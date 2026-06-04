@@ -315,6 +315,77 @@ impl TeamRosterStore {
         Ok(())
     }
 
+    /// Persist a teammate's permission mode to `team.json` and the live
+    /// roster. Leader-side write-back paired with a `ModeSetRequest` to the
+    /// teammate's mailbox. TS: `teamHelpers.ts:357 setMemberMode`.
+    pub async fn set_member_mode(
+        &self,
+        team_name: &str,
+        member_name: &str,
+        mode: coco_types::PermissionMode,
+    ) -> Result<(), String> {
+        let mut team_file = match team_file::read_team_file(team_name)
+            .map_err(|e| format!("Failed to read team '{team_name}': {e}"))?
+        {
+            Some(tf) => tf,
+            None => return Ok(()),
+        };
+        if let Some(member) = team_file.members.iter_mut().find(|m| m.name == member_name) {
+            member.mode = Some(mode);
+            let updated = member.clone();
+            team_file::write_team_file(team_name, &team_file).map_err(|e| {
+                format!("Failed to set teammate '{member_name}' mode={mode:?}: {e}")
+            })?;
+            if let Some(manager) = self.active_team.read().await.as_ref() {
+                manager.upsert_member(updated).await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Persist MULTIPLE teammates' permission modes to `team.json` in ONE
+    /// atomic write, then upsert each changed member into the live roster.
+    /// Mirrors TS `setMultipleMemberModes` (`teamHelpers.ts:415`): batching
+    /// avoids the read-modify-write race of looping [`Self::set_member_mode`]
+    /// (N reads + N writes of the same file). Members not present in the team
+    /// file, or already at the requested mode, are skipped; the file is
+    /// rewritten only when at least one member actually changes.
+    pub async fn set_member_modes(
+        &self,
+        team_name: &str,
+        updates: &[(String, coco_types::PermissionMode)],
+    ) -> Result<(), String> {
+        let mut team_file = match team_file::read_team_file(team_name)
+            .map_err(|e| format!("Failed to read team '{team_name}': {e}"))?
+        {
+            Some(tf) => tf,
+            None => return Ok(()),
+        };
+        let update_map: std::collections::HashMap<&str, coco_types::PermissionMode> = updates
+            .iter()
+            .map(|(name, mode)| (name.as_str(), *mode))
+            .collect();
+        let mut changed: Vec<crate::types::TeamMember> = Vec::new();
+        for member in &mut team_file.members {
+            if let Some(&new_mode) = update_map.get(member.name.as_str())
+                && member.mode != Some(new_mode)
+            {
+                member.mode = Some(new_mode);
+                changed.push(member.clone());
+            }
+        }
+        if !changed.is_empty() {
+            team_file::write_team_file(team_name, &team_file)
+                .map_err(|e| format!("Failed to set member modes for team '{team_name}': {e}"))?;
+            if let Some(manager) = self.active_team.read().await.as_ref() {
+                for member in changed {
+                    manager.upsert_member(member).await;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn running_non_lead_members(&self) -> Vec<TeamMember> {
         let Some(team_name) = self.active_team_name().await else {
             return Vec::new();

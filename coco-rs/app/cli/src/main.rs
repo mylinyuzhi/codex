@@ -597,6 +597,14 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     .await;
     install_session_late_binds(session_runtime.clone(), &cwd, Some(mcp_handle), lsp_handle).await?;
 
+    // Leader-side teammate inbox consumption (R1): a long-running SDK leader
+    // that approves a teammate shutdown must run teardown, or it leaks stale
+    // team.json membership + orphaned task assignments. No human approval UI
+    // here, so no permission bridge is registered (worker deny-path prompts
+    // fail closed); teardown / idle / coordinator re-injection still flow.
+    // No-op when AgentTeams is off or this session is itself a teammate.
+    coco_cli::leader_inbox_poller::install_leader(session_runtime.clone(), None).await;
+
     // TS parity (`main.tsx:2437/2577/2607`): SessionStart hooks fire
     // once at session bootstrap; output queues onto the shared
     // sync-hook buffer and surfaces as `hook_*` reminders on the
@@ -643,6 +651,17 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // emitting the lifecycle exit. Done after `server.run()` so the
     // dispatch loop has already stopped accepting new turns.
     let session_runtime_guard = state.session_runtime.read().await;
+    if let Some(session_runtime) = session_runtime_guard.as_ref() {
+        // Persist coordinator mode at exit so a later `--resume` re-derives the
+        // role (R2). The SDK leader path previously never wrote it, silently
+        // dropping the coordinator role on resume.
+        let session_id = session_runtime.current_session_id().await;
+        coco_cli::coordinator_mode_resume::persist_session_mode(
+            &session_runtime.session_manager,
+            &session_id,
+            &session_runtime.runtime_config.features,
+        );
+    }
     if let Some(session_runtime) = session_runtime_guard.as_ref()
         && let Some(memory_runtime) = session_runtime.memory_runtime()
     {

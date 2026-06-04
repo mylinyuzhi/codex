@@ -23,7 +23,11 @@ use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
 use crate::state::SlashPopupState;
+use crate::state::SubagentKind;
+use crate::state::SubagentStatus;
 use crate::state::SuggestionKind;
+use crate::state::TeamRosterMember;
+use crate::state::TeamRosterState;
 use crate::update_rewind;
 
 /// Open the model picker for the `Main` role, seeded from the
@@ -51,6 +55,70 @@ pub(crate) fn cycle_model(state: &mut AppState) {
             selected,
             effort,
         }));
+}
+
+/// Open the teams roster picker, seeded from the live teammate list
+/// (`session.subagents` where `kind == Teammate` and still running). The
+/// leader cycles a focused teammate's permission mode (Left/Right) and
+/// applies it on Enter via `UserCommand::SetTeammateMode`. TS:
+/// `components/teams/TeamsDialog.tsx`.
+pub(crate) fn team_roster(state: &mut AppState) {
+    let team_name = state
+        .session
+        .subagents
+        .iter()
+        .find(|s| s.kind == SubagentKind::Teammate)
+        .and_then(|s| s.team_name.clone())
+        .unwrap_or_default();
+
+    // Seed each member's CURRENT mode from team.json so the picker shows and
+    // cycles from the live mode rather than a hardcoded `Default`. TS reads
+    // `team.json` fresh on every render (`TeamsDialog.tsx`); we read it once
+    // when the picker opens. Members missing a stored mode fall back to
+    // `Default` (matches `permissionModeFromString(undefined)`).
+    let mode_by_name: std::collections::HashMap<String, coco_types::PermissionMode> =
+        coco_coordinator::team_file::read_team_file(&team_name)
+            .ok()
+            .flatten()
+            .map(|tf| {
+                tf.members
+                    .into_iter()
+                    .filter_map(|m| m.mode.map(|mode| (m.name, mode)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+    let members: Vec<TeamRosterMember> = state
+        .session
+        .subagents
+        .iter()
+        .filter(|s| s.kind == SubagentKind::Teammate && s.status == SubagentStatus::Running)
+        .map(|s| {
+            // agent_id is `name@team`; the set_teammate_mode target is the
+            // bare name.
+            let name = s
+                .agent_id
+                .split('@')
+                .next()
+                .unwrap_or(&s.agent_id)
+                .to_string();
+            let mode = mode_by_name
+                .get(&name)
+                .copied()
+                .unwrap_or(coco_types::PermissionMode::Default);
+            TeamRosterMember {
+                name,
+                agent_type: s.agent_type.clone(),
+                color: s.color.as_deref().and_then(|c| c.parse().ok()),
+                mode,
+            }
+        })
+        .collect();
+    state.ui.show_modal(ModalState::TeamRoster(TeamRosterState {
+        team_name,
+        members,
+        selected: 0,
+    }));
 }
 
 /// Open the standalone theme picker (TS `ThemePicker`). The choice list and

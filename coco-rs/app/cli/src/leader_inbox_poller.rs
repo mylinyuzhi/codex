@@ -67,6 +67,48 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> tokio::task::JoinHandle<()> {
     })
 }
 
+/// Install leader-side teammate inbox consumption for a NON-teammate session
+/// with AgentTeams enabled. Spawns the continuous poller (which drives
+/// `ShutdownApproved` → `teardown_teammate`, idle notifications, and the
+/// coordinator re-injection of teammate messages). When `bridge` is supplied
+/// (interactive leaders), it also registers the leader permission queue so a
+/// worker's deny-path prompt surfaces to the human.
+///
+/// Safe from any entrypoint: no-op when AgentTeams is off or when this session
+/// is itself a teammate; the poller idles until a team is active. The leak
+/// this closes: previously ONLY the TUI installed the poller, so a headless /
+/// SDK leader that approved a teammate shutdown never ran teardown — leaking
+/// stale `team.json` membership + orphaned task assignments (even for
+/// in-process teammates, whose teardown is not pane-gated). TS runs
+/// `useInboxPoller` on every leader entrypoint, interactive AND print
+/// (`cli/print.ts:2497-2613`).
+///
+/// Note: a single-shot `-p` leader exits right after its turn, so the 1 s
+/// background poll may not fire — TS additionally drains the inbox until no
+/// teammates remain active before exiting (`print.ts`). That bounded
+/// end-of-run drain is a separate follow-up; this install covers long-running
+/// leaders (SDK server, interactive).
+pub async fn install_leader(
+    runtime: Arc<SessionRuntime>,
+    bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
+) {
+    if !runtime
+        .runtime_config
+        .features
+        .enabled(coco_types::Feature::AgentTeams)
+    {
+        return;
+    }
+    if coco_coordinator::identity::resolve_teammate_identity().is_some() {
+        // This session is itself a teammate, not the leader.
+        return;
+    }
+    if let Some(bridge) = bridge {
+        crate::leader_permission::register(bridge).await;
+    }
+    spawn(runtime);
+}
+
 async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
     // Resolve the active team from the roster (TS reads
     // `appState.teamContext?.teamName` each tick, `:143-150`).
@@ -111,10 +153,16 @@ async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
                 let Some(setter) = permission_setter.clone() else {
                     continue;
                 };
+                // Serialize FIRST; on failure leave the message UNREAD and
+                // undispatched so the next tick can retry — a `to_value` failure
+                // here must never silently drop the worker's permission request.
+                let Ok(value) = serde_json::to_value(&parsed) else {
+                    continue;
+                };
                 // Dispatch once per tool_use_id; the leader setter prompts the
                 // human and replies to the worker.
                 if dispatched.insert(tool_use_id.clone()) {
-                    setter(serde_json::to_value(&parsed).unwrap_or_default());
+                    setter(value);
                 }
                 let _ = mailbox::mark_message_as_read_by_index(TEAM_LEAD_NAME, &team, idx);
             }
@@ -122,8 +170,28 @@ async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
                 enqueue_coordinator_message(queue, format_idle_notification(&parsed)).await;
                 let _ = mailbox::mark_message_as_read_by_index(TEAM_LEAD_NAME, &team, idx);
             }
-            // Plan-approval / shutdown / mode-set / team-permission / sandbox
-            // stay on their existing consumers — leave unread.
+            mailbox::ProtocolMessage::ShutdownApproved {
+                from,
+                pane_id,
+                backend_type,
+                ..
+            } => {
+                // A teammate approved its shutdown. Tear it down: kill the
+                // pane (pane-based teammates only — in-process ones carry
+                // no pane id and exit via their own runner-loop break),
+                // remove its team-file membership, and unassign its tasks.
+                // TS `useInboxPoller.ts:687-741`.
+                let agent_id = format!("{from}@{team}");
+                if let Err(e) = handle
+                    .teardown_teammate(&agent_id, from, pane_id.as_deref(), backend_type.as_deref())
+                    .await
+                {
+                    tracing::warn!(agent_id, error = %e, "leader shutdown teardown failed");
+                }
+                let _ = mailbox::mark_message_as_read_by_index(TEAM_LEAD_NAME, &team, idx);
+            }
+            // Plan-approval / shutdown-request / mode-set / team-permission
+            // / sandbox stay on their existing consumers — leave unread.
             _ => {}
         }
     }

@@ -78,6 +78,21 @@ pub trait TaskListHandle: Send + Sync {
     /// Implementations check "main-thread, all completed, ≥3 tasks,
     /// none match `/verif/i`".
     async fn should_nudge_verification(&self, just_completed: bool, is_main_thread: bool) -> bool;
+
+    /// Clear ownership of every task owned by a stopping teammate,
+    /// resetting each to its pending state so another teammate can
+    /// claim it. Returns the `(task_id, subject)` pairs that were
+    /// unassigned. Default no-op for in-memory / no-op stores; the
+    /// disk-backed store overrides it. TS: `unassignTeammateTasks`
+    /// (`utils/tasks.ts:818`), invoked from the leader's
+    /// `ShutdownApproved` inbox handler.
+    async fn unassign_teammate_tasks(
+        &self,
+        _teammate_id: &str,
+        _teammate_name: &str,
+    ) -> Result<Vec<(String, String)>, coco_error::BoxedError> {
+        Ok(Vec::new())
+    }
 }
 
 pub type TaskListHandleRef = Arc<dyn TaskListHandle>;

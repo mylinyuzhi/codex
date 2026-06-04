@@ -11,6 +11,7 @@
 use coco_config::EnvKey;
 use coco_subagent::SessionMode;
 use coco_subagent::SessionModeSwitch;
+use coco_subagent::is_coordinator_mode;
 use coco_subagent::is_coordinator_mode_env;
 use coco_subagent::session_mode_switch_action;
 use coco_types::Feature;
@@ -38,6 +39,38 @@ pub fn reconcile_on_resume(stored_mode: Option<&str>, features: &Features) -> Op
         _ => {}
     }
     action.warning()
+}
+
+/// Persist this leader session's coordinator-mode state (`coordinator` /
+/// `normal`) into its transcript so a later `--resume` re-derives the role via
+/// [`reconcile_on_resume`]. Gated on [`Feature::AgentTeams`] so non-team
+/// transcripts stay clean.
+///
+/// `save_mode` loads the session and requires an existing transcript, so call
+/// this AFTER at least one turn (end-of-run is fine). The write side was
+/// previously wired ONLY at the TUI exit checkpoint — a headless / SDK leader
+/// never persisted the mode, so `--resume` of that session silently dropped
+/// the coordinator role. TS `saveMode` runs on every leader entrypoint
+/// (`main.tsx` / `cli/print.ts` / `screens/REPL.tsx`).
+///
+/// Synchronous IO — callers on an async runtime should wrap in
+/// `spawn_blocking`.
+pub fn persist_session_mode(
+    session_manager: &coco_session::SessionManager,
+    session_id: &str,
+    features: &Features,
+) {
+    if !features.enabled(Feature::AgentTeams) {
+        return;
+    }
+    let mode = if is_coordinator_mode(features) {
+        "coordinator"
+    } else {
+        "normal"
+    };
+    if let Err(e) = session_manager.save_mode(session_id, mode) {
+        tracing::warn!(error = %e, mode, "failed to persist coordinator mode to transcript");
+    }
 }
 
 /// Flip the process-global `COCO_COORDINATOR_MODE` var. `is_coordinator_mode`

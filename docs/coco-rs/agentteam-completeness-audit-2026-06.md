@@ -1,6 +1,145 @@
 # Agent-Teams Completeness Audit — 2026-06
 
-> **Status (2026-06-04): 7 / 12 gaps fixed** — gap 1 (cross-process teammate
+> **Status (2026-06-04, re-verified): gap 6 + gap 7-pane now implemented;
+> several "remaining" gaps were stale.** A HEAD re-verification (5 adversarial
+> agents, one per remaining gap + a baseline pass) corrected the table below —
+> see **§ Re-verification (2026-06-04)**. Net picture:
+> - **In-process teams: complete & usable.**
+> - **Cross-process teams: bootable + driven + reports back + now shuts down
+>   cleanly.** This pass closed the one real deliverability blocker (shutdown
+>   leaked processes/panes on exit).
+>
+> **Done:** gap 1 (inbox→turn pump — keystone), gap 2 (clap launch break),
+> gap 3 (plan-approval codec), gap 4a/4b (teammate→leader content), gap 5
+> (leader team-awareness reminder — `team_context` + `agent_pending_messages`
+> fed; `teammate_mailbox` deliberately `None` — coco-rs delivers a teammate's
+> mailbox as injected TURNS via the pump/runner, so a parallel reminder would
+> double-deliver; now documented at the source), gap 7 (team-dir cleanup
+> on exit), **gap 6 (shutdown round-trip — Phase 1)**, **gap 7-pane
+> (orphan-pane kill on exit — Phase 1)**, **gap 11 (coordinator-mode resume
+> survival — Phase 2)**, **gap 12 (worker badge — Phase 3)**.
+>
+> **Remaining (re-sequenced):** gap 8 **DONE (Phase 4 + 4-UI + tail)** —
+> producer + bidirectional consumer (mode via `SetPermissionMode`, rules via
+> the shared live-rules `Arc`) + `team_allowed_paths` boot seeding + the TUI
+> roster picker all landed; gap 9 **DELETED (Phase 5)**; gap 10 (DEFERRED —
+> blocked on sandbox-bootstrap, out of agentteam scope); and the two-process
+> tmux E2E (validation debt for gaps 1 / 4b / 6) — the last open item.
+
+### What Phase 4 (gap 8) landed — the functional core
+
+The cross-process consumer turned out **much lighter** than the audit's
+"thread `TeammateControlState` into the pump" framing: the cross-process
+teammate is a normal `coco` session, so a `ModeSetRequest` is applied by
+**reusing the session's existing `UserCommand::SetPermissionMode` seam**
+rather than building a parallel control state.
+
+- **Producer:** `TeamRosterStore::set_member_mode` (team.json + live roster
+  write-back, TS `setMemberMode`) + `SwarmAgentHandle::set_teammate_mode`
+  (write-back **+** `ModeSetRequest` to the teammate's mailbox) +
+  `AgentHandle::set_teammate_mode` trait method (default-`Err`).
+- **In-process consumer:** already wired — `runner_loop::drain_control_messages`
+  applies `ModeSet` + `TeamPermissionUpdate` to the live `TeammateControlState`.
+- **Cross-process consumer:** `teammate_inbox_pump::drain_control_tick` drains a
+  leader `ModeSetRequest` each tick and injects `UserCommand::SetPermissionMode`
+  (fire-and-forget; no turn, no handshake). Pure `control_message_to_command`
+  helper is unit-tested.
+- **Tests:** `control_mode_set_maps_to_set_permission_mode` +
+  `control_other_message_maps_to_none`.
+
+**TUI roster picker (Phase 4-UI) — landed.** A `ModalState::TeamRoster`
+interactive modal, opened with **Ctrl+T** when a team is active (gated on
+`session.subagents` containing a teammate). It lists the running teammates
+(read synchronously from `session.subagents`, no new event stream / no
+coordinator coupling), and the leader cycles the focused teammate's mode
+(←/→ over the four interactive modes) and applies it on Enter via
+`UserCommand::SetTeammateMode` → `AgentHandle::set_teammate_mode`. Full TEA
+wiring: state + `ModalState` variant, `show::team_roster` constructor,
+`picker_styled::team_roster_lines` (reuses `render_select_list`),
+`surface_content` dispatch, `KeybindingContext::TeamRoster` +
+`map_team_roster_key`, `nav` / `confirm` / `team_roster_cycle_mode`
+handlers, en + zh-CN i18n keys. Tests: `team_roster_lists_only_running_teammates`,
+`team_roster_cycle_mode_wraps_interactive_modes`.
+
+**gap-8 tail — DONE.** The cross-process teammate now seeds its engine
+config's `live_permission_rules` `Arc` at boot from
+`load_team_allowed_path_rules(team)` (now `pub`), and the pump's
+`drain_control_tick` extends that same `Arc` on a leader `TeamPermissionUpdate`
+(via `into_permission_rules`). Both mirror the in-process `TeammateControlState`
+exactly — the main `QueryEngineConfig.live_permission_rules` seam made this a
+small wire, not the "thread a parallel control state" lift the audit feared.
+The `Arc` is built at the teammate boot branch in `tui_runner`, installed via
+`update_engine_config`, and shared into `teammate_inbox_pump::spawn`.
+
+## Re-verification (2026-06-04) — corrections to the original table
+
+A HEAD re-check found the original 5-gap "remaining" table partly stale:
+
+| Gap | Original claim | Verified at HEAD | Action this pass |
+|---|---|---|---|
+| **6 shutdown** | large, all owed | Accurate. Request-delivery wired; the whole approval leg (worker producer → leader consumer → kill_pane + remove member + unassign tasks) was missing; all helpers existed unwired. | **Implemented** (round-trip + prompt). |
+| **7 pane-kill** | (folded into cleanup) | Dir/worktree/task cleanup wired at `tui_runner:715`; `kill_orphaned_teammate_panes` was dead → tmux panes orphaned on exit. | **Implemented** (backend-correct orphan kill before dir removal). |
+| **8 leader controls** | large; add codec + drain logic | **Stale.** `create_mode_set_request` / `into_permission_rules` / `drain_control_messages` ModeSet+TeamPermissionUpdate apply-logic ALL exist and are wired in-process. Only missing: a **producer** (no leader caller), `team_file::set_member_mode`, the **cross-process** pump invoking `drain_control_messages`, and cross-process `team_allowed_paths` seeding. No TUI teams-roster surface exists yet. | Deferred to a dedicated PR (Phase 4). |
+| **9 resume** | medium, pure wiring | **Reframed.** `reconnect.rs` is implemented with genuinely zero callers, but a working identity-driven team-context path (`resolve_team_snapshot`) already exists — `reconnect.rs` + `AppState.team_context` are a redundant orphan. | **Deleted (Phase 5).** Removed `coordinator/reconnect.rs` (3 fns + tests + `pub mod`), `AppState.team_context` field, and the now-unused `coco_state::TeamContext` re-export. The identity dynamic-context tier (`get_dynamic_team_context`, used by the 3-tier identity resolution) is load-bearing and intentionally kept; only its unused `set_dynamic_team_context` setter lingers (deleting it alone would be a half-measure — tracked, not part of this orphan). |
+| **10 sandbox** | medium, two-way stub | **Blocked.** The sandbox approval bridge is fully dead in production (`check_network` / `*_async` / `set_approval_bridge` zero callers; nothing emits `SandboxApprovalRequired`). Even single-process sandbox network approval doesn't work; the worker side would be dead code. | **Deferred** — sandbox-bootstrap, not agentteam. |
+| **11 coordinator mode** | medium, product decision | **Mostly wired.** `engine_prompt:80` gate fires; env-launch parity works for the live session today. Only **resume survival** is missing — the `saveMode` snapshot half (`MetadataEntry::Mode`) is absent; the `reconcile_on_resume` read path is fully wired. | **Implemented (Phase 2)** — `SessionManager::save_mode` + exit-checkpoint snapshot. |
+| **12 worker badge** | low | Accurate; additive `Option` fields, ~6 files. coco-rs can do better than TS (real per-teammate color vs TS hardcoded `cyan`). | **Implemented (Phase 3)** — `coco_types::WorkerBadge` threaded request→event→state→title. |
+
+### What Phase 2 (gap 11) + Phase 3 (gap 12) landed
+
+**Phase 2 — coordinator-mode resume survival:**
+- `SessionManager::save_mode(id, "coordinator"|"normal")` appends a `Mode`
+  metadata entry (`app/session/src/lib.rs`). The reader / `reconcile_on_resume`
+  path was already fully wired — only the writer was missing.
+- `tui_runner` exit checkpoint snapshots `is_coordinator_mode(features)` into
+  the transcript (gated on `Feature::AgentTeams` to keep non-team transcripts
+  clean). A resumed coordinator session now re-enters coordinator mode.
+- Env-launch (`COCO_COORDINATOR_MODE=1`) remains the TS-faithful entry trigger;
+  no CLI flag added (TS has none either).
+
+**Phase 3 — worker badge at the permission seam:**
+- New `coco_types::WorkerBadge { name, color: AgentColorName }`.
+- Threaded `Option<WorkerBadge>` through `ToolPermissionRequest` →
+  `TuiOnlyEvent::ApprovalRequired` → `PermissionPromptState`. The cross-process
+  producer (`leader_permission.rs`) sets it with the worker's real assigned
+  palette color (improves on TS's hardcoded `cyan`); in-process requests leave
+  it `None` (TS parity).
+- The prompt renderer suffixes the title with `· @name` (TS
+  `PermissionRequestTitle.tsx:32`). The text surface is monochrome, so the
+  typed color is carried for styled / SDK consumers.
+- 4 new tests (`save_mode` round-trip, title-with/without-badge); 20 existing
+  permission test literals updated for the additive field. `PanePromptState`
+  gained `#[allow(clippy::large_enum_variant)]` (single-instance UI state).
+
+### What gap 6 + gap 7-pane implementation landed (this pass)
+
+- `mailbox::create_shutdown_approved_message` now carries the approver's
+  own `pane_id` / `backend_type` (empty pane id collapses to `None`).
+- `AgentHandle` gained `request_shutdown` (leader→teammate),
+  `respond_to_shutdown` (teammate→leader, enriches with self pane coords
+  from `team.json`), and `teardown_teammate` (leader-side: `kill_pane` via
+  the pane backend + `rollback_member` + `unassign_teammate_tasks`). All
+  three implemented on `SwarmAgentHandle`; default-`Err` elsewhere.
+- `SendMessageTool` intercepts structured `shutdown_request` /
+  `shutdown_response` and routes them through the handle (with TS-parity
+  validation: no broadcast request; response must target `team-lead`).
+- `leader_inbox_poller` gained a `ShutdownApproved` arm → `teardown_teammate`.
+  This unifies in-process + cross-process teardown through the one poller.
+- `TaskListHandle::unassign_teammate_tasks` added (disk impl overrides;
+  default no-op).
+- `cleanup_session_teams` now kills orphaned **tmux** panes before removing
+  dirs (iTerm2 orphan-on-crash teardown documented as a follow-up; the
+  graceful path uses the registry-routed backend via `teardown_teammate`).
+- Teammate prompt addendum now explains the shutdown-response protocol.
+- 14 unit tests added (protocol round-trip, SendMessage branches + validation,
+  prompt addendum, unassign). The `poll_once` `ShutdownApproved` arm +
+  `teardown_teammate` are **E2E-unvalidated** (like gap 1 / gap 4b) — covered
+  by the planned two-process tmux test.
+
+---
+
+> **(Original, superseded by the re-verification above.) Status (2026-06-04):
+> 7 / 12 gaps fixed** — gap 1 (cross-process teammate
 > inbox→turn pump — THE keystone), gap 2 (clap launch break), gap 3
 > (plan-approval codec), gap 4a (in-process pending-message loop), gap 4b
 > (teammate→leader regular messages + idle notifications), gap 5 (leader
@@ -57,12 +196,57 @@
   `worker_badge {name,color}` to `ToolPermissionRequest` → `ApprovalRequired` →
   TUI confirm renderer; in-process currently hardcodes `agent_id = session_id`.
 
-**Validation debt (not a gap, but tracked):**
+**Validation debt — L0 + L1 LANDED (2026-06); L2/L3 remain.**
 
-- [ ] **gap 1 + gap 4b are E2E-unvalidated** (like #257). Needs a two-process
-  tmux test: spawn a real pane teammate, assert it consumes its mailbox and
-  runs a turn (gap 1), and that a teammate `send_message` / idle notification
-  surfaces in the leader's next turn (gap 4b).
+- [x] **L0 — `COCO_TEAMS_DIR` hermetic infra.** `EnvKey::CocoTeamsDir` +
+  `team_file::teams_base_dir()` override (the single base-dir resolution
+  point, so all mailbox/team-file paths isolate at once).
+- [x] **L1 — hermetic pump integration tests.** `teammate_inbox_pump.test.rs`
+  now drives `drain_control_tick` / `scan_tick` against a REAL on-disk mailbox
+  (tempdir via `COCO_TEAMS_DIR`): mode-set→`SetPermissionMode`+marked-read,
+  plain-message framing, shutdown-over-peer priority. The pump's file IPC is
+  now integration-proven, not just in-memory-mocked. (Serialized via an async
+  `ENV_LOCK` + nextest per-process isolation.)
+- [x] **L2 — real-binary PTY + wiremock (PASSING).**
+  `app/cli/tests/teammate_pty_e2e.rs` (`#[ignore]`): spawns the REAL `coco`
+  binary in a PTY with `COCO_AGENT_*` identity + a temp `COCO_CONFIG_DIR`
+  (`providers.json` → wiremock SSE model) + a seeded `COCO_TEAMS_DIR` mailbox;
+  asserts the model received the framed prompt. **Verified passing** — the
+  cross-process teammate genuinely boots → pump consumes mailbox → runs a turn.
+- [x] **L3 — real tmux pane primitive (PASSING).**
+  `coordinator/src/pane/tmux.test.rs::tmux_create_pane_spawns_real_pane`
+  (`#[ignore]`, tmux-gated): `TmuxBackend::create_teammate_pane` creates a real
+  pane on the PID-scoped swarm socket. **Verified against tmux 3.4.**
+- [x] **External-mode socket bug — FIXED + regression-tested.**
+  `TmuxBackend` external mode (`is_native=false`) created panes on the PID
+  swarm socket but ran `kill_pane`/`send_command`/`set_pane_*`/`hide`/`show`/
+  `rebalance` on the default socket — so external-session teammate panes
+  couldn't receive commands or be torn down (a real gap-6/gap-1 bug). Fix:
+  collapsed the socket choice into `TmuxBackend::socket()` + a single
+  `TmuxBackend::run()` entry point; every op now targets the backend's own
+  server (native `$TMUX` / external PID socket). The L3 test
+  (`tmux_pane_lifecycle_create_and_kill`) was upgraded to create→kill and
+  assert the pane is gone — fails pre-fix, passes post-fix (tmux 3.4).
+
+- [ ] (original framing) **gaps 1 / 4b / 6 / 8-cross are unit-covered but
+  E2E-unvalidated**
+  (like #257). The components have deterministic unit tests
+  (`scan_next_prompt` priority, `inject_and_wait` handshake,
+  `control_message_to_command`, protocol round-trips, shutdown constructors,
+  roster filtering/cycle), but the cross-process boot→consume→turn→report
+  loop has no end-to-end test. **Why it's a separate effort (2026-06
+  finding):** a real two-process test needs (a) a **mock-model harness** the
+  spawned teammate process points at — without a model the teammate can't run
+  a turn to assert on; (b) **tmux** (gate via `is_tmux_available`); and (c)
+  even a lighter *hermetic* integration test of the pump's mailbox path is
+  blocked because the mailbox/team-file API resolves its base dir from
+  `dirs::home_dir()` directly (not injectable) — so it would either pollute
+  the real `~/.claude/teams` or require an env-mutation hack (discouraged) or
+  a base-dir-injection refactor across all mailbox callers. Recommended
+  sequencing: first make `team_file::teams_base_dir` injectable (or add a
+  `COCO_TEAMS_DIR` override consumed by `mailbox`/`team_file`), then write a
+  hermetic pump integration test (no process spawn), then the full
+  two-process tmux test on top.
 
 
 Adversarial completeness audit of the coco-rs agent-teams subsystem

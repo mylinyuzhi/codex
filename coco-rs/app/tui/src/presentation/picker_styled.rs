@@ -18,6 +18,7 @@ use crate::state::GlobalSearchState;
 use crate::state::MemoryDialogState;
 use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
+use crate::state::TeamRosterState;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::widgets::SelectItem;
 use coco_tui_ui::widgets::SelectListStyle;
@@ -64,6 +65,72 @@ pub(crate) fn export_lines(
         lines,
         styles.primary(),
     )
+}
+
+/// Teams roster — the leader cycles a focused teammate's permission mode.
+/// TS: `components/teams/TeamsDialog.tsx`. Rows list the running teammates;
+/// the pill below shows the mode about to be applied on Enter.
+pub(crate) fn team_roster_lines(
+    r: &TeamRosterState,
+    styles: UiStyles<'_>,
+    list_budget: usize,
+) -> (String, Vec<Line<'static>>, Color) {
+    let title = t!("dialog.title_team_roster").to_string();
+    if r.members.is_empty() {
+        return (
+            title,
+            vec![dim_line(t!("dialog.team_roster_empty"), styles)],
+            styles.primary(),
+        );
+    }
+    let items: Vec<SelectItem> = r
+        .members
+        .iter()
+        .map(|m| {
+            // Each row shows the teammate's OWN current mode (TS renders
+            // `teammate.mode` per row) so divergent modes are visible at a
+            // glance.
+            let mode = crate::update::permission_mode_label(m.mode);
+            let label = if m.agent_type.is_empty() {
+                format!("{} · {mode}", m.name)
+            } else {
+                format!("{} ({}) · {mode}", m.name, m.agent_type)
+            };
+            SelectItem::new(label)
+        })
+        .collect();
+    let mut lines = vec![
+        dim_line(
+            t!("dialog.team_roster_team", team = r.team_name.as_str()),
+            styles,
+        ),
+        Line::default(),
+    ];
+    lines.extend(render_select_list(
+        &items,
+        r.selected.min(items.len().saturating_sub(1)),
+        &list_style(list_budget),
+        styles,
+    ));
+    lines.push(Line::default());
+    // The pill reflects the FOCUSED member's mode (the one Left/Right edits).
+    let focused_mode = r
+        .members
+        .get(r.selected)
+        .map(|m| m.mode)
+        .unwrap_or(coco_types::PermissionMode::Default);
+    lines.push(Line::from(vec![
+        Span::styled(
+            t!("dialog.team_roster_set_mode").to_string(),
+            Style::default().fg(styles.dim()),
+        ),
+        Span::styled(
+            crate::update::permission_mode_label(focused_mode),
+            Style::default().fg(styles.accent()),
+        ),
+    ]));
+    lines.push(dim_line(t!("dialog.hints_team_roster"), styles));
+    (title, lines, styles.primary())
 }
 
 /// `/memory` — pick a memory file to edit. Flat single-select list.

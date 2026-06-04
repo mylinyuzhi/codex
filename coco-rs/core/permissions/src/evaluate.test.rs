@@ -433,6 +433,26 @@ fn test_dont_ask_mode_denies_all() {
     assert!(matches!(result, PermissionDecision::Deny { .. }));
 }
 
+/// #72 / TS: dontAsk converts an EARLY-return ask (here a tool-wide ask rule,
+/// which returns before mode fallthrough) into a deny — not just the
+/// fallthrough ask.
+#[test]
+fn test_dont_ask_converts_early_ask_rule_to_deny() {
+    let mut ctx = empty_context(PermissionMode::DontAsk);
+    ctx.ask_rules.insert(
+        PermissionRuleSource::Session,
+        vec![make_rule(
+            "Bash",
+            None,
+            PermissionBehavior::Ask,
+            PermissionRuleSource::Session,
+        )],
+    );
+    let result =
+        PermissionEvaluator::evaluate(&ToolId::Builtin(ToolName::Bash), &bash_input("ls"), &ctx);
+    assert!(matches!(result, PermissionDecision::Deny { .. }));
+}
+
 /// TS: dontAsk still honors explicit allow rules.
 #[test]
 fn test_dont_ask_mode_allows_explicit_rules() {

@@ -166,8 +166,10 @@ pub fn settings_allow_always_allow_options(settings: &coco_config::SettingsWithS
 impl ToolPermissionBridge for TuiPermissionBridge {
     async fn request_permission(
         &self,
-        request: ToolPermissionRequest,
+        mut request: ToolPermissionRequest,
     ) -> Result<ToolPermissionResolution, String> {
+        crate::leader_permission::enrich_in_process_worker_badge(&mut request);
+
         // Step 1: register the oneshot in the pending map BEFORE
         // emitting the event. Reverse order risks a fast-path race
         // where the user clicks Approve before the entry exists and
@@ -250,6 +252,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 // choices splice `user_choice`; classic read permissions
                 // derive TS-style path-scoped "always allow" updates.
                 original_input: Some(request.input.clone()),
+                worker_badge: request.worker_badge.clone(),
             })
         };
         if let Err(e) = self.notification_tx.send(event).await {

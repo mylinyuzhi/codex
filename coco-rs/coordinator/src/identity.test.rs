@@ -53,26 +53,47 @@ fn test_resolve_teammate_identity_from_dynamic_context() {
     clear_dynamic_team_context();
 }
 
+/// Tier-3 (env-var) identity resolution. This is the path that makes a spawned
+/// teammate's `--resume` safe — the resumed process inherits `COCO_*` from its
+/// pane/parent — and therefore the reason deleting the transcript-scan
+/// `reconnect.rs` was a behavioral no-op (R3 was a false-positive). Locks the
+/// supported resume topology against regression.
 #[test]
-fn test_is_team_lead() {
-    let tc = TeamContext {
-        team_name: "test".into(),
-        team_file_path: String::new(),
-        lead_agent_id: "leader@test".into(),
-        self_agent_id: Some("leader@test".into()),
-        self_agent_name: Some("team-lead".into()),
-        is_leader: true,
-        self_agent_color: None,
-        teammates: Default::default(),
-    };
-    assert!(is_team_lead(Some(&tc)));
+fn test_resolve_teammate_identity_from_env_vars() {
+    use crate::constants::AGENT_ID_ENV_VAR;
+    use crate::constants::AGENT_NAME_ENV_VAR;
+    use crate::constants::PLAN_MODE_REQUIRED_ENV_VAR;
+    use crate::constants::TEAM_NAME_ENV_VAR;
+    use crate::constants::TEAMMATE_COLOR_ENV_VAR;
 
-    let tc2 = TeamContext {
-        is_leader: false,
-        ..tc
-    };
-    assert!(!is_team_lead(Some(&tc2)));
-    assert!(!is_team_lead(None));
+    // Tier-1 (task-local) is absent outside a `run_with_teammate_context`
+    // scope; clear tier-2 so resolution falls through to the env tier.
+    clear_dynamic_team_context();
+    // SAFETY: nextest isolates each test in its own process, so these
+    // process-global env mutations cannot race sibling tests.
+    unsafe {
+        std::env::set_var(AGENT_ID_ENV_VAR.as_str(), "researcher@my-team");
+        std::env::set_var(AGENT_NAME_ENV_VAR.as_str(), "researcher");
+        std::env::set_var(TEAM_NAME_ENV_VAR.as_str(), "my-team");
+        std::env::set_var(TEAMMATE_COLOR_ENV_VAR.as_str(), "blue");
+        std::env::set_var(PLAN_MODE_REQUIRED_ENV_VAR.as_str(), "1");
+    }
+
+    let id = resolve_teammate_identity().expect("identity resolves from env (resume path)");
+    assert_eq!(id.agent_id, "researcher@my-team");
+    assert_eq!(id.agent_name, "researcher");
+    assert_eq!(id.team_name, "my-team");
+    assert_eq!(id.color, Some(coco_types::AgentColorName::Blue));
+    assert!(id.plan_mode_required);
+
+    // SAFETY: same as above.
+    unsafe {
+        std::env::remove_var(AGENT_ID_ENV_VAR.as_str());
+        std::env::remove_var(AGENT_NAME_ENV_VAR.as_str());
+        std::env::remove_var(TEAM_NAME_ENV_VAR.as_str());
+        std::env::remove_var(TEAMMATE_COLOR_ENV_VAR.as_str());
+        std::env::remove_var(PLAN_MODE_REQUIRED_ENV_VAR.as_str());
+    }
 }
 
 #[tokio::test]

@@ -82,9 +82,17 @@ fn test_non_claude_config() {
 // ── has_suspicious_windows_pattern ──
 
 #[test]
-fn test_ads_detected() {
-    assert!(has_suspicious_windows_pattern("C:\\file.txt::$DATA"));
-    assert!(has_suspicious_windows_pattern("C:\\settings.json:stream"));
+fn test_ads_colon_is_windows_only() {
+    // Colons are valid filename characters on Linux/macOS, so the NTFS-ADS
+    // colon check is Windows-only (#74). On Unix a legitimate colon path must
+    // NOT be flagged; on Windows the ADS pattern still is.
+    if cfg!(target_os = "windows") {
+        assert!(has_suspicious_windows_pattern("C:\\file.txt::$DATA"));
+        assert!(has_suspicious_windows_pattern("C:\\settings.json:stream"));
+    } else {
+        assert!(!has_suspicious_windows_pattern("/tmp/log:2026-06-01.txt"));
+        assert!(!has_suspicious_windows_pattern("/tmp/settings.json:stream"));
+    }
 }
 
 #[test]

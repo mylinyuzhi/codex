@@ -1161,6 +1161,8 @@ impl SwarmAgentHandle {
             is_in_process_teammate: false,
             plan_mode_required: false,
             session_id: None,
+            // Subagents/teammates never inherit the leader's bypass capability
+            // (A7b) — always gated. See the teammate site in `mod.rs`.
             bypass_permissions_available: false,
             cwd_override,
             fork_context_messages,

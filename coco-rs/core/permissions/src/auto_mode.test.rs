@@ -21,61 +21,49 @@ fn test_read_only_even_unknown_tool() {
     assert_eq!(decision, AutoModeDecision::Allow);
 }
 
-// ── Write/Edit path checks ──
+// ── File-modifying tools defer to the decision-layer path-safety gate ──
+//
+// `classify_for_auto_mode` must NOT lexically auto-allow file writes (the old
+// "relative or /tmp → Allow" shortcut let `../` traversal and /tmp escapes
+// bypass review). Every file tool now returns NeedsPrompt so the orchestrator
+// runs `check_path_safety_for_auto_edit` + cwd containment instead.
 
 #[test]
-fn test_write_relative_path_allowed() {
+fn test_write_relative_path_defers_to_review() {
     let input = serde_json::json!({"file_path": "src/main.rs"});
     let decision = classify_for_auto_mode("Write", &input, /*is_read_only*/ false);
-    assert_eq!(decision, AutoModeDecision::Allow);
+    assert_eq!(
+        decision,
+        AutoModeDecision::NeedsPrompt {
+            reason: "Write requires path-safety review".into()
+        }
+    );
 }
 
 #[test]
-fn test_write_tmp_path_allowed() {
+fn test_write_traversal_path_not_auto_allowed() {
+    // The exact regression: a CWD-escaping relative path must never be
+    // lexically allowed here.
+    let input = serde_json::json!({"file_path": "../../../etc/cron.d/evil"});
+    let decision = classify_for_auto_mode("Write", &input, /*is_read_only*/ false);
+    assert!(matches!(decision, AutoModeDecision::NeedsPrompt { .. }));
+}
+
+#[test]
+fn test_write_tmp_path_defers_to_review() {
     let input = serde_json::json!({"file_path": "/tmp/test.txt"});
     let decision = classify_for_auto_mode("Write", &input, /*is_read_only*/ false);
-    assert_eq!(decision, AutoModeDecision::Allow);
+    assert!(matches!(decision, AutoModeDecision::NeedsPrompt { .. }));
 }
 
 #[test]
-fn test_write_absolute_path_needs_prompt() {
-    let input = serde_json::json!({"file_path": "/etc/passwd"});
-    let decision = classify_for_auto_mode("Write", &input, /*is_read_only*/ false);
-    assert_eq!(
-        decision,
-        AutoModeDecision::NeedsPrompt {
-            reason: "Write to absolute path".into()
-        }
-    );
-}
-
-#[test]
-fn test_edit_absolute_path_needs_prompt() {
-    let input = serde_json::json!({"file_path": "/home/user/.bashrc"});
-    let decision = classify_for_auto_mode("Edit", &input, /*is_read_only*/ false);
-    assert_eq!(
-        decision,
-        AutoModeDecision::NeedsPrompt {
-            reason: "Edit to absolute path".into()
-        }
-    );
-}
-
-#[test]
-fn test_edit_relative_path_allowed() {
+fn test_edit_defers_to_review() {
     let input = serde_json::json!({"file_path": "Cargo.toml"});
     let decision = classify_for_auto_mode("Edit", &input, /*is_read_only*/ false);
-    assert_eq!(decision, AutoModeDecision::Allow);
-}
-
-#[test]
-fn test_write_no_path_needs_prompt() {
-    let input = serde_json::json!({"content": "hello"});
-    let decision = classify_for_auto_mode("Write", &input, /*is_read_only*/ false);
     assert_eq!(
         decision,
         AutoModeDecision::NeedsPrompt {
-            reason: "Write to absolute path".into()
+            reason: "Edit requires path-safety review".into()
         }
     );
 }

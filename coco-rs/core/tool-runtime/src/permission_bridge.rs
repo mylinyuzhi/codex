@@ -53,6 +53,12 @@ pub struct ToolPermissionRequest {
     /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
+    /// Identity badge for a cross-process teammate whose tool needs the
+    /// leader's approval — surfaced in the prompt so the human sees who
+    /// is asking. `None` for the leader's own (in-process) requests.
+    /// TS: `workerBadge` on `PermissionRequest.tsx:89`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_badge: Option<coco_types::WorkerBadge>,
 }
 
 /// Leader's decision on a permission request.

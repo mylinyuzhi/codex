@@ -151,6 +151,16 @@ impl TaskListHandle for TaskListStore {
         self.should_nudge_verification_after_update(just_completed, is_main_thread)
             .await
     }
+
+    async fn unassign_teammate_tasks(
+        &self,
+        teammate_id: &str,
+        teammate_name: &str,
+    ) -> Result<Vec<(String, String)>, coco_error::BoxedError> {
+        self.unassign_teammate_tasks(teammate_id, teammate_name)
+            .await
+            .map_err(boxed)
+    }
 }
 
 #[async_trait::async_trait]

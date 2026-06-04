@@ -208,3 +208,72 @@ async fn test_classify_error_defaults_to_block() {
     assert!(result.should_block);
     assert_eq!(result.stage, Some(2));
 }
+
+#[tokio::test]
+async fn test_classify_transport_error_marks_unavailable() {
+    let result = classify_yolo_action(
+        EMPTY_MESSAGES,
+        "Bash",
+        &serde_json::json!({"command": "rm -rf /"}),
+        &AutoModeRules::default(),
+        |_req: ClassifyRequest| async { Err("connection refused".to_string()) },
+    )
+    .await;
+    assert!(result.unavailable);
+    assert!(!result.transcript_too_long);
+}
+
+#[tokio::test]
+async fn test_classify_prompt_too_long_marks_transcript_too_long() {
+    let result = classify_yolo_action(
+        EMPTY_MESSAGES,
+        "Bash",
+        &serde_json::json!({"command": "rm -rf /"}),
+        &AutoModeRules::default(),
+        |_req: ClassifyRequest| async { Err("prompt is too long: 250000 tokens".to_string()) },
+    )
+    .await;
+    assert!(result.transcript_too_long);
+    assert!(!result.unavailable);
+}
+
+#[test]
+fn test_truncate_multibyte_boundary_no_panic() {
+    // 499 ASCII bytes + a 3-byte char straddling byte 500 must not panic.
+    let s = format!("{}中", "a".repeat(499));
+    let out = truncate(&s, 500);
+    assert!(out.ends_with("..."));
+    // The multibyte char was dropped at the boundary, not split.
+    assert!(out.starts_with(&"a".repeat(499)));
+    assert!(!out.contains('中'));
+}
+
+#[test]
+fn test_truncate_short_string_unchanged() {
+    assert_eq!(truncate("hello", 100), "hello");
+}
+
+#[test]
+fn test_format_transcript_is_chronological() {
+    let entries = vec![
+        TranscriptEntry {
+            role: TranscriptRole::User,
+            content: vec![TranscriptBlock::Text("first-marker".into())],
+        },
+        TranscriptEntry {
+            role: TranscriptRole::Assistant,
+            content: vec![TranscriptBlock::ToolCall {
+                tool_name: "Bash".into(),
+                input_summary: "ls".into(),
+            }],
+        },
+        TranscriptEntry {
+            role: TranscriptRole::User,
+            content: vec![TranscriptBlock::Text("second-marker".into())],
+        },
+    ];
+    let out = format_transcript(&entries);
+    let first = out.find("first-marker").expect("first present");
+    let second = out.find("second-marker").expect("second present");
+    assert!(first < second, "transcript must be chronological:\n{out}");
+}

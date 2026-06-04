@@ -11,6 +11,7 @@ fn dummy_request(id: &str) -> ToolPermissionRequest {
         input: serde_json::json!({"command": "ls"}),
         suggestions: vec![],
         choices: None,
+        worker_badge: None,
     }
 }
 

@@ -297,6 +297,15 @@ impl SwarmAdapter {
 
 #[async_trait]
 impl SwarmSource for SwarmAdapter {
+    /// Always `None` — intentional divergence, NOT an unfinished stub.
+    /// TS surfaces a teammate's unread mailbox as a `<teammate_mailbox>`
+    /// reminder; coco-rs instead delivers each mailbox message as a real
+    /// injected TURN (the in-process `runner_loop` scan / the cross-process
+    /// `teammate_inbox_pump`). Returning a mailbox snapshot here too would
+    /// double-deliver the same content (once as a turn, once as a reminder).
+    /// The leader→teammate `agent_pending_messages` reminder (below) and the
+    /// teammate→leader `leader_inbox_poller` cover the directions that DON'T
+    /// ride turn injection.
     async fn teammate_mailbox(&self, _agent_id: Option<&str>) -> Option<TeammateMailboxInfo> {
         None
     }

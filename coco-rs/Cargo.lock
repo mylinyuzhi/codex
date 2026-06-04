@@ -1105,6 +1105,8 @@ dependencies = [
  "coco-tools",
  "coco-tui",
  "coco-types",
+ "coco-utils-cargo-bin",
+ "coco-utils-pty",
  "dirs",
  "libc",
  "pretty_assertions",
@@ -1118,6 +1120,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -2322,6 +2325,7 @@ dependencies = [
  "base64 0.22.1",
  "coco-config",
  "coco-context",
+ "coco-coordinator",
  "coco-file-search",
  "coco-file-watch",
  "coco-git",

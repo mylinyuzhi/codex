@@ -95,6 +95,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Transcript(_) => return None,
         // Styled render path (see `surface/modal.rs`) — not a text surface.
         ModalState::ThemePicker(_) => return None,
+        ModalState::TeamRoster(_) => return None,
     })
 }
 
@@ -116,6 +117,7 @@ pub(crate) fn modal_styled_surface(
         ModalState::SessionBrowser(s) => ps::session_browser_lines(s, styles, list_budget),
         ModalState::GlobalSearch(g) => ps::global_search_lines(g, styles, list_budget),
         ModalState::CopyPicker(cp) => ps::copy_picker_lines(cp, styles, list_budget),
+        ModalState::TeamRoster(r) => ps::team_roster_lines(r, styles, list_budget),
         _ => return None,
     })
 }

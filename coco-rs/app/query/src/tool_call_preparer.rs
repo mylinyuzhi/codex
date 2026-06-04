@@ -379,6 +379,25 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         && state.is_active()
     {
         let is_read_only = tool.is_read_only(effective_input);
+        // Context for path-safety immunity + safe-in-cwd fast path + headless
+        // fail-closed. cwd: worktree override first, else the bootstrap cwd.
+        let cwd = ctx
+            .cwd_override
+            .as_deref()
+            .or(ctx.original_cwd.as_deref())
+            .and_then(|p| p.to_str())
+            .map(str::to_owned);
+        let additional_dirs: Vec<String> = ctx
+            .permission_context
+            .additional_dirs
+            .keys()
+            .cloned()
+            .collect();
+        let auto_ctx = coco_permissions::AutoModeContext {
+            cwd: cwd.as_deref(),
+            additional_dirs: &additional_dirs,
+            is_non_interactive: ctx.is_non_interactive,
+        };
         let mut tracker_guard = tracker.lock().await;
         let classifier_decision = try_classify_in_auto_mode(
             &tool_call.tool_name,
@@ -389,6 +408,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
             history_messages,
             model_runtimes,
             auto_mode_rules,
+            auto_ctx,
         )
         .await;
         drop(tracker_guard);
@@ -539,6 +559,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     messages: &[M],
     model_runtimes: &Arc<ModelRuntimeRegistry>,
     auto_mode_rules: &AutoModeRules,
+    auto_ctx: coco_permissions::AutoModeContext<'_>,
 ) -> Option<PermissionDecision> {
     let model_runtimes = model_runtimes.clone();
     let classify_fn = move |req: coco_permissions::ClassifyRequest| {
@@ -650,6 +671,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
         tracker,
         messages,
         auto_mode_rules,
+        &auto_ctx,
         classify_fn,
     )
     .await

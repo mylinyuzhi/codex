@@ -47,16 +47,26 @@
 //! `command_rx` can drain to `None` and the process can exit — without this
 //! the held clone would block `driver_handle.await` forever.
 //!
+//! ## Control messages (gap 8)
+//! Before each prompt scan, [`drain_control_tick`] applies leader-pushed
+//! controls (the cross-process analog of the in-process runner's
+//! `drain_control_messages`): a `ModeSetRequest` injects
+//! `UserCommand::SetPermissionMode`, and a `TeamPermissionUpdate` extends the
+//! teammate's shared live-rules `Arc` (seeded at boot from the team's
+//! `team_allowed_paths` and installed on the engine config). Both apply
+//! without spawning a turn.
+//!
 //! ## Out of scope (tracked follow-ups)
-//! - Live ModeSet / TeamPermissionUpdate application (gap 8): control messages
-//!   are skipped by `scan_next_prompt` and left unread for that wiring; they
-//!   are never mis-injected as prompts.
 //! - Pane teardown on ShutdownRequest (gap 6): the request is delivered as a
-//!   turn so the teammate can wrap up; the leader still owns the pane kill.
+//!   turn so the teammate can wrap up; the leader owns the pane kill via the
+//!   `ShutdownApproved` round-trip.
 //! - Teammate→leader idle/result reporting after each turn.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use coco_types::PermissionRule;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -80,14 +90,25 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 ///   top-level turn (fired by `run_agent_driver`).
 /// - `cancel`: fired by the runner after `app.run()` returns so the pump drops
 ///   `command_tx` and the driver can shut down.
+/// - `live_permission_rules`: the same `Arc` installed on the teammate's
+///   engine config at boot (seeded from `team_allowed_paths`); the pump
+///   extends it when a leader `TeamPermissionUpdate` arrives.
 pub fn spawn(
     identity: TeammateIdentity,
     command_tx: mpsc::Sender<UserCommand>,
     turn_done_rx: mpsc::Receiver<String>,
     cancel: CancellationToken,
+    live_permission_rules: Arc<RwLock<Vec<PermissionRule>>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        run(identity, command_tx, turn_done_rx, cancel).await;
+        run(
+            identity,
+            command_tx,
+            turn_done_rx,
+            cancel,
+            live_permission_rules,
+        )
+        .await;
     })
 }
 
@@ -96,8 +117,15 @@ async fn run(
     command_tx: mpsc::Sender<UserCommand>,
     mut turn_done_rx: mpsc::Receiver<String>,
     cancel: CancellationToken,
+    live_permission_rules: Arc<RwLock<Vec<PermissionRule>>>,
 ) {
     loop {
+        // Apply any pending leader control messages (mode / permission rules)
+        // FIRST so the next turn runs under the right policy (gap 8).
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            _ = drain_control_tick(&identity, &command_tx, &live_permission_rules) => {}
+        }
         let framed = tokio::select! {
             _ = cancel.cancelled() => return,
             framed = scan_tick(&identity) => framed,
@@ -153,6 +181,70 @@ async fn scan_tick(identity: &TeammateIdentity) -> Option<String> {
             color.as_deref(),
             summary.as_deref(),
         )),
+    }
+}
+
+/// Drain leader→teammate control messages (gap 8). A `ModeSetRequest` is
+/// applied by injecting `UserCommand::SetPermissionMode` — the cross-process
+/// analog of the in-process runner's `drain_control_messages`, reusing the
+/// session's existing live permission-mode seam rather than a parallel control
+/// state. Fire-and-forget: `SetPermissionMode` updates config + app_state
+/// without spawning a turn, so no completion handshake is needed.
+///
+/// A `TeamPermissionUpdate` (rule push) extends the shared live-rules `Arc`
+/// in place — the cross-process analog of the in-process runner's
+/// `team_permission_rules` store.
+async fn drain_control_tick(
+    identity: &TeammateIdentity,
+    command_tx: &mpsc::Sender<UserCommand>,
+    live_rules: &Arc<RwLock<Vec<PermissionRule>>>,
+) {
+    let messages =
+        mailbox::read_mailbox(&identity.agent_name, &identity.team_name).unwrap_or_default();
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.read
+            || msg.from != TEAM_LEAD_NAME
+            || !mailbox::is_structured_protocol_message(&msg.text)
+        {
+            continue;
+        }
+        let Some(parsed) = mailbox::parse_protocol_message(&msg.text) else {
+            continue;
+        };
+        let applied = if let Some(cmd) = control_message_to_command(&parsed) {
+            command_tx.send(cmd).await.is_ok()
+        } else if let mailbox::ProtocolMessage::TeamPermissionUpdate {
+            permission_update, ..
+        } = &parsed
+        {
+            let rules = permission_update.clone().into_permission_rules();
+            if !rules.is_empty() {
+                live_rules.write().await.extend(rules);
+            }
+            true
+        } else {
+            false
+        };
+        if applied {
+            let _ = mailbox::mark_message_as_read_by_index(
+                &identity.agent_name,
+                &identity.team_name,
+                i,
+            );
+        }
+    }
+}
+
+/// Pure mapping from a leader control message to the `UserCommand` that
+/// applies it to this teammate's live session. `ModeSetRequest` →
+/// `SetPermissionMode`; everything else is `None` (left unread). Split out
+/// so the dispatch decision is unit-testable without a file mailbox.
+fn control_message_to_command(parsed: &mailbox::ProtocolMessage) -> Option<UserCommand> {
+    match parsed {
+        mailbox::ProtocolMessage::ModeSetRequest { mode, .. } => {
+            Some(UserCommand::SetPermissionMode { mode: *mode })
+        }
+        _ => None,
     }
 }
 
