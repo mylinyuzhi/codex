@@ -400,7 +400,7 @@ impl MarketplaceManager {
     ///
     /// For local/relative-path sources, copies the plugin directory.
     /// Returns the path where the plugin was installed.
-    pub fn install_plugin(
+    pub async fn install_plugin(
         &self,
         marketplace_name: &str,
         entry: &PluginMarketplaceEntry,
@@ -450,15 +450,16 @@ impl MarketplaceManager {
 
                 copy_dir_contents(&source_dir, &version_dir)?;
             }
-            crate::schemas::PluginSource::Remote(_remote) => {
-                // Remote sources (npm, github, git-subdir, url) require network
-                // access. For now, create a placeholder manifest noting the
-                // source so a subsequent fetch step can materialise the content.
-                tracing::info!(
-                    plugin = %entry.name,
-                    marketplace = %marketplace_name,
-                    "remote plugin source — cache directory prepared, fetch pending"
-                );
+            crate::schemas::PluginSource::Remote(remote) => {
+                // Remote plugin source: the manifest points at an external
+                // repo / registry (not a subdir of the marketplace). Fetch it
+                // per-plugin (git clone / npm / pip). On any failure remove the
+                // empty version dir so no broken enabled-but-empty entry is
+                // left on disk for the loader to choke on.
+                if let Err(e) = crate::fetch::fetch_plugin_source(remote, &version_dir).await {
+                    let _ = std::fs::remove_dir_all(&version_dir);
+                    return Err(e);
+                }
             }
         }
 

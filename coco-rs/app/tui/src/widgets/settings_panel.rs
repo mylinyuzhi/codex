@@ -9,15 +9,13 @@
 
 use crate::display_settings::DisplaySettings;
 use crate::i18n::t;
-use crate::theme::ThemeChoice;
-use crate::theme::ThemeRuntimeState;
-use crate::theme::ThemeSetting;
 use coco_tui_ui::display::SyntaxHighlighting;
 
-/// Settings panel tab.
+/// Settings panel tab. Theme selection moved to the standalone `/theme` picker;
+/// the first tab now hosts only display toggles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
-    Theme,
+    Display,
     OutputStyle,
     Permissions,
     About,
@@ -28,8 +26,6 @@ pub enum SettingsTab {
 pub struct SettingsPanelState {
     pub active_tab: SettingsTab,
     pub selected: i32,
-    pub themes: Vec<ThemeChoice>,
-    pub active_theme: ThemeSetting,
     pub display_settings: DisplaySettings,
     pub output_styles: Vec<String>,
     pub permission_rules: Vec<PermissionRuleDisplay>,
@@ -44,32 +40,18 @@ pub struct PermissionRuleDisplay {
 }
 
 impl SettingsPanelState {
-    pub fn new(theme_state: &ThemeRuntimeState, display_settings: DisplaySettings) -> Self {
+    pub fn new(display_settings: DisplaySettings) -> Self {
         Self {
-            active_tab: SettingsTab::Theme,
-            selected: selected_theme_index(&theme_state.choices, &theme_state.setting),
-            themes: theme_state.choices.clone(),
-            active_theme: theme_state.setting.clone(),
+            active_tab: SettingsTab::Display,
+            selected: 0,
             display_settings,
             output_styles: Vec::new(),
             permission_rules: Vec::new(),
         }
     }
 
-    pub fn set_themes(&mut self, themes: Vec<ThemeChoice>, active_theme: ThemeSetting) {
-        self.selected = selected_theme_index(&themes, &active_theme);
-        self.themes = themes;
-        self.active_theme = active_theme;
-    }
-
     pub fn set_display_settings(&mut self, display_settings: DisplaySettings) {
         self.display_settings = display_settings;
-    }
-
-    pub fn selected_theme_choice(&self) -> Option<&ThemeChoice> {
-        usize::try_from(self.selected)
-            .ok()
-            .and_then(|selected| self.themes.get(selected))
     }
 
     pub fn is_syntax_highlighting_selected(&self) -> bool {
@@ -80,32 +62,33 @@ impl SettingsPanelState {
         self.selected == self.copy_full_response_index()
     }
 
-    pub fn theme_item_count(&self) -> usize {
-        self.themes.len() + 2
+    /// The Display tab has two selectable rows: syntax highlighting + copy.
+    pub fn display_item_count(&self) -> usize {
+        2
     }
 
     fn syntax_highlighting_index(&self) -> i32 {
-        self.themes.len() as i32
+        0
     }
 
     fn copy_full_response_index(&self) -> i32 {
-        self.themes.len() as i32 + 1
+        1
     }
 
     pub fn next_tab(&mut self) {
         self.active_tab = match self.active_tab {
-            SettingsTab::Theme => SettingsTab::OutputStyle,
+            SettingsTab::Display => SettingsTab::OutputStyle,
             SettingsTab::OutputStyle => SettingsTab::Permissions,
             SettingsTab::Permissions => SettingsTab::About,
-            SettingsTab::About => SettingsTab::Theme,
+            SettingsTab::About => SettingsTab::Display,
         };
         self.selected = 0;
     }
 
     pub fn prev_tab(&mut self) {
         self.active_tab = match self.active_tab {
-            SettingsTab::Theme => SettingsTab::About,
-            SettingsTab::OutputStyle => SettingsTab::Theme,
+            SettingsTab::Display => SettingsTab::About,
+            SettingsTab::OutputStyle => SettingsTab::Display,
             SettingsTab::Permissions => SettingsTab::OutputStyle,
             SettingsTab::About => SettingsTab::Permissions,
         };
@@ -115,15 +98,8 @@ impl SettingsPanelState {
 
 impl Default for SettingsPanelState {
     fn default() -> Self {
-        Self::new(&ThemeRuntimeState::default(), DisplaySettings::default())
+        Self::new(DisplaySettings::default())
     }
-}
-
-fn selected_theme_index(themes: &[ThemeChoice], active_theme: &ThemeSetting) -> i32 {
-    themes
-        .iter()
-        .position(|choice| &choice.setting == active_theme)
-        .unwrap_or(0) as i32
 }
 
 pub(crate) fn syntax_highlighting_status(syntax_highlighting: SyntaxHighlighting) -> String {

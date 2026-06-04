@@ -10,12 +10,12 @@ fn test_register_extended_builtins() {
 
     // Verify we registered a reasonable number of extended commands.
     // Count drifts as commands move between layers; the floor only
-    // catches whole-block regressions. Floor lowered to 44 after a
-    // builtin migrated to `handlers/` per CLAUDE.md "Deliberately Not
-    // Ported" / "Deferred" tables.
+    // catches whole-block regressions. Floor lowered to 43 after `/theme`
+    // migrated to `register_ts_parity_handlers` (CommandHandler opening the
+    // standalone picker on no args).
     assert!(
-        registry.len() >= 44,
-        "Expected at least 44 extended commands, got {}",
+        registry.len() >= 43,
+        "Expected at least 43 extended commands, got {}",
         registry.len()
     );
 }
@@ -247,11 +247,8 @@ fn test_version_handler() {
 
 // /vim is now an async handler; behavior covered by handlers::vim::tests.
 
-#[test]
-fn test_theme_handler() {
-    assert!(theme_handler("").contains("~/.coco/theme.json"));
-    assert!(theme_handler("dark").contains("Theme `dark`"));
-}
+// `/theme` moved to a CommandHandler (handlers::theme::ThemeHandler) that
+// opens the picker on no args; see handlers/theme.test.rs.
 
 #[test]
 fn test_config_read_handler_accepts_jsonc_settings() {

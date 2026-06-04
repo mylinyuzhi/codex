@@ -1,6 +1,7 @@
 use pretty_assertions::assert_eq;
 
 use super::*;
+use crate::RetryConfig;
 
 #[test]
 fn test_classify_401_as_auth() {
@@ -40,13 +41,53 @@ fn test_classify_400_normal() {
 }
 
 #[test]
-fn test_classify_500_as_provider_error() {
-    let err = InferenceError::from_http_status(500, "Internal Server Error", None);
-    assert!(matches!(
-        err,
-        InferenceError::ProviderError { status: 500, .. }
-    ));
-    assert!(!err.is_retryable());
+fn test_classify_retryable_status_buckets() {
+    // Overload cascade (503/529): the capacity bucket, capped in-client to
+    // engage fallback fast (TS MAX_529_RETRIES). Retryable.
+    for status in [503, 529] {
+        let err = InferenceError::from_http_status(status, "overloaded", None);
+        assert!(
+            matches!(err, InferenceError::Overloaded { .. }),
+            "status {status} should be Overloaded"
+        );
+        assert!(err.is_retryable(), "status {status} should be retryable");
+        assert!(
+            RetryConfig::default().should_retry(2, &err)
+                && !RetryConfig::default().should_retry(3, &err),
+            "overload cascade {status} must cap at MAX_CAPACITY_RETRIES (3)"
+        );
+    }
+
+    // Generic 5xx (500/502/504) + 408/409: transient, retryable with the FULL
+    // backoff budget (TS retries status >= 500 / 408 / 409 up to max_retries).
+    for status in [500, 502, 504, 408, 409] {
+        let err = InferenceError::from_http_status(status, "server error", None);
+        assert!(
+            matches!(err, InferenceError::NetworkError { .. }),
+            "status {status} should be NetworkError"
+        );
+        assert!(err.is_retryable(), "status {status} should be retryable");
+        // NOT capacity-capped — gets the full retry budget.
+        assert!(
+            RetryConfig::default().should_retry(5, &err),
+            "generic transient {status} must get the full retry budget"
+        );
+    }
+
+    // 429: rate-limited, retryable, NOT capacity-capped (TS retries 429 to the
+    // full budget honoring retry-after).
+    let rate = InferenceError::from_http_status(429, "slow down", None);
+    assert!(matches!(rate, InferenceError::RateLimited { .. }));
+    assert!(rate.is_retryable());
+    assert!(
+        RetryConfig::default().should_retry(5, &rate),
+        "429 must get the full retry budget, not the capacity cap"
+    );
+
+    // Non-retryable caller errors stay non-retryable.
+    let not_found = InferenceError::from_http_status(404, "nope", None);
+    assert!(matches!(not_found, InferenceError::ProviderError { .. }));
+    assert!(!not_found.is_retryable());
 }
 
 #[test]
@@ -69,9 +110,13 @@ fn test_cancelled_not_retryable() {
 #[test]
 fn test_body_truncation() {
     let long_body = "x".repeat(1000);
-    let err = InferenceError::from_http_status(500, &long_body, None);
+    // 404 maps to the message-bearing ProviderError variant (500 now maps to
+    // the retryable Overloaded bucket, which carries no body).
+    let err = InferenceError::from_http_status(404, &long_body, None);
     if let InferenceError::ProviderError { message, .. } = &err {
         assert!(message.len() <= 504); // 500 + "..."
         assert!(message.ends_with("..."));
+    } else {
+        panic!("expected ProviderError for 404");
     }
 }

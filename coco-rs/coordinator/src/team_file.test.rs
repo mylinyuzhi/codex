@@ -106,3 +106,45 @@ fn test_sanitize_name_for_dir() {
     assert_eq!(crate::types::sanitize_name("My Team!"), "my-team-");
     assert_eq!(crate::types::sanitize_name("test-1"), "test-1");
 }
+
+#[test]
+fn cleanup_destroys_member_worktrees_and_tasks_dir() {
+    // Unique name so we can safely touch the real teams base + tasks root,
+    // mirroring the agent_handle integration tests.
+    let team_name = format!("agentteam-cleanup-{}", uuid::Uuid::new_v4().simple());
+
+    // Stand-in worktree: a plain dir. `destroy_worktree`'s
+    // `git worktree remove` fails on a non-worktree and falls back to
+    // remove_dir_all, so the dir should still be gone after cleanup.
+    let worktree = std::env::temp_dir().join(format!("wt-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(worktree.join("f.txt"), "x").unwrap();
+
+    // Team file with a member carrying that worktree path.
+    let team_dir = get_team_dir(&team_name);
+    std::fs::create_dir_all(&team_dir).unwrap();
+    let mut tf = make_test_team_file();
+    tf.name = team_name.clone();
+    tf.members[0].worktree_path = Some(worktree.to_string_lossy().to_string());
+    std::fs::write(
+        get_team_file_path(&team_name),
+        serde_json::to_string_pretty(&tf).unwrap(),
+    )
+    .unwrap();
+
+    // The team's task-list dir under the same root `TaskList::open` uses.
+    let task_list_id = crate::types::sanitize_name(&team_name);
+    let tasks_dir = coco_config::global_config::config_home()
+        .join("tasks")
+        .join(coco_tasks::task_list::sanitize_path_component(
+            &task_list_id,
+        ));
+    std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::write(tasks_dir.join("t.json"), "{}").unwrap();
+
+    cleanup_team_directories(&team_name).expect("cleanup ok");
+
+    assert!(!worktree.exists(), "member worktree should be destroyed");
+    assert!(!team_dir.exists(), "team dir should be removed");
+    assert!(!tasks_dir.exists(), "task-list dir should be removed");
+}

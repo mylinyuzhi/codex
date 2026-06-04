@@ -229,9 +229,7 @@ pub(crate) fn single_line_tool_input(tool_name: &str, input: &Value) -> String {
     match tool {
         ToolName::Glob => join_existing(input, &["pattern", "path"], " in "),
         ToolName::Grep => join_existing(input, &["pattern", "path"], " in "),
-        ToolName::Read => scalar_value(input, "file_path")
-            .or_else(|| scalar_value(input, "path"))
-            .unwrap_or_default(),
+        ToolName::Read => read_target_preview(input),
         ToolName::Edit | ToolName::Write | ToolName::NotebookEdit => {
             scalar_value(input, "file_path")
                 .or_else(|| scalar_value(input, "path"))
@@ -243,6 +241,30 @@ pub(crate) fn single_line_tool_input(tool_name: &str, input: &Value) -> String {
             .or_else(|| scalar_value(input, "prompt"))
             .unwrap_or_default(),
         _ => object_summary(input),
+    }
+}
+
+/// Read header preview: the path, plus a `· lines N-M` / `· from line N`
+/// suffix when offset/limit are present. Mirrors TS `FileReadTool/UI.tsx`
+/// (`lines {start}-{end}` when a limit is set, else `from line {start}`).
+fn read_target_preview(input: &Value) -> String {
+    let path = scalar_value(input, "file_path")
+        .or_else(|| scalar_value(input, "path"))
+        .unwrap_or_default();
+    let offset = input.get("offset").and_then(Value::as_i64);
+    let limit = input.get("limit").and_then(Value::as_i64);
+    if offset.is_none() && limit.is_none() {
+        return path;
+    }
+    let start = offset.unwrap_or(1).max(1);
+    let range = match limit {
+        Some(limit) if limit > 0 => format!("lines {start}-{}", start + limit - 1),
+        _ => format!("from line {start}"),
+    };
+    if path.is_empty() {
+        range
+    } else {
+        format!("{path} · {range}")
     }
 }
 

@@ -1287,3 +1287,17 @@ impl SaveDiff {
         serde_json::json!({ "skill_overrides": serde_json::Value::Object(overrides) })
     }
 }
+
+/// Standalone theme picker (TS `components/ThemePicker.tsx`). Opened by
+/// `/theme`; navigating live-previews the focused theme via an in-memory
+/// `apply_theme_setting`, Enter persists, Esc restores `original_setting` so
+/// the preview never sticks.
+#[derive(Debug, Clone)]
+pub struct ThemePickerState {
+    /// Auto + every built-in / custom theme, in display order.
+    pub choices: Vec<crate::theme::ThemeChoice>,
+    /// Index into `choices` (clamped to range by the renderer / nav).
+    pub selected: i32,
+    /// Theme setting active when the picker opened, restored on cancel.
+    pub original_setting: crate::theme::ThemeSetting,
+}

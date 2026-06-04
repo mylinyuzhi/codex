@@ -128,6 +128,11 @@ fn reapply_sandbox(
         runtime.settings.sourced_permission_rules();
     let sourced_fs_allow_read = runtime.settings.sourced_filesystem_allow_read();
 
+    // Same self-permission deny set as bootstrap — passing `&[]` here silently
+    // dropped the S8 protection on the first settings hot-reload, re-opening
+    // the sandbox escape mid-session.
+    let settings_files = crate::session_runtime::sandbox_settings_deny_paths(&settings_root);
+
     let inputs = AdapterInputs {
         settings: &sandbox_settings,
         mode,
@@ -138,7 +143,7 @@ fn reapply_sandbox(
         permission_deny_rules: &permission_deny_rules,
         additional_directories: &additional_directories,
         coco_temp_dir: &coco_temp_dir,
-        settings_files: &[],
+        settings_files: &settings_files,
         worktree_main_repo: worktree.as_deref(),
         sourced_permission_allow_rules: Some(&sourced_allow_rules),
         sourced_filesystem_allow_read: Some(&sourced_fs_allow_read),

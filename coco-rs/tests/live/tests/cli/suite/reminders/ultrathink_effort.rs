@@ -13,7 +13,7 @@ use crate::common::reminders;
 
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
-        max_turns: 2,
+        max_turns: Some(2),
         system_reminder: SystemReminderConfig {
             attachments: AttachmentSettings {
                 ultrathink_effort: true,

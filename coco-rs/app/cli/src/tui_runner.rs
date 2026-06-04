@@ -221,6 +221,26 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let tui_permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
         tui_permission_bridge_concrete.clone();
 
+    // Pick the permission bridge for THIS session's engine. A cross-process
+    // pane teammate forwards deny-path prompts to the leader via mailbox IPC
+    // (the leader polls its inbox + routes them to its approval UI) rather
+    // than prompting in the teammate's own pane; the leader session keeps the
+    // TuiPermissionBridge. TS: pane workers install the mailbox bridge, the
+    // leader uses ToolUseConfirm. In-process teammates instead inherit the
+    // leader's bridge via `wire_engine` and never reach this branch.
+    let session_permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
+        match coco_coordinator::identity::resolve_teammate_identity() {
+            Some(identity) => {
+                // Bounded by MailboxPermissionBridge's internal timeout, so a
+                // silent/absent leader fails closed rather than hanging.
+                let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                Arc::new(coco_coordinator::MailboxPermissionBridge::new(
+                    identity, cancelled,
+                ))
+            }
+            None => tui_permission_bridge.clone(),
+        };
+
     // SessionRuntime owns every per-session subsystem (FileReadState,
     // SessionMemoryService, FileHistoryState, ToolAppState,
     // CompactionObserverRegistry, HookRegistry, history Mutex, etc.).
@@ -239,7 +259,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             tools,
             session_manager,
             fast_model_spec,
-            permission_bridge: Some(tui_permission_bridge),
+            permission_bridge: Some(session_permission_bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
             // TS parity: load `~/.coco/agents` + `<cwd>/.claude/agents`
@@ -251,6 +271,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
                 &cwd,
             ),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+            session_id_override: None,
         },
     )
     .await?;
@@ -318,6 +339,85 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         &coco_config::global_config::config_home(),
     );
 
+    // Skill change detector — TS parity: `skillChangeDetector.ts`
+    // (registered at startup in `main.tsx`). Reloads the skill catalog
+    // (reminder + SkillTool) and rebuilds the slash-command registry on
+    // `.md` edits so authoring skills doesn't require a session restart.
+    // Held by `_skill_watcher_guard` until TUI shutdown (drop = clean
+    // stop), exactly like the plugin watcher above.
+    let _skill_watcher_guard = coco_cli::skill_watch::spawn(
+        runtime.clone(),
+        notification_tx.clone(),
+        cwd.clone(),
+        coco_config::global_config::config_home(),
+    );
+
+    // Team-memory server sync — TS parity: `startTeamMemoryWatcher`
+    // (`setup.ts:365-368`). Pulls server team memory at session start,
+    // then debounce-pushes local edits. Fire-and-forget on the
+    // interactive path; no-ops unless team memory is enabled, the repo
+    // has a github `origin` slug, and a claude.ai OAuth token is present.
+    coco_cli::team_memory_sync::bootstrap(
+        &runtime.runtime_config,
+        cwd.clone(),
+        coco_config::global_config::config_home(),
+    );
+
+    // Agent-teams role wiring (TS `useInboxPoller`). A LEADER registers the
+    // setter that routes a pane teammate's forwarded permission request to its
+    // approval UI + replies via mailbox, plus a continuous 1s inbox poll. A
+    // cross-process TEAMMATE instead runs the inbox→turn pump (gap 1) that
+    // drives turns from its own mailbox. `teammate_turn_done_tx` is the pump's
+    // completion handshake (threaded into `run_agent_driver` below); `None`
+    // for a leader. `pump_cancel` lets the exit path stop the pump so it drops
+    // its `command_tx` clone and the driver can shut down.
+    let mut teammate_turn_done_tx: Option<mpsc::Sender<String>> = None;
+    let pump_cancel = CancellationToken::new();
+    if runtime
+        .runtime_config
+        .features
+        .enabled(coco_types::Feature::AgentTeams)
+    {
+        match coco_coordinator::identity::resolve_teammate_identity() {
+            None => {
+                coco_cli::leader_permission::register(tui_permission_bridge.clone()).await;
+                // Continuous 1s inbox poll (TS useInboxPoller) so worker
+                // permission prompts surface even while the leader is idle.
+                // Fire-and-forget for the session lifetime; dies on process
+                // exit (same pattern as the official-marketplace installer).
+                coco_cli::leader_inbox_poller::spawn(runtime.clone());
+            }
+            Some(identity) => {
+                // Cross-process teammate: pump this teammate's mailbox into
+                // TUI turns. `command_tx` is cloned BEFORE `App::new` consumes
+                // it below; the pump injects `SubmitInput` and serializes on
+                // the completion handshake.
+                let (tx, rx) = mpsc::channel::<String>(16);
+                teammate_turn_done_tx = Some(tx);
+                coco_cli::teammate_inbox_pump::spawn(
+                    identity,
+                    command_tx.clone(),
+                    rx,
+                    pump_cancel.clone(),
+                );
+            }
+        }
+    }
+
+    // Official marketplace auto-install — TS parity
+    // (`useOfficialMarketplaceNotification`). Fire-and-forget on the
+    // interactive path only: retry-gated + backoff, opt-out via
+    // `COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE`, and non-fatal. Never blocks
+    // startup — the `anthropics/claude-plugins-official` marketplace is fetched
+    // once in the background and reused on subsequent launches.
+    {
+        let plugins_dir = coco_config::global_config::config_home().join("plugins");
+        tokio::spawn(async move {
+            let outcome = coco_plugins::official::ensure_official_marketplace(plugins_dir).await;
+            tracing::debug!(?outcome, "official marketplace auto-install");
+        });
+    }
+
     // Honor `--resume` / `--continue` / `--fork-session`. The binary
     // entry has already loaded the source transcript; here we repoint
     // every session-id-keyed subsystem at the resume target and seed
@@ -336,6 +436,16 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             "resume: hydrating session",
         );
         hydrate_resume_plan(&plan, &runtime, &notification_tx).await;
+        // Reconcile coordinator mode to the resumed session (TS
+        // `matchSessionMode`). This flips `COCO_COORDINATOR_MODE` *before*
+        // the coordinator badge (below) and the first per-turn system
+        // prompt are computed, so both reflect the resumed session's mode.
+        if let Some(warning) = coco_cli::coordinator_mode_resume::reconcile_on_resume(
+            plan.conversation.mode.as_deref(),
+            &runtime.runtime_config.features,
+        ) {
+            emit_slash_text(&notification_tx, "resume", "", warning).await;
+        }
         eprintln!(
             "{} session {} ({} prior message(s))",
             if plan.is_fork { "Forked" } else { "Resumed" },
@@ -561,6 +671,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         runtime_publisher,
         cwd.clone(),
         flag_settings_path,
+        teammate_turn_done_tx,
     ));
 
     // Startup is complete; emit the phase profile (COCO_STARTUP_PROFILE)
@@ -571,6 +682,12 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
 
     // Run TUI (blocks until exit)
     let tui_result = app.run().await;
+
+    // Stop the cross-process teammate inbox pump (if any) so it drops its
+    // `command_tx` clone. Without this the held clone keeps the driver's
+    // `command_rx` open and `driver_handle.await` below blocks forever — the
+    // teammate process would hang on every exit. No-op for a leader session.
+    pump_cancel.cancel();
 
     // Capture the session id BEFORE dropping the App — the TUI's Drop
     // restores the terminal but moves the AppState out of reach.
@@ -589,6 +706,16 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // transcript append, telemetry). The driver writes only to stderr
     // / log files, so it cannot clobber this stdout write.
     coco_cli::resume_hint::print_resume_hint(&cwd, session_id.as_deref());
+
+    // TS parity (`gracefulShutdown.ts` cleanupSessionTeams): on leader exit,
+    // remove the team dirs (+ worktrees + tasks via cleanup_team_directories)
+    // for teams this session led, so they do not orphan. Cross-process pane
+    // teardown is a separate backend-aware follow-up.
+    if let Some(sid) = session_id.as_deref()
+        && let Err(e) = coco_coordinator::team_file::cleanup_session_teams(sid)
+    {
+        tracing::warn!(error = %e, "team cleanup on exit failed");
+    }
 
     // Wait for agent driver to finish its own teardown.
     let _ = driver_handle.await;
@@ -664,6 +791,7 @@ fn spawn_config_reload_error_toasts(
 /// Runs as a background tokio task alongside the TUI event loop.
 ///
 /// Events flow directly as `CoreEvent` from QueryEngine → TUI (no mapping layer).
+#[allow(clippy::too_many_arguments)]
 async fn run_agent_driver(
     mut command_rx: mpsc::Receiver<UserCommand>,
     event_tx: mpsc::Sender<CoreEvent>,
@@ -672,6 +800,11 @@ async fn run_agent_driver(
     runtime_publisher: Option<Arc<coco_config::RuntimePublisher>>,
     cwd: std::path::PathBuf,
     flag_settings: Option<std::path::PathBuf>,
+    // Cross-process teammate inbox pump (gap 1) completion handshake. When
+    // `Some`, each spawned top-level turn fires its `user_message_id` here on
+    // completion so the pump can serialize on its own injected turn. `None`
+    // for leader / standalone sessions.
+    teammate_turn_done_tx: Option<mpsc::Sender<String>>,
 ) {
     // Per-session one-shot gate: title gen runs at most once per
     // session id, never the process. After `/resume` or `/clear` the
@@ -780,12 +913,19 @@ async fn run_agent_driver(
                 let title_gen_attempted_t = title_gen_attempted.clone();
                 let session_id_t = session_id.clone();
                 let turn_done_tx_t = turn_done_tx.clone();
+                // Cross-process teammate pump handshake: fire this turn's
+                // `user_message_id` on completion (Drop covers panic + cancel).
+                let pump_done = teammate_turn_done_tx.as_ref().map(|tx| PumpDoneGuard {
+                    id: user_message_id.clone(),
+                    tx: tx.clone(),
+                });
 
                 let task = tokio::spawn(async move {
                     let _done = TurnDoneGuard {
                         turn_id,
                         tx: turn_done_tx_t,
                     };
+                    let _pump_done = pump_done;
                     process_submit_turn(
                         user_message_id,
                         effective_content,
@@ -1970,6 +2110,16 @@ async fn dispatch_resume(
                 "slash resume: hydrating session",
             );
             hydrate_resume_plan(&plan, runtime, event_tx).await;
+            // Reconcile coordinator mode to the resumed session, same as the
+            // startup path (TS `matchSessionMode` is wired into the REPL
+            // resume too). Runs at a turn boundary, so the env flip is
+            // observed by the next prompt assembly.
+            if let Some(warning) = coco_cli::coordinator_mode_resume::reconcile_on_resume(
+                plan.conversation.mode.as_deref(),
+                &runtime.runtime_config.features,
+            ) {
+                emit_slash_text(event_tx, "resume", args, warning).await;
+            }
         }
         Err(err) => {
             emit_slash_text(
@@ -2772,6 +2922,11 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenModelPicker))
                         .await;
                 }
+                DialogSpec::ThemePicker => {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::OpenThemePicker))
+                        .await;
+                }
                 DialogSpec::SkillsList { mut payload } => {
                     // The `SkillsHandler` runs through the
                     // `CommandHandler` trait, which doesn't carry a
@@ -2825,7 +2980,8 @@ async fn dispatch_slash_command(
                         | DialogSpec::MemoryFileSelector { .. }
                         | DialogSpec::SkillsList { .. }
                         | DialogSpec::AgentsList { .. }
-                        | DialogSpec::ModelPicker => unreachable!(),
+                        | DialogSpec::ModelPicker
+                        | DialogSpec::ThemePicker => unreachable!(),
                     }
                     .to_string();
                     emit_slash_status(
@@ -3051,6 +3207,25 @@ impl Drop for TurnDoneGuard {
                 "turn completion signal failed in Drop; active_turn may stay locked until next drain"
             );
         }
+    }
+}
+
+/// Completion signaller for the cross-process teammate inbox pump (gap 1).
+///
+/// Fires the turn's `user_message_id` so the pump (`teammate_inbox_pump`)
+/// can release its serialized wait and inject the next mailbox message.
+/// `Drop` (not a tail send) so the signal fires on normal completion,
+/// cancellation, AND panic — same reasoning as [`TurnDoneGuard`]. Only
+/// attached in a teammate session (the pump is the sole consumer); the
+/// `try_send` is best-effort against the bounded handshake channel.
+struct PumpDoneGuard {
+    id: String,
+    tx: mpsc::Sender<String>,
+}
+
+impl Drop for PumpDoneGuard {
+    fn drop(&mut self) {
+        let _ = self.tx.try_send(self.id.clone());
     }
 }
 
@@ -3605,8 +3780,11 @@ async fn dispatch_context(
 ) -> SlashOutcome {
     match runtime.analyze_main_context().await {
         Ok(report) => {
-            let text = coco_query::context_analysis::format_markdown(&report);
-            emit_slash_text(event_tx, "context", "", &text).await;
+            let _ = event_tx
+                .send(CoreEvent::Tui(TuiOnlyEvent::OpenContextUsage {
+                    result: report.to_wire(),
+                }))
+                .await;
         }
         Err(e) => {
             emit_slash_status(

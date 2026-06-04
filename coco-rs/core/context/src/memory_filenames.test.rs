@@ -94,6 +94,62 @@ fn loads_both_claude_and_agents_when_present() {
 }
 
 #[test]
+fn dedups_byte_identical_claude_and_agents_keeping_claude() {
+    let dir = tempdir().unwrap();
+    let body = "# shared instructions\nidentical bytes\n";
+    fs::write(dir.path().join("CLAUDE.md"), body).unwrap();
+    fs::write(dir.path().join("AGENTS.md"), body).unwrap();
+
+    let hits = find_memory_files(dir.path(), MEMORY_FILE_CANDIDATES);
+    let names: Vec<&str> = hits
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    // Exact-copy pair collapses to CLAUDE.md only.
+    assert_eq!(names, vec!["CLAUDE.md"]);
+}
+
+#[test]
+fn keeps_both_when_content_differs_by_a_single_byte() {
+    let dir = tempdir().unwrap();
+    // Same length, one byte different — must NOT dedup.
+    fs::write(dir.path().join("CLAUDE.md"), "alpha").unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "alphb").unwrap();
+
+    let hits = find_memory_files(dir.path(), MEMORY_FILE_CANDIDATES);
+    let names: Vec<&str> = hits
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["AGENTS.md", "CLAUDE.md"]);
+}
+
+#[test]
+fn keeps_both_when_sizes_differ() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("CLAUDE.md"), "longer content here").unwrap();
+    fs::write(dir.path().join("AGENTS.md"), "short").unwrap();
+
+    let hits = find_memory_files(dir.path(), MEMORY_FILE_CANDIDATES);
+    assert_eq!(hits.len(), 2, "different sizes are never byte-identical");
+}
+
+#[test]
+fn dedups_identical_local_variants_keeping_claude_local() {
+    let dir = tempdir().unwrap();
+    let body = "local override\n";
+    fs::write(dir.path().join("CLAUDE.local.md"), body).unwrap();
+    fs::write(dir.path().join("AGENTS.local.md"), body).unwrap();
+
+    let hits = find_memory_files(dir.path(), MEMORY_LOCAL_FILE_CANDIDATES);
+    let names: Vec<&str> = hits
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["CLAUDE.local.md"]);
+}
+
+#[test]
 fn skips_directories_with_matching_name() {
     let dir = tempdir().unwrap();
     fs::create_dir(dir.path().join("CLAUDE.md")).unwrap();

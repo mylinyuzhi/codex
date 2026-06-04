@@ -13,7 +13,7 @@ const NEEDLE: &str = "🦁lion-roar-7392";
 
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
-        max_turns: 2,
+        max_turns: Some(2),
         system_reminder: SystemReminderConfig {
             critical_instruction: Some(NEEDLE.to_string()),
             ..SystemReminderConfig::default()

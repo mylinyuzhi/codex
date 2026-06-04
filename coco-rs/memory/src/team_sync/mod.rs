@@ -31,4 +31,5 @@ pub use types::TeamMemorySyncPushResult;
 pub use types::TeamMemorySyncUploadResult;
 pub use types::{MAX_FILE_SIZE_BYTES, MAX_PUT_BODY_BYTES, SYNC_TIMEOUT_MS};
 pub use watcher::WatcherConfig;
+pub use watcher::run_watch_loop;
 pub use watcher::spawn_watcher;

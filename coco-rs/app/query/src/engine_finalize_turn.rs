@@ -221,16 +221,27 @@ impl QueryEngine {
             }
         }
 
-        // Provider capability split. On Anthropic (server-side edits)
-        // we attach a one-shot `context_management` payload to the next
-        // QueryParams build instead of mutating messages locally — the
-        // API clears tool results in place and the prompt cache stays
-        // intact. On other providers, fall back to the original
-        // client-side mutation path (cache-invalidating but universal).
-        if self
+        // Provider capability split. On Anthropic (server-side edits) we
+        // attach a one-shot `context_management` payload to the next
+        // QueryParams build instead of mutating messages locally — the API
+        // clears tool results in place and the prompt cache stays intact. On
+        // other providers, fall back to the client-side mutation path
+        // (cache-invalidating but universal).
+        //
+        // Loop guard: the server-side branch frees no LOCAL tokens (it queues
+        // an edit the retry will send). If the PREVIOUS attempt already queued
+        // a server-side edit and we are back here, that cache-preserving retry
+        // did NOT resolve the overflow — fall back to client-side truncation
+        // (which frees real tokens) so we don't queue-and-retry forever.
+        let server_side_supported = self
             .runtime_snapshot()
-            .is_some_and(|snapshot| snapshot.supports_server_side_context_edits)
-        {
+            .is_some_and(|snapshot| snapshot.supports_server_side_context_edits);
+        let prior_server_side_unresolved = {
+            let mut state = self.reactive_state.lock().await;
+            state.take_pending_server_side()
+        };
+        let use_server_side = server_side_supported && !prior_server_side_unresolved;
+        if use_server_side {
             // Build aggressive ApiContextOptions from current state.
             // `trigger_threshold = pre_tokens` ensures the server applies
             // clearing for the current oversized prompt; `keep_target`
@@ -287,17 +298,30 @@ impl QueryEngine {
             .unwrap_or(0);
         let post_tokens = coco_messages::estimate_tokens_for_messages(history.as_slice());
         let actually_freed = (pre_tokens - post_tokens).max(0);
-        {
+
+        // Progress signal for `handle_context_overflow`. The server-side
+        // (Anthropic) branch frees no LOCAL tokens — it queues a
+        // `context_management` edit the next request will carry, and the API
+        // clears in place. So "queued" IS progress: returning false here would
+        // make the very first context-overflow turn terminate as Exhausted
+        // before the cache-preserving retry ever runs (the original bug). The
+        // `pending_server_side` flag (taken at the top) bounds this — a
+        // re-entry after a server-side queue falls back to the client-side
+        // branch below, which counts progress by tokens actually dropped.
+        let made_progress = {
             let mut state = self.reactive_state.lock().await;
-            // Treat any meaningful reduction as a success; if we
-            // couldn't drop anything, mark a failure so the breaker
-            // trips eventually.
-            if actually_freed > 0 {
+            if use_server_side {
+                state.set_pending_server_side();
                 state.record_success(now_ms);
+                true
+            } else if actually_freed > 0 {
+                state.record_success(now_ms);
+                true
             } else {
                 state.record_failure(now_ms);
+                false
             }
-        }
+        };
 
         let removed = (pre_count - history.len() as i32).max(0);
         let _ = emit_protocol(
@@ -353,14 +377,14 @@ impl QueryEngine {
         let qs = self.query_source_label();
         self.notify_model_compaction(qs).await;
 
-        // Reactive compact also rewrites history (peels oldest API-round
-        // groups, drops attachments) — so it must reset the memory
-        // recall state AND clear the SM cache, same as the full / SM-first
-        // / partial compact paths. Without this, a long session that
-        // survives a PTL retry inherits a saturated `total_bytes` and
-        // stale `already_surfaced` set, silently killing recall for the
-        // rest of the session.
-        if let Some(rt) = &self.memory_runtime {
+        // The CLIENT-SIDE reactive compact rewrites history (peels oldest
+        // API-round groups, drops attachments), so it must reset the memory
+        // recall state AND clear the SM cache — same as full / SM-first /
+        // partial compact. The SERVER-SIDE (Anthropic) branch only queues an
+        // edit and leaves local history intact, so its recall/SM state is still
+        // valid; resetting there would needlessly kill recall for the rest of
+        // the session.
+        if !use_server_side && let Some(rt) = &self.memory_runtime {
             rt.reset_recall_state();
             rt.session_memory.clear_after_compact().await;
         }
@@ -371,9 +395,10 @@ impl QueryEngine {
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
         // Progress signal for `handle_context_overflow` / recovery
-        // dispatcher (Finding **R1**). Any meaningful reduction counts;
-        // zero-freed runs surface as terminal exhaustion to the caller.
-        actually_freed > 0
+        // dispatcher (Finding **R1**). Client-side counts tokens freed;
+        // server-side counts the queued edit as progress (see `made_progress`
+        // above). Zero-progress runs surface as terminal exhaustion.
+        made_progress
     }
 
     /// Finalize a turn after tools have executed: drain queued commands + inbox,

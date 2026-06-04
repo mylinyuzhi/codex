@@ -8,75 +8,63 @@ use ratatui::style::Color;
 use crate::color::ColorCapability;
 use crate::color::adapt_color;
 
-/// Available theme names.
+/// Available theme names. Mirrors claude-code's `THEME_NAMES`
+/// (`utils/theme.ts`) one-for-one — no coco-only extras. `Dark` is the
+/// default (TS `config.ts` → `theme: 'dark'`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeName {
     #[default]
-    Default,
     Dark,
     Light,
     DarkDaltonized,
     LightDaltonized,
     DarkAnsi,
     LightAnsi,
-    Dracula,
-    Nord,
 }
 
 impl ThemeName {
     pub fn all() -> &'static [Self] {
         &[
-            Self::Default,
             Self::Dark,
             Self::Light,
             Self::DarkDaltonized,
             Self::LightDaltonized,
             Self::DarkAnsi,
             Self::LightAnsi,
-            Self::Dracula,
-            Self::Nord,
         ]
     }
 
     pub fn id(self) -> &'static str {
         match self {
-            Self::Default => "default",
             Self::Dark => "dark",
             Self::Light => "light",
             Self::DarkDaltonized => "dark_daltonized",
             Self::LightDaltonized => "light_daltonized",
             Self::DarkAnsi => "dark_ansi",
             Self::LightAnsi => "light_ansi",
-            Self::Dracula => "dracula",
-            Self::Nord => "nord",
         }
     }
 
     pub fn label(self) -> &'static str {
+        // Friendly names mirroring claude-code's ThemePicker options verbatim.
         match self {
-            Self::Default => "Default",
-            Self::Dark => "Dark",
-            Self::Light => "Light",
-            Self::DarkDaltonized => "Dark Daltonized",
-            Self::LightDaltonized => "Light Daltonized",
-            Self::DarkAnsi => "Dark ANSI",
-            Self::LightAnsi => "Light ANSI",
-            Self::Dracula => "Dracula",
-            Self::Nord => "Nord",
+            Self::Dark => "Dark mode",
+            Self::Light => "Light mode",
+            Self::DarkDaltonized => "Dark mode (colorblind-friendly)",
+            Self::LightDaltonized => "Light mode (colorblind-friendly)",
+            Self::DarkAnsi => "Dark mode (ANSI colors only)",
+            Self::LightAnsi => "Light mode (ANSI colors only)",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
         match id {
-            "default" => Some(Self::Default),
             "dark" => Some(Self::Dark),
             "light" => Some(Self::Light),
             "dark_daltonized" | "dark-daltonized" => Some(Self::DarkDaltonized),
             "light_daltonized" | "light-daltonized" => Some(Self::LightDaltonized),
             "dark_ansi" | "dark-ansi" => Some(Self::DarkAnsi),
             "light_ansi" | "light-ansi" => Some(Self::LightAnsi),
-            "dracula" => Some(Self::Dracula),
-            "nord" => Some(Self::Nord),
             _ => None,
         }
     }
@@ -147,6 +135,10 @@ pub struct Theme {
     pub code_type: Color,
     /// Operator / punctuation highlight (syntect `keyword.operator.*`).
     pub code_operator: Color,
+    /// Inline `code` span foreground (markdown backticks). Decoupled from
+    /// `accent` so prose-context inline code can be tuned soft without
+    /// recoloring the accent-driven chips / alerts that also read `accent`.
+    pub code_inline: Color,
     /// Optional background fill behind fenced code blocks. `None` inherits the
     /// terminal background.
     pub code_bg: Option<Color>,
@@ -175,15 +167,12 @@ impl Theme {
     /// Get theme by name.
     pub fn from_name(name: ThemeName) -> Self {
         match name {
-            ThemeName::Default => Self::default_theme(),
             ThemeName::Dark => Self::dark_theme(),
             ThemeName::Light => Self::light_theme(),
             ThemeName::DarkDaltonized => Self::dark_daltonized_theme(),
             ThemeName::LightDaltonized => Self::light_daltonized_theme(),
             ThemeName::DarkAnsi => Self::dark_ansi_theme(),
             ThemeName::LightAnsi => Self::light_ansi_theme(),
-            ThemeName::Dracula => Self::dracula_theme(),
-            ThemeName::Nord => Self::nord_theme(),
         }
     }
 
@@ -192,223 +181,213 @@ impl Theme {
     }
 
     #[allow(clippy::disallowed_methods)]
-    fn default_theme() -> Self {
-        Self {
-            modal_border: Color::DarkGray,
-            panel_border: Color::DarkGray,
-            code_function: Color::Cyan,
-            code_type: Color::Yellow,
-            code_operator: Color::DarkGray,
-            code_bg: None,
-            blockquote: Color::DarkGray,
-            heading: Color::Cyan,
-            hr: Color::DarkGray,
-            strikethrough: Color::DarkGray,
-            primary: Color::Cyan,
-            secondary: Color::DarkGray,
-            accent: Color::Magenta,
-
-            text: Color::Reset,
-            text_dim: Color::DarkGray,
-            text_bold: Color::Reset,
-
-            user_message: Color::Green,
-            // Subtle dark tint — slightly above typical dark-terminal
-            // background so user rows separate visually from prose.
-            user_message_bg: Some(Color::Rgb(30, 36, 42)),
-            assistant_message: Color::Cyan,
-            // Thinking renders as normal text by default: `Color::Reset` =
-            // terminal default foreground. The renderer then de-emphasizes it
-            // with `.dim().italic()` (presentation/thinking.rs), matching
-            // codex-rs (history_cell/messages.rs) and Claude Code. The token
-            // stays wired through `.fg(styles.thinking())`, so a theme / config
-            // can recolor thinking later without touching render code.
-            thinking: Color::Reset,
-            system_message: Color::DarkGray,
-
-            tool_running: Color::Yellow,
-            tool_completed: Color::Green,
-            // Soft coral instead of ANSI 31 — palette-independent, reads as a
-            // warm red rather than the terminal's muddy dark red. Matches the
-            // Claude Code TS `dark.error` (rgb(255,107,128)).
-            tool_error: Color::Rgb(255, 107, 128),
-            warning: Color::Yellow,
-            success: Color::Green,
-            error: Color::Rgb(255, 107, 128),
-
-            border: Color::DarkGray,
-            border_focused: Color::Cyan,
-            scrollbar: Color::DarkGray,
-            plan_mode: Color::Cyan,
-            selection_bg: Color::Rgb(18, 55, 62),
-            selection_fg: Color::Cyan,
-
-            diff_added: Color::Green,
-            diff_removed: Color::Rgb(255, 107, 128),
-
-            code_keyword: Color::Magenta,
-            code_string: Color::Green,
-            code_comment: Color::DarkGray,
-            code_number: Color::Cyan,
-
-            hyperlink: Color::Cyan,
-            table_border: Color::DarkGray,
-            table_header: Color::Cyan,
-            search_match: Color::Yellow,
-            progress_bar: Color::Cyan,
-            context_used: Color::Cyan,
-            context_free: Color::DarkGray,
-        }
-    }
-
-    #[allow(clippy::disallowed_methods)]
     fn dark_theme() -> Self {
+        // Explicit-RGB palette mapped to Claude Code's TS dark theme — NO
+        // ANSI-named colors except `Color::Reset` (body text inherits the
+        // terminal foreground). Named colors are recolored by the terminal's own
+        // 16-color palette (a custom palette, e.g. magenta→red, would tint the
+        // whole UI), so every token is a fixed RGB that also downsamples to a
+        // stable xterm-256 index. Token → TS dark: primary/assistant/heading =
+        // `claude`, accent = `permission` (periwinkle), grays =
+        // `subtle`/`inactive`/`promptBorder`; success/warning/error/planMode/
+        // selectionBg are taken verbatim.
         Self {
-            modal_border: Color::DarkGray,
-            panel_border: Color::DarkGray,
-            code_function: Color::LightCyan,
-            code_type: Color::LightYellow,
-            code_operator: Color::DarkGray,
+            modal_border: Color::Rgb(80, 80, 80),
+            panel_border: Color::Rgb(80, 80, 80),
+            code_function: Color::Rgb(86, 182, 194),
+            code_type: Color::Rgb(229, 192, 123),
+            code_operator: Color::Rgb(130, 137, 151),
+            code_inline: Color::Rgb(177, 185, 249), // = accent/permission (TS codespan)
             code_bg: None,
-            blockquote: Color::DarkGray,
-            heading: Color::LightCyan,
-            hr: Color::DarkGray,
-            strikethrough: Color::DarkGray,
-            primary: Color::LightCyan,
-            secondary: Color::DarkGray,
-            accent: Color::LightMagenta,
+            blockquote: Color::Rgb(80, 80, 80),
+            heading: Color::Rgb(215, 119, 87),
+            hr: Color::Rgb(80, 80, 80),
+            strikethrough: Color::Rgb(80, 80, 80),
+            primary: Color::Rgb(215, 119, 87),
+            secondary: Color::Rgb(80, 80, 80),
+            // TS `permission`/`suggestion` periwinkle — TS's pervasive cool
+            // accent; replaces the palette-recolorable `Magenta`.
+            accent: Color::Rgb(177, 185, 249),
 
             text: Color::Reset,
-            text_dim: Color::DarkGray,
+            text_dim: Color::Rgb(153, 153, 153),
             text_bold: Color::Reset,
 
-            user_message: Color::LightGreen,
-            user_message_bg: Some(Color::Rgb(30, 36, 42)),
-            assistant_message: Color::LightCyan,
-            // Normal text by default (`Color::Reset`); the renderer adds
-            // `.dim().italic()`. Kept themeable — see default_theme.
+            user_message: Color::Rgb(78, 186, 101),
+            user_message_bg: Some(Color::Rgb(55, 55, 55)),
+            assistant_message: Color::Rgb(215, 119, 87),
+            // Thinking renders as normal text (`Color::Reset` = terminal default
+            // fg); the renderer de-emphasizes with `.dim().italic()`. Themeable.
             thinking: Color::Reset,
-            system_message: Color::DarkGray,
+            system_message: Color::Rgb(80, 80, 80),
 
-            tool_running: Color::LightYellow,
-            tool_completed: Color::LightGreen,
-            // Soft coral — see default_theme. Brighter than ANSI 91 LightRed
-            // and palette-independent. Matches Claude Code TS `dark.error`.
+            tool_running: Color::Rgb(255, 193, 7),
+            tool_completed: Color::Rgb(78, 186, 101),
             tool_error: Color::Rgb(255, 107, 128),
-            warning: Color::LightYellow,
-            success: Color::LightGreen,
+            warning: Color::Rgb(255, 193, 7),
+            success: Color::Rgb(78, 186, 101),
             error: Color::Rgb(255, 107, 128),
 
-            border: Color::DarkGray,
-            border_focused: Color::LightCyan,
-            scrollbar: Color::DarkGray,
-            plan_mode: Color::LightCyan,
-            selection_bg: Color::Rgb(18, 55, 62),
-            selection_fg: Color::LightCyan,
+            border: Color::Rgb(136, 136, 136),
+            border_focused: Color::Rgb(177, 185, 249),
+            scrollbar: Color::Rgb(80, 80, 80),
+            plan_mode: Color::Rgb(72, 150, 140),
+            selection_bg: Color::Rgb(38, 79, 120),
+            selection_fg: Color::Rgb(177, 185, 249),
 
-            diff_added: Color::LightGreen,
+            diff_added: Color::Rgb(78, 186, 101),
             diff_removed: Color::Rgb(255, 107, 128),
 
-            code_keyword: Color::LightMagenta,
-            code_string: Color::LightGreen,
-            code_comment: Color::DarkGray,
-            code_number: Color::LightCyan,
+            // One Dark soft code palette (fixed truecolor, keyword BOLD dropped).
+            // TS's md fence uses cli-highlight (blue keyword); One Dark's soft
+            // purple reads calmer than Monokai's `#F92672` (which quantized to a
+            // red `#FF005F` at 256-color).
+            code_keyword: Color::Rgb(198, 120, 221),
+            code_string: Color::Rgb(152, 195, 121),
+            code_comment: Color::Rgb(92, 99, 112),
+            code_number: Color::Rgb(209, 154, 102),
 
-            hyperlink: Color::LightCyan,
-            table_border: Color::DarkGray,
-            table_header: Color::LightCyan,
-            search_match: Color::LightYellow,
-            progress_bar: Color::LightCyan,
-            context_used: Color::LightCyan,
-            context_free: Color::DarkGray,
+            hyperlink: Color::Rgb(122, 180, 232),
+            table_border: Color::Rgb(80, 80, 80),
+            table_header: Color::Rgb(215, 119, 87),
+            search_match: Color::Rgb(255, 193, 7),
+            progress_bar: Color::Rgb(177, 185, 249),
+            context_used: Color::Rgb(177, 185, 249),
+            context_free: Color::Rgb(80, 80, 80),
         }
     }
 
     #[allow(clippy::disallowed_methods)]
     fn light_theme() -> Self {
+        // Explicit-RGB palette mapped to TS `lightTheme` — same discipline as
+        // `dark_theme` (no palette-recolorable ANSI-named UI tokens). Token →
+        // TS light: primary/assistant/heading/table_header = `claude`, accent/
+        // code_inline/focus = `permission` (medium blue), grays = `subtle`/
+        // `inactive`/`promptBorder`; success/warning/error/planMode/selectionBg
+        // verbatim; hyperlink = `briefLabelYou`. Code-syntax keeps GitHub-light.
         Self {
-            modal_border: Color::DarkGray,
-            panel_border: Color::DarkGray,
-            code_function: Color::Cyan,
-            code_type: Color::Magenta,
-            code_operator: Color::DarkGray,
+            modal_border: Color::Rgb(175, 175, 175),
+            panel_border: Color::Rgb(175, 175, 175),
+            // GitHub-light syntax palette (mirrors claude-code's light file
+            // preview, `GITHUB_SCOPES`); keyword BOLD dropped in the renderer.
+            code_function: Color::Rgb(121, 93, 163),
+            code_type: Color::Rgb(0, 134, 179),
+            code_operator: Color::Rgb(150, 152, 150),
+            code_inline: Color::Rgb(87, 105, 247), // = permission (TS light codespan)
             code_bg: None,
-            blockquote: Color::DarkGray,
-            heading: Color::Cyan,
-            hr: Color::DarkGray,
-            strikethrough: Color::DarkGray,
-            primary: Color::Cyan,
-            secondary: Color::DarkGray,
-            accent: Color::Magenta,
+            blockquote: Color::Rgb(175, 175, 175),
+            heading: Color::Rgb(215, 119, 87),
+            hr: Color::Rgb(175, 175, 175),
+            strikethrough: Color::Rgb(175, 175, 175),
+            primary: Color::Rgb(215, 119, 87),
+            secondary: Color::Rgb(175, 175, 175),
+            accent: Color::Rgb(87, 105, 247),
 
             text: Color::Reset,
-            text_dim: Color::DarkGray,
+            text_dim: Color::Rgb(102, 102, 102),
             text_bold: Color::Reset,
 
-            user_message: Color::Green,
-            // Subtle light tint for light-background terminals — keeps
-            // user rows distinguishable without overpowering the prose.
-            user_message_bg: Some(Color::Rgb(232, 236, 242)),
-            assistant_message: Color::Cyan,
-            thinking: Color::Magenta,
-            system_message: Color::DarkGray,
+            user_message: Color::Rgb(44, 122, 57),
+            user_message_bg: Some(Color::Rgb(240, 240, 240)),
+            assistant_message: Color::Rgb(215, 119, 87),
+            thinking: Color::Reset,
+            system_message: Color::Rgb(175, 175, 175),
 
-            tool_running: Color::Yellow,
-            tool_completed: Color::Green,
-            tool_error: Color::Red,
-            warning: Color::Yellow,
-            success: Color::Green,
-            error: Color::Red,
+            tool_running: Color::Rgb(150, 108, 30),
+            tool_completed: Color::Rgb(44, 122, 57),
+            tool_error: Color::Rgb(171, 43, 63),
+            warning: Color::Rgb(150, 108, 30),
+            success: Color::Rgb(44, 122, 57),
+            error: Color::Rgb(171, 43, 63),
 
-            border: Color::DarkGray,
-            border_focused: Color::Cyan,
-            scrollbar: Color::DarkGray,
-            plan_mode: Color::Cyan,
-            selection_bg: Color::Rgb(220, 244, 246),
-            selection_fg: Color::Cyan,
+            border: Color::Rgb(153, 153, 153),
+            border_focused: Color::Rgb(87, 105, 247),
+            scrollbar: Color::Rgb(175, 175, 175),
+            plan_mode: Color::Rgb(0, 102, 102),
+            selection_bg: Color::Rgb(180, 213, 255),
+            selection_fg: Color::Rgb(87, 105, 247),
 
-            diff_added: Color::Green,
-            diff_removed: Color::Red,
+            diff_added: Color::Rgb(44, 122, 57),
+            diff_removed: Color::Rgb(171, 43, 63),
 
-            code_keyword: Color::Magenta,
-            code_string: Color::Green,
-            code_comment: Color::DarkGray,
-            code_number: Color::Cyan,
+            // GitHub-light syntax palette (see light_theme code_function above).
+            code_keyword: Color::Rgb(167, 29, 93),
+            code_string: Color::Rgb(24, 54, 145),
+            code_comment: Color::Rgb(150, 152, 150),
+            code_number: Color::Rgb(0, 134, 179),
 
-            hyperlink: Color::Cyan,
-            table_border: Color::DarkGray,
-            table_header: Color::Cyan,
-            search_match: Color::Yellow,
-            progress_bar: Color::Cyan,
-            context_used: Color::Cyan,
-            context_free: Color::DarkGray,
+            hyperlink: Color::Rgb(37, 99, 235),
+            table_border: Color::Rgb(175, 175, 175),
+            table_header: Color::Rgb(215, 119, 87),
+            search_match: Color::Rgb(150, 108, 30),
+            progress_bar: Color::Rgb(87, 105, 247),
+            context_used: Color::Rgb(87, 105, 247),
+            context_free: Color::Rgb(175, 175, 175),
         }
     }
 
     #[allow(clippy::disallowed_methods)]
     fn dark_daltonized_theme() -> Self {
+        // TS `darkDaltonizedTheme`: deuteranopia-adjusted brand/accent + every
+        // semantic color, over dark's grays. Code syntax inherits dark's Monokai
+        // (TS keeps `MONOKAI_SCOPES` for dark-daltonized).
         let mut theme = Self::dark_theme();
-        theme.success = Color::LightCyan;
-        theme.error = Color::LightMagenta;
-        theme.tool_completed = Color::LightCyan;
-        theme.tool_error = Color::LightMagenta;
-        theme.diff_added = Color::LightCyan;
-        theme.diff_removed = Color::LightMagenta;
-        theme.user_message = Color::LightCyan;
+        // claude (orange adjusted for deuteranopia) → brand tokens
+        theme.primary = Color::Rgb(255, 153, 51);
+        theme.heading = Color::Rgb(255, 153, 51);
+        theme.assistant_message = Color::Rgb(255, 153, 51);
+        theme.table_header = Color::Rgb(255, 153, 51);
+        // permission (light blue) → accent tokens + inline code
+        theme.accent = Color::Rgb(153, 204, 255);
+        theme.border_focused = Color::Rgb(153, 204, 255);
+        theme.selection_fg = Color::Rgb(153, 204, 255);
+        theme.progress_bar = Color::Rgb(153, 204, 255);
+        theme.context_used = Color::Rgb(153, 204, 255);
+        theme.code_inline = Color::Rgb(153, 204, 255);
+        theme.plan_mode = Color::Rgb(102, 153, 153);
+        // success (blue instead of green) → success / diff-added family
+        theme.success = Color::Rgb(51, 153, 255);
+        theme.tool_completed = Color::Rgb(51, 153, 255);
+        theme.diff_added = Color::Rgb(51, 153, 255);
+        theme.user_message = Color::Rgb(51, 153, 255);
+        theme.error = Color::Rgb(255, 102, 102);
+        theme.tool_error = Color::Rgb(255, 102, 102);
+        theme.diff_removed = Color::Rgb(255, 102, 102);
+        theme.warning = Color::Rgb(255, 204, 0);
+        theme.tool_running = Color::Rgb(255, 204, 0);
+        theme.search_match = Color::Rgb(255, 204, 0);
         theme
     }
 
     #[allow(clippy::disallowed_methods)]
     fn light_daltonized_theme() -> Self {
+        // TS `lightDaltonizedTheme`: deuteranopia-adjusted brand/accent + every
+        // semantic color, over light's grays + GitHub-light syntax.
         let mut theme = Self::light_theme();
-        theme.success = Color::Cyan;
-        theme.error = Color::Magenta;
-        theme.tool_completed = Color::Cyan;
-        theme.tool_error = Color::Magenta;
-        theme.diff_added = Color::Cyan;
-        theme.diff_removed = Color::Magenta;
-        theme.user_message = Color::Cyan;
-        theme.selection_bg = Color::Rgb(216, 238, 246);
+        theme.primary = Color::Rgb(255, 153, 51);
+        theme.heading = Color::Rgb(255, 153, 51);
+        theme.assistant_message = Color::Rgb(255, 153, 51);
+        theme.table_header = Color::Rgb(255, 153, 51);
+        // permission (bright blue) → accent tokens + inline code
+        theme.accent = Color::Rgb(51, 102, 255);
+        theme.border_focused = Color::Rgb(51, 102, 255);
+        theme.selection_fg = Color::Rgb(51, 102, 255);
+        theme.progress_bar = Color::Rgb(51, 102, 255);
+        theme.context_used = Color::Rgb(51, 102, 255);
+        theme.code_inline = Color::Rgb(51, 102, 255);
+        theme.plan_mode = Color::Rgb(51, 102, 102);
+        // success (blue instead of green) → success / diff-added family
+        theme.success = Color::Rgb(0, 102, 153);
+        theme.tool_completed = Color::Rgb(0, 102, 153);
+        theme.diff_added = Color::Rgb(0, 102, 153);
+        theme.user_message = Color::Rgb(0, 102, 153);
+        theme.error = Color::Rgb(204, 0, 0);
+        theme.tool_error = Color::Rgb(204, 0, 0);
+        theme.diff_removed = Color::Rgb(204, 0, 0);
+        theme.warning = Color::Rgb(255, 153, 0);
+        theme.tool_running = Color::Rgb(255, 153, 0);
+        theme.search_match = Color::Rgb(255, 153, 0);
+        theme.user_message_bg = Some(Color::Rgb(220, 220, 220));
         theme
     }
 
@@ -416,17 +395,23 @@ impl Theme {
         Self {
             modal_border: Color::DarkGray,
             panel_border: Color::DarkGray,
-            code_function: Color::LightCyan,
-            code_type: Color::LightYellow,
+            // ANSI bright-palette syntax (mirrors claude-code's `ANSI_SCOPES`:
+            // keyword 13, type 14, fn 11, number 12, string 10, comment 8).
+            code_function: Color::LightYellow,
+            code_type: Color::LightCyan,
             code_operator: Color::DarkGray,
+            code_inline: Color::LightBlue, // = accent/permission (TS codespan, not magenta)
             code_bg: None,
             blockquote: Color::DarkGray,
-            heading: Color::LightCyan,
+            // Brand = TS `claude` (ansi:redBright); cool accent = TS `permission`
+            // (ansi:blueBright). Chrome grays keep `DarkGray` (ANSI 8) instead of
+            // TS's `ansi:white` — a gray dim/border reads better than white.
+            heading: Color::LightRed,
             hr: Color::DarkGray,
             strikethrough: Color::DarkGray,
-            primary: Color::LightCyan,
+            primary: Color::LightRed,
             secondary: Color::DarkGray,
-            accent: Color::LightMagenta,
+            accent: Color::LightBlue,
 
             text: Color::Reset,
             text_dim: Color::DarkGray,
@@ -437,7 +422,7 @@ impl Theme {
             // themes use — readers on ANSI-strict terminals get the
             // `❯` prefix as the user-row marker.
             user_message_bg: None,
-            assistant_message: Color::LightCyan,
+            assistant_message: Color::LightRed,
             thinking: Color::LightMagenta,
             system_message: Color::DarkGray,
 
@@ -449,11 +434,11 @@ impl Theme {
             error: Color::LightRed,
 
             border: Color::DarkGray,
-            border_focused: Color::LightCyan,
+            border_focused: Color::LightBlue,
             scrollbar: Color::DarkGray,
             plan_mode: Color::LightCyan,
             selection_bg: Color::Blue,
-            selection_fg: Color::LightCyan,
+            selection_fg: Color::LightBlue,
 
             diff_added: Color::LightGreen,
             diff_removed: Color::LightRed,
@@ -461,14 +446,14 @@ impl Theme {
             code_keyword: Color::LightMagenta,
             code_string: Color::LightGreen,
             code_comment: Color::DarkGray,
-            code_number: Color::LightCyan,
+            code_number: Color::LightBlue,
 
-            hyperlink: Color::LightCyan,
+            hyperlink: Color::LightBlue,
             table_border: Color::DarkGray,
-            table_header: Color::LightCyan,
+            table_header: Color::LightRed,
             search_match: Color::LightYellow,
-            progress_bar: Color::LightCyan,
-            context_used: Color::LightCyan,
+            progress_bar: Color::LightBlue,
+            context_used: Color::LightBlue,
             context_free: Color::DarkGray,
         }
     }
@@ -477,17 +462,23 @@ impl Theme {
         Self {
             modal_border: Color::DarkGray,
             panel_border: Color::DarkGray,
-            code_function: Color::Cyan,
-            code_type: Color::Magenta,
+            // ANSI bright-palette syntax — TS uses one `ANSI_SCOPES` map for
+            // both ansi themes (`buildTheme` isAnsi branch ignores dark/light).
+            code_function: Color::LightYellow,
+            code_type: Color::LightCyan,
             code_operator: Color::DarkGray,
+            code_inline: Color::Blue, // = accent/permission (TS codespan, not magenta)
             code_bg: None,
             blockquote: Color::DarkGray,
-            heading: Color::Cyan,
+            // Brand = TS `claude` (ansi:redBright); cool accent = TS `permission`
+            // (light-ansi uses ansi:blue, not bright). Chrome grays keep
+            // `DarkGray` over TS's `ansi:white` for readability.
+            heading: Color::LightRed,
             hr: Color::DarkGray,
             strikethrough: Color::DarkGray,
-            primary: Color::Cyan,
+            primary: Color::LightRed,
             secondary: Color::DarkGray,
-            accent: Color::Magenta,
+            accent: Color::Blue,
 
             text: Color::Reset,
             text_dim: Color::DarkGray,
@@ -498,7 +489,7 @@ impl Theme {
             // themes use — readers on ANSI-strict terminals get the
             // `❯` prefix as the user-row marker.
             user_message_bg: None,
-            assistant_message: Color::Cyan,
+            assistant_message: Color::LightRed,
             thinking: Color::Magenta,
             system_message: Color::DarkGray,
 
@@ -510,155 +501,28 @@ impl Theme {
             error: Color::Red,
 
             border: Color::DarkGray,
-            border_focused: Color::Cyan,
+            border_focused: Color::Blue,
             scrollbar: Color::DarkGray,
             plan_mode: Color::Cyan,
-            selection_bg: Color::Blue,
-            selection_fg: Color::Cyan,
+            selection_bg: Color::Cyan,
+            selection_fg: Color::Blue,
 
             diff_added: Color::Green,
             diff_removed: Color::Red,
 
-            code_keyword: Color::Magenta,
-            code_string: Color::Green,
+            // ANSI bright-palette syntax (see light_ansi code_function above).
+            code_keyword: Color::LightMagenta,
+            code_string: Color::LightGreen,
             code_comment: Color::DarkGray,
-            code_number: Color::Cyan,
+            code_number: Color::LightBlue,
 
-            hyperlink: Color::Cyan,
+            hyperlink: Color::Blue,
             table_border: Color::DarkGray,
-            table_header: Color::Cyan,
+            table_header: Color::LightRed,
             search_match: Color::Yellow,
-            progress_bar: Color::Cyan,
-            context_used: Color::Cyan,
+            progress_bar: Color::Blue,
+            context_used: Color::Blue,
             context_free: Color::DarkGray,
-        }
-    }
-
-    // Dracula's palette is defined by specific 24-bit RGB values
-    // (https://draculatheme.com/contribute) — the named ANSI palette is the
-    // wrong contract here. `Color::Rgb` is intentional in this constructor.
-    #[allow(clippy::disallowed_methods)]
-    fn dracula_theme() -> Self {
-        Self {
-            modal_border: Color::Rgb(98, 114, 164),
-            panel_border: Color::Rgb(98, 114, 164),
-            code_function: Color::Rgb(80, 250, 123),  // green
-            code_type: Color::Rgb(139, 233, 253),     // cyan
-            code_operator: Color::Rgb(255, 121, 198), // pink
-            code_bg: None,
-            blockquote: Color::Rgb(98, 114, 164),
-            heading: Color::Rgb(139, 233, 253),
-            hr: Color::Rgb(98, 114, 164),
-            strikethrough: Color::Rgb(98, 114, 164),
-            primary: Color::Rgb(139, 233, 253), // cyan
-            secondary: Color::DarkGray,
-            accent: Color::Rgb(255, 121, 198), // pink
-
-            text: Color::Reset,
-            text_dim: Color::DarkGray,
-            text_bold: Color::Reset,
-
-            user_message: Color::Rgb(80, 250, 123), // green
-            // Dracula's `currentLine` — sits one tone above the base
-            // background, matching the project's UI conventions.
-            user_message_bg: Some(Color::Rgb(68, 71, 90)),
-            assistant_message: Color::Rgb(139, 233, 253),
-            thinking: Color::Rgb(189, 147, 249), // purple
-            system_message: Color::DarkGray,
-
-            tool_running: Color::Rgb(241, 250, 140), // yellow
-            tool_completed: Color::Rgb(80, 250, 123),
-            tool_error: Color::Rgb(255, 85, 85), // red
-            warning: Color::Rgb(241, 250, 140),
-            success: Color::Rgb(80, 250, 123),
-            error: Color::Rgb(255, 85, 85),
-
-            border: Color::DarkGray,
-            border_focused: Color::Rgb(139, 233, 253),
-            scrollbar: Color::DarkGray,
-            plan_mode: Color::Rgb(139, 233, 253),
-            selection_bg: Color::Rgb(68, 71, 90),
-            selection_fg: Color::Rgb(139, 233, 253),
-
-            diff_added: Color::Rgb(80, 250, 123),
-            diff_removed: Color::Rgb(255, 85, 85),
-
-            code_keyword: Color::Rgb(255, 121, 198),
-            code_string: Color::Rgb(241, 250, 140),
-            code_comment: Color::Rgb(98, 114, 164),
-            code_number: Color::Rgb(189, 147, 249),
-
-            hyperlink: Color::Rgb(139, 233, 253),
-            table_border: Color::Rgb(98, 114, 164),
-            table_header: Color::Rgb(189, 147, 249),
-            search_match: Color::Rgb(241, 250, 140),
-            progress_bar: Color::Rgb(139, 233, 253),
-            context_used: Color::Rgb(139, 233, 253),
-            context_free: Color::Rgb(68, 71, 90),
-        }
-    }
-
-    // Nord's palette is defined by specific 24-bit RGB values
-    // (https://www.nordtheme.com/) — the named ANSI palette is the wrong
-    // contract here. `Color::Rgb` is intentional in this constructor.
-    #[allow(clippy::disallowed_methods)]
-    fn nord_theme() -> Self {
-        Self {
-            modal_border: Color::Rgb(76, 86, 106),
-            panel_border: Color::Rgb(76, 86, 106),
-            code_function: Color::Rgb(136, 192, 208), // nord8
-            code_type: Color::Rgb(143, 188, 187),     // nord7
-            code_operator: Color::Rgb(129, 161, 193), // nord9
-            code_bg: None,
-            blockquote: Color::Rgb(76, 86, 106),
-            heading: Color::Rgb(136, 192, 208),
-            hr: Color::Rgb(76, 86, 106),
-            strikethrough: Color::Rgb(76, 86, 106),
-            primary: Color::Rgb(136, 192, 208), // nord8
-            secondary: Color::DarkGray,
-            accent: Color::Rgb(180, 142, 173), // nord15
-
-            text: Color::Reset,
-            text_dim: Color::DarkGray,
-            text_bold: Color::Reset,
-
-            user_message: Color::Rgb(163, 190, 140), // nord14
-            // Nord's `polar night 2` — one tone above the base
-            // background, matching the project's UI accent regions.
-            user_message_bg: Some(Color::Rgb(59, 66, 82)),
-            assistant_message: Color::Rgb(136, 192, 208),
-            thinking: Color::Rgb(180, 142, 173),
-            system_message: Color::DarkGray,
-
-            tool_running: Color::Rgb(235, 203, 139), // nord13
-            tool_completed: Color::Rgb(163, 190, 140),
-            tool_error: Color::Rgb(191, 97, 106), // nord11
-            warning: Color::Rgb(235, 203, 139),
-            success: Color::Rgb(163, 190, 140),
-            error: Color::Rgb(191, 97, 106),
-
-            border: Color::DarkGray,
-            border_focused: Color::Rgb(136, 192, 208),
-            scrollbar: Color::DarkGray,
-            plan_mode: Color::Rgb(136, 192, 208),
-            selection_bg: Color::Rgb(59, 66, 82),
-            selection_fg: Color::Rgb(136, 192, 208),
-
-            diff_added: Color::Rgb(163, 190, 140),
-            diff_removed: Color::Rgb(191, 97, 106),
-
-            code_keyword: Color::Rgb(180, 142, 173),
-            code_string: Color::Rgb(163, 190, 140),
-            code_comment: Color::Rgb(76, 86, 106),
-            code_number: Color::Rgb(180, 142, 173),
-
-            hyperlink: Color::Rgb(136, 192, 208),
-            table_border: Color::Rgb(76, 86, 106),
-            table_header: Color::Rgb(136, 192, 208),
-            search_match: Color::Rgb(235, 203, 139),
-            progress_bar: Color::Rgb(136, 192, 208),
-            context_used: Color::Rgb(136, 192, 208),
-            context_free: Color::Rgb(76, 86, 106),
         }
     }
 }
@@ -711,6 +575,7 @@ impl Theme {
             code_function,
             code_type,
             code_operator,
+            code_inline,
             blockquote,
             heading,
             hr,
@@ -730,6 +595,10 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::default_theme()
+        Self::dark_theme()
     }
 }
+
+#[cfg(test)]
+#[path = "theme.test.rs"]
+mod tests;

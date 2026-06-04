@@ -263,6 +263,10 @@ llm_json = "1.0.3"
 keyring = "3"
 lazy_static = "1"
 libc = "0.2"
+# `event` feature gates `rustix::event::poll`, used for the bounded OSC 11
+# terminal-background read (`auto` theme). Pinned to the version crossterm
+# already resolves so no extra crate version enters the tree.
+rustix = { version = "1", features = ["event"] }
 log = "0.4"
 lru = "0.16.3"
 minijinja = "2"

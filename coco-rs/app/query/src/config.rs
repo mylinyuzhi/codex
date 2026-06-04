@@ -79,8 +79,12 @@ pub enum ContinueReason {
 /// Configuration for the query engine.
 #[derive(Debug, Clone)]
 pub struct QueryEngineConfig {
-    /// Maximum turns before stopping.
-    pub max_turns: i32,
+    /// Maximum agentic turns before stopping. `None` = unbounded (the model
+    /// loops until it naturally stops). TS parity: `maxTurns` is optional and
+    /// only set by `--print --max-turns`; the interactive REPL leaves it unset
+    /// so long autonomous tasks run to completion. Subagents/forks set an
+    /// explicit `Some(_)` cap.
+    pub max_turns: Option<i32>,
     /// Session-level total token budget (input + output, accumulated
     /// across every API call in this loop invocation). Drives
     /// [`crate::budget::BudgetTracker`]'s 90% nudge / diminishing-returns
@@ -362,7 +366,7 @@ pub struct QueryEngineConfig {
 impl Default for QueryEngineConfig {
     fn default() -> Self {
         Self {
-            max_turns: 30,
+            max_turns: None,
             total_token_budget: None,
             prompt_cache: None,
             system_prompt: None,

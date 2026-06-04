@@ -128,6 +128,30 @@ fn slot_default(provider: &'static str, model_id: &'static str) -> PrebuiltLangu
     PrebuiltLanguageModelSlot::new(model, RetryConfig::default())
 }
 
+/// Slot whose fingerprint reports the Anthropic wire API, so
+/// `supports_server_side_context_edits()` returns true — required to exercise
+/// the server-side reactive-compaction branch. (`slot_default` leaves the
+/// fingerprint API unset, so it always takes the client-side branch regardless
+/// of the provider string.)
+fn slot_anthropic(model_id: &'static str) -> PrebuiltLanguageModelSlot {
+    let model: Arc<dyn LanguageModel> = Arc::new(StubModel {
+        provider: "anthropic",
+        id: model_id,
+    });
+    let fingerprint = ProviderClientFingerprint {
+        provider: "anthropic".to_string(),
+        api: coco_types::ProviderApi::Anthropic,
+        api_model_name: model_id.to_string(),
+        base_url: String::new(),
+        wire_api: None,
+        client_options_digest: [0u8; 32],
+        timeout_secs: 0,
+        api_key_origin_digest: [0u8; 32],
+        runtime_state_digest: [0u8; 32],
+    };
+    PrebuiltLanguageModelSlot::new(model, RetryConfig::default()).with_fingerprint(fingerprint)
+}
+
 fn registry_from_slot(slot: PrebuiltLanguageModelSlot) -> Arc<ModelRuntimeRegistry> {
     Arc::new(ModelRuntimeRegistry::from_prebuilt_language_model(
         coco_types::ModelRole::Main,
@@ -149,7 +173,9 @@ fn test_engine(config: QueryEngineConfig, slot: PrebuiltLanguageModelSlot) -> Qu
 
 fn loop_turn_state() -> LoopTurnState {
     LoopTurnState::new(
-        /*max_tokens*/ None, /*max_turns*/ 100, /*max_continuations*/ 3,
+        /*max_tokens*/ None,
+        /*max_turns*/ Some(100),
+        /*max_continuations*/ 3,
     )
 }
 
@@ -1243,36 +1269,15 @@ async fn r8_check_blocking_limit_falls_back_to_10pct_without_model_info() {
 /// TerminateExhausted exit must not regress the existing happy path.
 #[tokio::test]
 async fn r1_recover_prompt_too_long_compacted_keeps_continue_disposition() {
-    let client = slot_default("anthropic", "claude-3");
+    let client = slot_anthropic("claude-3");
     let engine = test_engine(QueryEngineConfig::default(), client.clone());
 
-    // Circuit-breaker NOT tripped — fresh state. do_reactive_compact
-    // walks its body and writes to `pending_reactive_context_management`
-    // (Anthropic server-side edits supported because the stub client
-    // is registered with provider = "anthropic"); the
-    // estimate_tokens_for_messages delta on a tiny history is zero
-    // (no tool results to clear), which records a failure — first
-    // attempt only. The dispatcher reports Exhausted on the FIRST
-    // attempt only if the breaker was already tripped, so this test
-    // proves we DON'T spuriously terminate when the breaker is fresh
-    // even if a single attempt freed nothing.
-    //
-    // Note: on a tiny history (`hello`) the freed-token delta is 0 so
-    // record_failure fires once. The next call would still attempt
-    // (failure_count=1 < 3); we expect the FIRST call's recovery
-    // disposition to be... well, the first call's actually_freed is 0
-    // so the new R1 path will report Exhausted. Hmm — that's not the
-    // happy path we want to test.
-    //
-    // To exercise the happy path we instead seed a record_success
-    // up-front so the breaker stays open AND we simulate the
-    // "compaction made progress" outcome by pushing a large enough
-    // history that api_microcompact CAN remove tokens.
-    //
-    // Simpler: stub do_reactive_compact via direct manipulation.
-    // Skip this happy-path assertion — it's covered by the existing
-    // C15 / behavioral tests in engine.test.rs which exercise the
-    // ReactiveCompactRetry transition end-to-end.
+    // Circuit-breaker NOT tripped — fresh state. The stub client is
+    // provider="anthropic", so do_reactive_compact takes the server-side
+    // branch: it QUEUES a `context_management` payload (no local history
+    // mutation) and reports progress — the cache-preserving retry will carry
+    // the payload and the API clears in place. This is the happy path the
+    // test name promises: the turn continues, it is not terminated.
 
     let mut history = MessageHistory::new();
     history.push(create_user_message("hello"));
@@ -1291,15 +1296,69 @@ async fn r1_recover_prompt_too_long_compacted_keeps_continue_disposition() {
         )
         .await;
 
-    // With the breaker fresh + tiny history, do_reactive_compact freed
-    // nothing → made_progress = false → Exhausted. The partial msg +
-    // synthetic api_error were pushed; the dispatcher signals terminal.
-    // This validates that the new R1 exit also fires on the
-    // "single-attempt zero-progress" path without waiting for the
-    // breaker to fully trip.
+    // Anthropic supports server-side context edits, so do_reactive_compact
+    // queues a payload and reports progress: the dispatcher must Continue with
+    // ReactiveCompactRetry, NOT terminate. (Before the L3 fix this path
+    // spuriously returned TerminateExhausted because progress was measured by
+    // freed LOCAL tokens, which is always zero on the server-side branch.)
+    assert!(
+        matches!(
+            disposition,
+            RecoveryDisposition::Continue(ContinueReason::ReactiveCompactRetry)
+        ),
+        "anthropic server-side reactive recovery must Continue(ReactiveCompactRetry), \
+         got {disposition:?}",
+    );
+
+    // Happy path: no synthetic prompt_too_long api_error is pushed — the turn
+    // is retried with the queued context_management, not terminated.
+    let synthetic_present = history.as_slice().iter().rev().take(2).any(|m| {
+        matches!(
+            m.as_ref(),
+            coco_messages::Message::Assistant(a)
+                if a.api_error
+                    .as_ref()
+                    .and_then(|e| e.error_type.as_deref())
+                    == Some("prompt_too_long")
+        )
+    });
+    assert!(
+        !synthetic_present,
+        "server-side reactive recovery should retry, not push a terminal api_error",
+    );
+}
+
+/// L3 cross-check: on the CLIENT-SIDE branch (non-Anthropic), a reactive
+/// attempt that frees no local tokens (tiny history, nothing to clear) makes
+/// no progress → the dispatcher must TerminateExhausted and push the synthetic
+/// api_error so the C3 StopFailure guard fires next iteration. This preserves
+/// the zero-progress coverage after the happy-path test moved to the
+/// server-side branch.
+#[tokio::test]
+async fn r1_recover_prompt_too_long_client_side_zero_progress_exhausts() {
+    let client = slot_default("openai", "gpt-4");
+    let engine = test_engine(QueryEngineConfig::default(), client.clone());
+
+    let mut history = MessageHistory::new();
+    history.push(create_user_message("hello"));
+    let mut turn_state = loop_turn_state();
+    let event_tx = None;
+    let assistant = assistant_partial("partial response");
+
+    let disposition = engine
+        .run_post_stream_recovery(
+            WithheldReason::PromptTooLong,
+            assistant,
+            &mut history,
+            &event_tx,
+            &mut turn_state,
+            &slot_snapshot(&client),
+        )
+        .await;
+
     assert!(
         matches!(disposition, RecoveryDisposition::TerminateExhausted),
-        "zero-progress single attempt must also TerminateExhausted, got {disposition:?}",
+        "client-side zero-progress reactive recovery must TerminateExhausted, got {disposition:?}",
     );
     let synthetic_present = history.as_slice().iter().rev().take(2).any(|m| {
         matches!(
@@ -1313,7 +1372,6 @@ async fn r1_recover_prompt_too_long_compacted_keeps_continue_disposition() {
     });
     assert!(
         synthetic_present,
-        "TerminateExhausted must always push the synthetic api_error so the \
-         C3 guard can fire StopFailure hooks on the next iteration",
+        "TerminateExhausted must push the synthetic api_error for the C3 StopFailure guard",
     );
 }

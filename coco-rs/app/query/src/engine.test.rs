@@ -890,7 +890,7 @@ async fn test_fallback_retry_does_not_consume_max_turns() {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
-        max_turns: 1,
+        max_turns: Some(1),
         ..Default::default()
     };
 
@@ -1057,7 +1057,7 @@ async fn test_max_turns_limit() {
     let tools = Arc::new(registry);
 
     let config = QueryEngineConfig {
-        max_turns: 1,
+        max_turns: Some(1),
         ..Default::default()
     };
     let (result, events) = collect_events_from_run(model, tools, config, None, "read file").await;
@@ -1465,7 +1465,7 @@ async fn test_budget_tracker_stops_on_limit() {
     use crate::budget::BudgetDecision;
     use crate::budget::BudgetTracker;
 
-    let mut tracker = BudgetTracker::new(Some(100), 30, 3);
+    let mut tracker = BudgetTracker::new(Some(100), Some(30), 3);
     tracker.record_usage(&coco_types::TokenUsage {
         input_tokens: coco_types::InputTokens {
             total: 80,
@@ -4719,7 +4719,7 @@ async fn turn_budget_stop_emits_completed_or_max_turns_reached() {
     let tools = Arc::new(ToolRegistry::new());
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
-        max_turns: 1,
+        max_turns: Some(1),
         ..Default::default()
     };
     // Manually exhaust the budget: max_turns=1 means budget.check(turn=1)

@@ -29,76 +29,32 @@ pub fn get_teammate_command() -> String {
 /// flags + inherited flags + env vars.
 pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
     let command = get_teammate_command();
-    let agent_id = format!("{}@{}", config.name, config.team_name);
 
-    let mut args = vec![
-        format!("--agent-id={}", shell_quote(&agent_id)),
-        format!("--agent-name={}", shell_quote(&config.name)),
-        format!("--team-name={}", shell_quote(&config.team_name)),
-        format!(
-            "--parent-session-id={}",
-            shell_quote(&config.parent_session_id)
-        ),
-    ];
-
-    if let Some(color) = &config.color {
-        args.push(format!("--agent-color={}", shell_quote(color.as_str())));
-    }
-
-    if config.plan_mode_required {
-        args.push("--plan-mode-required".to_string());
-    }
-
+    // Identity (agent-id / agent-name / team-name / parent-session-id /
+    // color / plan-mode) rides `COCO_*` env (build_inherited_env_vars +
+    // identity.rs tier-3), NOT CLI flags: the clap `Cli` defines none of
+    // those flags and has no catch-all, so emitting them makes the spawned
+    // `coco` child fail argument parsing on launch. Only real clap flags
+    // belong here.
+    let mut args: Vec<String> = Vec::new();
     if let Some(model) = &config.model {
         args.push(format!("--model={}", shell_quote(model)));
     }
 
-    // Build inherited env vars
     let env_vars = build_inherited_env_vars(config);
+    let args_str = args.join(" ");
+    let suffix = if args_str.is_empty() {
+        String::new()
+    } else {
+        format!(" {args_str}")
+    };
 
     // cd to working directory, then run with env
     format!(
-        "cd {cwd} && {env_vars}{command} {args}",
+        "cd {cwd} && {env_vars}{command}{suffix}",
         cwd = shell_quote(&config.cwd),
         command = shell_quote(&command),
-        args = args.join(" ")
     )
-}
-
-/// Build inherited CLI flags for teammate processes.
-///
-/// TS: `buildInheritedCliFlags(options?)`
-pub fn build_inherited_cli_flags(config: &TeammateSpawnConfig) -> Vec<String> {
-    let mut flags = Vec::new();
-
-    // Permission mode (unless plan mode required)
-    if !config.plan_mode_required {
-        for perm in &config.permissions {
-            flags.push(format!("--permission={perm}"));
-        }
-    }
-
-    // Model override
-    if let Some(model) = &config.model {
-        flags.push(format!("--model={model}"));
-    }
-
-    // Agent identity
-    let agent_id = format!("{}@{}", config.name, config.team_name);
-    flags.push(format!("--agent-id={agent_id}"));
-    flags.push(format!("--agent-name={}", config.name));
-    flags.push(format!("--team-name={}", config.team_name));
-    flags.push(format!("--parent-session-id={}", config.parent_session_id));
-
-    if let Some(color) = &config.color {
-        flags.push(format!("--agent-color={}", color.as_str()));
-    }
-
-    if config.plan_mode_required {
-        flags.push("--plan-mode-required".to_string());
-    }
-
-    flags
 }
 
 /// Build env vars to inherit into teammate processes.

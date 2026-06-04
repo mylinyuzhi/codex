@@ -52,7 +52,7 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
     });
 
     let cfg = SessionConfig {
-        max_turns: 5,
+        max_turns: Some(5),
         max_output_tokens: 1_024,
         hooks: Some(Arc::new(registry)),
         ..SessionConfig::default()

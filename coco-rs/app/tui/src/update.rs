@@ -39,6 +39,149 @@ mod transcript;
 #[path = "update.test.rs"]
 mod tests;
 
+/// How a picker/dialog reports being closed with Esc. Mirrors TS local-jsx
+/// `onDone('… dismissed', { display: 'system' })` — every picker leaves a
+/// transcript trace of what closed.
+enum PickerDismiss {
+    /// Picker opened by a slash command → render `❯ /<name>` + `⎿ <message>`,
+    /// matching the command's own confirm feedback (e.g. theme "Theme set to").
+    Slash {
+        name: &'static str,
+        message: &'static str,
+    },
+    /// Keybinding-only overlay (no slash command) → a standalone system line,
+    /// with no misleading `/cmd` echo.
+    System { message: &'static str },
+}
+
+/// Dismiss feedback for a modal closed via Esc. `None` for prompt-style and
+/// viewer modals that own their own decline UX. Wording mirrors TS where a
+/// counterpart exists (`Theme picker dismissed`, `Skills dialog dismissed`,
+/// `Cancelled memory editing`, …).
+fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
+    use ModalState as M;
+    use PickerDismiss::Slash;
+    use PickerDismiss::System;
+    Some(match modal {
+        M::Help => Slash {
+            name: "help",
+            message: "Help dialog dismissed",
+        },
+        M::ModelPicker(_) => Slash {
+            name: "model",
+            message: "Model picker dismissed",
+        },
+        M::ThemePicker(_) => Slash {
+            name: "theme",
+            message: "Theme picker dismissed",
+        },
+        M::SkillsDialog(_) => Slash {
+            name: "skills",
+            message: "Skills dialog dismissed",
+        },
+        M::AgentsDialog(_) => Slash {
+            name: "agents",
+            message: "Agents dialog dismissed",
+        },
+        M::McpServerSelect(_) => Slash {
+            name: "mcp",
+            message: "MCP dialog dismissed",
+        },
+        M::MemoryDialog(_) => Slash {
+            name: "memory",
+            message: "Cancelled memory editing",
+        },
+        M::Settings(_) => Slash {
+            name: "status",
+            message: "Status dialog dismissed",
+        },
+        M::DiffView(_) => Slash {
+            name: "diff",
+            message: "Diff dialog dismissed",
+        },
+        M::Export(_) => Slash {
+            name: "export",
+            message: "Export dialog dismissed",
+        },
+        M::SessionBrowser(_) => Slash {
+            name: "resume",
+            message: "Session browser dismissed",
+        },
+        M::CopyPicker(_) => Slash {
+            name: "copy",
+            message: "Copy cancelled",
+        },
+        M::QuickOpen(_) => System {
+            message: "Quick open dismissed",
+        },
+        M::GlobalSearch(_) => System {
+            message: "Search dismissed",
+        },
+        // Prompt / viewer / system modals own their own decline UX; Rewind
+        // runs a dedicated multi-phase cancel (`interaction::rewind_cancel`).
+        M::Error(_)
+        | M::Transcript(_)
+        | M::Rewind(_)
+        | M::Doctor(_)
+        | M::WorktreeExit(_)
+        | M::Bridge(_)
+        | M::InvalidConfig(_)
+        | M::IdleReturn(_)
+        | M::Trust(_)
+        | M::AutoModeOptIn(_)
+        | M::BypassPermissions(_)
+        | M::TaskDetail(_)
+        | M::Feedback(_) => return None,
+    })
+}
+
+/// Close the active modal and surface its dismiss feedback. Shared by both Esc
+/// routes: `TuiCommand::Cancel` and `TuiCommand::Deny` — the theme picker and
+/// settings reuse the Settings keybinding context, whose Esc resolves to `Deny`
+/// (`interaction::deny`), so the close logic must live in one place reachable
+/// from both. Restores the theme picker's live preview before closing.
+pub(crate) async fn close_modal_with_feedback(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+) {
+    // Theme picker: Esc cancels the live preview by restoring the theme that was
+    // active when the picker opened. Read `original_setting` before the take.
+    if let Some(ModalState::ThemePicker(p)) = state.ui.modal.as_ref() {
+        let original = p.original_setting.clone();
+        if let Err(err) = state.ui.apply_theme_setting(original) {
+            tracing::warn!(
+                error = %err,
+                "theme picker: failed to restore original theme on cancel"
+            );
+        }
+    }
+    // Capture the dismiss feedback before the modal is taken, emit after close.
+    let dismiss = state.ui.modal.as_ref().and_then(picker_dismiss);
+    state.ui.dismiss_modal();
+    match dismiss {
+        Some(PickerDismiss::Slash { name, message }) => {
+            let messages = coco_messages::build_slash_command_messages(
+                name, /*args*/ "", message, /*is_sensitive*/ false,
+            );
+            let _ = command_tx
+                .send(UserCommand::PushSlashResult { messages })
+                .await;
+        }
+        Some(PickerDismiss::System { message }) => {
+            let _ = command_tx
+                .send(UserCommand::PushSystemMessage {
+                    kind: crate::command::SystemPushKind::Informational {
+                        level: coco_messages::SystemMessageLevel::Info,
+                        title: String::new(),
+                        message: message.to_string(),
+                    },
+                })
+                .await;
+        }
+        None => {}
+    }
+}
+
 /// Apply a TUI command to the state.
 ///
 /// Returns `true` if the state changed and a redraw is needed.
@@ -349,24 +492,14 @@ pub async fn handle_command(
             if !interaction::rewind_cancel(state) {
                 return true; // phase-back; keep state
             }
-            // /memory cancel surfaces a toast (TS:
-            // `commands/memory/memory.tsx::onCancel` → "Cancelled memory editing").
-            // Transient confirmation only — the transcript line was a
-            // duplicate of the toast and was dropped as part of
-            // unified-transcript Commit 2.
-            if matches!(state.ui.modal, Some(ModalState::MemoryDialog(_))) {
-                let text = crate::i18n::t!("toast.memory_cancelled").to_string();
-                state.ui.add_toast(crate::state::ui::Toast::info(text));
-            }
-            if matches!(state.ui.modal, Some(ModalState::CopyPicker(_))) {
-                copy::enqueue_copy_output(t!("toast.copy_cancelled").to_string(), command_tx);
-            }
-            if state.has_active_surface() {
-                if state.ui.modal.is_some() {
-                    state.ui.dismiss_modal();
-                } else {
-                    state.ui.dismiss_prompt();
-                }
+            // Every picker reports its own dismissal to the transcript (TS
+            // local-jsx `onDone('… dismissed', { display: 'system' })`). The
+            // theme picker / settings route Esc through `Deny` instead, so the
+            // shared helper also runs there (`interaction::deny`).
+            if state.ui.modal.is_some() {
+                close_modal_with_feedback(state, command_tx).await;
+            } else if state.has_active_surface() {
+                state.ui.dismiss_prompt();
             }
             true
         }
@@ -698,10 +831,6 @@ pub async fn handle_command(
         }
         TuiCommand::ShowExport => {
             show::export(state);
-            true
-        }
-        TuiCommand::ShowContextViz => {
-            state.ui.show_modal(ModalState::ContextVisualization);
             true
         }
         TuiCommand::ShowRewind => {

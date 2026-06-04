@@ -114,6 +114,9 @@ pub enum EnvKey {
     CocoMemorySessionMemoryDisable,
     /// Force-enable KAIROS daily-log mode (assistant-mode append-only logs).
     CocoMemoryKairos,
+    /// Override the team-memory sync endpoint base URL. Defaults to the
+    /// Anthropic API base. TS: `process.env.TEAM_MEMORY_SYNC_URL`.
+    CocoTeamMemorySyncUrl,
     /// Free-form policy / guidance text injected verbatim into the
     /// auto-memory system-prompt section's "extra guidelines" slot.
     /// Used by Cowork-style deployments to push operator-controlled
@@ -227,6 +230,11 @@ pub enum EnvKey {
     /// Useful for sandbox / CI environments that want deterministic
     /// blocking behavior.
     CocoBackgroundTasksDisable,
+    /// Disable the startup auto-install of the official plugin marketplace
+    /// (`anthropics/claude-plugins-official`). When set truthy, coco does not
+    /// fetch/register the official marketplace on launch. Replaces TS
+    /// `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`.
+    CocoPluginsDisableOfficialMarketplace,
     /// Enable auto-detach of long-running foreground AgentTool spawns.
     /// When set to a positive integer (milliseconds), foreground sub-agents
     /// that haven't completed by this deadline fire `signal_detach` so the
@@ -322,6 +330,7 @@ impl EnvKey {
             Self::CocoMemoryDreamDisable => "COCO_MEMORY_DREAM_DISABLE",
             Self::CocoMemorySessionMemoryDisable => "COCO_MEMORY_SESSION_MEMORY_DISABLE",
             Self::CocoMemoryKairos => "COCO_MEMORY_KAIROS",
+            Self::CocoTeamMemorySyncUrl => "COCO_TEAM_MEMORY_SYNC_URL",
             Self::CocoCoworkMemoryExtraGuidelines => "COCO_COWORK_MEMORY_EXTRA_GUIDELINES",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
             Self::CocoModel => "COCO_MODEL",
@@ -363,6 +372,9 @@ impl EnvKey {
             Self::CocoPromptSuggestionDisable => "COCO_PROMPT_SUGGESTION_DISABLE",
             Self::CocoBareMode => "COCO_BARE_MODE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
+            Self::CocoPluginsDisableOfficialMarketplace => {
+                "COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE"
+            }
             Self::CocoAutoBackgroundTasks => "COCO_AUTO_BACKGROUND_TASKS",
             Self::CocoAgentSummaryEnable => "COCO_AGENT_SUMMARY_ENABLE",
             Self::CocoAgentListInMessages => "COCO_AGENT_LIST_IN_MESSAGES",

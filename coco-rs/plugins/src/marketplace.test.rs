@@ -184,8 +184,8 @@ fn test_register_marketplace_rejects_reserved_name() {
 // install_plugin (local source)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn test_install_plugin_local_source() {
+#[tokio::test]
+async fn test_install_plugin_local_source() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
     // Create a "marketplace" directory with a plugin source.
@@ -212,6 +212,7 @@ fn test_install_plugin_local_source() {
     let entry = make_entry("my-plugin", Some("A plugin"), None);
     let install_path = mgr
         .install_plugin("test-mkt", &entry, PluginScope::User)
+        .await
         .expect("install");
 
     assert!(install_path.exists());

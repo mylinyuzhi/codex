@@ -126,10 +126,8 @@ impl SkillChangeDetector {
                 // Interior mutability — no Mutex needed since
                 // SkillManager has internal RwLock.
                 manager_clone.reload_disk_skills(new_skills);
-                // Re-register bundled skills so they're always
-                // available (TS check on `process.env.USER_TYPE` →
-                // `UserType::from_env()`).
-                crate::bundled::register_bundled(&manager_clone, coco_types::UserType::from_env());
+                // Re-register bundled skills so they survive a disk reload.
+                crate::bundled::register_bundled(&manager_clone);
                 tracing::info!(count = manager_clone.len(), "skills reloaded");
 
                 let _ = change_tx_clone.send(event);

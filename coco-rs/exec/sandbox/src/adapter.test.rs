@@ -528,3 +528,95 @@ fn test_filesystem_deny_read_globs_routed_separately() {
         "literal path stays in denied_read_paths",
     );
 }
+
+// ── Network isolation posture ──────────────────────────────────────────────
+//
+// `allow_network == false` is the secure default once the sandbox is enabled:
+// egress is isolated and routed through the per-domain proxy filter (TS keeps
+// network filtered whenever the sandbox is on). These lock that posture so the
+// `NetworkMode::default() == Full` regression cannot silently re-open it.
+
+fn inputs_with_mode<'a>(settings: &'a SandboxSettings, mode: SandboxMode) -> AdapterInputs<'a> {
+    AdapterInputs {
+        mode,
+        ..empty_inputs(settings, Path::new("/proj"), &[])
+    }
+}
+
+#[test]
+fn test_enabled_sandbox_default_isolates_network() {
+    // Sandbox on, no network config at all — must isolate (allow_network=false).
+    // This is the dominant config and the one the NetworkMode regression broke.
+    let s = SandboxSettings {
+        enabled: true,
+        ..Default::default()
+    };
+    let out = build_runtime_config(inputs_with_mode(&s, SandboxMode::WorkspaceWrite));
+    assert!(
+        !out.config.allow_network,
+        "enabled sandbox with default network must isolate (allow_network=false)",
+    );
+}
+
+#[test]
+fn test_full_access_mode_allows_network() {
+    // FullAccess == "no sandbox restrictions", so network is unrestricted.
+    let s = SandboxSettings {
+        enabled: true,
+        ..Default::default()
+    };
+    let out = build_runtime_config(inputs_with_mode(&s, SandboxMode::FullAccess));
+    assert!(
+        out.config.allow_network,
+        "FullAccess mode must not isolate network",
+    );
+}
+
+#[test]
+fn test_allow_network_toggle_opts_out_of_isolation() {
+    // The coarse `allow_network` toggle is the only opt-out from isolation.
+    let s = SandboxSettings {
+        enabled: true,
+        allow_network: true,
+        ..Default::default()
+    };
+    let out = build_runtime_config(inputs_with_mode(&s, SandboxMode::WorkspaceWrite));
+    assert!(
+        out.config.allow_network,
+        "allow_network=true must bypass isolation",
+    );
+}
+
+#[test]
+fn test_limited_network_mode_does_not_relax_isolation() {
+    // NetworkMode gates HTTP methods only; Limited must still isolate (and a
+    // fortiori must not flip allow_network on like the old `mode != Full` did).
+    use crate::config::{NetworkConfig, NetworkMode};
+    let s = SandboxSettings {
+        enabled: true,
+        network: NetworkConfig {
+            mode: NetworkMode::Limited,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let out = build_runtime_config(inputs_with_mode(&s, SandboxMode::WorkspaceWrite));
+    assert!(
+        !out.config.allow_network,
+        "Limited mode must still isolate network",
+    );
+}
+
+#[test]
+fn test_disabled_sandbox_does_not_isolate_network() {
+    // No sandbox ⇒ no network restriction.
+    let s = SandboxSettings {
+        enabled: false,
+        ..Default::default()
+    };
+    let out = build_runtime_config(inputs_with_mode(&s, SandboxMode::WorkspaceWrite));
+    assert!(
+        out.config.allow_network,
+        "disabled sandbox must not isolate network",
+    );
+}

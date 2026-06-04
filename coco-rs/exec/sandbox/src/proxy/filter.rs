@@ -129,7 +129,12 @@ impl DomainFilter {
         }
 
         if self.allowed_domains.is_empty() {
-            return true;
+            // No allow-list. With a deny-list configured this is blocklist mode
+            // (allow everything not denied). With NO domain config at all, deny
+            // by default — this filter is the sandbox's egress gate, and
+            // enabling the sandbox must not silently grant unrestricted network
+            // (the deny-by-default posture the adapter advertises).
+            return !self.denied_domains.is_empty();
         }
 
         self.matches_list(&normalized, &self.allowed_domains)

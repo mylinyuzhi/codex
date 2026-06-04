@@ -20,6 +20,7 @@ use crate::state::MemoryDialogScope;
 use crate::state::MemoryDialogState;
 use crate::state::ModalState;
 use crate::state::PanePromptState;
+use crate::state::QuickOpenState;
 use crate::state::SessionBrowserState;
 use crate::state::SessionOption;
 use crate::state::SlashCommandInfo;
@@ -30,6 +31,7 @@ use crate::widgets::suggestion_popup::SuggestionItem;
 use crate::widgets::suggestion_popup::SuggestionMeta;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_types::CommandArgumentKind;
+use coco_types::CommandTypeTag;
 
 fn drained_channel() -> (mpsc::Sender<UserCommand>, mpsc::Receiver<UserCommand>) {
     mpsc::channel(8)
@@ -233,6 +235,51 @@ async fn autocomplete_enter_completes_arg_slash_command_without_submitting() {
         rx.try_recv().is_err(),
         "commands with argument hints should wait for user args"
     );
+}
+
+#[tokio::test]
+async fn autocomplete_enter_submits_overlay_command_despite_optional_arg_hint() {
+    // Regression: `/model` (a `local-jsx` overlay opener) advertises an optional
+    // `[model]` hint but must still run on bare Enter so the picker opens —
+    // mirroring TS, where accepting `/model` and pressing Enter renders
+    // <ModelPicker>. Previously the mere presence of an arg hint forced
+    // completion-only mode, parking the input at `/model ` with no overlay.
+    let mut state = AppState::new();
+    state.session.available_commands = vec![SlashCommandInfo {
+        name: "model".into(),
+        argument_hint: Some("[model]".into()),
+        argument_kind: CommandArgumentKind::FreeText,
+        kind: CommandTypeTag::LocalOverlay,
+        ..SlashCommandInfo::default()
+    }];
+    state.ui.input.textarea.set_text("/mod");
+    state.ui.input.textarea.set_cursor(4);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::SlashCommand,
+        items: vec![SuggestionItem {
+            label: "/model".into(),
+            description: None,
+            metadata: None,
+        }],
+        selected: 0,
+        query: "mod".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
+
+    assert!(
+        state.ui.input.is_empty(),
+        "submitted overlay command consumes input"
+    );
+    match rx.try_recv() {
+        Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
+            assert_eq!(name, "model");
+            assert!(args.is_empty(), "no-arg overlay open carries empty args");
+        }
+        other => panic!("expected ExecuteSlashCommand on the wire, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -1469,16 +1516,71 @@ async fn esc_on_memory_dialog_records_transcript_result() {
             }],
             selected: 0,
         }));
-    let (tx, _rx) = drained_channel();
+    let (tx, mut rx) = drained_channel();
 
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
     assert!(!state.ui.has_active_surface(), "memory dialog dismissed");
-    // Transient toast confirmation only — the duplicated transcript
-    // line was dropped in unified-transcript Commit 2.
-    assert!(state.ui.toasts.iter().any(|t| {
-        t.severity == ToastSeverity::Info && t.message.contains("Cancelled memory editing")
+    // Mirrors TS `commands/memory/memory.tsx::onCancel` → a transcript system
+    // line (`❯ /memory` + `⎿ Cancelled memory editing`), not a toast.
+    match rx.try_recv() {
+        Ok(UserCommand::PushSlashResult { messages }) => assert!(
+            format!("{messages:?}").contains("Cancelled memory editing"),
+            "expected dismiss text in {messages:?}"
+        ),
+        other => panic!("expected PushSlashResult, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn esc_on_theme_picker_emits_dismiss_slash_result() {
+    // Mirrors TS `commands/theme/theme.tsx::onCancel` → "Theme picker dismissed".
+    // The theme picker reuses the Settings keybinding context, whose Esc maps to
+    // `Deny` (not `Cancel`) — the dismiss feedback must fire on that route too.
+    let mut state = AppState::new();
+    state
+        .ui
+        .show_modal(ModalState::ThemePicker(crate::state::ThemePickerState {
+            choices: state.ui.theme_state.choices.clone(),
+            selected: 0,
+            original_setting: crate::theme::ThemeSetting::default(),
+        }));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Deny, &tx).await;
+
+    assert!(!state.ui.has_active_surface(), "theme picker dismissed");
+    match rx.try_recv() {
+        Ok(UserCommand::PushSlashResult { messages }) => assert!(
+            format!("{messages:?}").contains("Theme picker dismissed"),
+            "expected dismiss text in {messages:?}"
+        ),
+        other => panic!("expected PushSlashResult, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn esc_on_quick_open_emits_system_dismiss_line() {
+    // Keybinding-only overlay (no slash command) → a standalone system line,
+    // not a `❯ /quick-open` echo.
+    let mut state = AppState::new();
+    state.ui.show_modal(ModalState::QuickOpen(QuickOpenState {
+        filter: String::new(),
+        files: vec!["a.rs".to_string()],
+        selected: 0,
     }));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+
+    assert!(!state.ui.has_active_surface(), "quick open dismissed");
+    match rx.try_recv() {
+        Ok(UserCommand::PushSystemMessage { kind }) => assert!(
+            format!("{kind:?}").contains("Quick open dismissed"),
+            "expected dismiss text in {kind:?}"
+        ),
+        other => panic!("expected PushSystemMessage, got {other:?}"),
+    }
 }
 
 #[tokio::test]

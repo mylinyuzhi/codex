@@ -30,13 +30,6 @@ use coco_types::ToolAppState;
 use crate::engine::QueryEngine;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PromptMemoryFile {
-    pub path: String,
-    pub source: coco_context::MemoryFileSource,
-    pub tokens: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModelToolSource {
     BuiltIn,
     Mcp { server_name: String },
@@ -65,8 +58,6 @@ pub(crate) struct BuiltPrompt {
     /// Same working copy as `Vec<Arc<Message>>`, shared via outer `Arc` so
     /// every tool ctx in this turn observes byte-identical history.
     pub messages_snapshot: Arc<Vec<Arc<Message>>>,
-    /// Source-aware memory file sections included in the system prompt.
-    pub memory_files: Vec<PromptMemoryFile>,
 }
 
 impl QueryEngine {
@@ -86,7 +77,6 @@ impl QueryEngine {
         //      `EnvKey::CocoSimple` and narrows the worker tool list.
         //   2. Otherwise: explicit config override > built-in default +
         //      CLAUDE.md discovery.
-        let mut memory_files = Vec::new();
         let system_text = if coco_subagent::is_coordinator_mode(&self.config.features) {
             let simple_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoSimple);
             coco_subagent::coordinator_system_prompt(simple_mode)
@@ -96,15 +86,8 @@ impl QueryEngine {
             let mut text =
                 String::from("You are coco, an AI coding assistant. Be concise and helpful.\n\n");
             let cwd = std::env::current_dir().unwrap_or_default();
-            let claude_files = coco_context::discover_memory_files(&cwd);
-            for f in &claude_files {
-                let segment = format!("# {}\n{}\n\n", f.path.display(), f.content);
-                memory_files.push(PromptMemoryFile {
-                    path: f.path.display().to_string(),
-                    source: f.source,
-                    tokens: coco_messages::estimate_text_tokens(&segment),
-                });
-                text.push_str(&segment);
+            for f in &coco_context::discover_memory_files(&cwd) {
+                text.push_str(&format!("# {}\n{}\n\n", f.path.display(), f.content));
             }
             text
         };
@@ -156,7 +139,6 @@ impl QueryEngine {
         BuiltPrompt {
             prompt,
             messages_snapshot: Arc::new(messages_for_api),
-            memory_files,
         }
     }
 

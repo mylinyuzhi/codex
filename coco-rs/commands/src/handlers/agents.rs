@@ -1,7 +1,11 @@
-//! `/agents` — list, show, validate, reload, and inspect agent definitions.
+//! `/agents` — open the agents overlay, or run a text sub-command.
 //!
-//! TS: `src/commands/agents/` — `/agents list`, `/agents show <name>`,
-//! `/agents validate`, `/agents reload`, `/agents paths`.
+//! TS: `commands/agents/{index.ts,agents.tsx}` is a pure picker — `call(onDone,
+//! context)` takes no args and always renders `<AgentsMenu>` (no `argumentHint`).
+//! coco-rs mirrors that no-arg picker and **additionally** exposes text
+//! sub-commands (`list` / `show <name>` / `paths` / `validate` / `reload`) as a
+//! coco-only extension for SDK / headless / scripted callers that can't open a
+//! TUI overlay. This is a deliberate superset of TS, not a TS-parity claim.
 //!
 //! Backed by the `coco-subagent` catalog: built-ins from
 //! [`coco_subagent::BuiltinAgentCatalog::interactive`] plus markdown agents

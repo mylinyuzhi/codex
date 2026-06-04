@@ -53,6 +53,25 @@ pub(crate) fn cycle_model(state: &mut AppState) {
         }));
 }
 
+/// Open the standalone theme picker (TS `ThemePicker`). The choice list and
+/// the currently-saved setting come from the live `ThemeRuntimeState`; the
+/// cursor starts on the saved theme so Enter-without-moving is a no-op.
+pub(crate) fn open_theme_picker(state: &mut AppState) {
+    let choices = state.ui.theme_state.choices.clone();
+    let original_setting = state.ui.theme_state.setting.clone();
+    let selected = choices
+        .iter()
+        .position(|c| c.setting == original_setting)
+        .unwrap_or(0) as i32;
+    state
+        .ui
+        .show_modal(ModalState::ThemePicker(crate::state::ThemePickerState {
+            choices,
+            selected,
+            original_setting,
+        }));
+}
+
 /// Build the picker entries for `role` from the session-frozen
 /// `model_catalog`. The catalog covers all three resolution layers
 /// (L0 builtin + L1 `~/.coco/models.json` + L2 per-provider
@@ -364,13 +383,11 @@ pub(super) fn doctor(state: &mut AppState) {
         }));
 }
 
-/// Open the tabbed settings state (theme, output style, permissions, about).
+/// Open the tabbed settings state (display, output style, permissions, about).
+/// Theme selection lives in the standalone `/theme` picker.
 pub(super) fn settings(state: &mut AppState) {
     state.ui.show_modal(ModalState::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(
-            &state.ui.theme_state,
-            state.ui.display_settings.clone(),
-        ),
+        crate::widgets::settings_panel::SettingsPanelState::new(state.ui.display_settings.clone()),
     ));
 }
 

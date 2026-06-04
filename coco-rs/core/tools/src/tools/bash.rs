@@ -497,9 +497,32 @@ impl Tool for BashTool {
             })
             .unwrap_or_default();
 
+        // Surface non-zero exit codes (TS BashTool.tsx:696-700). A command that
+        // fails only via its exit code with no stdout/stderr (`false`, a script
+        // that `exit 1`s silently) would otherwise render as empty — the model
+        // could not tell it failed. Mirror TS exactly: append the bare
+        // `Exit code N` ONLY when the command-aware interpreter classifies it as
+        // a genuine error. Expected non-zero codes (grep no-match, diff differs,
+        // test false, find inaccessible) are `is_error: false` → nothing is
+        // appended to the model output; their friendly explanation is TUI-only.
+        let exit_tail = {
+            let exit_code = data.get("exitCode").and_then(Value::as_i64).unwrap_or(0);
+            let command = data.get("command").and_then(Value::as_str).unwrap_or("");
+            if exit_code != 0
+                && !interrupted
+                && coco_shell::semantics::interpret_command_result(command, exit_code as i32)
+                    .is_error
+            {
+                format!("Exit code {exit_code}")
+            } else {
+                String::new()
+            }
+        };
+
         let combined = [
             processed.as_str(),
             error_message.as_str(),
+            exit_tail.as_str(),
             background_info.as_str(),
         ]
         .into_iter()
@@ -881,6 +904,11 @@ async fn execute_via_task_runtime(
                 "stderr": stderr,
                 "exitCode": outputs.exit_code,
                 "interrupted": outputs.interrupted,
+                // Carried so `render_for_model` can interpret the exit code with
+                // command-aware semantics. This is the PRODUCTION path (a
+                // TaskRuntime is wired); without it the interpreter saw an empty
+                // command and labelled every non-zero exit a generic error.
+                "command": command,
             });
             // Image detection on bytes from disk. The unified path
             // reads the file via `read_terminal_outputs` which returns
@@ -1153,6 +1181,9 @@ async fn execute_foreground(
         "stderr": stderr,
         "exitCode": exit_code,
         "interrupted": interrupted,
+        // Carried so `render_for_model` can interpret the exit code with
+        // command-aware semantics (grep no-match vs genuine error).
+        "command": command,
     });
     if is_image {
         result_obj["isImage"] = serde_json::Value::Bool(true);

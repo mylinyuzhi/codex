@@ -158,11 +158,27 @@ pub fn build_call_options_with_extra(
     // Critically, an explicit per-call `Disable` must NOT silently fall
     // through to the model default — that would let a turn disable
     // thinking only for it to come back via the model.
-    let thinking: Option<&ThinkingLevel> = match per_call.thinking_level.as_ref() {
-        Some(t) => Some(t),
-        None => info.default_thinking(),
+    // Clamp an explicit per-call numeric effort into the model's declared
+    // `supported_thinking_levels` ladder before it reaches the wire.
+    // `resolve_thinking_level`: exact match → nearest declared level →
+    // verbatim passthrough when the model declares no ladder (trust the
+    // caller). For an over-ceiling request (e.g. `--effort max` / XHigh on a
+    // model whose top declared level is High) nearest-match lands on the top
+    // declared level — a graceful degrade instead of emitting
+    // `output_config.effort="max"`, which 400s on models that reject it.
+    // This is the single wire choke point, so it covers every explicit
+    // override source uniformly (CLI `--effort`, SDK `set_thinking_level`,
+    // subagent frontmatter, the model picker) against the *resolved*
+    // `ModelInfo` for this specific call. Only explicit levels are clamped:
+    // `Off`/`Auto` are not numeric levels (they mean "off" / "defer to the
+    // provider default") and must bypass the effort-distance math, which
+    // would otherwise snap them to the nearest declared numeric level.
+    let thinking: Option<ThinkingLevel> = match per_call.thinking_level.as_ref() {
+        Some(t) if t.effort.is_explicit_level() => Some(info.resolve_thinking_level(t)),
+        Some(t) => Some(t.clone()),
+        None => info.default_thinking().cloned(),
     };
-    if let Some(t) = thinking
+    if let Some(t) = thinking.as_ref()
         && t.effort.is_explicit_level()
     {
         call.reasoning = Some(reasoning_effort_to_level(t.effort));
@@ -182,7 +198,7 @@ pub fn build_call_options_with_extra(
     for (k, v) in &per_call.extra_body {
         merge_into_extra(&mut extra, k, v);
     }
-    if let Some(t) = thinking {
+    if let Some(t) = thinking.as_ref() {
         // Disabled levels (effort == None) still flow `level.options`
         // through — DeepSeek V4 emits `{"thinking":{"type":"disabled"}}`
         // when off. The Lane A2 typed-reasoning gate above (`call.reasoning`)

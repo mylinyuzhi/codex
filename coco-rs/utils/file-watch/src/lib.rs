@@ -270,6 +270,27 @@ impl<E: Clone + Send + 'static> FileWatcherBuilder<E> {
 // Event loop
 // ---------------------------------------------------------------------------
 
+/// Whether a raw filesystem event represents an actual change to a file's
+/// content, name, or existence — as opposed to a read-open/close or a
+/// metadata-only touch (atime, permissions).
+///
+/// Read events (`Access`) and metadata-only events (`Modify(Metadata)`) are
+/// dropped *before* the caller's `classify` closure runs. This is
+/// load-bearing: notify's inotify backend watches with a mask that includes
+/// `IN_OPEN` / `IN_CLOSE_WRITE` / `IN_ATTRIB`, so any consumer whose reaction
+/// re-reads the watched file would otherwise self-feed — the reaction's own
+/// `open()` re-fires the watch (and under a `strictatime` mount, so does the
+/// atime bump), producing an unbounded reload loop. `Any` / `Other` are
+/// conservatively treated as changes so backends that only emit coarse events
+/// (some non-inotify platforms) are not silently dropped.
+fn is_content_change(kind: EventKind) -> bool {
+    use notify::event::ModifyKind;
+    !matches!(
+        kind,
+        EventKind::Access(_) | EventKind::Modify(ModifyKind::Metadata(_))
+    )
+}
+
 fn spawn_event_loop<E, C, M>(
     mut raw_rx: mpsc::UnboundedReceiver<notify::Result<notify::Event>>,
     tx: broadcast::Sender<E>,
@@ -310,6 +331,12 @@ fn spawn_event_loop<E, C, M>(
                                 event_paths = ?event.paths,
                                 "file watcher received filesystem event"
                             );
+                            // Drop read-opens/closes and metadata-only touches
+                            // before classify so a consumer that re-reads the
+                            // watched file cannot self-feed a reload loop.
+                            if !is_content_change(event.kind) {
+                                continue;
+                            }
                             if let Some(classified) = classify(&event) {
                                 pending = Some(match pending.take() {
                                     Some(acc) => merge(acc, classified),

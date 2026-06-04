@@ -23,7 +23,9 @@ pub enum BudgetDecision {
 /// TS: BudgetTracker with diminishing returns detection.
 pub struct BudgetTracker {
     pub max_tokens: Option<i64>,
-    pub max_turns: i32,
+    /// Turn cap. `None` = unbounded (TS interactive REPL); `Some(n)` caps at n
+    /// (TS `--print --max-turns`, and every subagent/fork).
+    pub max_turns: Option<i32>,
     pub max_continuations: i32,
     pub min_remaining_tokens: i64,
     consumed_tokens: i64,
@@ -37,7 +39,7 @@ pub struct BudgetTracker {
 }
 
 impl BudgetTracker {
-    pub fn new(max_tokens: Option<i64>, max_turns: i32, max_continuations: i32) -> Self {
+    pub fn new(max_tokens: Option<i64>, max_turns: Option<i32>, max_continuations: i32) -> Self {
         Self {
             max_tokens,
             max_turns,
@@ -74,13 +76,14 @@ impl BudgetTracker {
 
     /// Check whether the budget allows continuing.
     pub fn check(&self, current_turn: i32) -> BudgetDecision {
-        // Check turn limit.
-        if current_turn >= self.max_turns {
+        // Check turn limit. `None` = unbounded (TS interactive REPL): the model
+        // loops until it stops on its own, the token budget trips, or the user
+        // interrupts.
+        if let Some(max) = self.max_turns
+            && current_turn >= max
+        {
             return BudgetDecision::Stop {
-                reason: format!(
-                    "reached maximum turns ({current_turn}/{max})",
-                    max = self.max_turns
-                ),
+                reason: format!("reached maximum turns ({current_turn}/{max})"),
             };
         }
 

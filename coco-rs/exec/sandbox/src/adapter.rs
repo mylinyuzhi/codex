@@ -464,12 +464,20 @@ fn dedup_paths(paths: &mut Vec<PathBuf>) {
 
 /// Whether the sandbox settings indicate network isolation should apply.
 ///
-/// TS treats network as isolated whenever the user enables sandbox + has not
-/// explicitly opted into open network. We mirror the conservative default:
-/// if `enabled` and not in `FullAccess` mode, network is restricted to the
-/// allowlist.
+/// TS isolates network whenever the sandbox is enabled and the user has not
+/// explicitly opted into open network (`sandbox-adapter.ts` always routes
+/// egress through the per-domain filter when `isSandboxingEnabled()`). The
+/// only opt-out is the coarse `allow_network` toggle.
+///
+/// Network isolation is deliberately decoupled from [`NetworkMode`]:
+/// `NetworkMode` gates *HTTP methods* (Full = all methods, Limited =
+/// GET/HEAD/OPTIONS) and flows into the [`DomainFilter`] when the proxy starts;
+/// it must never act as an on/off switch. Keying isolation off `mode != Full`
+/// was a category error that, because `NetworkMode` defaults to `Full`, left
+/// the dominant config (sandbox on, no `network.mode`) with `allow_network ==
+/// true` — unrestricted egress, the exact escape this guards against.
 fn network_isolated(settings: &SandboxSettings) -> bool {
-    settings.enabled && !settings.network.allowed_domains.is_empty()
+    settings.enabled && !settings.allow_network
 }
 
 /// Compute paths under `cwd` that look like a planted bare-repo (HEAD,

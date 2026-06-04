@@ -171,6 +171,10 @@ impl<'a> UiStyles<'a> {
         self.theme.code_operator
     }
 
+    pub fn code_inline(self) -> Color {
+        self.theme.code_inline
+    }
+
     pub fn code_bg(self) -> Option<Color> {
         self.theme.code_bg
     }

@@ -64,6 +64,12 @@ pub struct ReactiveCompactState {
     failure_count: i32,
     /// Timestamp (ms) of the last compaction attempt.
     last_attempt_ms: i64,
+    /// Set when the last reactive attempt only QUEUED a server-side
+    /// `context_management` edit (Anthropic) instead of mutating history. If we
+    /// re-enter reactive compaction with this set, the cache-preserving retry
+    /// did not resolve the overflow, so the caller falls back to client-side
+    /// truncation (which frees real local tokens) instead of queue-looping.
+    pending_server_side: bool,
 }
 
 impl ReactiveCompactState {
@@ -88,10 +94,23 @@ impl ReactiveCompactState {
         self.last_attempt_ms = timestamp_ms;
     }
 
+    /// Mark that the last reactive attempt queued a server-side edit (freed no
+    /// local tokens). Read+cleared by [`Self::take_pending_server_side`].
+    pub fn set_pending_server_side(&mut self) {
+        self.pending_server_side = true;
+    }
+
+    /// Read and clear the server-side-pending flag. `true` means the previous
+    /// attempt was a server-side queue that has not been confirmed resolved.
+    pub fn take_pending_server_side(&mut self) -> bool {
+        std::mem::take(&mut self.pending_server_side)
+    }
+
     /// Reset the circuit breaker, re-enabling reactive compaction.
     pub fn reset(&mut self) {
         self.failure_count = 0;
         self.last_attempt_ms = 0;
+        self.pending_server_side = false;
     }
 
     /// Current consecutive failure count.

@@ -192,10 +192,7 @@ fn test_model_picker_context() {
 fn test_settings_theme_tab_uses_theme_picker_context() {
     let mut state = AppState::new();
     state.ui.show_modal(crate::state::ModalState::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(
-            &state.ui.theme_state,
-            state.ui.display_settings.clone(),
-        ),
+        crate::widgets::settings_panel::SettingsPanelState::new(state.ui.display_settings.clone()),
     ));
     assert_eq!(active_context(&state), KeybindingContext::ThemePicker);
 }
@@ -204,10 +201,7 @@ fn test_settings_theme_tab_uses_theme_picker_context() {
 fn test_theme_picker_ctrl_t_toggles_syntax_highlighting() {
     let mut state = AppState::new();
     state.ui.show_modal(crate::state::ModalState::Settings(
-        crate::widgets::settings_panel::SettingsPanelState::new(
-            &state.ui.theme_state,
-            state.ui.display_settings.clone(),
-        ),
+        crate::widgets::settings_panel::SettingsPanelState::new(state.ui.display_settings.clone()),
     ));
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
     assert!(matches!(cmd, Some(TuiCommand::ToggleSyntaxHighlighting)));

@@ -41,6 +41,53 @@ fn soft_breaks_preserve_authored_lines() {
 }
 
 #[test]
+fn inline_code_uses_code_inline_token_matching_ts_permission() {
+    // Inline `code` spans paint with the `code_inline` token. TS renders
+    // codespan via `color('permission')`, so the default `code_inline` mirrors
+    // the periwinkle `accent` (= permission) rather than a syntax-highlight
+    // color — this is why inline code reads "light blue", not pink. The token
+    // stays a distinct field so custom (`theme.json`) themes can override it.
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let lines = render_markdown(
+        "use `xyzzy` here",
+        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled),
+        None,
+    );
+    let code = lines[0]
+        .spans
+        .iter()
+        .find(|s| s.content.as_ref() == "xyzzy")
+        .expect("an inline-code span");
+    assert_eq!(code.style.fg, Some(theme.code_inline));
+    assert_eq!(
+        theme.code_inline, theme.accent,
+        "default inline code mirrors TS `color('permission')`"
+    );
+}
+
+#[test]
+fn list_marker_uses_body_text_color_not_brand() {
+    // TS renders the list marker (`-` / `N.`) with no color wrapper, so it
+    // inherits the body text color. coco mirrors that: the bullet must NOT use
+    // the brand `primary` (claude orange), which downsampled to a harsh yellow.
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let lines = render_markdown(
+        "- item",
+        MarkdownOptions::new(styles, 80, SyntaxHighlighting::Enabled),
+        None,
+    );
+    let bullet = lines[0]
+        .spans
+        .iter()
+        .find(|s| s.content.as_ref().contains('•'))
+        .expect("a bullet span");
+    assert_eq!(bullet.style.fg, Some(theme.text));
+    assert_ne!(theme.text, theme.primary, "bullet must not use brand color");
+}
+
+#[test]
 fn heading_renders_without_hash_prefix() {
     let lines = render_text("# Title");
     assert_eq!(lines, vec!["  Title".to_string()]);

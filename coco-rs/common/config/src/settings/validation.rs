@@ -600,6 +600,8 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "include_git_instructions",
     "allow_managed_hooks_only",
     "strict_plugin_only_customization",
+    "strict_known_marketplaces",
+    "blocked_marketplaces",
     "file_checkpointing_enabled",
 ];
 

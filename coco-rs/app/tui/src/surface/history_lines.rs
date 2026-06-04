@@ -70,6 +70,8 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) show_system_reminders: bool,
     pub(crate) show_thinking: bool,
+    /// Session working directory for relative memory-chip paths (`None` ⇒ absolute).
+    pub(crate) cwd: Option<&'a str>,
     pub(crate) kb_handle: Option<&'a KeybindingHandle>,
     pub(crate) replay_cache_policy: HistoryReplayCachePolicy,
     /// TUI-side side-cache for reasoning metadata keyed by assistant
@@ -273,7 +275,8 @@ pub(crate) fn render_finalized_history_lines(
         .show_system_reminders(options.show_system_reminders)
         .show_thinking(options.show_thinking)
         .width(options.width)
-        .syntax_highlighting(options.syntax_highlighting);
+        .syntax_highlighting(options.syntax_highlighting)
+        .cwd(options.cwd);
     if let Some(kb_handle) = options.kb_handle {
         chat = chat.kb_handle(kb_handle);
     }

@@ -232,3 +232,85 @@ async fn event_loop_flushes_on_close() {
         .unwrap();
     assert_eq!(second, vec![path("/tmp/b")]);
 }
+
+// -----------------------------------------------------------------------
+// is_content_change — read/metadata filtering (self-feed-loop guard)
+// -----------------------------------------------------------------------
+
+#[test]
+fn content_change_keeps_real_mutations() {
+    use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
+    assert!(is_content_change(EventKind::Create(CreateKind::File)));
+    assert!(is_content_change(EventKind::Modify(ModifyKind::Data(
+        DataChange::Any
+    ))));
+    assert!(is_content_change(EventKind::Modify(ModifyKind::Name(
+        RenameMode::To
+    ))));
+    assert!(is_content_change(EventKind::Remove(RemoveKind::File)));
+    // Coarse fallbacks pass through so non-inotify backends are not dropped.
+    assert!(is_content_change(EventKind::Any));
+    assert!(is_content_change(EventKind::Other));
+}
+
+#[test]
+fn content_change_drops_reads_and_metadata() {
+    use notify::event::{AccessKind, AccessMode, MetadataKind, ModifyKind};
+    // IN_OPEN — the read that self-feeds when the reaction re-reads the file.
+    assert!(!is_content_change(EventKind::Access(AccessKind::Open(
+        AccessMode::Any
+    ))));
+    assert!(!is_content_change(EventKind::Access(AccessKind::Read)));
+    assert!(!is_content_change(EventKind::Access(AccessKind::Close(
+        AccessMode::Write
+    ))));
+    // IN_ATTRIB — the atime bump that self-feeds under a strictatime mount.
+    assert!(!is_content_change(EventKind::Modify(ModifyKind::Metadata(
+        MetadataKind::Any
+    ))));
+}
+
+/// Regression for the runaway config-reload loop: a read-open on a watched
+/// file must be filtered before `classify`, while a real write on the same
+/// path is still delivered.
+#[tokio::test]
+async fn event_loop_filters_read_open_but_keeps_write() {
+    use notify::event::{AccessKind, AccessMode, DataChange, ModifyKind};
+    let (raw_tx, raw_rx) = mpsc::unbounded_channel::<notify::Result<notify::Event>>();
+    let (tx, mut rx) = broadcast::channel::<Vec<PathBuf>>(8);
+
+    spawn_event_loop(
+        raw_rx,
+        tx,
+        Duration::from_secs(1),
+        |event| {
+            let paths: Vec<PathBuf> = event.paths.clone();
+            if paths.is_empty() { None } else { Some(paths) }
+        },
+        |mut acc, new| {
+            acc.extend(new);
+            acc
+        },
+    );
+
+    // Read-open (as emitted when the reload re-reads models.json) — dropped.
+    let open = notify::Event::new(EventKind::Access(AccessKind::Open(AccessMode::Any)))
+        .add_path(path("/tmp/models.json"));
+    raw_tx.send(Ok(open)).unwrap();
+    assert!(
+        timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .is_err(),
+        "read-open event must be filtered before classify"
+    );
+
+    // A genuine content change on the same path is still delivered.
+    let modify = notify::Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Any)))
+        .add_path(path("/tmp/models.json"));
+    raw_tx.send(Ok(modify)).unwrap();
+    let received = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received, vec![path("/tmp/models.json")]);
+}

@@ -194,6 +194,16 @@ class ConfigChangeSource(str, Enum):
     policy_settings = 'policy_settings'
     skills = 'skills'
 
+class ContextCategoryKind(str, Enum):
+    system_prompt = 'system_prompt'
+    tools = 'tools'
+    mcp_tools = 'mcp_tools'
+    agents = 'agents'
+    memory_files = 'memory_files'
+    skills = 'skills'
+    messages = 'messages'
+    free = 'free'
+
 class EffortLevel(str, Enum):
     low = 'low'
     medium = 'medium'
@@ -467,6 +477,10 @@ class SourceType(str, Enum):
     url = 'url'
     document = 'document'
 
+class SuggestionSeverity(str, Enum):
+    warning = 'warning'
+    info = 'info'
+
 class SystemMessageLevel(str, Enum):
     info = 'info'
     warning = 'warning'
@@ -526,7 +540,7 @@ RequestId = int | str
 SilentPayload = Union["HookCancelledPayload", "HookErrorDuringExecutionPayload", "HookNonBlockingErrorPayload", "HookSystemMessagePayload", "HookPermissionDecisionPayload", "CommandPermissionsPayload", "StructuredOutputPayload", "DynamicSkillPayload", "MaxTurnsReachedPayload", "AlreadyReadFilePayload", "EditedImageFilePayload"]
 
 # System messages have sub-types for different notification kinds.
-SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "SystemCompactBoundaryMessage", "SystemMicrocompactBoundaryMessage", "SystemLocalCommandMessage", "SystemPermissionRetryMessage", "SystemBridgeStatusMessage", "SystemMemorySavedMessage", "SystemAwaySummaryMessage", "SystemAgentsKilledMessage", "SystemApiMetricsMessage", "SystemStopHookSummaryMessage", "SystemTurnDurationMessage", "SystemScheduledTaskFireMessage", "SystemUserInterruptionMessage"]
+SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "SystemCompactBoundaryMessage", "SystemMicrocompactBoundaryMessage", "SystemLocalCommandMessage", "SystemPermissionRetryMessage", "SystemBridgeStatusMessage", "SystemMemorySavedMessage", "SystemAwaySummaryMessage", "SystemAgentsKilledMessage", "SystemApiMetricsMessage", "SystemStopHookSummaryMessage", "SystemTurnDurationMessage", "SystemScheduledTaskFireMessage", "SystemContextUsageMessage", "SystemUserInterruptionMessage"]
 
 # Tool message content parts.
 ToolContentPart = Union["ToolResultPart", "ToolApprovalResponsePart"]
@@ -1752,6 +1766,11 @@ class TuiOnlyEventSlashCommandResult(BaseModel):
     name: str
     text: str
 
+class TuiOnlyEventOpenContextUsage(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_context_usage'] = Field(default='open_context_usage', alias='type')
+    result: ContextUsageResult
+
 class TuiOnlyEventSlashCommandStatus(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['slash_command_status'] = Field(default='slash_command_status', alias='type')
@@ -1821,6 +1840,10 @@ class TuiOnlyEventOpenModelPicker(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_model_picker'] = Field(default='open_model_picker', alias='type')
 
+class TuiOnlyEventOpenThemePicker(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_theme_picker'] = Field(default='open_theme_picker', alias='type')
+
 class TuiOnlyEventOpenSkillsDialog(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_skills_dialog'] = Field(default='open_skills_dialog', alias='type')
@@ -1837,7 +1860,7 @@ class TuiOnlyEventSkillOverridesSaved(BaseModel):
     result: SkillOverridesSaveResult
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -2949,6 +2972,10 @@ class AttachmentMessage(BaseModel):
     uuid: str
     extras: AttachmentExtras | None = None
 
+class AttachmentTypeBreakdown(BaseModel):
+    name: str
+    tokens: int
+
 class BudgetExhaustedOutcome(BaseModel):
     used_tokens: int
     budget_tokens: int | None = None
@@ -2996,8 +3023,14 @@ class ContextSkill(BaseModel):
     source: str
     tokens: int
 
+class ContextSuggestion(BaseModel):
+    detail: str
+    severity: SuggestionSeverity
+    title: str
+    savings_tokens: int | None = None
+
 class ContextUsageCategory(BaseModel):
-    name: str
+    kind: ContextCategoryKind
     tokens: int
 
 class ContextUsageResult(BaseModel):
@@ -3014,6 +3047,7 @@ class ContextUsageResult(BaseModel):
     memory_files: list[ContextMemoryFile] | None = None
     message_breakdown: MessageBreakdown | None = None
     skills: list[ContextSkill] | None = None
+    suggestions: list[ContextSuggestion] | None = None
 
 class CustomPart(BaseModel):
     kind: str
@@ -3236,6 +3270,8 @@ class MessageBreakdown(BaseModel):
     tool_call_tokens: int
     tool_result_tokens: int
     user_message_tokens: int
+    attachments_by_type: list[AttachmentTypeBreakdown] | None = None
+    tool_calls_by_type: list[ToolTypeBreakdown] | None = None
 
 class ModelSpec(BaseModel):
     api: ProviderApi
@@ -3716,6 +3752,10 @@ class SystemCompactBoundaryMessage(BaseModel):
     trigger: CompactTrigger = 'auto'
     user_context: str | None = None
 
+class SystemContextUsageMessage(BaseModel):
+    result: ContextUsageResult
+    uuid: str
+
 class SystemInformationalMessage(BaseModel):
     level: SystemMessageLevel
     message: str
@@ -3876,6 +3916,11 @@ class ToolResultPart(BaseModel):
     tool_name: str = Field(alias='toolName')
     is_error: bool = Field(default=None, alias='isError')
     provider_metadata: ProviderMetadata | None = Field(default=None, alias='providerMetadata')
+
+class ToolTypeBreakdown(BaseModel):
+    call_tokens: int
+    name: str
+    result_tokens: int
 
 class TurnStartResult(BaseModel):
     turn_id: str

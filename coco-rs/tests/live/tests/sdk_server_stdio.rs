@@ -179,6 +179,7 @@ async fn serve(args: Args) -> Result<()> {
         skill_manager,
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+        session_id_override: None,
     })
     .await
     .with_context(|| format!("build SessionRuntime for {}/{model_id}", args.provider))?;
@@ -204,7 +205,7 @@ async fn serve(args: Args) -> Result<()> {
     let runner = Arc::new(QueryEngineRunner::new(
         session_runtime.clone(),
         cli.max_tokens.unwrap_or(2_048),
-        cli.max_turns.unwrap_or(8),
+        cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));
     server.set_turn_runner(runner).await;

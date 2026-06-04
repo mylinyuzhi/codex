@@ -11,7 +11,7 @@ use crate::common::reminders;
 
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
-        max_turns: 2,
+        max_turns: Some(2),
         max_budget_usd: Some(1.0), // generous; we just want the reminder to fire
         ..SessionConfig::default()
     };

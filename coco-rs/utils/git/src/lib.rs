@@ -7,6 +7,7 @@ mod errors;
 mod ghost_commits;
 mod operations;
 mod platform;
+mod remote;
 mod worktree;
 
 // Basic git operations
@@ -39,6 +40,15 @@ pub use ghost_commits::restore_ghost_commit;
 pub use ghost_commits::restore_ghost_commit_with_options;
 pub use ghost_commits::restore_to_commit;
 pub use platform::create_symlink;
+pub use remote::CloneOptions;
+pub use remote::DEFAULT_REMOTE_TIMEOUT;
+pub use remote::fetch_and_checkout_sha;
+pub use remote::github_origin_slug;
+pub use remote::parse_origin_slug;
+pub use remote::pull;
+pub use remote::redact_credentials;
+pub use remote::run_git as run_git_async;
+pub use remote::shallow_clone;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;

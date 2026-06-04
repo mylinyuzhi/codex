@@ -174,11 +174,14 @@ pub(super) fn try_render(
                 .find(|t| t.call_id == *call_id)
                 .map(|t| format!(" ({})", format_duration_seconds(t.elapsed())))
                 .unwrap_or_default();
+            // Width-1 `●` in the tool-type color so the marker aligns with the
+            // assistant `⏺` and the result `└` gutter at column 2 — an emoji
+            // (`🔧`) is width-2 and its cell width is font-dependent, so it
+            // drifts the whole row out of the gutter.
+            let tone = tool_tone_color(tool_name_tone(tool_name), w.styles);
             let mut spans = vec![
-                Span::raw("🔧 ").fg(w.styles.dim()),
-                Span::raw(tool_name.clone())
-                    .fg(tool_tone_color(tool_name_tone(tool_name), w.styles))
-                    .bold(),
+                Span::raw("● ").fg(tone),
+                Span::raw(tool_name.clone()).fg(tone).bold(),
             ];
             if !preview_spans.is_empty() {
                 spans.push(Span::raw("(").fg(w.styles.text()));

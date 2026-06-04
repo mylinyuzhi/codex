@@ -91,7 +91,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
         let initial_rule_maps = build_initial_rule_maps(&config.extra_permission_rules);
 
         let engine_config = QueryEngineConfig {
-            max_turns: config.max_turns.unwrap_or(30),
+            // Mirror TS: a subagent uses its own configured turn cap, or runs
+            // unbounded (None) when unset — same as the main loop. The shared
+            // token-budget / continuation cap / interrupt still bound it.
+            max_turns: config.max_turns,
             total_token_budget: None,
             prompt_cache: config.prompt_cache.clone(),
             system_prompt: Some(config.system_prompt),

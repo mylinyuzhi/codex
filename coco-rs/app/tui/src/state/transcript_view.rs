@@ -299,6 +299,8 @@ pub enum SystemCellKind {
     TurnDuration,
     /// Scheduled task fire row.
     ScheduledTaskFire,
+    /// `/context` usage snapshot — colored grid + grouped detail block.
+    ContextUsage,
 }
 
 impl From<&SystemMessage> for SystemCellKind {
@@ -321,6 +323,7 @@ impl From<&SystemMessage> for SystemCellKind {
             SystemMessage::StopHookSummary(_) => Self::StopHookSummary,
             SystemMessage::TurnDuration(_) => Self::TurnDuration,
             SystemMessage::ScheduledTaskFire(_) => Self::ScheduledTaskFire,
+            SystemMessage::ContextUsage(_) => Self::ContextUsage,
         }
     }
 }

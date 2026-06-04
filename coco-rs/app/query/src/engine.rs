@@ -562,11 +562,13 @@ impl QueryEngine {
                 BudgetDecision::Stop { reason } => {
                     warn!(%reason, "budget stop");
                     let hit_max_turns = next_iteration_counts_as_turn
-                        && self.config.max_turns > 0
-                        && turn_state.turn >= self.config.max_turns;
+                        && self
+                            .config
+                            .max_turns
+                            .is_some_and(|max| turn_state.turn >= max);
                     if hit_max_turns {
                         let payload = coco_messages::MaxTurnsReachedPayload {
-                            max_turns: self.config.max_turns,
+                            max_turns: self.config.max_turns.unwrap_or(0),
                             turn_count: turn_state.turn,
                         };
                         acc.run_artifacts.max_turns_reached = Some(payload.clone());
@@ -592,7 +594,7 @@ impl QueryEngine {
                             coco_types::TurnEndedParams::max_turns_reached(
                                 id.clone(),
                                 Some(*total_usage),
-                                self.config.max_turns,
+                                self.config.max_turns.unwrap_or(0),
                             )
                         } else {
                             coco_types::TurnEndedParams::budget_exhausted(

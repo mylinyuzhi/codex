@@ -175,7 +175,7 @@ async fn test_full_path_write_then_read() {
     let config = QueryEngineConfig {
         model_id: "mock-full-path".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_turns: 10,
+        max_turns: Some(10),
         ..Default::default()
     };
 
@@ -220,7 +220,7 @@ async fn test_full_path_with_hooks() {
     let config = QueryEngineConfig {
         model_id: "mock-full-path".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_turns: 10,
+        max_turns: Some(10),
         ..Default::default()
     };
 
@@ -249,7 +249,7 @@ async fn test_full_path_budget_exhaustion() {
         model_id: "mock-full-path".into(),
         permission_mode: PermissionMode::BypassPermissions,
         total_token_budget: Some(50), // Will be exhausted after first turn (100+50=150 > 50)
-        max_turns: 10,
+        max_turns: Some(10),
         ..Default::default()
     };
 
@@ -344,7 +344,7 @@ async fn test_full_path_with_bash_safety() {
     let config = QueryEngineConfig {
         model_id: "mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_turns: 5,
+        max_turns: Some(5),
         ..Default::default()
     };
 
@@ -525,7 +525,7 @@ async fn test_full_path_glob_and_grep() {
     let config = QueryEngineConfig {
         model_id: "mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_turns: 10,
+        max_turns: Some(10),
         ..Default::default()
     };
 

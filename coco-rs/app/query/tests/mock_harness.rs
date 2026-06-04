@@ -487,7 +487,8 @@ pub struct PlanModeTurnParams {
     pub prompt_if_empty: String,
     /// Raise this for scenarios that need more than the default 10
     /// tool-iteration budget (e.g. tool_rounds_do_not_advance_cadence).
-    pub max_turns: i32,
+    /// `None` = unbounded (mirrors `QueryEngineConfig.max_turns`).
+    pub max_turns: Option<i32>,
     /// Engine starting mode. Plan-mode tests start here as
     /// [`PermissionMode::Plan`] directly: the engine's plan-mode
     /// reminder snapshots `config.permission_mode` at construction
@@ -514,7 +515,7 @@ impl PlanModeTurnParams {
             plan_role_model: None,
             messages: Vec::new(),
             prompt_if_empty: prompt.into(),
-            max_turns: 20,
+            max_turns: Some(20),
             permission_mode: PermissionMode::Plan,
         }
     }
@@ -615,7 +616,7 @@ pub async fn run_with_mock(
     let config = QueryEngineConfig {
         model_id: "scripted-mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_turns: 10,
+        max_turns: Some(10),
         ..Default::default()
     };
     let engine = QueryEngine::new(config, client, tools, cancel, None);

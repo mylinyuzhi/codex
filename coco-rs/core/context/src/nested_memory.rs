@@ -143,15 +143,29 @@ pub fn traverse_for_file(
     // Phase 3: per-nested-dir CLAUDE.md / AGENTS.md / .claude/CLAUDE.md /
     // local + .claude/rules/**/*.md (unconditional + matching conditional).
     for dir in &nested_dirs {
-        load_nested_dir(dir, file, &mut out, loaded);
+        load_nested_dir(dir, file, cwd, &mut out, loaded);
     }
 
     // Phase 4: cwd-level conditional rules. For dirs from filesystem
     // root → CWD inclusive, only conditional `.claude/rules/**/*.md`
     // matching the trigger file are loaded — unconditional rules in
     // those dirs were already loaded eagerly at session start.
+    //
+    // In a nested worktree, skip the main repo's dirs above the worktree:
+    // a conditional rule there is also checked out into the worktree (loaded
+    // via Phase 3 / cwd's own dir), so loading the main-repo copy too would
+    // double the same guidance at a different path. Mirrors the eager skip
+    // (claudemd.ts:881-884). Phase 3 `nested_dirs` are descendants of cwd
+    // (inside the worktree) so they never hit the skip zone.
+    let nested = crate::memory_discovery::nested_worktree_roots(cwd);
     for dir in &cwd_level_dirs {
-        load_cwd_level_conditional_rules(dir, file, &mut out, loaded);
+        if nested
+            .as_ref()
+            .is_some_and(|roots| crate::memory_discovery::dir_in_skip_zone(dir, roots))
+        {
+            continue;
+        }
+        load_cwd_level_conditional_rules(dir, file, cwd, &mut out, loaded);
     }
 
     out
@@ -160,23 +174,30 @@ pub fn traverse_for_file(
 fn load_nested_dir(
     dir: &Path,
     file: &Path,
+    cwd: &Path,
     out: &mut Vec<LoadedMemoryEntry>,
     loaded: &mut HashSet<PathBuf>,
 ) {
     // <dir>/{CLAUDE,AGENTS}.md (case-insensitive). Project source.
     for path in find_memory_files(dir, MEMORY_FILE_CANDIDATES) {
-        push_loaded(path, MemoryFileSource::Project, out, loaded);
+        push_loaded(path, MemoryFileSource::Project, cwd, out, loaded);
     }
 
     // <dir>/.claude/CLAUDE.md (claude-code-specific config-dir path).
     let dot_claude = dir.join(".claude").join("CLAUDE.md");
     if dot_claude.exists() {
-        push_loaded(dot_claude, MemoryFileSource::ProjectConfig, out, loaded);
+        push_loaded(
+            dot_claude,
+            MemoryFileSource::ProjectConfig,
+            cwd,
+            out,
+            loaded,
+        );
     }
 
     // <dir>/{CLAUDE,AGENTS}.local.md. Local source.
     for path in find_memory_files(dir, MEMORY_LOCAL_FILE_CANDIDATES) {
-        push_loaded(path, MemoryFileSource::Local, out, loaded);
+        push_loaded(path, MemoryFileSource::Local, cwd, out, loaded);
     }
 
     // <dir>/.claude/rules/**/*.md — both unconditional (descendants of CWD
@@ -189,7 +210,7 @@ fn load_nested_dir(
     // Unconditional rules: load all files in this dir's rules tree
     // that don't have a `paths:` frontmatter.
     for rule in collect_rule_files(&rules_dir, false) {
-        push_rule_entry(rule, MemoryFileSource::Project, out, loaded);
+        push_rule_entry(rule, MemoryFileSource::Project, cwd, out, loaded);
     }
     // Conditional rules: load files whose `paths:` glob matches the
     // trigger file. Project rules use `dirname(dirname(rules_dir))` as
@@ -198,20 +219,28 @@ fn load_nested_dir(
     let conditional = collect_rule_files(&rules_dir, true);
     let matched = filter_rules_matching(conditional, file, &project_base);
     for rule in matched {
-        push_rule_entry(rule, MemoryFileSource::Project, out, loaded);
+        push_rule_entry(rule, MemoryFileSource::Project, cwd, out, loaded);
     }
 }
 
 fn push_rule_entry(
     rule: crate::memory_rules::RuleFile,
     source: MemoryFileSource,
+    cwd: &Path,
     out: &mut Vec<LoadedMemoryEntry>,
     loaded: &mut HashSet<PathBuf>,
 ) {
     // Rule body is already frontmatter-stripped by `read_rule_file`.
     // Run @import expansion against `loaded` so includes from a rule
     // body load alongside it AND dedup against the session set.
-    let entries = expand_imports(&rule.path, &rule.content, loaded, 0);
+    let entries = expand_imports(
+        &rule.path,
+        &rule.content,
+        loaded,
+        0,
+        cwd,
+        crate::memory_discovery::allows_external_imports(source),
+    );
     let mut iter = entries.into_iter();
     if let Some((_p, _c)) = iter.next() {
         // Preserve the rule's typed shape for the first entry (this keeps
@@ -230,6 +259,7 @@ fn push_rule_entry(
 fn push_loaded(
     path: PathBuf,
     source: MemoryFileSource,
+    cwd: &Path,
     out: &mut Vec<LoadedMemoryEntry>,
     loaded: &mut HashSet<PathBuf>,
 ) {
@@ -242,7 +272,14 @@ fn push_loaded(
     // (passed as its `processed` set) AND the @import recursion's own
     // cycle break — single source of truth for both. Returns the
     // parent followed by each transitively-included file.
-    let entries = expand_imports(&path, &content, loaded, 0);
+    let entries = expand_imports(
+        &path,
+        &content,
+        loaded,
+        0,
+        cwd,
+        crate::memory_discovery::allows_external_imports(source),
+    );
     for (p, c) in entries {
         out.push(LoadedMemoryEntry {
             path: p,
@@ -284,6 +321,7 @@ fn phase1_managed_user_conditional_rules(file: &Path) -> Vec<LoadedMemoryEntry> 
 fn load_cwd_level_conditional_rules(
     dir: &Path,
     file: &Path,
+    cwd: &Path,
     out: &mut Vec<LoadedMemoryEntry>,
     loaded: &mut HashSet<PathBuf>,
 ) {
@@ -294,7 +332,7 @@ fn load_cwd_level_conditional_rules(
     let conditional = collect_rule_files(&rules_dir, true);
     let matched = filter_rules_matching(conditional, file, dir);
     for rule in matched {
-        push_rule_entry(rule, MemoryFileSource::Project, out, loaded);
+        push_rule_entry(rule, MemoryFileSource::Project, cwd, out, loaded);
     }
 }
 

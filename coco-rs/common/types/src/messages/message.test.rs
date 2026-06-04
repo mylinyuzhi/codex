@@ -55,6 +55,33 @@ fn test_normal_user_is_both_visible() {
 }
 
 #[test]
+fn test_compact_summary_stays_api_visible_despite_transcript_only() {
+    // Regression: a compaction summary carries BOTH
+    // `is_visible_in_transcript_only` (it replaces the summarized history in
+    // the transcript) AND `is_compact_summary`. It MUST reach the model — it
+    // is the post-compact context. The transcript-only UI_ONLY arm must
+    // exempt compact summaries, otherwise every compaction silently drops the
+    // summary from the prompt.
+    let msg = Message::User(UserMessage {
+        message: crate::LlmMessage::user_text("summary of the prior conversation"),
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: true,
+        is_virtual: false,
+        is_compact_summary: true,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    });
+    let v = msg.visibility();
+    assert!(v.api, "compaction summary must reach the model");
+    assert!(
+        v.ui,
+        "compaction summary must also render in the transcript"
+    );
+}
+
+#[test]
 fn test_message_origin_slash_command_serde() {
     let json = serde_json::to_string(&MessageOrigin::SlashCommand).unwrap();
     assert_eq!(json, "\"slash_command\"");

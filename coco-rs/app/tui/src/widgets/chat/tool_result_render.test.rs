@@ -174,7 +174,7 @@ fn edit_without_input_falls_back_to_output() {
 
 #[test]
 fn bash_renders_output_without_echoing_the_command() {
-    // The `🔧`/`●` header already names the command; the body shows only output,
+    // The `●` header already names the command; the body shows only output,
     // never a redundant `$ command` line.
     let input = json!({"command": "ls -la /tmp"});
     let out = text_of(&render("Bash", Some(input), "file_a\nfile_b", false));
@@ -209,6 +209,66 @@ fn read_highlights_file_content() {
         false,
     ));
     assert!(out.contains("fn main()"), "file content must render: {out}");
+}
+
+#[test]
+fn read_splits_cat_n_line_numbers_into_a_gutter() {
+    // Read returns `cat -n` (`<n>\t<content>`). The line number must land in a
+    // dim gutter, never jammed against the content as `1# heading`.
+    let input = json!({"file_path": "README.md"});
+    let out = text_of(&render(
+        "Read",
+        Some(input),
+        "1\t# heading\n2\t\n3\tbody text",
+        false,
+    ));
+    assert!(
+        out.contains("# heading"),
+        "markdown content must survive line-number stripping: {out}"
+    );
+    assert!(
+        out.contains("body text"),
+        "later lines must render too: {out}"
+    );
+    assert!(
+        !out.contains("1# heading"),
+        "line number must not jam against content: {out}"
+    );
+    assert!(
+        !out.contains('\t'),
+        "the cat -n tab must be consumed, not emitted: {out}"
+    );
+}
+
+#[test]
+fn read_preview_uses_a_single_trailing_ellipsis() {
+    // A read longer than the inline cap collapses to a contiguous head plus ONE
+    // trailing "… +N lines" marker — never a stacked middle ellipsis whose count
+    // disagrees with the line-number gutter (regression for the cat -n preview).
+    let input = json!({"file_path": "README.md"});
+    let output = (1..=10)
+        .map(|n| format!("{n}\tline {n} content"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let out = text_of(&render("Read", Some(input), &output, false));
+    assert_eq!(
+        out.matches("… +").count(),
+        1,
+        "exactly one truncation marker expected: {out}"
+    );
+    // Head is contiguous (lines 1..=5 shown), the rest collapse into the marker.
+    assert!(
+        out.contains("5  line 5 content"),
+        "head line 5 shown: {out}"
+    );
+    assert!(
+        !out.contains("6  line 6 content"),
+        "line 6 must be elided into the marker, not shown: {out}"
+    );
+    assert!(
+        out.contains("… +5 lines"),
+        "marker must count the 5 omitted lines (6-10): {out}"
+    );
 }
 
 #[test]

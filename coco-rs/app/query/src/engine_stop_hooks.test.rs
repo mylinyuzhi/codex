@@ -124,7 +124,9 @@ fn engine_with_hooks(hooks: Option<Arc<HookRegistry>>) -> QueryEngine {
 
 fn loop_turn_state() -> LoopTurnState {
     LoopTurnState::new(
-        /*max_tokens*/ None, /*max_turns*/ 100, /*max_continuations*/ 3,
+        /*max_tokens*/ None,
+        /*max_turns*/ Some(100),
+        /*max_continuations*/ 3,
     )
 }
 

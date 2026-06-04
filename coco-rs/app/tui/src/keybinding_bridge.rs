@@ -46,6 +46,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             // Filterable list modals
             ModalState::ModelPicker(_) => KeybindingContext::ModelPicker,
 
+            // Standalone theme picker — reuses the ThemePicker context so the
+            // `theme:toggleSyntaxHighlighting` (ctrl+t) binding is active.
+            ModalState::ThemePicker(_) => KeybindingContext::ThemePicker,
+
             // Filterable list modals
             ModalState::SessionBrowser(_)
             | ModalState::GlobalSearch(_)
@@ -60,15 +64,14 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             ModalState::Help
             | ModalState::DiffView(_)
             | ModalState::TaskDetail(_)
-            | ModalState::Doctor(_)
-            | ModalState::ContextVisualization => KeybindingContext::Scrollable,
+            | ModalState::Doctor(_) => KeybindingContext::Scrollable,
             ModalState::Transcript(_) => KeybindingContext::Transcript,
 
-            // Tabbed settings state. The Theme tab gets the TS
-            // ThemePicker context so `theme:toggleSyntaxHighlighting`
-            // works without making syntax highlighting a theme.json field.
+            // Tabbed settings state. The Display tab gets the TS
+            // ThemePicker context so `theme:toggleSyntaxHighlighting` (ctrl+t)
+            // toggles the syntax-highlighting row.
             ModalState::Settings(s)
-                if s.active_tab == crate::widgets::settings_panel::SettingsTab::Theme =>
+                if s.active_tab == crate::widgets::settings_panel::SettingsTab::Display =>
             {
                 KeybindingContext::ThemePicker
             }
@@ -468,7 +471,6 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('v') if ctrl || alt => Some(TuiCommand::PasteFromClipboard),
         KeyCode::Char('m') if ctrl => Some(TuiCommand::CycleModel),
         KeyCode::Char('g') if ctrl => Some(TuiCommand::OpenPlanEditor),
-        KeyCode::Char('w') if ctrl => Some(TuiCommand::ShowContextViz),
         KeyCode::Char(',') if ctrl => Some(TuiCommand::ShowSettings),
 
         // Tab

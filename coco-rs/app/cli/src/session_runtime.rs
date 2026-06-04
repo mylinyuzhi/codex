@@ -342,6 +342,11 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// [`coco_subagent::BuiltinAgentCatalog::sdk_noninteractive`] to
     /// disable the entire built-in roster.
     pub builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog,
+    /// Session id to adopt (resume / continue / fork). `None` mints a
+    /// fresh per-process uuid. Threaded so every runtime subsystem
+    /// (task dirs, task-list id, agent transcripts, usage snapshot)
+    /// keys off the SAME id the engine config uses.
+    pub session_id_override: Option<String>,
 }
 
 /// Construct a [`ThinkingLevel`] for an effort, threading the model's
@@ -473,6 +478,13 @@ pub struct SessionRuntime {
     pub file_read_state: Arc<RwLock<FileReadState>>,
     pub file_history: Option<Arc<RwLock<FileHistoryState>>>,
     pub app_state: Arc<RwLock<ToolAppState>>,
+    /// Session-scoped peer-message store, shared (one `Arc`) by every
+    /// per-turn engine built via `wire_engine` — including in-process
+    /// teammate engines. `SendMessage` pushes into it (`ToolUseContext.
+    /// pending_messages`) and the recipient drains it via the
+    /// `agent_pending_messages` system-reminder (`SwarmAdapter`). The two
+    /// sites MUST share this exact `Arc`, else messages vanish.
+    pending_message_store: coco_tool_runtime::PendingMessageStoreRef,
     /// Session-scoped Auto mode classifier state. Installed on every
     /// per-turn engine so `permission_mode = Auto` can auto-approve
     /// safe/read-only tools before falling back to interactive approval.
@@ -585,6 +597,9 @@ pub struct SessionRuntime {
     /// every per-turn engine via [`Self::wire_engine`]. TS parity:
     /// `Project` from `utils/sessionStorage.ts`.
     transcript_store: Arc<TranscriptStore>,
+    /// When false, all transcript / usage / file-history persistence is
+    /// suppressed for this run (TS `shouldSkipPersistence`).
+    persist_session: bool,
     /// Shared cumulative token/cost tracker for the current session id.
     session_usage_tracker: Arc<tokio::sync::Mutex<CostTracker>>,
     /// Serializes session usage updates and durable writes across all
@@ -714,10 +729,24 @@ impl SessionRuntime {
             skill_manager,
             agent_search_paths,
             builtin_agent_catalog,
+            session_id_override,
         } = opts;
 
         let config_home = coco_config::global_config::config_home();
-        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_id = session_id_override.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        // Bare mode (`COCO_BARE_MODE` / `--bare`) skips session-start background
+        // housekeeping — the `!isBareMode()` gate TS applies to
+        // `startBackgroundHousekeeping` (`main.tsx:2816`). Recall /
+        // memory_runtime build / snapshot start stay on; only the fire-and-forget
+        // sweeps + the (coco-specific) SM warm-load are suppressed. Same env read
+        // as the per-turn gate in `engine_finalize_turn`.
+        let bare_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode);
+        // Session-persistence kill switch: `--no-session-persistence`
+        // (print-mode-only, validated at startup) suppresses ALL transcript
+        // JSONL + usage-snapshot + file-history + subagent-transcript writes
+        // for this run. TS: the flag feeds both `shouldSkipPersistence`
+        // (transcript/usage) and `persistSession` (file-history).
+        let persist_session = !cli.no_session_persistence;
 
         // Concurrent-sessions PID registry. Skipped for subagent
         // contexts (TS `getAgentId() != null`), and best-effort: a
@@ -901,13 +930,15 @@ impl SessionRuntime {
             // racing the NoOp slot and emitting spurious
             // `AutoDreamFailed` events. TS parity: `initAutoDream`
             // schedules on session start; per-turn ticks via
-            // `executeAutoDream` from stop hooks.
-            let dream_clone = runtime.clone();
-            tokio::spawn(async move {
-                let now_ms = coco_memory::service::dream::DreamService::now_ms();
-                let outcome = dream_clone.tick_dream(now_ms).await;
-                tracing::debug!(?outcome, "auto-dream gate check at session start");
-            });
+            // `executeAutoDream` from stop hooks. Skipped in bare mode.
+            if !bare_mode {
+                let dream_clone = runtime.clone();
+                tokio::spawn(async move {
+                    let now_ms = coco_memory::service::dream::DreamService::now_ms();
+                    let outcome = dream_clone.tick_dream(now_ms).await;
+                    tracing::debug!(?outcome, "auto-dream gate check at session start");
+                });
+            }
         }
 
         // Session-memory handle threaded into the engine. Same `Arc`
@@ -916,7 +947,9 @@ impl SessionRuntime {
         // back to LLM summarization). Warm the on-disk cache here so
         // the first compact short-circuit doesn't have to read disk.
         let session_memory_service = memory_runtime.as_ref().map(|r| r.session_memory.clone());
-        if let Some(svc) = &session_memory_service {
+        if let Some(svc) = &session_memory_service
+            && !bare_mode
+        {
             svc.load_from_disk().await;
         }
 
@@ -924,7 +957,7 @@ impl SessionRuntime {
         // prior `/clear`, which regenerates the session id). 30-day
         // retention mirrors the worktree GC cadence; mtime-only, fire-
         // and-forget so a wedged filesystem can't block startup.
-        if memory_runtime.is_some() {
+        if memory_runtime.is_some() && !bare_mode {
             let pdir = project_paths.project_dir();
             let sid = session_id.clone();
             tokio::spawn(async move {
@@ -1015,7 +1048,7 @@ impl SessionRuntime {
         // the bootstrap returns `None` (degrade to unsandboxed) — unless
         // `sandbox.fail_if_unavailable` is set, in which case it returns
         // an error and we exit before the REPL starts.
-        let sandbox_state = build_sandbox_state(&runtime_config, &cwd)?;
+        let sandbox_state = build_sandbox_state(&runtime_config, &cwd).await?;
 
         // Session-scoped attachment channel. The engine drains the rx at
         // the head of each turn (drain_attachment_inbox), while producers
@@ -1069,19 +1102,21 @@ impl SessionRuntime {
                     &mut shell,
                 );
                 // Sweep prior-run residue in the background — mtime-only,
-                // no await needed on the hot path.
-                let dir = snap_cfg.snapshot_dir.clone();
-                let sid = session_id.clone();
-                let retention = snap_cfg.retention;
-                tokio::spawn(async move {
-                    match coco_shell::cleanup_stale_snapshots(&dir, &sid, retention).await {
-                        Ok(n) if n > 0 => {
-                            info!("reaped {n} stale shell snapshots from {}", dir.display());
+                // no await needed on the hot path. Skipped in bare mode.
+                if !bare_mode {
+                    let dir = snap_cfg.snapshot_dir.clone();
+                    let sid = session_id.clone();
+                    let retention = snap_cfg.retention;
+                    tokio::spawn(async move {
+                        match coco_shell::cleanup_stale_snapshots(&dir, &sid, retention).await {
+                            Ok(n) if n > 0 => {
+                                info!("reaped {n} stale shell snapshots from {}", dir.display());
+                            }
+                            Ok(_) => {}
+                            Err(e) => warn!("shell snapshot cleanup failed: {e}"),
                         }
-                        Ok(_) => {}
-                        Err(e) => warn!("shell snapshot cleanup failed: {e}"),
-                    }
-                });
+                    });
+                }
             }
             let session_env_reader = Some(Arc::new(coco_shell::SessionEnvReader::new(
                 &config_home,
@@ -1113,7 +1148,9 @@ impl SessionRuntime {
             permission_rule_source_roots,
             context_window: 200_000,
             max_output_tokens: 16_384,
-            max_turns: runtime_config.loop_config.max_turns.unwrap_or(30),
+            // Interactive: unbounded unless the user set `loop.max_turns`
+            // (TS leaves the REPL uncapped; `--max-turns` is `--print`-only).
+            max_turns: runtime_config.loop_config.max_turns,
             total_token_budget: cli
                 .max_tokens
                 .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
@@ -1277,6 +1314,7 @@ impl SessionRuntime {
             file_read_state,
             file_history,
             app_state,
+            pending_message_store: Arc::new(coco_tool_runtime::InMemoryPendingMessageStore::new()),
             auto_mode_state,
             denial_tracker,
             session_memory_service,
@@ -1316,6 +1354,7 @@ impl SessionRuntime {
             session_attachment_tx,
             session_attachment_rx,
             transcript_store,
+            persist_session,
             session_usage_tracker,
             session_usage_write_lock,
             transcript_dedup,
@@ -1483,7 +1522,17 @@ impl SessionRuntime {
         self.session_id.read().await.clone()
     }
 
+    /// Whether this run persists session artifacts (transcript / usage /
+    /// file-history / subagent transcripts). False under
+    /// `--no-session-persistence` (TS `shouldSkipPersistence`).
+    pub fn persist_session(&self) -> bool {
+        self.persist_session
+    }
+
     pub async fn flush_session_usage_snapshot(&self) {
+        if !self.persist_session {
+            return;
+        }
         let session_id = self.current_session_id().await;
         let _write_guard = self.session_usage_write_lock.lock().await;
         let snapshot = self
@@ -1617,6 +1666,47 @@ impl SessionRuntime {
     /// `/dream` and `/summary` triggers) clone the inner `Arc`.
     pub fn memory_runtime(&self) -> Option<&Arc<coco_memory::MemoryRuntime>> {
         self.memory_runtime.as_ref()
+    }
+
+    /// The production swarm `AgentHandle` once `attach_agent_handle` has
+    /// late-bound it (the eager `swarm_agent_handle` is a no-op until then).
+    /// `None` before attach / in non-swarm sessions. Used by the leader
+    /// inbox poller to resolve the active team via `active_team_name`.
+    pub async fn current_agent_handle(&self) -> Option<AgentHandleRef> {
+        self.agent_handle.read().await.clone()
+    }
+
+    /// Resolve this session's team snapshot for the team-coordination
+    /// reminder (TS first-turn `team_context` injection). A teammate session
+    /// uses its own identity (env/context); a leader session uses the roster
+    /// active team. `None` when not in a team. Computed per-turn in
+    /// `wire_engine` so the app-query `SwarmAdapter` stays coordinator-free.
+    async fn resolve_team_snapshot(&self) -> Option<coco_system_reminder::TeamContextSnapshot> {
+        let (agent_id, agent_name, team_name) =
+            if let Some(id) = coco_coordinator::identity::resolve_teammate_identity() {
+                (id.agent_id, id.agent_name, id.team_name)
+            } else {
+                let handle = self.current_agent_handle().await?;
+                let team = handle.active_team_name().await?;
+                (format!("team-lead@{team}"), "team-lead".to_string(), team)
+            };
+        let task_list_id = coco_coordinator::types::sanitize_name(&team_name);
+        Some(coco_system_reminder::TeamContextSnapshot {
+            team_config_path: coco_coordinator::team_file::get_team_file_path(&team_name)
+                .display()
+                .to_string(),
+            task_list_path: self
+                .config_home
+                .join("tasks")
+                .join(coco_tasks::task_list::sanitize_path_component(
+                    &task_list_id,
+                ))
+                .display()
+                .to_string(),
+            agent_id,
+            agent_name,
+            team_name,
+        })
     }
 
     /// Resolve a role to `(spec, effort)`, layering overrides above
@@ -1959,6 +2049,7 @@ impl SessionRuntime {
         // optional and silently skips if its data is empty (TS parity:
         // `getAttachments` returns `[]` when the underlying source
         // has nothing to surface).
+        let team_snapshot = self.resolve_team_snapshot().await;
         let sources = coco_system_reminder::ReminderSources {
             // Combined hook source: async-hook registry drains first,
             // then the sync-hook buffer that orchestration just wrote.
@@ -1981,9 +2072,23 @@ impl SessionRuntime {
             // Skills source: in-process `SkillManager` Arc kept alive
             // for the session. Empty manager ⇒ generator short-circuits.
             skills: Some(self.skill_manager.clone() as Arc<dyn coco_system_reminder::SkillsSource>),
+            // Swarm source: drains peer messages from the shared pending
+            // store, so a teammate's `SendMessage` surfaces as an
+            // `agent_pending_messages` reminder on the recipient's next turn.
+            // MUST share the SAME `Arc` as `engine.with_pending_messages`
+            // below (the producer side) — otherwise messages vanish.
+            swarm: Some(Arc::new(
+                coco_query::reminder_adapters::SwarmAdapter::new()
+                    .with_pending_messages(self.pending_message_store.clone())
+                    .with_team_context(team_snapshot),
+            ) as Arc<dyn coco_system_reminder::SwarmSource>),
             ..Default::default()
         };
         engine = engine.with_reminder_sources(sources);
+        // Producer side of the pending-message pipeline: `SendMessage` pushes
+        // into `ToolUseContext.pending_messages` (= this store). Shared across
+        // the leader + in-process teammate engines (both via `wire_engine`).
+        engine = engine.with_pending_messages(self.pending_message_store.clone());
         // Build observers fresh per call so the FileReadState and
         // AppState observers reference the engine's actual handles.
         // Cheap — the registry is just a Vec of Arc<dyn Observer>.
@@ -2017,7 +2122,13 @@ impl SessionRuntime {
         // wire time; concurrent `/agents reload` swaps land on the
         // next per-turn engine, not the in-flight one.
         engine = engine.with_agent_catalog(self.agent_catalog.read().await.clone());
-        if let Some(fh) = &self.file_history {
+        // config_home drives plan-mode (`plans_dir` / `session_plan_file`)
+        // independent of persistence — always wire it; only the file-history
+        // snapshot store is gated by persistence.
+        engine = engine.with_config_home(self.config_home.clone());
+        if self.persist_session
+            && let Some(fh) = &self.file_history
+        {
             engine = engine.with_file_history(fh.clone(), self.config_home.clone());
         }
         if let Some(bridge) = &self.permission_bridge {
@@ -2031,13 +2142,15 @@ impl SessionRuntime {
         // per-turn engine doesn't re-write history each time.
         // TS parity: `Project.recordTranscript` keys writes by
         // session id and skips already-persisted uuids.
-        let live_session_id = self.session_id.read().await.clone();
-        engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
-        engine = engine.with_session_usage_tracker(self.session_usage_tracker.clone());
-        engine = engine.with_session_usage_write_lock(self.session_usage_write_lock.clone());
-        engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
-        engine =
-            engine.with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
+        if self.persist_session {
+            let live_session_id = self.session_id.read().await.clone();
+            engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
+            engine = engine.with_session_usage_tracker(self.session_usage_tracker.clone());
+            engine = engine.with_session_usage_write_lock(self.session_usage_write_lock.clone());
+            engine = engine.with_transcript_dedup(self.transcript_dedup.clone());
+            engine = engine
+                .with_tool_result_replacement_state(self.tool_result_replacement_state.clone());
+        }
         // Agent handle: installed by bootstrap after TaskRuntime exists.
         // Until then the engine carries the explicit no-op handle from
         // `swarm_agent_handle`.
@@ -2671,11 +2784,7 @@ impl SessionRuntime {
         cwd: &std::path::Path,
         runtime_config: &coco_config::RuntimeConfig,
     ) -> usize {
-        let skill_manager = coco_skills::SkillManager::new();
-        skill_manager.load_from_dirs(&[
-            self.config_home.join("skills"),
-            cwd.join(".coco").join("skills"),
-        ]);
+        let skill_manager = coco_skills::build_session_skill_manager(&self.config_home, cwd);
         let mut plugin_manager = coco_plugins::PluginManager::new();
         plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&self.config_home, cwd));
         let registry = coco_commands::build_command_registry(
@@ -2936,7 +3045,7 @@ impl SessionRuntime {
 /// `sandbox.fail_if_unavailable` is `true` — the caller propagates this so
 /// coco exits before the REPL starts, matching TS
 /// `sandbox.failIfUnavailable` (`entrypoints/sandboxTypes.ts:95`).
-pub(crate) fn build_sandbox_state(
+pub(crate) async fn build_sandbox_state(
     runtime_config: &RuntimeConfig,
     cwd: &std::path::Path,
 ) -> anyhow::Result<Option<Arc<coco_sandbox::SandboxState>>> {
@@ -3028,6 +3137,12 @@ pub(crate) fn build_sandbox_state(
         runtime_config.settings.sourced_permission_rules();
     let sourced_fs_allow_read = runtime_config.settings.sourced_filesystem_allow_read();
 
+    // Deny writes to every settings source so a sandboxed command can't edit
+    // its own permission rules (or disable the sandbox) — the self-permission
+    // escape TS blocks unconditionally — plus the `.claude/` command/agent
+    // definitions.
+    let settings_files = sandbox_settings_deny_paths(&settings_root);
+
     let inputs = AdapterInputs {
         settings: &sandbox_settings,
         mode,
@@ -3038,12 +3153,16 @@ pub(crate) fn build_sandbox_state(
         permission_deny_rules: &permission_deny_rules,
         additional_directories: &additional_directories,
         coco_temp_dir: &coco_temp_dir,
-        settings_files: &[],
+        settings_files: &settings_files,
         worktree_main_repo: worktree.as_deref(),
         sourced_permission_allow_rules: Some(&sourced_allow_rules),
         sourced_filesystem_allow_read: Some(&sourced_fs_allow_read),
     };
     let out = coco_sandbox::build_runtime_config(inputs);
+    // `allow_network == false` means network is isolated (the safe default once
+    // the sandbox is enabled, unless the coarse `sandbox.allow_network` toggle
+    // is set, or the mode is `FullAccess`).
+    let network_isolated = !out.config.allow_network;
 
     let platform = coco_sandbox::platform::create_platform();
     let state = match mode {
@@ -3052,7 +3171,60 @@ pub(crate) fn build_sandbox_state(
         }
         _ => coco_sandbox::SandboxState::new(out.enforcement, out.settings, out.config, platform),
     };
-    Ok(Some(Arc::new(state)))
+    let state = Arc::new(state);
+
+    if network_isolated {
+        // macOS: the sandboxed process reaches the egress proxy over loopback,
+        // so start it — the `DomainFilter` then enforces deny-by-default
+        // per-domain filtering. Other platforms (Linux): the proxy is not
+        // reachable from the `--unshare-net` namespace until the netns socat
+        // bridge is wired, so isolated network is fail-closed (ALL egress
+        // blocked). Either way the posture is secure — no unrestricted egress.
+        // The coarse `sandbox.allow_network` toggle opts back into network.
+        if cfg!(target_os = "macos") {
+            if let Err(e) = state.start_network_proxy().await {
+                warn!(error = %e, "sandbox egress proxy failed to start; network is blocked this session");
+            }
+        } else {
+            warn!(
+                "sandbox network isolation blocks ALL egress on this platform — \
+                 per-domain filtering (netns bridge) is not yet wired; set \
+                 sandbox.allow_network = true to allow network"
+            );
+        }
+    }
+
+    Ok(Some(state))
+}
+
+/// Settings / definition files denied write inside the sandbox, so a sandboxed
+/// command cannot rewrite its own permission rules, disable the sandbox, or
+/// inject commands/agents. Mirrors TS `sandbox-adapter.ts:230-255` (every
+/// SETTING_SOURCE settings file + managed drop-in + `.claude/{commands,agents}`;
+/// `.claude/skills` is already added by the adapter).
+///
+/// MUST be the single source for both the bootstrap (`build_sandbox_state`) and
+/// the hot-reload (`sandbox_reload::reapply_sandbox`) paths — passing `&[]` on
+/// reload silently re-opened the self-permission escape after the first
+/// settings change.
+pub(crate) fn sandbox_settings_deny_paths(settings_root: &std::path::Path) -> Vec<PathBuf> {
+    use coco_config::global_config;
+    let managed = global_config::managed_settings_path();
+    let mut paths = vec![
+        global_config::user_settings_path(),
+        global_config::project_settings_path(settings_root),
+        global_config::local_settings_path(settings_root),
+        managed.clone(),
+        global_config::global_config_path(),
+        settings_root.join(".claude").join("commands"),
+        settings_root.join(".claude").join("agents"),
+    ];
+    // Managed drop-in directory (`managed-settings.d`) next to the managed
+    // settings file — TS denies the whole drop-in dir, not just the .json.
+    if let Some(dir) = managed.parent() {
+        paths.push(dir.join("managed-settings.d"));
+    }
+    paths
 }
 
 #[cfg(test)]

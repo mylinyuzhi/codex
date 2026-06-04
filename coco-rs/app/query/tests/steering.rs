@@ -260,7 +260,7 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
         model_id: "steering-mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
         // 4 turns is plenty: turn 1 queues bash, turn 2 returns text.
-        max_turns: 4,
+        max_turns: Some(4),
         ..Default::default()
     };
 

@@ -26,6 +26,7 @@ pub use command_tags::COMMAND_NAME_TAG;
 pub use command_tags::LOCAL_COMMAND_STDERR_TAG;
 pub use command_tags::LOCAL_COMMAND_STDOUT_TAG;
 pub use command_tags::NO_CONTENT_MESSAGE;
+pub use command_tags::build_context_usage_messages;
 pub use command_tags::build_slash_command_messages;
 pub use command_tags::extract_tag;
 pub use command_tags::format_command_input;

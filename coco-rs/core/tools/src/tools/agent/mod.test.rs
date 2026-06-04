@@ -435,9 +435,9 @@ async fn test_agent_tool_rejects_remote_isolation_cleanly() {
 #[tokio::test]
 async fn test_agent_tool_accepts_worktree_isolation_input_shape() {
     // `isolation: "worktree"` must NOT be rejected by the tool's
-    // early gate — it falls through to the AgentHandle, which is
-    // responsible for the actual worktree lifecycle. This test
-    // proves the gate is remote-only, not worktree-blocking.
+    // remote-isolation gate — it falls through to the AgentHandle,
+    // which is responsible for the actual worktree lifecycle. This
+    // test proves the gate is remote-only, not worktree-blocking.
     let ctx = ToolUseContext::test_default();
     let result = <AgentTool as DynTool>::execute(
         &AgentTool,
@@ -1221,6 +1221,56 @@ async fn test_agent_tool_threads_definition_from_catalog_to_spawn_request() {
     assert_eq!(def.name, "Explore");
     assert_eq!(def.model.as_deref(), Some("anthropic/claude-haiku-4-5"));
     assert_eq!(def.model_role, Some(ModelRole::Explore));
+}
+
+#[tokio::test]
+async fn test_agent_tool_isolation_falls_back_to_definition() {
+    // TS `AgentTool.tsx:431` `effectiveIsolation = isolation ?? selectedAgent.isolation`:
+    // an agent whose frontmatter declares `isolation: worktree` must isolate
+    // even when the model omits the param.
+    use coco_subagent::AgentCatalogSnapshot;
+    use coco_types::{AgentDefinition, AgentIsolation, AgentSource, AgentTypeId, SubagentType};
+    use std::collections::BTreeMap;
+
+    let mut active = BTreeMap::new();
+    active.insert(
+        "Explore".to_string(),
+        AgentDefinition {
+            agent_type: AgentTypeId::Builtin(SubagentType::Explore),
+            name: "Explore".into(),
+            when_to_use: Some("desc".into()),
+            description: Some("desc".into()),
+            source: AgentSource::BuiltIn,
+            isolation: AgentIsolation::Worktree,
+            ..Default::default()
+        },
+    );
+
+    let capturing = Arc::new(CapturingAgentHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = capturing.clone();
+    ctx.agent_catalog = Some(Arc::new(AgentCatalogSnapshot::new(active, Vec::new())));
+
+    // No `isolation` param — must inherit the definition's worktree isolation.
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "isolated task",
+            "description": "do work",
+            "subagent_type": "Explore",
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_ok(), "exec must succeed: {result:?}");
+
+    let captured = capturing.last_request.lock().await;
+    let req = captured.as_ref().expect("spawn request must be captured");
+    assert_eq!(
+        req.isolation.as_deref(),
+        Some("worktree"),
+        "definition isolation must flow into the spawn request when the param is omitted"
+    );
 }
 
 #[tokio::test]

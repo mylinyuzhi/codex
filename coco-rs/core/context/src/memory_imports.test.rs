@@ -11,6 +11,7 @@ use super::is_text_extension;
 use super::is_valid_at_path;
 use super::resolve_at_path;
 use super::scan_at_paths;
+use super::strip_html_comments;
 
 #[test]
 fn extract_simple_relative_path() {
@@ -156,7 +157,14 @@ fn expand_imports_loads_parent_then_child() {
     fs::write(&child, "child content\n").unwrap();
 
     let mut processed = HashSet::new();
-    let entries = expand_imports(&parent, "# Parent\n@./child.md\n", &mut processed, 0);
+    let entries = expand_imports(
+        &parent,
+        "# Parent\n@./child.md\n",
+        &mut processed,
+        0,
+        dir.path(),
+        true,
+    );
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].0, parent);
     assert_eq!(entries[1].0, child);
@@ -172,7 +180,7 @@ fn expand_imports_breaks_cycles() {
     fs::write(&b, "@./a.md\n").unwrap();
 
     let mut processed = HashSet::new();
-    let entries = expand_imports(&a, "@./b.md\n", &mut processed, 0);
+    let entries = expand_imports(&a, "@./b.md\n", &mut processed, 0, dir.path(), true);
     // a, then b — b's @./a.md is rejected by processed set.
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].0, a);
@@ -200,6 +208,8 @@ fn expand_imports_caps_at_max_depth() {
         &fs::read_to_string(&paths[0]).unwrap(),
         &mut processed,
         0,
+        dir.path(),
+        true,
     );
     // Should load up to MAX_INCLUDE_DEPTH (5) levels of children + the
     // parent itself = 6 entries. The 7th (file6.md) is reached at depth
@@ -221,9 +231,72 @@ fn expand_imports_skips_binary_extensions() {
     fs::write(&img, b"\x89PNG").unwrap();
 
     let mut processed = HashSet::new();
-    let entries = expand_imports(&parent, "@./logo.png\n", &mut processed, 0);
+    let entries = expand_imports(
+        &parent,
+        "@./logo.png\n",
+        &mut processed,
+        0,
+        dir.path(),
+        true,
+    );
     assert_eq!(entries.len(), 1, "binary file must not be loaded");
     assert_eq!(entries[0].0, parent);
+}
+
+#[test]
+fn strip_html_comments_removes_block_comments() {
+    assert_eq!(strip_html_comments("a <!-- c --> b"), "a  b");
+    // Multi-line comment.
+    assert_eq!(strip_html_comments("a\n<!--\nx\n-->\nb"), "a\n\nb");
+}
+
+#[test]
+fn strip_html_comments_preserves_code_fences_and_unclosed() {
+    // A comment inside a fenced code block is kept verbatim.
+    let fenced = "```\n<!-- keep -->\n```";
+    assert_eq!(strip_html_comments(fenced), fenced);
+    // A dangling `<!--` with no `-->` is left intact (can't eat the file).
+    assert_eq!(strip_html_comments("real <!-- oops"), "real <!-- oops");
+}
+
+#[test]
+fn expand_imports_strips_html_comments_from_loaded_content() {
+    let dir = tempdir().unwrap();
+    let parent = dir.path().join("CLAUDE.md");
+    let body = "Visible.\n<!-- secret authoring note -->\nMore.\n";
+    fs::write(&parent, body).unwrap();
+
+    let mut processed = HashSet::new();
+    let entries = expand_imports(&parent, body, &mut processed, 0, dir.path(), false);
+    assert!(!entries[0].1.contains("secret authoring note"));
+    assert!(entries[0].1.contains("Visible."));
+    assert!(entries[0].1.contains("More."));
+}
+
+#[test]
+fn expand_imports_gates_external_imports() {
+    let cwd = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    let parent = cwd.path().join("CLAUDE.md");
+    let secret = outside.path().join("secret.md");
+    fs::write(&secret, "SECRET\n").unwrap();
+    let body = format!("@{}\n", secret.display());
+    fs::write(&parent, &body).unwrap();
+
+    // Project memory (allow_external=false) must NOT pull a file outside cwd.
+    let mut processed = HashSet::new();
+    let gated = expand_imports(&parent, &body, &mut processed, 0, cwd.path(), false);
+    assert_eq!(
+        gated.len(),
+        1,
+        "external @import must be skipped when gated"
+    );
+
+    // User-global memory (allow_external=true) may include it.
+    let mut processed2 = HashSet::new();
+    let allowed = expand_imports(&parent, &body, &mut processed2, 0, cwd.path(), true);
+    assert_eq!(allowed.len(), 2, "external @import loads when allowed");
+    assert!(allowed[1].1.contains("SECRET"));
 }
 
 #[test]
@@ -233,7 +306,14 @@ fn expand_imports_skips_missing_files_silently() {
     fs::write(&parent, "@./does_not_exist.md\n").unwrap();
 
     let mut processed = HashSet::new();
-    let entries = expand_imports(&parent, "@./does_not_exist.md\n", &mut processed, 0);
+    let entries = expand_imports(
+        &parent,
+        "@./does_not_exist.md\n",
+        &mut processed,
+        0,
+        dir.path(),
+        true,
+    );
     assert_eq!(entries.len(), 1, "missing imports must not error");
     assert_eq!(entries[0].0, parent);
 }

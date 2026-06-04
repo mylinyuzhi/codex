@@ -91,8 +91,8 @@ pub struct HarnessConfig {
     pub permission_mode: PermissionMode,
     /// Engine ceiling on agent loop turns. 8 is enough for the multi-
     /// turn / tool-chain suites without giving an underspecified
-    /// `ScriptedModel` queue room to spin forever.
-    pub max_turns: i32,
+    /// `ScriptedModel` queue room to spin forever. `None` = unbounded.
+    pub max_turns: Option<i32>,
     /// Hooks installed before the engine is built. The harness owns
     /// the `HookRegistry`; production code paths fire through the
     /// engine's `Option<Arc<HookRegistry>>` field.
@@ -115,7 +115,7 @@ impl Default for HarnessConfig {
             width: 120,
             height: 40,
             permission_mode: PermissionMode::BypassPermissions,
-            max_turns: 8,
+            max_turns: Some(8),
             hooks: Vec::new(),
             replies: Vec::new(),
             workdir: None,
@@ -155,7 +155,7 @@ impl TuiHarnessBuilder {
     }
 
     pub fn with_max_turns(mut self, max_turns: i32) -> Self {
-        self.cfg.max_turns = max_turns;
+        self.cfg.max_turns = Some(max_turns);
         self
     }
 

@@ -32,6 +32,9 @@ pub struct ConversationForResume {
     pub plan_slug: Option<String>,
     /// Whether the session had sidechain entries.
     pub has_sidechain: bool,
+    /// Stored execution mode (`coordinator` / `normal`) from the last
+    /// `Mode` metadata entry — drives coordinator-mode reconcile on resume.
+    pub mode: Option<String>,
 }
 
 /// Full session state for resume, anchored to one selected conversation chain.
@@ -48,6 +51,9 @@ pub struct SessionResumeState {
     pub total_output_tokens: i64,
     pub plan_slug: Option<String>,
     pub has_sidechain: bool,
+    /// Stored execution mode (`coordinator` / `normal`) from the last
+    /// `Mode` metadata entry — drives coordinator-mode reconcile on resume.
+    pub mode: Option<String>,
 }
 
 /// Load a conversation from a session transcript for resume.
@@ -73,6 +79,7 @@ pub fn load_conversation_for_resume(
         total_output_tokens: resume_state.total_output_tokens,
         plan_slug: resume_state.plan_slug,
         has_sidechain: resume_state.has_sidechain,
+        mode: resume_state.mode,
     })
 }
 
@@ -314,6 +321,13 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
     let file_history_snapshots =
         build_file_history_snapshot_chain(&metadata_entries, &chain_message_uuids);
 
+    // Last-wins `Mode` metadata entry — the session's stored
+    // coordinator/normal mode, replayed so resume can reconcile it.
+    let latest_mode = metadata_entries.iter().rev().find_map(|entry| match entry {
+        Entry::Metadata(MetadataEntry::Mode { mode, .. }) => Some(mode.clone()),
+        _ => None,
+    });
+
     Ok(SessionResumeState {
         messages,
         selected_chain_uuids,
@@ -326,6 +340,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         total_output_tokens: total_output,
         plan_slug,
         has_sidechain,
+        mode: latest_mode,
     })
 }
 

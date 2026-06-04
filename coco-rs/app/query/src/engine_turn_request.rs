@@ -128,7 +128,6 @@ impl QueryEngine {
         let crate::engine_prompt::BuiltPrompt {
             prompt,
             messages_snapshot,
-            memory_files: _,
         } = self.build_prompt(history).await;
         let tool_defs = self.build_tool_definitions(&app_state_snapshot).await;
 

@@ -68,7 +68,7 @@ mod field {
 
 /// Inline row caps before truncation (full body shown when `ctx.expanded`).
 const DIFF_PREVIEW_ROWS: usize = 24;
-const CODE_PREVIEW_ROWS: usize = 20;
+const CODE_PREVIEW_ROWS: usize = 6;
 const STRUCTURED_PREVIEW_ROWS: usize = 14;
 const PLAIN_TOOL_PREVIEW_ROWS: usize = TOOL_OUTPUT_PREVIEW_ROWS;
 /// Single-line header cap (matches the invocation header's preview width).
@@ -175,7 +175,7 @@ fn render_known(
         Read => render_read(cx, input, output, lines),
         Write => render_write(cx, input, output, lines),
         NotebookEdit => render_notebook_edit(cx, input, output, lines),
-        // ── Shell → output (the `●`/`🔧` header already names the command) ─
+        // ── Shell → output (the `●` header already names the command) ─
         Bash | PowerShell | Repl => render_text(cx, output, PLAIN_TOOL_PREVIEW_ROWS, lines),
         // ── Search → match list ────────────────────────────────────────
         Grep | Glob => render_text(cx, output, PLAIN_TOOL_PREVIEW_ROWS, lines),
@@ -502,7 +502,10 @@ fn render_read(
         .and_then(|i| str_field(i, field::FILE_PATH))
         .map(|p| file_ext(&p))
         .unwrap_or_default();
-    render_code(cx, &ext, output, None, lines);
+    // Read output is `cat -n` (`<n>\t<content>`): split the line number into a
+    // dim gutter so it can't jam against the content and so the highlighter
+    // sees real source rather than a number-prefixed line.
+    render_highlighted_rows(cx, &ext, output, Gutter::LineNumbers, lines);
 }
 
 fn render_write(
@@ -640,15 +643,22 @@ fn render_text(
     push_text_preview(cx, output, cx.rows(base_rows), lines, cx.styles.text());
 }
 
-/// Render `content` as syntax-highlighted code, one line at a time.
+/// Optional left gutter for [`render_highlighted_rows`].
+#[derive(Clone, Copy)]
+enum Gutter {
+    /// Plain code body (Write / NotebookEdit content) — no gutter.
+    None,
+    /// `cat -n` line numbers (Read output) split into a dim, right-aligned
+    /// gutter; the number is stripped before highlighting.
+    LineNumbers,
+}
+
+/// Render `content` as syntax-highlighted code under a tool header.
 ///
 /// Highlights via [`coco_tui_markdown::highlight_code_lines`] directly rather
 /// than wrapping the content in a Markdown fence: a fence both
 /// breaks on a `` ``` `` *inside* the content (e.g. reading a Markdown file) and
-/// draws a code-block border that doesn't belong under a tool header. Only the
-/// first `rows` logical lines are highlighted — truncation happens *before*
-/// the expensive work — and then the rendered block is capped by wrapped
-/// screen rows so a few very long code lines cannot flood the viewport.
+/// draws a code-block border that doesn't belong under a tool header.
 fn render_code(
     cx: &ToolResultRenderCtx<'_>,
     lang: &str,
@@ -659,37 +669,104 @@ fn render_code(
     if let Some(header) = header {
         lines.push(result_line(header, cx.styles.dim()));
     }
+    render_highlighted_rows(cx, lang, content, Gutter::None, lines);
+}
+
+/// Highlight + render `content` one logical line at a time, with an optional
+/// `cat -n` line-number gutter.
+///
+/// Only the first `rows` logical lines are highlighted — truncation happens
+/// *before* the expensive work — and then the rendered block is capped by
+/// wrapped screen rows so a few very long lines cannot flood the viewport. When
+/// `gutter` is [`Gutter::LineNumbers`] each line's leading `<n>\t` is split off
+/// into a dim, right-aligned gutter so (a) the number never jams against the
+/// content and (b) the highlighter parses real source instead of `12\t…`.
+fn render_highlighted_rows(
+    cx: &ToolResultRenderCtx<'_>,
+    lang: &str,
+    content: &str,
+    gutter: Gutter,
+    lines: &mut Vec<Line<'static>>,
+) {
     if content.trim().is_empty() {
         lines.push(result_line("(empty)".to_string(), cx.styles.dim()));
         return;
     }
     let rows = cx.rows(CODE_PREVIEW_ROWS);
     let mut body = content.lines();
-    let visible: Vec<String> = body.by_ref().take(rows).map(transcript_safe_line).collect();
+    // Each row is `(line_number, content)`; the number is empty for the
+    // no-gutter path and for any line lacking a `<digits>\t` prefix.
+    let mut visible: Vec<(String, String)> = body
+        .by_ref()
+        .take(rows)
+        .map(|line| match gutter {
+            Gutter::LineNumbers => {
+                let (num, rest) = split_line_number(line);
+                (num, transcript_safe_line(rest))
+            }
+            Gutter::None => (String::new(), transcript_safe_line(line)),
+        })
+        .collect();
+    // `count()` consumes the lazy remainder without materializing it.
+    let mut omitted = body.count();
+    // Reserve one row for the "… +N lines" marker so the preview is exactly
+    // `rows` logical lines (head + marker). Without this the marker pushes the
+    // block to `rows + 1` lines and `truncate_lines_middle` re-elides it into a
+    // second, *middle* ellipsis whose count double-reports the omission — a
+    // marker that visibly disagrees with the line-number gutter.
+    if omitted > 0 {
+        visible.pop();
+        omitted += 1;
+    }
+    let gutter_width = visible
+        .iter()
+        .map(|(num, _)| num.chars().count())
+        .max()
+        .unwrap_or(0);
     let highlighted = coco_tui_markdown::highlight_code_lines(
-        &visible.join("\n"),
+        &visible
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
         lang,
         cx.styles,
         cx.syntax_highlighting,
     );
     let mut rendered = Vec::with_capacity(visible.len() + 1);
-    for (index, line) in visible.iter().enumerate() {
+    for (index, (num, text)) in visible.iter().enumerate() {
         let prefix = if index == 0 { "  └ " } else { "    " };
         let mut spans = vec![Span::raw(prefix).fg(cx.styles.dim())];
-        if let Some(line_spans) = highlighted.as_ref().and_then(|h| h.get(index)) {
-            spans.extend(line_spans.iter().cloned());
-        } else {
-            spans.push(Span::raw(line.clone()).fg(cx.styles.text()));
+        if gutter_width > 0 {
+            spans.push(Span::raw(format!("{num:>gutter_width$}  ")).fg(cx.styles.dim()));
+        }
+        match highlighted.as_ref().and_then(|h| h.get(index)) {
+            Some(line_spans) if !line_spans.is_empty() => {
+                spans.extend(line_spans.iter().cloned());
+            }
+            _ => spans.push(Span::raw(text.clone()).fg(cx.styles.text())),
         }
         rendered.push(Line::from(spans));
     }
-    // `count()` consumes the lazy remainder without materializing it.
-    let omitted = body.count();
     let omitted_hint = (omitted > 0).then_some(omitted);
     if omitted > 0 {
         rendered.push(cx.truncation_line(omitted));
     }
     lines.extend(truncate_lines_middle(cx, rendered, rows, omitted_hint));
+}
+
+/// Split a `cat -n` line (`<number>\t<content>`) into `(number, content)`.
+/// Returns an empty number when the line has no leading `<digits>\t` prefix so
+/// non-numbered lines (e.g. the Read tool's trailing "… N more lines" note)
+/// pass through unchanged.
+fn split_line_number(line: &str) -> (String, &str) {
+    if let Some((prefix, rest)) = line.split_once('\t')
+        && !prefix.is_empty()
+        && prefix.bytes().all(|b| b.is_ascii_digit() || b == b' ')
+    {
+        return (prefix.trim().to_string(), rest);
+    }
+    (String::new(), line)
 }
 
 /// Plain-text preview with a configurable row budget and base color.

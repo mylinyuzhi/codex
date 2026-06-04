@@ -559,6 +559,23 @@
       ]
     },
     {
+      "description": "Open the full-color `/context` usage surface. Carries the analyzed\nreport (the TUI cannot reach the engine to compute it). Replaces the\nformer markdown-in-transcript output and the removed `Ctrl+W` overlay.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ContextUsageResult"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_context_usage"
+        }
+      },
+      "required": [
+        "type",
+        "result"
+      ]
+    },
+    {
       "description": "Dispatcher-side breadcrumb for slash commands the runtime couldn't\nfully execute (missing handler, handler error, empty Prompt body,\ndialog wiring pending). The TUI translates `kind` via the i18n\ncatalog before rendering.",
       "type": "object",
       "properties": {
@@ -814,6 +831,19 @@
       ]
     },
     {
+      "description": "Tell the TUI to open the standalone theme picker. Emitted when the\nslash dispatcher resolves `/theme` with no args. The TUI builds the\nchoice list from its live `ThemeRuntimeState`.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_theme_picker"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
       "description": "Tell the TUI to open the `/skills` read-only overlay. The slash\ndispatcher pre-builds the entry list + per-group subtitles so\nthe TUI doesn't recompute paths or token estimates.\n\nTS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog\nis read-only — Esc to close; selection has no side effects.",
       "type": "object",
       "properties": {
@@ -974,6 +1004,22 @@
       },
       "required": [
         "entries"
+      ]
+    },
+    "AttachmentTypeBreakdown": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "tokens"
       ]
     },
     "CommandArgumentKind": {
@@ -1156,6 +1202,240 @@
         }
       ]
     },
+    "ContextAgent": {
+      "type": "object",
+      "properties": {
+        "agent_type": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "agent_type",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextCategoryKind": {
+      "description": "Closed set of context-window usage categories. Each renderer maps the\nkind to its own label + color; the wire carries the typed kind so the\nvocabulary cannot drift across SDK / TUI / cross-language codegens.",
+      "type": "string",
+      "enum": [
+        "system_prompt",
+        "tools",
+        "mcp_tools",
+        "agents",
+        "memory_files",
+        "skills",
+        "messages",
+        "free"
+      ]
+    },
+    "ContextMcpTool": {
+      "type": "object",
+      "properties": {
+        "is_loaded": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "server_name",
+        "tokens",
+        "is_loaded"
+      ]
+    },
+    "ContextMemoryFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "path",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextSkill": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextSuggestion": {
+      "description": "An actionable suggestion shown under the `/context` view. Mirrors TS\n`ContextSuggestion` (`utils/contextSuggestions.ts`).",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "savings_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "severity": {
+          "$ref": "#/$defs/SuggestionSeverity"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "title",
+        "detail"
+      ]
+    },
+    "ContextUsageCategory": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Typed category identity — the renderer derives label + color from it.",
+          "$ref": "#/$defs/ContextCategoryKind"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "kind",
+        "tokens"
+      ]
+    },
+    "ContextUsageResult": {
+      "description": "Response to `ClientRequest::ContextUsage`.\nMatches TS `SDKControlGetContextUsageResponseSchema` (controlSchemas.ts:205-306).\nSimplified subset — TS includes a rich breakdown grid that's UI-specific.",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextAgent"
+          }
+        },
+        "auto_compact_threshold": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "categories": {
+          "description": "Categorized breakdown (system prompt, tools, history, etc.).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextUsageCategory"
+          }
+        },
+        "is_auto_compact_enabled": {
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "mcp_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextMcpTool"
+          }
+        },
+        "memory_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextMemoryFile"
+          }
+        },
+        "message_breakdown": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "percentage": {
+          "type": "number",
+          "format": "double"
+        },
+        "raw_max_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextSkill"
+          }
+        },
+        "suggestions": {
+          "description": "Actionable guidance (near-capacity, large tool results, …). Computed\nfrom the breakdown so SDK + TUI render the same suggestions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextSuggestion"
+          }
+        },
+        "total_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "total_tokens",
+        "max_tokens",
+        "raw_max_tokens",
+        "percentage",
+        "model",
+        "categories",
+        "is_auto_compact_enabled"
+      ]
+    },
     "MemoryDialogEntry": {
       "description": "One row in the `/memory` file-picker overlay. Built by the slash\ndispatcher and shipped to the TUI via [`TuiOnlyEvent::OpenMemoryDialog`].",
       "type": "object",
@@ -1305,6 +1585,52 @@
           "type": "string",
           "const": "agent_mem_folder"
         }
+      ]
+    },
+    "MessageBreakdown": {
+      "type": "object",
+      "properties": {
+        "assistant_message_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "attachment_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "attachments_by_type": {
+          "description": "Per-attachment-kind token totals, sorted tokens-desc.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttachmentTypeBreakdown"
+          }
+        },
+        "tool_call_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tool_calls_by_type": {
+          "description": "Per-tool token attribution (calls + results), sorted total-desc.\nDrives the large-tool-result / read-bloat suggestions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolTypeBreakdown"
+          }
+        },
+        "tool_result_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "user_message_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "tool_call_tokens",
+        "tool_result_tokens",
+        "attachment_tokens",
+        "assistant_message_tokens",
+        "user_message_tokens"
       ]
     },
     "PermissionAskChoice": {
@@ -2149,6 +2475,35 @@
             "kind"
           ]
         }
+      ]
+    },
+    "SuggestionSeverity": {
+      "description": "Severity of a context suggestion. `Warning` sorts before `Info`.",
+      "type": "string",
+      "enum": [
+        "warning",
+        "info"
+      ]
+    },
+    "ToolTypeBreakdown": {
+      "type": "object",
+      "properties": {
+        "call_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "call_tokens",
+        "result_tokens"
       ]
     }
   }

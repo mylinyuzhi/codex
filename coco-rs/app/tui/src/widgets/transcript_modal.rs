@@ -254,6 +254,7 @@ struct TranscriptCellRenderer<'a> {
     width: u16,
     styles: UiStyles<'a>,
     syntax_highlighting: SyntaxHighlighting,
+    cwd: Option<&'a str>,
 }
 
 impl<'a> TranscriptCellRenderer<'a> {
@@ -272,6 +273,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             width,
             styles,
             syntax_highlighting: state.ui.display_settings.syntax_highlighting,
+            cwd: state.session.working_dir.as_deref(),
         }
     }
 
@@ -489,11 +491,25 @@ impl<'a> TranscriptCellRenderer<'a> {
                 }
             }
             CellKind::UserAttachment | CellKind::Attachment => {
-                lines.push(Line::from(vec![
-                    Span::raw("> ").fg(self.styles.dim()),
-                    Span::raw("📎 ").fg(self.styles.accent()),
-                    Span::raw("attachment".to_string()).fg(self.styles.dim()),
-                ]));
+                // Memory injections collapse to `◆ memory · <path>` (path relative
+                // to cwd); other attachments show their first body line behind a
+                // width-1 hollow `◇`. Silent / structured payloads render nothing.
+                if let Some(path) =
+                    crate::widgets::chat::nested_memory_chip_path(cell.source.as_ref(), self.cwd)
+                {
+                    lines.push(Line::from(vec![
+                        Span::raw("◆ ").fg(self.styles.accent()).dim(),
+                        Span::raw("memory · ").fg(self.styles.dim()),
+                        Span::raw(path).fg(self.styles.dim()),
+                    ]));
+                } else if let Some(summary) =
+                    crate::widgets::chat::attachment_summary_text(cell.source.as_ref())
+                {
+                    lines.push(Line::from(vec![
+                        Span::raw("◇ ").fg(self.styles.accent()).dim(),
+                        Span::raw(summary).fg(self.styles.dim()),
+                    ]));
+                }
             }
             CellKind::Progress | CellKind::Tombstone => {}
             CellKind::System(kind) => self.render_system_cell(kind, &cell.source, lines),
@@ -587,11 +603,10 @@ impl<'a> TranscriptCellRenderer<'a> {
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
+        let tone = tool_tone_color(tool_name_tone(tool_name), self.styles);
         let mut spans = vec![
-            Span::raw("🔧 ").fg(self.styles.dim()),
-            Span::raw(tool_name.to_string())
-                .fg(tool_tone_color(tool_name_tone(tool_name), self.styles))
-                .bold(),
+            Span::raw("● ").fg(tone),
+            Span::raw(tool_name.to_string()).fg(tone).bold(),
         ];
         if !preview_spans.is_empty() {
             spans.push(Span::raw("(").fg(self.styles.text()));
@@ -1078,6 +1093,8 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
 }
 
 fn meta_preview_text(cell: &RenderedCell) -> String {
+    // Only System cells collapse to a meta preview now — attachments render as
+    // content rows (see `presentation::transcript::is_meta`).
     let Message::System(sm) = cell.source.as_ref() else {
         return String::new();
     };
@@ -1102,7 +1119,8 @@ fn meta_preview_text(cell: &RenderedCell) -> String {
         | SystemMessage::ApiMetrics(_)
         | SystemMessage::StopHookSummary(_)
         | SystemMessage::TurnDuration(_)
-        | SystemMessage::ScheduledTaskFire(_) => String::new(),
+        | SystemMessage::ScheduledTaskFire(_)
+        | SystemMessage::ContextUsage(_) => String::new(),
     }
 }
 
@@ -1127,6 +1145,7 @@ fn system_summary_text(msg: &Message) -> Option<String> {
         SystemMessage::StopHookSummary(_) => "stop hook summary".to_string(),
         SystemMessage::TurnDuration(_) => "turn duration".to_string(),
         SystemMessage::ScheduledTaskFire(_) => "scheduled task".to_string(),
+        SystemMessage::ContextUsage(_) => "context usage".to_string(),
         SystemMessage::Informational(_)
         | SystemMessage::ApiError(_)
         | SystemMessage::CompactBoundary(_)

@@ -80,6 +80,20 @@ pub enum SessionMode {
     Coordinator,
 }
 
+impl SessionMode {
+    /// Parse the persisted mode string (`MetadataEntry::Mode.mode` /
+    /// `TranscriptMetadata.mode`) into a [`SessionMode`]. Unknown / absent
+    /// values return `None` (treated as "no stored mode" by
+    /// [`session_mode_switch_action`]).
+    pub fn from_metadata_str(s: &str) -> Option<Self> {
+        match s {
+            "coordinator" => Some(Self::Coordinator),
+            "normal" => Some(Self::Normal),
+            _ => None,
+        }
+    }
+}
+
 /// Action a caller should take after [`session_mode_switch_action`]. The
 /// runtime in TS mutates `process.env`; in Rust we surface intent and let
 /// the bootstrap layer (which already owns env composition) flip the var.

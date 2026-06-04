@@ -418,7 +418,7 @@ async fn run_with_events(
     let config = QueryEngineConfig {
         model_id: "json-scripted-mock".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_turns: config_overrides.max_turns.unwrap_or(10),
+        max_turns: config_overrides.max_turns.or(Some(10)),
         total_token_budget: config_overrides.max_tokens,
         ..Default::default()
     };

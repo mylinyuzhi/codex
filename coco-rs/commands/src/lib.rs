@@ -136,6 +136,9 @@ pub enum DialogSpec {
     /// a role pill so multi-provider users can address any
     /// [`coco_types::ModelRole`] from the same surface.
     ModelPicker,
+    /// `/theme` (no args) — standalone theme picker with live preview + a
+    /// sample diff. TS parity: `components/ThemePicker.tsx`.
+    ThemePicker,
     /// `/skills` — read-only skill catalog overlay. Payload carries the
     /// fully-grouped entry list plus per-group subtitle text so the
     /// TUI doesn't recompute paths or token estimates.
@@ -670,14 +673,14 @@ impl CommandHandler for SkillPromptHandler {
 mod seam_tests {
     use super::*;
     use coco_skills::SkillManager;
-    use coco_skills::bundled::register_bundled_default;
+    use coco_skills::bundled::register_bundled;
     use coco_types::Features;
     use coco_types::UserType;
 
     #[tokio::test]
     async fn build_registry_includes_skills_and_ts_parity_handlers() {
         let sm = SkillManager::new();
-        register_bundled_default(&sm);
+        register_bundled(&sm);
         let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
@@ -720,7 +723,7 @@ mod seam_tests {
     #[tokio::test]
     async fn skills_filtered_by_features() {
         let sm = SkillManager::new();
-        register_bundled_default(&sm);
+        register_bundled(&sm);
         let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
@@ -779,7 +782,7 @@ mod seam_tests {
     #[tokio::test]
     async fn rewind_emits_open_dialog() {
         let sm = SkillManager::new();
-        register_bundled_default(&sm);
+        register_bundled(&sm);
         let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,

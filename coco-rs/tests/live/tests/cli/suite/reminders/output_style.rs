@@ -17,7 +17,7 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
         ..SessionBootstrap::default()
     };
     let cfg = SessionConfig {
-        max_turns: 2,
+        max_turns: Some(2),
         session_bootstrap: Some(bootstrap),
         ..SessionConfig::default()
     };

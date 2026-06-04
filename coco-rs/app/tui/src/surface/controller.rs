@@ -439,6 +439,7 @@ fn history_options(state: &AppState, width: u16) -> HistoryLineRenderOptions<'_>
         syntax_highlighting: state.ui.display_settings.syntax_highlighting,
         show_system_reminders: state.ui.show_system_reminders,
         show_thinking: state.ui.show_thinking,
+        cwd: state.session.working_dir.as_deref(),
         kb_handle: Some(&state.ui.kb_handle),
         replay_cache_policy: state.ui.display_settings.native_replay_cache,
         reasoning_metadata: Some(&state.session.reasoning_metadata),

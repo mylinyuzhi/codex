@@ -337,6 +337,8 @@ pub fn expand_imports(
     content: &str,
     processed: &mut HashSet<PathBuf>,
     depth: u32,
+    cwd: &Path,
+    allow_external: bool,
 ) -> Vec<(PathBuf, String)> {
     let mut out: Vec<(PathBuf, String)> = Vec::new();
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -344,18 +346,31 @@ pub fn expand_imports(
         return out; // cycle: skip
     }
 
-    out.push((path.to_path_buf(), content.to_string()));
+    // Strip HTML comments so authorial `<!-- … -->` never reaches the model
+    // prompt (TS `stripHtmlComments`, claudemd.ts:292). @imports inside a
+    // comment are inactive because extraction runs on the stripped body.
+    let stripped = strip_html_comments(content);
+    out.push((path.to_path_buf(), stripped.clone()));
 
     if depth >= MAX_INCLUDE_DEPTH {
         return out;
     }
 
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    for token in extract_include_paths(content) {
+    for token in extract_include_paths(&stripped) {
         let Some(resolved) = resolve_at_path(&token, base_dir) else {
             continue;
         };
         if !is_text_extension(&resolved) {
+            continue;
+        }
+        // Security boundary: an @import resolving OUTSIDE the project cwd is
+        // "external" — skip it unless the caller allows external includes
+        // (only user-global memory does). Prevents an untrusted project
+        // CLAUDE.md from pulling host files (SSH keys, cloud creds) into the
+        // prompt. TS: `isExternal = !pathInOriginalCwd(resolved); if
+        // (isExternal && !includeExternal) continue` (claudemd.ts:667-670).
+        if !allow_external && !path_within(&resolved, cwd) {
             continue;
         }
         let Ok(child_content) = std::fs::read_to_string(&resolved) else {
@@ -366,10 +381,104 @@ pub fn expand_imports(
             &child_content,
             processed,
             depth + 1,
+            cwd,
+            allow_external,
         ));
     }
 
     out
+}
+
+/// Strip block-level HTML comments (`<!-- … -->`) from memory content,
+/// preserving fenced code blocks and leaving an unclosed `<!--` intact.
+///
+/// TS: `stripHtmlComments` (claudemd.ts:292-334) — block-level only, skips
+/// fenced code, non-greedy, keeps a dangling `<!--` so a stray marker can't
+/// eat the rest of the file.
+pub fn strip_html_comments(content: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    let mut in_fence = false;
+    let mut fence_marker: Option<char> = None;
+    let mut at_bol = true;
+    while !rest.is_empty() {
+        if at_bol {
+            let trimmed = rest.trim_start_matches([' ', '\t']);
+            if let Some(mc) = fence_marker_char(trimmed) {
+                match fence_marker {
+                    None => {
+                        in_fence = true;
+                        fence_marker = Some(mc);
+                    }
+                    Some(open) if open == mc => {
+                        in_fence = false;
+                        fence_marker = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !in_fence && rest.starts_with("<!--") {
+            match rest[4..].find("-->") {
+                Some(end) => {
+                    rest = &rest[4 + end + 3..];
+                    at_bol = false;
+                    continue;
+                }
+                // Unclosed comment: leave the remainder verbatim (TS parity).
+                None => {
+                    out.push_str(rest);
+                    break;
+                }
+            }
+        }
+        let ch = rest.chars().next().unwrap_or('\u{fffd}');
+        out.push(ch);
+        at_bol = ch == '\n';
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
+
+/// Lexically resolve `.`/`..` without touching the filesystem, so an
+/// `@import` cannot escape the cwd via `../../..`.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Best-effort canonicalization for a path that may not exist yet: resolve
+/// the longest existing prefix (so symlinks like macOS `/tmp`→`/private/tmp`
+/// match the canonicalized root), then re-append the remainder.
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    let lexical = lexical_normalize(path);
+    if let Ok(c) = lexical.canonicalize() {
+        return c;
+    }
+    if let (Some(parent), Some(name)) = (lexical.parent(), lexical.file_name())
+        && let Ok(pc) = parent.canonicalize()
+    {
+        return pc.join(name);
+    }
+    lexical
+}
+
+/// True when `path` resolves inside `root`'s subtree. Mirrors TS
+/// `pathInOriginalCwd` = `pathInWorkingPath(path, originalCwd)`.
+fn path_within(path: &Path, root: &Path) -> bool {
+    let root_n = root
+        .canonicalize()
+        .unwrap_or_else(|_| lexical_normalize(root));
+    canonicalize_best_effort(path).starts_with(&root_n)
 }
 
 #[cfg(test)]
