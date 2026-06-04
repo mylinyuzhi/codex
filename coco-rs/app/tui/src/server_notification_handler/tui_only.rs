@@ -70,6 +70,7 @@ pub(super) fn handle(
             choices,
             permission_suggestions,
             original_input,
+            worker_badge,
         } => {
             state.ui.push_delayed_permission(
                 crate::state::PermissionPromptState {
@@ -80,6 +81,7 @@ pub(super) fn handle(
                         input_preview: display_input.as_display_str().to_string(),
                     },
                     risk_level: None,
+                    worker_badge,
                     // When the dialog is in choice mode, suppress the
                     // "Always Allow" affordance — the user is picking
                     // a one-shot action (e.g. keep/clear context), not

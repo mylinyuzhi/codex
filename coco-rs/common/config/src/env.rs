@@ -157,6 +157,12 @@ pub enum EnvKey {
     CocoTaskListId,
     CocoTeamName,
     CocoTeammateCommand,
+    /// Override the base directory for agent-team files + mailboxes
+    /// (default `~/.claude/teams`). Read by
+    /// `coco_coordinator::team_file::teams_base_dir`; lets tests isolate the
+    /// teams/mailbox tree (and a future swarm-leader relocate it, like
+    /// [`Self::CocoRemoteMemoryDir`] does for the memory base).
+    CocoTeamsDir,
     CocoVerifyPlan,
     /// Soft kill auto-compact only. Manual `/compact` keeps working.
     CocoCompactDisableAuto,
@@ -350,6 +356,7 @@ impl EnvKey {
             Self::CocoTaskListId => "COCO_TASK_LIST_ID",
             Self::CocoTeamName => "COCO_TEAM_NAME",
             Self::CocoTeammateCommand => "COCO_TEAMMATE_COMMAND",
+            Self::CocoTeamsDir => "COCO_TEAMS_DIR",
             Self::CocoVerifyPlan => "COCO_VERIFY_PLAN",
             Self::CocoCompactDisableAuto => "COCO_COMPACT_DISABLE_AUTO",
             Self::CocoCompactDisable => "COCO_COMPACT_DISABLE",

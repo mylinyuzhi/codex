@@ -111,9 +111,13 @@ pub fn is_claude_config_path(path: &str) -> bool {
 ///
 /// TS: `hasSuspiciousWindowsPathPattern()` in filesystem.ts
 pub fn has_suspicious_windows_pattern(path: &str) -> bool {
-    // NTFS Alternate Data Streams: "file.txt::$DATA", "settings.json:stream"
-    // Skip drive letter at position 1 (e.g., C:)
-    if path.len() > 2 && path[2..].contains(':') {
+    // NTFS Alternate Data Streams: "file.txt::$DATA", "settings.json:stream".
+    // Colons are valid filename characters on Linux/macOS, so this check is
+    // Windows-only — TS gates it on getPlatform() === 'windows' | 'wsl'
+    // (filesystem.ts:546-551). Without the guard a legitimate Unix path like
+    // `/tmp/log:2026-06-01.txt` is spuriously flagged. Skip the drive letter
+    // at position 1 (e.g. C:).
+    if cfg!(target_os = "windows") && path.len() > 2 && path[2..].contains(':') {
         return true;
     }
 

@@ -41,6 +41,27 @@ fn ctrl_shift(code: KeyCode) -> KeyEvent {
     }
 }
 
+fn shift(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        code,
+        modifiers: KeyModifiers::SHIFT,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::NONE,
+    }
+}
+
+fn team_roster_state() -> AppState {
+    let mut state = AppState::new();
+    state.ui.show_modal(crate::state::ModalState::TeamRoster(
+        crate::state::TeamRosterState {
+            team_name: "t".into(),
+            members: Vec::new(),
+            selected: 0,
+        },
+    ));
+    state
+}
+
 fn model_picker_state() -> AppState {
     let mut state = AppState::new();
     state.ui.show_modal(crate::state::ModalState::ModelPicker(
@@ -99,6 +120,7 @@ fn install_permission_prompt(state: &mut AppState) {
             display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
             original_input: None,
             permission_suggestions: vec![],
+            worker_badge: None,
         },
     ));
 }
@@ -275,6 +297,65 @@ fn test_ctrl_shift_o_toggles_teammate_preview() {
     assert!(matches!(
         cmd,
         Some(TuiCommand::ToggleTeammateMessagePreview)
+    ));
+}
+
+/// End-to-end A7a regression guard: `ctrl+shift+t` resolves through the
+/// rebindable `app:toggleTeamRoster` action to `OpenTeamRoster` when a teammate
+/// is present. Before A7a the roster picker had NO reachable key — `ctrl+t` was
+/// claimed by `app:toggleTodos` and the hardcoded fallback was dead. Without a
+/// teammate the key is an inert no-op (not a global shadow).
+#[test]
+fn test_ctrl_shift_t_opens_team_roster_when_teammate_present() {
+    let mut state = AppState::new();
+    // No teammate ⇒ inert (the resolver fires the action, dispatch returns None).
+    assert!(map_key(&state, ctrl_shift(KeyCode::Char('t'))).is_none());
+
+    state
+        .session
+        .subagents
+        .push(crate::state::SubagentInstance {
+            kind: crate::state::SubagentKind::Teammate,
+            agent_id: "researcher@my-team".into(),
+            agent_type: "explore".into(),
+            description: String::new(),
+            status: crate::state::SubagentStatus::Running,
+            color: None,
+            team_name: Some("my-team".into()),
+            tool_use_id: None,
+            started_at_ms: None,
+            last_tool_name: None,
+            tool_count: 0,
+            total_tokens: 0,
+            is_backgrounded: false,
+            recent_activities: Vec::new(),
+            final_message: None,
+        });
+    let cmd = map_key(&state, ctrl_shift(KeyCode::Char('t')));
+    assert!(
+        matches!(cmd, Some(TuiCommand::OpenTeamRoster)),
+        "ctrl+shift+t with a teammate present must open the roster; got {cmd:?}"
+    );
+}
+
+/// Inside the roster picker, plain Left/Right cycle the FOCUSED teammate's
+/// mode; Shift+Left/Right cycle ALL teammates in tandem (R8 cycle-all, TS
+/// `cycleAllTeammateModes`).
+#[test]
+fn test_roster_shift_arrows_cycle_all_modes() {
+    let state = team_roster_state();
+    assert!(matches!(
+        map_key(&state, shift(KeyCode::Right)),
+        Some(TuiCommand::TeamRosterCycleAllModes(1))
+    ));
+    assert!(matches!(
+        map_key(&state, shift(KeyCode::Left)),
+        Some(TuiCommand::TeamRosterCycleAllModes(-1))
+    ));
+    // Plain arrows still cycle only the focused member.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Right)),
+        Some(TuiCommand::TeamRosterCycleMode(1))
     ));
 }
 

@@ -29,6 +29,35 @@ pub async fn register(bridge: ToolPermissionBridgeRef) {
     coco_coordinator::teammate::register_leader_permission_queue(setter).await;
 }
 
+/// Enrich an in-process teammate's permission request with a worker badge.
+///
+/// In-process teammates inherit the LEADER's permission bridge, so their
+/// requests reach the bridge with `worker_badge: None` — the generic
+/// `coco_query` permission controller can't see the coordinator's task-local
+/// identity. The bridge runs inline within the teammate's
+/// `run_with_teammate_context` scope, so the live identity resolves here: the
+/// in-process analog of the cross-process badge set in [`handle_request`].
+/// No-op for the leader's own requests (not a teammate) and for requests that
+/// already carry a badge. TS: in-process teammates badge from their own
+/// `identity` (`inProcessRunner.ts:234`).
+pub fn enrich_in_process_worker_badge(request: &mut ToolPermissionRequest) {
+    use coco_coordinator::identity;
+    if request.worker_badge.is_some() || !identity::is_in_process_teammate() {
+        return;
+    }
+    let Some(name) = identity::get_agent_name() else {
+        return;
+    };
+    // Color cache is keyed on the `name@team` agent id (see coordinator's
+    // `assign_teammate_color`), matching the cross-process lookup above.
+    let color_key = identity::get_agent_id().unwrap_or_else(|| name.clone());
+    request.worker_badge = Some(coco_types::WorkerBadge {
+        name,
+        color: coco_coordinator::pane::layout::get_teammate_color(&color_key)
+            .unwrap_or(coco_types::AgentColorName::Cyan),
+    });
+}
+
 /// Prompt the leader (human) for a worker's permission request, then write
 /// the decision back to the worker's inbox. On any failure we write nothing,
 /// leaving the worker's bounded wait to fail closed.
@@ -60,6 +89,14 @@ async fn handle_request(bridge: ToolPermissionBridgeRef, value: serde_json::Valu
         input,
         suggestions: Vec::new(),
         choices: None,
+        // Badge the worker so the leader sees who is asking. Color is the
+        // worker's assigned per-teammate palette entry (coco-rs improves
+        // on TS's hardcoded `cyan`); fall back to Cyan when unassigned.
+        worker_badge: Some(coco_types::WorkerBadge {
+            name: worker_name.to_string(),
+            color: coco_coordinator::pane::layout::get_teammate_color(&agent_id)
+                .unwrap_or(coco_types::AgentColorName::Cyan),
+        }),
     };
     let resolution = match bridge.request_permission(req).await {
         Ok(r) => r,

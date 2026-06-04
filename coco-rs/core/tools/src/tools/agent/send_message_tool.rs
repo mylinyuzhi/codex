@@ -115,6 +115,21 @@ impl Tool for SendMessageTool {
             });
         }
 
+        // Structured control messages — `shutdown_request` (leader →
+        // teammate) and `shutdown_response` (teammate → leader) — need
+        // coordinator-side handling (proper wire envelopes + the
+        // approver's own pane-coordinate enrichment), not the plain
+        // mailbox passthrough below. TS `SendMessageTool.ts:888-893`.
+        if let Some(msg_type) = input.message.get("type").and_then(Value::as_str) {
+            match msg_type {
+                "shutdown_request" => return self.dispatch_shutdown_request(&input, ctx).await,
+                "shutdown_response" => return self.dispatch_shutdown_response(&input, ctx).await,
+                // Other structured variants fall through to the mailbox
+                // passthrough (serialized verbatim).
+                _ => {}
+            }
+        }
+
         if is_string_message {
             let summary = input.summary.as_deref().unwrap_or("");
             if summary.is_empty() {
@@ -251,5 +266,101 @@ impl Tool for SendMessageTool {
             permission_updates: Vec::new(),
             display_data: None,
         })
+    }
+}
+
+impl SendMessageTool {
+    /// Leader → teammate: route a structured `shutdown_request` through
+    /// the agent handle, which writes a `ShutdownRequest` to the target's
+    /// mailbox. TS `SendMessageTool.ts:888-889` `handleShutdownRequest`.
+    async fn dispatch_shutdown_request(
+        &self,
+        input: &SendMessageInput,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError> {
+        if input.to == "*" {
+            return Err(ToolError::InvalidInput {
+                message: "shutdown_request cannot be broadcast — name a single teammate".into(),
+                error_code: None,
+            });
+        }
+        let reason = input.message.get("reason").and_then(Value::as_str);
+        let message = ctx
+            .agent
+            .request_shutdown(&input.to, reason)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: e,
+                display_data: None,
+                source: None,
+            })?;
+        Ok(shutdown_result(message))
+    }
+
+    /// Teammate → leader: route a structured `shutdown_response` through
+    /// the agent handle, which enriches it with the approver's own pane
+    /// coordinates and writes `ShutdownApproved` / `ShutdownRejected` to
+    /// the team-lead mailbox. TS `SendMessageTool.ts:890-899` + the
+    /// target validation at `:695-706`.
+    async fn dispatch_shutdown_response(
+        &self,
+        input: &SendMessageInput,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError> {
+        // "team-lead" is the canonical leader inbox (TS: TEAM_LEAD_NAME).
+        // TS `SendMessageTool.ts:695-700` rejects any other target.
+        if input.to != "team-lead" {
+            return Err(ToolError::InvalidInput {
+                message: "shutdown_response must be sent to \"team-lead\"".into(),
+                error_code: None,
+            });
+        }
+        let request_id = input
+            .message
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if request_id.is_empty() {
+            return Err(ToolError::InvalidInput {
+                message: "shutdown_response requires a non-empty request_id".into(),
+                error_code: None,
+            });
+        }
+        let approve = input
+            .message
+            .get("approve")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let reason = input.message.get("reason").and_then(Value::as_str);
+        // TS `SendMessageTool.ts:705-714`: a rejection MUST carry a reason so
+        // the leader (and the worker's own next turn) knows why it declined.
+        if !approve && reason.is_none_or(|r| r.trim().is_empty()) {
+            return Err(ToolError::InvalidInput {
+                message: "reason is required when rejecting a shutdown request".into(),
+                error_code: None,
+            });
+        }
+        let message = ctx
+            .agent
+            .respond_to_shutdown(request_id, approve, reason)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: e,
+                display_data: None,
+                source: None,
+            })?;
+        Ok(shutdown_result(message))
+    }
+}
+
+/// Build the `{message}` envelope returned by the shutdown control
+/// paths — rendered to the model via [`SendMessageTool::render_for_model`].
+fn shutdown_result(message: String) -> ToolResult<Value> {
+    ToolResult {
+        data: serde_json::json!({ "message": message }),
+        new_messages: vec![],
+        app_state_patch: None,
+        permission_updates: Vec::new(),
+        display_data: None,
     }
 }

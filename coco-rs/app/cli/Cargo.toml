@@ -71,5 +71,8 @@ shlex.workspace = true
 
 [dev-dependencies]
 coco-frontmatter.workspace = true
+coco-utils-cargo-bin.workspace = true
+coco-utils-pty.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true
+wiremock.workspace = true

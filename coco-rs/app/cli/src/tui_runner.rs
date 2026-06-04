@@ -380,14 +380,32 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     {
         match coco_coordinator::identity::resolve_teammate_identity() {
             None => {
-                coco_cli::leader_permission::register(tui_permission_bridge.clone()).await;
-                // Continuous 1s inbox poll (TS useInboxPoller) so worker
-                // permission prompts surface even while the leader is idle.
-                // Fire-and-forget for the session lifetime; dies on process
-                // exit (same pattern as the official-marketplace installer).
-                coco_cli::leader_inbox_poller::spawn(runtime.clone());
+                // Leader session: register the human approval queue + spawn the
+                // continuous 1s inbox poll (TS useInboxPoller) so worker
+                // prompts/idle/shutdown surface even while the leader is idle.
+                // Shared with the headless/SDK leader paths.
+                coco_cli::leader_inbox_poller::install_leader(
+                    runtime.clone(),
+                    Some(tui_permission_bridge.clone()),
+                )
+                .await;
             }
             Some(identity) => {
+                // Seed this teammate's live permission rules from the team's
+                // allowed paths (gap 8) so it inherits the team's write fences
+                // without prompting. The same `Arc` is shared with the pump so
+                // a leader `TeamPermissionUpdate` extends it live — the
+                // cross-process analog of the in-process `TeammateControlState`.
+                let live_rules = std::sync::Arc::new(tokio::sync::RwLock::new(
+                    coco_coordinator::runner_loop::load_team_allowed_path_rules(
+                        &identity.team_name,
+                    ),
+                ));
+                runtime
+                    .update_engine_config(|cfg| {
+                        cfg.live_permission_rules = Some(live_rules.clone())
+                    })
+                    .await;
                 // Cross-process teammate: pump this teammate's mailbox into
                 // TUI turns. `command_tx` is cloned BEFORE `App::new` consumes
                 // it below; the pump injects `SubmitInput` and serializes on
@@ -399,6 +417,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
                     command_tx.clone(),
                     rx,
                     pump_cancel.clone(),
+                    live_rules,
                 );
             }
         }
@@ -708,9 +727,10 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     coco_cli::resume_hint::print_resume_hint(&cwd, session_id.as_deref());
 
     // TS parity (`gracefulShutdown.ts` cleanupSessionTeams): on leader exit,
-    // remove the team dirs (+ worktrees + tasks via cleanup_team_directories)
-    // for teams this session led, so they do not orphan. Cross-process pane
-    // teardown is a separate backend-aware follow-up.
+    // kill any orphaned tmux teammate panes, then remove the team dirs (+
+    // worktrees + tasks via cleanup_team_directories) for teams this session
+    // led, so neither the child processes nor the dirs orphan. (iTerm2 pane
+    // teardown via the it2 backend is a documented follow-up.)
     if let Some(sid) = session_id.as_deref()
         && let Err(e) = coco_coordinator::team_file::cleanup_session_teams(sid)
     {
@@ -1471,6 +1491,45 @@ async fn run_agent_driver(
                     to = ?mode,
                     "TUI SetPermissionMode propagated to engine_config + app_state",
                 );
+                // If THIS session is a teammate (cross-process pane), mirror
+                // the new mode into team.json so the leader's roster reflects
+                // it — covers both an inbox-applied `ModeSetRequest` and a
+                // self-initiated Shift+Tab cycle. Leader sessions are not
+                // teammates, so this no-ops. TS: `useInboxPoller.ts:594` +
+                // `syncTeammateMode` (`teamHelpers.ts:397`).
+                if coco_coordinator::identity::is_teammate()
+                    && let Some(team) = coco_coordinator::identity::get_team_name()
+                    && let Some(agent) = coco_coordinator::identity::get_agent_name()
+                    && let Err(e) = coco_coordinator::team_file::set_member_mode_in_team_file(
+                        &team, &agent, mode,
+                    )
+                {
+                    warn!(error = %e, "teammate mode write-back to team.json failed");
+                }
+            }
+
+            UserCommand::SetTeammateMode { name, mode } => {
+                // Leader applies a teammate's mode from the roster picker
+                // (gap 8): persist to team.json + notify the live teammate.
+                if let Some(handle) = runtime.current_agent_handle().await {
+                    match handle.set_teammate_mode(&name, mode).await {
+                        Ok(msg) => info!(teammate = %name, ?mode, "{msg}"),
+                        Err(e) => {
+                            warn!(teammate = %name, error = %e, "set teammate mode failed")
+                        }
+                    }
+                }
+            }
+
+            UserCommand::SetTeammateModes { updates } => {
+                // Leader applies the roster "cycle all" batch: one atomic
+                // team.json write + a ModeSetRequest per teammate.
+                if let Some(handle) = runtime.current_agent_handle().await {
+                    match handle.set_teammate_modes(updates).await {
+                        Ok(msg) => info!("{msg}"),
+                        Err(e) => warn!(error = %e, "set teammate modes (cycle all) failed"),
+                    }
+                }
             }
 
             UserCommand::PlanApprovalResponse {
@@ -1846,8 +1905,29 @@ async fn run_agent_driver(
     {
         let session_id = runtime.current_session_id().await;
         let mgr = Arc::clone(&runtime.session_manager);
-        if let Err(e) =
-            tokio::task::spawn_blocking(move || mgr.re_append_session_metadata(&session_id)).await
+        // TS `saveMode` parity: snapshot the session's coordinator-mode
+        // state at the exit checkpoint so `--resume` re-derives it via
+        // `reconcile_on_resume`. Gated on agent-teams so non-team
+        // transcripts stay clean. `Option<&'static str>` is Send → moved
+        // into the blocking closure alongside the re-append.
+        let mode = runtime
+            .runtime_config
+            .features
+            .enabled(coco_types::Feature::AgentTeams)
+            .then(|| {
+                if coco_subagent::is_coordinator_mode(&runtime.runtime_config.features) {
+                    "coordinator"
+                } else {
+                    "normal"
+                }
+            });
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let _ = mgr.re_append_session_metadata(&session_id);
+            if let Some(mode) = mode {
+                let _ = mgr.save_mode(&session_id, mode);
+            }
+        })
+        .await
         {
             warn!(error = %e, "shutdown re-append task join failed");
         }

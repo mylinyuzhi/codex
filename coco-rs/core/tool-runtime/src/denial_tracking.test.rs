@@ -1,42 +1,59 @@
 use super::*;
 
 #[test]
-fn test_circuit_breaker_trips_at_threshold() {
+fn test_fallback_trips_on_consecutive_threshold() {
     let mut tracker = DenialTracker::new();
-    assert!(!tracker.is_circuit_breaker_tripped());
+    assert!(!tracker.should_fallback_to_prompting());
 
     tracker.record_denial("Bash");
     tracker.record_denial("Bash");
-    assert!(!tracker.is_circuit_breaker_tripped());
+    assert!(!tracker.should_fallback_to_prompting());
 
     tracker.record_denial("Bash");
-    assert!(tracker.is_circuit_breaker_tripped());
+    assert!(tracker.should_fallback_to_prompting());
     assert!(tracker.is_stuck());
+    assert!(!tracker.hit_total_limit());
 }
 
 #[test]
-fn test_reset_consecutive_does_not_reset_circuit_breaker() {
+fn test_fallback_trips_on_total_threshold_without_consecutive() {
+    let mut tracker = DenialTracker::new();
+    // Interleave resets so the consecutive gate never fires, but total climbs.
+    for _ in 0..20 {
+        tracker.record_denial("Bash");
+        tracker.reset_consecutive();
+    }
+    assert!(!tracker.is_stuck());
+    assert!(tracker.hit_total_limit());
+    assert!(tracker.should_fallback_to_prompting());
+}
+
+#[test]
+fn test_reset_consecutive_clears_consecutive_gate() {
     let mut tracker = DenialTracker::new();
     for _ in 0..3 {
         tracker.record_denial("Bash");
     }
-    assert!(tracker.is_circuit_breaker_tripped());
+    assert!(tracker.should_fallback_to_prompting());
 
     tracker.reset_consecutive();
     assert!(!tracker.is_stuck());
-    // Circuit breaker stays tripped until explicitly reset.
-    assert!(tracker.is_circuit_breaker_tripped());
+    // Below the total cap, an allowed action clears the fallback condition.
+    assert!(!tracker.should_fallback_to_prompting());
 }
 
 #[test]
-fn test_reset_circuit_breaker() {
+fn test_reset_after_total_limit_clears_both() {
     let mut tracker = DenialTracker::new();
-    for _ in 0..3 {
+    for _ in 0..20 {
         tracker.record_denial("Bash");
+        tracker.reset_consecutive();
     }
-    tracker.reset_circuit_breaker();
-    assert!(!tracker.is_circuit_breaker_tripped());
-    assert!(!tracker.is_stuck());
+    assert!(tracker.should_fallback_to_prompting());
+    tracker.reset_after_total_limit();
+    assert_eq!(tracker.total_denials, 0);
+    assert_eq!(tracker.consecutive_denials, 0);
+    assert!(!tracker.should_fallback_to_prompting());
 }
 
 #[test]
@@ -71,20 +88,20 @@ fn test_subagent_fork_isolation_no_parent_pollution() {
     let mut parent = DenialTracker::new();
     let mut fork = DenialTracker::new();
 
-    // Fork hits 3 denies and trips its own breaker.
+    // Fork hits 3 denies and trips its own fallback condition.
     for _ in 0..3 {
         fork.record_denial("Bash");
     }
-    assert!(fork.is_circuit_breaker_tripped());
+    assert!(fork.should_fallback_to_prompting());
 
     // Parent stays clean.
     assert_eq!(parent.consecutive_denials, 0);
-    assert!(!parent.is_circuit_breaker_tripped());
+    assert!(!parent.should_fallback_to_prompting());
 
     // Parent denials still trip independently.
     for _ in 0..3 {
         parent.record_denial("Write");
     }
-    assert!(parent.is_circuit_breaker_tripped());
+    assert!(parent.should_fallback_to_prompting());
     assert_eq!(parent.tool_denial_count("Bash"), 0);
 }

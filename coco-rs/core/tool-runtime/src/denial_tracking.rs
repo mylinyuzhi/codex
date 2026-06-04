@@ -1,10 +1,11 @@
-/// Tracks permission denials to detect stuck loops and trigger circuit breaker.
+/// Tracks permission denials so auto-mode can fall back to prompting when the
+/// agent is stuck in a denial loop.
 ///
-/// TS: 3 consecutive denials → fallback to prompting (circuit breaker).
-///     20 total denials → suggest /permissions command.
-///
-/// The circuit breaker prevents wasting API calls on irrecoverable permission
-/// failures. When triggered, auto-mode falls back to interactive prompting.
+/// TS `denialTracking.ts`: `shouldFallbackToPrompting` fires on
+/// `consecutiveDenials >= 3 || totalDenials >= 20`. There is no persistent
+/// "tripped" latch — the check runs fresh after each recorded denial, an
+/// allowed action clears the consecutive streak (`reset_consecutive`), and
+/// hitting the total cap resets both counters (`reset_after_total_limit`).
 ///
 /// Lives in `coco-tool-runtime` because it is per-`ToolUseContext` runtime
 /// state (fork-isolated when `local_denial_tracking` is set; session-scoped
@@ -16,14 +17,12 @@ pub struct DenialTracker {
     pub total_denials: i32,
     /// Per-tool denial counts for targeted suggestions.
     per_tool_denials: std::collections::HashMap<String, i32>,
-    /// Whether the circuit breaker has tripped (auto-mode → prompting fallback).
-    circuit_breaker_tripped: bool,
 }
 
-/// Threshold for consecutive denials before circuit breaker trips.
+/// Threshold for consecutive denials before falling back to prompting.
 const CONSECUTIVE_DENIAL_THRESHOLD: i32 = 3;
 
-/// Threshold for total denials before suggesting /permissions.
+/// Threshold for total denials before falling back to prompting.
 const TOTAL_DENIAL_THRESHOLD: i32 = 20;
 
 impl DenialTracker {
@@ -39,10 +38,6 @@ impl DenialTracker {
             .per_tool_denials
             .entry(tool_name.to_string())
             .or_default() += 1;
-
-        if self.consecutive_denials >= CONSECUTIVE_DENIAL_THRESHOLD {
-            self.circuit_breaker_tripped = true;
-        }
     }
 
     /// Record a denial without a tool name (backward compat).
@@ -55,31 +50,41 @@ impl DenialTracker {
         self.consecutive_denials = 0;
     }
 
-    /// Reset the circuit breaker (e.g., after user adjusts permissions).
-    pub fn reset_circuit_breaker(&mut self) {
-        self.circuit_breaker_tripped = false;
-        self.consecutive_denials = 0;
+    /// Whether auto-mode should stop classifying and fall back to prompting:
+    /// 3 consecutive OR 20 total denials. TS `shouldFallbackToPrompting`
+    /// (`denialTracking.ts:40-45`).
+    pub fn should_fallback_to_prompting(&self) -> bool {
+        self.consecutive_denials >= CONSECUTIVE_DENIAL_THRESHOLD
+            || self.total_denials >= TOTAL_DENIAL_THRESHOLD
     }
 
-    /// Clear all denial state (consecutive + total + per-tool counts +
-    /// circuit breaker). Called by the post-compact observer because
-    /// the conversational context that drove the denials is now archived.
+    /// Whether the fallback was triggered by the *total* cap (vs the
+    /// consecutive one) — drives the warning wording and the counter reset.
+    pub fn hit_total_limit(&self) -> bool {
+        self.total_denials >= TOTAL_DENIAL_THRESHOLD
+    }
+
+    /// Reset both counters after the total cap is hit so the session can
+    /// continue past a single review prompt instead of denying forever.
+    /// TS `handleDenialLimitExceeded` total-limit branch
+    /// (`permissions.ts:1034-1040`).
+    pub fn reset_after_total_limit(&mut self) {
+        self.consecutive_denials = 0;
+        self.total_denials = 0;
+    }
+
+    /// Clear all denial state (consecutive + total + per-tool counts).
+    /// Called by the post-compact observer because the conversational
+    /// context that drove the denials is now archived.
     pub fn clear(&mut self) {
         self.consecutive_denials = 0;
         self.total_denials = 0;
         self.per_tool_denials.clear();
-        self.circuit_breaker_tripped = false;
     }
 
     /// Whether the agent appears stuck in a denial loop.
     pub fn is_stuck(&self) -> bool {
         self.consecutive_denials >= CONSECUTIVE_DENIAL_THRESHOLD
-    }
-
-    /// Whether the circuit breaker has tripped.
-    /// When true, auto-mode should fall back to interactive prompting.
-    pub fn is_circuit_breaker_tripped(&self) -> bool {
-        self.circuit_breaker_tripped
     }
 
     /// Whether total denials suggest the user should adjust permissions.

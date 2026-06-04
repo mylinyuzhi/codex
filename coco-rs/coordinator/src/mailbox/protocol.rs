@@ -986,14 +986,26 @@ fn permission_response_payload(
 
 /// Create a shutdown approved protocol message string.
 ///
-/// TS: `createShutdownApprovedMessage(params)`
-pub fn create_shutdown_approved_message(request_id: &str, from: &str) -> String {
+/// `pane_id` / `backend_type` are the approving worker's OWN pane
+/// coordinates (read from its `team.json` member entry). The leader's
+/// inbox poller uses them to tear down the right pane: present ⇒ a
+/// pane-based teammate the leader must `kill_pane`; absent (the
+/// in-process case) ⇒ the teammate already exits via its runner-loop
+/// break, so the leader only removes membership.
+///
+/// TS: `createShutdownApprovedMessage(params)` (`SendMessageTool.ts:330`).
+pub fn create_shutdown_approved_message(
+    request_id: &str,
+    from: &str,
+    pane_id: Option<&str>,
+    backend_type: Option<&str>,
+) -> String {
     let msg = ProtocolMessage::ShutdownApproved {
         request_id: request_id.to_string(),
         from: from.to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
-        pane_id: None,
-        backend_type: None,
+        pane_id: pane_id.filter(|s| !s.is_empty()).map(String::from),
+        backend_type: backend_type.filter(|s| !s.is_empty()).map(String::from),
     };
     serde_json::to_string(&msg).unwrap_or_default()
 }

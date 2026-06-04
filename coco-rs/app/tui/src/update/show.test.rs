@@ -26,6 +26,58 @@ fn seed_catalog(state: &mut AppState) {
     ];
 }
 
+fn teammate_row(name: &str, team: &str, agent_type: &str) -> crate::state::SubagentInstance {
+    crate::state::SubagentInstance {
+        kind: crate::state::SubagentKind::Teammate,
+        agent_id: format!("{name}@{team}"),
+        agent_type: agent_type.into(),
+        description: String::new(),
+        status: crate::state::SubagentStatus::Running,
+        color: None,
+        team_name: Some(team.into()),
+        tool_use_id: None,
+        started_at_ms: None,
+        last_tool_name: None,
+        tool_count: 0,
+        total_tokens: 0,
+        is_backgrounded: false,
+        recent_activities: Vec::new(),
+        final_message: None,
+    }
+}
+
+/// `team_roster` (gap 8) lists only running teammates from
+/// `session.subagents`, excluding plain subagents, and uses the bare name
+/// (not `name@team`) as the `set_teammate_mode` target.
+#[test]
+fn team_roster_lists_only_running_teammates() {
+    let mut state = AppState::new();
+    state
+        .session
+        .subagents
+        .push(teammate_row("researcher", "my-team", "explore"));
+    let mut plain = teammate_row("worker", "my-team", "build");
+    plain.kind = crate::state::SubagentKind::Subagent; // not a teammate
+    state.session.subagents.push(plain);
+
+    team_roster(&mut state);
+
+    let r = match state.ui.modal.as_ref() {
+        Some(ModalState::TeamRoster(r)) => r.clone(),
+        _ => panic!("expected TeamRoster modal"),
+    };
+    assert_eq!(r.team_name, "my-team");
+    assert_eq!(r.members.len(), 1, "plain subagents must be excluded");
+    assert_eq!(r.members[0].name, "researcher");
+    assert_eq!(r.members[0].agent_type, "explore");
+    // No team.json in this unit context ⇒ the member falls back to `Default`
+    // (mirrors `permissionModeFromString(undefined)`). The seed-from-team.json
+    // path — picker reflecting a STORED non-default mode — is exercised at the
+    // coordinator layer (`team_file` round-trip) rather than here, where
+    // constructing a `TeamFile` would cross the module-privacy boundary.
+    assert_eq!(r.members[0].mode, coco_types::PermissionMode::Default);
+}
+
 /// `cycle_model` opens the picker for the Main role from the
 /// session-frozen model catalog (provider-grouped because the seeder
 /// sorts on provider_display).

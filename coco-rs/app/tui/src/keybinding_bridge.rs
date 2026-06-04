@@ -25,6 +25,8 @@ pub enum KeybindingContext {
     Picker,
     /// Model picker state — filterable list plus effort/role controls.
     ModelPicker,
+    /// Teams roster picker — list nav plus ←/→ mode cycling (gap 8).
+    TeamRoster,
     /// Scrollable content state (help, diff view, task detail, doctor).
     Scrollable,
     /// Transcript reader state.
@@ -45,6 +47,7 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
         return match modal {
             // Filterable list modals
             ModalState::ModelPicker(_) => KeybindingContext::ModelPicker,
+            ModalState::TeamRoster(_) => KeybindingContext::TeamRoster,
 
             // Standalone theme picker — reuses the ThemePicker context so the
             // `theme:toggleSyntaxHighlighting` (ctrl+t) binding is active.
@@ -260,6 +263,7 @@ fn resolve_key(
     let cmd = match ctx {
         KeybindingContext::Confirmation => map_confirmation_key(key),
         KeybindingContext::ModelPicker => map_model_picker_key(key),
+        KeybindingContext::TeamRoster => map_team_roster_key(key),
         KeybindingContext::Picker => map_picker_key(key),
         KeybindingContext::Scrollable => map_scrollable_key(key),
         KeybindingContext::Transcript => map_transcript_key(key),
@@ -299,6 +303,27 @@ fn map_model_picker_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('p') if ctrl => Some(TuiCommand::SurfacePrev),
         KeyCode::Char('n') if ctrl => Some(TuiCommand::SurfaceNext),
         KeyCode::Char(c) => Some(TuiCommand::SurfaceFilter(c)),
+        _ => None,
+    }
+}
+
+/// Keys for the teams roster picker (gap 8): Up/Down select a teammate,
+/// Left/Right cycle the mode to apply, Enter applies, Esc closes.
+fn map_team_roster_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    match key.code {
+        KeyCode::Up => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down => Some(TuiCommand::SurfaceNext),
+        // Shift+Left/Right cycles ALL teammates' modes in tandem (TS list-view
+        // `cycleAllTeammateModes`); plain Left/Right cycles the focused one.
+        KeyCode::Left if shift => Some(TuiCommand::TeamRosterCycleAllModes(-1)),
+        KeyCode::Right if shift => Some(TuiCommand::TeamRosterCycleAllModes(1)),
+        KeyCode::Left => Some(TuiCommand::TeamRosterCycleMode(-1)),
+        KeyCode::Right => Some(TuiCommand::TeamRosterCycleMode(1)),
+        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
+        KeyCode::Esc => Some(TuiCommand::Cancel),
+        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
         _ => None,
     }
 }
@@ -470,6 +495,10 @@ fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // hints and defaults cannot diverge.
         KeyCode::Char('v') if ctrl || alt => Some(TuiCommand::PasteFromClipboard),
         KeyCode::Char('m') if ctrl => Some(TuiCommand::CycleModel),
+        // (The teams-roster picker now opens via the rebindable
+        // `app:toggleTeamRoster` action — default `ctrl+shift+t` — resolved in
+        // Layer 1; the old hardcoded `ctrl+t` arm here was dead because the
+        // resolver claims `ctrl+t` for `app:toggleTodos` first.)
         KeyCode::Char('g') if ctrl => Some(TuiCommand::OpenPlanEditor),
         KeyCode::Char(',') if ctrl => Some(TuiCommand::ShowSettings),
 

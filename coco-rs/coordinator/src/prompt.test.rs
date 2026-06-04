@@ -11,6 +11,11 @@ fn test_teammate_prompt_addendum_content() {
     assert!(TEAMMATE_PROMPT_ADDENDUM.contains("MUST use the SendMessage tool"));
     assert!(TEAMMATE_PROMPT_ADDENDUM.contains("team lead"));
     assert!(TEAMMATE_PROMPT_ADDENDUM.contains("task system"));
+    // Shutdown protocol guidance (gap 6) — teammates must know to reply
+    // with a shutdown_response when the leader requests shutdown.
+    assert!(TEAMMATE_PROMPT_ADDENDUM.contains("shutdown_request"));
+    assert!(TEAMMATE_PROMPT_ADDENDUM.contains("shutdown_response"));
+    assert!(TEAMMATE_PROMPT_ADDENDUM.contains("request_id"));
 }
 
 #[test]

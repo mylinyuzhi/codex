@@ -783,6 +783,13 @@ pub async fn run_chat_with_options(
         tracing::warn!(error = %e, "agent/task infrastructure unavailable in headless; spawns degrade");
     }
 
+    // Leader-side teammate inbox consumption (R1): drives `ShutdownApproved`
+    // → teardown so a headless leader doesn't leak stale team membership /
+    // orphaned tasks. No human UI ⇒ no permission bridge. Covers long-running
+    // headless (stream-json input); a single-shot `-p` leader exits before the
+    // 1 s poll fires — that bounded end-of-run drain is a documented follow-up.
+    crate::leader_inbox_poller::install_leader(runtime.clone(), None).await;
+
     let session_id = runtime.current_session_id().await;
 
     // Resume hydration: seed transcript dedup + tool-result replacement onto
@@ -897,6 +904,17 @@ pub async fn run_chat_with_options(
             .session_memory
             .wait_for_extraction(coco_memory::service::session::DEFAULT_WAIT_TIMEOUT)
             .await;
+    }
+
+    // Persist coordinator mode at end-of-run so a later `--resume` re-derives
+    // the role (R2). The headless leader path previously never wrote it.
+    {
+        let session_id = runtime.current_session_id().await;
+        crate::coordinator_mode_resume::persist_session_mode(
+            &runtime.session_manager,
+            &session_id,
+            &runtime.runtime_config.features,
+        );
     }
 
     let additional_dirs = resolve_additional_dirs(cli, &cwd);

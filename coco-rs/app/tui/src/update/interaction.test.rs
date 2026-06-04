@@ -241,6 +241,7 @@ fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
         display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: Some(serde_json::json!({"plan": "do the thing"})),
         permission_suggestions: vec![],
+        worker_badge: None,
     }));
     s
 }
@@ -344,6 +345,7 @@ async fn confirm_classic_yes_no_approves_selected_action() {
         display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
         original_input: None,
         permission_suggestions: vec![],
+        worker_badge: None,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -384,6 +386,7 @@ async fn confirm_classic_always_allow_sends_session_update() {
         display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
         original_input: None,
         permission_suggestions: vec![],
+        worker_badge: None,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -426,6 +429,7 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
         display_input: coco_types::PermissionDisplayInput::Text(file.display().to_string()),
         original_input: Some(serde_json::json!({"file_path": file.to_string_lossy()})),
         permission_suggestions: vec![],
+        worker_badge: None,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -499,6 +503,7 @@ fn build_choice_payload_merges_with_original_input() {
         display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: Some(serde_json::json!({"existing": 42, "other": "v"})),
         permission_suggestions: vec![],
+        worker_badge: None,
     };
     let out = build_choice_payload(&p).expect("payload built");
     assert_eq!(out["existing"], 42);
@@ -527,6 +532,7 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: None,
         permission_suggestions: vec![],
+        worker_badge: None,
     };
     assert!(build_choice_payload(&p).is_none());
 }
@@ -567,4 +573,129 @@ fn filtered_models_matches_provider_display() {
     let filtered = filtered_models(&m);
     assert_eq!(filtered.len(), 1);
     assert_eq!(filtered[0].provider, "openai");
+}
+
+/// `team_roster_cycle_mode` (gap 8 / R8) cycles the FOCUSED member's own mode
+/// through the four interactive modes with wraparound, seeding from that
+/// member's current mode (not a hardcoded `Default`) and leaving OTHER members
+/// untouched — the per-member independence a single shared mode field could
+/// not represent.
+#[test]
+fn team_roster_cycle_mode_wraps_interactive_modes() {
+    use coco_types::PermissionMode as PM;
+    let member = |name: &str, mode: PM| crate::state::TeamRosterMember {
+        name: name.into(),
+        agent_type: "explore".into(),
+        color: None,
+        mode,
+    };
+    let mut s = AppState::new();
+    s.ui.show_modal(ModalState::TeamRoster(crate::state::TeamRosterState {
+        team_name: "t".into(),
+        // Two members with DIFFERENT live modes; focus is on member 0.
+        members: vec![
+            member("researcher", PM::Plan),
+            member("builder", PM::AcceptEdits),
+        ],
+        selected: 0,
+    }));
+
+    let focused = |s: &AppState| match s.ui.modal.as_ref() {
+        Some(ModalState::TeamRoster(r)) => r.members[r.selected].mode,
+        _ => panic!("expected TeamRoster"),
+    };
+    let other = |s: &AppState| match s.ui.modal.as_ref() {
+        Some(ModalState::TeamRoster(r)) => r.members[1].mode,
+        _ => panic!("expected TeamRoster"),
+    };
+
+    // Seeds from the focused member's CURRENT mode (Plan), not Default. The
+    // returned (name, mode) is what gets persisted immediately (TS-faithful).
+    assert_eq!(
+        team_roster_cycle_mode(&mut s, 1),
+        Some(("researcher".to_string(), PM::BypassPermissions))
+    );
+    assert_eq!(focused(&s), PM::BypassPermissions);
+    team_roster_cycle_mode(&mut s, 1); // wrap → Default
+    assert_eq!(focused(&s), PM::Default);
+    team_roster_cycle_mode(&mut s, -1); // wrap backward → BypassPermissions
+    assert_eq!(focused(&s), PM::BypassPermissions);
+
+    // The unfocused member's mode was never touched.
+    assert_eq!(
+        other(&s),
+        PM::AcceptEdits,
+        "cycling member 0 must not affect member 1"
+    );
+}
+
+fn roster_state(modes: &[(&str, coco_types::PermissionMode)]) -> AppState {
+    let mut s = AppState::new();
+    s.ui.show_modal(ModalState::TeamRoster(crate::state::TeamRosterState {
+        team_name: "t".into(),
+        members: modes
+            .iter()
+            .map(|(name, mode)| crate::state::TeamRosterMember {
+                name: (*name).into(),
+                agent_type: "explore".into(),
+                color: None,
+                mode: *mode,
+            })
+            .collect(),
+        selected: 0,
+    }));
+    s
+}
+
+fn roster_modes(s: &AppState) -> Vec<coco_types::PermissionMode> {
+    match s.ui.modal.as_ref() {
+        Some(ModalState::TeamRoster(r)) => r.members.iter().map(|m| m.mode).collect(),
+        _ => panic!("expected TeamRoster"),
+    }
+}
+
+/// `team_roster_cycle_all_modes` (R8 cycle-all, TS `cycleAllTeammateModes`):
+/// when every teammate already shares the same mode, advance ALL by `delta` in
+/// tandem and return the full batch of updates.
+#[test]
+fn team_roster_cycle_all_modes_all_same_advances_in_tandem() {
+    use coco_types::PermissionMode as PM;
+    let mut s = roster_state(&[("a", PM::Default), ("b", PM::Default), ("c", PM::Default)]);
+
+    let updates = team_roster_cycle_all_modes(&mut s, 1);
+    assert_eq!(
+        updates,
+        vec![
+            ("a".to_string(), PM::AcceptEdits),
+            ("b".to_string(), PM::AcceptEdits),
+            ("c".to_string(), PM::AcceptEdits),
+        ]
+    );
+    assert_eq!(roster_modes(&s), vec![PM::AcceptEdits; 3]);
+}
+
+/// When modes DIVERGE, TS normalises every teammate to `Default` first
+/// (regardless of `delta` direction).
+#[test]
+fn team_roster_cycle_all_modes_divergent_resets_to_default() {
+    use coco_types::PermissionMode as PM;
+    let mut s = roster_state(&[("a", PM::Plan), ("b", PM::AcceptEdits), ("c", PM::Plan)]);
+
+    let updates = team_roster_cycle_all_modes(&mut s, 1);
+    assert!(
+        updates.iter().all(|(_, m)| *m == PM::Default),
+        "got {updates:?}"
+    );
+    assert_eq!(roster_modes(&s), vec![PM::Default; 3]);
+
+    // Now that they're all equal, a second cycle advances them together.
+    let updates2 = team_roster_cycle_all_modes(&mut s, 1);
+    assert!(updates2.iter().all(|(_, m)| *m == PM::AcceptEdits));
+}
+
+/// Empty roster ⇒ no-op (no updates, no panic).
+#[test]
+fn team_roster_cycle_all_modes_empty_is_noop() {
+    let mut s = roster_state(&[]);
+    assert!(team_roster_cycle_all_modes(&mut s, 1).is_empty());
 }

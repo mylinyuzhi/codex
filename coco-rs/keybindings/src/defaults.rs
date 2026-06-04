@@ -75,6 +75,10 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+t", KeybindingAction::AppToggleTodos),
                 ("ctrl+o", KeybindingAction::AppToggleTranscript),
                 ("ctrl+shift+o", KeybindingAction::AppToggleTeammatePreview),
+                // coco-rs-only affordance (no TS source — TS opens the teams
+                // dialog via the footer indicator). Sibling of `ctrl+t`; only
+                // active when the session has teammates (gated in dispatch).
+                ("ctrl+shift+t", KeybindingAction::AppToggleTeamRoster),
                 ("ctrl+r", KeybindingAction::HistorySearch),
                 // TS gates these on QUICK_SEARCH; coco-rs doesn't gate
                 // (the surfaces are part of the base TUI), so they ship

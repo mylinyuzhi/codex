@@ -104,6 +104,11 @@ impl ComposerPopupState {
     }
 }
 
+// Single-instance UI state: `AppState` holds at most one active prompt at a
+// time (never in a hot collection), so the per-variant size spread the
+// `large_enum_variant` lint flags carries no real memory cost — boxing the
+// payloads would only add indirection across 12+ construct/match sites.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum PanePromptState {
     Permission(PermissionPromptState),

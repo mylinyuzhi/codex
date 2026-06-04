@@ -131,13 +131,6 @@ pub struct AppState {
     #[serde(default)]
     pub inbox_messages: Vec<InboxEntry>,
 
-    // ── Team Context ──
-    /// Active team context (set when running as part of a team).
-    ///
-    /// TS: `AppState.teamContext` in state/AppStateStore.ts
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub team_context: Option<TeamContext>,
-
     /// Standalone agent context (non-team agent identity).
     ///
     /// TS: `AppState.standaloneAgentContext`. In TS, the `/rename`
@@ -313,8 +306,6 @@ pub enum InboxMessageStatus {
 // depending on `coco-state`. Re-exported here so AppState fields keep
 // their historical type names.
 pub use coco_types::StandaloneAgentContext;
-pub use coco_types::TeamContext;
-pub use coco_types::TeammateEntry;
 
 /// Pending permission request on worker side (waiting for leader response).
 #[derive(Debug, Clone, Serialize, Deserialize)]

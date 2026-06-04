@@ -119,6 +119,8 @@ pub use surface_payloads::SkillRow;
 pub use surface_payloads::SkillsDialogSource;
 pub use surface_payloads::SkillsDialogState;
 pub use surface_payloads::TaskDetailState;
+pub use surface_payloads::TeamRosterMember;
+pub use surface_payloads::TeamRosterState;
 pub use surface_payloads::ThemePickerState;
 pub use surface_payloads::TrustState;
 pub use surface_payloads::WorktreeExitState;

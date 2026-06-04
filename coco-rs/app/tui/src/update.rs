@@ -131,6 +131,7 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         | M::AutoModeOptIn(_)
         | M::BypassPermissions(_)
         | M::TaskDetail(_)
+        | M::TeamRoster(_)
         | M::Feedback(_) => return None,
     })
 }
@@ -821,6 +822,10 @@ pub async fn handle_command(
             show::session_browser(state);
             true
         }
+        TuiCommand::OpenTeamRoster => {
+            show::team_roster(state);
+            true
+        }
         TuiCommand::ShowGlobalSearch => {
             show::global_search(state);
             true
@@ -885,6 +890,27 @@ pub async fn handle_command(
         }
         TuiCommand::ModelPickerCycleEffort(delta) => {
             interaction::cycle_model_effort(state, delta);
+            true
+        }
+        TuiCommand::TeamRosterCycleMode(delta) => {
+            // Cycle the focused teammate's mode and apply it immediately
+            // (TS: cycling in the teams dialog persists at once).
+            if let Some((name, mode)) = interaction::team_roster_cycle_mode(state, delta) {
+                let _ = command_tx
+                    .send(UserCommand::SetTeammateMode { name, mode })
+                    .await;
+            }
+            true
+        }
+        TuiCommand::TeamRosterCycleAllModes(delta) => {
+            // Cycle ALL teammates in tandem and persist in one batch
+            // (TS `cycleAllTeammateModes`).
+            let updates = interaction::team_roster_cycle_all_modes(state, delta);
+            if !updates.is_empty() {
+                let _ = command_tx
+                    .send(UserCommand::SetTeammateModes { updates })
+                    .await;
+            }
             true
         }
         TuiCommand::ModelPickerCycleRole(delta) => {

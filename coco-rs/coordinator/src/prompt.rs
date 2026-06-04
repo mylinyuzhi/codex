@@ -23,6 +23,14 @@ IMPORTANT: You are running as an agent in a team. To communicate with anyone on 
 Just writing a response in text is not visible to others on your team - you MUST use the SendMessage tool.
 
 The user interacts primarily with the team lead. Your work is coordinated through the task system and teammate messaging.
+
+# Responding to shutdown requests
+
+If you receive a message with `type: \"shutdown_request\"`, finish or safely pause your current work, then approve it by sending a `shutdown_response` back to the team lead — echo the `request_id` and set `approve: true`:
+
+    SendMessage to: \"team-lead\" message: {\"type\": \"shutdown_response\", \"request_id\": \"<id>\", \"approve\": true}
+
+Approving shutdown terminates your process. Only reject (`approve: false`, with a `reason`) if you have unsaved critical work. Do not originate a `shutdown_request` yourself unless explicitly asked.
 ";
 
 /// Permission poll interval for in-process teammates (ms).

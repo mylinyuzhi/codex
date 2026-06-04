@@ -226,6 +226,9 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
             KbContext::Global,
         ],
         ModelPicker => vec![KbContext::ModelPicker, KbContext::Select, KbContext::Global],
+        // The roster's keys come from the legacy `map_team_roster_key`; the
+        // Select+Global stack just keeps generic nav/cancel resolvable.
+        TeamRoster => vec![KbContext::Select, KbContext::Global],
         Scrollable => vec![KbContext::Help, KbContext::Transcript, KbContext::Global],
         Transcript => vec![KbContext::Transcript, KbContext::Global],
         // Do not include Chat here: Chat binds Enter to submit, but TS
