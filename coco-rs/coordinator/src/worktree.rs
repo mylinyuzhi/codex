@@ -11,17 +11,19 @@
 //!
 //! Ported (parity with TS):
 //! - `git worktree add -B <branch> <path>` against canonical git root.
-//! - `hasWorktreeChanges` via `git status --porcelain`.
+//! - `hasWorktreeChanges`: dirty working tree (`git status --porcelain`) OR
+//!   new commits since creation (`rev-list --count <head>..HEAD`).
 //! - `git worktree remove --force` + `git branch -D`.
 //! - Post-creation setup: settings.local.json copy + git core.hooksPath
 //!   config (TS `worktree.ts:510-578`, items 1 + 2).
+//! - Periodic stale-worktree sweep (`cleanup_stale`, TS `:1058-1136`):
+//!   age + clean-tree + remote-reachable (unpushed-commit fail-close) +
+//!   `git worktree prune`.
 //!
 //! Deferred (out of scope per plan review):
 //! - Hook-based VCS (`WorktreeCreate` hook).
-//! - Symlinked directories (`worktree.ts:580-585`).
 //! - Commit-attribution prepare-commit-msg hook (`:603-623`).
 //! - Resume metadata (`runAgent.ts:738-742`).
-//! - Periodic stale-worktree sweep (`:1058-1136`).
 //!
 //! # Canonical git root
 //!
@@ -205,12 +207,6 @@ pub struct AgentWorktreeConfig {
     /// "target", ".venv"]`. Missing source dirs are silently
     /// skipped (TS matches this behavior).
     pub symlink_directories: Vec<PathBuf>,
-    /// When `true`, background agents with worktree isolation get
-    /// a worktree that is NEVER auto-cleaned — it persists for the
-    /// user to inspect even if nothing was changed. TS parity:
-    /// hook-based worktrees use this semantic (`worktree.ts:659-664`
-    /// "Hook-based worktrees are always kept").
-    pub keep_worktree_when_background: bool,
 }
 
 /// Agent worktree manager.
@@ -357,24 +353,6 @@ impl AgentWorktreeManager {
         })
     }
 
-    /// Same as [`Self::create_for`] but never auto-cleans the
-    /// worktree on completion — suitable for background agents
-    /// where the parent turn doesn't wait for the child and
-    /// post-completion cleanup would race with the still-running
-    /// child process.
-    ///
-    /// TS parity: background agents keep their worktrees; the user
-    /// inspects them via the agent listing. Staleness is handled
-    /// by `cleanup_stale` on subsequent sessions (30-day sweep).
-    pub fn create_for_background(&self, slug: &str) -> Result<AgentWorktreeSession, WorktreeError> {
-        // Structurally identical to `create_for`; the caller commits
-        // to never calling `cleanup_if_unchanged` on the returned
-        // session. A separate method makes intent explicit + gives
-        // us a single place to add "always kept" telemetry if
-        // needed later.
-        self.create_for(slug)
-    }
-
     /// Whether hook-based worktree creation is available. Returns
     /// `true` when the provided hook registry contains at least one
     /// `WorktreeCreate` handler.
@@ -438,9 +416,15 @@ impl AgentWorktreeManager {
             if age < older_than {
                 continue;
             }
-            // Check for uncommitted changes before removing.
-            let has_changes = has_worktree_changes(&path, "").unwrap_or(true);
-            if has_changes {
+            // Preserve any worktree with a dirty tree OR commits not yet on a
+            // remote. The stale path has no original head to diff against (the
+            // session metadata is gone after a crash/kill), so committed work
+            // is guarded by the unpushed-commit check rather than head..HEAD.
+            // Fail-closed: a git error keeps the worktree. TS
+            // cleanupStaleAgentWorktrees (worktree.ts:1101-1118).
+            if has_worktree_changes(&path, "").unwrap_or(true)
+                || has_unpushed_commits(&path).unwrap_or(true)
+            {
                 continue; // preserve user's work.
             }
             // Resolve the branch name from the slug.
@@ -455,6 +439,11 @@ impl AgentWorktreeManager {
                 removed += 1;
             }
         }
+        if removed > 0 {
+            // Drop git's internal registry entries for the now-deleted dirs.
+            // TS cleanupStaleAgentWorktrees (worktree.ts:1132-1134).
+            let _ = git_stdout(&self.canonical_git_root, &["worktree", "prune"]);
+        }
         removed
     }
 
@@ -463,9 +452,10 @@ impl AgentWorktreeManager {
     ///
     /// TS parity: `AgentTool.tsx:644-685` `cleanupWorktreeIfNeeded`.
     ///
-    /// "Changes" means any entry in `git status --porcelain` — staged,
-    /// unstaged, or untracked. TS's `hasWorktreeChanges`
-    /// (`worktree.ts:1144-1173`) uses the same criterion.
+    /// "Changes" means a dirty working tree (`git status --porcelain`) OR
+    /// commits made since `session.head_commit` — a clean tree can still hold
+    /// committed work that the force-remove + `branch -D` below would destroy.
+    /// Mirrors TS `hasWorktreeChanges` (`worktree.ts:1155-1173`).
     pub fn cleanup_if_unchanged(&self, session: AgentWorktreeSession) -> WorktreeCleanupOutcome {
         let has_changes = match has_worktree_changes(&session.path, &session.head_commit) {
             Ok(b) => b,
@@ -553,10 +543,65 @@ fn get_head_commit(path: &Path) -> Result<String, WorktreeError> {
     Ok(coco_git::get_head_commit(path)?)
 }
 
-fn has_worktree_changes(path: &Path, _head_commit: &str) -> Result<bool, WorktreeError> {
-    // TS's `hasWorktreeChanges` carries `_head_commit` for diagnostic
-    // logging but doesn't use it; mirror that here.
-    Ok(!coco_git::get_uncommitted_changes(path)?.is_empty())
+/// Whether the worktree holds work that must NOT be force-removed: a dirty
+/// working tree OR commits made since `head_commit` (the commit it was created
+/// from). A clean working tree can still hold committed work that
+/// `git worktree remove --force` + `branch -D` would destroy, so the commit
+/// check is essential — without it an agent that commits its output loses it.
+/// Mirrors TS `hasWorktreeChanges` (worktree.ts:1155-1173). An empty
+/// `head_commit` (the stale sweep, where the original head is unknown) skips
+/// the commit check; that path guards committed work via [`has_unpushed_commits`].
+fn has_worktree_changes(path: &Path, head_commit: &str) -> Result<bool, WorktreeError> {
+    if !coco_git::get_uncommitted_changes(path)?.is_empty() {
+        return Ok(true);
+    }
+    has_commits_since(path, head_commit)
+}
+
+/// New commits on HEAD since `head_commit` — `git rev-list --count
+/// <head>..HEAD` > 0. Empty `head_commit` → `Ok(false)` (check skipped).
+fn has_commits_since(path: &Path, head_commit: &str) -> Result<bool, WorktreeError> {
+    if head_commit.is_empty() {
+        return Ok(false);
+    }
+    let count = git_stdout(
+        path,
+        &["rev-list", "--count", &format!("{head_commit}..HEAD")],
+    )?;
+    Ok(count.trim().parse::<u64>().unwrap_or(0) > 0)
+}
+
+/// Any commit on HEAD not reachable from a remote — unpushed work the stale
+/// sweep must preserve (it has no original head to diff against). Mirrors TS
+/// `cleanupStaleAgentWorktrees`' `git rev-list --max-count=1 HEAD --not
+/// --remotes` (worktree.ts:1101-1118).
+fn has_unpushed_commits(path: &Path) -> Result<bool, WorktreeError> {
+    let out = git_stdout(
+        path,
+        &["rev-list", "--max-count=1", "HEAD", "--not", "--remotes"],
+    )?;
+    Ok(!out.trim().is_empty())
+}
+
+/// Run `git -C <cwd> <args>` and return stdout, or a `GitFailed` / `Io` error
+/// (callers fail-closed to "keep the worktree" on error).
+fn git_stdout(cwd: &Path, args: &[&str]) -> Result<String, WorktreeError> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .map_err(|e| WorktreeError::Io {
+            message: e.to_string(),
+            location: Location::default(),
+        })?;
+    if !out.status.success() {
+        return Err(WorktreeError::GitFailed {
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            location: Location::default(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// TS parity: `worktree.ts:516-534` — copies `.claude/settings.local.json`

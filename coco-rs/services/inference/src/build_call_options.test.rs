@@ -212,6 +212,152 @@ fn unset_per_call_falls_through_to_model_default_thinking() {
     assert!(inner.contains_key("thinking"));
 }
 
+/// Build a ModelInfo declaring an explicit thinking ladder topping out
+/// at `high` (no `xhigh`) — the canonical "model that doesn't support max
+/// effort" shape.
+fn info_with_ladder_low_to_high() -> ModelInfo {
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        supported_thinking_levels: Some(vec![
+            ThinkingLevel::low(),
+            ThinkingLevel::medium(),
+            ThinkingLevel::high(),
+        ]),
+        default_thinking_level: Some(ReasoningEffort::Medium),
+        ..Default::default()
+    };
+    ModelInfo::from_partial("test", "test", partial).unwrap()
+}
+
+fn anthropic_wire_effort(call: &LanguageModelV4CallOptions) -> Option<String> {
+    call.provider_options
+        .as_ref()?
+        .get("anthropic")?
+        .get("output_config")
+        .and_then(|oc| oc.get("effort"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+#[test]
+fn per_call_xhigh_clamps_to_top_declared_level() {
+    // Model declares [low, medium, high] — no xhigh. An explicit
+    // `--effort max` (XHigh) override must clamp to the top declared level
+    // (high), NOT pass through as wire `output_config.effort="max"` (which
+    // 400s on models that reject it).
+    let info = info_with_ladder_low_to_high();
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel::xhigh()),
+        ..Default::default()
+    };
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    assert_eq!(
+        call.reasoning,
+        Some(ReasoningLevel::High),
+        "XHigh over the model's ceiling must clamp to the top declared level (High)"
+    );
+    assert_eq!(
+        anthropic_wire_effort(&call).as_deref(),
+        Some("high"),
+        "wire effort must be 'high', never 'max', for a model whose ladder tops at high"
+    );
+}
+
+#[test]
+fn per_call_exact_match_effort_is_preserved() {
+    // An in-ladder request resolves to that exact declared level.
+    let info = info_with_ladder_low_to_high();
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel::low()),
+        ..Default::default()
+    };
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    assert_eq!(call.reasoning, Some(ReasoningLevel::Low));
+    assert_eq!(anthropic_wire_effort(&call).as_deref(), Some("low"));
+}
+
+#[test]
+fn per_call_no_declared_ladder_passes_effort_through() {
+    // Model declares no thinking ladder (None) — typical for a custom 3P
+    // model in ~/.coco/models.json. We cannot probe a ceiling, so
+    // `resolve_thinking_level` trusts the caller and passes the requested
+    // effort through verbatim (documented "trust the caller" contract).
+    let info = info_with_defaults(BTreeMap::new());
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel::xhigh()),
+        ..Default::default()
+    };
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    assert_eq!(
+        call.reasoning,
+        Some(ReasoningLevel::Xhigh),
+        "no declared ladder → trust the caller, pass XHigh through"
+    );
+    assert_eq!(anthropic_wire_effort(&call).as_deref(), Some("max"));
+}
+
+#[test]
+fn per_call_auto_is_not_clamped_to_nearest_numeric_level() {
+    // CRITICAL edge case: Auto (and Off) are not numeric efforts — they
+    // mean "let the provider default decide" / "off". They must bypass the
+    // effort-distance clamp, which would otherwise snap Auto to the nearest
+    // declared numeric level (High here) and force reasoning on.
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(200_000)),
+        max_output_tokens: Some(PositiveTokens::new(64_000)),
+        supported_thinking_levels: Some(vec![ThinkingLevel::high()]),
+        default_thinking_level: Some(ReasoningEffort::High),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test", partial).unwrap();
+    let per_call = PerCallOverrides {
+        thinking_level: Some(ThinkingLevel::auto()),
+        ..Default::default()
+    };
+
+    let call = build_call_options(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+
+    assert!(
+        call.reasoning.is_none(),
+        "Auto must not be clamped to a numeric level — reasoning stays unset"
+    );
+}
+
 #[test]
 fn extra_body_per_call_deep_merges_into_model_extra_body() {
     // model-level: reasoning has effort=low + summary=auto, plus a sibling key.

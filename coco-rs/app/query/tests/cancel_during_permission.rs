@@ -87,7 +87,7 @@ async fn cancelled_permission_synthesizes_error_tool_result() {
         // Default mode forces Bash through Ask — exactly what triggers
         // the bridge wait we want to cancel.
         permission_mode: PermissionMode::Default,
-        max_turns: 4,
+        max_turns: Some(4),
         session_id: "cancel-during-permission".into(),
         ..Default::default()
     };

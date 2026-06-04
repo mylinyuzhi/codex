@@ -5,6 +5,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::ToolCheckResult;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
@@ -69,6 +70,28 @@ specific prompt. Your job is to answer the prompt using ONLY information \
 from the provided content. \
 If the content does not contain enough information to answer the prompt, \
 say so clearly rather than guessing. Be concise.";
+
+/// Response guidelines appended to the extraction prompt, selected by
+/// whether the fetched URL is a preapproved documentation host.
+///
+/// TS: `prompt.ts:26-34` `makeSecondaryModelPrompt(_, _, isPreapprovedDomain)`.
+/// Preapproved docs get relaxed guidance (include code examples /
+/// excerpts); everything else gets the strict copyright/quoting rules.
+fn extract_guidelines(is_preapproved: bool) -> &'static str {
+    if is_preapproved {
+        "Provide a concise response based on the content above. Include relevant \
+         details, code examples, and documentation excerpts as needed."
+    } else {
+        "Provide a concise response based only on the content above. In your response:\n\
+         - Enforce a strict 125-character maximum for quotes from any source document. \
+         Open Source Software is ok as long as we respect the license.\n\
+         - Use quotation marks for exact language from articles; any language outside \
+         of the quotation should never be word-for-word the same.\n\
+         - You are not a lawyer and never comment on the legality of your own prompts \
+         and responses.\n\
+         - Never produce or reproduce exact song lyrics."
+    }
+}
 
 /// Max HTTP response body size. TS: `WebFetchTool/utils.ts:112`
 /// `MAX_HTTP_CONTENT_LENGTH = 10 * 1024 * 1024` (10 MB). Prevents a
@@ -176,11 +199,10 @@ pub(super) fn clear_web_fetch_cache() {
 /// these entries are for WebFetch GET only — the sandbox does NOT inherit
 /// this list for network restrictions.
 ///
-/// TODO(B2.6 follow-up): wire `is_preapproved_host` into the permission
-/// evaluator at the query-engine layer so matching hosts bypass the
-/// approval UI. Until that wiring lands, this is read only by tests —
-/// the `#[allow(dead_code)]` marker is intentional.
-#[allow(dead_code)]
+/// Consulted by [`WebFetchTool::check_permissions`] (approval bypass), the
+/// `execute` verbatim-passthrough branch, and the extraction-prompt
+/// guideline selector — mirroring TS `WebFetchTool.ts:104-121`,
+/// `:261-278`, and `prompt.ts:26-34`.
 const PREAPPROVED_WEB_HOSTS: &[&str] = &[
     // Anthropic (5)
     "platform.claude.com",
@@ -293,7 +315,6 @@ const PREAPPROVED_WEB_HOSTS: &[&str] = &[
 ///
 /// `hostname` should be the URL's host (lowercased), `pathname` should
 /// be the path portion starting with `/` (or empty for root).
-#[allow(dead_code)]
 pub(super) fn is_preapproved_host(hostname: &str, pathname: &str) -> bool {
     if hostname.is_empty() {
         return false;
@@ -326,9 +347,9 @@ pub(super) fn is_preapproved_host(hostname: &str, pathname: &str) -> bool {
 }
 
 /// Convenience wrapper that extracts hostname + pathname from a full
-/// URL and calls [`is_preapproved_host`]. Used by tests and the future
-/// permission-layer integration.
-#[allow(dead_code)]
+/// URL and calls [`is_preapproved_host`]. Consulted by the permission
+/// bypass, the verbatim-passthrough branch, and the extraction-prompt
+/// guideline selector.
 pub(super) fn is_preapproved_url(url: &str) -> bool {
     let host = extract_host(url);
     let pathname = extract_pathname(url);
@@ -338,7 +359,6 @@ pub(super) fn is_preapproved_url(url: &str) -> bool {
 /// Extract the pathname portion of a URL (everything from the first `/`
 /// after the host, up to `?` or `#`). Returns `"/"` when the URL has no
 /// explicit path (bare host).
-#[allow(dead_code)]
 fn extract_pathname(url: &str) -> String {
     let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     // Strip userinfo if present (user:pass@host).
@@ -637,6 +657,28 @@ Usage notes:
         Some("fetch a URL and summarize the page contents")
     }
 
+    /// TS `WebFetchTool.ts:104-121` `checkPermissions`: curated
+    /// documentation hosts (`PREAPPROVED_WEB_HOSTS`) skip the approval UI.
+    /// On a preapproved match we return `Allow` (mirroring TS `behavior:
+    /// 'allow', decisionReason: 'Preapproved host'`); every other URL
+    /// returns `Passthrough` so the rule pipeline and auto-mode prompt
+    /// still apply. A malformed URL yields an empty host →
+    /// `is_preapproved_url == false` → `Passthrough`, matching TS's
+    /// parse-failure fall-through.
+    async fn check_permissions(
+        &self,
+        input: &WebFetchInput,
+        _ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
+        if is_preapproved_url(&input.url) {
+            return ToolCheckResult::Allow {
+                updated_input: None,
+                feedback: Some("Preapproved host".into()),
+            };
+        }
+        ToolCheckResult::Passthrough
+    }
+
     fn get_activity_description(&self, input: &WebFetchInput) -> Option<String> {
         if input.url.is_empty() {
             return None;
@@ -824,10 +866,28 @@ Usage notes:
                 (extraction_input, was_truncated, content_type)
             };
 
-        // `content_type` is now bound regardless of cache path. Used by
-        // downstream tracing; keep it referenced so the warning-free build
-        // stays clean.
-        let _ = content_type;
+        // TS `WebFetchTool.ts:261-278`: a preapproved docs host serving raw
+        // markdown that fits the budget is returned VERBATIM — the main
+        // model reads the real page instead of a lossy side-model summary.
+        // `!was_truncated` mirrors TS `content.length < MAX_MARKDOWN_LENGTH`
+        // (truncation uses the same budget threshold).
+        let is_preapproved = is_preapproved_url(url);
+        if is_preapproved && content_type.to_lowercase().contains("text/markdown") && !was_truncated
+        {
+            return Ok(ToolResult {
+                data: serde_json::json!({
+                    "url": url,
+                    "prompt": prompt,
+                    "content": extraction_input,
+                    "truncated": false,
+                    "extraction_mode": "preapproved_verbatim",
+                }),
+                new_messages: vec![],
+                app_state_patch: None,
+                permission_updates: Vec::new(),
+                display_data: None,
+            });
+        }
 
         // Stage 4: LLM extraction pass via side-query. TS `utils.ts:498-
         // 514` calls `queryHaiku` with the user's prompt + truncated
@@ -839,8 +899,10 @@ Usage notes:
         // the extraction call errors out. We fall back to returning the
         // markdown directly with the user prompt attached — this matches
         // the old pre-B2.5 behavior and keeps tests green.
-        let user_message =
-            format!("{prompt}\n\n---\n\nWeb page content (markdown):\n\n{extraction_input}");
+        let user_message = format!(
+            "{prompt}\n\n---\n\nWeb page content (markdown):\n\n{extraction_input}\n\n{guidelines}",
+            guidelines = extract_guidelines(is_preapproved)
+        );
         let request =
             SideQueryRequest::simple(WEB_FETCH_EXTRACT_SYSTEM, &user_message, "web_fetch_extract");
 

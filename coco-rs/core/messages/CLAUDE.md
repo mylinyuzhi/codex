@@ -31,7 +31,7 @@ Surfaces the full Message family at `coco_messages::*`:
   `ProgressMessage`, `TombstoneMessage`, `ToolUseSummaryMessage`,
   `Visibility`, `MessageKind`, `MessageOrigin`, `StopReason`,
   `ApiError`, `PreservedSegment`, `PartialCompactDirection`.
-- **System messages**: `SystemMessage` + 14 sub-variants
+- **System messages**: `SystemMessage` + 16 sub-variants
   (`SystemInformationalMessage`, `SystemApiErrorMessage`,
   `SystemCompactBoundaryMessage`, `SystemMicrocompactBoundaryMessage`,
   `SystemLocalCommandMessage`, `SystemPermissionRetryMessage`,
@@ -39,7 +39,8 @@ Surfaces the full Message family at `coco_messages::*`:
   `SystemAwaySummaryMessage`, `SystemAgentsKilledMessage`,
   `SystemApiMetricsMessage`, `SystemStopHookSummaryMessage`,
   `SystemTurnDurationMessage`, `SystemScheduledTaskFireMessage`,
-  `SystemUserInterruptionMessage`), `SystemMessageLevel`.
+  `SystemContextUsageMessage`, `SystemUserInterruptionMessage`),
+  `SystemMessageLevel`.
 - **Attachment payloads**: `AttachmentBody`, `SilentPayload` + 10
   silent payload structs.
 - **Tool result**: `ToolResult<T>` (carries `Vec<Message>`).

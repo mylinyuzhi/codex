@@ -998,87 +998,137 @@ pub(crate) async fn wait_for_next_prompt_or_shutdown(
             return WaitResult::Aborted;
         }
 
-        // Priority 2: Mailbox scanning
+        // Priority 2: Mailbox scanning. Read once (pre-drain snapshot) and
+        // hand the same snapshot to the prompt scan — matches the historical
+        // single pre-`drain_control_messages` read so behavior is unchanged.
         let messages =
             mailbox::read_mailbox(&identity.agent_name, &identity.team_name).unwrap_or_default();
 
         // 2a: Control messages that update local teammate state and
-        // should not become model prompts.
+        // should not become model prompts. Drains its own read + marks read.
         drain_control_messages(identity, control_state).await;
 
-        // 2b: Shutdown requests (highest prompt-bearing mailbox priority)
-        for (i, msg) in messages.iter().enumerate() {
-            if msg.read {
-                continue;
-            }
-            if mailbox::is_structured_protocol_message(&msg.text)
-                && let Some(protocol) = mailbox::parse_protocol_message(&msg.text)
-                && matches!(protocol, mailbox::ProtocolMessage::ShutdownRequest { .. })
-            {
-                let _ = mailbox::mark_message_as_read_by_index(
-                    &identity.agent_name,
-                    &identity.team_name,
-                    i,
-                );
-                return WaitResult::ShutdownRequest {
+        // 2b–3: shutdown / team-lead / peer / unclaimed-task priority scan.
+        if let Some(result) = scan_next_prompt(identity, task_list, &messages).await {
+            return result;
+        }
+    }
+}
+
+/// One non-blocking pass of the teammate mailbox + task list, in the same
+/// priority order as the in-process [`wait_for_next_prompt_or_shutdown`]
+/// loop body: shutdown-request > team-lead message > peer FIFO >
+/// unclaimed task. Marks the **returned** message read; never returns
+/// [`WaitResult::Aborted`] (abort is the caller's concern) and does NOT
+/// drain control messages.
+///
+/// Shared by the in-process runner (which sleeps + loops around it under
+/// its own abort + control-drain) and the cross-process teammate inbox
+/// pump (`app/cli::teammate_inbox_pump`, gap 1) which ticks it on an
+/// interval and injects the framed result as a TUI turn.
+///
+/// `messages` is a caller-provided snapshot so the in-process loop can
+/// pass the same pre-`drain_control_messages` read it already performs.
+///
+/// Prompt-bearing means a **plain-text** mailbox entry (or an unclaimed
+/// task). Every structured protocol message
+/// ([`mailbox::is_structured_protocol_message`]) is skipped here so it can
+/// only ever reach its dedicated consumer — the shutdown arm below,
+/// `drain_control_messages` (ModeSet / TeamPermissionUpdate), the permission
+/// bridge (PermissionResponse), or `wait_for_plan_approval`
+/// (PlanApprovalResponse). This prevents a stray response/notification that
+/// landed in the teammate's own inbox from being mis-injected as a model
+/// prompt — a real hazard for the cross-process pump, which (unlike the
+/// in-process runner) has no in-turn consumer draining those before the scan.
+pub async fn scan_next_prompt(
+    identity: &TeammateIdentity,
+    task_list: Option<&TaskListHandleRef>,
+    messages: &[mailbox::TeammateMessage],
+) -> Option<WaitResult> {
+    // 2b–2d: highest-priority prompt-bearing mailbox entry. Pure selection,
+    // then mark the chosen message read (re-reads the file by index; the
+    // append-only inbox keeps the snapshot index aligned with disk).
+    if let Some((index, result)) = select_mailbox_prompt(messages) {
+        let _ = mailbox::mark_message_as_read_by_index(
+            &identity.agent_name,
+            &identity.team_name,
+            index,
+        );
+        return Some(result);
+    }
+
+    // Priority 3: Unclaimed tasks (lowest)
+    if let Some(task_list) = task_list
+        && let Some(task) = claim_first_available_task(task_list, &identity.agent_name).await
+    {
+        return Some(WaitResult::NewMessage {
+            message: crate::runner_loop_notify::format_task_as_prompt(
+                &task.id,
+                task.active_form.as_deref().unwrap_or(&task.subject),
+                &task.description,
+            ),
+            from: TEAM_LEAD_NAME.to_string(),
+            color: None,
+            summary: Some("task list assignment".to_string()),
+        });
+    }
+
+    None
+}
+
+/// Pure mailbox-arm selection — no I/O, no task list. Returns the index of
+/// the highest-priority prompt-bearing message and the [`WaitResult`] to
+/// emit, in the order shutdown-request > team-lead text > peer FIFO text.
+///
+/// A message is prompt-bearing only when it is **plain text** (not a
+/// structured protocol message). The single exception is a `ShutdownRequest`,
+/// which has its own top-priority arm; every other structured message
+/// (PermissionResponse / PlanApprovalResponse / ModeSet / … ) is skipped so
+/// it can only reach its dedicated consumer, never the model as a prompt.
+fn select_mailbox_prompt(messages: &[mailbox::TeammateMessage]) -> Option<(usize, WaitResult)> {
+    // 2b: Shutdown requests (highest prompt-bearing mailbox priority)
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.read {
+            continue;
+        }
+        if mailbox::is_structured_protocol_message(&msg.text)
+            && let Some(protocol) = mailbox::parse_protocol_message(&msg.text)
+            && matches!(protocol, mailbox::ProtocolMessage::ShutdownRequest { .. })
+        {
+            return Some((
+                i,
+                WaitResult::ShutdownRequest {
                     original_text: msg.text.clone(),
-                };
-            }
+                },
+            ));
         }
+    }
 
-        // 2c: Team-lead messages (second priority)
-        if let Some((i, msg)) = messages
-            .iter()
-            .enumerate()
-            .find(|(_, m)| !m.read && m.from == TEAM_LEAD_NAME && !is_non_prompt_control(&m.text))
-        {
-            let _ = mailbox::mark_message_as_read_by_index(
-                &identity.agent_name,
-                &identity.team_name,
-                i,
-            );
-            return WaitResult::NewMessage {
-                message: msg.text.clone(),
-                from: msg.from.clone(),
-                color: msg.color.clone(),
-                summary: msg.summary.clone(),
-            };
-        }
+    // 2c: Team-lead messages (second priority)
+    if let Some((i, msg)) = messages.iter().enumerate().find(|(_, m)| {
+        !m.read && m.from == TEAM_LEAD_NAME && !mailbox::is_structured_protocol_message(&m.text)
+    }) {
+        return Some((i, new_message_from(msg)));
+    }
 
-        // 2d: Any unread message (peer FIFO, third priority)
-        if let Some((i, msg)) = messages
-            .iter()
-            .enumerate()
-            .find(|(_, m)| !m.read && !is_non_prompt_control(&m.text))
-        {
-            let _ = mailbox::mark_message_as_read_by_index(
-                &identity.agent_name,
-                &identity.team_name,
-                i,
-            );
-            return WaitResult::NewMessage {
-                message: msg.text.clone(),
-                from: msg.from.clone(),
-                color: msg.color.clone(),
-                summary: msg.summary.clone(),
-            };
-        }
+    // 2d: Any unread plain-text message (peer FIFO, third priority)
+    if let Some((i, msg)) = messages
+        .iter()
+        .enumerate()
+        .find(|(_, m)| !m.read && !mailbox::is_structured_protocol_message(&m.text))
+    {
+        return Some((i, new_message_from(msg)));
+    }
 
-        // Priority 3: Unclaimed tasks (lowest)
-        if let Some(task_list) = task_list
-            && let Some(task) = claim_first_available_task(task_list, &identity.agent_name).await
-        {
-            return WaitResult::NewMessage {
-                message: crate::runner_loop_notify::format_task_as_prompt(
-                    &task.id,
-                    task.active_form.as_deref().unwrap_or(&task.subject),
-                    &task.description,
-                ),
-                from: TEAM_LEAD_NAME.to_string(),
-                color: None,
-                summary: Some("task list assignment".to_string()),
-            };
-        }
+    None
+}
+
+fn new_message_from(msg: &mailbox::TeammateMessage) -> WaitResult {
+    WaitResult::NewMessage {
+        message: msg.text.clone(),
+        from: msg.from.clone(),
+        color: msg.color.clone(),
+        summary: msg.summary.clone(),
     }
 }
 
@@ -1200,16 +1250,6 @@ fn permission_mode_wire(mode: coco_types::PermissionMode) -> String {
         .ok()
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_else(|| "default".to_string())
-}
-
-fn is_non_prompt_control(text: &str) -> bool {
-    matches!(
-        mailbox::parse_protocol_message(text),
-        Some(
-            mailbox::ProtocolMessage::ModeSetRequest { .. }
-                | mailbox::ProtocolMessage::TeamPermissionUpdate { .. }
-        )
-    )
 }
 
 fn load_team_allowed_path_rules(team_name: &str) -> Vec<coco_types::PermissionRule> {

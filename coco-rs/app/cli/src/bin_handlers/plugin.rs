@@ -163,7 +163,7 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
 /// syntax and error semantics stay in lock-step.
 async fn install_from_marketplace(target: &str, config_home: &std::path::Path) -> Result<()> {
     let plugins_dir = config_home.join("plugins");
-    let policy = coco_plugins::security::EnterprisePolicy::default();
+    let policy = coco_plugins::security::EnterprisePolicy::from_managed_settings();
     let result = coco_plugins::install::install_plugin_from_marketplace(
         &plugins_dir,
         Some(config_home),

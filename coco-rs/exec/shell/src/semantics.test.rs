@@ -2,161 +2,120 @@ use pretty_assertions::assert_eq;
 
 use super::*;
 
-#[test]
-fn test_exit_code_zero_is_success() {
-    assert_eq!(
-        interpret_command_result("ls", 0),
-        CommandResultInterpretation::Success
-    );
-    assert_eq!(
-        interpret_command_result("grep foo bar.txt", 0),
-        CommandResultInterpretation::Success
-    );
+fn err(message: &str) -> CommandResultInterpretation {
+    CommandResultInterpretation {
+        is_error: true,
+        message: Some(message.to_string()),
+    }
 }
 
-// ── grep ──
+fn expected(message: &str) -> CommandResultInterpretation {
+    CommandResultInterpretation {
+        is_error: false,
+        message: Some(message.to_string()),
+    }
+}
+
+fn ok() -> CommandResultInterpretation {
+    CommandResultInterpretation {
+        is_error: false,
+        message: None,
+    }
+}
 
 #[test]
-fn test_grep_no_match_is_expected() {
+fn test_exit_code_zero_is_success() {
+    assert_eq!(interpret_command_result("ls", 0), ok());
+    assert_eq!(interpret_command_result("grep foo bar.txt", 0), ok());
+}
+
+// ── grep / rg: exit 1 = no match (NOT an error), >= 2 = error ──
+
+#[test]
+fn test_grep_no_match_is_not_error() {
     assert_eq!(
         interpret_command_result("grep pattern file.txt", 1),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "no matches found".into()
-        }
+        expected("No matches found"),
+    );
+    assert_eq!(
+        interpret_command_result("rg pattern", 1),
+        expected("No matches found")
     );
 }
 
 #[test]
 fn test_grep_error_is_error() {
+    // >= 2 is a genuine error and carries no friendly message.
     assert_eq!(
         interpret_command_result("grep pattern file.txt", 2),
-        CommandResultInterpretation::Error
+        CommandResultInterpretation {
+            is_error: true,
+            message: None,
+        },
     );
 }
 
+// ── find: exit 1 = some dirs inaccessible (NOT an error) ──
+
 #[test]
-fn test_rg_no_match_is_expected() {
+fn test_find_partial_is_not_error() {
     assert_eq!(
-        interpret_command_result("rg pattern", 1),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "no matches found".into()
-        }
+        interpret_command_result("find . -name foo", 1),
+        expected("Some directories were inaccessible"),
     );
+    assert!(interpret_command_result("find . -name foo", 2).is_error);
 }
 
-// ── diff ──
+// ── diff: exit 1 = files differ (NOT an error) ──
 
 #[test]
-fn test_diff_files_differ_is_expected() {
+fn test_diff_files_differ_is_not_error() {
     assert_eq!(
         interpret_command_result("diff file1 file2", 1),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "files differ".into()
-        }
+        expected("Files differ"),
     );
+    assert!(interpret_command_result("diff file1 file2", 2).is_error);
 }
 
-#[test]
-fn test_diff_error_is_error() {
-    assert_eq!(
-        interpret_command_result("diff file1 file2", 2),
-        CommandResultInterpretation::Error
-    );
-}
-
-// ── test / [ ──
+// ── test / [ : exit 1 = condition false (NOT an error) ──
 
 #[test]
-fn test_test_false_is_expected() {
+fn test_test_false_is_not_error() {
     assert_eq!(
         interpret_command_result("test -f missing.txt", 1),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "condition evaluated to false".into()
-        }
+        expected("Condition is false"),
     );
-}
-
-#[test]
-fn test_bracket_false_is_expected() {
     assert_eq!(
         interpret_command_result("[ -d /nonexistent ]", 1),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "condition evaluated to false".into()
-        }
+        expected("Condition is false"),
     );
 }
 
-// ── git diff ──
+// ── DEFAULT semantic: anything else, any non-zero is an error ──
+// (TS has no special case for git/curl/timeout/egrep — they hit DEFAULT.)
 
 #[test]
-fn test_git_diff_differences_is_expected() {
-    assert_eq!(
-        interpret_command_result("git diff --exit-code", 1),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "git diff found differences".into()
-        }
-    );
-}
-
-#[test]
-fn test_git_push_error_is_error() {
-    assert_eq!(
-        interpret_command_result("git push origin main", 1),
-        CommandResultInterpretation::Error
-    );
-}
-
-// ── curl ──
-
-#[test]
-fn test_curl_http_error_is_expected() {
-    assert_eq!(
-        interpret_command_result("curl -f http://example.com/404", 22),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "HTTP error response (e.g. 404)".into()
-        }
-    );
-}
-
-// ── timeout ──
-
-#[test]
-fn test_timeout_is_expected() {
-    assert_eq!(
-        interpret_command_result("timeout 5 sleep 10", 124),
-        CommandResultInterpretation::ExpectedFailure {
-            explanation: "command timed out".into()
-        }
-    );
-}
-
-// ── unknown commands ──
-
-#[test]
-fn test_unknown_command_nonzero_is_error() {
+fn test_default_nonzero_is_error() {
     assert_eq!(
         interpret_command_result("mycommand --flag", 1),
-        CommandResultInterpretation::Error
+        err("Command failed with exit code 1"),
     );
+    // `git diff --exit-code` exit 1: base is `git`, NOT special → error (TS parity).
+    assert!(interpret_command_result("git diff --exit-code", 1).is_error);
+    // curl/timeout are not special in TS either.
+    assert!(interpret_command_result("curl -f http://example.com/404", 22).is_error);
+    assert!(interpret_command_result("timeout 5 sleep 10", 124).is_error);
+}
+
+// ── base command = LAST pipeline segment (heuristicallyExtractBaseCommand) ──
+
+#[test]
+fn test_base_command_is_last_pipeline_segment() {
+    // The exit code is the LAST command's: `... | grep z` exit 1 = grep no-match.
     assert_eq!(
-        interpret_command_result("ls /nonexistent", 2),
-        CommandResultInterpretation::Error
+        interpret_command_result("cat a.txt | grep z", 1),
+        expected("No matches found"),
     );
-}
-
-// ── helpers ──
-
-#[test]
-fn test_extract_base_command() {
-    assert_eq!(extract_base_command("grep foo"), "grep");
-    assert_eq!(extract_base_command("  git status"), "git");
-    assert_eq!(extract_base_command("VAR=val command arg"), "command");
-}
-
-#[test]
-fn test_command_has_subcommand() {
-    assert!(command_has_subcommand("git diff --exit-code", "diff"));
-    assert!(command_has_subcommand("git diff file1 file2", "diff"));
-    assert!(!command_has_subcommand("git push origin", "diff"));
-    assert!(!command_has_subcommand("diff file1 file2", "diff"));
+    // Conversely, a leading grep followed by another command keys off the last.
+    assert!(interpret_command_result("grep z a.txt | mycommand", 1).is_error);
 }

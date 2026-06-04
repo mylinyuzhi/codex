@@ -10,6 +10,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
+use crate::context_usage::ContextCategoryKind;
+use crate::context_usage::ContextSuggestion;
 use crate::wire_tagged::wire_tagged_enum;
 
 wire_tagged_enum! {
@@ -266,12 +268,17 @@ pub struct ContextUsageResult {
     pub agents: Vec<ContextAgent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<ContextSkill>,
+    /// Actionable guidance (near-capacity, large tool results, …). Computed
+    /// from the breakdown so SDK + TUI render the same suggestions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<ContextSuggestion>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextUsageCategory {
-    pub name: String,
+    /// Typed category identity — the renderer derives label + color from it.
+    pub kind: ContextCategoryKind,
     pub tokens: i64,
 }
 
@@ -283,6 +290,28 @@ pub struct MessageBreakdown {
     pub attachment_tokens: i64,
     pub assistant_message_tokens: i64,
     pub user_message_tokens: i64,
+    /// Per-tool token attribution (calls + results), sorted total-desc.
+    /// Drives the large-tool-result / read-bloat suggestions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls_by_type: Vec<ToolTypeBreakdown>,
+    /// Per-attachment-kind token totals, sorted tokens-desc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments_by_type: Vec<AttachmentTypeBreakdown>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolTypeBreakdown {
+    pub name: String,
+    pub call_tokens: i64,
+    pub result_tokens: i64,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentTypeBreakdown {
+    pub name: String,
+    pub tokens: i64,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

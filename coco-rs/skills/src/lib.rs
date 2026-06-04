@@ -1196,6 +1196,37 @@ pub fn get_managed_skills_path() -> PathBuf {
     }
 }
 
+/// Build the canonical per-session skill catalog: bundled skills plus the
+/// managed / user / project disk scopes (both `.claude/skills` and the
+/// coco-native `.coco/skills`, plus legacy flat-`.md` command dirs).
+///
+/// Single source of truth so the command registry, the `/context` usage
+/// detail, the `/skills` dialog, and the reminder `SkillsSource` all read
+/// the same catalog and cannot drift. Mirrors TS `loadSkillsDir.ts`
+/// (`getLimitedSkillToolCommands`), which always folds bundled commands
+/// into the session skill set.
+pub fn build_session_skill_manager(config_home: &Path, cwd: &Path) -> SkillManager {
+    let manager = SkillManager::new();
+    bundled::register_bundled(&manager);
+
+    // Standard scopes: managed / user / `.claude/skills` / `.claude/commands`.
+    manager.load_scoped(&SkillScopes {
+        managed: Some(get_managed_skills_path()),
+        user_skills: Some(config_home.join("skills")),
+        project_skills: Some(cwd.join(".claude").join("skills")),
+        user_commands: Some(config_home.join("commands")),
+        project_commands: Some(cwd.join(".claude").join("commands")),
+    });
+    // coco-rs extension: `.coco/skills/` as an additional project path,
+    // loaded last so the newer convention wins name collisions.
+    manager.load_scoped(&SkillScopes {
+        project_skills: Some(cwd.join(".coco").join("skills")),
+        ..SkillScopes::default()
+    });
+
+    manager
+}
+
 /// Standard skill directory paths by source, in loading priority order.
 ///
 /// TS: `getSkillsPath()` — maps SettingSource to directory path.

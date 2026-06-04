@@ -3,10 +3,13 @@
 use std::time::Instant;
 
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Padding;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
@@ -219,6 +222,58 @@ pub(crate) fn render_modal_surface(
         return;
     }
 
+    if let ModalState::ThemePicker(picker) = modal {
+        let placement_area = modal_placement_area(area, input_area, modal);
+        if placement_area.height == 0 || placement_area.width == 0 {
+            return;
+        }
+        let box_width = placement_area.width.clamp(40, 80);
+        // Inner content width = box_width − 2 border − 2 horizontal padding.
+        let inner_width = box_width.saturating_sub(4).max(1);
+        // Reserve rows for the fixed chrome (title/subtitle/blanks/diff box +
+        // rules/syntax/footer) + 2 border rows; the theme list takes whatever
+        // is left, so the footer always renders even on a short terminal.
+        const CHROME_ROWS: u16 = 16;
+        let list_visible = placement_area.height.saturating_sub(CHROME_ROWS).max(3) as usize;
+        let lines = crate::presentation::theme_picker::theme_picker_lines(
+            picker,
+            state.ui.display_settings.syntax_highlighting,
+            styles,
+            inner_width,
+            list_visible,
+        );
+        let box_height = (lines.len() as u16 + 2).min(placement_area.height);
+        let modal_area = layout::centered_fixed_area(placement_area, box_width, box_height);
+        frame.render_widget(Clear, modal_area);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .padding(Padding::horizontal(1))
+                    .border_style(Style::default().fg(styles.accent())),
+            ),
+            modal_area,
+        );
+        return;
+    }
+
+    // List dialogs migrated onto `render_select_list` render styled `Line`s
+    // (colored cursor / markers) instead of a monochrome text body.
+    {
+        let placement_area = modal_placement_area(area, input_area, modal);
+        // Vertical budget for the scrolling list: terminal height minus the
+        // dialog chrome (filter/query/intro + hint) and borders. The widget
+        // windows the *full* list to this many rows so the focused row stays
+        // visible (no pre-truncation) and the footer always renders.
+        let list_budget = placement_area.height.saturating_sub(8).max(3) as usize;
+        if let Some((title, lines, border)) =
+            crate::surface_content::modal_styled_surface(modal, state, styles, list_budget)
+        {
+            render_styled_modal_box(frame, placement_area, &title, lines, border);
+            return;
+        }
+    }
+
     let Some(text_surface) = crate::surface_content::modal_text_surface(modal) else {
         return;
     };
@@ -240,6 +295,44 @@ pub(crate) fn render_modal_surface(
                 .title(title)
                 .border_style(Style::default().fg(border_color)),
         ),
+        modal_area,
+    );
+}
+
+/// Render a pre-built styled body inside a bordered, centered box. Shared by
+/// the list dialogs migrated onto `render_select_list`; the box sizes to the
+/// content (capped to the placement area).
+fn render_styled_modal_box(
+    frame: &mut SurfaceFrame<'_>,
+    placement_area: Rect,
+    title: &str,
+    lines: Vec<Line<'static>>,
+    border: Color,
+) {
+    if placement_area.height == 0 || placement_area.width == 0 {
+        return;
+    }
+    let content_w = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let title_w = text_width(title) as u16;
+    // +4 = 2 border + 2 horizontal padding.
+    let box_width = (content_w.max(title_w) + 4).clamp(40, placement_area.width.min(100));
+    let box_height = (lines.len() as u16 + 2).min(placement_area.height);
+    let modal_area = layout::centered_fixed_area(placement_area, box_width, box_height);
+
+    frame.render_widget(Clear, modal_area);
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .padding(Padding::horizontal(1))
+        .border_style(Style::default().fg(border));
+    if !title.is_empty() {
+        // The dialog title i18n values already carry their own surrounding
+        // spaces (e.g. " Export Transcript "), matching the text-surface path.
+        block = block.title(title.to_string());
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(block),
         modal_area,
     );
 }

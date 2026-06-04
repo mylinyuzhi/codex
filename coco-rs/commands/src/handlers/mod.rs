@@ -32,6 +32,7 @@ pub mod sentinel;
 pub mod session;
 pub mod skills;
 pub mod summary;
+pub mod theme;
 pub mod vim;
 
 pub mod stats;

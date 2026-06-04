@@ -8,6 +8,48 @@ fn fresh_store() -> (TempDir, Arc<TaskListStore>) {
 }
 
 #[tokio::test]
+async fn test_open_does_not_create_dir() {
+    // Lazy contract (TS `ensureTasksDir` is writer-only): opening must NOT
+    // create the on-disk dir, so a session that never writes a task leaves no
+    // empty `tasks/<id>/` behind.
+    let dir = TempDir::new().unwrap();
+    let store = TaskListStore::open(dir.path(), "lazy-list").unwrap();
+    assert!(
+        !store.tasks_dir.exists(),
+        "open() must not eagerly create the task dir"
+    );
+}
+
+#[tokio::test]
+async fn test_create_task_creates_dir_lazily() {
+    let dir = TempDir::new().unwrap();
+    let store = TaskListStore::open(dir.path(), "lazy-list").unwrap();
+    assert!(!store.tasks_dir.exists());
+    store
+        .create_task("subject".into(), "desc".into(), None, None)
+        .await
+        .unwrap();
+    assert!(
+        store.tasks_dir.exists(),
+        "the first write must materialize the dir"
+    );
+    assert!(store.tasks_dir.join("1.json").exists());
+}
+
+#[tokio::test]
+async fn test_read_paths_tolerate_missing_dir() {
+    let dir = TempDir::new().unwrap();
+    let store = TaskListStore::open(dir.path(), "lazy-list").unwrap();
+    // No dir on disk; reads must return empty/None, not error or create it.
+    assert!(store.list_tasks().await.unwrap().is_empty());
+    assert!(store.get_task("1").await.unwrap().is_none());
+    assert!(
+        !store.tasks_dir.exists(),
+        "read paths must not create the dir"
+    );
+}
+
+#[tokio::test]
 async fn test_resolve_task_list_id_precedence() {
     // Env var wins.
     // SAFETY: set_var/remove_var are unsafe in Rust 2024; this test is

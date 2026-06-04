@@ -290,76 +290,10 @@ pub fn detect_blocked_sleep_pattern(command: &str) -> Option<String> {
     }
 }
 
-// ── Command semantics ──
-
-/// Semantic interpretation of a command's exit code.
-///
-/// TS: CommandSemantic, COMMAND_SEMANTICS
-#[derive(Debug, Clone)]
-pub struct CommandInterpretation {
-    pub is_error: bool,
-    pub message: Option<String>,
-}
-
-/// Interpret a command result using semantic rules.
-///
-/// TS: interpretCommandResult()
-pub fn interpret_command_result(
-    command: &str,
-    exit_code: i32,
-    _stdout: &str,
-    _stderr: &str,
-) -> CommandInterpretation {
-    let base_command = command.split_whitespace().next().unwrap_or("");
-
-    match base_command {
-        // grep/rg: 0=matches found, 1=no matches, 2+=error
-        "grep" | "rg" => CommandInterpretation {
-            is_error: exit_code >= 2,
-            message: if exit_code == 1 {
-                Some("No matches found".into())
-            } else {
-                None
-            },
-        },
-        // find: 0=success, 1=partial success, 2+=error
-        "find" => CommandInterpretation {
-            is_error: exit_code >= 2,
-            message: if exit_code == 1 {
-                Some("Some directories were inaccessible".into())
-            } else {
-                None
-            },
-        },
-        // diff: 0=no differences, 1=differences found, 2+=error
-        "diff" => CommandInterpretation {
-            is_error: exit_code >= 2,
-            message: if exit_code == 1 {
-                Some("Files differ".into())
-            } else {
-                None
-            },
-        },
-        // test/[: 0=true, 1=false, 2+=error
-        "test" | "[" => CommandInterpretation {
-            is_error: exit_code >= 2,
-            message: if exit_code == 1 {
-                Some("Condition is false".into())
-            } else {
-                None
-            },
-        },
-        // Default: non-zero is error
-        _ => CommandInterpretation {
-            is_error: exit_code != 0,
-            message: if exit_code != 0 {
-                Some(format!("Command failed with exit code {exit_code}"))
-            } else {
-                None
-            },
-        },
-    }
-}
+// Command-semantics interpretation lives in the single canonical
+// `coco_shell::semantics::interpret_command_result` (mirrors TS
+// `commandSemantics.ts`). A duplicate implementation previously lived here and
+// was never wired — removed per the no-duplicate-helper rule.
 
 // ── Output processing ──
 

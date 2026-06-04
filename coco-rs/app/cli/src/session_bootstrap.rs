@@ -202,15 +202,13 @@ pub fn build_engine_resources(
 /// the `SkillManager` Arc that backed the skill-derived commands. The
 /// caller threads the manager into `SessionRuntime` so the per-turn
 /// reminder pipeline's `SkillsSource` reads the same in-memory catalog.
-fn build_session_command_registry(
+pub(crate) fn build_session_command_registry(
     runtime_config: &RuntimeConfig,
     cwd: &Path,
 ) -> (CommandRegistry, Arc<coco_skills::SkillManager>) {
     let config_home = global_config::config_home();
 
-    let skill_manager = coco_skills::SkillManager::new();
-    skill_manager.load_from_dirs(&[config_home.join("skills"), cwd.join(".coco").join("skills")]);
-    let skill_manager = Arc::new(skill_manager);
+    let skill_manager = Arc::new(coco_skills::build_session_skill_manager(&config_home, cwd));
 
     let mut plugin_manager = coco_plugins::PluginManager::new();
     plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&config_home, cwd));
@@ -301,15 +299,19 @@ pub async fn install_session_late_binds(
     // Per-agent transcript persistence (TS-faithful resume). The
     // project paths match the runtime's transcript path so
     // `<project_dir>/<session_id>/subagents/agent-<id>.*` lives
-    // alongside the main session JSONL.
-    let agent_transcript_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
-        crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(Arc::new(
-            coco_session::TranscriptStore::new(crate::paths::project_paths(cwd)),
-        )),
-    );
-    runtime
-        .attach_agent_transcript_store(agent_transcript_store)
-        .await;
+    // alongside the main session JSONL. Skipped under
+    // `--no-session-persistence` so a print run that spawns subagents
+    // writes no subagent JSONL (TS `appendEntry` shouldSkipPersistence guard).
+    if runtime.persist_session() {
+        let agent_transcript_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
+            crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(Arc::new(
+                coco_session::TranscriptStore::new(crate::paths::project_paths(cwd)),
+            )),
+        );
+        runtime
+            .attach_agent_transcript_store(agent_transcript_store)
+            .await;
+    }
 
     // MCP handle (if any). Installed BEFORE `install_agent_team` so
     // AgentTool's prompt-time MCP filter sees a populated handle on

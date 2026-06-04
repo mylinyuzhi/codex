@@ -202,8 +202,6 @@ pub enum TuiCommand {
     ShowQuickOpen,
     /// Show export dialog.
     ShowExport,
-    /// Show context visualization.
-    ShowContextViz,
     /// Show rewind state (message selector).
     /// TS: triggered by double-Esc or /rewind command.
     ShowRewind,

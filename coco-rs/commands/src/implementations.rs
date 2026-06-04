@@ -154,15 +154,8 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             Some("[name]"),
         ),
-        (
-            names::THEME,
-            "Change the color theme",
-            &[],
-            theme_handler,
-            true,
-            AlwaysSafe,
-            Some("[name]"),
-        ),
+        // /theme registered via `register_ts_parity_handlers` below — a custom
+        // CommandHandler returning `OpenDialog(ThemePicker)` on no args.
         (
             names::IDE,
             "Manage IDE integrations",
@@ -677,21 +670,6 @@ fn branch_handler(args: &str) -> String {
     } else {
         format!("Creating conversation branch: {name}")
     }
-}
-
-fn theme_handler(args: &str) -> String {
-    let name = args.trim();
-    if name.is_empty() {
-        return "TUI themes are managed by ~/.coco/theme.json.\n\n\
-                Available built-ins: auto, default, dark, light, dark-daltonized, \
-                light-daltonized, dark-ansi, light-ansi, dracula, nord.\n\n\
-                In the TUI, use /theme <name> or open Settings."
-            .to_string();
-    }
-    format!(
-        "Theme `{name}` is handled by the TUI and saved to ~/.coco/theme.json. \
-         Run this command inside the TUI to apply it immediately."
-    )
 }
 
 fn copy_handler(args: &str) -> String {
@@ -1464,6 +1442,28 @@ pub fn register_ts_parity_handlers(
                 handler: names::MODEL.to_string(),
             }),
             handler: Some(Arc::new(handlers::model::ModelHandler)),
+            is_enabled: None,
+        });
+    }
+
+    // /theme — TS: commands/theme/theme.tsx (renders <ThemePicker>).
+    // TS takes no argument (index.ts declares no argumentHint; call ignores
+    // args) and always opens the live-preview picker — mirror that: no hint.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::THEME,
+            "Change the theme",
+            &[],
+            CommandSafety::AlwaysSafe,
+            None,
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::THEME.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::theme::ThemeHandler)),
             is_enabled: None,
         });
     }

@@ -50,6 +50,10 @@ struct MutableConfig {
     cached_proxy_env: HashMap<String, String>,
     /// Extra paths to bind-mount into the sandbox (e.g., bridge UDS sockets).
     bridge_bind_paths: Vec<std::path::PathBuf>,
+    /// The running egress proxy, owned here so it lives for the session and is
+    /// shut down (via its `Drop`) when the state is dropped. `Some` once
+    /// [`SandboxState::start_network_proxy`] has run.
+    proxy_server: Option<crate::proxy::ProxyServer>,
 }
 
 /// Pre-computed snapshot for per-command sandbox decisions.
@@ -136,6 +140,7 @@ impl SandboxState {
                 config,
                 cached_proxy_env: HashMap::new(),
                 bridge_bind_paths: Vec::new(),
+                proxy_server: None,
             }),
             platform,
             session_tag: generate_session_tag(),
@@ -365,6 +370,50 @@ impl SandboxState {
         );
 
         vars
+    }
+
+    /// Start the egress proxy and route the sandbox through it.
+    ///
+    /// Builds a [`crate::proxy::DomainFilter`] from the configured allow/deny
+    /// domain lists, starts the HTTP-CONNECT + SOCKS5 proxy, then activates
+    /// network isolation so commands run with the proxy env vars (and, on
+    /// Linux, the `proxy_active` seccomp `ProxyRouted` mode). The proxy is
+    /// owned by this state and shut down when the state is dropped.
+    ///
+    /// Idempotent: a no-op if the proxy is already running. Without this call,
+    /// "network isolated" would degrade to "block all network" (Linux
+    /// `--unshare-net`) because no egress path exists.
+    pub async fn start_network_proxy(&self) -> anyhow::Result<()> {
+        let filter = {
+            let m = self
+                .mutable
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if m.network_active {
+                return Ok(());
+            }
+            std::sync::Arc::new(crate::proxy::DomainFilter::from_network_config(
+                &m.settings.network,
+            ))
+        };
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let proxy = crate::proxy::ProxyServer::start(filter, cancel).await?;
+        let ports = ProxyPorts {
+            http_port: proxy.http_port(),
+            socks_port: proxy.socks_port(),
+        };
+        let env = Self::build_proxy_env_vars(ports);
+
+        let mut m = self
+            .mutable
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        m.proxy_server = Some(proxy);
+        m.proxy_ports = Some(ports);
+        m.cached_proxy_env = env;
+        m.network_active = true;
+        Ok(())
     }
 
     /// Set network isolation as active with the given proxy ports.

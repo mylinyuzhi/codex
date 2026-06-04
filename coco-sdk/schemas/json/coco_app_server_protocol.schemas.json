@@ -1028,6 +1028,22 @@
       ],
       "type": "object"
     },
+    "AttachmentTypeBreakdown": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "tokens"
+      ],
+      "type": "object"
+    },
     "BudgetExhaustedOutcome": {
       "description": "Payload for [`TurnOutcome::BudgetExhausted`]. `budget_tokens` is\nthe configured `max_tokens` ceiling; `None` when no explicit max\nwas set (the 90%-of-window heuristic still drove the stop, but\nthere is no honest single number to emit).",
       "properties": {
@@ -2010,6 +2026,20 @@
       ],
       "type": "object"
     },
+    "ContextCategoryKind": {
+      "description": "Closed set of context-window usage categories. Each renderer maps the\nkind to its own label + color; the wire carries the typed kind so the\nvocabulary cannot drift across SDK / TUI / cross-language codegens.",
+      "enum": [
+        "system_prompt",
+        "tools",
+        "mcp_tools",
+        "agents",
+        "memory_files",
+        "skills",
+        "messages",
+        "free"
+      ],
+      "type": "string"
+    },
     "ContextClearedParams": {
       "properties": {
         "new_mode": {
@@ -2123,10 +2153,38 @@
       ],
       "type": "object"
     },
+    "ContextSuggestion": {
+      "description": "An actionable suggestion shown under the `/context` view. Mirrors TS\n`ContextSuggestion` (`utils/contextSuggestions.ts`).",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "savings_tokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/SuggestionSeverity"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "title",
+        "detail"
+      ],
+      "type": "object"
+    },
     "ContextUsageCategory": {
       "properties": {
-        "name": {
-          "type": "string"
+        "kind": {
+          "$ref": "#/$defs/ContextCategoryKind",
+          "description": "Typed category identity \u2014 the renderer derives label + color from it."
         },
         "tokens": {
           "format": "int64",
@@ -2134,7 +2192,7 @@
         }
       },
       "required": [
-        "name",
+        "kind",
         "tokens"
       ],
       "type": "object"
@@ -2205,6 +2263,13 @@
         "skills": {
           "items": {
             "$ref": "#/$defs/ContextSkill"
+          },
+          "type": "array"
+        },
+        "suggestions": {
+          "description": "Actionable guidance (near-capacity, large tool results, \u2026). Computed\nfrom the breakdown so SDK + TUI render the same suggestions.",
+          "items": {
+            "$ref": "#/$defs/ContextSuggestion"
           },
           "type": "array"
         },
@@ -4608,9 +4673,23 @@
           "format": "int64",
           "type": "integer"
         },
+        "attachments_by_type": {
+          "description": "Per-attachment-kind token totals, sorted tokens-desc.",
+          "items": {
+            "$ref": "#/$defs/AttachmentTypeBreakdown"
+          },
+          "type": "array"
+        },
         "tool_call_tokens": {
           "format": "int64",
           "type": "integer"
+        },
+        "tool_calls_by_type": {
+          "description": "Per-tool token attribution (calls + results), sorted total-desc.\nDrives the large-tool-result / read-bloat suggestions.",
+          "items": {
+            "$ref": "#/$defs/ToolTypeBreakdown"
+          },
+          "type": "array"
         },
         "tool_result_tokens": {
           "format": "int64",
@@ -9333,6 +9412,14 @@
       ],
       "type": "object"
     },
+    "SuggestionSeverity": {
+      "description": "Severity of a context suggestion. `Warning` sorts before `Info`.",
+      "enum": [
+        "warning",
+        "info"
+      ],
+      "type": "string"
+    },
     "SummarizeCompletedParams": {
       "properties": {
         "from_turn": {
@@ -9512,6 +9599,23 @@
         "uuid",
         "tokens_before",
         "tokens_after"
+      ],
+      "type": "object"
+    },
+    "SystemContextUsageMessage": {
+      "description": "Payload for [`SystemMessage::ContextUsage`] \u2014 a `/context` snapshot.\nHolds the runtime-analyzed report verbatim; the renderer derives the\ncolored grid, legend, and grouped Memory/MCP/Agents/Skills sections\nfrom it. Persisted to the transcript like any other system row, so a\nresumed session re-paints the historical snapshot.",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ContextUsageResult"
+        },
+        "uuid": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uuid",
+        "result"
       ],
       "type": "object"
     },
@@ -9762,6 +9866,20 @@
           "properties": {
             "kind": {
               "const": "scheduled_task_fire",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SystemContextUsageMessage",
+          "description": "`/context` usage snapshot rendered inline in the transcript (TS\n`/context` is a `local-jsx` command whose `<ContextVisualization>`\nprints into the scrollback, not a modal). Carries the full analyzed\nreport; the TUI paints the colored grid + grouped detail from it.",
+          "properties": {
+            "kind": {
+              "const": "context_usage",
               "type": "string"
             }
           },
@@ -11301,6 +11419,27 @@
       ],
       "type": "object"
     },
+    "ToolTypeBreakdown": {
+      "properties": {
+        "call_tokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result_tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "call_tokens",
+        "result_tokens"
+      ],
+      "type": "object"
+    },
     "ToolUseSummaryParams": {
       "description": "Matches TS `SDKToolUseSummaryMessage` (coreSchemas.ts:1769-1777).\n\nBackground Haiku-based summary of a batch of tool uses. TS uses this\nto compress verbose tool output before it's displayed or archived.",
       "properties": {
@@ -11879,6 +12018,23 @@
           "type": "object"
         },
         {
+          "description": "Open the full-color `/context` usage surface. Carries the analyzed\nreport (the TUI cannot reach the engine to compute it). Replaces the\nformer markdown-in-transcript output and the removed `Ctrl+W` overlay.",
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/ContextUsageResult"
+            },
+            "type": {
+              "const": "open_context_usage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Dispatcher-side breadcrumb for slash commands the runtime couldn't\nfully execute (missing handler, handler error, empty Prompt body,\ndialog wiring pending). The TUI translates `kind` via the i18n\ncatalog before rendering.",
           "properties": {
             "kind": {
@@ -12125,6 +12281,19 @@
           "properties": {
             "type": {
               "const": "open_model_picker",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tell the TUI to open the standalone theme picker. Emitted when the\nslash dispatcher resolves `/theme` with no args. The TUI builds the\nchoice list from its live `ThemeRuntimeState`.",
+          "properties": {
+            "type": {
+              "const": "open_theme_picker",
               "type": "string"
             }
           },

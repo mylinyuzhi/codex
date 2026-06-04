@@ -250,6 +250,13 @@ pub struct Settings {
     /// When true, only plugin-level customization is permitted.
     #[serde(default)]
     pub strict_plugin_only_customization: bool,
+    /// Managed allowlist of approved marketplace names. When non-empty, only
+    /// these marketplaces may be installed from (TS `strictKnownMarketplaces`).
+    #[serde(default)]
+    pub strict_known_marketplaces: Vec<String>,
+    /// Managed denylist of marketplace names (TS `blockedMarketplaces`).
+    #[serde(default)]
+    pub blocked_marketplaces: Vec<String>,
 
     // === File Checkpointing ===
     /// When false, disables file checkpointing for rewind.

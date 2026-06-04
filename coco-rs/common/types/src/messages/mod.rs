@@ -72,6 +72,7 @@ pub use message::SystemApiMetricsMessage;
 pub use message::SystemAwaySummaryMessage;
 pub use message::SystemBridgeStatusMessage;
 pub use message::SystemCompactBoundaryMessage;
+pub use message::SystemContextUsageMessage;
 pub use message::SystemInformationalMessage;
 pub use message::SystemLocalCommandMessage;
 pub use message::SystemMemorySavedMessage;

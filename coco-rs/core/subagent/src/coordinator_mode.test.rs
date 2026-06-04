@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn session_mode_from_metadata_str_parses_known_values() {
+    assert_eq!(
+        SessionMode::from_metadata_str("coordinator"),
+        Some(SessionMode::Coordinator)
+    );
+    assert_eq!(
+        SessionMode::from_metadata_str("normal"),
+        Some(SessionMode::Normal)
+    );
+    assert_eq!(SessionMode::from_metadata_str("bogus"), None);
+    assert_eq!(SessionMode::from_metadata_str(""), None);
+}
+
 fn features_with_agent_teams(enabled: bool) -> Features {
     let mut f = Features::empty();
     if enabled {

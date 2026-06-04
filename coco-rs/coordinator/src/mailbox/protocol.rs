@@ -516,6 +516,12 @@ pub enum ProtocolMessage {
         approved: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         feedback: Option<String>,
+        // The leader-side writers (TUI human approve + model SendMessage)
+        // serialize via `coco_tool_runtime::PlanApprovalResponse`, which has
+        // no timestamp field. Without `default` the teammate's
+        // `wait_for_plan_approval` parse fails and an actually-approving
+        // leader blocks the teammate forever.
+        #[serde(default)]
         timestamp: String,
         #[serde(
             rename = "permissionMode",

@@ -31,8 +31,6 @@ use coco_llm_types::TextPart;
 use coco_llm_types::Usage;
 use coco_messages::CostTracker;
 use coco_query::ContinueReason;
-use coco_query::QueryEngine;
-use coco_query::QueryEngineConfig;
 use coco_tool_runtime::ToolRegistry;
 use coco_types::TokenUsage;
 use tokio_util::sync::CancellationToken;
@@ -608,6 +606,10 @@ pub struct RunChatOptions {
     /// instead of a fresh per-process uuid. `None` keeps the
     /// engine's default empty-session-id behavior.
     pub session_id_override: Option<String>,
+    /// Stored coordinator/normal mode of the resumed session, used to
+    /// reconcile coordinator mode (TS `matchSessionMode`). `None` = no
+    /// resume / no stored mode.
+    pub stored_mode: Option<String>,
 }
 
 /// Drive one headless agent run with default options. See
@@ -660,6 +662,15 @@ pub async fn run_chat_with_options(
 
     let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
     crate::model_card_refresh::spawn_if_enabled(&runtime_config);
+    // Reconcile coordinator mode to a resumed session (TS `matchSessionMode`,
+    // wired into the print/headless resume path too). Flips the env flag
+    // before the engine assembles its system prompt below.
+    if let Some(warning) = crate::coordinator_mode_resume::reconcile_on_resume(
+        opts.stored_mode.as_deref(),
+        &runtime_config.features,
+    ) {
+        eprintln!("{warning}");
+    }
     let settings = &runtime_config.settings;
 
     // Resolve the active output style once — fed into the system
@@ -697,20 +708,6 @@ pub async fn run_chat_with_options(
     let registry = ToolRegistry::new();
     coco_tools::register_all_tools(&registry);
 
-    // Headless doesn't load settings hooks yet (TS handles those via
-    // `runHeadless`'s settings loader; coco-rs's headless path skips
-    // them for now). We still need an in-memory `HookRegistry` so the
-    // `StructuredOutput` Stop function hook can register against it.
-    // Once headless hook loading lands, swap this for the shared
-    // registry built at session bootstrap.
-    let hook_registry = Arc::new(coco_hooks::HookRegistry::new());
-
-    // Conditional `StructuredOutput` tool injection + Stop hook
-    // registration. TS-parity: `main.tsx:1879-1901` plus
-    // `registerStructuredOutputEnforcement(setAppState, sessionId)`.
-    // TUI never reaches this code path (matches TS
-    // `isNonInteractiveSession` gate).
-    inject_structured_output_tool_if_requested(cli, &registry, &hook_registry)?;
     let tool_count = registry.len();
     let tools = Arc::new(registry);
     let cancel = opts.cancel.unwrap_or_default();
@@ -737,6 +734,73 @@ pub async fn run_chat_with_options(
         active_output_style.as_ref(),
     )?;
 
+    // Build the one canonical SessionRuntime — same shape as TUI/SDK — so the
+    // leader engine and every subagent share ONE config, ONE session id, and
+    // ONE `wire_engine` install list (agent + task handles, memory_runtime,
+    // file_read_state, transcript/usage). TS parity: print mode forks
+    // subagents from a single context, not a second session container.
+    let config_home = coco_config::global_config::config_home();
+    let (command_registry, skill_manager) =
+        crate::session_bootstrap::build_session_command_registry(&runtime_config, &cwd);
+    let runtime = crate::session_runtime::SessionRuntime::build(
+        crate::session_runtime::SessionRuntimeBuildOpts {
+            cli,
+            runtime_config: Arc::new(runtime_config.clone()),
+            cwd: cwd.clone(),
+            model_id: model_id.clone(),
+            system_prompt,
+            bypass_permissions_available,
+            permission_mode,
+            model_runtimes: Some(model_runtimes),
+            tools: tools.clone(),
+            session_manager: Arc::new(coco_session::SessionManager::new(config_home.clone())),
+            fast_model_spec: None,
+            permission_bridge: None,
+            command_registry: Arc::new(tokio::sync::RwLock::new(Arc::new(command_registry))),
+            skill_manager,
+            agent_search_paths: crate::paths::standard_agent_search_paths(&config_home, &cwd),
+            builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+            // Resume / continue / fork: key every runtime subsystem off the
+            // resumed id, else task dirs + agent transcripts orphan.
+            session_id_override: opts.session_id_override.clone(),
+        },
+    )
+    .await?;
+
+    // `StructuredOutput` tool + Stop hook (TS `main.tsx:1879-1901`). The tool
+    // registers into the shared `tools` Arc; the Stop hook MUST target the
+    // runtime's hook registry — the one its engines dispatch from.
+    inject_structured_output_tool_if_requested(cli, tools.as_ref(), &runtime.hook_registry())?;
+
+    // Agent/task spawning infra (TaskRuntime + agent team + worktree manager +
+    // fork dispatcher), unconditional like TUI/SDK. Best-effort: a transient
+    // task-dir / worktree-discovery failure must NOT kill a print run that
+    // never spawns anything — degrade to NoOp handles instead.
+    if let Err(e) =
+        crate::session_bootstrap::install_session_late_binds(runtime.clone(), &cwd, None, None)
+            .await
+    {
+        tracing::warn!(error = %e, "agent/task infrastructure unavailable in headless; spawns degrade");
+    }
+
+    let session_id = runtime.current_session_id().await;
+
+    // Resume hydration: seed transcript dedup + tool-result replacement onto
+    // the runtime so `wire_engine` installs them on the engine and the resumed
+    // prior messages are not re-written to the JSONL. Session usage for the
+    // resumed id is loaded by `SessionRuntime::build` and flushed by the
+    // engine's per-turn finalize — no manual flush needed.
+    if opts.session_id_override.is_some() {
+        runtime
+            .seed_transcript_dedup(opts.prior_messages.iter().filter_map(|m| m.uuid().copied()))
+            .await;
+        let prior: Vec<coco_messages::Message> =
+            opts.prior_messages.iter().map(|m| (**m).clone()).collect();
+        runtime
+            .seed_tool_result_replacement_state(&prior, &session_id, None)
+            .await;
+    }
+
     // Bootstrap the per-source permission rule maps; see
     // `crate::permission_rule_loader` for the conversion path. Mirrors
     // TS `loadPermissionRules()` so headless runs honor the same
@@ -746,72 +810,32 @@ pub async fn run_chat_with_options(
     let permission_rule_source_roots =
         crate::permission_rule_loader::permission_rule_source_roots(&runtime_config.settings, &cwd);
 
-    let config = QueryEngineConfig {
-        model_id: model_id.clone(),
-        // `--resume` / `--continue` / `--fork-session` route through
-        // `RunChatOptions::session_id_override`; absent it the engine
-        // defaults to a per-run uuid (TS parity: anonymous headless
-        // runs aren't keyed against a persistent transcript).
-        session_id: opts
-            .session_id_override
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        permission_mode,
-        bypass_permissions_available,
-        allow_rules,
-        deny_rules,
-        ask_rules,
-        permission_rule_source_roots,
-        context_window: 200_000,
-        max_output_tokens: 16_384,
-        max_turns: cli
-            .max_turns
-            .or(runtime_config.loop_config.max_turns)
-            .unwrap_or(30),
-        total_token_budget: cli
-            .max_tokens
-            .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from)),
-        prompt_cache: main_model
-            .supports_prompt_cache
-            .then(|| coco_types::PromptCacheConfig {
-                mode: coco_types::PromptCacheMode::Auto,
-                ttl: coco_types::CacheTtl::OneHour,
-                scope: None,
-                requested_betas: Default::default(),
-                skip_cache_write: false,
-            }),
-        system_prompt: Some(system_prompt),
-        streaming_tool_execution: runtime_config.loop_config.enable_streaming_tools,
-        project_dir: Some(
-            runtime_config
-                .paths
-                .project_dir
-                .clone()
-                .unwrap_or_else(|| cwd.clone()),
-        ),
-        cwd_override: Some(cwd.clone()),
-        tool_filter: build_tool_filter(cli),
-        plans_directory: settings.merged.plans_directory.clone(),
-        plan_mode_settings: settings.merged.plan_mode.clone(),
-        system_reminder: settings.merged.system_reminder.clone(),
-        tool_config: runtime_config.tool.clone(),
-        sandbox_config: runtime_config.sandbox.clone(),
-        sandbox_state: crate::session_runtime::build_sandbox_state(&runtime_config, &cwd)?,
-        memory_config: runtime_config.memory.clone(),
-        shell_config: runtime_config.shell.clone(),
-        web_fetch_config: runtime_config.web_fetch.clone(),
-        web_search_config: runtime_config.web_search.clone(),
-        lsp_config: runtime_config.lsp.clone(),
-        compact: runtime_config.compact.clone(),
-        features: Arc::new(runtime_config.features.clone()),
-        skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
-        tool_overrides: runtime_config.tool_overrides.clone(),
-        ..Default::default()
-    };
+    // Per-turn engine config: start from the runtime's base (memory-augmented
+    // system prompt, sandbox_state, model / cache / compact / features …) then
+    // layer the CLI-specific overrides the runtime base doesn't carry,
+    // mirroring the SDK runner. Built through the runtime so `wire_engine`
+    // installs the full handle/subsystem set on the leader.
+    let mut config = runtime.current_engine_config().await;
+    config.session_id = session_id.clone();
+    config.permission_mode = permission_mode;
+    config.bypass_permissions_available = bypass_permissions_available;
+    config.allow_rules = allow_rules;
+    config.deny_rules = deny_rules;
+    config.ask_rules = ask_rules;
+    config.permission_rule_source_roots = permission_rule_source_roots;
+    // `--print`: honor `--max-turns` then `loop.max_turns`; unbounded when
+    // neither is set (TS `query.ts:1705` only caps when maxTurns is given).
+    config.max_turns = cli.max_turns.or(runtime_config.loop_config.max_turns);
+    config.total_token_budget = cli
+        .max_tokens
+        .or_else(|| runtime_config.loop_config.total_token_budget.map(i64::from));
+    config.cwd_override = Some(cwd.clone());
+    config.tool_filter = build_tool_filter(cli);
+    config.plans_directory = settings.merged.plans_directory.clone();
 
     tracing::info!(
         target: "coco_cli::headless",
-        max_turns = config.max_turns,
+        max_turns = ?config.max_turns,
         total_token_budget = ?config.total_token_budget,
         context_window = config.context_window,
         streaming_tools = config.streaming_tool_execution,
@@ -819,89 +843,18 @@ pub async fn run_chat_with_options(
         "engine config built"
     );
 
-    // Per-call FileReadState — gives the Read tool's dedup AND the
-    // shared @-mention pipeline a session-scoped cache. One-shot scope
-    // (dies with the function) matches `coco -p` semantics.
-    let file_read_state = Arc::new(tokio::sync::RwLock::new(coco_context::FileReadState::new()));
-
-    let session_id_for_engine = config.session_id.clone();
-    let agent_id_for_engine = config.agent_id.clone();
-    let mut engine = QueryEngine::new(config, model_runtimes, tools, cancel, Some(hook_registry))
-        .with_file_read_state(file_read_state.clone());
-    let mut session_usage_flush = None;
-    // Wire the JSONL transcript writer for resume / continue runs so
-    // headless turns persist into the same `<sessions_dir>/<id>.jsonl`
-    // the TUI / SDK paths use. Pre-populate the dedup set with the
-    // resumed messages' uuids — those entries are already on disk
-    // and re-appending them would corrupt the chain.
-    if opts.session_id_override.is_some() {
-        let store = Arc::new(coco_session::TranscriptStore::new(
-            crate::paths::project_paths(&cwd),
-        ));
-        let store_for_load = Arc::clone(&store);
-        let usage_session_id = session_id_for_engine.clone();
-        let loaded_usage = tokio::task::spawn_blocking(move || {
-            store_for_load.load_usage_snapshot(&usage_session_id)
-        })
-        .await
-        .ok()
-        .and_then(std::result::Result::ok)
-        .flatten()
-        .map(CostTracker::from_snapshot)
-        .unwrap_or_default();
-        let session_usage_tracker = Arc::new(tokio::sync::Mutex::new(loaded_usage));
-        let session_usage_write_lock = Arc::new(tokio::sync::Mutex::new(()));
-        let mut seen: std::collections::HashSet<uuid::Uuid> = std::collections::HashSet::new();
-        for msg in &opts.prior_messages {
-            if let Some(uuid) = msg.uuid() {
-                seen.insert(*uuid);
-            }
-        }
-        let dedup = Arc::new(tokio::sync::Mutex::new(seen));
-        let records = store
-            .load_content_replacements_for_chain(
-                &session_id_for_engine,
-                agent_id_for_engine.as_deref(),
-            )
-            .unwrap_or_default();
-        let mut replacement_state =
-            coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
-        for msg in &opts.prior_messages {
-            if let coco_messages::Message::ToolResult(tr) = msg.as_ref() {
-                replacement_state.seen_ids.insert(tr.tool_use_id.clone());
-            }
-        }
-        for record in records {
-            replacement_state
-                .seen_ids
-                .insert(record.tool_use_id().to_string());
-            replacement_state.replacements.insert(
-                record.tool_use_id().to_string(),
-                record.replacement().to_string(),
-            );
-        }
-        engine = engine
-            .with_transcript_store(store.clone(), session_id_for_engine.clone())
-            .with_session_usage_tracker(session_usage_tracker.clone())
-            .with_session_usage_write_lock(session_usage_write_lock.clone())
-            .with_transcript_dedup(dedup)
-            .with_tool_result_replacement_state(Arc::new(tokio::sync::RwLock::new(
-                replacement_state,
-            )));
-        session_usage_flush = Some((
-            store,
-            session_id_for_engine.clone(),
-            session_usage_tracker,
-            session_usage_write_lock,
-        ));
-    }
+    let engine = runtime.build_engine_from_config(config, cancel, None).await;
 
     // Resolve `@`-mentions in the prompt to file-content system-reminder
     // messages. TS parity: `getAttachmentMessages` from
     // `processUserInput.ts:504`. Both branches below now share one
     // expansion pipeline so headless behaves like TUI / SDK.
-    let inputs =
-        crate::at_mention_turn::resolve_turn_inputs_text_only(prompt, &cwd, &file_read_state).await;
+    let inputs = crate::at_mention_turn::resolve_turn_inputs_text_only(
+        prompt,
+        &cwd,
+        &runtime.file_read_state,
+    )
+    .await;
     let new_turn_messages = crate::at_mention_turn::build_messages_for_turn(&inputs);
     let messages: Vec<std::sync::Arc<coco_messages::Message>> = if opts.prior_messages.is_empty() {
         new_turn_messages
@@ -928,25 +881,6 @@ pub async fn run_chat_with_options(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     drainer.abort();
-
-    if let Some((store, session_id, tracker, write_lock)) = session_usage_flush {
-        let _write_guard = write_lock.lock().await;
-        let snapshot = tracker.lock().await.snapshot(&session_id);
-        let session_id_for_write = session_id.clone();
-        match tokio::task::spawn_blocking(move || {
-            store.write_usage_snapshot(&session_id_for_write, &snapshot)
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                tracing::warn!(error = %e, session_id, "failed to flush headless session usage");
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, session_id, "headless session usage flush task failed");
-            }
-        }
-    }
 
     // Wait for any in-flight auto-memory extraction + session-memory
     // fork to complete before we return so partial writes aren't

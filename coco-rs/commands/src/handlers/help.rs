@@ -91,8 +91,8 @@ const CATEGORIES: &[Category] = &[
             CommandEntry {
                 name: "theme",
                 aliases: &[],
-                description: "Change the color theme",
-                usage: "/theme [name]",
+                description: "Change the theme",
+                usage: "/theme",
             },
             CommandEntry {
                 name: "color",

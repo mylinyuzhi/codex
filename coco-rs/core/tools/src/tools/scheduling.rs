@@ -11,6 +11,7 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
+use coco_types::Feature;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
@@ -154,6 +155,13 @@ impl Tool for CronCreateTool {
     }
     fn name(&self) -> &str {
         ToolName::CronCreate.as_str()
+    }
+    /// TS `CronCreateTool.ts:67-69` `isEnabled() { return isKairosCronEnabled() }`.
+    /// Hidden from the model unless the cron feature is on — without a real
+    /// [`ScheduleStore`](coco_tool_runtime::ScheduleStore) the tool only
+    /// fails, so advertising it would waste model turns.
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::AgentTriggers)
     }
     fn description(&self, _input: &CronCreateInput, _options: &DescriptionOptions) -> String {
         "Create a scheduled task that runs on a cron schedule.".into()
@@ -316,6 +324,10 @@ impl Tool for CronDeleteTool {
     fn name(&self) -> &str {
         ToolName::CronDelete.as_str()
     }
+    /// TS `CronDeleteTool.ts` `isEnabled() { return isKairosCronEnabled() }`.
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::AgentTriggers)
+    }
     fn description(&self, _input: &CronDeleteInput, _options: &DescriptionOptions) -> String {
         "Delete a scheduled task by ID.".into()
     }
@@ -420,6 +432,10 @@ impl Tool for CronListTool {
     }
     fn name(&self) -> &str {
         ToolName::CronList.as_str()
+    }
+    /// TS `CronListTool.ts:48-50` `isEnabled() { return isKairosCronEnabled() }`.
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::AgentTriggers)
     }
     fn description(&self, _input: &CronListInput, _options: &DescriptionOptions) -> String {
         "List all scheduled tasks.".into()
@@ -564,6 +580,15 @@ impl Tool for RemoteTriggerTool {
     }
     fn name(&self) -> &str {
         ToolName::RemoteTrigger.as_str()
+    }
+    /// TS `RemoteTriggerTool.ts:57-62` gates `isEnabled()` on a growthbook
+    /// flag + `isPolicyAllowed('allow_remote_sessions')`. coco-rs collapses
+    /// that to the [`Feature::AgentTriggersRemote`] capability gate. The live
+    /// transport (claude.ai OAuth + Anthropic-internal endpoints) is an
+    /// explicit non-goal, so the feature stays off by default and the tool
+    /// is hidden rather than registered-and-failing.
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::AgentTriggersRemote)
     }
     fn description(&self, _input: &RemoteTriggerInput, _options: &DescriptionOptions) -> String {
         "Manage remote trigger endpoints that can invoke agents.".into()

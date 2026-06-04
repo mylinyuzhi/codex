@@ -367,11 +367,14 @@ impl<'a> Writer<'a> {
             Tag::Paragraph => self.block_gap(),
             Tag::Heading { level, .. } => {
                 self.block_gap();
-                let mut style = Style::default()
-                    .fg(self.styles.heading())
-                    .add_modifier(Modifier::BOLD);
+                // TS renders headings with emphasis only — bold, and h1 also
+                // italic + underline — with NO color, so they inherit the body
+                // text color instead of a brand tint.
+                let mut style = Style::default().add_modifier(Modifier::BOLD);
                 if matches!(level, HeadingLevel::H1) {
-                    style = style.add_modifier(Modifier::UNDERLINED);
+                    style = style
+                        .add_modifier(Modifier::ITALIC)
+                        .add_modifier(Modifier::UNDERLINED);
                 }
                 self.push_style(style);
             }
@@ -405,9 +408,9 @@ impl<'a> Writer<'a> {
                     Some(Some(n)) => {
                         let label = format!("{n}. ");
                         *n += 1;
-                        Span::styled(label, Style::default().fg(self.styles.primary()))
+                        Span::styled(label, Style::default().fg(self.styles.text()))
                     }
-                    _ => Span::styled("• ".to_string(), Style::default().fg(self.styles.primary())),
+                    _ => Span::styled("• ".to_string(), Style::default().fg(self.styles.text())),
                 };
                 self.item_hang
                     .push((UnicodeWidthStr::width(marker.content.as_ref()), false));
@@ -546,12 +549,13 @@ impl<'a> Writer<'a> {
             t.cur_cell.push_str(code);
             return;
         }
-        // Inline code keeps the accent foreground but preserves surrounding
+        // Inline code uses the dedicated `code_inline` token (decoupled from
+        // `accent`, which also drives chips/alerts) but preserves surrounding
         // inline modifiers (bold/italic/strikethrough/link) via patch.
         self.spans.push(Span::styled(
             code.to_string(),
             self.cur_style
-                .patch(Style::default().fg(self.styles.accent())),
+                .patch(Style::default().fg(self.styles.code_inline())),
         ));
     }
 
@@ -745,10 +749,11 @@ impl<'a> Writer<'a> {
         header: bool,
     ) {
         let border = Style::default().fg(self.styles.table_border());
+        // TS does not color table headers (header cells are plain formatted
+        // inline tokens); keep a bold weight for scanability but drop the brand
+        // tint so the header doesn't read as orange/red.
         let text_style = if header {
-            Style::default()
-                .fg(self.styles.table_header())
-                .add_modifier(Modifier::BOLD)
+            Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };

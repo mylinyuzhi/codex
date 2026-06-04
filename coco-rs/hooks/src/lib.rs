@@ -1028,7 +1028,12 @@ pub async fn execute_hook(
             timeout_ms,
             allowed_env_vars,
         } => {
-            // SSRF guard — block private/link-local addresses (TS parity).
+            // SSRF guard, layer 1 — pre-flight check. This is the authoritative
+            // gate for IP-LITERAL URLs (reqwest does not invoke a custom DNS
+            // resolver for those, so e.g. `http://169.254.169.254/` must be
+            // caught here). For hostname URLs it is an early-exit; the connect-
+            // time resolver below is the authoritative gate that closes the
+            // DNS-rebinding TOCTOU.
             match crate::ssrf::check_url_ssrf(url).await {
                 Ok(true) => {
                     return Err(crate::HooksError::SsrfFailed {
@@ -1037,9 +1042,11 @@ pub async fn execute_hook(
                     });
                 }
                 Err(e) => {
-                    tracing::debug!("SSRF check failed for {url}: {e}");
-                    // Allow the request to proceed if DNS resolution fails
-                    // (the actual HTTP request will fail anyway).
+                    // Pre-flight DNS failed. Safe to proceed: the SsrfGuarded
+                    // resolver below re-resolves at connect time and blocks any
+                    // private/link-local address (and a genuine DNS failure just
+                    // fails the request). Not a fail-open hole.
+                    tracing::debug!("SSRF pre-flight DNS failed for {url}: {e}");
                 }
                 Ok(false) => {} // allowed
             }
@@ -1048,6 +1055,17 @@ pub async fn execute_hook(
             // (`utils/hooks/execHttpHook.ts:12`). Rust used to default
             // to 10 s, which would clip any HTTP hook doing real work.
             let client = reqwest::Client::builder()
+                // SSRF guard, layer 2 — connect-time resolver. Drops blocked IPs
+                // so the validated IP IS the connected IP, closing the DNS-
+                // rebinding window the one-shot pre-flight leaves open. TS
+                // installs `ssrfGuardedLookup` as axios's per-request `lookup`.
+                .dns_resolver(std::sync::Arc::new(crate::ssrf::SsrfGuardedResolver))
+                // SSRF defense-in-depth: never follow redirects. The pre-flight
+                // `check_url_ssrf` only validates the *original* URL's host, so an
+                // allowlisted endpoint that 3xx-redirects to an internal/metadata
+                // address (e.g. 169.254.169.254) would otherwise bypass the guard.
+                // TS `execHttpHook.ts:206` sets `maxRedirects: 0`.
+                .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_millis(
                     timeout_ms
                         .and_then(|ms| u64::try_from(ms).ok())

@@ -615,6 +615,34 @@ fn test_is_preapproved_host_vercel_docs_path_scoped() {
     assert!(!is_preapproved_url("https://vercel.com/docs-evil"));
 }
 
+/// WebFetchTool::check_permissions auto-allows a preapproved docs host
+/// (TS `WebFetchTool.ts:104-121`), short-circuiting the approval prompt.
+#[tokio::test]
+async fn test_webfetch_check_permissions_allows_preapproved_host() {
+    let ctx = ToolUseContext::test_default();
+    let result = <WebFetchTool as DynTool>::check_permissions(
+        &WebFetchTool,
+        &json!({"url": "https://docs.python.org/3/library/os.html", "prompt": "x"}),
+        &ctx,
+    )
+    .await;
+    assert!(matches!(result, coco_types::ToolCheckResult::Allow { .. }));
+}
+
+/// A non-preapproved host falls through to the rule pipeline
+/// (`Passthrough`) so the normal approval flow still applies.
+#[tokio::test]
+async fn test_webfetch_check_permissions_passthrough_for_other_host() {
+    let ctx = ToolUseContext::test_default();
+    let result = <WebFetchTool as DynTool>::check_permissions(
+        &WebFetchTool,
+        &json!({"url": "https://example.com/", "prompt": "x"}),
+        &ctx,
+    )
+    .await;
+    assert!(matches!(result, coco_types::ToolCheckResult::Passthrough));
+}
+
 // ---------------------------------------------------------------------------
 // check_redirect — the core SSRF guard
 // ---------------------------------------------------------------------------

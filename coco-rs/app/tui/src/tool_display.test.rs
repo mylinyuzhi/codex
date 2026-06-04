@@ -39,6 +39,42 @@ fn test_tool_input_preview_formats_glob_as_single_line() {
 }
 
 #[test]
+fn test_read_preview_path_only_has_no_range_suffix() {
+    let input = serde_json::json!({"file_path": "/repo/README.md"});
+    assert_eq!(
+        tool_input_preview(ToolName::Read.as_str(), &input),
+        "/repo/README.md"
+    );
+}
+
+#[test]
+fn test_read_preview_with_limit_shows_line_range() {
+    let input = serde_json::json!({"file_path": "/repo/README.md", "limit": 10});
+    assert_eq!(
+        tool_input_preview(ToolName::Read.as_str(), &input),
+        "/repo/README.md · lines 1-10"
+    );
+}
+
+#[test]
+fn test_read_preview_with_offset_and_limit_shows_line_range() {
+    let input = serde_json::json!({"file_path": "/repo/README.md", "offset": 5, "limit": 10});
+    assert_eq!(
+        tool_input_preview(ToolName::Read.as_str(), &input),
+        "/repo/README.md · lines 5-14"
+    );
+}
+
+#[test]
+fn test_read_preview_with_offset_only_shows_from_line() {
+    let input = serde_json::json!({"file_path": "/repo/README.md", "offset": 5});
+    assert_eq!(
+        tool_input_preview(ToolName::Read.as_str(), &input),
+        "/repo/README.md · from line 5"
+    );
+}
+
+#[test]
 fn test_shell_permission_display_input_keeps_command_variant() {
     let input = serde_json::json!({"command": "ls -la"});
 

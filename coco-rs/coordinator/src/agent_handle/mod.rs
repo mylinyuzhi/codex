@@ -962,6 +962,10 @@ impl AgentHandle for SwarmAgentHandle {
         ))
     }
 
+    async fn active_team_name(&self) -> Option<String> {
+        self.roster_store.active_team_name().await
+    }
+
     async fn query_agent_status(&self, agent_id: &str) -> Result<AgentSpawnResponse, String> {
         match AgentIdentity::classify(agent_id) {
             AgentIdentity::LocalAgent => self.query_local_agent_status(agent_id).await,

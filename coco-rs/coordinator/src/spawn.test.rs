@@ -28,12 +28,18 @@ fn test_build_teammate_command_basic() {
 
     let cmd = build_teammate_command(&config);
     assert!(cmd.contains("cd /project &&"));
-    assert!(cmd.contains("--agent-id=researcher@my-team"));
-    assert!(cmd.contains("--agent-name=researcher"));
-    assert!(cmd.contains("--team-name=my-team"));
-    assert!(cmd.contains("--agent-color=blue"));
     assert!(cmd.contains("--model=anthropic/claude-opus-4-7"));
-    assert!(cmd.contains("--parent-session-id=session-1"));
+    // Identity rides COCO_* env, NOT CLI flags (clap defines none of the
+    // identity flags and would reject them on the child's launch).
+    assert!(!cmd.contains("--agent-id"));
+    assert!(!cmd.contains("--agent-name"));
+    assert!(!cmd.contains("--team-name"));
+    assert!(!cmd.contains("--agent-color"));
+    assert!(!cmd.contains("--parent-session-id"));
+    assert!(cmd.contains("COCO_AGENT_ID=researcher@my-team"));
+    assert!(cmd.contains("COCO_AGENT_NAME=researcher"));
+    assert!(cmd.contains("COCO_TEAM_NAME=my-team"));
+    assert!(cmd.contains("COCO_AGENT_COLOR=blue"));
     assert!(!cmd.contains("--plan-mode-required"));
 }
 
@@ -57,7 +63,9 @@ fn test_build_teammate_command_plan_mode() {
     };
 
     let cmd = build_teammate_command(&config);
-    assert!(cmd.contains("--plan-mode-required"));
+    // plan-mode rides env now (clap has no --plan-mode-required flag).
+    assert!(!cmd.contains("--plan-mode-required"));
+    assert!(cmd.contains("COCO_PLAN_MODE_REQUIRED=1"));
     assert!(!cmd.contains("--agent-color"));
 }
 
@@ -93,30 +101,4 @@ fn test_build_inherited_env_vars() {
     assert!(env.contains("COCO_AGENT_ID=worker@t"));
     assert!(env.contains("COCO_AGENT_NAME=worker"));
     assert!(env.contains("COCO_TEAM_NAME=t"));
-}
-
-#[test]
-fn test_build_inherited_cli_flags() {
-    let config = TeammateSpawnConfig {
-        name: "worker".into(),
-        team_name: "t".into(),
-        color: Some(crate::constants::AgentColorName::Green),
-        plan_mode_required: false,
-        prompt: String::new(),
-        cwd: String::new(),
-        model: Some("anthropic/claude-sonnet-4-6".into()),
-        system_prompt: None,
-        system_prompt_mode: crate::pane::SystemPromptMode::Default,
-        worktree_path: None,
-        parent_session_id: "sess".into(),
-        permissions: vec!["Edit".into()],
-        allow_permission_prompts: false,
-        ..Default::default()
-    };
-
-    let flags = build_inherited_cli_flags(&config);
-    assert!(flags.contains(&"--agent-id=worker@t".to_string()));
-    assert!(flags.contains(&"--model=anthropic/claude-sonnet-4-6".to_string()));
-    assert!(flags.contains(&"--agent-color=green".to_string()));
-    assert!(flags.contains(&"--permission=Edit".to_string()));
 }

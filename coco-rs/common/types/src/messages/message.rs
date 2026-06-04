@@ -113,7 +113,18 @@ impl Message {
             // the transcript but must never reach the model — the canonical
             // API gate (`filter_by_options(for_api)` → `visibility().api`)
             // honors this so the flag cannot leak into the prompt.
-            Self::User(u) if u.is_visible_in_transcript_only => Visibility::UI_ONLY,
+            //
+            // EXCEPTION: a compaction summary also carries
+            // `is_visible_in_transcript_only` (it replaces the summarized
+            // history in the transcript) yet MUST reach the model — it *is*
+            // the post-compact context. Exempting `is_compact_summary` keeps
+            // it API-visible; without this, every compaction silently drops
+            // the summary from the prompt and the model loses all pre-compact
+            // context. Slash echoes (`is_compact_summary == false`) stay
+            // UI-only.
+            Self::User(u) if u.is_visible_in_transcript_only && !u.is_compact_summary => {
+                Visibility::UI_ONLY
+            }
             Self::User(_) | Self::Assistant(_) | Self::ToolResult(_) => Visibility::BOTH,
             Self::System(_) => Visibility::API_ONLY,
             Self::Attachment(a) => Visibility {
@@ -536,6 +547,11 @@ pub enum SystemMessage {
     StopHookSummary(SystemStopHookSummaryMessage),
     TurnDuration(SystemTurnDurationMessage),
     ScheduledTaskFire(SystemScheduledTaskFireMessage),
+    /// `/context` usage snapshot rendered inline in the transcript (TS
+    /// `/context` is a `local-jsx` command whose `<ContextVisualization>`
+    /// prints into the scrollback, not a modal). Carries the full analyzed
+    /// report; the TUI paints the colored grid + grouped detail from it.
+    ContextUsage(SystemContextUsageMessage),
     /// User cancellation marker. Replaces the legacy text-based
     /// `INTERRUPT_MESSAGE` / `INTERRUPT_MESSAGE_FOR_TOOL_USE` User
     /// messages with a typed variant. `for_tool_use` is computed once
@@ -561,6 +577,7 @@ impl SystemMessage {
             Self::StopHookSummary(m) => &m.uuid,
             Self::TurnDuration(m) => &m.uuid,
             Self::ScheduledTaskFire(m) => &m.uuid,
+            Self::ContextUsage(m) => &m.uuid,
             Self::UserInterruption(m) => &m.uuid,
         }
     }
@@ -743,6 +760,18 @@ pub struct SystemScheduledTaskFireMessage {
     pub uuid: Uuid,
     pub task_id: String,
     pub schedule: String,
+}
+
+/// Payload for [`SystemMessage::ContextUsage`] — a `/context` snapshot.
+/// Holds the runtime-analyzed report verbatim; the renderer derives the
+/// colored grid, legend, and grouped Memory/MCP/Agents/Skills sections
+/// from it. Persisted to the transcript like any other system row, so a
+/// resumed session re-paints the historical snapshot.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemContextUsageMessage {
+    pub uuid: Uuid,
+    pub result: crate::server_request::ContextUsageResult,
 }
 
 /// Authoritative cancel marker. `for_tool_use` is computed by the engine

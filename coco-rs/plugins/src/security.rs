@@ -8,6 +8,7 @@
 //! 2. Official-name impersonation — regex + non-ASCII homograph check.
 //! 3. Enterprise policy — strict marketplaces / blocklist / managed-only.
 
+use std::collections::HashSet;
 use std::path::Component;
 use std::path::Path;
 
@@ -179,6 +180,10 @@ fn ascii_fold(s: &str) -> String {
 /// TS: `pluginPolicy.ts EnterprisePluginPolicy`.
 #[derive(Debug, Clone, Default)]
 pub struct EnterprisePolicy {
+    /// Per-plugin org force-disable list, keyed by `name@marketplace`
+    /// ([`PluginId`] display form). TS: `policySettings.enabledPlugins[id]
+    /// === false` — the single source of truth across install / enable / UI.
+    pub blocked_plugins: HashSet<String>,
     /// Only allow plugins from approved marketplaces.
     pub strict_known_marketplaces: bool,
     /// Approved marketplace allowlist (used when strict mode is on).
@@ -189,12 +194,58 @@ pub struct EnterprisePolicy {
     pub strict_plugin_only_customization: bool,
 }
 
+impl EnterprisePolicy {
+    /// Build the policy from managed/enterprise (`Policy`-scope) settings.
+    ///
+    /// TS: `pluginPolicy.ts` reads `getSettingsForSource('policySettings')`.
+    /// The per-plugin blocklist is every `enabled_plugins[id].enabled ==
+    /// false` entry in the policy layer (mirrors TS `enabledPlugins[id] ===
+    /// false`); `strict_plugin_only_customization` carries the managed flag.
+    ///
+    /// Marketplace-level fields map from the managed `strict_known_marketplaces`
+    /// allowlist (presence ⇒ strict) and `blocked_marketplaces` denylist.
+    pub fn from_managed_settings() -> Self {
+        coco_config::settings::policy::load_policy_settings()
+            .map(|p| Self::from_policy_settings(&p))
+            .unwrap_or_default()
+    }
+
+    /// Build the policy from an already-loaded `Policy`-scope [`coco_config::Settings`].
+    ///
+    /// Split out from [`Self::from_managed_settings`] (the disk-loading entry
+    /// point) so the settings → policy mapping is unit-testable without
+    /// touching the system managed-settings path.
+    pub fn from_policy_settings(policy: &coco_config::Settings) -> Self {
+        let blocked_plugins = policy
+            .enabled_plugins
+            .iter()
+            .filter(|(_, cfg)| !cfg.enabled)
+            .map(|(id, _)| id.clone())
+            .collect();
+        Self {
+            blocked_plugins,
+            strict_known_marketplaces: !policy.strict_known_marketplaces.is_empty(),
+            known_marketplaces: policy.strict_known_marketplaces.clone(),
+            blocked_marketplaces: policy.blocked_marketplaces.clone(),
+            strict_plugin_only_customization: policy.strict_plugin_only_customization,
+        }
+    }
+}
+
 /// Verdict from [`check_policy`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyVerdict {
     Ok,
-    BlockedMarketplace { marketplace: String },
-    UnapprovedMarketplace { marketplace: String },
+    /// Per-plugin org force-disable (TS `enabledPlugins[id] === false`).
+    BlockedPlugin {
+        plugin: String,
+    },
+    BlockedMarketplace {
+        marketplace: String,
+    },
+    UnapprovedMarketplace {
+        marketplace: String,
+    },
     UserScopeForbidden,
 }
 
@@ -206,6 +257,15 @@ pub fn check_policy(
     is_user_scope: bool,
     policy: &EnterprisePolicy,
 ) -> PolicyVerdict {
+    // Primary gate: per-plugin org blocklist. Applies regardless of
+    // marketplace (a blocked id can be bare or `name@marketplace`), matching
+    // TS where `isPluginBlockedByPolicy(id)` is checked first at every site.
+    if policy.blocked_plugins.contains(&plugin.to_string()) {
+        return PolicyVerdict::BlockedPlugin {
+            plugin: plugin.to_string(),
+        };
+    }
+
     if policy.strict_plugin_only_customization && is_user_scope {
         return PolicyVerdict::UserScopeForbidden;
     }

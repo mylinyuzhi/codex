@@ -7,7 +7,6 @@ pub mod analytics;
 pub mod builtin;
 pub mod compact_settings;
 pub mod constants;
-pub mod effort;
 pub mod env;
 pub mod error;
 pub mod fast_mode;

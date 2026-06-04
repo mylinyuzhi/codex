@@ -270,6 +270,10 @@ fn describe_discovered(
     project_claudemd: &Path,
 ) -> (MemoryScope, String) {
     match source {
+        MemoryFileSource::Managed => (
+            MemoryScope::Managed,
+            format!("Managed policy (read-only): {}", display_path(path)),
+        ),
         MemoryFileSource::UserGlobal => (MemoryScope::User, "Saved in ~/.coco/CLAUDE.md".into()),
         MemoryFileSource::ProjectConfig => (
             MemoryScope::ProjectConfig,

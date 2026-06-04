@@ -6,11 +6,14 @@ pub mod agent_handle_factory;
 pub mod agent_transcript_persistence;
 pub mod at_mention_turn;
 pub mod command_queue_sink;
+pub mod coordinator_mode_resume;
 pub mod disk_task_output;
 pub mod elicitation_hooks;
 pub mod file_changed_watcher;
 pub mod fork_dispatcher;
 pub mod headless;
+pub mod leader_inbox_poller;
+pub mod leader_permission;
 pub mod lsp_handle_adapter;
 pub mod mcp_handle_adapter;
 pub mod model_card_refresh;
@@ -27,9 +30,12 @@ pub mod session_bootstrap;
 pub mod session_rename;
 pub mod session_runtime;
 pub mod side_query_impl;
+pub mod skill_watch;
 pub mod startup_profile;
 pub mod task_runtime;
+pub mod team_memory_sync;
 pub mod team_task_list_router;
+pub mod teammate_inbox_pump;
 pub mod tracing_init;
 pub mod tui_permission_bridge;
 
@@ -185,6 +191,12 @@ pub struct Cli {
     /// Disable session persistence.
     #[arg(long)]
     pub no_session_persistence: bool,
+
+    /// Bare mode: skip session-start + per-turn background housekeeping
+    /// (auto-dream, memory extraction, prompt suggestion, stale-dir sweeps).
+    /// Flag form of `COCO_BARE_MODE=1`. TS `--bare` / `CLAUDE_CODE_SIMPLE`.
+    #[arg(long)]
+    pub bare: bool,
 
     // ── PR-E3: TS-parity SDK/scripting flags ──
     /// Structured input format for non-interactive mode.

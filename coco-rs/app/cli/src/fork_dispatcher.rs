@@ -60,7 +60,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
     ) -> Result<ForkedAgentResult, coco_error::BoxedError> {
         // Derive the AgentQueryConfig shape from the cache slot. This
         // keeps the byte-faithful contract documented on `forked_agent`
-        // (skip_cache_write, skip_transcript, max_turns: 1 by default).
+        // (skip_cache_write, skip_transcript, max_turns: Some(1) by default).
         let mut agent_config = coco_query::forked_agent::build_query_config(cache, options);
         if let Some(system) = system_prompt_override {
             agent_config.system_prompt = system;
@@ -91,7 +91,8 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             permission_rule_source_roots,
             context_window: agent_config.context_window.unwrap_or(200_000),
             max_output_tokens: agent_config.max_output_tokens.unwrap_or(16_384),
-            max_turns: agent_config.max_turns.unwrap_or(1),
+            // Forks stay bounded (default single round-trip).
+            max_turns: Some(agent_config.max_turns.unwrap_or(1)),
             total_token_budget: None,
             prompt_cache: agent_config.prompt_cache.clone(),
             system_prompt: Some(agent_config.system_prompt.clone()),

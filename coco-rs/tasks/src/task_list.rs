@@ -203,7 +203,11 @@ impl TaskListStore {
     /// `tasks_root` (typically `{config_home}/tasks`).
     pub fn open(tasks_root: &Path, task_list_id: &str) -> crate::Result<Arc<Self>> {
         let tasks_dir = tasks_root.join(sanitize_path_component(task_list_id));
-        fs::create_dir_all(&tasks_dir)?;
+        // The directory is materialized lazily by the first writer (every
+        // list-mutating op routes through `ensure_lock_file`, which
+        // `create_dir_all`s the parent); readers tolerate its absence. This
+        // avoids leaking an empty `tasks/<id>/` per session that never writes
+        // a task. TS parity: `ensureTasksDir` is writer-only (`utils/tasks.ts`).
         let (change_tx, _rx) = tokio::sync::broadcast::channel(16);
         Ok(Arc::new(Self {
             tasks_dir,

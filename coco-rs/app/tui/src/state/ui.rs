@@ -240,24 +240,49 @@ impl UiState {
         }
     }
 
-    pub fn apply_theme_runtime(&mut self, theme_state: ThemeRuntimeState) {
-        // Single install chokepoint: quantize RGB palettes to the terminal's
-        // color capability here so every theme path — initial load AND in-app
-        // theme switches (which resolve a fresh, un-downsampled `Theme`) — gets
-        // adapted. `downsample` is idempotent (already-indexed colors pass
-        // through), so the loader's own downsample is harmless.
+    /// Install a resolved theme. Single chokepoint: quantize RGB palettes to
+    /// the terminal's color capability so every theme path — initial load AND
+    /// in-app switches (which resolve a fresh, un-downsampled `Theme`) — gets
+    /// adapted. `downsample` is idempotent. `log` is `false` on the live-preview
+    /// path so navigating the theme picker doesn't write an INFO line per
+    /// keypress; commit/boot paths pass `true`.
+    fn install_theme_runtime(&mut self, theme_state: ThemeRuntimeState, log: bool) {
         self.theme = theme_state.theme.clone();
-        self.theme
-            .downsample(coco_tui_ui::color::color_capability());
-        if let Some(ModalState::Settings(settings)) = self.modal.as_mut() {
-            settings.set_themes(theme_state.choices.clone(), theme_state.setting.clone());
+        let capability = coco_tui_ui::color::color_capability();
+        self.theme.downsample(capability);
+        if log {
+            // Record the resolved theme + color depth + terminal env so the
+            // active palette is diagnosable from the log. Named theme colors
+            // (e.g. `accent`) are NOT downsampled and render via the terminal's
+            // own 16-color palette — a custom palette (magenta→red) recolors them.
+            tracing::info!(
+                theme = %theme_state.active_id,
+                setting = theme_state.setting.as_str(),
+                color_capability = ?capability,
+                term = %std::env::var("TERM").unwrap_or_default(),
+                colorterm = %std::env::var("COLORTERM").unwrap_or_default(),
+                colorfgbg = %std::env::var("COLORFGBG").unwrap_or_default(),
+                "theme applied"
+            );
         }
         self.theme_state = theme_state;
+    }
+
+    pub fn apply_theme_runtime(&mut self, theme_state: ThemeRuntimeState) {
+        self.install_theme_runtime(theme_state, /*log*/ true);
     }
 
     pub fn apply_theme_setting(&mut self, setting: ThemeSetting) -> anyhow::Result<()> {
         let theme_state = self.theme_state.with_setting(setting)?;
         self.apply_theme_runtime(theme_state);
+        Ok(())
+    }
+
+    /// Apply a theme for live preview — same install, but no INFO log (called
+    /// per keypress while navigating the theme picker).
+    pub fn preview_theme_setting(&mut self, setting: ThemeSetting) -> anyhow::Result<()> {
+        let theme_state = self.theme_state.with_setting(setting)?;
+        self.install_theme_runtime(theme_state, /*log*/ false);
         Ok(())
     }
 

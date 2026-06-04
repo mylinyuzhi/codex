@@ -1962,6 +1962,22 @@
         "body"
       ]
     },
+    "AttachmentTypeBreakdown": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "tokens"
+      ]
+    },
     "BudgetExhaustedOutcome": {
       "description": "Payload for [`TurnOutcome::BudgetExhausted`]. `budget_tokens` is\nthe configured `max_tokens` ceiling; `None` when no explicit max\nwas set (the 90%-of-window heuristic still drove the stop, but\nthere is no honest single number to emit).",
       "type": "object",
@@ -2124,6 +2140,40 @@
         "delta"
       ]
     },
+    "ContextAgent": {
+      "type": "object",
+      "properties": {
+        "agent_type": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "agent_type",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextCategoryKind": {
+      "description": "Closed set of context-window usage categories. Each renderer maps the\nkind to its own label + color; the wire carries the typed kind so the\nvocabulary cannot drift across SDK / TUI / cross-language codegens.",
+      "type": "string",
+      "enum": [
+        "system_prompt",
+        "tools",
+        "mcp_tools",
+        "agents",
+        "memory_files",
+        "skills",
+        "messages",
+        "free"
+      ]
+    },
     "ContextClearedParams": {
       "type": "object",
       "properties": {
@@ -2171,6 +2221,206 @@
       "required": [
         "removed_messages",
         "summary_tokens"
+      ]
+    },
+    "ContextMcpTool": {
+      "type": "object",
+      "properties": {
+        "is_loaded": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "server_name": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "server_name",
+        "tokens",
+        "is_loaded"
+      ]
+    },
+    "ContextMemoryFile": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "path",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextSkill": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "tokens"
+      ]
+    },
+    "ContextSuggestion": {
+      "description": "An actionable suggestion shown under the `/context` view. Mirrors TS\n`ContextSuggestion` (`utils/contextSuggestions.ts`).",
+      "type": "object",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "savings_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "severity": {
+          "$ref": "#/$defs/SuggestionSeverity"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "severity",
+        "title",
+        "detail"
+      ]
+    },
+    "ContextUsageCategory": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Typed category identity — the renderer derives label + color from it.",
+          "$ref": "#/$defs/ContextCategoryKind"
+        },
+        "tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "kind",
+        "tokens"
+      ]
+    },
+    "ContextUsageResult": {
+      "description": "Response to `ClientRequest::ContextUsage`.\nMatches TS `SDKControlGetContextUsageResponseSchema` (controlSchemas.ts:205-306).\nSimplified subset — TS includes a rich breakdown grid that's UI-specific.",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextAgent"
+          }
+        },
+        "auto_compact_threshold": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "categories": {
+          "description": "Categorized breakdown (system prompt, tools, history, etc.).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextUsageCategory"
+          }
+        },
+        "is_auto_compact_enabled": {
+          "type": "boolean"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "mcp_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextMcpTool"
+          }
+        },
+        "memory_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextMemoryFile"
+          }
+        },
+        "message_breakdown": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "percentage": {
+          "type": "number",
+          "format": "double"
+        },
+        "raw_max_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextSkill"
+          }
+        },
+        "suggestions": {
+          "description": "Actionable guidance (near-capacity, large tool results, …). Computed\nfrom the breakdown so SDK + TUI render the same suggestions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextSuggestion"
+          }
+        },
+        "total_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "total_tokens",
+        "max_tokens",
+        "raw_max_tokens",
+        "percentage",
+        "model",
+        "categories",
+        "is_auto_compact_enabled"
       ]
     },
     "ContextUsageWarningParams": {
@@ -3291,6 +3541,52 @@
             "type"
           ]
         }
+      ]
+    },
+    "MessageBreakdown": {
+      "type": "object",
+      "properties": {
+        "assistant_message_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "attachment_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "attachments_by_type": {
+          "description": "Per-attachment-kind token totals, sorted tokens-desc.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttachmentTypeBreakdown"
+          }
+        },
+        "tool_call_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tool_calls_by_type": {
+          "description": "Per-tool token attribution (calls + results), sorted total-desc.\nDrives the large-tool-result / read-bloat suggestions.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolTypeBreakdown"
+          }
+        },
+        "tool_result_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "user_message_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "tool_call_tokens",
+        "tool_result_tokens",
+        "attachment_tokens",
+        "assistant_message_tokens",
+        "user_message_tokens"
       ]
     },
     "MessageKind": {
@@ -4733,6 +5029,14 @@
         "data"
       ]
     },
+    "SuggestionSeverity": {
+      "description": "Severity of a context suggestion. `Warning` sorts before `Info`.",
+      "type": "string",
+      "enum": [
+        "warning",
+        "info"
+      ]
+    },
     "SummarizeCompletedParams": {
       "type": "object",
       "properties": {
@@ -4913,6 +5217,23 @@
         "uuid",
         "tokens_before",
         "tokens_after"
+      ]
+    },
+    "SystemContextUsageMessage": {
+      "description": "Payload for [`SystemMessage::ContextUsage`] — a `/context` snapshot.\nHolds the runtime-analyzed report verbatim; the renderer derives the\ncolored grid, legend, and grouped Memory/MCP/Agents/Skills sections\nfrom it. Persisted to the transcript like any other system row, so a\nresumed session re-paints the historical snapshot.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ContextUsageResult"
+        },
+        "uuid": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "uuid",
+        "result"
       ]
     },
     "SystemInformationalMessage": {
@@ -5166,6 +5487,20 @@
             }
           },
           "$ref": "#/$defs/SystemScheduledTaskFireMessage",
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "description": "`/context` usage snapshot rendered inline in the transcript (TS\n`/context` is a `local-jsx` command whose `<ContextVisualization>`\nprints into the scrollback, not a modal). Carries the full analyzed\nreport; the TUI paints the colored grid + grouped detail from it.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "context_usage"
+            }
+          },
+          "$ref": "#/$defs/SystemContextUsageMessage",
           "required": [
             "kind"
           ]
@@ -6672,6 +7007,27 @@
         "toolCallId",
         "toolName",
         "output"
+      ]
+    },
+    "ToolTypeBreakdown": {
+      "type": "object",
+      "properties": {
+        "call_tokens": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result_tokens": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "name",
+        "call_tokens",
+        "result_tokens"
       ]
     },
     "ToolUseSummaryParams": {

@@ -106,11 +106,21 @@ async fn resolve_file_mention(
         return resolve_directory(&abs_path, &display_path, options.max_dir_entries);
     }
 
+    // FileReadState is keyed by CANONICAL path — matching the Read primer
+    // (`coco_tools::record_file_read`) and the Edit/Write read-before-edit
+    // guards, which canonicalize. Caching an @mention under a lexical
+    // `cwd.join` key would hide it from those guards on any symlinked path
+    // (e.g. macOS `/tmp` → `/private/tmp`), triggering a spurious
+    // "has not been read yet" rejection on a subsequent edit.
+    let key_path = tokio::fs::canonicalize(&abs_path)
+        .await
+        .unwrap_or_else(|_| abs_path.clone());
+
     // Dedup check: if file is in FileReadState and mtime hasn't changed,
     // return AlreadyReadFileAttachment.
     // TS: generateFileAttachment() line 3077-3115
-    if let Some(entry) = file_read_state.peek(&abs_path)
-        && let Ok(disk_mtime) = file_mtime_ms(&abs_path).await
+    if let Some(entry) = file_read_state.peek(&key_path)
+        && let Ok(disk_mtime) = file_mtime_ms(&key_path).await
         && entry.mtime_ms == disk_mtime
     {
         return Some(Attachment::AlreadyReadFile(AlreadyReadFileAttachment {
@@ -131,8 +141,8 @@ async fn resolve_file_mention(
 
     let attachment = generate_file_attachment(&abs_path, options.cwd, &read_options)?;
 
-    // Update FileReadState with new content and mtime.
-    update_file_read_state(file_read_state, &abs_path, &attachment, &read_options).await;
+    // Update FileReadState with new content and mtime, keyed by canonical path.
+    update_file_read_state(file_read_state, &key_path, &attachment, &read_options).await;
 
     Some(attachment)
 }

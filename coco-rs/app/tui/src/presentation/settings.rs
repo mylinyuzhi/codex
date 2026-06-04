@@ -13,7 +13,7 @@ pub(crate) fn settings_surface_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let tab_bar = [
-        (SettingsTab::Theme, t!("dialog.settings_tab_theme")),
+        (SettingsTab::Display, t!("dialog.settings_tab_display")),
         (SettingsTab::OutputStyle, t!("dialog.settings_tab_output")),
         (
             SettingsTab::Permissions,
@@ -33,21 +33,9 @@ pub(crate) fn settings_surface_content(
     .join("  ");
 
     let items: Vec<String> = match s.active_tab {
-        SettingsTab::Theme => {
-            let mut items: Vec<String> = s
-                .themes
-                .iter()
-                .enumerate()
-                .map(|(i, choice)| {
-                    let marker = if i as i32 == s.selected { "▸ " } else { "  " };
-                    let active = if choice.setting == s.active_theme {
-                        "✓ "
-                    } else {
-                        "  "
-                    };
-                    format!("{marker}{active}{}", choice.label)
-                })
-                .collect();
+        SettingsTab::Display => {
+            let mut items: Vec<String> =
+                vec![t!("dialog.settings_theme_hint").to_string(), String::new()];
             let marker = if s.is_syntax_highlighting_selected() {
                 "▸ "
             } else {

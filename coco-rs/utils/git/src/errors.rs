@@ -14,6 +14,8 @@ pub enum GitToolingError {
         status: ExitStatus,
         stderr: String,
     },
+    #[error("git command `{command}` timed out after {seconds}s")]
+    GitTimeout { command: String, seconds: u64 },
     #[error("git command `{command}` produced non-UTF-8 output")]
     GitOutputUtf8 {
         command: String,

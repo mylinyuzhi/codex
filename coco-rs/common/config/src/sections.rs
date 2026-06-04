@@ -24,8 +24,9 @@ const DEFAULT_BASH_MAX_OUTPUT_BYTES: i64 = 30_000;
 /// Crate-internal: this is a config-resolution detail, not a public API.
 pub(crate) const BASH_MAX_OUTPUT_BYTES_UPPER: i64 = 150_000;
 const DEFAULT_GLOB_TIMEOUT_SECONDS: i32 = 10;
-const DEFAULT_MAX_RETRIES: i32 = 3;
-const DEFAULT_RETRY_BASE_DELAY_MS: i64 = 1_000;
+// TS `withRetry.ts`: DEFAULT_MAX_RETRIES = 10, base delay 500ms.
+const DEFAULT_MAX_RETRIES: i32 = 10;
+const DEFAULT_RETRY_BASE_DELAY_MS: i64 = 500;
 const DEFAULT_RETRY_MAX_DELAY_MS: i64 = 60_000;
 const DEFAULT_RETRY_JITTER: f64 = 0.25;
 /// 60-second HTTP fetch timeout — matches TS `WebFetchTool/utils.ts:116`
@@ -382,7 +383,10 @@ pub struct LoopConfig {
 impl Default for LoopConfig {
     fn default() -> Self {
         Self {
-            max_turns: Some(30),
+            // Unbounded by default — TS only caps turns when `--max-turns`
+            // (print mode) or `loop.max_turns` (settings) is explicitly set.
+            // The interactive REPL runs until the model stops on its own.
+            max_turns: None,
             total_token_budget: None,
             permission_mode: PermissionMode::Default,
             enable_streaming_tools: true,

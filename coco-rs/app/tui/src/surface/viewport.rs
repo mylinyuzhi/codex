@@ -413,6 +413,7 @@ pub(crate) fn build_live_tail_lines(
         .tool_executions(&state.session.tool_executions)
         .width(width)
         .syntax_highlighting(state.ui.display_settings.syntax_highlighting)
+        .cwd(state.session.working_dir.as_deref())
         .kb_handle(&state.ui.kb_handle);
     if !state.ui.collapsed_tools.is_empty() {
         chat = chat.collapsed_tools(&state.ui.collapsed_tools);

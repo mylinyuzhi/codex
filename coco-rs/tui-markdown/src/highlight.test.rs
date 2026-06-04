@@ -25,6 +25,27 @@ fn highlights_known_language() {
 }
 
 #[test]
+fn keyword_token_uses_code_keyword_color_without_bold() {
+    // Regression guard on the token→style mapping itself (independent of which
+    // syntect scope a given word lands in): keywords paint with `code_keyword`
+    // and stay unbolded. The old ANSI-Magenta + BOLD combo read as a harsh red;
+    // both of claude-code's highlighters leave keywords unbolded.
+    use ratatui::style::Modifier;
+
+    use super::CodeToken;
+
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let style = CodeToken::Keyword.style(styles);
+    assert_eq!(style.fg, Some(theme.code_keyword));
+    assert!(
+        !style.add_modifier.contains(Modifier::BOLD),
+        "keyword must not be bold, got {:?}",
+        style.add_modifier
+    );
+}
+
+#[test]
 fn unknown_language_falls_back_to_none() {
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
@@ -74,8 +95,8 @@ fn cache_key_includes_theme() {
     // second call would HIT the first theme's entry and return a ptr-equal Arc;
     // asserting non-equality proves the theme is part of the key.
     let code = "fn cache_key_includes_theme() {}\n";
-    let t1 = Theme::from_name(ThemeName::Default);
-    let t2 = Theme::from_name(ThemeName::Dracula);
+    let t1 = Theme::from_name(ThemeName::Dark);
+    let t2 = Theme::from_name(ThemeName::Light);
     let a = highlight_code(
         code,
         "rust",

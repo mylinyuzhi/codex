@@ -94,34 +94,9 @@ fn test_non_silent_with_output() {
     assert!(!is_silent_command("cat file"));
 }
 
-// ── interpret_command_result tests ──
-
-#[test]
-fn test_interpret_grep_no_matches() {
-    let result = interpret_command_result("grep pattern", 1, "", "");
-    assert!(!result.is_error);
-    assert_eq!(result.message.as_deref(), Some("No matches found"));
-}
-
-#[test]
-fn test_interpret_grep_error() {
-    let result = interpret_command_result("grep pattern", 2, "", "");
-    assert!(result.is_error);
-}
-
-#[test]
-fn test_interpret_diff_differences() {
-    let result = interpret_command_result("diff a b", 1, "", "");
-    assert!(!result.is_error);
-    assert_eq!(result.message.as_deref(), Some("Files differ"));
-}
-
-#[test]
-fn test_interpret_default_failure() {
-    let result = interpret_command_result("cargo build", 101, "", "");
-    assert!(result.is_error);
-    assert!(result.message.unwrap().contains("101"));
-}
+// Command-semantics interpretation moved to the canonical
+// `coco_shell::semantics` (see `exec/shell/src/semantics.test.rs`); the
+// duplicate interpreter that lived here was removed.
 
 // ── truncate_output_intelligent tests ──
 

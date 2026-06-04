@@ -381,6 +381,7 @@ fn replay_options(
         syntax_highlighting,
         show_system_reminders: false,
         show_thinking: false,
+        cwd: None,
         kb_handle: None,
         replay_cache_policy: HistoryReplayCachePolicy::default(),
         reasoning_metadata: None,

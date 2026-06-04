@@ -91,7 +91,9 @@ pub async fn post_json_to_api_with_client<T>(
     }
 
     let response = request.send().await.map_err(|e| {
-        api_error_to_sdk_error(APICallError::new(format!("Request failed: {e}"), url))
+        // Connection/DNS/timeout failures are transient — TS treats
+        // APIConnectionError as always-retryable so the backoff loop fires.
+        api_error_to_sdk_error(APICallError::retryable(format!("Request failed: {e}"), url))
     })?;
 
     check_cancelled(&abort_signal)?;
@@ -147,7 +149,9 @@ pub async fn get_from_api_with_client<T>(
     }
 
     let response = request.send().await.map_err(|e| {
-        api_error_to_sdk_error(APICallError::new(format!("Request failed: {e}"), url))
+        // Connection/DNS/timeout failures are transient — TS treats
+        // APIConnectionError as always-retryable so the backoff loop fires.
+        api_error_to_sdk_error(APICallError::retryable(format!("Request failed: {e}"), url))
     })?;
 
     handle_response(response, url, Value::Null, success_handler, error_handler).await
@@ -220,7 +224,9 @@ pub async fn post_stream_to_api_with_client(
     }
 
     let response = request.send().await.map_err(|e| {
-        api_error_to_sdk_error(APICallError::new(format!("Request failed: {e}"), url))
+        // Connection/DNS/timeout failures are transient — TS treats
+        // APIConnectionError as always-retryable so the backoff loop fires.
+        api_error_to_sdk_error(APICallError::retryable(format!("Request failed: {e}"), url))
     })?;
 
     let status = response.status();
@@ -280,7 +286,9 @@ pub async fn post_json_to_api_with_client_and_headers<T>(
     }
 
     let response = request.send().await.map_err(|e| {
-        api_error_to_sdk_error(APICallError::new(format!("Request failed: {e}"), url))
+        // Connection/DNS/timeout failures are transient — TS treats
+        // APIConnectionError as always-retryable so the backoff loop fires.
+        api_error_to_sdk_error(APICallError::retryable(format!("Request failed: {e}"), url))
     })?;
 
     check_cancelled(&abort_signal)?;
@@ -314,7 +322,9 @@ pub async fn post_stream_to_api_with_client_and_headers(
     }
 
     let response = request.send().await.map_err(|e| {
-        api_error_to_sdk_error(APICallError::new(format!("Request failed: {e}"), url))
+        // Connection/DNS/timeout failures are transient — TS treats
+        // APIConnectionError as always-retryable so the backoff loop fires.
+        api_error_to_sdk_error(APICallError::retryable(format!("Request failed: {e}"), url))
     })?;
 
     let status = response.status();

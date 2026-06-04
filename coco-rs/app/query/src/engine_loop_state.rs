@@ -123,7 +123,7 @@ impl LoopTurnState {
     /// initialized from the provided session caps.
     pub(crate) fn new(
         total_token_budget: Option<i64>,
-        max_turns: i32,
+        max_turns: Option<i32>,
         max_continuations: i32,
     ) -> Self {
         Self {
@@ -357,10 +357,27 @@ impl QueryEngine {
         // env vars (set by the swarm spawner); mirror
         // `swarm_identity::get_agent_name` env fallback. Env namespace
         // is `COCO_*` — see swarm_constants.
-        let agent_name_env = env::env_opt(EnvKey::CocoAgentName);
-        let team_name_env = env::env_opt(EnvKey::CocoTeamName);
-        if let (Some(mbox), Some(agent), Some(team)) =
-            (self.mailbox.clone(), agent_name_env, team_name_env)
+        // Teammate processes get their identity from the spawner's env
+        // (`COCO_AGENT_NAME` / `COCO_TEAM_NAME`). A leader has no such env
+        // (TS reads `appState.teamContext` instead), so when the env is
+        // absent we resolve the active team from the coordinator roster via
+        // the agent handle and identify as `team-lead`. Without this the
+        // leader's `inject_leader_pending_approvals` never fires (its
+        // `agent == "team-lead"` + mailbox gate was unreachable).
+        let (agent_name, team_name) = match (
+            env::env_opt(EnvKey::CocoAgentName),
+            env::env_opt(EnvKey::CocoTeamName),
+        ) {
+            (Some(agent), Some(team)) => (Some(agent), Some(team)),
+            _ => match self.agent_handle.as_ref() {
+                Some(handle) => match handle.active_team_name().await {
+                    Some(team) => (Some("team-lead".to_string()), Some(team)),
+                    None => (None, None),
+                },
+                None => (None, None),
+            },
+        };
+        if let (Some(mbox), Some(agent), Some(team)) = (self.mailbox.clone(), agent_name, team_name)
         {
             pr_init = pr_init.with_mailbox(
                 mbox,

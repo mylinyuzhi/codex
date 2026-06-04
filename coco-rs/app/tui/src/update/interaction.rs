@@ -319,9 +319,10 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
             ));
             state.ui.dismiss_modal();
         }
-        _ => {
-            state.ui.dismiss_modal();
-        }
+        // Theme picker / settings (and any modal whose context maps Esc → Deny)
+        // close through the shared helper so they restore the theme preview and
+        // emit the same dismiss feedback as the `Cancel` route.
+        _ => super::close_modal_with_feedback(state, command_tx).await,
     }
 }
 
@@ -631,7 +632,23 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
         return;
     }
 
+    let mut theme_preview: Option<crate::theme::ThemeSetting> = None;
     match state.ui.modal.as_mut() {
+        Some(ModalState::ThemePicker(p)) => {
+            let count = p.choices.len() as i32;
+            let prev = p.selected;
+            p.selected = (p.selected + delta).clamp(0, (count - 1).max(0));
+            // Live preview: only when the focused row actually changed, capture
+            // the theme and apply it in-memory *after* the borrow is released so
+            // the whole picker recolors as the cursor moves (Esc restores
+            // `original_setting`).
+            if p.selected != prev {
+                theme_preview = p
+                    .choices
+                    .get(p.selected as usize)
+                    .map(|c| c.setting.clone());
+            }
+        }
         Some(ModalState::ModelPicker(m)) => {
             let count = filtered_models(m).len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
@@ -693,7 +710,6 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
         Some(
             ModalState::Help
             | ModalState::Doctor(_)
-            | ModalState::ContextVisualization
             | ModalState::Bridge(_)
             | ModalState::InvalidConfig(_),
         ) => {
@@ -701,6 +717,9 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
                 (state.ui.help_scroll + delta * constants::SCROLL_LINE_STEP).max(0);
         }
         _ => {}
+    }
+    if let Some(setting) = theme_preview {
+        let _ = state.ui.preview_theme_setting(setting);
     }
 }
 
@@ -817,46 +836,42 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         .await;
                 }
             }
-            ModalState::Settings(s) => {
-                // Only the Theme tab applies changes on Enter. Other tabs are
-                // read-only (About) or populated asynchronously (OutputStyle,
-                // Permissions). On Theme tab, theme rows persist to
-                // ~/.coco/theme.json and the syntax row persists to settings.json.
-                let mut s = s;
-                if let crate::widgets::settings_panel::SettingsTab::Theme = s.active_tab {
-                    if let Some(choice) = s.selected_theme_choice().cloned() {
-                        match state.ui.apply_theme_setting(choice.setting.clone()) {
-                            Ok(()) => {
-                                s.active_theme = choice.setting.clone();
-                                match crate::theme::save_theme_setting(&choice.setting) {
-                                    Ok(_path) => {
-                                        // `❯ /theme` + `⎿ Theme set to …`
-                                        // transcript line, but `System`
-                                        // (transcript-only): theme is a
-                                        // tool-config action the LLM must not
-                                        // see. Same feedback channel as `/model`.
-                                        let messages = coco_messages::build_slash_command_messages(
-                                            "theme",
-                                            /*args*/ "",
-                                            &format!("Theme set to {}", choice.label),
-                                            /*is_sensitive*/ false,
-                                        );
-                                        let _ = command_tx
-                                            .send(crate::command::UserCommand::PushSlashResult {
-                                                messages,
-                                            })
-                                            .await;
-                                    }
-                                    Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(
-                                        format!("Failed to save theme: {err}"),
-                                    )),
-                                }
+            ModalState::ThemePicker(p) => {
+                // Standalone picker (TS): the focused theme is already applied
+                // in-memory via live preview; Enter persists it and closes.
+                if let Some(choice) = p.choices.get(p.selected.max(0) as usize).cloned() {
+                    match state.ui.apply_theme_setting(choice.setting.clone()) {
+                        Ok(()) => match crate::theme::save_theme_setting(&choice.setting) {
+                            Ok(_path) => {
+                                let messages = coco_messages::build_slash_command_messages(
+                                    "theme",
+                                    /*args*/ "",
+                                    &format!("Theme set to {}", choice.label),
+                                    /*is_sensitive*/ false,
+                                );
+                                let _ = command_tx
+                                    .send(crate::command::UserCommand::PushSlashResult { messages })
+                                    .await;
                             }
                             Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(
-                                format!("Failed to apply theme: {err}"),
+                                format!("Failed to save theme: {err}"),
                             )),
-                        }
-                    } else if s.is_syntax_highlighting_selected() {
+                        },
+                        Err(err) => state.ui.add_toast(crate::state::ui::Toast::error(format!(
+                            "Failed to apply theme: {err}"
+                        ))),
+                    }
+                }
+                // Picker closes (modal already taken).
+                return;
+            }
+            ModalState::Settings(s) => {
+                // Only the Display tab toggles anything on Enter (syntax
+                // highlighting → settings.json; copy-full-response → settings).
+                // Theme selection moved to the standalone `/theme` picker.
+                let mut s = s;
+                if let crate::widgets::settings_panel::SettingsTab::Display = s.active_tab {
+                    if s.is_syntax_highlighting_selected() {
                         toggle_syntax_highlighting(state);
                         s.set_display_settings(state.ui.display_settings.clone());
                     } else if s.is_copy_full_response_selected() {
@@ -864,8 +879,7 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         s.set_display_settings(state.ui.display_settings.clone());
                     }
                 }
-                // Keep settings open after selection — user may want to try
-                // themes successively.
+                // Keep settings open after a toggle.
                 state.ui.restore_modal(ModalState::Settings(s));
                 return;
             }
@@ -1445,7 +1459,7 @@ fn toggle_copy_full_response(state: &mut AppState) {
 fn settings_item_count(s: &crate::widgets::settings_panel::SettingsPanelState) -> usize {
     use crate::widgets::settings_panel::SettingsTab;
     match s.active_tab {
-        SettingsTab::Theme => s.theme_item_count(),
+        SettingsTab::Display => s.display_item_count(),
         SettingsTab::OutputStyle => s.output_styles.len(),
         SettingsTab::Permissions => s.permission_rules.len(),
         SettingsTab::About => 0,

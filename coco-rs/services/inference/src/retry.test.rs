@@ -91,6 +91,41 @@ fn test_should_retry_within_limit() {
 }
 
 #[test]
+fn test_overload_cascade_capped_but_others_get_full_budget() {
+    let config = RetryConfig {
+        max_retries: 10,
+        ..Default::default()
+    };
+    // Overload cascade (503/529) — capped at MAX_CAPACITY_RETRIES (3) so the
+    // fallback chain engages fast, even though max_retries is 10.
+    let overloaded = crate::errors::OverloadedSnafu {
+        retry_after_ms: None,
+    }
+    .build();
+    assert!(config.should_retry(2, &overloaded));
+    assert!(
+        !config.should_retry(3, &overloaded),
+        "overload cascade must cap at 3 regardless of max_retries"
+    );
+
+    // Rate limit (429) and generic network/5xx — NOT capacity-capped: full
+    // budget (TS retries 429 / status>=500 up to DEFAULT_MAX_RETRIES).
+    let rate_limited = crate::errors::RateLimitedSnafu {
+        retry_after_ms: None,
+        message: "slow down".to_string(),
+    }
+    .build();
+    let network = crate::errors::NetworkSnafu {
+        message: "5xx".to_string(),
+    }
+    .build();
+    assert!(config.should_retry(5, &rate_limited));
+    assert!(config.should_retry(9, &rate_limited));
+    assert!(config.should_retry(9, &network));
+    assert!(!config.should_retry(10, &network)); // at max_retries
+}
+
+#[test]
 fn test_jitter_adds_delay() {
     let config = RetryConfig {
         max_retries: 3,

@@ -131,7 +131,7 @@ pub fn refresh_suggestions(state: &mut AppState) {
     // The Autocomplete keybinding context only activates when items is
     // non-empty, so arrow keys keep passing through to input editing until
     // results materialize.
-    let items = match trigger.kind {
+    let mut items = match trigger.kind {
         SuggestionKind::SlashCommand => slash_items(state, &trigger.query),
         SuggestionKind::At => unified_seed_items(state, &trigger.query),
         SuggestionKind::Path | SuggestionKind::Directory => Vec::new(),
@@ -139,16 +139,41 @@ pub fn refresh_suggestions(state: &mut AppState) {
         SuggestionKind::Symbol => Vec::new(),
     };
 
-    // Preserve selected index across refreshes where possible — clamp to
-    // the new item range so navigation stays stable as the user types.
-    let prior_selected = state
+    // Snapshot the prior popup for the SAME trigger token (kind + position):
+    // its selection (so navigation stays stable as the user types) and its
+    // rows (so async-backed popups don't blank between keystrokes).
+    let (prior_selected, prior_items) = state
         .ui
         .completion
         .active
         .as_ref()
-        .filter(|s| s.kind == trigger.kind)
-        .map(|s| s.selected)
-        .unwrap_or(0);
+        .filter(|s| s.kind == trigger.kind && s.trigger_pos == trigger.pos)
+        .map(|s| (s.selected, s.items.clone()))
+        .unwrap_or((0, Vec::new()));
+
+    // Async-backed kinds fill `items` only when the debounced result lands
+    // (At merges file results, Path/Directory come from FileSearchManager,
+    // Symbol from LSP). Installing an empty Vec on every keystroke blanks the
+    // popup for ~one debounce interval — the severe flicker while typing a
+    // path. Keep the previously-shown rows mounted until the async result for
+    // the new key replaces them in `apply_async_result_for_key`; a genuinely
+    // empty *final* result still collapses the popup there. Fully-synchronous
+    // kinds (SlashCommand, CustomTitle) keep clearing immediately — an empty
+    // result is authoritative for them.
+    if items.is_empty()
+        && !prior_items.is_empty()
+        && matches!(
+            trigger.kind,
+            SuggestionKind::At
+                | SuggestionKind::Path
+                | SuggestionKind::Directory
+                | SuggestionKind::Symbol
+        )
+    {
+        items = prior_items;
+    }
+
+    // Clamp the preserved selection to the new item range.
     let selected = if items.is_empty() {
         0
     } else {

@@ -152,6 +152,56 @@ fn test_refresh_leading_slash_uses_popup_not_ghost() {
 }
 
 #[test]
+fn at_popup_retains_prior_items_across_keystroke_until_async_lands() {
+    // Flicker regression: typing another character of the same `@` token must
+    // NOT blank the popup while the debounced file search is still pending.
+    // The previously-shown rows are retained until apply_async_result swaps in
+    // the new results, eliminating the per-keystroke empty frame.
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@src/fo");
+    state.ui.input.textarea.set_cursor("@src/fo".len());
+    refresh_suggestions(&mut state);
+
+    // Simulate the FileSearchManager result for the first query landing.
+    {
+        let active = state
+            .ui
+            .completion
+            .active
+            .as_mut()
+            .expect("async @ popup installed");
+        active.items = vec![SuggestionItem {
+            label: "src/foo.rs".to_string(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        }];
+    }
+
+    // User types one more character of the SAME @-token.
+    state.ui.input.textarea.set_text("@src/foo");
+    state.ui.input.textarea.set_cursor("@src/foo".len());
+    refresh_suggestions(&mut state);
+
+    let active = state
+        .ui
+        .completion
+        .active
+        .as_ref()
+        .expect("popup must stay mounted, not blank");
+    assert_eq!(
+        active
+            .items
+            .iter()
+            .map(|i| i.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["src/foo.rs"],
+        "prior file rows must be retained across the keystroke, not cleared to empty"
+    );
+}
+
+#[test]
 fn test_refresh_installs_shell_history_ghost() {
     let mut state = AppState::new();
     state.ui.input.add_to_history("!cargo test".into());

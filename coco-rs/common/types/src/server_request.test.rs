@@ -140,7 +140,7 @@ fn context_usage_result_roundtrip() {
         percentage: 25.0,
         model: "claude-opus".into(),
         categories: vec![ContextUsageCategory {
-            name: "system_prompt".into(),
+            kind: crate::ContextCategoryKind::SystemPrompt,
             tokens: 5000,
         }],
         is_auto_compact_enabled: true,
@@ -150,9 +150,10 @@ fn context_usage_result_roundtrip() {
         mcp_tools: Vec::new(),
         agents: Vec::new(),
         skills: Vec::new(),
+        suggestions: Vec::new(),
     };
     let j = serde_json::to_value(&r).unwrap();
     assert_eq!(j["total_tokens"], 50_000);
     assert_eq!(j["percentage"], 25.0);
-    assert_eq!(j["categories"][0]["name"], "system_prompt");
+    assert_eq!(j["categories"][0]["kind"], "system_prompt");
 }

@@ -10,11 +10,11 @@ expression: output
                                                                                 
   ‖ 3 in parallel                                                               
                                                                                 
-🔧  Bash(ls -la)                                                                 
+● Bash(ls -la)                                                                  
                                                                                 
-🔧  Read(src/main.rs)                                                            
+● Read(src/main.rs)                                                             
                                                                                 
-🔧  Grep(TODO)                                                                   
+● Grep(TODO)                                                                    
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               

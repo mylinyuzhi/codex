@@ -4,6 +4,8 @@
 
 use std::ops::Range;
 
+use coco_types::CommandTypeTag;
+
 use crate::state::AppState;
 use crate::widgets::suggestion_popup::SuggestionItem;
 use crate::widgets::suggestion_popup::SuggestionMeta;
@@ -401,7 +403,13 @@ fn accepted_slash_command(state: &AppState, label: &str) -> Option<AcceptedSlash
         .find(|cmd| cmd.name == name)
         .map(|cmd| AcceptedSlashCommand {
             argument_hint: cmd.argument_hint.clone(),
-            should_submit: !cmd.argument_kind.accepts_arguments(),
+            // Overlay-opening commands (`local-jsx` in TS — `/theme`, `/model`,
+            // …) run on Enter even when they advertise an optional `[arg]`
+            // hint: the overlay collects any further input interactively. Only
+            // commands whose argument must be typed first stay in completion
+            // mode after accepting the suggestion.
+            should_submit: !cmd.argument_kind.accepts_arguments()
+                || cmd.kind == CommandTypeTag::LocalOverlay,
         })
 }
 

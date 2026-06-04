@@ -248,6 +248,29 @@ where
     }
 }
 
+/// Resolve the current process's teammate identity from the 3-tier
+/// context (task-local → dynamic → env). Returns `None` when this is not
+/// a teammate (no agent id resolves).
+///
+/// Used by the cross-process [`MailboxPermissionBridge`] install so a
+/// pane teammate forwards deny-path permission prompts to the leader.
+///
+/// [`MailboxPermissionBridge`]: crate::runner_loop_mailbox_permission::MailboxPermissionBridge
+pub fn resolve_teammate_identity() -> Option<crate::types::TeammateIdentity> {
+    use std::str::FromStr;
+    let agent_id = get_agent_id()?;
+    let team_name = get_team_name(None)?;
+    let agent_name = get_agent_name().unwrap_or_else(|| agent_id.clone());
+    let color = get_teammate_color().and_then(|c| coco_types::AgentColorName::from_str(&c).ok());
+    Some(crate::types::TeammateIdentity {
+        agent_id,
+        agent_name,
+        team_name,
+        color,
+        plan_mode_required: is_plan_mode_required(),
+    })
+}
+
 /// Create a `TeammateContextData` for spawning an in-process agent.
 pub fn create_teammate_context(
     agent_name: &str,

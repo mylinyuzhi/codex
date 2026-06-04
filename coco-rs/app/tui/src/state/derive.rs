@@ -284,6 +284,37 @@ pub(crate) mod test_helpers {
             .expect("info message yields a cell")
     }
 
+    /// Single-cell `RenderedCell` for a `/context` usage snapshot
+    /// (`SystemMessage::ContextUsage`) — first-class content, not a meta row.
+    pub fn context_usage_cell() -> RenderedCell {
+        let result = coco_types::ContextUsageResult {
+            total_tokens: 1_000,
+            max_tokens: 200_000,
+            raw_max_tokens: 200_000,
+            percentage: 0.5,
+            model: "test/model".to_string(),
+            categories: Vec::new(),
+            is_auto_compact_enabled: false,
+            auto_compact_threshold: None,
+            message_breakdown: None,
+            memory_files: Vec::new(),
+            mcp_tools: Vec::new(),
+            agents: Vec::new(),
+            skills: Vec::new(),
+            suggestions: Vec::new(),
+        };
+        let msg = coco_messages::Message::System(coco_messages::SystemMessage::ContextUsage(
+            coco_messages::SystemContextUsageMessage {
+                uuid: Uuid::new_v4(),
+                result,
+            },
+        ));
+        message_to_cells(Arc::new(msg))
+            .into_iter()
+            .next()
+            .expect("context usage message yields a cell")
+    }
+
     /// Synthetic thinking-cell for tests that exercise the assistant
     /// thinking renderer. The owned engine message carries the
     /// reasoning text so renderers can rehydrate metadata via
