@@ -93,6 +93,7 @@ pub use agent::ModelInheritance;
 pub use agent::ModelSource;
 pub use agent::SubagentType;
 pub use agent::ToolAllowList;
+pub use agent::WorkerBadge;
 
 // Inter-agent IPC (mailbox protocol + sub-agent state snapshots)
 pub use agent_ipc::IdleReason;
@@ -101,8 +102,6 @@ pub use agent_ipc::SubAgentState;
 pub use agent_ipc::SubAgentStatus;
 pub use agent_ipc::SubagentRuntimeSnapshot;
 pub use agent_ipc::TaskEntry;
-pub use agent_ipc::TeamContext;
-pub use agent_ipc::TeammateEntry;
 pub use agent_ipc::TeammateProtocolContent;
 pub use agent_ipc::TeammateProtocolMessage;
 

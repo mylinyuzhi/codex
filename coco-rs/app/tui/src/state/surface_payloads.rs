@@ -51,6 +51,10 @@ pub struct PermissionPromptState {
     /// Permission updates suggested by core for "always allow".
     /// Prefer these over UI-side inference.
     pub permission_suggestions: Vec<coco_types::PermissionUpdate>,
+    /// Identity badge of the requesting cross-process teammate, if any.
+    /// Rendered in the prompt title so the leader sees who is asking;
+    /// `None` for the leader's own in-process requests.
+    pub worker_badge: Option<coco_types::WorkerBadge>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,6 +254,40 @@ pub struct ModelPickerState {
     /// `default_effort` on every selection change (see `update::interaction`).
     /// `None` when the focused model declares no thinking levels.
     pub effort: Option<coco_types::ReasoningEffort>,
+}
+
+/// Teams roster picker — lets the leader cycle a teammate's permission
+/// mode. TS parity: `components/teams/TeamsDialog.tsx` (per-member mode
+/// cycling). Members come from `session.subagents` (kind == Teammate); each
+/// member's CURRENT mode is seeded fresh from `team.json` so the picker shows
+/// and cycles from the live mode (not a hardcoded default). Left/Right cycles
+/// the focused member's mode in place; Enter dispatches it via
+/// `UserCommand::SetTeammateMode`.
+#[derive(Debug, Clone)]
+pub struct TeamRosterState {
+    /// Active team name (header).
+    pub team_name: String,
+    /// Running teammates, in roster order.
+    pub members: Vec<TeamRosterMember>,
+    /// Index of the focused teammate row.
+    pub selected: usize,
+}
+
+/// One teammate row in the roster picker.
+#[derive(Debug, Clone)]
+pub struct TeamRosterMember {
+    /// Display name (the `name` half of `name@team`), used as the
+    /// `set_teammate_mode` target.
+    pub name: String,
+    /// Agent type label (e.g. `"explore"`), shown as a dim suffix.
+    pub agent_type: String,
+    /// Assigned palette color, if any.
+    pub color: Option<coco_types::AgentColorName>,
+    /// This teammate's CURRENT permission mode, seeded from `team.json` and
+    /// cycled in place by Left/Right when focused. Per-member so divergent
+    /// teammate modes are each shown and edited correctly (a single shared
+    /// field could not represent that). TS: `teammate.mode` per row.
+    pub mode: coco_types::PermissionMode,
 }
 
 /// One row in the picker — pre-resolved against the registry so the

@@ -52,6 +52,7 @@ async fn request_permission_approved_round_trip() {
                 input: serde_json::json!({ "command": "ls" }),
                 suggestions: vec![],
                 choices: None,
+                worker_badge: None,
             })
             .await
     });
@@ -106,6 +107,7 @@ async fn request_permission_denied_round_trip() {
                 input: serde_json::json!({ "command": "rm -rf /" }),
                 suggestions: vec![],
                 choices: None,
+                worker_badge: None,
             })
             .await
     });
@@ -151,6 +153,7 @@ async fn request_permission_client_error_is_treated_as_denial() {
                 input: serde_json::json!({}),
                 suggestions: vec![],
                 choices: None,
+                worker_badge: None,
             })
             .await
     });
@@ -196,6 +199,7 @@ async fn request_permission_errors_if_transport_not_initialized() {
             input: serde_json::json!({}),
             suggestions: vec![],
             choices: None,
+            worker_badge: None,
         })
         .await;
     let err = result.expect_err("should error when transport missing");

@@ -30,7 +30,36 @@ fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
         display_input,
         original_input: None,
         permission_suggestions: vec![],
+        worker_badge: None,
     }
+}
+
+#[test]
+fn permission_content_title_includes_worker_badge() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "ls".to_string(),
+    });
+    state.worker_badge = Some(coco_types::WorkerBadge {
+        name: "researcher".to_string(),
+        color: coco_types::AgentColorName::Cyan,
+    });
+    let (title, _body, _border) = permission_content(&state, UiStyles::new(&theme));
+    // The worker name is surfaced in the title so the leader sees who is
+    // asking (gap 12). TS `PermissionRequestTitle.tsx:32`.
+    assert!(title.contains("· @researcher"), "got title: {title}");
+}
+
+#[test]
+fn permission_content_omits_badge_without_worker() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "ls".to_string(),
+    });
+    let (title, _body, _border) = permission_content(&state, UiStyles::new(&theme));
+    assert!(!title.contains('@'), "no badge expected: {title}");
 }
 
 #[test]

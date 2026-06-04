@@ -217,6 +217,13 @@ impl<'a> PermissionController<'a> {
             input: tool_input.clone(),
             suggestions,
             choices,
+            // The generic controller can't resolve the coordinator's
+            // task-local teammate identity, so it leaves the badge empty.
+            // For in-process teammates the leader's permission bridge
+            // (`leader_permission::enrich_in_process_worker_badge`) fills it
+            // in — it runs inline within the teammate's task-local scope.
+            // Cross-process teammates are badged in `leader_permission`.
+            worker_badge: None,
         };
 
         let bridge_result = tokio::select! {

@@ -69,6 +69,48 @@ fn app_toggle_todos_maps_to_toggle_expanded_tasks_view() {
     assert!(matches!(cmd, TuiCommand::ToggleExpandedTasksView));
 }
 
+/// `app:toggleTeamRoster` (the new `ctrl+shift+t` binding) is gated on the
+/// session actually having a teammate — in a non-team session it returns
+/// `None` (inert, no global shadow), and opens the roster when a teammate is
+/// present. Regression guard for A7a: the roster picker previously had NO
+/// reachable trigger because the resolver claimed `ctrl+t` for todos before
+/// the dead hardcoded fallback.
+#[test]
+fn app_toggle_team_roster_is_inert_without_a_teammate() {
+    let state = fresh_state();
+    assert!(
+        dispatch_action(&KeybindingAction::AppToggleTeamRoster, &state).is_none(),
+        "no teammate ⇒ binding must be an inert no-op, not a global shadow"
+    );
+}
+
+#[test]
+fn app_toggle_team_roster_opens_when_a_teammate_is_present() {
+    let mut state = fresh_state();
+    state
+        .session
+        .subagents
+        .push(crate::state::SubagentInstance {
+            kind: crate::state::SubagentKind::Teammate,
+            agent_id: "researcher@my-team".into(),
+            agent_type: "explore".into(),
+            description: String::new(),
+            status: crate::state::SubagentStatus::Running,
+            color: None,
+            team_name: Some("my-team".into()),
+            tool_use_id: None,
+            started_at_ms: None,
+            last_tool_name: None,
+            tool_count: 0,
+            total_tokens: 0,
+            is_backgrounded: false,
+            recent_activities: Vec::new(),
+            final_message: None,
+        });
+    let cmd = dispatch_action(&KeybindingAction::AppToggleTeamRoster, &state).unwrap();
+    assert!(matches!(cmd, TuiCommand::OpenTeamRoster));
+}
+
 #[test]
 fn app_toggle_transcript_maps_to_toggle_transcript() {
     let state = fresh_state();

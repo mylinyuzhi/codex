@@ -14,6 +14,7 @@ use crate::state::surface_payloads::QuickOpenState;
 use crate::state::surface_payloads::SessionBrowserState;
 use crate::state::surface_payloads::SkillsDialogState;
 use crate::state::surface_payloads::TaskDetailState;
+use crate::state::surface_payloads::TeamRosterState;
 use crate::state::surface_payloads::ThemePickerState;
 use crate::state::surface_payloads::{self};
 
@@ -46,6 +47,7 @@ pub enum ModalState {
     Feedback(surface_payloads::FeedbackState),
     McpServerSelect(surface_payloads::McpServerSelectState),
     CopyPicker(CopyPickerState),
+    TeamRoster(TeamRosterState),
 }
 
 impl ModalState {
@@ -73,6 +75,7 @@ impl ModalState {
             | Self::SkillsDialog(_)
             | Self::AgentsDialog(_)
             | Self::CopyPicker(_)
+            | Self::TeamRoster(_)
             | Self::IdleReturn(_) => 7,
             Self::Help => 8,
         }

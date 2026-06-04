@@ -31,6 +31,7 @@ pub use auto_mode::AutoModeDecision;
 pub use auto_mode::AutoModeInput;
 pub use auto_mode::classify_auto_mode_extended;
 pub use auto_mode::classify_for_auto_mode;
+pub use auto_mode_decision::AutoModeContext;
 pub use auto_mode_decision::can_use_tool_in_auto_mode;
 pub use auto_mode_state::AutoModeState;
 pub use classifier::AutoModeRules;

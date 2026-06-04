@@ -222,6 +222,16 @@ pub enum UserCommand {
     /// Set permission mode. Replaces the legacy `SetPlanMode { bool }`
     /// — plan-mode activation is just `SetPermissionMode { mode: Plan }`.
     SetPermissionMode { mode: PermissionMode },
+    /// Leader → teammate: set a teammate's permission mode from the teams
+    /// roster picker (gap 8). Routed to `AgentHandle::set_teammate_mode`,
+    /// which persists it + notifies the live teammate via `ModeSetRequest`.
+    SetTeammateMode { name: String, mode: PermissionMode },
+    /// Leader → teammates: set MANY teammates' modes at once (roster
+    /// "cycle all", Shift+Left/Right). One atomic `team.json` write +
+    /// per-teammate `ModeSetRequest`. Routed to `AgentHandle::set_teammate_modes`.
+    SetTeammateModes {
+        updates: Vec<(String, PermissionMode)>,
+    },
     /// Set the Main role's thinking effort.
     ///
     /// Emitted by [`crate::events::TuiCommand::CycleThinkingLevel`]

@@ -26,10 +26,19 @@ pub(crate) fn permission_content(
         Some(RiskLevel::High) => t!("dialog.risk_high").to_string(),
         None => String::new(),
     };
+    // Cross-process teammate requests carry a worker badge — suffix the
+    // title with `· @name` so the leader sees who is asking (TS
+    // `PermissionRequestTitle.tsx:32`). The text surface is monochrome;
+    // the badge color is carried on the event for styled / SDK consumers.
+    let worker_suffix = p
+        .worker_badge
+        .as_ref()
+        .map(|b| format!(" · @{}", b.name))
+        .unwrap_or_default();
     let title = if risk_badge.is_empty() {
-        format!(" {} ", p.tool_name)
+        format!(" {}{worker_suffix} ", p.tool_name)
     } else {
-        format!(" {}{risk_badge}", p.tool_name)
+        format!(" {}{risk_badge}{worker_suffix}", p.tool_name)
     };
 
     let classifier_line = if let Some(rule) = &p.classifier_auto_approved {

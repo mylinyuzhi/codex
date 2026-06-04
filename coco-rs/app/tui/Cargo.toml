@@ -12,6 +12,7 @@ testing = []
 
 [dependencies]
 coco-config.workspace = true
+coco-coordinator.workspace = true
 coco-messages.workspace = true
 coco-types.workspace = true
 coco-context.workspace = true

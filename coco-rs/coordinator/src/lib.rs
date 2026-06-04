@@ -1,8 +1,8 @@
 //! Spawn lifecycle for the agent-team subsystem.
 //!
 //! Owns: runner, runner-loop, mailbox IPC, team file, terminal pane
-//! backends (tmux / iTerm2 / pane executor), agent identity / discovery /
-//! reconnect, and the [`coco_tool_runtime::AgentHandle`] implementation
+//! backends (tmux / iTerm2 / pane executor), agent identity / discovery,
+//! and the [`coco_tool_runtime::AgentHandle`] implementation
 //! the tool layer invokes.
 //!
 //! Pure-logic rules and templates live in `core/subagent`
@@ -76,7 +76,6 @@ pub mod discovery;
 pub mod identity;
 pub mod inprocess_backend;
 pub mod prompt;
-pub mod reconnect;
 pub mod roster_store;
 pub mod spawn;
 pub mod teammate;

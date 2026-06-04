@@ -7,11 +7,13 @@
 //! 2. Dynamic team context (set at runtime for tmux teammates)
 //! 3. Environment variables (legacy/fallback)
 
+use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use coco_config::env;
 use coco_types::TaskStateBase;
-use coco_types::TeamContext;
 
 use crate::constants::AGENT_ID_ENV_VAR;
 use crate::constants::AGENT_NAME_ENV_VAR;
@@ -39,6 +41,13 @@ pub struct TeammateContextData {
     pub color: Option<String>,
     pub plan_mode_required: bool,
     pub parent_session_id: String,
+    /// In-process teammate's own stop flag (the runner-loop's
+    /// `config.cancelled`). When the model approves its own shutdown,
+    /// [`signal_self_stop`] flips this so the runner loop breaks on its
+    /// next `config.cancelled` check — the in-process analog of TS
+    /// `handleShutdownApproval` aborting the teammate's `abortController`.
+    /// `None` for non-runner contexts (spawn-time / tmux).
+    pub self_stop_signal: Option<Arc<AtomicBool>>,
 }
 
 /// Run a future with teammate context set in task-local storage.
@@ -63,6 +72,28 @@ pub fn get_teammate_context() -> Option<TeammateContextData> {
 /// TS: `isInProcessTeammate()`
 pub fn is_in_process_teammate() -> bool {
     TEAMMATE_CONTEXT.try_with(|_| ()).is_ok()
+}
+
+/// Signal the current in-process teammate to stop after this turn by
+/// flipping its task-local `self_stop_signal`. Returns `true` when a
+/// signal was present (an in-process teammate with a wired flag).
+///
+/// Called from `SendMessageTool` → `respond_to_shutdown` on the APPROVE
+/// path: the tool runs inline within the teammate's task-local scope, so
+/// it can flip the runner-loop's own `config.cancelled` Arc and let the
+/// loop exit on its next cancellation check. TS parity:
+/// `SendMessageTool.ts` `handleShutdownApproval` → `abortController.abort()`.
+pub fn signal_self_stop() -> bool {
+    TEAMMATE_CONTEXT
+        .try_with(|ctx| {
+            if let Some(sig) = &ctx.self_stop_signal {
+                sig.store(true, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false)
 }
 
 // ── Dynamic Context (tier 2) ──
@@ -139,18 +170,17 @@ pub fn get_agent_name() -> Option<String> {
     env::env_opt(AGENT_NAME_ENV_VAR)
 }
 
-/// Get the current team name (3-tier priority).
+/// Get the current team name (3-tier priority: task-local → dynamic → env).
 ///
-/// TS: `getTeamName(teamContext?)`
-pub fn get_team_name(team_context: Option<&TeamContext>) -> Option<String> {
+/// TS: `getTeamName(teamContext?)` — the optional `teamContext` arg is dropped:
+/// no production caller ever supplied it (the live authority is the coordinator
+/// roster, not an `AppState.teamContext`).
+pub fn get_team_name() -> Option<String> {
     if let Some(ctx) = get_teammate_context() {
         return Some(ctx.team_name);
     }
     if let Some(ctx) = get_dynamic_team_context() {
         return Some(ctx.team_name);
-    }
-    if let Some(tc) = team_context {
-        return Some(tc.team_name.clone());
     }
     env::env_opt(TEAM_NAME_ENV_VAR)
 }
@@ -201,16 +231,6 @@ pub fn is_plan_mode_required() -> bool {
     env::is_env_truthy(PLAN_MODE_REQUIRED_ENV_VAR)
 }
 
-/// Check if this session is the team leader.
-///
-/// TS: `isTeamLead(teamContext?)`
-pub fn is_team_lead(team_context: Option<&TeamContext>) -> bool {
-    let Some(tc) = team_context else {
-        return false;
-    };
-    tc.is_leader
-}
-
 /// Check if there are any active in-process teammates.
 ///
 /// TS: `hasActiveInProcessTeammates(appState)`
@@ -259,7 +279,7 @@ where
 pub fn resolve_teammate_identity() -> Option<crate::types::TeammateIdentity> {
     use std::str::FromStr;
     let agent_id = get_agent_id()?;
-    let team_name = get_team_name(None)?;
+    let team_name = get_team_name()?;
     let agent_name = get_agent_name().unwrap_or_else(|| agent_id.clone());
     let color = get_teammate_color().and_then(|c| coco_types::AgentColorName::from_str(&c).ok());
     Some(crate::types::TeammateIdentity {
@@ -286,6 +306,9 @@ pub fn create_teammate_context(
         color,
         plan_mode_required,
         parent_session_id: parent_session_id.to_string(),
+        // Spawn-time context carries no runner cancel flag — the runner
+        // loop wires its own when it scopes the per-turn context.
+        self_stop_signal: None,
     }
 }
 

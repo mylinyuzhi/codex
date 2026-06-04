@@ -73,6 +73,30 @@ impl PermissionEvaluator {
         context: &ToolPermissionContext,
         tool_check: Option<&ToolCheckFn>,
     ) -> PermissionDecision {
+        let decision = Self::evaluate_inner(tool_id, input, context, tool_check);
+        // TS `hasPermissionsToUseTool`: dontAsk converts ANY remaining 'ask'
+        // into 'deny' as the final step, so early-return asks (tool-wide ask,
+        // content ask, path-safety ask, MCP server ask) are denied too — not
+        // only the mode-fallthrough ask.
+        if context.mode == PermissionMode::DontAsk
+            && matches!(decision, PermissionDecision::Ask { .. })
+        {
+            return PermissionDecision::Deny {
+                message: format!("{tool_id} denied: permission mode does not allow prompting"),
+                reason: PermissionDecisionReason::Mode {
+                    mode: PermissionMode::DontAsk,
+                },
+            };
+        }
+        decision
+    }
+
+    fn evaluate_inner(
+        tool_id: &ToolId,
+        input: &Value,
+        context: &ToolPermissionContext,
+        tool_check: Option<&ToolCheckFn>,
+    ) -> PermissionDecision {
         let tool_str = tool_id.to_string();
 
         tracing::trace!(
@@ -635,7 +659,7 @@ fn lexical_normalize(path: &std::path::Path) -> std::path::PathBuf {
 /// Extract the file-path argument from a file-modifying tool's input.
 ///
 /// Write + Edit use `file_path`; NotebookEdit uses `notebook_path`.
-fn extract_file_modifying_path(tool_str: &str, input: &Value) -> Option<String> {
+pub(crate) fn extract_file_modifying_path(tool_str: &str, input: &Value) -> Option<String> {
     let key = if tool_str == ToolName::NotebookEdit.as_str() {
         "notebook_path"
     } else {
@@ -694,7 +718,7 @@ fn is_shell_tool(tool_pattern: &str) -> bool {
 }
 
 /// Whether a tool modifies files (Write, Edit, NotebookEdit).
-fn is_file_modifying_tool(tool_name: &str) -> bool {
+pub(crate) fn is_file_modifying_tool(tool_name: &str) -> bool {
     tool_name == ToolName::Write.as_str()
         || tool_name == ToolName::Edit.as_str()
         || tool_name == ToolName::NotebookEdit.as_str()

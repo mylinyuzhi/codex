@@ -273,6 +273,21 @@ impl FromStr for AgentColorName {
     }
 }
 
+/// Identity badge for a teammate whose tool needs the leader's approval.
+/// Surfaced in the leader's permission prompt so a human reviewing a
+/// cross-process worker's request can see WHO is asking. The `color` is
+/// the worker's assigned per-teammate palette color (a coco-rs
+/// improvement over TS's hardcoded `cyan`); text-surface renderers show
+/// the name and carry the color for styled / SDK consumers.
+///
+/// TS: `WorkerBadgeProps` (`components/permissions/WorkerBadge.tsx:6`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerBadge {
+    pub name: String,
+    pub color: AgentColorName,
+}
+
 // ── Agent Isolation ──
 
 /// Isolation mode for a subagent's execution environment.

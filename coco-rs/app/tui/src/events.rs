@@ -194,6 +194,9 @@ pub enum TuiCommand {
     ShowHelp,
     /// Show command palette state.
     ShowCommandPalette,
+    /// Open the teams roster picker (Ctrl+T when a team is active) — the
+    /// leader cycles a teammate's permission mode (gap 8).
+    OpenTeamRoster,
     /// Show session browser state.
     ShowSessionBrowser,
     /// Show global search (Ctrl+Shift+F).
@@ -261,6 +264,14 @@ pub enum TuiCommand {
     /// Tab → +1, Shift+Tab → -1. coco-rs-only extension to the TS
     /// picker (TS only ever drives the `main` model).
     ModelPickerCycleRole(i32),
+    /// Cycle the FOCUSED teammate's mode in the TeamRoster picker by `delta`
+    /// (Left/Right) and apply it immediately (TS: cycling persists). gap 8.
+    TeamRosterCycleMode(i32),
+    /// Cycle ALL teammates' modes in tandem by `delta` (Shift+Left/Right) and
+    /// apply immediately. Mirrors TS `cycleAllTeammateModes`: if the members'
+    /// modes diverge, normalise all to `Default`; otherwise advance all by
+    /// `delta`. One atomic `team.json` write + per-teammate mailbox notify.
+    TeamRosterCycleAllModes(i32),
 
     // ── Task management ──
     /// Background all foreground tasks. Single-press Ctrl+B when at

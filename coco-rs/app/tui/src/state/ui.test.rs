@@ -112,6 +112,7 @@ fn permission_prompt() -> PermissionPromptState {
         display_input: coco_types::PermissionDisplayInput::Command("echo hi".to_string()),
         original_input: None,
         permission_suggestions: vec![],
+        worker_badge: None,
     }
 }
 

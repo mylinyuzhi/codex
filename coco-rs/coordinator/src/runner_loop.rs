@@ -347,13 +347,14 @@ pub async fn run_in_process_teammate(
     // `<task-notification>` status to `Failed` and the
     // `on_teammate_stop` reason to "failed: {msg}".
     let mut run_error: Option<String> = None;
-    // Tracks whether the *current* turn was triggered by a shutdown
-    // request from the leader. After the model finishes its response
-    // (which becomes the shutdown approval/rejection text the leader
-    // sees), we exit the loop cleanly. TS parity: `inProcessRunner.ts`
-    // exits after the model finalises its shutdown reply rather than
-    // looping for another message.
-    let mut handling_shutdown = false;
+    // Shutdown is decided by the MODEL, not the runner: a leader
+    // `ShutdownRequest` is delivered as an ordinary turn, and the loop
+    // exits only if the model APPROVES — its `shutdown_response` tool call
+    // runs `signal_self_stop`, flipping `config.cancelled` so the
+    // `config.cancelled` check below breaks. A rejection leaves the flag
+    // clear and the teammate keeps working. TS parity:
+    // `inProcessRunner.ts` "Does NOT auto-approve shutdown" +
+    // `SendMessageTool.ts` `handleShutdownApproval` → `abortController.abort()`.
     // Plan-approval gate — initially open iff the spawn did NOT request
     // plan-mode. When `true`, the runner suspends after each model turn
     // and pushes a `PlanApprovalRequest` to the leader, then awaits the
@@ -419,12 +420,41 @@ pub async fn run_in_process_teammate(
             cancel: Some(current_turn_cancel.clone()),
         };
 
-        // Run query
+        // Run query — wrapped in the teammate's task-local identity context
+        // so identity-aware tools resolve THIS worker via tier-1 of the
+        // 3-tier resolver. `SendMessage`'s structured `shutdown_response`
+        // (and plan-approval) call `respond_to_shutdown`, which reads
+        // `get_agent_name()/get_team_name()/get_agent_id()`; without the
+        // scope those return `None` for an in-process teammate (no env vars,
+        // no dynamic context) and the approval fails closed. Unsafe tools
+        // run serially inline on THIS task (`commit_flush`), so the
+        // task-local reaches their execution; safe (read-only) tools spawn
+        // on a JoinSet and never need identity. TS parity:
+        // `inProcessRunner.ts` runs the whole turn inside
+        // `runWithTeammateContext`.
         let query_result_result = {
             let prompt_for_query = current_prompt.clone();
             let mut control_poll_interval =
                 tokio::time::interval(Duration::from_millis(POLL_INTERVAL_MS));
-            let query_future = engine.run_query(&prompt_for_query, query_config);
+            let teammate_context = crate::identity::TeammateContextData {
+                agent_id: config.identity.agent_id.clone(),
+                agent_name: config.identity.agent_name.clone(),
+                team_name: config.identity.team_name.clone(),
+                color: config.identity.color.map(|c| c.as_str().to_string()),
+                plan_mode_required: config.identity.plan_mode_required,
+                // Not consumed during the turn; the resume/transcript path
+                // that reads it was removed. Empty keeps tier-1 self-consistent.
+                parent_session_id: String::new(),
+                // Share THIS teammate's cancel flag so an approved
+                // `shutdown_response` (via `signal_self_stop`) breaks the loop
+                // on the next `config.cancelled` check below. A rejection
+                // never sets it, so the teammate keeps working — TS parity.
+                self_stop_signal: Some(config.cancelled.clone()),
+            };
+            let query_future = crate::identity::run_with_teammate_context(
+                teammate_context,
+                engine.run_query(&prompt_for_query, query_config),
+            );
             tokio::pin!(query_future);
             loop {
                 tokio::select! {
@@ -577,15 +607,6 @@ pub async fn run_in_process_teammate(
                     all_messages = all_messages[start..].to_vec();
                 }
             }
-        }
-
-        // Shutdown enforcement: if this turn handled a shutdown request,
-        // the model's response is the approval/rejection text. Exit the
-        // loop so the cleanup path runs (TS parity — the loop does not
-        // continue waiting for further messages once the shutdown
-        // dialogue is complete).
-        if handling_shutdown {
-            break;
         }
 
         // Plan-approval gate — runs between the plan-write turn and the
@@ -750,7 +771,9 @@ pub async fn run_in_process_teammate(
                 );
                 current_prompt = wrapped;
                 was_idle = false;
-                handling_shutdown = true;
+                // No auto-exit flag: the model decides via its
+                // `shutdown_response` (approve ⇒ `signal_self_stop` flips
+                // `config.cancelled`; reject ⇒ keep working).
 
                 update_teammate_task(
                     &config,
@@ -1252,7 +1275,12 @@ fn permission_mode_wire(mode: coco_types::PermissionMode) -> String {
         .unwrap_or_else(|| "default".to_string())
 }
 
-fn load_team_allowed_path_rules(team_name: &str) -> Vec<coco_types::PermissionRule> {
+/// Read a team's `team_allowed_paths` and convert them into `Allow`
+/// permission rules. Used to seed a teammate's live permission rules so it
+/// inherits the team's allowed write paths without prompting — by the
+/// in-process runner directly and by the cross-process teammate boot path
+/// (gap 8 `team_allowed_paths` seeding).
+pub fn load_team_allowed_path_rules(team_name: &str) -> Vec<coco_types::PermissionRule> {
     let Ok(Some(team_file)) = crate::team_file::read_team_file(team_name) else {
         return Vec::new();
     };

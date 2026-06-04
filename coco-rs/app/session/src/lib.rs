@@ -278,6 +278,27 @@ impl SessionManager {
             .collect())
     }
 
+    /// Snapshot the session's coordinator-mode state into the transcript
+    /// (`"coordinator"` / `"normal"`) so a later `--resume` can re-derive
+    /// it. The reader keeps the last-wins `Mode` entry
+    /// ([`storage::read_transcript_metadata`]), which drives
+    /// `coco_cli::coordinator_mode_resume::reconcile_on_resume`. TS parity:
+    /// `utils/sessionStorage.ts saveMode`.
+    ///
+    /// Errors when no transcript exists for `id` (a zero-turn session has
+    /// nothing to record); callers treat the write as best-effort.
+    pub fn save_mode(&self, id: &str, mode: &str) -> crate::Result<()> {
+        let session = self.load(id)?;
+        let store = self.store_for(&session.working_dir);
+        store.append_metadata(
+            id,
+            &storage::MetadataEntry::Mode {
+                session_id: id.to_string(),
+                mode: mode.to_string(),
+            },
+        )
+    }
+
     /// Re-append session metadata to EOF so the lite-metadata tail scan in
     /// [`storage::read_transcript_metadata`] keeps finding it after
     /// large post-compaction content. TS parity:

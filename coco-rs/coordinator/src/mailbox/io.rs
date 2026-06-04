@@ -111,41 +111,58 @@ pub fn write_to_mailbox(
 /// Mark all messages as read.
 ///
 /// TS: `markMessagesAsRead(agentName, teamName)`
+///
+/// Read-modify-write under `with_inbox_lock` — same TOCTOU avoidance as
+/// [`write_to_mailbox`]. An unlocked RMW here could clobber a peer's
+/// `write_to_mailbox` that appended between this fn's read and write-back.
 pub fn mark_messages_as_read(agent_name: &str, team_name: &str) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
     if !path.exists() {
         return Ok(());
     }
-    let mut messages = read_mailbox(agent_name, team_name)?;
-    for msg in &mut messages {
-        msg.read = true;
-    }
-    let content = serde_json::to_string_pretty(&messages)?;
-    std::fs::write(&path, content)?;
-    Ok(())
+    with_inbox_lock(&path, |path| {
+        let mut messages = read_messages_no_lock(path).unwrap_or_default();
+        for msg in &mut messages {
+            msg.read = true;
+        }
+        let content = serde_json::to_string_pretty(&messages)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    })
 }
 
 /// Mark a message as read by index.
 ///
 /// TS: `markMessageAsReadByIndex(agentName, teamName, messageIndex)`
+///
+/// Locked RMW (see [`mark_messages_as_read`]). The append-only inbox keeps
+/// any earlier `index` valid even if a peer appended concurrently — and the
+/// in-lock re-read preserves that appended message instead of dropping it.
 pub fn mark_message_as_read_by_index(
     agent_name: &str,
     team_name: &str,
     index: usize,
 ) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
-    let mut messages = read_mailbox(agent_name, team_name)?;
-    if let Some(msg) = messages.get_mut(index) {
-        msg.read = true;
-        let content = serde_json::to_string_pretty(&messages)?;
-        std::fs::write(&path, content)?;
+    if !path.exists() {
+        return Ok(());
     }
-    Ok(())
+    with_inbox_lock(&path, |path| {
+        let mut messages = read_messages_no_lock(path).unwrap_or_default();
+        if let Some(msg) = messages.get_mut(index) {
+            msg.read = true;
+            let content = serde_json::to_string_pretty(&messages)?;
+            std::fs::write(path, content)?;
+        }
+        Ok(())
+    })
 }
 
 /// Mark messages as read by predicate.
 ///
 /// TS: `markMessagesAsReadByPredicate(agentName, predicate, teamName?)`
+///
+/// Locked RMW (see [`mark_messages_as_read`]).
 pub fn mark_messages_as_read_by_predicate(
     agent_name: &str,
     team_name: &str,
@@ -155,15 +172,17 @@ pub fn mark_messages_as_read_by_predicate(
     if !path.exists() {
         return Ok(());
     }
-    let mut messages = read_mailbox(agent_name, team_name)?;
-    for msg in &mut messages {
-        if predicate(msg) {
-            msg.read = true;
+    with_inbox_lock(&path, |path| {
+        let mut messages = read_messages_no_lock(path).unwrap_or_default();
+        for msg in &mut messages {
+            if predicate(msg) {
+                msg.read = true;
+            }
         }
-    }
-    let content = serde_json::to_string_pretty(&messages)?;
-    std::fs::write(&path, content)?;
-    Ok(())
+        let content = serde_json::to_string_pretty(&messages)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    })
 }
 
 /// Clear an agent's inbox.
