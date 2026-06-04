@@ -8,16 +8,9 @@ use ratatui::prelude::*;
 #[cfg(test)]
 use super::layout;
 use crate::i18n::t;
-use crate::state::CopyPickerSelection;
-use crate::state::CopyPickerState;
-use crate::state::ExportState;
-use crate::state::GlobalSearchState;
 use crate::state::McpServerSelectState;
 use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
-use crate::state::MemoryDialogState;
-use crate::state::QuickOpenState;
-use crate::state::SessionBrowserState;
 use crate::state::SkillLockSource;
 use crate::state::SkillOverrideState;
 use crate::state::SkillRow;
@@ -142,191 +135,7 @@ pub(crate) fn collapse_hints(hints: &str, width: usize) -> String {
     }
 }
 
-pub(crate) fn session_browser_content(
-    s: &SessionBrowserState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let filter_lower = s.filter.to_lowercase();
-    let items: Vec<String> = s
-        .sessions
-        .iter()
-        .filter(|sess| filter_lower.is_empty() || sess.label.to_lowercase().contains(&filter_lower))
-        .enumerate()
-        .map(|(i, session)| {
-            format!(
-                "{} {} — {}{} — {}",
-                selected_marker(i, s.selected),
-                session.label,
-                session.message_count,
-                t!("dialog.sessions_item_suffix"),
-                session.created_at
-            )
-        })
-        .collect();
-
-    let body = if items.is_empty() {
-        t!("dialog.no_saved_sessions").to_string()
-    } else {
-        format!(
-            "{}\n\n{}\n\n{}",
-            filter_line(
-                &s.filter,
-                t!("dialog.type_filter_sessions").as_ref(),
-                FilterPrefix::Filter
-            ),
-            items.join("\n"),
-            t!("dialog.hints_nav_resume_cancel")
-        )
-    };
-
-    (
-        t!("dialog.title_sessions").to_string(),
-        body,
-        styles.primary(),
-    )
-}
-
-pub(crate) fn quick_open_content(
-    q: &QuickOpenState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let items: Vec<String> = q
-        .files
-        .iter()
-        .enumerate()
-        .take(15)
-        .map(|(i, file)| format!("{} {file}", selected_marker(i, q.selected)))
-        .collect();
-
-    (
-        t!("dialog.title_quick_open").to_string(),
-        format!(
-            "{}\n\n{}\n\n{}",
-            filter_line(
-                &q.filter,
-                t!("dialog.type_file_name").as_ref(),
-                FilterPrefix::Open
-            ),
-            items.join("\n"),
-            t!("dialog.hints_enter_open_cancel")
-        ),
-        styles.primary(),
-    )
-}
-
-pub(crate) fn global_search_content(
-    g: &GlobalSearchState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let query_line = if g.query.is_empty() {
-        t!("dialog.type_search").to_string()
-    } else {
-        t!("dialog.search_prefix", text = g.query.as_str()).to_string()
-    };
-
-    let results: Vec<String> = g
-        .results
-        .iter()
-        .enumerate()
-        .take(20)
-        .map(|(i, r)| {
-            let marker = if i as i32 == g.selected { "▸ " } else { "  " };
-            format!("{marker}{}:{} {}", r.file, r.line_number, r.content.trim())
-        })
-        .collect();
-
-    let status = if g.is_searching {
-        format!("\n{}", t!("dialog.searching"))
-    } else if g.results.is_empty() && !g.query.is_empty() {
-        format!("\n{}", t!("dialog.no_results"))
-    } else {
-        String::new()
-    };
-
-    (
-        t!("dialog.title_global_search").to_string(),
-        format!(
-            "{query_line}{status}\n\n{}\n\n{}",
-            results.join("\n"),
-            t!("dialog.esc_cancel")
-        ),
-        styles.primary(),
-    )
-}
-
-pub(crate) fn export_content(e: &ExportState, styles: UiStyles<'_>) -> (String, String, Color) {
-    let items: Vec<String> = e
-        .formats
-        .iter()
-        .enumerate()
-        .map(|(i, fmt)| format!("{} {}", selected_marker(i, e.selected), fmt.label()))
-        .collect();
-
-    (
-        t!("dialog.title_export").to_string(),
-        format!(
-            "{}\n\n{}\n\n{}",
-            t!("dialog.select_format"),
-            items.join("\n"),
-            t!("dialog.hints_nav_export_cancel")
-        ),
-        styles.primary(),
-    )
-}
-
-pub(crate) fn copy_picker_content(
-    cp: &CopyPickerState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let lines = cp.full_text.matches('\n').count() + 1;
-    let chars = cp.full_text.chars().count();
-    let full_label = t!("copy.picker_full_response", chars = chars, lines = lines).to_string();
-    let always_label = t!("copy.picker_always").to_string();
-
-    let mut rows: Vec<String> = Vec::with_capacity(cp.option_count());
-    rows.push(format!(
-        "{} {}",
-        copy_picker_marker(cp.selected, CopyPickerSelection::Full),
-        full_label,
-    ));
-    for (i, block) in cp.code_blocks.iter().enumerate() {
-        let lang = block.lang.as_deref().unwrap_or("text");
-        let block_chars = block.code.chars().count();
-        let preview = first_line_preview(&block.code, 60);
-        let label = t!(
-            "copy.picker_code_block",
-            lang = lang,
-            chars = block_chars,
-            preview = preview.as_str(),
-        )
-        .to_string();
-        rows.push(format!(
-            "{} {}",
-            copy_picker_marker(cp.selected, CopyPickerSelection::CodeBlock(i)),
-            label,
-        ));
-    }
-    rows.push(format!(
-        "{} {}",
-        copy_picker_marker(cp.selected, CopyPickerSelection::Always),
-        always_label,
-    ));
-
-    let title = t!("dialog.title_copy_picker", age = cp.message_age + 1).to_string();
-    let body = format!(
-        "{}\n\n{}\n\n{}",
-        t!("dialog.copy_picker_prompt"),
-        rows.join("\n"),
-        t!("dialog.hints_copy_picker"),
-    );
-    (title, body, styles.primary())
-}
-
-fn copy_picker_marker(selected: CopyPickerSelection, arm: CopyPickerSelection) -> &'static str {
-    if selected == arm { "▸" } else { " " }
-}
-
-fn first_line_preview(text: &str, max: usize) -> String {
+pub(crate) fn first_line_preview(text: &str, max: usize) -> String {
     let line = text.lines().next().unwrap_or("");
     let mut out = String::new();
     for (width, ch) in line.chars().enumerate() {
@@ -337,43 +146,6 @@ fn first_line_preview(text: &str, max: usize) -> String {
         out.push(ch);
     }
     out
-}
-
-pub(crate) fn memory_dialog_content(
-    m: &MemoryDialogState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    let items: Vec<String> = m
-        .entries
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| {
-            format!(
-                "{} {} {} {}",
-                selected_marker(i, m.selected),
-                memory_row_kind_tag(entry.row_kind),
-                memory_scope_tag(entry.scope),
-                entry.label
-            )
-        })
-        .collect();
-
-    let body = if items.is_empty() {
-        t!("dialog.memory_no_files").to_string()
-    } else {
-        format!(
-            "{}\n\n{}\n\n{}",
-            t!("dialog.memory_select"),
-            items.join("\n"),
-            t!("dialog.hints_nav_select_cancel"),
-        )
-    };
-
-    (
-        t!("dialog.title_memory").to_string(),
-        body,
-        styles.primary(),
-    )
 }
 
 /// Render the editable 2.1.142 `/skills` overlay. TS parity: `uJ4`
@@ -557,17 +329,7 @@ pub(crate) fn mcp_server_select_content(
     )
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FilterPrefix {
-    Filter,
-    Open,
-}
-
-fn selected_marker(index: usize, selected: i32) -> &'static str {
-    if index as i32 == selected { "▸" } else { " " }
-}
-
-fn memory_scope_tag(scope: MemoryDialogScope) -> &'static str {
+pub(crate) fn memory_scope_tag(scope: MemoryDialogScope) -> &'static str {
     match scope {
         MemoryDialogScope::Managed => "[managed]",
         MemoryDialogScope::User => "[user]",
@@ -582,7 +344,7 @@ fn memory_scope_tag(scope: MemoryDialogScope) -> &'static str {
     }
 }
 
-fn memory_row_kind_tag(kind: MemoryDialogRowKind) -> &'static str {
+pub(crate) fn memory_row_kind_tag(kind: MemoryDialogRowKind) -> &'static str {
     match kind {
         MemoryDialogRowKind::File {
             exists: true,
@@ -599,17 +361,6 @@ fn memory_row_kind_tag(kind: MemoryDialogRowKind) -> &'static str {
         MemoryDialogRowKind::Folder { enabled: false } => "[folder:off]",
         MemoryDialogRowKind::Toggle { enabled: true } => "[toggle:on]",
         MemoryDialogRowKind::Toggle { enabled: false } => "[toggle:off]",
-    }
-}
-
-fn filter_line(filter: &str, empty_text: &str, prefix: FilterPrefix) -> String {
-    if filter.is_empty() {
-        empty_text.to_string()
-    } else {
-        match prefix {
-            FilterPrefix::Filter => t!("dialog.filter_prefix", text = filter).to_string(),
-            FilterPrefix::Open => t!("dialog.open_prefix", text = filter).to_string(),
-        }
     }
 }
 

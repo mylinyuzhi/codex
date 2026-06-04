@@ -37,7 +37,9 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 
 ## Module Layout
 
-`attachment`, `changed_files`, `claude_rules`, `claudemd`, `claudemd_imports`, `environment`, `file_cache`, `file_history`, `file_read_state`, `git_operations`, `git_utils`, `memory`, `memory_filenames`, `mention_resolver`, `nested_memory`, `plan_mode`, `prompt`, `prompt_suggestion`, `suggestions`, `token_estimation`, `user_input`, `vim_mode`, `worktree`.
+`attachment`, `changed_files`, `claude_rules`, `claudemd`, `claudemd_imports`, `environment`, `file_cache`, `file_history`, `file_read_state`, `git_operations`, `git_utils`, `memory`, `memory_filenames`, `mention_resolver`, `nested_memory`, `plan_mode`, `prompt`, `prompt_suggestion`, `suggestions`, `token_estimation`, `user_input`, `vim_mode`.
+
+> Git worktree *creation* for agent isolation lives in `coco_coordinator::worktree` (`AgentWorktreeManager`), not here — this crate only *reads* the filesystem during memory discovery.
 
 ## Architecture
 
@@ -50,7 +52,7 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 
 Two-phase loading; the eager pass runs once at session start and the lazy pass fires per file-read trigger.
 
-1. **Eager** (`claudemd::discover_memory_files`, called from prompt build): walks `~/.coco/{CLAUDE,AGENTS}.md` then filesystem-root → CWD inclusive. In each dir loads `<dir>/.claude/CLAUDE.md`, `<dir>/{CLAUDE,AGENTS}.md`, `<dir>/{CLAUDE,AGENTS}.local.md` (case-insensitive). Each loaded file is fed through `claudemd_imports::expand_imports` so `@./other.md` and friends are recursively materialised in the same pass with cycle-break + `MAX_INCLUDE_DEPTH=5`.
+1. **Eager** (`claudemd::discover_memory_files`, called from prompt build): walks `~/.coco/{CLAUDE,AGENTS}.md` then filesystem-root → CWD inclusive. In each dir loads `<dir>/.claude/CLAUDE.md`, `<dir>/{CLAUDE,AGENTS}.md`, `<dir>/{CLAUDE,AGENTS}.local.md` (case-insensitive). Each loaded file is fed through `claudemd_imports::expand_imports` so `@./other.md` and friends are recursively materialised in the same pass with cycle-break + `MAX_INCLUDE_DEPTH=5`. **Nested-worktree skip**: when CWD is a git worktree nested inside its main repo (coco agent worktrees live at `<main>/.claude/worktrees/<slug>`), `nested_worktree_roots` (via `get_git_root` + `coco_git::find_canonical_git_root`) detects the nesting and the walk skips the main repo's *checked-in* files (Project / ProjectConfig / unconditional rules) in dirs above the worktree — git already checks them out into the worktree, so loading both would duplicate the same content at distinct paths. `CLAUDE.local.md` (gitignored, main-repo-only) is still loaded. The lazy pass applies the same skip to Phase-4 cwd-level conditional rules. TS parity: `claudemd.ts:868-934`.
 2. **Lazy** (`nested_memory::traverse_for_file`, called from `app/query::QueryEngine::drain_nested_memory_triggers` at end of every turn batch): four phases per trigger file `X` —
    - **Phase 1** managed (`/etc/coco/rules`) + user (`~/.coco/rules`) **conditional** rules whose `paths:` glob matches `X`.
    - **Phase 2** `directories_to_process(X, cwd)` splits the filesystem into `nested_dirs` (CWD-exclusive → file-parent-inclusive) and `cwd_level_dirs` (root → CWD inclusive).

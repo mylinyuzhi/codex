@@ -240,9 +240,15 @@ async fn test_select_teammate_executor_explicit_tmux_uses_registered_pane() {
 
     let commands = pane.commands.lock().await;
     assert_eq!(commands.len(), 1);
+    // Identity rides COCO_* env, not CLI flags (clap rejects identity flags).
     assert!(
-        commands[0].contains("--team-name="),
-        "pane command should include teammate CLI flags: {}",
+        commands[0].contains(&format!("COCO_TEAM_NAME={team_name}")),
+        "pane command should carry teammate identity via env: {}",
+        commands[0]
+    );
+    assert!(
+        !commands[0].contains("--team-name="),
+        "identity must not be a CLI flag: {}",
         commands[0]
     );
 

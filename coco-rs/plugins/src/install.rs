@@ -229,7 +229,17 @@ pub async fn install_plugin_from_marketplace(
         }
     }
 
-    // Step 5: persist enabledPlugins in settings.json (best-effort —
+    // Step 5: materialize the root plugin FIRST. Nothing is persisted to
+    // settings.json / installed-state until the content actually exists on
+    // disk, so a failed install (e.g. an unsupported remote source) leaves no
+    // broken enabled-but-empty entry behind — the model/user sees a real
+    // failure instead of a phantom "✓ Installed".
+    let install_path = manager
+        .install_plugin(&marketplace_name, &entry, scope)
+        .await
+        .map_err(InstallError::from)?;
+
+    // Step 6: persist enabledPlugins in settings.json (best-effort —
     // every closure member becomes `{ "enabled": true }`).
     if let Some(dir) = settings_dir
         && let Err(e) = write_enabled_plugins(dir, &closure)
@@ -237,13 +247,6 @@ pub async fn install_plugin_from_marketplace(
         return Err(InstallError::SettingsWriteFailed(e.to_string()));
     }
 
-    // Step 6: materialize. The root install is the one we surface as
-    // `install_path`; closure dependencies install in best-effort
-    // mode (logged on failure) since they're not what the user
-    // asked for explicitly.
-    let install_path = manager
-        .install_plugin(&marketplace_name, &entry, scope)
-        .map_err(InstallError::from)?;
     record_installation(
         plugins_dir,
         &root_id.to_string(),
@@ -261,7 +264,7 @@ pub async fn install_plugin_from_marketplace(
         };
         if let Some((_, dep_entry)) = manager.get_plugin_by_id(&dep_id.to_string()) {
             let dep_entry = dep_entry.clone();
-            match manager.install_plugin(dep_mkt, &dep_entry, scope) {
+            match manager.install_plugin(dep_mkt, &dep_entry, scope).await {
                 Ok(dep_path) => {
                     if let Err(e) = record_installation(
                         plugins_dir,
@@ -386,6 +389,9 @@ fn write_enabled_plugins(settings_dir: &Path, closure: &[PluginId]) -> std::io::
 
 fn policy_reason(verdict: &PolicyVerdict) -> String {
     match verdict {
+        PolicyVerdict::BlockedPlugin { plugin } => {
+            format!("plugin '{plugin}' is blocked by your organization's policy")
+        }
         PolicyVerdict::BlockedMarketplace { marketplace } => {
             format!("marketplace '{marketplace}' is blocklisted")
         }

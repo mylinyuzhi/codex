@@ -262,6 +262,7 @@ pub async fn build_live_server_with_options(
         // prompt is reproducible across runs.
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+        session_id_override: None,
     })
     .await
     .with_context(|| format!("build SessionRuntime for {provider}/{model_id}"))?;
@@ -296,7 +297,7 @@ pub async fn build_live_server_with_options(
     let runner = Arc::new(QueryEngineRunner::new(
         session_runtime.clone(),
         cli.max_tokens.unwrap_or(2_048),
-        cli.max_turns.unwrap_or(8),
+        cli.max_turns.or(Some(8)),
         Some(system_prompt),
     ));
     server.set_turn_runner(runner).await;

@@ -381,7 +381,7 @@ async fn dialog_payload_roundtrip_reflects_persisted_overrides() {
     // for skills that actually have overrides on disk.
     use coco_config::SkillOverrideTiers;
     use coco_skills::SkillManager;
-    use coco_skills::bundled::register_bundled_default;
+    use coco_skills::bundled::register_bundled;
     use coco_types::SkillLockSource;
     use coco_types::SkillOverrideState;
     use std::collections::BTreeMap;
@@ -400,7 +400,7 @@ async fn dialog_payload_roundtrip_reflects_persisted_overrides() {
     // `row.lock` non-empty. Filter the locked ones out and sort.
     let bundled_target = {
         let mgr = SkillManager::new();
-        register_bundled_default(&mgr);
+        register_bundled(&mgr);
         let mut names: Vec<String> = mgr
             .all_including_conditional()
             .iter()
@@ -479,7 +479,7 @@ async fn dialog_payload_roundtrip_reflects_persisted_overrides() {
     // The CLI bridge step (mirrors tui_runner.rs around the
     // OpenSkillsDialog dispatch).
     let mgr = SkillManager::new();
-    register_bundled_default(&mgr);
+    register_bundled(&mgr);
     enrich_payload_with_tiers(&mut payload2, &locked_tiers, &mgr);
     let post_enrich = payload2
         .entries

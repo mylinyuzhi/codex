@@ -55,14 +55,26 @@ enum WatchEvent {
     Modified,
 }
 
-/// Spawn a watcher task. Returns a join handle the caller can drop
-/// to detach (the watcher self-terminates when its broadcast channel
-/// closes — closing the FileWatcher accomplishes that). Errors at
-/// install time get logged at warn and the loop returns.
+/// Spawn the watch loop as a detached task. Returns a join handle the
+/// caller holds for the session lifetime; aborting/dropping the future
+/// tears the watch down cleanly. Equivalent to
+/// `tokio::spawn(run_watch_loop(config, state))`.
 pub fn spawn_watcher(
     config: WatcherConfig,
     state: Arc<Mutex<SyncState>>,
 ) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(run_watch_loop(config, state))
+}
+
+/// Run the debounced push loop until the watch is torn down (the future
+/// is dropped / aborted) or a permanent failure suppresses it.
+///
+/// **Owns the [`FileWatcher`] for the loop's lifetime.** The watcher
+/// holds the `broadcast::Sender`; dropping it closes the channel and the
+/// `rx.recv()` loop would exit immediately. The `watcher` binding must
+/// therefore outlive `rx` — it stays in scope until this fn returns
+/// (mirrors how `SkillChangeDetector` holds its `_inner` field).
+pub async fn run_watch_loop(config: WatcherConfig, state: Arc<Mutex<SyncState>>) {
     let watcher: FileWatcher<WatchEvent> = match FileWatcherBuilder::new()
         .throttle_interval(Duration::from_millis(DEBOUNCE_MS))
         .build(
@@ -80,71 +92,69 @@ pub fn spawn_watcher(
         Ok(w) => w,
         Err(e) => {
             tracing::warn!(error = %e, "team-memory-watcher: build failed; aborting watch");
-            return tokio::spawn(async move {});
+            return;
         }
     };
     watcher.watch(config.watch_dir.clone(), RecursiveMode::Recursive);
     let mut rx = watcher.subscribe();
 
-    tokio::spawn(async move {
-        let mut suppressed_reason: Option<String> = None;
-        // `while let` exits when the broadcast channel closes
-        // (watcher torn down). Replaces the prior `match {Ok|Err}`
-        // shape clippy flagged as `while_let_loop`.
-        while let Ok(WatchEvent::Modified) = rx.recv().await {
-            if suppressed_reason.is_some() {
-                continue;
-            }
-            let token = match (config.bearer_token_provider)() {
-                Some(t) => t,
-                None => {
-                    suppressed_reason = Some("no_oauth".into());
-                    tracing::warn!(
-                        "team-memory-watcher: no OAuth token; suppressing push until restart"
-                    );
-                    continue;
-                }
-            };
-            let entries = (config.read_entries)();
-            if entries.is_empty() {
-                continue;
-            }
-            let mut state_guard = state.lock().await;
-            let result = push_service(
-                &mut state_guard,
-                &config.base_url,
-                &config.repo_slug,
-                &token,
-                &entries,
-            )
-            .await;
-            drop(state_guard);
-            if !result.success {
-                if let Some(err) = &result.error {
-                    tracing::warn!(error = %err, "team-memory-watcher: push failed");
-                    // Permanent-failure heuristic: 4xx except 409/429
-                    // get suppressed (TS `isPermanentFailure`).
-                    if let Some(status) = parse_http_status(err)
-                        && (400..500).contains(&status)
-                        && status != 409
-                        && status != 429
-                    {
-                        suppressed_reason = Some(format!("http_{status}"));
-                        tracing::warn!(
-                            "team-memory-watcher: suppressing retry until session restart ({status})"
-                        );
-                    }
-                }
-            } else if result.uploaded_count > 0 {
-                tracing::info!(
-                    uploaded = result.uploaded_count,
-                    skipped = result.skipped_secrets.len(),
-                    "team-memory-watcher: push succeeded"
-                );
-            }
+    let mut suppressed_reason: Option<String> = None;
+    // `while let` exits when the broadcast channel closes
+    // (watcher torn down). Replaces the prior `match {Ok|Err}`
+    // shape clippy flagged as `while_let_loop`.
+    while let Ok(WatchEvent::Modified) = rx.recv().await {
+        if suppressed_reason.is_some() {
+            continue;
         }
-        tracing::debug!("team-memory-watcher: loop exited");
-    })
+        let token = match (config.bearer_token_provider)() {
+            Some(t) => t,
+            None => {
+                suppressed_reason = Some("no_oauth".into());
+                tracing::warn!(
+                    "team-memory-watcher: no OAuth token; suppressing push until restart"
+                );
+                continue;
+            }
+        };
+        let entries = (config.read_entries)();
+        if entries.is_empty() {
+            continue;
+        }
+        let mut state_guard = state.lock().await;
+        let result = push_service(
+            &mut state_guard,
+            &config.base_url,
+            &config.repo_slug,
+            &token,
+            &entries,
+        )
+        .await;
+        drop(state_guard);
+        if !result.success {
+            if let Some(err) = &result.error {
+                tracing::warn!(error = %err, "team-memory-watcher: push failed");
+                // Permanent-failure heuristic: 4xx except 409/429
+                // get suppressed (TS `isPermanentFailure`).
+                if let Some(status) = parse_http_status(err)
+                    && (400..500).contains(&status)
+                    && status != 409
+                    && status != 429
+                {
+                    suppressed_reason = Some(format!("http_{status}"));
+                    tracing::warn!(
+                        "team-memory-watcher: suppressing retry until session restart ({status})"
+                    );
+                }
+            }
+        } else if result.uploaded_count > 0 {
+            tracing::info!(
+                uploaded = result.uploaded_count,
+                skipped = result.skipped_secrets.len(),
+                "team-memory-watcher: push succeeded"
+            );
+        }
+    }
+    tracing::debug!("team-memory-watcher: loop exited");
 }
 
 /// Parse `"http 413: …"` style error strings into the status code.

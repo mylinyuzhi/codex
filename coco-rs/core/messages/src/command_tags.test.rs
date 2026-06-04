@@ -52,6 +52,45 @@ fn test_build_is_transcript_only_and_carries_args() {
 }
 
 #[test]
+fn test_build_context_usage_messages_echo_then_system_snapshot() {
+    // `/context` prints inline: a `❯ /context` echo (transcript-only User)
+    // followed by a typed System snapshot the TUI paints. Neither is a
+    // `<local-command-stdout>` body — the second message is a System, not a
+    // markdown User result.
+    let result = coco_types::ContextUsageResult {
+        total_tokens: 1234,
+        max_tokens: 200_000,
+        raw_max_tokens: 200_000,
+        percentage: 0.6,
+        model: "anthropic/claude".to_string(),
+        categories: Vec::new(),
+        is_auto_compact_enabled: false,
+        auto_compact_threshold: None,
+        message_breakdown: None,
+        memory_files: Vec::new(),
+        mcp_tools: Vec::new(),
+        agents: Vec::new(),
+        skills: Vec::new(),
+        suggestions: Vec::new(),
+    };
+    let msgs = build_context_usage_messages("", result);
+    assert_eq!(msgs.len(), 2);
+
+    let (echo, echo_t_only) = user_text(&msgs[0]);
+    assert!(is_command_input(echo));
+    assert_eq!(extract_tag(echo, COMMAND_NAME_TAG), Some("/context"));
+    assert!(echo_t_only, "echo must never reach the model");
+
+    let coco_types::messages::Message::System(coco_types::messages::SystemMessage::ContextUsage(
+        snapshot,
+    )) = &msgs[1]
+    else {
+        panic!("expected System(ContextUsage) snapshot");
+    };
+    assert_eq!(snapshot.result.total_tokens, 1234);
+}
+
+#[test]
 fn test_sensitive_args_redacted() {
     let msgs =
         build_slash_command_messages("login", "secret-token", "ok", /*is_sensitive*/ true);

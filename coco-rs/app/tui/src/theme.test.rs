@@ -81,7 +81,7 @@ fn test_theme_definition_mode_selects_base_without_extends() -> anyhow::Result<(
     let state = ThemeRuntimeState::from_config(PathBuf::from("theme.json"), config)?;
 
     assert_eq!(state.active_id, "my_light");
-    assert_eq!(state.theme.selection_bg, Color::Rgb(220, 244, 246));
+    assert_eq!(state.theme.selection_bg, Color::Rgb(180, 213, 255));
     Ok(())
 }
 
@@ -185,6 +185,26 @@ fn test_save_theme_setting_replaces_invalid_config_with_backup() -> anyhow::Resu
         .count();
     assert_eq!(backups, 1);
     Ok(())
+}
+
+#[test]
+fn test_global_theme_setting_maps_auto_and_named() {
+    use super::ThemeSetting;
+    use super::config::theme_setting_from_global;
+
+    // TS-parity: `GlobalConfig.theme` ("auto" / a named theme) maps into the
+    // TUI's ThemeSetting so `~/.coco.json` drives the theme when no `theme.json`.
+    assert_eq!(theme_setting_from_global("auto"), Some(ThemeSetting::Auto));
+    assert_eq!(
+        theme_setting_from_global("  AUTO "),
+        Some(ThemeSetting::Auto)
+    );
+    assert_eq!(
+        theme_setting_from_global("dark"),
+        Some(ThemeSetting::Named("dark".to_string()))
+    );
+    assert_eq!(theme_setting_from_global(""), None);
+    assert_eq!(theme_setting_from_global("   "), None);
 }
 
 #[test]

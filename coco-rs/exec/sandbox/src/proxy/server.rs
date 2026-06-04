@@ -108,6 +108,15 @@ impl ProxyServer {
     }
 }
 
+impl Drop for ProxyServer {
+    /// Cancel the accept loops when the owning `SandboxState` is dropped so the
+    /// proxy tasks don't outlive the session. (`stop()` additionally awaits the
+    /// handles; Drop can't await, but cancelling is enough to wind them down.)
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+    }
+}
+
 /// Accept loop for the HTTP CONNECT proxy.
 async fn run_http_proxy(
     listener: TcpListener,

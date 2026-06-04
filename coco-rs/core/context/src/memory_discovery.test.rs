@@ -158,6 +158,63 @@ fn walks_root_to_cwd() {
 }
 
 #[test]
+fn eager_loads_unconditional_project_rules_not_conditional() {
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join(".claude").join("rules");
+    std::fs::create_dir_all(&rules).unwrap();
+    // Unconditional rule (no `paths:` frontmatter) — must be in turn-1 prompt.
+    std::fs::write(rules.join("style.md"), "Always use tabs.").unwrap();
+    // Conditional rule (`paths:`) — must NOT eager-load (it's lazy).
+    std::fs::write(
+        rules.join("ts.md"),
+        "---\npaths: \"**/*.ts\"\n---\nTS-only rule.",
+    )
+    .unwrap();
+
+    let files = discover_memory_files(dir.path());
+    assert!(
+        files.iter().any(|f| f.content.contains("Always use tabs")),
+        "unconditional .claude/rules must be eager-loaded"
+    );
+    assert!(
+        !files.iter().any(|f| f.content.contains("TS-only rule")),
+        "conditional .claude/rules must NOT be eager-loaded"
+    );
+}
+
+#[test]
+fn discovery_is_deterministic_across_turns() {
+    // Prompt-cache safety: re-reading the same on-disk files every turn (at
+    // build_prompt time) must produce byte-identical output, or the cached
+    // system-prompt prefix would thrash. Order comes from sorted
+    // find_memory_files / collect_rule_files, content from read_to_string —
+    // so unchanged files yield an identical result and the LLM prompt cache
+    // stays valid.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("CLAUDE.md"), "root").unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "agents").unwrap();
+    let rules = dir.path().join(".claude").join("rules");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(rules.join("b.md"), "rule b").unwrap();
+    std::fs::write(rules.join("a.md"), "rule a").unwrap();
+
+    let snapshot = || -> Vec<(std::path::PathBuf, String, MemoryFileSource)> {
+        discover_memory_files(dir.path())
+            .into_iter()
+            .map(|f| (f.path, f.content, f.source))
+            .collect()
+    };
+    let first = snapshot();
+    for _ in 0..5 {
+        assert_eq!(
+            first,
+            snapshot(),
+            "discovery must be deterministic per turn"
+        );
+    }
+}
+
+#[test]
 fn dedupes_canonical_path() {
     // Two entries pointing at the same file (via symlink): only one load.
     let dir = tempfile::tempdir().unwrap();
@@ -170,4 +227,96 @@ fn dedupes_canonical_path() {
         .filter(|f| f.path.canonicalize().ok() == Some(real.canonicalize().unwrap()))
         .count();
     assert_eq!(count, 1, "expected exactly one load of {}", real.display());
+}
+
+/// Run `git` in `cwd`, isolated from the developer's global/system config so
+/// the test is reproducible regardless of host git settings. Panics if git is
+/// unavailable (the workspace already relies on real git in tests).
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .status()
+        .expect("git must be available for this test");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn git_init_repo(root: &std::path::Path) {
+    git(root, &["init", "-q"]);
+    git(root, &["config", "user.email", "t@t"]);
+    git(root, &["config", "user.name", "t"]);
+    git(root, &["config", "commit.gpgsign", "false"]);
+}
+
+#[test]
+fn nested_worktree_skips_main_repo_checked_in_but_keeps_local() {
+    // A git worktree nested at <main>/.claude/worktrees/<slug> (coco's agent
+    // worktree layout). git checks the branch's tracked memory out into the
+    // worktree, so <main>/CLAUDE.md and <wt>/CLAUDE.md hold the SAME content at
+    // DISTINCT paths — the canonical-path dedup can't catch it. We must skip
+    // the main repo's checked-in copy (Project + rules) while still loading the
+    // gitignored CLAUDE.local.md that only exists in the main repo.
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path();
+    git_init_repo(main);
+    std::fs::write(main.join("CLAUDE.md"), "MAIN-ROOT-MEMORY").unwrap();
+    let rules = main.join(".claude").join("rules");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(rules.join("style.md"), "TABS-RULE").unwrap();
+    git(main, &["add", "."]);
+    git(main, &["commit", "-q", "-m", "init"]);
+
+    // Nested worktree (checks out CLAUDE.md + the rule into <wt>).
+    let wt = main.join(".claude").join("worktrees").join("wt");
+    git(main, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+
+    // Gitignored local file — only in the main repo, never in the worktree.
+    std::fs::write(main.join("CLAUDE.local.md"), "MAIN-LOCAL").unwrap();
+
+    let files = discover_memory_files(&wt);
+
+    // The worktree's own checked-in copies load…
+    assert!(
+        files.iter().any(|f| f.path == wt.join("CLAUDE.md")),
+        "worktree CLAUDE.md should load"
+    );
+    // …but the main repo's checked-in copies above the worktree are skipped.
+    assert!(
+        !files.iter().any(|f| f.path == main.join("CLAUDE.md")),
+        "main-repo CLAUDE.md must be skipped in a nested worktree"
+    );
+    // The duplicated rule content loads exactly once (the worktree's copy).
+    let rule_hits = files
+        .iter()
+        .filter(|f| f.content.contains("TABS-RULE"))
+        .count();
+    assert_eq!(rule_hits, 1, "duplicated unconditional rule must load once");
+    // The gitignored local file is still loaded despite the skip.
+    assert!(
+        files
+            .iter()
+            .any(|f| f.source == MemoryFileSource::Local && f.path == main.join("CLAUDE.local.md")),
+        "main-repo CLAUDE.local.md must still load (gitignored, not duplicated)"
+    );
+}
+
+#[test]
+fn plain_git_repo_is_not_falsely_skipped() {
+    // Control: a regular repo (no worktree) has gitRoot == canonicalRoot, so
+    // nested_worktree_roots returns None and discovery is unchanged.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    git_init_repo(repo);
+    std::fs::write(repo.join("CLAUDE.md"), "PLAIN").unwrap();
+
+    let files = discover_memory_files(repo);
+    assert!(
+        files
+            .iter()
+            .any(|f| f.source == MemoryFileSource::Project && f.path == repo.join("CLAUDE.md")),
+        "a plain git repo's CLAUDE.md must still load"
+    );
 }

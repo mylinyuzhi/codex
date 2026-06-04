@@ -16,6 +16,7 @@ coco-model-card.workspace = true
 coco-otel.workspace = true
 coco-frontmatter.workspace = true
 coco-paths.workspace = true
+coco-git.workspace = true
 
 async-trait.workspace = true
 chrono.workspace = true

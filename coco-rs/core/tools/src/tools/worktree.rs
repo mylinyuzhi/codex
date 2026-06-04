@@ -95,6 +95,25 @@ impl Tool for EnterWorktreeTool {
             });
         }
 
+        // The branch is interpolated into the default worktree path
+        // (`../worktrees/<branch>`), so reject path-traversal segments that
+        // could escape the intended location (e.g. `../../etc`). `/` stays
+        // allowed — it is valid in refs like `feat/x`; only `.`/`..` segments,
+        // a leading `/`, or a backslash are blocked. Such names are invalid
+        // git refs anyway.
+        if branch.starts_with('/')
+            || branch.contains('\\')
+            || branch.split('/').any(|seg| seg == "." || seg == "..")
+        {
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "branch name {branch:?} must not contain path-traversal \
+                     segments (\".\", \"..\", a leading \"/\", or \"\\\")"
+                ),
+                error_code: None,
+            });
+        }
+
         let worktree_path = input
             .path
             .clone()

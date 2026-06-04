@@ -17,7 +17,7 @@ use crate::common::reminders;
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
         permission_mode: PermissionMode::Plan,
-        max_turns: 2,
+        max_turns: Some(2),
         ..SessionConfig::default()
     };
     let outcome = run_session(provider, model, cfg, "Reply with one word: ok").await?;

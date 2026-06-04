@@ -8,7 +8,7 @@ expression: output
                                                                                 
 ❯ List files                                                                    
                                                                                 
-🔧  Bash(ls -la)                                                                 
+● Bash(ls -la)                                                                  
   └ file1.rs                                                                    
     file2.rs                                                                    
     Cargo.toml                                                                  

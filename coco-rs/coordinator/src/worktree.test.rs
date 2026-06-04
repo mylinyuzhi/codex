@@ -156,6 +156,78 @@ fn test_cleanup_keeps_worktree_when_files_changed() {
     assert!(path.exists(), "worktree with changes must survive cleanup");
 }
 
+fn commit_in(dir: &Path, file: &str, content: &str, message: &str) {
+    std::fs::write(dir.join(file), content).unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["add", "."])
+        .output()
+        .unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["commit", "-m", message])
+        .output()
+        .unwrap();
+}
+
+#[test]
+fn test_cleanup_keeps_worktree_when_commits_made() {
+    if !git_available() {
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    init_repo(tmp.path());
+
+    let manager = AgentWorktreeManager::discover_from_cwd(tmp.path()).unwrap();
+    let session = manager.create_for("agent-commit01").unwrap();
+
+    // The child agent COMMITS its output: the working tree ends clean but HEAD
+    // has advanced past the commit the worktree was created from. Without the
+    // commit-since-creation check this looked like "no changes" and the
+    // worktree + branch were force-removed, destroying the commit.
+    commit_in(&session.path, "work.txt", "agent output", "agent work");
+
+    let path = session.path.clone();
+    let outcome = manager.cleanup_if_unchanged(session);
+    assert!(
+        matches!(
+            outcome,
+            WorktreeCleanupOutcome::Kept {
+                reason: KeptReason::HasChanges,
+                ..
+            }
+        ),
+        "worktree with a new commit must be kept, got {outcome:?}"
+    );
+    assert!(path.exists(), "committed agent work must survive cleanup");
+}
+
+#[test]
+fn test_cleanup_stale_keeps_worktree_with_unpushed_commits() {
+    if !git_available() {
+        return;
+    }
+    let tmp = TempDir::new().unwrap();
+    init_repo(tmp.path());
+
+    let manager = AgentWorktreeManager::discover_from_cwd(tmp.path()).unwrap();
+    let session = manager.create_for("agent-abcdef01").unwrap();
+
+    // Commit work, leaving a clean tree. With no remote configured, the commit
+    // is "unpushed" — the stale sweep must preserve it even though it's old and
+    // its working tree is clean.
+    commit_in(&session.path, "wip.txt", "x", "wip");
+
+    let removed = manager.cleanup_stale(std::time::Duration::from_secs(0));
+    assert_eq!(removed, 0, "unpushed commits must block the stale sweep");
+    assert!(
+        session.path.exists(),
+        "worktree with unpushed commits must survive"
+    );
+}
+
 #[test]
 fn test_post_creation_setup_copies_settings_local() {
     if !git_available() {
@@ -200,13 +272,51 @@ fn test_is_agent_slug_narrow_shape() {
     assert!(!is_agent_slug("random-dir"), "non-agent prefix must reject");
 }
 
+/// Push `repo`'s current HEAD to a fresh bare remote so its commits are
+/// remote-reachable — required for the stale sweep to consider a clean,
+/// commit-free agent worktree removable (the unpushed-commit guard otherwise
+/// keeps everything in a remote-less repo, mirroring TS).
+fn add_remote_and_push(repo: &Path, remote: &Path) {
+    Command::new("git")
+        .args(["init", "--bare"])
+        .arg(remote)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["remote", "add", "origin"])
+        .arg(remote)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["push", "origin", "HEAD"])
+        .output()
+        .unwrap();
+    // Populate refs/remotes/origin/* so `rev-list HEAD --not --remotes` sees
+    // the pushed commits even on git versions that don't auto-create the
+    // tracking ref on push.
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["fetch", "origin"])
+        .output()
+        .unwrap();
+}
+
 #[test]
 fn test_cleanup_stale_removes_old_agent_worktree_without_changes() {
     if !git_available() {
         return;
     }
     let tmp = TempDir::new().unwrap();
+    let remote = TempDir::new().unwrap();
     init_repo(tmp.path());
+    // The base commits must be on a remote, else the unpushed-commit guard
+    // (TS-faithful, fail-closed) keeps the worktree.
+    add_remote_and_push(tmp.path(), remote.path());
 
     let manager = AgentWorktreeManager::discover_from_cwd(tmp.path()).unwrap();
     let session = manager.create_for("agent-abcd1234").unwrap();
@@ -219,7 +329,7 @@ fn test_cleanup_stale_removes_old_agent_worktree_without_changes() {
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     // Threshold of 1ms: any worktree older than 1ms is a sweep
-    // candidate.
+    // candidate. Clean tree + all commits pushed → removable.
     let removed = manager.cleanup_stale(std::time::Duration::from_millis(1));
     assert_eq!(removed, 1);
     assert!(!path.exists(), "stale worktree dir should be gone");
@@ -315,7 +425,6 @@ fn test_symlink_directories_mirrors_configured_dirs_into_worktree() {
     let manager = AgentWorktreeManager::new(tmp.path().canonicalize().unwrap()).with_config(
         AgentWorktreeConfig {
             symlink_directories: vec![PathBuf::from("node_modules")],
-            keep_worktree_when_background: false,
         },
     );
     let session = manager.create_for("agent-cafe1234").unwrap();
@@ -349,34 +458,11 @@ fn test_symlink_directories_skips_missing_sources() {
     let manager = AgentWorktreeManager::new(tmp.path().canonicalize().unwrap()).with_config(
         AgentWorktreeConfig {
             symlink_directories: vec![PathBuf::from("node_modules")],
-            keep_worktree_when_background: false,
         },
     );
     let session = manager.create_for("agent-deadbeef").unwrap();
     assert!(session.path.exists());
     assert!(!session.path.join("node_modules").exists());
-}
-
-#[test]
-fn test_create_for_background_does_not_auto_cleanup() {
-    if !git_available() {
-        return;
-    }
-    let tmp = TempDir::new().unwrap();
-    init_repo(tmp.path());
-
-    let manager = AgentWorktreeManager::discover_from_cwd(tmp.path()).unwrap();
-    let session = manager.create_for_background("agent-bg123456").unwrap();
-    let path = session.path.clone();
-
-    // Caller is free to NOT call cleanup_if_unchanged for a
-    // background session. Simulate that by dropping the session
-    // without cleanup. Worktree must survive.
-    drop(session);
-    assert!(
-        path.exists(),
-        "background worktrees must survive without explicit cleanup"
-    );
 }
 
 #[test]

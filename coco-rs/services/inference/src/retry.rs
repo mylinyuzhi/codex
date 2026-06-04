@@ -2,6 +2,10 @@ use std::time::Duration;
 
 use crate::errors::InferenceError;
 
+/// Max in-client retries for capacity/overload errors before letting the
+/// model-runtime fallback chain take over. TS `MAX_529_RETRIES`.
+const MAX_CAPACITY_RETRIES: i32 = 3;
+
 /// Retry configuration for API calls.
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
@@ -17,9 +21,13 @@ pub struct RetryConfig {
 
 impl Default for RetryConfig {
     fn default() -> Self {
+        // Mirrors TS `withRetry.ts` (DEFAULT_MAX_RETRIES = 10, base 500ms).
+        // The production `RetryConfig` is built from settings via the
+        // `From<ApiRetryConfig>` impl below; this default backs direct
+        // `RetryConfig::default()` callers and test fixtures.
         Self {
-            max_retries: 3,
-            base_delay_ms: 1000,
+            max_retries: 10,
+            base_delay_ms: 500,
             max_delay_ms: 60_000,
             jitter_factor: 0.25,
         }
@@ -65,8 +73,31 @@ impl RetryConfig {
     }
 
     /// Whether a retry should be attempted for this error at this attempt count.
+    ///
+    /// Only the overload cascade (503/529, [`InferenceError::Overloaded`]) is
+    /// capped at [`MAX_CAPACITY_RETRIES`], so a saturated primary yields to the
+    /// model-runtime fallback chain fast instead of burning the full budget
+    /// in-client (TS `MAX_529_RETRIES`). All OTHER retryable errors — rate
+    /// limits (429), network/timeout (408), lock/conflict (409), and generic
+    /// 5xx — get the full `max_retries`, matching TS `withRetry` (which retries
+    /// 429 and `status >= 500` up to `DEFAULT_MAX_RETRIES`).
     pub fn should_retry(&self, attempt: i32, error: &InferenceError) -> bool {
-        attempt < self.max_retries && error.is_retryable()
+        if !error.is_retryable() {
+            return false;
+        }
+        let cap = if Self::is_capacity_error(error) {
+            self.max_retries.min(MAX_CAPACITY_RETRIES)
+        } else {
+            self.max_retries
+        };
+        attempt < cap
+    }
+
+    /// Overload-cascade errors (503/529) — bounded in-client so the fallback
+    /// chain engages fast. Rate limits (429) are deliberately NOT capped here:
+    /// TS retries them up to the full budget honoring `retry-after`.
+    fn is_capacity_error(error: &InferenceError) -> bool {
+        matches!(error, InferenceError::Overloaded { .. })
     }
 
     /// Check if this error is an auth failure that needs credential refresh.

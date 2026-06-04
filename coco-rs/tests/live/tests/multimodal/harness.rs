@@ -89,7 +89,7 @@ pub async fn run_multimodal_scenario(
         max_output_tokens: 2_048,
         // Multimodal scenarios are 2-turn: tool_call + final answer.
         // Cap tight so an under-specified `replies` queue can't spin.
-        max_turns: 4,
+        max_turns: Some(4),
         total_token_budget: None,
         system_prompt: Some(
             "You are a deterministic test scripted model. Use tools as instructed.".into(),

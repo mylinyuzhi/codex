@@ -589,6 +589,18 @@ pub trait AgentHandle: Send + Sync {
         Err("AgentHandle::interrupt_agent_current_work not supported in this context".into())
     }
 
+    /// Name of this session's active team, if any (`None` outside team
+    /// mode). The cross-process leader inbox poller uses it to locate the
+    /// `team-lead` inbox to scan. This is the runtime-reachable equivalent
+    /// of TS `appState.teamContext?.teamName` (`useInboxPoller.ts:149`) —
+    /// in coco-rs the authoritative live source is the coordinator roster,
+    /// since `team_context` lives on the TUI-only `AppState`, not the
+    /// engine/tool-shared `ToolAppState`. Default `None` for non-swarm
+    /// handles.
+    async fn active_team_name(&self) -> Option<String> {
+        None
+    }
+
     // Note: `resolve_skill` was removed in Phase 7 of the agent-loop
     // refactor. Skill resolution now goes through the dedicated
     // `SkillHandle` trait (`skill_handle.rs`); `AgentHandle` is the

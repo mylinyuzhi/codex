@@ -33,6 +33,27 @@ fn test_dynamic_context_set_clear() {
 }
 
 #[test]
+fn test_resolve_teammate_identity_from_dynamic_context() {
+    set_dynamic_team_context(DynamicTeamContext {
+        agent_id: "researcher@my-team".into(),
+        agent_name: "researcher".into(),
+        team_name: "my-team".into(),
+        color: Some("blue".into()),
+        plan_mode_required: true,
+        parent_session_id: None,
+    });
+
+    let id = resolve_teammate_identity().expect("teammate identity resolves from context");
+    assert_eq!(id.agent_id, "researcher@my-team");
+    assert_eq!(id.agent_name, "researcher");
+    assert_eq!(id.team_name, "my-team");
+    assert_eq!(id.color, Some(coco_types::AgentColorName::Blue));
+    assert!(id.plan_mode_required);
+
+    clear_dynamic_team_context();
+}
+
+#[test]
 fn test_is_team_lead() {
     let tc = TeamContext {
         team_name: "test".into(),

@@ -29,9 +29,6 @@ pub enum ContextError {
     #[error("git failed: {message}")]
     GitFailed { message: String },
 
-    #[error("worktree validation failed: {message}")]
-    WorktreeInvalid { message: String },
-
     #[error("path error at {path}: {message}")]
     PathError { path: PathBuf, message: String },
 }
@@ -45,12 +42,6 @@ impl ContextError {
 
     pub fn git_failed(message: impl Into<String>) -> Self {
         Self::GitFailed {
-            message: message.into(),
-        }
-    }
-
-    pub fn worktree_invalid(message: impl Into<String>) -> Self {
-        Self::WorktreeInvalid {
             message: message.into(),
         }
     }
@@ -72,7 +63,6 @@ impl ErrorExt for ContextError {
             Self::Io { .. } => StatusCode::IoError,
             Self::Json { .. } => StatusCode::InvalidJson,
             Self::GitFailed { .. } => StatusCode::External,
-            Self::WorktreeInvalid { .. } => StatusCode::InvalidArguments,
             Self::PathError { .. } => StatusCode::InvalidArguments,
             Self::Generic { .. } => StatusCode::Internal,
         }

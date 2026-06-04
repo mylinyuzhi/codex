@@ -42,6 +42,28 @@ async fn test_exit_worktree_rejects_whitespace_path() {
     assert!(result.is_err());
 }
 
+/// Branch names are interpolated into the default worktree path
+/// (`../worktrees/<branch>`); path-traversal segments must be rejected
+/// before any git invocation so a name like `../../etc` can't escape.
+#[tokio::test]
+async fn test_enter_worktree_rejects_branch_path_traversal() {
+    let ctx = ToolUseContext::test_default();
+    for bad in ["../../etc", "a/../b", "/abs", "..", "wt\\x"] {
+        let result = <EnterWorktreeTool as DynTool>::execute(
+            &EnterWorktreeTool,
+            json!({ "branch": bad }),
+            &ctx,
+        )
+        .await;
+        assert!(result.is_err(), "branch {bad:?} should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("path-traversal"),
+            "branch {bad:?} should fail with a traversal message, got: {err}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Restoration target resolution
 // ---------------------------------------------------------------------------

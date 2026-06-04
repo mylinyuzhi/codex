@@ -1896,6 +1896,12 @@ pub enum TuiOnlyEvent {
         args: String,
         text: String,
     },
+    /// Open the full-color `/context` usage surface. Carries the analyzed
+    /// report (the TUI cannot reach the engine to compute it). Replaces the
+    /// former markdown-in-transcript output and the removed `Ctrl+W` overlay.
+    OpenContextUsage {
+        result: crate::server_request::ContextUsageResult,
+    },
     /// Dispatcher-side breadcrumb for slash commands the runtime couldn't
     /// fully execute (missing handler, handler error, empty Prompt body,
     /// dialog wiring pending). The TUI translates `kind` via the i18n
@@ -1997,6 +2003,10 @@ pub enum TuiOnlyEvent {
     /// `/model` from input bar). The TUI consumes the current
     /// `state.session.model` to mark the "current" entry.
     OpenModelPicker,
+    /// Tell the TUI to open the standalone theme picker. Emitted when the
+    /// slash dispatcher resolves `/theme` with no args. The TUI builds the
+    /// choice list from its live `ThemeRuntimeState`.
+    OpenThemePicker,
     /// Tell the TUI to open the `/skills` read-only overlay. The slash
     /// dispatcher pre-builds the entry list + per-group subtitles so
     /// the TUI doesn't recompute paths or token estimates.

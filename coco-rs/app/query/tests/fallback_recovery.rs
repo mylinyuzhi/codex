@@ -148,7 +148,7 @@ fn minimal_config(model_id: &str) -> QueryEngineConfig {
     // two full fallback-chain cycles plus a successful call.
     QueryEngineConfig {
         model_id: model_id.to_string(),
-        max_turns: 20,
+        max_turns: Some(20),
         total_token_budget: Some(16_384),
         context_window: 200_000,
         max_output_tokens: 4_096,

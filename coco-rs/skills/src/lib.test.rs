@@ -1329,3 +1329,20 @@ fn test_register_with_empty_paths_is_unconditional() {
     assert_eq!(mgr.conditional_skill_count(), 0);
     assert!(mgr.get("regular").is_some());
 }
+
+#[test]
+fn build_session_skill_manager_includes_bundled() {
+    // Regression: the per-session catalog must fold in bundled skills so
+    // `/context` usage detail and the command registry see them — not just
+    // the `/skills` dialog's throwaway manager. Nonexistent dirs isolate
+    // the bundled contribution.
+    let config_home = PathBuf::from("/nonexistent-coco-config");
+    let cwd = PathBuf::from("/nonexistent-coco-cwd");
+    let manager = build_session_skill_manager(&config_home, &cwd);
+    let all = manager.all();
+    let names: Vec<&str> = all.iter().map(|s| s.name.as_str()).collect();
+    assert!(
+        names.contains(&"keybindings-help"),
+        "bundled skills missing from session manager: {names:?}"
+    );
+}

@@ -141,7 +141,7 @@ async fn capture_assistant_content(content: Vec<AssistantContentPart>) -> Vec<As
     let config = QueryEngineConfig {
         model_id: "metadata-mock-1".into(),
         permission_mode: PermissionMode::BypassPermissions,
-        max_turns: 2,
+        max_turns: Some(2),
         ..Default::default()
     };
     let engine = QueryEngine::new(config, client, tools, cancel, None);

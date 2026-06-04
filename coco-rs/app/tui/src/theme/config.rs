@@ -34,7 +34,18 @@ pub struct ThemeRuntimeState {
 
 impl ThemeRuntimeState {
     pub fn load_default_path() -> Result<Self> {
-        Self::load_from_path(theme_config_path())
+        let path = theme_config_path();
+        if path.exists() {
+            return Self::load_from_path(path);
+        }
+        // No TUI-local `theme.json`: honor `GlobalConfig.theme` (`~/.coco.json`),
+        // mirroring TS where the active theme lives in GlobalConfig
+        // (`~/.claude.json`), not in `settings.json`.
+        let config = ThemeConfig {
+            active: global_theme_setting().unwrap_or_default(),
+            ..ThemeConfig::default()
+        };
+        Self::from_config(path, config)
     }
 
     pub fn load_from_path(path: PathBuf) -> Result<Self> {
@@ -78,8 +89,8 @@ impl Default for ThemeRuntimeState {
         Self {
             config_path: theme_config_path(),
             setting,
-            active_id: ThemeName::Default.id().to_string(),
-            theme: Theme::from_name(ThemeName::Default),
+            active_id: ThemeName::Dark.id().to_string(),
+            theme: Theme::from_name(ThemeName::Dark),
             choices: registry.choices(),
             registry,
         }
@@ -98,7 +109,7 @@ impl ThemeChoice {
         Self {
             setting: ThemeSetting::Auto,
             id: "auto".to_string(),
-            label: "Auto".to_string(),
+            label: "Auto (match terminal)".to_string(),
         }
     }
 
@@ -137,7 +148,8 @@ impl ThemeSetting {
 
 impl Default for ThemeSetting {
     fn default() -> Self {
-        Self::Named(ThemeName::Default.id().to_string())
+        // TS `config.ts` defaults `theme: 'dark'`.
+        Self::Named(ThemeName::Dark.id().to_string())
     }
 }
 
@@ -277,7 +289,7 @@ impl ThemeRegistry {
                 Some(ThemeMode::Light) => ThemeName::Light.id(),
                 Some(ThemeMode::Dark) => ThemeName::Dark.id(),
                 Some(ThemeMode::Ansi) => ThemeName::DarkAnsi.id(),
-                None => ThemeName::Default.id(),
+                None => ThemeName::Dark.id(),
             });
         let mut resolved = self.resolve_id(base_id, stack)?;
         stack.pop();
@@ -325,6 +337,7 @@ pub struct PartialThemeColors {
     pub code_function: Option<String>,
     pub code_type: Option<String>,
     pub code_operator: Option<String>,
+    pub code_inline: Option<String>,
     pub code_bg: Option<String>,
     pub blockquote: Option<String>,
     pub heading: Option<String>,
@@ -375,6 +388,7 @@ impl PartialThemeColors {
             && self.code_function.is_none()
             && self.code_type.is_none()
             && self.code_operator.is_none()
+            && self.code_inline.is_none()
             && self.code_bg.is_none()
             && self.blockquote.is_none()
             && self.heading.is_none()
@@ -595,6 +609,7 @@ fn apply_colors(theme: &mut Theme, colors: &PartialThemeColors) -> Result<()> {
         "code_operator",
         &colors.code_operator,
     )?;
+    apply_color(&mut theme.code_inline, "code_inline", &colors.code_inline)?;
     apply_optional_color(&mut theme.code_bg, "code_bg", &colors.code_bg)?;
     apply_color(&mut theme.blockquote, "blockquote", &colors.blockquote)?;
     apply_color(&mut theme.heading, "heading", &colors.heading)?;
@@ -783,16 +798,54 @@ fn parse_rgb_color(inner: &str) -> Result<Color> {
 }
 
 fn system_theme_id() -> &'static str {
-    if let Ok(value) = std::env::var("COLORFGBG")
-        && let Some(bg) = value.split(';').next_back()
-        && let Ok(index) = bg.parse::<i32>()
-        && (0..=15).contains(&index)
-    {
-        return if (0..=6).contains(&index) || index == 8 {
-            ThemeName::Dark.id()
-        } else {
-            ThemeName::Light.id()
-        };
+    use coco_tui_ui::system_theme::SystemTheme;
+
+    // Prefer an OSC 11 background probe (terminal's actual background); fall
+    // back to the synchronous `$COLORFGBG` seed, then dark. The probe (when the
+    // active setting is `auto`) runs once at TUI boot via `install_theme`.
+    let detected = coco_tui_ui::system_theme::cached_system_theme().or_else(|| {
+        std::env::var("COLORFGBG")
+            .ok()
+            .and_then(|value| coco_tui_ui::system_theme::detect_from_colorfgbg(&value))
+    });
+    match detected.unwrap_or(SystemTheme::Dark) {
+        SystemTheme::Light => ThemeName::Light.id(),
+        SystemTheme::Dark => ThemeName::Dark.id(),
     }
-    ThemeName::Dark.id()
+}
+
+/// The `active` setting persisted in `theme.json` (without resolving it). Lets
+/// the TUI boot decide whether to run the OSC 11 background probe — only `auto`
+/// needs it. Defaults to the built-in default on any read/parse failure.
+pub(crate) fn persisted_active_setting() -> ThemeSetting {
+    let path = theme_config_path();
+    if path.exists() {
+        return load_theme_config(&path)
+            .map(|config| config.active)
+            .unwrap_or_default();
+    }
+    global_theme_setting().unwrap_or_default()
+}
+
+/// The theme selection from `GlobalConfig` (`~/.coco.json`) — TS parity (TS
+/// stores the active theme in GlobalConfig at `~/.claude.json`). `None` when
+/// unset/empty. Consulted only when no TUI-local `theme.json` exists; the
+/// in-app picker still writes `theme.json`, which takes precedence.
+fn global_theme_setting() -> Option<ThemeSetting> {
+    let global = coco_config::global_config::load_global_config().ok()?;
+    theme_setting_from_global(global.theme.as_deref()?)
+}
+
+/// Map a `GlobalConfig.theme` string to a [`ThemeSetting`] (`"auto"` →
+/// [`ThemeSetting::Auto`], otherwise a named theme). `None` for empty input.
+pub(crate) fn theme_setting_from_global(theme: &str) -> Option<ThemeSetting> {
+    let theme = theme.trim();
+    if theme.is_empty() {
+        return None;
+    }
+    Some(if theme.eq_ignore_ascii_case("auto") {
+        ThemeSetting::Auto
+    } else {
+        ThemeSetting::Named(theme.to_string())
+    })
 }

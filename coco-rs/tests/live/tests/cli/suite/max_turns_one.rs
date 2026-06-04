@@ -19,7 +19,7 @@ use crate::cli::harness::run_session;
 
 pub async fn run(provider: &str, model: &str) -> Result<()> {
     let cfg = SessionConfig {
-        max_turns: 1,
+        max_turns: Some(1),
         // Generous output cap so the first iteration's reply isn't
         // truncated; the boundary we're testing is iteration count, not
         // length.

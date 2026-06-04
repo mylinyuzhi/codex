@@ -4,10 +4,14 @@
 
 pub mod diff_display;
 pub mod notification;
+pub mod select_list;
 pub mod spinner_verbs;
 pub mod status_indicator;
 pub mod textarea;
 
+pub use select_list::SelectItem;
+pub use select_list::SelectListStyle;
+pub use select_list::render_select_list;
 pub use status_indicator::StatusIndicator;
 pub use status_indicator::StatusIndicatorView;
 pub use textarea::BolBehavior;

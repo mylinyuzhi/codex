@@ -181,39 +181,67 @@ impl Tool for EditTool {
                 let frs_read = frs.read().await;
                 frs_read.peek(&abs_path).cloned()
             };
-            if let Some(entry) = cached {
-                if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
-                    && entry.mtime_ms != disk_mtime
+            // Read-before-edit guard (TS FileEditTool.ts:275-287, errorCode 6).
+            // `canonicalize` succeeded, so the file exists on disk — but it was
+            // never read this session. Mirror Write/NotebookEdit and reject:
+            // editing an unseen file is the data-loss class this guards against.
+            let Some(entry) = cached else {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!(
+                        "{file_path} has not been read yet. Read it first before editing it."
+                    ),
+                    display_data: None,
+                    source: None,
+                });
+            };
+
+            // TS also rejects PARTIAL-view reads (FileEditTool.ts:275,
+            // `readTimestamp.isPartialView`): a Read with offset/limit only
+            // cached a slice, so the full file can't be validated against the
+            // edit. Force a full Read first — same data-loss guard as the
+            // never-read case above.
+            if entry.offset.is_some() || entry.limit.is_some() {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!(
+                        "{file_path} was only read partially (a line range). \
+                         Read the whole file before editing it."
+                    ),
+                    display_data: None,
+                    source: None,
+                });
+            }
+
+            if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
+                && entry.mtime_ms != disk_mtime
+            {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!(
+                        "{file_path} has been modified since it was last read \
+                         (mtime changed). Read it again before editing."
+                    ),
+                    display_data: None,
+                    source: None,
+                });
+            }
+
+            if entry.offset.is_none()
+                && entry.limit.is_none()
+                && let Ok(meta) = tokio::fs::metadata(&abs_path).await
+                && meta.len() <= LAYER2_MAX_BYTES
+                && let Ok(raw) = tokio::fs::read(&abs_path).await
+            {
+                let enc = coco_file_encoding::detect_encoding(&raw);
+                if let Ok(current) = enc.decode(&raw)
+                    && current != entry.content
                 {
                     return Err(ToolError::ExecutionFailed {
                         message: format!(
                             "{file_path} has been modified since it was last read \
-                             (mtime changed). Read it again before editing."
+                             (content changed). Read it again before editing."
                         ),
                         display_data: None,
                         source: None,
                     });
-                }
-
-                if entry.offset.is_none()
-                    && entry.limit.is_none()
-                    && let Ok(meta) = tokio::fs::metadata(&abs_path).await
-                    && meta.len() <= LAYER2_MAX_BYTES
-                    && let Ok(raw) = tokio::fs::read(&abs_path).await
-                {
-                    let enc = coco_file_encoding::detect_encoding(&raw);
-                    if let Ok(current) = enc.decode(&raw)
-                        && current != entry.content
-                    {
-                        return Err(ToolError::ExecutionFailed {
-                            message: format!(
-                                "{file_path} has been modified since it was last read \
-                                 (content changed). Read it again before editing."
-                            ),
-                            display_data: None,
-                            source: None,
-                        });
-                    }
                 }
             }
         }

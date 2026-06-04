@@ -665,23 +665,45 @@ impl ApiClient {
         debug!("api_call stream begin");
         let options = self.build_options(params);
 
-        // `abort_signal: None` — see `do_query_with_options` rationale.
-        let result = match self.model.do_stream(&options, None).await {
-            Ok(r) => r,
-            Err(e) => {
-                let err = self.wrap_provider_error(e);
-                // Reactive-401: refresh once and reopen the stream.
-                if RetryConfig::is_auth_error(&err)
-                    && let Some(hook) = &self.refresh_hook
-                    && hook().await
-                {
-                    warn!("stream auth error; refreshed credentials, reopening");
-                    self.model.do_stream(&options, None).await.map_err(|e2| {
-                        let err2 = self.wrap_provider_error(e2);
-                        warn!(error = %err2, "api_call stream reopen failed");
-                        err2
-                    })?
-                } else {
+        // Open the stream with the same exponential-backoff retry policy as
+        // the blocking `query()` path. TS `withRetry.ts` wraps BOTH blocking
+        // and streaming requests; the open fails before any bytes flow, so a
+        // transient 429 / 5xx / timeout / connection error is safe to retry
+        // here without losing partial output. Reactive-401 refresh is tried
+        // once and does NOT consume the retry budget, matching the blocking
+        // loop. `abort_signal: None` — see `do_query_with_options` rationale.
+        let mut attempt = 0;
+        let mut auth_refreshed = false;
+        let result = loop {
+            match self.model.do_stream(&options, None).await {
+                Ok(r) => break r,
+                Err(e) => {
+                    let err = self.wrap_provider_error(e);
+
+                    if RetryConfig::is_auth_error(&err)
+                        && !auth_refreshed
+                        && let Some(hook) = &self.refresh_hook
+                    {
+                        auth_refreshed = true;
+                        if hook().await {
+                            warn!("stream auth error; refreshed credentials, reopening");
+                            continue;
+                        }
+                    }
+
+                    if self.retry.should_retry(attempt, &err) {
+                        let delay = self.retry.delay_for_attempt(attempt, &err);
+                        warn!(
+                            error_class = err.error_class(),
+                            attempt,
+                            delay_ms = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX),
+                            "stream open failed; retrying"
+                        );
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+
                     warn!(error = %err, "api_call stream open failed");
                     return Err(err);
                 }
@@ -704,35 +726,50 @@ impl ApiClient {
         self.usage.lock().await.clone()
     }
 
-    /// Wrap an opaque provider `AISdkError` into [`InferenceError::ProviderError`]
+    /// Wrap an opaque provider `AISdkError` into a typed [`InferenceError`]
     /// with `(provider, model_id)` attribution prefixed onto the message.
-    /// Mirrors `vercel_ai::wrap_gateway_error` so error logs name the
-    /// failing provider/model instead of just the raw vendor message.
-    /// Status defaults to `0` because the underlying SDK error type
-    /// doesn't carry HTTP status — typed status codes are recovered at
-    /// the next layer up via [`crate::errors`] classification.
+    /// The variant is chosen by HTTP status so `is_retryable()` is correct —
+    /// transient 429 / 5xx / timeout / connection errors become retryable
+    /// variants that the blocking + streaming backoff loops actually retry.
+    /// Mirrors `vercel_ai::wrap_gateway_error` plus TS `withRetry::shouldRetry`.
     fn wrap_provider_error(&self, e: vercel_ai_provider::AISdkError) -> InferenceError {
-        // Recover the HTTP status from the boxed `APICallError` cause (the
-        // adapter preserves it there). Without this it defaults to 0, and a
-        // real 401/403 would never classify as an auth error — defeating the
-        // reactive-refresh + retry-policy paths.
-        let status = e
+        // Recover the HTTP status + retryability hint from the boxed
+        // `APICallError` cause (the adapter preserves them there).
+        let api_err = e
             .cause
             .as_ref()
-            .and_then(|c| c.downcast_ref::<vercel_ai_provider::APICallError>())
+            .and_then(|c| c.downcast_ref::<vercel_ai_provider::APICallError>());
+        let status = api_err
             .and_then(|api| api.status_code)
             .map(i32::from)
             .unwrap_or(0);
-        crate::errors::ProviderSnafu {
-            status,
-            message: format!(
-                "Provider '{}' error for model '{}': {}",
-                self.model.provider(),
-                self.model.model_id(),
-                e
-            ),
+        let message = format!(
+            "Provider '{}' error for model '{}': {}",
+            self.model.provider(),
+            self.model.model_id(),
+            e
+        );
+
+        // Classify by HTTP status so `is_retryable()` is correct and the
+        // backoff retry loops (blocking + streaming) fire for transient
+        // errors. Without this every provider error collapsed to a
+        // non-retryable `ProviderError` and the retry policy was dead.
+        if status != 0 {
+            return InferenceError::from_http_status(status, &message, /*retry_after*/ None);
         }
-        .build()
+
+        // No HTTP status. Trust ONLY the adapter's explicit retryability hint:
+        // a wrapped connection/timeout error (`APICallError { is_retryable:
+        // true, status: None }`, matching TS `APIConnectionError`) becomes a
+        // retryable NetworkError. An opaque error with no `APICallError` cause
+        // carries no transient signal, so it stays a non-retryable
+        // `ProviderError` — we must not spin the backoff loop on unknown errors.
+        let retryable = api_err.map(|api| api.is_retryable).unwrap_or(false);
+        if retryable {
+            crate::errors::NetworkSnafu { message }.build()
+        } else {
+            crate::errors::ProviderSnafu { status, message }.build()
+        }
     }
 
     /// Build [`LanguageModelV4CallOptions`] for a query, returning the

@@ -56,8 +56,8 @@ pub struct SessionConfig {
     pub context_window: i64,
     /// Per-call output cap. Default 2_048 keeps each turn cheap.
     pub max_output_tokens: i64,
-    /// Hard upper bound on agent loop turns.
-    pub max_turns: i32,
+    /// Hard upper bound on agent loop turns (`None` = unbounded).
+    pub max_turns: Option<i32>,
     /// Session-level total token budget (input + output, accumulated
     /// across every API call). `None` lets the engine run unbounded.
     pub total_token_budget: Option<i64>,
@@ -103,7 +103,7 @@ impl Default for SessionConfig {
         Self {
             context_window: 200_000,
             max_output_tokens: 2_048,
-            max_turns: 8,
+            max_turns: Some(8),
             total_token_budget: None,
             event_buffer: 1024,
             system_prompt: None,
@@ -125,7 +125,7 @@ impl SessionConfig {
         Self {
             context_window: window_tokens,
             max_output_tokens: 1_024,
-            max_turns: 12,
+            max_turns: Some(12),
             ..Self::default()
         }
     }

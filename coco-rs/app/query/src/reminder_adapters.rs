@@ -244,6 +244,11 @@ impl IdeBridgeSource for IdeBridgeAdapter {
 #[derive(Clone)]
 pub struct SwarmAdapter {
     pending: coco_tool_runtime::PendingMessageStoreRef,
+    /// Pre-resolved team snapshot for this turn (the leader's roster team,
+    /// or a teammate's identity team). Resolved in `app/cli` `wire_engine`
+    /// (which has coordinator access) and handed in per turn, so this
+    /// app-query adapter stays free of a coordinator dependency.
+    team_snapshot: Option<TeamContextSnapshot>,
 }
 
 impl std::fmt::Debug for SwarmAdapter {
@@ -256,6 +261,7 @@ impl Default for SwarmAdapter {
     fn default() -> Self {
         Self {
             pending: Arc::new(coco_tool_runtime::NoOpPendingMessageStore),
+            team_snapshot: None,
         }
     }
 }
@@ -279,6 +285,14 @@ impl SwarmAdapter {
         self.pending = store;
         self
     }
+
+    /// Set the per-turn team snapshot that backs the `team_context`
+    /// reminder (the one-shot "Team Coordination" injection). `None` =
+    /// not in a team this turn.
+    pub fn with_team_context(mut self, snapshot: Option<TeamContextSnapshot>) -> Self {
+        self.team_snapshot = snapshot;
+        self
+    }
 }
 
 #[async_trait]
@@ -287,7 +301,7 @@ impl SwarmSource for SwarmAdapter {
         None
     }
     async fn team_context(&self, _agent_id: Option<&str>) -> Option<TeamContextSnapshot> {
-        None
+        self.team_snapshot.clone()
     }
     async fn agent_pending_messages(&self, agent_id: Option<&str>) -> Vec<AgentPendingMessage> {
         let Some(id) = agent_id else {

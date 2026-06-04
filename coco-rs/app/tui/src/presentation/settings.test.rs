@@ -9,7 +9,7 @@ use crate::widgets::settings_panel::SettingsTab;
 use coco_tui_ui::style::UiStyles;
 
 #[test]
-fn settings_surface_content_renders_theme_tab_and_syntax_row() {
+fn settings_surface_content_renders_display_tab_and_syntax_row() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let state = SettingsPanelState::default();
@@ -18,7 +18,9 @@ fn settings_surface_content_renders_theme_tab_and_syntax_row() {
 
     assert_eq!(title, " Settings ");
     assert_eq!(border, theme.primary);
-    assert!(body.contains("[Theme]   Output    Permissions    About "));
+    assert!(body.contains("[Display]   Output    Permissions    About "));
+    // Theme selection moved to /theme; the Display tab points users there.
+    assert!(body.contains("use /theme"));
     assert!(body.contains("Syntax highlighting: Enabled"));
     assert!(body.contains("Tab Switch tab"));
 }

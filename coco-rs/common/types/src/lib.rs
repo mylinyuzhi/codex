@@ -17,6 +17,7 @@ mod attachment_kind;
 mod cache;
 mod client_request;
 mod command;
+pub mod context_usage;
 mod event;
 mod extended;
 pub mod features;
@@ -244,8 +245,20 @@ pub use sdk_hook_output::PermissionRequestDecision;
 pub use sdk_hook_output::SdkHookOutput;
 
 // Server request types (Phase 2 — SDK control protocol, agent → SDK)
+pub use context_usage::ContextCategoryKind;
+pub use context_usage::ContextSuggestion;
+pub use context_usage::GridCell;
+pub use context_usage::GridCellKind;
+pub use context_usage::SourceGroup;
+pub use context_usage::SuggestionSeverity;
+pub use context_usage::build_grid;
+pub use context_usage::build_suggestions;
+pub use context_usage::fmt_token_compact;
+pub use context_usage::group_by_source;
+pub use context_usage::source_group;
 pub use server_request::ApiProvider as SdkApiProvider;
 pub use server_request::AskForApprovalParams as ServerAskForApprovalParams;
+pub use server_request::AttachmentTypeBreakdown;
 pub use server_request::ConfigReadResult;
 pub use server_request::ContextAgent;
 pub use server_request::ContextMcpTool;
@@ -279,6 +292,7 @@ pub use server_request::SessionListResult;
 pub use server_request::SessionReadResult;
 pub use server_request::SessionResumeResult;
 pub use server_request::SessionStartResult;
+pub use server_request::ToolTypeBreakdown;
 pub use server_request::TurnStartResult;
 
 // JSON-RPC envelope types (Phase 2 — wire format)

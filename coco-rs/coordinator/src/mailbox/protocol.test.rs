@@ -311,3 +311,39 @@ fn test_optional_fields_omitted_on_serialize_when_none() {
     assert!(!s.contains("idleReason"), "None fields must skip: {s}");
     assert!(!s.contains("summary"));
 }
+
+#[test]
+fn test_plan_approval_response_parses_from_leader_writer_codec() {
+    // The leader-side writers (TUI human approve + model SendMessage)
+    // serialize via `coco_tool_runtime::PlanApprovalResponse`, which has NO
+    // `timestamp` field. The teammate consumer (`wait_for_plan_approval`)
+    // parses via THIS codec — it must accept the timestamp-less JSON, else
+    // an actually-approving leader blocks the teammate forever.
+    let writer = coco_tool_runtime::PlanApprovalMessage::PlanApprovalResponse(
+        coco_tool_runtime::PlanApprovalResponse {
+            request_id: "req-1".to_string(),
+            approved: true,
+            feedback: None,
+            permission_mode: None,
+        },
+    );
+    let json = serde_json::to_string(&writer).expect("writer serialises");
+    assert!(
+        !json.contains("timestamp"),
+        "writer omits timestamp: {json}"
+    );
+
+    let parsed = parse_protocol_message(&json).expect("consumer must parse writer JSON");
+    let ProtocolMessage::PlanApprovalResponse {
+        request_id,
+        approved,
+        timestamp,
+        ..
+    } = parsed
+    else {
+        panic!("wrong variant");
+    };
+    assert_eq!(request_id, "req-1");
+    assert!(approved);
+    assert_eq!(timestamp, "", "missing timestamp defaults to empty");
+}

@@ -26,6 +26,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
+use coco_types::AttachmentKind;
+
 use crate::i18n::t;
 use crate::presentation::streaming::StreamingTailView;
 use crate::presentation::thinking::ThinkingDisplay;
@@ -80,6 +82,9 @@ pub struct ChatWidget<'a> {
     pub(crate) styles: UiStyles<'a>,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) width: u16,
+    /// Session working directory, used to show memory-chip paths relative to it.
+    /// `None` (tests / no session) falls back to the absolute path.
+    pub(crate) cwd: Option<&'a str>,
     /// Keybinding handle for rendering live shortcuts (e.g. the
     /// `…(<chord> to see full summary)` hint). `None` falls back to
     /// the default literal — used in tests that build a ChatWidget
@@ -102,9 +107,15 @@ impl<'a> ChatWidget<'a> {
             styles,
             syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
+            cwd: None,
             kb_handle: None,
             show_thinking_internal: false,
         }
+    }
+
+    pub fn cwd(mut self, cwd: Option<&'a str>) -> Self {
+        self.cwd = cwd;
+        self
     }
 
     pub fn reasoning_metadata(
@@ -335,11 +346,10 @@ impl<'a> ChatWidget<'a> {
         let elapsed = execution
             .map(|tool| format!(" ({})", format_duration_seconds(tool.elapsed())))
             .unwrap_or_default();
+        let tone = tool_tone_color(tool_name_tone(tool_name), self.styles);
         let mut spans = vec![
-            Span::raw("🔧 ").fg(self.styles.dim()),
-            Span::raw(tool_name.to_string())
-                .fg(tool_tone_color(tool_name_tone(tool_name), self.styles))
-                .bold(),
+            Span::raw("● ").fg(tone),
+            Span::raw(tool_name.to_string()).fg(tone).bold(),
         ];
         if !preview_spans.is_empty() {
             spans.push(Span::raw("(").fg(self.styles.text()));
@@ -523,8 +533,84 @@ fn meta_category(kind: &CellKind) -> &'static str {
         CellKind::System(SystemCellKind::StopHookSummary) => "hook",
         CellKind::System(SystemCellKind::TurnDuration) => "turn",
         CellKind::System(SystemCellKind::ScheduledTaskFire) => "schedule",
+        CellKind::System(SystemCellKind::ContextUsage) => "context",
         _ => "meta",
     }
+}
+
+/// First meaningful line of a renderable attachment's body, for a one-line
+/// transcript content row (shared by the chat widget and the Ctrl+O modal).
+/// `None` when the attachment carries no displayable text (silent / structured
+/// payloads). Mirrors TS `AttachmentMessage` rendering the body, not a `[meta]`
+/// collapse.
+pub(crate) fn attachment_summary_text(source: &coco_messages::Message) -> Option<String> {
+    let coco_messages::Message::Attachment(att) = source else {
+        return None;
+    };
+    let body = strip_system_reminder_wrapper(&att.as_text_for_display());
+    let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
+    Some(first.to_string())
+}
+
+/// Path for a memory-injection chip (nested CLAUDE.md / relevant memories), or
+/// `None` for any other attachment. Detected by typed [`AttachmentKind`] — not
+/// by sniffing the body — so the verbose `Contents of <path>:` reminder collapses
+/// to a compact `◆ memory · <path>` row instead of dumping its first line.
+pub(crate) fn nested_memory_chip_path(
+    source: &coco_messages::Message,
+    cwd: Option<&str>,
+) -> Option<String> {
+    let coco_messages::Message::Attachment(att) = source else {
+        return None;
+    };
+    if !matches!(
+        att.kind,
+        AttachmentKind::NestedMemory | AttachmentKind::RelevantMemories
+    ) {
+        return None;
+    }
+    let body = strip_system_reminder_wrapper(&att.as_text_for_display());
+    let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
+    // NestedMemory header is `Contents of {path}:`; RelevantMemories is
+    // `Memory: {path} (last modified …)`. Strip down to just `{path}`.
+    let path = first
+        .strip_prefix("Contents of ")
+        .map(|rest| rest.strip_suffix(':').unwrap_or(rest))
+        .or_else(|| {
+            first
+                .strip_prefix("Memory: ")
+                .map(|rest| rest.split(" (").next().unwrap_or(rest))
+        })
+        .unwrap_or(first);
+    Some(relativize_path(path, cwd))
+}
+
+/// Display form of a path: relative to `cwd` when it lives under the working
+/// directory, else the absolute path unchanged (e.g. `~/.coco/CLAUDE.md`).
+pub(crate) fn relativize_path(path: &str, cwd: Option<&str>) -> String {
+    if let Some(cwd) = cwd.filter(|c| !c.is_empty())
+        && let Some(rest) = path
+            .strip_prefix(cwd.trim_end_matches('/'))
+            .and_then(|rest| rest.strip_prefix('/'))
+        && !rest.is_empty()
+    {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
+/// Strip the `<system-reminder>` wrapper lines from an attachment body so the
+/// content row shows the meaningful text, not the XML tag.
+fn strip_system_reminder_wrapper(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            let t = line.trim();
+            t != "<system-reminder>" && t != "</system-reminder>"
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// Best-effort short text for the meta-preview row. Walks
@@ -533,6 +619,8 @@ fn meta_category(kind: &CellKind) -> &'static str {
 fn meta_preview_text(cell: &RenderedCell) -> String {
     use coco_messages::Message;
     use coco_messages::SystemMessage as SM;
+    // Only System cells collapse to a meta preview now — attachments render as
+    // content rows (see `presentation::transcript::is_meta`).
     let Message::System(sm) = cell.source.as_ref() else {
         return String::new();
     };
@@ -557,7 +645,8 @@ fn meta_preview_text(cell: &RenderedCell) -> String {
         | SM::ApiMetrics(_)
         | SM::StopHookSummary(_)
         | SM::TurnDuration(_)
-        | SM::ScheduledTaskFire(_) => String::new(),
+        | SM::ScheduledTaskFire(_)
+        | SM::ContextUsage(_) => String::new(),
     }
 }
 

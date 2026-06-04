@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::i18n::locale_test_guard;
 use crate::presentation::streaming::StreamingTailView;
 use crate::state::derive::test_helpers::{
-    assistant_text_cell, assistant_thinking_cell_with_metadata, info_cell, tool_result_cell,
-    tool_use_cell, user_text_cell,
+    assistant_text_cell, assistant_thinking_cell_with_metadata, context_usage_cell, info_cell,
+    tool_result_cell, tool_use_cell, user_text_cell,
 };
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
@@ -328,6 +328,21 @@ fn transcript_projection_distinguishes_meta_and_regular_messages() {
 }
 
 #[test]
+fn transcript_projection_renders_context_usage_as_full_cell_not_meta() {
+    // `/context` is first-class inline content: it must never collapse to a
+    // `# [context]` meta preview, regardless of the system-reminder toggle.
+    let cells = vec![context_usage_cell()];
+    assert_eq!(
+        projection_cells(&cells, /*show_system_reminders*/ false),
+        vec![TranscriptCell::Cell { index: 0 }]
+    );
+    assert_eq!(
+        projection_cells(&cells, /*show_system_reminders*/ true),
+        vec![TranscriptCell::Cell { index: 0 }]
+    );
+}
+
+#[test]
 fn transcript_projection_groups_parallel_tool_runs() {
     let cells = vec![
         tool_use_cell("tool-1", "Read", serde_json::json!({})),
@@ -514,8 +529,10 @@ fn transcript_modal_caps_expanded_tool_result_lines() {
 
     assert!(body.contains("line-0"));
     assert!(!body.contains(&format!("line-{TRANSCRIPT_EXPANDED_CELL_LINE_CAP}")));
-    // Reader caps at the per-cell line budget; the overflow is marked, not shown.
-    assert!(body.contains("+1 lines"));
+    // Reader caps at the per-cell line budget; the overflow collapses into a
+    // SINGLE trailing marker. One row of the budget is reserved for that marker,
+    // so the last two lines (cap-1 and cap) are folded into "+2 lines".
+    assert!(body.contains("+2 lines"));
 }
 
 #[test]

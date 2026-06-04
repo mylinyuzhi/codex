@@ -25,7 +25,7 @@ pub async fn run(provider: &str, model: &str) -> Result<()> {
     const MARKER: &str = "ZX42-OVERRIDE-OK";
 
     let cfg = SessionConfig {
-        max_turns: 2,
+        max_turns: Some(2),
         max_output_tokens: 512,
         system_prompt: Some(format!(
             "You are a test fixture. ALWAYS end every reply with the exact \

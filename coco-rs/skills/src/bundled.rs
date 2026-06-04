@@ -7,9 +7,11 @@
 //!
 //! 1. **Inventory**: matches `skills/bundled/index.ts` exactly. Skills that TS
 //!    ships only as gated registrations (`feature(...)` calls) are gated here
-//!    via `gated_by: Some(Feature::*)`. Skills that TS ships as ant-only
-//!    (`if (process.env.USER_TYPE !== 'ant') return`) are gated via a
-//!    user-type check at registration time.
+//!    via `gated_by: Some(Feature::*)`. Skills TS ships ant-only
+//!    (`if (process.env.USER_TYPE !== 'ant') return`) are general-purpose
+//!    workflows, so coco-rs registers them **unconditionally** — the
+//!    `USER_TYPE === 'ant'` visibility convention is intentionally dropped
+//!    (see root `CLAUDE.md` "Always-Enabled General-Purpose Commands").
 //! 2. **No Rust-only extras**: TS does NOT ship `commit`, `review-pr`, or
 //!    `pdf` as bundled skills (`/commit` is a top-level `commands/commit.ts`,
 //!    `review-pr` is covered by `commands/review.ts`, and PDF reading is
@@ -21,7 +23,6 @@
 
 use coco_types::Feature;
 use coco_types::ToolName;
-use coco_types::UserType;
 use std::collections::HashMap;
 
 use crate::SkillContext;
@@ -70,16 +71,15 @@ fn bundled(
 
 /// Get all bundled skill definitions.
 ///
-/// **Selection logic mirrors TS `skills/bundled/index.ts:initBundledSkills`**:
-/// - 5 unconditional skills are always present (update-config, keybindings,
-///   loremIpsum, batch — note: TS gates loremIpsum on USER_TYPE='ant', so we
-///   gate via [`UserType`] argument).
-/// - 5 ant-only skills (verify, debug, skillify, remember, simplify, stuck)
-///   present only when `user_type == Ant`.
+/// **Selection logic** (coco-rs diverges from TS by dropping the ant gate):
+/// - Always-on skills (update-config, keybindings-help, batch) plus the
+///   formerly-ant general-purpose skills (verify, debug, skillify, remember,
+///   simplify, stuck, lorem-ipsum) are returned unconditionally.
 /// - 7 feature-gated skills (loop, schedule, claude-api, dream, hunter,
 ///   claude-in-chrome, run-skill-generator) carry `gated_by: Some(Feature::*)`
-///   and are filtered by `SkillManager::visible(features)`.
-pub fn get_bundled_skills(user_type: UserType) -> Vec<SkillDefinition> {
+///   and are filtered by `SkillManager::visible(features)` — these remain
+///   gated because they guard real capabilities, not a user-type convention.
+pub fn get_bundled_skills() -> Vec<SkillDefinition> {
     let mut skills: Vec<SkillDefinition> = Vec::new();
 
     // ───────────────── unconditional ─────────────────
@@ -143,10 +143,10 @@ pub fn get_bundled_skills(user_type: UserType) -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // ───────────────── ant-only ─────────────────
+    // ─── formerly ant-only — now unconditional (coco-rs drops USER_TYPE gate) ───
 
-    if user_type.is_ant() {
-        // /verify — TS: skills/bundled/verify.ts (ant-only)
+    {
+        // /verify — TS: skills/bundled/verify.ts (general-purpose)
         skills.push(bundled(
             "verify",
             "Verify a code change does what it should by running the app",
@@ -234,7 +234,7 @@ pub fn get_bundled_skills(user_type: UserType) -> Vec<SkillDefinition> {
         // /lorem-ipsum — TS: skills/bundled/loremIpsum.ts (ant-only)
         let mut li = bundled(
             "lorem-ipsum",
-            "Generate filler text for long context testing. Specify token count as argument (e.g., /lorem-ipsum 50000). Outputs approximately the requested number of tokens. Ant-only.",
+            "Generate filler text for long context testing. Specify token count as argument (e.g., /lorem-ipsum 50000). Outputs approximately the requested number of tokens.",
             include_str!("bundled_prompts/lorem_ipsum.txt"),
             vec![],
         );
@@ -375,17 +375,12 @@ pub fn get_bundled_skills(user_type: UserType) -> Vec<SkillDefinition> {
     skills
 }
 
-/// Register all bundled skills into a SkillManager (filtered by user type +
-/// feature gates at the visibility layer).
-pub fn register_bundled(manager: &crate::SkillManager, user_type: UserType) {
-    for skill in get_bundled_skills(user_type) {
+/// Register all bundled skills into a SkillManager. Feature-gated skills are
+/// still filtered later at the [`crate::SkillManager::visible`] layer.
+pub fn register_bundled(manager: &crate::SkillManager) {
+    for skill in get_bundled_skills() {
         manager.register(skill);
     }
-}
-
-/// Convenience for tests that want default (Human user, Stable features).
-pub fn register_bundled_default(manager: &crate::SkillManager) {
-    register_bundled(manager, UserType::Human);
 }
 
 #[cfg(test)]

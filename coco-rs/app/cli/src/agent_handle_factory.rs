@@ -19,22 +19,32 @@
 //! against the parent's `claudeAPIClient`; multi-provider role
 //! resolution is a Rust-only feature so the wiring lives here.
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use anyhow::Result;
 use coco_coordinator::agent_handle::SwarmAgentHandle;
 use coco_coordinator::runner::InProcessAgentRunner;
 use coco_coordinator::types::TeamManager;
+use coco_coordinator::worktree::AgentWorktreeManager;
 use coco_query::agent_adapter::{QueryEngineAdapter, QueryEngineFactory};
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentQueryEngineRef;
 use coco_types::LlmModelSelection;
 use coco_types::ModelRole;
 use tokio::sync::RwLock;
+use tracing::debug;
+use tracing::info;
 use tracing::warn;
 
 use crate::session_runtime::SessionRuntime;
+
+/// Stale agent-worktree GC threshold — crash-leaked `agent-*` worktrees
+/// older than this are swept at session start. Mirrors TS
+/// `cleanupStaleAgentWorktrees` (cleanup.ts: 30-day `DEFAULT_CLEANUP_PERIOD_DAYS`).
+const STALE_WORKTREE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Per-runtime handles required to construct the production
 /// `SwarmAgentHandle`. Splitting this out of `SessionRuntime::build`
@@ -127,6 +137,50 @@ pub async fn build_agent_team_wiring(
         }
     }
     handle.set_backend_registry(backend_registry);
+
+    // Install the agent worktree manager so `AgentTool` spawns with
+    // `isolation: "worktree"` get a real git worktree under the main repo's
+    // `.claude/worktrees/agent-<slug>` (cwd_override + cleanup-on-success).
+    // Without this install, `worktree_manager()` stays `None` and every such
+    // spawn fails fast with "no AgentWorktreeManager is configured".
+    //
+    // TS parity: agent worktree creation is UNGATED — `AgentTool.tsx` calls
+    // `createAgentWorktree(slug)` whenever `effectiveIsolation === "worktree"`
+    // with no feature/setting/flag check; it only requires being inside a git
+    // repo (`findCanonicalGitRoot(getCwd())`). So we install whenever
+    // discovery succeeds and skip silently otherwise — a later isolation
+    // request then surfaces the existing clear error. (`Feature::Worktree`
+    // gates the separate interactive EnterWorktree/ExitWorktree tools, not
+    // subagent isolation, so it is deliberately not consulted here.)
+    match AgentWorktreeManager::discover_from_cwd(Path::new(&cwd)) {
+        Ok(manager) => {
+            let manager = Arc::new(manager);
+            handle.set_worktree_manager(manager.clone());
+
+            // Reap crash-leaked `agent-*` worktrees (parent killed before
+            // `cleanup_if_unchanged` ran). Fire-and-forget, mirroring the
+            // session-memory / shell-snapshot sweeps in `session_runtime`.
+            // `cleanup_stale` runs synchronous git subprocesses, so it goes
+            // through `spawn_blocking` to avoid stalling a runtime worker.
+            // Bare mode skips the sweep (TS: `cleanupStaleAgentWorktrees` lives
+            // inside the `!isBareMode()` housekeeping, not the create path).
+            if !coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode) {
+                tokio::spawn(async move {
+                    let removed = tokio::task::spawn_blocking(move || {
+                        manager.cleanup_stale(STALE_WORKTREE_TTL)
+                    })
+                    .await
+                    .unwrap_or(0);
+                    if removed > 0 {
+                        info!("reaped {removed} stale agent worktree(s)");
+                    }
+                });
+            }
+        }
+        Err(e) => {
+            debug!(error = %e, "agent worktree isolation unavailable (cwd not in a git repo)");
+        }
+    }
 
     if let Some(task_list) = runtime.current_task_list().await {
         handle.set_task_list(task_list);

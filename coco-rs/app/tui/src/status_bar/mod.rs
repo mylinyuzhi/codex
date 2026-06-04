@@ -7,7 +7,6 @@ mod widget;
 use crate::state::AppState;
 use crate::state::ExitKey;
 
-pub(crate) use builtin::format_token_count;
 pub(crate) use runtime::StatusLineRuntime;
 pub(crate) use runtime::StatusLineUpdate;
 pub(crate) use widget::StatusBarWidget;

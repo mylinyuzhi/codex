@@ -29,6 +29,14 @@ pub const MEMORY_LOCAL_FILE_CANDIDATES: &[&str] = &["CLAUDE.local.md", "AGENTS.l
 /// of the lowercased basename — repeated calls on identical trees
 /// produce identical sequences.
 ///
+/// When a directory holds more than one matching file with **byte-identical
+/// content** (e.g. a `CLAUDE.md` / `AGENTS.md` pair that are exact copies),
+/// the duplicates are collapsed to the single file matching the earliest
+/// entry in `candidates` — so `CLAUDE.md` wins over `AGENTS.md`. Files whose
+/// contents differ are all kept. This runs on every directory read, so the
+/// same tree never injects the same memory twice. Files that differ in size
+/// are never read for comparison (cheap pre-filter).
+///
 /// Empty result on read errors (`ENOENT`, `EACCES`, `ENOTDIR`) — matches
 /// TS `processMdRules` defensive read behavior in `claudemd.ts:730-738`.
 /// Directory entries that happen to share a candidate name are skipped;
@@ -61,7 +69,63 @@ pub fn find_memory_files(dir: &Path, candidates: &[&str]) -> Vec<PathBuf> {
     }
 
     hits.sort_by(|a, b| a.0.cmp(&b.0));
-    hits.into_iter().map(|(_, path)| path).collect()
+    let paths: Vec<PathBuf> = hits.into_iter().map(|(_, path)| path).collect();
+    dedup_byte_identical(paths, candidates)
+}
+
+/// Collapse byte-identical matches in a single directory, keeping the file
+/// that matches the earliest `candidates` entry (so a duplicated
+/// `CLAUDE.md` / `AGENTS.md` pair survives as `CLAUDE.md`). Survivor order is
+/// preserved. Only equal-length files are read, so non-duplicates cost no
+/// extra I/O beyond a `stat`.
+fn dedup_byte_identical(paths: Vec<PathBuf>, candidates: &[&str]) -> Vec<PathBuf> {
+    if paths.len() < 2 {
+        return paths;
+    }
+
+    // Preference rank: index of the first candidate the basename matches.
+    // Lower rank wins (CLAUDE.md is candidates[0]); unmatched sort last.
+    let rank = |p: &Path| -> usize {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|name| candidates.iter().position(|c| name.eq_ignore_ascii_case(c)))
+            .unwrap_or(usize::MAX)
+    };
+
+    let sizes: Vec<Option<u64>> = paths
+        .iter()
+        .map(|p| std::fs::metadata(p).map(|m| m.len()).ok())
+        .collect();
+
+    let mut dropped = vec![false; paths.len()];
+    for i in 0..paths.len() {
+        for j in (i + 1)..paths.len() {
+            if dropped[i] || dropped[j] {
+                continue;
+            }
+            // Cheap pre-filter: different size ⇒ not byte-identical.
+            match (sizes[i], sizes[j]) {
+                (Some(a), Some(b)) if a == b => {}
+                _ => continue,
+            }
+            let (Ok(ci), Ok(cj)) = (std::fs::read(&paths[i]), std::fs::read(&paths[j])) else {
+                continue;
+            };
+            if ci == cj {
+                if rank(&paths[i]) <= rank(&paths[j]) {
+                    dropped[j] = true;
+                } else {
+                    dropped[i] = true;
+                }
+            }
+        }
+    }
+
+    paths
+        .into_iter()
+        .zip(dropped)
+        .filter_map(|(path, drop)| (!drop).then_some(path))
+        .collect()
 }
 
 #[cfg(test)]

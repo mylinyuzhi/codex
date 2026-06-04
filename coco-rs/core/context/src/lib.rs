@@ -29,7 +29,6 @@ pub mod prompt_suggestion;
 pub mod suggestions;
 pub mod user_input;
 pub mod vim_mode;
-pub mod worktree;
 
 pub use attachment::Attachment;
 pub use attachment::AttachmentBatch;
@@ -65,7 +64,6 @@ pub use memory::MemoryFileInfo;
 pub use memory::MemoryType;
 pub use memory_discovery::MemoryFile;
 pub use memory_discovery::MemoryFileSource;
-pub use memory_discovery::discover_claude_md_files;
 pub use memory_discovery::discover_memory_files;
 pub use memory_filenames::MEMORY_FILE_CANDIDATES;
 pub use memory_filenames::MEMORY_LOCAL_FILE_CANDIDATES;

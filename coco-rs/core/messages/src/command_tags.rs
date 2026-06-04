@@ -27,6 +27,8 @@
 use coco_types::messages::LlmMessage;
 use coco_types::messages::Message;
 use coco_types::messages::MessageOrigin;
+use coco_types::messages::SystemContextUsageMessage;
+use coco_types::messages::SystemMessage;
 use coco_types::messages::UserMessage;
 use uuid::Uuid;
 
@@ -104,6 +106,28 @@ pub fn build_slash_command_messages(
             &format_local_command_stdout(output),
             /*transcript_only*/ true,
         ),
+    ]
+}
+
+/// Build the `❯ /context` echo + the inline context-usage snapshot for the
+/// `/context` slash command. The echo is a transcript-only `Message::User`
+/// (never reaches the model); the snapshot is a `Message::System` the TUI
+/// paints as a colored grid + grouped detail. Mirrors TS `/context`
+/// (`local-jsx` → `<ContextVisualization>` printed into the scrollback), not
+/// a modal. Both messages are model-invisible.
+pub fn build_context_usage_messages(
+    args: &str,
+    result: coco_types::ContextUsageResult,
+) -> Vec<Message> {
+    vec![
+        slash_user_message(
+            &format_command_input("context", args),
+            /*transcript_only*/ true,
+        ),
+        Message::System(SystemMessage::ContextUsage(SystemContextUsageMessage {
+            uuid: Uuid::new_v4(),
+            result,
+        })),
     ]
 }
 

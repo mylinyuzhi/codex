@@ -370,6 +370,24 @@ pub(super) fn handle(
             }
             true
         }
+        // === `/context` full-color usage snapshot (inline in transcript) ===
+        TuiOnlyEvent::OpenContextUsage { result } => {
+            // TS `/context` (`local-jsx`) prints `<ContextVisualization>` into
+            // the scrollback, not a modal. Build the `❯ /context` echo + the
+            // typed system snapshot and round-trip them through engine history
+            // so transcript / SDK / JSONL converge (same path as /help).
+            let messages = coco_messages::build_context_usage_messages(/*args*/ "", result);
+            if let Err(e) =
+                command_tx.try_send(crate::command::UserCommand::PushSlashResult { messages })
+            {
+                tracing::warn!(
+                    target: "coco_tui::system_push",
+                    error = ?e,
+                    "OpenContextUsage: failed to dispatch PushSlashResult",
+                );
+            }
+            true
+        }
         // === Open the rewind picker state ===
         // Slash `/rewind` opens the bare picker. Internal preselect
         // flows use `TuiCommand::ShowRewindFor`.
@@ -534,6 +552,10 @@ pub(super) fn handle(
         }
         TuiOnlyEvent::OpenModelPicker => {
             crate::update::show::cycle_model(state);
+            true
+        }
+        TuiOnlyEvent::OpenThemePicker => {
+            crate::update::show::open_theme_picker(state);
             true
         }
         TuiOnlyEvent::SlashCommandStatus { name, kind } => {

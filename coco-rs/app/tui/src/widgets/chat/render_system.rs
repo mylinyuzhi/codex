@@ -77,6 +77,17 @@ pub(super) fn try_render(
             ));
             Some(())
         }
+        CellKind::System(SystemCellKind::ContextUsage) => {
+            // `/context` snapshot — paint the full colored grid + grouped
+            // detail block inline (TS `<ContextVisualization>` parity).
+            let Message::System(SystemMessage::ContextUsage(m)) = cell.source.as_ref() else {
+                return Some(());
+            };
+            lines.extend(crate::presentation::context_view::report_lines(
+                &m.result, w.styles, w.cwd,
+            ));
+            Some(())
+        }
         // Remaining SystemCellKind sub-variants (PermissionRetry,
         // BridgeStatus, MemorySaved, AwaySummary, AgentsKilled,
         // ApiMetrics, StopHookSummary, TurnDuration, ScheduledTaskFire,
@@ -142,6 +153,8 @@ fn system_message_summary(msg: &Message) -> Option<String> {
         | SystemMessage::CompactBoundary(_)
         | SystemMessage::MicrocompactBoundary(_)
         | SystemMessage::LocalCommand(_)
+        // ContextUsage paints via its own render arm above; no summary row.
+        | SystemMessage::ContextUsage(_)
         | SystemMessage::UserInterruption(_) => return None,
     })
 }

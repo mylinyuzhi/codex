@@ -47,7 +47,9 @@ pub struct QueryEngineRunner {
     /// Max output tokens per turn. Pulled from CLI flags at startup.
     max_output_tokens: i64,
     /// Max internal agent turns (tool-use iterations) per SDK turn.
-    max_turns: i32,
+    /// `None` = unbounded (TS leaves SDK turns uncapped unless `max_turns` is
+    /// supplied in the request or `loop.max_turns` in settings).
+    max_turns: Option<i32>,
     /// Optional system prompt. When None, the engine uses its default.
     system_prompt: Option<String>,
 }
@@ -59,7 +61,7 @@ impl QueryEngineRunner {
     pub fn new(
         runtime: Arc<crate::session_runtime::SessionRuntime>,
         max_output_tokens: i64,
-        max_turns: i32,
+        max_turns: Option<i32>,
         system_prompt: Option<String>,
     ) -> Self {
         Self {
@@ -134,11 +136,9 @@ impl TurnRunner for QueryEngineRunner {
                 ask_rules,
                 permission_rule_source_roots,
                 max_output_tokens,
-                max_turns: if max_turns > 0 {
-                    max_turns
-                } else {
-                    runtime_config.loop_config.max_turns.unwrap_or(max_turns)
-                },
+                // Request `max_turns` wins, else settings `loop.max_turns`,
+                // else unbounded (TS parity).
+                max_turns: max_turns.or(runtime_config.loop_config.max_turns),
                 total_token_budget: runtime_config.loop_config.total_token_budget.map(i64::from),
                 prompt_cache: runtime
                     .model_runtimes()

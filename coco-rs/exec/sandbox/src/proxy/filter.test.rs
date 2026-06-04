@@ -8,10 +8,22 @@ use std::net::Ipv6Addr;
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_is_allowed_empty_lists_allows_all() {
+fn test_is_allowed_no_config_denies_by_default() {
+    // No allow-list and no deny-list = no network config. The egress gate must
+    // deny by default so enabling the sandbox doesn't silently grant full
+    // network. (Configure allowed_domains, or set network.mode = Full, to allow.)
     let filter = DomainFilter::new(vec![], vec![]);
-    assert!(filter.is_allowed("example.com"));
-    assert!(filter.is_allowed("anything.org"));
+    assert!(!filter.is_allowed("example.com"));
+    assert!(!filter.is_allowed("anything.org"));
+}
+
+#[test]
+fn test_is_allowed_deny_only_is_blocklist_mode() {
+    // A deny-list with no allow-list = blocklist mode: allow everything not
+    // explicitly denied.
+    let filter = DomainFilter::new(vec![], vec!["evil.com".to_string()]);
+    assert!(filter.is_allowed("good.com"));
+    assert!(!filter.is_allowed("evil.com"));
 }
 
 #[test]
@@ -214,22 +226,31 @@ fn test_is_non_public_ipv6_link_local() {
 
 #[test]
 fn test_ssrf_prevention_in_filter() {
-    let filter = DomainFilter::new(vec![], vec![]).with_ssrf_protection();
-    // Private IPs should be blocked.
+    // Allow-list the public hosts so deny-by-default doesn't mask the SSRF gate.
+    let filter = DomainFilter::new(
+        vec!["8.8.8.8".to_string(), "example.com".to_string()],
+        vec![],
+    )
+    .with_ssrf_protection();
+    // Private IPs are blocked by SSRF even when not in the allow-list.
     assert!(!filter.is_allowed("127.0.0.1"));
     assert!(!filter.is_allowed("10.0.0.1"));
     assert!(!filter.is_allowed("192.168.1.1"));
     assert!(!filter.is_allowed("[::1]"));
-    // Public IPs should pass.
+    // Allow-listed public IP / domain pass.
     assert!(filter.is_allowed("8.8.8.8"));
-    // Domain names should pass (no DNS resolution here).
     assert!(filter.is_allowed("example.com"));
 }
 
 #[test]
 fn test_ssrf_prevention_disabled_by_default() {
-    let filter = DomainFilter::new(vec![], vec![]);
-    // Without SSRF protection, private IPs are allowed.
+    // Allow-list the private IPs; with SSRF protection OFF they must pass
+    // (this isolates the SSRF gate from deny-by-default, which would otherwise
+    // block them for lack of an allow-list entry).
+    let filter = DomainFilter::new(
+        vec!["127.0.0.1".to_string(), "10.0.0.1".to_string()],
+        vec![],
+    );
     assert!(filter.is_allowed("127.0.0.1"));
     assert!(filter.is_allowed("10.0.0.1"));
 }

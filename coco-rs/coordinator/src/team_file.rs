@@ -110,14 +110,59 @@ pub fn list_team_names() -> Vec<String> {
         .collect()
 }
 
-/// Clean up team directories (remove team dir and its contents).
+/// Clean up everything a team owns: per-member worktrees, the team dir,
+/// and the team's task-list directory.
 ///
-/// TS: `cleanupTeamDirectories(teamName)`
+/// TS: `cleanupTeamDirectories(teamName)` (`teamHelpers.ts:641-683`) —
+/// destroy each `member.worktreePath`, then `rm` the team dir, then `rm`
+/// `getTasksDir(sanitizedName)`. The worktree + tasks-dir steps are
+/// best-effort (TS `Promise.allSettled`): a failure there is logged and
+/// must not abort the team-dir removal.
 pub fn cleanup_team_directories(team_name: &str) -> crate::Result<()> {
+    // 1. Destroy each member's git worktree. Read the team file BEFORE the
+    //    dir is removed below; skip members without an isolated worktree.
+    if let Ok(Some(team_file)) = read_team_file(team_name) {
+        for member in &team_file.members {
+            if let Some(worktree_path) = &member.worktree_path
+                && let Err(e) = destroy_worktree(worktree_path)
+            {
+                tracing::warn!(
+                    member = %member.name,
+                    worktree = %worktree_path,
+                    error = %e,
+                    "team cleanup: failed to destroy worktree (continuing)"
+                );
+            }
+        }
+    }
+
+    // 2. Remove the team dir and its contents.
     let dir = get_team_dir(team_name);
     if dir.is_dir() {
         std::fs::remove_dir_all(&dir)?;
     }
+
+    // 3. Remove the team's task-list directory, which would otherwise be
+    //    orphaned. The store's `task_list_id` is `sanitize_name(team_name)`
+    //    (roster_store) and lives at `{config_home}/tasks/{sanitized}`
+    //    (`TaskList::open`). Best-effort so a tasks-dir failure never blocks
+    //    a delete.
+    let task_list_id = crate::types::sanitize_name(team_name);
+    let tasks_dir = coco_config::global_config::config_home()
+        .join("tasks")
+        .join(coco_tasks::task_list::sanitize_path_component(
+            &task_list_id,
+        ));
+    if tasks_dir.is_dir()
+        && let Err(e) = std::fs::remove_dir_all(&tasks_dir)
+    {
+        tracing::warn!(
+            dir = %tasks_dir.display(),
+            error = %e,
+            "team cleanup: failed to remove task-list dir (continuing)"
+        );
+    }
+
     Ok(())
 }
 

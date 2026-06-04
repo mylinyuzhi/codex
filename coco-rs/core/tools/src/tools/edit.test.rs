@@ -454,6 +454,92 @@ async fn test_edit_detects_content_drift_in_race() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "current on disk");
 }
 
+/// Read-before-edit guard (TS `FileEditTool.ts:275`, errorCode 6): when the
+/// file exists on disk but has NO FileReadState entry, the edit must be
+/// rejected — editing an unseen file is the data-loss class this guards.
+#[tokio::test]
+async fn test_edit_rejects_unread_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("unread.txt");
+    std::fs::write(&file, "hello world").unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    // Empty FileReadState — the file was never read this session.
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "hello",
+            "new_string": "goodbye"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(result.is_err(), "editing an unread file must be rejected");
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("has not been read"),
+        "error should tell the model to read first",
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello world");
+}
+
+/// TS also rejects PARTIAL-view reads (`isPartialView`): a Read with
+/// offset/limit only cached a slice, so the full file can't be validated
+/// against the edit. An entry with `offset`/`limit` set must be rejected.
+#[tokio::test]
+async fn test_edit_rejects_partial_view_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("partial.txt");
+    std::fs::write(&file, "line one\nline two\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(
+            abs,
+            FileReadEntry {
+                content: "line one\n".into(),
+                mtime_ms: mtime,
+                offset: Some(1), // partial view (line range) → must reject
+                limit: Some(1),
+            },
+        );
+    }
+
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "line one",
+            "new_string": "LINE ONE"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "editing after a partial read must be rejected"
+    );
+    assert!(
+        result.unwrap_err().to_string().contains("partially"),
+        "error should mention the partial read",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "line one\nline two\n"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // render_for_model — TS parity for Edit branches
 // ---------------------------------------------------------------------------

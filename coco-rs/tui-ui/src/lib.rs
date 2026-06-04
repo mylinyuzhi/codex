@@ -18,6 +18,7 @@ pub mod frame_rate_limiter;
 pub mod panic_guard;
 pub mod paste;
 pub mod style;
+pub mod system_theme;
 pub mod theme;
 pub mod truncate;
 pub mod widgets;

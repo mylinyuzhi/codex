@@ -101,6 +101,9 @@ impl QueryEngine {
             if !ctx.disable_all_hooks {
                 for (loaded_path, trigger_path, source) in newly_loaded {
                     let memory_type = match source {
+                        coco_context::MemoryFileSource::Managed => {
+                            coco_hooks::orchestration::MemoryType::Managed
+                        }
                         coco_context::MemoryFileSource::UserGlobal => {
                             coco_hooks::orchestration::MemoryType::User
                         }

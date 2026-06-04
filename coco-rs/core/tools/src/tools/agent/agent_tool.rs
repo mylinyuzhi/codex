@@ -428,22 +428,6 @@ impl Tool for AgentTool {
             });
         }
 
-        // Isolation-mode early gate. Remote isolation is explicitly
-        // unsupported in the current coco-rs build — TS parity: ant
-        // builds forward to CCR, but the 3p Rust agent returns a
-        // clean model-visible error instead of silently falling back
-        // to sync mode.
-        if input.isolation.as_deref() == Some("remote") {
-            return Err(ToolError::ExecutionFailed {
-                message: "Isolation mode 'remote' is not supported in this build. \
-                          Use 'worktree' for local isolation or omit the field for \
-                          no isolation."
-                    .into(),
-                display_data: None,
-                source: None,
-            });
-        }
-
         // TS `AgentTool.tsx:375-391` polls for pending MCP servers with a
         // 30 s deadline before tool-availability check. coco-rs settles
         // the MCP lifecycle at session start (see `app/cli` bootstrap), so
@@ -646,6 +630,37 @@ impl Tool for AgentTool {
             }
         }
 
+        // Effective isolation: the explicit tool param overrides, else the
+        // agent definition's frontmatter isolation. TS `AgentTool.tsx:431`
+        // `effectiveIsolation = isolation ?? selectedAgent.isolation` — a
+        // definition declaring `isolation: worktree` isolates even when the
+        // model omits the param. `AgentIsolation::None` maps to `None` so the
+        // spawn-side `Some("worktree")` gate stays correct.
+        let effective_isolation: Option<String> = input.isolation.clone().or_else(|| {
+            resolved_definition
+                .as_ref()
+                .and_then(|d| match d.isolation {
+                    coco_types::AgentIsolation::None => None,
+                    other => Some(other.to_string()),
+                })
+        });
+
+        // Remote isolation is unsupported in this build (TS forwards ant
+        // builds to CCR; the 3p Rust agent returns a clean model-visible
+        // error). Gate on the EFFECTIVE value so a definition-declared
+        // `isolation: remote` is rejected too — TS gates on effectiveIsolation
+        // (`AgentTool.tsx:435`).
+        if effective_isolation.as_deref() == Some("remote") {
+            return Err(ToolError::ExecutionFailed {
+                message: "Isolation mode 'remote' is not supported in this build. \
+                          Use 'worktree' for local isolation or omit the field for \
+                          no isolation."
+                    .into(),
+                display_data: None,
+                source: None,
+            });
+        }
+
         // TS `AgentTool.tsx:100`: `cwd` is "Mutually exclusive with
         // isolation: 'worktree'". Reject the conflict upfront — the
         // worktree's CWD is the worktree dir, can't override.
@@ -654,7 +669,7 @@ impl Tool for AgentTool {
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from);
-        let requested_isolation = input.isolation.as_deref();
+        let requested_isolation = effective_isolation.as_deref();
         if requested_cwd.is_some() && requested_isolation == Some("worktree") {
             return Err(ToolError::InvalidInput {
                 message: "`cwd` and `isolation: \"worktree\"` are mutually exclusive — \
@@ -762,7 +777,7 @@ impl Tool for AgentTool {
             auto_background_ms,
             enable_summarization,
             session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
-            isolation: input.isolation.clone(),
+            isolation: effective_isolation,
             name: requested_name,
             team_name: resolved_team_name.clone(),
             mode: effective_mode_str,

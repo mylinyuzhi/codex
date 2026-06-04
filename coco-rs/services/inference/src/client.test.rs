@@ -193,6 +193,41 @@ async fn test_provider_error_includes_provider_and_model_attribution() {
 }
 
 #[test]
+fn wrap_provider_error_classifies_retryable_status_from_cause() {
+    // An Anthropic-shaped error: an `AISdkError` whose cause is an
+    // `APICallError` carrying the HTTP status. `wrap_provider_error` must
+    // recover the status and classify a 529 as a RETRYABLE Overloaded (not the
+    // old non-retryable ProviderError that killed the backoff loop for the
+    // primary provider).
+    let client = ApiClient::with_default_fingerprint(Arc::new(ErrorModel), RetryConfig::default());
+    let api = vercel_ai_provider::APICallError::new("Overloaded", "https://api.anthropic.com")
+        .with_status(529)
+        .with_retryable(true);
+    let sdk = vercel_ai_provider::AISdkError::new("Anthropic API error (529): Overloaded")
+        .with_cause(Box::new(api));
+    let err = client.wrap_provider_error(sdk);
+    assert!(
+        matches!(err, InferenceError::Overloaded { .. }),
+        "529 should classify as Overloaded, got {err:?}",
+    );
+    assert!(err.is_retryable(), "529 Overloaded must be retryable");
+}
+
+#[test]
+fn wrap_provider_error_opaque_no_cause_is_non_retryable() {
+    // No `APICallError` cause (opaque transport/serde error) → non-retryable
+    // ProviderError, so the backoff loop doesn't spin on unknown errors.
+    let client = ApiClient::with_default_fingerprint(Arc::new(ErrorModel), RetryConfig::default());
+    let sdk = vercel_ai_provider::AISdkError::new("some opaque failure");
+    let err = client.wrap_provider_error(sdk);
+    assert!(
+        matches!(err, InferenceError::ProviderError { .. }),
+        "opaque error should stay ProviderError, got {err:?}",
+    );
+    assert!(!err.is_retryable());
+}
+
+#[test]
 fn stop_reason_is_normal_covers_happy_path() {
     for normal in [
         coco_llm_types::StopReason::EndTurn,

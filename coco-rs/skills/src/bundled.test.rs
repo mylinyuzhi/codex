@@ -2,26 +2,10 @@ use super::*;
 use coco_types::Features;
 
 #[test]
-fn human_user_gets_unconditional_only() {
-    let skills = get_bundled_skills(UserType::Human);
-    let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
-    // Unconditional set
-    assert!(names.contains(&"update-config"));
-    assert!(names.contains(&"keybindings-help"));
-    assert!(names.contains(&"batch"));
-    // Ant-only must NOT appear for human
-    assert!(!names.contains(&"verify"));
-    assert!(!names.contains(&"debug"));
-    assert!(!names.contains(&"skillify"));
-    assert!(!names.contains(&"remember"));
-    assert!(!names.contains(&"simplify"));
-    assert!(!names.contains(&"stuck"));
-    assert!(!names.contains(&"lorem-ipsum"));
-}
-
-#[test]
-fn ant_user_gets_unconditional_plus_ant_only() {
-    let skills = get_bundled_skills(UserType::Ant);
+fn catalog_includes_formerly_ant_skills() {
+    // coco-rs drops the TS `USER_TYPE === 'ant'` gate: these general-purpose
+    // skills are available to every user, alongside the always-on set.
+    let skills = get_bundled_skills();
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
     for required in [
         "update-config",
@@ -35,14 +19,17 @@ fn ant_user_gets_unconditional_plus_ant_only() {
         "stuck",
         "lorem-ipsum",
     ] {
-        assert!(names.contains(&required), "ant should get {required}");
+        assert!(
+            names.contains(&required),
+            "bundled catalog should include {required}"
+        );
     }
 }
 
 #[test]
 fn no_rust_only_extras() {
     // commit/review-pr/pdf were removed in Round 11 — TS does not ship them as bundled.
-    let skills = get_bundled_skills(UserType::Ant);
+    let skills = get_bundled_skills();
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
     assert!(!names.contains(&"commit"));
     assert!(!names.contains(&"review-pr"));
@@ -51,21 +38,21 @@ fn no_rust_only_extras() {
 
 #[test]
 fn debug_disables_model_invocation() {
-    let skills = get_bundled_skills(UserType::Ant);
+    let skills = get_bundled_skills();
     let debug = skills.iter().find(|s| s.name == "debug").unwrap();
     assert!(debug.disable_model_invocation);
 }
 
 #[test]
 fn batch_disables_model_invocation() {
-    let skills = get_bundled_skills(UserType::Human);
+    let skills = get_bundled_skills();
     let batch = skills.iter().find(|s| s.name == "batch").unwrap();
     assert!(batch.disable_model_invocation);
 }
 
 #[test]
 fn keybindings_not_user_invocable() {
-    let skills = get_bundled_skills(UserType::Human);
+    let skills = get_bundled_skills();
     let kb = skills
         .iter()
         .find(|s| s.name == "keybindings-help")
@@ -76,28 +63,28 @@ fn keybindings_not_user_invocable() {
 
 #[test]
 fn loop_is_gated_by_agent_triggers() {
-    let skills = get_bundled_skills(UserType::Ant);
+    let skills = get_bundled_skills();
     let l = skills.iter().find(|s| s.name == "loop").unwrap();
     assert_eq!(l.gated_by, Some(Feature::AgentTriggers));
 }
 
 #[test]
 fn schedule_is_gated_by_agent_triggers_remote() {
-    let skills = get_bundled_skills(UserType::Ant);
+    let skills = get_bundled_skills();
     let s = skills.iter().find(|s| s.name == "schedule").unwrap();
     assert_eq!(s.gated_by, Some(Feature::AgentTriggersRemote));
 }
 
 #[test]
 fn claude_api_is_gated_by_building_claude_apps() {
-    let skills = get_bundled_skills(UserType::Ant);
+    let skills = get_bundled_skills();
     let c = skills.iter().find(|s| s.name == "claude-api").unwrap();
     assert_eq!(c.gated_by, Some(Feature::BuildingClaudeApps));
 }
 
 #[test]
 fn dream_hunter_chrome_runskillgen_present_and_gated() {
-    let skills = get_bundled_skills(UserType::Ant);
+    let skills = get_bundled_skills();
     let dream = skills.iter().find(|s| s.name == "dream").unwrap();
     let hunter = skills.iter().find(|s| s.name == "hunter").unwrap();
     let chrome = skills
@@ -117,7 +104,7 @@ fn dream_hunter_chrome_runskillgen_present_and_gated() {
 #[test]
 fn visible_filters_by_features() {
     let manager = crate::SkillManager::new();
-    register_bundled(&manager, UserType::Ant);
+    register_bundled(&manager);
 
     let no_features = Features::empty();
     let visible_empty_skills = manager.visible(&no_features);
@@ -125,10 +112,11 @@ fn visible_filters_by_features() {
         .iter()
         .map(|s| s.name.as_str())
         .collect();
-    // Even with no features enabled, ungated skills appear.
+    // Even with no features enabled, ungated skills appear — including the
+    // formerly-ant general-purpose skills.
     assert!(visible_empty.contains(&"update-config"));
-    assert!(visible_empty.contains(&"verify")); // ant + ungated
-    // Gated skills should NOT appear.
+    assert!(visible_empty.contains(&"verify"));
+    // Feature-gated skills should NOT appear.
     assert!(!visible_empty.contains(&"loop"));
     assert!(!visible_empty.contains(&"dream"));
 
@@ -148,7 +136,7 @@ fn visible_filters_by_features() {
 
 #[test]
 fn all_bundled_are_bundled_source() {
-    let skills = get_bundled_skills(UserType::Ant);
+    let skills = get_bundled_skills();
     for skill in &skills {
         assert!(
             matches!(skill.source, crate::SkillSource::Bundled),

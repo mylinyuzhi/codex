@@ -28,6 +28,16 @@ use coco_cli::session_runtime;
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // `--bare` is the flag form of bare mode (TS `isBareMode` = env OR
+    // `--bare`); export the env so every downstream
+    // `is_env_truthy(CocoBareMode)` read — session bootstrap and the per-turn
+    // finalize — observes it.
+    if cli.bare {
+        // SAFETY: set once at startup, single-threaded, before any task spawn.
+        unsafe {
+            std::env::set_var(coco_config::EnvKey::CocoBareMode.as_str(), "1");
+        }
+    }
     coco_cli::startup_profile::init();
 
     // Bind the handle for the lifetime of `main` so the non-blocking
@@ -43,6 +53,23 @@ async fn main() -> Result<()> {
         has_prompt = cli.prompt.is_some(),
         "coco entry"
     );
+
+    // `--no-session-persistence` is print-mode-only (TS main.tsx:1855-1859):
+    // it suppresses session transcript/usage writes for a one-shot run, but an
+    // interactive TUI session relies on persistence to stay resumable.
+    if cli.no_session_persistence
+        && !(cli.non_interactive
+            || cli.prompt.is_some()
+            || !std::io::IsTerminal::is_terminal(&std::io::stdout())
+            || matches!(
+                cli.command,
+                Some(Commands::Sdk | Commands::Chat { .. } | Commands::Review { .. })
+            ))
+    {
+        anyhow::bail!(
+            "--no-session-persistence can only be used in print mode (-p / --print) or SDK mode"
+        );
+    }
 
     if let Some(cmd) = &cli.command {
         match cmd {
@@ -308,6 +335,7 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
                 .map(std::sync::Arc::new)
                 .collect(),
             session_id_override: Some(p.session_id),
+            stored_mode: p.conversation.mode,
             ..Default::default()
         },
         None => coco_cli::headless::RunChatOptions::default(),
@@ -475,6 +503,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             // Interactive sessions get the full built-in roster;
             // SDK noninteractive paths can override.
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
+            session_id_override: None,
         },
     )
     .await?;
@@ -595,7 +624,7 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let runner = Arc::new(QueryEngineRunner::new(
         session_runtime,
         cli.max_tokens.unwrap_or(16_384),
-        cli.max_turns.unwrap_or(30),
+        cli.max_turns,
         system_prompt,
     ));
     server.set_turn_runner(runner).await;

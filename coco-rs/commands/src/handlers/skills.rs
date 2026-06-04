@@ -1,16 +1,17 @@
 //! `/skills` — open the editable 4-state override dialog or run the
 //! text subcommand variants.
 //!
-//! TS parity: 2.1.142 `eT5` slash entry → `uJ4` dialog
-//! (`cli_inner_pretty.js:476909`). The no-arg invocation returns a
+//! TS: `commands/skills/{index.ts,skills.tsx}` is a pure picker — `call(onDone,
+//! context)` takes no args and always renders `<SkillsMenu>` (no `argumentHint`).
+//! coco mirrors that no-arg dialog: the invocation returns a
 //! [`crate::CommandResult::OpenDialog`] carrying a fully-built
 //! [`coco_types::SkillsDialogPayload`] with every row pre-populated:
 //! `description`, `frontmatter_bytes`, `current_local`, `baseline`,
 //! and `lock` — the TUI consumer renders without recomputing.
 //!
-//! Sub-commands (`list` / `show <name>` / `paths`) stay text-only
-//! so SDK / headless / scripted callers get a flat enumeration they
-//! can parse.
+//! Sub-commands (`list` / `show <name>` / `paths`) are a coco-only extension on
+//! top of the TS picker — text output so SDK / headless / scripted callers get
+//! a flat enumeration they can parse.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -19,9 +20,7 @@ use async_trait::async_trait;
 use coco_config::SkillOverrideTiers;
 use coco_skills::SkillDefinition;
 use coco_skills::SkillManager;
-use coco_skills::SkillScopes;
 use coco_skills::SkillSource;
-use coco_skills::bundled::register_bundled_default;
 use coco_skills::estimate_skill_frontmatter_bytes;
 use coco_skills::get_managed_skills_path;
 use coco_skills::resolve_skill_baseline;
@@ -252,33 +251,11 @@ fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {
 /// session restart — the engine's live registry still loads only at
 /// startup, but `/skills` reflects current disk truth.
 ///
-/// **Two project paths.** coco-rs supports BOTH the canonical
-/// `.coco/skills/` and the TS-compat `.claude/skills/` as project
-/// skill roots. We invoke `load_scoped` twice: once for the standard
-/// scopes (managed / user / `.claude/skills` / `.claude/commands`)
-/// and once again with only `project_skills = .coco/skills` so those
-/// also get `SkillSource::Project { path }`. Last-write-wins on name
-/// collisions, with `.coco/skills` winning since it's loaded second
-/// (the newer convention is preferred).
+/// Builds the same catalog the session runtime uses (bundled + managed /
+/// user / project scopes), so the `/skills` dialog and `/context` never
+/// disagree. See [`coco_skills::build_session_skill_manager`].
 fn build_manager(config_home: &Path, cwd: &Path) -> SkillManager {
-    let manager = SkillManager::new();
-    register_bundled_default(&manager);
-
-    // Standard scopes: managed / user / `.claude/skills` / `.claude/commands`.
-    manager.load_scoped(&SkillScopes {
-        managed: Some(get_managed_skills_path()),
-        user_skills: Some(config_home.join("skills")),
-        project_skills: Some(cwd.join(".claude").join("skills")),
-        user_commands: Some(config_home.join("commands")),
-        project_commands: Some(cwd.join(".claude").join("commands")),
-    });
-    // coco-rs extension: `.coco/skills/` as an additional project path.
-    manager.load_scoped(&SkillScopes {
-        project_skills: Some(cwd.join(".coco").join("skills")),
-        ..SkillScopes::default()
-    });
-
-    manager
+    coco_skills::build_session_skill_manager(config_home, cwd)
 }
 
 fn render_list(manager: &SkillManager) -> String {

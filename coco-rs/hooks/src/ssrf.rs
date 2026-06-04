@@ -10,6 +10,7 @@
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
+use std::net::SocketAddr;
 
 /// Returns true if the IP address is in a range that HTTP hooks should not reach.
 ///
@@ -169,6 +170,44 @@ pub async fn check_url_ssrf(url: &str) -> crate::Result<bool> {
     }
 
     Ok(false)
+}
+
+/// A `reqwest` DNS resolver that drops SSRF-blocked addresses, so a connection
+/// can only be made to an allowed IP — **the validated IP is the connected IP**.
+///
+/// This closes the DNS-rebinding TOCTOU that the standalone pre-flight
+/// [`check_url_ssrf`] cannot: between the pre-flight resolution and reqwest's
+/// own resolution at connect time, a hostname can rebind to a private / cloud-
+/// metadata address. Installing this as reqwest's resolver makes the guarded
+/// resolution the one that actually drives the socket. Mirrors TS
+/// `ssrfGuardedLookup` (installed as axios's per-request `lookup`).
+///
+/// NOTE: reqwest does NOT invoke a custom resolver when the URL host is an IP
+/// literal — those connect directly, so the [`check_url_ssrf`] pre-flight is
+/// still required to block e.g. `http://169.254.169.254/`.
+#[derive(Debug, Clone, Default)]
+pub struct SsrfGuardedResolver;
+
+impl reqwest::dns::Resolve for SsrfGuardedResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            // System resolution (the port is a placeholder — reqwest substitutes
+            // the real one). Drop every address in a blocked range so a rebind to
+            // a private / link-local IP cannot be connected to.
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
+            let allowed: Vec<SocketAddr> =
+                resolved.filter(|a| !is_blocked_address(&a.ip())).collect();
+            if allowed.is_empty() {
+                return Err(format!(
+                    "SSRF guard: all addresses resolved for `{host}` are private/link-local"
+                )
+                .into());
+            }
+            let addrs: reqwest::dns::Addrs = Box::new(allowed.into_iter());
+            Ok(addrs)
+        })
+    }
 }
 
 /// Check if a URL is allowed by the URL allowlist.

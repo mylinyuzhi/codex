@@ -62,10 +62,7 @@ async fn list_plugins() -> crate::Result<String> {
     scan_plugin_dir(Path::new(".claude/plugins"), "project", &mut plugins).await;
 
     // Scan user plugins
-    if let Some(home) = dirs::home_dir() {
-        let user_dir = home.join(".cocode").join("plugins");
-        scan_plugin_dir(&user_dir, "user", &mut plugins).await;
-    }
+    scan_plugin_dir(&resolve_plugins_dir(), "user", &mut plugins).await;
 
     let mut out = String::from("## Installed Plugins\n\n");
 
@@ -73,7 +70,7 @@ async fn list_plugins() -> crate::Result<String> {
         out.push_str("No plugins installed.\n\n");
         out.push_str("Plugin directories:\n");
         out.push_str("  .claude/plugins/       (project-level)\n");
-        out.push_str("  ~/.cocode/plugins/     (user-level)\n\n");
+        out.push_str("  ~/.coco/plugins/       (user-level)\n\n");
         out.push_str("Each plugin is a directory containing a PLUGIN.toml manifest.\n\n");
         out.push_str("A plugin can provide:\n");
         out.push_str("  - Skills (slash commands)\n");
@@ -228,8 +225,10 @@ async fn install_plugin(target: &str) -> crate::Result<String> {
         return Ok("Usage: /plugin install <name>[@<marketplace>]".to_string());
     }
     let plugins_dir = resolve_plugins_dir();
-    let settings_dir = dirs::home_dir().map(|h| h.join(".cocode"));
-    let policy = coco_plugins::security::EnterprisePolicy::default();
+    // Settings live at the config root (same as the `coco plugin` CLI), so
+    // enabledPlugins is written where the loader reads it.
+    let settings_dir = Some(coco_config::global_config::config_home());
+    let policy = coco_plugins::security::EnterprisePolicy::from_managed_settings();
     let result = coco_plugins::install::install_plugin_from_marketplace(
         &plugins_dir,
         settings_dir.as_deref(),
@@ -293,7 +292,7 @@ async fn uninstall_plugin(target: &str) -> crate::Result<String> {
     };
 
     let project_dir = PathBuf::from(".claude/plugins").join(&name);
-    let user_dir = dirs::home_dir().map(|h| h.join(".cocode").join("plugins").join(&name));
+    let user_dir = Some(resolve_plugins_dir().join(&name));
 
     let removed_path = if tokio::fs::metadata(&project_dir).await.is_ok() {
         tokio::fs::remove_dir_all(&project_dir).await?;
@@ -355,7 +354,7 @@ async fn uninstall_plugin(target: &str) -> crate::Result<String> {
 /// Show detailed information about a specific plugin.
 async fn plugin_info(name: &str) -> crate::Result<String> {
     let project_dir = PathBuf::from(".claude/plugins").join(name);
-    let user_dir = dirs::home_dir().map(|h| h.join(".cocode").join("plugins").join(name));
+    let user_dir = Some(resolve_plugins_dir().join(name));
 
     let plugin_dir = if tokio::fs::metadata(&project_dir).await.is_ok() {
         project_dir
@@ -564,6 +563,10 @@ async fn marketplace_subcommand(args: &str) -> crate::Result<String> {
                 marketplace_remove(name.trim()).await
             } else if let Some(source) = args.strip_prefix("add ") {
                 marketplace_add(source.trim()).await
+            } else if let Some(name) = args.strip_prefix("update ") {
+                marketplace_update(name.trim()).await
+            } else if args == "update" {
+                marketplace_update_all().await
             } else {
                 marketplace_help().await
             }
@@ -576,7 +579,8 @@ async fn marketplace_help() -> crate::Result<String> {
     Ok("Marketplace Management\n\n\
         Usage:\n\
         /plugin marketplace list              List configured marketplaces\n\
-        /plugin marketplace add <source>      Add a marketplace source\n\
+        /plugin marketplace add <source>      Add and fetch a marketplace source\n\
+        /plugin marketplace update [<name>]   Re-fetch one or all marketplaces\n\
         /plugin marketplace remove <name>     Remove a marketplace"
         .to_string())
 }
@@ -643,18 +647,99 @@ async fn marketplace_add(source: &str) -> crate::Result<String> {
 
     let plugins_dir = resolve_plugins_dir();
     let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir.clone());
-    let install_location = plugins_dir
-        .join("marketplaces")
-        .join(&name)
-        .to_string_lossy()
-        .to_string();
+    let cache_dir = plugins_dir.join("marketplaces");
+
+    // Materialize the source: git clone for github/git, HTTP download for url,
+    // no-op (path returned as-is) for local file/directory sources. The fetch
+    // determines the real `install_location` (a clone dir, a `<name>.json`
+    // file, or a `dir/path` subpath).
+    let install_location =
+        match coco_plugins::fetch::fetch_marketplace(&mkt_source, &name, &cache_dir).await {
+            Ok(loc) => loc.to_string_lossy().to_string(),
+            Err(e) => return Ok(format!("Failed to fetch marketplace '{name}': {e}")),
+        };
 
     match manager.register_marketplace(&name, mkt_source, &install_location) {
-        Ok(()) => Ok(format!(
-            "Marketplace '{name}' added.\n\nFetch with: /plugin marketplace update {name}"
-        )),
+        // Only claim the marketplace is usable once its manifest actually loads.
+        Ok(()) => match manager.load_cached_marketplace(&name) {
+            Ok(_) => Ok(format!(
+                "Marketplace '{name}' added. It is ready to search and install from."
+            )),
+            Err(e) => Ok(format!(
+                "Marketplace '{name}' added, but no valid marketplace manifest was found at \
+                 {install_location}: {e}"
+            )),
+        },
         Err(e) => Ok(format!("Failed to add marketplace: {e}")),
     }
+}
+
+/// Re-fetch a single marketplace (git pull / HTTP re-download) and reload it.
+///
+/// TS: `marketplaceManager.ts refreshMarketplace(name)`.
+async fn marketplace_update(name: &str) -> crate::Result<String> {
+    if name.is_empty() {
+        return Ok("Usage: /plugin marketplace update <name>".to_string());
+    }
+    let plugins_dir = resolve_plugins_dir();
+    let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir.clone());
+
+    let source = {
+        let known = manager.load_known_marketplaces();
+        match known.get(name) {
+            Some(entry) => entry.source.clone(),
+            None => {
+                return Ok(format!(
+                    "Marketplace '{name}' not found. Add it first: /plugin marketplace add <source>"
+                ));
+            }
+        }
+    };
+
+    let cache_dir = plugins_dir.join("marketplaces");
+    let install_location =
+        match coco_plugins::fetch::fetch_marketplace(&source, name, &cache_dir).await {
+            Ok(loc) => loc.to_string_lossy().to_string(),
+            Err(e) => return Ok(format!("Failed to update marketplace '{name}': {e}")),
+        };
+    // Re-register to refresh `last_updated` + `install_location`.
+    if let Err(e) = manager.register_marketplace(name, source, &install_location) {
+        return Ok(format!("Failed to update marketplace '{name}': {e}"));
+    }
+    match manager.load_cached_marketplace(name) {
+        Ok(_) => Ok(format!("Marketplace '{name}' updated.")),
+        Err(e) => Ok(format!(
+            "Marketplace '{name}' re-fetched, but its manifest failed to load: {e}"
+        )),
+    }
+}
+
+/// Re-fetch every configured marketplace (TS `refreshAllMarketplaces`).
+/// Per-marketplace failures are collected and reported, not fatal.
+async fn marketplace_update_all() -> crate::Result<String> {
+    let plugins_dir = resolve_plugins_dir();
+    let manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir);
+    let known = manager.load_known_marketplaces();
+    if known.is_empty() {
+        return Ok("No marketplaces configured.".to_string());
+    }
+    let mut names: Vec<String> = known.keys().cloned().collect();
+    names.sort();
+    let mut updated = 0usize;
+    let mut failures = Vec::new();
+    for name in &names {
+        match marketplace_update(name).await {
+            Ok(msg) if msg.starts_with("Failed") => failures.push(format!("  {name}: {msg}")),
+            Ok(_) => updated += 1,
+            Err(e) => failures.push(format!("  {name}: {e}")),
+        }
+    }
+    let mut out = format!("Updated {updated}/{} marketplace(s).", names.len());
+    if !failures.is_empty() {
+        out.push_str("\n\nFailures:\n");
+        out.push_str(&failures.join("\n"));
+    }
+    Ok(out)
 }
 
 /// Remove a marketplace.
@@ -675,20 +760,24 @@ async fn marketplace_remove(name: &str) -> crate::Result<String> {
     }
 }
 
-/// Resolve the plugins directory path.
+/// Resolve the user plugins directory path.
+///
+/// MUST share the config root with the `coco plugin` CLI subcommand
+/// (`bin_handlers/plugin.rs` → `global_config::config_home().join("plugins")`).
+/// The slash handlers previously hardcoded `~/.cocode/plugins`, which (a)
+/// ignored `$COCO_CONFIG_DIR` and (b) split-brained against the CLI's
+/// `~/.coco/plugins`: a marketplace added via `/plugin` was invisible to
+/// `coco plugin install` and vice-versa.
 fn resolve_plugins_dir() -> PathBuf {
-    dirs::home_dir()
-        .map(|h| h.join(".cocode").join("plugins"))
-        .unwrap_or_else(|| PathBuf::from(".cocode/plugins"))
+    coco_config::global_config::config_home().join("plugins")
 }
 
 /// Get project and user plugin directories for scanning.
 fn plugin_scan_dirs() -> Vec<(PathBuf, &'static str)> {
-    let mut dirs = vec![(PathBuf::from(".claude/plugins"), "project")];
-    if let Some(home) = dirs::home_dir() {
-        dirs.push((home.join(".cocode").join("plugins"), "user"));
-    }
-    dirs
+    vec![
+        (PathBuf::from(".claude/plugins"), "project"),
+        (resolve_plugins_dir(), "user"),
+    ]
 }
 
 #[cfg(test)]

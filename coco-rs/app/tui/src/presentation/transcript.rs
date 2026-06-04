@@ -255,12 +255,14 @@ pub(crate) fn active_transcript_cell<'a>(
 }
 
 fn is_meta(cell: &RenderedCell) -> bool {
-    // Attachments (e.g. tool-summary) ride through but render dim; treat them
-    // as meta by default. Slash-command output is an empty-title informational
-    // system message, and should remain fully visible instead of collapsing to
-    // a one-line "# [system]" preview.
+    // Attachments: defer to the engine's single predicate so the TUI can never
+    // contradict it. `derive::message_to_cells` already drops attachments with
+    // `renders_in_transcript() == false`, so every surviving `CellKind::
+    // Attachment` is content (`is_meta_message == false`) and renders as a row,
+    // not a collapsed "# [meta]" preview — mirrors TS, where renderable
+    // attachments are first-class content. System reminders still collapse.
     match &cell.kind {
-        CellKind::Attachment => true,
+        CellKind::Attachment => coco_messages::predicates::is_meta_message(cell.source.as_ref()),
         CellKind::System(SystemCellKind::Informational) => {
             let coco_messages::Message::System(coco_messages::SystemMessage::Informational(info)) =
                 cell.source.as_ref()
@@ -269,6 +271,9 @@ fn is_meta(cell: &RenderedCell) -> bool {
             };
             !info.title.is_empty()
         }
+        // `/context` snapshot is first-class content (TS prints it inline), not
+        // a collapsible system reminder — render the full colored block.
+        CellKind::System(SystemCellKind::ContextUsage) => false,
         CellKind::System(_) => true,
         _ => false,
     }

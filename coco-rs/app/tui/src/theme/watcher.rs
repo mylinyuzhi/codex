@@ -13,6 +13,8 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::ThemeLoadResult;
+use super::ThemeSetting;
+use super::config::persisted_active_setting;
 use super::load_theme_runtime_or_default;
 use super::theme_config_path;
 
@@ -90,6 +92,14 @@ pub async fn install_theme() -> ThemeSetup {
         }
     };
     let mut watch_rx = watcher.subscribe();
+    // `auto` resolves dark/light from the terminal background. Probe it once,
+    // best-effort (≤100ms), before the initial resolve so the first paint
+    // reflects the real background rather than just the `$COLORFGBG` seed. The
+    // probe restores the terminal mode immediately; `setup_terminal` re-enters
+    // raw mode later. Only `auto` pays for it (avoids touching others' input).
+    if matches!(persisted_active_setting(), ThemeSetting::Auto) {
+        crate::system_theme_probe::probe_terminal_background_once(Duration::from_millis(100));
+    }
     let initial = load_theme_runtime_or_default();
     let (reload_tx, reload_rx) = mpsc::channel::<ThemeLoadResult>(8);
     tokio::spawn(async move {

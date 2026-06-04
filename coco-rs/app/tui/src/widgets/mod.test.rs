@@ -164,6 +164,60 @@ fn test_snapshot_with_tool_result() {
 }
 
 #[test]
+fn test_snapshot_attachment_chips() {
+    // Alignment reference: every leading marker is width-1 and content lands at
+    // column 2 — user `❯`, tool `●`, result `└` (+ line-number gutter), memory
+    // `◆` (filled, relative path), generic attachment `◇` (hollow), assistant
+    // `⏺`. Locks the gutter, the `· lines N-M` header, and path relativization.
+    use std::sync::Arc;
+
+    use coco_messages::AttachmentMessage;
+    use coco_messages::LlmMessage;
+    use coco_messages::Message;
+    use coco_types::AttachmentKind;
+
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state.session.working_dir = Some("/repo".to_string());
+    test_helpers::push_user_text(&mut state.session, "1", "read utils/foo/bar.rs");
+    test_helpers::push_tool_use_input(
+        &mut state.session,
+        "c1",
+        "Read",
+        serde_json::json!({"file_path": "utils/foo/bar.rs", "limit": 3}),
+    );
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "c1",
+        "Read",
+        "1\tfn foo() {}\n2\t\n3\t// done",
+        false,
+    );
+    // Nested-CLAUDE.md injection → `◆ memory · <path relative to cwd>`.
+    state
+        .session
+        .transcript
+        .on_message_appended(Arc::new(Message::Attachment(AttachmentMessage::api(
+            AttachmentKind::NestedMemory,
+            LlmMessage::user_text(
+                "<system-reminder>\nContents of /repo/utils/foo/CLAUDE.md:\n\n# foo rules\n</system-reminder>",
+            ),
+        ))));
+    // Generic (@-mentioned file) attachment → `◇ <first body line>`.
+    state
+        .session
+        .transcript
+        .on_message_appended(Arc::new(Message::Attachment(AttachmentMessage::api(
+            AttachmentKind::File,
+            LlmMessage::user_text("utils/foo/bar.rs"),
+        ))));
+    test_helpers::push_assistant_text(&mut state.session, "Here is the file.");
+
+    let output = render_to_string(&state, 80, 24);
+    insta::assert_snapshot!("attachment_chips", output);
+}
+
+#[test]
 fn test_snapshot_edit_diff() {
     // The headline feature: an Edit invocation renders a colored unified diff
     // synthesized from old_string/new_string (not raw text).

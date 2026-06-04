@@ -14,6 +14,7 @@ use crate::state::surface_payloads::QuickOpenState;
 use crate::state::surface_payloads::SessionBrowserState;
 use crate::state::surface_payloads::SkillsDialogState;
 use crate::state::surface_payloads::TaskDetailState;
+use crate::state::surface_payloads::ThemePickerState;
 use crate::state::surface_payloads::{self};
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,7 @@ pub enum ModalState {
     Help,
     Error(String),
     ModelPicker(ModelPickerState),
+    ThemePicker(ThemePickerState),
     SessionBrowser(SessionBrowserState),
     GlobalSearch(GlobalSearchState),
     QuickOpen(QuickOpenState),
@@ -33,7 +35,6 @@ pub enum ModalState {
     AgentsDialog(AgentsDialogState),
     Transcript(crate::state::transcript::TranscriptState),
     Doctor(DoctorState),
-    ContextVisualization,
     WorktreeExit(surface_payloads::WorktreeExitState),
     Bridge(surface_payloads::BridgeState),
     InvalidConfig(surface_payloads::InvalidConfigState),
@@ -58,6 +59,7 @@ impl ModalState {
             | Self::Bridge(_)
             | Self::McpServerSelect(_) => 6,
             Self::ModelPicker(_)
+            | Self::ThemePicker(_)
             | Self::SessionBrowser(_)
             | Self::GlobalSearch(_)
             | Self::QuickOpen(_)
@@ -65,7 +67,6 @@ impl ModalState {
             | Self::Feedback(_)
             | Self::TaskDetail(_)
             | Self::Doctor(_)
-            | Self::ContextVisualization
             | Self::Settings(_)
             | Self::Transcript(_)
             | Self::MemoryDialog(_)

@@ -25,6 +25,13 @@ use crate::types::TeammateIdentity;
 /// Poll interval for inbox scanning (ms). Mirrors [`crate::runner_loop::POLL_INTERVAL_MS`].
 const POLL_INTERVAL_MS: u64 = 500;
 
+/// Hard ceiling on how long a worker blocks waiting for the leader to
+/// resolve a permission request. Without it a leader that never answers
+/// (crashed, no poller, denied silently) would hang the worker forever.
+/// On expiry the bridge fails closed (treated as a denial), which is the
+/// safe direction for an unanswered approval prompt.
+const PERMISSION_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+
 #[derive(Debug, Clone, Default)]
 pub struct MailboxPermissionOutcome {
     pub approved: bool,
@@ -69,8 +76,18 @@ pub async fn request_permission_via_mailbox(
         return None;
     }
 
+    let deadline = tokio::time::Instant::now() + PERMISSION_WAIT_TIMEOUT;
     loop {
         if cancelled.load(Ordering::Relaxed) {
+            return None;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                request_id,
+                tool_name,
+                "team permission: leader did not respond within {}s; failing closed",
+                PERMISSION_WAIT_TIMEOUT.as_secs(),
+            );
             return None;
         }
         let messages =
