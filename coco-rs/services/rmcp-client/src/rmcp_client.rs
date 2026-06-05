@@ -10,6 +10,8 @@ use coco_mcp_types::CallToolRequestParams;
 use coco_mcp_types::CallToolResult;
 use coco_mcp_types::InitializeRequestParams;
 use coco_mcp_types::InitializeResult;
+use coco_mcp_types::ListPromptsRequestParams;
+use coco_mcp_types::ListPromptsResult;
 use coco_mcp_types::ListResourceTemplatesRequestParams;
 use coco_mcp_types::ListResourceTemplatesResult;
 use coco_mcp_types::ListResourcesRequestParams;
@@ -587,6 +589,29 @@ impl RmcpClient {
                 move |service| {
                     let p = p.clone();
                     async move { service.list_resources(p).await }
+                }
+            })
+            .await?;
+        let converted = convert_to_mcp(result)?;
+        self.persist_oauth_tokens().await;
+        Ok(converted)
+    }
+
+    pub async fn list_prompts(
+        &self,
+        params: Option<ListPromptsRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<ListPromptsResult> {
+        self.refresh_oauth_if_needed().await;
+        let rmcp_params = params
+            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .transpose()?;
+        let result = self
+            .run_service_operation("prompts/list", timeout, {
+                let p = rmcp_params.clone();
+                move |service| {
+                    let p = p.clone();
+                    async move { service.list_prompts(p).await }
                 }
             })
             .await?;

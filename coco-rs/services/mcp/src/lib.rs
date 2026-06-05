@@ -13,6 +13,7 @@ pub mod config;
 pub mod config_watcher;
 pub mod discovery;
 pub mod elicitation;
+mod env_expansion;
 pub mod naming;
 pub mod tool_call;
 pub mod types;

@@ -387,6 +387,37 @@ fn test_agent_spawn_request_inheritance_fields_are_serde_skip() {
 
 // ── AgentTool tests ──
 
+#[test]
+fn test_agent_classifier_input_surfaces_subagent_type_and_mode() {
+    // TS `AgentTool.toAutoClassifierInput`: the gate sees which agent type
+    // runs and at what permission mode — `(subagent_type, mode=…): prompt` —
+    // NOT the cosmetic `description`.
+    assert_eq!(
+        <AgentTool as DynTool>::to_auto_classifier_input(
+            &AgentTool,
+            &serde_json::json!({
+                "prompt": "delete the repo",
+                "description": "cleanup",
+                "subagent_type": "general-purpose",
+                "mode": "acceptEdits"
+            }),
+        ),
+        Some("(general-purpose, mode=acceptEdits): delete the repo".to_string())
+    );
+}
+
+#[test]
+fn test_agent_classifier_input_prompt_only_when_no_tags() {
+    // No subagent_type / mode → TS prefix is a bare `": "`.
+    assert_eq!(
+        <AgentTool as DynTool>::to_auto_classifier_input(
+            &AgentTool,
+            &serde_json::json!({"prompt": "do the thing", "description": "x"}),
+        ),
+        Some(": do the thing".to_string())
+    );
+}
+
 #[tokio::test]
 async fn test_agent_tool_empty_prompt_rejected() {
     let ctx = ToolUseContext::test_default();
@@ -809,6 +840,197 @@ async fn test_send_message_target_not_found() {
     )
     .await;
     assert!(result.is_err());
+}
+
+// ── Structured shutdown control messages (gap 6) ──
+
+/// Records the shutdown control calls routed through the agent handle so
+/// tests can assert SendMessageTool dispatched the right method with the
+/// right arguments. All non-shutdown methods are unused.
+#[derive(Default)]
+struct ShutdownRecordingHandle {
+    request: tokio::sync::Mutex<Option<(String, Option<String>)>>,
+    response: tokio::sync::Mutex<Option<(String, bool, Option<String>)>>,
+}
+
+#[async_trait::async_trait]
+impl AgentHandle for ShutdownRecordingHandle {
+    async fn spawn_agent(&self, _r: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
+        Err("unused".into())
+    }
+    async fn send_message(&self, _to: &str, _c: &str) -> Result<String, String> {
+        Err("send_message must not be called for structured shutdown messages".into())
+    }
+    async fn create_team(
+        &self,
+        _r: coco_tool_runtime::CreateTeamRequest,
+    ) -> Result<CreateTeamResult, String> {
+        Err("unused".into())
+    }
+    async fn delete_team(&self) -> Result<String, String> {
+        Err("unused".into())
+    }
+    async fn query_agent_status(&self, _a: &str) -> Result<AgentSpawnResponse, String> {
+        Err("unused".into())
+    }
+    async fn get_agent_output(&self, _a: &str) -> Result<String, String> {
+        Err("unused".into())
+    }
+    async fn request_shutdown(&self, target: &str, reason: Option<&str>) -> Result<String, String> {
+        *self.request.lock().await = Some((target.to_string(), reason.map(String::from)));
+        Ok(format!("requested {target}"))
+    }
+    async fn respond_to_shutdown(
+        &self,
+        request_id: &str,
+        approve: bool,
+        reason: Option<&str>,
+    ) -> Result<String, String> {
+        *self.response.lock().await =
+            Some((request_id.to_string(), approve, reason.map(String::from)));
+        Ok(format!("responded {approve}"))
+    }
+}
+
+#[tokio::test]
+async fn test_send_message_shutdown_request_routes_to_handle() {
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "researcher",
+            "message": {"type": "shutdown_request", "reason": "team disbanded"},
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.data.get("message").and_then(|m| m.as_str()),
+        Some("requested researcher")
+    );
+    assert_eq!(
+        *handle.request.lock().await,
+        Some(("researcher".to_string(), Some("team disbanded".to_string())))
+    );
+}
+
+#[tokio::test]
+async fn test_send_message_shutdown_request_broadcast_rejected() {
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({"to": "*", "message": {"type": "shutdown_request"}}),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_err(), "shutdown_request to '*' must reject");
+    assert!(handle.request.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn test_send_message_shutdown_response_routes_to_handle() {
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "team-lead",
+            "message": {"type": "shutdown_response", "request_id": "s-7", "approve": true},
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.data.get("message").and_then(|m| m.as_str()),
+        Some("responded true")
+    );
+    assert_eq!(
+        *handle.response.lock().await,
+        Some(("s-7".to_string(), true, None))
+    );
+}
+
+#[tokio::test]
+async fn test_send_message_shutdown_response_wrong_target_rejected() {
+    // TS `SendMessageTool.ts:695-700`: shutdown_response must target the
+    // team lead.
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "researcher",
+            "message": {"type": "shutdown_response", "request_id": "s-7", "approve": true},
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_err(), "shutdown_response to non-lead must reject");
+    assert!(handle.response.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn test_send_message_shutdown_response_missing_request_id_rejected() {
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "team-lead",
+            "message": {"type": "shutdown_response", "approve": false},
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_err(), "missing request_id must reject");
+    assert!(handle.response.lock().await.is_none());
+}
+
+/// TS `SendMessageTool.ts:705-714`: rejecting a shutdown (`approve: false`)
+/// without a non-empty `reason` is a validation error — the leader (and the
+/// worker's own next turn) must know WHY it declined.
+#[tokio::test]
+async fn test_send_message_shutdown_response_reject_without_reason_rejected() {
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "team-lead",
+            "message": {"type": "shutdown_response", "request_id": "s-7", "approve": false},
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_err(), "rejecting without a reason must reject");
+    // The handle must NOT have been called — validation precedes dispatch.
+    assert!(handle.response.lock().await.is_none());
+
+    // ...but a rejection WITH a reason routes through to the handle.
+    let ok = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "team-lead",
+            "message": {
+                "type": "shutdown_response", "request_id": "s-7",
+                "approve": false, "reason": "still mid-refactor"
+            },
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(ok.is_ok(), "rejection with a reason must route: {ok:?}");
+    assert!(handle.response.lock().await.is_some());
 }
 
 // ── Auto-resume path (TS `SendMessageTool.ts:822-872` parity) ──

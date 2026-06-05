@@ -21,7 +21,7 @@
 //! 5. `SandboxSettings.filesystem.{allow_write, deny_write, deny_read}` paths
 //!    are resolved (`~/x` → home, relative → settings_root) and folded in
 //! 6. CWD + Claude temp dir always writable (mirrors TS line 225)
-//! 7. Settings.json + `.claude/skills` always denied write (TS lines 235–255)
+//! 7. Settings.json + `.coco/skills` always denied write
 //! 8. Worktree main-repo path added as writable when in a worktree (TS line 286)
 
 use std::collections::HashSet;
@@ -262,7 +262,7 @@ fn collect_writable_roots(
     paths.into_iter().map(WritableRoot::new).collect()
 }
 
-/// Collect deny-write paths from settings.json files, `.claude/skills`,
+/// Collect deny-write paths from settings.json files, `.coco/skills`,
 /// permission rule denies, and settings filesystem section.
 fn collect_deny_write_paths(
     inputs: &AdapterInputs<'_>,
@@ -284,10 +284,10 @@ fn collect_deny_write_paths(
         );
     }
 
-    // .claude/skills in original + current cwd (TS lines 247–255).
-    paths.push(inputs.original_cwd.join(".claude").join("skills"));
+    // Project skills in original + current cwd.
+    paths.push(inputs.original_cwd.join(".coco").join("skills"));
     if inputs.current_cwd != inputs.original_cwd {
-        paths.push(inputs.current_cwd.join(".claude").join("skills"));
+        paths.push(inputs.current_cwd.join(".coco").join("skills"));
     }
 
     // Permission rule deny paths: Edit(/foo) → deny.

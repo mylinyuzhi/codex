@@ -41,6 +41,11 @@ pub(crate) struct PermissionController<'a> {
     hooks: Option<&'a Arc<HookRegistry>>,
     orchestration_ctx: Option<&'a OrchestrationContext>,
     completion_event_mode: ToolCompletionEventMode,
+    /// True when the session cannot show an interactive permission prompt
+    /// (coco equivalent of TS `shouldAvoidPermissionPrompts`). When set, a
+    /// residual `Ask` with no permission bridge fails closed (Deny) rather
+    /// than silently auto-allowing. TS `permissions.ts:929-951`.
+    avoid_permission_prompts: bool,
 }
 
 impl<'a> PermissionController<'a> {
@@ -56,6 +61,7 @@ impl<'a> PermissionController<'a> {
         hooks: Option<&'a Arc<HookRegistry>>,
         orchestration_ctx: Option<&'a OrchestrationContext>,
         completion_event_mode: ToolCompletionEventMode,
+        avoid_permission_prompts: bool,
     ) -> Self {
         Self {
             event_tx,
@@ -68,6 +74,7 @@ impl<'a> PermissionController<'a> {
             hooks,
             orchestration_ctx,
             completion_event_mode,
+            avoid_permission_prompts,
         }
     }
 
@@ -200,6 +207,39 @@ impl<'a> PermissionController<'a> {
         }
 
         let Some(bridge) = self.permission_bridge else {
+            // No interactive bridge. In a non-interactive (headless / SDK
+            // print) session there is no one to prompt, so a residual `Ask`
+            // must fail closed — DENY — rather than silently auto-allowing.
+            // Mirrors TS `permissions.ts:929-951`, which runs the
+            // PermissionRequest hook (above) and then AUTO_REJECTs when no
+            // hook decides. An interactive session with no bridge keeps the
+            // legacy embedded-host permissive fallback.
+            if self.avoid_permission_prompts {
+                warn!(
+                    tool = tool_call.tool_name,
+                    "denying tool: interactive approval unavailable in non-interactive session"
+                );
+                self.record_denial(tool_call, tool_input);
+                let output = format!(
+                    "Permission to use {} requires interactive approval, which is \
+                     unavailable in this non-interactive session.",
+                    tool_call.tool_name
+                );
+                complete_tool_call_with_error_mode(
+                    self.event_tx,
+                    self.history,
+                    &tool_call.tool_call_id,
+                    &tool_call.tool_name,
+                    tool_id,
+                    &output,
+                    self.completion_event_mode,
+                )
+                .await;
+                self.state_tracker
+                    .transition_to(SessionState::Running, self.event_tx)
+                    .await;
+                return PermissionOutcome::Denied;
+            }
             self.state_tracker
                 .transition_to(SessionState::Running, self.event_tx)
                 .await;
@@ -217,6 +257,13 @@ impl<'a> PermissionController<'a> {
             input: tool_input.clone(),
             suggestions,
             choices,
+            // The generic controller can't resolve the coordinator's
+            // task-local teammate identity, so it leaves the badge empty.
+            // For in-process teammates the leader's permission bridge
+            // (`leader_permission::enrich_in_process_worker_badge`) fills it
+            // in — it runs inline within the teammate's task-local scope.
+            // Cross-process teammates are badged in `leader_permission`.
+            worker_badge: None,
         };
 
         let bridge_result = tokio::select! {

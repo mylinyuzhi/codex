@@ -6,6 +6,14 @@ use crate::HookEventType;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn hook_permission_decision_ask_round_trips() {
+    let encoded = serde_json::to_string(&HookPermissionDecision::Ask).unwrap();
+    assert_eq!(encoded, "\"ask\"");
+    let decoded: HookPermissionDecision = serde_json::from_str("\"ask\"").unwrap();
+    assert_eq!(decoded, HookPermissionDecision::Ask);
+}
+
+#[test]
 fn silent_payload_round_trips_with_every_silent_attachment_kind() {
     // Every Coverage::SilentEvent and Coverage::SilentReminder kind must
     // be buildable via the typed silent_* constructors. If any variant

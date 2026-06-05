@@ -301,6 +301,7 @@ class HookOutcomeStatus(str, Enum):
 class HookPermissionDecision(str, Enum):
     allow = 'allow'
     deny = 'deny'
+    ask = 'ask'
 
 class InstructionsLoadReason(str, Enum):
     session_start = 'session_start'
@@ -1626,6 +1627,7 @@ class TuiOnlyEventApprovalRequired(BaseModel):
     original_input: dict[str, Any] | None = None
     permission_suggestions: list[PermissionUpdate] | None = None
     show_always_allow: bool = False
+    worker_badge: WorkerBadge | None = None
 
 class TuiOnlyEventQuestionAsked(BaseModel):
     model_config = {"populate_by_name": True}
@@ -3945,6 +3947,10 @@ class UserPromptSubmitInput(BaseModel):
     agent_type: str | None = None
     permission_mode: str | None = None
     transcript_path: str = ''
+
+class WorkerBadge(BaseModel):
+    color: AgentColorName
+    name: str
 
 class WorktreeCreateInput(BaseModel):
     cwd: str

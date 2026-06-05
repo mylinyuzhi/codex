@@ -111,6 +111,9 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             is_non_interactive: true,
+            // Forks are fire-and-forget — no UI to prompt, so a residual `Ask`
+            // must fail closed. TS forked agents set `shouldAvoidPermissionPrompts`.
+            avoid_permission_prompts: true,
             // Fork dispatch is fire-and-forget — model-driven thinking
             // / effort overrides would invalidate the parent cache, so
             // we skip them. `forked_agent::build_query_config` already

@@ -237,9 +237,13 @@
    "ts_ref": "execAgentHook.ts (full multi-turn agent eval: forked QueryEngine max_turns=50, must call StructuredOutputTool, auto-granted Read of transcript)",
    "rust_location": "coco-rs/app/query/src/hook_llm.rs:241-266 (evaluate_agent: resolves source, logs tracing::warn!, returns HookEvaluationResult::Cancelled unconditionally — no forked engine, no StructuredOutput); reachable via coco-rs/hooks/src/orchestration.rs:3246-3265 (HookHandler::Agent => is_agent=true => llm.evaluate_agent)",
    "description": "TS supports agent-type prompt/stop hooks that run a full multi-turn forked agent which must call StructuredOutputTool to produce {ok, reason}. coco-rs implements only the Prompt path; the Agent path is a stub that logs a warning and unconditionally returns Cancelled. Because Cancelled is treated as a silent no-op, any configured agent-type Stop/judge hook never actually evaluates the turn — it always passes through with no decision.",
-   "user_impact": "A user who configures an LLM-judge (agent-type) Stop/judge hook gets no evaluation — Cancelled is a silent no-op, so the hook always passes and quality/policy gates that should block or feed back to the model never fire.",
-   "likely_intentional": true,
-   "source": "reviewed+verified"
+      "user_impact": "A user who configures an LLM-judge (agent-type) Stop/judge hook gets no evaluation — Cancelled is a silent no-op, so the hook always passes and quality/policy gates that should block or feed back to the model never fire.",
+      "likely_intentional": true,
+      "source": "reviewed+verified",
+      "resolution": {
+        "status": "resolved_on_branch",
+        "summary": "QueryHookLlm::evaluate_agent now delegates to a late-bound hook-agent runner. The CLI runner executes a scoped child QueryEngine with StructuredOutput enforcement and maps {ok,reason} to hook outcomes."
+      }
   },
   {
    "module": "query",
@@ -2512,9 +2516,13 @@
    "ts_ref": "utils/hooks/execAgentHook.ts:36-339 (multi-turn query() with MAX_AGENT_TURNS=50 + StructuredOutputTool, returns blocking when {ok:false})",
    "rust_location": "coco-rs/app/query/src/hook_llm.rs:241-266 (evaluate_agent: returns HookEvaluationResult::Cancelled after a warn, never runs an LLM); fallback at coco-rs/hooks/src/lib.rs:1102-1112 returns PromptText. Only evaluate_agent impl in workspace (grep confirms no alternative).",
    "description": "TS execAgentHook spawns a full multi-turn agent that inspects the codebase/transcript and returns structured {ok, reason}; a false result becomes a blocking error injected into the conversation. Rust's evaluate_agent does no LLM work at all — it logs a warning and returns Cancelled (silent). Any settings hook with type:\"agent\" (e.g. a Stop hook verifying \"tests ran and passed\") never enforces its condition. The hooks crate's lib.rs:1102-1112 fallback also just returns the prompt text.",
-   "user_impact": "A settings hook with type:\"agent\" (e.g. a Stop hook verifying \"tests ran and passed\") never enforces its condition. TS execAgentHook returns outcome:'blocking' with a blockingError on {ok:false} (execAgentHook.ts:271-283); Rust always returns Cancelled (non-blocking, silent), so the agent proceeds as if the check passed.",
-   "likely_intentional": true,
-   "source": "reviewed+verified"
+      "user_impact": "A settings hook with type:\"agent\" (e.g. a Stop hook verifying \"tests ran and passed\") never enforces its condition. TS execAgentHook returns outcome:'blocking' with a blockingError on {ok:false} (execAgentHook.ts:271-283); Rust always returns Cancelled (non-blocking, silent), so the agent proceeds as if the check passed.",
+      "likely_intentional": true,
+      "source": "reviewed+verified",
+      "resolution": {
+        "status": "resolved_on_branch",
+        "summary": "Agent hooks now run through a bounded scoped child QueryEngine with a StructuredOutput tool and Stop enforcement. {ok:true} passes, {ok:false,reason} blocks, and missing output cancels."
+      }
   },
   {
    "module": "hooks",
@@ -2525,9 +2533,13 @@
    "ts_ref": "utils/hooks.ts:2500-2613 (parseHookOutput(result.stdout) + processHookJSONOutput run for any exit code) and :2648-2666 (exit 2 also blocking)",
    "rust_location": "coco-rs/hooks/src/orchestration.rs:3349 `let output = if exit_code == 0 { stdout } else { stderr };`; aggregator parses r.output at orchestration.rs:974. TS parseHookOutput(result.stdout) runs for ANY exit code (hooks.ts:2500), validationError-first (2504), then processHookJSONOutput (2544).",
    "description": "TS always parses result.stdout as the JSON control payload regardless of exit code, then applies hookSpecificOutput (updatedInput, additionalContext, decision, etc.). Rust folds stdout into the result only when exit_code==0; on any non-zero exit it sets output=stderr, so the aggregator's parse_hook_output never sees the stdout JSON. A hook that emits updatedInput/decision/additionalContext on stdout while exiting non-zero (notably the exit-2 'block with structured feedback' idiom, or a PreToolUse hook emitting updatedInput then exiting 1) has its entire JSON control output discarded.",
-   "user_impact": "PreToolUse updatedInput, PostToolUse updatedMCPToolOutput, additionalContext, decision:allow/deny, suppressOutput, watchPaths emitted on stdout are silently discarded whenever the hook exits non-zero. The exit-2 'block with structured feedback' idiom loses its reason text entirely.",
-   "likely_intentional": false,
-   "source": "reviewed+verified"
+      "user_impact": "PreToolUse updatedInput, PostToolUse updatedMCPToolOutput, additionalContext, decision:allow/deny, suppressOutput, watchPaths emitted on stdout are silently discarded whenever the hook exits non-zero. The exit-2 'block with structured feedback' idiom loses its reason text entirely.",
+      "likely_intentional": false,
+      "source": "reviewed+verified",
+      "resolution": {
+        "status": "resolved_on_branch",
+        "summary": "process_execution_result now preserves valid stdout JSON controls for any exit code and only uses stderr/exit-2 blocking fallback when stdout is not valid structured hook output."
+      }
   },
   {
    "module": "hooks",
@@ -2538,9 +2550,13 @@
    "ts_ref": "utils/hooks.ts:566-568 & 610-612 (permissionDecision 'ask' → permissionBehavior='ask'); schema hint hooks.ts:424,428 lists 'allow'|'deny'|'ask'",
    "rust_location": "coco-rs/common/types/src/messages/attachment_body.rs:139-143 (HookPermissionDecision = Allow|Deny only, snake_case); coco-rs/common/types/src/sdk_hook_output.rs:127 (HookSpecificOutput::PreToolUse.permission_decision: Option<HookPermissionDecision>); orchestration.rs:1011-1024 flat permission_decision match drops 'ask' via `_ => {}`; parse fallback to PlainText at orchestration.rs:164-169. TS: permissionBehaviorSchema() = z.enum(['allow','deny','ask']) (PermissionRule.ts:25-26), result.permissionBehavior='ask' (hooks.ts:566-568, 610-611).",
    "description": "TS supports a third PreToolUse permission decision 'ask' that forces an interactive permission prompt. coco-rs's HookPermissionDecision enum has only Allow/Deny. The flat-format path drops 'ask' silently. Worse, in the nested hookSpecificOutput path the field is Option<HookPermissionDecision>, so a present `\"permissionDecision\":\"ask\"` makes serde_json::from_str::<HookJsonOutput> error, causing parse_hook_output to fall back to PlainText (orchestration.rs:159-171) — discarding the ENTIRE JSON control payload (updatedInput, additionalContext, etc.) and injecting the raw JSON string as additional context.",
-   "user_impact": "A PreToolUse hook returning permissionDecision:'ask' is ignored (flat path) or — in the nested hookSpecificOutput form — fails serde_json::from_str::<HookJsonOutput>, falling back to PlainText, which discards the ENTIRE control payload (updatedInput, additionalContext, etc.) and injects the raw JSON as additional context.",
-   "likely_intentional": false,
-   "source": "reviewed+verified"
+      "user_impact": "A PreToolUse hook returning permissionDecision:'ask' is ignored (flat path) or — in the nested hookSpecificOutput form — fails serde_json::from_str::<HookJsonOutput>, falling back to PlainText, which discards the ENTIRE control payload (updatedInput, additionalContext, etc.) and injects the raw JSON as additional context.",
+      "likely_intentional": false,
+      "source": "reviewed+verified",
+      "resolution": {
+        "status": "resolved_on_branch",
+        "summary": "HookPermissionDecision now includes Ask, and flat plus nested PreToolUse permissionDecision:\"ask\" output maps to PermissionBehavior::Ask without blocking by itself."
+      }
   },
   {
    "module": "hooks",

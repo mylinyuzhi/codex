@@ -132,7 +132,7 @@ pub struct HookPermissionDecisionPayload {
     pub hook_event: HookEventType,
 }
 
-/// `allow` / `deny` decision, matching TS `'allow' | 'deny'`.
+/// `allow` / `deny` / `ask` decision from hook output.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -140,6 +140,7 @@ pub enum HookPermissionDecision {
     #[default]
     Allow,
     Deny,
+    Ask,
 }
 
 /// TS parity: `command_permissions` (`utils/attachments.ts:605-608`).

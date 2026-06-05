@@ -2866,11 +2866,12 @@
       ]
     },
     "HookPermissionDecision": {
-      "description": "`allow` / `deny` decision, matching TS `'allow' | 'deny'`.",
+      "description": "`allow` / `deny` / `ask` decision from hook output.",
       "type": "string",
       "enum": [
         "allow",
-        "deny"
+        "deny",
+        "ask"
       ]
     },
     "HookPermissionDecisionPayload": {

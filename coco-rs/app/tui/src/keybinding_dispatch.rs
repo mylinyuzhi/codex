@@ -51,6 +51,19 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // TS `app:toggleTeammatePreview` (Ctrl+Shift+O) — toggle
         // teammate spinner-line message previews on/off.
         AppToggleTeammatePreview => TuiCommand::ToggleTeammateMessagePreview,
+        // coco-rs-only `app:toggleTeamRoster` (Ctrl+Shift+T) — open the
+        // teammate roster / mode picker. Gated on the session having a
+        // teammate so the binding is an inert no-op in non-team sessions
+        // (it returns `None`, swallowing the key without a cascade fallthrough)
+        // rather than shadowing the key globally.
+        AppToggleTeamRoster => {
+            return state
+                .session
+                .subagents
+                .iter()
+                .any(|s| s.kind == crate::state::SubagentKind::Teammate)
+                .then_some(TuiCommand::OpenTeamRoster);
+        }
         AppGlobalSearch => TuiCommand::ShowGlobalSearch,
         AppQuickOpen => TuiCommand::ShowQuickOpen,
         // KAIROS (`app:toggleBrief`) / TERMINAL_PANEL (`app:toggleTerminal`)

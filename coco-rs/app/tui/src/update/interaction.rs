@@ -696,6 +696,11 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
             let count = m.entries.len() as i32;
             m.selected = (m.selected + delta).clamp(0, (count - 1).max(0));
         }
+        Some(ModalState::TeamRoster(r)) => {
+            let count = r.members.len() as i32;
+            let next = (r.selected as i32 + delta).clamp(0, (count - 1).max(0));
+            r.selected = next as usize;
+        }
         Some(ModalState::CopyPicker(cp)) => {
             if delta < 0 {
                 for _ in 0..delta.unsigned_abs() {
@@ -760,6 +765,11 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
                         state.session.model = entry.model_id.clone();
                     }
                 }
+            }
+            ModalState::TeamRoster(_) => {
+                // Mode cycling (Left/Right, Shift+Left/Right) already persisted
+                // each change immediately (TS-faithful), so Enter just closes
+                // the picker — `take_modal()` above already removed it.
             }
             ModalState::Rewind(mut r) => {
                 // Capture the 1-based turn number for the protocol-level
@@ -1307,6 +1317,72 @@ pub(super) fn cycle_model_effort(state: &mut AppState, delta: i32) {
     let n = entry.supported_efforts.len() as i32;
     let next_idx = (current_idx + delta).rem_euclid(n) as usize;
     m.effort = Some(entry.supported_efforts[next_idx]);
+}
+
+/// The four interactive permission modes the roster cycles through. The
+/// auto-mode variants (Auto / DontAsk / Bubble) are intentionally excluded —
+/// leaders set teammates to one of these four (matches the Shift+Tab cycle).
+const ROSTER_MODE_ORDER: [coco_types::PermissionMode; 4] = [
+    coco_types::PermissionMode::Default,
+    coco_types::PermissionMode::AcceptEdits,
+    coco_types::PermissionMode::Plan,
+    coco_types::PermissionMode::BypassPermissions,
+];
+
+/// Advance `current` by `delta` steps through [`ROSTER_MODE_ORDER`] (wrapping).
+fn next_roster_mode(current: coco_types::PermissionMode, delta: i32) -> coco_types::PermissionMode {
+    let idx = ROSTER_MODE_ORDER
+        .iter()
+        .position(|m| *m == current)
+        .unwrap_or(0) as i32;
+    let n = ROSTER_MODE_ORDER.len() as i32;
+    ROSTER_MODE_ORDER[(idx + delta).rem_euclid(n) as usize]
+}
+
+/// Cycle the FOCUSED teammate's mode by `delta` (Left/Right). Each teammate
+/// carries its own mode, so divergent modes stay independent. Mutates the local
+/// picker state for immediate UI feedback and returns `(name, new_mode)` to
+/// persist (TS: cycling applies immediately). gap 8.
+pub(super) fn team_roster_cycle_mode(
+    state: &mut AppState,
+    delta: i32,
+) -> Option<(String, coco_types::PermissionMode)> {
+    let Some(ModalState::TeamRoster(r)) = state.ui.modal.as_mut() else {
+        return None;
+    };
+    let member = r.members.get_mut(r.selected)?;
+    member.mode = next_roster_mode(member.mode, delta);
+    Some((member.name.clone(), member.mode))
+}
+
+/// Cycle ALL teammates' modes in tandem by `delta` (Shift+Left/Right), mirroring
+/// TS `cycleAllTeammateModes`: if the members' modes diverge, normalise every
+/// member to `Default`; otherwise advance every member by `delta` from the
+/// shared mode. Mutates the local picker state and returns the `(name, mode)`
+/// updates to persist in one batch. Empty roster ⇒ no-op.
+pub(super) fn team_roster_cycle_all_modes(
+    state: &mut AppState,
+    delta: i32,
+) -> Vec<(String, coco_types::PermissionMode)> {
+    let Some(ModalState::TeamRoster(r)) = state.ui.modal.as_mut() else {
+        return Vec::new();
+    };
+    let Some(first_mode) = r.members.first().map(|m| m.mode) else {
+        return Vec::new();
+    };
+    let all_same = r.members.iter().all(|m| m.mode == first_mode);
+    let target = if all_same {
+        next_roster_mode(first_mode, delta)
+    } else {
+        coco_types::PermissionMode::Default
+    };
+    r.members
+        .iter_mut()
+        .map(|m| {
+            m.mode = target;
+            (m.name.clone(), target)
+        })
+        .collect()
 }
 
 fn filtered_models(m: &ModelPickerState) -> Vec<&ModelEntry> {

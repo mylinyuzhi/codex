@@ -74,6 +74,13 @@ pub struct BackgroundShellRequest {
     /// When set, the TaskRuntime fires `signal_detach(task_id)`
     /// internally after this many ms of foreground execution.
     pub auto_detach_ms: Option<u64>,
+    /// Whether the driver kills the child when it exceeds `timeout_ms`.
+    /// `false` (auto-backgroundable foreground commands) means the timeout
+    /// does NOT kill — paired with `auto_detach_ms = timeout_ms`, the fg
+    /// awaiter is released and the child keeps running in the background until
+    /// natural exit (TS `shouldAutoBackground` parity). `true` keeps the
+    /// hard-kill-on-timeout behaviour (explicit bg, `sleep`, subagents).
+    pub kill_on_timeout: bool,
     /// Optional sandbox runtime state.
     pub sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
     pub sandbox_bypass: coco_sandbox::SandboxBypass,
@@ -90,6 +97,7 @@ impl std::fmt::Debug for BackgroundShellRequest {
             .field("progress_tx", &self.progress_tx.is_some())
             .field("progress_throttle_ms", &self.progress_throttle_ms)
             .field("auto_detach_ms", &self.auto_detach_ms)
+            .field("kill_on_timeout", &self.kill_on_timeout)
             .finish()
     }
 }

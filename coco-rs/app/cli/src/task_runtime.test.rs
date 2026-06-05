@@ -588,6 +588,7 @@ async fn shell_spawn_runs_command_and_marks_completed() {
             progress_tx: None,
             progress_throttle_ms: 1000,
             auto_detach_ms: None,
+            kill_on_timeout: true,
             sandbox_state: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
@@ -625,6 +626,7 @@ async fn shell_spawn_propagates_nonzero_exit_as_failed() {
             progress_tx: None,
             progress_throttle_ms: 1000,
             auto_detach_ms: None,
+            kill_on_timeout: true,
             sandbox_state: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
@@ -662,6 +664,7 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
             progress_tx: None,
             progress_throttle_ms: 1000,
             auto_detach_ms: None,
+            kill_on_timeout: true,
             sandbox_state: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
@@ -708,6 +711,7 @@ async fn shell_stop_suppresses_model_notification() {
             progress_tx: None,
             progress_throttle_ms: 1000,
             auto_detach_ms: None,
+            kill_on_timeout: true,
             sandbox_state: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
@@ -921,6 +925,7 @@ async fn shell_spawn_persists_exit_code_for_terminal_outputs() {
             progress_tx: None,
             progress_throttle_ms: 1000,
             auto_detach_ms: None,
+            kill_on_timeout: true,
             sandbox_state: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
@@ -968,6 +973,7 @@ async fn shell_spawn_emits_progress_events_through_progress_tx() {
             progress_tx: Some(tx),
             progress_throttle_ms: 100,
             auto_detach_ms: None,
+            kill_on_timeout: true,
             sandbox_state: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })
@@ -1005,6 +1011,7 @@ async fn shell_spawn_auto_detach_timer_fires() {
             progress_tx: None,
             progress_throttle_ms: 1000,
             auto_detach_ms: Some(200),
+            kill_on_timeout: false,
             sandbox_state: None,
             sandbox_bypass: coco_sandbox::SandboxBypass::No,
         })

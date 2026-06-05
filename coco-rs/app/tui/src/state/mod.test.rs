@@ -375,6 +375,7 @@ fn test_permission_prompt() {
             display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
             original_input: None,
             permission_suggestions: vec![],
+            worker_badge: None,
         }));
 
     assert!(state.has_active_surface());

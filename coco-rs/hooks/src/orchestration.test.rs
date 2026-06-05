@@ -237,6 +237,29 @@ fn test_aggregate_results_json_permission_allow() {
 }
 
 #[test]
+fn test_aggregate_results_flat_permission_ask() {
+    let json_output = r#"{"permissionDecision": "ask", "reason": "needs review"}"#;
+    let results = vec![SingleHookResult {
+        command: "ask.sh".to_string(),
+        succeeded: true,
+        output: json_output.to_string(),
+        blocked: false,
+        outcome: HookOutcome::Success,
+        status_message: None,
+        async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
+    }];
+    let agg = aggregate_results(&results);
+    assert!(!agg.is_blocked());
+    assert_eq!(agg.permission_behavior, Some(PermissionBehavior::Ask));
+    assert_eq!(
+        agg.hook_permission_decision_reason.as_deref(),
+        Some("needs review")
+    );
+}
+
+#[test]
 fn test_aggregate_results_additional_context() {
     let results = vec![
         SingleHookResult {
@@ -1300,6 +1323,67 @@ fn test_aggregate_with_hook_specific_output() {
         Some("dangerous")
     );
     assert_eq!(agg.additional_contexts, vec!["blocked cmd"]);
+}
+
+#[test]
+fn test_aggregate_with_hook_specific_output_permission_ask() {
+    let json_output = r#"{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "needs human", "additionalContext": "review cmd"}}"#;
+    let results = vec![SingleHookResult {
+        command: "check.sh".to_string(),
+        succeeded: true,
+        output: json_output.to_string(),
+        blocked: false,
+        outcome: HookOutcome::Success,
+        status_message: None,
+        async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
+    }];
+    let agg = aggregate_results(&results);
+    assert_eq!(agg.permission_behavior, Some(PermissionBehavior::Ask));
+    assert!(!agg.is_blocked());
+    assert_eq!(
+        agg.hook_permission_decision_reason.as_deref(),
+        Some("needs human")
+    );
+    assert_eq!(agg.additional_contexts, vec!["review cmd"]);
+}
+
+#[test]
+fn test_process_execution_result_prefers_stdout_json_on_nonzero_exit() {
+    let result = process_execution_result(
+        HookExecutionResult::CommandOutput {
+            exit_code: 1,
+            stdout: r#"{"additionalContext":"from stdout"}"#.to_string(),
+            stderr: "stderr failure".to_string(),
+        },
+        "hook.sh",
+        HookBlockingSource::Command("hook.sh".to_string()),
+    );
+    let agg = aggregate_results(&[result]);
+    assert!(!agg.is_blocked());
+    assert_eq!(agg.additional_contexts, vec!["from stdout"]);
+}
+
+#[test]
+fn test_process_execution_result_exit_two_uses_stderr_without_stdout_json() {
+    let result = process_execution_result(
+        HookExecutionResult::CommandOutput {
+            exit_code: 2,
+            stdout: String::new(),
+            stderr: "blocked via stderr".to_string(),
+        },
+        "hook.sh",
+        HookBlockingSource::Command("hook.sh".to_string()),
+    );
+    let agg = aggregate_results(&[result]);
+    assert!(agg.is_blocked());
+    assert_eq!(
+        agg.blocking_error
+            .as_ref()
+            .map(|e| e.blocking_error.as_str()),
+        Some("blocked via stderr")
+    );
 }
 
 #[test]

@@ -155,6 +155,44 @@ fn test_shutdown_rejected_round_trip() {
 }
 
 #[test]
+fn test_create_shutdown_approved_carries_pane_coords() {
+    // Pane-based teammate: pane id + backend round-trip so the leader can
+    // kill the right pane.
+    let text = create_shutdown_approved_message("req-9", "worker-1", Some("%3"), Some("tmux"));
+    let ProtocolMessage::ShutdownApproved {
+        request_id,
+        from,
+        pane_id,
+        backend_type,
+        ..
+    } = parse_protocol_message(&text).expect("must parse")
+    else {
+        panic!("wrong variant");
+    };
+    assert_eq!(request_id, "req-9");
+    assert_eq!(from, "worker-1");
+    assert_eq!(pane_id.as_deref(), Some("%3"));
+    assert_eq!(backend_type.as_deref(), Some("tmux"));
+}
+
+#[test]
+fn test_create_shutdown_approved_empty_pane_is_none() {
+    // In-process teammate: empty pane id collapses to None so the leader
+    // skips kill_pane and only removes membership.
+    let text = create_shutdown_approved_message("req-1", "ip-worker", Some(""), Some("in-process"));
+    let ProtocolMessage::ShutdownApproved {
+        pane_id,
+        backend_type,
+        ..
+    } = parse_protocol_message(&text).expect("must parse")
+    else {
+        panic!("wrong variant");
+    };
+    assert_eq!(pane_id, None);
+    assert_eq!(backend_type.as_deref(), Some("in-process"));
+}
+
+#[test]
 fn test_task_assignment_round_trip() {
     let json = r#"{"type":"task_assignment","taskId":"t1","subject":"refactor","description":"split agent_handle.rs","assignedBy":"team-lead","timestamp":"t"}"#;
     assert_round_trips(json, "task_assignment");

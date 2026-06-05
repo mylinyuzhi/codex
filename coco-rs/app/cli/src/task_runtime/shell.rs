@@ -145,10 +145,12 @@ impl TaskRuntime {
         // `SandboxState::try_wrap_command_with_binds` before spawn.
         let sandbox_for_driver = request.sandbox_state.clone();
         let sandbox_bypass_for_driver = request.sandbox_bypass;
+        let kill_on_timeout = request.kill_on_timeout;
         tokio::spawn(async move {
             let outcome = run_shell_task(
                 &command_str,
                 timeout_ms,
+                kill_on_timeout,
                 cancel_for_driver,
                 dto_for_driver,
                 sandbox_for_driver,
@@ -205,11 +207,12 @@ struct ShellOutcome {
 #[instrument(
     level = "debug",
     skip(cancel, dto, sandbox_state),
-    fields(command_preview = %command_preview(command), timeout_ms, sandboxed = sandbox_state.is_some())
+    fields(command_preview = %command_preview(command), timeout_ms, kill_on_timeout, sandboxed = sandbox_state.is_some())
 )]
 async fn run_shell_task(
     command: &str,
     timeout_ms: i64,
+    kill_on_timeout: bool,
     cancel: CancellationToken,
     dto: DiskTaskOutput,
     sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
@@ -315,7 +318,12 @@ async fn run_shell_task(
                 WaitOutcome::SpawnFailed
             }
         },
-        () = tokio::time::sleep(timeout_duration) => {
+        // When `kill_on_timeout` is false (auto-backgroundable fg command),
+        // this arm is disabled: the timeout no longer kills the child. The fg
+        // awaiter is released separately by the auto-detach timer (which fires
+        // at the same `timeout_ms`), and the child runs to natural exit in the
+        // background — TS `shouldAutoBackground` parity.
+        () = tokio::time::sleep(timeout_duration), if kill_on_timeout => {
             let _ = child.kill().await;
             WaitOutcome::TimedOut { budget_ms: timeout_ms }
         }

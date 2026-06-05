@@ -46,7 +46,62 @@ pub struct YoloClassifierResult {
     pub duration_ms: Option<i64>,
     /// Which stage produced this result (1 = fast, 2 = extended thinking).
     pub stage: Option<i32>,
+    /// The classifier model could not respond (transport / capacity error),
+    /// as opposed to actively blocking. TS `classifierResult.unavailable`
+    /// (`permissions.ts:843-876`). Distinct from `should_block` so the
+    /// decision layer can fail-open/closed instead of treating an outage as
+    /// a malicious block.
+    pub unavailable: bool,
+    /// The classifier prompt exceeded the model's context window — a
+    /// deterministic condition that will not recover on retry. TS
+    /// `classifierResult.transcriptTooLong` (`permissions.ts:818-842`).
+    pub transcript_too_long: bool,
 }
+
+impl YoloClassifierResult {
+    /// Construct a plain allow/block verdict with the unavailable /
+    /// transcript-too-long flags cleared (the common case).
+    fn verdict(should_block: bool, reason: String, stage: Option<i32>) -> Self {
+        Self {
+            should_block,
+            reason,
+            model: String::new(),
+            usage: None,
+            duration_ms: None,
+            stage,
+            unavailable: false,
+            transcript_too_long: false,
+        }
+    }
+}
+
+/// Whether a classifier transport error string indicates the prompt overran
+/// the model's context window (deterministic — retry cannot help) vs. a
+/// transient outage. TS detects the literal `'prompt is too long'` API error
+/// (`permissions.ts` transcript-too-long branch).
+fn is_transcript_too_long_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("prompt is too long")
+        || lower.contains("context window")
+        || lower.contains("context length")
+        || lower.contains("too many tokens")
+}
+
+/// Projects a tool's raw input down to the security-relevant fields the
+/// auto-mode classifier should see (TS `Tool.toAutoClassifierInput`).
+///
+/// `None` ⇒ the caller has no projection for this `(tool, input)` pair —
+/// either the tool is unknown or it declares no classifier-relevant input — in
+/// which case the classifier falls back to the raw input JSON. Built from the
+/// live `ToolRegistry` in `app/query` and threaded down so this crate stays
+/// free of any `coco-tools` dependency.
+pub type InputProjector<'a> =
+    &'a (dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync);
+
+/// Which classifier stages run (Both / Fast / Thinking). Defined in
+/// `coco-types` so `coco-config`'s `AutoModeConfig` and this crate's
+/// `AutoModeRules` share one type.
+pub use coco_types::ClassifierMode;
 
 /// Auto-mode configuration rules.
 ///
@@ -62,6 +117,10 @@ pub struct AutoModeRules {
     /// Environment context for the classifier.
     #[serde(default)]
     pub environment: Vec<String>,
+    /// Which classifier stages run (Both / Fast / Thinking). TS
+    /// `twoStageClassifier`. Defaults to `Both` (two-stage escalation).
+    #[serde(default)]
+    pub classifier_mode: ClassifierMode,
 }
 
 /// A compressed transcript entry for the classifier.
@@ -79,6 +138,11 @@ pub enum TranscriptRole {
 }
 
 /// A content block in the transcript.
+///
+/// TS `TranscriptBlock` (`yoloClassifier.ts:287-289`) carries only `Text`
+/// (user-authored) and `ToolCall` (assistant tool_use). Assistant prose and
+/// tool *results* are deliberately excluded — both are attacker-influenceable
+/// and must not reach the security classifier.
 #[derive(Debug, Clone)]
 pub enum TranscriptBlock {
     /// User text message.
@@ -87,12 +151,6 @@ pub enum TranscriptBlock {
     ToolCall {
         tool_name: String,
         input_summary: String,
-    },
-    /// Tool result (abbreviated).
-    ToolResult {
-        tool_name: String,
-        output_summary: String,
-        is_error: bool,
     },
 }
 
@@ -129,7 +187,11 @@ const SAFE_TOOLS: &[&str] = &[
     ToolName::SendMessage.as_str(),
     // Misc safe
     ToolName::Sleep.as_str(),
-    ToolName::Brief.as_str(),
+    // NB: `Brief` is intentionally NOT allowlisted here — TS
+    // `SAFE_YOLO_ALLOWLISTED_TOOLS` omits it. It is still auto-allowed in
+    // auto-mode via the read-only fast path (`BriefTool::is_read_only` is
+    // always true), so this only keeps the allowlist faithful to TS without
+    // changing behavior.
 ];
 
 /// Check if a tool is in the safe-tool allowlist (no classifier needed).
@@ -145,6 +207,7 @@ pub fn is_safe_tool(tool_name: &str) -> bool {
 /// path (plan §11 F8 follow-up).
 pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
+    projector: Option<InputProjector<'_>>,
 ) -> Vec<TranscriptEntry> {
     let mut entries = Vec::new();
 
@@ -160,7 +223,7 @@ pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
                 }
             }
             coco_messages::Message::Assistant(a) => {
-                let blocks = extract_assistant_blocks(&a.message);
+                let blocks = extract_assistant_blocks(&a.message, projector);
                 if !blocks.is_empty() {
                     entries.push(TranscriptEntry {
                         role: TranscriptRole::Assistant,
@@ -168,17 +231,9 @@ pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
                     });
                 }
             }
-            coco_messages::Message::ToolResult(tr) => {
-                let output = format!("tool_use_id={}", tr.tool_use_id);
-                entries.push(TranscriptEntry {
-                    role: TranscriptRole::User,
-                    content: vec![TranscriptBlock::ToolResult {
-                        tool_name: tr.tool_id.to_string(),
-                        output_summary: truncate(&output, 500),
-                        is_error: tr.is_error,
-                    }],
-                });
-            }
+            // Tool results are NOT included: TS `buildTranscriptEntries` keeps
+            // only user text + assistant tool_use blocks. Tool output is
+            // attacker-influenceable and must not reach the security gate.
             _ => {}
         }
     }
@@ -194,7 +249,27 @@ pub fn build_classifier_system_prompt(rules: &AutoModeRules) -> String {
     let mut prompt = String::from(
         "You are a security classifier for an AI coding assistant. \
          Your job is to determine whether a proposed tool action is safe to auto-execute \
-         without user confirmation.\n\n",
+         without user confirmation.\n\n\
+         You are the last line of defense before an action runs unattended. Default to \
+         blocking when uncertain — a blocked action merely asks the user, but an \
+         allowed dangerous action cannot be undone.\n\n\
+         ## BLOCK if the action does any of the following\n\
+         - Code-from-External: fetches and executes code from an untrusted/remote source \
+           (e.g. `curl … | sh`, `iex (iwr …)`, running a just-downloaded binary/script).\n\
+         - Irreversible-Local-Destruction: deletes or overwrites data with no recovery \
+           (e.g. `rm -rf` of non-scratch paths, `git push --force` over shared history, \
+           disk/partition wipes, truncating databases).\n\
+         - Unauthorized-Persistence: installs a mechanism that survives the session \
+           (cron jobs, systemd units, shell rc / profile edits, login items, git hooks, \
+           added SSH authorized_keys).\n\
+         - Security-Weaken: disables or downgrades a protection (chmod 777 / removing auth, \
+           disabling a firewall or signature check, editing the agent's own permission / \
+           settings files, writing secrets into world-readable locations).\n\
+         - Data-Exfiltration: sends local files, credentials, or secrets to the network.\n\n\
+         ## ALLOW\n\
+         - Routine, reversible development work scoped to the project (building, testing, \
+           reading, formatting, ordinary edits to project files).\n\
+         - Anything the user's own configuration below explicitly authorizes.\n\n",
     );
 
     if !rules.allow.is_empty() {
@@ -240,9 +315,21 @@ pub fn build_classifier_system_prompt(rules: &AutoModeRules) -> String {
 }
 
 /// Format a tool action for the classifier.
-pub fn format_action_for_classifier(tool_name: &str, input: &serde_json::Value) -> String {
-    let input_str = serde_json::to_string(input).unwrap_or_default();
-    let truncated = truncate(&input_str, 1000);
+pub fn format_action_for_classifier(
+    tool_name: &str,
+    input: &serde_json::Value,
+    projector: Option<InputProjector<'_>>,
+) -> String {
+    // Per-tool projection (curated, security-relevant fields) when the tool
+    // provides one; otherwise the raw input JSON. A `None` projection is NOT
+    // an auto-allow here — the action being judged must always reach the
+    // classifier; the "no security relevance" fast-allow lives upstream in
+    // `is_safe_tool` (deliberate divergence from TS's `'' → allow` shortcut,
+    // which is unsafe without exhaustive per-tool annotation).
+    let projected = projector
+        .and_then(|project| project(tool_name, input))
+        .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_default());
+    let truncated = truncate(&projected, 1000);
     format!("<action>\ntool: {tool_name}\ninput: {truncated}\n</action>")
 }
 
@@ -251,6 +338,10 @@ const STAGE_1_MAX_TOKENS: i64 = 64;
 
 /// Stage 2 token budget. TS extended-thinking value.
 const STAGE_2_MAX_TOKENS: i64 = 4096;
+
+/// Single-stage `fast`-mode token budget. TS `mode === 'fast' ? 256`
+/// (`yoloClassifier.ts:781`).
+const FAST_ONLY_MAX_TOKENS: i64 = 256;
 
 /// Stage 1 suffix (TS `XML_S1_SUFFIX`, `yoloClassifier.ts:550`).
 pub const XML_S1_SUFFIX: &str = "\nErr on the side of blocking. <block> immediately.";
@@ -292,6 +383,7 @@ pub async fn classify_yolo_action<M, F, Fut>(
     input: &serde_json::Value,
     rules: &AutoModeRules,
     classify_fn: F,
+    projector: Option<InputProjector<'_>>,
 ) -> YoloClassifierResult
 where
     M: std::borrow::Borrow<coco_messages::Message>,
@@ -300,19 +392,12 @@ where
 {
     // Fast path: safe tools never need classification.
     if is_safe_tool(tool_name) {
-        return YoloClassifierResult {
-            should_block: false,
-            reason: "Safe tool (allowlisted)".into(),
-            model: String::new(),
-            usage: None,
-            duration_ms: None,
-            stage: None,
-        };
+        return YoloClassifierResult::verdict(false, "Safe tool (allowlisted)".into(), None);
     }
 
     let system_prompt = build_classifier_system_prompt(rules);
-    let transcript = build_transcript_entries(messages);
-    let action = format_action_for_classifier(tool_name, input);
+    let transcript = build_transcript_entries(messages, projector);
+    let action = format_action_for_classifier(tool_name, input, projector);
     let transcript_text = format_transcript(&transcript);
 
     // TS wraps the entire user content (transcript + action) in
@@ -326,99 +411,164 @@ where
          </transcript>\n"
     );
 
-    // ── Stage 1 ────────────────────────────────────────────────────────
-    let stage1_user_prompt = format!("{user_body}{XML_S1_SUFFIX}");
-    let stage1_result = classify_fn(ClassifyRequest {
-        system_prompt: system_prompt.clone(),
-        user_prompt: stage1_user_prompt,
-        max_tokens: STAGE_1_MAX_TOKENS,
-        stage: 1,
-        stop_sequences: Some(vec!["</block>".to_string()]),
-    })
-    .await;
+    match rules.classifier_mode {
+        // Single fast stage — 256 tokens, no stop sequence, verdict final.
+        // TS `fast` mode (`yoloClassifier.ts:826-857`).
+        ClassifierMode::Fast => {
+            let result = classify_fn(ClassifyRequest {
+                system_prompt,
+                user_prompt: format!("{user_body}{XML_S1_SUFFIX}"),
+                max_tokens: FAST_ONLY_MAX_TOKENS,
+                stage: 1,
+                stop_sequences: None,
+            })
+            .await;
+            interpret_final_verdict(
+                result,
+                1,
+                "Allowed by fast classifier",
+                "Blocked by fast classifier",
+            )
+        }
+        // Single extended stage — 4096 tokens, no stop sequence. TS
+        // `thinking` mode (`yoloClassifier.ts:860-880`).
+        ClassifierMode::Thinking => {
+            let result = classify_fn(ClassifyRequest {
+                system_prompt,
+                user_prompt: format!("{user_body}{XML_S2_SUFFIX}"),
+                max_tokens: STAGE_2_MAX_TOKENS,
+                stage: 2,
+                stop_sequences: None,
+            })
+            .await;
+            interpret_final_verdict(
+                result,
+                2,
+                "Allowed by extended classifier",
+                "No reason provided",
+            )
+        }
+        // Two-stage escalation (default).
+        ClassifierMode::Both => {
+            // ── Stage 1 ────────────────────────────────────────────────
+            let stage1_user_prompt = format!("{user_body}{XML_S1_SUFFIX}");
+            let stage1_result = classify_fn(ClassifyRequest {
+                system_prompt: system_prompt.clone(),
+                user_prompt: stage1_user_prompt,
+                max_tokens: STAGE_1_MAX_TOKENS,
+                stage: 1,
+                stop_sequences: Some(vec!["</block>".to_string()]),
+            })
+            .await;
 
-    if let Ok(response) = stage1_result {
-        match parse_xml_block(&response) {
-            Some(false) => {
-                // Allow — stage 1 verdict is sufficient (TS line 808-822).
-                return YoloClassifierResult {
-                    should_block: false,
-                    reason: "Allowed by fast classifier".into(),
-                    model: String::new(),
-                    usage: None,
-                    duration_ms: None,
-                    stage: Some(1),
-                };
+            if let Ok(response) = stage1_result {
+                match parse_xml_block(&response) {
+                    Some(false) => {
+                        // Allow — stage 1 verdict is sufficient (TS line 808-822).
+                        return YoloClassifierResult::verdict(
+                            false,
+                            "Allowed by fast classifier".into(),
+                            Some(1),
+                        );
+                    }
+                    Some(true) | None => {
+                        // Block or unparseable → escalate to stage 2.
+                    }
+                }
             }
-            Some(true) | None => {
-                // Block or unparseable → escalate to stage 2 for second opinion.
-            }
+            // Stage-1 transport error also falls through to stage 2.
+
+            // ── Stage 2 ────────────────────────────────────────────────
+            let stage2_user_prompt = format!("{user_body}{XML_S2_SUFFIX}");
+            let stage2_result = classify_fn(ClassifyRequest {
+                system_prompt,
+                user_prompt: stage2_user_prompt,
+                max_tokens: STAGE_2_MAX_TOKENS,
+                stage: 2,
+                stop_sequences: None,
+            })
+            .await;
+            interpret_final_verdict(
+                stage2_result,
+                2,
+                "Allowed by extended classifier",
+                "No reason provided",
+            )
         }
     }
-    // Stage-1 transport error also falls through to stage 2.
+}
 
-    // ── Stage 2 ────────────────────────────────────────────────────────
-    let stage2_user_prompt = format!("{user_body}{XML_S2_SUFFIX}");
-    let stage2_result = classify_fn(ClassifyRequest {
-        system_prompt,
-        user_prompt: stage2_user_prompt,
-        max_tokens: STAGE_2_MAX_TOKENS,
-        stage: 2,
-        stop_sequences: None,
-    })
-    .await;
-
-    match stage2_result {
+/// Interpret a single classifier stage's outcome as a final verdict.
+///
+/// Shared by the `Fast` / `Thinking` single-stage modes and `Both`-mode
+/// stage 2. `Ok` + `<block>no>` → allow (`allow_reason` when no `<reason>`);
+/// `<block>yes>` → block with the parsed reason, falling back to
+/// `block_reason` when the model emitted no `<reason>` (TS
+/// `parseXmlReason ?? 'No reason provided'` / `'Blocked by fast classifier'`);
+/// unparseable → block (safe default). `Err` flags `unavailable` /
+/// `transcript_too_long` so the decision layer can fail-open (interactive) or
+/// fail-closed (headless). TS `permissions.ts:818-876`.
+fn interpret_final_verdict(
+    result: Result<String, String>,
+    stage: i32,
+    allow_reason: &str,
+    block_reason: &str,
+) -> YoloClassifierResult {
+    match result {
         Ok(response) => {
             let parsed = parse_xml_block(&response);
             let reason = parse_xml_reason(&response).unwrap_or_default();
             match parsed {
-                Some(true) => YoloClassifierResult {
-                    should_block: true,
-                    reason,
-                    model: String::new(),
-                    usage: None,
-                    duration_ms: None,
-                    stage: Some(2),
-                },
-                Some(false) => YoloClassifierResult {
-                    should_block: false,
-                    reason: if reason.is_empty() {
-                        "Allowed by extended classifier".into()
+                Some(true) => YoloClassifierResult::verdict(
+                    true,
+                    if reason.is_empty() {
+                        block_reason.to_string()
                     } else {
                         reason
                     },
-                    model: String::new(),
-                    usage: None,
-                    duration_ms: None,
-                    stage: Some(2),
-                },
-                None => YoloClassifierResult {
-                    // Unparseable stage 2 → block (safe default, TS parity).
-                    should_block: true,
-                    reason: "Classifier stage 2 unparseable - blocking for safety".into(),
-                    model: String::new(),
-                    usage: None,
-                    duration_ms: None,
-                    stage: Some(2),
-                },
+                    Some(stage),
+                ),
+                Some(false) => YoloClassifierResult::verdict(
+                    false,
+                    if reason.is_empty() {
+                        allow_reason.to_string()
+                    } else {
+                        reason
+                    },
+                    Some(stage),
+                ),
+                None => YoloClassifierResult::verdict(
+                    true,
+                    format!("Classifier stage {stage} unparseable - blocking for safety"),
+                    Some(stage),
+                ),
             }
         }
-        Err(err) => YoloClassifierResult {
-            should_block: true,
-            reason: format!("Classifier error: {err}"),
-            model: String::new(),
-            usage: None,
-            duration_ms: None,
-            stage: Some(2),
-        },
+        Err(err) => {
+            let too_long = is_transcript_too_long_error(&err);
+            YoloClassifierResult {
+                should_block: true,
+                reason: format!("Classifier error: {err}"),
+                model: String::new(),
+                usage: None,
+                duration_ms: None,
+                stage: Some(stage),
+                unavailable: !too_long,
+                transcript_too_long: too_long,
+            }
+        }
     }
 }
 
 /// Format transcript entries into a compact string for the classifier.
+///
+/// Keeps the most recent 10 entries but emits them in **chronological**
+/// order (oldest of the window first) so the classifier reads the
+/// conversation forwards, matching the order the agent produced it.
 fn format_transcript(entries: &[TranscriptEntry]) -> String {
     let mut out = String::new();
-    for entry in entries.iter().rev().take(10) {
+    let start = entries.len().saturating_sub(10);
+    for entry in &entries[start..] {
         let role_str = match entry.role {
             TranscriptRole::User => "User",
             TranscriptRole::Assistant => "Assistant",
@@ -431,14 +581,6 @@ fn format_transcript(entries: &[TranscriptEntry]) -> String {
                     tool_name,
                     input_summary,
                 } => out.push_str(&format!("Called {tool_name}: {input_summary}")),
-                TranscriptBlock::ToolResult {
-                    tool_name,
-                    output_summary,
-                    is_error,
-                } => {
-                    let status = if *is_error { "ERROR" } else { "OK" };
-                    out.push_str(&format!("{tool_name} [{status}]: {output_summary}"));
-                }
             }
             out.push('\n');
         }
@@ -507,21 +649,43 @@ fn extract_user_text(msg: &coco_messages::LlmMessage) -> String {
     }
 }
 
-fn extract_assistant_blocks(msg: &coco_messages::LlmMessage) -> Vec<TranscriptBlock> {
+fn extract_assistant_blocks(
+    msg: &coco_messages::LlmMessage,
+    projector: Option<InputProjector<'_>>,
+) -> Vec<TranscriptBlock> {
     match msg {
         coco_messages::LlmMessage::Assistant { content, .. } => content
             .iter()
             .filter_map(|c| match c {
-                coco_messages::AssistantContent::Text(t) => {
-                    Some(TranscriptBlock::Text(truncate(&t.text, 500)))
-                }
-                coco_messages::AssistantContent::ToolCall(tc) => Some(TranscriptBlock::ToolCall {
-                    tool_name: tc.tool_name.clone(),
-                    input_summary: truncate(
-                        &serde_json::to_string(&tc.input).unwrap_or_default(),
-                        300,
-                    ),
-                }),
+                // Assistant text is deliberately dropped: it is model-authored
+                // and could be crafted to steer the security classifier
+                // (prompt injection into the permission gate). Only tool_use
+                // blocks are kept. TS `yoloClassifier.ts:341-356`.
+                coco_messages::AssistantContent::ToolCall(tc) => match projector {
+                    // Projector present (production): include the curated
+                    // projection, or SKIP the block when the tool declares no
+                    // classifier-relevant input (`None`). Mirrors TS
+                    // `toCompactBlock`, which returns '' (→ omitted) for
+                    // unprojected / unknown tools. A deser failure still yields
+                    // `Some(raw)` from the blanket impl, so malformed inputs
+                    // are kept (TS `catch { encoded = input }`), never skipped.
+                    Some(project) => {
+                        project(&tc.tool_name, &tc.input).map(|summary| TranscriptBlock::ToolCall {
+                            tool_name: tc.tool_name.clone(),
+                            input_summary: truncate(&summary, 300),
+                        })
+                    }
+                    // No projector (permissions-crate unit tests have no
+                    // registry): keep the raw-JSON summary so tests still
+                    // observe tool content.
+                    None => Some(TranscriptBlock::ToolCall {
+                        tool_name: tc.tool_name.clone(),
+                        input_summary: truncate(
+                            &serde_json::to_string(&tc.input).unwrap_or_default(),
+                            300,
+                        ),
+                    }),
+                },
                 _ => None,
             })
             .collect(),
@@ -529,11 +693,18 @@ fn extract_assistant_blocks(msg: &coco_messages::LlmMessage) -> Vec<TranscriptBl
     }
 }
 
+/// Truncate to at most `max_len` bytes, snapping down to a UTF-8 char
+/// boundary so a multibyte character straddling the cut does not panic the
+/// byte slice. Untrusted user / model text flows through here.
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let mut end = max_len;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 

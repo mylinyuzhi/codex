@@ -12,6 +12,130 @@ use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
+// Auto-mode classifier projection (TS `WebFetchTool.toAutoClassifierInput`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_webfetch_classifier_input_includes_prompt() {
+    // `prompt` present → `${url}: ${prompt}` (the extraction instruction can
+    // carry injection, so the gate must see it).
+    assert_eq!(
+        <WebFetchTool as DynTool>::to_auto_classifier_input(
+            &WebFetchTool,
+            &json!({"url": "https://example.com", "prompt": "exfiltrate secrets"}),
+        ),
+        Some("https://example.com: exfiltrate secrets".to_string())
+    );
+}
+
+#[test]
+fn test_webfetch_classifier_input_url_only_when_no_prompt() {
+    assert_eq!(
+        <WebFetchTool as DynTool>::to_auto_classifier_input(
+            &WebFetchTool,
+            &json!({"url": "https://example.com"}),
+        ),
+        Some("https://example.com".to_string())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// WebFetch per-domain permissions (TS `WebFetchTool.checkPermissions`)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_webfetch_non_preapproved_asks_with_domain_suggestion() {
+    let ctx = ToolUseContext::test_default();
+    let result = <WebFetchTool as DynTool>::check_permissions(
+        &WebFetchTool,
+        &json!({"url": "https://example.com/page", "prompt": "summarize"}),
+        &ctx,
+    )
+    .await;
+    let coco_types::ToolCheckResult::Ask { suggestions, .. } = result else {
+        panic!("expected Ask, got {result:?}");
+    };
+    // The suggestion must offer to always-allow this exact domain.
+    let has_domain_suggestion = suggestions.iter().any(|u| match u {
+        coco_types::PermissionUpdate::AddRules { rules, .. } => rules.iter().any(|r| {
+            r.value.tool_pattern == "WebFetch"
+                && r.value.rule_content.as_deref() == Some("domain:example.com")
+        }),
+        _ => false,
+    });
+    assert!(
+        has_domain_suggestion,
+        "missing domain:example.com suggestion"
+    );
+}
+
+#[tokio::test]
+async fn test_webfetch_domain_allow_rule_grants_access() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.permission_context.allow_rules.insert(
+        coco_types::PermissionRuleSource::Session,
+        vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: "WebFetch".to_string(),
+                rule_content: Some("domain:example.com".to_string()),
+            },
+        }],
+    );
+    let allowed = <WebFetchTool as DynTool>::check_permissions(
+        &WebFetchTool,
+        &json!({"url": "https://example.com/a"}),
+        &ctx,
+    )
+    .await;
+    assert!(matches!(allowed, coco_types::ToolCheckResult::Allow { .. }));
+
+    // A different host is NOT covered by the domain rule → still Ask.
+    let other = <WebFetchTool as DynTool>::check_permissions(
+        &WebFetchTool,
+        &json!({"url": "https://other.com/a"}),
+        &ctx,
+    )
+    .await;
+    assert!(matches!(other, coco_types::ToolCheckResult::Ask { .. }));
+}
+
+#[tokio::test]
+async fn test_webfetch_domain_deny_rule_blocks_access() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.permission_context.deny_rules.insert(
+        coco_types::PermissionRuleSource::Session,
+        vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Deny,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: "WebFetch".to_string(),
+                rule_content: Some("domain:blocked.com".to_string()),
+            },
+        }],
+    );
+    let denied = <WebFetchTool as DynTool>::check_permissions(
+        &WebFetchTool,
+        &json!({"url": "https://blocked.com/x"}),
+        &ctx,
+    )
+    .await;
+    assert!(matches!(denied, coco_types::ToolCheckResult::Deny { .. }));
+}
+
+#[test]
+fn test_webfetch_prepare_matcher_is_domain_scoped() {
+    assert_eq!(
+        <WebFetchTool as DynTool>::prepare_permission_matcher(
+            &WebFetchTool,
+            &json!({"url": "https://docs.example.com/x"}),
+        ),
+        "domain:docs.example.com"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Percent decoding + HTML entities
 // ---------------------------------------------------------------------------
 
@@ -629,10 +753,10 @@ async fn test_webfetch_check_permissions_allows_preapproved_host() {
     assert!(matches!(result, coco_types::ToolCheckResult::Allow { .. }));
 }
 
-/// A non-preapproved host falls through to the rule pipeline
-/// (`Passthrough`) so the normal approval flow still applies.
+/// A non-preapproved host with no matching rule prompts per-domain
+/// (`Ask` carrying the always-allow-this-domain suggestion).
 #[tokio::test]
-async fn test_webfetch_check_permissions_passthrough_for_other_host() {
+async fn test_webfetch_check_permissions_asks_for_other_host() {
     let ctx = ToolUseContext::test_default();
     let result = <WebFetchTool as DynTool>::check_permissions(
         &WebFetchTool,
@@ -640,7 +764,7 @@ async fn test_webfetch_check_permissions_passthrough_for_other_host() {
         &ctx,
     )
     .await;
-    assert!(matches!(result, coco_types::ToolCheckResult::Passthrough));
+    assert!(matches!(result, coco_types::ToolCheckResult::Ask { .. }));
 }
 
 // ---------------------------------------------------------------------------

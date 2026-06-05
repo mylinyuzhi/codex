@@ -319,6 +319,32 @@ impl TurnRunner for QueryEngineRunner {
                 return Ok(());
             }
 
+            // SDK-side `/cost` short-circuit — render the live multi-provider
+            // session cost snapshot instead of leaking the raw sentinel.
+            if coco_commands::handlers::cost::parse_cost_sentinel(&prompt).is_some() {
+                let snapshot = runtime.session_usage_snapshot().await;
+                let text = coco_messages::format_session_cost(&snapshot);
+                {
+                    let mut h = history_handle.lock().await;
+                    h.push(std::sync::Arc::new(coco_messages::create_meta_message(
+                        &text,
+                    )));
+                }
+                return Ok(());
+            }
+
+            // SDK-side `/status` short-circuit — render the live session status.
+            if coco_commands::parse_status_sentinel(&prompt).is_some() {
+                let text = runtime.status_report().await;
+                {
+                    let mut h = history_handle.lock().await;
+                    h.push(std::sync::Arc::new(coco_messages::create_meta_message(
+                        &text,
+                    )));
+                }
+                return Ok(());
+            }
+
             // SDK-side `/btw` short-circuit (D1). When the prompt is
             // the BTW sentinel emitted by `handlers::btw::handler`,
             // dispatch a one-shot fork via the runtime's

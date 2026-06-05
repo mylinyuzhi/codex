@@ -30,13 +30,13 @@ pub enum CommandSource {
     Bundled,
     /// User-scope on-disk skill (`~/.coco/skills/`). TS: `userSettings`.
     User,
-    /// Project-scope on-disk skill (`.claude/skills/`). TS: `projectSettings`.
+    /// Project-scope on-disk skill (`.coco/skills/`).
     Project,
     /// Enterprise/policy-managed skill. TS: `policySettings`.
     Managed,
     /// On-disk skill directory (general SKILL.md catch-all). TS: `skills`.
     Skills,
-    /// Legacy `.claude/commands/` flat-`.md` path. TS: `commands_DEPRECATED`.
+    /// Deprecated legacy flat-`.md` path. Not used by project skill discovery.
     CommandsDeprecated,
     /// Plugin-provided skill or command. Carries the contributing
     /// plugin's manifest name so the UI can render

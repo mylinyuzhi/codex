@@ -411,6 +411,9 @@ pub struct AutoModeConfig {
     pub allow: Vec<String>,
     pub soft_deny: Vec<String>,
     pub environment: Vec<String>,
+    /// Which classifier stages run: `both` (default, two-stage escalation),
+    /// `fast` (single 256-token call), or `thinking` (stage-2 only).
+    pub classifier_mode: coco_types::ClassifierMode,
 }
 
 /// An allowed MCP server entry in settings.

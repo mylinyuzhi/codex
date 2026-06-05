@@ -130,6 +130,11 @@ fn test_build_runtime_config_blocks_settings_files() {
     assert!(
         out.config
             .deny_write_paths
+            .contains(&PathBuf::from("/proj/.coco/skills"))
+    );
+    assert!(
+        !out.config
+            .deny_write_paths
             .contains(&PathBuf::from("/proj/.claude/skills"))
     );
 }

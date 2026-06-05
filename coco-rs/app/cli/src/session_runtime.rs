@@ -519,7 +519,7 @@ pub struct SessionRuntime {
     /// hook handlers. Threaded into every `OrchestrationContext` so
     /// settings hooks of `type: "prompt"` / `type: "agent"` actually
     /// reach an LLM instead of falling back to passthrough text.
-    pub(crate) hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle>,
+    pub(crate) hook_llm_handle: Arc<coco_query::hook_llm::QueryHookLlm>,
     /// Shared sync-hook-event buffer. SessionStart and UserPromptSubmit
     /// orchestration calls push `HookEvent`s here; the
     /// [`coco_hooks::reminder_source::CombinedHookEventsSource`]
@@ -1200,7 +1200,7 @@ impl SessionRuntime {
         // role overrides through the shared ModelRuntimeRegistry.
         // TS parity: `execPromptHook` / `execAgentHook` with
         // `hook.model` override.
-        let hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle> =
+        let hook_llm_handle =
             Arc::new(coco_query::hook_llm::QueryHookLlm::for_session(model_runtimes.clone()).await);
         // Main-session transcript store. Constructed once so the
         // file-history sink, the per-turn message append in
@@ -1813,6 +1813,67 @@ impl SessionRuntime {
         self.engine_config.read().await.clone()
     }
 
+    /// Render a live `/status` report from the session runtime. Replaces the
+    /// former all-hardcoded-placeholder output with real values: the resolved
+    /// Main/Fast model roles, permission mode, thinking level, plan-mode gate,
+    /// and connected MCP servers. (Plugin count is intentionally omitted — the
+    /// runtime holds no persistent plugin manager to read without a reload.)
+    pub async fn status_report(&self) -> String {
+        use std::fmt::Write as _;
+
+        let cfg = self.current_engine_config().await;
+        let mut out = String::from("Session status:\n");
+        let _ = writeln!(out, "  Version: {}", env!("CARGO_PKG_VERSION"));
+
+        if let Some(main) = self.resolve_role(ModelRole::Main).await {
+            let _ = writeln!(
+                out,
+                "  Model: {} ({})",
+                main.spec.model_id, main.spec.provider
+            );
+            if let Some(effort) = main.effort {
+                let _ = writeln!(out, "  Effort: {effort:?}");
+            }
+        }
+        let _ = writeln!(out, "  Permission mode: {:?}", cfg.permission_mode);
+        match cfg.thinking_level.as_ref().map(|t| t.effort) {
+            Some(effort) => {
+                let _ = writeln!(out, "  Thinking: {effort:?}");
+            }
+            None => {
+                let _ = writeln!(out, "  Thinking: off");
+            }
+        }
+        let _ = writeln!(
+            out,
+            "  Plan mode: {}",
+            if cfg.plan_mode_required { "on" } else { "off" }
+        );
+        if let Some(fast) = self.resolve_role(ModelRole::Fast).await {
+            let _ = writeln!(
+                out,
+                "  Fast model: {} ({})",
+                fast.spec.model_id, fast.spec.provider
+            );
+        }
+
+        let servers = match self.current_mcp_handle().await {
+            Some(handle) => handle.connected_servers().await,
+            None => Vec::new(),
+        };
+        if servers.is_empty() {
+            let _ = write!(out, "  MCP servers: none connected");
+        } else {
+            let _ = write!(
+                out,
+                "  MCP servers: {} connected ({})",
+                servers.len(),
+                servers.join(", ")
+            );
+        }
+        out
+    }
+
     /// Build a fresh `QueryEngine` for one turn using the runtime's
     /// stored `engine_config`. Both runners share this so the wiring
     /// can never drift. The session-memory text is refreshed from disk
@@ -1983,10 +2044,27 @@ impl SessionRuntime {
             .permission_mode
             .is_some_and(|mode| mode == coco_types::PermissionMode::Auto);
         self.auto_mode_state.set_active(auto_active);
+        // Build the classifier rules from settings (`auto_mode` is restricted
+        // to user/policy sources by the per-source validator). Previously this
+        // passed `::default()`, so allow/soft_deny/environment AND the
+        // classifier mode were all silently dropped.
+        let auto_mode_rules = self
+            .runtime_config
+            .settings
+            .merged
+            .auto_mode
+            .as_ref()
+            .map(|c| coco_permissions::AutoModeRules {
+                allow: c.allow.clone(),
+                soft_deny: c.soft_deny.clone(),
+                environment: c.environment.clone(),
+                classifier_mode: c.classifier_mode,
+            })
+            .unwrap_or_default();
         engine = engine.with_auto_mode(
             self.auto_mode_state.clone(),
             self.denial_tracker.clone(),
-            coco_permissions::AutoModeRules::default(),
+            auto_mode_rules,
         );
         // Skill-emitted `permission_updates` now flow through the
         // engine's own per-engine `EngineLiveRulesHandle`
@@ -2216,6 +2294,31 @@ impl SessionRuntime {
         dispatcher: coco_query::forked_agent::ForkDispatcherRef,
     ) {
         *self.fork_dispatcher.write().await = Some(dispatcher);
+    }
+
+    /// Install the runtime-backed Agent hook runner onto the shared
+    /// LLM hook handle. Called after `SessionRuntime::build` returns
+    /// because the runner captures `Arc<SessionRuntime>`.
+    pub async fn attach_hook_agent_runner(&self, runner: coco_query::hook_llm::HookAgentRunnerRef) {
+        self.hook_llm_handle.install_agent_runner(runner).await;
+    }
+
+    /// Snapshot the registered tool set for scoped child registries.
+    pub(crate) fn registered_tools(&self) -> Vec<Arc<dyn coco_tool_runtime::DynTool>> {
+        self.tools.all()
+    }
+
+    /// Build an engine with caller-supplied scoped registries, then
+    /// apply the standard per-session wiring.
+    pub(crate) async fn build_engine_from_config_with_registries(
+        &self,
+        config: QueryEngineConfig,
+        cancel: CancellationToken,
+        tools: Arc<ToolRegistry>,
+        hooks: Option<Arc<coco_hooks::HookRegistry>>,
+    ) -> QueryEngine {
+        let engine = QueryEngine::new(config, self.model_runtimes.clone(), tools, cancel, hooks);
+        self.wire_engine(engine, None).await
     }
 
     /// Read the currently installed fork dispatcher. Returns `None`
@@ -3199,9 +3302,8 @@ pub(crate) async fn build_sandbox_state(
 
 /// Settings / definition files denied write inside the sandbox, so a sandboxed
 /// command cannot rewrite its own permission rules, disable the sandbox, or
-/// inject commands/agents. Mirrors TS `sandbox-adapter.ts:230-255` (every
-/// SETTING_SOURCE settings file + managed drop-in + `.claude/{commands,agents}`;
-/// `.claude/skills` is already added by the adapter).
+/// inject agents. Mirrors TS `sandbox-adapter.ts:230-255` for settings files
+/// and managed drop-ins; `.coco/skills` is added by the adapter.
 ///
 /// MUST be the single source for both the bootstrap (`build_sandbox_state`) and
 /// the hot-reload (`sandbox_reload::reapply_sandbox`) paths — passing `&[]` on
@@ -3216,7 +3318,6 @@ pub(crate) fn sandbox_settings_deny_paths(settings_root: &std::path::Path) -> Ve
         global_config::local_settings_path(settings_root),
         managed.clone(),
         global_config::global_config_path(),
-        settings_root.join(".claude").join("commands"),
         settings_root.join(".claude").join("agents"),
     ];
     // Managed drop-in directory (`managed-settings.d`) next to the managed

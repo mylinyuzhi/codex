@@ -70,6 +70,10 @@ pub struct QuerySkillRuntime {
     /// invocation — fine for sessions without a subagent runtime,
     /// loud-failing instead of silently ignoring.
     agent_engine: Option<AgentQueryEngineRef>,
+    /// Current session id, substituted for `${CLAUDE_SESSION_ID}` in skill
+    /// prompts. Installed at bootstrap via [`Self::with_session_id`]; `None`
+    /// leaves the token unexpanded (older behaviour).
+    session_id: Option<String>,
 }
 
 impl QuerySkillRuntime {
@@ -77,6 +81,7 @@ impl QuerySkillRuntime {
         Self {
             manager,
             agent_engine: None,
+            session_id: None,
         }
     }
 
@@ -84,6 +89,12 @@ impl QuerySkillRuntime {
     /// Without this, fork invocations fail with `Forked { reason }`.
     pub fn with_agent_engine(mut self, engine: AgentQueryEngineRef) -> Self {
         self.agent_engine = Some(engine);
+        self
+    }
+
+    /// Install the session id used to expand `${CLAUDE_SESSION_ID}`.
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
         self
     }
 }
@@ -166,13 +177,30 @@ impl SkillHandle for QuerySkillRuntime {
         );
 
         // Expand argument substitutions. TS parity:
-        // `SkillTool.ts:565-597` runs the expander before either
-        // inline injection or fork spawn. We reuse the existing
-        // `coco-tools::skill_advanced::expand_skill_prompt_simple`
-        // which handles `$ARGS`, numeric positionals, and named
-        // argument substitution.
-        let expanded_prompt =
-            coco_tools::tools::skill_advanced::expand_skill_prompt_simple(&skill.prompt, args);
+        // `SkillTool.ts:565-597` runs the expander before either inline
+        // injection or fork spawn. Beyond `$ARGS`/positionals, the skill's
+        // source directory and session id MUST be substituted so
+        // `${CLAUDE_SKILL_DIR}` / `${CLAUDE_SESSION_ID}` resolve (and the
+        // "Base directory for this skill:" header is prepended) — otherwise
+        // the literal tokens reach the model and skill-relative file resolution
+        // breaks (`SkillTool.ts:1073-1081`).
+        let skill_dir = skill
+            .skill_root
+            .as_deref()
+            .and_then(std::path::Path::to_str);
+        let expanded_prompt = coco_tools::tools::skill_advanced::expand_skill_prompt(
+            &skill.prompt,
+            &coco_tools::tools::skill_advanced::ExpandOptions {
+                args,
+                argument_names: &[],
+                skill_dir,
+                session_id: self.session_id.as_deref(),
+                base_dir: skill_dir,
+                plugin_root: None,
+                plugin_data_dir: None,
+                user_config: None,
+            },
+        );
 
         // Skill frontmatter `allowed-tools` becomes Command-source
         // auto-allow rules. Inline path threads these through

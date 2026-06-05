@@ -244,6 +244,10 @@ impl Tool for BashTool {
     /// pattern as `ReadTool` / `PowerShellTool`).
     type Output = serde_json::Value;
 
+    fn to_auto_classifier_input(&self, input: &BashInput) -> Option<String> {
+        Some(input.command.clone())
+    }
+
     // Static schema from a literal `json!`; a parse failure means the literal
     // is malformed (a programmer error), so panicking on first build is correct.
     #[allow(clippy::expect_used)]
@@ -650,12 +654,19 @@ impl Tool for BashTool {
         // a sandbox or construct the env differently — coco-rs does not accept
         // IFS manipulation via user approval.
         //
-        // Stage 3 — destructive warning. Catches `rm -rf /`, `dd of=...`,
-        // and other patterns the Ask-phase classifier doesn't cover.
+        // Read-only commands skip the security check to avoid false positives
+        // on harmless `grep 'foo`bar'` patterns with metacharacters inside
+        // quoted strings.
         //
-        // Read-only commands skip stages 2 and 3 to avoid false positives on
-        // harmless `grep 'foo`bar'` patterns that contain metacharacters
-        // inside quoted strings.
+        // NOTE: destructive-command detection is intentionally NOT a block.
+        // TS (`destructiveCommandWarning.ts`) treats it as a purely
+        // informational advisory behind a default-off feature flag — it never
+        // affects permission logic. coco-rs matches that: the
+        // `coco_shell::destructive::get_destructive_warning` advisory is
+        // available for the permission-request UI but does not deny here. The
+        // `check_security` Deny below is a SEPARATE, DELIBERATE DIVERGENCE
+        // (IFS injection and similar genuinely-dangerous constructs that coco-rs
+        // blocks even with approval).
         if !is_read_only_command(command) {
             for check in check_security(command) {
                 if check.severity == SecuritySeverity::Deny {
@@ -668,9 +679,6 @@ impl Tool for BashTool {
                         ),
                     });
                 }
-            }
-            if let Some(warning) = coco_shell::destructive::get_destructive_warning(command) {
-                return Err(ToolError::PermissionDenied { message: warning });
             }
         }
 
@@ -773,17 +781,27 @@ async fn execute_via_task_runtime(
     let tool_use_id = ctx.tool_use_id.clone();
     let agent_id = ctx.agent_id.as_ref().map(|a| a.as_str().to_string());
 
-    // Auto-detach budget: only meaningful in fg mode for main-thread
-    // sessions where the config flag opts in. Subagents and bg-spawned
-    // commands don't auto-detach (no fg awaiter to release).
-    let auto_detach_ms = if !run_in_background
+    // Auto-background-on-timeout (TS `shouldAutoBackground`): for a
+    // foreground, main-thread command that's eligible (anything but `sleep`),
+    // the command's own `timeout_ms` becomes the auto-detach budget — when it
+    // elapses the fg awaiter is released with a bg-shape result and the child
+    // KEEPS RUNNING (the driver does not kill it). This replaces the old
+    // kill-on-timeout behaviour, matching TS where a long fg command is moved
+    // to the background on timeout rather than terminated. Subagents and
+    // bg-spawned commands don't auto-detach (no fg awaiter to release).
+    let auto_background = !run_in_background
         && ctx.agent_id.is_none()
         && ctx.tool_config.bash.auto_background_on_timeout
-    {
-        Some(ASSISTANT_BLOCKING_BUDGET_MS)
+        && super::bash_advanced::is_autobackgrounding_allowed(command);
+    let auto_detach_ms = if auto_background {
+        Some(timeout_ms)
     } else {
         None
     };
+    // When auto-backgrounding, the timeout must NOT kill the child — it only
+    // releases the fg awaiter (via the auto-detach timer above). Otherwise
+    // (sleep, subagents, explicit bg) the driver hard-kills on timeout.
+    let kill_on_timeout = !auto_background;
 
     // Progress emission: fg mode only. Bg-spawned commands return
     // immediately so the model has no live receiver — TS doesn't
@@ -804,6 +822,7 @@ async fn execute_via_task_runtime(
         progress_tx,
         progress_throttle_ms: 1000,
         auto_detach_ms,
+        kill_on_timeout,
         // W6: sandbox params from `execute` (single resolution site
         // for `dangerouslyDisableSandbox` parsing). Both fg and bg
         // paths now apply the same wrap as the legacy ShellExecutor

@@ -34,11 +34,11 @@ async fn handler_lists_bundled_skills() {
 
 #[tokio::test]
 async fn handler_picks_up_project_skill_md() {
-    // Drop a SKILL.md into <cwd>/.claude/skills/foo/, expect /skills list
+    // Drop a SKILL.md into <cwd>/.coco/skills/foo/, expect /skills list
     // to include it tagged as project source.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
-    let skill_dir = cwd.join(".claude").join("skills").join("foo");
+    let skill_dir = cwd.join(".coco").join("skills").join("foo");
     fs::create_dir_all(&skill_dir).unwrap();
     // Strict TS-parity layout: frontmatter at the top of the file, no
     // leading `# Name` heading. The skill name is taken from the parent
@@ -127,7 +127,7 @@ async fn paths_lists_bundled_first() {
     .unwrap();
     assert!(out.contains("bundled"));
     assert!(out.contains(".coco/skills") || out.contains(".coco\\skills"));
-    assert!(out.contains(".claude/skills") || out.contains(".claude\\skills"));
+    assert!(!out.contains(".claude/skills") && !out.contains(".claude\\skills"));
 }
 
 #[tokio::test]
@@ -214,7 +214,7 @@ async fn build_dialog_payload_groups_project_skills_under_project() {
     // `User`, collapsing the project/user split in the overlay).
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
-    let skill_dir = cwd.join(".claude").join("skills").join("foo");
+    let skill_dir = cwd.join(".coco").join("skills").join("foo");
     fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
@@ -258,9 +258,7 @@ async fn build_dialog_payload_groups_project_skills_under_project() {
 
 #[tokio::test]
 async fn build_dialog_payload_loads_coco_skills_dir_too() {
-    // coco-rs supports a second project root: `<cwd>/.coco/skills/`
-    // (canonical) in addition to `<cwd>/.claude/skills/` (TS-compat).
-    // Both must surface in the dialog under `Project`.
+    // Project discovery is coco-native: `<cwd>/.coco/skills/`.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
     let coco_skill = cwd.join(".coco").join("skills").join("bar");

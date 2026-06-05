@@ -252,6 +252,7 @@ fn test_permission_request_shows_prompt() {
             choices: None,
             permission_suggestions: vec![],
             original_input: None,
+            worker_badge: None,
         }),
     );
     assert!(!state.has_active_surface());
@@ -286,6 +287,7 @@ fn test_permission_request_hides_always_allow_when_disabled() {
             choices: None,
             permission_suggestions: vec![],
             original_input: None,
+            worker_badge: None,
         }),
     );
     assert!(state.ui.flush_delayed_permissions(ready_at));

@@ -113,6 +113,9 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_budget_usd: None,
             streaming_tool_execution: true,
             is_non_interactive: true,
+            // Subagents have no interactive UI — a residual `Ask` must fail
+            // closed. TS async subagents set `shouldAvoidPermissionPrompts`.
+            avoid_permission_prompts: true,
             // Subagents inherit the parent's debug/verbose surface only
             // when the parent piped that into `AgentQueryConfig`; today
             // we don't propagate, so default to `false`. TS parity:

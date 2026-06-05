@@ -172,7 +172,7 @@ impl QueryEngine {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
 
-        // (1) Nested-dir discovery: each new `.claude/skills/` dir
+        // (1) Nested-dir discovery: each new `.coco/skills/` dir
         // surfaces a model-visible dynamic_skill attachment listing
         // the newly-loaded skill names. TS `addSkillDirectories`.
         for dir in triggered_dirs {

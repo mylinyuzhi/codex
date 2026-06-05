@@ -59,8 +59,8 @@ impl Tool for McpAuthTool {
         }
     }
 
-    fn to_auto_classifier_input(&self, input: &McpAuthInput) -> String {
-        input.server_name.clone()
+    fn to_auto_classifier_input(&self, input: &McpAuthInput) -> Option<String> {
+        Some(input.server_name.clone())
     }
 
     fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {

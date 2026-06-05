@@ -455,7 +455,7 @@ async fn test_permissions_handler_reset_non_tui_honest() {
 #[tokio::test]
 async fn test_cost_handler() {
     let output = handlers::cost::handler(String::new()).await.unwrap();
-    assert!(output.contains("Session Cost"));
+    assert!(output.contains("Session cost"));
 }
 
 #[tokio::test]
@@ -572,6 +572,23 @@ fn rename_handler_empty_emits_bare_sentinel_for_auto_generation() {
 fn parse_rename_sentinel_rejects_unrelated_text() {
     assert_eq!(parse_rename_sentinel("hello world"), None);
     assert_eq!(parse_rename_sentinel("__COCO_OTHER__ foo"), None);
+}
+
+#[test]
+fn status_handler_emits_sentinel() {
+    let out = status_extended_handler("");
+    assert!(
+        out.starts_with(STATUS_SENTINEL),
+        "must lead with sentinel: {out}"
+    );
+    assert!(parse_status_sentinel(&out).is_some());
+}
+
+#[test]
+fn parse_status_sentinel_rejects_unrelated_text() {
+    assert!(parse_status_sentinel("__COCO_STATUS__\nbody").is_some());
+    assert_eq!(parse_status_sentinel("hello"), None);
+    assert_eq!(parse_status_sentinel("__COCO_OTHER__"), None);
 }
 
 #[test]

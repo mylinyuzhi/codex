@@ -14,21 +14,15 @@
 //!   `UserPromptSubmit` hooks don't fire from within a hook
 //!   evaluation. Mirrors TS `execPromptHook.ts:21-211`.
 //!
-//! - **Agent path**: pragmatic stub — logs a warning and returns
-//!   `Cancelled`. TS `execAgentHook.ts:264` uses the same outcome
-//!   when the agent stops without calling `StructuredOutputTool`,
-//!   so this is silent (no UI error) and matches TS's worst-case
-//!   fallback. Full multi-turn agent evaluation requires:
-//!     * `StructuredOutputTool` registered in the tool registry
-//!     * A forked `QueryEngine` with `max_turns = 50`
-//!     * Session-level "must call StructuredOutput before Stop"
-//!       enforcement
-//!     * Auto-grant of `Read(/<transcript_path>)` for the run
-//!
-//!   This is tracked as a P3 follow-up in `crate-coco-hooks.md`.
-//!   The model-routing wiring (`pick_client`) IS in place so when
-//!   the stub is replaced the per-hook `model` override already
-//!   flows correctly.
+//! - **Agent path**: full hook verdict path via a late-bound runner
+//!   installed by `coco-cli::session_runtime`. The concrete runner
+//!   builds a scoped child `QueryEngine` with `max_turns = 50`, a
+//!   `StructuredOutputTool`, and a Stop enforcement function hook so
+//!   the child must produce `{ok, reason?}`. `{ok:false}` maps to a
+//!   blocking hook result; max-turn/no-output still maps to
+//!   `Cancelled`, matching TS's fallback. Transcript-specific read
+//!   grants are not separately threaded yet; Stop hook input JSON
+//!   still reaches the child through the processed prompt.
 //!
 //! # Model selection
 //!
@@ -101,6 +95,7 @@ struct HookResponse {
 pub struct QueryHookLlm {
     model_runtimes: Arc<ModelRuntimeRegistry>,
     default_model_id: String,
+    agent_runner: tokio::sync::RwLock<Option<HookAgentRunnerRef>>,
 }
 
 impl std::fmt::Debug for QueryHookLlm {
@@ -136,7 +131,16 @@ impl QueryHookLlm {
         Self {
             model_runtimes,
             default_model_id,
+            agent_runner: tokio::sync::RwLock::new(None),
         }
+    }
+
+    /// Late-bind the real Agent hook runner. SessionRuntime installs
+    /// this after it has an `Arc<Self>` so the runner can build scoped
+    /// child engines without creating an ownership cycle during
+    /// bootstrap.
+    pub async fn install_agent_runner(&self, runner: HookAgentRunnerRef) {
+        *self.agent_runner.write().await = Some(runner);
     }
 
     /// Pick the runtime source for a single hook invocation.
@@ -169,6 +173,23 @@ impl QueryHookLlm {
         }
     }
 }
+
+/// Request passed from [`QueryHookLlm`] to the runtime-specific Agent
+/// hook runner.
+#[derive(Debug, Clone)]
+pub struct HookAgentRunRequest {
+    pub prompt: String,
+    pub model_source: ModelRuntimeSource,
+    pub model_id: String,
+    pub timeout: Duration,
+}
+
+#[async_trait]
+pub trait HookAgentRunner: Send + Sync + std::fmt::Debug {
+    async fn run(&self, request: HookAgentRunRequest) -> HookEvaluationResult;
+}
+
+pub type HookAgentRunnerRef = Arc<dyn HookAgentRunner>;
 
 #[async_trait]
 impl HookLlmHandle for QueryHookLlm {
@@ -240,29 +261,36 @@ impl HookLlmHandle for QueryHookLlm {
 
     async fn evaluate_agent(
         &self,
-        _prompt: &str,
+        prompt: &str,
         model: Option<&str>,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> HookEvaluationResult {
-        // Resolve the source even though we don't yet use it. This keeps
-        // the per-hook `model` routing validation wired for the future
-        // full agent implementation.
-        let _source = self.pick_source(model);
+        let source = self.pick_source(model);
+        let model_id = self
+            .model_runtimes
+            .snapshot_for_source(source.clone())
+            .map(|snapshot| snapshot.model_id)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "Agent hook model source unresolved; falling back to default HookAgent model id"
+                );
+                self.default_model_id.clone()
+            });
 
-        // Stub: full multi-turn agent evaluation requires a forked
-        // `QueryEngine`, `StructuredOutputTool`, transcript-read
-        // permission grant, and "must call structured output" stop-hook
-        // enforcement. Until that lands, return `Cancelled` — TS's
-        // own fallback when `MAX_AGENT_TURNS` is hit or no
-        // StructuredOutput call is observed (`execAgentHook.ts:248-267`).
-        // `Cancelled` is silent (no UI error), so users with Agent
-        // hooks configured see "no effect" rather than spurious
-        // failures, which is the conservative degradation.
-        tracing::warn!(
-            "Agent hook evaluation falling back to Cancelled — full implementation is pending. \
-             See crate-coco-hooks.md P3 follow-up. TS reference: utils/hooks/execAgentHook.ts."
-        );
-        HookEvaluationResult::Cancelled
+        let Some(runner) = self.agent_runner.read().await.clone() else {
+            tracing::warn!("Agent hook evaluation has no runner installed; returning Cancelled");
+            return HookEvaluationResult::Cancelled;
+        };
+
+        runner
+            .run(HookAgentRunRequest {
+                prompt: prompt.to_string(),
+                model_source: source,
+                model_id,
+                timeout,
+            })
+            .await
     }
 }
 

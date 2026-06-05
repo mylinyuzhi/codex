@@ -34,6 +34,7 @@ Re-verification of the 267-finding `parity-deep-review-2026-06` audit against **
 
 > **Errata (post-audit reclassifications):**
 > - **config#244**: high → **✅ RESOLVED on this branch** (was mis-framed; interactive paths were already config-driven/clamped — TS `modelSupportsMaxEffort` deliberately not ported). Effective remaining-open high count is **32**. See the config#244 detail entry.
+> - **hooks#179 / hooks#180 / hooks#181 / query#4**: **✅ RESOLVED on this branch**. Agent hooks now delegate to a scoped 50-turn child `QueryEngine` with `StructuredOutput` enforcement; nonzero hook exits preserve valid stdout JSON control payloads before stderr fallback; flat and nested `permissionDecision:"ask"` now decode to `PermissionBehavior::Ask`. Effective remaining-open total is **180**; high **29**; medium **64**.
 
 ## 2. Critical & High Opens
 
@@ -51,9 +52,9 @@ Re-verification of the 267-finding `parity-deep-review-2026-06` audit against **
 - **tools-web-mcp#52** — Preapproved-host WebFetch bypass is dead `#[allow(dead_code)]`; permission layer never consults it. → Add `WebFetchTool::check_permissions` calling `is_preapproved_host`; short-circuit auto_mode.
 
 ### Hook agent/output handling
-- **hooks#179 / query#4** — Agent-type (LLM-judge) Stop hook is a stub returning `Cancelled` unconditionally. → Fork QueryEngine (max_turns≈50) + StructuredOutputTool + enforcement; map `{ok,reason}`.
-- **hooks#180** — Hook stdout JSON control only parsed on exit 0; non-zero replaces stdout with stderr, losing control payload. → Carry both streams; `parse_hook_output(stdout)` regardless of exit code.
-- **hooks#181** — `permissionDecision:"ask"` unsupported; flat path silently drops (→ ungated exec, security-relevant), nested path fails serde and drops entire control payload. → Add `HookPermissionDecision::Ask` → `PermissionBehavior::Ask` in both arms.
+- **hooks#179 / query#4 [✅ RESOLVED on this branch]** — Agent-type (LLM-judge) Stop hooks now run through a late-bound hook-agent runner that builds a scoped child `QueryEngine` (`max_turns=50`) with a `StructuredOutput` tool and Stop enforcement; `{ok:true}` passes, `{ok:false,reason}` blocks, missing output cancels.
+- **hooks#180 [✅ RESOLVED on this branch]** — `process_execution_result` now parses valid stdout JSON control payloads on any exit code and only falls back to exit-2/stderr blocking behavior when stdout is not valid structured control JSON.
+- **hooks#181 [✅ RESOLVED on this branch]** — `HookPermissionDecision::Ask` now deserializes from `"ask"` and both flat and nested PreToolUse hook output map it to `PermissionBehavior::Ask` without treating Ask as a blocking result.
 
 ### Permissions (auto-mode / classifier safety)
 - **permissions#66** — Auto-mode injects a `!starts_with('/')||/tmp` heuristic TS never uses, auto-allowing relative path-traversal + `/tmp` writes before the classifier. → Replace with TS acceptEdits-would-allow re-check; drop heuristic + Bash-read-only shortcut.
@@ -157,7 +158,7 @@ Re-verification of the 267-finding `parity-deep-review-2026-06` audit against **
 
 2. **Severity inversions: Rust hard-DENY where TS routes through Ask.** shell#157/#163/#162, permissions#66 (auto-allow heuristic), permissions#72 (dontAsk), tools-exec#33 (kill vs background). Rust repeatedly chose terminal/destructive outcomes where TS preserves an approvable/recoverable path — both stricter (blocks legit work) and, for #66, looser (auto-allows traversal).
 
-3. **Stub/placeholder functions advertised as complete.** hooks#179/query#4 (`Cancelled` stub), config#247 (org prefetch stub), commands#202/#203 (hardcoded placeholders), marketplace fetch stubs. Module docs and code comments make false parity claims (e.g. "Hard kill — both auto and manual" that gates auto only; "TS parity" tests codifying divergent behavior).
+3. **Stub/placeholder functions advertised as complete.** config#247 (org prefetch stub), commands#202/#203 (hardcoded placeholders), marketplace fetch stubs. hooks#179/query#4 was in this bucket at audit time but is now resolved on this branch. Module docs and code comments make false parity claims (e.g. "Hard kill — both auto and manual" that gates auto only; "TS parity" tests codifying divergent behavior).
 
 4. **Permission/classifier security surface is systematically diluted.** #66/#68/#70/#71/#72/#74 plus low #75/#78/#79: the auto-mode classifier pipeline diverges in transcript construction (injection risk), denial accounting, transcript-overflow handling, and dontAsk semantics — security-relevant and clustered.
 
@@ -269,6 +270,8 @@ Net: a cross-process (pane/tmux/iterm) teammate hitting a tool-permission prompt
 
 #### hooks#179 — Agent-type hook executor is a stub that silently returns Cancelled
 
+- **resolution:** ✅ RESOLVED on this branch. `QueryHookLlm::evaluate_agent` no longer unconditionally returns `Cancelled`; it delegates to a late-bound `SessionRuntimeHookAgentRunner`. The runner builds an isolated child `QueryEngine` with a scoped tool registry containing `StructuredOutput`, a scoped hook registry containing only the StructuredOutput Stop enforcement function hook, `max_turns=50`, non-interactive permission behavior, and `query_source=fork_label=hook_agent`. Structured `{ok:true}` maps to success, `{ok:false,reason}` maps to blocking, and missing output still maps to Cancelled.
+
 - **module:** hooks | **gap_type:** stub
 - **TS behavior:** utils/hooks/execAgentHook.ts:36-339 spawns a full multi-turn query() (MAX_AGENT_TURNS=50) with a StructuredOutput tool, transcript-read grant and stop-hook enforcement. On structuredOutputResult.ok===false it returns outcome:'blocking' with a blockingError (lines 271-283); only max-turns or no-structured-output returns 'cancelled' (lines 248-267).
 - **current Rust (HEAD):** Rust: coco-rs/app/query/src/hook_llm.rs:241-266 — evaluate_agent resolves pick_source into unused `_source`, logs tracing::warn!, and unconditionally returns HookEvaluationResult::Cancelled; no LLM/multi-turn agent/StructuredOutputTool/transcript-grant. Module doc lines 17-31 calls it a "pragmatic stub" P3 follow-up. grep shows this is the only `impl HookLlmHandle` in the workspace (line 174). Orchestration coco-rs/hooks/src/orchestration.rs:3263-3286 DOES call llm.evaluate_agent and maps Blocking{reason}->exit_code 2 {"decision":"block"}, but that branch is unreachable since evaluate_agent only returns Cancelled. Fallback coco-rs/hooks/src/lib.rs:1120-1130 (no llm_handle) returns PromptText. TS: utils/hooks/execAgentHook.ts:36-339 spawns multi-turn query() MAX_AGENT_TURNS=50 with StructuredOutputTool + Read(/transcriptPath) grant + registerStructuredOutputEnforcement; ok===false -> outcome:'blocking' (lines 271-283); only max-turns/no-structured-output -> 'cancelled' (lines 248-267). Commit 132748800f did NOT touch hook_llm.rs (last touch cb96fca848).
@@ -277,6 +280,8 @@ Net: a cross-process (pane/tmux/iterm) teammate hitting a tool-permission prompt
 
 #### hooks#180 — Hook stdout JSON control output only parsed on exit code 0
 
+- **resolution:** ✅ RESOLVED on this branch. `process_execution_result` now checks stdout for valid hook JSON before the nonzero-exit branch. Valid stdout JSON remains the aggregate control payload for any exit code; exit 2 uses stderr as the blocking fallback only when stdout is not valid structured hook output.
+
 - **module:** hooks | **gap_type:** divergent
 - **TS behavior:** utils/hooks.ts:2500 calls parseHookOutput(result.stdout) for ANY exit code, then validationError check (2504) and processHookJSONOutput (2544) run regardless of exit status. The exit-2 'block with structured feedback' idiom and a PreToolUse hook emitting updatedInput then exiting non-zero both have their stdout JSON applied.
 - **current Rust (HEAD):** Rust HEAD coco-rs/hooks/src/orchestration.rs:3349 — process_execution_result: `let output = if exit_code == 0 { stdout } else { stderr };` and SingleHookResult (line 302-326) carries only a single `output: String` (no separate stdout). aggregate_results_for_event parses only `r.output` for JSON control signals at orchestration.rs:974 (`parse_hook_output(&r.output)`). So on any non-zero exit, stdout (the JSON control payload) is replaced by stderr before parsing and is permanently lost. TS utils/hooks.ts:2500 calls parseHookOutput(result.stdout) unconditionally; if stdout is valid JSON, processHookJSONOutput runs at line 2544 and the function returns at line 2613 for ANY exit code. processHookJSONOutput (lines 489-608) applies decision/permissionDecision/systemMessage/additionalContext/updatedInput/etc. with no exit-code gating. The exit-2 blocking branch (line 2648, uses stderr) and other non-zero branches (2616-2697) are reached only when stdout is NOT valid JSON (after the `if (json)` block at 2533 returns early).
@@ -284,6 +289,8 @@ Net: a cross-process (pane/tmux/iterm) teammate hitting a tool-permission prompt
 - **verify note:** Genuinely open in HEAD, not sanctioned/organizational. The gap: a hook emitting JSON on stdout and exiting non-zero (exit-2 "block with structured feedback", or a PreToolUse hook emitting updatedInput/decision/permissionDecision/additionalContext then exiting non-zero) has its entire stdout JSON silently dropped because Rust substitutes stderr for output on exit!=0. TS always parses stdout first and applies the JSON control payload regardless of exit status. Note for the fixer: the right fix is to preserve stdout on SingleHookResult (or parse stdout JSON before the exit-code branch) so aggregate_results_for_event sees it; the exit==2 -> blocked=true + output=stderr fallback should only apply when stdout is NOT valid JSON, mirroring TS line 2533/2648 ordering. Severity high confirmed: silently drops permission decisions, input rewrites, and context injection on a common idiom.
 
 #### hooks#181 — permissionDecision/permissionBehavior 'ask' unsupported; an 'ask' value breaks the whole JSON parse
+
+- **resolution:** ✅ RESOLVED on this branch. `HookPermissionDecision` includes `Ask`, serde accepts `"ask"` in nested `hookSpecificOutput`, and the flat `permissionDecision:"ask"` arm now merges `PermissionBehavior::Ask`. Downstream Ask handling was already wired, and Ask remains non-blocking by itself.
 
 - **module:** hooks | **gap_type:** missing
 - **TS behavior:** utils/hooks.ts:566-568 & 610-612 — permissionDecision 'ask' sets permissionBehavior='ask' (interactive prompt). Schema hint lists 'allow'|'deny'|'ask' (hooks.ts:424,428). PermissionBehavior enum includes 'ask'.
@@ -777,6 +784,8 @@ TS: utils/messages.ts:2187-2195 — the canonical normalizeMessagesForAPI reduce
 - **verify note:** Triage verdict confirmed correct. Real behavioral divergence: coco-rs surfaces Later-priority background task-completion notifications to the model at every turn boundary; TS defers them until a Sleep tool ran in the just-completed batch (otherwise caps at Next). Both the Later-priority producer (command_queue_sink) and the gating signal (Sleep tool) already exist in coco-rs, so this is unimplemented gating, not missing infrastructure. Not in the sanctioned list (not reactive-compact, not a skipped TS subsystem, not env/config rename, not feature-gated in TS). Not organizational — it changes transcript ordering and when the model is interrupted by async results. Fix: thread a sleep_ran flag from the just-executed tool batch into engine_finalize_turn and pass `if sleep_ran { Later } else { Next }` to drain_command_queue_into_history. Medium severity accurate — affects long-running/background-task sessions only, not a crash/correctness issue.
 
 #### query#4 — Agent-type (LLM-judge) Stop hooks are a stub that always returns Cancelled
+
+- **resolution:** ✅ RESOLVED on this branch via the same hook-agent runner as hooks#179. The query-side stub was replaced by late-bound delegation from `QueryHookLlm::evaluate_agent`; the concrete CLI runner executes a bounded scoped child engine and maps `StructuredOutput` `{ok,reason}` into hook evaluation results.
 
 - **module:** query | **gap_type:** stub
 - **TS behavior:** execAgentHook.ts runs a full forked agent (MAX_AGENT_TURNS=50) with createStructuredOutputTool + registerStructuredOutputEnforcement producing {ok, reason}. On `!ok` it returns outcome:'blocking' with blockingError 'Agent hook condition was not met: ${reason}' (feeds back to the model); on `ok` it passes; Cancelled is only the fallback for hitting max turns or no StructuredOutput call (execAgentHook.ts:237-267).

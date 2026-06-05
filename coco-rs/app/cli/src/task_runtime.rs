@@ -24,8 +24,8 @@
 //!   (`Arc<dyn NotificationSink>`) is always wired; tests use
 //!   `NoOpNotificationSink` (default), production wires
 //!   [`crate::command_queue_sink::CommandQueueNotificationSink`].
-//! - Stall watchdog — [`stall::watchdog`] / [`stall::agent_watchdog`]
-//!   spawned per task.
+//! - Stall watchdog — [`stall::watchdog`] spawned per shell task (no
+//!   agent-task watchdog; TS has none).
 //! - Auto-background / auto-detach / progress timers — [`timers`].
 //!
 //! ## Module map (TS counterpart)

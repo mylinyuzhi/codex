@@ -143,6 +143,10 @@ impl Tool for ReplTool {
     coco_tool_runtime::impl_runtime_schema!(ReplInput);
     type Output = ReplOutput;
 
+    fn to_auto_classifier_input(&self, input: &ReplInput) -> Option<String> {
+        Some(input.command.clone().unwrap_or_default())
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Repl)
     }

@@ -19,6 +19,27 @@ pub enum PermissionBehavior {
 /// TS: `ClassifierBehavior` in types/permissions.ts
 pub type ClassifierBehavior = PermissionBehavior;
 
+/// Which auto-mode classifier stages run. TS `TwoStageMode`
+/// (`yoloClassifier.ts:1308`).
+///
+/// Controls only *which stages execute and their token budgets* — never the
+/// model. Every mode runs on `ModelRole::Main`, mirroring TS running every
+/// mode on `getMainLoopModel()`. Shared between `coco-config`
+/// (`AutoModeConfig`) and `coco-permissions` (`AutoModeRules`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassifierMode {
+    /// Stage 1 fast (64 tok, stop `</block>`) → escalate to Stage 2 (4096 tok)
+    /// on block / unparseable. The default.
+    #[default]
+    Both,
+    /// Single fast stage: 256 tok, no stop sequence, verdict final. TS `fast`.
+    Fast,
+    /// Stage 2 only: 4096 tok, no stop sequence. TS `thinking`.
+    Thinking,
+}
+
 /// Token usage from the classifier.
 ///
 /// TS: `ClassifierUsage` in types/permissions.ts

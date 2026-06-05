@@ -10,8 +10,6 @@
 //! crate can read and write these without depending on `coco-state`. The
 //! types are pure data with serde — no tokio, no app/state, no LLM.
 
-use std::collections::HashMap;
-
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -69,50 +67,10 @@ pub struct SubagentRuntimeSnapshot {
     pub wire_api: Option<WireApi>,
 }
 
-/// Team context — set when running as part of a multi-agent team.
-///
-/// TS: `AppState.teamContext` in `state/AppStateStore.ts`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TeamContext {
-    pub team_name: String,
-    pub team_file_path: String,
-    pub lead_agent_id: String,
-    /// Own agent ID (same as lead_agent_id for leaders).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub self_agent_id: Option<String>,
-    /// Own display name ('team-lead' for leaders).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub self_agent_name: Option<String>,
-    /// True if this session is the team leader.
-    #[serde(default)]
-    pub is_leader: bool,
-    /// Assigned UI color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub self_agent_color: Option<String>,
-    /// Active teammates keyed by agent ID.
-    #[serde(default)]
-    pub teammates: HashMap<String, TeammateEntry>,
-}
-
-/// Entry for a teammate in the team context.
-///
-/// TS: `AppState.teamContext.teammates[id]`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TeammateEntry {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    #[serde(default)]
-    pub tmux_session_name: String,
-    #[serde(default)]
-    pub tmux_pane_id: String,
-    pub cwd: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree_path: Option<String>,
-    pub spawned_at: i64,
-}
+// `TeamContext` / `TeammateEntry` (the old `AppState.teamContext` mirror)
+// were removed: coco-rs keeps live team authority in the coordinator roster,
+// so these structs had no production reader — only an always-`None` parameter
+// on `identity::get_team_name`, now dropped.
 
 /// Standalone agent context (non-team agent identity).
 ///

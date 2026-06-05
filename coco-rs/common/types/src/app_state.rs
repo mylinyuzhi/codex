@@ -198,6 +198,14 @@ pub struct ToolAppState {
     /// one bit for reminder-gating purposes).
     pub pending_plan_verification: bool,
 
+    // ── Worktree session state ───────────────────────────────────────
+    /// Active foreground worktree entered by `EnterWorktree`.
+    ///
+    /// `ExitWorktree` reads this instead of trusting model-supplied paths,
+    /// then clears it after returning to the original cwd. Background
+    /// agent worktrees are tracked separately by the coordinator.
+    pub active_worktree: Option<ActiveWorktreeState>,
+
     // ── Phase 2 delta-reminder announce state ────────────────────────
     /// The set of tool wire-names announced to the agent via the most
     /// recent `deferred_tools_delta` reminder. Engine diffs this
@@ -335,6 +343,15 @@ pub struct ToolAppState {
     pub rate_limits: BTreeMap<String, RateLimitEntry>,
 }
 
+/// Foreground worktree state stored on [`ToolAppState`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveWorktreeState {
+    pub original_cwd: std::path::PathBuf,
+    pub worktree_path: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
+}
+
 // ────────────────────────────────────────────────────────────────
 // RAII counter guards (Phase 7 stub-field wire-up)
 // ────────────────────────────────────────────────────────────────
@@ -417,13 +434,13 @@ pub struct PromptSuggestion {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Read-only handle + queued-patch types (tool-facing API surface)
+// App-state handle + queued-patch types (tool-facing API surface)
 // ────────────────────────────────────────────────────────────────
 //
 // `ToolUseContext.app_state` holds an `AppStateReadHandle` — a wrapper
-// around `Arc<RwLock<ToolAppState>>` that exposes **only** `read()`.
-// Tools thus cannot call `.write()` on app_state from inside
-// `execute()`; the type system prevents it.
+// around `Arc<RwLock<ToolAppState>>`. Most tool mutations should still
+// flow through queued patches, but tools that must make state durable
+// before another process/session side effect may take a direct write lock.
 //
 // Mutations flow through `ToolResult::app_state_patch`: a boxed
 // `FnOnce(&mut ToolAppState)` that the executor applies post-execute
@@ -432,21 +449,20 @@ pub struct PromptSuggestion {
 // tools return a `(ctx) => newCtx` modifier; the orchestrator queues
 // them per tool_use_id and applies after the concurrent batch. No
 // tool can observe another tool's mutation mid-batch, and no tool
-// can directly mutate the shared store.
+// can observe another queued mutation mid-batch.
 
-/// Read-only handle to the shared [`ToolAppState`]. Tools receive
+/// Handle to the shared [`ToolAppState`]. Tools receive
 /// this on [`crate::ToolUseContext::app_state`] and can query live
-/// state via [`AppStateReadHandle::read`]. Mutations are **not**
-/// exposed — tools return an [`AppStatePatch`] through
-/// [`crate::ToolResult::app_state_patch`] instead.
+/// state via [`AppStateReadHandle::read`]. Ordinary mutations return
+/// an [`AppStatePatch`] through [`crate::ToolResult::app_state_patch`]
+/// instead.
 ///
 /// TS parity: `appState.toolPermissionContext` is visible via
 /// `context.getAppState()`, but writes go through
 /// `context.setAppState(...)` which the orchestrator funnels into
-/// `queuedContextModifiers` for post-batch apply. Rust's type
-/// system enforces the same discipline: the handle has no write
-/// surface at all, so a tool that tries to mutate simply won't
-/// compile. Elegant over documented.
+/// `queuedContextModifiers` for post-batch apply. Rust keeps that as
+/// the default path while still exposing a write lock for tools whose
+/// state update must precede another side effect.
 ///
 /// Non-tool callers (engine, reminder, TUI / SDK mode handlers)
 /// that architecturally *are* authorized to mutate hold the
@@ -467,6 +483,12 @@ impl AppStateReadHandle {
     /// (e.g. `ctx.app_state.as_ref()?.read().await.permission_mode`).
     pub async fn read(&self) -> tokio::sync::RwLockReadGuard<'_, ToolAppState> {
         self.inner.read().await
+    }
+
+    /// Acquire a write lock for tools that must update app state before
+    /// another side effect, such as changing the session cwd.
+    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, ToolAppState> {
+        self.inner.write().await
     }
 }
 

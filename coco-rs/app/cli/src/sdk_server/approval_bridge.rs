@@ -52,8 +52,12 @@ impl SdkPermissionBridge {
 impl ToolPermissionBridge for SdkPermissionBridge {
     async fn request_permission(
         &self,
-        request: ToolPermissionRequest,
+        mut request: ToolPermissionRequest,
     ) -> Result<ToolPermissionResolution, String> {
+        // In-process teammates inherit the leader's bridge — badge them from
+        // the live task-local identity (same as the TUI bridge).
+        crate::leader_permission::enrich_in_process_worker_badge(&mut request);
+
         // Read the transport handle the dispatcher published at startup.
         let transport = {
             let guard = self.state.transport.read().await;

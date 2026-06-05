@@ -1003,11 +1003,6 @@ pub fn aggregate_results_for_event(
                     _ => {}
                 }
 
-                // Flat-format `permissionDecision` (legacy shell-hook
-                // emission). TS canonical `'allow' | 'deny'` — `ask`
-                // was a coco-rs extension that the typed SDK path
-                // doesn't support; we drop it here too so the wire
-                // vocabulary stays consistent across both paths.
                 match json.permission_decision.as_deref() {
                     Some("allow") => {
                         agg.permission_behavior = Some(merge_permission(
@@ -1019,6 +1014,12 @@ pub fn aggregate_results_for_event(
                         agg.permission_behavior = Some(merge_permission(
                             agg.permission_behavior,
                             PermissionBehavior::Deny,
+                        ));
+                    }
+                    Some("ask") => {
+                        agg.permission_behavior = Some(merge_permission(
+                            agg.permission_behavior,
+                            PermissionBehavior::Ask,
                         ));
                     }
                     _ => {}
@@ -1243,6 +1244,12 @@ fn apply_hook_specific_output(
                                 .unwrap_or_else(|| "Blocked by hook".to_string()),
                             source,
                         });
+                    }
+                    HookPermissionDecision::Ask => {
+                        agg.permission_behavior = Some(merge_permission(
+                            agg.permission_behavior,
+                            PermissionBehavior::Ask,
+                        ));
                     }
                 }
             }
@@ -3345,8 +3352,14 @@ fn process_execution_result(
             stderr,
         } => {
             // Exit code 2 is the TS "blocking error" convention.
-            let blocked = exit_code == 2;
-            let output = if exit_code == 0 { stdout } else { stderr };
+            let stdout_has_json_control =
+                matches!(parse_hook_output(&stdout), ParsedHookOutput::Json(_));
+            let blocked = exit_code == 2 && !stdout_has_json_control;
+            let output = if stdout_has_json_control || exit_code == 0 {
+                stdout
+            } else {
+                stderr
+            };
             SingleHookResult {
                 command: label.to_string(),
                 succeeded: exit_code == 0,

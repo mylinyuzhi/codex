@@ -601,6 +601,89 @@ pub trait AgentHandle: Send + Sync {
         None
     }
 
+    /// Leader → teammate: request a teammate shut down. Writes a
+    /// `ShutdownRequest` to the target's mailbox; the teammate's pump /
+    /// runner-loop delivers it as a turn and the model replies by
+    /// calling [`Self::respond_to_shutdown`]. Returns a confirmation
+    /// string for the model. Default `Err` for non-swarm handles.
+    ///
+    /// TS: `SendMessageTool.ts` `handleShutdownRequest` →
+    /// `sendShutdownRequestToMailbox`.
+    async fn request_shutdown(
+        &self,
+        _target: &str,
+        _reason: Option<&str>,
+    ) -> Result<String, String> {
+        Err("AgentHandle::request_shutdown not supported in this context".into())
+    }
+
+    /// Teammate → leader: approve or reject a leader shutdown request.
+    /// The worker enriches the response with its OWN pane coordinates
+    /// (read from `team.json`) so the leader can tear down the right
+    /// pane, writes a `ShutdownApproved` / `ShutdownRejected` to the
+    /// `team-lead` mailbox, and returns a confirmation string. Default
+    /// `Err` for non-swarm handles.
+    ///
+    /// TS: `SendMessageTool.ts` `handleShutdownApproval` /
+    /// `handleShutdownRejection`.
+    async fn respond_to_shutdown(
+        &self,
+        _request_id: &str,
+        _approve: bool,
+        _reason: Option<&str>,
+    ) -> Result<String, String> {
+        Err("AgentHandle::respond_to_shutdown not supported in this context".into())
+    }
+
+    /// Leader-side effect of consuming a `ShutdownApproved`: kill the
+    /// teammate's pane (when `pane_id` + `backend_type` indicate a
+    /// pane-based teammate), remove its team-file membership, and
+    /// unassign its in-flight tasks. Driven by the leader inbox poller.
+    /// Default `Err` for non-swarm handles.
+    ///
+    /// TS: `useInboxPoller.ts:687-741` (`killPane` +
+    /// `removeTeammateFromTeamFile` + `unassignTeammateTasks`).
+    async fn teardown_teammate(
+        &self,
+        _agent_id: &str,
+        _name: &str,
+        _pane_id: Option<&str>,
+        _backend_type: Option<&str>,
+    ) -> Result<(), String> {
+        Err("AgentHandle::teardown_teammate not supported in this context".into())
+    }
+
+    /// Leader → teammate: set a teammate's permission mode. Persists the
+    /// mode to `team.json` and writes a `ModeSetRequest` to the
+    /// teammate's mailbox so a live teammate applies it (the in-process
+    /// runner via `drain_control_messages`, the cross-process pump via
+    /// `UserCommand::SetPermissionMode`). Returns a confirmation string.
+    /// Default `Err` for non-swarm handles.
+    ///
+    /// TS: `TeamsDialog.tsx` `sendModeChangeToTeammate` (`setMemberMode`
+    /// + `createModeSetRequestMessage` + `writeToMailbox`).
+    async fn set_teammate_mode(
+        &self,
+        _name: &str,
+        _mode: coco_types::PermissionMode,
+    ) -> Result<String, String> {
+        Err("AgentHandle::set_teammate_mode not supported in this context".into())
+    }
+
+    /// Set MULTIPLE teammates' permission modes in one atomic `team.json`
+    /// write, then notify each via mailbox. Batch analog of
+    /// [`Self::set_teammate_mode`] used by the roster "cycle all" action.
+    /// Default `Err` for non-swarm handles.
+    ///
+    /// TS: `TeamsDialog.tsx` `cycleAllTeammateModes` → `setMultipleMemberModes`
+    /// + per-teammate `createModeSetRequestMessage` / `writeToMailbox`.
+    async fn set_teammate_modes(
+        &self,
+        _updates: Vec<(String, coco_types::PermissionMode)>,
+    ) -> Result<String, String> {
+        Err("AgentHandle::set_teammate_modes not supported in this context".into())
+    }
+
     // Note: `resolve_skill` was removed in Phase 7 of the agent-loop
     // refactor. Skill resolution now goes through the dedicated
     // `SkillHandle` trait (`skill_handle.rs`); `AgentHandle` is the

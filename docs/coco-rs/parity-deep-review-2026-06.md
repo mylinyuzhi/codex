@@ -171,9 +171,9 @@ coco-rs 是否忠实复刻其**可观察行为**。仅看行为/逻辑对齐，�
 - **影响**：压缩后上下文比 TS 大、token 估计/重触发曲线不同；长会话反复压缩浪费 token 且更易再触发 prompt_too_long。
 
 ### L5. hooks：三处控制流偏离使 hook 静默失效
-- **agent-hook 存根** `hook_llm.rs:241-266`：直接 warn + 返回 Cancelled，从不跑 LLM。任何 `type:"agent"` 的 Stop hook（如"验证测试通过"）从不强制。
-- **JSON 仅 exit 0 解析** `orchestration.rs:3349`：`output = if exit_code==0 {stdout} else {stderr}`，非零退出时 stdout JSON 控制载荷（updatedInput/decision/additionalContext/exit-2 阻断理由）全部丢弃。TS 任何退出码都解析 stdout。
-- **`permissionDecision:'ask'` 破坏整段解析** `attachment_body.rs:139-143` 只有 Allow/Deny；嵌套 hookSpecificOutput 路径里出现 'ask' 会让 serde 解析失败 → 回退 PlainText → 丢弃**整个**控制载荷。
+- **agent-hook 存根 [✅ RESOLVED on this branch]**：`evaluate_agent` 现在委托到 late-bound hook-agent runner，运行 scoped child `QueryEngine`（50 turns）+ `StructuredOutput` enforcement，并映射 `{ok,reason}`。
+- **JSON 仅 exit 0 解析 [✅ RESOLVED on this branch]**：非零退出时 valid stdout JSON control 现在优先被解析；只有 stdout 不是结构化控制 JSON 时才回退 exit-2/stderr 阻断。
+- **`permissionDecision:'ask'` 破坏整段解析 [✅ RESOLVED on this branch]**：`HookPermissionDecision::Ask` 已加入，flat/nested 输出都映射到 `PermissionBehavior::Ask`。
 
 ---
 
@@ -496,11 +496,12 @@ TS 每轮注入 "Today's date is X"；Rust 缺失。叠加 `FileReadState` 无 `
 - 描述: TS unconditionally denies writes to every settings source's settings.json to prevent the agent from editing its own permission rules from inside the sandbox (sandbox escape). The CLI passes settings_files: &[] to AdapterInputs, and sets both original_cwd and current_cwd to the same cwd, so collect_deny_write_paths never adds the cwd .claude/settings.json / settings.local.json (gated on current_cwd != original_cwd) and the always-denied settings_files list is empty. Result: no settings.json path is in deny_write.
 - 影响: A sandboxed bash command can write .claude/settings.json / settings.local.json / ~/.coco/settings.json (inject allow rules, disable sandbox) - the exact self-permission-edit escape TS blocks unconditionally via SETTING_SOURCES + managed-drop-in deny.
 
-**37. [hooks] Agent-type hook executor is a stub that silently returns Cancelled** _( stub · ⚠intentional )_
+**37. [hooks] Agent-type hook executor is a stub that silently returns Cancelled** _( stub · ⚠intentional · ✅ RESOLVED on this branch )_
 - TS: `utils/hooks/execAgentHook.ts:36-339 (multi-turn query() with MAX_AGENT_TURNS=50 + StructuredOutputTool, returns blocking when {ok:false})`
 - Rust: `coco-rs/app/query/src/hook_llm.rs:241-266 (evaluate_agent: returns HookEvaluationResult::Cancelled after a warn, never runs an LLM); fallback at coco-rs/hooks/src/lib.rs:1102-1112 returns PromptText. Only evaluate_agent impl in workspace (grep confirms no alternative).`
 - 描述: TS execAgentHook spawns a full multi-turn agent that inspects the codebase/transcript and returns structured {ok, reason}; a false result becomes a blocking error injected into the conversation. Rust's evaluate_agent does no LLM work at all — it logs a warning and returns Cancelled (silent). Any settings hook with type:"agent" (e.g. a Stop hook verifying "tests ran and passed") never enforces its condition. The hooks crate's lib.rs:1102-1112 fallback also just returns the prompt text.
 - 影响: A settings hook with type:"agent" (e.g. a Stop hook verifying "tests ran and passed") never enforces its condition. TS execAgentHook returns outcome:'blocking' with a blockingError on {ok:false} (execAgentHook.ts:271-283); Rust always returns Cancelled (non-blocking, silent), so the agent proceeds as if the check passed.
+- 解决: `QueryHookLlm::evaluate_agent` now delegates to a late-bound CLI runner. The runner builds a scoped child `QueryEngine` with `StructuredOutputTool`, only the StructuredOutput Stop enforcement function hook, `max_turns=50`, non-interactive permission behavior, and `hook_agent` attribution. `{ok:true}` passes, `{ok:false,reason}` blocks, missing structured output cancels.
 
 **38. [hooks] HTTP hooks follow redirects, bypassing the SSRF guard** _( divergent )_
 - TS: `utils/hooks/execHttpHook.ts:206 (maxRedirects: 0) combined with ssrfGuardedLookup validating the connected IP`
@@ -508,17 +509,19 @@ TS 每轮注入 "Today's date is X"；Rust 缺失。叠加 `FileReadState` 无 `
 - 描述: TS disables redirects entirely (maxRedirects:0) and validates the resolved IP at connect time via ssrfGuardedLookup. coco-rs checks SSRF only against the original URL's host (a one-time DNS resolution before the request) and builds a reqwest client with default redirect policy (follows up to 10). A server reachable at an allowed/loopback URL can return 301/302 to http://169.254.169.254/ (cloud metadata) or an internal host, and reqwest will follow it — the post-redirect target is never SSRF-checked.
 - 影响: An allowed/loopback HTTP-hook endpoint can return 301/302 to http://169.254.169.254/ (cloud metadata) or an internal host; reqwest's default policy follows up to 10 redirects, and the post-redirect target is never SSRF-checked — defeating the advertised SSRF protection.
 
-**39. [hooks] Hook stdout JSON control output only parsed on exit code 0** _( divergent )_
+**39. [hooks] Hook stdout JSON control output only parsed on exit code 0** _( divergent · ✅ RESOLVED on this branch )_
 - TS: `utils/hooks.ts:2500-2613 (parseHookOutput(result.stdout) + processHookJSONOutput run for any exit code) and :2648-2666 (exit 2 also blocking)`
 - Rust: `coco-rs/hooks/src/orchestration.rs:3349 `let output = if exit_code == 0 { stdout } else { stderr };`; aggregator parses r.output at orchestration.rs:974. TS parseHookOutput(result.stdout) runs for ANY exit code (hooks.ts:2500), validationError-first (2504), then processHookJSONOutput (2544).`
 - 描述: TS always parses result.stdout as the JSON control payload regardless of exit code, then applies hookSpecificOutput (updatedInput, additionalContext, decision, etc.). Rust folds stdout into the result only when exit_code==0; on any non-zero exit it sets output=stderr, so the aggregator's parse_hook_output never sees the stdout JSON. A hook that emits updatedInput/decision/additionalContext on stdout while exiting non-zero (notably the exit-2 'block with structured feedback' idiom, or a PreToolUse hook emitting updatedInput then exiting 1) has its entire JSON control output discarded.
 - 影响: PreToolUse updatedInput, PostToolUse updatedMCPToolOutput, additionalContext, decision:allow/deny, suppressOutput, watchPaths emitted on stdout are silently discarded whenever the hook exits non-zero. The exit-2 'block with structured feedback' idiom loses its reason text entirely.
+- 解决: `process_execution_result` now detects valid stdout hook JSON before nonzero-exit fallback. Structured stdout controls aggregate behavior for any exit code; stderr remains the fallback blocking/non-blocking text when stdout is not valid hook JSON.
 
-**40. [hooks] permissionDecision/permissionBehavior 'ask' unsupported; an 'ask' value breaks the whole JSON parse** _( missing )_
+**40. [hooks] permissionDecision/permissionBehavior 'ask' unsupported; an 'ask' value breaks the whole JSON parse** _( missing · ✅ RESOLVED on this branch )_
 - TS: `utils/hooks.ts:566-568 & 610-612 (permissionDecision 'ask' → permissionBehavior='ask'); schema hint hooks.ts:424,428 lists 'allow'|'deny'|'ask'`
 - Rust: `coco-rs/common/types/src/messages/attachment_body.rs:139-143 (HookPermissionDecision = Allow|Deny only, snake_case); coco-rs/common/types/src/sdk_hook_output.rs:127 (HookSpecificOutput::PreToolUse.permission_decision: Option<HookPermissionDecision>); orchestration.rs:1011-1024 flat permission_decision match drops 'ask' via `_ => {}`; parse fallback to PlainText at orchestration.rs:164-169. TS: permissionBehaviorSchema() = z.enum(['allow','deny','ask']) (PermissionRule.ts:25-26), result.permissionBehavior='ask' (hooks.ts:566-568, 610-611).`
 - 描述: TS supports a third PreToolUse permission decision 'ask' that forces an interactive permission prompt. coco-rs's HookPermissionDecision enum has only Allow/Deny. The flat-format path drops 'ask' silently. Worse, in the nested hookSpecificOutput path the field is Option<HookPermissionDecision>, so a present `"permissionDecision":"ask"` makes serde_json::from_str::<HookJsonOutput> error, causing parse_hook_output to fall back to PlainText (orchestration.rs:159-171) — discarding the ENTIRE JSON control payload (updatedInput, additionalContext, etc.) and injecting the raw JSON string as additional context.
 - 影响: A PreToolUse hook returning permissionDecision:'ask' is ignored (flat path) or — in the nested hookSpecificOutput form — fails serde_json::from_str::<HookJsonOutput>, falling back to PlainText, which discards the ENTIRE control payload (updatedInput, additionalContext, etc.) and injects the raw JSON as additional context.
+- 解决: `HookPermissionDecision::Ask` now deserializes from `"ask"`. Flat `permissionDecision:"ask"` and nested `hookSpecificOutput.permissionDecision:"ask"` both merge `PermissionBehavior::Ask`; Ask is non-blocking and reaches the existing permission prompt path.
 
 **41. [skills] ${CLAUDE_SKILL_DIR} and ${CLAUDE_SESSION_ID} placeholders are never substituted** _( missing )_
 - TS: `skills/loadSkillsDir.ts:356-369 (replace ${CLAUDE_SKILL_DIR} with baseDir, ${CLAUDE_SESSION_ID} with getSessionId())`
@@ -607,11 +610,12 @@ TS 每轮注入 "Today's date is X"；Rust 缺失。叠加 `FileReadState` 无 `
 
 ### MEDIUM
 
-**55. [query] Agent-type (LLM-judge) Stop hooks are a stub that always returns Cancelled** _( stub · ⚠intentional )_
+**55. [query] Agent-type (LLM-judge) Stop hooks are a stub that always returns Cancelled** _( stub · ⚠intentional · ✅ RESOLVED on this branch )_
 - TS: `execAgentHook.ts (full multi-turn agent eval: forked QueryEngine max_turns=50, must call StructuredOutputTool, auto-granted Read of transcript)`
 - Rust: `coco-rs/app/query/src/hook_llm.rs:241-266 (evaluate_agent: resolves source, logs tracing::warn!, returns HookEvaluationResult::Cancelled unconditionally — no forked engine, no StructuredOutput); reachable via coco-rs/hooks/src/orchestration.rs:3246-3265 (HookHandler::Agent => is_agent=true => llm.evaluate_agent)`
 - 描述: TS supports agent-type prompt/stop hooks that run a full multi-turn forked agent which must call StructuredOutputTool to produce {ok, reason}. coco-rs implements only the Prompt path; the Agent path is a stub that logs a warning and unconditionally returns Cancelled. Because Cancelled is treated as a silent no-op, any configured agent-type Stop/judge hook never actually evaluates the turn — it always passes through with no decision.
 - 影响: A user who configures an LLM-judge (agent-type) Stop/judge hook gets no evaluation — Cancelled is a silent no-op, so the hook always passes and quality/policy gates that should block or feed back to the model never fire.
+- 解决: Same implementation as hooks#179: the query-side `evaluate_agent` stub now delegates to a runtime-installed hook-agent runner and maps `StructuredOutput` `{ok,reason}` to hook evaluation results.
 
 **56. [query] Later-priority task notifications drain every turn instead of only after a Sleep tool** _( divergent · ⚠intentional )_
 - TS: `query.ts:1566-1578 (sleepRan ? 'later' : 'next'; getCommandsByMaxPriority gated on SLEEP_TOOL presence); messageQueueManager.ts getCommandsByMaxPriority`

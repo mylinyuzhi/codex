@@ -54,6 +54,7 @@ mod wire_tagged;
 // === Re-exports ===
 
 // App-state (cross-turn shared state carried on ToolUseContext)
+pub use app_state::ActiveWorktreeState;
 pub use app_state::AppStatePatch;
 pub use app_state::AppStateReadHandle;
 pub use app_state::ElicitationGuard;
@@ -93,6 +94,7 @@ pub use agent::ModelInheritance;
 pub use agent::ModelSource;
 pub use agent::SubagentType;
 pub use agent::ToolAllowList;
+pub use agent::WorkerBadge;
 
 // Inter-agent IPC (mailbox protocol + sub-agent state snapshots)
 pub use agent_ipc::IdleReason;
@@ -101,8 +103,6 @@ pub use agent_ipc::SubAgentState;
 pub use agent_ipc::SubAgentStatus;
 pub use agent_ipc::SubagentRuntimeSnapshot;
 pub use agent_ipc::TaskEntry;
-pub use agent_ipc::TeamContext;
-pub use agent_ipc::TeammateEntry;
 pub use agent_ipc::TeammateProtocolContent;
 pub use agent_ipc::TeammateProtocolMessage;
 
@@ -357,6 +357,7 @@ pub enum CompactTrigger {
 // Permission types
 pub use permission::AdditionalWorkingDir;
 pub use permission::ClassifierBehavior;
+pub use permission::ClassifierMode;
 pub use permission::ClassifierUsage;
 pub use permission::PendingClassifierCheck;
 pub use permission::PermissionAskChoice;

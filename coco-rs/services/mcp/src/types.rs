@@ -59,6 +59,8 @@ pub struct McpSseConfig {
     pub url: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<McpOAuthConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +68,36 @@ pub struct McpHttpConfig {
     pub url: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<McpOAuthConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpOAuthConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xaa: Option<McpXaaConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpXaaConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idp_client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idp_client_secret: Option<String>,
+    #[serde(default, alias = "idToken", skip_serializing_if = "Option::is_none")]
+    pub idp_id_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idp_token_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

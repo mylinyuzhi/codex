@@ -30,6 +30,9 @@ fn parse_known_actions_round_trip() {
         "scroll:pageUp",
         "selection:copy",
         "messageActions:enter",
+        // coco-rs-only team-roster open action (A7a) — must round-trip so it
+        // loads from `~/.coco/keybindings.json`.
+        "app:toggleTeamRoster",
     ];
     for name in names {
         let action: KeybindingAction = name.parse().expect(name);

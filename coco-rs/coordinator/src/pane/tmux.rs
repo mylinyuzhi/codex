@@ -46,6 +46,40 @@ impl TmuxBackend {
             first_pane_used: Mutex::new(false),
         }
     }
+
+    /// The tmux `-L` socket for THIS backend's server, or `None` to use the
+    /// inherited `$TMUX` server.
+    ///
+    /// - **Native** (`is_native=true`): the leader is inside tmux, so ops
+    ///   address the inherited `$TMUX` server — no `-L` (`None`).
+    /// - **External** (`is_native=false`): there is no inherited server, so the
+    ///   backend runs a dedicated PID-scoped server (`claude-swarm-<pid>`);
+    ///   EVERY op must address it with `-L` (`Some`).
+    fn socket(&self) -> Option<String> {
+        (!self.is_native).then(crate::constants::swarm_socket_name)
+    }
+
+    /// The single tmux entry point. Routes every command through the backend's
+    /// own server ([`Self::socket`]) so native and external never diverge on
+    /// which server they target — the bug that left external-session panes
+    /// created on the swarm socket but killed/commanded on the default one.
+    async fn run(&self, args: &[&str]) -> crate::Result<String> {
+        match self.socket() {
+            Some(socket) => run_tmux_with_socket(&socket, args).await,
+            None => run_tmux(args).await,
+        }
+    }
+
+    /// The active window target (`session:window`) for the inherited client,
+    /// or `None` when nothing is attached / the query fails. Used only as the
+    /// fallback target for per-window options. TS: `getCurrentWindowTarget()`.
+    async fn current_window_target(&self) -> Option<String> {
+        self.run(&["display-message", "-p", "#{session_name}:#{window_index}"])
+            .await
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
 }
 
 #[async_trait]
@@ -94,7 +128,8 @@ impl PaneBackend for TmuxBackend {
     }
 
     async fn send_command_to_pane(&self, pane_id: &PaneId, command: &str) -> crate::Result<()> {
-        run_tmux(&["send-keys", "-t", pane_id, command, "Enter"]).await?;
+        self.run(&["send-keys", "-t", pane_id, command, "Enter"])
+            .await?;
         Ok(())
     }
 
@@ -109,7 +144,7 @@ impl PaneBackend for TmuxBackend {
         // the per-pane `pane-border-style` and `pane-active-border-style`
         // options so the border keeps its colour whether the pane is
         // active or inactive (requires tmux 3.2+).
-        run_tmux(&[
+        self.run(&[
             "select-pane",
             "-t",
             pane_id,
@@ -117,7 +152,7 @@ impl PaneBackend for TmuxBackend {
             &format!("bg=default,fg={tmux_color}"),
         ])
         .await?;
-        run_tmux(&[
+        self.run(&[
             "set-option",
             "-p",
             "-t",
@@ -126,7 +161,7 @@ impl PaneBackend for TmuxBackend {
             &format!("fg={tmux_color}"),
         ])
         .await?;
-        run_tmux(&[
+        self.run(&[
             "set-option",
             "-p",
             "-t",
@@ -144,12 +179,32 @@ impl PaneBackend for TmuxBackend {
         name: &str,
         _color: AgentColorName,
     ) -> crate::Result<()> {
-        run_tmux(&["select-pane", "-t", pane_id, "-T", name]).await?;
+        self.run(&["select-pane", "-t", pane_id, "-T", name])
+            .await?;
         Ok(())
     }
 
-    async fn enable_pane_border_status(&self, _window_target: Option<&str>) -> crate::Result<()> {
-        run_tmux(&["set-option", "-g", "pane-border-status", "top"]).await?;
+    async fn enable_pane_border_status(&self, window_target: Option<&str>) -> crate::Result<()> {
+        // Scope to the window (`-w -t <target>`), NOT the server (`-g`): a
+        // global set mutates the user's unrelated tmux windows and is never
+        // reverted on teardown. Fall back to the active window when no target
+        // is supplied; bail if none resolves. TS: `TmuxBackend.ts:233-252`.
+        let target = match window_target {
+            Some(t) => t.to_string(),
+            None => match self.current_window_target().await {
+                Some(t) => t,
+                None => return Ok(()),
+            },
+        };
+        self.run(&[
+            "set-option",
+            "-w",
+            "-t",
+            &target,
+            "pane-border-status",
+            "top",
+        ])
+        .await?;
         Ok(())
     }
 
@@ -162,30 +217,33 @@ impl PaneBackend for TmuxBackend {
     }
 
     async fn kill_pane(&self, pane_id: &PaneId) -> crate::Result<bool> {
-        let output = run_tmux(&["kill-pane", "-t", pane_id]).await;
+        let output = self.run(&["kill-pane", "-t", pane_id]).await;
         Ok(output.is_ok())
     }
 
     async fn hide_pane(&self, pane_id: &PaneId) -> crate::Result<bool> {
         // Ensure hidden session exists
-        let has_hidden = run_tmux(&["has-session", "-t", HIDDEN_SESSION_NAME])
+        let has_hidden = self
+            .run(&["has-session", "-t", HIDDEN_SESSION_NAME])
             .await
             .is_ok();
 
         if !has_hidden {
-            run_tmux(&["new-session", "-d", "-s", HIDDEN_SESSION_NAME]).await?;
+            self.run(&["new-session", "-d", "-s", HIDDEN_SESSION_NAME])
+                .await?;
         }
 
         // Move pane to hidden session
-        let result = run_tmux(&[
-            "join-pane",
-            "-d",
-            "-t",
-            &format!("{HIDDEN_SESSION_NAME}:"),
-            "-s",
-            pane_id,
-        ])
-        .await;
+        let result = self
+            .run(&[
+                "join-pane",
+                "-d",
+                "-t",
+                &format!("{HIDDEN_SESSION_NAME}:"),
+                "-s",
+                pane_id,
+            ])
+            .await;
 
         Ok(result.is_ok())
     }
@@ -195,15 +253,16 @@ impl PaneBackend for TmuxBackend {
         pane_id: &PaneId,
         target_window_or_pane: &str,
     ) -> crate::Result<bool> {
-        let result = run_tmux(&[
-            "join-pane",
-            "-d",
-            "-t",
-            target_window_or_pane,
-            "-s",
-            &format!("{HIDDEN_SESSION_NAME}:{pane_id}"),
-        ])
-        .await;
+        let result = self
+            .run(&[
+                "join-pane",
+                "-d",
+                "-t",
+                target_window_or_pane,
+                "-s",
+                &format!("{HIDDEN_SESSION_NAME}:{pane_id}"),
+            ])
+            .await;
 
         Ok(result.is_ok())
     }
@@ -228,7 +287,7 @@ impl TmuxBackend {
             vec!["split-window", "-v", "-P", "-F", "#{pane_id}"]
         };
 
-        let output = run_tmux(&split_args).await?;
+        let output = self.run(&split_args).await?;
         let pane_id = output.trim().to_string();
 
         tokio::time::sleep(std::time::Duration::from_millis(PANE_SHELL_INIT_DELAY_MS)).await;
@@ -255,13 +314,18 @@ impl TmuxBackend {
         _color: AgentColorName,
         is_first: bool,
     ) -> crate::Result<CreatePaneResult> {
-        let socket_name = crate::constants::swarm_socket_name();
-
-        if is_first {
-            // Create the swarm session
-            run_tmux_with_socket(
-                &socket_name,
-                &[
+        // All ops route through `self.run`, which (external mode) addresses the
+        // dedicated PID-scoped swarm server — same server kill_pane /
+        // send_command now target too.
+        let swarm_window = format!("{SWARM_SESSION_NAME}:{SWARM_VIEW_WINDOW_NAME}");
+        let pane_id = if is_first {
+            // Create the swarm session; its INITIAL pane IS the first
+            // teammate's pane. TS reuses `firstPaneId` here rather than
+            // splitting — an unconditional split would orphan that initial
+            // pane as a stray empty shell. TS:
+            // `createTeammatePaneExternal` first-teammate arm.
+            let output = self
+                .run(&[
                     "new-session",
                     "-d",
                     "-s",
@@ -271,31 +335,30 @@ impl TmuxBackend {
                     "-P",
                     "-F",
                     "#{pane_id}",
-                ],
-            )
-            .await?;
-        }
-
-        let output = run_tmux_with_socket(
-            &socket_name,
-            &[
-                "split-window",
-                "-t",
-                &format!("{SWARM_SESSION_NAME}:{SWARM_VIEW_WINDOW_NAME}"),
-                "-P",
-                "-F",
-                "#{pane_id}",
-            ],
-        )
-        .await?;
-
-        let pane_id = output.trim().to_string();
+                ])
+                .await?;
+            // Enable per-window pane titles now that the swarm window exists.
+            let _ = self.enable_pane_border_status(Some(&swarm_window)).await;
+            output.trim().to_string()
+        } else {
+            // Subsequent teammates split an existing pane in the swarm window.
+            let output = self
+                .run(&[
+                    "split-window",
+                    "-t",
+                    &swarm_window,
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                ])
+                .await?;
+            output.trim().to_string()
+        };
 
         tokio::time::sleep(std::time::Duration::from_millis(PANE_SHELL_INIT_DELAY_MS)).await;
 
         // Set title
-        let _ =
-            run_tmux_with_socket(&socket_name, &["select-pane", "-t", &pane_id, "-T", name]).await;
+        let _ = self.run(&["select-pane", "-t", &pane_id, "-T", name]).await;
 
         Ok(CreatePaneResult {
             pane_id,
@@ -305,15 +368,18 @@ impl TmuxBackend {
 
     /// Rebalance panes with leader (30% leader, 70% teammates).
     async fn rebalance_panes_with_leader(&self, window_target: &str) -> crate::Result<()> {
-        run_tmux(&["select-layout", "-t", window_target, "main-vertical"]).await?;
+        self.run(&["select-layout", "-t", window_target, "main-vertical"])
+            .await?;
         // Set leader pane width to 30%
-        run_tmux(&["set-option", "-t", window_target, "main-pane-width", "30%"]).await?;
+        self.run(&["set-option", "-t", window_target, "main-pane-width", "30%"])
+            .await?;
         Ok(())
     }
 
     /// Rebalance panes without leader (tiled layout).
     async fn rebalance_panes_tiled(&self, window_target: &str) -> crate::Result<()> {
-        run_tmux(&["select-layout", "-t", window_target, "tiled"]).await?;
+        self.run(&["select-layout", "-t", window_target, "tiled"])
+            .await?;
         Ok(())
     }
 }

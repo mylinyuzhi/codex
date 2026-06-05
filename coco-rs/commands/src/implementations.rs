@@ -847,18 +847,12 @@ fn color_handler(args: &str) -> String {
 }
 
 fn status_extended_handler(_args: &str) -> String {
+    // Emit the sentinel; the runner replaces it with a live report built from
+    // the session runtime (model role, permission mode, thinking, plan mode,
+    // connected MCP servers). The fallback line below is shown verbatim only
+    // in contexts without a runtime to intercept the sentinel.
     let version = env!("CARGO_PKG_VERSION");
-    format!(
-        "Session status:\n\
-         Version: {version}\n\
-         Model: (current model)\n\
-         Permission mode: (current mode)\n\
-         Thinking: (current level)\n\
-         Fast mode: off\n\
-         Plan mode: off\n\
-         MCP servers: 0 connected\n\
-         Plugins: 0 loaded"
-    )
+    format!("{STATUS_SENTINEL}\nSession status unavailable in this context (v{version}).")
 }
 
 fn effort_extended_handler(args: &str) -> String {
@@ -1013,11 +1007,22 @@ pub const RELOAD_PLUGINS_SENTINEL: &str = "__COCO_RELOAD_PLUGINS__";
 /// so pre/post hook consistency within a turn is preserved.
 pub const RELOAD_HOOKS_SENTINEL: &str = "__COCO_RELOAD_HOOKS__";
 
+/// Sentinel emitted by `/status`. Runners replace it with a live session
+/// status report (model / permission mode / thinking / plan mode / MCP
+/// servers) — the handler can't reach that runtime state itself.
+pub const STATUS_SENTINEL: &str = "__COCO_STATUS__";
+
 /// Parse a `__COCO_RELOAD_HOOKS__` first line. Returns `Some(())` on
 /// match (no payload), `None` otherwise.
 #[must_use]
 pub fn parse_reload_hooks_sentinel(handler_output: &str) -> Option<()> {
     handlers::sentinel::parse_sentinel(handler_output, RELOAD_HOOKS_SENTINEL).map(|_| ())
+}
+
+/// Parse a `__COCO_STATUS__` first line. Returns `Some(())` on match.
+#[must_use]
+pub fn parse_status_sentinel(handler_output: &str) -> Option<()> {
+    handlers::sentinel::parse_sentinel(handler_output, STATUS_SENTINEL).map(|_| ())
 }
 
 fn rename_handler(args: &str) -> String {
@@ -1180,14 +1185,14 @@ fn init_handler_async(
             if tokio::fs::metadata(".claude/settings.json").await.is_ok() {
                 out.push_str("  settings.json found.\n");
             }
-            if tokio::fs::metadata(".claude/skills").await.is_ok() {
-                out.push_str("  skills/ directory found.\n");
-            }
             if tokio::fs::metadata(".claude/rules").await.is_ok() {
                 out.push_str("  rules/ directory found.\n");
             }
         } else {
             out.push_str(".claude/ directory will be created.\n");
+        }
+        if tokio::fs::metadata(".coco/skills").await.is_ok() {
+            out.push_str(".coco/skills directory found.\n");
         }
 
         // Detect build system

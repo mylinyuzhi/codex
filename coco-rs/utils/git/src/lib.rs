@@ -53,7 +53,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
+pub use worktree::WorktreeChangeSummary;
 pub use worktree::cleanup_orphaned_worktrees;
+pub use worktree::count_worktree_changes;
 pub use worktree::parse_worktree_output;
 pub use worktree::worktree_paths;
 

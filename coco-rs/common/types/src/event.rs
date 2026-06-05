@@ -1727,6 +1727,11 @@ pub enum TuiOnlyEvent {
         permission_suggestions: Vec<crate::PermissionUpdate>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         original_input: Option<serde_json::Value>,
+        /// Identity badge of the requesting cross-process teammate, if
+        /// any — rendered in the prompt so the leader sees who is asking.
+        /// TS: `workerBadge` on `PermissionRequest.tsx:89`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worker_badge: Option<crate::WorkerBadge>,
     },
     /// AskUserQuestion overlay needed. `input` carries the full tool
     /// input dict (the `questions[]` array, etc.) verbatim so the TUI
@@ -2320,7 +2325,7 @@ pub enum SkillsDialogSource {
     /// Compiled-in bundled skill catalog. TS `bundled` / `builtin`
     /// collapsed to a single label (display: `built-in`).
     BuiltIn,
-    /// `<cwd>/.claude/skills/` — TS `projectSettings`.
+    /// `<cwd>/.coco/skills/` — project skills.
     Project,
     /// `~/.coco/skills/` — TS `userSettings`.
     User,

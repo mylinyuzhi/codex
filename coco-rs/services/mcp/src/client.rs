@@ -39,6 +39,9 @@ use crate::naming;
 use crate::types::ConnectedMcpServer;
 use crate::types::McpCapabilities;
 use crate::types::McpConnectionState;
+use crate::types::McpOAuthConfig;
+use crate::types::McpPrompt;
+use crate::types::McpResource;
 use crate::types::McpServerConfig;
 use crate::types::McpToolDefinition;
 use crate::types::ScopedMcpServerConfig;
@@ -229,32 +232,45 @@ impl McpConnectionManager {
                     message: format!("stdio spawn failed: {e}"),
                 })?
             }
-            McpServerConfig::Sse(sse) => RmcpClient::new_streamable_http_client(
-                server_name,
-                &sse.url,
-                /*bearer_token*/ None,
-                Some(sse.headers.clone()),
-                /*env_http_headers*/ None,
-                OAuthCredentialsStoreMode::Auto,
-                self.config_home.clone(),
-            )
-            .await
-            .map_err(|e| McpClientError::SpawnFailed {
-                message: format!("SSE connect failed: {e}"),
-            })?,
-            McpServerConfig::Http(http) => RmcpClient::new_streamable_http_client(
-                server_name,
-                &http.url,
-                /*bearer_token*/ None,
-                Some(http.headers.clone()),
-                /*env_http_headers*/ None,
-                OAuthCredentialsStoreMode::Auto,
-                self.config_home.clone(),
-            )
-            .await
-            .map_err(|e| McpClientError::SpawnFailed {
-                message: format!("HTTP connect failed: {e}"),
-            })?,
+            McpServerConfig::Sse(sse) => {
+                ensure_xaa_tokens(server_name, &sse.url, sse.oauth.as_ref(), &self.config_home)
+                    .await?;
+                RmcpClient::new_streamable_http_client(
+                    server_name,
+                    &sse.url,
+                    /*bearer_token*/ None,
+                    Some(sse.headers.clone()),
+                    /*env_http_headers*/ None,
+                    OAuthCredentialsStoreMode::Auto,
+                    self.config_home.clone(),
+                )
+                .await
+                .map_err(|e| McpClientError::SpawnFailed {
+                    message: format!("SSE connect failed: {e}"),
+                })?
+            }
+            McpServerConfig::Http(http) => {
+                ensure_xaa_tokens(
+                    server_name,
+                    &http.url,
+                    http.oauth.as_ref(),
+                    &self.config_home,
+                )
+                .await?;
+                RmcpClient::new_streamable_http_client(
+                    server_name,
+                    &http.url,
+                    /*bearer_token*/ None,
+                    Some(http.headers.clone()),
+                    /*env_http_headers*/ None,
+                    OAuthCredentialsStoreMode::Auto,
+                    self.config_home.clone(),
+                )
+                .await
+                .map_err(|e| McpClientError::SpawnFailed {
+                    message: format!("HTTP connect failed: {e}"),
+                })?
+            }
             McpServerConfig::Sdk(sdk) => {
                 return self.do_connect_sdk(server_name, sdk).await;
             }
@@ -320,9 +336,26 @@ impl McpConnectionManager {
             channel_permission: false,
         };
 
+        // Discover resources and prompts when the server advertises them —
+        // mirrors the TS connect fan-out (tools/list + resources/list +
+        // prompts/list). Prompts surface as MCP slash-commands; resources back
+        // the List/Read MCP resource tools.
+        let resources = if capabilities.resources {
+            fetch_resources(&client, server_name).await
+        } else {
+            Vec::new()
+        };
+        let commands = if capabilities.prompts {
+            fetch_prompts(&client, server_name).await
+        } else {
+            Vec::new()
+        };
+
         info!(
             server = %server_name,
             tools = tools.len(),
+            resources = resources.len(),
+            prompts = commands.len(),
             "MCP server connected and initialized"
         );
 
@@ -331,8 +364,8 @@ impl McpConnectionManager {
             capabilities,
             instructions: init_result.instructions,
             tools,
-            resources: Vec::new(),
-            commands: Vec::new(),
+            resources,
+            commands,
         })
     }
 
@@ -710,6 +743,141 @@ impl McpConnectionManager {
             project_root.map(PathBuf::as_path),
         )
     }
+}
+
+/// List a connected server's resources, mapping into [`McpResource`].
+/// A failure is logged and treated as "no resources" — it must not abort
+/// connect (TS does the same via `Promise.all` with per-fetch catch).
+async fn fetch_resources(client: &RmcpClient, server_name: &str) -> Vec<McpResource> {
+    match client
+        .list_resources(None, Some(DEFAULT_INIT_TIMEOUT))
+        .await
+    {
+        Ok(result) => result
+            .resources
+            .into_iter()
+            .map(|r| McpResource {
+                uri: r.uri,
+                name: r.name,
+                description: r.description,
+                mime_type: r.mime_type,
+            })
+            .collect(),
+        Err(e) => {
+            warn!(server = %server_name, "failed to list MCP resources: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// List a connected server's prompts, mapping into [`McpPrompt`] (surfaced as
+/// MCP slash-commands). Failures are logged and treated as "no prompts".
+async fn fetch_prompts(client: &RmcpClient, server_name: &str) -> Vec<McpPrompt> {
+    match client.list_prompts(None, Some(DEFAULT_INIT_TIMEOUT)).await {
+        Ok(result) => result
+            .prompts
+            .into_iter()
+            .map(|p| McpPrompt {
+                name: p.name,
+                description: p.description,
+            })
+            .collect(),
+        Err(e) => {
+            warn!(server = %server_name, "failed to list MCP prompts: {e}");
+            Vec::new()
+        }
+    }
+}
+
+async fn ensure_xaa_tokens(
+    server_name: &str,
+    url: &str,
+    oauth: Option<&McpOAuthConfig>,
+    config_home: &std::path::Path,
+) -> Result<(), McpClientError> {
+    let Some(oauth) = oauth else {
+        return Ok(());
+    };
+    let Some(xaa) = &oauth.xaa else {
+        return Ok(());
+    };
+
+    if coco_rmcp_client::has_valid_oauth_tokens(
+        server_name,
+        url,
+        OAuthCredentialsStoreMode::Auto,
+        config_home,
+    )
+    .map_err(|error| McpClientError::SpawnFailed {
+        message: format!("failed to inspect stored OAuth credentials: {error}"),
+    })? {
+        info!(
+            server = %server_name,
+            "stored OAuth credentials found; skipping XAA exchange"
+        );
+        return Ok(());
+    }
+
+    let client_id = required_xaa_field(
+        "oauth.clientId or oauth.xaa.clientId",
+        oauth.client_id.as_ref().or(xaa.client_id.as_ref()),
+    )?;
+    let config = crate::xaa::XaaConfig {
+        client_id: client_id.to_string(),
+        client_secret: required_xaa_field("oauth.xaa.clientSecret", xaa.client_secret.as_ref())?
+            .to_string(),
+        idp_client_id: required_xaa_field("oauth.xaa.idpClientId", xaa.idp_client_id.as_ref())?
+            .to_string(),
+        idp_client_secret: xaa.idp_client_secret.clone(),
+        idp_id_token: required_xaa_field("oauth.xaa.idpIdToken", xaa.idp_id_token.as_ref())?
+            .to_string(),
+        idp_token_endpoint: required_xaa_field(
+            "oauth.xaa.idpTokenEndpoint",
+            xaa.idp_token_endpoint.as_ref(),
+        )?
+        .to_string(),
+        scope: xaa.scope.clone(),
+    };
+
+    let http_client = reqwest::Client::new();
+    let result = crate::xaa::perform_cross_app_access(&http_client, url, &config)
+        .await
+        .map_err(|error| McpClientError::SpawnFailed {
+            message: format!("XAA authentication failed: {error}"),
+        })?;
+    if !result.token_type.is_empty() && !result.token_type.eq_ignore_ascii_case("bearer") {
+        warn!(
+            server = %server_name,
+            token_type = %result.token_type,
+            "XAA returned non-bearer token type; persisting as OAuth bearer token"
+        );
+    }
+    coco_rmcp_client::save_oauth_access_token(coco_rmcp_client::OAuthAccessTokenSave {
+        server_name,
+        url,
+        client_id: &config.client_id,
+        access_token: result.access_token,
+        refresh_token: result.refresh_token,
+        expires_in: result.expires_in,
+        scopes: result.scope,
+        store_mode: OAuthCredentialsStoreMode::Auto,
+        config_home,
+    })
+    .map_err(|error| McpClientError::SpawnFailed {
+        message: format!("failed to persist XAA credentials: {error}"),
+    })
+}
+
+fn required_xaa_field<'a>(
+    field: &str,
+    value: Option<&'a String>,
+) -> Result<&'a str, McpClientError> {
+    value
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| McpClientError::SpawnFailed {
+            message: format!("XAA config missing required field {field}"),
+        })
 }
 
 fn oauth_login_target(config: &McpServerConfig) -> Option<(String, HashMap<String, String>)> {

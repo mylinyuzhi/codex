@@ -151,6 +151,10 @@ impl Tool for ReadTool {
     /// renderer; deferred to a TS-parity output-typing pass.
     type Output = Value;
 
+    fn to_auto_classifier_input(&self, input: &ReadInput) -> Option<String> {
+        Some(input.file_path.clone())
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Read)
     }
@@ -611,7 +615,7 @@ impl Tool for ReadTool {
         )
         .await;
         // Fire-and-forget skill discovery: walk up from the file path to
-        // Walk up to the cwd boundary and queue any `.claude/skills/`
+        // Walk up to the cwd boundary and queue any `.coco/skills/`
         // ancestor dirs for the app/query layer to load; also queue
         // the file path for conditional-skill activation. TS
         // `FileReadTool.ts:578-591` does both on every successful Read.

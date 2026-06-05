@@ -74,6 +74,10 @@ impl Tool for WriteTool {
     coco_tool_runtime::impl_runtime_schema!(WriteInput);
     type Output = WriteOutput;
 
+    fn to_auto_classifier_input(&self, input: &WriteInput) -> Option<String> {
+        Some(format!("{}: {}", input.file_path, input.content))
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Write)
     }
@@ -299,7 +303,7 @@ impl Tool for WriteTool {
         crate::record_file_edit(ctx, path, content.to_string()).await;
         // TS `FileWriteTool.ts` mirrors `FileReadTool.ts:578-591` skill
         // auto-discovery + conditional-skill activation — when a
-        // write touches a path under a nested `.claude/skills/`
+        // write touches a path under a nested `.coco/skills/`
         // ancestor or matches a `paths`-gated skill, the next batch
         // boundary picks both up.
         crate::track_skill_triggers(ctx, path).await;

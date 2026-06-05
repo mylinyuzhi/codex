@@ -20,8 +20,14 @@ use crate::types::TeamFile;
 
 /// Base directory for all teams.
 ///
+/// `COCO_TEAMS_DIR` overrides it (tests isolate the teams/mailbox tree; a
+/// future swarm-leader can relocate it). Otherwise `~/.claude/teams/`.
+///
 /// TS: `~/.claude/teams/`
 pub fn teams_base_dir() -> PathBuf {
+    if let Some(dir) = coco_config::env::env_opt(coco_config::EnvKey::CocoTeamsDir) {
+        return PathBuf::from(dir);
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".claude")
@@ -65,6 +71,29 @@ pub fn write_team_file(team_name: &str, team_file: &TeamFile) -> crate::Result<(
     }
     let content = serde_json::to_string_pretty(team_file)?;
     std::fs::write(&path, content)?;
+    Ok(())
+}
+
+/// Write a single member's permission mode into `team.json`.
+///
+/// Free-function form of [`crate::roster_store::TeamRosterStore::set_member_mode`]
+/// for the **teammate** side, which has no leader-side roster manager to
+/// upsert. Used when a (cross-process) teammate self-cycles or applies a
+/// `ModeSetRequest`, so the leader's roster view reflects the live mode.
+/// No-op when the team file or member is missing. TS:
+/// `teamHelpers.ts:357 setMemberMode`.
+pub fn set_member_mode_in_team_file(
+    team_name: &str,
+    member_name: &str,
+    mode: coco_types::PermissionMode,
+) -> crate::Result<()> {
+    let Some(mut team_file) = read_team_file(team_name)? else {
+        return Ok(());
+    };
+    if let Some(member) = team_file.members.iter_mut().find(|m| m.name == member_name) {
+        member.mode = Some(mode);
+        write_team_file(team_name, &team_file)?;
+    }
     Ok(())
 }
 
@@ -168,12 +197,24 @@ pub fn cleanup_team_directories(team_name: &str) -> crate::Result<()> {
 
 /// Clean up teams owned by the current session.
 ///
-/// TS: `cleanupSessionTeams()`
+/// On leader exit (graceful or SIGINT/crash), for each team this session
+/// led: kill any still-running teammate panes FIRST (otherwise the child
+/// `coco` processes orphan — gh-32730 class), THEN remove the team dir +
+/// worktrees + tasks. Pane-kill must precede dir removal because it reads
+/// the member list out of the team file.
+///
+/// TS: `cleanupSessionTeams()` → `killOrphanedTeammatePanes` +
+/// `cleanupTeamDirectories`.
 pub fn cleanup_session_teams(session_id: &str) -> crate::Result<()> {
     for name in list_team_names() {
         if let Ok(Some(tf)) = read_team_file(&name)
             && tf.lead_session_id.as_deref() == Some(session_id)
         {
+            // Best-effort: a pane-kill failure must not block dir cleanup.
+            if let Err(e) = kill_orphaned_teammate_panes(&name) {
+                tracing::warn!(team = %name, error = %e,
+                    "session cleanup: failed to kill orphaned teammate panes (continuing)");
+            }
             cleanup_team_directories(&name)?;
         }
     }
@@ -237,20 +278,29 @@ pub fn get_session_cleanup_teams() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Kill all pane-based teammates for a team.
+/// Kill all tmux-pane teammates for a team (orphan cleanup on leader
+/// exit). Best-effort: a failed kill is ignored so cleanup proceeds.
 ///
-/// TS: `killOrphanedTeammatePanes(teamName)`
+/// Only tmux panes are torn down here via the `tmux` CLI. iTerm2 panes
+/// need the it2 backend, which is reached on the graceful shutdown path
+/// (`AgentHandle::teardown_teammate` → registry pane backend); an iTerm2
+/// pane left by a crash is a documented follow-up, not killed with the
+/// wrong backend.
+///
+/// TS: `killOrphanedTeammatePanes(teamName)`.
 pub fn kill_orphaned_teammate_panes(team_name: &str) -> crate::Result<()> {
     let Some(team_file) = read_team_file(team_name)? else {
         return Ok(());
     };
     for member in &team_file.members {
-        if !member.tmux_pane_id.is_empty() {
-            // Best-effort kill
-            let _ = std::process::Command::new("tmux")
-                .args(["kill-pane", "-t", &member.tmux_pane_id])
-                .status();
+        if member.tmux_pane_id.is_empty()
+            || member.backend_type != Some(crate::types::BackendType::Tmux)
+        {
+            continue;
         }
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-pane", "-t", &member.tmux_pane_id])
+            .status();
     }
     Ok(())
 }

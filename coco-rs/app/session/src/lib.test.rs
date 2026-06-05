@@ -129,6 +129,25 @@ fn set_title_appends_custom_title_and_agent_name_metadata() {
 }
 
 #[test]
+fn save_mode_appends_mode_metadata_for_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::new(dir.path().to_path_buf());
+    let paths = seed_transcript(dir.path(), "sess-mode");
+    mgr.save_mode("sess-mode", "coordinator").unwrap();
+    let raw = std::fs::read_to_string(paths.transcript("sess-mode")).unwrap();
+    // TS `saveMode` parity: a `mode` metadata entry records the session's
+    // coordinator state so `reconcile_on_resume` can re-derive it.
+    assert!(
+        raw.contains("\"mode\""),
+        "expected mode metadata entry: {raw}",
+    );
+    assert!(
+        raw.contains("coordinator"),
+        "expected the coordinator mode value: {raw}",
+    );
+}
+
+#[test]
 fn set_ai_title_writes_ai_title_entry_distinct_from_custom_title() {
     let dir = tempfile::tempdir().unwrap();
     let mgr = SessionManager::new(dir.path().to_path_buf());

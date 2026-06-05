@@ -1740,7 +1740,7 @@
           "type": "object"
         },
         {
-          "description": "Project-scope on-disk skill (`.claude/skills/`). TS: `projectSettings`.",
+          "description": "Project-scope on-disk skill (`.coco/skills/`).",
           "properties": {
             "kind": {
               "const": "project",
@@ -1779,7 +1779,7 @@
           "type": "object"
         },
         {
-          "description": "Legacy `.claude/commands/` flat-`.md` path. TS: `commands_DEPRECATED`.",
+          "description": "Deprecated legacy flat-`.md` path. Not used by project skill discovery.",
           "properties": {
             "kind": {
               "const": "commands_deprecated",
@@ -2860,10 +2860,11 @@
       "type": "string"
     },
     "HookPermissionDecision": {
-      "description": "`allow` / `deny` decision, matching TS `'allow' | 'deny'`.",
+      "description": "`allow` / `deny` / `ask` decision from hook output.",
       "enum": [
         "allow",
-        "deny"
+        "deny",
+        "ask"
       ],
       "type": "string"
     },
@@ -9141,7 +9142,7 @@
         },
         {
           "const": "project",
-          "description": "`<cwd>/.claude/skills/` \u2014 TS `projectSettings`.",
+          "description": "`<cwd>/.coco/skills/` \u2014 project skills.",
           "type": "string"
         },
         {
@@ -11501,6 +11502,17 @@
             "type": {
               "const": "approval_required",
               "type": "string"
+            },
+            "worker_badge": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkerBadge"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identity badge of the requesting cross-process teammate, if\nany \u2014 rendered in the prompt so the leader sees who is asking.\nTS: `workerBadge` on `PermissionRequest.tsx:89`."
             }
           },
           "required": [
@@ -12715,6 +12727,22 @@
       ],
       "title": "WireApi",
       "type": "string"
+    },
+    "WorkerBadge": {
+      "description": "Identity badge for a teammate whose tool needs the leader's approval.\nSurfaced in the leader's permission prompt so a human reviewing a\ncross-process worker's request can see WHO is asking. The `color` is\nthe worker's assigned per-teammate palette color (a coco-rs\nimprovement over TS's hardcoded `cyan`); text-surface renderers show\nthe name and carry the color for styled / SDK consumers.\n\nTS: `WorkerBadgeProps` (`components/permissions/WorkerBadge.tsx:6`).",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/AgentColorName"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "color"
+      ],
+      "type": "object"
     },
     "WorktreeEnteredParams": {
       "properties": {

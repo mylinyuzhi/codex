@@ -8,7 +8,7 @@
 //! git worktree — create a branch, modify files there, and tear it
 //! down. The process CWD restoration is handled here; higher layers
 //! (query engine) are responsible for hooks, system prompt, and memory
-//! cache restoration reported in the result payload.
+//! cache restoration.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -21,27 +21,26 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::PathBuf;
 
 // ── EnterWorktreeTool ──
 
 /// Typed input for [`EnterWorktreeTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct EnterWorktreeInput {
-    /// Branch name for the worktree
+    /// Optional descriptive name for the worktree.
     #[serde(default)]
-    pub branch: String,
-    /// Path for the worktree directory (optional, defaults to
-    /// `../worktrees/<branch>`)
-    #[serde(default)]
-    pub path: Option<String>,
+    pub name: Option<String>,
 }
 
 /// Typed output for [`EnterWorktreeTool`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnterWorktreeOutput {
+    pub worktree_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
     pub message: String,
-    pub path: String,
-    pub branch: String,
 }
 
 pub struct EnterWorktreeTool;
@@ -51,6 +50,10 @@ impl Tool for EnterWorktreeTool {
     type Input = EnterWorktreeInput;
     coco_tool_runtime::impl_runtime_schema!(EnterWorktreeInput);
     type Output = EnterWorktreeOutput;
+
+    fn to_auto_classifier_input(&self, input: &EnterWorktreeInput) -> Option<String> {
+        Some(input.name.clone().unwrap_or_default())
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::EnterWorktree)
@@ -62,13 +65,13 @@ impl Tool for EnterWorktreeTool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
     fn description(&self, _input: &EnterWorktreeInput, _options: &DescriptionOptions) -> String {
-        "Create and enter a git worktree for isolated work on a branch.".into()
+        "Create and enter a git worktree for isolated work.".into()
     }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("create and enter a git worktree on a branch")
+        Some("create and enter a git worktree")
     }
 
     /// Emit the prebuilt `message` field as plain text — the model
@@ -84,43 +87,35 @@ impl Tool for EnterWorktreeTool {
     async fn execute(
         &self,
         input: EnterWorktreeInput,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
     ) -> Result<ToolResult<EnterWorktreeOutput>, ToolError> {
-        let branch = input.branch.trim();
-
-        if branch.is_empty() {
+        let app_state = ctx
+            .app_state
+            .as_ref()
+            .ok_or_else(|| ToolError::InvalidInput {
+                message: "Cannot enter a worktree because app state is unavailable".into(),
+                error_code: None,
+            })?;
+        let slug = worktree_slug(input.name.as_deref());
+        if slug.is_empty() {
             return Err(ToolError::InvalidInput {
-                message: "branch parameter is required".into(),
+                message: "name must include at least one ASCII letter or digit".into(),
                 error_code: None,
             });
         }
 
-        // The branch is interpolated into the default worktree path
-        // (`../worktrees/<branch>`), so reject path-traversal segments that
-        // could escape the intended location (e.g. `../../etc`). `/` stays
-        // allowed — it is valid in refs like `feat/x`; only `.`/`..` segments,
-        // a leading `/`, or a backslash are blocked. Such names are invalid
-        // git refs anyway.
-        if branch.starts_with('/')
-            || branch.contains('\\')
-            || branch.split('/').any(|seg| seg == "." || seg == "..")
-        {
-            return Err(ToolError::InvalidInput {
-                message: format!(
-                    "branch name {branch:?} must not contain path-traversal \
-                     segments (\".\", \"..\", a leading \"/\", or \"\\\")"
-                ),
-                error_code: None,
-            });
-        }
-
-        let worktree_path = input
-            .path
-            .clone()
-            .unwrap_or_else(|| format!("../worktrees/{branch}"));
+        let branch = format!("{}{slug}", coco_types::AGENT_WORKTREE_BRANCH_PREFIX);
+        let current_cwd = if let Some(session_cwd) = &ctx.session_cwd {
+            session_cwd.read().await.clone()
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        };
+        let worktree_path = current_cwd.join("..").join("worktrees").join(&slug);
+        let worktree_path_string = worktree_path.to_string_lossy().to_string();
 
         let output = tokio::process::Command::new("git")
-            .args(["worktree", "add", "-b", branch, &worktree_path])
+            .current_dir(&current_cwd)
+            .args(["worktree", "add", "-b", &branch, &worktree_path_string])
             .output()
             .await
             .map_err(|e| ToolError::ExecutionFailed {
@@ -132,7 +127,8 @@ impl Tool for EnterWorktreeTool {
         if !output.status.success() {
             // Try without -b (branch may already exist)
             let output2 = tokio::process::Command::new("git")
-                .args(["worktree", "add", &worktree_path, branch])
+                .current_dir(&current_cwd)
+                .args(["worktree", "add", &worktree_path_string, &branch])
                 .output()
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
@@ -151,14 +147,51 @@ impl Tool for EnterWorktreeTool {
             }
         }
 
+        let abs_worktree = std::fs::canonicalize(&worktree_path).unwrap_or(worktree_path);
+        let state = coco_types::ActiveWorktreeState {
+            original_cwd: current_cwd,
+            worktree_path: abs_worktree.clone(),
+            worktree_branch: Some(branch.clone()),
+        };
+        {
+            let mut guard = app_state.write().await;
+            guard.active_worktree = Some(state.clone());
+        }
+
+        if let Err(e) = std::env::set_current_dir(&abs_worktree) {
+            {
+                let mut guard = app_state.write().await;
+                guard.active_worktree = None;
+            }
+            let _ = tokio::process::Command::new("git")
+                .current_dir(&state.original_cwd)
+                .args(["worktree", "remove", "--force", &worktree_path_string])
+                .output()
+                .await;
+            return Err(ToolError::ExecutionFailed {
+                message: format!("Created worktree but failed to enter it: {e}"),
+                display_data: None,
+                source: None,
+            });
+        }
+        if let Some(session_cwd) = &ctx.session_cwd {
+            *session_cwd.write().await = abs_worktree.clone();
+        }
+
         Ok(ToolResult {
             data: EnterWorktreeOutput {
-                message: format!("Created worktree at '{worktree_path}' on branch '{branch}'"),
-                path: worktree_path,
-                branch: branch.to_string(),
+                worktree_path: abs_worktree.display().to_string(),
+                worktree_branch: Some(branch.clone()),
+                message: format!(
+                    "Created and entered worktree at '{}' on branch '{}'",
+                    abs_worktree.display(),
+                    branch
+                ),
             },
             new_messages: vec![],
-            app_state_patch: None,
+            app_state_patch: Some(Box::new(move |app_state| {
+                app_state.active_worktree = Some(state);
+            })),
             permission_updates: Vec::new(),
             display_data: None,
         })
@@ -167,71 +200,40 @@ impl Tool for EnterWorktreeTool {
 
 // ── ExitWorktreeTool ──
 //
-// TS: `tools/ExitWorktreeTool/ExitWorktreeTool.ts:29-145`. The TS tool
-// tears down a worktree AND restores the session's prior state in a
-// specific order:
-//
-//   1. `setCwd(originalCwd)` — process-level current directory
-//   2. `setOriginalCwd(originalCwd)` — session's recorded origin cwd
-//   3. `setProjectRoot(previousProjectRoot)` — conditional
-//   4. `restoreHooksSnapshot()` — revert hook overrides made in worktree
-//   5. `restoreSystemPromptSections()` — rebuild system prompt
-//   6. `clearMemoryCaches()` — drop claude.md / memory caches
-//
-// Steps 3–6 live at the query-engine/app layer in coco-rs (they require
-// cross-crate access to the system prompt builder, hook registry, etc.)
-// and are out of scope for this tool alone. Step 1 (`set_current_dir`)
-// is the critical one — without it, the process cwd is left dangling
-// inside a just-removed directory and the next Bash call fails with
-// ENOENT. This implementation handles step 1 inline and emits the
-// other restoration targets in the result payload so the query engine
-// can apply them in its SessionEnd-like cleanup hook.
+// TS: `tools/ExitWorktreeTool/ExitWorktreeTool.ts:29-145`. The active
+// worktree target lives in session app state, so the model only chooses
+// whether to keep or remove it. This tool restores the process/session cwd
+// before optional removal so later shell commands do not inherit a removed
+// directory.
 
 /// Typed input for [`ExitWorktreeTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ExitWorktreeInput {
-    /// Path of the worktree to remove
+    /// What to do with the active worktree.
+    pub action: ExitWorktreeAction,
+    /// Required `true` when the worktree has uncommitted files (or its git
+    /// state can't be verified). Without it the tool refuses removal and
+    /// lists the pending work, so the model can confirm with the user first —
+    /// removal is otherwise permanent. Mirrors TS `discard_changes`.
     #[serde(default)]
-    pub path: String,
-    /// Force removal even with uncommitted changes
-    #[serde(default)]
-    pub force: bool,
-    /// Absolute path to restore as the process cwd after the worktree
-    /// is removed. If omitted, defaults to the parent directory of the
-    /// worktree.
-    #[serde(default)]
-    pub previous_cwd: Option<String>,
+    pub discard_changes: bool,
 }
 
-/// Restoration metadata for the query-engine cleanup hook. Layers
-/// 2–6 (from `ExitWorktreeTool.ts:126-145`) can't be performed by the
-/// tool itself; this struct reports what the upper layer still needs
-/// to restore.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ExitWorktreeRestoration {
-    /// Process-cwd target the tool resolved (explicit `previous_cwd`,
-    /// then the worktree's parent dir, then `current_dir`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd_target: Option<String>,
-    /// True iff `std::env::set_current_dir(cwd_target)` succeeded.
-    #[serde(default)]
-    pub cwd_restored: bool,
-    /// Set when set_current_dir failed; the upper-layer cleanup hook
-    /// may want to surface this to the user.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd_restore_error: Option<String>,
-    /// Layers the upper-layer cleanup hook still needs to handle.
-    /// Currently always the same five labels; kept as a typed Vec so
-    /// future layers can be added without breaking the wire shape.
-    #[serde(default)]
-    pub pending_layers: Vec<String>,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitWorktreeAction {
+    #[default]
+    Keep,
+    Remove,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExitWorktreeOutput {
+    pub worktree_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
     pub message: String,
-    pub path: String,
-    pub restoration: ExitWorktreeRestoration,
 }
 
 pub struct ExitWorktreeTool;
@@ -241,6 +243,16 @@ impl Tool for ExitWorktreeTool {
     type Input = ExitWorktreeInput;
     coco_tool_runtime::impl_runtime_schema!(ExitWorktreeInput);
     type Output = ExitWorktreeOutput;
+
+    fn to_auto_classifier_input(&self, input: &ExitWorktreeInput) -> Option<String> {
+        // `discard_changes` permits removing a dirty worktree — that's the
+        // security-relevant signal, so surface it alongside the action.
+        Some(if input.discard_changes {
+            format!("{:?} (discard_changes)", input.action)
+        } else {
+            format!("{:?}", input.action)
+        })
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ExitWorktree)
@@ -252,17 +264,13 @@ impl Tool for ExitWorktreeTool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
     fn description(&self, _input: &ExitWorktreeInput, _options: &DescriptionOptions) -> String {
-        "Remove a git worktree and return to the previous working directory. \
-         Restores the process CWD if it was inside the worktree being removed \
-         and returns a `restoration` block describing the session state to \
-         rebuild (hooks, system prompt, memory caches)."
-            .into()
+        "Exit the active git worktree, optionally removing it.".into()
     }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("remove a git worktree and restore previous cwd")
+        Some("exit or remove an active git worktree")
     }
 
     /// Emit the prebuilt `message` field; restoration metadata is for
@@ -279,54 +287,108 @@ impl Tool for ExitWorktreeTool {
         input: ExitWorktreeInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<ExitWorktreeOutput>, ToolError> {
-        let path = input.path.trim();
-
-        if path.is_empty() {
-            return Err(ToolError::InvalidInput {
-                message: "path parameter is required".into(),
+        let state = ctx
+            .app_state
+            .as_ref()
+            .ok_or_else(|| ToolError::InvalidInput {
+                message: "No active worktree state is available in this session".into(),
                 error_code: None,
-            });
-        }
+            })?
+            .read()
+            .await
+            .active_worktree
+            .clone()
+            .ok_or_else(|| ToolError::InvalidInput {
+                message: "No active worktree to exit".into(),
+                error_code: None,
+            })?;
 
-        // Resolve the restoration target BEFORE we remove the worktree.
-        // Three sources in priority order:
-        //   1. Explicit `previous_cwd` parameter from the caller.
-        //   2. The parent directory of the worktree path.
-        //   3. Current process cwd — last-ditch fallback; if the process
-        //      cwd is inside the worktree this will fail step 1 below
-        //      and leave the caller in a dangling dir. Better than
-        //      panicking, though.
-        let explicit_prev = input.previous_cwd.as_deref().map(std::path::PathBuf::from);
+        let worktree_path = state.worktree_path.clone();
+        let restore_target = state.original_cwd.clone();
+        let path_display = worktree_path.display().to_string();
 
-        let worktree_path = std::path::PathBuf::from(path);
-        let parent_fallback = worktree_path.parent().map(std::path::Path::to_path_buf);
-        let restore_target = explicit_prev
-            .or(parent_fallback)
-            .or_else(|| std::env::current_dir().ok());
-
-        let mut args = vec!["worktree", "remove"];
-        if input.force {
-            args.push("--force");
-        }
-        args.push(path);
-
-        let output = tokio::process::Command::new("git")
-            .args(&args)
-            .output()
+        // Safety gate (TS `ExitWorktreeTool.validateInput`): unless the caller
+        // passed `discard_changes`, refuse to remove a worktree that has
+        // uncommitted work — `git worktree remove --force` would destroy it
+        // permanently. Fail-closed: if git state can't be verified, also refuse.
+        if matches!(input.action, ExitWorktreeAction::Remove) && !input.discard_changes {
+            let gate_path = worktree_path.clone();
+            let summary = tokio::task::spawn_blocking(move || {
+                coco_git::count_worktree_changes(&gate_path, None)
+            })
             .await
             .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("Failed to run git worktree remove: {e}"),
+                message: format!("worktree status check panicked: {e}"),
                 display_data: None,
                 source: None,
             })?;
+            match summary {
+                None => {
+                    return Err(ToolError::InvalidInput {
+                        message: format!(
+                            "Could not verify the git state of the worktree at {path_display:?}. \
+                             Refusing to remove without explicit confirmation. Re-invoke with \
+                             discard_changes: true to proceed."
+                        ),
+                        error_code: None,
+                    });
+                }
+                Some(summary) if summary.has_pending_work() => {
+                    let files = summary.changed_files;
+                    let noun = if files == 1 { "file" } else { "files" };
+                    return Err(ToolError::InvalidInput {
+                        message: format!(
+                            "Worktree at {path_display:?} has {files} uncommitted {noun}. Removing will \
+                             discard this work permanently. Confirm with the user, then re-invoke \
+                             with discard_changes: true."
+                        ),
+                        error_code: None,
+                    });
+                }
+                Some(_) => {} // clean worktree — safe to remove
+            }
+        }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if let Err(e) = std::env::set_current_dir(&restore_target) {
             return Err(ToolError::ExecutionFailed {
-                message: format!("git worktree remove failed: {stderr}"),
+                message: format!(
+                    "Failed to restore cwd to '{}': {e}",
+                    restore_target.display()
+                ),
                 display_data: None,
                 source: None,
             });
+        }
+        if let Some(session_cwd) = &ctx.session_cwd {
+            *session_cwd.write().await = restore_target.clone();
+        }
+
+        if matches!(input.action, ExitWorktreeAction::Remove) {
+            let mut args = vec!["worktree", "remove"];
+            if input.discard_changes {
+                args.push("--force");
+            }
+            args.push(&path_display);
+
+            let output = tokio::process::Command::new("git")
+                .current_dir(&restore_target)
+                .args(&args)
+                .output()
+                .await
+                .map_err(|e| ToolError::ExecutionFailed {
+                    message: format!("Failed to run git worktree remove: {e}"),
+                    display_data: None,
+                    source: None,
+                })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(ToolError::ExecutionFailed {
+                    message: format!("git worktree remove failed: {stderr}"),
+                    display_data: None,
+                    source: None,
+                });
+            }
         }
 
         // Proactive LSP cleanup: shutdown the worktree-rooted servers
@@ -337,60 +399,70 @@ impl Tool for ExitWorktreeTool {
         // catches this when the next request happens to touch a file
         // under the removed root, but that next request may never come
         // in the session. Best-effort — adapter swallows errors.
-        let abs_worktree =
-            std::fs::canonicalize(&worktree_path).unwrap_or_else(|_| worktree_path.clone());
-        ctx.lsp.shutdown_for_root(&abs_worktree).await;
-
-        // Layer 1: restore process CWD. Critical: without this, if the
-        // process cwd was inside the just-removed worktree, every
-        // subsequent relative path operation fails with ENOENT.
-        //
-        // TS `ExitWorktreeTool.ts:126` calls `setCwd(originalCwd)`
-        // **unconditionally** — it always moves the cwd to the
-        // restoration target, whether or not the current cwd was inside
-        // the worktree. This is the predictable behavior: callers can
-        // rely on "after ExitWorktree, cwd is the restoration target".
-        let mut cwd_restored = false;
-        let mut restore_error: Option<String> = None;
-        if let Some(target) = restore_target.as_ref() {
-            match std::env::set_current_dir(target) {
-                Ok(()) => cwd_restored = true,
-                Err(e) => restore_error = Some(e.to_string()),
-            }
+        if matches!(input.action, ExitWorktreeAction::Remove) {
+            ctx.lsp.shutdown_for_root(&worktree_path).await;
         }
+        let message = match input.action {
+            ExitWorktreeAction::Keep => {
+                format!("Exited worktree at '{path_display}' and kept it on disk")
+            }
+            ExitWorktreeAction::Remove => {
+                format!("Exited and removed worktree at '{path_display}'")
+            }
+        };
 
-        let cwd_target = restore_target
-            .as_ref()
-            .and_then(|p| p.to_str().map(String::from));
-
-        // Layers 2-6: report what the query-engine layer still needs to
-        // restore. These are keys the caller can use to drive its own
-        // cleanup hook — the tool itself can't touch them because they
-        // live in a higher-layer state tree that's not accessible via
-        // ToolUseContext.
         Ok(ToolResult {
             data: ExitWorktreeOutput {
-                message: format!("Removed worktree at '{path}'"),
-                path: path.to_string(),
-                restoration: ExitWorktreeRestoration {
-                    cwd_target,
-                    cwd_restored,
-                    cwd_restore_error: restore_error,
-                    pending_layers: vec![
-                        "originalCwd".into(),
-                        "projectRoot".into(),
-                        "hooksSnapshot".into(),
-                        "systemPromptSections".into(),
-                        "memoryCaches".into(),
-                    ],
-                },
+                worktree_path: path_display,
+                worktree_branch: state.worktree_branch,
+                message,
             },
             new_messages: vec![],
-            app_state_patch: None,
+            app_state_patch: Some(Box::new(|app_state| {
+                app_state.active_worktree = None;
+            })),
             permission_updates: Vec::new(),
             display_data: None,
         })
     }
+}
+
+fn worktree_slug(name: Option<&str>) -> String {
+    let source = name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_string());
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in source.chars() {
+        let next = if ch.is_ascii_alphanumeric() {
+            Some(ch.to_ascii_lowercase())
+        } else if ch == '-' || ch == '_' || ch.is_whitespace() {
+            Some('-')
+        } else {
+            None
+        };
+        let Some(next) = next else {
+            continue;
+        };
+        if next == '-' {
+            if !last_dash && !out.is_empty() {
+                out.push(next);
+                last_dash = true;
+            }
+        } else {
+            out.push(next);
+            last_dash = false;
+        }
+        if out.len() >= 48 {
+            break;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 #[cfg(test)]

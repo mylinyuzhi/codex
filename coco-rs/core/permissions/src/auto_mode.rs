@@ -28,14 +28,21 @@ pub struct AutoModeInput<'a> {
     pub bash_is_read_only: bool,
 }
 
-/// Classify whether a tool can be used in auto mode.
+/// Classify whether a NON-file tool can be used in auto mode without the LLM
+/// classifier.
 ///
-/// Safe-tool allowlist (from TS yoloClassifier.ts):
+/// File-modifying tools (Write/Edit/NotebookEdit/ApplyPatch) are **not**
+/// handled here — the decision orchestrator
+/// ([`crate::auto_mode_decision::can_use_tool_in_auto_mode`]) handles them
+/// with path-safety + cwd context so a lexical "relative or /tmp" shortcut
+/// can't auto-allow a CWD-escaping traversal or override a non-classifier-
+/// approvable safety block.
+///
+/// Fast-allow set:
 /// - All read-only tools: allow
 /// - Bash: allow if command is read-only, otherwise prompt
-/// - Write/Edit: allow if path is relative or /tmp, otherwise prompt
-/// - Task/Todo tools: allow (read-only side effects)
-/// - Unknown tools: prompt
+/// - Task/Todo/Plan tools: allow (session-local side effects)
+/// - Unknown / network / agent / scheduling / MCP / file tools: prompt
 pub fn classify_for_auto_mode(
     tool_name: &str,
     input: &serde_json::Value,
@@ -58,9 +65,13 @@ pub fn classify_auto_mode_extended(ctx: &AutoModeInput<'_>) -> AutoModeDecision 
 
     let name = ctx.tool_name;
 
-    // File I/O: check path safety
-    if name == ToolName::Write.as_str() || name == ToolName::Edit.as_str() {
-        return classify_file_path(name, ctx.input);
+    // File-modifying tools are handled by the decision orchestrator with
+    // path-safety + cwd context — never auto-allowed by a lexical shortcut
+    // here. Defer to the classifier if one somehow reaches this path.
+    if crate::evaluate::is_file_modifying_tool(name) {
+        return AutoModeDecision::NeedsPrompt {
+            reason: format!("{name} requires path-safety review"),
+        };
     }
 
     // Bash: allow read-only commands, prompt for others
@@ -145,19 +156,6 @@ pub fn classify_auto_mode_extended(ctx: &AutoModeInput<'_>) -> AutoModeDecision 
     // Unknown tools — prompt
     AutoModeDecision::NeedsPrompt {
         reason: format!("unknown tool: {name}"),
-    }
-}
-
-/// Classify file path safety for Write/Edit tools.
-fn classify_file_path(tool_name: &str, input: &serde_json::Value) -> AutoModeDecision {
-    if let Some(path) = input.get("file_path").and_then(|v| v.as_str()) {
-        // Relative paths or /tmp are safe
-        if !path.starts_with('/') || path.starts_with("/tmp") {
-            return AutoModeDecision::Allow;
-        }
-    }
-    AutoModeDecision::NeedsPrompt {
-        reason: format!("{tool_name} to absolute path"),
     }
 }
 

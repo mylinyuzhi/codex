@@ -190,6 +190,16 @@ pub fn build_system_prompt(
         additional_working_directories,
     ));
 
+    // Git status snapshot — TS `getSystemContext` `gitStatus`, appended via
+    // `appendSystemContext` as `gitStatus: <value>`. Rendered immediately
+    // after `<env>` so it shares the cached session-start prefix (the status
+    // is a snapshot taken at session start, stable for the conversation).
+    // Present only in git repos — `get_environment_info` leaves `git_status`
+    // `None` otherwise, mirroring TS's `is_git_repo` gate.
+    if let Some(git) = &environment.git_status {
+        prompt.add_text(render_git_status_block(git));
+    }
+
     // `notes_after_env` — TS subagent path bundles
     // `enhanceSystemPromptWithEnvDetails::notes` immediately after the
     // env block (BEFORE memory). Placing it here keeps that ordering
@@ -254,6 +264,48 @@ fn render_env_block(env: &crate::EnvironmentInfo, additional_dirs: &[String]) ->
         ));
     }
     s
+}
+
+/// TS `MAX_STATUS_CHARS` — `git status --short` is truncated past this.
+const MAX_STATUS_CHARS: usize = 2000;
+
+/// Render the start-of-conversation git status block, mirroring TS
+/// `getGitStatus` joined with `\n\n` and prefixed `gitStatus: ` by
+/// `appendSystemContext`. The branch / main-branch / user / dirty-file /
+/// recent-commits snapshot is what gives the model start-of-session repo
+/// awareness for commit / PR / review work.
+fn render_git_status_block(git: &crate::GitStatus) -> String {
+    let truncated_status = if git.status.chars().count() > MAX_STATUS_CHARS {
+        let head: String = git.status.chars().take(MAX_STATUS_CHARS).collect();
+        format!(
+            "{head}\n... (truncated because it exceeds 2k characters. If you need more information, run \"git status\" using BashTool)"
+        )
+    } else {
+        git.status.clone()
+    };
+    let status_body = if truncated_status.is_empty() {
+        "(clean)"
+    } else {
+        truncated_status.as_str()
+    };
+
+    let mut parts = vec![
+        "This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.".to_string(),
+        format!("Current branch: {}", git.branch),
+        format!(
+            "Main branch (you will usually use this for PRs): {}",
+            git.main_branch.as_deref().unwrap_or_default()
+        ),
+    ];
+    if let Some(user) = &git.user
+        && !user.is_empty()
+    {
+        parts.push(format!("Git user: {user}"));
+    }
+    parts.push(format!("Status:\n{status_body}"));
+    parts.push(format!("Recent commits:\n{}", git.recent_commits));
+
+    format!("gitStatus: {}", parts.join("\n\n"))
 }
 
 /// TS `getShellInfoLine`: includes Windows-only Unix-syntax hint.

@@ -337,7 +337,8 @@ pub async fn install_session_late_binds(
     // Post-turn fork dispatcher (`/btw`, `promptSuggestion`). Captures
     // `Arc<SessionRuntime>` and routes every dispatch through
     // `build_engine_from_config`, leaving the parent loop untouched.
-    crate::fork_dispatcher::install(runtime).await;
+    crate::fork_dispatcher::install(runtime.clone()).await;
+    crate::hook_agent_runner::install(runtime).await;
 
     Ok(())
 }

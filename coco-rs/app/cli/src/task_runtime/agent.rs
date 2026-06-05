@@ -30,7 +30,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, trace, warn};
 
 use super::TaskRuntime;
-use super::stall;
 use super::timers::spawn_agent_auto_background_timer;
 use crate::disk_task_output::DEFAULT_MAX_READ_BYTES;
 
@@ -135,24 +134,13 @@ impl TaskRuntime {
             })
             .await;
         debug_assert_eq!(assigned, task_id);
-        // W6 (Item 3 / A4): spawn the agent stall watchdog. Fires a
-        // notification if the agent's disk output is silent for
-        // `AGENT_STALL_THRESHOLD_MS`. The bg agent driver in
-        // `coordinator::spawn_background` drains `Stream::TextDelta`
-        // into `append_output` so disk-size growth is a faithful
-        // proxy for "agent is still working". Cancel propagates from
-        // the task entry's cancel token, so terminal transitions /
-        // `kill_task` stop the watchdog cleanly.
-        tokio::spawn(stall::agent_watchdog(
-            task_id.clone(),
-            description.to_string(),
-            tool_use_id.map(String::from),
-            invoking_agent.map(String::from),
-            output_path.clone(),
-            dto.clone(),
-            self.notification_sink.clone(),
-            cancel.clone(),
-        ));
+        // NOTE: no agent stall watchdog. TS has none for agent tasks
+        // (`LocalAgentTask.tsx` has no stall/interval logic) — agents have no
+        // stdin and never emit interactive prompts, so a silence-based stall
+        // notice (the old `agent_watchdog`) only ever misfired the shell-shaped
+        // "waiting for interactive input / re-run with piped input" advice. The
+        // shell stall watchdog (`stall::watchdog`) remains, as it faithfully
+        // ports `LocalShellTask.tsx`.
         // TS parity (`LocalAgentTask.tsx:582-608`): when `autoBackgroundMs`
         // is set, the foreground sub-agent auto-detaches after that
         // many ms of execution. The fg awaiter (`tool.execute`'s
@@ -167,7 +155,7 @@ impl TaskRuntime {
             task_type = "local_agent",
             output_file = %output_path,
             auto_background_ms = ?auto_background_ms,
-            "agent task registered (Running, stall watchdog spawned)"
+            "agent task registered (Running)"
         );
         task_id
     }

@@ -145,3 +145,56 @@ fn format_cost_uses_four_decimals_below_one_cent() {
     assert_eq!(format_cost(1.23), "$1.23");
     assert_eq!(format_cost(0.005), "$0.0050");
 }
+
+#[test]
+fn format_session_cost_empty_reports_no_usage() {
+    let snap = coco_types::SessionUsageSnapshot::default();
+    let out = format_session_cost(&snap);
+    assert!(out.contains("No API usage recorded yet"));
+}
+
+#[test]
+fn format_session_cost_renders_per_model_and_total() {
+    let snap = coco_types::SessionUsageSnapshot {
+        session_id: "s1".into(),
+        totals: coco_types::SessionUsageTotals {
+            input_tokens: 1_500,
+            output_tokens: 500,
+            total_cost_usd: 0.42,
+            request_count: 2,
+            ..Default::default()
+        },
+        models: vec![
+            coco_types::SessionModelUsageEntry {
+                provider: "openai".into(),
+                model_id: "gpt-5".into(),
+                input_tokens: 1_000,
+                output_tokens: 300,
+                total_cost_usd: 0.30,
+                request_count: 1,
+                priced: true,
+                ..Default::default()
+            },
+            coco_types::SessionModelUsageEntry {
+                provider: "local".into(),
+                model_id: "mystery".into(),
+                input_tokens: 500,
+                output_tokens: 200,
+                request_count: 1,
+                priced: false,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let out = format_session_cost(&snap);
+    // Multi-provider: both buckets present, keyed by (provider, model_id).
+    assert!(out.contains("openai / gpt-5"));
+    assert!(out.contains("local / mystery"));
+    // Priced model shows its cost; unpriced model is flagged, not mispriced.
+    assert!(out.contains("$0.30"));
+    assert!(out.contains("unpriced model"));
+    // Thousands grouping + total.
+    assert!(out.contains("1,000"));
+    assert!(out.contains("**Total cost:  $0.42**"));
+}

@@ -43,6 +43,17 @@
         "type": {
           "type": "string",
           "const": "approval_required"
+        },
+        "worker_badge": {
+          "description": "Identity badge of the requesting cross-process teammate, if\nany — rendered in the prompt so the leader sees who is asking.\nTS: `workerBadge` on `PermissionRequest.tsx:89`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkerBadge"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1095,7 +1106,7 @@
           ]
         },
         {
-          "description": "Project-scope on-disk skill (`.claude/skills/`). TS: `projectSettings`.",
+          "description": "Project-scope on-disk skill (`.coco/skills/`).",
           "type": "object",
           "properties": {
             "kind": {
@@ -1134,7 +1145,7 @@
           ]
         },
         {
-          "description": "Legacy `.claude/commands/` flat-`.md` path. TS: `commands_DEPRECATED`.",
+          "description": "Deprecated legacy flat-`.md` path. Not used by project skill discovery.",
           "type": "object",
           "properties": {
             "kind": {
@@ -2299,7 +2310,7 @@
           "const": "built_in"
         },
         {
-          "description": "`<cwd>/.claude/skills/` — TS `projectSettings`.",
+          "description": "`<cwd>/.coco/skills/` — project skills.",
           "type": "string",
           "const": "project"
         },
@@ -2504,6 +2515,22 @@
         "name",
         "call_tokens",
         "result_tokens"
+      ]
+    },
+    "WorkerBadge": {
+      "description": "Identity badge for a teammate whose tool needs the leader's approval.\nSurfaced in the leader's permission prompt so a human reviewing a\ncross-process worker's request can see WHO is asking. The `color` is\nthe worker's assigned per-teammate palette color (a coco-rs\nimprovement over TS's hardcoded `cyan`); text-surface renderers show\nthe name and carry the color for styled / SDK consumers.\n\nTS: `WorkerBadgeProps` (`components/permissions/WorkerBadge.tsx:6`).",
+      "type": "object",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/AgentColorName"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "color"
       ]
     }
   }

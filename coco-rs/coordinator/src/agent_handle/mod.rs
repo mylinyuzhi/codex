@@ -39,6 +39,7 @@ use coco_types::TaskStatus;
 use coco_types::TaskType;
 
 use crate::constants::TEAM_LEAD_NAME;
+use crate::identity::get_agent_id;
 use crate::identity::get_agent_name;
 use crate::identity::get_team_name;
 use crate::mailbox::TeammateMessage;
@@ -749,6 +750,11 @@ impl SwarmAgentHandle {
                 max_turns: config.max_turns,
                 cancelled,
                 auto_compact_threshold: self.teammate_auto_compact_threshold,
+                // Intentional invariant (A7b): teammates NEVER inherit the
+                // leader's bypass-permissions capability — they always run
+                // through the normal permission gate. Hardcoded `false` rather
+                // than threading the parent's flag, so a future change to grant
+                // teammates bypass is an explicit, reviewable edit.
                 bypass_permissions_available: false,
                 features: request.features.clone(),
                 tool_overrides: request.tool_overrides.clone(),
@@ -876,7 +882,7 @@ impl AgentHandle for SwarmAgentHandle {
             let tm = self.team_manager.read().await;
             tm.as_ref()
                 .map(|m| m.team_name().to_string())
-                .or_else(|| get_team_name(None))
+                .or_else(get_team_name)
                 .ok_or_else(|| "No active team — cannot send message".to_string())?
         };
 
@@ -982,6 +988,287 @@ impl AgentHandle for SwarmAgentHandle {
 
     async fn interrupt_agent_current_work(&self, agent_id: &str) -> Result<bool, String> {
         self.interrupt_teammate_current_work(agent_id).await
+    }
+
+    async fn request_shutdown(&self, target: &str, reason: Option<&str>) -> Result<String, String> {
+        if target == "*" {
+            return Err("shutdown_request cannot be broadcast — name a single teammate".into());
+        }
+        if target == TEAM_LEAD_NAME {
+            return Err("cannot request the team lead to shut down".into());
+        }
+        let team_name = {
+            let tm = self.team_manager.read().await;
+            tm.as_ref()
+                .map(|m| m.team_name().to_string())
+                .or_else(get_team_name)
+                .ok_or_else(|| "No active team — cannot request shutdown".to_string())?
+        };
+        let from = get_agent_name().unwrap_or_else(|| TEAM_LEAD_NAME.to_string());
+        let request_id =
+            crate::mailbox::send_shutdown_request(target, &team_name, &from, reason)
+                .map_err(|e| format!("Failed to send shutdown request to '{target}': {e}"))?;
+        Ok(format!(
+            "Shutdown requested for '{target}' (request {request_id}). \
+             Awaiting the teammate's approval."
+        ))
+    }
+
+    async fn respond_to_shutdown(
+        &self,
+        request_id: &str,
+        approve: bool,
+        reason: Option<&str>,
+    ) -> Result<String, String> {
+        // Only teammates respond to shutdown; the leader never does.
+        // Resolve this worker's own identity from the 3-tier resolver.
+        let from = get_agent_name().ok_or_else(|| {
+            "shutdown_response requires a teammate identity (no agent name resolved)".to_string()
+        })?;
+        let team_name = get_team_name().ok_or_else(|| {
+            "shutdown_response requires an active team (no team resolved)".to_string()
+        })?;
+        let agent_id = get_agent_id().unwrap_or_else(|| format!("{from}@{team_name}"));
+
+        // Read this worker's OWN pane coordinates from team.json so the
+        // leader can kill the right pane. In-process teammates carry an
+        // empty pane id + InProcess backend → the leader skips kill_pane
+        // and the teammate exits via its runner-loop break.
+        let (pane_id, backend_type) = self_pane_coords(&team_name, &agent_id);
+
+        let text = if approve {
+            crate::mailbox::create_shutdown_approved_message(
+                request_id,
+                &from,
+                pane_id.as_deref(),
+                backend_type.as_deref(),
+            )
+        } else {
+            crate::mailbox::create_shutdown_rejected_message(
+                request_id,
+                &from,
+                reason.unwrap_or("shutdown rejected by teammate"),
+            )
+        };
+        let summary = if approve {
+            "shutdown approved"
+        } else {
+            "shutdown rejected"
+        };
+        let message = TeammateMessage {
+            from: from.clone(),
+            text,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            read: false,
+            color: crate::pane::layout::get_teammate_color(&from).map(|c| c.as_str().to_string()),
+            summary: Some(summary.to_string()),
+        };
+        write_to_mailbox(TEAM_LEAD_NAME, message, &team_name)
+            .map_err(|e| format!("Failed to send shutdown response to team lead: {e}"))?;
+
+        // On approval, abort our OWN in-process runner loop (TS
+        // `handleShutdownApproval` → `task.abortController.abort()`). This
+        // tool runs inline inside the teammate's task-local scope, so
+        // `signal_self_stop` reaches the runner's `config.cancelled` flag.
+        // No-op (returns false) for cross-process teammates — those exit
+        // when the leader's `teardown_teammate` kills their pane instead.
+        if approve {
+            crate::identity::signal_self_stop();
+        }
+
+        Ok(if approve {
+            format!(
+                "Shutdown approved. Confirmation sent to {TEAM_LEAD_NAME}; \
+                 wrap up and exit."
+            )
+        } else {
+            format!("Shutdown rejected. Notified {TEAM_LEAD_NAME} and continuing work.")
+        })
+    }
+
+    async fn teardown_teammate(
+        &self,
+        agent_id: &str,
+        name: &str,
+        pane_id: Option<&str>,
+        backend_type: Option<&str>,
+    ) -> Result<(), String> {
+        let Some(team_name) = self.roster_store.active_team_name().await else {
+            return Err("no active team — cannot tear down teammate".into());
+        };
+
+        // 1. Kill the pane for pane-based teammates. In-process teammates
+        //    have no pane id (and an InProcess backend) and exit via their
+        //    own runner-loop break, so kill_pane is skipped.
+        let is_in_process = backend_type == Some(crate::types::BackendType::InProcess.as_str());
+        if let Some(pane) = pane_id.filter(|p| !p.is_empty())
+            && !is_in_process
+            && let Some(registry) = &self.backend_registry
+            && let Some(backend) = registry.get_pane_backend().await
+        {
+            // Kill on the backend the teammate was actually created on. A
+            // session hosts a single pane backend today so this normally
+            // matches; guard defensively so a future mixed tmux/iTerm2 team
+            // never kills the wrong server's pane. TS:
+            // `getBackendByType(backendType).killPane(...)`.
+            let registered = backend.backend_type().as_str();
+            if backend_type.is_some_and(|bt| bt != registered) {
+                tracing::warn!(agent_id, pane_id = pane, msg_backend = ?backend_type,
+                    registered, "shutdown teardown: backend_type mismatch — skipping kill_pane");
+            } else if let Err(e) = backend.kill_pane(&pane.to_string()).await {
+                tracing::warn!(agent_id, pane_id = pane, error = %e,
+                    "shutdown teardown: kill_pane failed (continuing)");
+            }
+        }
+
+        // 2. Remove the teammate from the team file + live roster.
+        if let Err(e) = self
+            .roster_store
+            .rollback_member(&team_name, agent_id)
+            .await
+        {
+            tracing::warn!(agent_id, error = %e,
+                "shutdown teardown: remove member failed (continuing)");
+        }
+
+        // 3. Unassign its in-flight tasks so peers can reclaim them, and
+        //    notify the leader which tasks reopened so its model can
+        //    reassign them. TS: `useInboxPoller.ts:733-788` pushes a
+        //    `teammate_terminated` message built from the unassigned list —
+        //    coco-rs routes the same content through the leader's own inbox
+        //    (the poller re-injects it as a coordinator turn).
+        if let Some(task_list) = &self.task_list {
+            match task_list.unassign_teammate_tasks(agent_id, name).await {
+                Ok(reopened) if !reopened.is_empty() => {
+                    let list = reopened
+                        .iter()
+                        .map(|(id, subject)| format!("- {subject} ({id})"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let text = format!(
+                        "Teammate '{name}' was terminated. {n} task(s) returned to the \
+                         pool for reassignment:\n{list}",
+                        n = reopened.len()
+                    );
+                    let message = TeammateMessage {
+                        from: name.to_string(),
+                        text,
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        read: false,
+                        color: None,
+                        summary: Some(format!("{name} terminated")),
+                    };
+                    if let Err(e) = write_to_mailbox(TEAM_LEAD_NAME, message, &team_name) {
+                        tracing::warn!(agent_id, error = %e,
+                            "shutdown teardown: terminate notification failed (continuing)");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(agent_id, error = %e,
+                    "shutdown teardown: unassign tasks failed (continuing)"),
+            }
+        }
+
+        // 4. Mark a PANE teammate's running task terminal. In-process
+        //    teammates already get this from their runner wrapper
+        //    (`complete_teammate_task` on loop exit); pane teammates have no
+        //    such runner, so the row would otherwise linger `Running` forever.
+        //    Idempotent — no-ops on an already-terminal row. TS:
+        //    `useInboxPoller.ts:749-765`.
+        if !is_in_process {
+            self.task_registry
+                .complete_teammate_task(agent_id, coco_types::TaskStatus::Completed, None, None)
+                .await;
+        }
+
+        Ok(())
+    }
+
+    async fn set_teammate_mode(
+        &self,
+        name: &str,
+        mode: coco_types::PermissionMode,
+    ) -> Result<String, String> {
+        let team_name = self
+            .roster_store
+            .active_team_name()
+            .await
+            .ok_or_else(|| "no active team — cannot set teammate mode".to_string())?;
+        // 1. Persist to team.json + live roster.
+        self.roster_store
+            .set_member_mode(&team_name, name, mode)
+            .await?;
+        // 2. Notify the live teammate via a ModeSetRequest in its mailbox.
+        let message = TeammateMessage {
+            from: TEAM_LEAD_NAME.to_string(),
+            text: crate::mailbox::create_mode_set_request(mode, TEAM_LEAD_NAME),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            read: false,
+            color: None,
+            summary: Some("mode change".to_string()),
+        };
+        write_to_mailbox(name, message, &team_name)
+            .map_err(|e| format!("Failed to notify teammate '{name}' of mode change: {e}"))?;
+        Ok(format!("Set '{name}' permission mode to {mode:?}"))
+    }
+
+    async fn set_teammate_modes(
+        &self,
+        updates: Vec<(String, coco_types::PermissionMode)>,
+    ) -> Result<String, String> {
+        let team_name = self
+            .roster_store
+            .active_team_name()
+            .await
+            .ok_or_else(|| "no active team — cannot set teammate modes".to_string())?;
+        // 1. ONE atomic team.json write for all changed members (TS
+        //    `setMultipleMemberModes` — avoids the N-write race of looping
+        //    `set_member_mode`).
+        self.roster_store
+            .set_member_modes(&team_name, &updates)
+            .await?;
+        // 2. Notify every targeted teammate via a `ModeSetRequest` so its live
+        //    permission context updates. TS mails ALL teammates in the batch,
+        //    not only the ones whose stored mode changed.
+        for (name, mode) in &updates {
+            let message = TeammateMessage {
+                from: TEAM_LEAD_NAME.to_string(),
+                text: crate::mailbox::create_mode_set_request(*mode, TEAM_LEAD_NAME),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                read: false,
+                color: None,
+                summary: Some("mode change".to_string()),
+            };
+            if let Err(e) = write_to_mailbox(name, message, &team_name) {
+                tracing::warn!(teammate = %name, error = %e,
+                    "set_teammate_modes: mailbox notify failed (continuing)");
+            }
+        }
+        Ok(format!(
+            "Set permission mode for {} teammate(s)",
+            updates.len()
+        ))
+    }
+}
+
+/// Read a worker's own `(pane_id, backend_type)` from its team.json
+/// member entry. Returns `(None, None)` when the file or member is
+/// missing. The pane id is normalised to `None` when empty (the
+/// in-process case). TS: the `selfMember` lookup in
+/// `SendMessageTool.ts:323-328` `handleShutdownApproval`.
+fn self_pane_coords(team_name: &str, agent_id: &str) -> (Option<String>, Option<String>) {
+    match crate::team_file::read_team_file(team_name) {
+        Ok(Some(tf)) => tf
+            .members
+            .into_iter()
+            .find(|m| m.agent_id == agent_id)
+            .map(|m| {
+                let pane = (!m.tmux_pane_id.is_empty()).then_some(m.tmux_pane_id);
+                let backend = m.backend_type.map(|b| b.as_str().to_string());
+                (pane, backend)
+            })
+            .unwrap_or((None, None)),
+        _ => (None, None),
     }
 }
 
