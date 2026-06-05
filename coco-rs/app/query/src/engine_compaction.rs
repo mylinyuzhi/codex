@@ -73,6 +73,10 @@ impl QueryEngine {
             return coco_compact::CompactOutcome::Skipped;
         }
 
+        // TS parity: non-empty manual `/compact` histories flow through
+        // session-memory / LLM compaction; the compact service decides
+        // whether there is enough conversation to summarize.
+
         // TS commands/compact/compact.ts:98 calls `microcompactMessages`
         // before `compactConversation`, but that function is a no-op in
         // external builds (only the `feature('CACHED_MICROCOMPACT')` /

@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use coco_llm_types::LlmMessage;
 use coco_llm_types::UserContentPart;
+use coco_session::storage::ChainWriteOptions;
 use coco_types::CacheSafeParams;
 use coco_types::ForkLabel;
 use coco_types::HookEventType;
@@ -279,6 +281,27 @@ fn assistant_msg(text: &str) -> coco_messages::Message {
     })
 }
 
+fn assistant_msg_with_usage(
+    text: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+) -> coco_messages::Message {
+    let mut msg = assistant_msg(text);
+    if let coco_messages::Message::Assistant(assistant) = &mut msg {
+        assistant.usage = Some(coco_types::TokenUsage {
+            input_tokens: coco_types::InputTokens {
+                total: input_tokens,
+                ..Default::default()
+            },
+            output_tokens: coco_types::OutputTokens {
+                total: output_tokens,
+                ..Default::default()
+            },
+        });
+    }
+    msg
+}
+
 fn compactable_history() -> coco_messages::MessageHistory {
     let mut history = coco_messages::MessageHistory::new();
     for idx in 0..4 {
@@ -298,6 +321,17 @@ fn drain_protocol_events(
         }
     }
     events
+}
+
+fn chain_options(cwd: &str) -> ChainWriteOptions {
+    ChainWriteOptions {
+        cwd: cwd.to_string(),
+        timestamp: "2026-01-02T03:04:05Z".to_string(),
+        is_sidechain: false,
+        agent_id: None,
+        starting_parent_uuid: None,
+        git_branch: None,
+    }
 }
 
 fn empty_cache() -> CacheSafeParams {
@@ -343,9 +377,9 @@ async fn manual_compact_empty_history_emits_compaction_failed() {
 }
 
 #[tokio::test]
-async fn manual_compact_too_short_history_emits_compaction_failed() {
+async fn manual_compact_single_round_enters_llm_compact_when_summary_is_returned() {
     let model = Arc::new(CapturingModel::default());
-    let engine = new_engine(model, None);
+    let engine = new_engine(model.clone(), None);
     let mut history = coco_messages::MessageHistory::new();
     history.push(coco_messages::create_user_message("one round"));
     history.push(assistant_msg("assistant"));
@@ -356,22 +390,34 @@ async fn manual_compact_too_short_history_emits_compaction_failed() {
         .run_manual_compact(
             &mut history,
             &event_tx,
-            crate::ManualCompactRequest::new(None),
+            crate::ManualCompactRequest::new(Some("focus".to_string())),
         )
         .await;
 
-    assert_eq!(outcome, coco_compact::CompactOutcome::Skipped);
+    assert_eq!(outcome, coco_compact::CompactOutcome::Applied);
+    assert!(
+        model
+            .options
+            .lock()
+            .expect("model options lock poisoned")
+            .is_some(),
+        "single-round manual compact should reach the LLM summarizer"
+    );
     let events = drain_protocol_events(&mut rx);
-    assert!(events.iter().any(|event| matches!(
-        event,
-        coco_types::ServerNotification::CompactionFailed(p)
-            if p.error == "Not enough messages to compact."
-    )));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, coco_types::ServerNotification::CompactionFailed(_)))
+    );
     assert!(events.iter().any(|event| matches!(
         event,
         coco_types::ServerNotification::CompactionPhase(p)
             if p.phase == coco_types::CompactionPhase::Done
     )));
+    let rendered = format!("{:?}", history.as_slice());
+    assert!(rendered.contains("<command-name>/compact</command-name>"));
+    assert!(rendered.contains("direct summary"));
+    assert!(rendered.contains("<local-command-stdout>Compacted ("));
 }
 
 #[tokio::test]
@@ -401,6 +447,145 @@ async fn manual_compact_summarizer_error_emits_compaction_failed() {
         coco_types::ServerNotification::CompactionPhase(p)
             if p.phase == coco_types::CompactionPhase::Done
     )));
+}
+
+#[tokio::test]
+async fn compact_preserved_segment_round_trips_through_transcript_store_resume() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cwd = "/compact-preserved-test";
+    let paths = Arc::new(coco_paths::ProjectPaths::new(
+        dir.path().to_path_buf(),
+        std::path::Path::new(cwd),
+    ));
+    let store = coco_session::TranscriptStore::new(paths);
+    let session_id = "session-compact-preserved";
+    let mut seen = HashSet::new();
+
+    let old_user = Arc::new(coco_messages::create_user_message("old prefix user"));
+    let old_assistant = Arc::new(assistant_msg("old prefix assistant"));
+    let head = Arc::new(coco_messages::create_user_message("preserved user"));
+    let tail = Arc::new(assistant_msg_with_usage(
+        "preserved assistant",
+        /*input_tokens*/ 190_000,
+        /*output_tokens*/ 200,
+    ));
+    let pre_compact = vec![
+        old_user.clone(),
+        old_assistant.clone(),
+        head.clone(),
+        tail.clone(),
+    ];
+    store
+        .append_message_chain(
+            session_id,
+            pre_compact.iter().map(Arc::as_ref),
+            &mut seen,
+            chain_options(cwd),
+        )
+        .expect("pre-compact history writes");
+
+    let result = coco_compact::compact_conversation(
+        &pre_compact,
+        &coco_compact::CompactRunOptions {
+            keep_recent_rounds: 1,
+            trigger: coco_types::CompactTrigger::Manual,
+            ..Default::default()
+        },
+        |_attempt| async {
+            Ok(coco_compact::CompactSummaryResponse {
+                summary: "compact summary".to_string(),
+            })
+        },
+        None,
+    )
+    .await
+    .expect("compact succeeds");
+
+    let boundary_uuid = *result
+        .boundary_marker
+        .uuid()
+        .expect("boundary uuid should exist");
+    let summary_uuid = *result.summary_messages[0]
+        .uuid()
+        .expect("summary uuid should exist");
+    let tail_uuid = *tail.uuid().expect("tail uuid should exist");
+    let kept_uuids = result
+        .messages_to_keep
+        .iter()
+        .filter_map(|message| message.uuid().copied())
+        .collect::<Vec<_>>();
+    assert!(
+        kept_uuids.contains(&tail_uuid),
+        "preserved segment should include the final assistant"
+    );
+    let summarized_uuids = pre_compact
+        .iter()
+        .filter_map(|message| message.uuid().copied())
+        .filter(|uuid| !kept_uuids.contains(uuid))
+        .collect::<Vec<_>>();
+    match &result.boundary_marker {
+        coco_messages::Message::System(coco_messages::SystemMessage::CompactBoundary(boundary)) => {
+            let segment = boundary
+                .preserved_segment
+                .as_ref()
+                .expect("compact should annotate preserved segment");
+            assert_eq!(segment.head_uuid, kept_uuids[0]);
+            assert_eq!(segment.tail_uuid, *kept_uuids.last().expect("kept uuid"));
+            assert_eq!(segment.anchor_uuid, boundary_uuid);
+        }
+        other => panic!("expected compact boundary, got {other:?}"),
+    }
+
+    let post_compact = coco_compact::build_post_compact_messages(&result);
+    store
+        .append_message_chain(
+            session_id,
+            post_compact.iter().map(Arc::as_ref),
+            &mut seen,
+            chain_options(cwd),
+        )
+        .expect("post-compact history writes");
+
+    let state =
+        coco_session::recovery::load_session_state_for_resume(&store.transcript_path(session_id))
+            .expect("resume state loads");
+
+    for uuid in [boundary_uuid, summary_uuid]
+        .into_iter()
+        .chain(kept_uuids.iter().copied())
+    {
+        assert!(
+            state.selected_chain_uuids.contains(&uuid.to_string()),
+            "expected selected resume chain to contain {uuid}"
+        );
+    }
+    for uuid in summarized_uuids {
+        assert!(
+            !state.selected_chain_uuids.contains(&uuid.to_string()),
+            "old compacted prefix should be pruned from selected resume chain"
+        );
+    }
+    let resumed_uuids = state
+        .messages
+        .iter()
+        .filter_map(coco_messages::Message::uuid)
+        .copied()
+        .collect::<Vec<_>>();
+    let mut expected_uuids = vec![boundary_uuid];
+    expected_uuids.extend(kept_uuids);
+    expected_uuids.push(summary_uuid);
+    assert_eq!(
+        resumed_uuids, expected_uuids,
+        "resume should relink preserved messages under the compact boundary"
+    );
+    assert_eq!(
+        state.total_input_tokens, 0,
+        "preserved assistant input usage must be zeroed on resume"
+    );
+    assert_eq!(
+        state.total_output_tokens, 0,
+        "preserved assistant output usage must be zeroed on resume"
+    );
 }
 
 #[tokio::test]
