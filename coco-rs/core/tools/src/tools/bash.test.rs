@@ -501,17 +501,18 @@ fn test_sandbox_state_active_non_excluded_wraps() {
     assert!(snap.should_wrap, "active + non-excluded → wrap");
 }
 
-/// R6-T19: runtime-config gate for auto-background-on-timeout.
+/// Auto-background-on-timeout defaults ON (TS `shouldAutoBackground`).
 #[test]
-fn test_auto_background_on_timeout_default_disabled() {
+fn test_auto_background_on_timeout_default_enabled() {
     let config = coco_config::ToolConfig::default();
-    assert!(!config.bash.auto_background_on_timeout);
+    assert!(config.bash.auto_background_on_timeout);
 }
 
-/// With auto-background opted out (default), a timeout still surfaces
-/// as an ExecutionFailed error — existing behavior.
+/// `sleep` is excluded from auto-backgrounding, so a `sleep` timeout still
+/// surfaces as an ExecutionFailed error rather than moving to the background.
+/// (`test_default()` also has no TaskRuntime, exercising the fallback path.)
 #[tokio::test]
-async fn test_bash_timeout_without_auto_background_errors() {
+async fn test_bash_sleep_timeout_errors_not_backgrounded() {
     let ctx = ToolUseContext::test_default();
     let result = <BashTool as DynTool>::execute(
         &BashTool,
@@ -521,10 +522,18 @@ async fn test_bash_timeout_without_auto_background_errors() {
     .await;
     assert!(
         result.is_err(),
-        "timeout should error when auto-bg disabled"
+        "sleep timeout should error, not background"
     );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("timed out"));
+}
+
+#[test]
+fn test_is_autobackgrounding_allowed_excludes_sleep() {
+    use crate::tools::bash_advanced::is_autobackgrounding_allowed;
+    assert!(!is_autobackgrounding_allowed("sleep 10"));
+    assert!(is_autobackgrounding_allowed("npm run build"));
+    assert!(is_autobackgrounding_allowed("cargo test"));
 }
 
 /// R6-T17: when ctx.cancel fires mid-execution, the child process is

@@ -87,6 +87,22 @@ fn is_transcript_too_long_error(err: &str) -> bool {
         || lower.contains("too many tokens")
 }
 
+/// Projects a tool's raw input down to the security-relevant fields the
+/// auto-mode classifier should see (TS `Tool.toAutoClassifierInput`).
+///
+/// `None` ⇒ the caller has no projection for this `(tool, input)` pair —
+/// either the tool is unknown or it declares no classifier-relevant input — in
+/// which case the classifier falls back to the raw input JSON. Built from the
+/// live `ToolRegistry` in `app/query` and threaded down so this crate stays
+/// free of any `coco-tools` dependency.
+pub type InputProjector<'a> =
+    &'a (dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync);
+
+/// Which classifier stages run (Both / Fast / Thinking). Defined in
+/// `coco-types` so `coco-config`'s `AutoModeConfig` and this crate's
+/// `AutoModeRules` share one type.
+pub use coco_types::ClassifierMode;
+
 /// Auto-mode configuration rules.
 ///
 /// TS: AutoModeRules — user-configurable allow/deny/environment rules.
@@ -101,6 +117,17 @@ pub struct AutoModeRules {
     /// Environment context for the classifier.
     #[serde(default)]
     pub environment: Vec<String>,
+    /// Which classifier stages run (Both / Fast / Thinking). TS
+    /// `twoStageClassifier`. Defaults to `Both` (two-stage escalation).
+    #[serde(default)]
+    pub classifier_mode: ClassifierMode,
+    /// When the LLM classifier is unavailable (transient transport/capacity
+    /// outage), fail OPEN to a manual prompt in interactive sessions instead
+    /// of denying. Default `false` = fail closed (deny), matching TS's shipped
+    /// `tengu_iron_gate_closed` default. Coco replaces that GrowthBook gate
+    /// with this setting. Independent of `classifier_mode`.
+    #[serde(default)]
+    pub classifier_unavailable_fail_open: bool,
 }
 
 /// A compressed transcript entry for the classifier.
@@ -167,7 +194,11 @@ const SAFE_TOOLS: &[&str] = &[
     ToolName::SendMessage.as_str(),
     // Misc safe
     ToolName::Sleep.as_str(),
-    ToolName::Brief.as_str(),
+    // NB: `Brief` is intentionally NOT allowlisted here — TS
+    // `SAFE_YOLO_ALLOWLISTED_TOOLS` omits it. It is still auto-allowed in
+    // auto-mode via the read-only fast path (`BriefTool::is_read_only` is
+    // always true), so this only keeps the allowlist faithful to TS without
+    // changing behavior.
 ];
 
 /// Check if a tool is in the safe-tool allowlist (no classifier needed).
@@ -183,6 +214,7 @@ pub fn is_safe_tool(tool_name: &str) -> bool {
 /// path (plan §11 F8 follow-up).
 pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
+    projector: Option<InputProjector<'_>>,
 ) -> Vec<TranscriptEntry> {
     let mut entries = Vec::new();
 
@@ -198,7 +230,7 @@ pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
                 }
             }
             coco_messages::Message::Assistant(a) => {
-                let blocks = extract_assistant_blocks(&a.message);
+                let blocks = extract_assistant_blocks(&a.message, projector);
                 if !blocks.is_empty() {
                     entries.push(TranscriptEntry {
                         role: TranscriptRole::Assistant,
@@ -290,9 +322,21 @@ pub fn build_classifier_system_prompt(rules: &AutoModeRules) -> String {
 }
 
 /// Format a tool action for the classifier.
-pub fn format_action_for_classifier(tool_name: &str, input: &serde_json::Value) -> String {
-    let input_str = serde_json::to_string(input).unwrap_or_default();
-    let truncated = truncate(&input_str, 1000);
+pub fn format_action_for_classifier(
+    tool_name: &str,
+    input: &serde_json::Value,
+    projector: Option<InputProjector<'_>>,
+) -> String {
+    // Per-tool projection (curated, security-relevant fields) when the tool
+    // provides one; otherwise the raw input JSON. A `None` projection is NOT
+    // an auto-allow here — the action being judged must always reach the
+    // classifier; the "no security relevance" fast-allow lives upstream in
+    // `is_safe_tool` (deliberate divergence from TS's `'' → allow` shortcut,
+    // which is unsafe without exhaustive per-tool annotation).
+    let projected = projector
+        .and_then(|project| project(tool_name, input))
+        .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_default());
+    let truncated = truncate(&projected, 1000);
     format!("<action>\ntool: {tool_name}\ninput: {truncated}\n</action>")
 }
 
@@ -301,6 +345,10 @@ const STAGE_1_MAX_TOKENS: i64 = 64;
 
 /// Stage 2 token budget. TS extended-thinking value.
 const STAGE_2_MAX_TOKENS: i64 = 4096;
+
+/// Single-stage `fast`-mode token budget. TS `mode === 'fast' ? 256`
+/// (`yoloClassifier.ts:781`).
+const FAST_ONLY_MAX_TOKENS: i64 = 256;
 
 /// Stage 1 suffix (TS `XML_S1_SUFFIX`, `yoloClassifier.ts:550`).
 pub const XML_S1_SUFFIX: &str = "\nErr on the side of blocking. <block> immediately.";
@@ -342,6 +390,7 @@ pub async fn classify_yolo_action<M, F, Fut>(
     input: &serde_json::Value,
     rules: &AutoModeRules,
     classify_fn: F,
+    projector: Option<InputProjector<'_>>,
 ) -> YoloClassifierResult
 where
     M: std::borrow::Borrow<coco_messages::Message>,
@@ -354,8 +403,8 @@ where
     }
 
     let system_prompt = build_classifier_system_prompt(rules);
-    let transcript = build_transcript_entries(messages);
-    let action = format_action_for_classifier(tool_name, input);
+    let transcript = build_transcript_entries(messages, projector);
+    let action = format_action_for_classifier(tool_name, input, projector);
     let transcript_text = format_transcript(&transcript);
 
     // TS wraps the entire user content (transcript + action) in
@@ -369,74 +418,139 @@ where
          </transcript>\n"
     );
 
-    // ── Stage 1 ────────────────────────────────────────────────────────
-    let stage1_user_prompt = format!("{user_body}{XML_S1_SUFFIX}");
-    let stage1_result = classify_fn(ClassifyRequest {
-        system_prompt: system_prompt.clone(),
-        user_prompt: stage1_user_prompt,
-        max_tokens: STAGE_1_MAX_TOKENS,
-        stage: 1,
-        stop_sequences: Some(vec!["</block>".to_string()]),
-    })
-    .await;
+    match rules.classifier_mode {
+        // Single fast stage — 256 tokens, no stop sequence, verdict final.
+        // TS `fast` mode (`yoloClassifier.ts:826-857`).
+        ClassifierMode::Fast => {
+            let result = classify_fn(ClassifyRequest {
+                system_prompt,
+                user_prompt: format!("{user_body}{XML_S1_SUFFIX}"),
+                max_tokens: FAST_ONLY_MAX_TOKENS,
+                stage: 1,
+                stop_sequences: None,
+            })
+            .await;
+            interpret_final_verdict(
+                result,
+                1,
+                "Allowed by fast classifier",
+                "Blocked by fast classifier",
+            )
+        }
+        // Single extended stage — 4096 tokens, no stop sequence. TS
+        // `thinking` mode (`yoloClassifier.ts:860-880`).
+        ClassifierMode::Thinking => {
+            let result = classify_fn(ClassifyRequest {
+                system_prompt,
+                user_prompt: format!("{user_body}{XML_S2_SUFFIX}"),
+                max_tokens: STAGE_2_MAX_TOKENS,
+                stage: 2,
+                stop_sequences: None,
+            })
+            .await;
+            interpret_final_verdict(
+                result,
+                2,
+                "Allowed by extended classifier",
+                "No reason provided",
+            )
+        }
+        // Two-stage escalation (default).
+        ClassifierMode::Both => {
+            // ── Stage 1 ────────────────────────────────────────────────
+            let stage1_user_prompt = format!("{user_body}{XML_S1_SUFFIX}");
+            let stage1_result = classify_fn(ClassifyRequest {
+                system_prompt: system_prompt.clone(),
+                user_prompt: stage1_user_prompt,
+                max_tokens: STAGE_1_MAX_TOKENS,
+                stage: 1,
+                stop_sequences: Some(vec!["</block>".to_string()]),
+            })
+            .await;
 
-    if let Ok(response) = stage1_result {
-        match parse_xml_block(&response) {
-            Some(false) => {
-                // Allow — stage 1 verdict is sufficient (TS line 808-822).
-                return YoloClassifierResult::verdict(
-                    false,
-                    "Allowed by fast classifier".into(),
-                    Some(1),
-                );
+            if let Ok(response) = stage1_result {
+                match parse_xml_block(&response) {
+                    Some(false) => {
+                        // Allow — stage 1 verdict is sufficient (TS line 808-822).
+                        return YoloClassifierResult::verdict(
+                            false,
+                            "Allowed by fast classifier".into(),
+                            Some(1),
+                        );
+                    }
+                    Some(true) | None => {
+                        // Block or unparseable → escalate to stage 2.
+                    }
+                }
             }
-            Some(true) | None => {
-                // Block or unparseable → escalate to stage 2 for second opinion.
-            }
+            // Stage-1 transport error also falls through to stage 2.
+
+            // ── Stage 2 ────────────────────────────────────────────────
+            let stage2_user_prompt = format!("{user_body}{XML_S2_SUFFIX}");
+            let stage2_result = classify_fn(ClassifyRequest {
+                system_prompt,
+                user_prompt: stage2_user_prompt,
+                max_tokens: STAGE_2_MAX_TOKENS,
+                stage: 2,
+                stop_sequences: None,
+            })
+            .await;
+            interpret_final_verdict(
+                stage2_result,
+                2,
+                "Allowed by extended classifier",
+                "No reason provided",
+            )
         }
     }
-    // Stage-1 transport error also falls through to stage 2.
+}
 
-    // ── Stage 2 ────────────────────────────────────────────────────────
-    let stage2_user_prompt = format!("{user_body}{XML_S2_SUFFIX}");
-    let stage2_result = classify_fn(ClassifyRequest {
-        system_prompt,
-        user_prompt: stage2_user_prompt,
-        max_tokens: STAGE_2_MAX_TOKENS,
-        stage: 2,
-        stop_sequences: None,
-    })
-    .await;
-
-    match stage2_result {
+/// Interpret a single classifier stage's outcome as a final verdict.
+///
+/// Shared by the `Fast` / `Thinking` single-stage modes and `Both`-mode
+/// stage 2. `Ok` + `<block>no>` → allow (`allow_reason` when no `<reason>`);
+/// `<block>yes>` → block with the parsed reason, falling back to
+/// `block_reason` when the model emitted no `<reason>` (TS
+/// `parseXmlReason ?? 'No reason provided'` / `'Blocked by fast classifier'`);
+/// unparseable → block (safe default). `Err` flags `unavailable` /
+/// `transcript_too_long` so the decision layer can fail-open (interactive) or
+/// fail-closed (headless). TS `permissions.ts:818-876`.
+fn interpret_final_verdict(
+    result: Result<String, String>,
+    stage: i32,
+    allow_reason: &str,
+    block_reason: &str,
+) -> YoloClassifierResult {
+    match result {
         Ok(response) => {
             let parsed = parse_xml_block(&response);
             let reason = parse_xml_reason(&response).unwrap_or_default();
             match parsed {
-                Some(true) => YoloClassifierResult::verdict(true, reason, Some(2)),
-                Some(false) => YoloClassifierResult::verdict(
-                    false,
+                Some(true) => YoloClassifierResult::verdict(
+                    true,
                     if reason.is_empty() {
-                        "Allowed by extended classifier".into()
+                        block_reason.to_string()
                     } else {
                         reason
                     },
-                    Some(2),
+                    Some(stage),
                 ),
-                // Unparseable stage 2 → block (safe default, TS parity).
+                Some(false) => YoloClassifierResult::verdict(
+                    false,
+                    if reason.is_empty() {
+                        allow_reason.to_string()
+                    } else {
+                        reason
+                    },
+                    Some(stage),
+                ),
                 None => YoloClassifierResult::verdict(
                     true,
-                    "Classifier stage 2 unparseable - blocking for safety".into(),
-                    Some(2),
+                    format!("Classifier stage {stage} unparseable - blocking for safety"),
+                    Some(stage),
                 ),
             }
         }
-        // A transport / capacity error is NOT a malicious block. Flag it so
-        // the decision layer can fail-open (interactive) or fail-closed
-        // (headless deny) instead of denying as if the classifier refused.
-        // A deterministic context-window overrun is flagged separately —
-        // retrying cannot help, so the decision layer falls back to manual
-        // approval rather than looping. TS `permissions.ts:818-876`.
         Err(err) => {
             let too_long = is_transcript_too_long_error(&err);
             YoloClassifierResult {
@@ -445,7 +559,7 @@ where
                 model: String::new(),
                 usage: None,
                 duration_ms: None,
-                stage: Some(2),
+                stage: Some(stage),
                 unavailable: !too_long,
                 transcript_too_long: too_long,
             }
@@ -542,7 +656,10 @@ fn extract_user_text(msg: &coco_messages::LlmMessage) -> String {
     }
 }
 
-fn extract_assistant_blocks(msg: &coco_messages::LlmMessage) -> Vec<TranscriptBlock> {
+fn extract_assistant_blocks(
+    msg: &coco_messages::LlmMessage,
+    projector: Option<InputProjector<'_>>,
+) -> Vec<TranscriptBlock> {
     match msg {
         coco_messages::LlmMessage::Assistant { content, .. } => content
             .iter()
@@ -551,13 +668,31 @@ fn extract_assistant_blocks(msg: &coco_messages::LlmMessage) -> Vec<TranscriptBl
                 // and could be crafted to steer the security classifier
                 // (prompt injection into the permission gate). Only tool_use
                 // blocks are kept. TS `yoloClassifier.ts:341-356`.
-                coco_messages::AssistantContent::ToolCall(tc) => Some(TranscriptBlock::ToolCall {
-                    tool_name: tc.tool_name.clone(),
-                    input_summary: truncate(
-                        &serde_json::to_string(&tc.input).unwrap_or_default(),
-                        300,
-                    ),
-                }),
+                coco_messages::AssistantContent::ToolCall(tc) => match projector {
+                    // Projector present (production): include the curated
+                    // projection, or SKIP the block when the tool declares no
+                    // classifier-relevant input (`None`). Mirrors TS
+                    // `toCompactBlock`, which returns '' (→ omitted) for
+                    // unprojected / unknown tools. A deser failure still yields
+                    // `Some(raw)` from the blanket impl, so malformed inputs
+                    // are kept (TS `catch { encoded = input }`), never skipped.
+                    Some(project) => {
+                        project(&tc.tool_name, &tc.input).map(|summary| TranscriptBlock::ToolCall {
+                            tool_name: tc.tool_name.clone(),
+                            input_summary: truncate(&summary, 300),
+                        })
+                    }
+                    // No projector (permissions-crate unit tests have no
+                    // registry): keep the raw-JSON summary so tests still
+                    // observe tool content.
+                    None => Some(TranscriptBlock::ToolCall {
+                        tool_name: tc.tool_name.clone(),
+                        input_summary: truncate(
+                            &serde_json::to_string(&tc.input).unwrap_or_default(),
+                            300,
+                        ),
+                    }),
+                },
                 _ => None,
             })
             .collect(),

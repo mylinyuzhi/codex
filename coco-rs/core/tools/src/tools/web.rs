@@ -356,6 +356,44 @@ pub(super) fn is_preapproved_url(url: &str) -> bool {
     is_preapproved_host(&host, &pathname)
 }
 
+/// True if `pattern` targets the WebFetch tool (exact name or `*` wildcard).
+fn web_fetch_tool_pattern(pattern: &str) -> bool {
+    pattern == ToolName::WebFetch.as_str() || pattern == "*"
+}
+
+/// Find a WebFetch rule that applies to `host`: a tool-wide `WebFetch` rule
+/// (no content) or one scoped to `domain:<host>`. Mirrors TS
+/// `getRuleByContentsForTool(.., WebFetchTool, ..)` plus tool-wide coverage.
+fn matching_web_fetch_rule<'a>(
+    rules: &'a coco_types::PermissionRulesBySource,
+    host: &str,
+) -> Option<&'a coco_types::PermissionRule> {
+    let domain_rule = format!("domain:{host}");
+    rules.values().flatten().find(|r| {
+        web_fetch_tool_pattern(&r.value.tool_pattern)
+            && match r.value.rule_content.as_deref() {
+                None => true,
+                Some(content) => content == domain_rule,
+            }
+    })
+}
+
+/// "Always allow this domain" suggestion attached to a WebFetch `Ask`. TS:
+/// `buildSuggestions(ruleContent)` — an `addRules` allow for `domain:<host>`.
+fn web_fetch_domain_suggestions(host: &str) -> Vec<coco_types::PermissionUpdate> {
+    vec![coco_types::PermissionUpdate::AddRules {
+        rules: vec![coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: ToolName::WebFetch.as_str().to_string(),
+                rule_content: Some(format!("domain:{host}")),
+            },
+        }],
+        destination: coco_types::PermissionUpdateDestination::Session,
+    }]
+}
+
 /// Extract the pathname portion of a URL (everything from the first `/`
 /// after the host, up to `?` or `#`). Returns `"/"` when the URL has no
 /// explicit path (bare host).
@@ -608,6 +646,17 @@ impl Tool for WebFetchTool {
     /// escape hatch (see `BashTool` for the same rationale).
     type Output = serde_json::Value;
 
+    fn to_auto_classifier_input(&self, input: &WebFetchInput) -> Option<String> {
+        // TS `WebFetchTool`: `prompt ? `${url}: ${prompt}` : url`. The fetch
+        // prompt can carry injected extraction instructions, so the gate sees
+        // it when present.
+        Some(if input.prompt.is_empty() {
+            input.url.clone()
+        } else {
+            format!("{}: {}", input.url, input.prompt)
+        })
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::WebFetch)
     }
@@ -657,18 +706,28 @@ Usage notes:
         Some("fetch a URL and summarize the page contents")
     }
 
-    /// TS `WebFetchTool.ts:104-121` `checkPermissions`: curated
-    /// documentation hosts (`PREAPPROVED_WEB_HOSTS`) skip the approval UI.
-    /// On a preapproved match we return `Allow` (mirroring TS `behavior:
-    /// 'allow', decisionReason: 'Preapproved host'`); every other URL
-    /// returns `Passthrough` so the rule pipeline and auto-mode prompt
-    /// still apply. A malformed URL yields an empty host →
-    /// `is_preapproved_url == false` → `Passthrough`, matching TS's
-    /// parse-failure fall-through.
+    /// Per-domain matcher so persisted `domain:<host>` rules apply to the
+    /// right host. TS: `webFetchToolInputToPermissionRuleContent`.
+    fn prepare_permission_matcher(&self, input: &WebFetchInput) -> String {
+        let host = extract_host(&input.url);
+        if host.is_empty() {
+            self.name().to_string()
+        } else {
+            format!("domain:{host}")
+        }
+    }
+
+    /// TS `WebFetchTool.ts:104-180` `checkPermissions`: preapproved
+    /// documentation hosts skip the dialog (`Allow`). Otherwise the request is
+    /// gated **per domain** — `deny` → `ask` → `allow` rules keyed on
+    /// `domain:<host>` (plus any tool-wide `WebFetch` rule), then a default
+    /// `Ask` carrying an "always allow this domain" suggestion so the user can
+    /// persist per-domain trust instead of an over-broad tool-wide allow. A
+    /// malformed URL (empty host) falls through to `Passthrough`.
     async fn check_permissions(
         &self,
         input: &WebFetchInput,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
     ) -> ToolCheckResult {
         if is_preapproved_url(&input.url) {
             return ToolCheckResult::Allow {
@@ -676,7 +735,34 @@ Usage notes:
                 feedback: Some("Preapproved host".into()),
             };
         }
-        ToolCheckResult::Passthrough
+        let host = extract_host(&input.url);
+        if host.is_empty() {
+            return ToolCheckResult::Passthrough;
+        }
+        let pc = &ctx.permission_context;
+        if matching_web_fetch_rule(&pc.deny_rules, &host).is_some() {
+            return ToolCheckResult::Deny {
+                message: format!("WebFetch denied access to domain:{host}."),
+            };
+        }
+        if matching_web_fetch_rule(&pc.ask_rules, &host).is_some() {
+            return ToolCheckResult::Ask {
+                message: format!("Allow WebFetch to access {host}?"),
+                suggestions: web_fetch_domain_suggestions(&host),
+                choices: None,
+            };
+        }
+        if matching_web_fetch_rule(&pc.allow_rules, &host).is_some() {
+            return ToolCheckResult::Allow {
+                updated_input: None,
+                feedback: None,
+            };
+        }
+        ToolCheckResult::Ask {
+            message: format!("Allow WebFetch to access {host}?"),
+            suggestions: web_fetch_domain_suggestions(&host),
+            choices: None,
+        }
     }
 
     fn get_activity_description(&self, input: &WebFetchInput) -> Option<String> {
@@ -1439,6 +1525,10 @@ impl Tool for WebSearchTool {
     /// downstream-consumer `results` array; staying on `Value` keeps
     /// the consumer flexibility without forcing a typed result envelope.
     type Output = serde_json::Value;
+
+    fn to_auto_classifier_input(&self, input: &WebSearchInput) -> Option<String> {
+        Some(input.query.clone())
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::WebSearch)

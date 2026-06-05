@@ -1,129 +1,132 @@
 //! Destructive command warning patterns.
 //!
-//! TS: destructiveCommandWarning.ts — ~20 patterns that trigger warnings.
-//! These patterns are checked before tool execution to warn the user.
+//! TS: `tools/BashTool/destructiveCommandWarning.ts`. This is **purely
+//! informational** — it does NOT affect permission logic or auto-approval.
+//! The returned note is meant for display in the permission-request UI; the
+//! BashTool never denies a command on the basis of these patterns (matching
+//! TS, where the warning rides behind a default-off feature flag).
+//!
+//! Patterns are word-boundary regexes mirroring TS exactly. The `regex` crate
+//! has no negative-lookahead, so the one TS rule that uses one (`git clean`
+//! force-but-not-dry-run) is expressed as a force-match minus a dry-run match.
 
-/// Check if a command is destructive and return a warning message.
-pub fn get_destructive_warning(command: &str) -> Option<String> {
-    let trimmed = command.trim();
+use std::sync::LazyLock;
 
-    for &(pattern, warning) in DESTRUCTIVE_PATTERNS {
-        if matches_pattern(trimmed, pattern) {
-            return Some(warning.to_string());
-        }
-    }
+use regex::Regex;
 
-    // Check case-insensitive SQL patterns
-    let upper = trimmed.to_uppercase();
-    for &(pattern, warning) in SQL_PATTERNS {
-        if upper.contains(pattern) {
-            return Some(warning.to_string());
-        }
-    }
-
-    None
+/// A destructive-command rule. Most are a single regex; `git clean` needs an
+/// extra dry-run exclusion the `regex` crate can't express as a lookahead.
+enum Rule {
+    Regex(Regex),
+    GitCleanForce { force: Regex, dry_run: Regex },
 }
 
-/// Destructive command patterns and their warnings.
-/// Matched via substring contains (case-sensitive).
-const DESTRUCTIVE_PATTERNS: &[(&str, &str)] = &[
-    // Filesystem destruction
-    ("rm -rf /", "This will delete the entire filesystem"),
-    ("rm -rf ~", "This will delete your home directory"),
-    (
-        "rm -rf .",
-        "This will delete the current directory and all contents",
-    ),
-    (
-        "rm -rf *",
-        "This will delete all files in the current directory",
-    ),
-    (":(){:|:&};:", "This is a fork bomb"),
-    ("mkfs", "This will format a filesystem"),
-    ("dd if=", "dd can overwrite disk data irreversibly"),
-    ("> /dev/sd", "This will overwrite a disk device"),
-    ("chmod -R 777 /", "This will make all files world-writable"),
-    (
-        "chown -R",
-        "Recursive ownership change can break system files",
-    ),
-    // Git destructive operations
-    (
-        "git push --force",
-        "Force pushing can overwrite remote history and lose commits",
-    ),
-    (
-        "git push -f",
-        "Force pushing can overwrite remote history and lose commits",
-    ),
-    (
-        "git reset --hard",
-        "This will discard all uncommitted changes permanently",
-    ),
-    (
-        "git clean -f",
-        "This will permanently delete untracked files",
-    ),
-    (
-        "git clean -fd",
-        "This will permanently delete untracked files and directories",
-    ),
-    (
-        "git checkout -- .",
-        "This will discard all unstaged changes in the working tree",
-    ),
-    (
-        "git restore .",
-        "This will discard all unstaged changes in the working tree",
-    ),
-    ("--no-verify", "This bypasses pre-commit and pre-push hooks"),
-    // Infrastructure / container destruction
-    (
-        "kubectl delete",
-        "This will delete Kubernetes resources (potentially in production)",
-    ),
-    (
-        "terraform destroy",
-        "This will destroy infrastructure resources",
-    ),
-    ("docker rm", "This will remove Docker containers"),
-    ("docker rmi", "This will remove Docker images"),
-    (
-        "docker system prune",
-        "This will remove all unused Docker data",
-    ),
-    // System commands
-    ("shutdown", "This will shut down the system"),
-    ("reboot", "This will reboot the system"),
-    ("systemctl stop", "This will stop a system service"),
-    ("kill -9", "This will forcefully kill a process"),
-    ("killall", "This will kill processes by name"),
-    ("pkill", "This will signal processes by pattern"),
-];
+impl Rule {
+    fn matches(&self, command: &str) -> bool {
+        match self {
+            Rule::Regex(re) => re.is_match(command),
+            Rule::GitCleanForce { force, dry_run } => {
+                force.is_match(command) && !dry_run.is_match(command)
+            }
+        }
+    }
+}
 
-/// SQL destructive patterns (checked case-insensitively).
-const SQL_PATTERNS: &[(&str, &str)] = &[
-    (
-        "DROP TABLE",
-        "This will permanently delete a database table",
-    ),
-    (
-        "DROP DATABASE",
-        "This will permanently delete an entire database",
-    ),
-    (
-        "TRUNCATE TABLE",
-        "This will delete all rows in a table irreversibly",
-    ),
-    ("DELETE FROM", "This will delete rows from a database table"),
-    (
-        "ALTER TABLE",
-        "This will modify the structure of a database table",
-    ),
-];
+/// Ordered destructive-command rules (first match wins), mirroring the TS
+/// `DESTRUCTIVE_PATTERNS` array order and warnings verbatim.
+#[allow(clippy::expect_used)] // static init of compile-time-constant patterns
+static RULES: LazyLock<Vec<(Rule, &'static str)>> = LazyLock::new(|| {
+    let re = |p: &str| Regex::new(p).expect("valid destructive pattern");
+    vec![
+        // Git — data loss / hard to reverse
+        (
+            Rule::Regex(re(r"\bgit\s+reset\s+--hard\b")),
+            "Note: may discard uncommitted changes",
+        ),
+        (
+            Rule::Regex(re(
+                r"\bgit\s+push\b[^;&|\n]*[ \t](--force|--force-with-lease|-f)\b",
+            )),
+            "Note: may overwrite remote history",
+        ),
+        (
+            Rule::GitCleanForce {
+                force: re(r"\bgit\s+clean\b[^;&|\n]*-[a-zA-Z]*f"),
+                dry_run: re(r"\bgit\s+clean\b[^;&|\n]*(--dry-run|-[a-zA-Z]*n)"),
+            },
+            "Note: may permanently delete untracked files",
+        ),
+        (
+            Rule::Regex(re(r"\bgit\s+checkout\s+(--\s+)?\.[ \t]*($|[;&|\n])")),
+            "Note: may discard all working tree changes",
+        ),
+        (
+            Rule::Regex(re(r"\bgit\s+restore\s+(--\s+)?\.[ \t]*($|[;&|\n])")),
+            "Note: may discard all working tree changes",
+        ),
+        (
+            Rule::Regex(re(r"\bgit\s+stash[ \t]+(drop|clear)\b")),
+            "Note: may permanently remove stashed changes",
+        ),
+        (
+            Rule::Regex(re(
+                r"\bgit\s+branch\s+(-D[ \t]|--delete\s+--force|--force\s+--delete)\b",
+            )),
+            "Note: may force-delete a branch",
+        ),
+        // Git — safety bypass
+        (
+            Rule::Regex(re(r"\bgit\s+(commit|push|merge)\b[^;&|\n]*--no-verify\b")),
+            "Note: may skip safety hooks",
+        ),
+        (
+            Rule::Regex(re(r"\bgit\s+commit\b[^;&|\n]*--amend\b")),
+            "Note: may rewrite the last commit",
+        ),
+        // File deletion (dangerous absolute paths handled elsewhere)
+        (
+            Rule::Regex(re(
+                r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR][a-zA-Z]*f|(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f[a-zA-Z]*[rR]",
+            )),
+            "Note: may recursively force-remove files",
+        ),
+        (
+            Rule::Regex(re(r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*[rR]")),
+            "Note: may recursively remove files",
+        ),
+        (
+            Rule::Regex(re(r"(^|[;&|\n]\s*)rm\s+-[a-zA-Z]*f")),
+            "Note: may force-remove files",
+        ),
+        // Database
+        (
+            Rule::Regex(re(r"(?i)\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b")),
+            "Note: may drop or truncate database objects",
+        ),
+        (
+            Rule::Regex(re(r#"(?i)\bDELETE\s+FROM\s+\w+[ \t]*(;|"|'|\n|$)"#)),
+            "Note: may delete all rows from a database table",
+        ),
+        // Infrastructure
+        (
+            Rule::Regex(re(r"\bkubectl\s+delete\b")),
+            "Note: may delete Kubernetes resources",
+        ),
+        (
+            Rule::Regex(re(r"\bterraform\s+destroy\b")),
+            "Note: may destroy Terraform infrastructure",
+        ),
+    ]
+});
 
-fn matches_pattern(command: &str, pattern: &str) -> bool {
-    command.contains(pattern)
+/// Return an informational warning if `command` matches a destructive pattern.
+///
+/// Advisory only — callers MUST NOT use this to block or deny a command.
+pub fn get_destructive_warning(command: &str) -> Option<String> {
+    RULES
+        .iter()
+        .find(|(rule, _)| rule.matches(command))
+        .map(|(_, warning)| (*warning).to_string())
 }
 
 #[cfg(test)]

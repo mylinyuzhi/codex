@@ -27,12 +27,14 @@ pub use implementations::ParsedRename;
 pub use implementations::RELOAD_HOOKS_SENTINEL;
 pub use implementations::RELOAD_PLUGINS_SENTINEL;
 pub use implementations::RENAME_SENTINEL;
+pub use implementations::STATUS_SENTINEL;
 pub use implementations::TAG_SENTINEL;
 pub use implementations::names;
 pub use implementations::parse_add_dir_sentinel;
 pub use implementations::parse_reload_hooks_sentinel;
 pub use implementations::parse_reload_plugins_sentinel;
 pub use implementations::parse_rename_sentinel;
+pub use implementations::parse_status_sentinel;
 pub use implementations::parse_tag_sentinel;
 pub use implementations::register_extended_builtins;
 

@@ -1106,7 +1106,7 @@
           ]
         },
         {
-          "description": "Project-scope on-disk skill (`.claude/skills/`). TS: `projectSettings`.",
+          "description": "Project-scope on-disk skill (`.coco/skills/`).",
           "type": "object",
           "properties": {
             "kind": {
@@ -1145,7 +1145,7 @@
           ]
         },
         {
-          "description": "Legacy `.claude/commands/` flat-`.md` path. TS: `commands_DEPRECATED`.",
+          "description": "Deprecated legacy flat-`.md` path. Not used by project skill discovery.",
           "type": "object",
           "properties": {
             "kind": {
@@ -2310,7 +2310,7 @@
           "const": "built_in"
         },
         {
-          "description": "`<cwd>/.claude/skills/` — TS `projectSettings`.",
+          "description": "`<cwd>/.coco/skills/` — project skills.",
           "type": "string",
           "const": "project"
         },

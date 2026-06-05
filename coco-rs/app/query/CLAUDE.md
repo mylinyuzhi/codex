@@ -150,7 +150,7 @@ step 3.5.
 ### `ForkedAgentOptions::for_label` cache-parity defaults
 
 The conservative shape preserves the parent's prompt cache:
-`max_turns=Some(1)`, `skip_transcript=true`, `skip_cache_write=true`,
+`max_turns=Some(1)`, `transcript_mode=Disabled`, `skip_cache_write=true`,
 `effort=None`, `max_output_tokens=None`. **Do not set
 `max_output_tokens`** on cache-shared forks — PR #18143 incident:
 `effort: 'low'` dropped cache hit rate from 92.7% → 61% (45× spike

@@ -426,7 +426,9 @@ pub fn inject_structured_output_tool_if_requested(
             coco_types::HookEventType::Stop,
             None,
             std::time::Duration::from_millis(5_000),
-            std::sync::Arc::new(StructuredOutputEnforcement),
+            std::sync::Arc::new(
+                coco_query::structured_output_enforcement::StructuredOutputEnforcement,
+            ),
             format!(
                 "You MUST call the {} tool to complete this request. Call this tool now.",
                 coco_types::ToolName::StructuredOutput.as_str()
@@ -439,37 +441,6 @@ pub fn inject_structured_output_tool_if_requested(
         "registered StructuredOutput tool + Stop enforcement hook from --json-schema"
     );
     Ok(true)
-}
-
-/// [`coco_hooks::FunctionHookPredicate`] impl for the TS-parity
-/// `StructuredOutput` Stop enforcement. Returns `true` when history
-/// already contains a successful `StructuredOutput` tool call (the
-/// silent attachment is only pushed on schema-conforming input, per
-/// `StructuredOutputTool::execute`).
-#[derive(Debug)]
-struct StructuredOutputEnforcement;
-
-impl coco_hooks::FunctionHookPredicate for StructuredOutputEnforcement {
-    fn evaluate(&self, messages: &[std::sync::Arc<coco_messages::Message>]) -> bool {
-        use coco_messages::AttachmentBody;
-        use coco_messages::Message;
-        use coco_messages::SilentPayload;
-        use coco_types::AttachmentKind;
-        messages.iter().any(|m| match m.as_ref() {
-            Message::Attachment(att) => {
-                att.kind == AttachmentKind::StructuredOutput
-                    && matches!(
-                        &att.body,
-                        AttachmentBody::Silent(SilentPayload::StructuredOutput(_))
-                    )
-            }
-            _ => false,
-        })
-    }
-
-    fn name(&self) -> &str {
-        "StructuredOutputEnforcement"
-    }
 }
 
 fn enforce_dangerous_skip_safety(requesting_bypass: bool) -> Result<()> {
@@ -823,6 +794,17 @@ pub async fn run_chat_with_options(
     // mirroring the SDK runner. Built through the runtime so `wire_engine`
     // installs the full handle/subsystem set on the leader.
     let mut config = runtime.current_engine_config().await;
+    // `coco -p` is a one-shot run with no interactive prompt.
+    // `is_non_interactive` drives the session-level side effects (self-fork
+    // suppression, "sdk" label, prompt assembly) — TS `getIsNonInteractiveSession()`.
+    config.is_non_interactive = true;
+    // `avoid_permission_prompts` is the separate permission concept (TS
+    // `shouldAvoidPermissionPrompts`): with no UI to prompt, the auto-mode
+    // classifier's `require_interactive_or_deny` and the permission
+    // controller's no-bridge fallback DENY rather than silently auto-allow.
+    // Kept distinct so a future consumer-backed print/SDK mode could stay
+    // non-interactive while still routing `Ask` to a `canUseTool` callback.
+    config.avoid_permission_prompts = true;
     config.session_id = session_id.clone();
     config.permission_mode = permission_mode;
     config.bypass_permissions_available = bypass_permissions_available;

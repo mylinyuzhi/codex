@@ -134,6 +134,87 @@ fn save_oauth_tokens_writes_fallback_when_keyring_fails() -> Result<()> {
 }
 
 #[test]
+fn save_oauth_access_token_persists_plain_xaa_result() -> Result<()> {
+    let home = TempCocodeHome::new();
+    super::save_oauth_access_token(super::OAuthAccessTokenSave {
+        server_name: "xaa-server",
+        url: "https://mcp.example.test",
+        client_id: "as-client",
+        access_token: "xaa-access".to_string(),
+        refresh_token: Some("xaa-refresh".to_string()),
+        expires_in: Some(3600),
+        scopes: Some("read write".to_string()),
+        store_mode: OAuthCredentialsStoreMode::File,
+        config_home: home.path(),
+    })?;
+
+    let loaded = super::load_oauth_tokens(
+        "xaa-server",
+        "https://mcp.example.test",
+        OAuthCredentialsStoreMode::File,
+        home.path(),
+    )?
+    .expect("tokens should load from fallback file");
+    assert_eq!(loaded.server_name, "xaa-server");
+    assert_eq!(loaded.client_id, "as-client");
+    assert_eq!(
+        loaded.token_response.0.access_token().secret(),
+        "xaa-access"
+    );
+    assert_eq!(
+        loaded
+            .token_response
+            .0
+            .refresh_token()
+            .map(RefreshToken::secret)
+            .map(String::as_str),
+        Some("xaa-refresh")
+    );
+    assert_eq!(
+        loaded.token_response.0.scopes().map(|scopes| {
+            scopes
+                .iter()
+                .map(|scope| scope.as_ref().to_string())
+                .collect::<Vec<_>>()
+        }),
+        Some(vec!["read".to_string(), "write".to_string()])
+    );
+    assert!(loaded.expires_at.is_some());
+    Ok(())
+}
+
+#[test]
+fn has_valid_oauth_tokens_returns_true_for_unexpired_file_token() -> Result<()> {
+    let home = TempCocodeHome::new();
+    let tokens = sample_tokens();
+    super::save_oauth_tokens_to_file(&tokens, home.path())?;
+
+    assert!(super::has_valid_oauth_tokens(
+        &tokens.server_name,
+        &tokens.url,
+        OAuthCredentialsStoreMode::File,
+        home.path(),
+    )?);
+    Ok(())
+}
+
+#[test]
+fn has_valid_oauth_tokens_returns_false_for_expired_file_token() -> Result<()> {
+    let home = TempCocodeHome::new();
+    let mut tokens = sample_tokens();
+    tokens.expires_at = Some(1);
+    super::save_oauth_tokens_to_file(&tokens, home.path())?;
+
+    assert!(!super::has_valid_oauth_tokens(
+        &tokens.server_name,
+        &tokens.url,
+        OAuthCredentialsStoreMode::File,
+        home.path(),
+    )?);
+    Ok(())
+}
+
+#[test]
 fn delete_oauth_tokens_removes_all_storage() -> Result<()> {
     let home = TempCocodeHome::new();
     let store = MockKeyringStore::default();

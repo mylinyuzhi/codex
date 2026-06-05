@@ -54,6 +54,7 @@ mod wire_tagged;
 // === Re-exports ===
 
 // App-state (cross-turn shared state carried on ToolUseContext)
+pub use app_state::ActiveWorktreeState;
 pub use app_state::AppStatePatch;
 pub use app_state::AppStateReadHandle;
 pub use app_state::ElicitationGuard;
@@ -356,6 +357,7 @@ pub enum CompactTrigger {
 // Permission types
 pub use permission::AdditionalWorkingDir;
 pub use permission::ClassifierBehavior;
+pub use permission::ClassifierMode;
 pub use permission::ClassifierUsage;
 pub use permission::PendingClassifierCheck;
 pub use permission::PermissionAskChoice;

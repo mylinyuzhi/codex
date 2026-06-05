@@ -199,7 +199,7 @@ dialog.agents_create_err_non_writable: "Selected source is not writable from the
 dialog.agents_create_write_failed: "Failed to create agent file: %{error}"
 dialog.agents_create_exists: "An agent file already exists at %{path}."
 dialog.agents_created_toast: "Created %{path}. Opening editor…"
-dialog.skills_empty: "No skills found.\nCreate skills in .claude/skills/ or ~/.coco/skills/"
+dialog.skills_empty: "No skills found.\nCreate skills in .coco/skills/ or ~/.coco/skills/"
 dialog.skills_subtitle: "%{count} %{noun}"
 dialog.skills_noun_singular: "skill"
 dialog.skills_noun_plural: "skills"

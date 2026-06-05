@@ -1413,25 +1413,13 @@ async fn test_read_tool_emits_full_tool_lifecycle() {
 }
 
 #[tokio::test]
-async fn test_bash_destructive_command_blocked() {
-    // Test that the Bash tool blocks destructive commands
-
-    use coco_tools::BashTool;
-
-    let tool = BashTool;
-    let ctx = coco_tool_runtime::ToolUseContext::test_default();
-
-    // "rm -rf /" should be blocked by destructive warning check
-    let result = <BashTool as coco_tool_runtime::DynTool>::execute(
-        &tool,
-        serde_json::json!({"command": "rm -rf /"}),
-        &ctx,
-    )
-    .await;
-
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("permission denied") || err.to_string().contains("delete"));
+async fn test_bash_destructive_command_requires_approval() {
+    // Destructive commands are not hard-denied inside BashTool::execute;
+    // they require approval via the shell safety/permission layer.
+    let exec = coco_shell::ShellExecutor::new(std::path::Path::new("/tmp"));
+    let result = exec.check_safety("rm -rf /");
+    assert!(!result.is_safe());
+    assert!(!result.is_denied());
 }
 
 #[tokio::test]

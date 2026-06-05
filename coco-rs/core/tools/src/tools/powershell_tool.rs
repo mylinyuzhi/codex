@@ -81,6 +81,10 @@ impl Tool for PowerShellTool {
     /// renderer; deferred to a follow-up TS-parity pass.
     type Output = Value;
 
+    fn to_auto_classifier_input(&self, input: &PowerShellInput) -> Option<String> {
+        Some(input.command.clone())
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::PowerShell)
     }
@@ -364,6 +368,8 @@ async fn execute_background(
             progress_tx: None,
             progress_throttle_ms: 1000,
             auto_detach_ms: None,
+            // Explicit bg spawn keeps the hard-kill-on-timeout behaviour.
+            kill_on_timeout: true,
             // W6: PowerShell bg path currently doesn't thread sandbox
             // state — `pwsh` runs on macOS/Linux too but the sandbox
             // wrap targets bash. Skip for now; this is a follow-up.

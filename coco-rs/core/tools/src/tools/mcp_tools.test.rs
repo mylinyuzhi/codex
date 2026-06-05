@@ -258,7 +258,7 @@ async fn mcp_auth_tool_forwards_to_generic_handle() {
             &McpAuthTool,
             &json!({"server_name": "srv"})
         ),
-        "srv"
+        Some("srv".to_string())
     );
     let permission = <McpAuthTool as DynTool>::check_permissions(
         &McpAuthTool,

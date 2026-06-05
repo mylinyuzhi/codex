@@ -21,6 +21,7 @@ use coco_context::attachment::generate_file_attachment;
 use coco_context::file_read_state::FileReadEntry;
 use coco_llm_types::AssistantContentPart;
 use coco_messages::AttachmentMessage;
+use coco_messages::CompactFileReferencePayload;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_types::ToolName;
@@ -73,7 +74,37 @@ pub fn create_post_compact_file_attachments_with_priority<M: std::borrow::Borrow
     plan_file: Option<&Path>,
     prioritized_paths: &HashSet<PathBuf>,
 ) -> Vec<AttachmentMessage> {
+    create_post_compact_file_attachments_with_priority_and_limit(
+        snapshot,
+        preserved_messages,
+        cwd,
+        plan_file,
+        prioritized_paths,
+        POST_COMPACT_MAX_FILES_TO_RESTORE,
+    )
+}
+
+/// Like [`create_post_compact_file_attachments_with_priority`] with a
+/// caller-supplied restore limit from resolved runtime config.
+pub fn create_post_compact_file_attachments_with_priority_and_limit<
+    M: std::borrow::Borrow<Message>,
+>(
+    snapshot: &[(PathBuf, FileReadEntry)],
+    preserved_messages: &[M],
+    cwd: &Path,
+    plan_file: Option<&Path>,
+    prioritized_paths: &HashSet<PathBuf>,
+    max_files_to_restore: usize,
+) -> Vec<AttachmentMessage> {
     let preserved_read_paths = collect_read_tool_file_paths(preserved_messages);
+    tracing::debug!(
+        snapshot_files = snapshot.len(),
+        preserved_read_files = preserved_read_paths.len(),
+        prioritized_files = prioritized_paths.len(),
+        max_files_to_restore,
+        cwd = %cwd.display(),
+        "selecting post-compact file restore candidates"
+    );
 
     // Filter: skip excluded paths and files already in preserved messages.
     // Reverse so most-recently-accessed comes first.
@@ -89,10 +120,17 @@ pub fn create_post_compact_file_attachments_with_priority<M: std::borrow::Borrow
     // Stable partition: prioritized first, others second. Both keep
     // their LRU order from the reverse iteration above.
     filtered.sort_by_key(|(path, _)| !prioritized_paths.contains(path));
-    let candidates: Vec<&(PathBuf, FileReadEntry)> = filtered
-        .into_iter()
-        .take(POST_COMPACT_MAX_FILES_TO_RESTORE)
+    let candidates: Vec<&(PathBuf, FileReadEntry)> =
+        filtered.into_iter().take(max_files_to_restore).collect();
+    let candidate_paths: Vec<String> = candidates
+        .iter()
+        .map(|(path, _)| path.display().to_string())
         .collect();
+    tracing::debug!(
+        candidate_count = candidates.len(),
+        candidate_paths = ?candidate_paths,
+        "selected post-compact file restore candidates"
+    );
 
     let read_options = FileReadOptions {
         max_tokens: Some(POST_COMPACT_MAX_TOKENS_PER_FILE),
@@ -102,14 +140,23 @@ pub fn create_post_compact_file_attachments_with_priority<M: std::borrow::Borrow
     let read_tool_name = ToolName::Read.as_str();
     let mut used_tokens: i64 = 0;
     let mut result = Vec::new();
+    let mut restored_paths = Vec::new();
 
     for (path, _entry) in &candidates {
         let Some(att) = generate_file_attachment(path, cwd, &read_options) else {
+            tracing::debug!(
+                path = %path.display(),
+                "skipping post-compact file restore candidate because attachment generation failed"
+            );
             continue;
         };
 
         // Only restore text file attachments (skip images, PDFs, etc.)
         let coco_context::attachment::Attachment::File(ref f) = att else {
+            tracing::debug!(
+                path = %path.display(),
+                "skipping post-compact file restore candidate because it is not a text file"
+            );
             continue;
         };
 
@@ -127,15 +174,33 @@ pub fn create_post_compact_file_attachments_with_priority<M: std::borrow::Borrow
         // the full formatted message, not just file content.
         let att_tokens = coco_messages::estimate_text_tokens(&text);
         if used_tokens + att_tokens > POST_COMPACT_TOKEN_BUDGET {
+            tracing::debug!(
+                path = %path.display(),
+                used_tokens,
+                attachment_tokens = att_tokens,
+                token_budget = POST_COMPACT_TOKEN_BUDGET,
+                "stopping post-compact file restore because token budget would be exceeded"
+            );
             break;
         }
         used_tokens += att_tokens;
+        restored_paths.push(f.display_path.clone());
 
-        result.push(AttachmentMessage::api(
-            coco_types::AttachmentKind::CompactFileReference,
+        result.push(AttachmentMessage::compact_file_reference(
+            CompactFileReferencePayload {
+                filename: f.filename.clone(),
+                display_path: f.display_path.clone(),
+            },
             LlmMessage::user_text(coco_messages::wrapping::wrap_in_system_reminder(&text)),
         ));
     }
+
+    tracing::info!(
+        restored_files = result.len(),
+        used_tokens,
+        restored_paths = ?restored_paths,
+        "post-compact file restore complete"
+    );
 
     result
 }

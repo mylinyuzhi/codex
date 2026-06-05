@@ -224,6 +224,91 @@ pub fn format_cost(cost_usd: f64) -> String {
     }
 }
 
+/// Group an integer with thousands separators (e.g. `1234567` → `1,234,567`).
+fn group_thousands(n: i64) -> String {
+    let neg = n < 0;
+    let digits = n.unsigned_abs().to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    let mut out: String = grouped.chars().rev().collect();
+    if neg {
+        out.insert(0, '-');
+    }
+    out
+}
+
+/// Render a per-model session cost breakdown from a live
+/// [`coco_types::SessionUsageSnapshot`].
+///
+/// This is the source `/cost` should display: it is multi-provider (pricing
+/// already resolved via `coco_model_card` when the snapshot was accumulated by
+/// [`CostTracker`]) and flags unpriced models, rather than re-deriving cost
+/// from a stale session file with hardcoded single-provider pricing.
+pub fn format_session_cost(snapshot: &coco_types::SessionUsageSnapshot) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::from("## Session Cost\n\n");
+    if snapshot.models.is_empty() {
+        out.push_str("No API usage recorded yet.\n\n");
+        out.push_str("Cost tracking begins when the first API request is made.");
+        return out;
+    }
+
+    for m in &snapshot.models {
+        let _ = writeln!(out, "### {} / {}\n", m.provider, m.model_id);
+        let _ = writeln!(
+            out,
+            "  Input tokens:       {:>12}",
+            group_thousands(m.input_tokens)
+        );
+        let _ = writeln!(
+            out,
+            "  Output tokens:      {:>12}",
+            group_thousands(m.output_tokens)
+        );
+        let _ = writeln!(
+            out,
+            "  Cache read tokens:  {:>12}",
+            group_thousands(m.cache_read_input_tokens)
+        );
+        let _ = writeln!(
+            out,
+            "  Cache write tokens: {:>12}",
+            group_thousands(m.cache_creation_input_tokens)
+        );
+        let _ = writeln!(out, "  API requests:       {:>12}", m.request_count);
+        if m.priced {
+            let _ = writeln!(
+                out,
+                "  Cost:               {}\n",
+                format_cost(m.total_cost_usd)
+            );
+        } else {
+            out.push_str("  Cost:               (unpriced model — no pricing data)\n\n");
+        }
+    }
+
+    let t = &snapshot.totals;
+    out.push_str("### Total\n\n");
+    let _ = writeln!(out, "  Input tokens:  {}", group_thousands(t.input_tokens));
+    let _ = writeln!(out, "  Output tokens: {}", group_thousands(t.output_tokens));
+    let _ = writeln!(out, "  API requests:  {}", t.request_count);
+    let _ = write!(out, "  **Total cost:  {}**", format_cost(t.total_cost_usd));
+    if !snapshot.unpriced_models.is_empty() {
+        let _ = write!(
+            out,
+            "\n\n_Note: {} model(s) had no pricing data and are excluded from the cost total._",
+            snapshot.unpriced_models.len()
+        );
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct UsageCost {
     input_cost_usd: f64,

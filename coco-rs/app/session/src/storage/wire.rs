@@ -141,7 +141,7 @@ pub(super) fn is_compact_boundary_message(msg: &coco_messages::Message) -> bool 
         msg,
         coco_messages::Message::System(coco_messages::SystemMessage::CompactBoundary(_))
             | coco_messages::Message::System(coco_messages::SystemMessage::MicrocompactBoundary(_))
-    ) || matches!(msg, coco_messages::Message::User(u) if u.is_compact_summary)
+    )
 }
 
 pub(super) fn remember_assistant_tool_calls(

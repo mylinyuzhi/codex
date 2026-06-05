@@ -40,6 +40,27 @@ session > command > cliArg > flagSettings > localSettings > projectSettings > us
 ```
 Deny always wins immediately (step 1 of eval pipeline), regardless of priority.
 
+## Auto-mode classifier-failure posture (fail open vs closed)
+
+Two non-recoverable / transient classifier outcomes are mapped to a
+human-review-or-deny decision in `auto_mode_decision.rs`:
+
+- **`transcript_too_long`** (deterministic context overrun — retry can't
+  help) → manual prompt when interactive, deny when headless. TS skips the
+  iron-gate for this case (`permissions.ts:818-842`); coco matches.
+- **`unavailable`** (transient transport/capacity outage) → **fail closed
+  (deny) by default**, even in interactive mode. TS gates this on the
+  `tengu_iron_gate_closed` GrowthBook flag whose shipped default is `true`
+  (deny). Coco does not port GrowthBook gates, so it replaces the flag with
+  the `auto_mode.classifier_unavailable_fail_open` setting
+  (`AutoModeConfig` → `AutoModeRules`, default `false` = fail closed).
+  Opting in (`true`) restores a manual interactive prompt; headless always
+  denies regardless (no prompt is reachable).
+
+Both branches deny in headless via `require_interactive_or_deny`, which keys
+off the **permission-specific** `avoid_permission_prompts` (not session-level
+`is_non_interactive`).
+
 ## Default `Tool::check_permissions` returns `Passthrough` (not `Allow`)
 
 TS `TOOL_DEFAULTS.checkPermissions` (`Tool.ts:762-766`) returns

@@ -919,6 +919,19 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "$ref": "#/$defs/CompactFileReferencePayload",
+          "properties": {
+            "type": {
+              "const": "compact_file_reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1740,7 +1753,7 @@
           "type": "object"
         },
         {
-          "description": "Project-scope on-disk skill (`.claude/skills/`). TS: `projectSettings`.",
+          "description": "Project-scope on-disk skill (`.coco/skills/`).",
           "properties": {
             "kind": {
               "const": "project",
@@ -1779,7 +1792,7 @@
           "type": "object"
         },
         {
-          "description": "Legacy `.claude/commands/` flat-`.md` path. TS: `commands_DEPRECATED`.",
+          "description": "Deprecated legacy flat-`.md` path. Not used by project skill discovery.",
           "properties": {
             "kind": {
               "const": "commands_deprecated",
@@ -1846,6 +1859,22 @@
           "type": "string"
         }
       ]
+    },
+    "CompactFileReferencePayload": {
+      "description": "TS parity: `CompactFileReferenceAttachment`\n(`utils/attachments.ts:307-312`).",
+      "properties": {
+        "display_path": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "display_path"
+      ],
+      "type": "object"
     },
     "CompactTrigger": {
       "description": "How compaction was triggered.\n\nStays in `coco-types` (rather than `coco-messages`) because\n`event::CompactionPhaseParams` references it; the rest of the message\nfamily lives in `coco-messages`.\n\nMirrors the TS taxonomy: manual `/compact`, threshold-based auto, PTL-413\nreactive recovery, gap-based time-based microcompact, session-memory\nshort-circuit (no LLM), and staged context-collapse commit.",
@@ -2860,10 +2889,11 @@
       "type": "string"
     },
     "HookPermissionDecision": {
-      "description": "`allow` / `deny` decision, matching TS `'allow' | 'deny'`.",
+      "description": "`allow` / `deny` / `ask` decision from hook output.",
       "enum": [
         "allow",
-        "deny"
+        "deny",
+        "ask"
       ],
       "type": "string"
     },
@@ -9141,7 +9171,7 @@
         },
         {
           "const": "project",
-          "description": "`<cwd>/.claude/skills/` \u2014 TS `projectSettings`.",
+          "description": "`<cwd>/.coco/skills/` \u2014 project skills.",
           "type": "string"
         },
         {

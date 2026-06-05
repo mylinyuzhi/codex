@@ -451,7 +451,24 @@ impl<'a> TranscriptCellRenderer<'a> {
         lines: &mut Vec<Line<'static>>,
     ) {
         match &cell.kind {
-            CellKind::UserText { text } => self.render_text_block(">", text, lines),
+            CellKind::UserText { text } => {
+                if let Some(rendered) =
+                    crate::presentation::slash_command::render_slash_command_user_text(
+                        cell.source.as_ref(),
+                        text,
+                        crate::presentation::slash_command::SlashCommandRenderOptions {
+                            styles: self.styles,
+                            width: self.width,
+                            syntax_highlighting: self.syntax_highlighting,
+                            apply_user_background: false,
+                        },
+                    )
+                {
+                    lines.extend(rendered);
+                } else {
+                    self.render_text_block(">", text, lines);
+                }
+            }
             CellKind::AssistantText { text, .. } => self.render_text_block("⏺", text, lines),
             CellKind::AssistantThinking { text } => {
                 let meta = self.reasoning_metadata.get(&cell.message_uuid);
@@ -494,7 +511,16 @@ impl<'a> TranscriptCellRenderer<'a> {
                 // Memory injections collapse to `◆ memory · <path>` (path relative
                 // to cwd); other attachments show their first body line behind a
                 // width-1 hollow `◇`. Silent / structured payloads render nothing.
-                if let Some(path) =
+                if let Some(path) = crate::widgets::chat::compact_file_reference_chip_path(
+                    cell.source.as_ref(),
+                    self.cwd,
+                ) {
+                    lines.push(Line::from(vec![
+                        Span::raw("◇ ").fg(self.styles.accent()).dim(),
+                        Span::raw("Referenced file ").fg(self.styles.dim()),
+                        Span::raw(path).fg(self.styles.dim()).bold(),
+                    ]));
+                } else if let Some(path) =
                     crate::widgets::chat::nested_memory_chip_path(cell.source.as_ref(), self.cwd)
                 {
                     lines.push(Line::from(vec![

@@ -387,6 +387,37 @@ fn test_agent_spawn_request_inheritance_fields_are_serde_skip() {
 
 // ── AgentTool tests ──
 
+#[test]
+fn test_agent_classifier_input_surfaces_subagent_type_and_mode() {
+    // TS `AgentTool.toAutoClassifierInput`: the gate sees which agent type
+    // runs and at what permission mode — `(subagent_type, mode=…): prompt` —
+    // NOT the cosmetic `description`.
+    assert_eq!(
+        <AgentTool as DynTool>::to_auto_classifier_input(
+            &AgentTool,
+            &serde_json::json!({
+                "prompt": "delete the repo",
+                "description": "cleanup",
+                "subagent_type": "general-purpose",
+                "mode": "acceptEdits"
+            }),
+        ),
+        Some("(general-purpose, mode=acceptEdits): delete the repo".to_string())
+    );
+}
+
+#[test]
+fn test_agent_classifier_input_prompt_only_when_no_tags() {
+    // No subagent_type / mode → TS prefix is a bare `": "`.
+    assert_eq!(
+        <AgentTool as DynTool>::to_auto_classifier_input(
+            &AgentTool,
+            &serde_json::json!({"prompt": "do the thing", "description": "x"}),
+        ),
+        Some(": do the thing".to_string())
+    );
+}
+
 #[tokio::test]
 async fn test_agent_tool_empty_prompt_rejected() {
     let ctx = ToolUseContext::test_default();

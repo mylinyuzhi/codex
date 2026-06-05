@@ -73,6 +73,60 @@ pub fn parse_worktree_output(stdout: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Pending-work summary for a worktree, used as a removal safety gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorktreeChangeSummary {
+    /// Uncommitted (staged + unstaged + untracked) files.
+    pub changed_files: usize,
+    /// Commits on `HEAD` not reachable from `base_commit`, when one is given.
+    pub commits_ahead: usize,
+}
+
+impl WorktreeChangeSummary {
+    /// True when the worktree has work that removal would discard.
+    pub fn has_pending_work(&self) -> bool {
+        self.changed_files > 0 || self.commits_ahead > 0
+    }
+}
+
+/// Count uncommitted files (and, when `base_commit` is given, commits ahead of
+/// it) in `worktree_path`.
+///
+/// Returns `None` when git state cannot be reliably determined (the
+/// `status` / `rev-list` subprocess failed — lock file, corrupt index, bad
+/// ref). Callers MUST treat `None` as "unknown, assume unsafe" (fail-closed),
+/// mirroring TS `countWorktreeChanges` — a silent `0/0` would let a forced
+/// removal destroy real work. `base_commit` is `None` for callers that have no
+/// baseline; the uncommitted-file count is still authoritative.
+pub fn count_worktree_changes(
+    worktree_path: &Path,
+    base_commit: Option<&str>,
+) -> Option<WorktreeChangeSummary> {
+    let status =
+        crate::operations::run_git_for_stdout(worktree_path, ["status", "--porcelain"], None)
+            .ok()?;
+    let changed_files = status.lines().filter(|l| !l.trim().is_empty()).count();
+
+    let commits_ahead = match base_commit {
+        Some(base) => {
+            let range = format!("{base}..HEAD");
+            let out = crate::operations::run_git_for_stdout(
+                worktree_path,
+                ["rev-list", "--count", range.as_str()],
+                None,
+            )
+            .ok()?;
+            out.trim().parse::<usize>().ok()?
+        }
+        None => 0,
+    };
+
+    Some(WorktreeChangeSummary {
+        changed_files,
+        commits_ahead,
+    })
+}
+
 /// An orphaned worktree discovered during cleanup.
 #[derive(Debug)]
 struct OrphanedWorktree {

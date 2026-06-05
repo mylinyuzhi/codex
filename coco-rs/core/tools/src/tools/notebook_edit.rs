@@ -71,6 +71,17 @@ pub enum NotebookEditMode {
     Delete,
 }
 
+impl NotebookEditMode {
+    /// Lowercase wire name (matches the `snake_case` serde rename).
+    fn as_str(self) -> &'static str {
+        match self {
+            NotebookEditMode::Replace => "replace",
+            NotebookEditMode::Insert => "insert",
+            NotebookEditMode::Delete => "delete",
+        }
+    }
+}
+
 /// Typed input for [`NotebookEditTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct NotebookEditInput {
@@ -151,6 +162,18 @@ impl Tool for NotebookEditTool {
     type Input = NotebookEditInput;
     coco_tool_runtime::impl_runtime_schema!(NotebookEditInput);
     type Output = NotebookEditOutput;
+
+    fn to_auto_classifier_input(&self, input: &NotebookEditInput) -> Option<String> {
+        // TS `NotebookEditTool`: `${notebook_path} ${mode}: ${new_source}`.
+        // `edit_mode` (replace / insert / delete) is security-relevant, so it
+        // rides along with the path and payload.
+        Some(format!(
+            "{} {}: {}",
+            input.notebook_path,
+            input.edit_mode.as_str(),
+            input.new_source
+        ))
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::NotebookEdit)
@@ -288,11 +311,19 @@ impl Tool for NotebookEditTool {
 
         // Resolve cell index from cell_id. For insert with an empty
         // cell_id we default to position 0 so the model can create the
-        // first cell without having to pass "0" explicitly.
+        // first cell without having to pass "0" explicitly. For insert
+        // with a referenced cell, TS places the new cell AFTER it
+        // (`NotebookEditTool.ts:365-366`: `cellIndex += 1`), so the new
+        // cell follows the one named — not before it.
         let cell_index = if matches!(edit_mode, NotebookEditMode::Insert) && cell_id.is_empty() {
             0
         } else {
-            resolve_cell_index(cells, cell_id)?
+            let idx = resolve_cell_index(cells, cell_id)?;
+            if matches!(edit_mode, NotebookEditMode::Insert) {
+                idx + 1
+            } else {
+                idx
+            }
         };
 
         // R5-T15: return the actual cell ID (string) rather than a bare

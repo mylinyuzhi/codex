@@ -157,6 +157,52 @@ async fn test_inline_skill_expands_prompt_into_new_messages() {
 }
 
 #[tokio::test]
+async fn test_inline_skill_substitutes_skill_dir_and_session_id() {
+    let mut skill = sample_skill(
+        "paths",
+        "Schema at ${CLAUDE_SKILL_DIR}/schema.json for session ${CLAUDE_SESSION_ID}",
+        SkillContext::Inline,
+        false,
+        false,
+    );
+    skill.skill_root = Some(std::path::PathBuf::from("/skills/paths"));
+
+    let mgr = SkillManager::new();
+    mgr.register(skill);
+    let rt = QuerySkillRuntime::new(Arc::new(mgr)).with_session_id("sess-123");
+
+    let result = rt
+        .invoke_skill(
+            "paths",
+            "",
+            SubagentInheritance::default(),
+            coco_tool_runtime::SkillGateContext::default(),
+        )
+        .await
+        .expect("ok");
+    let json = match result {
+        SkillInvocationResult::Inline { new_messages, .. } => new_messages[0].clone(),
+        _ => panic!("expected Inline"),
+    };
+    let text = serde_json::to_string(&json).unwrap();
+    assert!(
+        text.contains("/skills/paths/schema.json"),
+        "${{CLAUDE_SKILL_DIR}} must be substituted; got: {text}"
+    );
+    assert!(
+        text.contains("session sess-123"),
+        "${{CLAUDE_SESSION_ID}} must be substituted; got: {text}"
+    );
+    assert!(
+        text.contains("Base directory for this skill: /skills/paths"),
+        "base-dir header must be prepended; got: {text}"
+    );
+    // The literal tokens must NOT survive.
+    assert!(!text.contains("CLAUDE_SKILL_DIR"));
+    assert!(!text.contains("CLAUDE_SESSION_ID"));
+}
+
+#[tokio::test]
 async fn test_inline_skill_expands_arguments() {
     // `expand_skill_prompt_simple` substitutes $ARGUMENTS with the
     // raw args string. Prove the substitution happens.

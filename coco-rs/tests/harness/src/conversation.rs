@@ -51,13 +51,15 @@ pub fn with_tool_results(tool: ToolName, count: usize, content_size: usize) -> V
     msgs.push(messages::user("Process these items"));
 
     for i in 0..count {
-        msgs.push(messages::assistant_with_tool_call(
+        let tool_call_id = format!("call_{tool}_{i}", tool = tool.as_str());
+        msgs.push(messages::assistant_with_tool_call_id(
+            &tool_call_id,
             tool.as_str(),
             serde_json::json!({"id": i}),
         ));
         msgs.push(messages::tool_result_large(
             tool,
-            &format!("call_{tool}_{i}", tool = tool.as_str()),
+            &tool_call_id,
             content_size,
         ));
     }

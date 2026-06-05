@@ -242,6 +242,25 @@ impl Tool for AgentTool {
         ))
     }
 
+    fn to_auto_classifier_input(&self, input: &AgentInput) -> Option<String> {
+        // Mirror TS `AgentTool.toAutoClassifierInput`: the gate must see the
+        // security-relevant spawn parameters — which agent type runs and at
+        // what permission mode — not the cosmetic 3-5 word `description`.
+        let mut tags: Vec<String> = Vec::new();
+        if let Some(subagent_type) = input.subagent_type.as_deref().filter(|s| !s.is_empty()) {
+            tags.push(subagent_type.to_string());
+        }
+        if let Some(mode) = input.mode.as_deref().filter(|s| !s.is_empty()) {
+            tags.push(format!("mode={mode}"));
+        }
+        let prefix = if tags.is_empty() {
+            ": ".to_string()
+        } else {
+            format!("({}): ", tags.join(", "))
+        };
+        Some(format!("{prefix}{}", input.prompt))
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Agent)
     }

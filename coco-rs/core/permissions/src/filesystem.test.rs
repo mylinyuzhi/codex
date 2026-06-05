@@ -36,9 +36,6 @@ fn test_dangerous_directories() {
     assert!(is_dangerous_file_path("/project/.git/config"));
     assert!(is_dangerous_file_path("/project/.Git/hooks/pre-commit"));
     assert!(is_dangerous_file_path("/project/.claude/settings.json"));
-    assert!(is_dangerous_file_path(
-        "/project/.claude/commands/deploy.md"
-    ));
     assert!(is_dangerous_file_path("/project/.vscode/settings.json"));
 }
 
@@ -70,8 +67,17 @@ fn test_claude_config_detected() {
     assert!(is_claude_config_path(
         "/project/.claude/settings.local.json"
     ));
-    assert!(is_claude_config_path("/project/.claude/commands/foo.md"));
+    assert!(is_claude_config_path("/project/.coco/skills/foo/SKILL.md"));
+    assert!(is_claude_config_path("/project/.claude/agents/reviewer.md"));
     assert!(is_claude_config_path("/project/.Claude/Settings.json"));
+}
+
+#[test]
+fn test_legacy_claude_skills_and_commands_are_not_project_skill_config() {
+    assert!(!is_claude_config_path(
+        "/project/.claude/skills/foo/SKILL.md"
+    ));
+    assert!(!is_claude_config_path("/project/.claude/commands/foo.md"));
 }
 
 #[test]

@@ -11,6 +11,7 @@ fn empty_rules() -> AutoModeRules {
         allow: vec![],
         soft_deny: vec![],
         environment: vec![],
+        ..AutoModeRules::default()
     }
 }
 
@@ -21,7 +22,7 @@ fn interactive_ctx(cwd: Option<&str>) -> AutoModeContext<'_> {
     AutoModeContext {
         cwd,
         additional_dirs: NO_DIRS,
-        is_non_interactive: false,
+        avoid_permission_prompts: false,
     }
 }
 
@@ -30,7 +31,7 @@ fn headless_ctx(cwd: Option<&str>) -> AutoModeContext<'_> {
     AutoModeContext {
         cwd,
         additional_dirs: NO_DIRS,
-        is_non_interactive: true,
+        avoid_permission_prompts: true,
     }
 }
 
@@ -63,6 +64,7 @@ async fn test_inactive_returns_none() {
         &empty_rules(),
         &interactive_ctx(None),
         mock_allow,
+        None,
     )
     .await;
     assert!(result.is_none());
@@ -85,6 +87,7 @@ async fn test_safe_tool_allows_and_resets_streak() {
         &empty_rules(),
         &interactive_ctx(None),
         mock_error, // should never be called
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Allow { .. })));
@@ -107,6 +110,7 @@ async fn test_classifier_allow() {
         &empty_rules(),
         &interactive_ctx(None),
         mock_allow,
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Allow { .. })));
@@ -127,6 +131,7 @@ async fn test_classifier_block() {
         &empty_rules(),
         &interactive_ctx(None),
         mock_block,
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Deny { .. })));
@@ -152,6 +157,7 @@ async fn test_write_traversal_is_immune_interactive_ask() {
         &empty_rules(),
         &interactive_ctx(Some("/work")),
         mock_allow, // classifier must NOT be consulted for an immune block
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Ask { .. })));
@@ -173,6 +179,7 @@ async fn test_write_traversal_headless_denies() {
         &empty_rules(),
         &headless_ctx(Some("/work")),
         mock_allow,
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Deny { .. })));
@@ -193,6 +200,7 @@ async fn test_write_shell_expansion_is_immune() {
         &empty_rules(),
         &interactive_ctx(Some("/work")),
         mock_allow,
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Ask { .. })));
@@ -214,6 +222,7 @@ async fn test_write_safe_in_cwd_allows() {
         &empty_rules(),
         &interactive_ctx(Some("/work")),
         mock_error, // classifier must NOT be consulted
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Allow { .. })));
@@ -235,6 +244,7 @@ async fn test_write_outside_cwd_goes_to_classifier() {
         &empty_rules(),
         &interactive_ctx(Some("/work")),
         mock_block,
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Deny { .. })));
@@ -257,6 +267,7 @@ async fn test_write_no_cwd_defers_to_classifier() {
         &empty_rules(),
         &interactive_ctx(None),
         mock_block,
+        None,
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Deny { .. })));
@@ -281,6 +292,7 @@ async fn test_denial_limit_consecutive_falls_back_to_ask() {
             &empty_rules(),
             &interactive_ctx(None),
             mock_block,
+            None,
         )
         .await;
     }
@@ -312,6 +324,7 @@ async fn test_denial_limit_headless_denies() {
             &empty_rules(),
             &headless_ctx(None),
             mock_block,
+            None,
         )
         .await;
     }
@@ -341,6 +354,7 @@ async fn test_denial_total_limit_resets_counters() {
         &empty_rules(),
         &interactive_ctx(None),
         mock_block,
+        None,
     )
     .await;
     // 20th total denial → fallback Ask mentioning the total, and a reset.
@@ -357,7 +371,7 @@ async fn test_denial_total_limit_resets_counters() {
 // ── #69: classifier-unavailable fail-open / fail-closed ──
 
 #[tokio::test]
-async fn test_classifier_unavailable_interactive_asks() {
+async fn test_classifier_unavailable_interactive_denies_by_default() {
     let state = AutoModeState::new();
     state.set_active(true);
     let mut tracker = DenialTracker::new();
@@ -371,9 +385,37 @@ async fn test_classifier_unavailable_interactive_asks() {
         &empty_rules(),
         &interactive_ctx(None),
         mock_error,
+        None,
     )
     .await;
-    // Transport outage → fail-open to a manual prompt (NOT a hard deny).
+    // Default posture is fail-closed (matches TS `tengu_iron_gate_closed`):
+    // a transient outage denies even when an interactive prompt is reachable.
+    assert!(matches!(result, Some(PermissionDecision::Deny { .. })));
+}
+
+#[tokio::test]
+async fn test_classifier_unavailable_interactive_asks_when_fail_open_opted_in() {
+    let state = AutoModeState::new();
+    state.set_active(true);
+    let mut tracker = DenialTracker::new();
+    let rules = AutoModeRules {
+        classifier_unavailable_fail_open: true,
+        ..AutoModeRules::default()
+    };
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
+        "Bash",
+        &json!({"command": "curl example.com"}),
+        /*is_read_only*/ false,
+        &state,
+        &mut tracker,
+        &[],
+        &rules,
+        &interactive_ctx(None),
+        mock_error,
+        None,
+    )
+    .await;
+    // Opting into fail-open restores a manual prompt in interactive sessions.
     assert!(matches!(result, Some(PermissionDecision::Ask { .. })));
 }
 
@@ -392,6 +434,7 @@ async fn test_classifier_unavailable_headless_denies() {
         &empty_rules(),
         &headless_ctx(None),
         mock_error,
+        None,
     )
     .await;
     // No prompt available → fail-closed (deny).
@@ -415,6 +458,7 @@ async fn test_transcript_too_long_interactive_asks() {
         &empty_rules(),
         &interactive_ctx(None),
         |_req: ClassifyRequest| async { Err("prompt is too long: 250000 tokens".to_string()) },
+        None,
     )
     .await;
     match result {

@@ -1,118 +1,177 @@
-//! Tests for ExitWorktreeTool. These focus on input validation and
-//! restoration-target resolution paths that don't require a real git
-//! worktree. The happy-path end-to-end test would need `git worktree
-//! add`/`remove` against a real repo, which is out of scope for unit
-//! tests — integration coverage lives separately.
+//! Tests for EnterWorktreeTool and ExitWorktreeTool.
 
 use super::EnterWorktreeTool;
 use super::ExitWorktreeTool;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::ActiveWorktreeState;
+use coco_types::ToolAppState;
 use serde_json::json;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+struct CwdGuard(PathBuf);
+
+impl CwdGuard {
+    fn set(path: &Path) -> Self {
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(path).unwrap();
+        Self(previous)
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Input validation
 // ---------------------------------------------------------------------------
 
-/// Missing `path` parameter must fail with InvalidInput before we even
-/// try to invoke git.
 #[tokio::test]
-async fn test_exit_worktree_rejects_missing_path() {
-    let ctx = ToolUseContext::test_default();
-    let result = <ExitWorktreeTool as DynTool>::execute(&ExitWorktreeTool, json!({}), &ctx).await;
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("path"), "should mention path: {err}");
-}
-
-#[tokio::test]
-async fn test_exit_worktree_rejects_empty_path() {
+async fn test_exit_worktree_rejects_missing_state() {
     let ctx = ToolUseContext::test_default();
     let result =
-        <ExitWorktreeTool as DynTool>::execute(&ExitWorktreeTool, json!({"path": ""}), &ctx).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_exit_worktree_rejects_whitespace_path() {
-    let ctx = ToolUseContext::test_default();
-    let result =
-        <ExitWorktreeTool as DynTool>::execute(&ExitWorktreeTool, json!({"path": "   "}), &ctx)
+        <ExitWorktreeTool as DynTool>::execute(&ExitWorktreeTool, json!({"action": "keep"}), &ctx)
             .await;
     assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("active worktree"),
+        "should mention state: {err}"
+    );
 }
 
-/// Branch names are interpolated into the default worktree path
-/// (`../worktrees/<branch>`); path-traversal segments must be rejected
-/// before any git invocation so a name like `../../etc` can't escape.
 #[tokio::test]
-async fn test_enter_worktree_rejects_branch_path_traversal() {
-    let ctx = ToolUseContext::test_default();
-    for bad in ["../../etc", "a/../b", "/abs", "..", "wt\\x"] {
-        let result = <EnterWorktreeTool as DynTool>::execute(
-            &EnterWorktreeTool,
-            json!({ "branch": bad }),
-            &ctx,
-        )
-        .await;
-        assert!(result.is_err(), "branch {bad:?} should be rejected");
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("path-traversal"),
-            "branch {bad:?} should fail with a traversal message, got: {err}"
-        );
-    }
+async fn test_exit_worktree_rejects_when_no_active_worktree() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+    let result =
+        <ExitWorktreeTool as DynTool>::execute(&ExitWorktreeTool, json!({"action": "keep"}), &ctx)
+            .await;
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("No active worktree")
+    );
 }
 
-// ---------------------------------------------------------------------------
-// Restoration target resolution
-// ---------------------------------------------------------------------------
-//
-// The restoration target is picked in priority order (explicit >
-// parent-dir > current-cwd). We can exercise the non-existent-path
-// branch which hits git worktree remove's failure path and verify our
-// error-handling returns ToolError::ExecutionFailed instead of panicking.
-
 #[tokio::test]
-async fn test_exit_worktree_nonexistent_path_fails_gracefully() {
-    let ctx = ToolUseContext::test_default();
-    let result = <ExitWorktreeTool as DynTool>::execute(
-        &ExitWorktreeTool,
-        json!({
-            "path": "/nonexistent/worktree/that/does/not/exist/xyz-12345",
-            "previous_cwd": "/tmp"
-        }),
+async fn test_enter_worktree_rejects_missing_app_state_before_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let session_cwd = Arc::new(RwLock::new(repo.clone()));
+    let _cwd_guard = CwdGuard::set(&repo);
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.session_cwd = Some(session_cwd.clone());
+    ctx.app_state = None;
+
+    let result = <EnterWorktreeTool as DynTool>::execute(
+        &EnterWorktreeTool,
+        json!({"name": "missing-state"}),
         &ctx,
     )
     .await;
-    // Either git is not installed (InstalledError path) or git reports
-    // failure — both land in ExecutionFailed with a non-empty message.
+
     assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
+    assert_eq!(std::env::current_dir().unwrap(), repo);
+    assert_eq!(*session_cwd.read().await, repo);
+    assert!(!temp.path().join("worktrees").join("missing-state").exists());
+}
+
+#[test]
+fn test_enter_worktree_schema_uses_name_only() {
+    let schema =
+        <EnterWorktreeTool as DynTool>::runtime_validation_schema(&EnterWorktreeTool).as_value();
+    assert!(schema["properties"].get("name").is_some());
+    assert!(schema["properties"].get("branch").is_none());
+    assert!(schema["properties"].get("path").is_none());
+}
+
+#[test]
+fn test_exit_worktree_schema_uses_action_not_path() {
+    let schema =
+        <ExitWorktreeTool as DynTool>::runtime_validation_schema(&ExitWorktreeTool).as_value();
+    assert!(schema["properties"].get("action").is_some());
+    assert!(schema["properties"].get("discard_changes").is_some());
+    assert!(schema["properties"].get("path").is_none());
+    assert!(schema["properties"].get("previous_cwd").is_none());
+}
+
+#[tokio::test]
+async fn test_exit_worktree_refuses_unverifiable_without_discard() {
+    let temp = tempfile::tempdir().unwrap();
+    let original = temp.path().join("repo");
+    std::fs::create_dir_all(&original).unwrap();
+    let worktree = temp.path().join("missing-worktree");
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        active_worktree: Some(ActiveWorktreeState {
+            original_cwd: original,
+            worktree_path: worktree,
+            worktree_branch: Some("agent/task-test".into()),
+        }),
+        ..ToolAppState::default()
+    }));
+    let mut ctx = ToolUseContext::test_default();
+    ctx.app_state = Some(app_state.into());
+    let result = <ExitWorktreeTool as DynTool>::execute(
+        &ExitWorktreeTool,
+        json!({ "action": "remove" }),
+        &ctx,
+    )
+    .await;
+    let err = result.expect_err("should refuse").to_string();
     assert!(
-        !err.is_empty() && !err.contains("panic"),
-        "error should be structured, not a panic: {err}"
+        err.contains("discard_changes"),
+        "refusal must tell the model how to confirm: {err}"
     );
 }
 
-/// The schema must document `previous_cwd` so the model knows how to
-/// invoke the tool. TS contract check.
-#[test]
-fn test_exit_worktree_schema_advertises_previous_cwd() {
-    let schema =
-        <ExitWorktreeTool as DynTool>::runtime_validation_schema(&ExitWorktreeTool).as_value();
-    assert!(
-        schema["properties"].get("previous_cwd").is_some(),
-        "schema must expose previous_cwd parameter"
-    );
-    assert!(
-        schema["properties"].get("path").is_some(),
-        "schema must expose path parameter"
-    );
-    assert!(
-        schema["properties"].get("force").is_some(),
-        "schema must expose force parameter"
-    );
+#[tokio::test]
+async fn test_exit_worktree_keep_restores_cwd_and_clears_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let original = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    std::fs::create_dir_all(&original).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        active_worktree: Some(ActiveWorktreeState {
+            original_cwd: original.clone(),
+            worktree_path: worktree.clone(),
+            worktree_branch: Some("agent/task-test".into()),
+        }),
+        ..ToolAppState::default()
+    }));
+    let session_cwd = Arc::new(RwLock::new(worktree.clone()));
+    let _cwd_guard = CwdGuard::set(&worktree);
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.app_state = Some(app_state.clone().into());
+    ctx.session_cwd = Some(session_cwd.clone());
+
+    let mut result =
+        <ExitWorktreeTool as DynTool>::execute(&ExitWorktreeTool, json!({"action": "keep"}), &ctx)
+            .await
+            .unwrap();
+    if let Some(patch) = result.app_state_patch.take() {
+        let mut app_state = app_state.write().await;
+        patch(&mut app_state);
+    }
+
+    assert_eq!(std::env::current_dir().unwrap(), original);
+    assert_eq!(*session_cwd.read().await, original);
+    assert!(worktree.exists(), "keep must not remove worktree dir");
+    assert!(app_state.read().await.active_worktree.is_none());
+    assert_eq!(result.data["worktreePath"], worktree.display().to_string());
+    assert_eq!(result.data["worktreeBranch"], "agent/task-test");
 }
 
 // ---------------------------------------------------------------------------
@@ -124,15 +183,18 @@ fn enter_worktree_render_emits_message_text_only() {
     use coco_tool_runtime::ToolResultContentPart;
     use serde_json::json;
     let data = json!({
-        "message": "Created worktree at '/tmp/wt' on branch 'feat/x'",
-        "path": "/tmp/wt",
-        "branch": "feat/x",
+        "message": "Created and entered worktree at '/tmp/wt' on branch 'agent/task-x'",
+        "worktreePath": "/tmp/wt",
+        "worktreeBranch": "agent/task-x",
     });
     let parts = <EnterWorktreeTool as DynTool>::render_for_model(&EnterWorktreeTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    assert_eq!(text, "Created worktree at '/tmp/wt' on branch 'feat/x'");
+    assert_eq!(
+        text,
+        "Created and entered worktree at '/tmp/wt' on branch 'agent/task-x'"
+    );
 }
 
 #[test]
@@ -140,13 +202,13 @@ fn exit_worktree_render_emits_message_text_only() {
     use coco_tool_runtime::ToolResultContentPart;
     use serde_json::json;
     let data = json!({
-        "message": "Removed worktree at '/tmp/wt'",
-        "path": "/tmp/wt",
-        "restoration": {"cwd_restored": true},
+        "message": "Exited and removed worktree at '/tmp/wt'",
+        "worktreePath": "/tmp/wt",
+        "worktreeBranch": "agent/task-x",
     });
     let parts = <ExitWorktreeTool as DynTool>::render_for_model(&ExitWorktreeTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    assert_eq!(text, "Removed worktree at '/tmp/wt'");
+    assert_eq!(text, "Exited and removed worktree at '/tmp/wt'");
 }

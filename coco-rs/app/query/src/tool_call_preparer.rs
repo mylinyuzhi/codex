@@ -214,6 +214,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.denial_tracker,
         args.model_runtimes,
         args.auto_mode_rules,
+        args.tools,
     )
     .await;
 
@@ -236,6 +237,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.hooks,
         Some(&args.orchestration_ctx),
         args.completion_event_mode,
+        args.ctx.avoid_permission_prompts,
     )
     .resolve(decision, tc, &effective_input, &tool_id)
     .await;
@@ -319,6 +321,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     denial_tracker: Option<&Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
     model_runtimes: &Arc<ModelRuntimeRegistry>,
     auto_mode_rules: &AutoModeRules,
+    tools: &ToolRegistry,
 ) -> PermissionDecision {
     let (hook_permission_behavior, hook_permission_reason) = hook_permission;
     let mut hook_permission_behavior = hook_permission_behavior;
@@ -396,7 +399,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         let auto_ctx = coco_permissions::AutoModeContext {
             cwd: cwd.as_deref(),
             additional_dirs: &additional_dirs,
-            is_non_interactive: ctx.is_non_interactive,
+            avoid_permission_prompts: ctx.avoid_permission_prompts,
         };
         let mut tracker_guard = tracker.lock().await;
         let classifier_decision = try_classify_in_auto_mode(
@@ -409,6 +412,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
             model_runtimes,
             auto_mode_rules,
             auto_ctx,
+            tools,
         )
         .await;
         drop(tracker_guard);
@@ -541,11 +545,14 @@ async fn evaluate_with_rules(
     // evaluation, so the returned decision already preserves
     // `updated_input` when the tool returned one. No post-processing
     // needed here.
-    coco_permissions::PermissionEvaluator::evaluate_with_tool_check(
+    coco_permissions::PermissionEvaluator::evaluate_with_tool_check_and_options(
         &tool_id,
         effective_input,
         &ctx.permission_context,
         Some(&tool_check),
+        coco_permissions::PermissionEvaluationOptions {
+            dynamic_read_only: tool.is_read_only(effective_input),
+        },
     )
 }
 
@@ -560,6 +567,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
     model_runtimes: &Arc<ModelRuntimeRegistry>,
     auto_mode_rules: &AutoModeRules,
     auto_ctx: coco_permissions::AutoModeContext<'_>,
+    tools: &ToolRegistry,
 ) -> Option<PermissionDecision> {
     let model_runtimes = model_runtimes.clone();
     let classify_fn = move |req: coco_permissions::ClassifyRequest| {
@@ -590,7 +598,12 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     prompt: prompt.clone(),
                     max_tokens: Some(req.max_tokens),
                     thinking_level: None,
-                    fast_mode: req.stage == 1,
+                    // The classifier runs on the shared Main runtime. TS sets
+                    // no priority flag here — stage-1 "fastness" comes purely
+                    // from the small token budget + `</block>` stop. Toggling
+                    // `fast_mode` per stage would only churn the Main runtime's
+                    // prompt-cache-break detector. Keep it off for both stages.
+                    fast_mode: false,
                     tools: None,
                     tool_choice: None,
                     context_management: None,
@@ -663,6 +676,17 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
         }
     };
 
+    // Per-tool projection of the judged action and the prior tool_use blocks
+    // in the transcript, resolved from the live registry. `None` from a tool
+    // (no projection / unknown) → the classifier falls back to raw JSON; the
+    // "no security relevance" auto-allow stays in `is_safe_tool`.
+    let projector = |name: &str, value: &Value| {
+        tools
+            .get_by_name(name)
+            .and_then(|t| t.to_auto_classifier_input(value))
+    };
+    let projector: coco_permissions::InputProjector<'_> = &projector;
+
     coco_permissions::can_use_tool_in_auto_mode(
         tool_name,
         input,
@@ -673,6 +697,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
         auto_mode_rules,
         &auto_ctx,
         classify_fn,
+        Some(projector),
     )
     .await
 }

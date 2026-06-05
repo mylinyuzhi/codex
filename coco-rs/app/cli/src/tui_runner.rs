@@ -2022,6 +2022,15 @@ enum SlashOutcome {
     /// Trigger a session-memory force update (9-section). Emitted when
     /// the dispatcher sees `SUMMARY_SENTINEL`.
     TriggerSummary,
+    /// Render the live multi-provider session cost. Emitted when the
+    /// dispatcher sees `COST_SENTINEL` — the handler can't reach the
+    /// `CostTracker`, so the runner reads `runtime.session_usage_snapshot()`
+    /// and formats it.
+    ShowCost,
+    /// Render the live session status (model / permission mode / thinking /
+    /// plan mode / MCP servers). Emitted on `STATUS_SENTINEL`; the runner
+    /// builds it from `runtime.status_report()`.
+    ShowStatus,
     /// Rename the current session. `Explicit(name)` uses the
     /// caller-supplied name verbatim; `Auto` directs the dispatcher
     /// to derive a kebab-case name via the `ModelRole::Fast`
@@ -2400,6 +2409,8 @@ enum SentinelTrigger {
     },
     Dream,
     Summary,
+    Cost,
+    Status,
     Rename {
         request: coco_commands::ParsedRename,
     },
@@ -2437,6 +2448,16 @@ fn classify_sentinel_trigger(text: &str) -> Option<SentinelTrigger> {
     }
     if text.starts_with(SUMMARY_SENTINEL) && parse_summary_sentinel(text).is_some() {
         return Some(SentinelTrigger::Summary);
+    }
+    if text.starts_with(coco_commands::handlers::cost::COST_SENTINEL)
+        && coco_commands::handlers::cost::parse_cost_sentinel(text).is_some()
+    {
+        return Some(SentinelTrigger::Cost);
+    }
+    if text.starts_with(coco_commands::STATUS_SENTINEL)
+        && coco_commands::parse_status_sentinel(text).is_some()
+    {
+        return Some(SentinelTrigger::Status);
     }
     if text.starts_with(coco_commands::RENAME_SENTINEL)
         && let Some(request) = coco_commands::parse_rename_sentinel(text)
@@ -2554,6 +2575,19 @@ async fn handle_slash_outcome(
             run_session_memory_force(runtime).await;
             SlashFollowup::Done
         }
+        SlashOutcome::ShowCost => {
+            // Read the live multi-provider tracker (NOT a stale session file),
+            // pricing already resolved via `coco_model_card` at accumulation.
+            let snapshot = runtime.session_usage_snapshot().await;
+            let text = coco_messages::format_session_cost(&snapshot);
+            emit_slash_text(event_tx, "cost", "", &text).await;
+            SlashFollowup::Done
+        }
+        SlashOutcome::ShowStatus => {
+            let text = runtime.status_report().await;
+            emit_slash_text(event_tx, "status", "", &text).await;
+            SlashFollowup::Done
+        }
         SlashOutcome::TriggerRename { request } => {
             run_session_rename(runtime, event_tx, request).await;
             SlashFollowup::Done
@@ -2646,6 +2680,15 @@ async fn drain_queued_slash_commands(
             }
             SlashOutcome::TriggerSummary => {
                 run_session_memory_force(runtime).await;
+            }
+            SlashOutcome::ShowCost => {
+                let snapshot = runtime.session_usage_snapshot().await;
+                let text = coco_messages::format_session_cost(&snapshot);
+                emit_slash_text(event_tx, "cost", "", &text).await;
+            }
+            SlashOutcome::ShowStatus => {
+                let text = runtime.status_report().await;
+                emit_slash_text(event_tx, "status", "", &text).await;
             }
             SlashOutcome::TriggerRename { request } => {
                 run_session_rename(runtime, event_tx, request).await;
@@ -2857,6 +2900,8 @@ async fn dispatch_slash_command(
                     },
                     SentinelTrigger::Dream => SlashOutcome::TriggerDream,
                     SentinelTrigger::Summary => SlashOutcome::TriggerSummary,
+                    SentinelTrigger::Cost => SlashOutcome::ShowCost,
+                    SentinelTrigger::Status => SlashOutcome::ShowStatus,
                     SentinelTrigger::Rename { request } => SlashOutcome::TriggerRename { request },
                     SentinelTrigger::Tag { tag } => SlashOutcome::TriggerTag { tag },
                     SentinelTrigger::AddDir { path } => SlashOutcome::TriggerAddDir { path },

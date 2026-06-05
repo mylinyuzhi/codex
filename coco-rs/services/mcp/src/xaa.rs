@@ -2,30 +2,34 @@
 //!
 //! TS: `services/mcp/xaa.ts` (SEP-990, ID-JAG spec).
 //!
-//! Obtains an MCP access token WITHOUT a browser consent screen by
-//! chaining:
+//! Obtains an MCP access token WITHOUT a browser consent screen by chaining:
 //!   1. RFC 8693 Token Exchange at the IdP: `id_token` → ID-JAG
 //!   2. RFC 7523 JWT Bearer Grant at the AS: ID-JAG → `access_token`
 //!
-//! # Scope
+//! [`perform_cross_app_access`] is the orchestrator: it discovers the MCP
+//! server's PRM (RFC 9728) and the authorization server's metadata (RFC 8414),
+//! then runs the two legs with the spec-correct parameters — `audience` is the
+//! **AS issuer** (not a client id) and the leg-1 request carries the
+//! `resource` (the MCP server URL). Leg 2 authenticates with
+//! `client_secret_basic` by default (the SEP-990 conformance expectation),
+//! falling back to `client_secret_post` only when the AS advertises post-only.
 //!
-//! This module implements the wire-level token exchange + bearer grant
-//! primitives, plus the two-leg orchestration. PRM discovery (RFC 9728)
-//! is separated into `xaa_idp_login.rs`; callers that already know the
-//! IdP's `token_endpoint` can call [`exchange_id_token_for_jag`] and
-//! [`exchange_jag_for_access_token`] directly.
+//! Tokens are redacted from debug logs via [`redact_tokens`] — failing to do so
+//! leaks credentials if a misbehaving AS echoes the `subject_token` in an error.
 //!
-//! Redacts tokens from debug logs via a pattern matching the TS
-//! implementation — failing to do so leaks credentials if a misbehaving
-//! AS echoes the subject_token in an error body.
+//! HTTP/SSE MCP configs with `oauth.xaa` call this flow before connecting and
+//! persist the result through `coco-rmcp-client` OAuth storage.
 
-use std::time::Duration;
-
+use base64::Engine as _;
 use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
+use std::time::Duration;
 use tracing::debug;
 use tracing::warn;
+
+use crate::xaa_idp_login::discover_authorization_server;
+use crate::xaa_idp_login::discover_prm;
 
 /// Default HTTP timeout for XAA requests (TS: `XAA_REQUEST_TIMEOUT_MS`).
 pub const XAA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -36,52 +40,86 @@ pub const TOKEN_EXCHANGE_GRANT: &str = "urn:ietf:params:oauth:grant-type:token-e
 /// `urn:ietf:params:oauth:grant-type:jwt-bearer` (RFC 7523).
 pub const JWT_BEARER_GRANT: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 
-/// ID-JAG token type (IETF draft: `draft-ietf-oauth-identity-assertion-authz-grant`).
+/// ID-JAG token type (`draft-ietf-oauth-identity-assertion-authz-grant`).
 pub const ID_JAG_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id-jag";
 
 /// `urn:ietf:params:oauth:token-type:id_token` — id_token subject type.
 pub const ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
 
-/// Configuration for an XAA token exchange.
-#[derive(Debug, Clone)]
-pub struct XaaConfig {
-    /// Client ID registered at the AS (MCP server's resource identifier).
-    pub as_client_id: String,
-    /// IdP's token endpoint (from OIDC well-known discovery).
-    pub idp_token_endpoint: String,
-    /// IdP's client ID (the IdP-registered identity for this app).
-    pub idp_client_id: String,
-    /// Authorization server's token endpoint (from PRM / well-known).
-    pub as_token_endpoint: String,
-    /// Audience claim: typically the MCP server's resource URL.
-    pub audience: String,
-    /// Optional scope to request.
-    pub scope: Option<String>,
-    /// IdP client secret (for confidential-client token exchange). When
-    /// `None`, the caller should inject client_secret via `client_id`
-    /// alone (public client flow), which many IdPs don't allow for
-    /// token exchange — the orchestrator checks this.
-    pub idp_client_secret: Option<String>,
+/// Client authentication method at the AS token endpoint (leg 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsAuthMethod {
+    /// Base64 `Authorization: Basic` header (SEP-990 conformance default).
+    ClientSecretBasic,
+    /// `client_id` / `client_secret` in the form body.
+    ClientSecretPost,
 }
 
-/// Successful XAA orchestration result.
+/// Static inputs to the XAA orchestrator (mirrors TS `XaaConfig`).
+#[derive(Debug, Clone)]
+pub struct XaaConfig {
+    /// Client ID registered at the MCP server's authorization server.
+    pub client_id: String,
+    /// Client secret for the MCP server's authorization server.
+    pub client_secret: String,
+    /// Client ID registered at the IdP (for the token-exchange request).
+    pub idp_client_id: String,
+    /// Optional IdP client secret (`client_secret_post`) — some IdPs require it.
+    pub idp_client_secret: Option<String>,
+    /// The user's OIDC `id_token` from IdP login.
+    pub idp_id_token: String,
+    /// IdP token endpoint (RFC 8693 token-exchange target).
+    pub idp_token_endpoint: String,
+    /// Optional scope requested in both legs.
+    pub scope: Option<String>,
+}
+
+/// Parameters for the RFC 8693 token exchange at the IdP (leg 1).
+#[derive(Debug, Clone)]
+pub struct JwtGrantRequest {
+    pub token_endpoint: String,
+    /// The AS **issuer URL** (not a client id).
+    pub audience: String,
+    /// The MCP server resource URL (PRM `resource`).
+    pub resource: String,
+    pub id_token: String,
+    /// IdP-registered client id.
+    pub client_id: String,
+    pub client_secret: Option<String>,
+    pub scope: Option<String>,
+}
+
+/// Parameters for the RFC 7523 jwt-bearer grant at the AS (leg 2).
+#[derive(Debug, Clone)]
+pub struct JwtBearerRequest {
+    pub token_endpoint: String,
+    pub assertion: String,
+    /// AS-registered client id.
+    pub client_id: String,
+    pub client_secret: String,
+    pub auth_method: AsAuthMethod,
+    pub scope: Option<String>,
+}
+
+/// Successful XAA orchestration result (mirrors TS `XaaResult`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XaaResult {
-    /// The AS-issued access token (what the MCP client sends as a
-    /// bearer token on subsequent requests).
+    /// AS-issued access token (the bearer token for subsequent MCP requests).
     pub access_token: String,
-    /// Seconds until `access_token` expires.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_in: Option<i64>,
     /// Token type — almost always `"Bearer"`.
     #[serde(default)]
     pub token_type: String,
-    /// The ID-JAG from the first leg (retained for observability / audit).
-    /// Intentionally not returned to callers in normal flows; field
-    /// included so tests and integration scripts can verify the
-    /// two-leg exchange actually ran.
+    /// Seconds until `access_token` expires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id_jag_length: Option<usize>,
+    pub expires_in: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    /// AS issuer URL discovered via PRM. Callers persist this so refresh /
+    /// revocation can locate the token endpoint (the MCP URL is not the AS URL).
+    #[serde(default)]
+    pub authorization_server_url: String,
 }
 
 /// Errors returned by the XAA exchange path.
@@ -93,44 +131,48 @@ pub enum XaaError {
     Provider {
         status: u16,
         body: String,
-        /// Whether callers should drop any cached id_token because the
-        /// IdP deemed it invalid (TS: `shouldClearIdToken`).
+        /// Whether callers should drop any cached id_token because the IdP
+        /// deemed it invalid (TS: `shouldClearIdToken`).
         should_clear_id_token: bool,
     },
     #[error("malformed response: {0}")]
     MalformedResponse(String),
+    #[error("discovery failed: {0}")]
+    Discovery(String),
     #[error("config error: {0}")]
     Config(String),
 }
 
-/// RFC 8693 Token Exchange at the IdP.
-///
-/// Exchange an `id_token` (opaque to this function — caller provides it
-/// from their existing OIDC session) for an ID-JAG that the downstream
-/// Authorization Server can bearer-grant against.
-pub async fn exchange_id_token_for_jag(
-    client: &Client,
-    config: &XaaConfig,
-    id_token: &str,
-) -> Result<String, XaaError> {
-    let mut form: Vec<(&str, String)> = vec![
-        ("grant_type", TOKEN_EXCHANGE_GRANT.into()),
-        ("client_id", config.idp_client_id.clone()),
-        ("subject_token", id_token.to_string()),
-        ("subject_token_type", ID_TOKEN_TYPE.into()),
-        ("requested_token_type", ID_JAG_TOKEN_TYPE.into()),
-        ("audience", config.as_client_id.clone()),
+/// Build the leg-1 (token-exchange) form body. Pure — unit-tested.
+fn build_token_exchange_form(req: &JwtGrantRequest) -> Vec<(&'static str, String)> {
+    let mut form = vec![
+        ("grant_type", TOKEN_EXCHANGE_GRANT.to_string()),
+        ("requested_token_type", ID_JAG_TOKEN_TYPE.to_string()),
+        ("audience", req.audience.clone()),
+        ("resource", req.resource.clone()),
+        ("subject_token", req.id_token.clone()),
+        ("subject_token_type", ID_TOKEN_TYPE.to_string()),
+        ("client_id", req.client_id.clone()),
     ];
-    if let Some(scope) = &config.scope {
-        form.push(("scope", scope.clone()));
-    }
-    if let Some(secret) = &config.idp_client_secret {
+    if let Some(secret) = &req.client_secret {
         form.push(("client_secret", secret.clone()));
     }
+    if let Some(scope) = &req.scope {
+        form.push(("scope", scope.clone()));
+    }
+    form
+}
 
-    debug!(endpoint = %config.idp_token_endpoint, "xaa: leg 1 (id_token -> ID-JAG)");
+/// RFC 8693 Token Exchange at the IdP: `id_token` → ID-JAG (leg 1).
+pub async fn request_jwt_authorization_grant(
+    client: &Client,
+    req: JwtGrantRequest,
+) -> Result<String, XaaError> {
+    let form = build_token_exchange_form(&req);
+
+    debug!(endpoint = %req.token_endpoint, "xaa: leg 1 (id_token -> ID-JAG)");
     let response = client
-        .post(&config.idp_token_endpoint)
+        .post(&req.token_endpoint)
         .timeout(XAA_REQUEST_TIMEOUT)
         .form(&form)
         .send()
@@ -158,8 +200,8 @@ pub async fn exchange_id_token_for_jag(
     }
 
     let parsed: TokenExchangeResponse = serde_json::from_str(&body_text).map_err(|e| {
-        // Protocol violation with a 2xx — safer to drop the cached
-        // id_token so we don't keep hitting a broken flow.
+        // A protocol violation with a 2xx — safer to drop the cached id_token
+        // so we don't keep hitting a broken flow.
         XaaError::MalformedResponse(format!("invalid JSON in 200 body: {e}"))
     })?;
 
@@ -175,29 +217,59 @@ pub async fn exchange_id_token_for_jag(
     Ok(parsed.access_token)
 }
 
-/// RFC 7523 JWT Bearer Grant at the AS.
-///
-/// Present the ID-JAG (from `exchange_id_token_for_jag`) as a JWT
-/// assertion and receive the AS-issued access token.
-pub async fn exchange_jag_for_access_token(
-    client: &Client,
-    config: &XaaConfig,
-    id_jag: &str,
-) -> Result<XaaResult, XaaError> {
-    let mut form: Vec<(&str, String)> = vec![
-        ("grant_type", JWT_BEARER_GRANT.into()),
-        ("assertion", id_jag.to_string()),
-        ("client_id", config.as_client_id.clone()),
+/// `Authorization: Basic` value for `client_secret_basic`, matching TS:
+/// Base64 of `encodeURIComponent(id):encodeURIComponent(secret)`.
+fn basic_auth_header(client_id: &str, client_secret: &str) -> String {
+    let raw = format!(
+        "{}:{}",
+        urlencoding::encode(client_id),
+        urlencoding::encode(client_secret)
+    );
+    format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(raw)
+    )
+}
+
+/// Build the leg-2 request: optional `Authorization` header (basic) + form
+/// body. Pure — unit-tested.
+fn build_jwt_bearer(req: &JwtBearerRequest) -> (Option<String>, Vec<(&'static str, String)>) {
+    let mut form = vec![
+        ("grant_type", JWT_BEARER_GRANT.to_string()),
+        ("assertion", req.assertion.clone()),
     ];
-    if let Some(scope) = &config.scope {
+    if let Some(scope) = &req.scope {
         form.push(("scope", scope.clone()));
     }
+    match req.auth_method {
+        AsAuthMethod::ClientSecretBasic => (
+            Some(basic_auth_header(&req.client_id, &req.client_secret)),
+            form,
+        ),
+        AsAuthMethod::ClientSecretPost => {
+            form.push(("client_id", req.client_id.clone()));
+            form.push(("client_secret", req.client_secret.clone()));
+            (None, form)
+        }
+    }
+}
 
-    debug!(endpoint = %config.as_token_endpoint, "xaa: leg 2 (ID-JAG -> access_token)");
-    let response = client
-        .post(&config.as_token_endpoint)
+/// RFC 7523 JWT Bearer Grant at the AS: ID-JAG → `access_token` (leg 2).
+pub async fn exchange_jwt_auth_grant(
+    client: &Client,
+    req: JwtBearerRequest,
+) -> Result<XaaResult, XaaError> {
+    let (auth_header, form) = build_jwt_bearer(&req);
+
+    debug!(endpoint = %req.token_endpoint, "xaa: leg 2 (ID-JAG -> access_token)");
+    let mut builder = client
+        .post(&req.token_endpoint)
         .timeout(XAA_REQUEST_TIMEOUT)
-        .form(&form)
+        .form(&form);
+    if let Some(header) = auth_header {
+        builder = builder.header(reqwest::header::AUTHORIZATION, header);
+    }
+    let response = builder
         .send()
         .await
         .map_err(|e| XaaError::Http(redact_tokens(&e.to_string())))?;
@@ -212,8 +284,8 @@ pub async fn exchange_jag_for_access_token(
         return Err(XaaError::Provider {
             status: status.as_u16(),
             body: redact_tokens(&body_text),
-            // 4xx/5xx on the AS leg does NOT invalidate the id_token;
-            // only the IdP owns that decision.
+            // A 4xx/5xx on the AS leg does NOT invalidate the id_token; only
+            // the IdP owns that decision.
             should_clear_id_token: false,
         });
     }
@@ -226,21 +298,113 @@ pub async fn exchange_jag_for_access_token(
     }
     Ok(XaaResult {
         access_token: parsed.access_token,
-        expires_in: parsed.expires_in,
         token_type: parsed.token_type.unwrap_or_else(|| "Bearer".into()),
-        id_jag_length: Some(id_jag.len()),
+        expires_in: parsed.expires_in,
+        scope: parsed.scope,
+        refresh_token: parsed.refresh_token,
+        authorization_server_url: String::new(),
     })
 }
 
-/// Orchestrator: run both legs in sequence, returning the AS-issued
-/// access token. Intended as the normal entry point.
-pub async fn exchange_id_token(
+/// Full XAA flow: PRM → AS metadata → token-exchange → jwt-bearer →
+/// `access_token`. Mirrors TS `performCrossAppAccess`.
+pub async fn perform_cross_app_access(
     client: &Client,
+    server_url: &str,
     config: &XaaConfig,
-    id_token: &str,
 ) -> Result<XaaResult, XaaError> {
-    let id_jag = exchange_id_token_for_jag(client, config, id_token).await?;
-    exchange_jag_for_access_token(client, config, &id_jag).await
+    debug!(server_url, "xaa: discovering PRM");
+    let prm = discover_prm(client, server_url)
+        .await
+        .map_err(|e| XaaError::Discovery(format!("PRM discovery failed: {e}")))?;
+
+    // RFC 9728 §3.3 mix-up protection: advertised resource must match the URL.
+    if let Some(resource) = &prm.resource
+        && resource.trim_end_matches('/') != server_url.trim_end_matches('/')
+    {
+        return Err(XaaError::Discovery(format!(
+            "PRM resource mismatch: expected {server_url}, got {resource}"
+        )));
+    }
+    let resource = prm
+        .resource
+        .clone()
+        .unwrap_or_else(|| server_url.trim_end_matches('/').to_string());
+
+    // Try each advertised AS until one supports the jwt-bearer grant.
+    let mut chosen = None;
+    let mut errors = Vec::new();
+    for as_url in &prm.authorization_servers {
+        match discover_authorization_server(client, as_url).await {
+            Ok(meta) => {
+                if !meta.grant_types.is_empty()
+                    && !meta.grant_types.iter().any(|g| g == JWT_BEARER_GRANT)
+                {
+                    errors.push(format!("{as_url}: does not advertise jwt-bearer"));
+                    continue;
+                }
+                chosen = Some(meta);
+                break;
+            }
+            Err(e) => errors.push(format!("{as_url}: {e}")),
+        }
+    }
+    let as_meta = chosen.ok_or_else(|| {
+        XaaError::Discovery(format!(
+            "no authorization server supports jwt-bearer; tried: {}",
+            errors.join("; ")
+        ))
+    })?;
+
+    // Pick auth method from what the AS advertises (SEP-990 default: basic).
+    let auth_method = if !as_meta.token_endpoint_auth_methods.is_empty()
+        && !as_meta
+            .token_endpoint_auth_methods
+            .iter()
+            .any(|m| m == "client_secret_basic")
+        && as_meta
+            .token_endpoint_auth_methods
+            .iter()
+            .any(|m| m == "client_secret_post")
+    {
+        AsAuthMethod::ClientSecretPost
+    } else {
+        AsAuthMethod::ClientSecretBasic
+    };
+    debug!(
+        issuer = %as_meta.issuer,
+        token_endpoint = %as_meta.token_endpoint,
+        "xaa: selected authorization server"
+    );
+
+    let id_jag = request_jwt_authorization_grant(
+        client,
+        JwtGrantRequest {
+            token_endpoint: config.idp_token_endpoint.clone(),
+            audience: as_meta.issuer.clone(),
+            resource,
+            id_token: config.idp_id_token.clone(),
+            client_id: config.idp_client_id.clone(),
+            client_secret: config.idp_client_secret.clone(),
+            scope: config.scope.clone(),
+        },
+    )
+    .await?;
+
+    let mut result = exchange_jwt_auth_grant(
+        client,
+        JwtBearerRequest {
+            token_endpoint: as_meta.token_endpoint.clone(),
+            assertion: id_jag,
+            client_id: config.client_id.clone(),
+            client_secret: config.client_secret.clone(),
+            auth_method,
+            scope: config.scope.clone(),
+        },
+    )
+    .await?;
+    result.authorization_server_url = as_meta.issuer;
+    Ok(result)
 }
 
 // ── Private types ─────────────────────────────────────────────────────
@@ -256,6 +420,8 @@ struct AccessTokenResponse {
     access_token: String,
     expires_in: Option<i64>,
     token_type: Option<String>,
+    scope: Option<String>,
+    refresh_token: Option<String>,
 }
 
 /// Decide whether a non-2xx IdP response should invalidate the cached

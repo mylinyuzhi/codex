@@ -130,8 +130,18 @@ pub struct QueryEngineConfig {
     pub max_budget_usd: Option<f64>,
     /// Enable streaming tool execution (tools execute during API streaming).
     pub streaming_tool_execution: bool,
-    /// Whether this is a non-interactive (SDK/script) session.
+    /// Whether this is a non-interactive (SDK/script) session. Drives
+    /// session-level side effects only (self-fork suppression, the "sdk"
+    /// label, prompt assembly) — NOT permission decisions.
     pub is_non_interactive: bool,
+    /// Whether the session cannot show an interactive permission prompt, so a
+    /// residual `Ask` must fail closed (Deny) instead of silently auto-allowing.
+    /// coco equivalent of TS `ToolPermissionContext.shouldAvoidPermissionPrompts`
+    /// (true for forked / async subagents and headless `-p`). Kept distinct
+    /// from `is_non_interactive`: TS top-level `-p` is non-interactive yet
+    /// still propagates `Ask` to an SDK `canUseTool` consumer, so the two
+    /// concepts must be independently settable.
+    pub avoid_permission_prompts: bool,
     /// Debug-logging surface for tools. Mirrors TS `toolUseContext.options.debug`
     /// (CLI `--debug`) — visible on `ToolUseContext.debug`. Defaults to `false`.
     pub debug: bool,
@@ -383,6 +393,7 @@ impl Default for QueryEngineConfig {
             // available by setting this to `false`.
             streaming_tool_execution: true,
             is_non_interactive: false,
+            avoid_permission_prompts: false,
             debug: false,
             verbose: false,
             thinking_level: None,

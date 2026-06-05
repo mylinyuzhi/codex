@@ -35,7 +35,9 @@ pub use auto_mode_decision::AutoModeContext;
 pub use auto_mode_decision::can_use_tool_in_auto_mode;
 pub use auto_mode_state::AutoModeState;
 pub use classifier::AutoModeRules;
+pub use classifier::ClassifierMode;
 pub use classifier::ClassifyRequest;
+pub use classifier::InputProjector;
 pub use classifier::YoloClassifierResult;
 pub use classifier::classify_yolo_action;
 pub use classifier::is_safe_tool;
@@ -45,6 +47,7 @@ pub use dangerous_rules::strip_dangerous_rules;
 // runtime state); re-exported here so existing permission-side call
 // sites resolve through the canonical name.
 pub use coco_tool_runtime::DenialTracker;
+pub use evaluate::PermissionEvaluationOptions;
 pub use evaluate::PermissionEvaluator;
 pub use evaluate::ToolCheckFn;
 pub use evaluate::ToolCheckResult;

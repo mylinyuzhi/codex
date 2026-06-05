@@ -452,7 +452,7 @@ pub(crate) async fn track_nested_memory_attachment(
 /// follow-ups:
 ///
 /// 1. **Nested-dir discovery** — walk up the file's ancestry to find
-///    any `.claude/skills/` directories not yet loaded; push them into
+///    any `.coco/skills/` directories not yet loaded; push them into
 ///    `ctx.dynamic_skill_dir_triggers`. TS:
 ///    `FileReadTool.ts:578-591` (`discoverSkillDirsForPaths` +
 ///    `addSkillDirectories`).
@@ -486,7 +486,7 @@ pub(crate) async fn track_skill_triggers(ctx: &coco_tool_runtime::ToolUseContext
     }
 
     // (1) Nested-dir discovery walks the file's filesystem ancestry to
-    // find `.claude/skills/` dirs — canonicalization is fine here
+    // find `.coco/skills/` dirs — canonicalization is fine here
     // because the dir-walk needs the real filesystem layout.
     let canonical = tokio::fs::canonicalize(path)
         .await

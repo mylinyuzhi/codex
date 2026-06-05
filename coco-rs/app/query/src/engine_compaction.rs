@@ -55,6 +55,34 @@ impl ManualCompactRequest {
 }
 
 impl QueryEngine {
+    /// Replace the authoritative in-memory history after compaction and keep
+    /// the append-only transcript resumable.
+    ///
+    /// TS records compact rewrites by appending the new boundary/summary
+    /// chain, not by rewriting JSONL. When the boundary carries a preserved
+    /// segment, the preserved tail must already exist on disk so resume can
+    /// validate and relink it.
+    async fn replace_history_after_compact(
+        &self,
+        history: &mut MessageHistory,
+        new_messages: Vec<Arc<Message>>,
+        event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    ) {
+        let has_preserved_segment = new_messages.iter().any(|msg| {
+            matches!(
+                msg.as_ref(),
+                Message::System(coco_messages::SystemMessage::CompactBoundary(boundary))
+                    if boundary.preserved_segment.is_some()
+            )
+        });
+        if has_preserved_segment {
+            self.record_transcript_tail(history).await;
+        }
+
+        crate::history_sync::history_replace_and_emit(history, new_messages, event_tx).await;
+        self.record_transcript_tail(history).await;
+    }
+
     /// Public manual entry-point for `/compact [instructions]`.
     ///
     /// Equivalent to the auto path but with `CompactTrigger::Manual` and
@@ -68,10 +96,15 @@ impl QueryEngine {
         request: ManualCompactRequest,
     ) -> coco_compact::CompactOutcome {
         if history.is_empty() {
-            emit_manual_compaction_failed(event_tx, "No messages to compact").await;
+            append_manual_compact_notice(history, event_tx, &request, "No messages to compact.")
+                .await;
             emit_compaction_done(event_tx).await;
             return coco_compact::CompactOutcome::Skipped;
         }
+
+        // TS parity: non-empty manual `/compact` histories flow through
+        // session-memory / LLM compaction; the compact service decides
+        // whether there is enough conversation to summarize.
 
         // TS commands/compact/compact.ts:98 calls `microcompactMessages`
         // before `compactConversation`, but that function is a no-op in
@@ -247,13 +280,16 @@ impl QueryEngine {
                         /*agent_id*/ None,
                     )
                 });
+                let max_files_to_restore =
+                    self.config.compact.post_compact.max_files_to_restore.max(0) as usize;
                 result.attachments.extend(
-                    coco_compact::create_post_compact_file_attachments_with_priority(
+                    coco_compact::create_post_compact_file_attachments_with_priority_and_limit(
                         &snapshot,
                         &result.messages_to_keep,
                         &cwd,
                         plan_file.as_deref(),
                         &prioritized_paths,
+                        max_files_to_restore,
                     ),
                 );
                 if let Some(att) = self.create_current_plan_attachment() {
@@ -304,12 +340,8 @@ impl QueryEngine {
                 // `MessageTruncated { 0 }` + per-message
                 // `MessageAppended` burst so the TUI's TranscriptView
                 // and SDK observers see the new state.
-                crate::history_sync::history_replace_and_emit(
-                    history,
-                    new_messages.clone(),
-                    event_tx,
-                )
-                .await;
+                self.replace_history_after_compact(history, new_messages.clone(), event_tx)
+                    .await;
                 self.update_post_compact_delta_state(delta_state).await;
                 if let Some(frs) = &self.file_read_state {
                     let mut frs = frs.write().await;
@@ -535,7 +567,7 @@ impl QueryEngine {
         // I-1 (Authority): session-memory compaction rewrites history.
         // Emit truncate + appended-burst so the TUI/SDK derived views
         // converge on the new state.
-        crate::history_sync::history_replace_and_emit(history, new_messages.clone(), event_tx)
+        self.replace_history_after_compact(history, new_messages.clone(), event_tx)
             .await;
         self.update_post_compact_delta_state(delta_state).await;
 
@@ -626,6 +658,7 @@ impl QueryEngine {
 
             let mut options =
                 crate::forked_agent::ForkedAgentOptions::for_label(coco_types::ForkLabel::Compact);
+            options.transcript_mode = crate::forked_agent::ForkTranscriptMode::Sidechain;
             options.can_use_tool = Some(crate::forked_agent::deny_all_handle(
                 "compact summary: tools disabled",
             ));
@@ -1284,6 +1317,8 @@ impl QueryEngine {
         // we read the lock now and move the resolved set in. Self-designed
         // augmentation; TS has no mention-aware re-injection.
         let prioritized_paths = self.recently_mentioned_paths_snapshot().await;
+        let max_files_to_restore =
+            self.config.compact.post_compact.max_files_to_restore.max(0) as usize;
         let attachment_fn: coco_compact::compact::PostCompactAttachmentFn =
             Box::new(move |result: &coco_compact::CompactResult| {
                 // Resolve plan file path for exclusion from file restore.
@@ -1300,13 +1335,15 @@ impl QueryEngine {
                     )
                 });
 
-                let mut atts = coco_compact::create_post_compact_file_attachments_with_priority(
-                    &snapshot,
-                    &result.messages_to_keep,
-                    &cwd,
-                    plan_file.as_deref(),
-                    &prioritized_paths,
-                );
+                let mut atts =
+                    coco_compact::create_post_compact_file_attachments_with_priority_and_limit(
+                        &snapshot,
+                        &result.messages_to_keep,
+                        &cwd,
+                        plan_file.as_deref(),
+                        &prioritized_paths,
+                        max_files_to_restore,
+                    );
 
                 // TS: `createPlanAttachmentIfNeeded()` (`compact.ts:1470`)
                 // — re-inject the plan file's content so it survives the
@@ -1428,9 +1465,14 @@ impl QueryEngine {
         {
             Ok(mut result) => {
                 if result.summary_messages.is_empty() {
-                    if manual_request.is_some() {
-                        emit_manual_compaction_failed(event_tx, "Not enough messages to compact.")
-                            .await;
+                    if let Some(request) = manual_request {
+                        append_manual_compact_notice(
+                            history,
+                            event_tx,
+                            request,
+                            "Not enough messages to compact.",
+                        )
+                        .await;
                     }
                     let _ = emit_protocol(
                         event_tx,
@@ -1538,12 +1580,8 @@ impl QueryEngine {
                 // `MessageTruncated { 0 }` + per-message
                 // `MessageAppended` burst so the TUI/SDK derived views
                 // track the new state.
-                crate::history_sync::history_replace_and_emit(
-                    history,
-                    new_messages.clone(),
-                    event_tx,
-                )
-                .await;
+                self.replace_history_after_compact(history, new_messages.clone(), event_tx)
+                    .await;
                 self.update_post_compact_delta_state(delta_state).await;
 
                 if let Some(frs) = &self.file_read_state {
@@ -1689,6 +1727,22 @@ async fn emit_compaction_done(event_tx: &Option<tokio::sync::mpsc::Sender<CoreEv
     .await;
 }
 
+async fn append_manual_compact_notice(
+    history: &mut MessageHistory,
+    event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
+    request: &ManualCompactRequest,
+    notice: &str,
+) {
+    for msg in coco_messages::build_slash_command_messages(
+        "compact",
+        &request.command_args,
+        notice,
+        /*is_sensitive*/ false,
+    ) {
+        crate::history_sync::history_push_and_emit(history, msg, event_tx).await;
+    }
+}
+
 fn append_manual_compact_breadcrumbs(
     result: &mut coco_compact::CompactResult,
     request: &ManualCompactRequest,
@@ -1704,9 +1758,7 @@ fn append_manual_compact_breadcrumbs(
             &coco_messages::format_command_input("compact", &request.command_args),
         )),
         Arc::new(create_manual_compact_user_message(
-            &coco_messages::format_local_command_stdout(&manual_compact_stdout(
-                result.user_display_message.as_deref(),
-            )),
+            &coco_messages::format_local_command_stdout(&manual_compact_stdout(result)),
         )),
     ];
     result.messages_to_keep.extend(breadcrumbs);
@@ -1721,14 +1773,25 @@ fn create_manual_compact_user_message(content: &str) -> Message {
         is_virtual: false,
         is_compact_summary: false,
         permission_mode: None,
-        origin: Some(MessageOrigin::UserInput),
+        origin: Some(MessageOrigin::SlashCommand),
         parent_tool_use_id: None,
     })
 }
 
-fn manual_compact_stdout(user_display_message: Option<&str>) -> String {
-    let mut text = "Compacted (Ctrl+O to see full summary)".to_string();
-    if let Some(message) = user_display_message
+fn manual_compact_stdout(result: &coco_compact::CompactResult) -> String {
+    let mut text = if result.pre_compact_tokens > 0 && result.post_compact_tokens > 0 {
+        let saved = result
+            .pre_compact_tokens
+            .saturating_sub(result.post_compact_tokens);
+        let saved_percent = (saved as f64 / result.pre_compact_tokens as f64) * 100.0;
+        format!(
+            "Compacted ({} -> {} tokens, saved {} / {:.1}%; Ctrl+O to see full summary)",
+            result.pre_compact_tokens, result.post_compact_tokens, saved, saved_percent
+        )
+    } else {
+        "Compacted (Ctrl+O to see full summary)".to_string()
+    };
+    if let Some(message) = result.user_display_message.as_deref()
         && !message.trim().is_empty()
     {
         text.push('\n');

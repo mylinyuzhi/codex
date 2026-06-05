@@ -64,6 +64,7 @@ fn test_for_label_query_source_matches_label() {
         (ForkLabel::AgentSummary, "agent_summary"),
         (ForkLabel::AutoDream, "auto_dream"),
         (ForkLabel::Speculation, "speculation"),
+        (ForkLabel::HookAgent, "hook_agent"),
     ];
     for (label, wire) in cases {
         let o = ForkContextOverrides::for_label(label);
