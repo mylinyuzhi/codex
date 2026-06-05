@@ -1497,3 +1497,67 @@ fn test_format_stop_hook_message() {
     let msg = format_stop_hook_message(&err);
     assert_eq!(msg, "Stop hook feedback:\ntests failed");
 }
+
+// ---------------------------------------------------------------------------
+// resolve_timeout — handler-specific defaults (TS parity)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn resolve_timeout_agent_hook_defaults_to_60s() {
+    // TS execAgentHook.ts:75 — agent hooks default to 60s, independent
+    // of the generic 10-minute tool-hook timeout.
+    let handler = HookHandler::Agent {
+        prompt: "verify tests passed".into(),
+        model: None,
+        timeout_ms: None,
+    };
+    assert_eq!(
+        resolve_timeout(&handler, DEFAULT_HOOK_TIMEOUT),
+        Duration::from_secs(60)
+    );
+}
+
+#[test]
+fn resolve_timeout_prompt_hook_defaults_to_30s() {
+    // TS execPromptHook.ts:55 — prompt hooks default to 30s.
+    let handler = HookHandler::Prompt {
+        prompt: "is this safe?".into(),
+        model: None,
+        timeout_ms: None,
+    };
+    assert_eq!(
+        resolve_timeout(&handler, DEFAULT_HOOK_TIMEOUT),
+        Duration::from_secs(30)
+    );
+}
+
+#[test]
+fn resolve_timeout_explicit_overrides_handler_default() {
+    let handler = HookHandler::Agent {
+        prompt: "verify".into(),
+        model: None,
+        timeout_ms: Some(5_000),
+    };
+    assert_eq!(
+        resolve_timeout(&handler, DEFAULT_HOOK_TIMEOUT),
+        Duration::from_millis(5_000)
+    );
+}
+
+#[test]
+fn resolve_timeout_command_hook_uses_event_default() {
+    // Non-LLM handlers keep the event-supplied default.
+    let handler = HookHandler::Command {
+        command: "echo hi".into(),
+        timeout_ms: None,
+        shell: None,
+    };
+    assert_eq!(
+        resolve_timeout(&handler, DEFAULT_HOOK_TIMEOUT),
+        DEFAULT_HOOK_TIMEOUT
+    );
+    assert_eq!(
+        resolve_timeout(&handler, SESSION_END_HOOK_TIMEOUT),
+        SESSION_END_HOOK_TIMEOUT
+    );
+}

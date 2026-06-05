@@ -19,10 +19,15 @@
 //!   builds a scoped child `QueryEngine` with `max_turns = 50`, a
 //!   `StructuredOutputTool`, and a Stop enforcement function hook so
 //!   the child must produce `{ok, reason?}`. `{ok:false}` maps to a
-//!   blocking hook result; max-turn/no-output still maps to
-//!   `Cancelled`, matching TS's fallback. Transcript-specific read
-//!   grants are not separately threaded yet; Stop hook input JSON
-//!   still reaches the child through the processed prompt.
+//!   blocking hook result (feedback prefixed `Agent hook condition was
+//!   not met: ` per TS `execAgentHook.ts:279`); max-turn/no-output
+//!   still maps to `Cancelled`, matching TS's fallback. The runner also
+//!   mirrors TS's verifier sandbox: `ALL_AGENT_DISALLOWED_TOOLS` are
+//!   withheld, a dedicated verifier system prompt replaces the main
+//!   one, thinking is disabled, and the default timeout is 60s. The
+//!   explicit `Read(/transcriptPath)` session grant is not separately
+//!   threaded; the transcript path reaches the child via the Stop hook
+//!   input JSON in the processed prompt.
 //!
 //! # Model selection
 //!

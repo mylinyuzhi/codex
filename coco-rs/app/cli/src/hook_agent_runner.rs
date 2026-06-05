@@ -6,11 +6,31 @@ use coco_query::QueryEngineConfig;
 use coco_query::hook_llm::HookAgentRunRequest;
 use coco_query::hook_llm::HookAgentRunner;
 use coco_tool_runtime::ToolRegistry;
+use coco_types::ToolId;
+use coco_types::ToolName;
 use tokio_util::sync::CancellationToken;
 
 use crate::session_runtime::SessionRuntime;
 
 const MAX_AGENT_HOOK_TURNS: i32 = 50;
+
+/// System prompt for the Stop-hook (LLM-judge) agent. Adapted from TS
+/// `execAgentHook.ts:107-116` `asSystemPrompt`. Replaces the main
+/// session prompt for the scoped child engine (matching TS, which hands
+/// the hook agent a dedicated verifier prompt). The conversation
+/// transcript path travels in the Stop hook input JSON that becomes the
+/// agent's user prompt, so the agent can `Read` it to inspect history.
+const HOOK_AGENT_SYSTEM_PROMPT: &str = "You are verifying a stop condition in Claude Code. \
+Your task is to verify that the agent completed the given condition. The conversation \
+transcript path is provided in the hook input — you can Read that file to analyze the \
+conversation history if needed.
+
+Use the available tools to inspect the codebase and verify the condition. Use as few steps \
+as possible — be efficient and direct.
+
+When done, return your result using the StructuredOutput tool with:
+- ok: true if the condition is met
+- ok: false with reason if the condition is not met";
 
 pub struct SessionRuntimeHookAgentRunner {
     runtime: Arc<SessionRuntime>,
@@ -67,10 +87,37 @@ async fn run_agent(
 fn scoped_tool_registry(runtime: &SessionRuntime) -> Result<Arc<ToolRegistry>, String> {
     let registry = Arc::new(ToolRegistry::new());
     for tool in runtime.registered_tools() {
+        // Withhold tools a Stop-hook judge must not use — spawning
+        // subagents, entering/exiting plan mode, asking the user, or
+        // stopping tasks — to keep the verifier from steering the main
+        // session. TS: `ALL_AGENT_DISALLOWED_TOOLS` (`constants/tools.ts:36-46`).
+        if is_agent_hook_disallowed_tool(&tool.id()) {
+            continue;
+        }
         registry.register(tool);
     }
     coco_tools::register_structured_output_tool(&registry, hook_agent_schema())?;
     Ok(registry)
+}
+
+/// Builtin tools withheld from a Stop-hook agent. Mirrors TS
+/// `ALL_AGENT_DISALLOWED_TOOLS` (`constants/tools.ts:36-46`). The
+/// `USER_TYPE === 'ant'` Agent-tool exception is intentionally dropped —
+/// coco-rs does not port ant gates — so the Agent tool is always
+/// withheld. coco-rs has no Workflow tool, so the `WORKFLOW_SCRIPTS`
+/// entry has no analog.
+fn is_agent_hook_disallowed_tool(id: &ToolId) -> bool {
+    matches!(
+        id,
+        ToolId::Builtin(
+            ToolName::TaskOutput
+                | ToolName::ExitPlanMode
+                | ToolName::EnterPlanMode
+                | ToolName::Agent
+                | ToolName::AskUserQuestion
+                | ToolName::TaskStop
+        )
+    )
 }
 
 fn scoped_hook_registry() -> Result<Arc<coco_hooks::HookRegistry>, String> {
@@ -99,6 +146,13 @@ fn configure_hook_agent(config: &mut QueryEngineConfig, request: &HookAgentRunRe
     config.streaming_tool_execution = false;
     config.is_non_interactive = true;
     config.avoid_permission_prompts = true;
+    // Verifier framing replaces the inherited main-session prompt — TS
+    // hands the hook agent a dedicated `asSystemPrompt` (execAgentHook.ts:107).
+    config.system_prompt = Some(HOOK_AGENT_SYSTEM_PROMPT.to_string());
+    // Disable thinking for the verifier — TS `thinkingConfig: { type:
+    // 'disabled' }` (execAgentHook.ts:134). Otherwise the child inherits
+    // the user's extended-thinking budget from the cloned session config.
+    config.thinking_level = None;
     config.query_source_override = Some(coco_types::ForkLabel::HookAgent.as_str().to_string());
     config.fork_label = Some(coco_types::ForkLabel::HookAgent);
     config.session_id = format!("hook-agent-{}", uuid::Uuid::new_v4());
@@ -128,12 +182,18 @@ fn parse_structured_output(
     if ok {
         return Ok(HookEvaluationResult::Ok);
     }
-    let reason = value
+    // TS feeds the model `Agent hook condition was not met: ${reason}`
+    // (execAgentHook.ts:279). Keep the prefix so the blocking feedback
+    // reads the same; drop the trailing `: ` when no reason was given.
+    let reason = match value
         .get("reason")
         .and_then(serde_json::Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or("Agent hook condition was not met")
-        .to_string();
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(reason) => format!("Agent hook condition was not met: {reason}"),
+        None => "Agent hook condition was not met".to_string(),
+    };
     Ok(HookEvaluationResult::Blocking { reason })
 }
 
@@ -144,29 +204,5 @@ pub async fn install(runtime: Arc<SessionRuntime>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_structured_output_ok_true() {
-        let result = parse_structured_output(Some(serde_json::json!({"ok": true}))).unwrap();
-        assert!(matches!(result, HookEvaluationResult::Ok));
-    }
-
-    #[test]
-    fn parse_structured_output_ok_false_blocks() {
-        let result =
-            parse_structured_output(Some(serde_json::json!({"ok": false, "reason": "bad"})))
-                .unwrap();
-        match result {
-            HookEvaluationResult::Blocking { reason } => assert_eq!(reason, "bad"),
-            other => panic!("expected Blocking, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_structured_output_missing_output_cancels() {
-        let result = parse_structured_output(None).unwrap();
-        assert!(matches!(result, HookEvaluationResult::Cancelled));
-    }
-}
+#[path = "hook_agent_runner.test.rs"]
+mod tests;
