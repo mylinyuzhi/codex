@@ -95,7 +95,9 @@ fn test_realistic_mixed_tools() {
 fn test_idempotent() {
     let mut messages = vec![
         msg::user("test"),
+        msg::assistant_with_tool_call_id("call_1", "Read", serde_json::json!({"file_path": "/a"})),
         msg::tool_result(ToolName::Read, "call_1", &"x".repeat(2000)),
+        msg::assistant_with_tool_call_id("call_2", "Bash", serde_json::json!({"command": "ls"})),
         msg::tool_result(ToolName::Bash, "call_2", &"y".repeat(2000)),
         msg::assistant("done"),
     ];
@@ -339,7 +341,9 @@ fn test_combined_micro_pipeline() {
     let mut messages = vec![
         msg::user("do everything"),
         // Old tool results (micro_compact target)
+        msg::assistant_with_tool_call_id("call_0", "Read", serde_json::json!({"file_path": "a"})),
         msg::tool_result(ToolName::Read, "call_0", &"old file content ".repeat(200)),
+        msg::assistant_with_tool_call_id("call_1", "Bash", serde_json::json!({"command": "cat a"})),
         msg::tool_result(ToolName::Bash, "call_1", &"old bash output ".repeat(200)),
         // Old thinking blocks (compact_thinking target)
         msg::assistant_with_thinking("Old analysis", &thinking),
@@ -354,7 +358,7 @@ fn test_combined_micro_pipeline() {
     let total_before = messages.len();
 
     // Stage 1: Clear old tool results
-    let micro_result = micro_compact(&mut messages, /*keep_recent*/ 3);
+    let micro_result = micro_compact(&mut messages, /*keep_recent*/ 1);
     assert!(
         micro_result.messages_cleared > 0,
         "micro should clear tool results"

@@ -21,6 +21,7 @@ pub(crate) mod picker_styled;
 pub(crate) mod request;
 pub(crate) mod rewind;
 pub(crate) mod settings;
+pub(crate) mod slash_command;
 pub(crate) mod streaming;
 pub(crate) mod theme_picker;
 pub(crate) mod thinking;

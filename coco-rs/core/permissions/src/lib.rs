@@ -47,6 +47,7 @@ pub use dangerous_rules::strip_dangerous_rules;
 // runtime state); re-exported here so existing permission-side call
 // sites resolve through the canonical name.
 pub use coco_tool_runtime::DenialTracker;
+pub use evaluate::PermissionEvaluationOptions;
 pub use evaluate::PermissionEvaluator;
 pub use evaluate::ToolCheckFn;
 pub use evaluate::ToolCheckResult;

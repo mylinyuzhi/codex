@@ -58,6 +58,46 @@ fn finalized_history_lines_do_not_emit_active_busy_tail() {
 }
 
 #[test]
+fn finalized_history_lines_hide_compact_boundary_and_summary_by_default() {
+    let theme = Theme::default();
+    let mut messages = vec![
+        coco_messages::create_compact_boundary_message(797, 511),
+        compact_summary_message("Summary:\nEarlier context details."),
+    ];
+    messages.extend(coco_messages::build_slash_command_messages(
+        "compact",
+        "",
+        "Compacted (797 -> 511 tokens, saved 286 / 35.9%; Ctrl+O to see full summary)",
+        false,
+    ));
+    let cells: Vec<RenderedCell> = messages
+        .into_iter()
+        .flat_map(|message| message_to_cells(Arc::new(message)))
+        .collect();
+
+    let lines = render_finalized_history_lines(
+        &cells,
+        HistoryLineRenderOptions {
+            styles: UiStyles::new(&theme),
+            width: 96,
+            syntax_highlighting: SyntaxHighlighting::Disabled,
+            show_system_reminders: false,
+            show_thinking: false,
+            cwd: None,
+            kb_handle: None,
+            replay_cache_policy: HistoryReplayCachePolicy::default(),
+            reasoning_metadata: None,
+        },
+    );
+    let body = plain_lines(&lines).join("\n");
+
+    assert!(!body.contains("# [compact]"));
+    assert!(!body.contains("Earlier context details."));
+    assert!(body.contains("❯ /compact"));
+    assert!(body.contains("Compacted (797 -> 511 tokens"));
+}
+
+#[test]
 fn finalized_history_lines_collapse_meta_by_default() {
     let theme = Theme::default();
     let cells = vec![test_helpers::info_cell("system", "system reminder")];
@@ -721,6 +761,20 @@ fn compact_boundary_cell(tokens_before: i64, tokens_after: i64) -> RenderedCell 
     .into_iter()
     .next()
     .expect("compact boundary message yields a cell")
+}
+
+fn compact_summary_message(text: &str) -> coco_messages::Message {
+    coco_messages::Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::user_text(text),
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: true,
+        is_virtual: false,
+        is_compact_summary: true,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    })
 }
 
 fn plain_lines(lines: &[Line<'_>]) -> Vec<String> {

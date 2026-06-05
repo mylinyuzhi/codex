@@ -21,6 +21,7 @@ fn default_config_matches_ts_constants() {
     assert!(!cfg.api_native.clear_tool_uses);
     assert_eq!(cfg.api_native.max_input_tokens, 180_000);
     assert_eq!(cfg.api_native.target_input_tokens, 40_000);
+    assert_eq!(cfg.post_compact.max_files_to_restore, 5);
     assert!(!cfg.session_memory.enabled);
     assert_eq!(cfg.session_memory.min_tokens, 10_000);
     assert!(!cfg.experimental.history_snip.enabled);
@@ -38,8 +39,10 @@ fn settings_overrides_apply() {
     let mut settings = Settings::default();
     settings.compact.auto.enabled = Some(false);
     settings.compact.micro.keep_recent = Some(3);
+    settings.compact.micro.time_based.keep_recent = Some(4);
     settings.compact.api_native.clear_tool_results = Some(true);
     settings.compact.api_native.max_input_tokens = Some(150_000);
+    settings.compact.post_compact.max_files_to_restore = Some(2);
     settings.compact.session_memory.enabled = Some(true);
     settings.compact.session_memory.min_tokens = Some(20_000);
     settings.compact.experimental.history_snip.enabled = Some(true);
@@ -50,13 +53,34 @@ fn settings_overrides_apply() {
     assert!(!cfg.auto.enabled);
     assert!(!cfg.auto.is_active());
     assert_eq!(cfg.micro.keep_recent, 3);
+    assert_eq!(cfg.micro.time_based.keep_recent, 4);
     assert!(cfg.api_native.clear_tool_results);
     assert_eq!(cfg.api_native.max_input_tokens, 150_000);
+    assert_eq!(cfg.post_compact.max_files_to_restore, 2);
     assert!(cfg.session_memory.enabled);
     assert_eq!(cfg.session_memory.min_tokens, 20_000);
     assert!(cfg.experimental.history_snip.enabled);
     assert!((cfg.experimental.history_snip.auto_pct - 0.5).abs() < f64::EPSILON);
     assert!(!cfg.experimental.display_collapses.read_search);
+}
+
+#[test]
+fn env_micro_and_post_compact_overrides_settings() {
+    let mut settings = Settings::default();
+    settings.compact.micro.keep_recent = Some(3);
+    settings.compact.micro.time_based.keep_recent = Some(4);
+    settings.compact.post_compact.max_files_to_restore = Some(2);
+    let env = EnvSnapshot::from_pairs([
+        (EnvKey::CocoCompactMicroKeepRecent, "8"),
+        (EnvKey::CocoCompactMicroTimeBasedKeepRecent, "9"),
+        (EnvKey::CocoCompactPostCompactMaxFilesToRestore, "7"),
+    ]);
+
+    let cfg = CompactConfig::resolve(&settings, &env);
+
+    assert_eq!(cfg.micro.keep_recent, 8);
+    assert_eq!(cfg.micro.time_based.keep_recent, 9);
+    assert_eq!(cfg.post_compact.max_files_to_restore, 7);
 }
 
 #[test]

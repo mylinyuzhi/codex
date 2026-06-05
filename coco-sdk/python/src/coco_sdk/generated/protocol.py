@@ -526,7 +526,7 @@ AssistantContentPart = Union["TextPart", "FilePart", "ReasoningPart", "Reasoning
 AttachmentBody = Union["LanguageModelV4Message", "SilentPayload", "dict[str, Any]"]
 
 # Typed structured extras carried alongside an [`AttachmentBody::Api`] body.
-AttachmentExtras = Union["SkillDiscoveryPayload"]
+AttachmentExtras = Union["SkillDiscoveryPayload", "CompactFileReferencePayload"]
 
 # Top-level wire message. SDK clients send these over stdin; coco-rs
 JsonRpcMessage = Union["JsonRpcRequest", "JsonRpcResponse", "JsonRpcNotification", "JsonRpcError"]
@@ -2985,6 +2985,10 @@ class BudgetExhaustedOutcome(BaseModel):
 class CommandPermissionsPayload(BaseModel):
     allowed_tools: list[str] = Field(alias='allowedTools')
     model: str | None = None
+
+class CompactFileReferencePayload(BaseModel):
+    display_path: str
+    filename: str
 
 class CompletedOutcome(BaseModel):
     stop_reason: UnifiedFinishReason | None = None

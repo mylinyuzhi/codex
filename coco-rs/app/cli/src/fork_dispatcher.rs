@@ -32,7 +32,10 @@
 use std::sync::Arc;
 
 use coco_query::QueryEngineConfig;
-use coco_query::forked_agent::{ForkDispatcher, ForkedAgentOptions, ForkedAgentResult};
+use coco_query::forked_agent::{
+    ForkDispatcher, ForkTranscriptMode, ForkedAgentOptions, ForkedAgentResult,
+};
+use coco_tool_runtime::AgentSpawnMetadata;
 use coco_types::CacheSafeParams;
 
 use crate::session_runtime::SessionRuntime;
@@ -60,7 +63,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
     ) -> Result<ForkedAgentResult, coco_error::BoxedError> {
         // Derive the AgentQueryConfig shape from the cache slot. This
         // keeps the byte-faithful contract documented on `forked_agent`
-        // (skip_cache_write, skip_transcript, max_turns: Some(1) by default).
+        // (skip_cache_write, transcript_mode, max_turns: Some(1) by default).
         let mut agent_config = coco_query::forked_agent::build_query_config(cache, options);
         if let Some(system) = system_prompt_override {
             agent_config.system_prompt = system;
@@ -81,6 +84,9 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 &runtime_config.settings,
                 &self.runtime.original_cwd,
             );
+
+        let sidechain_agent_id = (options.transcript_mode == ForkTranscriptMode::Sidechain)
+            .then(|| coco_query::fork_context::auto_agent_id(options.fork_label));
 
         let engine_config = QueryEngineConfig {
             model_id: agent_config.model.clone(),
@@ -142,6 +148,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 let mut iso =
                     coco_query::fork_context::ForkContextOverrides::for_label(options.fork_label);
                 iso.query_source = options.query_source.clone();
+                iso.agent_id = sidechain_agent_id.clone();
                 iso.can_use_tool = options.can_use_tool.clone();
                 iso.require_can_use_tool = options.require_can_use_tool;
                 iso
@@ -162,7 +169,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         let cancel = options.overrides.abort.clone().unwrap_or_default();
         let engine = self
             .runtime
-            .build_engine_from_config(engine_config, cancel, None)
+            .build_fork_engine_from_config(engine_config, cancel, None)
             .await;
 
         let parent_msg_count = agent_config.fork_context_messages.len();
@@ -178,29 +185,20 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // mirroring the cache-share path. Empty fork-context messages
         // → run with the prompt only (rare; promptSuggestion etc.
         // always pass parent history).
-        let result = if parent_msg_count > 0 {
-            let mut messages: Vec<std::sync::Arc<coco_messages::Message>> =
-                agent_config.fork_context_messages.clone();
-            messages.push(std::sync::Arc::new(coco_messages::create_user_message(
-                prompt,
-            )));
-            engine
-                .run_with_messages_no_events(messages)
-                .await
-                .map_err(|e| {
-                    Box::new(coco_error::PlainError::new(
-                        format!("fork engine run_with_messages_no_events: {e}"),
-                        coco_error::StatusCode::Internal,
-                    )) as coco_error::BoxedError
-                })?
-        } else {
-            engine.run(prompt).await.map_err(|e| {
+        let mut messages: Vec<std::sync::Arc<coco_messages::Message>> =
+            agent_config.fork_context_messages.clone();
+        messages.push(std::sync::Arc::new(coco_messages::create_user_message(
+            prompt,
+        )));
+        let result = engine
+            .run_with_messages_no_events(messages)
+            .await
+            .map_err(|e| {
                 Box::new(coco_error::PlainError::new(
-                    format!("fork engine run: {e}"),
+                    format!("fork engine run_with_messages_no_events: {e}"),
                     coco_error::StatusCode::Internal,
                 )) as coco_error::BoxedError
-            })?
-        };
+            })?;
 
         // Multi-message capture (TS parity:
         // `utils/forkedAgent.ts::runForkedAgent` returns the engine's
@@ -215,6 +213,15 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             .cloned()
             .collect();
 
+        if let Some(agent_id) = sidechain_agent_id.as_deref() {
+            self.persist_sidechain_transcript(
+                agent_id,
+                options.fork_label.as_str(),
+                &result.final_messages,
+            )
+            .await;
+        }
+
         tracing::debug!(
             fork_label = %options.fork_label,
             query_source = %options.query_source,
@@ -228,6 +235,51 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             total_usage: result.total_usage,
             stop_reason: result.stop_reason,
         })
+    }
+}
+
+impl SessionRuntimeForkDispatcher {
+    async fn persist_sidechain_transcript(
+        &self,
+        agent_id: &str,
+        fork_label: &str,
+        messages: &[std::sync::Arc<coco_messages::Message>],
+    ) {
+        if messages.is_empty() {
+            return;
+        }
+        let Some(store) = self.runtime.current_agent_transcript_store().await else {
+            return;
+        };
+        let session_id = self.runtime.current_session_id().await;
+        if session_id.is_empty() {
+            return;
+        }
+        let metadata = AgentSpawnMetadata {
+            agent_type: fork_label.to_string(),
+            worktree_path: None,
+            description: Some(agent_id.to_string()),
+        };
+        if let Err(e) = store
+            .write_agent_metadata(&session_id, agent_id, &metadata)
+            .await
+        {
+            tracing::debug!(
+                error = %e,
+                agent_id,
+                "fork sidechain metadata write failed"
+            );
+        }
+        if let Err(e) = store
+            .append_agent_messages(&session_id, agent_id, messages)
+            .await
+        {
+            tracing::debug!(
+                error = %e,
+                agent_id,
+                "fork sidechain transcript write failed"
+            );
+        }
     }
 }
 

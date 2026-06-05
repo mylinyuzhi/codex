@@ -1,10 +1,12 @@
-use super::is_slash_command_origin;
 use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageOrigin;
 use coco_messages::UserMessage;
+use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::style::UiStyles;
+use coco_tui_ui::theme::Theme;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -32,13 +34,33 @@ fn user_cell(text: &str, origin: Option<MessageOrigin>) -> RenderedCell {
 #[test]
 fn slash_origin_gates_command_pill_rendering() {
     let echo = "<command-name>/help</command-name>\n<command-args></command-args>";
+    let theme = Theme::default();
+    let opts = || crate::presentation::slash_command::SlashCommandRenderOptions {
+        styles: UiStyles::new(&theme),
+        width: 80,
+        syntax_highlighting: SyntaxHighlighting::Disabled,
+        apply_user_background: false,
+    };
     // Genuine slash echo (origin stamped) → eligible for the `❯ /cmd` pill.
-    assert!(is_slash_command_origin(&user_cell(
-        echo,
-        Some(MessageOrigin::SlashCommand)
-    )));
+    assert!(
+        crate::presentation::slash_command::render_slash_command_user_text(
+            user_cell(echo, Some(MessageOrigin::SlashCommand))
+                .source
+                .as_ref(),
+            echo,
+            opts()
+        )
+        .is_some()
+    );
     // Identical text typed by a user (no slash origin) → NOT a pill; it
     // renders as plain user text so a raw `<command-name>` substring is never
     // mistaken for a command invocation.
-    assert!(!is_slash_command_origin(&user_cell(echo, None)));
+    assert!(
+        crate::presentation::slash_command::render_slash_command_user_text(
+            user_cell(echo, None).source.as_ref(),
+            echo,
+            opts()
+        )
+        .is_none()
+    );
 }

@@ -20,7 +20,7 @@ fn test_for_label_is_cache_safe() {
     // write, no effort override (PR #18143 cache-bust risk).
     let opts = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
     assert_eq!(opts.max_turns, Some(1));
-    assert!(opts.skip_transcript);
+    assert_eq!(opts.transcript_mode, ForkTranscriptMode::Disabled);
     assert!(opts.skip_cache_write);
     assert!(
         opts.effort.is_none(),

@@ -1853,6 +1853,19 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "compact_file_reference"
+            }
+          },
+          "$ref": "#/$defs/CompactFileReferencePayload",
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -2032,6 +2045,22 @@
       },
       "required": [
         "allowedTools"
+      ]
+    },
+    "CompactFileReferencePayload": {
+      "description": "TS parity: `CompactFileReferenceAttachment`\n(`utils/attachments.ts:307-312`).",
+      "type": "object",
+      "properties": {
+        "display_path": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "display_path"
       ]
     },
     "CompactTrigger": {

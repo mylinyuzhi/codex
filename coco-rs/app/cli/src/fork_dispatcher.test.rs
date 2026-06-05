@@ -6,6 +6,7 @@ use coco_config::EnvSnapshot;
 use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
+use coco_query::forked_agent::ForkTranscriptMode;
 use coco_types::ForkLabel;
 use tempfile::TempDir;
 
@@ -147,6 +148,12 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     .expect("build SessionRuntime")
 }
 
+fn temp_transcript_store(home: &TempDir) -> Arc<coco_session::TranscriptStore> {
+    Arc::new(coco_session::TranscriptStore::new(Arc::new(
+        coco_paths::ProjectPaths::new(home.path().join("coco-home"), home.path()),
+    )))
+}
+
 #[tokio::test]
 async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let home = TempDir::new().expect("home tempdir");
@@ -173,4 +180,56 @@ async fn dispatch_with_parent_history_uses_no_event_message_path() {
     let text = coco_messages::wrapping::extract_text_from_message(&result.messages[0]);
     assert!(text.contains("parent turn"));
     assert!(text.contains("fork turn"));
+}
+
+#[tokio::test]
+async fn compact_sidechain_transcript_writes_agent_store_only() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let session_id = runtime.current_session_id().await;
+    let transcript_store = temp_transcript_store(&home);
+    let agent_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
+        crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(
+            transcript_store.clone(),
+        ),
+    );
+    runtime.attach_agent_transcript_store(agent_store).await;
+
+    let dispatcher = SessionRuntimeForkDispatcher::new(runtime);
+    let cache = CacheSafeParams {
+        rendered_system_prompt: "test".into(),
+        model_id: "mock-model".into(),
+        provider: "mock".into(),
+        prompt_cache: None,
+        fork_context_messages: vec![Arc::new(coco_messages::create_user_message("parent turn"))],
+    };
+    let mut options = ForkedAgentOptions::for_label(ForkLabel::Compact);
+    options.transcript_mode = ForkTranscriptMode::Sidechain;
+
+    let result = dispatcher
+        .dispatch(&cache, &options, "fork turn", None)
+        .await
+        .expect("fork dispatch should succeed");
+
+    assert_eq!(result.messages.len(), 1);
+    assert!(
+        !transcript_store.transcript_path(&session_id).exists(),
+        "sidechain fork must not write the main session transcript"
+    );
+
+    let subagents_dir = transcript_store.project_paths().subagents_dir(&session_id);
+    let entries = std::fs::read_dir(&subagents_dir)
+        .expect("sidechain transcript directory should exist")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read sidechain transcript entries");
+    let transcript_paths = entries
+        .iter()
+        .map(std::fs::DirEntry::path)
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .collect::<Vec<_>>();
+    assert_eq!(transcript_paths.len(), 1);
+    let transcript = std::fs::read_to_string(&transcript_paths[0])
+        .expect("sidechain transcript should be readable");
+    assert!(transcript.contains("parent turn"));
+    assert!(transcript.contains("fork turn"));
 }

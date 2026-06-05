@@ -35,6 +35,7 @@ pub use attachment_body::AlreadyReadFilePayload;
 pub use attachment_body::AttachmentBody;
 pub use attachment_body::AttachmentExtras;
 pub use attachment_body::CommandPermissionsPayload;
+pub use attachment_body::CompactFileReferencePayload;
 pub use attachment_body::DynamicSkillPayload;
 pub use attachment_body::EditedImageFilePayload;
 pub use attachment_body::HookCancelledPayload;

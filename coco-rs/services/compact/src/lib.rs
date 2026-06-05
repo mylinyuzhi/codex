@@ -71,6 +71,7 @@ pub use post_compact_async_agents::AsyncAgentSnapshot;
 pub use post_compact_async_agents::create_async_agent_attachments;
 pub use post_compact_files::create_post_compact_file_attachments;
 pub use post_compact_files::create_post_compact_file_attachments_with_priority;
+pub use post_compact_files::create_post_compact_file_attachments_with_priority_and_limit;
 pub use post_compact_plan::create_plan_attachment_from_owned;
 pub use post_compact_plan::create_plan_attachment_if_needed;
 pub use post_compact_plan_mode::create_plan_mode_attachment_if_needed;

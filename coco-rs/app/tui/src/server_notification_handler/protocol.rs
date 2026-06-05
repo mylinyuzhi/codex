@@ -183,6 +183,8 @@ pub(super) fn handle(
         // === Context ===
         ServerNotification::ContextCompacted(p) => {
             state.session.is_compacting = false;
+            state.session.compaction_started_at = None;
+            state.session.compaction_phase = None;
             // Suppress the next ContextUsageWarning emission — the
             // freshly-compacted token count won't be reflected in the
             // banner until the next API response arrives. TS:
@@ -211,6 +213,7 @@ pub(super) fn handle(
         }
         ServerNotification::CompactionStarted => {
             state.session.is_compacting = true;
+            state.session.compaction_started_at = Some(std::time::Instant::now());
             state.session.compact_warning_suppressed = false;
             true
         }
@@ -221,21 +224,47 @@ pub(super) fn handle(
             state.session.compaction_phase = match (p.phase, p.hook_type) {
                 (CompactionPhase::HooksStart, Some(CompactionHookType::PreCompact)) => {
                     state.session.is_compacting = true;
+                    state
+                        .session
+                        .compaction_started_at
+                        .get_or_insert_with(std::time::Instant::now);
                     Some(CompactionPhaseLabel::PreCompactHooks)
                 }
                 (CompactionPhase::HooksStart, Some(CompactionHookType::PostCompact)) => {
+                    state.session.is_compacting = true;
+                    state
+                        .session
+                        .compaction_started_at
+                        .get_or_insert_with(std::time::Instant::now);
                     Some(CompactionPhaseLabel::PostCompactHooks)
                 }
                 (CompactionPhase::HooksStart, Some(CompactionHookType::SessionStart)) => {
+                    state.session.is_compacting = true;
+                    state
+                        .session
+                        .compaction_started_at
+                        .get_or_insert_with(std::time::Instant::now);
                     Some(CompactionPhaseLabel::SessionStartHooks)
                 }
-                (CompactionPhase::HooksStart, None) => Some(CompactionPhaseLabel::PreCompactHooks),
+                (CompactionPhase::HooksStart, None) => {
+                    state.session.is_compacting = true;
+                    state
+                        .session
+                        .compaction_started_at
+                        .get_or_insert_with(std::time::Instant::now);
+                    Some(CompactionPhaseLabel::PreCompactHooks)
+                }
                 (CompactionPhase::Summarizing, _) => {
                     state.session.is_compacting = true;
+                    state
+                        .session
+                        .compaction_started_at
+                        .get_or_insert_with(std::time::Instant::now);
                     Some(CompactionPhaseLabel::Summarizing)
                 }
                 (CompactionPhase::Done, _) => {
                     state.session.is_compacting = false;
+                    state.session.compaction_started_at = None;
                     state.session.compact_warning_suppressed = true;
                     None
                 }
@@ -244,6 +273,7 @@ pub(super) fn handle(
         }
         ServerNotification::CompactionFailed(p) => {
             state.session.is_compacting = false;
+            state.session.compaction_started_at = None;
             state.session.compaction_phase = None;
             // Compaction failures leave the session in a compromised state
             // (context still over budget); escalate past the toast.
@@ -1070,6 +1100,7 @@ fn clear_session_boundary_state(state: &mut AppState) {
     state.session.current_turn_number = None;
     state.session.session_state = coco_types::SessionState::Idle;
     state.session.is_compacting = false;
+    state.session.compaction_started_at = None;
     state.session.compaction_phase = None;
     state.session.stream_stall = false;
     state.session.tool_executions.clear();

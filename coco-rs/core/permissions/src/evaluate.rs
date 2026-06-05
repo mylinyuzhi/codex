@@ -39,6 +39,18 @@ pub use coco_types::ToolCheckResult;
 /// allow rules (step 2). The tool can return `Passthrough` to defer to rules.
 pub type ToolCheckFn = dyn Fn(&ToolId, &Value, &ToolPermissionContext) -> ToolCheckResult;
 
+/// Per-call facts supplied by the tool runtime to the rule evaluator.
+///
+/// These are facts about the already-validated tool input, not policy.
+/// Keeping them explicit avoids making `coco-permissions` depend on
+/// shell/file parsers owned by tool crates.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PermissionEvaluationOptions {
+    /// The concrete tool/input pair is read-only even though the tool name
+    /// itself may not be statically read-only, e.g. `Bash(ls | head)`.
+    pub dynamic_read_only: bool,
+}
+
 /// Permission evaluator. Implements the multi-step evaluation pipeline.
 pub struct PermissionEvaluator;
 
@@ -73,7 +85,25 @@ impl PermissionEvaluator {
         context: &ToolPermissionContext,
         tool_check: Option<&ToolCheckFn>,
     ) -> PermissionDecision {
-        let decision = Self::evaluate_inner(tool_id, input, context, tool_check);
+        Self::evaluate_with_tool_check_and_options(
+            tool_id,
+            input,
+            context,
+            tool_check,
+            PermissionEvaluationOptions::default(),
+        )
+    }
+
+    /// Evaluate with an optional tool-level permission callback and
+    /// per-call runtime facts.
+    pub fn evaluate_with_tool_check_and_options(
+        tool_id: &ToolId,
+        input: &Value,
+        context: &ToolPermissionContext,
+        tool_check: Option<&ToolCheckFn>,
+        options: PermissionEvaluationOptions,
+    ) -> PermissionDecision {
+        let decision = Self::evaluate_inner(tool_id, input, context, tool_check, options);
         // TS `hasPermissionsToUseTool`: dontAsk converts ANY remaining 'ask'
         // into 'deny' as the final step, so early-return asks (tool-wide ask,
         // content ask, path-safety ask, MCP server ask) are denied too — not
@@ -96,6 +126,7 @@ impl PermissionEvaluator {
         input: &Value,
         context: &ToolPermissionContext,
         tool_check: Option<&ToolCheckFn>,
+        options: PermissionEvaluationOptions,
     ) -> PermissionDecision {
         let tool_str = tool_id.to_string();
 
@@ -106,6 +137,7 @@ impl PermissionEvaluator {
             allow_rule_sources = context.allow_rules.len(),
             ask_rule_sources = context.ask_rules.len(),
             has_tool_check = tool_check.is_some(),
+            dynamic_read_only = options.dynamic_read_only,
             "permission_eval: enter",
         );
 
@@ -387,11 +419,12 @@ impl PermissionEvaluator {
         }
 
         // Step 8: Mode-based fallthrough
-        let decision = mode_fallthrough(context, &tool_str, input);
+        let decision = mode_fallthrough(context, &tool_str, input, options);
         tracing::debug!(
             tool_name = %tool_str,
             permission_decision = decision_label(&decision),
             mode = ?context.mode,
+            dynamic_read_only = options.dynamic_read_only,
             "permission_eval: fell through to mode-based decision",
         );
         decision
@@ -503,6 +536,7 @@ fn mode_fallthrough(
     context: &ToolPermissionContext,
     tool_str: &str,
     input: &Value,
+    options: PermissionEvaluationOptions,
 ) -> PermissionDecision {
     match context.mode {
         PermissionMode::BypassPermissions => PermissionDecision::Allow {
@@ -527,6 +561,7 @@ fn mode_fallthrough(
         PermissionMode::Plan => {
             if context.bypass_available
                 || is_read_only_tool(tool_str)
+                || options.dynamic_read_only
                 || is_session_plan_file_write(tool_str, input, context)
             {
                 PermissionDecision::Allow {
@@ -545,7 +580,10 @@ fn mode_fallthrough(
         // tools (Write, Edit, NotebookEdit). Dangerous paths are already
         // caught by step 6 (path safety), so only safe edits reach here.
         PermissionMode::AcceptEdits => {
-            if is_read_only_tool(tool_str) || is_file_modifying_tool(tool_str) {
+            if is_read_only_tool(tool_str)
+                || options.dynamic_read_only
+                || is_file_modifying_tool(tool_str)
+            {
                 PermissionDecision::Allow {
                     updated_input: None,
                     feedback: None,
@@ -561,7 +599,9 @@ fn mode_fallthrough(
         // TS parity: safe read-only tools never need an approval prompt in
         // ordinary interactive modes. Keep Bubble out of this fast path so
         // the parent permission context remains authoritative.
-        PermissionMode::Default | PermissionMode::Auto if is_read_only_tool(tool_str) => {
+        PermissionMode::Default | PermissionMode::Auto
+            if is_read_only_tool(tool_str) || options.dynamic_read_only =>
+        {
             PermissionDecision::Allow {
                 updated_input: None,
                 feedback: None,
