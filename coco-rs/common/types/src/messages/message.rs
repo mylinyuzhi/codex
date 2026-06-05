@@ -15,6 +15,7 @@ use super::aliases::LlmMessage;
 use super::attachment_body::AlreadyReadFilePayload;
 use super::attachment_body::AttachmentExtras;
 use super::attachment_body::CommandPermissionsPayload;
+use super::attachment_body::CompactFileReferencePayload;
 use super::attachment_body::DynamicSkillPayload;
 use super::attachment_body::EditedImageFilePayload;
 use super::attachment_body::HookCancelledPayload;
@@ -358,6 +359,17 @@ impl AttachmentMessage {
             kind: AttachmentKind::SkillDiscovery,
             body: AttachmentBody::Api(LlmMessage::user_text(content.into())),
             extras: Some(AttachmentExtras::SkillDiscovery(payload)),
+        }
+    }
+    pub fn compact_file_reference(
+        payload: CompactFileReferencePayload,
+        message: LlmMessage,
+    ) -> Self {
+        Self {
+            uuid: Uuid::new_v4(),
+            kind: AttachmentKind::CompactFileReference,
+            body: AttachmentBody::Api(message),
+            extras: Some(AttachmentExtras::CompactFileReference(payload)),
         }
     }
     pub fn silent_already_read_file(payload: AlreadyReadFilePayload) -> Self {

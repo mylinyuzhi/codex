@@ -49,6 +49,16 @@ pub enum AttachmentBody {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AttachmentExtras {
     SkillDiscovery(SkillDiscoveryPayload),
+    CompactFileReference(CompactFileReferencePayload),
+}
+
+/// TS parity: `CompactFileReferenceAttachment`
+/// (`utils/attachments.ts:307-312`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactFileReferencePayload {
+    pub filename: String,
+    pub display_path: String,
 }
 
 // ─── Silent payloads (one per silent AttachmentKind) ────────────────────

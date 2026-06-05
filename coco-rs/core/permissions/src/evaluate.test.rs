@@ -285,6 +285,47 @@ fn test_default_mode_allows_read_only_tools_without_rules() {
 }
 
 #[test]
+fn test_default_mode_allows_dynamic_read_only_tool_input_without_rules() {
+    let ctx = empty_context(PermissionMode::Default);
+    let result = PermissionEvaluator::evaluate_with_tool_check_and_options(
+        &ToolId::Builtin(ToolName::Bash),
+        &bash_input("ls -la | head -30"),
+        &ctx,
+        None,
+        PermissionEvaluationOptions {
+            dynamic_read_only: true,
+        },
+    );
+
+    assert!(matches!(result, PermissionDecision::Allow { .. }));
+}
+
+#[test]
+fn test_dynamic_read_only_does_not_override_explicit_ask_rule() {
+    let mut ctx = empty_context(PermissionMode::Default);
+    ctx.ask_rules.insert(
+        PermissionRuleSource::UserSettings,
+        vec![make_rule(
+            "Bash",
+            None,
+            PermissionBehavior::Ask,
+            PermissionRuleSource::UserSettings,
+        )],
+    );
+    let result = PermissionEvaluator::evaluate_with_tool_check_and_options(
+        &ToolId::Builtin(ToolName::Bash),
+        &bash_input("ls -la | head -30"),
+        &ctx,
+        None,
+        PermissionEvaluationOptions {
+            dynamic_read_only: true,
+        },
+    );
+
+    assert!(matches!(result, PermissionDecision::Ask { .. }));
+}
+
+#[test]
 fn test_bubble_mode_does_not_auto_allow_read_only_tools() {
     let ctx = empty_context(PermissionMode::Bubble);
     let result = PermissionEvaluator::evaluate(

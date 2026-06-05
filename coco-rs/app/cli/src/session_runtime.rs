@@ -349,6 +349,12 @@ pub struct SessionRuntimeBuildOpts<'a> {
     pub session_id_override: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnginePersistenceMode {
+    MainSession,
+    Fork,
+}
+
 /// Construct a [`ThinkingLevel`] for an effort, threading the model's
 /// declared `supported_thinking_levels` budget when one is registered.
 /// Falls back to a budget-less level (`budget_tokens: None`) so the
@@ -1826,7 +1832,8 @@ impl SessionRuntime {
             cancel,
             Some(self.hook_registry.clone()),
         );
-        self.wire_engine(engine, None).await
+        self.wire_engine(engine, None, EnginePersistenceMode::MainSession)
+            .await
     }
 
     pub async fn analyze_main_context(
@@ -1947,6 +1954,40 @@ impl SessionRuntime {
         cancel: CancellationToken,
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
     ) -> QueryEngine {
+        self.build_engine_from_config_with_persistence(
+            config,
+            cancel,
+            app_state_override,
+            EnginePersistenceMode::MainSession,
+        )
+        .await
+    }
+
+    /// Build a fork engine from a caller-provided config. Fork engines
+    /// share runtime services but never write to the parent main-session
+    /// transcript, usage tracker, or file-history sink.
+    pub(crate) async fn build_fork_engine_from_config(
+        &self,
+        config: QueryEngineConfig,
+        cancel: CancellationToken,
+        app_state_override: Option<Arc<RwLock<ToolAppState>>>,
+    ) -> QueryEngine {
+        self.build_engine_from_config_with_persistence(
+            config,
+            cancel,
+            app_state_override,
+            EnginePersistenceMode::Fork,
+        )
+        .await
+    }
+
+    async fn build_engine_from_config_with_persistence(
+        &self,
+        config: QueryEngineConfig,
+        cancel: CancellationToken,
+        app_state_override: Option<Arc<RwLock<ToolAppState>>>,
+        persistence: EnginePersistenceMode,
+    ) -> QueryEngine {
         let engine = QueryEngine::new(
             config,
             self.model_runtimes.clone(),
@@ -1954,7 +1995,8 @@ impl SessionRuntime {
             cancel,
             Some(self.hook_registry.clone()),
         );
-        self.wire_engine(engine, app_state_override).await
+        self.wire_engine(engine, app_state_override, persistence)
+            .await
     }
 
     /// Install every per-session subsystem on a pre-built engine. The
@@ -1969,10 +2011,11 @@ impl SessionRuntime {
     /// `handoff.app_state` would be installed on the engine but
     /// `runtime.app_state` would be reset by observers — the two would
     /// drift after every compaction.
-    pub async fn wire_engine(
+    async fn wire_engine(
         &self,
         mut engine: QueryEngine,
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
+        persistence: EnginePersistenceMode,
     ) -> QueryEngine {
         let app_state = app_state_override.unwrap_or_else(|| self.app_state.clone());
         engine = engine.with_file_read_state(self.file_read_state.clone());
@@ -2126,7 +2169,8 @@ impl SessionRuntime {
         // independent of persistence — always wire it; only the file-history
         // snapshot store is gated by persistence.
         engine = engine.with_config_home(self.config_home.clone());
-        if self.persist_session
+        if persistence == EnginePersistenceMode::MainSession
+            && self.persist_session
             && let Some(fh) = &self.file_history
         {
             engine = engine.with_file_history(fh.clone(), self.config_home.clone());
@@ -2142,7 +2186,7 @@ impl SessionRuntime {
         // per-turn engine doesn't re-write history each time.
         // TS parity: `Project.recordTranscript` keys writes by
         // session id and skips already-persisted uuids.
-        if self.persist_session {
+        if persistence == EnginePersistenceMode::MainSession && self.persist_session {
             let live_session_id = self.session_id.read().await.clone();
             engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
             engine = engine.with_session_usage_tracker(self.session_usage_tracker.clone());

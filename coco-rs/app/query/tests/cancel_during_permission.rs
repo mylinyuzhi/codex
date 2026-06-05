@@ -36,6 +36,7 @@ use coco_tool_runtime::ToolPermissionRequest;
 use coco_tool_runtime::ToolPermissionResolution;
 use coco_types::PermissionMode;
 use serde_json::json;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use mock_harness::MockModelBuilder;
@@ -46,7 +47,9 @@ use mock_harness::core_tools;
 /// Awaits a never-completing inner future so the only way out is the
 /// engine's own `cancel.cancelled()` arm in
 /// `permission_controller.rs:197-203`.
-struct HangingPermissionBridge;
+struct HangingPermissionBridge {
+    entered: Arc<Notify>,
+}
 
 #[async_trait::async_trait]
 impl ToolPermissionBridge for HangingPermissionBridge {
@@ -54,6 +57,7 @@ impl ToolPermissionBridge for HangingPermissionBridge {
         &self,
         _request: ToolPermissionRequest,
     ) -> Result<ToolPermissionResolution, String> {
+        self.entered.notify_waiters();
         // Never resolves. The engine's `tokio::select!` race with its
         // cancel token is the only escape — exactly the path under test.
         std::future::pending::<()>().await;
@@ -61,18 +65,24 @@ impl ToolPermissionBridge for HangingPermissionBridge {
     }
 }
 
-fn hanging_bridge() -> ToolPermissionBridgeRef {
-    Arc::new(HangingPermissionBridge)
+fn hanging_bridge() -> (ToolPermissionBridgeRef, Arc<Notify>) {
+    let entered = Arc::new(Notify::new());
+    (
+        Arc::new(HangingPermissionBridge {
+            entered: entered.clone(),
+        }),
+        entered,
+    )
 }
 
 /// Mock model that issues exactly one Bash tool call. Bash is not in
-/// the Default-mode auto-allow list (`Read`/`Glob`/`Grep`/`ToolSearch`
-/// only — `core/permissions/src/setup.rs:404-423`), so the engine
-/// routes the call through the permission bridge.
+/// the Default-mode static auto-allow list, and this command is not
+/// dynamically read-only, so the engine routes the call through the
+/// permission bridge.
 fn mock_model_calling_bash() -> Arc<dyn coco_inference::LanguageModel> {
     MockModelBuilder::new()
         .on_call(0, |_| {
-            MockResponse::tool_call("Bash", json!({"command": "echo hello"}))
+            MockResponse::tool_call("Bash", json!({"command": "mkdir cancel-test-dir"}))
         })
         .build()
 }
@@ -91,19 +101,21 @@ async fn cancelled_permission_synthesizes_error_tool_result() {
         session_id: "cancel-during-permission".into(),
         ..Default::default()
     };
+    let (bridge, bridge_entered) = hanging_bridge();
     let engine = QueryEngine::new(config, client, core_tools(), cancel.clone(), None)
-        .with_permission_bridge(hanging_bridge());
+        .with_permission_bridge(bridge);
 
     // Spawn the engine on a background task so we can fire cancel
     // mid-flight. The hanging bridge means the run never returns
     // without external cancellation.
     let run_handle = tokio::spawn(async move { engine.run("run echo for me").await });
 
-    // 200ms is enough for the engine to: build prompt, issue API call
-    // (mock returns synchronously), enter `tool_call_preparer` →
-    // `permission_controller.resolve()` → bridge wait. Tuned high enough
-    // that slow CI doesn't race the cancel before the bridge is reached.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Wait until the bridge is definitely pending before firing cancel.
+    // This avoids a timing race where the test cancels too early or too
+    // late relative to permission resolution.
+    tokio::time::timeout(Duration::from_secs(5), bridge_entered.notified())
+        .await
+        .expect("permission bridge should be entered before cancellation");
     cancel.cancel();
 
     // Bound the wait so a regression that breaks the cancel path

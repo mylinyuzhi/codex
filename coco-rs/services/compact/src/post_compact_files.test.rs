@@ -138,6 +138,12 @@ fn test_create_post_compact_file_attachments_basic() {
         atts[0].kind,
         coco_types::AttachmentKind::CompactFileReference
     );
+    let Some(coco_messages::AttachmentExtras::CompactFileReference(payload)) =
+        atts[0].extras.as_ref()
+    else {
+        panic!("compact file reference should preserve typed display payload");
+    };
+    assert_eq!(payload.display_path, "b.rs");
     // Most recent (b.rs, last in snapshot) should come first in result
     let text0 = format!("{:?}", atts[0].as_api_message().expect("api body"));
     assert!(
@@ -189,4 +195,32 @@ fn test_create_post_compact_file_attachments_respects_max_files() {
         POST_COMPACT_MAX_FILES_TO_RESTORE,
         "should cap at max files"
     );
+}
+
+#[test]
+fn test_create_post_compact_file_attachments_respects_configured_limit() {
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let mut snapshot = Vec::new();
+    for i in 0..3 {
+        let file = dir.path().join(format!("file{i}.rs"));
+        std::fs::write(&file, format!("fn f{i}() {{}}")).expect("write");
+        snapshot.push((file, make_entry(&format!("fn f{i}() {{}}"), i)));
+    }
+
+    let atts = create_post_compact_file_attachments_with_priority_and_limit::<Message>(
+        &snapshot,
+        &[],
+        dir.path(),
+        /*plan*/ None,
+        &std::collections::HashSet::new(),
+        /*max_files_to_restore*/ 1,
+    );
+
+    assert_eq!(atts.len(), 1);
+    let Some(coco_messages::AttachmentExtras::CompactFileReference(payload)) =
+        atts[0].extras.as_ref()
+    else {
+        panic!("compact file reference should preserve typed display payload");
+    };
+    assert_eq!(payload.display_path, "file2.rs");
 }

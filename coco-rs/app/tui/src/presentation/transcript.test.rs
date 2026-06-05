@@ -3,6 +3,7 @@ use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::i18n::locale_test_guard;
@@ -27,6 +28,48 @@ use coco_tui_ui::style::UiStyles;
 fn push_cells(state: &mut AppState, cells: impl IntoIterator<Item = RenderedCell>) {
     for cell in cells {
         state.session.transcript.on_message_appended(cell.source);
+    }
+}
+
+fn slash_user_cell(text: String) -> RenderedCell {
+    let uuid = Uuid::new_v4();
+    let source = Arc::new(coco_messages::Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::user_text(&text),
+        uuid,
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: Some(coco_messages::MessageOrigin::SlashCommand),
+        parent_tool_use_id: None,
+    }));
+    RenderedCell {
+        message_uuid: uuid,
+        kind: CellKind::UserText { text },
+        source,
+    }
+}
+
+fn compact_summary_cell(text: &str) -> RenderedCell {
+    let uuid = Uuid::new_v4();
+    let source = Arc::new(coco_messages::Message::User(coco_messages::UserMessage {
+        message: coco_messages::LlmMessage::user_text(text),
+        uuid,
+        timestamp: String::new(),
+        is_visible_in_transcript_only: true,
+        is_virtual: false,
+        is_compact_summary: true,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    }));
+    RenderedCell {
+        message_uuid: uuid,
+        kind: CellKind::UserText {
+            text: text.to_string(),
+        },
+        source,
     }
 }
 
@@ -274,6 +317,45 @@ fn snapshot_transcript_modal_streaming_tail() {
     );
 }
 
+#[test]
+fn transcript_modal_renders_slash_command_without_raw_tags() {
+    let _locale = locale_test_guard("en");
+    let mut app_state = AppState::default();
+    push_cells(
+        &mut app_state,
+        [
+            slash_user_cell(coco_messages::format_command_input("compact", "")),
+            slash_user_cell(coco_messages::format_local_command_stdout(
+                "Compacted (12 -> 7 tokens, saved 5 / 41.7%; Ctrl+O to see full summary)",
+            )),
+        ],
+    );
+    let state = TranscriptState::new();
+    let body = render_transcript_text(&app_state, &state, 96, 10);
+
+    assert!(body.contains("❯ /compact"));
+    assert!(body.contains("Compacted (12 -> 7 tokens"));
+    assert!(!body.contains("<command-name>"));
+    assert!(!body.contains("<local-command-stdout>"));
+}
+
+#[test]
+fn transcript_modal_keeps_compact_summary_available_for_ctrl_o() {
+    let _locale = locale_test_guard("en");
+    let mut app_state = AppState::default();
+    push_cells(
+        &mut app_state,
+        [compact_summary_cell(
+            "Summary:\nEarlier compacted context remains available here.",
+        )],
+    );
+    let state = TranscriptState::new();
+    let body = render_transcript_text(&app_state, &state, 96, 10);
+
+    assert!(body.contains("Summary:"));
+    assert!(body.contains("Earlier compacted context remains available here."));
+}
+
 fn render_transcript_text(
     state: &AppState,
     transcript: &TranscriptState,
@@ -299,9 +381,37 @@ fn projection_cells(cells: &[RenderedCell], show_system_reminders: bool) -> Vec<
         cells,
         TranscriptProjectionOptions {
             show_system_reminders,
+            show_compact_internals: false,
         },
     )
     .cells
+}
+
+#[test]
+fn transcript_projection_hides_compact_internals_unless_requested() {
+    let boundary = crate::state::derive::message_to_cells(Arc::new(
+        coco_messages::create_compact_boundary_message(10, 4),
+    ));
+    let summary = vec![compact_summary_cell("Summary:\nHidden in default chat")];
+    let cells = boundary.into_iter().chain(summary).collect::<Vec<_>>();
+
+    let hidden = transcript_projection(
+        &cells,
+        TranscriptProjectionOptions {
+            show_system_reminders: false,
+            show_compact_internals: false,
+        },
+    );
+    assert!(hidden.cells.is_empty());
+
+    let visible = transcript_projection(
+        &cells,
+        TranscriptProjectionOptions {
+            show_system_reminders: false,
+            show_compact_internals: true,
+        },
+    );
+    assert_eq!(visible.cells.len(), 2);
 }
 
 #[test]
@@ -567,6 +677,7 @@ fn transcript_presentation_appends_active_streaming_after_committed_cells() {
         cells: &cells,
         options: TranscriptProjectionOptions {
             show_system_reminders: false,
+            show_compact_internals: false,
         },
         streaming: Some(&streaming),
         show_thinking: true,
@@ -593,6 +704,7 @@ fn transcript_presentation_appends_busy_spinner_when_tools_are_active() {
         cells: &cells,
         options: TranscriptProjectionOptions {
             show_system_reminders: false,
+            show_compact_internals: false,
         },
         streaming: None,
         show_thinking: true,
@@ -616,6 +728,7 @@ fn transcript_presentation_omits_active_cell_when_idle() {
         cells: &cells,
         options: TranscriptProjectionOptions {
             show_system_reminders: false,
+            show_compact_internals: false,
         },
         streaming: None,
         show_thinking: true,

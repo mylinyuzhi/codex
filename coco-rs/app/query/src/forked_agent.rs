@@ -27,7 +27,7 @@
 //! preserves the parent's prompt cache:
 //!
 //! - `max_turns: Some(1)` — single round-trip
-//! - `skip_transcript: true` — no sidechain noise in the parent's
+//! - `transcript_mode: Disabled` — no sidechain noise in the parent's
 //!   transcript
 //! - `skip_cache_write: true` — fire-and-forget; don't pollute the
 //!   shared cache with this branch
@@ -61,6 +61,15 @@ pub use coco_tool_runtime::CanUseToolHandleRef;
 pub use coco_tool_runtime::DecisionReason;
 pub use coco_tool_runtime::NoOpCanUseToolHandle;
 pub use coco_tool_runtime::deny_all_handle;
+
+/// Transcript persistence policy for a framework-spawned fork.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForkTranscriptMode {
+    /// Do not persist the fork transcript anywhere.
+    Disabled,
+    /// Persist the fork under the session sidechain/subagent transcript area.
+    Sidechain,
+}
 
 /// Streaming hook fired for each [`Message`] the fork emits during
 /// its agent loop. Used by speculation + auto-dream to update the
@@ -106,9 +115,10 @@ impl std::fmt::Debug for ForkedAgentOverrides {
 pub struct ForkedAgentOptions {
     /// Hard cap on turns. `Some(1)` is the standard "one-shot" shape.
     pub max_turns: Option<i32>,
-    /// `true` ⇒ fork's history doesn't enter the parent's transcript
-    /// store. Default for ephemeral / fire-and-forget side queries.
-    pub skip_transcript: bool,
+    /// Where the fork transcript should be persisted. Fork engines never
+    /// write to the parent's main transcript; sidechain mode mirrors TS
+    /// `recordSidechainTranscript` for compact-like forks.
+    pub transcript_mode: ForkTranscriptMode,
     /// `true` ⇒ the fork's API request asks the provider not to
     /// write a fresh prompt-cache entry on the last message.
     pub skip_cache_write: bool,
@@ -145,7 +155,7 @@ impl std::fmt::Debug for ForkedAgentOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ForkedAgentOptions")
             .field("max_turns", &self.max_turns)
-            .field("skip_transcript", &self.skip_transcript)
+            .field("transcript_mode", &self.transcript_mode)
             .field("skip_cache_write", &self.skip_cache_write)
             .field("effort", &self.effort)
             .field("query_source", &self.query_source)
@@ -161,7 +171,7 @@ impl std::fmt::Debug for ForkedAgentOptions {
 impl ForkedAgentOptions {
     /// Build options with the cache-parity-safe defaults for `label`.
     ///
-    /// Defaults: `max_turns=Some(1)`, `skip_transcript=true`,
+    /// Defaults: `max_turns=Some(1)`, `transcript_mode=Disabled`,
     /// `skip_cache_write=true`, `effort=None`, `can_use_tool=None`,
     /// `require_can_use_tool=false`. `query_source` defaults to
     /// `label.as_str()` so telemetry strings stay aligned with the
@@ -169,7 +179,7 @@ impl ForkedAgentOptions {
     pub fn for_label(label: ForkLabel) -> Self {
         Self {
             max_turns: Some(1),
-            skip_transcript: true,
+            transcript_mode: ForkTranscriptMode::Disabled,
             skip_cache_write: true,
             effort: None,
             query_source: label.as_str().to_string(),

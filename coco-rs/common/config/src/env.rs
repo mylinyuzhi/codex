@@ -194,6 +194,12 @@ pub enum EnvKey {
     /// Enable Anthropic `clear_tool_uses_20250919` for entire tool_use blocks.
     /// Replaces TS `USE_API_CLEAR_TOOL_USES`.
     CocoCompactApiClearToolUses,
+    /// Override microcompact keep-recent count for compactable tool results.
+    CocoCompactMicroKeepRecent,
+    /// Override time-based microcompact keep-recent count.
+    CocoCompactMicroTimeBasedKeepRecent,
+    /// Override the number of recently read files restored after full compact.
+    CocoCompactPostCompactMaxFilesToRestore,
     /// Enable Tool Result Budget Level 2 (per-message aggregate cap).
     /// TS feature gate: `tengu_hawthorn_steeple` (default off, matches
     /// feature-stripped behavior). See `docs/coco-rs/tool-result-budget-plan.md`.
@@ -369,6 +375,13 @@ impl EnvKey {
             Self::CocoCompactApiTargetInputTokens => "COCO_COMPACT_API_TARGET_INPUT_TOKENS",
             Self::CocoCompactApiClearToolResults => "COCO_COMPACT_API_CLEAR_TOOL_RESULTS",
             Self::CocoCompactApiClearToolUses => "COCO_COMPACT_API_CLEAR_TOOL_USES",
+            Self::CocoCompactMicroKeepRecent => "COCO_COMPACT_MICRO_KEEP_RECENT",
+            Self::CocoCompactMicroTimeBasedKeepRecent => {
+                "COCO_COMPACT_MICRO_TIME_BASED_KEEP_RECENT"
+            }
+            Self::CocoCompactPostCompactMaxFilesToRestore => {
+                "COCO_COMPACT_POST_COMPACT_MAX_FILES_TO_RESTORE"
+            }
             Self::CocoCompactToolResultBudgetEnable => "COCO_COMPACT_TOOL_RESULT_BUDGET_ENABLE",
             Self::CocoPromptCacheAllowlist => "COCO_PROMPT_CACHE_ALLOWLIST",
             Self::CocoCompactToolResultBudgetPerMessageChars => {

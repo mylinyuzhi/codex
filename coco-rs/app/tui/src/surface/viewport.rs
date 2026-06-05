@@ -102,11 +102,12 @@ pub(crate) fn interactive_viewport_desired_height(
         };
     // Mirror render_live_viewport's reservations so the sizing pass and the
     // paint pass agree on viewport height (these were previously omitted here).
-    let status_indicator_rows: u16 = if state.ui.ephemeral.turn_active() {
-        1
-    } else {
-        0
-    };
+    let status_indicator_rows: u16 =
+        if state.ui.ephemeral.turn_active() || state.session.is_compacting {
+            1
+        } else {
+            0
+        };
     let background_pills_rows: u16 =
         if crate::widgets::build_background_pills_view(state).is_empty() {
             0
@@ -235,11 +236,12 @@ fn render_live_viewport(
     // Single-row main-turn status indicator (spinner + verb + elapsed
     // + tokens) above the activity panel — visible only while a turn
     // is running.
-    let status_indicator_rows: u16 = if state.ui.ephemeral.turn_active() {
-        1
-    } else {
-        0
-    };
+    let status_indicator_rows: u16 =
+        if state.ui.ephemeral.turn_active() || state.session.is_compacting {
+            1
+        } else {
+            0
+        };
     // Background pills bar — shown when any subagent is backgrounded.
     // TS keeps the row populated for the lifetime of the backgrounded
     // task (completed teammates render with `is_idle = true`); we
@@ -299,46 +301,70 @@ fn render_live_viewport(
         avail_for_live_tail,
         state,
     );
-    if status_indicator_area.height > 0 && state.ui.ephemeral.turn_active() {
+    if status_indicator_area.height > 0
+        && (state.ui.ephemeral.turn_active() || state.session.is_compacting)
+    {
         // Elapsed reads from the UI ephemeral helper so the displayed
         // clock subtracts paused time (permission-prompt blocks). The
         // turn-start anchor is on the running-turn record itself —
         // no Option<Instant> threading required.
-        let elapsed_ms = state.ui.ephemeral.elapsed_ms(std::time::Instant::now());
-        let effort = state.session.thinking_effort;
-        let effort_level = effort.is_explicit_level().then(|| effort.as_str());
-        // TS `hasRunningTeammates` derives from
-        // `tasks.some(t => isInProcessTeammateTask(t) && !t.isIdle)`. In
-        // coco-rs an "in-process teammate" maps to
-        // `SubagentKind::Teammate` and the closest "not idle" predicate
-        // is `status == Running`.
-        let has_running_teammates = state.session.subagents.iter().any(|a| {
-            matches!(a.kind, crate::state::SubagentKind::Teammate)
-                && matches!(a.status, crate::state::session::SubagentStatus::Running)
-        });
-        let teammate_tokens: i64 = state
-            .session
-            .subagents
-            .iter()
-            .filter(|a| {
+        let view = if state.ui.ephemeral.turn_active() {
+            let elapsed_ms = state.ui.ephemeral.elapsed_ms(std::time::Instant::now());
+            let effort = state.session.thinking_effort;
+            let effort_level = effort.is_explicit_level().then(|| effort.as_str());
+            // TS `hasRunningTeammates` derives from
+            // `tasks.some(t => isInProcessTeammateTask(t) && !t.isIdle)`. In
+            // coco-rs an "in-process teammate" maps to
+            // `SubagentKind::Teammate` and the closest "not idle" predicate
+            // is `status == Running`.
+            let has_running_teammates = state.session.subagents.iter().any(|a| {
                 matches!(a.kind, crate::state::SubagentKind::Teammate)
                     && matches!(a.status, crate::state::session::SubagentStatus::Running)
-            })
-            .map(|a| a.total_tokens)
-            .sum();
-        let view = coco_tui_ui::widgets::StatusIndicatorView {
-            verb: state.ui.ephemeral.current_verb().unwrap_or("Working"),
-            elapsed_ms,
-            input_tokens: None,
-            output_tokens: state
-                .ui
-                .ephemeral
-                .live_output_tokens()
-                .saturating_add(teammate_tokens),
-            effort_level,
-            show_interrupt_hint: true,
-            force_show_tokens: false,
-            has_running_teammates,
+            });
+            let teammate_tokens: i64 = state
+                .session
+                .subagents
+                .iter()
+                .filter(|a| {
+                    matches!(a.kind, crate::state::SubagentKind::Teammate)
+                        && matches!(a.status, crate::state::session::SubagentStatus::Running)
+                })
+                .map(|a| a.total_tokens)
+                .sum();
+            coco_tui_ui::widgets::StatusIndicatorView {
+                verb: state.ui.ephemeral.current_verb().unwrap_or("Working"),
+                elapsed_ms,
+                input_tokens: None,
+                output_tokens: state
+                    .ui
+                    .ephemeral
+                    .live_output_tokens()
+                    .saturating_add(teammate_tokens),
+                effort_level,
+                show_interrupt_hint: true,
+                force_show_tokens: false,
+                has_running_teammates,
+            }
+        } else {
+            let elapsed_ms = state
+                .session
+                .compaction_started_at
+                .map(|started| started.elapsed().as_millis() as i64)
+                .unwrap_or(0);
+            coco_tui_ui::widgets::StatusIndicatorView {
+                verb: state
+                    .session
+                    .compaction_phase
+                    .map(crate::state::session::CompactionPhaseLabel::status_label)
+                    .unwrap_or("Compacting conversation"),
+                elapsed_ms,
+                input_tokens: None,
+                output_tokens: 0,
+                effort_level: None,
+                show_interrupt_hint: true,
+                force_show_tokens: false,
+                has_running_teammates: false,
+            }
         };
         frame.render_widget(
             coco_tui_ui::widgets::StatusIndicator::new(view, styles),

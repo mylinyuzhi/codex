@@ -127,12 +127,21 @@ pub fn assistant_with_thinking(text: &str, thinking: &str) -> Message {
 
 /// Assistant message with a tool call.
 pub fn assistant_with_tool_call(tool_name: &str, input: serde_json::Value) -> Message {
+    assistant_with_tool_call_id(&format!("call_{tool_name}"), tool_name, input)
+}
+
+/// Assistant message with a tool call and explicit tool-use id.
+pub fn assistant_with_tool_call_id(
+    tool_call_id: &str,
+    tool_name: &str,
+    input: serde_json::Value,
+) -> Message {
     Message::Assistant(AssistantMessage {
         message: LlmMessage::Assistant {
             content: vec![
                 AssistantContent::Text(coco_llm_types::TextPart::new(format!("Using {tool_name}"))),
                 AssistantContent::ToolCall(coco_llm_types::ToolCallPart {
-                    tool_call_id: format!("call_{tool_name}"),
+                    tool_call_id: tool_call_id.to_string(),
                     tool_name: tool_name.to_string(),
                     input,
                     provider_executed: None,

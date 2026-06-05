@@ -541,11 +541,14 @@ async fn evaluate_with_rules(
     // evaluation, so the returned decision already preserves
     // `updated_input` when the tool returned one. No post-processing
     // needed here.
-    coco_permissions::PermissionEvaluator::evaluate_with_tool_check(
+    coco_permissions::PermissionEvaluator::evaluate_with_tool_check_and_options(
         &tool_id,
         effective_input,
         &ctx.permission_context,
         Some(&tool_check),
+        coco_permissions::PermissionEvaluationOptions {
+            dynamic_read_only: tool.is_read_only(effective_input),
+        },
     )
 }
 

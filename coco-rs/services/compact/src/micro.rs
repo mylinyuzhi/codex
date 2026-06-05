@@ -7,7 +7,6 @@
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
-use coco_types::ToolId;
 use coco_types::ToolName;
 
 use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
@@ -70,6 +69,11 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
         .skip(total.saturating_sub(keep_recent))
         .map(String::as_str)
         .collect();
+    let clear_set: std::collections::HashSet<&str> = compactable_ids
+        .iter()
+        .map(String::as_str)
+        .filter(|id| !keep_set.contains(id))
+        .collect();
 
     let mut cleared: i32 = 0;
     let mut tokens_freed: i64 = 0;
@@ -79,12 +83,7 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
             continue;
         };
 
-        if !is_compactable_tool(&tr.tool_id) {
-            continue;
-        }
-
-        // Skip tool calls in the keep set (most-recent compactable IDs).
-        if keep_set.contains(tr.tool_use_id.as_str()) {
+        if !clear_set.contains(tr.tool_use_id.as_str()) {
             continue;
         }
 
@@ -93,10 +92,6 @@ pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> Microcompa
         }
 
         let est_tokens = coco_messages::estimate_tool_result_message_tokens(tr);
-        if est_tokens <= 10 {
-            continue;
-        }
-
         tr.message = LlmMessage::Tool {
             content: vec![coco_messages::ToolContent::ToolResult(
                 coco_messages::ToolResultContent {
@@ -160,16 +155,6 @@ pub fn time_based_microcompact(
     })
 }
 
-/// Check if a tool is in the compactable set.
-fn is_compactable_tool(tool_id: &ToolId) -> bool {
-    match tool_id {
-        ToolId::Builtin(name) => COMPACTABLE_TOOLS.contains(name),
-        // MCP and custom tools: always compactable (external tools often
-        // produce large output).
-        ToolId::Mcp { .. } | ToolId::Custom(_) => true,
-    }
-}
-
 /// Check if a tool result has already been cleared.
 fn is_already_cleared(tr: &coco_messages::ToolResultMessage) -> bool {
     if let LlmMessage::Tool { content, .. } = &tr.message
@@ -181,3 +166,7 @@ fn is_already_cleared(tr: &coco_messages::ToolResultMessage) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+#[path = "micro.test.rs"]
+mod tests;

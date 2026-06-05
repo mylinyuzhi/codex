@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::QueryEngineConfig;
 use crate::engine::QueryEngine;
 use crate::forked_agent::ForkDispatcher;
+use crate::forked_agent::ForkTranscriptMode;
 use crate::forked_agent::ForkedAgentOptions;
 use crate::forked_agent::ForkedAgentResult;
 
@@ -311,6 +312,19 @@ fn compactable_history() -> coco_messages::MessageHistory {
     history
 }
 
+fn user_text(message: &coco_messages::Message) -> Option<&str> {
+    let coco_messages::Message::User(user) = message else {
+        return None;
+    };
+    let LlmMessage::User { content, .. } = &user.message else {
+        return None;
+    };
+    content.iter().find_map(|part| match part {
+        UserContentPart::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    })
+}
+
 fn drain_protocol_events(
     rx: &mut tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
 ) -> Vec<coco_types::ServerNotification> {
@@ -347,7 +361,7 @@ fn empty_cache() -> CacheSafeParams {
 }
 
 #[tokio::test]
-async fn manual_compact_empty_history_emits_compaction_failed() {
+async fn manual_compact_empty_history_emits_notice_without_failure() {
     let model = Arc::new(CapturingModel::default());
     let engine = new_engine(model, None);
     let mut history = coco_messages::MessageHistory::new();
@@ -364,16 +378,21 @@ async fn manual_compact_empty_history_emits_compaction_failed() {
 
     assert_eq!(outcome, coco_compact::CompactOutcome::Skipped);
     let events = drain_protocol_events(&mut rx);
-    assert!(events.iter().any(|event| matches!(
-        event,
-        coco_types::ServerNotification::CompactionFailed(p)
-            if p.error == "No messages to compact"
-    )));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, coco_types::ServerNotification::CompactionFailed(_)))
+    );
     assert!(events.iter().any(|event| matches!(
         event,
         coco_types::ServerNotification::CompactionPhase(p)
             if p.phase == coco_types::CompactionPhase::Done
     )));
+    let rendered = format!("{:?}", history.as_slice());
+    assert!(rendered.contains("<command-name>/compact</command-name>"));
+    assert!(
+        rendered.contains("<local-command-stdout>No messages to compact.</local-command-stdout>")
+    );
 }
 
 #[tokio::test]
@@ -612,9 +631,33 @@ async fn manual_compact_success_appends_slash_breadcrumbs_before_hook_results() 
     assert!(rendered.contains("<local-command-caveat>Caveat:"));
     assert!(rendered.contains("<command-name>/compact</command-name>"));
     assert!(rendered.contains("<command-args>keep build errors</command-args>"));
-    assert!(rendered.contains(
-        "<local-command-stdout>Compacted (Ctrl+O to see full summary)</local-command-stdout>"
-    ));
+    assert!(rendered.contains("<local-command-stdout>Compacted ("));
+    assert!(rendered.contains("tokens, saved"));
+    assert!(rendered.contains("Ctrl+O to see full summary)</local-command-stdout>"));
+    let compact_breadcrumbs = history
+        .as_slice()
+        .iter()
+        .filter_map(|msg| {
+            let coco_messages::Message::User(user) = msg.as_ref() else {
+                return None;
+            };
+            let text = user_text(msg.as_ref())?;
+            (text.contains("<command-name>/compact</command-name>")
+                || text.contains("<local-command-stdout>Compacted"))
+            .then_some(user)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(compact_breadcrumbs.len(), 2);
+    for user in compact_breadcrumbs {
+        assert_eq!(
+            user.origin,
+            Some(coco_messages::MessageOrigin::SlashCommand)
+        );
+        assert!(
+            !user.is_visible_in_transcript_only,
+            "manual compact breadcrumbs must remain model-visible"
+        );
+    }
     let stdout_idx = rendered
         .find("<local-command-stdout>")
         .expect("stdout breadcrumb should be present");
@@ -683,6 +726,7 @@ async fn compact_summary_uses_cache_safe_fork_with_deny_all_tools() {
         .expect("dispatcher should capture options");
     assert_eq!(options.fork_label, ForkLabel::Compact);
     assert_eq!(options.max_turns, Some(1));
+    assert_eq!(options.transcript_mode, ForkTranscriptMode::Sidechain);
     assert!(options.skip_cache_write);
     assert!(options.can_use_tool.is_some());
     assert!(options.require_can_use_tool);

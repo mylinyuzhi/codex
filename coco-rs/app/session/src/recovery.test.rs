@@ -84,6 +84,50 @@ fn assistant_line(
     serde_json::to_string(&entry).unwrap()
 }
 
+fn compact_boundary_line(
+    uuid: &uuid::Uuid,
+    preserved_segment: Option<serde_json::Value>,
+) -> String {
+    let mut message = json!({
+        "kind": "compact_boundary",
+        "uuid": uuid,
+        "tokens_before": 50_000,
+        "tokens_after": 8_000,
+        "trigger": "auto",
+    });
+    if let Some(segment) = preserved_segment {
+        message["preserved_segment"] = segment;
+    }
+    serde_json::to_string(&json!({
+        "type": "system",
+        "uuid": uuid,
+        "session_id": "s1",
+        "cwd": "/tmp/p",
+        "timestamp": "2025-01-15T10:00:03Z",
+        "is_sidechain": false,
+        "message": message,
+    }))
+    .unwrap()
+}
+
+fn preserved_segment_json(
+    head_uuid: &uuid::Uuid,
+    anchor_uuid: &uuid::Uuid,
+    tail_uuid: &uuid::Uuid,
+) -> serde_json::Value {
+    json!({
+        "head_uuid": head_uuid,
+        "anchor_uuid": anchor_uuid,
+        "tail_uuid": tail_uuid,
+    })
+}
+
+fn selected_contains(state: &SessionResumeState, uuid: &uuid::Uuid) -> bool {
+    state
+        .selected_chain_uuids
+        .contains(uuid.to_string().as_str())
+}
+
 #[test]
 fn test_load_conversation_for_resume_basic_round_trip() {
     let dir = tempfile::tempdir().unwrap();
@@ -286,6 +330,128 @@ fn test_load_conversation_for_resume_latest_model_wins() {
     let conversation = load_conversation_for_resume(&path).expect("resume loads");
     assert_eq!(conversation.model, "claude-opus-4-7");
     assert_eq!(conversation.turn_count, 2);
+}
+
+#[test]
+fn test_load_session_state_for_resume_relinks_live_compact_preserved_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("compact-live.jsonl");
+    let old_user = uuid::Uuid::new_v4();
+    let old_assistant = uuid::Uuid::new_v4();
+    let head = uuid::Uuid::new_v4();
+    let tail = uuid::Uuid::new_v4();
+    let boundary = uuid::Uuid::new_v4();
+    let summary = uuid::Uuid::new_v4();
+    let future_user = uuid::Uuid::new_v4();
+    let body = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        user_line(old_user.to_string().as_str(), "old prompt"),
+        assistant_line(
+            old_assistant.to_string().as_str(),
+            old_user.to_string().as_str(),
+            "old reply",
+            "claude-sonnet-4-6",
+            Some((100, 10))
+        ),
+        user_line_with_parent(
+            head.to_string().as_str(),
+            Some(old_assistant.to_string().as_str()),
+            "kept prompt"
+        ),
+        assistant_line(
+            tail.to_string().as_str(),
+            head.to_string().as_str(),
+            "kept reply",
+            "claude-sonnet-4-6",
+            Some((190_000, 200))
+        ),
+        compact_boundary_line(
+            &boundary,
+            Some(preserved_segment_json(&head, &summary, &tail))
+        ),
+        assistant_line(
+            summary.to_string().as_str(),
+            boundary.to_string().as_str(),
+            "compact summary",
+            "claude-sonnet-4-6",
+            Some((7, 8))
+        ),
+        user_line_with_parent(
+            future_user.to_string().as_str(),
+            Some(summary.to_string().as_str()),
+            "after compact"
+        ),
+    );
+    std::fs::write(&path, body).unwrap();
+
+    let state = load_session_state_for_resume(&path).expect("resume loads");
+
+    assert!(selected_contains(&state, &boundary));
+    assert!(selected_contains(&state, &summary));
+    assert!(selected_contains(&state, &head));
+    assert!(selected_contains(&state, &tail));
+    assert!(selected_contains(&state, &future_user));
+    assert!(!selected_contains(&state, &old_user));
+    assert!(!selected_contains(&state, &old_assistant));
+    assert_eq!(
+        state.total_input_tokens, 7,
+        "preserved assistant usage must be zeroed on resume"
+    );
+    assert_eq!(state.total_output_tokens, 8);
+}
+
+#[test]
+fn test_load_session_state_for_resume_prunes_stale_compact_preserved_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("compact-stale.jsonl");
+    let head = uuid::Uuid::new_v4();
+    let tail = uuid::Uuid::new_v4();
+    let first_boundary = uuid::Uuid::new_v4();
+    let summary = uuid::Uuid::new_v4();
+    let second_boundary = uuid::Uuid::new_v4();
+    let final_assistant = uuid::Uuid::new_v4();
+    let body = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n",
+        user_line(head.to_string().as_str(), "kept prompt"),
+        assistant_line(
+            tail.to_string().as_str(),
+            head.to_string().as_str(),
+            "kept reply",
+            "claude-sonnet-4-6",
+            Some((100, 10))
+        ),
+        compact_boundary_line(
+            &first_boundary,
+            Some(preserved_segment_json(&head, &summary, &tail))
+        ),
+        assistant_line(
+            summary.to_string().as_str(),
+            first_boundary.to_string().as_str(),
+            "first summary",
+            "claude-sonnet-4-6",
+            Some((11, 12))
+        ),
+        compact_boundary_line(&second_boundary, None),
+        assistant_line(
+            final_assistant.to_string().as_str(),
+            second_boundary.to_string().as_str(),
+            "second summary",
+            "claude-sonnet-4-6",
+            Some((3, 4))
+        ),
+    );
+    std::fs::write(&path, body).unwrap();
+
+    let state = load_session_state_for_resume(&path).expect("resume loads");
+
+    assert!(selected_contains(&state, &second_boundary));
+    assert!(selected_contains(&state, &final_assistant));
+    assert!(!selected_contains(&state, &first_boundary));
+    assert!(!selected_contains(&state, &summary));
+    assert!(!selected_contains(&state, &head));
+    assert!(!selected_contains(&state, &tail));
+    assert_eq!(state.total_input_tokens, 3);
+    assert_eq!(state.total_output_tokens, 4);
 }
 
 /// New: tool_use / tool_result blocks must round-trip on resume so

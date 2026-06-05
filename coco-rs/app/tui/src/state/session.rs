@@ -125,6 +125,17 @@ pub enum CompactionPhaseLabel {
     Summarizing,
 }
 
+impl CompactionPhaseLabel {
+    pub fn status_label(self) -> &'static str {
+        match self {
+            Self::PreCompactHooks => "Running PreCompact hooks",
+            Self::PostCompactHooks => "Running PostCompact hooks",
+            Self::SessionStartHooks => "Running SessionStart hooks",
+            Self::Summarizing => "Compacting conversation",
+        }
+    }
+}
+
 /// Current Unix epoch in milliseconds (best-effort — clamps to 0
 /// if the system clock is before the epoch, which only happens in
 /// pathological setups).
@@ -240,6 +251,8 @@ pub struct SessionState {
     pub fallback_model: Option<String>,
     /// Whether compaction is in progress.
     pub is_compacting: bool,
+    /// Start time for the current compaction operation, if visible in the UI.
+    pub compaction_started_at: Option<Instant>,
     /// Current compaction sub-phase (drives the spinner text). `None`
     /// when no compaction is running. Maps to TS REPL.tsx:2502
     /// `spinnerMessage` switch on `onCompactProgress` events.
@@ -541,6 +554,7 @@ impl Default for SessionState {
             busy: false,
             fallback_model: None,
             is_compacting: false,
+            compaction_started_at: None,
             compaction_phase: None,
             compact_warning_suppressed: false,
             mcp_servers: Vec::new(),
