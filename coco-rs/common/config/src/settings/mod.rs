@@ -414,6 +414,11 @@ pub struct AutoModeConfig {
     /// Which classifier stages run: `both` (default, two-stage escalation),
     /// `fast` (single 256-token call), or `thinking` (stage-2 only).
     pub classifier_mode: coco_types::ClassifierMode,
+    /// On a transient classifier outage, fail OPEN to a manual prompt
+    /// (interactive) instead of denying. Default `false` = fail closed,
+    /// matching TS's shipped `tengu_iron_gate_closed` default (coco's
+    /// settings-based replacement for that GrowthBook gate).
+    pub classifier_unavailable_fail_open: bool,
 }
 
 /// An allowed MCP server entry in settings.

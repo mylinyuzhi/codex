@@ -78,8 +78,6 @@ pub struct AppState {
     pub denial_consecutive: i32,
     #[serde(default)]
     pub denial_total: i32,
-    #[serde(default)]
-    pub denial_circuit_breaker_tripped: bool,
 
     // ── Feature Flags ──
     #[serde(default)]

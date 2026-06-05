@@ -121,6 +121,13 @@ pub struct AutoModeRules {
     /// `twoStageClassifier`. Defaults to `Both` (two-stage escalation).
     #[serde(default)]
     pub classifier_mode: ClassifierMode,
+    /// When the LLM classifier is unavailable (transient transport/capacity
+    /// outage), fail OPEN to a manual prompt in interactive sessions instead
+    /// of denying. Default `false` = fail closed (deny), matching TS's shipped
+    /// `tengu_iron_gate_closed` default. Coco replaces that GrowthBook gate
+    /// with this setting. Independent of `classifier_mode`.
+    #[serde(default)]
+    pub classifier_unavailable_fail_open: bool,
 }
 
 /// A compressed transcript entry for the classifier.

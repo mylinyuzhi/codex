@@ -2102,6 +2102,7 @@ impl SessionRuntime {
                 soft_deny: c.soft_deny.clone(),
                 environment: c.environment.clone(),
                 classifier_mode: c.classifier_mode,
+                classifier_unavailable_fail_open: c.classifier_unavailable_fail_open,
             })
             .unwrap_or_default();
         engine = engine.with_auto_mode(

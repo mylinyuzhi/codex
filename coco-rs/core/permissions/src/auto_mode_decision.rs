@@ -144,10 +144,16 @@ where
             auto_ctx.avoid_permission_prompts,
         ));
     }
-    //    Transient outage → fail-open to a manual prompt when interactive;
-    //    fail-closed (deny) in headless where no prompt is possible. TS
-    //    distinguishes this from a malicious block (`permissions.ts:843-876`).
+    //    Transient outage. TS gates this on `tengu_iron_gate_closed` (default
+    //    true = fail closed: deny even in interactive mode); only the rare
+    //    open-gate path falls back to a prompt (`permissions.ts:843-876`).
+    //    Coco replaces the GrowthBook gate with the
+    //    `classifier_unavailable_fail_open` setting (default false = fail
+    //    closed, matching TS's shipped posture). Opting into fail-open
+    //    restores a manual prompt when interactive; headless always denies.
     if result.unavailable {
+        let avoid_prompts =
+            !rules.classifier_unavailable_fail_open || auto_ctx.avoid_permission_prompts;
         return Some(require_interactive_or_deny(
             format!(
                 "Auto-mode classifier unavailable ({}) — manual approval required",
@@ -157,7 +163,7 @@ where
                 classifier: AUTO_MODE_CLASSIFIER.into(),
                 reason: "unavailable".into(),
             },
-            auto_ctx.avoid_permission_prompts,
+            avoid_prompts,
         ));
     }
 
