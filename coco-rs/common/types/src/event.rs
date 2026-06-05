@@ -2325,7 +2325,7 @@ pub enum SkillsDialogSource {
     /// Compiled-in bundled skill catalog. TS `bundled` / `builtin`
     /// collapsed to a single label (display: `built-in`).
     BuiltIn,
-    /// `<cwd>/.claude/skills/` — TS `projectSettings`.
+    /// `<cwd>/.coco/skills/` — project skills.
     Project,
     /// `~/.coco/skills/` — TS `userSettings`.
     User,

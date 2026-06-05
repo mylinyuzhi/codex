@@ -241,7 +241,10 @@ impl Default for BashConfig {
             default_timeout_ms: DEFAULT_BASH_TIMEOUT_MS,
             max_timeout_ms: DEFAULT_BASH_MAX_TIMEOUT_MS,
             max_output_bytes: DEFAULT_BASH_MAX_OUTPUT_BYTES,
-            auto_background_on_timeout: false,
+            // TS `shouldAutoBackground` defaults ON: a foreground command that
+            // hits its timeout is moved to the background rather than killed.
+            // Set false to restore hard-kill-on-timeout.
+            auto_background_on_timeout: true,
         }
     }
 }

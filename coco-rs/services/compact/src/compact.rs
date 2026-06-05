@@ -65,7 +65,11 @@ pub struct CompactRunOptions {
     pub max_summary_tokens: i64,
     /// Context window size of the model running the summarizer.
     pub context_window: i64,
-    /// Number of recent rounds to preserve (not compacted).
+    /// Number of recent rounds to preserve as original messages.
+    ///
+    /// TS full compact has no `keepRecent` equivalent and keeps no
+    /// recent original rounds; non-zero values are for explicit
+    /// internal callers/tests only.
     pub keep_recent_rounds: usize,
     /// Custom compact prompt override (merged from PreCompact hooks +
     /// `/compact <instructions>`).
@@ -88,7 +92,7 @@ impl Default for CompactRunOptions {
         Self {
             max_summary_tokens: MAX_OUTPUT_TOKENS_FOR_SUMMARY,
             context_window: 200_000,
-            keep_recent_rounds: 2,
+            keep_recent_rounds: 0,
             custom_prompt: None,
             suppress_follow_up: true,
             trigger: CompactTrigger::Auto,
@@ -1208,3 +1212,7 @@ fn parse_prompt_too_long_token_gap(message: &str) -> Option<i64> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "compact.test.rs"]
+mod tests;

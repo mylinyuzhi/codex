@@ -23,6 +23,7 @@
 //! | `AgentSummary` | `services/AgentSummary/agentSummary.ts:109` | deny-all (30s timer fork) |
 //! | `AutoDream` | `services/autoDream/autoDream.ts:224` | auto-mem with broader memory_root |
 //! | `Speculation` | `services/PromptSuggestion/speculation.ts:457` | 3-boundary (Edit/Write rewrites to overlay; Bash via shell-parser read-only check; deny default) |
+//! | `HookAgent` | `utils/hooks/execAgentHook.ts` | scoped StructuredOutput verifier |
 //!
 //! Order is deliberate: PromptSuggestion / SideQuestion / Compact are
 //! the simplest deny-all callers; the memory family follows; finally
@@ -61,6 +62,9 @@ pub enum ForkLabel {
     /// sandbox so accept can instant-inject the result. Gated by
     /// `Feature::Speculation`.
     Speculation,
+    /// Agent-type hook verifier. Runs as an isolated child query with
+    /// a scoped StructuredOutput tool/enforcement hook.
+    HookAgent,
 }
 
 impl ForkLabel {
@@ -78,6 +82,7 @@ impl ForkLabel {
             ForkLabel::AgentSummary => "agent_summary",
             ForkLabel::AutoDream => "auto_dream",
             ForkLabel::Speculation => "speculation",
+            ForkLabel::HookAgent => "hook_agent",
         }
     }
 }

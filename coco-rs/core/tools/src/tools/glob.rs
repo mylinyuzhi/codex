@@ -97,6 +97,10 @@ impl Tool for GlobTool {
     /// pass-through, matching the pre-typed behaviour.
     type Output = String;
 
+    fn to_auto_classifier_input(&self, input: &GlobInput) -> Option<String> {
+        Some(input.pattern.clone())
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Glob)
     }

@@ -411,6 +411,48 @@ fn test_context_compacted_toast() {
     assert!(state.ui.has_toasts());
 }
 
+#[test]
+fn test_compaction_protocol_updates_running_state() {
+    let mut state = AppState::new();
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::CompactionStarted),
+    );
+    assert!(state.session.is_compacting);
+    assert!(state.session.compaction_started_at.is_some());
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::CompactionPhase(
+            coco_types::CompactionPhaseParams {
+                phase: coco_types::CompactionPhase::Summarizing,
+                hook_type: None,
+            },
+        )),
+    );
+    assert_eq!(
+        state.session.compaction_phase,
+        Some(crate::state::session::CompactionPhaseLabel::Summarizing)
+    );
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Protocol(ServerNotification::ContextCompacted(
+            coco_types::ContextCompactedParams {
+                removed_messages: 2,
+                summary_tokens: 10,
+                trigger: coco_types::CompactTrigger::Manual,
+                pre_tokens: Some(100),
+                post_tokens: Some(40),
+            },
+        )),
+    );
+    assert!(!state.session.is_compacting);
+    assert!(state.session.compaction_started_at.is_none());
+    assert!(state.session.compaction_phase.is_none());
+}
+
 /// Regression: a stream delta arriving before TurnStarted must not be
 /// silently dropped. Before the fix, handle_stream would no-op when
 /// `state.ui.streaming` was None, so the first delta content was lost

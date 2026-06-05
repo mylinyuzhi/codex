@@ -45,3 +45,69 @@ async fn authenticate_stdio_reports_oauth_not_needed() {
         "MCP server 'local' does not use OAuth authentication."
     );
 }
+
+#[tokio::test]
+async fn ensure_xaa_tokens_skips_exchange_when_stored_tokens_exist() {
+    let home = tempfile::tempdir().unwrap();
+    coco_rmcp_client::save_oauth_access_token(coco_rmcp_client::OAuthAccessTokenSave {
+        server_name: "enterprise",
+        url: "https://mcp.example.test",
+        client_id: "as-client",
+        access_token: "stored-token".to_string(),
+        refresh_token: None,
+        expires_in: Some(3600),
+        scopes: None,
+        store_mode: OAuthCredentialsStoreMode::File,
+        config_home: home.path(),
+    })
+    .unwrap();
+
+    let oauth = McpOAuthConfig {
+        client_id: Some("as-client".into()),
+        xaa: Some(crate::types::McpXaaConfig {
+            client_id: None,
+            client_secret: Some("as-secret".into()),
+            idp_client_id: Some("idp-client".into()),
+            idp_client_secret: None,
+            idp_id_token: None,
+            idp_token_endpoint: Some("https://idp.example.test/token".into()),
+            scope: None,
+        }),
+    };
+
+    let result = ensure_xaa_tokens(
+        "enterprise",
+        "https://mcp.example.test",
+        Some(&oauth),
+        home.path(),
+    )
+    .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn ensure_xaa_tokens_errors_on_missing_idp_token_without_stored_tokens() {
+    let home = tempfile::tempdir().unwrap();
+    let oauth = McpOAuthConfig {
+        client_id: Some("as-client".into()),
+        xaa: Some(crate::types::McpXaaConfig {
+            client_id: None,
+            client_secret: Some("as-secret".into()),
+            idp_client_id: Some("idp-client".into()),
+            idp_client_secret: None,
+            idp_id_token: None,
+            idp_token_endpoint: Some("https://idp.example.test/token".into()),
+            scope: None,
+        }),
+    };
+
+    let err = ensure_xaa_tokens(
+        "enterprise-missing",
+        "https://mcp-missing.example.test",
+        Some(&oauth),
+        home.path(),
+    )
+    .await
+    .expect_err("missing idp token should fail before exchange");
+    assert!(err.to_string().contains("oauth.xaa.idpIdToken"));
+}

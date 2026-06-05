@@ -73,6 +73,10 @@ impl Tool for EditTool {
     coco_tool_runtime::impl_runtime_schema!(EditInput);
     type Output = EditOutput;
 
+    fn to_auto_classifier_input(&self, input: &EditInput) -> Option<String> {
+        Some(format!("{}: {}", input.file_path, input.new_string))
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Edit)
     }
@@ -372,7 +376,7 @@ impl Tool for EditTool {
         crate::record_file_edit(ctx, path, new_content).await;
         // TS `FileEditTool.ts` mirrors `FileReadTool.ts:578-591` skill
         // auto-discovery + conditional-skill activation — when an
-        // edit touches a path under a nested `.claude/skills/`
+        // edit touches a path under a nested `.coco/skills/`
         // ancestor or matches a `paths`-gated skill, the next batch
         // boundary picks both up.
         crate::track_skill_triggers(ctx, path).await;

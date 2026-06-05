@@ -460,7 +460,10 @@ impl App {
         // Self-schedule the next frame while a turn is running or a
         // stream is in flight. This replaces the unconditional
         // `spinner_interval.tick()` arm of the main loop.
-        if self.state.ui.ephemeral.turn_active() || self.state.ui.streaming.is_some() {
+        if self.state.ui.ephemeral.turn_active()
+            || self.state.ui.streaming.is_some()
+            || self.state.session.is_compacting
+        {
             self.frame_requester
                 .schedule_frame_in(constants::SPINNER_TICK_INTERVAL);
         }

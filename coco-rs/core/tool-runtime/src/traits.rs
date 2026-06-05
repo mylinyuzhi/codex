@@ -319,7 +319,7 @@ pub trait DynTool: Send + Sync + 'static {
 
     async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult;
     fn prepare_permission_matcher(&self, input: &Value) -> String;
-    fn to_auto_classifier_input(&self, input: &Value) -> String;
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String>;
 
     // -- Execution --
 
@@ -723,9 +723,16 @@ pub trait Tool: Send + Sync + 'static {
         self.name().to_string()
     }
 
-    /// Generate representation for auto-mode security classifier.
-    fn to_auto_classifier_input(&self, _input: &Self::Input) -> String {
-        self.name().to_string()
+    /// Project this tool's input down to the security-relevant fields the
+    /// auto-mode classifier should see (TS `Tool.toAutoClassifierInput`).
+    ///
+    /// `None` means "no classifier-relevant input" — the classifier then
+    /// falls back to the raw input JSON. Security-relevant tools (anything
+    /// that mutates the filesystem, executes code, or reaches the network)
+    /// should override this with a curated `Some(...)` so the gate judges a
+    /// minimal, well-formed projection rather than an over-broad blob.
+    fn to_auto_classifier_input(&self, _input: &Self::Input) -> Option<String> {
+        None
     }
 
     // -- Execution --
@@ -981,10 +988,16 @@ impl<T: Tool> DynTool for T {
             .map(|t| Tool::prepare_permission_matcher(self, &t))
             .unwrap_or_else(|_| self.name().to_string())
     }
-    fn to_auto_classifier_input(&self, input: &Value) -> String {
-        serde_json::from_value::<T::Input>(input.clone())
-            .map(|t| Tool::to_auto_classifier_input(self, &t))
-            .unwrap_or_else(|_| self.name().to_string())
+    fn to_auto_classifier_input(&self, input: &Value) -> Option<String> {
+        match serde_json::from_value::<T::Input>(input.clone()) {
+            Ok(typed) => Tool::to_auto_classifier_input(self, &typed),
+            // Deserialization failure must NOT become `None`: `None` reads as
+            // "no security relevance" downstream. A malformed input is exactly
+            // what the gate must still inspect, so fall back to the raw JSON
+            // (fail toward classification). TS `toCompactBlock` does the same
+            // (`catch { encoded = input }`).
+            Err(_) => Some(serde_json::to_string(input).unwrap_or_default()),
+        }
     }
 
     async fn execute(

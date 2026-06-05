@@ -74,6 +74,13 @@ impl Tool for SkillTool {
     coco_tool_runtime::impl_runtime_schema!(SkillInput);
     type Output = SkillOutput;
 
+    fn to_auto_classifier_input(&self, input: &SkillInput) -> Option<String> {
+        Some(match &input.args {
+            Some(args) => format!("{} {args}", input.skill),
+            None => input.skill.clone(),
+        })
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Skill)
     }

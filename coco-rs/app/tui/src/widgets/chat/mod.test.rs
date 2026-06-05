@@ -1,8 +1,11 @@
 use super::TRANSCRIPT_LINE_CHAR_CAP;
+use super::attachment_summary_text;
+use super::compact_file_reference_chip_path;
 use super::nested_memory_chip_path;
 use super::single_line_capped;
 use super::transcript_safe_line;
 use coco_messages::AttachmentMessage;
+use coco_messages::CompactFileReferencePayload;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_types::AttachmentKind;
@@ -59,4 +62,77 @@ fn nested_memory_chip_path_extracts_path_for_memory_kinds_only() {
         LlmMessage::user_text("The date has changed to 2026-06-02."),
     ));
     assert_eq!(nested_memory_chip_path(&other, Some("/repo")), None);
+}
+
+#[test]
+fn compact_file_reference_chip_path_uses_typed_payload() {
+    let message = Message::Attachment(AttachmentMessage::compact_file_reference(
+        CompactFileReferencePayload {
+            filename: "/repo/src/lib.rs".to_string(),
+            display_path: "src/lib.rs".to_string(),
+        },
+        LlmMessage::user_text(
+            "<system-reminder>\nCalled the Read tool with the following input: {\"file_path\":\"/repo/src/lib.rs\"}\n</system-reminder>",
+        ),
+    ));
+
+    assert_eq!(
+        compact_file_reference_chip_path(&message, Some("/repo")).as_deref(),
+        Some("src/lib.rs")
+    );
+    assert_eq!(attachment_summary_text(&message), None);
+}
+
+#[test]
+fn compact_file_reference_chip_path_supports_multiple_attachments() {
+    let messages = [
+        Message::Attachment(AttachmentMessage::compact_file_reference(
+            CompactFileReferencePayload {
+                filename: "/repo/Cargo.toml".to_string(),
+                display_path: "Cargo.toml".to_string(),
+            },
+            LlmMessage::user_text(""),
+        )),
+        Message::Attachment(AttachmentMessage::compact_file_reference(
+            CompactFileReferencePayload {
+                filename: "/repo/src/lib.rs".to_string(),
+                display_path: "src/lib.rs".to_string(),
+            },
+            LlmMessage::user_text(""),
+        )),
+    ];
+
+    let paths = messages
+        .iter()
+        .map(|message| compact_file_reference_chip_path(message, Some("/repo")))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        paths,
+        vec![
+            Some("Cargo.toml".to_string()),
+            Some("src/lib.rs".to_string())
+        ]
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| attachment_summary_text(message).is_none())
+    );
+}
+
+#[test]
+fn compact_file_reference_chip_path_supports_legacy_body() {
+    let message = Message::Attachment(AttachmentMessage::api(
+        AttachmentKind::CompactFileReference,
+        LlmMessage::user_text(
+            "<system-reminder>\nCalled the Read tool with the following input: {\"file_path\":\"/repo/src/main.rs\"}\nResult of calling the Read tool:\nfn main() {}\n</system-reminder>",
+        ),
+    ));
+
+    assert_eq!(
+        compact_file_reference_chip_path(&message, Some("/repo")).as_deref(),
+        Some("src/main.rs")
+    );
+    assert_eq!(attachment_summary_text(&message), None);
 }

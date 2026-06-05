@@ -14,6 +14,7 @@ use tracing::warn;
 
 use crate::types::ConfigScope;
 use crate::types::McpHttpConfig;
+use crate::types::McpOAuthConfig;
 use crate::types::McpServerConfig;
 use crate::types::McpSseConfig;
 use crate::types::McpStdioConfig;
@@ -133,7 +134,19 @@ fn load_mcp_json(
     };
 
     for (name, server_config) in servers {
-        if let Some(config) = parse_server_config(server_config) {
+        if let Some(mut config) = parse_server_config(server_config) {
+            // Expand ${VAR} / ${VAR:-default} references against the process
+            // environment before the config reaches the launch/transport layer.
+            let missing =
+                crate::env_expansion::expand_config(&mut config, &crate::env_expansion::ProcessEnv);
+            if !missing.is_empty() {
+                warn!(
+                    server = %name,
+                    ?scope,
+                    missing_vars = ?missing,
+                    "MCP config references unset environment variables; left as literal ${{...}}"
+                );
+            }
             debug!(server = %name, ?scope, "loaded MCP server config");
             configs.insert(
                 name.clone(),
@@ -166,6 +179,7 @@ fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
 
     if let Some(url) = value.get("url").and_then(|u| u.as_str()) {
         let headers = parse_headers(value);
+        let oauth = parse_oauth(value);
         let transport_type = value
             .get("transport")
             .and_then(|t| t.as_str())
@@ -175,10 +189,12 @@ fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
             "http" => Some(McpServerConfig::Http(McpHttpConfig {
                 url: url.to_string(),
                 headers,
+                oauth,
             })),
             _ => Some(McpServerConfig::Sse(McpSseConfig {
                 url: url.to_string(),
                 headers,
+                oauth,
             })),
         };
     }
@@ -210,6 +226,17 @@ fn parse_stdio_config(value: &serde_json::Value) -> Option<McpServerConfig> {
 
 fn parse_headers(value: &serde_json::Value) -> HashMap<String, String> {
     parse_string_map(value, "headers")
+}
+
+fn parse_oauth(value: &serde_json::Value) -> Option<McpOAuthConfig> {
+    let oauth = value.get("oauth")?;
+    match serde_json::from_value(oauth.clone()) {
+        Ok(config) => Some(config),
+        Err(error) => {
+            warn!(error = %error, "failed to parse MCP OAuth config");
+            None
+        }
+    }
 }
 
 fn parse_string_map(value: &serde_json::Value, key: &str) -> HashMap<String, String> {

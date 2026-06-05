@@ -68,7 +68,7 @@ fn test_skill_from_project() {
         "Deploy to production",
         "Run the deploy script.",
         SkillSource::Project {
-            path: "/project/.claude/skills/deploy.md".into(),
+            path: "/project/.coco/skills/deploy/SKILL.md".into(),
         },
     );
     skill.model = Some("anthropic/claude-opus-4-7".into());
@@ -383,18 +383,7 @@ fn test_discover_skills_nonexistent_dir() {
 
 #[test]
 fn test_load_from_dirs_with_legacy() {
-    let commands_dir = tempfile::tempdir().unwrap();
-    // Simulate .claude/commands/ with flat .md
-    std::fs::write(
-        commands_dir.path().join("old-cmd.md"),
-        "# old-cmd\n\nLegacy command.\n",
-    )
-    .unwrap();
-
     let mgr = SkillManager::new();
-    // Simulate path ending in "commands"
-    let _cmd_path = commands_dir.path().to_path_buf();
-    // load_from_dirs checks if path ends with "commands"
     let commands_path = tempfile::tempdir().unwrap();
     let actual_cmd_dir = commands_path.path().join("commands");
     std::fs::create_dir(&actual_cmd_dir).unwrap();
@@ -405,8 +394,8 @@ fn test_load_from_dirs_with_legacy() {
     .unwrap();
     mgr.load_from_dirs(&[actual_cmd_dir]);
 
-    assert_eq!(mgr.len(), 1);
-    assert!(mgr.get("legacy").is_some());
+    assert_eq!(mgr.len(), 0);
+    assert!(mgr.get("legacy").is_none());
 }
 
 #[test]
@@ -584,10 +573,14 @@ fn test_get_skill_paths_includes_managed() {
 #[test]
 fn test_get_skill_paths_order() {
     let paths = get_skill_paths(Path::new("/home/user/.coco"), Path::new("/project"));
-    // managed, user, project, legacy
     assert_eq!(paths[1], PathBuf::from("/home/user/.coco/skills"));
-    assert_eq!(paths[2], PathBuf::from("/project/.claude/skills"));
-    assert_eq!(paths[3], PathBuf::from("/project/.claude/commands"));
+    assert_eq!(paths[2], PathBuf::from("/project/.coco/skills"));
+    assert!(
+        !paths
+            .iter()
+            .skip(1)
+            .any(|p| p.to_string_lossy().contains(".claude"))
+    );
 }
 
 // ── Paths with brace expansion ──
@@ -611,7 +604,7 @@ Test.
 // ── R7-T10: discover_skill_dirs_for_paths ──
 //
 // TS `loadSkillsDir.ts:861-915` walks up from each file path collecting
-// `<ancestor>/.claude/skills/` directories that exist. The walk stops
+// `<ancestor>/.coco/skills/` directories that exist. The walk stops
 // at (but excludes) cwd, since cwd-level skills are loaded at startup.
 // The tests below cover the core walk, the cwd boundary, deepest-first
 // ordering, and the missing-dir fast path.
@@ -623,13 +616,13 @@ fn test_discover_skill_dirs_finds_nested() {
     // Create a nested project with a skills dir at the inner level only.
     let project = cwd.join("project");
     let inner = project.join("subdir");
-    std::fs::create_dir_all(inner.join(".claude").join("skills")).unwrap();
+    std::fs::create_dir_all(inner.join(".coco").join("skills")).unwrap();
     let file = inner.join("foo.rs");
     std::fs::write(&file, "// touched by Read").unwrap();
 
     let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0], inner.join(".claude").join("skills"));
+    assert_eq!(result[0], inner.join(".coco").join("skills"));
 }
 
 #[test]
@@ -638,7 +631,7 @@ fn test_discover_skill_dirs_excludes_cwd_level() {
     let cwd = dir.path();
     // Skills dir AT cwd should NOT be returned — cwd-level skills are
     // loaded at startup, the dynamic walker only finds nested ones.
-    std::fs::create_dir_all(cwd.join(".claude").join("skills")).unwrap();
+    std::fs::create_dir_all(cwd.join(".coco").join("skills")).unwrap();
     let file = cwd.join("readme.md");
     std::fs::write(&file, "").unwrap();
 
@@ -656,16 +649,16 @@ fn test_discover_skill_dirs_deepest_first() {
     // Two skills dirs at different depths.
     let outer = cwd.join("project");
     let inner = outer.join("module");
-    std::fs::create_dir_all(outer.join(".claude").join("skills")).unwrap();
-    std::fs::create_dir_all(inner.join(".claude").join("skills")).unwrap();
+    std::fs::create_dir_all(outer.join(".coco").join("skills")).unwrap();
+    std::fs::create_dir_all(inner.join(".coco").join("skills")).unwrap();
     let file = inner.join("hot.rs");
     std::fs::write(&file, "").unwrap();
 
     let result = discover_skill_dirs_for_paths(&[file.as_path()], cwd);
     assert_eq!(result.len(), 2);
     // Inner (more components) must come before outer.
-    assert_eq!(result[0], inner.join(".claude").join("skills"));
-    assert_eq!(result[1], outer.join(".claude").join("skills"));
+    assert_eq!(result[0], inner.join(".coco").join("skills"));
+    assert_eq!(result[1], outer.join(".coco").join("skills"));
 }
 
 #[test]
@@ -715,7 +708,7 @@ fn test_discover_skill_dirs_dedupes_across_paths() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     let project = cwd.join("project");
-    std::fs::create_dir_all(project.join(".claude").join("skills")).unwrap();
+    std::fs::create_dir_all(project.join(".coco").join("skills")).unwrap();
     let file1 = project.join("a.rs");
     let file2 = project.join("b.rs");
     std::fs::write(&file1, "").unwrap();
@@ -725,7 +718,7 @@ fn test_discover_skill_dirs_dedupes_across_paths() {
     // Same skills dir should only appear once even though both files
     // resolve to it.
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0], project.join(".claude").join("skills"));
+    assert_eq!(result[0], project.join(".coco").join("skills"));
 }
 
 // ── TS-format SKILL.md compatibility ──
@@ -1079,7 +1072,7 @@ fn conditional_skill(name: &str, paths: Vec<&str>) -> SkillDefinition {
         "conditional skill",
         "do conditional work",
         SkillSource::Project {
-            path: format!("/proj/.claude/skills/{name}/SKILL.md").into(),
+            path: format!("/proj/.coco/skills/{name}/SKILL.md").into(),
         },
     );
     s.paths = paths.into_iter().map(str::to_string).collect();
@@ -1235,8 +1228,7 @@ paths: '*.{ts,tsx}'
 ---
 body
 ";
-    let skill =
-        parse_skill_markdown(content, Path::new("/proj/.claude/skills/ts/SKILL.md")).unwrap();
+    let skill = parse_skill_markdown(content, Path::new("/proj/.coco/skills/ts/SKILL.md")).unwrap();
     mgr.register(skill);
 
     let cwd = PathBuf::from("/proj");
@@ -1302,11 +1294,8 @@ paths: build/**
 ---
 body
 ";
-    let skill = parse_skill_markdown(
-        content,
-        Path::new("/proj/.claude/skills/buildskill/SKILL.md"),
-    )
-    .unwrap();
+    let skill =
+        parse_skill_markdown(content, Path::new("/proj/.coco/skills/buildskill/SKILL.md")).unwrap();
     assert_eq!(skill.paths, vec!["build".to_string()]);
     mgr.register(skill);
 
@@ -1345,4 +1334,43 @@ fn build_session_skill_manager_includes_bundled() {
         names.contains(&"keybindings-help"),
         "bundled skills missing from session manager: {names:?}"
     );
+}
+
+#[test]
+fn build_session_skill_manager_loads_parent_project_coco_skills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_home = tmp.path().join("config");
+    let project = tmp.path().join("project");
+    let nested = project.join("packages").join("app");
+    let parent_skill = project.join(".coco").join("skills").join("parent-skill");
+    std::fs::create_dir_all(&parent_skill).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        parent_skill.join("SKILL.md"),
+        "---\ndescription: parent project skill\n---\n\nbody",
+    )
+    .unwrap();
+
+    let manager = build_session_skill_manager(&config_home, &nested);
+    let skill = manager
+        .get("parent-skill")
+        .expect("parent project skill should load");
+    assert!(matches!(skill.source, SkillSource::Project { .. }));
+}
+
+#[test]
+fn build_session_skill_manager_ignores_legacy_project_claude_skills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_home = tmp.path().join("config");
+    let project = tmp.path().join("project");
+    let legacy_skill = project.join(".claude").join("skills").join("legacy-skill");
+    std::fs::create_dir_all(&legacy_skill).unwrap();
+    std::fs::write(
+        legacy_skill.join("SKILL.md"),
+        "---\ndescription: legacy project skill\n---\n\nbody",
+    )
+    .unwrap();
+
+    let manager = build_session_skill_manager(&config_home, &project);
+    assert!(manager.get("legacy-skill").is_none());
 }

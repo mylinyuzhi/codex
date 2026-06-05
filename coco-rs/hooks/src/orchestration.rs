@@ -42,6 +42,18 @@ use crate::execute_hook;
 /// TS: TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_HOOK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
+/// Default timeout for Prompt (LLM) hooks (30 seconds), independent of
+/// the generic tool-hook timeout.
+///
+/// TS: `execPromptHook.ts:55` — `hook.timeout ? hook.timeout * 1000 : 30000`.
+const DEFAULT_PROMPT_HOOK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default timeout for Agent (LLM-judge) hooks (60 seconds), independent
+/// of the generic tool-hook timeout.
+///
+/// TS: `execAgentHook.ts:75` — `hook.timeout ? hook.timeout * 1000 : 60000`.
+const DEFAULT_AGENT_HOOK_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Default timeout for SessionEnd hooks (1.5 seconds).
 ///
 /// TS: SESSION_END_HOOK_TIMEOUT_MS_DEFAULT = 1500
@@ -1003,11 +1015,6 @@ pub fn aggregate_results_for_event(
                     _ => {}
                 }
 
-                // Flat-format `permissionDecision` (legacy shell-hook
-                // emission). TS canonical `'allow' | 'deny'` — `ask`
-                // was a coco-rs extension that the typed SDK path
-                // doesn't support; we drop it here too so the wire
-                // vocabulary stays consistent across both paths.
                 match json.permission_decision.as_deref() {
                     Some("allow") => {
                         agg.permission_behavior = Some(merge_permission(
@@ -1019,6 +1026,12 @@ pub fn aggregate_results_for_event(
                         agg.permission_behavior = Some(merge_permission(
                             agg.permission_behavior,
                             PermissionBehavior::Deny,
+                        ));
+                    }
+                    Some("ask") => {
+                        agg.permission_behavior = Some(merge_permission(
+                            agg.permission_behavior,
+                            PermissionBehavior::Ask,
                         ));
                     }
                     _ => {}
@@ -1243,6 +1256,12 @@ fn apply_hook_specific_output(
                                 .unwrap_or_else(|| "Blocked by hook".to_string()),
                             source,
                         });
+                    }
+                    HookPermissionDecision::Ask => {
+                        agg.permission_behavior = Some(merge_permission(
+                            agg.permission_behavior,
+                            PermissionBehavior::Ask,
+                        ));
                     }
                 }
             }
@@ -3291,19 +3310,25 @@ async fn run_hook_via_handle_or_fallback(
     })
 }
 
-/// Resolve timeout for a hook handler — uses the handler's explicit timeout if set.
+/// Resolve timeout for a hook handler — uses the handler's explicit
+/// timeout if set, otherwise a handler-type default.
+///
+/// Command / Http / SdkCallback fall back to the event-supplied
+/// `default`. Prompt and Agent hooks are LLM-driven and carry their own
+/// TS defaults (30s / 60s) independent of the generic 10-minute
+/// tool-hook timeout, so an unconfigured judge can't hang for minutes.
 fn resolve_timeout(handler: &HookHandler, default: Duration) -> Duration {
-    let explicit = match handler {
-        HookHandler::Command { timeout_ms, .. } => *timeout_ms,
-        HookHandler::Http { timeout_ms, .. } => *timeout_ms,
-        HookHandler::Prompt { timeout_ms, .. } => *timeout_ms,
-        HookHandler::Agent { timeout_ms, .. } => *timeout_ms,
-        HookHandler::SdkCallback { timeout_ms, .. } => *timeout_ms,
+    let (explicit, handler_default) = match handler {
+        HookHandler::Command { timeout_ms, .. } => (*timeout_ms, default),
+        HookHandler::Http { timeout_ms, .. } => (*timeout_ms, default),
+        HookHandler::Prompt { timeout_ms, .. } => (*timeout_ms, DEFAULT_PROMPT_HOOK_TIMEOUT),
+        HookHandler::Agent { timeout_ms, .. } => (*timeout_ms, DEFAULT_AGENT_HOOK_TIMEOUT),
+        HookHandler::SdkCallback { timeout_ms, .. } => (*timeout_ms, default),
     };
     explicit
         .and_then(|ms| u64::try_from(ms).ok())
         .map(Duration::from_millis)
-        .unwrap_or(default)
+        .unwrap_or(handler_default)
 }
 
 /// Derive the [`HookBlockingSource`] provenance for a handler. Every
@@ -3345,8 +3370,14 @@ fn process_execution_result(
             stderr,
         } => {
             // Exit code 2 is the TS "blocking error" convention.
-            let blocked = exit_code == 2;
-            let output = if exit_code == 0 { stdout } else { stderr };
+            let stdout_has_json_control =
+                matches!(parse_hook_output(&stdout), ParsedHookOutput::Json(_));
+            let blocked = exit_code == 2 && !stdout_has_json_control;
+            let output = if stdout_has_json_control || exit_code == 0 {
+                stdout
+            } else {
+                stderr
+            };
             SingleHookResult {
                 command: label.to_string(),
                 succeeded: exit_code == 0,

@@ -178,10 +178,16 @@ fn managed_skills_path_display() -> String {
 
 #[allow(dead_code)]
 fn project_skills_paths(cwd: &Path) -> Vec<String> {
-    vec![
-        cwd.join(".coco").join("skills").display().to_string(),
-        cwd.join(".claude").join("skills").display().to_string(),
-    ]
+    coco_skills::watcher::session_reload_scopes(Path::new(""), cwd)
+        .into_iter()
+        .filter_map(|scope| match scope {
+            coco_skills::watcher::SkillReloadScope::Project(path) => {
+                Some(path.display().to_string())
+            }
+            coco_skills::watcher::SkillReloadScope::Managed(_)
+            | coco_skills::watcher::SkillReloadScope::User(_) => None,
+        })
+        .collect()
 }
 
 /// Drop-in helper that lets a downstream consumer (TUI overlay
@@ -263,7 +269,7 @@ fn render_list(manager: &SkillManager) -> String {
     if skills.is_empty() {
         return "No skills found.\n\
                 Place SKILL.md directories in ~/.coco/skills (user) or \
-                .claude/skills (project)."
+                <project>/.coco/skills (project)."
             .to_string();
     }
     skills.sort_by(|a, b| a.name.cmp(&b.name));
@@ -328,20 +334,15 @@ fn render_show(manager: &SkillManager, name: &str) -> String {
 }
 
 fn render_paths(config_home: &Path, cwd: &Path) -> String {
-    let mut out = String::from("Skill search paths (later sources override earlier):\n\n");
+    let mut out = String::from("Skill search paths (earlier sources have priority):\n\n");
     out.push_str("  bundled  (compiled-in catalog)\n");
     out.push_str(&format!(
         "  user     {}\n",
         config_home.join("skills").display()
     ));
-    out.push_str(&format!(
-        "  project  {}\n",
-        cwd.join(".coco").join("skills").display()
-    ));
-    out.push_str(&format!(
-        "  project  {}  (legacy)\n",
-        cwd.join(".claude").join("skills").display()
-    ));
+    for path in project_skills_paths(cwd) {
+        out.push_str(&format!("  project  {path}\n"));
+    }
     out
 }
 

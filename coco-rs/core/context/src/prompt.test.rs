@@ -30,6 +30,54 @@ fn env_for_snapshot() -> EnvironmentInfo {
 }
 
 #[test]
+fn git_status_absent_renders_no_block() {
+    let env = empty_env();
+    let prompt = build_system_prompt("identity", &[], &env, None, None, None, None, &[]);
+    assert!(!prompt.full_text().contains("gitStatus:"));
+}
+
+#[test]
+fn git_status_present_renders_block_after_env() {
+    let mut env = env_for_snapshot();
+    env.git_status = Some(crate::GitStatus {
+        branch: "feat/x".to_string(),
+        main_branch: Some("main".to_string()),
+        user: Some("alice".to_string()),
+        status: " M src/lib.rs".to_string(),
+        recent_commits: "abc123 init".to_string(),
+    });
+    let prompt = build_system_prompt("ID", &[], &env, None, None, None, None, &[]);
+    let text = prompt.full_text();
+
+    assert!(text.contains("gitStatus: This is the git status at the start of the conversation."));
+    assert!(text.contains("Current branch: feat/x"));
+    assert!(text.contains("Main branch (you will usually use this for PRs): main"));
+    assert!(text.contains("Git user: alice"));
+    assert!(text.contains("Status:\n M src/lib.rs"));
+    assert!(text.contains("Recent commits:\nabc123 init"));
+    // Rendered after the `<env>` block.
+    assert!(text.find("</env>").unwrap() < text.find("gitStatus:").unwrap());
+}
+
+#[test]
+fn git_status_empty_status_renders_clean() {
+    let mut env = empty_env();
+    env.git_status = Some(crate::GitStatus {
+        branch: "main".to_string(),
+        main_branch: None,
+        user: None,
+        status: String::new(),
+        recent_commits: String::new(),
+    });
+    let text = build_system_prompt("ID", &[], &env, None, None, None, None, &[]).full_text();
+    assert!(text.contains("Status:\n(clean)"));
+    // No user line when git user is absent.
+    assert!(!text.contains("Git user:"));
+    // Main-branch line still present (matches TS empty-string behavior).
+    assert!(text.contains("Main branch (you will usually use this for PRs): \n"));
+}
+
+#[test]
 fn no_output_style_yields_no_section() {
     let env = empty_env();
     let prompt = build_system_prompt("identity", &[], &env, None, None, None, None, &[]);

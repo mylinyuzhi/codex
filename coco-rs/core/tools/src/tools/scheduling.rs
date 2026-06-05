@@ -150,6 +150,10 @@ impl Tool for CronCreateTool {
     coco_tool_runtime::impl_runtime_schema!(CronCreateInput);
     type Output = CronCreateOutput;
 
+    fn to_auto_classifier_input(&self, input: &CronCreateInput) -> Option<String> {
+        Some(format!("{}: {}", input.cron, input.prompt))
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::CronCreate)
     }
@@ -317,6 +321,10 @@ impl Tool for CronDeleteTool {
     type Input = CronDeleteInput;
     coco_tool_runtime::impl_runtime_schema!(CronDeleteInput);
     type Output = CronDeleteOutput;
+
+    fn to_auto_classifier_input(&self, input: &CronDeleteInput) -> Option<String> {
+        Some(input.schedule_id.clone())
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::CronDelete)

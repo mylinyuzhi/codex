@@ -158,6 +158,17 @@ async fn test_factory_honors_is_non_interactive() {
 }
 
 #[tokio::test]
+async fn test_factory_honors_avoid_permission_prompts() {
+    // `avoid_permission_prompts` is independent of `is_non_interactive`:
+    // a session can be non-interactive yet still route `Ask` to a consumer.
+    let mut config = test_config();
+    config.avoid_permission_prompts = true;
+    let ctx = factory(config).build(Default::default()).await;
+    assert!(ctx.avoid_permission_prompts);
+    assert!(!ctx.is_non_interactive);
+}
+
+#[tokio::test]
 async fn test_factory_honors_max_budget_usd() {
     let mut config = test_config();
     config.max_budget_usd = Some(12.5);

@@ -81,6 +81,10 @@ impl Tool for BriefTool {
     coco_tool_runtime::impl_runtime_schema!(BriefInput);
     type Output = BriefOutput;
 
+    fn to_auto_classifier_input(&self, input: &BriefInput) -> Option<String> {
+        Some(input.message.clone())
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Brief)
     }

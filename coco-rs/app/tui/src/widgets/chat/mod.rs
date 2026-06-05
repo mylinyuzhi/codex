@@ -174,6 +174,7 @@ impl<'a> ChatWidget<'a> {
             cells: self.cells,
             options: TranscriptProjectionOptions {
                 show_system_reminders: self.show_system_reminders,
+                show_compact_internals: false,
             },
             streaming: self.streaming,
             show_thinking: self.show_thinking,
@@ -182,7 +183,7 @@ impl<'a> ChatWidget<'a> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         for cell in presentation.cells {
-            self.render_transcript_cell(&cell, false, false, &mut lines);
+            self.render_transcript_cell(self.cells, &cell, false, false, &mut lines);
         }
 
         lines
@@ -190,6 +191,7 @@ impl<'a> ChatWidget<'a> {
 
     fn render_transcript_cell(
         &self,
+        cells: &[RenderedCell],
         cell: &TranscriptSourceCell<'_>,
         expanded: bool,
         selected: bool,
@@ -198,12 +200,12 @@ impl<'a> ChatWidget<'a> {
         let start_line = lines.len();
         match cell {
             TranscriptSourceCell::Committed(TranscriptCell::MetaPreview { index }) => {
-                if let Some(c) = self.cells.get(*index) {
+                if let Some(c) = cells.get(*index) {
                     self.render_meta_preview(c, lines);
                 }
             }
             TranscriptSourceCell::Committed(TranscriptCell::Cell { index }) => {
-                if let Some(c) = self.cells.get(*index) {
+                if let Some(c) = cells.get(*index) {
                     self.render_cell_with_expansion(c, expanded, lines);
                     lines.push(Line::default());
                 }
@@ -213,7 +215,7 @@ impl<'a> ChatWidget<'a> {
                 result,
                 ..
             }) => {
-                self.render_tool_call(*invocation, *result, expanded, lines);
+                self.render_tool_call(cells, *invocation, *result, expanded, lines);
                 lines.push(Line::default());
             }
             TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { count, .. }) => {
@@ -259,6 +261,7 @@ impl<'a> ChatWidget<'a> {
 
     fn render_tool_call(
         &self,
+        cells: &[RenderedCell],
         invocation: Option<usize>,
         result: Option<usize>,
         expanded: bool,
@@ -266,20 +269,20 @@ impl<'a> ChatWidget<'a> {
     ) {
         if expanded {
             if let Some(index) = invocation
-                && let Some(c) = self.cells.get(index)
+                && let Some(c) = cells.get(index)
             {
                 self.render_cell(c, lines);
             }
             if let Some(index) = result
-                && let Some(c) = self.cells.get(index)
+                && let Some(c) = cells.get(index)
             {
                 self.render_cell(c, lines);
             }
             return;
         }
 
-        let invocation_cell = invocation.and_then(|index| self.cells.get(index));
-        let result_cell = result.and_then(|index| self.cells.get(index));
+        let invocation_cell = invocation.and_then(|index| cells.get(index));
+        let result_cell = result.and_then(|index| cells.get(index));
 
         if let Some(cell) = invocation_cell
             && let CellKind::ToolUse { tool_name, call_id } = &cell.kind
@@ -547,9 +550,46 @@ pub(crate) fn attachment_summary_text(source: &coco_messages::Message) -> Option
     let coco_messages::Message::Attachment(att) = source else {
         return None;
     };
+    if att.kind == AttachmentKind::CompactFileReference {
+        return None;
+    }
     let body = strip_system_reminder_wrapper(&att.as_text_for_display());
     let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
     Some(first.to_string())
+}
+
+/// Path for a post-compact file-reference chip, or `None` for other
+/// attachments. This mirrors TS `AttachmentMessage` rendering
+/// `compact_file_reference` as `Referenced file <displayPath>` while keeping
+/// the model-visible restore reminder out of the chat surface.
+pub(crate) fn compact_file_reference_chip_path(
+    source: &coco_messages::Message,
+    cwd: Option<&str>,
+) -> Option<String> {
+    let coco_messages::Message::Attachment(att) = source else {
+        return None;
+    };
+    if att.kind != AttachmentKind::CompactFileReference {
+        return None;
+    }
+    if let Some(coco_messages::AttachmentExtras::CompactFileReference(payload)) =
+        att.extras.as_ref()
+    {
+        return Some(payload.display_path.clone());
+    }
+
+    compact_file_reference_path_from_legacy_body(&att.as_text_for_display(), cwd)
+}
+
+fn compact_file_reference_path_from_legacy_body(text: &str, cwd: Option<&str>) -> Option<String> {
+    let body = strip_system_reminder_wrapper(text);
+    let first = body.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let json = first
+        .strip_prefix("Called the Read tool with the following input: ")
+        .or_else(|| first.split_once(" input: ").map(|(_, rest)| rest))?;
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let path = value.get("file_path")?.as_str()?;
+    Some(relativize_path(path, cwd))
 }
 
 /// Path for a memory-injection chip (nested CLAUDE.md / relevant memories), or

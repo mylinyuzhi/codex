@@ -222,7 +222,7 @@ pub enum SkillSource {
     Plugin {
         plugin_name: String,
     },
-    /// Enterprise/policy-managed skills (e.g., `/etc/claude-code/.claude/skills/`).
+    /// Enterprise/policy-managed skills.
     ///
     /// TS: `policySettings` source in `getSkillsPath()`.
     Managed {
@@ -296,6 +296,8 @@ struct SkillCatalog {
     /// connection manager (`services/mcp/client.ts`). MCP skills have
     /// no on-disk `paths` semantics (see `mcp_builders.rs`).
     mcp: HashMap<(String, String), Arc<SkillDefinition>>,
+    /// Canonical file identities already loaded for disk skills.
+    disk_file_identities: HashSet<PathBuf>,
 }
 
 impl SkillCatalog {
@@ -311,12 +313,17 @@ impl SkillCatalog {
         !skill.paths.is_empty() && !self.activated_conditional_names.contains(&skill.name)
     }
     /// Insert `skill` into the right bucket per [`Self::is_conditional`].
-    /// Removes any stale entry under the same name from BOTH buckets so
-    /// register-on-reload is idempotent regardless of the prior bucket.
+    /// First loaded skill wins by canonical file identity and skill name.
     fn insert_disk(&mut self, skill: SkillDefinition) {
         let name = skill.name.clone();
-        self.disk.remove(&name);
-        self.disk_conditional.remove(&name);
+        if self.disk.contains_key(&name) || self.disk_conditional.contains_key(&name) {
+            return;
+        }
+        if let Some(identity) = canonical_skill_identity(&skill)
+            && !self.disk_file_identities.insert(identity)
+        {
+            return;
+        }
         let target = if self.is_conditional(&skill) {
             &mut self.disk_conditional
         } else {
@@ -410,6 +417,7 @@ impl SkillManager {
         let mut guard = self.write_catalog();
         guard.disk.clear();
         guard.disk_conditional.clear();
+        guard.disk_file_identities.clear();
         for skill in fresh {
             guard.insert_disk(skill);
         }
@@ -584,31 +592,21 @@ impl SkillManager {
 
     /// Discover and register skills from multiple directories.
     ///
-    /// Uses SKILL.md directory format for standard skill dirs and legacy
-    /// format (flat .md) for `.claude/commands/` directories.
-    /// Skills from later directories overwrite earlier ones with the same name (last wins).
+    /// Uses SKILL.md directory format. Earlier directories win by
+    /// canonical path and by skill name.
     pub fn load_from_dirs(&self, dirs: &[PathBuf]) {
         for dir in dirs {
-            // Legacy .claude/commands/ supports flat .md files
-            let format = if dir.ends_with("commands") {
-                SkillDirFormat::Legacy
-            } else {
-                SkillDirFormat::SkillMdOnly
-            };
-            for skill in discover_skills_with_format(std::slice::from_ref(dir), format) {
+            for skill in
+                discover_skills_with_format(std::slice::from_ref(dir), SkillDirFormat::SkillMdOnly)
+            {
                 self.register(skill);
             }
         }
     }
 
-    /// TS-mirroring load: walk the four scopes in TS priority order
-    /// (managed → user → project → legacy), tagging each skill with the
+    /// Load scopes in priority order (managed → user → project), tagging each skill with the
     /// correct [`SkillSource`] variant.
-    ///
-    /// TS: `loadSkillsDir.ts` walks `getSkillsPath('policySettings'|'userSettings'|'projectSettings', 'skills'|'commands')`.
-    /// Last-wins semantics — later registrations override earlier ones, mirroring TS.
     pub fn load_scoped(&self, scopes: &SkillScopes) {
-        // Order matters — last-write-wins, so least-priority first.
         if let Some(p) = &scopes.managed {
             self.load_with_source(p, SkillDirFormat::SkillMdOnly, |path| {
                 SkillSource::Managed { path }
@@ -622,16 +620,6 @@ impl SkillManager {
         if let Some(p) = &scopes.project_skills {
             self.load_with_source(p, SkillDirFormat::SkillMdOnly, |path| {
                 SkillSource::Project { path }
-            });
-        }
-        // Legacy `.claude/commands/` dirs — load last but keep the flat `.md`
-        // format (TS: `LoadedFrom = 'commands_DEPRECATED'`).
-        if let Some(p) = &scopes.user_commands {
-            self.load_with_source(p, SkillDirFormat::Legacy, |path| SkillSource::User { path });
-        }
-        if let Some(p) = &scopes.project_commands {
-            self.load_with_source(p, SkillDirFormat::Legacy, |path| SkillSource::Project {
-                path,
             });
         }
     }
@@ -658,20 +646,31 @@ impl SkillManager {
 
 /// Per-scope skill directory configuration for `SkillManager::load_scoped`.
 ///
-/// TS: `getSkillsPath()` returns paths for `policySettings | userSettings | projectSettings`
-/// across `skills | commands` subdirectories.
+/// TS: `getSkillsPath()` returns paths for managed, user, and project skill sources.
 #[derive(Debug, Clone, Default)]
 pub struct SkillScopes {
     /// Enterprise/policy skills (highest priority).
     pub managed: Option<PathBuf>,
     /// `~/.coco/skills/`.
     pub user_skills: Option<PathBuf>,
-    /// `<cwd>/.claude/skills/`.
+    /// Project `.coco/skills` directories.
     pub project_skills: Option<PathBuf>,
-    /// `~/.coco/commands/` (legacy flat-md format).
+    /// Deprecated; ignored.
     pub user_commands: Option<PathBuf>,
-    /// `<cwd>/.claude/commands/` (legacy flat-md format).
+    /// Deprecated; ignored.
     pub project_commands: Option<PathBuf>,
+}
+
+fn canonical_skill_identity(skill: &SkillDefinition) -> Option<PathBuf> {
+    let path = match &skill.source {
+        SkillSource::User { path }
+        | SkillSource::Project { path }
+        | SkillSource::Managed { path } => path,
+        SkillSource::Bundled | SkillSource::Plugin { .. } | SkillSource::Mcp { .. } => {
+            return None;
+        }
+    };
+    Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
 }
 
 /// Parse a skill definition from a markdown file.
@@ -688,26 +687,27 @@ pub fn load_skill_from_file(path: &Path) -> crate::Result<SkillDefinition> {
     parse_skill_markdown(&content, path)
 }
 
-/// Whether a directory uses the SKILL.md-only format (`.claude/skills/`)
-/// or also allows flat `.md` files (`.claude/commands/` legacy).
+/// Whether a directory uses the canonical SKILL.md-only format or also allows
+/// parser-only flat `.md` compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillDirFormat {
-    /// Only `skill-name/SKILL.md` directories (TS `.claude/skills/` format).
+    /// Only `skill-name/SKILL.md` directories.
     SkillMdOnly,
-    /// Both `SKILL.md` directories and flat `.md` files (legacy `.claude/commands/`).
+    /// Both `SKILL.md` directories and flat `.md` files. Session/project
+    /// discovery does not use this mode.
     Legacy,
 }
 
 /// Walk directories and discover skill files, deduplicating by canonical path.
 ///
-/// TS: `getSkillDirCommands()` — discovers skills from multiple directories,
-/// deduplicates by `realpath()`, supports both SKILL.md directories and flat .md files.
+/// TS: `getSkillDirCommands()` — discovers skills from multiple directories
+/// and deduplicates by `realpath()`.
 pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
     discover_skills_with_format(dirs, SkillDirFormat::SkillMdOnly)
 }
 
 /// Walk up from each file path to the cwd boundary and collect any
-/// `<ancestor>/.claude/skills/` directories that exist on disk.
+/// `<ancestor>/.coco/skills/` directories that exist on disk.
 ///
 /// TS: `loadSkillsDir.ts:861-915` `discoverSkillDirsForPaths`. The
 /// scanner runs on every Read/Write/Edit so the model can pick up
@@ -719,7 +719,7 @@ pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
 ///    (i.e. `current_dir.starts_with(cwd + sep)`). The cwd boundary is
 ///    excluded because cwd-level skills are already loaded at startup —
 ///    only nested ones are interesting here.
-/// 3. At each level, check `<currentDir>/.claude/skills` and add it to
+/// 3. At each level, check `<currentDir>/.coco/skills` and add it to
 ///    the result list if the directory exists.
 /// 4. Sort the results by path depth (deepest first) so deeper skills
 ///    take precedence when the manager loads them.
@@ -755,7 +755,7 @@ pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<Pa
                 break;
             }
 
-            let skill_dir = current_dir.join(".claude").join("skills");
+            let skill_dir = current_dir.join(".coco").join("skills");
             if seen.insert(skill_dir.clone()) && skill_dir.is_dir() {
                 result.push(skill_dir);
             }
@@ -817,7 +817,7 @@ pub fn discover_skills_with_format(
                     && entry_path.extension().is_some_and(|ext| ext == "md")
                     && entry_path.is_file()
                 {
-                    // Legacy: flat .md files in .claude/commands/
+                    // Parser-only compatibility for explicitly supplied legacy dirs.
                     try_load_skill(&entry_path, &mut skills, &mut seen_paths);
                 }
             }
@@ -934,7 +934,7 @@ fn derive_skill_name_from_path(path: &Path) -> crate::Result<String> {
         return Ok(dir_name.to_string());
     }
 
-    // Flat `.md` (legacy `.claude/commands/foo.md`): strip the extension.
+    // Flat `.md` parser compatibility: strip the extension.
     let stem = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
         crate::SkillsError::generic(format!("skill path {} has no file stem", path.display()))
     })?;
@@ -971,7 +971,8 @@ fn parse_argument_names_field(value: &str) -> Vec<String> {
 /// - The skill `name` comes from the file path, never from a heading or
 ///   from the frontmatter `name` field:
 ///     - `<dir>/SKILL.md` (case-insensitive) → `<dir>` basename
-///     - `<dir>/<stem>.md` → `<stem>` (legacy `.claude/commands/` flat layout)
+///     - `<dir>/<stem>.md` → `<stem>` (parser compatibility; not used by
+///       session/project discovery)
 /// - Frontmatter `name`, if present, is silently ignored. (TS exposes it
 ///   as `displayName` on the command record; coco-rs `SkillDefinition`
 ///   has no separate displayName field, so we drop it to avoid a
@@ -1196,9 +1197,8 @@ pub fn get_managed_skills_path() -> PathBuf {
     }
 }
 
-/// Build the canonical per-session skill catalog: bundled skills plus the
-/// managed / user / project disk scopes (both `.claude/skills` and the
-/// coco-native `.coco/skills`, plus legacy flat-`.md` command dirs).
+/// Build the canonical per-session skill catalog: bundled skills plus
+/// managed, user, and project `.coco/skills` disk scopes.
 ///
 /// Single source of truth so the command registry, the `/context` usage
 /// detail, the `/skills` dialog, and the reminder `SkillsSource` all read
@@ -1209,39 +1209,53 @@ pub fn build_session_skill_manager(config_home: &Path, cwd: &Path) -> SkillManag
     let manager = SkillManager::new();
     bundled::register_bundled(&manager);
 
-    // Standard scopes: managed / user / `.claude/skills` / `.claude/commands`.
     manager.load_scoped(&SkillScopes {
         managed: Some(get_managed_skills_path()),
         user_skills: Some(config_home.join("skills")),
-        project_skills: Some(cwd.join(".claude").join("skills")),
-        user_commands: Some(config_home.join("commands")),
-        project_commands: Some(cwd.join(".claude").join("commands")),
-    });
-    // coco-rs extension: `.coco/skills/` as an additional project path,
-    // loaded last so the newer convention wins name collisions.
-    manager.load_scoped(&SkillScopes {
-        project_skills: Some(cwd.join(".coco").join("skills")),
         ..SkillScopes::default()
     });
+    for project_skills in project_skill_dirs_up_to_home(cwd) {
+        manager.load_scoped(&SkillScopes {
+            project_skills: Some(project_skills),
+            ..SkillScopes::default()
+        });
+    }
 
     manager
 }
 
 /// Standard skill directory paths by source, in loading priority order.
 ///
-/// TS: `getSkillsPath()` — maps SettingSource to directory path.
-/// Order: managed → user → project → legacy commands.
+/// Order: managed → user → project `.coco/skills` walk-up.
 pub fn get_skill_paths(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
-    vec![
+    let mut paths = vec![
         // Enterprise/policy-managed skills (highest priority)
         get_managed_skills_path(),
         // User-level skills: ~/.coco/skills/
         config_dir.join("skills"),
-        // Project-level skills: .claude/skills/
-        project_dir.join(".claude").join("skills"),
-        // Legacy: .claude/commands/
-        project_dir.join(".claude").join("commands"),
-    ]
+    ];
+    paths.extend(project_skill_dirs_up_to_home(project_dir));
+    paths
+}
+
+pub(crate) fn project_skill_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
+    let home = dirs::home_dir();
+    let mut dirs = Vec::new();
+    let mut current = cwd.to_path_buf();
+    loop {
+        dirs.push(current.join(".coco").join("skills"));
+        if home.as_deref() == Some(current.as_path()) {
+            break;
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if parent == current {
+            break;
+        }
+        current = parent.to_path_buf();
+    }
+    dirs
 }
 
 /// Maximum characters per skill entry in the listing.
@@ -1430,7 +1444,7 @@ The following skills are available for use with the Skill tool:
 /// TS: Dynamic skill discovery triggered during Read/Write/Glob tool execution.
 /// Skills found here are inserted after plugins but before built-in commands.
 pub fn discover_dynamic_skills(dir: &Path) -> Vec<SkillDefinition> {
-    let skills_dir = dir.join(".claude").join("skills");
+    let skills_dir = dir.join(".coco").join("skills");
     if !skills_dir.is_dir() {
         return Vec::new();
     }

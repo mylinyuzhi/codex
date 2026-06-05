@@ -11,10 +11,13 @@ use crate::storage::ContentReplacementRecord;
 use crate::storage::Entry;
 use crate::storage::MetadataEntry;
 use crate::storage::TranscriptEntry;
+use crate::storage::TranscriptUsage;
 use crate::storage::build_file_history_snapshot_chain;
 use crate::storage::content_replacements_for_chain;
 use crate::storage::messages_from_transcript_entry;
 use coco_messages::Message;
+use coco_messages::PreservedSegment;
+use coco_messages::SystemMessage;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::BufRead;
@@ -141,6 +144,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
     // the pre-boundary range. microcompact_boundary is NOT a chain
     // break in TS (see `messages.ts:4608-4612`); it's a plain system
     // message that stays inline.
+    apply_preserved_segment_relinks(&mut entries);
 
     // Pass 2: build a uuid → entry index and the set of parent uuids
     // so we can identify leaves (uuids that no other entry points at).
@@ -346,6 +350,129 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
 
 fn is_transcript_message_type(entry_type: &str) -> bool {
     matches!(entry_type, "user" | "assistant" | "system" | "attachment")
+}
+
+fn apply_preserved_segment_relinks(entries: &mut Vec<TranscriptEntry>) {
+    let mut absolute_last_boundary_idx = None;
+    let mut last_segment = None;
+    let mut last_segment_boundary_idx = None;
+
+    for (idx, entry) in entries.iter().enumerate() {
+        let Some(boundary) = compact_boundary(entry) else {
+            continue;
+        };
+        absolute_last_boundary_idx = Some(idx);
+        if let Some(segment) = &boundary.preserved_segment {
+            last_segment = Some(segment.clone());
+            last_segment_boundary_idx = Some(idx);
+        }
+    }
+
+    let Some(segment) = last_segment else {
+        return;
+    };
+    let Some(absolute_last_boundary_idx) = absolute_last_boundary_idx else {
+        return;
+    };
+    let Some(last_segment_boundary_idx) = last_segment_boundary_idx else {
+        return;
+    };
+
+    let segment_is_live = last_segment_boundary_idx == absolute_last_boundary_idx;
+    let mut preserved_uuids = HashSet::new();
+
+    if segment_is_live {
+        let Some(walked) = preserved_segment_uuids(entries, &segment) else {
+            tracing::debug!(
+                head_uuid = %segment.head_uuid,
+                anchor_uuid = %segment.anchor_uuid,
+                tail_uuid = %segment.tail_uuid,
+                transcript_entries = entries.len(),
+                "compact preserved segment walk did not reach head; leaving transcript unpruned"
+            );
+            return;
+        };
+        preserved_uuids = walked;
+        relink_live_preserved_segment(entries, &segment, &preserved_uuids);
+    }
+
+    let mut idx = 0usize;
+    entries.retain(|entry| {
+        let keep =
+            idx >= absolute_last_boundary_idx || preserved_uuids.contains(entry.uuid.as_str());
+        idx += 1;
+        keep
+    });
+}
+
+fn compact_boundary(
+    entry: &TranscriptEntry,
+) -> Option<coco_messages::SystemCompactBoundaryMessage> {
+    if entry.entry_type != "system" {
+        return None;
+    }
+    messages_from_transcript_entry(entry)
+        .into_iter()
+        .find_map(|message| match message {
+            Message::System(SystemMessage::CompactBoundary(boundary)) => Some(boundary),
+            _ => None,
+        })
+}
+
+fn preserved_segment_uuids(
+    entries: &[TranscriptEntry],
+    segment: &PreservedSegment,
+) -> Option<HashSet<String>> {
+    let by_uuid: HashMap<&str, &TranscriptEntry> = entries
+        .iter()
+        .map(|entry| (entry.uuid.as_str(), entry))
+        .collect();
+    let head_uuid = segment.head_uuid.to_string();
+    let mut current_uuid = segment.tail_uuid.to_string();
+    let mut walked = HashSet::new();
+
+    loop {
+        let entry = by_uuid.get(current_uuid.as_str())?;
+        if !walked.insert(current_uuid.clone()) {
+            return None;
+        }
+        if current_uuid == head_uuid {
+            return Some(walked);
+        }
+        current_uuid = entry.parent_uuid.as_ref()?.clone();
+        if current_uuid.is_empty() {
+            return None;
+        }
+    }
+}
+
+fn relink_live_preserved_segment(
+    entries: &mut [TranscriptEntry],
+    segment: &PreservedSegment,
+    preserved_uuids: &HashSet<String>,
+) {
+    let head_uuid = segment.head_uuid.to_string();
+    let anchor_uuid = segment.anchor_uuid.to_string();
+    let tail_uuid = segment.tail_uuid.to_string();
+
+    for entry in entries.iter_mut() {
+        if entry.uuid == head_uuid {
+            entry.parent_uuid = Some(anchor_uuid.clone());
+        } else if entry.parent_uuid.as_deref() == Some(anchor_uuid.as_str())
+            && entry.uuid != head_uuid
+        {
+            entry.parent_uuid = Some(tail_uuid.clone());
+        }
+
+        if preserved_uuids.contains(entry.uuid.as_str()) && entry.entry_type == "assistant" {
+            entry.usage = Some(TranscriptUsage {
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: Some(0),
+                cache_creation_tokens: Some(0),
+            });
+        }
+    }
 }
 
 /// Check if a session can be resumed (transcript exists and is valid).

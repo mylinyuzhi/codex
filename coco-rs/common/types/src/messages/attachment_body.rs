@@ -49,6 +49,16 @@ pub enum AttachmentBody {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AttachmentExtras {
     SkillDiscovery(SkillDiscoveryPayload),
+    CompactFileReference(CompactFileReferencePayload),
+}
+
+/// TS parity: `CompactFileReferenceAttachment`
+/// (`utils/attachments.ts:307-312`).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactFileReferencePayload {
+    pub filename: String,
+    pub display_path: String,
 }
 
 // ─── Silent payloads (one per silent AttachmentKind) ────────────────────
@@ -132,7 +142,7 @@ pub struct HookPermissionDecisionPayload {
     pub hook_event: HookEventType,
 }
 
-/// `allow` / `deny` decision, matching TS `'allow' | 'deny'`.
+/// `allow` / `deny` / `ask` decision from hook output.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -140,6 +150,7 @@ pub enum HookPermissionDecision {
     #[default]
     Allow,
     Deny,
+    Ask,
 }
 
 /// TS parity: `command_permissions` (`utils/attachments.ts:605-608`).

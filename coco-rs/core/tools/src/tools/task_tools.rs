@@ -254,6 +254,10 @@ impl Tool for TaskCreateTool {
     /// invariants the renderer reads positionally.
     type Output = Value;
 
+    fn to_auto_classifier_input(&self, input: &TaskCreateInput) -> Option<String> {
+        Some(input.subject.clone().unwrap_or_default())
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TaskCreate)
     }
@@ -1432,6 +1436,10 @@ impl Tool for TodoWriteTool {
         })
     }
     type Output = Value;
+
+    fn to_auto_classifier_input(&self, input: &TodoWriteInput) -> Option<String> {
+        Some(format!("{} items", input.todos.len()))
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::TodoWrite)

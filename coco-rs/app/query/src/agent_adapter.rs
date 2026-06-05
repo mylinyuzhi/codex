@@ -113,6 +113,17 @@ impl AgentQueryEngine for QueryEngineAdapter {
             max_budget_usd: None,
             streaming_tool_execution: true,
             is_non_interactive: true,
+            // Hardcoded for ALL subagents: a residual `Ask` fails closed
+            // (deny) since coco has no parent-terminal prompt routing for
+            // child engines. TS sets `shouldAvoidPermissionPrompts` only for
+            // async subagents (`runAgent.ts:438-449`); `bubble`-mode
+            // subagents instead bubble the prompt to the parent terminal.
+            // Coco defines `PermissionMode::Bubble` but does not yet route
+            // subagent prompts upward, so unconditional fail-closed is the
+            // correct (fail-safe) choice. Make this conditional on
+            // `permission_mode != Bubble` only once that routing lands —
+            // doing so earlier would turn a clean deny into a dangling Ask.
+            avoid_permission_prompts: true,
             // Subagents inherit the parent's debug/verbose surface only
             // when the parent piped that into `AgentQueryConfig`; today
             // we don't propagate, so default to `false`. TS parity:

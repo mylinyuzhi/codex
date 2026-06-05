@@ -20,6 +20,21 @@ const PROGRESS_THRESHOLD_MS: u64 = 2000;
 /// TS: ASSISTANT_BLOCKING_BUDGET_MS = 15_000
 pub(crate) const ASSISTANT_BLOCKING_BUDGET_MS: u64 = 15_000;
 
+/// Commands that must NOT be auto-backgrounded on timeout — they belong in the
+/// foreground unless the user explicitly backgrounds them. TS:
+/// `DISALLOWED_AUTO_BACKGROUND_COMMANDS = ['sleep']`.
+const DISALLOWED_AUTO_BACKGROUND_COMMANDS: &[&str] = &["sleep"];
+
+/// Whether `command` is eligible for automatic backgrounding on timeout.
+/// Mirrors TS `isAutobackgroundingAllowed`: take the base command (first
+/// token) and allow everything except the disallowed set.
+pub(crate) fn is_autobackgrounding_allowed(command: &str) -> bool {
+    match command.split_whitespace().next() {
+        Some(base) => !DISALLOWED_AUTO_BACKGROUND_COMMANDS.contains(&base),
+        None => true,
+    }
+}
+
 /// Maximum image file size for base64 detection (20 MB).
 const MAX_IMAGE_FILE_SIZE: usize = 20 * 1024 * 1024;
 

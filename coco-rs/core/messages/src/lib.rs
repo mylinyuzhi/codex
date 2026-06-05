@@ -42,6 +42,7 @@ pub use content_kind::estimate_part;
 pub use cost::CostTracker;
 pub use cost::calculate_cost_usd;
 pub use cost::format_cost;
+pub use cost::format_session_cost;
 pub use cost::get_model_pricing;
 pub use creation::INTERRUPT_MESSAGE;
 pub use creation::INTERRUPT_MESSAGE_FOR_TOOL_USE;

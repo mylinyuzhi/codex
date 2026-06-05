@@ -7,6 +7,44 @@ use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
+// Auto-mode classifier projection (TS `NotebookEditTool.toAutoClassifierInput`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_notebook_edit_classifier_input_includes_edit_mode() {
+    // `${notebook_path} ${mode}: ${new_source}` — `edit_mode` is
+    // security-relevant (insert / replace / delete) so it rides along.
+    assert_eq!(
+        <NotebookEditTool as DynTool>::to_auto_classifier_input(
+            &NotebookEditTool,
+            &json!({
+                "notebook_path": "/work/nb.ipynb",
+                "cell_id": "c1",
+                "new_source": "print('x')",
+                "edit_mode": "delete"
+            }),
+        ),
+        Some("/work/nb.ipynb delete: print('x')".to_string())
+    );
+}
+
+#[test]
+fn test_notebook_edit_classifier_input_defaults_to_replace() {
+    // Omitted `edit_mode` defaults to `replace` (serde default).
+    assert_eq!(
+        <NotebookEditTool as DynTool>::to_auto_classifier_input(
+            &NotebookEditTool,
+            &json!({
+                "notebook_path": "/work/nb.ipynb",
+                "cell_id": "c1",
+                "new_source": "y = 1"
+            }),
+        ),
+        Some("/work/nb.ipynb replace: y = 1".to_string())
+    );
+}
+
+// ---------------------------------------------------------------------------
 // generate_cell_id — TS 13-char base-36 format
 // ---------------------------------------------------------------------------
 
@@ -193,7 +231,8 @@ async fn test_notebook_insert_auto_generates_id_on_45() {
 
     let updated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
-    let id = updated["cells"][0]["id"].as_str().unwrap();
+    // Inserted AFTER cell 0 (cell_id "0"), so the new cell lands at index 1.
+    let id = updated["cells"][1]["id"].as_str().unwrap();
     assert_eq!(id.len(), 13);
     // Must be lowercase alphanumeric.
     assert!(
@@ -225,8 +264,9 @@ async fn test_notebook_insert_no_id_on_pre_45() {
 
     let updated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+    // Inserted AFTER cell 0 → new cell at index 1.
     assert!(
-        updated["cells"][0].get("id").is_none() || updated["cells"][0]["id"].is_null(),
+        updated["cells"][1].get("id").is_none() || updated["cells"][1]["id"].is_null(),
         "pre-4.5 notebooks must not add cell IDs"
     );
 }
@@ -255,10 +295,64 @@ async fn test_notebook_insert_markdown_has_no_execution_state() {
 
     let updated: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
-    let cell = &updated["cells"][0];
+    // Inserted AFTER cell 0 → new cell at index 1.
+    let cell = &updated["cells"][1];
     assert_eq!(cell["cell_type"], "markdown");
     assert!(cell.get("execution_count").is_none());
     assert!(cell.get("outputs").is_none());
+}
+
+/// Regression for tools-file#18: insert places the new cell AFTER the
+/// referenced cell, not before it. With `cell_id: "0"` the new cell must
+/// land at index 1; an empty `cell_id` inserts at the beginning (index 0).
+#[tokio::test]
+async fn test_notebook_insert_lands_after_referenced_cell() {
+    let file = write_notebook(&minimal_notebook(5));
+    let ctx = ToolUseContext::test_default();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "cell_type": "code",
+            "new_source": "INSERTED"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let updated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+    // Original cell 0 stays first; the new cell is right after it.
+    assert_eq!(updated["cells"][0]["source"][0], "print('hello')\n");
+    assert_eq!(updated["cells"][1]["source"][0], "INSERTED");
+}
+
+/// Empty `cell_id` inserts at the beginning (index 0), unaffected by the
+/// insert-after `+1`.
+#[tokio::test]
+async fn test_notebook_insert_empty_cell_id_prepends() {
+    let file = write_notebook(&minimal_notebook(5));
+    let ctx = ToolUseContext::test_default();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "",
+            "edit_mode": "insert",
+            "cell_type": "code",
+            "new_source": "FIRST"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let updated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+    assert_eq!(updated["cells"][0]["source"][0], "FIRST");
 }
 
 // ---------------------------------------------------------------------------

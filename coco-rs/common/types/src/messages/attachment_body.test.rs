@@ -3,7 +3,16 @@ use crate::AttachmentKind;
 use crate::AttachmentMessage;
 use crate::Coverage;
 use crate::HookEventType;
+use crate::LlmMessage;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn hook_permission_decision_ask_round_trips() {
+    let encoded = serde_json::to_string(&HookPermissionDecision::Ask).unwrap();
+    assert_eq!(encoded, "\"ask\"");
+    let decoded: HookPermissionDecision = serde_json::from_str("\"ask\"").unwrap();
+    assert_eq!(decoded, HookPermissionDecision::Ask);
+}
 
 #[test]
 fn silent_payload_round_trips_with_every_silent_attachment_kind() {
@@ -123,6 +132,28 @@ fn skill_discovery_preserves_payload_and_api_prompt() {
         msg.as_text_for_display()
             .contains("Skills relevant to your task")
     );
+}
+
+#[test]
+fn compact_file_reference_preserves_payload_and_api_prompt() {
+    let payload = CompactFileReferencePayload {
+        filename: "/repo/src/lib.rs".to_string(),
+        display_path: "src/lib.rs".to_string(),
+    };
+    let msg = AttachmentMessage::compact_file_reference(
+        payload.clone(),
+        LlmMessage::user_text("model-visible restore reminder"),
+    );
+
+    assert_eq!(msg.kind, AttachmentKind::CompactFileReference);
+    let AttachmentBody::Api(message) = &msg.body else {
+        panic!("compact_file_reference body must be Api(LlmMessage)");
+    };
+    let Some(AttachmentExtras::CompactFileReference(stored)) = msg.extras.as_ref() else {
+        panic!("compact_file_reference must populate extras with the typed payload");
+    };
+    assert_eq!(stored, &payload);
+    assert_eq!(msg.as_api_message(), Some(message));
 }
 
 #[test]

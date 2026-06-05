@@ -12,6 +12,7 @@ pub mod elicitation_hooks;
 pub mod file_changed_watcher;
 pub mod fork_dispatcher;
 pub mod headless;
+pub mod hook_agent_runner;
 pub mod leader_inbox_poller;
 pub mod leader_permission;
 pub mod lsp_handle_adapter;

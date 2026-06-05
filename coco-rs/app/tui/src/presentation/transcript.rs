@@ -117,6 +117,12 @@ pub(crate) enum ActiveTranscriptCell<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TranscriptProjectionOptions {
     pub show_system_reminders: bool,
+    /// Show compact boundary + compact summary internals.
+    ///
+    /// Default chat/native scrollback keeps these hidden and shows the
+    /// `/compact` command result instead. The Ctrl+O transcript reader
+    /// sets this to true so the full summary remains available.
+    pub show_compact_internals: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +153,7 @@ pub(crate) fn transcript_projection(
     options: TranscriptProjectionOptions,
 ) -> TranscriptProjection {
     let show_system_reminders = options.show_system_reminders;
+    let show_compact_internals = options.show_compact_internals;
     let mut out = Vec::new();
     let mut consumed = vec![false; cells.len()];
     let mut i = 0;
@@ -156,6 +163,11 @@ pub(crate) fn transcript_projection(
             continue;
         }
         let cell = &cells[i];
+
+        if !show_compact_internals && is_compact_internal(cell) {
+            i += 1;
+            continue;
+        }
 
         // System reminders collapse to one-line preview unless the
         // user explicitly opted in via show_system_reminders.
@@ -275,6 +287,14 @@ fn is_meta(cell: &RenderedCell) -> bool {
         // a collapsible system reminder — render the full colored block.
         CellKind::System(SystemCellKind::ContextUsage) => false,
         CellKind::System(_) => true,
+        _ => false,
+    }
+}
+
+fn is_compact_internal(cell: &RenderedCell) -> bool {
+    match cell.source.as_ref() {
+        coco_messages::Message::User(user) if user.is_compact_summary => true,
+        coco_messages::Message::System(coco_messages::SystemMessage::CompactBoundary(_)) => true,
         _ => false,
     }
 }
@@ -435,6 +455,7 @@ pub(crate) fn transcript_expandable_cell_ids(state: &AppState) -> Vec<Transcript
         cells,
         options: TranscriptProjectionOptions {
             show_system_reminders: true,
+            show_compact_internals: true,
         },
         streaming: state.ui.streaming.as_ref(),
         show_thinking: true,
@@ -464,6 +485,7 @@ pub(crate) fn transcript_presentation_with_cells<'state>(
         cells,
         options: TranscriptProjectionOptions {
             show_system_reminders: true,
+            show_compact_internals: true,
         },
         streaming: state.ui.streaming.as_ref(),
         show_thinking: true,

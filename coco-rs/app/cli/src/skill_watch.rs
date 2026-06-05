@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use coco_skills::watcher::SkillChangeDetector;
+use coco_skills::watcher::session_reload_scopes;
 use coco_types::CoreEvent;
 use coco_types::TuiOnlyEvent;
 use tokio::sync::mpsc;
@@ -30,9 +31,13 @@ use crate::session_runtime::SessionRuntime;
 /// dirs [`crate::session_runtime::SessionRuntime::reload_plugins`] /
 /// `build_session_command_registry` load from:
 /// - `<config_home>/skills` — user scope
-/// - `<cwd>/.coco/skills` — project scope
+/// - every `<ancestor>/.coco/skills` from cwd upward
 pub fn default_watch_paths(cwd: &Path, config_home: &Path) -> Vec<PathBuf> {
-    vec![config_home.join("skills"), cwd.join(".coco").join("skills")]
+    session_reload_scopes(config_home, cwd)
+        .into_iter()
+        .filter(|scope| !matches!(scope, coco_skills::watcher::SkillReloadScope::Managed(_)))
+        .map(|scope| scope.path().to_path_buf())
+        .collect()
 }
 
 /// Spawn the skill-change detector plus a forwarder that rebuilds the
@@ -50,8 +55,8 @@ pub fn spawn(
     cwd: PathBuf,
     config_home: PathBuf,
 ) -> Option<Arc<SkillChangeDetector>> {
-    let paths = default_watch_paths(&cwd, &config_home);
-    match SkillChangeDetector::new(runtime.skill_manager(), paths) {
+    let scopes = session_reload_scopes(&config_home, &cwd);
+    match SkillChangeDetector::new(runtime.skill_manager(), scopes) {
         Ok(detector) => {
             let mut rx = detector.subscribe();
             tokio::spawn(async move {

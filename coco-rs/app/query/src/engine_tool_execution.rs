@@ -68,6 +68,19 @@ impl QueryEngine {
                 self.drain_dynamic_skill_triggers(c, &mut *history, event_tx)
                     .await;
             }
+            if self.cancel.is_cancelled() {
+                return ToolExecutionBranch::Return(Box::new(make_query_result(
+                    consts,
+                    &*acc,
+                    &*turn_state,
+                    response_text,
+                    /*cancelled*/ true,
+                    /*budget_exhausted*/ false,
+                    Some("cancelled".into()),
+                    history.to_vec(),
+                    history.snapshot(),
+                )));
+            }
             if let Some(stop_reason) = streaming_control_prevent {
                 return ToolExecutionBranch::Return(Box::new(make_query_result(
                     consts,
@@ -158,15 +171,33 @@ impl QueryEngine {
         .await;
         self.drain_dynamic_skill_triggers(&ctx, &mut *history, event_tx)
             .await;
-        if !tool_run_outcome.continue_after_tools {
+        if self.cancel.is_cancelled() {
             return ToolExecutionBranch::Return(Box::new(make_query_result(
                 consts,
                 &*acc,
                 &*turn_state,
                 response_text,
-                /*cancelled*/ false,
+                /*cancelled*/ true,
                 /*budget_exhausted*/ false,
-                tool_run_outcome.stop_reason_override,
+                Some("cancelled".into()),
+                history.to_vec(),
+                history.snapshot(),
+            )));
+        }
+        if !tool_run_outcome.continue_after_tools {
+            let cancelled = self.cancel.is_cancelled();
+            return ToolExecutionBranch::Return(Box::new(make_query_result(
+                consts,
+                &*acc,
+                &*turn_state,
+                response_text,
+                cancelled,
+                /*budget_exhausted*/ false,
+                if cancelled {
+                    Some("cancelled".into())
+                } else {
+                    tool_run_outcome.stop_reason_override
+                },
                 history.to_vec(),
                 history.snapshot(),
             )));

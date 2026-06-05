@@ -19,6 +19,7 @@ use crate::auto_mode::classify_for_auto_mode;
 use crate::auto_mode_state::AutoModeState;
 use crate::classifier::AutoModeRules;
 use crate::classifier::ClassifyRequest;
+use crate::classifier::InputProjector;
 use crate::classifier::classify_yolo_action;
 use crate::classifier::is_safe_tool;
 use crate::evaluate::extract_file_modifying_path;
@@ -40,12 +41,13 @@ pub struct AutoModeContext<'a> {
     pub cwd: Option<&'a str>,
     /// Additional writable roots (keys of `ToolPermissionContext.additional_dirs`).
     pub additional_dirs: &'a [String],
-    /// True for SDK / headless sessions that cannot show an interactive
-    /// prompt (coco equivalent of TS `shouldAvoidPermissionPrompts`). When
-    /// set, decisions that would otherwise fall back to an interactive Ask
-    /// instead DENY — a headless Ask is auto-allowed downstream, so falling
-    /// through would defeat the safety check.
-    pub is_non_interactive: bool,
+    /// True when the session cannot show an interactive prompt (coco
+    /// equivalent of TS `shouldAvoidPermissionPrompts`). When set, decisions
+    /// that would otherwise fall back to an interactive Ask instead DENY — a
+    /// headless Ask is auto-allowed downstream, so falling through would
+    /// defeat the safety check. Distinct from session-level
+    /// `is_non_interactive` (which drives side effects, not permissions).
+    pub avoid_permission_prompts: bool,
 }
 
 /// Attempt auto-mode classification for a tool call.
@@ -70,6 +72,7 @@ pub async fn can_use_tool_in_auto_mode<M, F, Fut>(
     rules: &AutoModeRules,
     auto_ctx: &AutoModeContext<'_>,
     classify_fn: F,
+    projector: Option<InputProjector<'_>>,
 ) -> Option<PermissionDecision>
 where
     M: std::borrow::Borrow<Message>,
@@ -103,7 +106,7 @@ where
                             reason: message,
                             classifier_approvable: false,
                         },
-                        auto_ctx.is_non_interactive,
+                        auto_ctx.avoid_permission_prompts,
                     ));
                 }
                 FileSafety::AllowInCwd => {
@@ -123,7 +126,8 @@ where
     }
 
     // 5. LLM classifier (two-stage XML)
-    let result = classify_yolo_action(messages, tool_name, input, rules, classify_fn).await;
+    let result =
+        classify_yolo_action(messages, tool_name, input, rules, classify_fn, projector).await;
 
     // 6. Classifier could not produce a usable verdict.
     //    Transcript-too-long is deterministic (retry can't help) → manual
@@ -137,13 +141,19 @@ where
                 classifier: AUTO_MODE_CLASSIFIER.into(),
                 reason: "transcript_too_long".into(),
             },
-            auto_ctx.is_non_interactive,
+            auto_ctx.avoid_permission_prompts,
         ));
     }
-    //    Transient outage → fail-open to a manual prompt when interactive;
-    //    fail-closed (deny) in headless where no prompt is possible. TS
-    //    distinguishes this from a malicious block (`permissions.ts:843-876`).
+    //    Transient outage. TS gates this on `tengu_iron_gate_closed` (default
+    //    true = fail closed: deny even in interactive mode); only the rare
+    //    open-gate path falls back to a prompt (`permissions.ts:843-876`).
+    //    Coco replaces the GrowthBook gate with the
+    //    `classifier_unavailable_fail_open` setting (default false = fail
+    //    closed, matching TS's shipped posture). Opting into fail-open
+    //    restores a manual prompt when interactive; headless always denies.
     if result.unavailable {
+        let avoid_prompts =
+            !rules.classifier_unavailable_fail_open || auto_ctx.avoid_permission_prompts;
         return Some(require_interactive_or_deny(
             format!(
                 "Auto-mode classifier unavailable ({}) — manual approval required",
@@ -153,7 +163,7 @@ where
                 classifier: AUTO_MODE_CLASSIFIER.into(),
                 reason: "unavailable".into(),
             },
-            auto_ctx.is_non_interactive,
+            avoid_prompts,
         ));
     }
 
@@ -176,7 +186,7 @@ where
                     classifier: AUTO_MODE_CLASSIFIER.into(),
                     reason: warning,
                 },
-                auto_ctx.is_non_interactive,
+                auto_ctx.avoid_permission_prompts,
             ));
         }
 
@@ -202,14 +212,14 @@ fn allow() -> PermissionDecision {
 }
 
 /// Map a "needs human review" outcome to a decision: an interactive Ask
-/// normally, but a Deny in non-interactive (headless/SDK) sessions where an
-/// Ask would be silently auto-allowed downstream.
+/// normally, but a Deny when no interactive prompt is reachable (an Ask would
+/// be silently auto-allowed downstream).
 fn require_interactive_or_deny(
     message: String,
     reason: PermissionDecisionReason,
-    is_non_interactive: bool,
+    avoid_permission_prompts: bool,
 ) -> PermissionDecision {
-    if is_non_interactive {
+    if avoid_permission_prompts {
         PermissionDecision::Deny { message, reason }
     } else {
         PermissionDecision::Ask {

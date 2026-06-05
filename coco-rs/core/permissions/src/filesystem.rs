@@ -100,9 +100,8 @@ pub fn is_claude_config_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/").to_lowercase();
     normalized.contains("/.claude/settings.json")
         || normalized.contains("/.claude/settings.local.json")
-        || normalized.contains("/.claude/commands/")
+        || normalized.contains("/.coco/skills/")
         || normalized.contains("/.claude/agents/")
-        || normalized.contains("/.claude/skills/")
 }
 
 // ── Suspicious Windows path patterns ──

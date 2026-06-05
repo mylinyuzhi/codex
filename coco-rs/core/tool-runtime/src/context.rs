@@ -45,8 +45,16 @@ pub struct ToolUseContext {
     pub main_loop_model: String,
     /// Thinking level configuration.
     pub thinking_level: Option<ThinkingLevel>,
-    /// Whether this is a non-interactive session (SDK/headless).
+    /// Whether this is a non-interactive session (SDK/headless). Session-level
+    /// side effects only — NOT permission decisions (use
+    /// `avoid_permission_prompts` for those).
     pub is_non_interactive: bool,
+    /// Whether a residual `Ask` must fail closed (Deny) because no interactive
+    /// prompt is reachable. coco equivalent of TS
+    /// `ToolPermissionContext.shouldAvoidPermissionPrompts`. Distinct from
+    /// `is_non_interactive` so a future consumer-backed print/SDK mode can stay
+    /// non-interactive while still routing `Ask` to its `canUseTool` callback.
+    pub avoid_permission_prompts: bool,
     /// Cost budget limit (USD).
     pub max_budget_usd: Option<f64>,
     /// Custom system prompt override.
@@ -264,7 +272,7 @@ pub struct ToolUseContext {
     ///
     /// TS `FileReadTool.ts:583` `context.dynamicSkillDirTriggers?.add(dir)` —
     /// when Read/Write/Edit touch a file, we walk up to find any
-    /// `.claude/skills/` ancestor dir and record it here. The app/query
+    /// `.coco/skills/` ancestor dir and record it here. The app/query
     /// layer drains this set after the tool batch completes and asks the
     /// SkillManager to load any newly-discovered dirs.
     ///
@@ -595,6 +603,7 @@ impl ToolUseContext {
             main_loop_model: self.main_loop_model.clone(),
             thinking_level: self.thinking_level.clone(),
             is_non_interactive: self.is_non_interactive,
+            avoid_permission_prompts: self.avoid_permission_prompts,
             max_budget_usd: self.max_budget_usd,
             custom_system_prompt: self.custom_system_prompt.clone(),
             append_system_prompt: self.append_system_prompt.clone(),
@@ -803,6 +812,7 @@ impl ToolUseContext {
             main_loop_model: "test-model".into(),
             thinking_level: None,
             is_non_interactive: false,
+            avoid_permission_prompts: false,
             max_budget_usd: None,
             custom_system_prompt: None,
             append_system_prompt: None,

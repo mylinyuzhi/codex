@@ -122,6 +122,18 @@ pub(crate) fn has_oauth_tokens(
     Ok(load_oauth_tokens(server_name, url, store_mode, config_home)?.is_some())
 }
 
+pub fn has_valid_oauth_tokens(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    config_home: &std::path::Path,
+) -> Result<bool> {
+    let Some(tokens) = load_oauth_tokens(server_name, url, store_mode, config_home)? else {
+        return Ok(false);
+    };
+    Ok(!token_needs_refresh(tokens.expires_at))
+}
+
 fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
     let Some(expires_at) = tokens.expires_at else {
         return;
@@ -192,6 +204,62 @@ pub fn save_oauth_tokens(
             save_oauth_tokens_with_keyring(&keyring_store, server_name, tokens, config_home)
         }
     }
+}
+
+pub struct OAuthAccessTokenSave<'a> {
+    pub server_name: &'a str,
+    pub url: &'a str,
+    pub client_id: &'a str,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_in: Option<i64>,
+    pub scopes: Option<String>,
+    pub store_mode: OAuthCredentialsStoreMode,
+    pub config_home: &'a std::path::Path,
+}
+
+pub fn save_oauth_access_token(params: OAuthAccessTokenSave<'_>) -> Result<()> {
+    let mut token_response = OAuthTokenResponse::new(
+        AccessToken::new(params.access_token),
+        BasicTokenType::Bearer,
+        EmptyExtraTokenFields {},
+    );
+    if let Some(refresh_token) = params.refresh_token {
+        token_response.set_refresh_token(Some(RefreshToken::new(refresh_token)));
+    }
+    if let Some(scopes) = params.scopes {
+        let scopes = scopes
+            .split_whitespace()
+            .filter(|scope| !scope.is_empty())
+            .map(|scope| Scope::new(scope.to_string()))
+            .collect::<Vec<_>>();
+        if !scopes.is_empty() {
+            token_response.set_scopes(Some(scopes));
+        }
+    }
+    if let Some(expires_in) = params
+        .expires_in
+        .and_then(|seconds| u64::try_from(seconds).ok())
+        && expires_in > 0
+    {
+        let duration = Duration::from_secs(expires_in);
+        token_response.set_expires_in(Some(&duration));
+    }
+
+    let expires_at = compute_expires_at_millis(&token_response);
+    let stored = StoredOAuthTokens {
+        server_name: params.server_name.to_string(),
+        url: params.url.to_string(),
+        client_id: params.client_id.to_string(),
+        token_response: WrappedOAuthTokenResponse(token_response),
+        expires_at,
+    };
+    save_oauth_tokens(
+        params.server_name,
+        &stored,
+        params.store_mode,
+        params.config_home,
+    )
 }
 
 fn save_oauth_tokens_with_keyring<K: KeyringStore>(

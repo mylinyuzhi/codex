@@ -25,6 +25,9 @@ const DEFAULT_STAGED_COMPACT_COMMIT_PCT: f64 = 0.85;
 /// Default per-message aggregate char cap for Tool Result Budget Level 2.
 /// TS: `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` in `constants/toolLimits.ts`.
 const DEFAULT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS: i64 = 200_000;
+/// Default number of recently read files restored after full compaction.
+/// TS: `POST_COMPACT_MAX_FILES_TO_RESTORE`.
+const DEFAULT_POST_COMPACT_MAX_FILES_TO_RESTORE: i32 = 5;
 
 // ── PartialCompactSettings (settings.json shape) ─────────────────────
 
@@ -37,6 +40,7 @@ pub struct PartialCompactSettings {
     pub auto: PartialAutoCompactSettings,
     pub micro: PartialMicroCompactSettings,
     pub api_native: PartialApiNativeSettings,
+    pub post_compact: PartialPostCompactSettings,
     pub session_memory: PartialSessionMemorySettings,
     pub experimental: PartialExperimentalSettings,
     pub tool_result_budget: PartialToolResultBudgetSettings,
@@ -82,6 +86,12 @@ pub struct PartialApiNativeSettings {
     pub clear_tool_uses: Option<bool>,
     pub max_input_tokens: Option<i64>,
     pub target_input_tokens: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialPostCompactSettings {
+    pub max_files_to_restore: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -152,6 +162,7 @@ pub struct CompactConfig {
     pub auto: AutoCompactConfig,
     pub micro: MicroCompactConfig,
     pub api_native: ApiNativeConfig,
+    pub post_compact: PostCompactConfig,
     pub session_memory: SessionMemoryConfig,
     pub experimental: ExperimentalConfig,
     pub tool_result_budget: ToolResultBudgetConfig,
@@ -239,6 +250,21 @@ impl Default for TimeBasedMcConfig {
             enabled: false,
             gap_threshold_minutes: 60,
             keep_recent: 5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PostCompactConfig {
+    /// Number of recently read files to restore after full compact.
+    /// Env: `COCO_COMPACT_POST_COMPACT_MAX_FILES_TO_RESTORE`.
+    pub max_files_to_restore: i32,
+}
+
+impl Default for PostCompactConfig {
+    fn default() -> Self {
+        Self {
+            max_files_to_restore: DEFAULT_POST_COMPACT_MAX_FILES_TO_RESTORE,
         }
     }
 }
@@ -445,6 +471,12 @@ impl CompactConfig {
         if let Some(v) = part.micro.keep_recent {
             config.micro.keep_recent = v.max(0);
         }
+        if let Some(v) = env
+            .get_i64(EnvKey::CocoCompactMicroKeepRecent)
+            .and_then(|v| i32::try_from(v).ok())
+        {
+            config.micro.keep_recent = v.max(0);
+        }
         if let Some(v) = part.micro.time_based.enabled {
             config.micro.time_based.enabled = v;
         }
@@ -454,11 +486,28 @@ impl CompactConfig {
         if let Some(v) = part.micro.time_based.keep_recent {
             config.micro.time_based.keep_recent = v.max(0);
         }
+        if let Some(v) = env
+            .get_i64(EnvKey::CocoCompactMicroTimeBasedKeepRecent)
+            .and_then(|v| i32::try_from(v).ok())
+        {
+            config.micro.time_based.keep_recent = v.max(0);
+        }
         if let Some(v) = part.micro.count_based_enabled {
             config.micro.count_based_enabled = v;
         }
         if let Some(v) = part.micro.clear_file_unchanged_stubs_enabled {
             config.micro.clear_file_unchanged_stubs_enabled = v;
+        }
+
+        // Post-compact restore.
+        if let Some(v) = part.post_compact.max_files_to_restore {
+            config.post_compact.max_files_to_restore = v.max(0);
+        }
+        if let Some(v) = env
+            .get_i64(EnvKey::CocoCompactPostCompactMaxFilesToRestore)
+            .and_then(|v| i32::try_from(v).ok())
+        {
+            config.post_compact.max_files_to_restore = v.max(0);
         }
 
         // API-native.

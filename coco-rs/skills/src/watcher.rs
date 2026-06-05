@@ -13,14 +13,64 @@
 use coco_file_watch::FileWatcher;
 use coco_file_watch::FileWatcherBuilder;
 use coco_file_watch::RecursiveMode;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 
-use crate::SkillDirFormat;
 use crate::SkillManager;
-use crate::discover_skills_with_format;
+use crate::SkillScopes;
+
+/// Disk scopes to rebuild during hot reload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillReloadScope {
+    Managed(PathBuf),
+    User(PathBuf),
+    Project(PathBuf),
+}
+
+impl SkillReloadScope {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Managed(path) | Self::User(path) | Self::Project(path) => path,
+        }
+    }
+
+    fn is_watched(&self) -> bool {
+        !matches!(self, Self::Managed(_))
+    }
+
+    fn load_into(&self, manager: &SkillManager) {
+        match self {
+            Self::Managed(path) => manager.load_scoped(&SkillScopes {
+                managed: Some(path.clone()),
+                ..SkillScopes::default()
+            }),
+            Self::User(path) => manager.load_scoped(&SkillScopes {
+                user_skills: Some(path.clone()),
+                ..SkillScopes::default()
+            }),
+            Self::Project(path) => manager.load_scoped(&SkillScopes {
+                project_skills: Some(path.clone()),
+                ..SkillScopes::default()
+            }),
+        }
+    }
+}
+
+pub fn session_reload_scopes(config_home: &Path, cwd: &Path) -> Vec<SkillReloadScope> {
+    let mut scopes = vec![
+        SkillReloadScope::Managed(crate::get_managed_skills_path()),
+        SkillReloadScope::User(config_home.join("skills")),
+    ];
+    scopes.extend(
+        crate::project_skill_dirs_up_to_home(cwd)
+            .into_iter()
+            .map(SkillReloadScope::Project),
+    );
+    scopes
+}
 
 /// Debounce interval for skill file changes (matches TS 300ms).
 const SKILL_DEBOUNCE_MS: u64 = 300;
@@ -67,6 +117,8 @@ pub struct SkillChangeDetector {
     manager: Arc<SkillManager>,
     /// Directories being watched.
     watched_dirs: Vec<PathBuf>,
+    /// Disk scopes rebuilt after each debounced change.
+    reload_scopes: Vec<SkillReloadScope>,
     /// Broadcast sender for change notifications (post-reload —
     /// `skill_hook_declarations` is filled in).
     change_tx: broadcast::Sender<SkillsChanged>,
@@ -79,7 +131,15 @@ impl SkillChangeDetector {
     /// will reload the [`SkillManager`] when `.md` files change.
     /// Returns an `Arc<Self>` so the caller can hold a guard binding
     /// to control lifetime.
-    pub fn new(manager: Arc<SkillManager>, skill_dirs: Vec<PathBuf>) -> crate::Result<Arc<Self>> {
+    pub fn new(
+        manager: Arc<SkillManager>,
+        reload_scopes: Vec<SkillReloadScope>,
+    ) -> crate::Result<Arc<Self>> {
+        let skill_dirs: Vec<PathBuf> = reload_scopes
+            .iter()
+            .filter(|scope| scope.is_watched())
+            .map(|scope| scope.path().to_path_buf())
+            .collect();
         let inner = FileWatcherBuilder::new()
             .throttle_interval(Duration::from_millis(SKILL_DEBOUNCE_MS))
             .build(classify, merge)
@@ -98,7 +158,7 @@ impl SkillChangeDetector {
         let (change_tx, _) = broadcast::channel(32);
         let change_tx_clone = change_tx.clone();
         let manager_clone = Arc::clone(&manager);
-        let dirs_clone = skill_dirs.clone();
+        let reload_scopes_clone = reload_scopes.clone();
         let mut rx = inner.subscribe();
         tokio::spawn(async move {
             while let Ok(mut event) = rx.recv().await {
@@ -106,16 +166,15 @@ impl SkillChangeDetector {
                     paths = ?event.changed_paths,
                     "skill files changed, reloading"
                 );
-                let new_skills: Vec<_> = dirs_clone
-                    .iter()
-                    .flat_map(|dir| {
-                        let format = if dir.ends_with("commands") {
-                            SkillDirFormat::Legacy
-                        } else {
-                            SkillDirFormat::SkillMdOnly
-                        };
-                        discover_skills_with_format(std::slice::from_ref(dir), format)
-                    })
+                let reloaded = SkillManager::new();
+                crate::bundled::register_bundled(&reloaded);
+                for scope in &reload_scopes_clone {
+                    scope.load_into(&reloaded);
+                }
+                let new_skills: Vec<_> = reloaded
+                    .all_including_conditional()
+                    .into_iter()
+                    .map(|skill| (*skill).clone())
                     .collect();
 
                 event.skill_hook_declarations = new_skills
@@ -126,8 +185,6 @@ impl SkillChangeDetector {
                 // Interior mutability — no Mutex needed since
                 // SkillManager has internal RwLock.
                 manager_clone.reload_disk_skills(new_skills);
-                // Re-register bundled skills so they survive a disk reload.
-                crate::bundled::register_bundled(&manager_clone);
                 tracing::info!(count = manager_clone.len(), "skills reloaded");
 
                 let _ = change_tx_clone.send(event);
@@ -138,6 +195,7 @@ impl SkillChangeDetector {
             _inner: inner,
             manager,
             watched_dirs: skill_dirs,
+            reload_scopes,
             change_tx,
         }))
     }
@@ -155,6 +213,10 @@ impl SkillChangeDetector {
     /// Get the watched directories.
     pub fn watched_dirs(&self) -> &[PathBuf] {
         &self.watched_dirs
+    }
+
+    pub fn reload_scopes(&self) -> &[SkillReloadScope] {
+        &self.reload_scopes
     }
 }
 

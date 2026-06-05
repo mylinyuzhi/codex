@@ -53,6 +53,10 @@ impl Tool for ApplyPatchTool {
     coco_tool_runtime::impl_runtime_schema!(ApplyPatchInput);
     type Output = ApplyPatchOutput;
 
+    fn to_auto_classifier_input(&self, input: &ApplyPatchInput) -> Option<String> {
+        Some(input.patch.clone())
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ApplyPatch)
     }

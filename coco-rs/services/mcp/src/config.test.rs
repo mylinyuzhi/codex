@@ -55,6 +55,41 @@ fn test_parse_http_config() {
 }
 
 #[test]
+fn test_parse_http_xaa_oauth_config() {
+    let json = serde_json::json!({
+        "url": "https://mcp.example.com/api",
+        "transport": "http",
+        "oauth": {
+            "clientId": "as-client",
+            "xaa": {
+                "clientSecret": "as-secret",
+                "idpClientId": "idp-client",
+                "idpClientSecret": "idp-secret",
+                "idpIdToken": "id-token",
+                "idpTokenEndpoint": "https://idp.example.com/token",
+                "scope": "read write"
+            }
+        }
+    });
+    let config = parse_server_config(&json).unwrap();
+    let McpServerConfig::Http(http) = config else {
+        panic!("expected http config");
+    };
+    let oauth = http.oauth.expect("oauth config");
+    assert_eq!(oauth.client_id.as_deref(), Some("as-client"));
+    let xaa = oauth.xaa.expect("xaa config");
+    assert_eq!(xaa.client_secret.as_deref(), Some("as-secret"));
+    assert_eq!(xaa.idp_client_id.as_deref(), Some("idp-client"));
+    assert_eq!(xaa.idp_client_secret.as_deref(), Some("idp-secret"));
+    assert_eq!(xaa.idp_id_token.as_deref(), Some("id-token"));
+    assert_eq!(
+        xaa.idp_token_endpoint.as_deref(),
+        Some("https://idp.example.com/token")
+    );
+    assert_eq!(xaa.scope.as_deref(), Some("read write"));
+}
+
+#[test]
 fn test_parse_invalid_config() {
     let json = serde_json::json!({"invalid": true});
     assert!(parse_server_config(&json).is_none());

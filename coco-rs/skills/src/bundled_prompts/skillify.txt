@@ -14,6 +14,6 @@ Convert a workflow or repeated task into a reusable skill file.
 
    Detailed instructions for the skill...
    ```
-3. Write the file to `.claude/skills/<name>.md`
+3. Write the file to `.coco/skills/<name>/SKILL.md`
 4. Verify the skill loads correctly by checking the format
 5. Suggest testing the skill with a sample invocation

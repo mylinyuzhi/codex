@@ -331,6 +331,7 @@ impl ToolContextFactory {
             // `queryConfig.*` through `toolUseContext.options.*`.
             thinking_level: self.config.thinking_level.clone(),
             is_non_interactive: self.config.is_non_interactive,
+            avoid_permission_prompts: self.config.avoid_permission_prompts,
             max_budget_usd: self.config.max_budget_usd,
             custom_system_prompt: self.config.system_prompt.clone(),
             append_system_prompt: self.config.append_system_prompt.clone(),

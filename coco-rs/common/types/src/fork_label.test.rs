@@ -14,6 +14,7 @@ fn test_as_str_round_trip_with_serde() {
         (ForkLabel::AgentSummary, "agent_summary"),
         (ForkLabel::AutoDream, "auto_dream"),
         (ForkLabel::Speculation, "speculation"),
+        (ForkLabel::HookAgent, "hook_agent"),
     ];
     for (variant, wire) in cases {
         assert_eq!(variant.as_str(), wire, "as_str for {variant:?}");
@@ -37,6 +38,7 @@ fn test_wire_strings_are_unique() {
         ForkLabel::AgentSummary,
         ForkLabel::AutoDream,
         ForkLabel::Speculation,
+        ForkLabel::HookAgent,
     ];
     let mut wires: Vec<&'static str> = all.iter().map(|v| v.as_str()).collect();
     wires.sort_unstable();

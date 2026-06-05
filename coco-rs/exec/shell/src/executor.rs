@@ -263,18 +263,18 @@ impl ShellExecutor {
     }
 
     /// Check command safety before execution.
+    ///
+    /// Destructive commands are NOT hard-denied — TS treats destructive
+    /// detection as an informational advisory. A destructive command surfaces
+    /// its note as the approval reason (escalate-to-ask), never a block.
     pub fn check_safety(&self, command: &str) -> SafetyResult {
-        if let Some(warning) = crate::destructive::get_destructive_warning(command) {
-            return SafetyResult::Denied { reason: warning };
-        }
-
         if crate::read_only::is_read_only_command(command) {
             return SafetyResult::Safe;
         }
 
-        SafetyResult::RequiresApproval {
-            reason: "command may have side effects".into(),
-        }
+        let reason = crate::destructive::get_destructive_warning(command)
+            .unwrap_or_else(|| "command may have side effects".into());
+        SafetyResult::RequiresApproval { reason }
     }
 
     /// Execute a command with streaming progress via a callback.

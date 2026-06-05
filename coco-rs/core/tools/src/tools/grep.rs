@@ -318,6 +318,13 @@ impl Tool for GrepTool {
     /// raw lines without JSON escaping.
     type Output = String;
 
+    fn to_auto_classifier_input(&self, input: &GrepInput) -> Option<String> {
+        Some(match &input.path {
+            Some(path) => format!("{} in {}", input.pattern, path),
+            None => input.pattern.clone(),
+        })
+    }
+
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::Grep)
     }
