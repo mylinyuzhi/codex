@@ -830,3 +830,105 @@ async fn test_notebook_delete_message_uses_cell_id() {
     let msg = result.data["message"].as_str().unwrap();
     assert_eq!(msg, "Deleted cell doomed-cell");
 }
+
+// ---------------------------------------------------------------------------
+// #19 — replace one-past-end → insert; cell_type switch on replace
+// ---------------------------------------------------------------------------
+
+/// TS `NotebookEditTool.ts:371-377`: replacing at index == cells.len()
+/// is an append-insert (cell_type defaults to code).
+#[tokio::test]
+async fn test_notebook_replace_one_past_end_converts_to_insert() {
+    let file = write_notebook(&minimal_notebook(5)); // 2 cells (idx 0,1)
+    let ctx = ToolUseContext::test_default();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "2", // one past the end
+            "edit_mode": "replace",
+            "new_source": "APPENDED"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let updated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+    let cells = updated["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 3, "one-past-end replace appends a cell");
+    assert_eq!(
+        cells[2]["cell_type"], "code",
+        "appended cell defaults to code"
+    );
+    assert_eq!(cells[2]["source"], json!(["APPENDED"]));
+}
+
+/// TS `NotebookEditTool.ts:425-427`: a replace whose `cell_type` differs
+/// from the target cell switches the cell's type.
+#[tokio::test]
+async fn test_notebook_replace_applies_cell_type_switch() {
+    let file = write_notebook(&minimal_notebook(5));
+    let ctx = ToolUseContext::test_default();
+    <NotebookEditTool as DynTool>::execute(
+        &NotebookEditTool,
+        json!({
+            "notebook_path": file.path().to_str().unwrap(),
+            "cell_id": "0", // a code cell
+            "edit_mode": "replace",
+            "cell_type": "markdown",
+            "new_source": "# now markdown"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    let updated: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file.path()).unwrap()).unwrap();
+    assert_eq!(updated["cells"][0]["cell_type"], "markdown");
+}
+
+// ---------------------------------------------------------------------------
+// #20 / #29 — validate_input (extension guard + insert cell_type)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_notebook_validate_rejects_non_ipynb() {
+    let ctx = ToolUseContext::test_default();
+    let res = <NotebookEditTool as DynTool>::validate_input(
+        &NotebookEditTool,
+        &json!({"notebook_path": "/work/file.py", "cell_id": "0", "new_source": "x"}),
+        &ctx,
+    );
+    match res {
+        coco_tool_runtime::ValidationResult::Invalid {
+            error_code,
+            message,
+        } => {
+            assert_eq!(error_code.as_deref(), Some("2"));
+            assert!(message.contains("Jupyter notebook"), "got: {message}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_notebook_validate_insert_requires_cell_type() {
+    let ctx = ToolUseContext::test_default();
+    let res = <NotebookEditTool as DynTool>::validate_input(
+        &NotebookEditTool,
+        &json!({
+            "notebook_path": "/work/nb.ipynb",
+            "cell_id": "0",
+            "edit_mode": "insert",
+            "new_source": "x"
+        }),
+        &ctx,
+    );
+    match res {
+        coco_tool_runtime::ValidationResult::Invalid { error_code, .. } => {
+            assert_eq!(error_code.as_deref(), Some("5"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}

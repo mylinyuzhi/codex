@@ -258,20 +258,30 @@ fn republish_runtime(
     publisher: &RuntimePublisher,
 ) -> Result<(), SettingsWriteError> {
     let env = EnvSnapshot::from_current_process();
+    // Preserve the originally-resolved `--setting-sources` set across the
+    // rebuild so a settings write doesn't silently re-enable a layer the
+    // operator disabled.
+    let enabled = publisher.current().enabled_setting_sources.clone();
     let settings = load_settings_with(
         cwd,
         flag,
         &catalogs.user_settings,
         &catalogs.managed_settings,
+        &enabled,
     )
     .map_err(|e| SettingsWriteError::Rebuild {
         source: Box::new(e),
     })?;
-    let rebuilt =
-        build_runtime_config_with(settings, env, RuntimeOverrides::default(), catalogs.clone())
-            .map_err(|e| SettingsWriteError::Rebuild {
-                source: Box::new(e),
-            })?;
+    let rebuilt = build_runtime_config_with(
+        settings,
+        env,
+        RuntimeOverrides::default(),
+        catalogs.clone(),
+        enabled,
+    )
+    .map_err(|e| SettingsWriteError::Rebuild {
+        source: Box::new(e),
+    })?;
     publisher.publish(Arc::new(rebuilt));
     Ok(())
 }

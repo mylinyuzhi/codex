@@ -46,7 +46,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use coco_messages::Message;
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
+
+use crate::cancellation::TurnAbortSignal;
 
 /// Reason field accompanying a [`CanUseToolDecision`]. Mirrors TS
 /// `permissionTypes.ts` `decisionReason` shape so analytics can
@@ -126,9 +127,9 @@ pub enum CanUseToolDecision {
 pub struct CanUseToolCallContext {
     /// The model-emitted tool_use_id for this call.
     pub tool_use_id: String,
-    /// Cancellation token; the callback should respect it for any
-    /// async work (e.g. fs lookups).
-    pub abort: CancellationToken,
+    /// Turn abort signal; the callback should respect it for any async work
+    /// (e.g. fs lookups) and may inspect the structured reason.
+    pub abort: TurnAbortSignal,
     /// When `true`, hook auto-approve cannot bypass the callback.
     /// Speculation needs this so overlay path-rewriting always
     /// runs regardless of hook config.
@@ -146,7 +147,7 @@ impl std::fmt::Debug for CanUseToolCallContext {
         f.debug_struct("CanUseToolCallContext")
             .field("tool_use_id", &self.tool_use_id)
             .field("require_can_use_tool", &self.require_can_use_tool)
-            .field("abort_cancelled", &self.abort.is_cancelled())
+            .field("abort_cancelled", &self.abort.is_aborted())
             .finish_non_exhaustive()
     }
 }

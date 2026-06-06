@@ -11,7 +11,6 @@ use coco_hooks::HookRegistry;
 use coco_hooks::load_hooks_from_config;
 use coco_types::HookScope;
 
-use crate::LoadedPlugin;
 use crate::loader::LoadedPluginV2;
 use crate::schemas::ManifestHooks;
 use crate::schemas::ManifestHooksEntry;
@@ -20,39 +19,11 @@ use crate::schemas::ManifestHooksEntry;
 ///
 /// Hooks are loaded from:
 /// 1. `hooks/hooks.json` in the plugin directory (if present)
-/// 2. The manifest's `hooks` field — either inline JSON or a file path string
+/// 2. The manifest's `hooks` field — either inline JSON object or a file path
+///    string pointing to a JSON file relative to the plugin root.
 ///
 /// Each hook is tagged with `HookScope::Builtin` and has its `status_message`
 /// prefixed with the plugin name for attribution.
-pub fn load_plugin_hooks(plugin: &LoadedPlugin) -> Vec<HookDefinition> {
-    let plugin_name = &plugin.name;
-    let mut hooks = Vec::new();
-
-    // 1. Load from hooks/hooks.json
-    load_hooks_from_dir(&plugin.path, plugin_name, &mut hooks);
-
-    // 2. Load from manifest hooks field (HashMap<String, Value>)
-    if !plugin.manifest.hooks.is_empty() {
-        let hooks_obj = serde_json::Value::Object(
-            plugin
-                .manifest
-                .hooks
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        );
-        load_hooks_from_value(&hooks_obj, plugin_name, &mut hooks);
-    }
-
-    hooks
-}
-
-/// Load hook definitions from a V2 plugin's hooks directory and manifest.
-///
-/// Hooks are loaded from:
-/// 1. `hooks/hooks.json` in the plugin directory (if present)
-/// 2. The manifest's `hooks` field — either inline JSON object or a file path
-///    string pointing to a JSON file relative to the plugin root.
 pub fn load_plugin_hooks_v2(plugin: &LoadedPluginV2) -> Vec<HookDefinition> {
     let plugin_name = &plugin.id.name;
     let mut hooks = Vec::new();
@@ -68,12 +39,7 @@ pub fn load_plugin_hooks_v2(plugin: &LoadedPluginV2) -> Vec<HookDefinition> {
     hooks
 }
 
-/// Load hooks from all enabled plugins (V1).
-pub fn load_all_plugin_hooks(plugins: &[&LoadedPlugin]) -> Vec<HookDefinition> {
-    plugins.iter().flat_map(|p| load_plugin_hooks(p)).collect()
-}
-
-/// Load hooks from all enabled plugins (V2).
+/// Load hooks from all enabled plugins.
 pub fn load_all_plugin_hooks_v2(plugins: &[&LoadedPluginV2]) -> Vec<HookDefinition> {
     plugins
         .iter()
@@ -81,17 +47,10 @@ pub fn load_all_plugin_hooks_v2(plugins: &[&LoadedPluginV2]) -> Vec<HookDefiniti
         .collect()
 }
 
-/// Register all plugin hooks into a `HookRegistry` (V1), deduplicating.
+/// Register all plugin hooks into a `HookRegistry`, deduplicating.
 ///
 /// Uses interior mutability — callers can pass `&Arc<HookRegistry>::deref()`
 /// or a freshly-built `&HookRegistry`.
-pub fn register_plugin_hooks(registry: &HookRegistry, plugins: &[&LoadedPlugin]) {
-    for hook in load_all_plugin_hooks(plugins) {
-        registry.register_deduped(hook);
-    }
-}
-
-/// Register all plugin hooks into a `HookRegistry` (V2), deduplicating.
 pub fn register_plugin_hooks_v2(registry: &HookRegistry, plugins: &[&LoadedPluginV2]) {
     for hook in load_all_plugin_hooks_v2(plugins) {
         registry.register_deduped(hook);

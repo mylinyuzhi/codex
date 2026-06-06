@@ -24,6 +24,7 @@ fn runtime_for_model(selection: &str, home: &TempDir) -> RuntimeConfig {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::empty_in(home.path()),
+        coco_config::parse_enabled_setting_sources(None),
     )
     .expect("runtime config")
 }

@@ -638,7 +638,7 @@ impl QueryEngine {
         crate::tool_context::ToolContextFactory {
             config: self.config.clone(),
             tools: self.tools.clone(),
-            cancel: self.cancel.clone(),
+            turn_abort: self.turn_abort.clone(),
             mailbox: self.mailbox.clone(),
             pending_messages: self.pending_messages.clone(),
             task_list: self.task_list.clone(),
@@ -671,6 +671,7 @@ impl QueryEngine {
             // resources, dynamic `McpTool`) fall back to
             // `NoOpMcpHandle` and surface "not configured" errors.
             mcp_handle: self.mcp_handle.clone(),
+            schedule_store: self.schedule_store.clone(),
             // Session-scoped schema validator. Clone is cheap —
             // inner state is `Arc<RwLock<HashMap>>` shared across
             // per-turn ctx rebuilds so the compile cache persists.
@@ -691,6 +692,18 @@ impl QueryEngine {
             // batch. See `engine_live_rules` for the lifecycle.
             live_command_rules: self.live_command_rules.clone(),
         }
+    }
+
+    /// Build a representative base [`ToolUseContext`](coco_tool_runtime::ToolUseContext)
+    /// for this session. app/cli uses it to back the in-prompt-shell
+    /// `BashToolHandle` (the handle clones it per command and folds in the
+    /// skill's `allowed-tools` before the permission check + Bash execution).
+    /// Carries the same resolved tool config, sandbox state, permission
+    /// context, handles, and cwd cell a per-turn tool call would receive.
+    pub async fn build_base_tool_context(&self) -> coco_tool_runtime::ToolUseContext {
+        self.tool_context_factory(None)
+            .build(crate::tool_context::ToolContextOverrides::default())
+            .await
     }
 
     /// Detect local-date rollover for the `date_change` system reminder.

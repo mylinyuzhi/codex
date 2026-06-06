@@ -7,11 +7,11 @@ use std::collections::HashSet;
 /// continuing. Update both the constant and the TS `Attachment` union
 /// size in the README.
 #[test]
-fn attachment_kind_all_has_60_variants() {
+fn attachment_kind_all_has_61_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        60,
-        "TS Attachment union size snapshot"
+        61,
+        "60 TS Attachment union members + coco-rs-synthetic user_context"
     );
 }
 
@@ -69,7 +69,10 @@ fn coverage_distribution_matches_readme_snapshot() {
     // is the only audit-add kind owned by the model-visible reminder path;
     // API-hidden audit-add kinds are typed silent events or inactive runtime
     // bookkeeping.
-    assert_eq!(reminder, 39, "in-crate reminders");
+    assert_eq!(
+        reminder, 40,
+        "in-crate reminders (incl. synthetic user_context)"
+    );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
     assert_eq!(outside, 6, "owned by sister crates");
     assert_eq!(silent_event, 9, "typed API-hidden events");
@@ -77,8 +80,8 @@ fn coverage_distribution_matches_readme_snapshot() {
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        60,
-        "total must match union size"
+        61,
+        "total must match union size + synthetic user_context"
     );
 }
 

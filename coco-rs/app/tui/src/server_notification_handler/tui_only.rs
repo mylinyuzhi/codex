@@ -336,10 +336,15 @@ pub(super) fn handle(
             }
             true
         }
+        TuiOnlyEvent::ToolInterruptibilityChanged { interruptible } => {
+            state.session.has_submit_interruptible_tool_in_progress = interruptible;
+            true
+        }
         TuiOnlyEvent::ToolExecutionAborted {
             tool_use_id: _,
             reason,
         } => {
+            let reason = format!("{reason:?}");
             state.ui.add_toast(Toast::warning(
                 t!("toast.tool_aborted_full", reason = reason.as_str()).to_string(),
             ));
@@ -421,6 +426,16 @@ pub(super) fn handle(
             state.ui.show_modal(ModalState::SkillsDialog(
                 crate::state::SkillsDialogState::from_wire(payload),
             ));
+            true
+        }
+        TuiOnlyEvent::OpenPluginDialog { payload } => {
+            if let Some(ModalState::PluginDialog(existing)) = state.ui.modal.as_mut() {
+                *existing = crate::state::PluginDialogState::from_wire(payload);
+            } else {
+                state.ui.show_modal(ModalState::PluginDialog(
+                    crate::state::PluginDialogState::from_wire(payload),
+                ));
+            }
             true
         }
         // /agents — 2-tab overlay (Running + Library). Running tab
@@ -554,6 +569,10 @@ pub(super) fn handle(
         }
         TuiOnlyEvent::OpenModelPicker => {
             crate::update::show::cycle_model(state);
+            true
+        }
+        TuiOnlyEvent::OpenSettings => {
+            crate::update::show::settings(state);
             true
         }
         TuiOnlyEvent::OpenThemePicker => {

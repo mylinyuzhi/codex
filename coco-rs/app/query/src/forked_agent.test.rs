@@ -101,7 +101,7 @@ async fn test_deny_all_handle_round_trip() {
     let handle = deny_all_handle("prompt_suggestion: tools disabled");
     let ctx = CanUseToolCallContext {
         tool_use_id: "tu-1".into(),
-        abort: CancellationToken::new(),
+        abort: coco_tool_runtime::TurnAbortSignal::from_token(CancellationToken::new()),
         require_can_use_tool: false,
         messages: Arc::new(Vec::<Arc<Message>>::new()),
     };

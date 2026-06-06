@@ -17,6 +17,8 @@ pub use error::SkillsError;
 pub use overrides::effective_skill_state;
 pub use overrides::resolve_skill_baseline;
 pub use overrides::resolve_skill_override_lock;
+pub use shell_exec::BashToolHandle;
+pub use shell_exec::NoOpBashToolHandle;
 // `estimate_skill_frontmatter_bytes` is defined at the crate root
 // further down; just listed here as a reminder it is part of the
 // public surface used by the `/skills` dialog payload builder.
@@ -363,6 +365,22 @@ impl SkillManager {
         (delta, is_initial)
     }
 
+    /// Clear the per-agent announcement map so every skill re-announces
+    /// on the next listing pass. Called after a disk reload (the catalog
+    /// changed, so an edited same-named skill must surface again) and on
+    /// `/clear` (the conversation is reset).
+    ///
+    /// TS parity: `resetSentSkillNames()` (`attachments.ts:2607-2613`)
+    /// wipes the `sentSkillNames` Map on every debounced reload
+    /// (`skillChangeDetector.ts:276`) and on `/clear` (`caches.ts:75-79`).
+    pub fn reset_announcements(&self) {
+        let mut guard = self
+            .announcements
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clear();
+    }
+
     /// Register (or replace) an on-disk / bundled skill. Interior-mut,
     /// safe to call on a shared `Arc<SkillManager>`.
     ///
@@ -642,6 +660,37 @@ impl SkillManager {
             self.register(skill);
         }
     }
+
+    /// Load skills from a legacy `commands/` directory ([`SkillDirFormat::Legacy`]
+    /// — both `SKILL.md` directories and flat `.md` files), tagging each with
+    /// the given setting-source scope.
+    ///
+    /// TS: `loadSkillsFromCommandsDir` (`loadSkillsDir.ts:566-623`), which
+    /// feeds `getSkillDirCommands` and dedups against `skills/` by realpath.
+    /// The source's path is preserved so `canonical_skill_identity` can
+    /// dedup these against the `skills/`-loaded copies via
+    /// `disk_file_identities`.
+    fn load_legacy_command_scope(&self, scope: SettingScope, dir: &Path) {
+        self.load_with_source(dir, SkillDirFormat::Legacy, |path| scope.source_for(path));
+    }
+}
+
+/// Setting-source scope for legacy `commands/` directory loading.
+#[derive(Debug, Clone, Copy)]
+enum SettingScope {
+    Managed,
+    User,
+    Project,
+}
+
+impl SettingScope {
+    fn source_for(self, path: PathBuf) -> SkillSource {
+        match self {
+            Self::Managed => SkillSource::Managed { path },
+            Self::User => SkillSource::User { path },
+            Self::Project => SkillSource::Project { path },
+        }
+    }
 }
 
 /// Per-scope skill directory configuration for `SkillManager::load_scoped`.
@@ -740,6 +789,14 @@ pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<Pa
     let mut result: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
+    // #197 / TS `discoverSkillDirsForPaths` runs `isPathGitignored` before
+    // adding each dir, so e.g. `node_modules/pkg/.coco/skills` is skipped.
+    // Fails open outside a git repo (PathChecker ignores nothing).
+    let ignore_checker = coco_file_ignore::PathChecker::new(
+        &resolved_cwd,
+        &coco_file_ignore::IgnoreConfig::default(),
+    );
+
     for &file_path in file_paths {
         // Start at the file's parent dir (skip the file itself).
         let Some(start_parent) = file_path.parent() else {
@@ -755,9 +812,13 @@ pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<Pa
                 break;
             }
 
-            let skill_dir = current_dir.join(".coco").join("skills");
-            if seen.insert(skill_dir.clone()) && skill_dir.is_dir() {
-                result.push(skill_dir);
+            // Skip gitignored containing dirs (node_modules, build dirs,
+            // etc.) but keep walking up to non-ignored ancestors.
+            if !ignore_checker.is_ignored(&current_dir) {
+                let skill_dir = current_dir.join(".coco").join("skills");
+                if seen.insert(skill_dir.clone()) && skill_dir.is_dir() {
+                    result.push(skill_dir);
+                }
             }
 
             // Walk to parent. Stop at root or if we cycle (shouldn't
@@ -1182,18 +1243,80 @@ fn scalar_to_string(v: &coco_frontmatter::FrontmatterValue) -> Option<String> {
     }
 }
 
-/// Platform-specific managed skills directory.
+/// Platform-specific managed configuration base directory.
 ///
 /// TS: `getManagedFilePath()` in `managedPath.ts`.
-pub fn get_managed_skills_path() -> PathBuf {
+fn managed_base_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Library/Application Support/ClaudeCode/.claude/skills")
+        PathBuf::from("/Library/Application Support/ClaudeCode/.claude")
     }
     #[cfg(not(target_os = "macos"))]
     {
         // Linux and other Unix platforms
-        PathBuf::from("/etc/claude-code/.claude/skills")
+        PathBuf::from("/etc/claude-code/.claude")
+    }
+}
+
+/// Platform-specific managed skills directory.
+///
+/// TS: `getManagedFilePath()` + `.claude/skills` in `loadSkillsDir.ts:641`.
+pub fn get_managed_skills_path() -> PathBuf {
+    managed_base_path().join("skills")
+}
+
+/// Platform-specific managed legacy `commands/` directory.
+///
+/// TS: `getManagedFilePath()` + `.claude/commands` (the managed scope of
+/// `loadMarkdownFilesForSubdir('commands', …)`).
+pub fn get_managed_commands_path() -> PathBuf {
+    managed_base_path().join("commands")
+}
+
+/// Per-scope load gates for [`build_session_skill_manager`], resolved by the
+/// app layer from `--setting-sources`, the `strictPluginOnlyCustomization`
+/// policy (`skills` surface), `--add-dir`, and `COCO_DISABLE_POLICY_SKILLS`.
+///
+/// TS parity: the `isSettingSourceEnabled(...) && !skillsLocked` guards in
+/// `loadSkillsDir.ts::getSkillDirCommands`. Bundled skills always load and are
+/// not gated here. When `skills_locked` is set, only managed (policy) skills
+/// load — user, project, legacy, and additional dirs are all skipped (the
+/// policy locks customization surfaces to plugin-only sources).
+#[derive(Debug, Clone)]
+pub struct SkillLoadGates {
+    /// Load managed/policy `.claude/skills`. Gated by `COCO_DISABLE_POLICY_SKILLS`.
+    pub managed_enabled: bool,
+    /// Load user `~/.coco/skills`. Requires `userSettings` enabled and not locked.
+    pub user_enabled: bool,
+    /// Load project `.coco/skills` walk-up. Requires `projectSettings` enabled
+    /// and not locked.
+    pub project_enabled: bool,
+    /// Load legacy `.coco/commands` dirs (managed → user → project up-to-home).
+    /// Gated like project per TS `loadSkillsFromCommandsDir` (`!skillsLocked`).
+    pub legacy_enabled: bool,
+    /// Load `.coco/skills` under each `--add-dir` path. Requires project scope
+    /// enabled (and not locked).
+    pub additional_dirs_enabled: bool,
+    /// Resolved `--add-dir` (and settings `additional_directories`) roots.
+    pub additional_dirs: Vec<PathBuf>,
+    /// `strictPluginOnlyCustomization` locks the `skills` surface. When set,
+    /// only managed skills load regardless of the other gates.
+    pub skills_locked: bool,
+}
+
+impl SkillLoadGates {
+    /// All scopes enabled, no additional dirs, nothing locked. Used by tests
+    /// and callers that don't carry a resolved `RuntimeConfig`.
+    pub fn all_enabled() -> Self {
+        Self {
+            managed_enabled: true,
+            user_enabled: true,
+            project_enabled: true,
+            legacy_enabled: true,
+            additional_dirs_enabled: true,
+            additional_dirs: Vec::new(),
+            skills_locked: false,
+        }
     }
 }
 
@@ -1205,20 +1328,66 @@ pub fn get_managed_skills_path() -> PathBuf {
 /// the same catalog and cannot drift. Mirrors TS `loadSkillsDir.ts`
 /// (`getLimitedSkillToolCommands`), which always folds bundled commands
 /// into the session skill set.
-pub fn build_session_skill_manager(config_home: &Path, cwd: &Path) -> SkillManager {
+///
+/// `gates` controls which disk scopes load (per `--setting-sources` and the
+/// `strictPluginOnlyCustomization` policy). `skills_locked` forces a managed-
+/// only load. Order mirrors TS: managed → user → project walk-up → additional
+/// `--add-dir` `.coco/skills`. The [`SkillManager`] dedups by canonical path
+/// (first-wins), so overlapping dirs don't double-register.
+pub fn build_session_skill_manager(
+    config_home: &Path,
+    cwd: &Path,
+    gates: &SkillLoadGates,
+) -> SkillManager {
     let manager = SkillManager::new();
     bundled::register_bundled(&manager);
 
-    manager.load_scoped(&SkillScopes {
-        managed: Some(get_managed_skills_path()),
-        user_skills: Some(config_home.join("skills")),
-        ..SkillScopes::default()
-    });
-    for project_skills in project_skill_dirs_up_to_home(cwd) {
+    // Managed/policy skills — gated by COCO_DISABLE_POLICY_SKILLS only; the
+    // `skills` lock does NOT skip managed (admin-controlled sources always load).
+    if gates.managed_enabled {
         manager.load_scoped(&SkillScopes {
-            project_skills: Some(project_skills),
+            managed: Some(get_managed_skills_path()),
             ..SkillScopes::default()
         });
+    }
+
+    // User + project + additional skills, and legacy commands, are ALL skipped
+    // when the `skills` surface is locked (TS `!skillsLocked`).
+    if !gates.skills_locked {
+        if gates.user_enabled {
+            manager.load_scoped(&SkillScopes {
+                user_skills: Some(config_home.join("skills")),
+                ..SkillScopes::default()
+            });
+        }
+        if gates.project_enabled {
+            for project_skills in project_skill_dirs_up_to_home(cwd) {
+                manager.load_scoped(&SkillScopes {
+                    project_skills: Some(project_skills),
+                    ..SkillScopes::default()
+                });
+            }
+        }
+        if gates.additional_dirs_enabled {
+            for dir in &gates.additional_dirs {
+                manager.load_scoped(&SkillScopes {
+                    project_skills: Some(dir.join(".coco").join("skills")),
+                    ..SkillScopes::default()
+                });
+            }
+        }
+        // Legacy commands-as-skills. TS `getSkillDirCommands` folds the
+        // deprecated `commands/` dirs (managed → user → project up-to-home)
+        // via `loadSkillsFromCommandsDir` (`loadSkillsDir.ts:713`), both
+        // `SKILL.md` dirs and flat `.md`. Dedup by canonical realpath inside
+        // `insert_disk` (first-wins → the `skills/` copy loaded above).
+        if gates.legacy_enabled {
+            manager.load_legacy_command_scope(SettingScope::Managed, &get_managed_commands_path());
+            manager.load_legacy_command_scope(SettingScope::User, &config_home.join("commands"));
+            for project_commands in project_command_dirs_up_to_home(cwd) {
+                manager.load_legacy_command_scope(SettingScope::Project, &project_commands);
+            }
+        }
     }
 
     manager
@@ -1239,11 +1408,39 @@ pub fn get_skill_paths(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
 }
 
 pub(crate) fn project_skill_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
+    project_dirs_up_to_home(cwd, "skills")
+}
+
+/// Legacy `.coco/commands` directories walked from `cwd` up to home,
+/// mirroring [`project_skill_dirs_up_to_home`] but for the deprecated
+/// commands subdir. TS `getProjectDirsUpToHome('commands', cwd)`.
+pub(crate) fn project_command_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
+    project_dirs_up_to_home(cwd, "commands")
+}
+
+/// Walk from `cwd` upward, collecting `.coco/<subdir>` at each level, and stop
+/// at the **git root OR home — whichever comes first**.
+///
+/// TS `getProjectDirsUpToHome` (`utils/markdownConfigLoader.ts:234-289`) stops
+/// after processing the git root specifically to "prevent commands from parent
+/// directories outside the repository from appearing in the project scope".
+/// Without the git-root boundary, sibling repos sharing a parent dir (e.g.
+/// `~/projects` holding a stray `~/projects/.coco/skills`) would leak skills
+/// into every child repo. We detect the git root by the presence of a `.git`
+/// entry — a directory for the main checkout, a file for a linked worktree —
+/// which is equivalent to `git rev-parse --show-toplevel` for this boundary
+/// without spawning a subprocess. Home remains the upper bound when cwd is not
+/// inside a repo.
+fn project_dirs_up_to_home(cwd: &Path, subdir: &str) -> Vec<PathBuf> {
     let home = dirs::home_dir();
     let mut dirs = Vec::new();
     let mut current = cwd.to_path_buf();
     loop {
-        dirs.push(current.join(".coco").join("skills"));
+        dirs.push(current.join(".coco").join(subdir));
+        // Stop after including the git root (TS parity — project isolation).
+        if current.join(".git").exists() {
+            break;
+        }
         if home.as_deref() == Some(current.as_path()) {
             break;
         }
@@ -1371,27 +1568,35 @@ fn skill_listing_mode(
     }
 }
 
+/// Char-safe truncation: returns `s` unchanged when within `max` chars, else
+/// the first `max - 3` chars plus `...`. Never slices a multi-byte boundary
+/// (the old byte-index `&s[..n]` form panicked on UTF-8 descriptions).
+fn truncate_with_ellipsis(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(3)).collect();
+    out.push_str("...");
+    out
+}
+
 /// Format a single skill entry for the listing, capping description length.
 fn format_skill_entry(skill: &SkillDefinition, mode: ListingMode) -> String {
     let mut entry = format!("- /{}", skill.name);
     if matches!(mode, ListingMode::Full) {
         if !skill.description.is_empty() {
-            let desc = if skill.description.len() > MAX_LISTING_DESC_CHARS {
-                format!("{}...", &skill.description[..MAX_LISTING_DESC_CHARS - 3])
-            } else {
-                skill.description.clone()
-            };
-            entry.push_str(&format!(": {desc}"));
+            entry.push_str(&format!(
+                ": {}",
+                truncate_with_ellipsis(&skill.description, MAX_LISTING_DESC_CHARS)
+            ));
         }
         if let Some(when) = &skill.when_to_use {
-            let remaining = MAX_LISTING_DESC_CHARS.saturating_sub(entry.len());
+            let remaining = MAX_LISTING_DESC_CHARS.saturating_sub(entry.chars().count());
             if remaining > 20 {
-                let when_text = if when.len() > remaining - 5 {
-                    format!("{}...", &when[..remaining - 8])
-                } else {
-                    when.clone()
-                };
-                entry.push_str(&format!(" - {when_text}"));
+                entry.push_str(&format!(
+                    " - {}",
+                    truncate_with_ellipsis(when, remaining - 5)
+                ));
             }
         }
     }

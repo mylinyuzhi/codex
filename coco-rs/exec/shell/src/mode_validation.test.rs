@@ -38,3 +38,13 @@ fn test_accept_edits_empty() {
     assert!(!is_auto_allowed_in_accept_edits(""));
     assert!(!is_auto_allowed_in_accept_edits("   "));
 }
+
+#[test]
+fn test_accept_edits_compound_command_finds_filesystem_subcommand() {
+    // Split-aware: a filesystem command anywhere in a compound command
+    // auto-allows (TS checkPermissionMode), not just the first base executable.
+    assert!(is_auto_allowed_in_accept_edits("cd src && rm old.txt"));
+    assert!(is_auto_allowed_in_accept_edits("cd build; mkdir -p out"));
+    // Still rejects when no subcommand is a filesystem command.
+    assert!(!is_auto_allowed_in_accept_edits("cd src && cargo build"));
+}

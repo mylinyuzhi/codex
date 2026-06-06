@@ -1226,3 +1226,32 @@ fn test_timeout_fused_k_invalid_rejected() {
         "timeout -k$(evil) should be rejected"
     );
 }
+
+#[test]
+fn test_dangerous_variables_redirect_contexts() {
+    // $VAR before a redirect, and a redirect before $VAR — both flag now
+    // (the original port only matched `$VAR |`). TS validateDangerousVariables.
+    for src in [
+        "cat $FILE > out.txt",
+        "cat > $OUT",
+        "wc -l < $INPUT",
+        "echo $X | grep y",
+    ] {
+        let analysis = analyze_command(src);
+        assert!(
+            analysis
+                .risks
+                .iter()
+                .any(|r| r.kind == RiskKind::DangerousVariables),
+            "expected DangerousVariables for: {src}"
+        );
+    }
+    // A plain variable with no adjacent pipe/redirect does not flag.
+    let safe = analyze_command("echo $HOME");
+    assert!(
+        !safe
+            .risks
+            .iter()
+            .any(|r| r.kind == RiskKind::DangerousVariables)
+    );
+}

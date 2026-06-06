@@ -142,9 +142,13 @@ fn cleanup_destroys_member_worktrees_and_tasks_dir() {
     std::fs::create_dir_all(&tasks_dir).unwrap();
     std::fs::write(tasks_dir.join("t.json"), "{}").unwrap();
 
-    cleanup_team_directories(&team_name).expect("cleanup ok");
+    let outcome = cleanup_team_directories(&team_name).expect("cleanup ok");
 
     assert!(!worktree.exists(), "member worktree should be destroyed");
     assert!(!team_dir.exists(), "team dir should be removed");
     assert!(!tasks_dir.exists(), "task-list dir should be removed");
+    assert!(
+        outcome.tasks_dir_removed,
+        "tasks_dir_removed must be true on the success path (gates notify)",
+    );
 }

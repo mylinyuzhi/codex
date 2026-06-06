@@ -17,6 +17,13 @@ use coco_types::CommandSafety;
 use coco_types::CommandType;
 use coco_types::LocalCommandData;
 
+/// `/compact` visibility gate: hidden when `COCO_COMPACT_DISABLE` is truthy,
+/// matching TS `commands/compact/index.ts:9`. A function pointer (not a
+/// captured closure) so it fits `IsEnabledFn` and re-reads the env each call.
+fn compact_command_enabled() -> bool {
+    !coco_config::env::is_env_truthy(coco_config::EnvKey::CocoCompactDisable)
+}
+
 // ── All command name constants (mirrors every TS commands/ directory) ─────
 
 pub mod names {
@@ -267,7 +274,8 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         (
             names::CONFIG,
             "Show or modify configuration",
-            &["configuration"],
+            // TS parity: `commands/config/index.ts:4` aliases `['settings']`.
+            &["settings"],
             config_extended_handler,
             true,
             LocalOnly,
@@ -526,7 +534,8 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         (
             names::CLEAR,
             "Clear conversation history and start fresh",
-            &[],
+            // TS parity: `commands/clear/index.ts` aliases `['reset', 'new']`.
+            &["reset", "new"],
             handlers::clear::handler,
             false,
             AlwaysSafe,
@@ -605,7 +614,16 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             base,
             command_type,
             handler: Some(handler),
-            is_enabled: None,
+            // `/compact` is hidden when the kill switch is set (TS
+            // `commands/compact/index.ts:9` `isEnabled: () =>
+            // !isEnvTruthy(DISABLE_COMPACT)`); every other async command is
+            // always enabled. The runtime hard-kill is enforced separately in
+            // `engine_compaction::run_manual_compact`.
+            is_enabled: if name == names::COMPACT {
+                Some(compact_command_enabled)
+            } else {
+                None
+            },
         });
     }
 
@@ -1518,6 +1536,28 @@ pub fn register_ts_parity_handlers(
         });
     }
 
+    // /plugin — TS local-jsx plugin manager. No-args opens the TUI dialog;
+    // subcommands (`list`, `install`, `marketplace`, ...) keep text output for
+    // headless/script consumers.
+    {
+        let mut base = crate::builtin_base_ext(
+            names::PLUGIN,
+            "Manage installed plugins",
+            &["plugins", "marketplace"],
+            CommandSafety::LocalOnly,
+            Some("[list|install|uninstall] [name]"),
+        );
+        base.loaded_from = Some(CommandSource::Builtin);
+        registry.register(RegisteredCommand {
+            base,
+            command_type: CommandType::LocalOverlay(LocalCommandData {
+                handler: names::PLUGIN.to_string(),
+            }),
+            handler: Some(Arc::new(handlers::plugin::PluginHandler)),
+            is_enabled: None,
+        });
+    }
+
     // /memory — TS: commands/memory/memory.tsx (local-jsx Dialog)
     {
         let mut base = crate::builtin_base_ext(
@@ -1583,6 +1623,7 @@ pub fn register_ts_parity_handlers(
             None,
         );
         base.loaded_from = Some(CommandSource::Builtin);
+        let bash_cell = registry.bash_tool_handle_cell();
         registry.register(RegisteredCommand {
             base,
             command_type: CommandType::Prompt(coco_types::PromptCommandData {
@@ -1601,6 +1642,7 @@ pub fn register_ts_parity_handlers(
                     progress_message: "analyzing code changes for security risks".to_string(),
                     body: SECURITY_REVIEW_PROMPT.to_string(),
                     args_handling: handlers::prompt_command::ArgsHandling::Static,
+                    bash_tool_handle: bash_cell,
                 },
             )),
             is_enabled: None,

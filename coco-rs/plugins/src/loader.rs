@@ -165,7 +165,8 @@ impl PluginLoader {
             let plugin_id_str = format!("{}@{}", entry.name, marketplace.name);
             let enabled = enabled_plugins.contains(&plugin_id_str);
 
-            let cache_dir = self.resolve_cache_path(&marketplace.name, &entry.name);
+            let cache_dir =
+                self.resolve_cache_path(&marketplace.name, &entry.name, entry.version.as_deref());
 
             if !cache_dir.exists() {
                 if enabled {
@@ -188,6 +189,68 @@ impl PluginLoader {
                 Err(err) => {
                     result.errors.push(err);
                 }
+            }
+        }
+
+        result
+    }
+
+    /// Load the complete active plugin set from every source — the production
+    /// orchestrator (TS `loadAllPlugins`).
+    ///
+    /// Marketplace plugins load from the versioned cache layout
+    /// (`cache/{mkt}/{plugin}/{version}`), enabled iff listed in `enabled_ids` (a
+    /// marketplace plugin must be opted in to load at all). Inline (local)
+    /// plugins under the standing dirs — each a `PLUGIN.toml`/`plugin.json`
+    /// directory — get identity `name@inline`, enabled unless explicitly listed
+    /// in `disabled_ids`. Builtins are merged in by the caller (TS
+    /// `getBuiltinPlugins`).
+    ///
+    /// Inline overrides a marketplace plugin of the same name (TS
+    /// `mergePluginSources`). Dependency-closure demotion (TS `verifyAndDemote`)
+    /// then flips any plugin whose declared `dependencies` aren't all enabled to
+    /// `enabled=false` — session-local, never written back to settings.
+    pub fn load_all_plugins(
+        &self,
+        standing_plugin_dirs: &[PathBuf],
+        marketplaces: &[PluginMarketplace],
+        enabled_ids: &HashSet<String>,
+        disabled_ids: &HashSet<String>,
+    ) -> PluginLoadResult {
+        let mut result = PluginLoadResult::default();
+
+        // 1. Marketplace plugins (versioned cache, must be opted in).
+        for mkt in marketplaces {
+            let mut r = self.load_from_marketplace(mkt, enabled_ids);
+            result.plugins.append(&mut r.plugins);
+            result.errors.append(&mut r.errors);
+        }
+
+        // 2. Inline / local standing-dir plugins. Skip reserved dirs (cache,
+        // marketplaces, data, …) and dirs without a manifest so they don't
+        // pollute `errors`.
+        for dir in standing_plugin_dirs {
+            if !dir.is_dir() || is_reserved_plugin_dir(dir) || !dir_has_manifest(dir) {
+                continue;
+            }
+            match self.load_from_dir(dir, PluginLoadSource::SessionDir, None) {
+                Ok(mut plugin) => {
+                    plugin.enabled = !disabled_ids.contains(&plugin.id.as_str());
+                    // Inline overrides a marketplace plugin of the same name.
+                    result
+                        .plugins
+                        .retain(|existing| existing.id.name != plugin.id.name);
+                    result.plugins.push(plugin);
+                }
+                Err(err) => result.errors.push(err),
+            }
+        }
+
+        // 3. Dependency-closure demotion (session-local).
+        let demoted = verify_and_demote(&result.plugins);
+        for plugin in &mut result.plugins {
+            if demoted.contains(&plugin.id.as_str()) {
+                plugin.enabled = false;
             }
         }
 
@@ -228,14 +291,48 @@ impl PluginLoader {
         })
     }
 
-    /// Compute the cache directory path for a marketplace plugin.
-    fn resolve_cache_path(&self, marketplace: &str, plugin_name: &str) -> PathBuf {
-        let sanitized_mkt = sanitize_for_path(marketplace);
-        let sanitized_plugin = sanitize_for_path(plugin_name);
-        self.plugins_dir
+    /// Resolve the on-disk cache directory for a marketplace plugin, INCLUDING
+    /// the version segment the installer writes
+    /// (`cache/{mkt}/{plugin}/{version|latest}`, see
+    /// `MarketplaceManager::install_plugin`). Prefers the requested version,
+    /// then `latest`, then the newest version subdir; falls back to the
+    /// non-versioned base for legacy installs. (Without the version segment the
+    /// loader looked one directory too shallow and never found installs.)
+    fn resolve_cache_path(
+        &self,
+        marketplace: &str,
+        plugin_name: &str,
+        version: Option<&str>,
+    ) -> PathBuf {
+        let base = self
+            .plugins_dir
             .join("cache")
-            .join(sanitized_mkt)
-            .join(sanitized_plugin)
+            .join(sanitize_for_path(marketplace))
+            .join(sanitize_for_path(plugin_name));
+
+        if let Some(v) = version {
+            let versioned = base.join(sanitize_for_path(v));
+            if versioned.exists() {
+                return versioned;
+            }
+        }
+        let latest = base.join("latest");
+        if latest.exists() {
+            return latest;
+        }
+        // Newest version subdir (lexical max — matches the install sanitizer).
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            let mut version_dirs: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
+            version_dirs.sort();
+            if let Some(newest) = version_dirs.pop() {
+                return newest;
+            }
+        }
+        base
     }
 
     /// Discover and load session-only plugins from --plugin-dir paths.
@@ -334,25 +431,6 @@ impl PluginLoader {
 // Dependency resolution (TS: dependencyResolver.ts)
 // ---------------------------------------------------------------------------
 
-/// Result of dependency resolution.
-#[derive(Debug)]
-pub enum DependencyResolution {
-    /// Resolved successfully; `closure` includes the root + all transitive deps.
-    Ok { closure: Vec<String> },
-    /// A cycle was detected.
-    Cycle { chain: Vec<String> },
-    /// A dependency was not found.
-    NotFound {
-        missing: String,
-        required_by: String,
-    },
-    /// A cross-marketplace dependency was blocked.
-    CrossMarketplace {
-        dependency: String,
-        required_by: String,
-    },
-}
-
 /// Normalize a bare dependency name to "name@marketplace" if the declaring
 /// plugin has a known marketplace. Inline plugins keep bare dep names.
 pub fn qualify_dependency(dep: &str, declaring_plugin_id: &str) -> String {
@@ -368,117 +446,21 @@ pub fn qualify_dependency(dep: &str, declaring_plugin_id: &str) -> String {
     dep.to_string()
 }
 
-/// Minimal lookup result for dependency resolution.
-pub struct DependencyLookupResult {
-    pub dependencies: Vec<String>,
+/// Reserved subdirectories of the plugins root that are infrastructure, not
+/// standing plugins (marketplace cache + catalogs + plugin data + npm cache).
+const RESERVED_PLUGIN_SUBDIRS: &[&str] = &["cache", "marketplaces", "data", "npm-cache"];
+
+/// True if `dir`'s final component is a reserved infra dir (so the orchestrator
+/// doesn't try to load `~/.coco/plugins/cache` as a plugin).
+fn is_reserved_plugin_dir(dir: &Path) -> bool {
+    dir.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| RESERVED_PLUGIN_SUBDIRS.contains(&n))
 }
 
-/// Walk the transitive dependency closure of `root_id` via DFS.
-///
-/// Security: cross-marketplace deps are blocked unless explicitly in
-/// `allowed_cross_marketplaces`.
-pub fn resolve_dependency_closure(
-    root_id: &str,
-    lookup: &dyn Fn(&str) -> Option<DependencyLookupResult>,
-    already_enabled: &HashSet<String>,
-    allowed_cross_marketplaces: &HashSet<String>,
-) -> DependencyResolution {
-    let root_marketplace = PluginId::parse(root_id).map(|id| id.marketplace);
-
-    let mut closure = Vec::new();
-    let mut visited = HashSet::new();
-    let mut stack = Vec::new();
-
-    #[allow(clippy::too_many_arguments)]
-    fn walk(
-        id: &str,
-        required_by: &str,
-        root_id: &str,
-        root_marketplace: &Option<String>,
-        lookup: &dyn Fn(&str) -> Option<DependencyLookupResult>,
-        already_enabled: &HashSet<String>,
-        allowed_cross_marketplaces: &HashSet<String>,
-        closure: &mut Vec<String>,
-        visited: &mut HashSet<String>,
-        stack: &mut Vec<String>,
-    ) -> Option<DependencyResolution> {
-        // Skip already-enabled dependencies (but never skip root).
-        if id != root_id && already_enabled.contains(id) {
-            return None;
-        }
-
-        // Cross-marketplace security check.
-        if let Some(root_mkt) = root_marketplace
-            && let Some(dep_id) = PluginId::parse(id)
-            && &dep_id.marketplace != root_mkt
-            && !allowed_cross_marketplaces.contains(&dep_id.marketplace)
-        {
-            return Some(DependencyResolution::CrossMarketplace {
-                dependency: id.to_string(),
-                required_by: required_by.to_string(),
-            });
-        }
-
-        if stack.contains(&id.to_string()) {
-            let mut chain: Vec<String> = stack.clone();
-            chain.push(id.to_string());
-            return Some(DependencyResolution::Cycle { chain });
-        }
-        if visited.contains(id) {
-            return None;
-        }
-        visited.insert(id.to_string());
-
-        let entry = match lookup(id) {
-            Some(e) => e,
-            None => {
-                return Some(DependencyResolution::NotFound {
-                    missing: id.to_string(),
-                    required_by: required_by.to_string(),
-                });
-            }
-        };
-
-        stack.push(id.to_string());
-        for raw_dep in &entry.dependencies {
-            let dep = qualify_dependency(raw_dep, id);
-            if let Some(err) = walk(
-                &dep,
-                id,
-                root_id,
-                root_marketplace,
-                lookup,
-                already_enabled,
-                allowed_cross_marketplaces,
-                closure,
-                visited,
-                stack,
-            ) {
-                return Some(err);
-            }
-        }
-        stack.pop();
-
-        closure.push(id.to_string());
-        None
-    }
-
-    if let Some(err) = walk(
-        root_id,
-        root_id,
-        root_id,
-        &root_marketplace,
-        lookup,
-        already_enabled,
-        allowed_cross_marketplaces,
-        &mut closure,
-        &mut visited,
-        &mut stack,
-    ) {
-        return err;
-    }
-
-    DependencyResolution::Ok { closure }
+/// True if `dir` holds a plugin manifest (`PLUGIN.toml` or `plugin.json`).
+fn dir_has_manifest(dir: &Path) -> bool {
+    dir.join("PLUGIN.toml").exists() || dir.join("plugin.json").exists()
 }
 
 /// Verify that all enabled plugins have their dependencies satisfied.

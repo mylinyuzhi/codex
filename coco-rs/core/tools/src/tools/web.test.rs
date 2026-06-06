@@ -1193,3 +1193,28 @@ fn webfetch_render_emits_redirect_blocked_message() {
     assert!(text.contains("redirected"), "got: {text}");
     assert!(text.contains("other.example.com"), "got: {text}");
 }
+
+// ---------------------------------------------------------------------------
+// #57 — binary content persistence helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mime_to_extension() {
+    use super::mime_to_extension;
+    assert_eq!(mime_to_extension("image/png"), "png");
+    assert_eq!(mime_to_extension("image/jpeg; charset=binary"), "jpg");
+    assert_eq!(mime_to_extension("application/zip"), "zip");
+    assert_eq!(mime_to_extension("application/octet-stream"), "bin");
+}
+
+#[test]
+fn test_persist_binary_content_writes_file() {
+    use super::persist_binary_content;
+    let bytes = b"\x89PNG\r\n\x1a\nfake-image-bytes";
+    let (path, size) = persist_binary_content(bytes, "image/png").unwrap();
+    assert_eq!(size, bytes.len());
+    assert!(path.ends_with(".png"), "path should have png ext: {path}");
+    let on_disk = std::fs::read(&path).unwrap();
+    assert_eq!(on_disk, bytes);
+    let _ = std::fs::remove_file(&path);
+}

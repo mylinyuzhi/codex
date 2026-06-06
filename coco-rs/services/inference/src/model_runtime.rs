@@ -1591,6 +1591,7 @@ fn recovery_probe_params() -> QueryParams {
         agentic: false,
         stop_sequences: None,
         response_format: None,
+        cancel: None,
     }
 }
 

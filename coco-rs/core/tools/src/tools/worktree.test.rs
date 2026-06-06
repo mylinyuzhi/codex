@@ -82,7 +82,12 @@ async fn test_enter_worktree_rejects_missing_app_state_before_mutation() {
     .await;
 
     assert!(result.is_err());
-    assert_eq!(std::env::current_dir().unwrap(), repo);
+    // Canonicalize both sides: on macOS the tempdir lives under /var which is a
+    // symlink to /private/var, so current_dir() resolves while `repo` does not.
+    assert_eq!(
+        std::env::current_dir().unwrap().canonicalize().unwrap(),
+        repo.canonicalize().unwrap()
+    );
     assert_eq!(*session_cwd.read().await, repo);
     assert!(!temp.path().join("worktrees").join("missing-state").exists());
 }
@@ -117,6 +122,7 @@ async fn test_exit_worktree_refuses_unverifiable_without_discard() {
             original_cwd: original,
             worktree_path: worktree,
             worktree_branch: Some("agent/task-test".into()),
+            original_head_commit: None,
         }),
         ..ToolAppState::default()
     }));
@@ -147,6 +153,7 @@ async fn test_exit_worktree_keep_restores_cwd_and_clears_state() {
             original_cwd: original.clone(),
             worktree_path: worktree.clone(),
             worktree_branch: Some("agent/task-test".into()),
+            original_head_commit: None,
         }),
         ..ToolAppState::default()
     }));
@@ -166,12 +173,24 @@ async fn test_exit_worktree_keep_restores_cwd_and_clears_state() {
         patch(&mut app_state);
     }
 
-    assert_eq!(std::env::current_dir().unwrap(), original);
+    // Canonicalize: macOS /var -> /private/var symlink (see note above).
+    assert_eq!(
+        std::env::current_dir().unwrap().canonicalize().unwrap(),
+        original.canonicalize().unwrap()
+    );
     assert_eq!(*session_cwd.read().await, original);
     assert!(worktree.exists(), "keep must not remove worktree dir");
     assert!(app_state.read().await.active_worktree.is_none());
     assert_eq!(result.data["worktreePath"], worktree.display().to_string());
     assert_eq!(result.data["worktreeBranch"], "agent/task-test");
+    // TS-parity output fields.
+    assert_eq!(result.data["action"], "keep");
+    assert_eq!(result.data["originalCwd"], original.display().to_string());
+    assert!(
+        result.data.get("discardedFiles").is_none(),
+        "keep discards nothing → field omitted"
+    );
+    assert!(result.data.get("discardedCommits").is_none());
 }
 
 // ---------------------------------------------------------------------------

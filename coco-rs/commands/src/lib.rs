@@ -9,6 +9,13 @@ pub mod implementations;
 pub use error::CommandsError;
 pub use error::Result;
 
+// The in-prompt shell seam lives in `coco-skills` (the lowest crate both
+// `coco-commands` and `coco-skills` can see — commands depends on skills).
+// Re-exported here so callers (app/cli) can inject one handle on both the
+// skill-prompt and slash-command handlers without importing two crates.
+pub use coco_skills::BashToolHandle;
+pub use coco_skills::NoOpBashToolHandle;
+
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -37,6 +44,29 @@ pub use implementations::parse_rename_sentinel;
 pub use implementations::parse_status_sentinel;
 pub use implementations::parse_tag_sentinel;
 pub use implementations::register_extended_builtins;
+
+/// Shared, late-bound slot for the in-prompt [`BashToolHandle`].
+///
+/// The handle (a `SessionBashToolHandle` in app/cli) can only be built
+/// once the per-tool `ToolUseContext` exists, which is *after* the
+/// command registry is constructed. The registry creates one empty cell
+/// at build time and clones the `Arc` into every shell-capable handler;
+/// [`CommandRegistry::set_bash_tool_handle`] later fills it. Handlers
+/// read it at execution time. `None` (test / pre-bootstrap) means the
+/// handler falls back to its legacy handle-free path.
+pub(crate) type SharedBashToolHandle = Arc<std::sync::RwLock<Option<Arc<dyn BashToolHandle>>>>;
+
+/// Late-bound session id shared with every skill handler so user-typed slash
+/// commands can substitute `${CLAUDE_SESSION_ID}`. Filled by
+/// [`CommandRegistry::set_session_id`] at session bootstrap.
+pub(crate) type SharedSessionId = Arc<std::sync::RwLock<Option<String>>>;
+
+/// Clone the current handle out of the shared cell, dropping the read
+/// guard before any `.await` (the guard is `!Send`). Returns `None` when
+/// no handle has been injected yet.
+pub(crate) fn snapshot_bash_handle(cell: &SharedBashToolHandle) -> Option<Arc<dyn BashToolHandle>> {
+    cell.read().ok().and_then(|slot| slot.clone())
+}
 
 /// Trait for command execution handlers.
 #[async_trait]
@@ -243,6 +273,12 @@ impl RegisteredCommand {
 #[derive(Default)]
 pub struct CommandRegistry {
     commands: HashMap<String, RegisteredCommand>,
+    /// Late-bound Bash handle shared with every shell-capable handler.
+    /// Filled by [`Self::set_bash_tool_handle`] at session bootstrap.
+    bash_tool_handle: SharedBashToolHandle,
+    /// Late-bound session id shared with skill handlers for the
+    /// `${CLAUDE_SESSION_ID}` placeholder. Filled by [`Self::set_session_id`].
+    session_id: SharedSessionId,
 }
 
 impl CommandRegistry {
@@ -252,6 +288,37 @@ impl CommandRegistry {
 
     pub fn register(&mut self, cmd: RegisteredCommand) {
         self.commands.insert(cmd.base.name.clone(), cmd);
+    }
+
+    /// The shared cell handed to shell-capable handlers at registration.
+    /// Cloning it (an `Arc`) lets a handler observe a later
+    /// [`Self::set_bash_tool_handle`] without being rebuilt.
+    pub(crate) fn bash_tool_handle_cell(&self) -> SharedBashToolHandle {
+        Arc::clone(&self.bash_tool_handle)
+    }
+
+    /// Inject the in-prompt Bash handle after the per-tool
+    /// `ToolUseContext` is available (app/cli session bootstrap). All
+    /// previously registered shell-capable handlers see it immediately —
+    /// they hold a clone of the same shared cell.
+    pub fn set_bash_tool_handle(&self, handle: Arc<dyn BashToolHandle>) {
+        if let Ok(mut slot) = self.bash_tool_handle.write() {
+            *slot = Some(handle);
+        }
+    }
+
+    /// The shared session-id cell handed to skill handlers at registration.
+    pub(crate) fn session_id_cell(&self) -> SharedSessionId {
+        Arc::clone(&self.session_id)
+    }
+
+    /// Inject the current session id so skill handlers can substitute
+    /// `${CLAUDE_SESSION_ID}`. Called at session bootstrap (and after a
+    /// `/reload-plugins` registry swap) alongside [`Self::set_bash_tool_handle`].
+    pub fn set_session_id(&self, session_id: String) {
+        if let Ok(mut slot) = self.session_id.write() {
+            *slot = Some(session_id);
+        }
     }
 
     /// Look up a command by name or alias.
@@ -494,15 +561,15 @@ fn command_result_kind(r: &CommandResult) -> &'static str {
 /// 6. TS-parity P1 handlers (rewind / memory / init / prompt-type commands).
 ///
 /// This function is a thin wrapper that performs the in-order registration —
-/// callers pass the constructed `SkillManager` and `PluginManager` along with
-/// user / feature context.
+/// callers pass the constructed `SkillManager` and the resolved enabled plugin
+/// set (`&[LoadedPluginV2]`) along with user / feature context.
 // PR2 took the arg count to 8 (added `skill_overrides`). Bundling into
 // a struct is the cleaner fix but touches every caller; left for a
 // follow-up refactor.
 #[allow(clippy::too_many_arguments)]
 pub fn build_command_registry(
     skill_manager: &coco_skills::SkillManager,
-    plugin_manager: &coco_plugins::PluginManager,
+    plugins: &[coco_plugins::loader::LoadedPluginV2],
     user_type: coco_types::UserType,
     features: coco_types::Features,
     project_root: std::path::PathBuf,
@@ -520,7 +587,7 @@ pub fn build_command_registry(
     // `off` override; the dialog's gate keeps the `name-only` /
     // `user-invocable-only` rows discoverable via `/`).
     register_skills_as_commands(&mut registry, skill_manager, &features, skill_overrides);
-    register_plugin_contributions(&mut registry, plugin_manager);
+    register_plugin_contributions(&mut registry, plugins);
 
     // 6. TS-parity P1 handlers — last so they win over any name collisions
     //    from skills/plugins (matches TS where `/init`, `/rewind`, `/memory`
@@ -546,6 +613,10 @@ fn register_skills_as_commands(
     use coco_types::CommandSource;
     use coco_types::PromptCommandData;
     use coco_types::SkillOverrideState;
+    // Cloned once and shared into every skill handler so a later
+    // `set_bash_tool_handle` / `set_session_id` reaches them all.
+    let bash_cell = registry.bash_tool_handle_cell();
+    let session_cell = registry.session_id_cell();
     for skill in manager.visible(features) {
         if !skill.user_invocable {
             continue;
@@ -606,6 +677,20 @@ fn register_skills_as_commands(
                 name: skill.name.clone(),
                 body: prompt,
                 progress_message,
+                // TS `loadedFrom !== 'mcp'` gate: MCP skills are remote
+                // and untrusted — never run their in-prompt shell.
+                is_mcp: matches!(skill.source, coco_skills::SkillSource::Mcp { .. }),
+                // Skill frontmatter `allowed-tools` → `alwaysAllowRules.command`.
+                allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
+                bash_tool_handle: Arc::clone(&bash_cell),
+                // `${CLAUDE_SKILL_DIR}` is known now; `${CLAUDE_SESSION_ID}` is
+                // late-bound via the shared cell (TS `getPromptForCommand`).
+                skill_dir: skill
+                    .skill_root
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .map(str::to_owned),
+                session_id: Arc::clone(&session_cell),
             })),
             is_enabled: None,
         });
@@ -614,27 +699,26 @@ fn register_skills_as_commands(
 
 fn register_plugin_contributions(
     registry: &mut CommandRegistry,
-    manager: &coco_plugins::PluginManager,
+    plugins: &[coco_plugins::loader::LoadedPluginV2],
 ) {
-    use coco_types::CommandSource;
-    // Iterate plugins individually instead of going through
-    // `collect_all_contributions` — that aggregate flattens out which
-    // plugin contributed each command, and the `/` popup needs the
-    // plugin name to render the `(plugin-name)` description prefix.
-    for plugin in manager.enabled() {
-        let contributions = plugin.contributions();
-        for cmd_name in contributions.commands {
-            let mut base = builtin_base(&cmd_name, &format!("Plugin command: {cmd_name}"), &[]);
-            base.loaded_from = Some(CommandSource::Plugin {
-                name: plugin.name.clone(),
-            });
+    // Each plugin's commands are loaded via the V2 bridge, which carries the
+    // REAL prompt body (parsed from the command markdown / manifest), the
+    // `plugin:command` namespace, and `loaded_from = Plugin` — replacing the
+    // old name-only `PluginCommandStub`. TS `loadPluginCommands`.
+    for plugin in plugins {
+        for pc in coco_plugins::command_bridge::load_plugin_commands_v2(plugin) {
+            let name = pc.base.name.clone();
+            let progress_message = match &pc.command_type {
+                CommandType::Prompt(d) => d.progress_message.clone(),
+                _ => String::new(),
+            };
             registry.register(RegisteredCommand {
-                base,
-                command_type: CommandType::Local(LocalCommandData {
-                    handler: cmd_name.clone(),
-                }),
-                handler: Some(std::sync::Arc::new(PluginCommandStub {
-                    name: cmd_name.clone(),
+                base: pc.base,
+                command_type: pc.command_type,
+                handler: Some(std::sync::Arc::new(PluginPromptHandler {
+                    name,
+                    body: pc.prompt,
+                    progress_message,
                 })),
                 is_enabled: None,
             });
@@ -642,10 +726,55 @@ fn register_plugin_contributions(
     }
 }
 
+/// Handler for a plugin-contributed prompt command: substitutes `$ARGUMENTS`
+/// (like a skill) and emits the body as a prompt. Mirrors `SkillPromptHandler`
+/// for the simple prompt case.
+struct PluginPromptHandler {
+    name: String,
+    body: String,
+    progress_message: String,
+}
+
+#[async_trait]
+impl CommandHandler for PluginPromptHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        let args_opt = (!args.is_empty()).then_some(args);
+        let text = coco_skills::prompt_render::substitute_arguments(
+            &self.body,
+            args_opt,
+            &[],
+            /* append_if_no_placeholder */ true,
+        );
+        Ok(CommandResult::Prompt {
+            progress_message: self.progress_message.clone(),
+            parts: vec![PromptPart::Text { text }],
+        })
+    }
+
+    fn handler_name(&self) -> &str {
+        &self.name
+    }
+}
+
 struct SkillPromptHandler {
     name: String,
     body: String,
     progress_message: String,
+    /// Whether the skill was loaded from an MCP server. MCP skills skip
+    /// in-prompt shell execution entirely (TS `loadedFrom !== 'mcp'`).
+    is_mcp: bool,
+    /// Frontmatter `allowed-tools`, surfaced to the permission evaluator
+    /// as `alwaysAllowRules.command`.
+    allowed_tools: Vec<String>,
+    /// Shared, late-bound Bash handle. `None` until session bootstrap
+    /// injects it — then the in-prompt shell routes through the real
+    /// Bash tool with a per-command permission check.
+    bash_tool_handle: SharedBashToolHandle,
+    /// Skill base directory for the `${CLAUDE_SKILL_DIR}` placeholder
+    /// (known at registration). `None` for skills without a root (bundled).
+    skill_dir: Option<String>,
+    /// Shared, late-bound session id for the `${CLAUDE_SESSION_ID}` placeholder.
+    session_id: SharedSessionId,
 }
 
 #[async_trait]
@@ -654,12 +783,37 @@ impl CommandHandler for SkillPromptHandler {
         // TS-mirroring argument substitution via the canonical implementation
         // in `coco_skills::prompt_render`.
         let args_opt = (!args.is_empty()).then_some(args);
-        let text = coco_skills::prompt_render::substitute_arguments(
+        let mut text = coco_skills::prompt_render::substitute_arguments(
             &self.body,
             args_opt,
             &[],
             /* append_if_no_placeholder */ true,
         );
+        // TS `getPromptForCommand` also replaces `${CLAUDE_SKILL_DIR}` /
+        // `${CLAUDE_SESSION_ID}` on every invocation. Snapshot the session-id
+        // cell, dropping the read guard before any later `.await`.
+        let session_id = self.session_id.read().ok().and_then(|s| s.clone());
+        text = coco_skills::prompt_render::substitute_skill_env(
+            &text,
+            self.skill_dir.as_deref(),
+            session_id.as_deref(),
+        );
+        // TS `loadedFrom !== 'mcp'` gate around `executeShellCommandsInPrompt`.
+        // Skip entirely for MCP skills; otherwise route the in-prompt shell
+        // through the real Bash tool (per-command permission check) when a
+        // handle is wired. Without a handle (tests / pre-bootstrap) the prompt
+        // is left verbatim — no unguarded `sh -c` from a slash command.
+        if !self.is_mcp
+            && let Some(handle) = snapshot_bash_handle(&self.bash_tool_handle)
+        {
+            text = coco_skills::shell_exec::execute_shell_in_prompt_with_tool(
+                &text,
+                &*handle,
+                &self.allowed_tools,
+            )
+            .await
+            .map_err(|message| crate::CommandsError::ShellCommandError { message })?;
+        }
         Ok(CommandResult::Prompt {
             progress_message: self.progress_message.clone(),
             parts: vec![PromptPart::Text { text }],
@@ -683,10 +837,9 @@ mod seam_tests {
     async fn build_registry_includes_skills_and_ts_parity_handlers() {
         let sm = SkillManager::new();
         register_bundled(&sm);
-        let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
-            &pm,
+            &[],
             UserType::Human,
             Features::with_defaults(),
             std::path::PathBuf::from("."),
@@ -726,10 +879,9 @@ mod seam_tests {
     async fn skills_filtered_by_features() {
         let sm = SkillManager::new();
         register_bundled(&sm);
-        let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
-            &pm,
+            &[],
             UserType::Ant,
             Features::empty(),
             std::path::PathBuf::from("."),
@@ -766,7 +918,7 @@ mod seam_tests {
             .enable(coco_types::Feature::AutoMemory);
         let reg2 = build_command_registry(
             &sm,
-            &pm,
+            &[],
             UserType::Ant,
             features,
             std::path::PathBuf::from("."),
@@ -785,10 +937,9 @@ mod seam_tests {
     async fn rewind_emits_open_dialog() {
         let sm = SkillManager::new();
         register_bundled(&sm);
-        let pm = coco_plugins::PluginManager::new();
         let reg = build_command_registry(
             &sm,
-            &pm,
+            &[],
             UserType::Human,
             Features::with_defaults(),
             std::path::PathBuf::from("."),
@@ -801,23 +952,181 @@ mod seam_tests {
             other => panic!("unexpected: {other:?}"),
         }
     }
-}
 
-struct PluginCommandStub {
-    name: String,
-}
+    // ── SkillPromptHandler shell routing ──
 
-#[async_trait]
-impl CommandHandler for PluginCommandStub {
-    async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
-        Ok(CommandResult::Text(format!(
-            "Plugin command /{} not yet bound to a handler.",
-            self.name
-        )))
+    /// Mock handle: echoes each command wrapped, captures the
+    /// `allowed_tools` it was called with, or denies/fails.
+    struct ScriptedHandle {
+        deny: Option<String>,
+        seen_allowed: std::sync::Mutex<Vec<Vec<String>>>,
     }
 
-    fn handler_name(&self) -> &str {
-        &self.name
+    impl ScriptedHandle {
+        fn allow() -> Self {
+            Self {
+                deny: None,
+                seen_allowed: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn deny(msg: &str) -> Self {
+            Self {
+                deny: Some(msg.to_string()),
+                seen_allowed: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl BashToolHandle for ScriptedHandle {
+        async fn execute_with_permissions(
+            &self,
+            command: &str,
+            allowed_tools: &[String],
+        ) -> std::result::Result<String, String> {
+            self.seen_allowed
+                .lock()
+                .expect("lock")
+                .push(allowed_tools.to_vec());
+            match &self.deny {
+                Some(m) => Err(m.clone()),
+                None => Ok(format!("<{command}>")),
+            }
+        }
+    }
+
+    fn skill_handler(
+        body: &str,
+        is_mcp: bool,
+        allowed_tools: Vec<String>,
+        handle: Option<Arc<dyn BashToolHandle>>,
+    ) -> SkillPromptHandler {
+        let cell: SharedBashToolHandle = Arc::new(std::sync::RwLock::new(handle));
+        SkillPromptHandler {
+            name: "s".to_string(),
+            body: body.to_string(),
+            progress_message: "running".to_string(),
+            is_mcp,
+            allowed_tools,
+            bash_tool_handle: cell,
+            skill_dir: None,
+            session_id: Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    fn prompt_text(r: CommandResult) -> String {
+        match r {
+            CommandResult::Prompt { parts, .. } => parts
+                .into_iter()
+                .filter_map(|p| match p {
+                    PromptPart::Text { text } => Some(text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+            other => panic!("expected Prompt, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_shell_allow_runs_and_substitutes() {
+        let h = skill_handler(
+            "see !`git status`",
+            /*is_mcp*/ false,
+            vec!["Bash(git status:*)".to_string()],
+            Some(Arc::new(ScriptedHandle::allow())),
+        );
+        let r = h.execute_command("").await.unwrap();
+        assert_eq!(prompt_text(r), "see <git status>");
+    }
+
+    #[tokio::test]
+    async fn skill_shell_passes_allowed_tools() {
+        let handle = Arc::new(ScriptedHandle::allow());
+        let h = skill_handler(
+            "!`echo hi`",
+            false,
+            vec!["Bash(echo:*)".to_string()],
+            Some(handle.clone()),
+        );
+        let _ = h.execute_command("").await.unwrap();
+        let seen = handle.seen_allowed.lock().expect("lock");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0], vec!["Bash(echo:*)".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn skill_shell_deny_aborts_with_error() {
+        let h = skill_handler(
+            "see !`rm -rf /`",
+            false,
+            vec![],
+            Some(Arc::new(ScriptedHandle::deny("denied"))),
+        );
+        let err = h.execute_command("").await.unwrap_err();
+        assert!(
+            matches!(err, CommandsError::ShellCommandError { ref message } if message == "denied"),
+            "got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_shell_mcp_source_skips_execution() {
+        let handle = Arc::new(ScriptedHandle::deny("would deny"));
+        // MCP-sourced skill: shell must be skipped entirely, so the
+        // marker is left verbatim and the (denying) handle is never hit.
+        let h = skill_handler(
+            "see !`echo hi`",
+            /*is_mcp*/ true,
+            vec![],
+            Some(handle.clone()),
+        );
+        let r = h.execute_command("").await.unwrap();
+        assert_eq!(prompt_text(r), "see !`echo hi`");
+        assert!(handle.seen_allowed.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn skill_shell_no_handle_leaves_verbatim() {
+        let h = skill_handler("see !`echo hi`", false, vec![], None);
+        let r = h.execute_command("").await.unwrap();
+        assert_eq!(prompt_text(r), "see !`echo hi`");
+    }
+
+    #[tokio::test]
+    async fn registry_injection_reaches_existing_handler() {
+        // A handle injected AFTER the handler is registered must be
+        // observed by it (shared cell semantics).
+        let h = skill_handler("!`echo hi`", false, vec![], None);
+        // Before injection: verbatim.
+        let cell = Arc::clone(&h.bash_tool_handle);
+        let r0 = h.execute_command("").await.unwrap();
+        assert_eq!(prompt_text(r0), "!`echo hi`");
+        // Inject via the shared cell (as set_bash_tool_handle does).
+        *cell.write().expect("write") = Some(Arc::new(ScriptedHandle::allow()));
+        let r1 = h.execute_command("").await.unwrap();
+        assert_eq!(prompt_text(r1), "<echo hi>");
+    }
+
+    #[tokio::test]
+    async fn set_bash_tool_handle_threads_into_skill_handlers() {
+        let sm = SkillManager::new();
+        register_bundled(&sm);
+        let reg = build_command_registry(
+            &sm,
+            &[],
+            UserType::Human,
+            Features::with_defaults(),
+            std::path::PathBuf::from("."),
+            std::path::PathBuf::from("/home/test"),
+            None,
+            &coco_config::SkillOverrideTiers::default(),
+        );
+        // Injection on the registry writes the shared cell that every
+        // skill / shell-expanding handler cloned at build time.
+        reg.set_bash_tool_handle(Arc::new(ScriptedHandle::allow()));
+        // The cell is now populated; a fresh snapshot sees the handle.
+        assert!(snapshot_bash_handle(&reg.bash_tool_handle_cell()).is_some());
     }
 }
 
@@ -949,7 +1258,8 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         (
             "config",
             "Show or modify configuration",
-            &["configuration"],
+            // TS parity: `commands/config/index.ts:4` aliases `['settings']`.
+            &["settings"],
             config_handler,
         ),
         ("model", "Switch the current model", &[], model_handler),

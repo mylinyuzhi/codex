@@ -865,6 +865,61 @@ async fn queue_input_of_plain_text_still_queues() {
 }
 
 #[tokio::test]
+async fn submit_input_while_streaming_without_interruptible_tool_queues() {
+    let mut state = AppState::new();
+    state.ui.streaming = Some(crate::state::StreamingState::default());
+    state.ui.input.textarea.set_text("next turn prompt");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::QueueCommand { prompt, images }) => {
+            assert_eq!(prompt, "next turn prompt");
+            assert!(images.is_empty());
+        }
+        other => panic!("expected QueueCommand on the wire, got {other:?}"),
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "non-interruptible streaming submit should only queue"
+    );
+}
+
+#[tokio::test]
+async fn submit_input_while_streaming_with_interruptible_tool_queues_then_interrupts() {
+    let mut state = AppState::new();
+    state.ui.streaming = Some(crate::state::StreamingState::default());
+    state.session.has_submit_interruptible_tool_in_progress = true;
+    state.ui.input.textarea.set_text("follow-up prompt");
+    state
+        .ui
+        .input
+        .textarea
+        .set_cursor(state.ui.input.text().len());
+
+    let (tx, mut rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::QueueCommand { prompt, images }) => {
+            assert_eq!(prompt, "follow-up prompt");
+            assert!(images.is_empty());
+        }
+        other => panic!("expected QueueCommand first, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(UserCommand::Interrupt(coco_types::TurnAbortReason::SubmitInterrupt)) => {}
+        other => panic!("expected submit interrupt second, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn up_on_empty_input_requests_edit_for_first_queued_command() {
     let mut state = AppState::new();
     state
@@ -944,7 +999,7 @@ async fn busy_ctrl_c_interrupts_without_exit_hint() {
     // not a session-state boolean. This handler's only job here is to
     // forward the cancel signal.
     match rx.try_recv() {
-        Ok(UserCommand::Interrupt) => {}
+        Ok(UserCommand::Interrupt(coco_types::TurnAbortReason::UserCancel)) => {}
         other => panic!("expected Interrupt on the wire, got {other:?}"),
     }
 }

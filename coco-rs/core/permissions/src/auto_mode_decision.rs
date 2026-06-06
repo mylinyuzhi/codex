@@ -9,8 +9,10 @@
 
 use coco_messages::Message;
 use coco_tool_runtime::DenialTracker;
+use coco_types::PermissionAbortReason;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDecisionReason;
+use coco_types::ToolName;
 use serde_json::Value;
 use std::future::Future;
 
@@ -26,6 +28,7 @@ use crate::evaluate::extract_file_modifying_path;
 use crate::evaluate::is_file_modifying_tool;
 use crate::filesystem;
 use crate::filesystem::PathSafetyResult;
+use crate::web_preapproved::is_preapproved_webfetch_url;
 
 /// `decisionReason.classifier` tag for auto-mode classifier decisions.
 const AUTO_MODE_CLASSIFIER: &str = "auto_mode";
@@ -118,6 +121,14 @@ where
                 FileSafety::Classify => {}
             }
         }
+    } else if tool_name == ToolName::WebFetch.as_str()
+        && input
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(is_preapproved_webfetch_url)
+    {
+        denial_tracker.reset_consecutive();
+        return Some(allow());
     } else if classify_for_auto_mode(tool_name, input, is_read_only) == AutoModeDecision::Allow {
         // 4. Non-file heuristic fast path (read-only tools, task/plan tools,
         //    read-only Bash). Allowed → clear the streak.
@@ -131,18 +142,22 @@ where
 
     // 6. Classifier could not produce a usable verdict.
     //    Transcript-too-long is deterministic (retry can't help) → manual
-    //    approval, or deny in headless. TS `permissions.ts:818-842`.
+    //    approval, or abort the turn in headless. TS `permissions.ts:818-842`.
     if result.transcript_too_long {
-        return Some(require_interactive_or_deny(
-            "Auto-mode classifier transcript exceeded the context window — \
+        let message = "Auto-mode classifier transcript exceeded the context window — \
              manual approval required"
-                .to_string(),
-            PermissionDecisionReason::Classifier {
-                classifier: AUTO_MODE_CLASSIFIER.into(),
-                reason: "transcript_too_long".into(),
-            },
-            auto_ctx.avoid_permission_prompts,
-        ));
+            .to_string();
+        if auto_ctx.avoid_permission_prompts {
+            return Some(PermissionDecision::Abort {
+                message,
+                reason: PermissionAbortReason::ClassifierTranscriptTooLong,
+            });
+        }
+        return Some(PermissionDecision::Ask {
+            message,
+            suggestions: Vec::new(),
+            choices: None,
+        });
     }
     //    Transient outage. TS gates this on `tengu_iron_gate_closed` (default
     //    true = fail closed: deny even in interactive mode); only the rare
@@ -172,13 +187,20 @@ where
         denial_tracker.record_denial(tool_name);
 
         // Denial-limit fallback: 3 consecutive OR 20 total denials → let the
-        // user review (or deny in headless). TS `handleDenialLimitExceeded`.
+        // user review (or abort the turn in headless). TS
+        // `handleDenialLimitExceeded`.
         if denial_tracker.should_fallback_to_prompting() {
             let warning = denial_limit_warning(denial_tracker, &result.reason);
             // Reset both counters on the total cap so the session continues
             // past one review prompt instead of denying forever.
             if denial_tracker.hit_total_limit() {
                 denial_tracker.reset_after_total_limit();
+            }
+            if auto_ctx.avoid_permission_prompts {
+                return Some(PermissionDecision::Abort {
+                    message: warning,
+                    reason: PermissionAbortReason::ClassifierDenialLimit,
+                });
             }
             return Some(require_interactive_or_deny(
                 warning.clone(),

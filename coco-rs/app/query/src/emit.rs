@@ -196,6 +196,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::CronJobsMissed { .. } => "cron_jobs_missed",
         TuiOnlyEvent::ToolCallDelta { .. } => "tool_call_delta",
         TuiOnlyEvent::ToolProgress { .. } => "tool_progress",
+        TuiOnlyEvent::ToolInterruptibilityChanged { .. } => "tool_interruptibility_changed",
         TuiOnlyEvent::ToolExecutionAborted { .. } => "tool_execution_aborted",
         TuiOnlyEvent::RewindCompleted { .. } => "rewind_completed",
         TuiOnlyEvent::SlashCommandResult { .. } => "slash_command_result",
@@ -213,8 +214,10 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::PromptEditorFailed { .. } => "prompt_editor_failed",
         TuiOnlyEvent::BashCommandCompleted { .. } => "bash_command_completed",
         TuiOnlyEvent::OpenModelPicker => "open_model_picker",
+        TuiOnlyEvent::OpenSettings => "open_settings",
         TuiOnlyEvent::OpenThemePicker => "open_theme_picker",
         TuiOnlyEvent::OpenSkillsDialog { .. } => "open_skills_dialog",
+        TuiOnlyEvent::OpenPluginDialog { .. } => "open_plugin_dialog",
         TuiOnlyEvent::OpenAgentsDialog { .. } => "open_agents_dialog",
         TuiOnlyEvent::SkillOverridesSaved { .. } => "skill_overrides_saved",
     }

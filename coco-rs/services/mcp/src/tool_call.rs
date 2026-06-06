@@ -30,12 +30,29 @@ pub enum McpToolContent {
     Resource { uri: String, text: Option<String> },
 }
 
+/// Truncate `s` to at most `max_len` BYTES, snapped down to the nearest
+/// char boundary. #154: `&s[..max_len]` panics when `max_len` lands
+/// inside a multibyte UTF-8 sequence; this never does.
+fn truncate_at_char_boundary(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        return s;
+    }
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Truncate a tool description to the maximum length with a suffix marker.
 pub fn truncate_description(description: &str) -> String {
     if description.len() <= MAX_DESCRIPTION_LENGTH {
         description.to_string()
     } else {
-        format!("{}... [truncated]", &description[..MAX_DESCRIPTION_LENGTH])
+        format!(
+            "{}... [truncated]",
+            truncate_at_char_boundary(description, MAX_DESCRIPTION_LENGTH)
+        )
     }
 }
 
@@ -47,7 +64,7 @@ pub fn prepare_tool_for_llm(tool: &McpToolDefinition) -> McpToolDefinition {
     {
         prepared.description = Some(format!(
             "{}... (truncated)",
-            &desc[..MAX_DESCRIPTION_LENGTH]
+            truncate_at_char_boundary(desc, MAX_DESCRIPTION_LENGTH)
         ));
     }
     prepared

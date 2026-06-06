@@ -180,6 +180,7 @@ async fn serve(args: Args) -> Result<()> {
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
+        is_non_interactive: true,
     })
     .await
     .with_context(|| format!("build SessionRuntime for {}/{model_id}", args.provider))?;

@@ -261,7 +261,16 @@ fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {
 /// user / project scopes), so the `/skills` dialog and `/context` never
 /// disagree. See [`coco_skills::build_session_skill_manager`].
 fn build_manager(config_home: &Path, cwd: &Path) -> SkillManager {
-    coco_skills::build_session_skill_manager(config_home, cwd)
+    // The `CommandHandler` trait does not carry `RuntimeConfig`, so the
+    // `/skills` dialog cannot resolve `--setting-sources` / policy gates here
+    // (same PR3 limitation as the `SkillOverrideTiers`). All scopes load; the
+    // engine's live registry — built via `build_session_skill_manager` with
+    // resolved gates — is the policy-enforcing catalog.
+    coco_skills::build_session_skill_manager(
+        config_home,
+        cwd,
+        &coco_skills::SkillLoadGates::all_enabled(),
+    )
 }
 
 fn render_list(manager: &SkillManager) -> String {

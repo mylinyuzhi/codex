@@ -839,6 +839,17 @@ Usage notes:
             });
         }
 
+        // #55 / TS `WebFetchTool/utils.ts:376-378`: upgrade `http://` to
+        // `https://` before fetching (the description advertises this).
+        // The cache key and display still use the original `url`.
+        let fetch_target: String = if parsed.scheme() == "http" {
+            let mut upgraded = parsed.clone();
+            let _ = upgraded.set_scheme("https");
+            upgraded.to_string()
+        } else {
+            url.to_string()
+        };
+
         let prompt = input.prompt.trim();
 
         if prompt.is_empty() {
@@ -861,23 +872,34 @@ Usage notes:
         //
         // Note: the cache key is the ORIGINAL url parameter, not the
         // post-redirect URL, matching TS behavior at `utils.ts:469`.
-        let (extraction_input, was_truncated, content_type) =
-            if let Some(cached) = web_fetch_cache_get(url) {
-                // Cache hit: skip Stage 1+2+3 and use the stored markdown.
-                tracing::debug!("WebFetch cache hit for {url}");
-                (cached.markdown, cached.was_truncated, cached.content_type)
-            } else {
-                // Cache miss: run the full fetch → markdown → truncate pipeline.
-                //
-                // Stage 1: HTTP fetch. `fetch_url` returns one of:
-                //   - `Body { body, content_type }` — normal 2xx response
-                //   - `CrossOriginRedirect { new_url }` — the origin
-                //     redirected somewhere outside the same-origin
-                //     allowlist; we surface this to the model so it can
-                //     decide whether to fetch the new URL. Matches TS
-                //     `WebFetchTool.tsx:227-235` SSRF guard.
-                let (body, content_type) = match fetch_url(url, fetch_config).await {
-                    Ok(FetchOutcome::Body { body, content_type }) => (body, content_type),
+        let (extraction_input, was_truncated, content_type, binary_note) = if let Some(cached) =
+            web_fetch_cache_get(url)
+        {
+            // Cache hit: skip Stage 1+2+3 and use the stored markdown.
+            tracing::debug!("WebFetch cache hit for {url}");
+            (
+                cached.markdown,
+                cached.was_truncated,
+                cached.content_type,
+                None,
+            )
+        } else {
+            // Cache miss: run the full fetch → markdown → truncate pipeline.
+            //
+            // Stage 1: HTTP fetch. `fetch_url` returns one of:
+            //   - `Body { body, content_type }` — normal 2xx response
+            //   - `CrossOriginRedirect { new_url }` — the origin
+            //     redirected somewhere outside the same-origin
+            //     allowlist; we surface this to the model so it can
+            //     decide whether to fetch the new URL. Matches TS
+            //     `WebFetchTool.tsx:227-235` SSRF guard.
+            let (body, content_type, binary_note) =
+                match fetch_url(&fetch_target, fetch_config).await {
+                    Ok(FetchOutcome::Body {
+                        body,
+                        content_type,
+                        binary_note,
+                    }) => (body, content_type, binary_note),
                     Ok(FetchOutcome::CrossOriginRedirect { new_url }) => {
                         return Ok(ToolResult {
                             data: serde_json::json!({
@@ -907,56 +929,60 @@ Usage notes:
                     }
                 };
 
-                // Stage 2: HTML → markdown. TS `WebFetchTool/utils.ts:85-97,
-                // 456-457` lazy-loads `turndown` and reuses one shared
-                // instance. We use the Rust `html2text` crate which does
-                // the same HTML-to-wrapped-plain-text conversion. Plain-
-                // text bodies (JSON, text/plain, unknown) bypass the
-                // conversion and are passed through as-is.
-                let markdown = if is_html_content_type(&content_type) {
-                    html_to_markdown(&body)
-                } else {
-                    body
-                };
-
-                // Stage 3: truncate to the extraction budget (100K chars
-                // by default; configurable via `web_fetch.max_content_length`).
-                // TS parity: `utils.ts:128 MAX_MARKDOWN_LENGTH = 100_000`.
-                let (extraction_input, was_truncated) = if markdown.len() > max_fetch_len {
-                    // char_indices-safe truncation to avoid splitting mid-UTF-8.
-                    let cut = markdown
-                        .char_indices()
-                        .take(max_fetch_len)
-                        .last()
-                        .map(|(i, c)| i + c.len_utf8())
-                        .unwrap_or(markdown.len());
-                    (markdown[..cut].to_string(), true)
-                } else {
-                    (markdown, false)
-                };
-
-                // Populate the cache so subsequent fetches of the same
-                // URL within the 15-min TTL are zero-cost. We cache the
-                // POST-truncation markdown so we don't waste bytes on
-                // content we'd only throw away again.
-                web_fetch_cache_set(
-                    url.to_string(),
-                    CachedWebFetch {
-                        markdown: extraction_input.clone(),
-                        content_type: content_type.clone(),
-                        was_truncated,
-                        inserted_at: std::time::Instant::now(),
-                    },
-                );
-
-                (extraction_input, was_truncated, content_type)
+            // Stage 2: HTML → markdown. TS `WebFetchTool/utils.ts:85-97,
+            // 456-457` lazy-loads `turndown` and reuses one shared
+            // instance. We use the Rust `html2text` crate which does
+            // the same HTML-to-wrapped-plain-text conversion. Plain-
+            // text bodies (JSON, text/plain, unknown) bypass the
+            // conversion and are passed through as-is.
+            let markdown = if is_html_content_type(&content_type) {
+                html_to_markdown(&body)
+            } else {
+                body
             };
+
+            // Stage 3: truncate to the extraction budget (100K chars
+            // by default; configurable via `web_fetch.max_content_length`).
+            // TS parity: `utils.ts:128 MAX_MARKDOWN_LENGTH = 100_000`.
+            let (extraction_input, was_truncated) = if markdown.len() > max_fetch_len {
+                // char_indices-safe truncation to avoid splitting mid-UTF-8.
+                let cut = markdown
+                    .char_indices()
+                    .take(max_fetch_len)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(markdown.len());
+                (markdown[..cut].to_string(), true)
+            } else {
+                (markdown, false)
+            };
+
+            // Populate the cache so subsequent fetches of the same
+            // URL within the 15-min TTL are zero-cost. We cache the
+            // POST-truncation markdown so we don't waste bytes on
+            // content we'd only throw away again.
+            web_fetch_cache_set(
+                url.to_string(),
+                CachedWebFetch {
+                    markdown: extraction_input.clone(),
+                    content_type: content_type.clone(),
+                    was_truncated,
+                    inserted_at: std::time::Instant::now(),
+                },
+            );
+
+            (extraction_input, was_truncated, content_type, binary_note)
+        };
 
         // TS `WebFetchTool.ts:261-278`: a preapproved docs host serving raw
         // markdown that fits the budget is returned VERBATIM — the main
         // model reads the real page instead of a lossy side-model summary.
         // `!was_truncated` mirrors TS `content.length < MAX_MARKDOWN_LENGTH`
         // (truncation uses the same budget threshold).
+        // #57: the binary-saved note is appended verbatim to whatever
+        // content the model ultimately receives.
+        let binary_note_str = binary_note.unwrap_or_default();
+
         let is_preapproved = is_preapproved_url(url);
         if is_preapproved && content_type.to_lowercase().contains("text/markdown") && !was_truncated
         {
@@ -964,7 +990,7 @@ Usage notes:
                 data: serde_json::json!({
                     "url": url,
                     "prompt": prompt,
-                    "content": extraction_input,
+                    "content": format!("{extraction_input}{binary_note_str}"),
                     "truncated": false,
                     "extraction_mode": "preapproved_verbatim",
                 }),
@@ -1004,7 +1030,7 @@ Usage notes:
                     data: serde_json::json!({
                         "url": url,
                         "prompt": prompt,
-                        "content": extraction_input,
+                        "content": format!("{extraction_input}{binary_note_str}"),
                         "truncated": was_truncated,
                         "extraction_mode": "raw",
                     }),
@@ -1020,7 +1046,7 @@ Usage notes:
             data: serde_json::json!({
                 "url": url,
                 "prompt": prompt,
-                "extracted": extracted,
+                "extracted": format!("{extracted}{binary_note_str}"),
                 "truncated": was_truncated,
                 "extraction_mode": "llm",
             }),
@@ -1058,12 +1084,15 @@ enum FetchOutcome {
     Body {
         body: String,
         content_type: String,
+        /// #57 / TS `WebFetchTool.ts:280-285`: when the body was binary,
+        /// the note "[Binary content (…) also saved to <path>]" appended
+        /// to the final result so the model knows the real bytes are on
+        /// disk. `None` for normal text responses.
+        binary_note: Option<String>,
     },
     /// Cross-origin redirect was blocked. The caller should surface this
     /// to the model so it can issue a new fetch with the new URL.
-    CrossOriginRedirect {
-        new_url: String,
-    },
+    CrossOriginRedirect { new_url: String },
 }
 
 /// Fetch URL content using reqwest. Applies:
@@ -1163,20 +1192,15 @@ async fn fetch_url(
             .unwrap_or("")
             .to_lowercase();
 
-        // Reject clearly binary content types. TS `utils.ts:442-449`
-        // persists binary bodies to disk and still runs Haiku on them,
-        // but that path is out of scope for now — we return an error so
-        // the model knows to use a different tool.
-        if content_type.contains("image/")
+        // #57 / TS `utils.ts:442-449`: binary bodies are persisted to
+        // disk (mime-derived extension) and still UTF-8 decoded + run
+        // through the pipeline, with a "[Binary content … also saved to
+        // <path>]" note appended to the result.
+        let is_binary = content_type.contains("image/")
             || content_type.contains("audio/")
             || content_type.contains("video/")
             || content_type.contains("application/octet-stream")
-            || content_type.contains("application/zip")
-        {
-            return Err(format!(
-                "Non-text content type: {content_type}. Only text-based content is supported."
-            ));
-        }
+            || content_type.contains("application/zip");
 
         // Streaming read with per-chunk byte-count enforcement.
         //
@@ -1206,12 +1230,71 @@ async fn fetch_url(
             }
             buffer.extend_from_slice(&chunk);
         }
+        // #57: persist binary bodies before the lossy decode so the model
+        // can reference the real bytes on disk.
+        let binary_note = if is_binary {
+            match persist_binary_content(&buffer, &content_type) {
+                Ok((path, size)) => Some(format!(
+                    "\n\n[Binary content ({content_type}, {size} bytes) also saved to {path}]"
+                )),
+                Err(e) => {
+                    tracing::debug!(
+                        "WebFetch binary persist failed ({e}); continuing without note"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let body = String::from_utf8_lossy(&buffer).into_owned();
 
-        return Ok(FetchOutcome::Body { body, content_type });
+        return Ok(FetchOutcome::Body {
+            body,
+            content_type,
+            binary_note,
+        });
     }
 
     Err("[NETWORK_ERROR] too many redirects (exceeded 10 hops)".into())
+}
+
+/// Persist a binary WebFetch body to a temp file with a mime-derived
+/// extension. TS `WebFetchTool/utils.ts:435-449 persistBinaryContent`.
+/// Returns `(absolute_path, byte_len)`.
+fn persist_binary_content(bytes: &[u8], content_type: &str) -> std::io::Result<(String, usize)> {
+    let ext = mime_to_extension(content_type);
+    // A content-addressed name avoids `Math.random`/clock use (forbidden
+    // in some build contexts) while staying collision-resistant.
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let dir = std::env::temp_dir().join("coco-web-fetch");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{hash:016x}.{ext}"));
+    std::fs::write(&path, bytes)?;
+    Ok((path.to_string_lossy().into_owned(), bytes.len()))
+}
+
+/// Map a binary content-type to a file extension (TS
+/// `getExtensionFromMimeType`). Falls back to `bin`.
+fn mime_to_extension(content_type: &str) -> &'static str {
+    let ct = content_type.split(';').next().unwrap_or("").trim();
+    match ct {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "application/pdf" => "pdf",
+        "application/zip" => "zip",
+        "audio/mpeg" => "mp3",
+        "audio/wav" => "wav",
+        "video/mp4" => "mp4",
+        _ => "bin",
+    }
 }
 
 /// Resolve a possibly-relative Location header against the base URL.

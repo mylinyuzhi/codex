@@ -21,6 +21,33 @@ fn test_truncate_tool_description() {
     assert!(truncated.ends_with("...(truncated)"));
 }
 
+#[test]
+fn headers_helper_output_must_be_string_map() {
+    let ok = parse_headers_helper_output("srv", r#"{"Authorization":"Bearer x"}"#).unwrap();
+    assert_eq!(ok.get("Authorization").unwrap(), "Bearer x");
+
+    let err = parse_headers_helper_output("srv", r#"{"Authorization":123}"#).unwrap_err();
+    assert!(err.to_string().contains("non-string"));
+}
+
+#[tokio::test]
+async fn resolve_http_headers_dynamic_overrides_static() {
+    let headers = resolve_http_headers(
+        "srv",
+        "https://example.test",
+        &HashMap::from([
+            ("Authorization".to_string(), "Bearer old".to_string()),
+            ("X-Static".to_string(), "yes".to_string()),
+        ]),
+        &Some("printf '{\"Authorization\":\"Bearer new\"}'".to_string()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(headers.get("Authorization").unwrap(), "Bearer new");
+    assert_eq!(headers.get("X-Static").unwrap(), "yes");
+}
+
 #[tokio::test]
 async fn authenticate_stdio_reports_oauth_not_needed() {
     let mut manager = McpConnectionManager::new(std::env::temp_dir());
@@ -43,6 +70,41 @@ async fn authenticate_stdio_reports_oauth_not_needed() {
     assert_eq!(
         result,
         "MCP server 'local' does not use OAuth authentication."
+    );
+}
+
+#[tokio::test]
+async fn unregister_server_drops_config_and_connection_state() {
+    let mut manager = McpConnectionManager::new(std::env::temp_dir());
+    manager.register_server(crate::types::ScopedMcpServerConfig {
+        name: "plugin:p:local".into(),
+        config: crate::types::McpServerConfig::Stdio(crate::types::McpStdioConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: Default::default(),
+            cwd: None,
+        }),
+        scope: crate::types::ConfigScope::Dynamic,
+        plugin_source: None,
+    });
+    // register_server seeds a Pending connection state + a config entry.
+    assert!(
+        manager
+            .registered_server_names()
+            .contains(&"plugin:p:local".to_string())
+    );
+    assert!(manager.get_state("plugin:p:local").await.is_some());
+
+    manager.unregister_server("plugin:p:local").await;
+    assert!(
+        !manager
+            .registered_server_names()
+            .contains(&"plugin:p:local".to_string()),
+        "config entry must be dropped"
+    );
+    assert!(
+        manager.get_state("plugin:p:local").await.is_none(),
+        "connection state must be dropped"
     );
 }
 

@@ -119,6 +119,18 @@ fn test_overload_cascade_capped_but_others_get_full_budget() {
         message: "5xx".to_string(),
     }
     .build();
+    // Background sources throw immediately on a capacity cascade (TS
+    // shouldRetry529); foreground / untagged sources still retry.
+    assert!(
+        !config.should_retry_with_source(0, &overloaded, Some("prompt_suggestion")),
+        "background source must not retry on 529"
+    );
+    assert!(config.should_retry_with_source(0, &overloaded, Some("repl_main_thread")));
+    assert!(config.should_retry_with_source(0, &overloaded, Some("compact")));
+    assert!(config.should_retry_with_source(0, &overloaded, None));
+    // A non-capacity error is unaffected by source gating.
+    assert!(config.should_retry_with_source(0, &rate_limited, Some("prompt_suggestion")));
+
     assert!(config.should_retry(5, &rate_limited));
     assert!(config.should_retry(9, &rate_limited));
     assert!(config.should_retry(9, &network));
@@ -138,9 +150,19 @@ fn test_jitter_adds_delay() {
     }
     .build();
 
-    // With 0.5 jitter on 1000ms base: delay = 1000 + 500 = 1500
-    assert_eq!(
-        config.delay_for_attempt(0, &err),
-        Duration::from_millis(1500)
+    // #136: jitter is now random in [0, jitter_factor*delay]. With 0.5
+    // jitter on a 1000ms base, the result lies in [1000, 1500]. Sample a
+    // few times so a degenerate constant 0 / constant max would surface.
+    let mut saw_below_max = false;
+    for _ in 0..50 {
+        let d = config.delay_for_attempt(0, &err).as_millis() as u64;
+        assert!((1000..=1500).contains(&d), "jitter out of range: {d}");
+        if d < 1500 {
+            saw_below_max = true;
+        }
+    }
+    assert!(
+        saw_below_max,
+        "jitter should vary below the max, not be a fixed +50%"
     );
 }

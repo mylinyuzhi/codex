@@ -5,6 +5,7 @@
 //! live in the private submodules (`state`, `show`, `edit`) to keep this
 //! dispatcher focused on routing.
 
+use coco_types::TurnAbortReason;
 use tokio::sync::mpsc;
 
 use crate::command::ShutdownReason;
@@ -26,6 +27,7 @@ mod edit;
 mod exit;
 mod expanded_view;
 mod interaction;
+mod plugin_dialog;
 // `pub(crate)` so the slash-command dispatcher (in
 // `server_notification_handler::tui_only`) can call into `cycle_model`
 // when `TuiOnlyEvent::OpenModelPicker` arrives. The other `show::*`
@@ -78,6 +80,10 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         M::SkillsDialog(_) => Slash {
             name: "skills",
             message: "Skills dialog dismissed",
+        },
+        M::PluginDialog(_) => Slash {
+            name: "plugin",
+            message: "Plugin dialog dismissed",
         },
         M::AgentsDialog(_) => Slash {
             name: "agents",
@@ -132,6 +138,7 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         | M::BypassPermissions(_)
         | M::TaskDetail(_)
         | M::TeamRoster(_)
+        | M::PluginHint(_)
         | M::Feedback(_) => return None,
     })
 }
@@ -155,6 +162,11 @@ pub(crate) async fn close_modal_with_feedback(
                 "theme picker: failed to restore original theme on cancel"
             );
         }
+    }
+    // Plugin-hint Esc dismissal is treated as "no" (TS auto-dismiss →
+    // onResponse('no')): record show-once so the prompt never reappears.
+    if let Some(ModalState::PluginHint(ph)) = state.ui.modal.as_ref() {
+        coco_plugins::mark_hint_plugin_shown(&ph.plugin_id);
     }
     // Capture the dismiss feedback before the modal is taken, emit after close.
     let dismiss = state.ui.modal.as_ref().and_then(picker_dismiss);
@@ -231,6 +243,12 @@ pub async fn handle_command(
     // Same fall-through contract as the skills dialog.
     if let agents_dialog::Handled::Yes(changed) =
         agents_dialog::intercept(state, &cmd, command_tx).await
+    {
+        return changed;
+    }
+
+    if let plugin_dialog::Handled::Yes(changed) =
+        plugin_dialog::intercept(state, &cmd, command_tx).await
     {
         return changed;
     }
@@ -361,6 +379,15 @@ pub async fn handle_command(
 
         // ── Input actions ──
         TuiCommand::SubmitInput => {
+            if state.is_streaming() {
+                let handled = queue_current_input(state, command_tx).await;
+                if state.session.has_submit_interruptible_tool_in_progress {
+                    let _ = command_tx
+                        .send(UserCommand::Interrupt(TurnAbortReason::SubmitInterrupt))
+                        .await;
+                }
+                return handled;
+            }
             // TS `useTextInput.ts:250-255`: a trailing backslash + Enter
             // inserts a newline instead of submitting (poor-man's
             // line-continuation). Match here so the heredoc-style escape
@@ -372,32 +399,14 @@ pub async fn handle_command(
             }
             edit::submit(state, command_tx).await
         }
-        TuiCommand::QueueInput => {
-            let text = state.ui.input.take_input();
-            if text.is_empty() {
-                return true;
-            }
-            // Resolve paste pills the same way `submit` does so mid-turn
-            // pastes (text expansion + image attachments) survive queueing.
-            // TS parity: `handlePromptSubmit.ts:336-343` enqueues with
-            // `pastedContents` so images flow into the queued attachment.
-            let resolved = state.ui.paste_manager.resolve_structured(&text);
-            // The TUI display is now a projection of the engine queue
-            // state — the round-trip `CommandQueued` notification
-            // (server_notification_handler/protocol.rs) repopulates
-            // `state.session.queued_commands` from the engine's
-            // authoritative count. Keep no optimistic local push: a
-            // double-push (here + on the event) would double the
-            // displayed count.
+        TuiCommand::SubmitInterrupt => {
+            let handled = queue_current_input(state, command_tx).await;
             let _ = command_tx
-                .send(UserCommand::QueueCommand {
-                    prompt: resolved.text,
-                    images: resolved.images,
-                })
+                .send(UserCommand::Interrupt(TurnAbortReason::SubmitInterrupt))
                 .await;
-            state.ui.paste_manager.clear();
-            true
+            handled
         }
+        TuiCommand::QueueInput => queue_current_input(state, command_tx).await,
         TuiCommand::Interrupt => {
             let now = std::time::Instant::now();
             let timing =
@@ -1150,7 +1159,9 @@ async fn apply_exit_effect(
                 exit_case = "interrupt_active_turn",
                 "exit key interrupted active turn"
             );
-            let _ = command_tx.send(UserCommand::Interrupt).await;
+            let _ = command_tx
+                .send(UserCommand::Interrupt(TurnAbortReason::UserCancel))
+                .await;
         }
         ExitEffect::ClearInput => {
             // Idle Ctrl+C with text in the input: clear + save to history.
@@ -1201,6 +1212,22 @@ async fn apply_exit_effect(
             state.quit();
         }
     }
+}
+
+async fn queue_current_input(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) -> bool {
+    let text = state.ui.input.take_input();
+    if text.is_empty() {
+        return true;
+    }
+    let resolved = state.ui.paste_manager.resolve_structured(&text);
+    let _ = command_tx
+        .send(UserCommand::QueueCommand {
+            prompt: resolved.text,
+            images: resolved.images,
+        })
+        .await;
+    state.ui.paste_manager.clear();
+    true
 }
 
 /// Whether any foreground tools / subagents are still running. Drives

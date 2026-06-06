@@ -328,11 +328,11 @@ pub fn format_action_for_classifier(
     projector: Option<InputProjector<'_>>,
 ) -> String {
     // Per-tool projection (curated, security-relevant fields) when the tool
-    // provides one; otherwise the raw input JSON. A `None` projection is NOT
-    // an auto-allow here — the action being judged must always reach the
-    // classifier; the "no security relevance" fast-allow lives upstream in
-    // `is_safe_tool` (deliberate divergence from TS's `'' → allow` shortcut,
-    // which is unsafe without exhaustive per-tool annotation).
+    // provides one; otherwise the raw input JSON. A `Some("")` projection
+    // (no security relevance) is fast-allowed upstream in `classify_yolo_action`
+    // before reaching here (TS `toCompact` empty contract). A `None` projection
+    // (no projector / un-annotated tool) is NOT an auto-allow — the action must
+    // reach the classifier, so it falls back to the raw input JSON.
     let projected = projector
         .and_then(|project| project(tool_name, input))
         .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_default());
@@ -400,6 +400,23 @@ where
     // Fast path: safe tools never need classification.
     if is_safe_tool(tool_name) {
         return YoloClassifierResult::verdict(false, "Safe tool (allowlisted)".into(), None);
+    }
+
+    // TS `toCompact` empty-projection fast-allow (yoloClassifier.ts:1021-1029):
+    // a tool whose security-relevant projection encodes to "" declares no
+    // classifier-relevant input → allow without invoking the LLM. This also
+    // guards the provider against an empty `<action>` block. A `None`
+    // projection (no projector / un-annotated tool) is NOT an auto-allow — it
+    // falls through to the raw-JSON classifier path below.
+    if let Some(project) = projector
+        && let Some(projected) = project(tool_name, input)
+        && projected.trim().is_empty()
+    {
+        return YoloClassifierResult::verdict(
+            false,
+            "Tool declares no classifier-relevant input".into(),
+            None,
+        );
     }
 
     let system_prompt = build_classifier_system_prompt(rules);
@@ -574,8 +591,11 @@ fn interpret_final_verdict(
 /// conversation forwards, matching the order the agent produced it.
 fn format_transcript(entries: &[TranscriptEntry]) -> String {
     let mut out = String::new();
-    let start = entries.len().saturating_sub(10);
-    for entry in &entries[start..] {
+    // #68: TS `yoloClassifier.ts buildTranscriptEntries` applies NO fixed
+    // N-entry cap — it renders the full transcript and relies on upstream
+    // compaction to bound history size. The previous `.saturating_sub(10)`
+    // window dropped older actions the classifier needs to judge.
+    for entry in entries {
         let role_str = match entry.role {
             TranscriptRole::User => "User",
             TranscriptRole::Assistant => "Assistant",

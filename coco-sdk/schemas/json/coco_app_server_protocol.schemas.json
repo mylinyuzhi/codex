@@ -936,7 +936,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every TS `Attachment.type` discriminator. 60 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
+      "description": "Every TS `Attachment.type` discriminator, plus coco-rs-synthetic\nreminder kinds. 61 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "enum": [
@@ -1005,6 +1005,11 @@
         {
           "const": "critical_system_reminder",
           "description": "TS: user-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the TS-aligned case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
+          "type": "string"
+        },
+        {
+          "const": "user_context",
+          "description": "coco-rs per-turn baseline user context (TS `prependUserContext`\n`utils/api.ts:449`, `currentDate` from `context.ts:186`). Injected\nevery turn as an `is_meta` `<system-reminder>` carrying\n`Today's date is <local ISO>.` \u2014 distinct from the one-shot\n[`DateChange`](Self::DateChange) rollover notice.",
           "type": "string"
         }
       ]
@@ -1076,21 +1081,6 @@
         "used_tokens"
       ],
       "type": "object"
-    },
-    "CancelReason": {
-      "description": "Why a turn was interrupted. Lets the TUI distinguish \"user pressed\nCtrl+C \u2014 restore the input if conditions match\" from \"system cancelled\nthe in-flight turn to make room for `/clear` / `/compact` / `/rewind`\n/ shutdown / next submit \u2014 leave the conversation alone\".\n\nMirrors TS `abortController.signal.reason` discrimination at\n`REPL.tsx:3001`. Used inside `TurnOutcome::Interrupted`.",
-      "oneOf": [
-        {
-          "const": "user_cancel",
-          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`\nin the SDK). The only reason that may trigger auto-restore.",
-          "type": "string"
-        },
-        {
-          "const": "system_preempt",
-          "description": "System pre-empted the in-flight turn so another session-level\noperation can run (Clear / Compact / Rewind / Shutdown / new\nSubmitInput). Auto-restore is suppressed \u2014 the user did not\nrequest a rewind.",
-          "type": "string"
-        }
-      ]
     },
     "CancelRequestParams": {
       "description": "Params for `control/cancelRequest`.",
@@ -3751,14 +3741,14 @@
       "type": "object"
     },
     "InterruptedOutcome": {
-      "description": "Payload for [`TurnOutcome::Interrupted`]. `cancel_reason`\ndistinguishes user Ctrl+C from system pre-empt (Clear / Compact\n/ Rewind / Shutdown). Never carries a model `stop_reason`.",
+      "description": "Payload for [`TurnOutcome::Interrupted`]. `abort_reason`\ndistinguishes user Ctrl+C, submit interrupt, permission abort, and\nsystem pre-empt. Never carries a model `stop_reason`.",
       "properties": {
-        "cancel_reason": {
-          "$ref": "#/$defs/CancelReason"
+        "abort_reason": {
+          "$ref": "#/$defs/TurnAbortReason"
         }
       },
       "required": [
-        "cancel_reason"
+        "abort_reason"
       ],
       "type": "object"
     },
@@ -5474,6 +5464,245 @@
       },
       "required": [
         "entered"
+      ],
+      "type": "object"
+    },
+    "PluginDialogAction": {
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "plugin_args": {
+          "description": "Slash command args after `/plugin`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "plugin_args"
+      ],
+      "type": "object"
+    },
+    "PluginDialogErrorRow": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "plugin_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "message"
+      ],
+      "type": "object"
+    },
+    "PluginDialogInstalledRow": {
+      "properties": {
+        "actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          },
+          "type": "array"
+        },
+        "blocked_by_policy": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mcp_servers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogMcpServerRow"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "options": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogOptionRow"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source",
+        "path",
+        "enabled",
+        "blocked_by_policy"
+      ],
+      "type": "object"
+    },
+    "PluginDialogMarketplaceRow": {
+      "properties": {
+        "actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "official": {
+          "type": "boolean"
+        },
+        "plugin_count": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "official",
+        "plugin_count"
+      ],
+      "type": "object"
+    },
+    "PluginDialogMcpServerRow": {
+      "properties": {
+        "actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          },
+          "type": "array"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "needs_config": {
+          "type": "boolean"
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogMcpToolRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "display_name",
+        "enabled",
+        "needs_config"
+      ],
+      "type": "object"
+    },
+    "PluginDialogMcpToolRow": {
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "PluginDialogOptionRow": {
+      "properties": {
+        "current_value": true,
+        "description": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "description",
+        "value_type",
+        "required"
+      ],
+      "type": "object"
+    },
+    "PluginDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenPluginDialog`].",
+      "properties": {
+        "errors": {
+          "items": {
+            "$ref": "#/$defs/PluginDialogErrorRow"
+          },
+          "type": "array"
+        },
+        "installed": {
+          "items": {
+            "$ref": "#/$defs/PluginDialogInstalledRow"
+          },
+          "type": "array"
+        },
+        "marketplaces": {
+          "items": {
+            "$ref": "#/$defs/PluginDialogMarketplaceRow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "installed",
+        "marketplaces",
+        "errors"
       ],
       "type": "object"
     },
@@ -10732,6 +10961,62 @@
       ],
       "type": "object"
     },
+    "ToolAbortReasonPayload": {
+      "description": "Structured reason for a tool abort notification.",
+      "oneOf": [
+        {
+          "description": "The whole turn was aborted.",
+          "properties": {
+            "kind": {
+              "const": "turn",
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/TurnAbortReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The tool itself was aborted independently of the turn.",
+          "properties": {
+            "kind": {
+              "const": "self_abort",
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A sibling shell tool failed and aborted this parallel tool.",
+          "properties": {
+            "failed_tool": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "sibling_error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "failed_tool"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ToolApprovalRequestPart": {
       "description": "A tool approval request content part (for provider-executed tools).\n\nThis is used for flows where the provider executes the tool (e.g. MCP tools)\nbut requires an explicit user approval before continuing.",
       "properties": {
@@ -11988,10 +12273,27 @@
           "type": "object"
         },
         {
+          "description": "Whether a streaming Enter can submit-interrupt the current turn.",
+          "properties": {
+            "interruptible": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "tool_interruptibility_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "interruptible"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Tool execution aborted notification.",
           "properties": {
             "reason": {
-              "type": "string"
+              "$ref": "#/$defs/ToolAbortReasonPayload"
             },
             "tool_use_id": {
               "type": "string"
@@ -12331,6 +12633,19 @@
           "type": "object"
         },
         {
+          "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args (TS `/config` local-jsx\npanel). Reuses the same overlay as the `Ctrl+,` keybind.",
+          "properties": {
+            "type": {
+              "const": "open_settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Tell the TUI to open the standalone theme picker. Emitted when the\nslash dispatcher resolves `/theme` with no args. The TUI builds the\nchoice list from its live `ThemeRuntimeState`.",
           "properties": {
             "type": {
@@ -12351,6 +12666,23 @@
             },
             "type": {
               "const": "open_skills_dialog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`/plugin` overlay \u2014 opens the tabbed installed / marketplace / errors\nmanager. The payload is a CLI-built snapshot because the TUI cannot\nreach plugin loader state directly.",
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/PluginDialogPayload"
+            },
+            "type": {
+              "const": "open_plugin_dialog",
               "type": "string"
             }
           },
@@ -12396,6 +12728,36 @@
         }
       ],
       "title": "TuiOnlyEvent"
+    },
+    "TurnAbortReason": {
+      "description": "Why a turn was aborted. Lets consumers distinguish user cancel,\nsubmit interrupt, permission abort, and system pre-emption.",
+      "oneOf": [
+        {
+          "const": "user_cancel",
+          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`\nin the SDK). The only reason that may trigger auto-restore.",
+          "type": "string"
+        },
+        {
+          "const": "submit_interrupt",
+          "description": "Streaming submit interruption: the user submitted new input while\nall running tools were cancel-interruptible.",
+          "type": "string"
+        },
+        {
+          "const": "system_preempt",
+          "description": "System pre-empted the in-flight turn so another session-level\noperation can run (Clear / Compact / Rewind / Shutdown / new\nSubmitInput). Auto-restore is suppressed \u2014 the user did not\nrequest a rewind.",
+          "type": "string"
+        },
+        {
+          "const": "permission_abort",
+          "description": "Permission flow aborted the turn instead of returning a normal\nmodel-visible denial.",
+          "type": "string"
+        },
+        {
+          "const": "background",
+          "description": "Turn moved to the background.",
+          "type": "string"
+        }
+      ]
     },
     "TurnEndedParams": {
       "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload \u2014\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\n\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned \u2014 this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
@@ -12466,7 +12828,7 @@
           "type": "object"
         },
         {
-          "description": "External cancellation (user Ctrl+C, system pre-empt).",
+          "description": "External cancellation (user Ctrl+C, submit interrupt, permission abort,\nsystem pre-empt).",
           "properties": {
             "data": {
               "$ref": "#/$defs/InterruptedOutcome"

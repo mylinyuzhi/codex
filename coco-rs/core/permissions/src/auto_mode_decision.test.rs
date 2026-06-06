@@ -1,4 +1,5 @@
 use coco_tool_runtime::DenialTracker;
+use coco_types::PermissionAbortReason;
 use coco_types::PermissionDecision;
 use serde_json::json;
 
@@ -114,6 +115,52 @@ async fn test_classifier_allow() {
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Allow { .. })));
+}
+
+#[tokio::test]
+async fn test_preapproved_webfetch_allows_without_classifier() {
+    let state = AutoModeState::new();
+    state.set_active(true);
+    let mut tracker = DenialTracker::new();
+    tracker.record_denial("Bash");
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
+        "WebFetch",
+        &json!({"url": "https://docs.python.org/3/library/os.html"}),
+        /*is_read_only*/ false,
+        &state,
+        &mut tracker,
+        &[],
+        &empty_rules(),
+        &interactive_ctx(None),
+        mock_error,
+        None,
+    )
+    .await;
+
+    assert!(matches!(result, Some(PermissionDecision::Allow { .. })));
+    assert_eq!(tracker.consecutive_denials, 0);
+}
+
+#[tokio::test]
+async fn test_preapproved_webfetch_rejects_subdomain() {
+    let state = AutoModeState::new();
+    state.set_active(true);
+    let mut tracker = DenialTracker::new();
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
+        "WebFetch",
+        &json!({"url": "https://sub.docs.python.org/"}),
+        /*is_read_only*/ false,
+        &state,
+        &mut tracker,
+        &[],
+        &empty_rules(),
+        &interactive_ctx(None),
+        mock_block,
+        None,
+    )
+    .await;
+
+    assert!(matches!(result, Some(PermissionDecision::Deny { .. })));
 }
 
 #[tokio::test]
@@ -308,7 +355,7 @@ async fn test_denial_limit_consecutive_falls_back_to_ask() {
 }
 
 #[tokio::test]
-async fn test_denial_limit_headless_denies() {
+async fn test_denial_limit_headless_aborts() {
     let state = AutoModeState::new();
     state.set_active(true);
     let mut tracker = DenialTracker::new();
@@ -328,7 +375,13 @@ async fn test_denial_limit_headless_denies() {
         )
         .await;
     }
-    assert!(matches!(last, Some(PermissionDecision::Deny { .. })));
+    assert!(matches!(
+        last,
+        Some(PermissionDecision::Abort {
+            reason: PermissionAbortReason::ClassifierDenialLimit,
+            ..
+        })
+    ));
 }
 
 #[tokio::test]
@@ -467,4 +520,31 @@ async fn test_transcript_too_long_interactive_asks() {
         }
         other => panic!("expected Ask, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_transcript_too_long_headless_aborts() {
+    let state = AutoModeState::new();
+    state.set_active(true);
+    let mut tracker = DenialTracker::new();
+    let result = can_use_tool_in_auto_mode::<coco_messages::Message, _, _>(
+        "Bash",
+        &json!({"command": "curl example.com"}),
+        /*is_read_only*/ false,
+        &state,
+        &mut tracker,
+        &[],
+        &empty_rules(),
+        &headless_ctx(None),
+        |_req: ClassifyRequest| async { Err("prompt is too long: 250000 tokens".to_string()) },
+        None,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Some(PermissionDecision::Abort {
+            reason: PermissionAbortReason::ClassifierTranscriptTooLong,
+            ..
+        })
+    ));
 }

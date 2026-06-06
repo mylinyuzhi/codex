@@ -121,11 +121,24 @@ pub fn load_mcpb(
         });
     }
 
-    // Build the MCP server config.
+    // Build the MCP server config, expanding `${__dirname}` / `${user_config.X}`
+    // placeholders in the command, args, and env (TS `getMcpConfigForManifest`).
+    let extracted_dir = target_dir.to_string_lossy().into_owned();
+    let command = substitute_template(
+        &target_dir.join(&manifest.server.command).to_string_lossy(),
+        &extracted_dir,
+        user_config,
+    );
+    let args: Vec<String> = manifest
+        .server
+        .args
+        .iter()
+        .map(|a| substitute_template(a, &extracted_dir, user_config))
+        .collect();
     let mcp_config = serde_json::json!({
-        "command": target_dir.join(&manifest.server.command).to_string_lossy(),
-        "args": manifest.server.args,
-        "env": merge_env(&manifest.server.env, user_config),
+        "command": command,
+        "args": args,
+        "env": merge_env(&manifest.server.env, &extracted_dir, user_config),
     });
 
     // Write/refresh cache sidecar.
@@ -200,31 +213,136 @@ fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> crate::Result<Mcp
         .ok_or_else(|| crate::PluginError::generic("mcpb", "MCPB archive missing manifest.json"))
 }
 
+/// Validate user-provided values against the manifest's JSONSchema-style
+/// `user_config` map. Mirrors TS `validateUserConfig`
+/// (`utils/plugins/mcpbHandler.ts:346-408`): required-field presence + per-field
+/// type (`string`, `string[]` when `multiple`, `number`, `boolean`,
+/// `file`/`directory` path) + numeric `min`/`max`. Error labels prefer the
+/// schema's `title`, falling back to the key. Empty result = valid.
 fn validate_config(
     schema: &HashMap<String, serde_json::Value>,
     user_config: &HashMap<String, serde_json::Value>,
 ) -> Vec<String> {
     let mut errors = Vec::new();
     for (key, prop) in schema {
+        let label = prop
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(key);
         let required = prop
             .get("required")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
-        if required && !user_config.contains_key(key) {
-            errors.push(format!("missing required config key: {key}"));
+
+        // A value is "not provided" when absent or an empty string, matching
+        // TS `value === undefined || value === ''`.
+        let value = match user_config.get(key) {
+            None => {
+                if required {
+                    errors.push(format!("{label} is required but not provided"));
+                }
+                continue;
+            }
+            Some(serde_json::Value::String(s)) if s.is_empty() => {
+                if required {
+                    errors.push(format!("{label} is required but not provided"));
+                }
+                continue;
+            }
+            Some(v) => v,
+        };
+
+        match prop.get("type").and_then(serde_json::Value::as_str) {
+            Some("string") => {
+                let multiple = prop
+                    .get("multiple")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                match value {
+                    serde_json::Value::Array(items) => {
+                        if !multiple {
+                            errors.push(format!("{label} must be a string, not an array"));
+                        } else if !items.iter().all(serde_json::Value::is_string) {
+                            errors.push(format!("{label} must be an array of strings"));
+                        }
+                    }
+                    serde_json::Value::String(_) => {}
+                    _ => errors.push(format!("{label} must be a string")),
+                }
+            }
+            Some("number") => {
+                if let Some(n) = value.as_f64() {
+                    if let Some(min) = prop.get("min").and_then(serde_json::Value::as_f64)
+                        && n < min
+                    {
+                        errors.push(format!("{label} must be at least {min}"));
+                    }
+                    if let Some(max) = prop.get("max").and_then(serde_json::Value::as_f64)
+                        && n > max
+                    {
+                        errors.push(format!("{label} must be at most {max}"));
+                    }
+                } else {
+                    errors.push(format!("{label} must be a number"));
+                }
+            }
+            Some("boolean") => {
+                if !value.is_boolean() {
+                    errors.push(format!("{label} must be a boolean"));
+                }
+            }
+            Some("file") | Some("directory") => {
+                if !value.is_string() {
+                    errors.push(format!("{label} must be a path string"));
+                }
+            }
+            _ => {}
         }
-        // TODO: full JSONSchema validation when needed; TS uses a subset
-        // (string/number/boolean + enum + required). Extend here as the
-        // surface grows.
     }
     errors
 }
 
+/// Expand MCPB template placeholders in a command / arg / env value:
+/// `${__dirname}` → the extracted bundle dir, `${user_config.KEY}` → the
+/// user-provided value (string values verbatim, others JSON-stringified).
+/// Unknown placeholders are left intact. Mirrors the substitution TS delegates
+/// to `@anthropic-ai/mcpb getMcpConfigForManifest`.
+fn substitute_template(
+    raw: &str,
+    extracted_dir: &str,
+    user_config: &HashMap<String, serde_json::Value>,
+) -> String {
+    let mut out = raw.replace("${__dirname}", extracted_dir);
+    for (k, v) in user_config {
+        let placeholder = format!("${{user_config.{k}}}");
+        if out.contains(&placeholder) {
+            let replacement = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            out = out.replace(&placeholder, &replacement);
+        }
+    }
+    out
+}
+
 fn merge_env(
     base: &HashMap<String, String>,
+    extracted_dir: &str,
     user_config: &HashMap<String, serde_json::Value>,
 ) -> serde_json::Value {
-    let mut merged: HashMap<String, String> = base.clone();
+    // Manifest-declared env values get template substitution; string user
+    // values are additionally exposed under their own key (coco-rs convenience
+    // retained from the original loader).
+    let mut merged: HashMap<String, String> = base
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                substitute_template(v, extracted_dir, user_config),
+            )
+        })
+        .collect();
     for (k, v) in user_config {
         if let Some(s) = v.as_str() {
             merged.insert(k.clone(), s.to_string());

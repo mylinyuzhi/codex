@@ -499,11 +499,28 @@
       ]
     },
     {
+      "description": "Whether a streaming Enter can submit-interrupt the current turn.",
+      "type": "object",
+      "properties": {
+        "interruptible": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "const": "tool_interruptibility_changed"
+        }
+      },
+      "required": [
+        "type",
+        "interruptible"
+      ]
+    },
+    {
       "description": "Tool execution aborted notification.",
       "type": "object",
       "properties": {
         "reason": {
-          "type": "string"
+          "$ref": "#/$defs/ToolAbortReasonPayload"
         },
         "tool_use_id": {
           "type": "string"
@@ -842,6 +859,19 @@
       ]
     },
     {
+      "description": "Tell the TUI to open the tabbed settings panel. Emitted when the slash\ndispatcher resolves `/config` with no args (TS `/config` local-jsx\npanel). Reuses the same overlay as the `Ctrl+,` keybind.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "open_settings"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    {
       "description": "Tell the TUI to open the standalone theme picker. Emitted when the\nslash dispatcher resolves `/theme` with no args. The TUI builds the\nchoice list from its live `ThemeRuntimeState`.",
       "type": "object",
       "properties": {
@@ -864,6 +894,23 @@
         "type": {
           "type": "string",
           "const": "open_skills_dialog"
+        }
+      },
+      "required": [
+        "type",
+        "payload"
+      ]
+    },
+    {
+      "description": "`/plugin` overlay — opens the tabbed installed / marketplace / errors\nmanager. The payload is a CLI-built snapshot because the TUI cannot\nreach plugin loader state directly.",
+      "type": "object",
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/PluginDialogPayload"
+        },
+        "type": {
+          "type": "string",
+          "const": "open_plugin_dialog"
         }
       },
       "required": [
@@ -1977,6 +2024,245 @@
         }
       ]
     },
+    "PluginDialogAction": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "plugin_args": {
+          "description": "Slash command args after `/plugin`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "plugin_args"
+      ]
+    },
+    "PluginDialogErrorRow": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "plugin_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plugin_id",
+        "message"
+      ]
+    },
+    "PluginDialogInstalledRow": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          }
+        },
+        "blocked_by_policy": {
+          "type": "boolean"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mcp_servers": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogMcpServerRow"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogOptionRow"
+          }
+        },
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source",
+        "path",
+        "enabled",
+        "blocked_by_policy"
+      ]
+    },
+    "PluginDialogMarketplaceRow": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "official": {
+          "type": "boolean"
+        },
+        "plugin_count": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "official",
+        "plugin_count"
+      ]
+    },
+    "PluginDialogMcpServerRow": {
+      "type": "object",
+      "properties": {
+        "actions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogAction"
+          }
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "needs_config": {
+          "type": "boolean"
+        },
+        "tools": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PluginDialogMcpToolRow"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "display_name",
+        "enabled",
+        "needs_config"
+      ]
+    },
+    "PluginDialogMcpToolRow": {
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "PluginDialogOptionRow": {
+      "type": "object",
+      "properties": {
+        "current_value": true,
+        "description": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "value_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "description",
+        "value_type",
+        "required"
+      ]
+    },
+    "PluginDialogPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenPluginDialog`].",
+      "type": "object",
+      "properties": {
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginDialogErrorRow"
+          }
+        },
+        "installed": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginDialogInstalledRow"
+          }
+        },
+        "marketplaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginDialogMarketplaceRow"
+          }
+        }
+      },
+      "required": [
+        "installed",
+        "marketplaces",
+        "errors"
+      ]
+    },
     "QueuedCommandEditImage": {
       "description": "Image payload paired with a queued command edit restore.",
       "type": "object",
@@ -2496,6 +2782,62 @@
         "info"
       ]
     },
+    "ToolAbortReasonPayload": {
+      "description": "Structured reason for a tool abort notification.",
+      "oneOf": [
+        {
+          "description": "The whole turn was aborted.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "turn"
+            },
+            "reason": {
+              "$ref": "#/$defs/TurnAbortReason"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "description": "The tool itself was aborted independently of the turn.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "self_abort"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ]
+        },
+        {
+          "description": "A sibling shell tool failed and aborted this parallel tool.",
+          "type": "object",
+          "properties": {
+            "failed_tool": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "sibling_error"
+            }
+          },
+          "required": [
+            "kind",
+            "failed_tool"
+          ]
+        }
+      ]
+    },
     "ToolTypeBreakdown": {
       "type": "object",
       "properties": {
@@ -2515,6 +2857,36 @@
         "name",
         "call_tokens",
         "result_tokens"
+      ]
+    },
+    "TurnAbortReason": {
+      "description": "Why a turn was aborted. Lets consumers distinguish user cancel,\nsubmit interrupt, permission abort, and system pre-emption.",
+      "oneOf": [
+        {
+          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`\nin the SDK). The only reason that may trigger auto-restore.",
+          "type": "string",
+          "const": "user_cancel"
+        },
+        {
+          "description": "Streaming submit interruption: the user submitted new input while\nall running tools were cancel-interruptible.",
+          "type": "string",
+          "const": "submit_interrupt"
+        },
+        {
+          "description": "System pre-empted the in-flight turn so another session-level\noperation can run (Clear / Compact / Rewind / Shutdown / new\nSubmitInput). Auto-restore is suppressed — the user did not\nrequest a rewind.",
+          "type": "string",
+          "const": "system_preempt"
+        },
+        {
+          "description": "Permission flow aborted the turn instead of returning a normal\nmodel-visible denial.",
+          "type": "string",
+          "const": "permission_abort"
+        },
+        {
+          "description": "Turn moved to the background.",
+          "type": "string",
+          "const": "background"
+        }
       ]
     },
     "WorkerBadge": {

@@ -438,6 +438,7 @@ fn decision_label(decision: &PermissionDecision) -> &'static str {
         PermissionDecision::Allow { .. } => "allow",
         PermissionDecision::Deny { .. } => "deny",
         PermissionDecision::Ask { .. } => "ask",
+        PermissionDecision::Abort { .. } => "abort",
     }
 }
 

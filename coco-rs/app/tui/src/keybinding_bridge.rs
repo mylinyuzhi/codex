@@ -61,6 +61,8 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | ModalState::Feedback(_)
             | ModalState::McpServerSelect(_)
             | ModalState::CopyPicker(_)
+            | ModalState::PluginHint(_)
+            | ModalState::PluginDialog(_)
             | ModalState::Rewind(_) => KeybindingContext::Picker,
 
             // Scrollable read-only modals
@@ -541,7 +543,7 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // all read from.
         // keymap = "input:newline"
         KeyCode::Enter if shift || alt => Some(TuiCommand::InsertNewline),
-        KeyCode::Enter if is_streaming => Some(TuiCommand::QueueInput),
+        KeyCode::Enter if is_streaming => Some(TuiCommand::SubmitInput),
         KeyCode::Enter if prompt_suggestion_visible(state) => {
             Some(TuiCommand::SubmitPromptSuggestion)
         }

@@ -348,8 +348,11 @@ async fn test_glob_respects_cancellation() {
     }
 
     let mut ctx = ToolUseContext::test_default();
-    ctx.cancel = tokio_util::sync::CancellationToken::new();
-    ctx.cancel.cancel();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    ctx.abort = coco_tool_runtime::ToolAbortSignal::from_turn(
+        coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),
+    );
+    cancel.cancel();
 
     let result = <GlobTool as DynTool>::execute(
         &GlobTool,

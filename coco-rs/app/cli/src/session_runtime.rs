@@ -51,6 +51,7 @@ use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::MailboxHandleRef;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::TurnAbortSignal;
 use coco_types::ModelRole;
 use coco_types::ModelSpec;
 use coco_types::PermissionMode;
@@ -94,11 +95,16 @@ struct FileWatchRegistrationContext {
     engine_config: Arc<RwLock<QueryEngineConfig>>,
     cancel: CancellationToken,
     async_hook_registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
+    command_queue: CommandQueue,
     hook_llm_handle: Arc<dyn coco_hooks::HookLlmHandle>,
 }
 
 struct QuerySessionStartHookSink {
     file_watch: FileWatchRegistrationContext,
+}
+
+fn async_rewake_sink(queue: &CommandQueue) -> Arc<dyn coco_hooks::AsyncRewakeSink> {
+    Arc::new(crate::command_queue_sink::CommandQueueNotificationSink::new(queue.clone()))
 }
 
 #[async_trait::async_trait]
@@ -125,6 +131,7 @@ impl FileWatchRegistrationContext {
             let cwd = std::env::current_dir().unwrap_or_default();
             let cancel = self.cancel.clone();
             let async_registry = self.async_hook_registry.clone();
+            let rewake_sink = async_rewake_sink(&self.command_queue);
             let llm_handle = self.hook_llm_handle.clone();
             let factory: Arc<
                 dyn Fn() -> coco_hooks::orchestration::OrchestrationContext + Send + Sync,
@@ -144,6 +151,7 @@ impl FileWatchRegistrationContext {
                 http_url_allowlist: None,
                 http_env_var_policy: None,
                 async_registry: Some(async_registry.clone()),
+                async_rewake_sink: Some(rewake_sink.clone()),
                 llm_handle: Some(llm_handle.clone()),
                 workspace_trust_accepted: None,
             });
@@ -283,22 +291,20 @@ fn populate_hook_registry(
             }
         }
     }
-    let plugin_dirs = coco_plugins::get_plugin_dirs(config_home, cwd);
-    let mut plugin_manager = coco_plugins::PluginManager::new();
-    plugin_manager.load_from_dirs(&plugin_dirs);
-    let plugin_count = plugin_manager.len();
-    if plugin_count > 0 {
+    // Plugin hooks: load the full ENABLED plugin set via the unified V2
+    // orchestrator (marketplace versioned cache + local `inline` dirs, gated by
+    // settings.json `enabled_plugins`) — not just the local-dir, all-enabled V1
+    // scan. `register_plugin_hooks_v2` uses `register_deduped` so a plugin
+    // re-declaring a settings hook stays single-fire.
+    let plugins = coco_plugins::load_enabled_plugins(config_home, cwd);
+    if !plugins.is_empty() {
         info!(
-            plugins = plugin_count,
-            "loaded {plugin_count} plugin(s) from {} dir(s)",
-            plugin_dirs.len()
+            plugins = plugins.len(),
+            "loaded {} enabled plugin(s)",
+            plugins.len()
         );
-    }
-    // `register_plugin_hooks` uses `register_deduped` internally
-    // so a plugin re-declaring a settings hook stays single-fire.
-    let plugin_refs: Vec<&coco_plugins::LoadedPlugin> = plugin_manager.enabled();
-    if !plugin_refs.is_empty() {
-        coco_plugins::hook_bridge::register_plugin_hooks(registry, &plugin_refs);
+        let refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+        coco_plugins::hook_bridge::register_plugin_hooks_v2(registry, &refs);
     }
 }
 
@@ -347,6 +353,10 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// (task dirs, task-list id, agent transcripts, usage snapshot)
     /// keys off the SAME id the engine config uses.
     pub session_id_override: Option<String>,
+    /// True for SDK / headless (print) sessions. File-history checkpointing
+    /// defaults OFF for these (TS `fileHistoryEnabledSdk`) and ON for the
+    /// interactive TUI, unless overridden by `COCO_FILE_CHECKPOINTING_*`.
+    pub is_non_interactive: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -425,6 +435,7 @@ pub struct SessionRuntime {
     pub runtime_config: Arc<RuntimeConfig>,
     pub session_manager: Arc<SessionManager>,
     pub fast_model_spec: Option<ModelSpec>,
+    schedule_store: coco_tool_runtime::ScheduleStoreRef,
     model_runtimes: Arc<coco_inference::ModelRuntimeRegistry>,
     side_query: coco_tool_runtime::SideQueryHandle,
     pub auto_title_enabled: bool,
@@ -630,6 +641,17 @@ pub struct SessionRuntime {
     /// MCP filter degrades to fail-closed (hides MCP-required
     /// agents).
     mcp_handle: Arc<RwLock<Option<coco_tool_runtime::McpHandleRef>>>,
+    /// The live MCP connection manager, when one was built for this session.
+    /// Distinct from [`Self::mcp_handle`] (the opaque tool-facing handle): this
+    /// is the concrete manager so reload paths can re-register plugin-contributed
+    /// MCP servers after a `/reload-plugins` / install / delisting. `None` on
+    /// entry points that don't build a manager (e.g. the TUI today, headless);
+    /// reload then no-ops. Set via [`Self::attach_mcp_manager`].
+    mcp_manager: Arc<RwLock<Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>>>,
+    /// Monotonic "the MCP server set changed" signal, bumped by
+    /// [`Self::reload_plugin_mcp_servers`]. Mirrors TS `mcp.pluginReconnectKey`
+    /// — consumers that own MCP reconnection re-run their effect when it moves.
+    mcp_reconnect_key: Arc<std::sync::atomic::AtomicU64>,
     /// Late-bind slot for the LSP handle. CLI / SDK installs a
     /// `LspManagerAdapter` here when `Feature::Lsp` is on and at
     /// least one language server is configured; `wire_engine` reads
@@ -714,6 +736,21 @@ pub struct SessionRuntime {
     _pid_registry: Option<coco_session::SessionRegistry>,
 }
 
+/// File-history checkpointing gate. TS `fileHistoryEnabled` (`fileHistory.ts:63-78`):
+/// interactive sessions default ON (settings flag, unless the disable env is
+/// set); non-interactive (SDK / headless) default OFF and require the SDK-enable
+/// env. The disable env always wins.
+fn file_checkpointing_enabled(settings_enabled: bool, is_non_interactive: bool) -> bool {
+    if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoFileCheckpointingDisable) {
+        return false;
+    }
+    if is_non_interactive {
+        coco_config::env::is_env_truthy(coco_config::EnvKey::CocoFileCheckpointingSdkEnable)
+    } else {
+        settings_enabled
+    }
+}
+
 impl SessionRuntime {
     /// Build the full session runtime. Constructs every subsystem TS
     /// `clearConversation` and the per-turn engine assembly need.
@@ -736,6 +773,7 @@ impl SessionRuntime {
             agent_search_paths,
             builtin_agent_catalog,
             session_id_override,
+            is_non_interactive,
         } = opts;
 
         let config_home = coco_config::global_config::config_home();
@@ -989,19 +1027,22 @@ impl SessionRuntime {
         // FileHistoryState — backed by JSONL transcript when enabled.
         // Sink shares the session_id Arc with SessionRuntime so
         // /clear regen propagates immediately (no rebuild required).
-        let (file_history, file_history_sink_session_id) =
-            if runtime_config.settings.merged.file_checkpointing_enabled {
-                let project_paths = crate::paths::project_paths(&cwd);
-                let sink_id = Arc::new(std::sync::RwLock::new(session_id.clone()));
-                let sink: Arc<dyn FileHistorySnapshotSink> = Arc::new(
-                    TranscriptFileHistorySink::new(project_paths, sink_id.clone()),
-                );
-                let mut state = FileHistoryState::new();
-                state.set_sink(sink);
-                (Some(Arc::new(RwLock::new(state))), Some(sink_id))
-            } else {
-                (None, None)
-            };
+        let (file_history, file_history_sink_session_id) = if file_checkpointing_enabled(
+            runtime_config.settings.merged.file_checkpointing_enabled,
+            is_non_interactive,
+        ) {
+            let project_paths = crate::paths::project_paths(&cwd);
+            let sink_id = Arc::new(std::sync::RwLock::new(session_id.clone()));
+            let sink: Arc<dyn FileHistorySnapshotSink> = Arc::new(TranscriptFileHistorySink::new(
+                project_paths,
+                sink_id.clone(),
+            ));
+            let mut state = FileHistoryState::new();
+            state.set_sink(sink);
+            (Some(Arc::new(RwLock::new(state))), Some(sink_id))
+        } else {
+            (None, None)
+        };
 
         // Shared per-session ToolAppState (plan-mode reminder cadence,
         // exited_plan_mode flag, last_emitted_date latch, etc.).
@@ -1017,13 +1058,12 @@ impl SessionRuntime {
         // layered on top via the bridge so plugin manifests can
         // declare their own SessionStart / PreToolUse / PostCompact /
         // etc. hooks. Same single-scope setup TS uses (see
-        // `plugins/loadPlugins`). The PluginManager itself is only
-        // needed for the duration of registration — `register_plugin_hooks`
+        // `plugins/loadPlugins`). The loaded plugin set is only needed
+        // for the duration of registration — `register_plugin_hooks_v2`
         // copies hook definitions into the registry, so dropping the
-        // manager afterward is safe. If a future SDK `plugin/reload`
-        // path needs the live manager it can be reintroduced as a
-        // proper `Arc<PluginManager>` field; until then we don't pay
-        // for the storage.
+        // `Vec<LoadedPluginV2>` afterward is safe. If a future SDK
+        // `plugin/reload` path needs the live set it can be reintroduced
+        // as a stored field; until then we don't pay for the storage.
         let hook_registry = {
             let registry = HookRegistry::new();
             populate_hook_registry(&registry, &runtime_config, &config_home, &cwd);
@@ -1305,6 +1345,7 @@ impl SessionRuntime {
             runtime_config,
             session_manager,
             fast_model_spec,
+            schedule_store: Arc::new(coco_tool_runtime::InMemoryScheduleStore::new()),
             model_runtimes,
             side_query,
             auto_title_enabled,
@@ -1352,6 +1393,8 @@ impl SessionRuntime {
             team_task_list_router: Arc::new(RwLock::new(None)),
             agent_transcript_store: Arc::new(RwLock::new(None)),
             mcp_handle: Arc::new(RwLock::new(None)),
+            mcp_manager: Arc::new(RwLock::new(None)),
+            mcp_reconnect_key: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             lsp_handle: Arc::new(RwLock::new(None)),
             agent_search_paths,
             builtin_agent_catalog,
@@ -1506,6 +1549,90 @@ impl SessionRuntime {
     /// Snapshot the installed MCP handle. `None` ⇒ no handle wired.
     pub async fn current_mcp_handle(&self) -> Option<coco_tool_runtime::McpHandleRef> {
         self.mcp_handle.read().await.clone()
+    }
+
+    /// Install the live `McpConnectionManager` so reload paths can re-register
+    /// plugin-contributed MCP servers. Call this after `SessionRuntime::build`
+    /// on entry points that own a manager (the SDK path today).
+    pub async fn attach_mcp_manager(
+        &self,
+        manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
+    ) {
+        let mut slot = self.mcp_manager.write().await;
+        *slot = Some(manager);
+    }
+
+    /// Current MCP reconnect key (TS `mcp.pluginReconnectKey`). Increments each
+    /// time [`Self::reload_plugin_mcp_servers`] changes the registered set.
+    pub fn mcp_reconnect_key(&self) -> u64 {
+        self.mcp_reconnect_key
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Re-register plugin-contributed MCP servers with the attached
+    /// `McpConnectionManager` and bump the reconnect key. Called from
+    /// `/reload-plugins` (and after install / delisting) so a plugin
+    /// enable/disable flows into the MCP layer — TS `refreshActivePlugins` →
+    /// `loadPluginMcpServers` + `pluginReconnectKey + 1`.
+    ///
+    /// Reconciles the live MCP set against the currently-enabled plugins:
+    /// servers from now-disabled/uninstalled plugins (the `plugin:` namespace)
+    /// are unregistered + their tools deregistered; newly-enabled servers are
+    /// registered, connected, and their tools registered. Bumps the reconnect
+    /// key. No-op (returns 0) when no manager is attached. Returns the count of
+    /// currently-enabled plugin MCP servers.
+    pub async fn reload_plugin_mcp_servers(&self, cwd: &std::path::Path) -> usize {
+        let Some(manager) = self.mcp_manager.read().await.clone() else {
+            return 0;
+        };
+        let plugins = coco_plugins::load_enabled_plugins(&self.config_home, cwd);
+        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+        let scoped = coco_plugins::mcp_bridge::extract_mcp_servers_from_plugins(&plugin_refs);
+        let count = scoped.len();
+        let new_names: std::collections::HashSet<String> =
+            scoped.iter().map(|s| s.name.clone()).collect();
+
+        // Reconcile: drop plugin servers (`plugin:` namespace) no longer present,
+        // then (re)register the current set. Plugin servers are keyed
+        // `plugin:<plugin>:<server>` by `mcp_bridge`, so the prefix isolates them
+        // from config-file servers, which this reload must never touch.
+        let stale: Vec<String> = {
+            let mut mgr = manager.lock().await;
+            let stale: Vec<String> = mgr
+                .registered_server_names()
+                .into_iter()
+                .filter(|n| n.starts_with("plugin:") && !new_names.contains(n))
+                .collect();
+            for name in &stale {
+                mgr.unregister_server(name).await;
+            }
+            mgr.register_all(scoped);
+            stale
+        };
+        for name in &stale {
+            coco_tools::deregister_mcp_server(self.tools(), name);
+        }
+        if count > 0 {
+            // Connect the newly-registered servers + register their tools into the
+            // live registry (idempotent — already-connected servers are skipped).
+            crate::session_bootstrap::connect_and_register_mcp(
+                manager.clone(),
+                self.tools().clone(),
+            )
+            .await;
+        }
+        self.mcp_reconnect_key
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        count
+    }
+
+    /// Re-read the on-disk LSP config, re-merge plugin-contributed LSP servers,
+    /// and re-prewarm via the attached LSP handle. No-op when no handle is
+    /// attached. Called from `/reload-plugins` (TS `reinitializeLspServerManager`).
+    pub async fn reload_lsp_servers(&self, cwd: &std::path::Path) {
+        if let Some(handle) = self.current_lsp_handle().await {
+            handle.reload(cwd).await;
+        }
     }
 
     /// Install or replace the late-bound LSP handle. Same semantics as
@@ -1885,16 +2012,35 @@ impl SessionRuntime {
     /// can never drift. The session-memory text is refreshed from disk
     /// before each build so a fresh extraction shows up on the next turn.
     pub async fn build_engine(&self, cancel: CancellationToken) -> QueryEngine {
+        self.build_engine_with_turn_abort(TurnAbortSignal::from_token(cancel))
+            .await
+    }
+
+    pub async fn build_engine_with_turn_abort(&self, turn_abort: TurnAbortSignal) -> QueryEngine {
         let engine_config = self.current_engine_config().await;
-        let engine = QueryEngine::new(
+        let engine = QueryEngine::new_with_turn_abort(
             engine_config,
             self.model_runtimes.clone(),
             self.tools.clone(),
-            cancel,
+            turn_abort,
             Some(self.hook_registry.clone()),
         );
-        self.wire_engine(engine, None, EnginePersistenceMode::MainSession)
-            .await
+        let engine = self
+            .wire_engine(engine, None, EnginePersistenceMode::MainSession)
+            .await;
+        // Inject the in-prompt-shell Bash handle into the LIVE command registry
+        // so skill / `ShellExpandingPromptHandler` markers route through the real
+        // Bash tool with a per-command permission check. Refreshed on every
+        // main-session engine build, so it also survives a `/reload-plugins`
+        // registry swap (the new registry starts with an empty handle cell).
+        // TS: `executeShellCommandsInPrompt`.
+        let base_ctx = engine.build_base_tool_context().await;
+        let registry = self.command_registry.read().await.clone();
+        crate::bash_tool_handle::inject_into_registry(&registry, base_ctx);
+        // Late-bind the session id so user-typed skill slash commands can
+        // substitute `${CLAUDE_SESSION_ID}` (TS `getPromptForCommand`).
+        registry.set_session_id(self.session_id.read().await.clone());
+        engine
     }
 
     pub async fn analyze_main_context(
@@ -1993,6 +2139,7 @@ impl SessionRuntime {
                 http_url_allowlist: None,
                 http_env_var_policy: None,
                 async_registry: Some(runtime.async_hook_registry.clone()),
+                async_rewake_sink: Some(async_rewake_sink(&runtime.command_queue)),
                 llm_handle: Some(runtime.hook_llm_handle.clone()),
                 workspace_trust_accepted: None,
             }
@@ -2229,6 +2376,7 @@ impl SessionRuntime {
         if let Some(mcp) = self.mcp_handle.read().await.clone() {
             engine = engine.with_mcp_handle(mcp);
         }
+        engine = engine.with_schedule_store(self.schedule_store.clone());
         // Same snapshot pattern as MCP — every per-turn engine reads
         // the late-bound LSP slot once at wire time. Hot-reloads of
         // the LSP config land on the next engine build.
@@ -2497,6 +2645,7 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };
@@ -2555,6 +2704,7 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };
@@ -2594,6 +2744,7 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };
@@ -2644,6 +2795,7 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };
@@ -2672,6 +2824,7 @@ impl SessionRuntime {
             engine_config: self.engine_config.clone(),
             cancel: self.cancel.clone(),
             async_hook_registry: self.async_hook_registry.clone(),
+            command_queue: self.command_queue.clone(),
             hook_llm_handle: self.hook_llm_handle.clone(),
         }
     }
@@ -2717,6 +2870,7 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };
@@ -2744,17 +2898,11 @@ impl SessionRuntime {
     }
 
     /// Fire ConfigChange hooks (TS `executeConfigChangeHooks`).
-    ///
-    /// Called from the per-session config-change watcher task spawned
-    /// by [`Self::spawn_config_change_watcher`]. Output is fire-and-forget;
-    /// TS uses the result for `hasBlockingResult` checks but coco-rs's
-    /// reload pipeline already publishes the new `RuntimeConfig` before
-    /// hooks fire, so the hook is observe-only here.
-    pub async fn fire_config_change_hooks(
+    pub async fn run_config_change_hooks(
         &self,
         source: coco_hooks::orchestration::ConfigChangeSource,
         file_path: Option<&str>,
-    ) {
+    ) -> coco_hooks::orchestration::AggregatedHookResult {
         let cfg = self.current_engine_config().await;
         let session_id = self.current_session_id().await;
         let ctx = coco_hooks::orchestration::OrchestrationContext {
@@ -2773,10 +2921,11 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };
-        if let Err(e) = coco_hooks::orchestration::execute_config_change(
+        match coco_hooks::orchestration::execute_config_change(
             &self.hook_registry,
             &ctx,
             source,
@@ -2784,8 +2933,21 @@ impl SessionRuntime {
         )
         .await
         {
-            warn!(error = %e, source = ?source, "ConfigChange hook execution failed");
+            Ok(agg) => agg,
+            Err(e) => {
+                warn!(error = %e, source = ?source, "ConfigChange hook execution failed");
+                coco_hooks::orchestration::AggregatedHookResult::default()
+            }
         }
+    }
+
+    /// Fire ConfigChange hooks for observe-only reload pipelines.
+    pub async fn fire_config_change_hooks(
+        &self,
+        source: coco_hooks::orchestration::ConfigChangeSource,
+        file_path: Option<&str>,
+    ) {
+        let _ = self.run_config_change_hooks(source, file_path).await;
     }
 
     /// Spawn a tokio task that subscribes to a [`coco_config_reload::ConfigChange`]
@@ -2909,9 +3071,10 @@ impl SessionRuntime {
     /// Rebuild the slash-command registry from disk and atomically
     /// swap it in. Triggered by `/reload-plugins` so the user can pick
     /// up plugin / skill / command edits without restarting the
-    /// session. New `SkillManager` + `PluginManager` are constructed
-    /// fresh each call; resolution order matches the original
-    /// bootstrap (`commands::build_command_registry`).
+    /// session. A new `SkillManager` and a freshly resolved enabled plugin
+    /// set (`load_enabled_plugins`) are constructed each call; resolution
+    /// order matches the original bootstrap
+    /// (`commands::build_command_registry`).
     ///
     /// Uses the frozen [`Self::runtime_config`] snapshot — fine for
     /// the user-initiated `/reload-plugins` path where settings
@@ -2935,12 +3098,42 @@ impl SessionRuntime {
         cwd: &std::path::Path,
         runtime_config: &coco_config::RuntimeConfig,
     ) -> usize {
-        let skill_manager = coco_skills::build_session_skill_manager(&self.config_home, cwd);
-        let mut plugin_manager = coco_plugins::PluginManager::new();
-        plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&self.config_home, cwd));
+        // Reload the LIVE skill manager (the one feeding the model catalog +
+        // dispatch), not a throwaway. Build a fresh catalog off disk with the
+        // resolved load gates, fold it into `self.skill_manager`, and clear the
+        // announcement map so edited skills re-announce. TS parity:
+        // `skillChangeDetector` re-emits the live catalog, it does not swap in
+        // a new manager instance.
+        let gates = crate::session_bootstrap::resolve_skill_load_gates_with_add_dirs(
+            runtime_config,
+            cwd,
+            &[],
+        );
+        let fresh = coco_skills::build_session_skill_manager(&self.config_home, cwd, &gates);
+        let fresh_skills: Vec<_> = fresh
+            .all_including_conditional()
+            .into_iter()
+            .map(|skill| (*skill).clone())
+            .collect();
+        self.skill_manager.reload_disk_skills(fresh_skills);
+        self.skill_manager.reset_announcements();
+        // Unified V2 plugin load (marketplace cache + local inline dirs, gated
+        // by enabled_plugins) so a `/reload-plugins` picks up disable/enable and
+        // marketplace installs, registering real plugin-command bodies.
+        let plugins = coco_plugins::load_enabled_plugins(&self.config_home, cwd);
+        let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+        for skill in coco_plugins::skill_bridge::load_all_plugin_skills_v2(&plugin_refs) {
+            self.skill_manager.register(skill);
+        }
+        // Builtin plugin skills (TS `getBuiltinPluginSkillCommands`) — symmetric
+        // with bootstrap so a reload re-registers them too.
+        coco_plugins::builtins::init_builtin_plugins();
+        for skill in coco_plugins::builtin_plugin_skills(&self.config_home) {
+            self.skill_manager.register(skill);
+        }
         let registry = coco_commands::build_command_registry(
-            &skill_manager,
-            &plugin_manager,
+            &self.skill_manager,
+            &plugins,
             coco_types::UserType::from_env(),
             runtime_config.features.clone(),
             cwd.to_path_buf(),
@@ -2950,8 +3143,15 @@ impl SessionRuntime {
         );
         let count = registry.len();
         let new_registry = Arc::new(registry);
-        let mut slot = self.command_registry.write().await;
-        *slot = new_registry;
+        {
+            let mut slot = self.command_registry.write().await;
+            *slot = new_registry;
+        }
+        // Re-register plugin MCP servers with the live manager (if attached) so a
+        // reload picks up newly enabled/disabled plugin MCP contributions
+        // (TS `refreshActivePlugins` → `loadPluginMcpServers`). No-op without a
+        // manager (e.g. the TUI today).
+        let _ = self.reload_plugin_mcp_servers(cwd).await;
         count
     }
 
@@ -3016,12 +3216,11 @@ impl SessionRuntime {
             .map_err(|e| anyhow::anyhow!("hook reload failed: {e}"))?;
 
         // Re-layer plugin hooks on top — they aren't in settings.json
-        // so `reload_from_runtime` doesn't see them.
-        let mut plugin_manager = coco_plugins::PluginManager::new();
-        plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&self.config_home, &cwd));
-        let plugin_refs: Vec<&coco_plugins::LoadedPlugin> = plugin_manager.enabled();
-        if !plugin_refs.is_empty() {
-            coco_plugins::hook_bridge::register_plugin_hooks(&self.hook_registry, &plugin_refs);
+        // so `reload_from_runtime` doesn't see them. Unified V2 source.
+        let plugins = coco_plugins::load_enabled_plugins(&self.config_home, &cwd);
+        if !plugins.is_empty() {
+            let refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+            coco_plugins::hook_bridge::register_plugin_hooks_v2(&self.hook_registry, &refs);
         }
 
         Ok(self.hook_registry.len().max(settings_count))
@@ -3056,6 +3255,7 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };
@@ -3072,6 +3272,11 @@ impl SessionRuntime {
         // Step 2: reset state from TS `clearSessionCaches`.
         *self.app_state.write().await = ToolAppState::default();
         self.reset_cache_break_detectors().await;
+        // Clear the per-agent skill announcement map so every skill
+        // re-announces in the post-clear transcript's first listing pass.
+        // TS parity: `clearSessionCaches` calls `resetSentSkillNames()`
+        // (`caches.ts:75-79`).
+        self.skill_manager.reset_announcements();
 
         // Drop any queued steering messages — `/clear` semantically
         // says "fresh start", and a queued prompt from the pre-clear
@@ -3147,6 +3352,7 @@ impl SessionRuntime {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: Some(self.async_hook_registry.clone()),
+            async_rewake_sink: Some(async_rewake_sink(&self.command_queue)),
             llm_handle: Some(self.hook_llm_handle.clone()),
             workspace_trust_accepted: None,
         };

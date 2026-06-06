@@ -15,11 +15,11 @@ fn app_interrupt_maps_to_interrupt() {
 }
 
 #[test]
-fn chat_submit_queues_when_streaming() {
+fn chat_submit_routes_to_update_layer_when_streaming() {
     let mut state = fresh_state();
     state.ui.streaming = Some(crate::state::StreamingState::default());
     let cmd = dispatch_action(&KeybindingAction::ChatSubmit, &state).unwrap();
-    assert!(matches!(cmd, TuiCommand::QueueInput));
+    assert!(matches!(cmd, TuiCommand::SubmitInput));
 }
 
 #[test]

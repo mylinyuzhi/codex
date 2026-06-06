@@ -34,10 +34,15 @@ pub fn is_read_only_agent(agent_type: &str) -> bool {
     matches!(agent_type, "Explore" | "Plan" | "coco-guide")
 }
 
-/// Whether classification should run for this turn. Skips read-only
-/// agents and zero-tool turns (TS `agentToolUtils.ts:391-398`).
-pub fn should_classify(agent_type: &str, total_tool_use_count: i64) -> bool {
-    !is_read_only_agent(agent_type) && total_tool_use_count > 0
+/// Whether classification should run for this hand-off. Gates *solely*
+/// on a non-empty transcript — mirroring TS
+/// `agentToolUtils.ts:411-412` (`const agentTranscript =
+/// buildTranscriptForClassifier(...); if (!agentTranscript) return null`).
+/// TS does NOT exempt read-only agents or zero-tool turns; `subagentType`
+/// and `totalToolUseCount` feed analytics only. The feature + auto-mode
+/// gate is [`handoff_classifier_active`].
+pub fn should_classify(transcript: &str) -> bool {
+    !transcript.trim().is_empty()
 }
 
 /// TS hand-off review user message — fed verbatim to the classifier so

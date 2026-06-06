@@ -31,6 +31,7 @@ fn test_ctx() -> OrchestrationContext {
         http_url_allowlist: None,
         http_env_var_policy: None,
         async_registry: None,
+        async_rewake_sink: None,
         llm_handle: None,
         workspace_trust_accepted: None,
     }
@@ -119,7 +120,7 @@ fn test_parse_hook_output_plain_text() {
     let parsed = parse_hook_output("just some text\n");
     match parsed {
         ParsedHookOutput::PlainText(t) => assert_eq!(t, "just some text\n"),
-        ParsedHookOutput::Json(_) => panic!("expected PlainText"),
+        other => panic!("expected PlainText, got {other:?}"),
     }
 }
 
@@ -132,7 +133,7 @@ fn test_parse_hook_output_json_decision() {
             assert_eq!(j.decision.as_deref(), Some("block"));
             assert_eq!(j.reason.as_deref(), Some("not allowed"));
         }
-        ParsedHookOutput::PlainText(_) => panic!("expected Json"),
+        other => panic!("expected Json, got {other:?}"),
     }
 }
 
@@ -145,7 +146,7 @@ fn test_parse_hook_output_json_continue_false() {
             assert_eq!(j.should_continue, Some(false));
             assert_eq!(j.stop_reason.as_deref(), Some("user abort"));
         }
-        ParsedHookOutput::PlainText(_) => panic!("expected Json"),
+        other => panic!("expected Json, got {other:?}"),
     }
 }
 
@@ -155,8 +156,43 @@ fn test_parse_hook_output_invalid_json_falls_back_to_plain() {
     let parsed = parse_hook_output(bad);
     match parsed {
         ParsedHookOutput::PlainText(t) => assert_eq!(t, bad),
-        ParsedHookOutput::Json(_) => panic!("expected PlainText for invalid JSON"),
+        other => panic!("expected PlainText for invalid JSON, got {other:?}"),
     }
+}
+
+#[test]
+fn test_parse_hook_output_valid_json_wrong_shape_is_validation_error() {
+    // Valid JSON, but `continue` must be a boolean — schema mismatch surfaces
+    // as a ValidationError (not PlainText), so it is never injected as context.
+    let parsed = parse_hook_output(r#"{"continue": "yes please"}"#);
+    match parsed {
+        ParsedHookOutput::ValidationError(msg) => {
+            assert!(msg.contains("Expected schema"), "got: {msg}");
+        }
+        other => panic!("expected ValidationError, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_aggregate_suppresses_validation_error_from_context() {
+    // A hook whose stdout is valid-JSON-wrong-shape must not inject its raw
+    // text into additional_contexts (TS validationError path).
+    let result = SingleHookResult {
+        command: "h".into(),
+        succeeded: true,
+        output: r#"{"continue": "yes please"}"#.into(),
+        blocked: false,
+        outcome: HookOutcome::Success,
+        status_message: None,
+        async_rewake: false,
+        source: HookBlockingSource::Command("h".into()),
+        sdk_output: None,
+    };
+    let agg = aggregate_results(std::slice::from_ref(&result));
+    assert!(
+        agg.additional_contexts.is_empty(),
+        "validation-error stdout must not be injected as context"
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -1261,7 +1297,7 @@ fn test_parse_hook_specific_output_pre_tool_use() {
                 other => panic!("expected PreToolUse, got {other:?}"),
             }
         }
-        ParsedHookOutput::PlainText(_) => panic!("expected Json"),
+        other => panic!("expected Json, got {other:?}"),
     }
 }
 
@@ -1281,7 +1317,7 @@ fn test_parse_hook_specific_output_permission_request() {
             }
             other => panic!("expected PermissionRequest, got {other:?}"),
         },
-        ParsedHookOutput::PlainText(_) => panic!("expected Json"),
+        other => panic!("expected Json, got {other:?}"),
     }
 }
 
@@ -1297,7 +1333,7 @@ fn test_parse_hook_specific_output_elicitation_decline() {
             }
             other => panic!("expected Elicitation, got {other:?}"),
         },
-        ParsedHookOutput::PlainText(_) => panic!("expected Json"),
+        other => panic!("expected Json, got {other:?}"),
     }
 }
 
@@ -1359,6 +1395,8 @@ fn test_process_execution_result_prefers_stdout_json_on_nonzero_exit() {
         },
         "hook.sh",
         HookBlockingSource::Command("hook.sh".to_string()),
+        HookEventType::PostToolUse,
+        &coco_messages::AttachmentEmitter::noop(),
     );
     let agg = aggregate_results(&[result]);
     assert!(!agg.is_blocked());
@@ -1375,6 +1413,8 @@ fn test_process_execution_result_exit_two_uses_stderr_without_stdout_json() {
         },
         "hook.sh",
         HookBlockingSource::Command("hook.sh".to_string()),
+        HookEventType::PostToolUse,
+        &coco_messages::AttachmentEmitter::noop(),
     );
     let agg = aggregate_results(&[result]);
     assert!(agg.is_blocked());

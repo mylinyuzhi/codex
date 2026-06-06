@@ -7,6 +7,12 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 
+use async_trait::async_trait;
+
+use crate::CommandHandler;
+use crate::CommandResult;
+use crate::DialogSpec;
+
 /// A discovered plugin from scanning plugin directories.
 struct PluginEntry {
     name: String,
@@ -52,6 +58,27 @@ pub fn handler(
             }
         }
     })
+}
+
+/// CommandHandler entry point used by the interactive slash dispatcher.
+///
+/// Bare `/plugin`, `/plugins`, and `/marketplace` are local-jsx commands in TS:
+/// they open the plugin manager. Explicit subcommands keep the legacy text path
+/// so headless/scripted use remains stable.
+pub struct PluginHandler;
+
+#[async_trait]
+impl CommandHandler for PluginHandler {
+    async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
+        if args.trim().is_empty() {
+            return Ok(CommandResult::OpenDialog(DialogSpec::PluginPicker));
+        }
+        Ok(CommandResult::Text(handler(args.to_string()).await?))
+    }
+
+    fn handler_name(&self) -> &str {
+        "plugin"
+    }
 }
 
 /// List all installed plugins from project and user directories.
@@ -218,8 +245,8 @@ fn extract_toml_string_value(rest: &str) -> Option<String> {
 /// users into thinking remote plugins had been fetched.
 ///
 /// TS: `services/plugins/PluginInstallationManager.ts`. Live-registry
-/// refresh is deferred to next session — Rust doesn't yet expose a
-/// thread-safe handle to the engine's PluginManager.
+/// refresh is deferred to `/reload-plugins` (which re-runs
+/// `load_enabled_plugins`); a fresh install is not auto-activated mid-session.
 async fn install_plugin(target: &str) -> crate::Result<String> {
     if target.trim().is_empty() {
         return Ok("Usage: /plugin install <name>[@<marketplace>]".to_string());
@@ -465,22 +492,44 @@ async fn search_plugins(query: &str) -> crate::Result<String> {
     Ok(out)
 }
 
-/// Enable a plugin: remove its name from the persistent disabled-plugins
-/// file. Live registry refresh deferred to next session — Rust doesn't yet
-/// expose a thread-safe handle to PluginManager.
+/// Settings directory where `enabled_plugins` lives (config root, same place
+/// the install path and loader read/write). TS single source of truth.
+fn settings_dir_for_plugins() -> PathBuf {
+    coco_config::global_config::config_home()
+}
+
+/// Enable a plugin: set `enabled_plugins[<id>].enabled = true` in settings.json
+/// — the single source of truth the loader and policy layer read (TS
+/// `setPluginEnabledOp`). The orphaned `disabled_plugins.json` is gone.
 async fn enable_plugin(name: &str) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin enable <name>".to_string());
     }
-    if !plugin_dir_exists(name).await {
+    let Some(plugin_id) = resolve_installed_plugin_id(name) else {
         return Ok(format!("Plugin '{name}' not found."));
+    };
+    // Enterprise-policy guard: org-blocked plugins cannot be enabled at any
+    // scope. Mirrors `install_plugin`'s blocklist gate (and TS
+    // `pluginOperations.ts:650-658`, which checks `isPluginBlockedByPolicy`
+    // on enable only — disable is intentionally ungated). Checked after the
+    // dir-exists check so we only block plugins the user could otherwise
+    // enable.
+    let policy = coco_plugins::security::EnterprisePolicy::from_managed_settings();
+    if let coco_plugins::security::PolicyVerdict::BlockedPlugin { plugin } =
+        coco_plugins::security::check_policy(&plugin_id, /*is_user_scope*/ true, &policy)
+    {
+        return Err(crate::CommandsError::generic(format!(
+            "Plugin \"{plugin}\" is blocked by your organization's policy and cannot be enabled"
+        )));
     }
-    let mut disabled = read_disabled_plugins().await;
-    if !disabled.iter().any(|n| n == name) {
+    let settings_dir = settings_dir_for_plugins();
+    // Enabled by default (no entry) or already explicitly enabled.
+    if coco_plugins::install::read_plugin_enabled(&settings_dir, &plugin_id) != Some(false) {
         return Ok(format!("Plugin '{name}' is already enabled."));
     }
-    disabled.retain(|n| n != name);
-    write_disabled_plugins(&disabled).await?;
+    coco_plugins::install::set_plugin_enabled(&settings_dir, &plugin_id, true).map_err(|e| {
+        crate::CommandsError::generic(format!("failed to update settings.json: {e}"))
+    })?;
     Ok(format!(
         "Plugin '{name}' enabled (persisted). Run /reload-plugins to \
          apply (slash commands refresh immediately; skills, hooks, \
@@ -489,21 +538,22 @@ async fn enable_plugin(name: &str) -> crate::Result<String> {
     ))
 }
 
-/// Disable a plugin: append its name to the persistent disabled-plugins
-/// file. Same deferral semantics as enable.
+/// Disable a plugin: set `enabled_plugins[<id>].enabled = false` in
+/// settings.json. Same source of truth as enable/install.
 async fn disable_plugin(name: &str) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin disable <name>".to_string());
     }
-    if !plugin_dir_exists(name).await {
+    let Some(plugin_id) = resolve_installed_plugin_id(name) else {
         return Ok(format!("Plugin '{name}' not found."));
-    }
-    let mut disabled = read_disabled_plugins().await;
-    if disabled.iter().any(|n| n == name) {
+    };
+    let settings_dir = settings_dir_for_plugins();
+    if coco_plugins::install::read_plugin_enabled(&settings_dir, &plugin_id) == Some(false) {
         return Ok(format!("Plugin '{name}' is already disabled."));
     }
-    disabled.push(name.to_string());
-    write_disabled_plugins(&disabled).await?;
+    coco_plugins::install::set_plugin_enabled(&settings_dir, &plugin_id, false).map_err(|e| {
+        crate::CommandsError::generic(format!("failed to update settings.json: {e}"))
+    })?;
     Ok(format!(
         "Plugin '{name}' disabled (persisted). Run /reload-plugins to \
          apply (slash commands refresh immediately; skills, hooks, \
@@ -512,39 +562,23 @@ async fn disable_plugin(name: &str) -> crate::Result<String> {
     ))
 }
 
-/// Check whether a plugin directory exists in any scan dir. Used by
-/// enable/disable to refuse silently mutating state for unknown names.
-async fn plugin_dir_exists(name: &str) -> bool {
-    for (dir, _label) in plugin_scan_dirs() {
-        if tokio::fs::metadata(dir.join(name)).await.is_ok() {
-            return true;
-        }
-    }
-    false
-}
-
-/// Path to the persistent disabled-plugins state file. Lives next to
-/// `installed_plugins.json` so deployment / backup tooling can treat the
-/// plugin state directory as one unit.
-fn disabled_plugins_path() -> PathBuf {
-    resolve_plugins_dir().join("disabled_plugins.json")
-}
-
-async fn read_disabled_plugins() -> Vec<String> {
-    let Ok(content) = tokio::fs::read_to_string(disabled_plugins_path()).await else {
-        return Vec::new();
-    };
-    serde_json::from_str(&content).unwrap_or_default()
-}
-
-async fn write_disabled_plugins(names: &[String]) -> crate::Result<()> {
-    let path = disabled_plugins_path();
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let json = serde_json::to_string_pretty(names)?;
-    tokio::fs::write(path, json).await?;
-    Ok(())
+/// Resolve a user-supplied plugin name to its full installed identity so the
+/// persisted `enabled_plugins` key matches exactly what the loader reads.
+///
+/// Searches *every* installed plugin (inline standing-dir plugins keyed
+/// `<name>@inline` **and** marketplace-installed plugins in the versioned
+/// cache, enabled or disabled), matching either the full id (`foo@mkt`) or a
+/// bare name (`foo`). Returns `None` when nothing is installed under that name
+/// — so `/plugin enable|disable` refuses to silently mutate state for unknown
+/// names, and now works for marketplace plugins the standing-dir scan can't
+/// see.
+fn resolve_installed_plugin_id(name: &str) -> Option<coco_plugins::identifier::PluginId> {
+    let config_home = settings_dir_for_plugins();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    coco_plugins::load_all_installed_plugins(&config_home, &cwd)
+        .into_iter()
+        .find(|p| p.id.to_string() == name || p.id.name == name)
+        .map(|p| coco_plugins::identifier::PluginId::parse(&p.id.to_string()))
 }
 
 /// Marketplace subcommand dispatcher.
@@ -770,14 +804,6 @@ async fn marketplace_remove(name: &str) -> crate::Result<String> {
 /// `coco plugin install` and vice-versa.
 fn resolve_plugins_dir() -> PathBuf {
     coco_config::global_config::config_home().join("plugins")
-}
-
-/// Get project and user plugin directories for scanning.
-fn plugin_scan_dirs() -> Vec<(PathBuf, &'static str)> {
-    vec![
-        (PathBuf::from(".claude/plugins"), "project"),
-        (resolve_plugins_dir(), "user"),
-    ]
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ use crate::state::McpServerApprovalPromptState;
 use crate::state::PlanApprovalPromptState;
 use crate::state::PlanEntryPromptState;
 use crate::state::PlanExitPromptState;
+use crate::state::PluginHintState;
 use crate::state::SandboxPermissionPromptState;
 use crate::state::TaskDetailState;
 use crate::state::TrustState;
@@ -342,6 +343,63 @@ pub(crate) fn plan_approval_content(
             t!("dialog.plan_approval_hints")
         ),
         styles.plan(),
+    )
+}
+
+pub(crate) fn plugin_hint_content(
+    ph: &PluginHintState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    // Mirror TS PluginHintMenu.tsx: a short body describing the plugin plus
+    // a 3-option select (install / dismiss / disable-all).
+    let options = [
+        t!("dialog.plugin_hint_install", name = ph.plugin_name.as_str()).to_string(),
+        t!("dialog.plugin_hint_no").to_string(),
+        t!("dialog.plugin_hint_disable").to_string(),
+    ];
+    let items: Vec<String> = options
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            let marker = if i as i32 == ph.selected {
+                "▸ "
+            } else {
+                "  "
+            };
+            format!("{marker}{opt}")
+        })
+        .collect();
+
+    let mut body = String::new();
+    body.push_str(&t!(
+        "dialog.plugin_hint_suggests",
+        command = ph.source_command.as_str()
+    ));
+    body.push_str("\n\n");
+    body.push_str(&t!(
+        "dialog.plugin_hint_plugin",
+        name = ph.plugin_name.as_str()
+    ));
+    body.push('\n');
+    body.push_str(&t!(
+        "dialog.plugin_hint_marketplace",
+        marketplace = ph.marketplace_name.as_str()
+    ));
+    if let Some(desc) = &ph.plugin_description {
+        body.push('\n');
+        body.push_str(desc);
+    }
+    body.push_str("\n\n");
+    body.push_str(&t!("dialog.plugin_hint_prompt"));
+    body.push_str("\n\n");
+    body.push_str(&items.join("\n"));
+    body.push_str("\n\n");
+    body.push_str(&t!("dialog.plugin_hint_hints"));
+
+    (
+        t!("dialog.title_plugin_hint").to_string(),
+        body,
+        styles.primary(),
     )
 }
 

@@ -10,10 +10,12 @@ fn read_only_agents_recognised() {
 }
 
 #[test]
-fn should_classify_skips_read_only_and_zero_tool_runs() {
-    assert!(!should_classify("Explore", 5));
-    assert!(!should_classify("general-purpose", 0));
-    assert!(should_classify("general-purpose", 1));
+fn should_classify_gates_only_on_nonempty_transcript() {
+    // TS parity: read-only agents and zero-tool turns are NOT exempt —
+    // classification runs whenever the transcript is non-empty.
+    assert!(!should_classify(""));
+    assert!(!should_classify("   \n  "));
+    assert!(should_classify("[user] hello"));
 }
 
 #[test]

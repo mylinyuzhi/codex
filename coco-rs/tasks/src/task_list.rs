@@ -227,6 +227,19 @@ impl TaskListStore {
         self.change_tx.subscribe()
     }
 
+    /// Fire a "tasks changed" notification without mutating any task.
+    ///
+    /// The list-mutating ops call the private [`Self::notify`] internally,
+    /// but team teardown removes the whole task-list directory out-of-band
+    /// (`coco_coordinator::team_file::cleanup_team_directories`) — no task
+    /// op runs, so subscribers would otherwise miss the deletion. This
+    /// public hook lets that path emit the same signal. TS parity: the
+    /// `notifyTasksUpdated()` call inside `cleanupTeamDirectories`
+    /// (`teamHelpers.ts:677`).
+    pub fn notify_change(&self) {
+        self.notify();
+    }
+
     fn task_path(&self, task_id: &str) -> PathBuf {
         self.tasks_dir
             .join(format!("{}.json", sanitize_path_component(task_id)))

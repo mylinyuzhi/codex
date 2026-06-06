@@ -1,18 +1,24 @@
-//! Plugin system via PLUGIN.toml manifests.
+//! Plugin system: PLUGIN.toml / plugin.json manifests, marketplace cache, and
+//! the V2 loader ([`loader::PluginLoader`] + [`load_enabled_plugins`]) that
+//! resolves the active plugin set the session bootstrap registers contributions
+//! from (commands / hooks / skills via the bridges).
 //!
-//! TS: plugins/ + services/plugins/ (PluginManifest, PluginManager, contributions)
+//! TS: plugins/ + services/plugins/ + utils/plugins/ (loadAllPlugins, refresh)
 
 pub mod builtins;
 pub mod command_bridge;
 pub mod dependency;
 pub mod errors;
 pub mod fetch;
+pub mod hints;
 pub mod hook_bridge;
 pub mod hot_reload;
 pub mod identifier;
 pub mod install;
 pub mod loader;
+pub mod lsp_bridge;
 pub mod marketplace;
+pub mod mcp_bridge;
 pub mod mcpb;
 pub mod official;
 pub mod parse_marketplace_input;
@@ -23,226 +29,24 @@ pub mod versioning;
 pub mod watcher;
 
 pub use errors::PluginError;
+pub use hints::ClaudeCodeHint;
+pub use hints::extract_claude_code_hints;
+pub use hints::pending_hint_snapshot;
+pub use marketplace::MAX_SHOWN_PLUGINS;
+pub use marketplace::PluginRecommendation;
+pub use marketplace::detect_and_uninstall_delisted_plugins;
+pub use marketplace::disable_hint_recommendations;
+pub use marketplace::mark_hint_plugin_shown;
+pub use marketplace::maybe_record_plugin_hint;
+pub use marketplace::resolve_plugin_hint;
+pub use marketplace::run_marketplace_startup;
 
 /// Crate-local Result alias. Default error is `PluginError`; the open
 /// generic preserves `Result::ok` and 2-arg `Result<T, E>` resolution.
 pub type Result<T, E = PluginError> = std::result::Result<T, E>;
 
-use serde::Deserialize;
-use serde::Serialize;
-use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-
-/// Plugin manifest — loaded from PLUGIN.toml.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginManifest {
-    pub name: String,
-    #[serde(default)]
-    pub version: Option<String>,
-    pub description: String,
-    #[serde(default)]
-    pub skills: Vec<String>,
-    #[serde(default)]
-    pub hooks: HashMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub mcp_servers: HashMap<String, serde_json::Value>,
-}
-
-/// A loaded plugin with its source and state.
-#[derive(Debug, Clone)]
-pub struct LoadedPlugin {
-    pub name: String,
-    pub manifest: PluginManifest,
-    pub path: PathBuf,
-    pub source: PluginSource,
-    pub enabled: bool,
-}
-
-/// Where a plugin was loaded from.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginSource {
-    Builtin,
-    User,
-    Project,
-    Repository { url: String },
-}
-
-/// Load a plugin manifest from a PLUGIN.toml file.
-pub fn load_plugin_manifest(path: &Path) -> crate::Result<PluginManifest> {
-    let content = std::fs::read_to_string(path)?;
-    let manifest: PluginManifest = toml::from_str(&content)?;
-    Ok(manifest)
-}
-
-/// Discover plugins by scanning directories for PLUGIN.toml files.
-/// Each directory in `dirs` is checked for a PLUGIN.toml at its root.
-pub fn discover_plugins(dirs: &[PathBuf]) -> Vec<LoadedPlugin> {
-    dirs.iter()
-        .filter_map(|dir| {
-            let manifest_path = dir.join("PLUGIN.toml");
-            let manifest = load_plugin_manifest(&manifest_path).ok()?;
-            Some(LoadedPlugin {
-                name: manifest.name.clone(),
-                manifest,
-                path: dir.clone(),
-                source: PluginSource::Project,
-                enabled: true,
-            })
-        })
-        .collect()
-}
-
-/// Plugin manager — loading, lifecycle, contributions.
-#[derive(Default)]
-pub struct PluginManager {
-    plugins: HashMap<String, LoadedPlugin>,
-}
-
-impl PluginManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn register(&mut self, plugin: LoadedPlugin) {
-        self.plugins.insert(plugin.name.clone(), plugin);
-    }
-
-    pub fn get(&self, name: &str) -> Option<&LoadedPlugin> {
-        self.plugins.get(name)
-    }
-
-    pub fn enabled(&self) -> Vec<&LoadedPlugin> {
-        self.plugins.values().filter(|p| p.enabled).collect()
-    }
-
-    pub fn len(&self) -> usize {
-        self.plugins.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.plugins.is_empty()
-    }
-
-    /// Enable a plugin by name. Returns false if the plugin was not found.
-    pub fn enable(&mut self, name: &str) -> bool {
-        if let Some(plugin) = self.plugins.get_mut(name) {
-            plugin.enabled = true;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Disable a plugin by name. Returns false if the plugin was not found.
-    pub fn disable(&mut self, name: &str) -> bool {
-        if let Some(plugin) = self.plugins.get_mut(name) {
-            plugin.enabled = false;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Discover and register plugins from the given directories.
-    /// Each directory is scanned for a PLUGIN.toml at its root.
-    pub fn load_from_dirs(&mut self, dirs: &[PathBuf]) {
-        for plugin in discover_plugins(dirs) {
-            self.register(plugin);
-        }
-    }
-}
-
-/// Plugin contributions — what a plugin provides to the system.
-///
-/// TS: PluginContributions in utils/plugins/
-#[derive(Debug, Clone, Default)]
-pub struct PluginContributions {
-    /// Skill definitions contributed by this plugin.
-    pub skills: Vec<String>,
-    /// Hook definitions contributed.
-    pub hooks: Vec<serde_json::Value>,
-    /// MCP server configs contributed.
-    pub mcp_servers: HashMap<String, serde_json::Value>,
-    /// Agent definitions contributed.
-    pub agents: Vec<String>,
-    /// Slash commands contributed.
-    pub commands: Vec<String>,
-}
-
-impl LoadedPlugin {
-    /// Collect all contributions from this plugin.
-    pub fn contributions(&self) -> PluginContributions {
-        let mut contributions = PluginContributions::default();
-
-        // Skills from manifest
-        for skill in &self.manifest.skills {
-            contributions.skills.push(skill.clone());
-        }
-
-        // Hooks from manifest
-        for hook_value in self.manifest.hooks.values() {
-            contributions.hooks.push(hook_value.clone());
-        }
-
-        // MCP servers from manifest
-        contributions.mcp_servers = self.manifest.mcp_servers.clone();
-
-        // Discover additional contributions from directory structure
-        self.discover_dir_contributions(&mut contributions);
-
-        contributions
-    }
-
-    /// Discover contributions from the plugin's directory structure.
-    fn discover_dir_contributions(&self, contributions: &mut PluginContributions) {
-        // Check for skills/ directory
-        let skills_dir = self.path.join("skills");
-        if skills_dir.is_dir()
-            && let Ok(entries) = std::fs::read_dir(&skills_dir)
-        {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "md")
-                    && let Some(name) = path.file_stem().and_then(|s| s.to_str())
-                {
-                    contributions.skills.push(name.to_string());
-                }
-            }
-        }
-
-        // Check for agents/ directory
-        let agents_dir = self.path.join("agents");
-        if agents_dir.is_dir()
-            && let Ok(entries) = std::fs::read_dir(&agents_dir)
-        {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "md")
-                    && let Some(name) = path.file_stem().and_then(|s| s.to_str())
-                {
-                    contributions.agents.push(name.to_string());
-                }
-            }
-        }
-
-        // Check for commands/ directory
-        let commands_dir = self.path.join("commands");
-        if commands_dir.is_dir()
-            && let Ok(entries) = std::fs::read_dir(&commands_dir)
-        {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "md")
-                    && let Some(name) = path.file_stem().and_then(|s| s.to_str())
-                {
-                    contributions.commands.push(name.to_string());
-                }
-            }
-        }
-    }
-}
 
 /// Standard plugin directories.
 pub fn get_plugin_dirs(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
@@ -275,20 +79,132 @@ pub fn get_plugin_dirs(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Collect all contributions from all enabled plugins.
-pub fn collect_all_contributions(manager: &PluginManager) -> PluginContributions {
-    let mut total = PluginContributions::default();
-
-    for plugin in manager.enabled() {
-        let c = plugin.contributions();
-        total.skills.extend(c.skills);
-        total.hooks.extend(c.hooks);
-        total.mcp_servers.extend(c.mcp_servers);
-        total.agents.extend(c.agents);
-        total.commands.extend(c.commands);
+/// Read settings.json `enabled_plugins` into `(enabled_ids, disabled_ids)` keyed
+/// by the explicit boolean: `{ "enabled": true }` (or bare `true`) → enabled;
+/// `false` → disabled; absent value defaults to enabled. TS
+/// `enabledPlugins[id] === true`.
+fn read_enabled_disabled_ids(
+    config_home: &Path,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    let mut enabled = std::collections::HashSet::new();
+    let mut disabled = std::collections::HashSet::new();
+    let path = config_home.join("settings.json");
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return (enabled, disabled);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (enabled, disabled);
+    };
+    let Some(obj) = value
+        .get("enabled_plugins")
+        .or_else(|| value.get("enabledPlugins"))
+        .and_then(|v| v.as_object())
+    else {
+        return (enabled, disabled);
+    };
+    for (id, v) in obj {
+        let is_enabled = v
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .or_else(|| v.as_bool())
+            .unwrap_or(true);
+        if is_enabled {
+            enabled.insert(id.clone());
+        } else {
+            disabled.insert(id.clone());
+        }
     }
+    (enabled, disabled)
+}
 
-    total
+/// Production entry point: load the full ENABLED plugin set from every source —
+/// the marketplace versioned cache + local `inline` dirs — gated by settings.json
+/// `enabled_plugins`. Mirrors TS `loadAllPlugins().enabled`. This is the single
+/// source the session bootstrap and `/reload-plugins` register contributions
+/// from (commands / hooks / skills via the V2 bridges).
+pub fn load_enabled_plugins(config_home: &Path, project_dir: &Path) -> Vec<loader::LoadedPluginV2> {
+    load_all_installed_plugins(config_home, project_dir)
+        .into_iter()
+        .filter(|p| p.enabled)
+        .collect()
+}
+
+/// Read settings.json `enabled_plugins` into an id→bool override map (the shape
+/// [`builtins::get_builtin_plugins`] consumes). Absent ids fall back to each
+/// builtin's `default_enabled`.
+fn read_enabled_plugin_overrides(config_home: &Path) -> std::collections::HashMap<String, bool> {
+    let (enabled, disabled) = read_enabled_disabled_ids(config_home);
+    enabled
+        .into_iter()
+        .map(|id| (id, true))
+        .chain(disabled.into_iter().map(|id| (id, false)))
+        .collect()
+}
+
+/// Skills contributed by enabled builtin plugins, honoring settings.json
+/// enable/disable overrides. Empty until a builtin is registered via
+/// [`builtins::init_builtin_plugins`] — wired so a future builtin's skills
+/// reach the model catalog alongside marketplace/inline plugin skills
+/// (TS `getBuiltinPluginSkillCommands`).
+pub fn builtin_plugin_skills(config_home: &Path) -> Vec<coco_skills::SkillDefinition> {
+    builtins::get_builtin_plugin_skills(&read_enabled_plugin_overrides(config_home))
+}
+
+/// Like [`load_enabled_plugins`] but returns *every* installed plugin with its
+/// resolved `enabled` flag (not just the enabled ones). Used by the
+/// `/plugin enable|disable` handlers to resolve a bare name to its full
+/// `name@marketplace` identity — including currently-disabled and
+/// marketplace-installed plugins the standing-dir scan can't see.
+pub fn load_all_installed_plugins(
+    config_home: &Path,
+    project_dir: &Path,
+) -> Vec<loader::LoadedPluginV2> {
+    let plugins_dir = config_home.join("plugins");
+    let (enabled_ids, disabled_ids) = read_enabled_disabled_ids(config_home);
+
+    // Marketplace catalogs (read every known marketplace's cached manifest).
+    let mut mgr = marketplace::MarketplaceManager::new(plugins_dir.clone());
+    let names: Vec<String> = mgr.load_known_marketplaces().into_keys().collect();
+    for name in &names {
+        let _ = mgr.load_cached_marketplace(name);
+    }
+    let marketplaces: Vec<schemas::PluginMarketplace> = names
+        .iter()
+        .filter_map(|n| mgr.cached_marketplace(n).cloned())
+        .collect();
+
+    let loader = loader::PluginLoader::new(plugins_dir);
+    let standing = get_plugin_dirs(config_home, project_dir);
+    loader
+        .load_all_plugins(&standing, &marketplaces, &enabled_ids, &disabled_ids)
+        .plugins
+}
+
+/// Discover each plugin's agent directories: the conventional
+/// `<plugin>/agents/` dir plus any directory listed in the manifest `agents`
+/// field. Returned as `(plugin_name, dir)` pairs so the subagent loader can
+/// namespace each agent `<plugin>:<agent>`. TS `loadPluginAgents` (the
+/// directory sources; single-file manifest entries are not yet mapped).
+pub fn plugin_agent_dirs(plugins: &[loader::LoadedPluginV2]) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for plugin in plugins {
+        let agents_dir = plugin.path.join("agents");
+        if agents_dir.is_dir() {
+            out.push((plugin.id.name.clone(), agents_dir));
+        }
+        if let Some(paths) = &plugin.manifest.agents {
+            for rel in paths.to_vec() {
+                let dir = plugin.path.join(rel);
+                if dir.is_dir() {
+                    out.push((plugin.id.name.clone(), dir));
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

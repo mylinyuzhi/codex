@@ -373,7 +373,7 @@ fn test_enter_queues_during_streaming() {
     state.ui.input.textarea.insert_str("h");
     state.ui.streaming = Some(crate::state::ui::StreamingState::new());
     let cmd = map_key(&state, press(KeyCode::Enter));
-    assert!(matches!(cmd, Some(TuiCommand::QueueInput)));
+    assert!(matches!(cmd, Some(TuiCommand::SubmitInput)));
 }
 
 #[test]

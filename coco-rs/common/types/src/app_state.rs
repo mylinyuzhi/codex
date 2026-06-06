@@ -350,6 +350,12 @@ pub struct ActiveWorktreeState {
     pub worktree_path: std::path::PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_branch: Option<String>,
+    /// SHA of the **resolved default branch** (e.g. `origin/main`) the worktree
+    /// was created from — NOT the repo's current HEAD. Mirrors TS
+    /// `ExitWorktreeTool` `originalHeadCommit`. Lets `ExitWorktree` report
+    /// `discardedCommits` = commits on the worktree branch ahead of that base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_head_commit: Option<String>,
 }
 
 // ────────────────────────────────────────────────────────────────

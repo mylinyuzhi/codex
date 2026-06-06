@@ -55,6 +55,17 @@ fn canned_state(task_id: &str) -> TaskStateBase {
     }
 }
 
+/// Catalog snapshot containing the built-in `verification` agent, so the
+/// #213 verification-nudge gate passes in tests.
+fn catalog_with_verification() -> std::sync::Arc<coco_subagent::AgentCatalogSnapshot> {
+    let mut store = coco_subagent::AgentDefinitionStore::new(
+        coco_subagent::BuiltinAgentCatalog::all_enabled(),
+        coco_subagent::AgentSearchPaths::empty(),
+    );
+    store.load();
+    store.snapshot()
+}
+
 #[async_trait::async_trait]
 impl TaskHandle for RecordingTaskHandle {
     async fn get_task_status(
@@ -108,8 +119,18 @@ impl TaskHandle for RecordingTaskHandle {
     async fn read_output(&self, _: &str) -> String {
         String::new()
     }
-    async fn task_state(&self, _: &str) -> Option<TaskStateBase> {
-        None
+    async fn task_state(&self, task_id: &str) -> Option<TaskStateBase> {
+        if self
+            .known_ids
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|id| id == task_id)
+        {
+            Some(canned_state(task_id))
+        } else {
+            None
+        }
     }
     async fn is_terminal(&self, _: &str) -> bool {
         false
@@ -206,7 +227,10 @@ async fn test_task_stop_accepts_task_id_for_background_task() {
             .await
             .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-1");
-    assert_eq!(stop_result.data["task_type"], "background");
+    assert_eq!(
+        stop_result.data["task_type"],
+        coco_types::TaskType::Shell.wire_name()
+    );
     assert_eq!(handle.killed(), vec!["bg-1".to_string()]);
 }
 
@@ -222,7 +246,10 @@ async fn test_task_stop_accepts_shell_id_alias() {
             .await
             .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-2");
-    assert_eq!(stop_result.data["task_type"], "background");
+    assert_eq!(
+        stop_result.data["task_type"],
+        coco_types::TaskType::Shell.wire_name()
+    );
 }
 
 #[tokio::test]
@@ -237,7 +264,10 @@ async fn test_task_stop_accepts_legacy_taskid_alias() {
             .await
             .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-3");
-    assert_eq!(stop_result.data["task_type"], "background");
+    assert_eq!(
+        stop_result.data["task_type"],
+        coco_types::TaskType::Shell.wire_name()
+    );
 }
 
 /// TS-alignment contract: plan-item IDs (in `utils/tasks.ts` disk
@@ -402,7 +432,10 @@ async fn test_task_stop_canonical_precedence() {
     .await
     .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-canonical");
-    assert_eq!(stop_result.data["task_type"], "background");
+    assert_eq!(
+        stop_result.data["task_type"],
+        coco_types::TaskType::Shell.wire_name()
+    );
     assert_eq!(handle.killed(), vec!["bg-canonical".to_string()]);
 }
 
@@ -828,6 +861,7 @@ async fn test_task_create_emits_snapshot_and_auto_expand() {
 async fn test_task_update_sets_verification_nudge_in_patch() {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent_id = None; // main thread
+    ctx.agent_catalog = Some(catalog_with_verification());
     let mut ids = Vec::new();
     for i in 0..3 {
         let r = <TaskCreateTool as DynTool>::execute(
@@ -1037,6 +1071,7 @@ async fn test_task_list_filters_resolved_blockers_from_blocked_by() {
 async fn test_task_update_verification_nudge_main_thread_all_done() {
     let mut ctx = ToolUseContext::test_default();
     ctx.agent_id = None; // main thread
+    ctx.agent_catalog = Some(catalog_with_verification());
     let mut ids = Vec::new();
     for i in 0..3 {
         let created = <TaskCreateTool as DynTool>::execute(

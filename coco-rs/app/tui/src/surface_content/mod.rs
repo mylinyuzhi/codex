@@ -43,11 +43,13 @@ pub(crate) enum TextSurfaceContent<'a> {
     BypassPermissions(&'a crate::state::BypassPermissionsState),
     TaskDetail(&'a crate::state::TaskDetailState),
     Feedback(&'a crate::state::FeedbackState),
+    PluginHint(&'a crate::state::PluginHintState),
     McpServerSelect(&'a crate::state::McpServerSelectState),
     Rewind(&'a crate::state::RewindState),
     Settings(&'a crate::widgets::settings_panel::SettingsPanelState),
     PlanApproval(&'a crate::state::PlanApprovalPromptState),
     SkillsDialog(&'a crate::state::SkillsDialogState),
+    PluginDialog(&'a crate::state::PluginDialogState),
     AgentsDialog(&'a crate::state::AgentsDialogState),
 }
 
@@ -79,6 +81,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::Settings(s) => TextSurfaceContent::Settings(s),
         ModalState::MemoryDialog(_) => return None,
         ModalState::SkillsDialog(s) => TextSurfaceContent::SkillsDialog(s),
+        ModalState::PluginDialog(p) => TextSurfaceContent::PluginDialog(p),
         ModalState::AgentsDialog(a) => TextSurfaceContent::AgentsDialog(a),
         ModalState::Doctor(d) => TextSurfaceContent::Doctor(d),
         ModalState::WorktreeExit(w) => TextSurfaceContent::WorktreeExit(w),
@@ -91,6 +94,7 @@ pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceConten
         ModalState::TaskDetail(td) => TextSurfaceContent::TaskDetail(td),
         ModalState::Feedback(f) => TextSurfaceContent::Feedback(f),
         ModalState::McpServerSelect(ms) => TextSurfaceContent::McpServerSelect(ms),
+        ModalState::PluginHint(ph) => TextSurfaceContent::PluginHint(ph),
         ModalState::CopyPicker(_) => return None,
         ModalState::Transcript(_) => return None,
         // Styled render path (see `surface/modal.rs`) — not a text surface.
@@ -158,11 +162,13 @@ pub(crate) fn surface_content(
         }
         TextSurfaceContent::TaskDetail(td) => confirm::task_detail_content(td, styles),
         TextSurfaceContent::Feedback(f) => confirm::feedback_content(f, styles),
+        TextSurfaceContent::PluginHint(ph) => confirm::plugin_hint_content(ph, styles),
         TextSurfaceContent::McpServerSelect(ms) => pickers::mcp_server_select_content(ms, styles),
         TextSurfaceContent::Rewind(r) => rewind::rewind_surface_content(r, styles),
         TextSurfaceContent::Settings(s) => settings::settings_surface_content(s, styles),
         TextSurfaceContent::PlanApproval(p) => confirm::plan_approval_content(p, styles),
         TextSurfaceContent::SkillsDialog(s) => pickers::skills_dialog_content(s, styles),
+        TextSurfaceContent::PluginDialog(p) => pickers::plugin_dialog_content(p, styles),
         TextSurfaceContent::AgentsDialog(a) => {
             pickers::agents_dialog_content(a, &state.session.subagents, styles)
         }

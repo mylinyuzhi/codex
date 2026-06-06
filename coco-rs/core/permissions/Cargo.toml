@@ -26,6 +26,7 @@ serde_json.workspace = true
 tracing.workspace = true
 regex.workspace = true
 globset.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

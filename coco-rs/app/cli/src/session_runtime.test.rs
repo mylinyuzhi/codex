@@ -26,6 +26,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::empty_in(home.path()),
+        coco_config::parse_enabled_setting_sources(None),
     )
     .expect("runtime config");
     let model_id = crate::headless::resolve_main_model(&runtime_config).model_id;
@@ -53,6 +54,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
+        is_non_interactive: false,
     })
     .await
     .expect("build SessionRuntime")
@@ -80,6 +82,35 @@ async fn orchestration_ctx_factory_can_run_inside_runtime_thread() {
     runtime.start_new_session("next-session".to_string()).await;
     let updated_session = factory();
     assert_eq!(updated_session.session_id, "next-session");
+}
+
+#[tokio::test]
+async fn reload_plugin_mcp_servers_noops_without_manager_then_bumps_key_when_attached() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let cwd = home.path().to_path_buf();
+
+    // No manager attached → no-op, reconnect key untouched.
+    assert_eq!(runtime.reload_plugin_mcp_servers(&cwd).await, 0);
+    assert_eq!(runtime.mcp_reconnect_key(), 0);
+
+    // Attach a manager → reload runs the manager path and bumps the key, even
+    // when no plugins contribute MCP servers (count 0, key still moves).
+    let manager = Arc::new(tokio::sync::Mutex::new(
+        coco_mcp::McpConnectionManager::new(home.path().to_path_buf()),
+    ));
+    runtime.attach_mcp_manager(manager.clone()).await;
+    let count = runtime.reload_plugin_mcp_servers(&cwd).await;
+    assert_eq!(count, 0, "no plugins → no plugin MCP servers");
+    assert_eq!(runtime.mcp_reconnect_key(), 1, "reconnect key bumps once");
+    assert!(
+        manager.lock().await.registered_server_names().is_empty(),
+        "no plugin servers were registered"
+    );
+
+    // A second reload bumps again (idempotent re-register, monotonic key).
+    runtime.reload_plugin_mcp_servers(&cwd).await;
+    assert_eq!(runtime.mcp_reconnect_key(), 2);
 }
 
 #[tokio::test]

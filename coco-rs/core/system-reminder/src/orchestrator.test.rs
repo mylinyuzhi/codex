@@ -328,7 +328,7 @@ async fn with_default_generators_registers_all_builtins() {
     assert_eq!(
         o.generator_count(),
         43,
-        "Phase A/B/C (11) + Phase-1 (5) + Phase-2 (3) + Phase-3 (14) + Phase-4 user-input (3) + Memory (2) + Main IDE (2) + Silent native (2) + Audit-add model-visible (1)"
+        "QueuedCommand is drained by query finalize, not the default reminder registry"
     );
 }
 
@@ -345,7 +345,11 @@ async fn all_attachment_type_variants_have_default_generator() {
         o.registered_attachment_types().into_iter().collect();
     let catalog: std::collections::HashSet<_> = AttachmentType::all().iter().copied().collect();
 
-    let missing: Vec<_> = catalog.difference(&registered).copied().collect();
+    let missing: Vec<_> = catalog
+        .difference(&registered)
+        .copied()
+        .filter(|ty| *ty != AttachmentType::QueuedCommand)
+        .collect();
     assert!(
         missing.is_empty(),
         "AttachmentType variants without default generator: {missing:?}"
@@ -377,9 +381,9 @@ async fn default_registry_order_matches_ts_attachment_batches() {
             AgentMentions,
             // Audit-add UserPrompt tier
             SkillDiscovery,
-            // allThreadAttachments
-            QueuedCommand,
+            // allThreadAttachments (QueuedCommand is drained by query finalize)
             DateChange,
+            UserContext,
             UltrathinkEffort,
             DeferredToolsDelta,
             AgentListingDelta,

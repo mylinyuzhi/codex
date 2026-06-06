@@ -154,6 +154,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 budget_tokens: None,
                 options: std::collections::HashMap::new(),
             }),
+            fast_mode: false,
             session_id: config.session_id.unwrap_or_default(),
             project_dir: None,
             // Subagent rule maps start empty, then we fold in any

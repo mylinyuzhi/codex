@@ -25,7 +25,7 @@
 //!
 //! # Cancellation
 //!
-//! `ctx.cancel` is cloned into the blocking closure and checked once per file
+//! `ctx.cancel_token()` is cloned into the blocking closure and checked once per file
 //! between searcher invocations. Mid-file cancellation is not supported by
 //! `grep-searcher`, so a very large file will finish before the worker yields;
 //! in practice this is bounded by the same timeout. The async side is
@@ -522,7 +522,7 @@ impl Tool for GrepTool {
 
         let timeout_secs = ctx.tool_config.glob_timeout_seconds.max(1) as u64;
 
-        let cancel = ctx.cancel.clone();
+        let cancel = ctx.cancel_token();
         let read_ignore_matcher =
             crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
                 &ctx.tool_config.file_read_ignore_patterns,

@@ -8,7 +8,7 @@ fn empty_paths() -> AgentSearchPaths {
         project_dirs: Vec::<PathBuf>::new(),
         flag_dirs: Vec::<PathBuf>::new(),
         policy_dirs: Vec::<PathBuf>::new(),
-        plugin_dirs: Vec::<PathBuf>::new(),
+        plugin_dirs: Vec::new(),
     }
 }
 
@@ -64,7 +64,7 @@ fn paths_includes_configured_dirs() {
         project_dirs: vec![PathBuf::from("/proj/.claude/agents")],
         flag_dirs: Vec::<PathBuf>::new(),
         policy_dirs: Vec::<PathBuf>::new(),
-        plugin_dirs: Vec::<PathBuf>::new(),
+        plugin_dirs: Vec::new(),
     };
     let out = render("paths", paths).unwrap();
     assert!(out.contains("/home/u/.coco/agents"));

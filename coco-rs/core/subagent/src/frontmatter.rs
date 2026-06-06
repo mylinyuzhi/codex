@@ -205,9 +205,10 @@ pub fn parse_agent_markdown(
             .unwrap_or_default();
     def.skills = read_csv_or_list(frontmatter, "skills").unwrap_or_default();
     def.mcp_servers = parse_mcp_servers(frontmatter);
-    def.required_mcp_servers =
-        read_csv_or_list_aliased(frontmatter, &["requiredMcpServers", "required_mcp_servers"])
-            .unwrap_or_default();
+    // NOTE: `required_mcp_servers` is intentionally NOT read from
+    // frontmatter — TS (loadAgentsDir.ts:693) only reads `mcpServers` and
+    // sets `requiredMcpServers` programmatically, never from a markdown
+    // field. The struct field stays for programmatic use.
     // Hooks parsing: nested `hooks:` mapping flows through verbatim
     // as `serde_json::Value`. `coco_hooks::load_hooks_from_config`
     // consumes it at SubagentStart time. TS parity:

@@ -24,6 +24,7 @@ pub(crate) enum PermissionOutcome {
         updated_input: Option<serde_json::Value>,
     },
     Denied,
+    Aborted,
 }
 
 pub(crate) struct PermissionController<'a> {
@@ -104,6 +105,21 @@ impl<'a> PermissionController<'a> {
                 )
                 .await;
                 PermissionOutcome::Denied
+            }
+            PermissionDecision::Abort { message, .. } => {
+                warn!(tool = tool_call.tool_name, %message, "tool permission aborted");
+                let output = format!("Permission aborted: {message}");
+                complete_tool_call_with_error_mode(
+                    self.event_tx,
+                    self.history,
+                    &tool_call.tool_call_id,
+                    &tool_call.tool_name,
+                    tool_id,
+                    &output,
+                    self.completion_event_mode,
+                )
+                .await;
+                PermissionOutcome::Aborted
             }
             PermissionDecision::Ask {
                 message,
@@ -314,15 +330,35 @@ impl<'a> PermissionController<'a> {
                         .await;
                     PermissionOutcome::Denied
                 }
+                coco_tool_runtime::ToolPermissionDecision::Aborted => {
+                    let feedback = resolution
+                        .feedback
+                        .unwrap_or_else(|| "Permission request aborted by client".into());
+                    warn!(tool = tool_call.tool_name, "approval bridge: aborted");
+                    let output = format!("Permission aborted: {feedback}");
+                    complete_tool_call_with_error_mode(
+                        self.event_tx,
+                        self.history,
+                        &tool_call.tool_call_id,
+                        &tool_call.tool_name,
+                        tool_id,
+                        &output,
+                        self.completion_event_mode,
+                    )
+                    .await;
+                    self.state_tracker
+                        .transition_to(SessionState::Running, self.event_tx)
+                        .await;
+                    PermissionOutcome::Aborted
+                }
             },
             Err(e) => {
                 warn!(
                     error = %e,
                     tool = tool_call.tool_name,
-                    "approval bridge failed; auto-denying"
+                    "approval bridge failed; aborting permission flow"
                 );
-                self.record_denial(tool_call, tool_input);
-                let output = format!("Approval bridge error: {e}");
+                let output = format!("Permission aborted: {e}");
                 complete_tool_call_with_error_mode(
                     self.event_tx,
                     self.history,
@@ -336,7 +372,7 @@ impl<'a> PermissionController<'a> {
                 self.state_tracker
                     .transition_to(SessionState::Running, self.event_tx)
                     .await;
-                PermissionOutcome::Denied
+                PermissionOutcome::Aborted
             }
         }
     }

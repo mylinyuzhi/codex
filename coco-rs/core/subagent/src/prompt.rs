@@ -96,14 +96,14 @@ impl<'a> AgentToolPromptRenderer<'a> {
         Self { snapshot }
     }
 
-    /// Format the agent listing block. Order matches the snapshot's active
-    /// iteration order, which is deterministic (alphabetical by
-    /// `agent_type` via `BTreeMap`). TS preserves source-load order in
-    /// `prompt.ts:198-199`; coco-rs uses alphabetical so multi-source
-    /// reloads stay stable across `BuiltinAgentCatalog` toggles.
+    /// Format the agent listing block in TS source-load order (built-in →
+    /// plugin → user → project → flag → managed), matching
+    /// `getActiveAgentsFromList` + `prompt.ts:198-199` so the
+    /// model-visible block and its prompt-cache key are byte-faithful to
+    /// TS.
     pub fn agent_list(&self, opts: &PromptOptions) -> String {
         self.snapshot
-            .active()
+            .active_in_load_order()
             .filter(|def| visible_to_prompt(def, opts))
             .map(format_agent_line)
             .collect::<Vec<_>>()

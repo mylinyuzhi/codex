@@ -155,6 +155,8 @@ pub struct QueryEngineConfig {
     /// currently driving the LLM with. TS: `queryConfig.thinkingLevel`
     /// threaded through `toolUseContext.options.thinkingLevel`.
     pub thinking_level: Option<ThinkingLevel>,
+    /// Whether the main model call should request fast-mode behavior.
+    pub fast_mode: bool,
     /// Session identifier for hook orchestration context.
     pub session_id: String,
     /// Project root directory for hook orchestration context.
@@ -397,6 +399,7 @@ impl Default for QueryEngineConfig {
             debug: false,
             verbose: false,
             thinking_level: None,
+            fast_mode: false,
             session_id: String::new(),
             project_dir: None,
             allow_rules: Default::default(),

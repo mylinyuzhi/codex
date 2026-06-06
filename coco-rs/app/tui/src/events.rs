@@ -90,6 +90,8 @@ pub enum TuiCommand {
     // ── Input actions ──
     /// Submit current input (or queue if streaming).
     SubmitInput,
+    /// Submit current input by queueing it and interrupting cancelable tools.
+    SubmitInterrupt,
     /// Queue input during streaming.
     QueueInput,
     /// Interrupt current operation.

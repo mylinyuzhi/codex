@@ -5,6 +5,7 @@
 pub mod agent_handle_factory;
 pub mod agent_transcript_persistence;
 pub mod at_mention_turn;
+pub mod bash_tool_handle;
 pub mod command_queue_sink;
 pub mod coordinator_mode_resume;
 pub mod disk_task_output;

@@ -59,6 +59,12 @@ pub struct McpSseConfig {
     pub url: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(
+        default,
+        alias = "headersHelper",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub headers_helper: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOAuthConfig>,
 }
@@ -68,6 +74,12 @@ pub struct McpHttpConfig {
     pub url: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(
+        default,
+        alias = "headersHelper",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub headers_helper: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<McpOAuthConfig>,
 }
@@ -105,6 +117,12 @@ pub struct McpWsConfig {
     pub url: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(
+        default,
+        alias = "headersHelper",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub headers_helper: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

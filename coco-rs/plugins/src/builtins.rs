@@ -76,6 +76,19 @@ pub fn register_builtin_plugin(def: BuiltinPluginDefinition) {
     lock_registry().insert(def.name.clone(), def);
 }
 
+/// Seed the builtin-plugin registry once at startup. This is the single
+/// registration point for compiled-in plugins — mirrors TS
+/// `plugins/bundled/index.ts initBuiltinPlugins()`, which is itself an empty
+/// scaffold (coco-rs ships no builtins yet). Idempotent: safe to call from
+/// every entry point (TUI / SDK / headless). Add `register_builtin_plugin(...)`
+/// calls here when a real builtin lands.
+pub fn init_builtin_plugins() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        // No builtins registered yet — parity with TS's empty scaffold.
+    });
+}
+
 /// Whether a plugin id has the `@builtin` marketplace suffix.
 /// TS: `isBuiltinPluginId`.
 pub fn is_builtin_plugin_id(id: &str) -> bool {

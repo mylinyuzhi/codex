@@ -52,6 +52,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         cache: None,
         stop_sequences: None,
         response_format: None,
+        cancel: None,
     };
     let result = query_client(&target.client, params).await?;
     usage_report::record(target.provider, &target.model, "tools.run", &result.usage);

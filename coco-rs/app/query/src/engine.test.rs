@@ -4663,8 +4663,8 @@ async fn turn_completed_fires_once_per_user_prompt_cycle() {
 async fn cancellation_returns_cancelled_without_engine_turn_ended() {
     // Turn-lifecycle refactor: the engine no longer wire-emits
     // `TurnEnded(Interrupted)` on cancel. Only the runner
-    // (`tui_runner` / `sdk_runner`) knows the `CancelReason`
-    // (UserCancel vs SystemPreempt, tracked in its `OnceLock`), so the
+    // (`tui_runner` / `sdk_runner`) knows the `TurnAbortReason`
+    // (UserCancel vs SystemPreempt, tracked in its turn abort signal), so the
     // runner owns that emit. The engine just finalizes the user-cancel
     // marker and returns `Ok(cancelled = true)`, leaving the terminal
     // `TurnEnded(Interrupted)` to the runner. This test locks the

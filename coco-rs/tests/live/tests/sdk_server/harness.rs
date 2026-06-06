@@ -263,6 +263,7 @@ pub async fn build_live_server_with_options(
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
+        is_non_interactive: true,
     })
     .await
     .with_context(|| format!("build SessionRuntime for {provider}/{model_id}"))?;

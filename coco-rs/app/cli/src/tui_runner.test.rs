@@ -6,7 +6,8 @@
 
 #[cfg(test)]
 mod agent_template_tests {
-    use super::super::{build_agent_template, yaml_single_quote};
+    use super::super::build_agent_template;
+    use super::super::yaml_single_quote;
     use coco_types::AgentColorName;
     use pretty_assertions::assert_eq;
 
@@ -82,14 +83,13 @@ use super::parse_permissions_mutation;
 use super::parse_slash_command;
 use super::session_plan_file_path;
 use super::should_trigger_title_gen;
-use coco_types::CancelReason;
+use coco_tool_runtime::TurnAbortController;
+use coco_types::TurnAbortReason;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
 #[test]
 fn title_gen_fires_when_all_conditions_met() {
@@ -116,12 +116,12 @@ async fn shutdown_drain_aborts_stuck_active_turn_after_timeout() {
         let _guard = DropFlag(dropped_for_task);
         std::future::pending::<()>().await;
     });
-    let cancel_reason = Arc::new(OnceLock::new());
+    let abort = TurnAbortController::new();
+    let signal = abort.signal();
     let slot = Arc::new(Mutex::new(Some(ActiveTurn {
         id: uuid::Uuid::new_v4(),
         task,
-        cancel: CancellationToken::new(),
-        cancel_reason: cancel_reason.clone(),
+        abort,
     })));
 
     drain_active_turn(
@@ -132,7 +132,7 @@ async fn shutdown_drain_aborts_stuck_active_turn_after_timeout() {
 
     assert!(slot.lock().await.is_none());
     assert!(dropped.load(Ordering::SeqCst));
-    assert_eq!(cancel_reason.get(), Some(&CancelReason::SystemPreempt));
+    assert_eq!(signal.reason(), Some(TurnAbortReason::SystemPreempt));
 }
 
 #[test]

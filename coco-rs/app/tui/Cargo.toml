@@ -20,6 +20,7 @@ coco-file-search.workspace = true
 coco-file-watch.workspace = true
 coco-git.workspace = true
 coco-keybindings = { workspace = true, features = ["crossterm", "loader"] }
+coco-plugins.workspace = true
 coco-subagent.workspace = true
 coco-tui-markdown = { workspace = true, features = ["mermaid"] }
 coco-tui-ui.workspace = true

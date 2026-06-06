@@ -194,6 +194,36 @@ impl Tool for NotebookEditTool {
         Some("edit a Jupyter notebook ipynb cell")
     }
 
+    /// TS `NotebookEditTool.ts:185-216`: reject non-`.ipynb` paths
+    /// (errorCode 2 → redirect to FileEdit) and require a `cell_type`
+    /// for insert (errorCode 5). UNC paths (`\\…` / `//…`) bypass the
+    /// extension check, matching TS.
+    fn validate_input(
+        &self,
+        input: &NotebookEditInput,
+        _ctx: &ToolUseContext,
+    ) -> coco_tool_runtime::ValidationResult {
+        use coco_tool_runtime::ValidationResult;
+        if input.notebook_path.is_empty() {
+            return ValidationResult::invalid("notebook_path parameter is required");
+        }
+        let is_unc =
+            input.notebook_path.starts_with("\\\\") || input.notebook_path.starts_with("//");
+        if !is_unc && !input.notebook_path.to_lowercase().ends_with(".ipynb") {
+            return ValidationResult::invalid_with_code(
+                "File must be a Jupyter notebook (.ipynb file). For editing other file types, use the FileEdit tool.",
+                "2",
+            );
+        }
+        if matches!(input.edit_mode, NotebookEditMode::Insert) && input.cell_type.is_none() {
+            return ValidationResult::invalid_with_code(
+                "Cell type is required when using edit_mode=insert.",
+                "5",
+            );
+        }
+        ValidationResult::Valid
+    }
+
     async fn check_permissions(
         &self,
         input: &NotebookEditInput,
@@ -326,6 +356,16 @@ impl Tool for NotebookEditTool {
             }
         };
 
+        // TS `NotebookEditTool.ts:371-377`: replacing one-past-the-end is
+        // an append-insert. `cell_type` then defaults to code (the
+        // `validate_input` gate only requires it for an *explicit* insert).
+        let effective_mode =
+            if matches!(edit_mode, NotebookEditMode::Replace) && cell_index == cells.len() {
+                NotebookEditMode::Insert
+            } else {
+                edit_mode
+            };
+
         // R5-T15: return the actual cell ID (string) rather than a bare
         // index. TS emits `new_cell_id` for insert and `cell_id` for
         // replace/delete so the model can reference cells by the ID it
@@ -346,7 +386,7 @@ impl Tool for NotebookEditTool {
             }
         };
 
-        let result_msg = match edit_mode {
+        let result_msg = match effective_mode {
             NotebookEditMode::Replace => {
                 let new_source = input.new_source.as_str();
 
@@ -368,10 +408,26 @@ impl Tool for NotebookEditTool {
                     .and_then(|v| v.as_str())
                     .map(String::from);
 
+                // TS `NotebookEditTool.ts:421-424`: only code cells reset
+                // execution state. Read the *current* type before any
+                // cell_type switch.
+                let was_code = cells[cell_index].get("cell_type").and_then(|v| v.as_str())
+                    == Some(NotebookCellType::Code.as_str());
+
                 cells[cell_index]["source"] = Value::Array(source_to_lines(new_source));
-                // Reset execution state on replace
-                cells[cell_index]["execution_count"] = Value::Null;
-                cells[cell_index]["outputs"] = Value::Array(vec![]);
+                if was_code {
+                    cells[cell_index]["execution_count"] = Value::Null;
+                    cells[cell_index]["outputs"] = Value::Array(vec![]);
+                }
+
+                // TS `NotebookEditTool.ts:425-427`: apply a cell_type
+                // switch on replace when the input differs from the cell.
+                if let Some(ct) = input.cell_type
+                    && cells[cell_index].get("cell_type").and_then(|v| v.as_str())
+                        != Some(ct.as_str())
+                {
+                    cells[cell_index]["cell_type"] = Value::String(ct.as_str().to_string());
+                }
 
                 let id = displayed_cell_id(Some(cell_id));
                 format!("Updated cell {id} with {new_source}")
@@ -472,7 +528,7 @@ impl Tool for NotebookEditTool {
         // `cell_id` from the resolved cell. Always include `cell_index`
         // for debuggability.
         let notebook_path_string = notebook_path.to_string();
-        let data = match edit_mode {
+        let data = match effective_mode {
             NotebookEditMode::Replace => NotebookEditOutput::Replace {
                 message: result_msg,
                 notebook_path: notebook_path_string,

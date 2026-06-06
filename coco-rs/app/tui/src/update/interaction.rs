@@ -200,12 +200,63 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
             ));
             state.ui.dismiss_modal();
         }
+        Some(ModalState::PluginHint(ph)) => {
+            let response = ph.selected_response();
+            let plugin_id = ph.plugin_id.clone();
+            let plugin_name = ph.plugin_name.clone();
+            apply_plugin_hint_response(state, command_tx, response, &plugin_id, &plugin_name).await;
+            state.ui.dismiss_modal();
+        }
         Some(ModalState::Trust(_) | ModalState::WorktreeExit(_)) => {
             state.ui.dismiss_modal();
         }
         _ => {
             state.ui.dismiss_modal();
         }
+    }
+}
+
+/// Apply the user's plugin-hint decision. Records show-once (regardless of
+/// yes/no), then routes the selected option:
+///   - Install → dispatch `/plugin install <id>`.
+///   - Dismiss → no further action.
+///   - Disable → persist the opt-out flag.
+///
+/// TS: `useClaudeCodeHintRecommendation.tsx` handleResponse.
+async fn apply_plugin_hint_response(
+    state: &mut AppState,
+    command_tx: &mpsc::Sender<UserCommand>,
+    response: crate::state::PluginHintResponse,
+    plugin_id: &str,
+    plugin_name: &str,
+) {
+    use crate::state::PluginHintResponse;
+
+    // Record show-once here, not at resolution-time — the dialog may have
+    // been displaced by a higher-priority modal and never rendered.
+    coco_plugins::mark_hint_plugin_shown(plugin_id);
+
+    match response {
+        PluginHintResponse::Install => {
+            if let Ok(name) = crate::state::SlashCommandName::new("plugin") {
+                let _ = command_tx
+                    .send(UserCommand::ExecuteSlashCommand {
+                        name,
+                        args: format!("install {plugin_id}"),
+                    })
+                    .await;
+            }
+            state.ui.add_toast(crate::state::ui::Toast::info(
+                t!("toast.plugin_hint_installing", name = plugin_name).to_string(),
+            ));
+        }
+        PluginHintResponse::Disable => {
+            coco_plugins::disable_hint_recommendations();
+            state.ui.add_toast(crate::state::ui::Toast::info(
+                t!("toast.plugin_hint_disabled").to_string(),
+            ));
+        }
+        PluginHintResponse::Dismiss => {}
     }
 }
 
@@ -678,6 +729,10 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
         Some(ModalState::Feedback(f)) => {
             let count = f.options.len() as i32;
             f.selected = (f.selected + delta).clamp(0, (count - 1).max(0));
+        }
+        Some(ModalState::PluginHint(ph)) => {
+            let count = crate::state::PluginHintState::OPTION_COUNT;
+            ph.selected = (ph.selected + delta).clamp(0, (count - 1).max(0));
         }
         Some(ModalState::Rewind(r)) => {
             update_rewind::handle_rewind_nav(r, delta);

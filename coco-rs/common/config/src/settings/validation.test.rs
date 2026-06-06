@@ -156,6 +156,20 @@ fn test_validate_settings_model_matches_family_alias() {
 }
 
 #[test]
+fn test_validate_settings_empty_available_models_denies_selected_model() {
+    let settings = Settings {
+        model: Some("claude-opus-4-6".into()),
+        available_models: Some(Vec::new()),
+        ..Default::default()
+    };
+    let errors = validate_settings(&settings);
+    assert!(
+        errors.iter().any(|e| e.path == "model"),
+        "expected model allowlist error: {errors:?}"
+    );
+}
+
+#[test]
 fn test_validate_settings_auto_mode_empty_string() {
     let settings = Settings {
         auto_mode: Some(crate::settings::AutoModeConfig {

@@ -4,7 +4,8 @@
 //!
 //! Each invocation can:
 //! - Substitute named arguments (`$1`, `$2`, …, `$ARGUMENTS`).
-//! - Execute embedded `$(shell)` commands via `shell_exec`.
+//! - Execute embedded shell commands (```` ```! … ``` ```` blocks and
+//!   `` !`…` `` inline spans) via `shell_exec`.
 //! - Prepend `Base directory for this skill: <dir>` when bundled `files` are
 //!   extracted (handled by [`render_with_extraction`] below).
 //!
@@ -122,6 +123,26 @@ pub async fn render_with_extraction(
 /// Argument splitting honors quoted strings (single/double quotes, backslash
 /// escapes) so `/foo "hello world"` parses as one arg, mirroring TS
 /// `parseArguments` which uses shell-quote.
+/// Substitute the skill-environment placeholders TS `getPromptForCommand`
+/// replaces on every invocation (loadSkillsDir.ts:356-369):
+/// `${CLAUDE_SKILL_DIR}` → the skill's base dir (backslash-normalized to `/`)
+/// and `${CLAUDE_SESSION_ID}` → the current session id. A `None` value leaves
+/// its placeholder untouched (so tests / pre-bootstrap don't blank it out).
+pub fn substitute_skill_env(
+    text: &str,
+    skill_dir: Option<&str>,
+    session_id: Option<&str>,
+) -> String {
+    let mut out = text.to_string();
+    if let Some(dir) = skill_dir {
+        out = out.replace("${CLAUDE_SKILL_DIR}", &dir.replace('\\', "/"));
+    }
+    if let Some(sid) = session_id {
+        out = out.replace("${CLAUDE_SESSION_ID}", sid);
+    }
+    out
+}
+
 pub fn substitute_arguments(
     prompt: &str,
     args: Option<&str>,

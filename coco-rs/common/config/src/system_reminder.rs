@@ -80,6 +80,10 @@ pub struct AttachmentSettings {
     pub compaction_reminder: bool,
     /// Date-change notification (TS `date_change`).
     pub date_change: bool,
+    /// Per-turn baseline user context (TS `prependUserContext`,
+    /// `utils/api.ts:449`). Injects `Today's date is <local ISO>.` every
+    /// turn so the model always has the date. On by default.
+    pub user_context: bool,
     /// Verify-plan reminder (TS `verify_plan_reminder`). TS gates on
     /// `USER_TYPE=ant && CLAUDE_CODE_VERIFY_PLAN=true`; coco-rs ships
     /// `VerifyPlanExecution` directly, so this defaults on.
@@ -201,6 +205,7 @@ impl Default for AttachmentSettings {
             auto_mode: true,
             compaction_reminder: true,
             date_change: true,
+            user_context: true,
             verify_plan_reminder: true,
             // Phase 1 — feature-gated in TS, default off in external builds.
             ultrathink_effort: false,

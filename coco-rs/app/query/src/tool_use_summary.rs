@@ -271,6 +271,7 @@ pub async fn generate_tool_use_summary(
                 agentic: false,
                 stop_sequences: None,
                 response_format: None,
+                cancel: None,
             };
             match model_runtimes.query_once(source.clone(), &params).await {
                 ModelRuntimeQueryOutcome::Success { result, .. } => return Ok(result),

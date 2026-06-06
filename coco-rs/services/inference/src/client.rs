@@ -127,6 +127,32 @@ pub struct QueryParams {
     /// json tool fallback).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<vercel_ai_provider::ResponseFormat>,
+    /// Optional cancellation token. When set, the retry loop checks it at the
+    /// top of each attempt and makes the backoff sleep interruptible, so a user
+    /// interrupt doesn't have to wait out a long capacity backoff (TS
+    /// `options.signal`). `#[serde(skip)]` — `CancellationToken` is not
+    /// serializable; scenario fixtures default it to `None`.
+    #[serde(skip)]
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
+}
+
+/// Sleep for `delay`, returning `Err(())` immediately if `cancel` fires so a
+/// user interrupt doesn't wait out a long capacity backoff (TS `sleep(ms,
+/// signal)`). With no token it is a plain sleep.
+async fn sleep_or_cancel(
+    delay: std::time::Duration,
+    cancel: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(), ()> {
+    match cancel {
+        Some(token) => tokio::select! {
+            () = tokio::time::sleep(delay) => Ok(()),
+            () = token.cancelled() => Err(()),
+        },
+        None => {
+            tokio::time::sleep(delay).await;
+            Ok(())
+        }
+    }
 }
 
 /// Result of a query.
@@ -462,6 +488,15 @@ impl ApiClient {
         }
 
         loop {
+            // TS `withRetry.ts:190` checks `signal?.aborted` at the top of every
+            // attempt: a token tripped before the first request — or while a slow
+            // request is in flight — is honored immediately, not only at the next
+            // backoff sleep (`sleep_or_cancel`).
+            if let Some(token) = params.cancel.as_ref()
+                && token.is_cancelled()
+            {
+                return crate::errors::CancelledSnafu.fail();
+            }
             // `call_options` is borrowed across attempts — no per-attempt
             // clone of the prompt vector. With N retries the savings are
             // N-1 × `Vec<LlmMessage>::clone` (which can be 100s of KB).
@@ -560,7 +595,11 @@ impl ApiClient {
                         }
                     }
 
-                    if !self.retry.should_retry(attempt, &e) {
+                    if !self.retry.should_retry_with_source(
+                        attempt,
+                        &e,
+                        params.query_source.as_deref(),
+                    ) {
                         warn!(
                             error_class = e.error_class(),
                             attempt, "non-retryable error, giving up"
@@ -576,7 +615,12 @@ impl ApiClient {
                         "retrying after error"
                     );
 
-                    tokio::time::sleep(delay).await;
+                    if sleep_or_cancel(delay, params.cancel.as_ref())
+                        .await
+                        .is_err()
+                    {
+                        return crate::errors::CancelledSnafu.fail();
+                    }
                     attempt += 1;
                 }
             }
@@ -587,11 +631,11 @@ impl ApiClient {
     /// with pre-built options.
     ///
     /// `options` is borrowed across retries; per-attempt clones are
-    /// avoided. `abort_signal` is `None` for now — coco-inference doesn't
-    /// thread a cancellation token through `QueryParams` yet (TS parity
-    /// also doesn't carry one at this seam). Adding it later means
-    /// adding a `QueryParams.abort_signal: Option<CancellationToken>`
-    /// field and forwarding here.
+    /// avoided. The per-request `abort_signal` passed to `do_generate` is
+    /// still `None`: `QueryParams.cancel` interrupts the *retry loop* (the
+    /// top-of-attempt check + `sleep_or_cancel`), but aborting an
+    /// already-in-flight HTTP request would require forwarding the token
+    /// into every provider adapter's `do_generate` — a separate enhancement.
     async fn do_query_with_options(
         &self,
         options: &LanguageModelV4CallOptions,
@@ -675,6 +719,13 @@ impl ApiClient {
         let mut attempt = 0;
         let mut auth_refreshed = false;
         let result = loop {
+            // Top-of-attempt cancel check (TS `withRetry.ts:190`), mirroring the
+            // blocking `query()` loop.
+            if let Some(token) = params.cancel.as_ref()
+                && token.is_cancelled()
+            {
+                return crate::errors::CancelledSnafu.fail();
+            }
             match self.model.do_stream(&options, None).await {
                 Ok(r) => break r,
                 Err(e) => {
@@ -691,7 +742,11 @@ impl ApiClient {
                         }
                     }
 
-                    if self.retry.should_retry(attempt, &err) {
+                    if self.retry.should_retry_with_source(
+                        attempt,
+                        &err,
+                        params.query_source.as_deref(),
+                    ) {
                         let delay = self.retry.delay_for_attempt(attempt, &err);
                         warn!(
                             error_class = err.error_class(),
@@ -699,7 +754,12 @@ impl ApiClient {
                             delay_ms = i64::try_from(delay.as_millis()).unwrap_or(i64::MAX),
                             "stream open failed; retrying"
                         );
-                        tokio::time::sleep(delay).await;
+                        if sleep_or_cancel(delay, params.cancel.as_ref())
+                            .await
+                            .is_err()
+                        {
+                            return crate::errors::CancelledSnafu.fail();
+                        }
                         attempt += 1;
                         continue;
                     }

@@ -2,8 +2,49 @@ use super::*;
 use crate::config::MemoryConfig;
 use crate::service::test_support::RecordingHandle;
 use coco_paths::ProjectPaths;
+use coco_tool_runtime::AgentHandle;
+use coco_tool_runtime::AgentSpawnRequest;
+use coco_tool_runtime::AgentSpawnResponse;
 use std::sync::Arc;
 use tempfile::tempdir;
+
+/// `AgentHandle` fake whose `spawn_agent` always errors — lets a test
+/// drive `run_fork` into its `Err` branch (e.g. to assert the init
+/// flag flips at gate-pass independent of fork success).
+struct FailingHandle;
+
+#[async_trait::async_trait]
+impl AgentHandle for FailingHandle {
+    async fn spawn_agent(&self, _request: AgentSpawnRequest) -> Result<AgentSpawnResponse, String> {
+        Err("forced spawn failure".into())
+    }
+    async fn send_message(&self, _to: &str, _content: &str) -> Result<String, String> {
+        Err("unused".into())
+    }
+    async fn create_team(
+        &self,
+        _request: coco_tool_runtime::CreateTeamRequest,
+    ) -> Result<coco_tool_runtime::CreateTeamResult, String> {
+        Err("unused".into())
+    }
+    async fn delete_team(&self) -> Result<String, String> {
+        Err("unused".into())
+    }
+    async fn resume_agent(
+        &self,
+        _agent_id: &str,
+        _prompt: &str,
+        _session_id: &str,
+    ) -> Result<AgentSpawnResponse, String> {
+        Err("unused".into())
+    }
+    async fn query_agent_status(&self, _agent_id: &str) -> Result<AgentSpawnResponse, String> {
+        Err("unused".into())
+    }
+    async fn get_agent_output(&self, _agent_id: &str) -> Result<String, String> {
+        Err("unused".into())
+    }
+}
 
 fn cfg() -> MemoryConfig {
     MemoryConfig::default()
@@ -144,6 +185,63 @@ async fn cumulative_tool_gate_skips_when_below_threshold() {
         SessionMemoryOutcome::Skipped(SkipReason::NeitherToolCallsNorBreak)
     );
     assert_eq!(handle.calls().len(), 1, "extraction must not fire");
+}
+
+#[tokio::test]
+async fn init_skips_when_neither_tool_calls_nor_break() {
+    // TS parity (`sessionMemory.ts:138-181` shouldExtractMemory): the
+    // tool-call / natural-break disjunction gates the INIT extraction
+    // too, not just updates. Init-token threshold met but cumulative
+    // tool calls < threshold AND the last turn HAD tool calls → both
+    // gate arms fail, so extraction must be skipped and the init flag
+    // must stay unset (the gate never passed).
+    let temp = tempdir().unwrap();
+    let handle = Arc::new(RecordingHandle::default());
+    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
+    // tokens above init threshold, tool_calls=2 < default 3, last turn HAD tools.
+    let outcome = svc.maybe_extract(15_000, 2, true, msg_id("u1")).await;
+    assert_eq!(
+        outcome,
+        SessionMemoryOutcome::Skipped(SkipReason::NeitherToolCallsNorBreak)
+    );
+    assert_eq!(handle.calls().len(), 0, "init extraction must not fire");
+    // Init gate never passed → a later natural-break turn still treats
+    // this as the FIRST init (init-token gate, not update-token gate).
+    assert!(
+        svc.last_extraction_message_id().await.is_none(),
+        "cursor must not advance when the gate fails"
+    );
+}
+
+#[tokio::test]
+async fn init_flips_initialized_at_gate_pass_even_when_fork_fails() {
+    // TS parity (`sessionMemory.ts:142` markSessionMemoryInitialized):
+    // the init flag flips synchronously at gate-pass, independent of
+    // the fork outcome. With a fork that always errors, the extraction
+    // reports Failed but the service must NOT re-arm the init-token
+    // gate on the next call — it transitions to the UPDATE path.
+    let temp = tempdir().unwrap();
+    let handle = Arc::new(FailingHandle);
+    let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle);
+    // Gate passes (tokens above init, tool_calls=5 ≥ 3); fork fails.
+    let outcome = svc.maybe_extract(15_000, 5, true, msg_id("u1")).await;
+    assert!(
+        matches!(outcome, SessionMemoryOutcome::Failed { .. }),
+        "fork should report Failed, got: {outcome:?}"
+    );
+    // Despite the failed fork, `initialized` flipped at gate-pass. The
+    // failed fork never advanced `last_extraction_tokens` (it stays 0),
+    // so a second call at 4_000 tokens routes through the UPDATE gate:
+    // growth 4_000 < update threshold 5_000 → BelowUpdateThreshold. If
+    // the flag had NOT stuck this same call would instead hit the init
+    // gate (4_000 < init threshold 10_000 → BelowInitThreshold). The
+    // two outcomes are distinguishable, so this proves the flag stuck.
+    let next = svc.maybe_extract(4_000, 5, true, msg_id("u2")).await;
+    assert_eq!(
+        next,
+        SessionMemoryOutcome::Skipped(SkipReason::BelowUpdateThreshold),
+        "initialized must remain true after a failed fork, routing to the update gate"
+    );
 }
 
 #[tokio::test]
