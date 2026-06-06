@@ -553,9 +553,9 @@ pub(super) async fn classifier_auto_approve(
 /// Push `c` into the current filterable state's filter string.
 pub(super) fn filter(state: &mut AppState, c: char) {
     // Question state specializes the keystroke routing: Space toggles
-    // multi-select; printable chars edit the "Other" notes textarea
-    // when that option is focused. Both consume the keystroke before
-    // any filter logic. TS: `QuestionView.tsx` `onKeyDown` priority.
+    // multi-select; printable chars edit the "Other" notes textarea when that
+    // option is focused; otherwise digits 1-9 jump to an option (TS `Select`
+    // number shortcuts). Each consumes the keystroke before any filter logic.
     if matches!(
         state.ui.interaction.active_prompt,
         Some(PanePromptState::Question(_))
@@ -567,7 +567,11 @@ pub(super) fn filter(state: &mut AppState, c: char) {
         if question_notes_input(state, c) {
             return;
         }
-        return; // Question state has no filter — silently swallow.
+        // Not editing the Other composer: a digit selects that option.
+        if let Some(d) = c.to_digit(10) {
+            question_select_digit(state, d as i32);
+        }
+        return; // Question state has no filter — silently swallow the rest.
     }
     match state.ui.modal.as_mut() {
         Some(ModalState::ModelPicker(m)) => {
@@ -638,20 +642,21 @@ pub(super) fn nav(state: &mut AppState, delta: i32) {
     }
     if let Some(prompt) = state.ui.interaction.active_prompt.as_mut() {
         match prompt {
-            PanePromptState::Question(q) => {
-                if let crate::state::QuestionFocus::Question(idx) = q.focus
-                    && let Some(qi) = q.questions.get_mut(idx as usize)
-                {
-                    let count = qi.options.len() as i32;
-                    let next = (qi.selected + delta).clamp(0, (count - 1).max(0));
-                    qi.selected = next;
-                    qi.editing_notes = qi
-                        .options
-                        .get(next as usize)
-                        .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
-                        .unwrap_or(false);
+            PanePromptState::Question(q) => match q.focus {
+                crate::state::QuestionFocus::Question(idx) => {
+                    if let Some(qi) = q.questions.get_mut(idx as usize) {
+                        let count = qi.options.len() as i32;
+                        qi.selected = (qi.selected + delta).clamp(0, (count - 1).max(0));
+                    }
                 }
-            }
+                // Submit tab: Up/Down moves between "Submit answers" (0) and
+                // "Cancel" (1).
+                crate::state::QuestionFocus::Submit => {
+                    q.submit_selected = (q.submit_selected + delta).clamp(0, 1);
+                }
+                crate::state::QuestionFocus::ChatAboutThis
+                | crate::state::QuestionFocus::SkipInterview => {}
+            },
             PanePromptState::PlanExit(p) => {
                 let order = crate::state::PlanExitTarget::available(
                     state.session.bypass_permissions_available,
@@ -992,25 +997,50 @@ pub(super) async fn confirm(state: &mut AppState, command_tx: &mpsc::Sender<User
             use crate::state::QuestionFocus;
             match q.focus {
                 QuestionFocus::Question(idx) => {
+                    // The free-text "Other" option needs typed text before Enter
+                    // commits it. Without this guard, Enter on a freshly-focused
+                    // Other submits/advances with an empty answer and the user
+                    // never gets to type. Keep the prompt open so the composer
+                    // stays active (TS: the notes TextInput captures input first).
+                    if let Some(qi) = q.questions.get(idx as usize)
+                        && qi.is_editing()
+                        && qi.notes.trim().is_empty()
+                    {
+                        state.ui.restore_prompt(PanePromptState::Question(q));
+                        return;
+                    }
                     let last_idx = (q.questions.len() as i32).saturating_sub(1);
                     if idx < last_idx {
+                        // Advance to the next question.
                         let mut q = q;
                         q.focus = QuestionFocus::Question(idx + 1);
                         state.ui.restore_prompt(PanePromptState::Question(q));
                         return;
                     }
-                    let updated_input = build_answer_payload(&q);
-                    let _ = command_tx
-                        .send(UserCommand::ApprovalResponse {
-                            request_id: q.request_id.clone(),
-                            approved: true,
-                            always_allow: false,
-                            feedback: None,
-                            updated_input: Some(updated_input),
-                            permission_updates: vec![],
-                            content_blocks: None,
-                        })
-                        .await;
+                    if q.questions.len() > 1 {
+                        // Multi-question: the last question's Enter advances to the
+                        // Submit tab (answer review) instead of submitting blind.
+                        let mut q = q;
+                        q.focus = QuestionFocus::Submit;
+                        state.ui.restore_prompt(PanePromptState::Question(q));
+                        return;
+                    }
+                    // Single question: Enter submits directly (no Submit tab).
+                    submit_question_answers(&q, command_tx).await;
+                }
+                QuestionFocus::Submit => {
+                    // The Submit tab is a confirmation list: 0 = "Submit
+                    // answers", 1 = "Cancel" (go back to the first question to
+                    // edit). Mirrors the TS "Ready to submit your answers?" step.
+                    if q.submit_selected == 0 {
+                        submit_question_answers(&q, command_tx).await;
+                    } else {
+                        let mut q = q;
+                        q.focus = QuestionFocus::Question(0);
+                        q.submit_selected = 0;
+                        state.ui.restore_prompt(PanePromptState::Question(q));
+                        return;
+                    }
                 }
                 QuestionFocus::ChatAboutThis => {
                     let feedback = q.chat_about_this_feedback();
@@ -1142,6 +1172,11 @@ pub(super) fn question_cycle_focus(state: &mut AppState, delta: i32) {
     }
     // Linearize the focus order so we can walk it as a Vec<QuestionFocus>.
     let mut order: Vec<QuestionFocus> = (0..q_count).map(QuestionFocus::Question).collect();
+    // The Submit tab only exists with >1 question (single-question prompts submit
+    // directly on Enter).
+    if q_count > 1 {
+        order.push(QuestionFocus::Submit);
+    }
     order.push(QuestionFocus::ChatAboutThis);
     if q.is_in_plan_mode {
         order.push(QuestionFocus::SkipInterview);
@@ -1150,15 +1185,59 @@ pub(super) fn question_cycle_focus(state: &mut AppState, delta: i32) {
     let len = order.len() as i32;
     let next = (idx + delta).rem_euclid(len) as usize;
     q.focus = order[next];
-    // Keep `editing_notes` in sync with the new focus.
-    if let QuestionFocus::Question(qi_idx) = q.focus
-        && let Some(qi) = q.questions.get_mut(qi_idx as usize)
-    {
-        qi.editing_notes = qi
-            .options
-            .get(qi.selected as usize)
-            .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
-            .unwrap_or(false);
+}
+
+/// Switch the focused nav-strip tab by `delta` (Left → -1, Right → +1),
+/// wrapping over the questions PLUS the trailing Submit tab — never the footer
+/// actions (those stay on Tab via [`question_cycle_focus`]). Mirrors the TS
+/// `← ☒ … ☐ … ✔ Submit →` bar. From a footer focus, Left lands on the last tab
+/// and Right on the first. No-op for a single question.
+pub(super) fn question_switch_question(state: &mut AppState, delta: i32) {
+    use crate::state::QuestionFocus;
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_mut() else {
+        return;
+    };
+    let q_count = q.questions.len() as i32;
+    if q_count <= 1 {
+        return;
+    }
+    // The nav ring is [Q0 … QN-1, Submit].
+    let mut ring: Vec<QuestionFocus> = (0..q_count).map(QuestionFocus::Question).collect();
+    ring.push(QuestionFocus::Submit);
+    let cur = match q.focus {
+        QuestionFocus::Question(_) | QuestionFocus::Submit => {
+            ring.iter().position(|f| *f == q.focus).unwrap_or(0) as i32
+        }
+        // From a footer action, re-enter the ring at the near end.
+        QuestionFocus::ChatAboutThis | QuestionFocus::SkipInterview => {
+            if delta < 0 {
+                ring.len() as i32
+            } else {
+                -1
+            }
+        }
+    };
+    let len = ring.len() as i32;
+    q.focus = ring[(cur + delta).rem_euclid(len) as usize];
+}
+
+/// Move the option cursor to the `digit`-th option (1-based) when a question is
+/// focused and not in the Other text composer. Out-of-range digits are no-ops.
+/// Mirrors the TS `Select` number shortcuts.
+pub(super) fn question_select_digit(state: &mut AppState, digit: i32) {
+    use crate::state::QuestionFocus;
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_mut() else {
+        return;
+    };
+    let QuestionFocus::Question(qi_idx) = q.focus else {
+        return;
+    };
+    let Some(qi) = q.questions.get_mut(qi_idx as usize) else {
+        return;
+    };
+    let idx = digit - 1;
+    if idx >= 0 && (idx as usize) < qi.options.len() {
+        qi.selected = idx;
     }
 }
 
@@ -1204,10 +1283,36 @@ pub(super) fn question_notes_input(state: &mut AppState, c: char) -> bool {
     let Some(qi) = q.questions.get_mut(qi_idx as usize) else {
         return false;
     };
-    if !qi.editing_notes {
+    if !qi.is_editing() {
         return false;
     }
     qi.notes.push(c);
+    true
+}
+
+/// Append pasted (or IME-committed) text into the focused question's `notes`
+/// buffer when the Other option is focused. Some terminals deliver IME-composed
+/// CJK as a bracketed paste rather than per-key `Char` events, so without this
+/// the text would land in the hidden background composer. Returns `true` if the
+/// paste was consumed by the Other composer.
+pub(super) fn question_notes_paste(state: &mut AppState, text: &str) -> bool {
+    use crate::state::QuestionFocus;
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_mut() else {
+        return false;
+    };
+    let QuestionFocus::Question(qi_idx) = q.focus else {
+        return false;
+    };
+    let Some(qi) = q.questions.get_mut(qi_idx as usize) else {
+        return false;
+    };
+    if !qi.is_editing() {
+        return false;
+    }
+    // Paste is single-line for the notes field; strip newlines so a multi-line
+    // clipboard doesn't break the composer layout.
+    qi.notes
+        .extend(text.chars().filter(|c| *c != '\n' && *c != '\r'));
     true
 }
 
@@ -1224,7 +1329,7 @@ pub(super) fn question_notes_backspace(state: &mut AppState) -> bool {
     let Some(qi) = q.questions.get_mut(qi_idx as usize) else {
         return false;
     };
-    if !qi.editing_notes {
+    if !qi.is_editing() {
         return false;
     }
     qi.notes.pop();
@@ -1258,16 +1363,36 @@ fn build_choice_payload(p: &crate::state::PermissionPromptState) -> Option<serde
 /// Build the `{...original_input, answers, annotations}` payload shipped
 /// via `UserCommand::ApprovalResponse.updated_input`. Mirrors TS
 /// `submitAnswers` at `AskUserQuestionPermissionRequest.tsx:407`.
+/// Submit all collected answers (Enter on the Submit tab, or on the sole
+/// question of a single-question prompt). Splices the payload into
+/// `updated_input` so the tool's `execute` sees the user's choices.
+async fn submit_question_answers(
+    q: &crate::state::QuestionPromptState,
+    command_tx: &mpsc::Sender<UserCommand>,
+) {
+    let updated_input = build_answer_payload(q);
+    let _ = command_tx
+        .send(UserCommand::ApprovalResponse {
+            request_id: q.request_id.clone(),
+            approved: true,
+            always_allow: false,
+            feedback: None,
+            updated_input: Some(updated_input),
+            permission_updates: vec![],
+            content_blocks: None,
+        })
+        .await;
+}
+
 fn build_answer_payload(q: &crate::state::QuestionPromptState) -> serde_json::Value {
     let mut answers = serde_json::Map::new();
     let mut annotations = serde_json::Map::new();
 
     for qi in &q.questions {
-        // Pick checked indices (multi-select) or the focused one
-        // (single-select). Multi-select with no toggles falls back to
-        // the focused option so we never ship an empty answer for a
-        // question that was actually shown.
-        let chosen_indices: Vec<i32> = if qi.multi_select && !qi.checked.is_empty() {
+        // Multi-select submits exactly what is checked (possibly nothing — TS
+        // `SelectMulti` ships the selected array verbatim, with no coercion to
+        // the cursor position). Single-select submits the focused option.
+        let chosen_indices: Vec<i32> = if qi.multi_select {
             qi.checked.clone()
         } else {
             vec![qi.selected]
@@ -1276,7 +1401,7 @@ fn build_answer_payload(q: &crate::state::QuestionPromptState) -> serde_json::Va
             .iter()
             .filter_map(|i| qi.options.get(*i as usize))
             .map(|o| {
-                if o.label == crate::state::OTHER_OPTION_LABEL {
+                if o.is_other() {
                     qi.notes.trim().to_string()
                 } else {
                     o.label.clone()
@@ -1289,12 +1414,10 @@ fn build_answer_payload(q: &crate::state::QuestionPromptState) -> serde_json::Va
 
         // Annotation entry — preview from the focused option (TS
         // `selectedOption?.preview`) and notes from the typed buffer
-        // (only when the focused option is NOT the Other sentinel,
+        // (only when the focused option is NOT the Other composer,
         // since for Other the notes ARE the answer).
         let focused_opt = qi.options.get(qi.selected as usize);
-        let is_other_focused = focused_opt
-            .map(|o| o.label == crate::state::OTHER_OPTION_LABEL)
-            .unwrap_or(false);
+        let is_other_focused = focused_opt.is_some_and(crate::state::QuestionOption::is_other);
         let preview = focused_opt.and_then(|o| o.preview.as_ref());
         let notes_for_annotation = if is_other_focused {
             None

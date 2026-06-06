@@ -1016,7 +1016,10 @@ impl<T: Tool> DynTool for T {
             new_messages: r.new_messages,
             app_state_patch: r.app_state_patch,
             permission_updates: r.permission_updates,
-            display_data: None,
+            // Preserve the typed tool's SUCCESS display data (apply-patch
+            // preview, AskUserQuestion answers) so the styled transcript cell
+            // gets it. Errors carry their own display data via `ToolError`.
+            display_data: r.display_data,
         })
     }
     fn get_path(&self, input: &Value) -> Option<String> {

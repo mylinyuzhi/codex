@@ -4,16 +4,20 @@ use ratatui::prelude::Color;
 
 use super::layout;
 use crate::i18n::t;
-use crate::state::OTHER_OPTION_DISPLAY;
-use crate::state::OTHER_OPTION_LABEL;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
 use crate::state::QuestionFocus;
-use crate::state::QuestionItem;
 use crate::state::QuestionPromptState;
 use crate::state::RiskLevel;
 use crate::state::surface_payloads::PermissionAction;
 use coco_tui_ui::style::UiStyles;
+use coco_tui_ui::widgets::FooterAction;
+use coco_tui_ui::widgets::NavTab;
+use coco_tui_ui::widgets::OptionRow;
+use coco_tui_ui::widgets::QuestionNav;
+use coco_tui_ui::widgets::QuestionView;
+use coco_tui_ui::widgets::RowMark;
+use coco_tui_ui::widgets::SubmitNavTab;
 
 pub(crate) fn permission_content(
     p: &PermissionPromptState,
@@ -104,81 +108,180 @@ fn classic_permission_actions(p: &PermissionPromptState) -> String {
     lines
 }
 
-pub(crate) fn question_content(
-    q: &QuestionPromptState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
+/// Project the domain [`QuestionPromptState`] into the pure, area-based
+/// [`QuestionView`] rendered by `coco_tui_ui::widgets::QuestionWidget`. All
+/// i18n + chip truncation + Other-composer logic lives here so the widget crate
+/// stays domain-free. Replaces the former flat-`String` `question_content`.
+pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
     let title = t!("dialog.title_question").to_string();
+    let total = q.questions.len();
 
     if q.questions.is_empty() {
-        return (
+        return QuestionView {
             title,
-            t!("dialog.hints_nav_select").to_string(),
-            styles.primary(),
-        );
+            chip: None,
+            nav: None,
+            prompt: String::new(),
+            rows: Vec::new(),
+            preview: None,
+            composer: None,
+            footer: Vec::new(),
+            hints: t!("dialog.hints_nav_select").to_string(),
+        };
     }
 
-    let total = q.questions.len();
     let focused_q_idx = match q.focus {
         QuestionFocus::Question(i) => layout::selected_in_bounds(i, total).unwrap_or(0),
-        QuestionFocus::ChatAboutThis | QuestionFocus::SkipInterview => 0,
+        QuestionFocus::Submit | QuestionFocus::ChatAboutThis | QuestionFocus::SkipInterview => 0,
     };
+    let on_submit = matches!(q.focus, QuestionFocus::Submit);
+    let on_this_question = matches!(q.focus, QuestionFocus::Question(_));
     let qi = &q.questions[focused_q_idx];
+    let selected_idx = layout::selected_in_bounds(qi.selected, qi.options.len());
 
-    let mut body = String::new();
+    let rows = qi
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            let focused = on_this_question && selected_idx == Some(i);
+            let mark = if qi.multi_select {
+                RowMark::Check {
+                    checked: qi.checked.contains(&(i as i32)),
+                    focused,
+                }
+            } else {
+                RowMark::Radio { focused }
+            };
+            OptionRow {
+                number: i + 1,
+                label: opt.label.clone(),
+                description: opt.description.clone(),
+                mark,
+            }
+        })
+        .collect();
 
-    if total > 1 {
-        body.push_str(&format!(
-            "[{}] {}/{}\n",
-            chip(&qi.header),
-            focused_q_idx + 1,
-            total
-        ));
-    } else if !qi.header.is_empty() {
-        body.push_str(&format!("[{}]\n", chip(&qi.header)));
+    // Preview + Other composer track the focused option (only while a question,
+    // not a footer item, is focused).
+    let focused_opt = selected_idx
+        .filter(|_| on_this_question)
+        .and_then(|idx| qi.options.get(idx));
+    let preview = focused_opt.and_then(|o| o.preview.clone());
+    let composer = (on_this_question && qi.is_editing()).then(|| qi.notes.clone());
+
+    let mut footer = vec![FooterAction {
+        label: "Chat about this".to_string(),
+        focused: matches!(q.focus, QuestionFocus::ChatAboutThis),
+    }];
+    if q.is_in_plan_mode {
+        footer.push(FooterAction {
+            label: "Skip interview and plan immediately".to_string(),
+            focused: matches!(q.focus, QuestionFocus::SkipInterview),
+        });
     }
-    if !qi.question.is_empty() {
-        body.push_str(&qi.question);
-        body.push_str("\n\n");
+
+    let hints = if on_submit {
+        "↑/↓: choose   Enter: confirm   ←/→: back to questions".to_string()
     } else {
-        body.push('\n');
+        let mut hints = t!("dialog.hints_nav_select").to_string();
+        if !qi.options.is_empty() {
+            hints.push_str(&format!("  1-{}: pick", qi.options.len().min(9)));
+        }
+        // ←/→ switch questions + the Submit tab (codex `move_question`); Tab
+        // reaches the footer actions, so surface the escape hatch there.
+        if total > 1 {
+            hints.push_str("  ←/→: question / submit");
+        }
+        if qi.multi_select {
+            hints.push_str("  Space: toggle");
+        }
+        hints.push_str(if q.is_in_plan_mode {
+            "  Tab: chat / skip"
+        } else {
+            "  Tab: chat about this"
+        });
+        hints
+    };
+
+    // On the Submit tab, replace the option list with a read-only review of
+    // every answer plus a Submit / Cancel confirmation list (TS "Review your
+    // answers" → "Ready to submit your answers?").
+    let (prompt, rows, preview, composer) = if on_submit {
+        let confirm_rows = vec![
+            OptionRow {
+                number: 1,
+                label: "Submit answers".to_string(),
+                description: String::new(),
+                mark: RowMark::Radio {
+                    focused: q.submit_selected == 0,
+                },
+            },
+            OptionRow {
+                number: 2,
+                label: "Cancel".to_string(),
+                description: String::new(),
+                mark: RowMark::Radio {
+                    focused: q.submit_selected == 1,
+                },
+            },
+        ];
+        (submit_review_text(q), confirm_rows, None, None)
+    } else {
+        (qi.question.clone(), rows, preview, composer)
+    };
+
+    // >1 question → a nav strip (every header + the trailing Submit tab, current
+    // highlighted) replaces the single-question chip; 1 question keeps `[chip]`.
+    let nav = (total > 1).then(|| QuestionNav {
+        tabs: q
+            .questions
+            .iter()
+            .map(|item| NavTab {
+                header: chip(&item.header),
+                answered: q.question_has_answer(item),
+            })
+            .collect(),
+        current: focused_q_idx,
+        submit: Some(SubmitNavTab {
+            focused: on_submit,
+            ready: q.all_answered(),
+        }),
+    });
+
+    QuestionView {
+        title,
+        chip: (total == 1 && !qi.header.is_empty()).then(|| chip(&qi.header)),
+        nav,
+        prompt,
+        rows,
+        preview,
+        composer,
+        footer,
+        hints,
     }
+}
 
-    body.push_str(&render_options(qi, q.focus));
-
-    let selected_option_idx = layout::selected_in_bounds(qi.selected, qi.options.len());
-
-    if let Some(opt) = selected_option_idx.and_then(|idx| qi.options.get(idx))
-        && let Some(preview) = &opt.preview
-    {
-        body.push_str("\n— preview —\n");
-        body.push_str(preview);
-        body.push('\n');
+/// Read-only "Review your answers" body shown above the Submit/Cancel list when
+/// the Submit tab is focused. Mirrors the TS review screen (warning when not all
+/// answered, `● question → answer` per row, then the "Ready to submit?" prompt).
+fn submit_review_text(q: &QuestionPromptState) -> String {
+    let mut out = String::from("Review your answers");
+    if !q.all_answered() {
+        out.push_str("\n\n⚠ You have not answered all questions");
     }
-
-    let focused_is_other = selected_option_idx
-        .and_then(|idx| qi.options.get(idx))
-        .map(|o| o.label == OTHER_OPTION_LABEL)
-        .unwrap_or(false);
-    if focused_is_other {
-        body.push_str(&format!("\nyour answer: {}", display_buffer(&qi.notes)));
-        body.push('\n');
-    } else if !qi.notes.is_empty() {
-        body.push_str(&format!("\nnotes: {}\n", qi.notes));
+    for item in &q.questions {
+        let answer = q.peek_answer_for(item);
+        let answer = answer.trim();
+        let answer = if answer.is_empty() {
+            "(unanswered)"
+        } else {
+            answer
+        };
+        out.push_str(&format!("\n\n● {}\n   → {answer}", item.question));
     }
-
-    body.push_str(&render_footer(q));
-
-    body.push('\n');
-    body.push_str(t!("dialog.hints_nav_select").as_ref());
-    if total > 1 {
-        body.push_str("  Tab: next question / footer");
-    }
-    if qi.multi_select {
-        body.push_str("  Space: toggle");
-    }
-
-    (title, body, styles.primary())
+    out.push_str("\n\nReady to submit your answers?");
+    out
 }
 
 fn permission_detail_for_prompt(p: &PermissionPromptState) -> String {
@@ -325,61 +428,17 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// Max display width of a question's `header` chip. Mirrors the tool schema's
+/// `header` description and TS `ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12`.
+const CHIP_MAX_CHARS: usize = 12;
+
 fn chip(s: &str) -> String {
-    if s.chars().count() > 20 {
-        let truncated: String = s.chars().take(19).collect();
+    if s.chars().count() > CHIP_MAX_CHARS {
+        let truncated: String = s.chars().take(CHIP_MAX_CHARS - 1).collect();
         format!("{truncated}…")
     } else {
         s.to_string()
     }
-}
-
-fn render_options(qi: &QuestionItem, focus: QuestionFocus) -> String {
-    let mut out = String::new();
-    let on_this_question = matches!(focus, QuestionFocus::Question(_));
-    let selected_idx = layout::selected_in_bounds(qi.selected, qi.options.len());
-    for (i, opt) in qi.options.iter().enumerate() {
-        let i32_i = i as i32;
-        let is_focused = on_this_question && selected_idx == Some(i);
-        let display_label = if opt.label == OTHER_OPTION_LABEL {
-            OTHER_OPTION_DISPLAY
-        } else {
-            opt.label.as_str()
-        };
-        let marker = if qi.multi_select {
-            let checked = qi.checked.contains(&i32_i);
-            let cursor = if is_focused { ">" } else { " " };
-            format!("{cursor} [{}]", if checked { "x" } else { " " })
-        } else if is_focused {
-            "▸ ".into()
-        } else {
-            "  ".into()
-        };
-        out.push_str(&format!("{marker} {display_label}\n"));
-        if !opt.description.is_empty() {
-            out.push_str(&format!("    {}\n", opt.description));
-        }
-    }
-    out
-}
-
-fn render_footer(q: &QuestionPromptState) -> String {
-    let mut out = String::from("\n");
-    let chat_focused = matches!(q.focus, QuestionFocus::ChatAboutThis);
-    let skip_focused = matches!(q.focus, QuestionFocus::SkipInterview);
-    let marker = |focused: bool| if focused { "▸ " } else { "  " };
-    out.push_str(&format!("{}Chat about this\n", marker(chat_focused)));
-    if q.is_in_plan_mode {
-        out.push_str(&format!(
-            "{}Skip interview and plan immediately\n",
-            marker(skip_focused)
-        ));
-    }
-    out
-}
-
-fn display_buffer(s: &str) -> String {
-    format!("{s}▌")
 }
 
 #[cfg(test)]

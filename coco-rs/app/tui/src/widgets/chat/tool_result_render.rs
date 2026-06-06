@@ -183,12 +183,14 @@ fn render_known(
         TodoWrite => render_todos(cx, input, output, lines),
         // ── Web → target header + output ───────────────────────────────
         WebFetch | WebSearch => render_web(cx, input, output, lines),
+        // ── AskUserQuestion → styled answered-questions cell ───────────
+        AskUserQuestion => render_ask_user_question(cx, display_data, output, lines),
         // ── Everything else → structured default (pretty JSON / text) ──
         Agent | Skill | SendMessage | TeamCreate | TeamDelete | TaskCreate | TaskGet | TaskList
         | TaskUpdate | TaskStop | TaskOutput | EnterPlanMode | ExitPlanMode
-        | VerifyPlanExecution | EnterWorktree | ExitWorktree | AskUserQuestion | ToolSearch
-        | Config | Brief | Lsp | McpAuth | ListMcpResources | ReadMcpResource | CronCreate
-        | CronDelete | CronList | RemoteTrigger | Sleep | StructuredOutput => {
+        | VerifyPlanExecution | EnterWorktree | ExitWorktree | ToolSearch | Config | Brief
+        | Lsp | McpAuth | ListMcpResources | ReadMcpResource | CronCreate | CronDelete
+        | CronList | RemoteTrigger | Sleep | StructuredOutput => {
             render_structured_default(cx, output, lines)
         }
     }
@@ -277,7 +279,7 @@ fn push_apply_patch_raw_row(
     content: &str,
     lines: &mut Vec<Line<'static>>,
 ) {
-    push_apply_patch_wrapped_row(cx, "    ".to_string(), content, cx.styles.dim(), lines);
+    push_wrapped_prefixed_row(cx, "    ".to_string(), content, cx.styles.dim(), lines);
 }
 
 fn render_apply_patch_preview(
@@ -301,12 +303,68 @@ fn render_capped_apply_patch_preview(
     render_apply_patch_preview(cx, &capped)
 }
 
+/// Styled transcript cell for a completed AskUserQuestion exchange, mirroring
+/// codex `RequestUserInputResultCell` instead of dumping the model-facing prose.
+/// Falls back to the prose when no structured answers were spliced (declined /
+/// test fixtures).
+fn render_ask_user_question(
+    cx: &ToolResultRenderCtx<'_>,
+    display_data: Option<&ToolDisplayData>,
+    output: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let Some(ToolDisplayData::AskUserQuestionResult(result)) = display_data else {
+        render_structured_default(cx, output, lines);
+        return;
+    };
+    let total = result.questions.len();
+    let answered = result
+        .questions
+        .iter()
+        .filter(|q| !q.answers.is_empty() || q.note.is_some())
+        .count();
+    // Header: "Questions N/total answered".
+    lines.push(Line::from(vec![
+        Span::raw("    ").fg(cx.styles.dim()),
+        Span::raw("Questions ").fg(cx.styles.text()).bold(),
+        Span::raw(format!("{answered}/{total} answered")).fg(cx.styles.dim()),
+    ]));
+    for q in &result.questions {
+        let unanswered = q.answers.is_empty() && q.note.is_none();
+        let question = if unanswered {
+            format!("{} (unanswered)", q.question)
+        } else {
+            q.question.clone()
+        };
+        push_wrapped_prefixed_row(cx, "    • ".to_string(), &question, cx.styles.text(), lines);
+        for answer in &q.answers {
+            push_wrapped_prefixed_row(
+                cx,
+                "      answer: ".to_string(),
+                answer,
+                cx.styles.accent(),
+                lines,
+            );
+        }
+        if let Some(note) = &q.note {
+            // codex labels a note on an option-question "note:", but a bare
+            // free-text answer "answer:".
+            let label = if q.answers.is_empty() {
+                "      answer: "
+            } else {
+                "      note: "
+            };
+            push_wrapped_prefixed_row(cx, label.to_string(), note, cx.styles.accent(), lines);
+        }
+    }
+}
+
 fn apply_patch_preview(display_data: Option<&ToolDisplayData>) -> Option<&ApplyPatchPreview> {
     match display_data {
         Some(ToolDisplayData::ApplyPatchPreview(preview)) if !preview.rows.is_empty() => {
             Some(preview)
         }
-        Some(ToolDisplayData::ApplyPatchPreview(_)) | None => None,
+        _ => None,
     }
 }
 
@@ -464,7 +522,7 @@ fn omitted_rows_to_usize(rows: i64) -> usize {
     }
 }
 
-fn push_apply_patch_wrapped_row(
+fn push_wrapped_prefixed_row(
     cx: &ToolResultRenderCtx<'_>,
     prefix: String,
     content: &str,

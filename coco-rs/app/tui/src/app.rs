@@ -280,6 +280,13 @@ impl App {
             terminal_size = ?self.state.ui.terminal_size,
             "TUI run loop start",
         );
+        // Defensive: guarantee the TUI terminal modes (raw mode, bracketed
+        // paste, focus reporting) are armed before the event loop. `setup_terminal`
+        // arms them at startup, but the theme / sync-update probes briefly borrow
+        // raw mode; this idempotent re-arm ensures no probe ordering can leave the
+        // session in cooked mode (which echoes focus reports as `^[[O`/`^[[I` and
+        // turns Ctrl+C into SIGINT). Best-effort.
+        let _ = crate::terminal::enter_tui_modes(&mut std::io::stdout());
         self.refresh_status_line();
         // Initial render
         self.redraw()?;
@@ -773,12 +780,21 @@ impl App {
                     lines = text.lines().count(),
                     "bracketed paste",
                 );
-                // Batch insertion via TextArea is O(text.len()) and only
-                // recomputes the wrap cache once, vs N times for per-char insert.
-                self.state.ui.input.textarea.insert_str(&text);
-                // Paste bypasses update::handle_command, so refresh the
-                // autocomplete state directly here.
-                crate::autocomplete::refresh_suggestions(&mut self.state);
+                // Route the paste into the active AskUserQuestion "Other"
+                // composer when one is focused; otherwise the main input. Some
+                // terminals deliver IME-committed CJK as a bracketed paste, so
+                // without this the text would silently land in the hidden
+                // background composer instead of the question's notes.
+                if crate::update::route_question_notes_paste(&mut self.state, &text) {
+                    // consumed by the Other composer
+                } else {
+                    // Batch insertion via TextArea is O(text.len()) and only
+                    // recomputes the wrap cache once, vs N times for per-char insert.
+                    self.state.ui.input.textarea.insert_str(&text);
+                    // Paste bypasses update::handle_command, so refresh the
+                    // autocomplete state directly here.
+                    crate::autocomplete::refresh_suggestions(&mut self.state);
+                }
                 true
             }
             TuiEvent::Suspend => {

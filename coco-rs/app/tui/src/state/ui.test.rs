@@ -218,3 +218,27 @@ fn slash_command_name_validation_rejects_non_names() {
     assert!(SlashCommandName::new("help now").is_err());
     assert!(SlashCommandName::new("help\n").is_err());
 }
+
+#[test]
+fn advance_display_holds_partial_trailing_line_until_newline() {
+    let mut s = super::StreamingState::new();
+    s.append_text("line one\npartial");
+
+    // One tick reveals the complete line; the partial trailing line stays
+    // hidden so its (re-wrapping) height cannot jitter the live region.
+    assert!(s.advance_display());
+    assert_eq!(s.visible_content(), "line one\n");
+
+    // Further ticks reveal nothing while only the partial line is pending.
+    assert!(!s.advance_display());
+    assert_eq!(s.visible_content(), "line one\n");
+
+    // Once the partial line gains its newline it becomes revealable.
+    s.append_text(" more\nrest");
+    assert!(s.advance_display());
+    assert_eq!(s.visible_content(), "line one\npartial more\n");
+
+    // reveal_all (finalize) shows the final partial line.
+    s.reveal_all();
+    assert_eq!(s.visible_content(), "line one\npartial more\nrest");
+}

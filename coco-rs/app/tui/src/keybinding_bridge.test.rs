@@ -131,6 +131,75 @@ fn test_default_context_is_chat() {
     assert_eq!(active_context(&state), KeybindingContext::Chat);
 }
 
+fn install_question_prompt(state: &mut AppState) {
+    state.ui.push_prompt(PanePromptState::Question(
+        crate::state::QuestionPromptState {
+            request_id: "q1".into(),
+            original_input: serde_json::json!({}),
+            questions: vec![crate::state::QuestionItem {
+                header: "Auth".into(),
+                question: "Which?".into(),
+                options: vec![
+                    crate::state::QuestionOption {
+                        label: "OAuth".into(),
+                        description: String::new(),
+                        preview: None,
+                        kind: crate::state::OptionKind::Pick,
+                    },
+                    crate::state::QuestionOption {
+                        label: crate::state::OTHER_OPTION_DISPLAY.into(),
+                        description: String::new(),
+                        preview: None,
+                        kind: crate::state::OptionKind::Other,
+                    },
+                ],
+                multi_select: false,
+                selected: 0,
+                checked: Vec::new(),
+                notes: String::new(),
+            }],
+            focus: crate::state::QuestionFocus::Question(0),
+            is_in_plan_mode: false,
+            submit_selected: 0,
+        },
+    ));
+}
+
+#[test]
+fn test_question_prompt_uses_dedicated_context() {
+    let mut state = AppState::new();
+    install_question_prompt(&mut state);
+    assert_eq!(active_context(&state), KeybindingContext::Question);
+}
+
+#[test]
+fn test_question_letter_keys_never_approve_or_deny() {
+    // Regression for the C1 critical: routing AskUserQuestion through the
+    // confirmation map made y/n/a emit Approve/Deny/ApproveAll, which tore the
+    // prompt down with no answer (hung tool). They must route to the
+    // filter/Other path instead; a question commits only via Enter.
+    let mut state = AppState::new();
+    install_question_prompt(&mut state);
+    for c in ['y', 'n', 'a'] {
+        assert!(
+            matches!(
+                map_key(&state, press(KeyCode::Char(c))),
+                Some(TuiCommand::SurfaceFilter(got)) if got == c
+            ),
+            "'{c}' must route to the filter/Other path, not approve/deny",
+        );
+    }
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Enter)),
+        Some(TuiCommand::SurfaceConfirm)
+    ));
+    // C2 critical: the "Other" composer needs a Backspace + printable route.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Backspace)),
+        Some(TuiCommand::SurfaceFilterBackspace)
+    ));
+}
+
 #[test]
 fn test_help_modal_context() {
     let mut state = AppState::new();

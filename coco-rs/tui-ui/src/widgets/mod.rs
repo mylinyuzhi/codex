@@ -4,11 +4,20 @@
 
 pub mod diff_display;
 pub mod notification;
+pub mod question;
 pub mod select_list;
 pub mod spinner_verbs;
 pub mod status_indicator;
 pub mod textarea;
 
+pub use question::FooterAction;
+pub use question::NavTab;
+pub use question::OptionRow;
+pub use question::QuestionNav;
+pub use question::QuestionView;
+pub use question::QuestionWidget;
+pub use question::RowMark;
+pub use question::SubmitNavTab;
 pub use select_list::SelectItem;
 pub use select_list::SelectListStyle;
 pub use select_list::render_select_list;

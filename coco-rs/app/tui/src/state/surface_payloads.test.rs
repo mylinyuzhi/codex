@@ -52,7 +52,7 @@ fn plan_approval_preserves_from_field_for_response_routing() {
 
 mod question_feedback {
     use super::super::OTHER_OPTION_DISPLAY;
-    use super::super::OTHER_OPTION_LABEL;
+    use super::super::OptionKind;
     use super::super::QuestionFocus;
     use super::super::QuestionItem;
     use super::super::QuestionOption;
@@ -63,6 +63,17 @@ mod question_feedback {
             label: label.into(),
             description: String::new(),
             preview: None,
+            kind: OptionKind::Pick,
+        }
+    }
+
+    /// The injected free-text "Other" composer row.
+    fn other() -> QuestionOption {
+        QuestionOption {
+            label: OTHER_OPTION_DISPLAY.into(),
+            description: String::new(),
+            preview: None,
+            kind: OptionKind::Other,
         }
     }
 
@@ -75,7 +86,6 @@ mod question_feedback {
             selected,
             checked: Vec::new(),
             notes: String::new(),
-            editing_notes: false,
         }
     }
 
@@ -86,6 +96,7 @@ mod question_feedback {
             questions,
             focus: QuestionFocus::Question(0),
             is_in_plan_mode: plan_mode,
+            submit_selected: 0,
         }
     }
 
@@ -94,11 +105,7 @@ mod question_feedback {
         let o = state(
             vec![
                 q("Which library?", 0, vec![opt("Tokio"), opt("Async-std")]),
-                q(
-                    "Custom name?",
-                    1,
-                    vec![opt("Default"), opt(OTHER_OPTION_LABEL)],
-                ),
+                q("Custom name?", 1, vec![opt("Default"), other()]),
             ],
             false,
         );
@@ -138,8 +145,8 @@ Questions asked and answers provided:\n\
         let mut o = state(
             vec![q(
                 "Pick:",
-                1, // focus on the OTHER sentinel
-                vec![opt("Tokio"), opt(OTHER_OPTION_LABEL)],
+                1, // focus on the Other composer
+                vec![opt("Tokio"), other()],
             )],
             false,
         );
@@ -151,18 +158,14 @@ Questions asked and answers provided:\n\
             "Other-with-notes must trim and use typed text; got: {actual}"
         );
         assert!(
-            !actual.contains(OTHER_OPTION_LABEL),
-            "must NOT leak the __other__ sentinel; got: {actual}"
+            !actual.contains("Answer: Other"),
+            "must use the typed text, not the Other label; got: {actual}"
         );
     }
 
     #[test]
     fn multi_select_joins_checked_labels_with_comma_space() {
-        let mut item = q(
-            "Pick many:",
-            0,
-            vec![opt("A"), opt("B"), opt("C"), opt(OTHER_OPTION_LABEL)],
-        );
+        let mut item = q("Pick many:", 0, vec![opt("A"), opt("B"), opt("C"), other()]);
         item.multi_select = true;
         item.checked = vec![0, 2];
         let o = state(vec![item], false);
@@ -173,20 +176,18 @@ Questions asked and answers provided:\n\
 
     #[test]
     fn no_answer_when_other_focused_with_no_notes() {
-        let o = state(
-            vec![q("Q?", 0, vec![opt(OTHER_OPTION_LABEL), opt("Skip")])],
-            false,
-        );
+        let o = state(vec![q("Q?", 0, vec![other(), opt("Skip")])], false);
         let actual = o.chat_about_this_feedback();
         assert!(actual.contains("(No answer provided)"), "got: {actual}");
     }
 
     #[test]
-    fn other_option_display_label_differs_from_sentinel() {
-        // Sentinel is the data-layer marker; display is what the
-        // renderer paints. peek_answer_for keys on the sentinel.
-        assert_eq!(OTHER_OPTION_LABEL, "__other__");
-        assert_eq!(OTHER_OPTION_DISPLAY, "Other");
+    fn is_editing_tracks_focused_other_composer() {
+        // Focus on the Other row → editing; focus on a normal pick → not.
+        let mut item = q("Q?", 1, vec![opt("Pick"), other()]);
+        assert!(item.is_editing(), "Other focused must report editing");
+        item.selected = 0;
+        assert!(!item.is_editing(), "normal pick focused must not edit");
     }
 }
 

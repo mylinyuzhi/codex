@@ -469,6 +469,28 @@ fn crossterm_surface_backend_direct_inserts_styled_and_wide_rows() {
 }
 
 #[test]
+fn crossterm_surface_backend_direct_omits_wide_char_continuation_space() {
+    // Regression: ratatui 0.30 fills a wide (CJK) char's continuation cell with
+    // a reset space (`skip == false`), so the direct-insert path must skip it by
+    // display width — otherwise `运动选择` is emitted as `运 动 选 择`.
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 12, 1));
+
+    terminal
+        .insert_history_lines([Line::from("运动选择")])
+        .expect("insert history");
+
+    let bytes = capture.ansi_bytes();
+    parse_with_vt100(&bytes);
+    assert!(
+        bytes.contains("运动选择"),
+        "wide chars must be contiguous, no continuation spaces: {bytes:?}"
+    );
+}
+
+#[test]
 fn crossterm_surface_backend_direct_inserts_extended_modifiers() {
     let capture = CapturedWriter::default();
     let backend = CrosstermBackend::new(capture.clone());
@@ -532,6 +554,35 @@ fn crossterm_surface_backend_emits_cursor_style_and_sync_update_bytes() {
     );
 }
 
+#[test]
+fn clear_after_position_stays_inside_synchronized_window() {
+    // The per-frame draw path must emit the viewport clear AFTER `?2026h` and
+    // BEFORE `?2026l`, so a terminal supporting synchronized update never
+    // presents the cleared (blank) region before the repaint — the fix for the
+    // streaming input-bar flicker.
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("test backend is infallible");
+    terminal.set_viewport_area(Rect::new(0, 4, 40, 6));
+    capture.reset();
+
+    terminal.begin_synchronized_update().expect("begin sync");
+    terminal
+        .clear_after_position(Position { x: 0, y: 2 })
+        .expect("clear queues");
+    terminal.end_synchronized_update().expect("end sync");
+
+    let bytes = capture.ansi_bytes();
+    let begin = bytes.find("\x1b[?2026h").expect("begin sync present");
+    let end = bytes.find("\x1b[?2026l").expect("end sync present");
+    let clear = bytes
+        .find("\x1b[0J")
+        .or_else(|| bytes.find("\x1b[J"))
+        .expect("clear-to-end present");
+    assert!(begin < clear, "clear must follow ?2026h: {bytes:?}");
+    assert!(clear < end, "clear must precede ?2026l: {bytes:?}");
+}
+
 fn parse_with_vt100(bytes: &str) {
     let mut parser = vt100::Parser::new(8, 16, 16);
     parser.process(bytes.as_bytes());
@@ -545,6 +596,12 @@ struct CapturedWriter {
 impl CapturedWriter {
     fn ansi_bytes(&self) -> String {
         String::from_utf8(self.bytes.borrow().clone()).expect("crossterm bytes are utf8")
+    }
+
+    /// Drop setup bytes emitted by terminal construction so an assertion
+    /// observes only the operations under test.
+    fn reset(&self) {
+        self.bytes.borrow_mut().clear();
     }
 }
 

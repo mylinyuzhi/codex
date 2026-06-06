@@ -813,7 +813,17 @@ class CocoClient:
 
         if method == ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL:
             if self._can_use_tool is None:
-                return False
+                # No permission callback configured: an approval can't be
+                # answered, so deny it rather than leave the request unanswered
+                # (which hangs the server waiting for a reply). Denying — not
+                # allowing — is the safe default because this path covers every
+                # Ask-returning tool, not just AskUserQuestion. A headless
+                # session that needs to answer must supply `can_use_tool`.
+                await router.respond(request_id, {
+                    "request_id": params.get("request_id", ""),
+                    "decision": "deny",
+                })
+                return True
             decision = await self._can_use_tool(
                 params.get("tool_name", ""),
                 params.get("input", {}),

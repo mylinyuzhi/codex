@@ -67,6 +67,10 @@ async fn test_enter_worktree_rejects_missing_app_state_before_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
+    // `current_dir()` returns the realpath; on macOS `tempfile` hands back the
+    // `/var` symlink, so canonicalize the expected path or the asserts below
+    // compare `/private/var/...` against `/var/...`.
+    let repo = std::fs::canonicalize(&repo).unwrap();
     let session_cwd = Arc::new(RwLock::new(repo.clone()));
     let _cwd_guard = CwdGuard::set(&repo);
 
@@ -148,6 +152,10 @@ async fn test_exit_worktree_keep_restores_cwd_and_clears_state() {
     let worktree = temp.path().join("worktree");
     std::fs::create_dir_all(&original).unwrap();
     std::fs::create_dir_all(&worktree).unwrap();
+    // Canonicalize so the cwd asserts compare realpaths (macOS `tempfile`
+    // yields the `/var` -> `/private/var` symlink that `current_dir()` resolves).
+    let original = std::fs::canonicalize(&original).unwrap();
+    let worktree = std::fs::canonicalize(&worktree).unwrap();
     let app_state = Arc::new(RwLock::new(ToolAppState {
         active_worktree: Some(ActiveWorktreeState {
             original_cwd: original.clone(),

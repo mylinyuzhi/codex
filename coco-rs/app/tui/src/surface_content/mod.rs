@@ -9,7 +9,6 @@ mod diff;
 mod help;
 mod permission;
 mod pickers;
-mod question;
 mod rewind;
 mod settings;
 
@@ -29,7 +28,6 @@ pub(crate) enum TextSurfaceContent<'a> {
     PlanEntry(&'a crate::state::PlanEntryPromptState),
     CostWarning(&'a crate::state::CostWarningPromptState),
     ModelPicker(&'a crate::state::ModelPickerState),
-    Question(&'a crate::state::QuestionPromptState),
     SandboxPermission(&'a crate::state::SandboxPermissionPromptState),
     DiffView(&'a crate::state::DiffViewState),
     McpServerApproval(&'a crate::state::McpServerApprovalPromptState),
@@ -53,17 +51,19 @@ pub(crate) enum TextSurfaceContent<'a> {
     AgentsDialog(&'a crate::state::AgentsDialogState),
 }
 
-pub(crate) fn prompt_text_surface(prompt: &PanePromptState) -> TextSurfaceContent<'_> {
-    match prompt {
+pub(crate) fn prompt_text_surface(prompt: &PanePromptState) -> Option<TextSurfaceContent<'_>> {
+    Some(match prompt {
         PanePromptState::Permission(p) => TextSurfaceContent::Permission(p),
-        PanePromptState::Question(q) => TextSurfaceContent::Question(q),
+        // Question renders through the dedicated area-based `QuestionWidget`
+        // (see `render_interaction_prompt`), not this flat text-surface path.
+        PanePromptState::Question(_) => return None,
         PanePromptState::SandboxPermission(s) => TextSurfaceContent::SandboxPermission(s),
         PanePromptState::CostWarning(c) => TextSurfaceContent::CostWarning(c),
         PanePromptState::PlanEntry(p) => TextSurfaceContent::PlanEntry(p),
         PanePromptState::PlanExit(p) => TextSurfaceContent::PlanExit(p),
         PanePromptState::PlanApproval(p) => TextSurfaceContent::PlanApproval(p),
         PanePromptState::McpServerApproval(m) => TextSurfaceContent::McpServerApproval(m),
-    }
+    })
 }
 
 pub(crate) fn modal_text_surface(modal: &ModalState) -> Option<TextSurfaceContent<'_>> {
@@ -146,7 +146,6 @@ pub(crate) fn surface_content(
         TextSurfaceContent::PlanEntry(p) => confirm::plan_entry_content(p, styles),
         TextSurfaceContent::CostWarning(c) => confirm::cost_warning_content(c, styles),
         TextSurfaceContent::ModelPicker(m) => pickers::model_picker_content(m, styles),
-        TextSurfaceContent::Question(q) => question::question_content(q, styles),
         TextSurfaceContent::SandboxPermission(s) => confirm::sandbox_content(s, styles),
         TextSurfaceContent::DiffView(d) => diff::diff_view_content(d, styles),
         TextSurfaceContent::McpServerApproval(m) => confirm::mcp_server_approval_content(m, styles),

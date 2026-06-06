@@ -266,6 +266,10 @@ pub enum TuiCommand {
     /// Tab → +1, Shift+Tab → -1. coco-rs-only extension to the TS
     /// picker (TS only ever drives the `main` model).
     ModelPickerCycleRole(i32),
+    /// Switch the focused question in the AskUserQuestion prompt by `delta`
+    /// (Left → -1, Right → +1), wrapping among questions only (NOT the footer
+    /// actions, which stay on Tab). Mirrors codex `move_question` (←/→/h/l).
+    QuestionSwitchQuestion(i32),
     /// Cycle the FOCUSED teammate's mode in the TeamRoster picker by `delta`
     /// (Left/Right) and apply it immediately (TS: cycling persists). gap 8.
     TeamRosterCycleMode(i32),

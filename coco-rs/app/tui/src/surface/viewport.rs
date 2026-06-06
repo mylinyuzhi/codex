@@ -19,6 +19,7 @@ use crate::presentation::input::InlinePopupView;
 use crate::presentation::input::inline_popup_view;
 use crate::state::AppState;
 use crate::state::FocusTarget;
+use crate::state::PanePromptState;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::modal::render_modal_surface;
 use crate::surface::modal::required_text_surface_height_for_box;
@@ -505,8 +506,17 @@ fn interaction_prompt_height(state: &AppState, width: u16, max_height: u16) -> u
         return 0;
     };
     let styles = UiStyles::new(&state.ui.theme);
-    let text_surface = crate::surface_content::prompt_text_surface(prompt);
     let box_width = interaction_prompt_box_width(width);
+    if let PanePromptState::Question(q) = prompt {
+        let view = crate::presentation::request::project_question(q);
+        return view
+            .desired_height(box_width, styles)
+            .min(max_height.saturating_sub(4))
+            .max(3);
+    }
+    let Some(text_surface) = crate::surface_content::prompt_text_surface(prompt) else {
+        return 0;
+    };
     required_text_surface_height_for_box(text_surface, state, styles, box_width, max_height)
         .min(max_height.saturating_sub(4))
         .max(3)
@@ -524,11 +534,30 @@ fn render_interaction_prompt(
     let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
         return;
     };
-    let text_surface = crate::surface_content::prompt_text_surface(prompt);
+    // AskUserQuestion renders through the dedicated area-based widget, pinned to
+    // the lower-left above the composer (mirrors TS/codex bottom-pane) instead
+    // of horizontally centered like the modal text prompts below. The prompt
+    // slot is already bottom-anchored by the viewport layout, so left-aligning
+    // the box is the whole "左下角" fix.
+    if let PanePromptState::Question(q) = prompt {
+        let width = interaction_prompt_box_width(area.width).min(area.width);
+        let box_area = Rect::new(area.x, area.y, width, area.height);
+        let view = crate::presentation::request::project_question(q);
+        frame.render_widget(Clear, box_area);
+        frame.render_widget(
+            coco_tui_ui::widgets::QuestionWidget::new(&view, styles),
+            box_area,
+        );
+        return;
+    }
+
+    let box_area = center_horizontally(area, interaction_prompt_box_width(area.width));
+    let Some(text_surface) = crate::surface_content::prompt_text_surface(prompt) else {
+        return;
+    };
     let (title, body, border_color) =
         crate::surface_content::surface_content(text_surface, state, styles);
     let body = compact_prompt_body(&body, area.height.saturating_sub(2) as usize);
-    let box_area = center_horizontally(area, interaction_prompt_box_width(area.width));
     frame.render_widget(Clear, box_area);
     frame.render_widget(
         Paragraph::new(body).wrap(Wrap { trim: false }).block(

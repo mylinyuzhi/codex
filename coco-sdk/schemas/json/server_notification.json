@@ -1598,6 +1598,49 @@
         "context"
       ]
     },
+    "AskUserQuestionAnswered": {
+      "description": "One answered (or unanswered) question in an [`AskUserQuestionResult`].",
+      "type": "object",
+      "properties": {
+        "answers": {
+          "description": "Selected option label(s). Empty ⇒ unanswered.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "description": "Freeform note (the \"Other\" composer text / annotation), if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "description": "The question text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "answers"
+      ]
+    },
+    "AskUserQuestionResult": {
+      "description": "Per-question answers for a completed AskUserQuestion call. Built by the tool\nfrom the spliced `answers`/`annotations` envelope; the model still sees the\nprose in `ToolResultMessage.message`.",
+      "type": "object",
+      "properties": {
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AskUserQuestionAnswered"
+          }
+        }
+      },
+      "required": [
+        "questions"
+      ]
+    },
     "AssistantContentPart": {
       "description": "Assistant message content parts.",
       "oneOf": [
@@ -6491,6 +6534,23 @@
             "kind": {
               "type": "string",
               "const": "apply_patch_preview"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ]
+        },
+        {
+          "description": "Structured answers for a completed AskUserQuestion exchange, rendered as\na styled transcript cell (mirrors codex `RequestUserInputResultCell`)\ninstead of the raw model-facing prose.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AskUserQuestionResult"
+            },
+            "kind": {
+              "type": "string",
+              "const": "ask_user_question_result"
             }
           },
           "required": [

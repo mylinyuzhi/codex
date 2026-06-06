@@ -111,6 +111,8 @@ pub use apply_patch_preview::ApplyPatchPreview;
 pub use apply_patch_preview::ApplyPatchPreviewAction;
 pub use apply_patch_preview::ApplyPatchPreviewRow;
 pub use apply_patch_preview::ApplyPatchPreviewSign;
+pub use apply_patch_preview::AskUserQuestionAnswered;
+pub use apply_patch_preview::AskUserQuestionResult;
 pub use apply_patch_preview::ToolDisplayData;
 
 // Event types (three-layer CoreEvent system; see event-system-design.md)

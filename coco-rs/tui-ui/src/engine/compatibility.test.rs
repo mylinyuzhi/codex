@@ -48,3 +48,18 @@ fn disables_native_scrollback_when_zellij_version_is_present() {
         TerminalCompatibility::ZellijNativeScrollbackDisabled
     );
 }
+
+#[test]
+fn synchronized_update_defaults_true_and_reflects_probe() {
+    // No probe yet → assume supported (BSU emitted, no fallback). This is the
+    // only test that writes the process-global cache, so the default holds
+    // until the explicit set below.
+    assert!(synchronized_update_supported());
+
+    set_synchronized_update_supported(false);
+    assert_eq!(synchronized_update_probed(), Some(false));
+    assert!(!synchronized_update_supported());
+
+    set_synchronized_update_supported(true);
+    assert!(synchronized_update_supported());
+}

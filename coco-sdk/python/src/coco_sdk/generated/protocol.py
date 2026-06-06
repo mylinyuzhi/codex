@@ -550,9 +550,6 @@ SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "Sy
 # Tool message content parts.
 ToolContentPart = Union["ToolResultPart", "ToolApprovalResponsePart"]
 
-# UI-only side channel for bounded display data produced by tools.
-ToolDisplayData = dict[str, Any]
-
 # User message content parts.
 UserContentPart = Union["TextPart", "FilePart"]
 
@@ -1538,6 +1535,21 @@ class ToolAbortReasonPayloadSiblingError(BaseModel):
 
 ToolAbortReasonPayload = Annotated[
     Union[ToolAbortReasonPayloadTurn, ToolAbortReasonPayloadSelfAbort, ToolAbortReasonPayloadSiblingError],
+    Field(discriminator='kind'),
+]
+
+class ToolDisplayDataApplyPatchPreview(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['apply_patch_preview'] = Field(default='apply_patch_preview', alias='kind')
+    data: ApplyPatchPreview
+
+class ToolDisplayDataAskUserQuestionResult(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['ask_user_question_result'] = Field(default='ask_user_question_result', alias='kind')
+    data: AskUserQuestionResult
+
+ToolDisplayData = Annotated[
+    Union[ToolDisplayDataApplyPatchPreview, ToolDisplayDataAskUserQuestionResult],
     Field(discriminator='kind'),
 ]
 
@@ -2995,6 +3007,14 @@ class ApiError(BaseModel):
 
 class ApplyPatchPreview(BaseModel):
     rows: list[ApplyPatchPreviewRow]
+
+class AskUserQuestionAnswered(BaseModel):
+    answers: list[str]
+    question: str
+    note: str | None = None
+
+class AskUserQuestionResult(BaseModel):
+    questions: list[AskUserQuestionAnswered]
 
 class AssistantMessage(BaseModel):
     message: LanguageModelV4Message

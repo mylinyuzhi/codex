@@ -41,6 +41,13 @@ mod transcript;
 #[path = "update.test.rs"]
 mod tests;
 
+/// Route a bracketed paste into the active AskUserQuestion "Other" composer.
+/// Returns `true` if consumed. Lets `app.rs` redirect clipboard / IME-committed
+/// paste away from the hidden main input while a question prompt is open.
+pub(crate) fn route_question_notes_paste(state: &mut AppState, text: &str) -> bool {
+    interaction::question_notes_paste(state, text)
+}
+
 /// How a picker/dialog reports being closed with Esc. Mirrors TS local-jsx
 /// `onDone('… dismissed', { display: 'system' })` — every picker leaves a
 /// transcript trace of what closed.
@@ -899,6 +906,10 @@ pub async fn handle_command(
         }
         TuiCommand::ModelPickerCycleEffort(delta) => {
             interaction::cycle_model_effort(state, delta);
+            true
+        }
+        TuiCommand::QuestionSwitchQuestion(delta) => {
+            interaction::question_switch_question(state, delta);
             true
         }
         TuiCommand::TeamRosterCycleMode(delta) => {

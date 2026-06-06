@@ -220,6 +220,11 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
             KbContext::Select,
             KbContext::Global,
         ],
+        // Deliberately NOT KbContext::Confirmation: a question must never be
+        // answerable by the Y/N/A approve/deny bindings. Generic Select nav
+        // (up/down/enter) plus Global stay resolvable; everything else falls
+        // to the legacy `map_question_key` cascade.
+        Question => vec![KbContext::Select, KbContext::Global],
         Picker => vec![
             KbContext::MessageSelector,
             KbContext::Select,

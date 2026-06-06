@@ -239,6 +239,43 @@ fn native_draw_repairs_provisional_append_after_mid_stream_resize() {
 }
 
 #[test]
+fn native_draw_repins_history_on_requested_replay() {
+    let backend = TestBackend::new(48, 9);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::default();
+    controller
+        .draw(&mut terminal, &state)
+        .expect("initial draw");
+
+    test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta");
+    controller.draw(&mut terminal, &state).expect("append draw");
+
+    // A turn-end relax requests a re-pin. With nothing else changed the next
+    // draw would normally be a no-op; the flag must force a full replay so
+    // finalized content re-seats the viewport at the bottom of native scrollback.
+    controller.request_repin_replay();
+    let outcome = controller.draw(&mut terminal, &state).expect("repin draw");
+    assert!(matches!(
+        outcome.history,
+        HistoryEmissionOutcome::Replayed { .. }
+    ));
+    let text = plain_terminal_text(&terminal);
+    assert_eq!(text.matches("alpha").count(), 1, "{text}");
+    assert_eq!(text.matches("beta").count(), 1, "{text}");
+
+    // One-shot: a follow-up draw with nothing changed must NOT replay again —
+    // the flag was consumed, so the re-pin fires at most once per request.
+    let after = controller
+        .draw(&mut terminal, &state)
+        .expect("post-repin draw");
+    assert!(
+        !matches!(after.history, HistoryEmissionOutcome::Replayed { .. }),
+        "pending_repin must be one-shot"
+    );
+}
+
+#[test]
 fn native_draw_replays_when_provisional_render_key_differs_on_finalize() {
     let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
@@ -337,7 +374,7 @@ fn native_draw_appends_after_transcript_revision_changes() {
 }
 
 #[test]
-fn native_draw_reappends_stable_stream_after_height_replay() {
+fn native_draw_reappends_stable_stream_after_width_replay() {
     let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
@@ -353,22 +390,29 @@ fn native_draw_reappends_stable_stream_after_height_replay() {
     state.ui.streaming = Some(streaming);
     controller.draw(&mut terminal, &state).expect("stream draw");
 
-    terminal.set_viewport_area(Rect::new(0, 11, 64, 7));
-    controller
+    // A width change (terminal resize) reflows history — immediately if the
+    // resized buffer forces it, otherwise after the debounce. Either way the
+    // stable stream content must re-emit exactly once (no duplication). A
+    // viewport *height* change must not replay at all — exercised separately.
+    terminal.set_viewport_area(Rect::new(0, 12, 60, 6));
+    let immediate = controller
         .draw(&mut terminal, &state)
-        .expect("schedule height replay");
-    let outcome = controller
+        .expect("width change draw");
+    let debounced = controller
         .draw_at(
             &mut terminal,
             &state,
             std::time::Instant::now() + std::time::Duration::from_millis(100),
         )
-        .expect("height replay");
+        .expect("width replay");
 
-    assert!(matches!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed { .. }
-    ));
+    assert!(
+        matches!(immediate.history, HistoryEmissionOutcome::Replayed { .. })
+            || matches!(debounced.history, HistoryEmissionOutcome::Replayed { .. }),
+        "a width resize must replay history: {:?} then {:?}",
+        immediate.history,
+        debounced.history,
+    );
     let text = plain_terminal_text(&terminal);
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
@@ -429,7 +473,13 @@ fn native_draw_replays_history_when_thinking_display_changes() {
 }
 
 #[test]
-fn native_draw_replays_history_when_reasoning_metadata_changes() {
+fn native_draw_bakes_reasoning_metadata_without_full_replay() {
+    // A per-turn reasoning-metadata attach must NOT trigger `replay_all_capped`.
+    // The engine emits `MessageAppended` + `ReasoningMetadataAttached` back to
+    // back at turn finalize and the TUI coalesces them into one draw, so the
+    // duration/tokens are in the side-cache when the assistant cell first
+    // commits — they bake into its single append-only emit (mirrors how
+    // claude-code-kim bakes the metadata footer into the finalized element).
     let backend = TestBackend::new(64, 10);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 6, 64, 4));
@@ -449,12 +499,7 @@ fn native_draw_replays_history_when_reasoning_metadata_changes() {
         .session
         .transcript
         .on_message_appended(std::sync::Arc::new(msg));
-    let mut controller = NativeSurfaceController::default();
-    controller.draw(&mut terminal, &state).expect("first draw");
-    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
-    assert!(text.contains("F2 to expand"));
-    assert!(!text.contains("reasoning tok"));
-
+    // Metadata in the side-cache before the cell's first (and only) commit.
     state.session.insert_reasoning_metadata(
         uuid,
         crate::state::session::ReasoningMetadata {
@@ -462,20 +507,24 @@ fn native_draw_replays_history_when_reasoning_metadata_changes() {
             reasoning_tokens: 22,
         },
     );
+
+    let mut controller = NativeSurfaceController::default();
     let outcome = controller
         .draw(&mut terminal, &state)
-        .expect("metadata replay");
+        .expect("finalize draw");
 
-    assert!(matches!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed {
-            message_count: 1,
-            ..
-        }
-    ));
+    // Append-only emit, never a full replay — that per-turn rewrite is the cost
+    // this change removes.
+    assert!(
+        !matches!(outcome.history, HistoryEmissionOutcome::Replayed { .. }),
+        "reasoning metadata must not force a full history replay: {:?}",
+        outcome.history
+    );
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
-    assert!(text.contains("22 reasoning tok"), "{text}");
-    assert!(text.contains("F2 to expand"), "{text}");
+    assert!(
+        text.contains("22 reasoning tok"),
+        "metadata baked in: {text}"
+    );
 }
 
 #[test]
@@ -525,7 +574,10 @@ fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
     streaming.append_text("short reply");
     streaming.reveal_all();
     state.ui.streaming = Some(streaming);
-    apply_native_viewport(&mut terminal, Rect::new(0, 18, 64, 12));
+    // Resize the terminal *width* mid-stream: that requests a stream-finish
+    // replay (reflow is width-keyed; a height-only change would not, and would
+    // not exercise the finish-replay gap path this test guards).
+    apply_native_viewport(&mut terminal, Rect::new(0, 18, 60, 12));
     controller.draw(&mut terminal, &state).expect("stream draw");
 
     state.ui.streaming = None;
@@ -549,7 +601,10 @@ fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
 }
 
 #[test]
-fn native_draw_replays_after_viewport_height_change_debounce() {
+fn native_draw_does_not_replay_on_viewport_height_change() {
+    // History re-wrap depends only on width. A viewport *height* change (the
+    // live tail growing/shrinking during streaming) must NOT schedule a
+    // full-history replay — that per-frame replay was the streaming flicker.
     let backend = TestBackend::new(48, 12);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 7, 48, 3));
@@ -560,6 +615,7 @@ fn native_draw_replays_after_viewport_height_change_debounce() {
         .draw(&mut terminal, &state)
         .expect("initial draw");
 
+    // Height-only change (width stays 48).
     terminal.set_viewport_area(Rect::new(0, 7, 48, 4));
     let height_change = controller
         .draw(&mut terminal, &state)
@@ -569,20 +625,18 @@ fn native_draw_replays_after_viewport_height_change_debounce() {
         HistoryEmissionOutcome::FastNoop { .. }
     ));
 
+    // Even past the reflow debounce window, no replay is scheduled.
     let outcome = controller
         .draw_at(
             &mut terminal,
             &state,
             std::time::Instant::now() + std::time::Duration::from_millis(100),
         )
-        .expect("replay draw");
-
-    assert_eq!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed {
-            message_count: 1,
-            rows: 6,
-        }
+        .expect("post-debounce draw");
+    assert!(
+        !matches!(outcome.history, HistoryEmissionOutcome::Replayed { .. }),
+        "viewport height change must not trigger a history replay: {:?}",
+        outcome.history
     );
 }
 

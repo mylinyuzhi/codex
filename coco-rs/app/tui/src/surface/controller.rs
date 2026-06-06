@@ -32,15 +32,25 @@ pub(crate) struct NativeSurfaceController {
     pending_stable_append: Option<ProvisionalStableAppend>,
     transcript_layout: TranscriptLayoutIndex,
     history_display: Option<HistoryDisplayState>,
+    /// One-shot: force a full history replay on the next frame so finalized
+    /// content re-seats the viewport after a turn-end height relax (see
+    /// `Tui::sync_surface_area`). Without it the viewport keeps the tall
+    /// streaming `history_bottom_y` and the input bar settles high with a blank
+    /// gap below once the conversation has overflowed the screen.
+    pending_repin: bool,
 }
 
+/// Display-mode inputs whose change requires a full history re-render (the
+/// committed cells are re-derived). Deliberately excludes reasoning metadata:
+/// that is a side-cache read at cell-build time (`history_options`), so the
+/// finalize draw bakes it into the assistant cell's single append-only emit —
+/// a per-turn metadata attach must NOT force `replay_all_capped`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HistoryDisplayState {
     show_system_reminders: bool,
     show_thinking: bool,
     syntax_highlighting: coco_tui_ui::display::SyntaxHighlighting,
     theme_hash: u64,
-    reasoning_metadata_revision: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +70,14 @@ impl NativeSurfaceController {
         let prepared = self.stream.prepare(state, width, plan);
         self.pending_stable_append = prepared.stable_append;
         prepared.lines
+    }
+
+    /// Force a full history replay on the next frame so finalized content
+    /// re-pins the viewport to the bottom of native scrollback. Called by
+    /// `Tui::sync_surface_area` when the grow-only height freeze releases at
+    /// turn end and the viewport shrinks.
+    pub(crate) fn request_repin_replay(&mut self) {
+        self.pending_repin = true;
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -85,9 +103,16 @@ impl NativeSurfaceController {
     where
         B: SurfaceBackend,
     {
-        self.draw_with_plan_at_frame(terminal, state, plan, precomputed_live, 0)
+        // Unit tests have no `Tui` wrapper, so the test helper owns the
+        // synchronized-update window itself.
+        self.draw_at_with_plan(terminal, state, Instant::now(), plan, precomputed_live, 0)
     }
 
+    /// Production frame entry. The caller (`Tui::draw_with_frame_index`) owns
+    /// the single synchronized-update window that also brackets the viewport
+    /// resize (`sync_surface_area`), so this path must NOT open its own — a
+    /// nested `?2026h`/`?2026l` would emit a premature ESU and present a torn
+    /// mid-frame. It therefore calls `draw_at_inner` directly.
     pub(crate) fn draw_with_plan_at_frame<B>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
@@ -99,7 +124,7 @@ impl NativeSurfaceController {
     where
         B: SurfaceBackend,
     {
-        self.draw_at_with_plan(
+        self.draw_at_inner(
             terminal,
             state,
             Instant::now(),
@@ -124,6 +149,11 @@ impl NativeSurfaceController {
         self.draw_at_with_plan(terminal, state, now, plan, None, 0)
     }
 
+    /// Test-only frame entry that owns its synchronized-update window. The
+    /// production path goes through `draw_with_plan_at_frame`, where `Tui`
+    /// owns the single window (see that method's note); this variant exists so
+    /// unit tests can drive a full frame without a `Tui`.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn draw_at_with_plan<B>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
@@ -163,8 +193,7 @@ impl NativeSurfaceController {
         let perf_config = state.ui.display_settings.performance;
         let mut precomputed_live =
             precomputed_live.or_else(|| Some(self.prepare_live_tail(state, width, plan)));
-        self.history
-            .note_viewport(width, viewport.height, stream_active);
+        self.history.note_viewport(width, stream_active);
 
         let options = history_options(state, width);
         let history_display = HistoryDisplayState::from(state);
@@ -176,6 +205,9 @@ impl NativeSurfaceController {
         let cells = state.session.transcript.cells();
         let transcript_revision = state.session.transcript.revision();
         let history_start = perf_config.enabled.then(Instant::now);
+        // Taken unconditionally so a relax request can never leak into a later
+        // frame if native history is briefly disabled (alt-screen / modal).
+        let needs_repin_replay = std::mem::take(&mut self.pending_repin);
         let mut history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
@@ -186,8 +218,14 @@ impl NativeSurfaceController {
             let needs_stream_finish_replay =
                 !stream_active && self.history.stream_finish_replay_needed();
             let needs_reflow_replay = self.history.replay_due(now);
-            if history_display_changed || needs_reflow_replay || needs_stream_finish_replay {
-                let cause = if needs_stream_finish_replay {
+            if history_display_changed
+                || needs_reflow_replay
+                || needs_stream_finish_replay
+                || needs_repin_replay
+            {
+                let cause = if needs_repin_replay {
+                    "viewport_relax_repin"
+                } else if needs_stream_finish_replay {
                     "stream_finish_pending_replay"
                 } else if history_display_changed {
                     "history_display_changed"
@@ -380,6 +418,7 @@ impl NativeSurfaceController {
         self.stream.reset();
         self.pending_stable_append = None;
         self.transcript_layout.reset();
+        self.pending_repin = false;
     }
 }
 
@@ -427,7 +466,6 @@ impl From<&AppState> for HistoryDisplayState {
             show_thinking: state.ui.show_thinking,
             syntax_highlighting: state.ui.display_settings.syntax_highlighting,
             theme_hash: UiStyles::new(&state.ui.theme).theme_hash(),
-            reasoning_metadata_revision: state.session.reasoning_metadata_revision,
         }
     }
 }

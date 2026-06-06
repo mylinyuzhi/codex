@@ -292,14 +292,14 @@ fn driver_note_viewport_schedules_stream_replay_after_resize() {
     let mut driver = SurfaceHistoryDriver::default();
 
     assert_eq!(
-        driver.note_viewport(80, 24, false),
+        driver.note_viewport(80, false),
         HistoryViewportChange {
             initialized: true,
             changed: false,
         }
     );
     assert_eq!(
-        driver.note_viewport(100, 24, true),
+        driver.note_viewport(100, true),
         HistoryViewportChange {
             initialized: false,
             changed: true,

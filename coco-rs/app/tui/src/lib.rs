@@ -37,6 +37,7 @@ pub(crate) mod status_bar;
 pub mod streaming;
 pub(crate) mod surface;
 mod surface_content;
+mod sync_update_probe;
 mod system_theme_probe;
 pub mod terminal;
 pub mod theme;

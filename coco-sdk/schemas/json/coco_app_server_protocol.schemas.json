@@ -664,6 +664,49 @@
       ],
       "type": "object"
     },
+    "AskUserQuestionAnswered": {
+      "description": "One answered (or unanswered) question in an [`AskUserQuestionResult`].",
+      "properties": {
+        "answers": {
+          "description": "Selected option label(s). Empty \u21d2 unanswered.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "note": {
+          "description": "Freeform note (the \"Other\" composer text / annotation), if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "description": "The question text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "answers"
+      ],
+      "type": "object"
+    },
+    "AskUserQuestionResult": {
+      "description": "Per-question answers for a completed AskUserQuestion call. Built by the tool\nfrom the spliced `answers`/`annotations` envelope; the model still sees the\nprose in `ToolResultMessage.message`.",
+      "properties": {
+        "questions": {
+          "items": {
+            "$ref": "#/$defs/AskUserQuestionAnswered"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "questions"
+      ],
+      "type": "object"
+    },
     "AssistantContentPart": {
       "description": "Assistant message content parts.",
       "oneOf": [
@@ -11194,6 +11237,23 @@
             },
             "kind": {
               "const": "apply_patch_preview",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Structured answers for a completed AskUserQuestion exchange, rendered as\na styled transcript cell (mirrors codex `RequestUserInputResultCell`)\ninstead of the raw model-facing prose.",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AskUserQuestionResult"
+            },
+            "kind": {
+              "const": "ask_user_question_result",
               "type": "string"
             }
           },

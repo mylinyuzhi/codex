@@ -5,6 +5,8 @@ use coco_types::ApplyPatchPreview;
 use coco_types::ApplyPatchPreviewAction;
 use coco_types::ApplyPatchPreviewRow;
 use coco_types::ApplyPatchPreviewSign;
+use coco_types::AskUserQuestionAnswered;
+use coco_types::AskUserQuestionResult;
 use coco_types::ToolDisplayData;
 use serde_json::json;
 
@@ -329,6 +331,61 @@ fn error_output_renders_regardless_of_tool() {
         true,
     ));
     assert!(out.contains("command failed: boom"), "{out}");
+}
+
+#[test]
+fn ask_user_question_renders_styled_answered_cell() {
+    let display = ToolDisplayData::AskUserQuestionResult(AskUserQuestionResult {
+        questions: vec![
+            AskUserQuestionAnswered {
+                question: "Pick a library?".into(),
+                answers: vec!["date-fns".into()],
+                note: None,
+            },
+            AskUserQuestionAnswered {
+                question: "Which features?".into(),
+                answers: vec!["i18n".into(), "timezones".into()],
+                note: Some("plus DST".into()),
+            },
+            AskUserQuestionAnswered {
+                question: "Anything else?".into(),
+                answers: vec![],
+                note: None,
+            },
+        ],
+    });
+    let out = text_of(&render_ex_width_with_display(
+        "AskUserQuestion",
+        None,
+        "ignored model prose",
+        Some(&display),
+        false,
+        false,
+        80,
+    ));
+    assert!(out.contains("Questions 2/3 answered"), "{out}");
+    assert!(out.contains("• Pick a library?"), "{out}");
+    assert!(out.contains("answer: date-fns"), "{out}");
+    assert!(out.contains("answer: i18n"), "{out}");
+    assert!(out.contains("answer: timezones"), "{out}");
+    assert!(out.contains("note: plus DST"), "{out}");
+    assert!(out.contains("Anything else? (unanswered)"), "{out}");
+    // The raw model-facing prose must NOT leak into the styled cell.
+    assert!(!out.contains("ignored model prose"), "{out}");
+}
+
+#[test]
+fn ask_user_question_without_display_data_falls_back_to_prose() {
+    let out = text_of(&render_ex_width_with_display(
+        "AskUserQuestion",
+        None,
+        "User has answered your questions: \"Q\"=\"A\".",
+        None,
+        false,
+        false,
+        80,
+    ));
+    assert!(out.contains("User has answered your questions"), "{out}");
 }
 
 #[test]

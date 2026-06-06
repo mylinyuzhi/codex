@@ -94,7 +94,7 @@ pub use surface_payloads::MemoryDialogState;
 pub use surface_payloads::ModelEntry;
 pub use surface_payloads::ModelPickerState;
 pub use surface_payloads::OTHER_OPTION_DISPLAY;
-pub use surface_payloads::OTHER_OPTION_LABEL;
+pub use surface_payloads::OptionKind;
 pub use surface_payloads::PermissionDetail;
 pub use surface_payloads::PermissionPromptState;
 pub use surface_payloads::PlanApprovalPromptState;
