@@ -426,6 +426,7 @@ impl QueryEngine {
     // string used to ride along for log correlation — it's now stamped
     // upstream in `run_session_loop`'s info span and dropped from the
     // signature here.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn finalize_turn_post_tools(
         &self,
         history: &mut MessageHistory,
@@ -434,6 +435,11 @@ impl QueryEngine {
         continuation: TurnContinuation,
         cycle_turn_id: Option<coco_types::TurnId>,
         stop_reason: Option<coco_messages::StopReason>,
+        // #3 / TS query.ts:1566-1578: whether a Sleep tool ran in the
+        // just-completed batch. `Later`-priority items (background
+        // task-completion notifications) drain only after a Sleep; else
+        // the boundary drain caps at `Next`.
+        sleep_ran: bool,
     ) {
         // Periodic terminal-task eviction. Fires every turn,
         // regardless of success / failure / cancellation outcome —
@@ -498,11 +504,18 @@ impl QueryEngine {
         // `getAgentPendingMessageAttachments`
         // (`attachments.ts:1085-1100`, coordinator messages, all of
         // which TS surfaces as `attachment.type === 'queued_command'`).
+        // #3: `later`-priority items (background task notifications) drain
+        // only when a Sleep tool ran this batch; otherwise cap at `next`.
+        let drain_priority = if sleep_ran {
+            QueuePriority::Later
+        } else {
+            QueuePriority::Next
+        };
         drain_command_queue_into_history(
             &self.command_queue,
             history,
             event_tx,
-            QueuePriority::Later,
+            drain_priority,
             self.config.agent_id.as_deref(),
         )
         .await;

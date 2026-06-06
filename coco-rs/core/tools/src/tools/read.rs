@@ -40,14 +40,34 @@ Usage:
 - You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.";
 
-/// Default byte budget for text reads. TS `FileReadTool.ts` +
-/// `getDefaultFileReadingLimits()` caps reads at 256KB when `limit` is
-/// unspecified. coco-rs previously only capped by line count, so files
-/// with very long lines (minified JSON, base64 blobs, single-line logs)
-/// could emit multi-megabyte output while staying under the 2000-line
-/// budget. Applying a byte cap in parallel with the line cap closes
-/// that gap. R5-T12.
-const DEFAULT_BYTE_LIMIT: usize = 256_000;
+/// Maximum total file size for a FULL read (no `limit`). TS
+/// `MAX_OUTPUT_SIZE = 0.25 * 1024 * 1024` (`utils/file.ts:48`). A full
+/// read of a larger file throws `FileTooLargeError` rather than
+/// truncating — TS deliberately reverted truncation (limits.ts) because
+/// a ~100-byte error beats ~256KB of truncated content. Partial reads
+/// (explicit `limit`) skip this check and rely on the token cap below.
+const MAX_READ_OUTPUT_BYTES: usize = 256 * 1024;
+
+/// Default output token budget for a read slice. TS
+/// `DEFAULT_MAX_OUTPUT_TOKENS = 25000` (`tools/FileReadTool/limits.ts`).
+/// Any read whose slice exceeds this estimate throws
+/// `MaxFileReadTokenExceededError` (mirrors `validateContentTokens`).
+const DEFAULT_MAX_OUTPUT_TOKENS: usize = 25_000;
+
+/// TS `bytesPerTokenForFileType` (`services/tokenEstimation.ts`): JSON
+/// family packs ~2 bytes/token, everything else ~4. Used for the rough
+/// pre-API token estimate.
+fn bytes_per_token_for_ext(file_path: &str) -> usize {
+    let ext = Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    match ext.as_str() {
+        "json" | "jsonl" | "jsonc" => 2,
+        _ => 4,
+    }
+}
 
 /// Upper bound on the RAW file size before we even attempt to decode.
 ///
@@ -245,6 +265,39 @@ impl Tool for ReadTool {
             && limit <= 0
         {
             return ValidationResult::invalid("limit must be positive");
+        }
+        // #24 / TS `FileReadTool.ts:418-440`: validate the PDF `pages`
+        // param up-front (pure string parsing, no I/O). Malformed → 7;
+        // a range wider than PDF_MAX_PAGES_PER_READ (incl. the open-ended
+        // `"N-"` form, which is unbounded) → 8.
+        if let Some(pages) = input.pages.as_deref() {
+            match parse_pdf_page_range_spec(pages) {
+                None => {
+                    return ValidationResult::invalid_with_code(
+                        format!(
+                            "Invalid pages parameter: \"{pages}\". Use formats like \"1-5\", \
+                             \"3\", or \"10-20\". Pages are 1-indexed."
+                        ),
+                        "7",
+                    );
+                }
+                Some((first, last)) => {
+                    let range_size = match last {
+                        None => PDF_MAX_PAGES_PER_READ + 1,
+                        Some(l) => l - first + 1,
+                    };
+                    if range_size > PDF_MAX_PAGES_PER_READ {
+                        return ValidationResult::invalid_with_code(
+                            format!(
+                                "Page range \"{pages}\" exceeds maximum of \
+                                 {PDF_MAX_PAGES_PER_READ} pages per request. \
+                                 Please use a smaller range."
+                            ),
+                            "8",
+                        );
+                    }
+                }
+            }
         }
         ValidationResult::Valid
     }
@@ -466,6 +519,22 @@ impl Tool for ReadTool {
             source: None,
         })?;
 
+        // #25 / TS `readFileInRange`: a FULL read (no `limit`) of a file
+        // larger than MAX_READ_OUTPUT_BYTES throws instead of truncating —
+        // the model must narrow with offset/limit. Partial reads pass
+        // through to the line + token caps.
+        if input.limit.is_none() && raw_bytes.len() > MAX_READ_OUTPUT_BYTES {
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "File content ({} bytes) exceeds maximum allowed size ({} bytes). \
+                     Use the offset and limit parameters to read specific portions of the file.",
+                    raw_bytes.len(),
+                    MAX_READ_OUTPUT_BYTES
+                ),
+                error_code: None,
+            });
+        }
+
         let encoding = coco_file_encoding::detect_encoding(&raw_bytes);
         let content = encoding
             .decode(&raw_bytes)
@@ -536,42 +605,39 @@ impl Tool for ReadTool {
 
         let line_end = (start + limit).min(total_lines);
 
+        // #17 / TS `validateContentTokens`: reject a slice whose rough
+        // token estimate exceeds the budget (default 25000) so a single
+        // Read can't blow the context. Estimate on the slice content (not
+        // the line-number prefixes) to match TS, using the file-type
+        // bytes/token ratio. The early `estimate <= max/4` skip in TS is
+        // an API-call optimization; with no API counting we compare the
+        // estimate directly.
+        let slice_bytes: usize = lines[start..line_end].iter().map(|l| l.len() + 1).sum();
+        let token_estimate = slice_bytes / bytes_per_token_for_ext(file_path);
+        if token_estimate > DEFAULT_MAX_OUTPUT_TOKENS {
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "File content ({token_estimate} tokens) exceeds maximum allowed tokens \
+                     ({DEFAULT_MAX_OUTPUT_TOKENS}). Use offset and limit parameters to read \
+                     specific portions of the file, or search for specific content instead of \
+                     reading the whole file."
+                ),
+                error_code: None,
+            });
+        }
+
         // Format as cat -n (1-indexed line numbers). The displayed line
         // number is `start + i + 1`, which evaluates to `offset + i` when
         // offset ≥ 1 and to `i + 1` when offset == 0 — matching TS.
-        //
-        // R5-T12: in addition to the line cap, enforce a byte budget so
-        // minified files / long-line blobs don't blow up the output. We
-        // stop emitting new lines once the accumulated byte count
-        // exceeds `DEFAULT_BYTE_LIMIT`. `end` tracks how many lines were
-        // actually emitted; `byte_truncated` reports the reason in the
-        // trailing footer so the model knows which cap hit.
         let mut output = String::new();
-        let mut end = start;
-        let mut byte_truncated = false;
         for (i, line) in lines[start..line_end].iter().enumerate() {
             let line_num = start + i + 1;
-            let next = format!("{line_num}\t{line}\n");
-            if !output.is_empty() && output.len() + next.len() > DEFAULT_BYTE_LIMIT {
-                // Emit at least one line, then stop if the next would
-                // bust the budget. The `!output.is_empty()` guard keeps
-                // single-giant-line files from returning zero content.
-                byte_truncated = true;
-                break;
-            }
-            output.push_str(&next);
-            end = start + i + 1;
+            output.push_str(&format!("{line_num}\t{line}\n"));
         }
+        let end = line_end;
 
-        // Append info if truncated by either cap.
-        if byte_truncated {
-            output.push_str(&format!(
-                "\n... ({} more lines not shown — output exceeded {} byte limit. \
-                 Use offset/limit to read more.)",
-                total_lines - end,
-                DEFAULT_BYTE_LIMIT
-            ));
-        } else if end < total_lines {
+        // Line-cap footer (TS): more lines exist beyond the emitted slice.
+        if end < total_lines {
             output.push_str(&format!(
                 "\n... ({} more lines not shown. Use offset/limit to read more.)",
                 total_lines - end
@@ -1390,6 +1456,43 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
 /// `(start, end)` range. Returns `None` on parse error.
 ///
 /// TS: `utils/pdfUtils.ts::parsePDFPageRange`.
+/// Pure parse of the PDF `pages` spec (no I/O, no `total`), mirroring TS
+/// `parsePDFPageRange` (`utils/pdfUtils.ts`). Returns `(first, last)`
+/// where `last` is `None` for the open-ended `"N-"` form, and `None` for
+/// a malformed spec. Used by `validate_input` for the up-front 7/8
+/// error-code checks.
+fn parse_pdf_page_range_spec(pages: &str) -> Option<(usize, Option<usize>)> {
+    let trimmed = pages.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // "N-" open-ended range.
+    if let Some(prefix) = trimmed.strip_suffix('-') {
+        let first: usize = prefix.trim().parse().ok()?;
+        if first < 1 {
+            return None;
+        }
+        return Some((first, None));
+    }
+    match trimmed.split_once('-') {
+        None => {
+            let page: usize = trimmed.parse().ok()?;
+            if page < 1 {
+                return None;
+            }
+            Some((page, Some(page)))
+        }
+        Some((a, b)) => {
+            let first: usize = a.trim().parse().ok()?;
+            let last: usize = b.trim().parse().ok()?;
+            if first < 1 || last < 1 || last < first {
+                return None;
+            }
+            Some((first, Some(last)))
+        }
+    }
+}
+
 fn parse_page_range(spec: &str, total: usize) -> Option<(usize, usize)> {
     let spec = spec.trim();
     if let Some((a, b)) = spec.split_once('-') {

@@ -225,6 +225,7 @@ impl HookLlmHandle for QueryHookLlm {
                     agentic: false,
                     stop_sequences: None,
                     response_format: None,
+                    cancel: None,
                 };
                 match self
                     .model_runtimes

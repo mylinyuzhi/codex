@@ -93,10 +93,15 @@ where
             push_u16(&mut out, target_y + 1);
             out.push_str(";1H");
             let mut current_style: Option<CellStyleKey> = None;
+            // Cells occupied by the continuation half of a preceding wide
+            // (CJK / emoji) grapheme. ratatui 0.30 fills these with a reset
+            // space (`skip == false`), so width tracking — not `cell.skip` —
+            // is what keeps a `运` from being emitted as `运 `.
+            let mut to_skip = 0usize;
             for x in 0..rendered.area.width {
                 let index = rendered.index_of(x, source_y);
                 let cell = &rendered.content[index];
-                if !cell.skip {
+                if !cell.skip && to_skip == 0 {
                     let next_style = CellStyleKey::from(cell);
                     if current_style != Some(next_style) {
                         push_ansi_style_prefix(&mut out, next_style);
@@ -104,6 +109,7 @@ where
                     }
                     out.push_str(cell.symbol());
                 }
+                to_skip = display_width(cell.symbol()).saturating_sub(1);
             }
         }
         out.push_str("\x1b[0m\x1b8");
@@ -414,12 +420,23 @@ where
     }
 
     /// Clear from `position` through the visible screen bottom.
+    ///
+    /// Issues no explicit trailing flush of its own. What prevents the
+    /// input-bar flicker is the caller's synchronized-update window, NOT flush
+    /// avoidance: the per-frame draw path brackets this clear between
+    /// `?2026h`/`?2026l`, so a 2026-capable terminal defers presentation until
+    /// the repaint and a viewport resize never shows a blank region. (The
+    /// underlying ratatui cursor-move/clear ops still flush; on terminals
+    /// without synchronized-update support the deferral does not apply.) The
+    /// removed trailing flush was redundant — the sub-ops already flushed.
+    /// Teardown callers that run OUTSIDE a draw frame (e.g.
+    /// [`Self::prepare_shell_prompt_after_exit`]) already issue their own flush.
     pub fn clear_after_position(&mut self, position: Position) -> Result<(), B::Error> {
         self.backend.set_cursor_position(position)?;
         self.backend.clear_region(ClearType::CurrentLine)?;
         self.backend.clear_region(ClearType::AfterCursor)?;
         self.invalidate_viewport();
-        self.backend.flush()
+        Ok(())
     }
 
     /// Insert finalized history rows immediately above the retained viewport.

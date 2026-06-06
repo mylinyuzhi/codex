@@ -68,6 +68,7 @@ pub enum ToolPermissionDecision {
     Approved,
     #[default]
     Rejected,
+    Aborted,
 }
 
 /// Resolution of a permission request.

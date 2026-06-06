@@ -1,24 +1,53 @@
-use std::collections::HashMap;
+use std::path::Path;
 
-use crate::LoadedPlugin;
-use crate::PluginManifest;
-use crate::PluginSource;
+use crate::loader::LoadedPluginV2;
+use crate::loader::PluginLoadSource;
+use crate::schemas::ManifestPaths;
+use crate::schemas::PluginId;
+use crate::schemas::PluginManifestV2;
 
 use super::*;
 
-fn test_plugin(name: &str, path: &Path, skills: Vec<&str>) -> LoadedPlugin {
-    LoadedPlugin {
-        name: name.to_string(),
-        manifest: PluginManifest {
+/// Build a minimal inline `LoadedPluginV2` with optional manifest skill paths.
+fn test_plugin(name: &str, path: &Path, skills: Vec<&str>) -> LoadedPluginV2 {
+    let skills_field = if skills.is_empty() {
+        None
+    } else {
+        Some(ManifestPaths::Multiple(
+            skills.into_iter().map(String::from).collect(),
+        ))
+    };
+    LoadedPluginV2 {
+        id: PluginId {
+            name: name.to_string(),
+            marketplace: "inline".to_string(),
+        },
+        manifest: PluginManifestV2 {
             name: name.to_string(),
             version: None,
-            description: "Test plugin".to_string(),
-            skills: skills.into_iter().map(String::from).collect(),
-            hooks: HashMap::new(),
-            mcp_servers: HashMap::new(),
+            description: Some("Test plugin".to_string()),
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: None,
+            dependencies: None,
+            skills: skills_field,
+            hooks: None,
+            agents: None,
+            commands: None,
+            mcp_servers: None,
+            lsp_servers: None,
+            output_styles: None,
+            channels: None,
+            user_config: None,
+            settings: None,
+            env_vars: None,
+            min_version: None,
+            max_version: None,
         },
         path: path.to_path_buf(),
-        source: PluginSource::User,
+        load_source: PluginLoadSource::SessionDir,
         enabled: true,
     }
 }
@@ -35,7 +64,7 @@ fn test_load_plugin_skills_from_manifest_paths() {
     .unwrap();
 
     let plugin = test_plugin("test-plugin", dir.path(), vec!["my-tool.md"]);
-    let skills = load_plugin_skills(&plugin);
+    let skills = load_plugin_skills_v2(&plugin);
 
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].name, "test-plugin:my-tool");
@@ -61,7 +90,7 @@ fn test_load_plugin_skills_from_skills_dir() {
     std::fs::write(skills_dir.join("test.md"), "# test\n\nRun tests.\n").unwrap();
 
     let plugin = test_plugin("my-plugin", dir.path(), vec![]);
-    let skills = load_plugin_skills(&plugin);
+    let skills = load_plugin_skills_v2(&plugin);
 
     assert_eq!(skills.len(), 2);
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
@@ -84,7 +113,7 @@ fn test_load_plugin_skills_skill_md_dir_format() {
     .unwrap();
 
     let plugin = test_plugin("cool-plugin", dir.path(), vec![]);
-    let skills = load_plugin_skills(&plugin);
+    let skills = load_plugin_skills_v2(&plugin);
 
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].name, "cool-plugin:my-skill");
@@ -94,7 +123,7 @@ fn test_load_plugin_skills_skill_md_dir_format() {
 fn test_load_plugin_skills_nonexistent_path() {
     let dir = tempfile::tempdir().unwrap();
     let plugin = test_plugin("test", dir.path(), vec!["nonexistent.md"]);
-    let skills = load_plugin_skills(&plugin);
+    let skills = load_plugin_skills_v2(&plugin);
     assert!(skills.is_empty());
 }
 
@@ -114,7 +143,7 @@ fn test_load_all_plugin_skills() {
     let p1 = test_plugin("plugin1", dir1.path(), vec![]);
     let p2 = test_plugin("plugin2", dir2.path(), vec![]);
 
-    let skills = load_all_plugin_skills(&[&p1, &p2]);
+    let skills = load_all_plugin_skills_v2(&[&p1, &p2]);
     assert_eq!(skills.len(), 2);
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
     assert!(names.contains(&"plugin1:a"));

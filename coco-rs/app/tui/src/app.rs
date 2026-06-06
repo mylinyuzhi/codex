@@ -280,6 +280,13 @@ impl App {
             terminal_size = ?self.state.ui.terminal_size,
             "TUI run loop start",
         );
+        // Defensive: guarantee the TUI terminal modes (raw mode, bracketed
+        // paste, focus reporting) are armed before the event loop. `setup_terminal`
+        // arms them at startup, but the theme / sync-update probes briefly borrow
+        // raw mode; this idempotent re-arm ensures no probe ordering can leave the
+        // session in cooked mode (which echoes focus reports as `^[[O`/`^[[I` and
+        // turns Ctrl+C into SIGINT). Best-effort.
+        let _ = crate::terminal::enter_tui_modes(&mut std::io::stdout());
         self.refresh_status_line();
         // Initial render
         self.redraw()?;
@@ -734,6 +741,9 @@ impl App {
                 self.state.ui.expire_toasts();
                 let permission_prompt_ready = self.state.ui.flush_delayed_permissions(now);
                 self.maybe_fire_idle_prompt().await;
+                // Surface a pending plugin-install hint (zero-cost when the
+                // single-slot store is empty, which is the common case).
+                let plugin_hint_shown = self.maybe_surface_plugin_hint();
                 // Drive the chord-timeout from the tick so a pending
                 // chord auto-cancels after the 1 s window without
                 // requiring another keypress (mirrors TS
@@ -756,6 +766,7 @@ impl App {
                     || chord_cancelled
                     || double_press_expired
                     || permission_prompt_ready
+                    || plugin_hint_shown
             }
             TuiEvent::Paste(text) => {
                 let now = self.state.clock.now();
@@ -769,12 +780,21 @@ impl App {
                     lines = text.lines().count(),
                     "bracketed paste",
                 );
-                // Batch insertion via TextArea is O(text.len()) and only
-                // recomputes the wrap cache once, vs N times for per-char insert.
-                self.state.ui.input.textarea.insert_str(&text);
-                // Paste bypasses update::handle_command, so refresh the
-                // autocomplete state directly here.
-                crate::autocomplete::refresh_suggestions(&mut self.state);
+                // Route the paste into the active AskUserQuestion "Other"
+                // composer when one is focused; otherwise the main input. Some
+                // terminals deliver IME-committed CJK as a bracketed paste, so
+                // without this the text would silently land in the hidden
+                // background composer instead of the question's notes.
+                if crate::update::route_question_notes_paste(&mut self.state, &text) {
+                    // consumed by the Other composer
+                } else {
+                    // Batch insertion via TextArea is O(text.len()) and only
+                    // recomputes the wrap cache once, vs N times for per-char insert.
+                    self.state.ui.input.textarea.insert_str(&text);
+                    // Paste bypasses update::handle_command, so refresh the
+                    // autocomplete state directly here.
+                    crate::autocomplete::refresh_suggestions(&mut self.state);
+                }
                 true
             }
             TuiEvent::Suspend => {
@@ -874,6 +894,8 @@ impl App {
             || ui.ctrl_d_tracker.pending().is_some()
             || ui.esc_tracker.pending().is_some()
             || (session.last_query_completion_at.is_some() && !session.idle_prompt_fired)
+            // A pending plugin-install hint needs a tick to surface its modal.
+            || coco_plugins::pending_hint_snapshot().is_some()
     }
 
     async fn maybe_fire_idle_prompt(&mut self) {
@@ -909,6 +931,67 @@ impl App {
             .await;
         self.state.session.idle_prompt_fired = true;
     }
+
+    /// Poll the process-level pending-hint store and, when a hint is waiting
+    /// and no blocking interaction is active, resolve it against the
+    /// marketplace cache and surface the plugin-recommendation modal.
+    ///
+    /// Mirrors TS `useClaudeCodeHintRecommendation`: resolve async, mark
+    /// shown-this-session on success, then clear the slot. The pre-store
+    /// gate (`maybe_record_plugin_hint`) already dropped installed/shown/
+    /// capped/policy-blocked hints, so anything that reaches here is worth
+    /// surfacing if it resolves against the cache.
+    fn maybe_surface_plugin_hint(&mut self) -> bool {
+        // Single-slot: nothing pending → nothing to do.
+        let Some(hint) = coco_plugins::pending_hint_snapshot() else {
+            return false;
+        };
+        // Don't displace a higher-priority focused dialog / prompt; the slot
+        // stays full and we retry on the next idle tick.
+        if self.state.ui.has_blocking_interaction() || self.state.ui.modal.is_some() {
+            return false;
+        }
+
+        let resolved = resolve_pending_plugin_hint(&hint);
+        // Clear the slot regardless — a hint that doesn't resolve against the
+        // cache is discarded (TS returns null and drops it).
+        coco_plugins::hints::clear_pending_hint();
+        let Some(rec) = resolved else {
+            return false;
+        };
+
+        coco_plugins::hints::mark_shown_this_session();
+        self.state
+            .ui
+            .show_modal(crate::state::ModalState::PluginHint(
+                crate::state::PluginHintState {
+                    plugin_id: rec.plugin_id,
+                    plugin_name: rec.plugin_name,
+                    marketplace_name: rec.marketplace_name,
+                    plugin_description: rec.plugin_description,
+                    source_command: rec.source_command,
+                    selected: 0,
+                },
+            ));
+        true
+    }
+}
+
+/// Resolve a pending hint against the on-disk marketplace cache. Builds a
+/// short-lived [`coco_plugins::marketplace::MarketplaceManager`] rooted at
+/// the user plugins dir, loads the hint's marketplace from disk, and looks
+/// up the plugin entry. Returns `None` if the marketplace or plugin isn't
+/// cached. TS: `resolvePluginHint` (the async `getPluginById` half).
+fn resolve_pending_plugin_hint(
+    hint: &coco_plugins::ClaudeCodeHint,
+) -> Option<coco_plugins::PluginRecommendation> {
+    let (_, marketplace_name) = hint.value.split_once('@')?;
+    let plugins_dir = coco_config::global_config::config_home().join("plugins");
+    let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir);
+    // Load the marketplace into the in-memory cache from its disk location.
+    // Missing / unparseable cache → the hint is discarded.
+    manager.load_cached_marketplace(marketplace_name).ok()?;
+    coco_plugins::resolve_plugin_hint(hint, &manager)
 }
 
 fn apply_terminal_compatibility_status(state: &mut AppState, tui: &Tui) {

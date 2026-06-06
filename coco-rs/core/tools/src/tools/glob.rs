@@ -28,7 +28,7 @@
 //!
 //! # Cancellation & worktree isolation
 //!
-//! `ctx.cancel` is checked per directory entry during the walk, and
+//! `ctx.cancel_token()` is checked per directory entry during the walk, and
 //! `ctx.cwd_override` is honored when set (for worktree-isolated subagents).
 
 use coco_file_ignore::IgnoreConfig;
@@ -228,7 +228,7 @@ impl Tool for GlobTool {
         let timeout_secs = ctx.tool_config.glob_timeout_seconds.max(1) as u64;
 
         // Move owned values into the blocking closure — no redundant clones.
-        let cancel = ctx.cancel.clone();
+        let cancel = ctx.cancel_token();
         let pattern_owned = input.pattern.clone();
         let read_ignore_matcher =
             crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(

@@ -29,9 +29,10 @@ use coco_types::PermissionDenialInfo;
 use coco_types::PermissionUpdate;
 use coco_types::ToolId;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
-use crate::traits::{DynTool, ProgressSender};
+use crate::cancellation::ToolAbortSignal;
+use crate::traits::DynTool;
+use crate::traits::ProgressSender;
 
 /// What [`prepare_batch`](crate::call_plan) returns for each committed
 /// assistant tool-use entry.
@@ -94,13 +95,9 @@ pub struct PreparedToolCall {
 /// semantic surface while letting `run_one` forward them into the
 /// `ToolUseContext` it builds per call.
 pub struct RunOneRuntime {
-    /// Child of the turn cancellation token (per I10). Cancelling
-    /// this aborts the single tool without affecting siblings.
-    pub cancellation: CancellationToken,
-    /// Shell-failure sibling-abort broadcast. The executor owns
-    /// signalling; the runner just forwards the token through
-    /// `ToolUseContext` so `tool.execute` can react.
-    pub sibling_abort: Option<CancellationToken>,
+    /// Structured per-tool abort signal combining turn, self, and sibling
+    /// abort sources.
+    pub abort: ToolAbortSignal,
     /// Progress-event sender, forwarded into `ToolUseContext.progress_tx`.
     pub progress_tx: Option<ProgressSender>,
     /// Echoes `PreparedToolCall.model_index` so the runner can tag

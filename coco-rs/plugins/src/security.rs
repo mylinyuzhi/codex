@@ -190,8 +190,11 @@ pub struct EnterprisePolicy {
     pub known_marketplaces: Vec<String>,
     /// Explicit blocklist (overrides allowlist).
     pub blocked_marketplaces: Vec<String>,
-    /// Users cannot install plugins outside `Managed` scope.
-    pub strict_plugin_only_customization: bool,
+    /// Managed `strictPluginOnlyCustomization` policy. When it locks all
+    /// surfaces (`true`), users cannot install plugins outside `Managed`
+    /// scope. Surface-specific arrays don't lock plugin install (no
+    /// `"plugins"` surface exists).
+    pub strict_plugin_only_customization: coco_config::StrictPluginOnlyCustomization,
 }
 
 impl EnterprisePolicy {
@@ -227,7 +230,7 @@ impl EnterprisePolicy {
             strict_known_marketplaces: !policy.strict_known_marketplaces.is_empty(),
             known_marketplaces: policy.strict_known_marketplaces.clone(),
             blocked_marketplaces: policy.blocked_marketplaces.clone(),
-            strict_plugin_only_customization: policy.strict_plugin_only_customization,
+            strict_plugin_only_customization: policy.strict_plugin_only_customization.clone(),
         }
     }
 }
@@ -266,7 +269,15 @@ pub fn check_policy(
         };
     }
 
-    if policy.strict_plugin_only_customization && is_user_scope {
+    // Plugin install is gated only by the all-surfaces lock (`true`). There is
+    // no `"plugins"` customization surface, so a surface-specific array never
+    // blocks install — `is_restricted_to_plugin_only("plugins")` returns true
+    // only for the `AllLocked(true)` form.
+    if policy
+        .strict_plugin_only_customization
+        .is_restricted_to_plugin_only("plugins")
+        && is_user_scope
+    {
         return PolicyVerdict::UserScopeForbidden;
     }
 

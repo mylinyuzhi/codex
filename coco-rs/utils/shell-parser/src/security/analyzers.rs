@@ -245,12 +245,17 @@ pub struct DangerousVariablesAnalyzer;
 
 impl Analyzer for DangerousVariablesAnalyzer {
     fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
-        // Look for patterns like $VAR | or ${VAR} | in unquoted context only.
-        // Inside double quotes, `"$VAR" | cmd` is safe because the variable
-        // is expanded as a single word.
+        // Look for `$VAR`/`${VAR}` adjacent to a pipe OR a redirect, in unquoted
+        // context only. Inside double quotes, `"$VAR" | cmd` is safe because the
+        // variable expands as a single word. TS `validateDangerousVariables`
+        // flags both orderings: `$VAR\s*[|<>]` and `[<>|]\s*$VAR` (the original
+        // port only matched the pipe-after case).
         #[allow(clippy::expect_used)]
-        static VAR_PIPE_RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r#"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s*\|"#).expect("valid regex")
+        static VAR_REDIR_RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(
+                r#"(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s*[|<>])|([|<>]\s*\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)"#,
+            )
+            .expect("valid regex")
         });
 
         let source = cmd.source();
@@ -258,10 +263,11 @@ impl Analyzer for DangerousVariablesAnalyzer {
             .into_iter()
             .map(|(_, ch)| ch)
             .collect();
-        if VAR_PIPE_RE.is_match(&unquoted) {
+        if VAR_REDIR_RE.is_match(&unquoted) {
             analysis.add_risk(SecurityRisk::new(
                 RiskKind::DangerousVariables,
-                "variable followed by pipe may allow command injection if variable contains newlines",
+                "variable adjacent to a pipe or redirect may allow command injection if the \
+                 variable contains newlines",
             ));
         }
     }

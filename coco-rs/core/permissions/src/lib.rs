@@ -20,6 +20,7 @@ pub mod settings_store;
 pub mod setup;
 pub mod shadowed_rules;
 pub mod shell_rules;
+mod web_preapproved;
 
 pub use bypass_permissions_killswitch::InitialPermissionMode;
 pub use bypass_permissions_killswitch::KillswitchCheck;
@@ -71,6 +72,7 @@ pub use filesystem::has_shell_expansion;
 pub use filesystem::is_dangerous_file_path;
 pub use filesystem::is_dangerous_removal_path;
 pub use filesystem::is_editable_internal_path;
+pub use filesystem::is_path_within_allowed_dirs;
 pub use filesystem::is_readable_internal_path;
 pub use filesystem::path_in_working_path;
 pub use mode_transition::apply_auto_transition_to_app_state;

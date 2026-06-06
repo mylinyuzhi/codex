@@ -313,82 +313,6 @@ fn test_discover_contributions_from_dirs() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_resolve_dependency_closure_simple() {
-    let enabled: HashSet<String> = HashSet::new();
-    let allowed: HashSet<String> = HashSet::new();
-
-    let lookup = |id: &str| -> Option<DependencyLookupResult> {
-        match id {
-            "root@mkt" => Some(DependencyLookupResult {
-                dependencies: vec!["dep-a@mkt".to_string()],
-            }),
-            "dep-a@mkt" => Some(DependencyLookupResult {
-                dependencies: vec![],
-            }),
-            _ => None,
-        }
-    };
-
-    let result = resolve_dependency_closure("root@mkt", &lookup, &enabled, &allowed);
-    match result {
-        DependencyResolution::Ok { closure } => {
-            assert_eq!(closure.len(), 2);
-            assert!(closure.contains(&"dep-a@mkt".to_string()));
-            assert!(closure.contains(&"root@mkt".to_string()));
-        }
-        other => panic!("expected Ok, got {other:?}"),
-    }
-}
-
-#[test]
-fn test_resolve_dependency_cycle() {
-    let enabled: HashSet<String> = HashSet::new();
-    let allowed: HashSet<String> = HashSet::new();
-
-    let lookup = |id: &str| -> Option<DependencyLookupResult> {
-        match id {
-            "a@mkt" => Some(DependencyLookupResult {
-                dependencies: vec!["b@mkt".to_string()],
-            }),
-            "b@mkt" => Some(DependencyLookupResult {
-                dependencies: vec!["a@mkt".to_string()],
-            }),
-            _ => None,
-        }
-    };
-
-    let result = resolve_dependency_closure("a@mkt", &lookup, &enabled, &allowed);
-    assert!(matches!(result, DependencyResolution::Cycle { .. }));
-}
-
-#[test]
-fn test_resolve_dependency_not_found() {
-    let enabled: HashSet<String> = HashSet::new();
-    let allowed: HashSet<String> = HashSet::new();
-
-    let lookup = |id: &str| -> Option<DependencyLookupResult> {
-        match id {
-            "root@mkt" => Some(DependencyLookupResult {
-                dependencies: vec!["missing@mkt".to_string()],
-            }),
-            _ => None,
-        }
-    };
-
-    let result = resolve_dependency_closure("root@mkt", &lookup, &enabled, &allowed);
-    match result {
-        DependencyResolution::NotFound {
-            missing,
-            required_by,
-        } => {
-            assert_eq!(missing, "missing@mkt");
-            assert_eq!(required_by, "root@mkt");
-        }
-        other => panic!("expected NotFound, got {other:?}"),
-    }
-}
-
-#[test]
 fn test_verify_and_demote_unsatisfied_deps() {
     let mk = |name: &str, mkt: &str, deps: Option<Vec<&str>>| LoadedPluginV2 {
         id: PluginId {
@@ -470,4 +394,69 @@ fn test_installed_plugins_manager_roundtrip() {
     let reloaded = InstalledPluginsManager::load(path).expect("reload");
     assert!(reloaded.is_installed("test@mkt"));
     assert_eq!(reloaded.get_installations("test@mkt").len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// resolve_cache_path (version segment) + load_all_plugins orchestrator
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_resolve_cache_path_includes_version_segment() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let loader = PluginLoader::new(tmp.path().to_path_buf());
+    // Installer writes cache/{mkt}/{plugin}/{version}.
+    let versioned = tmp
+        .path()
+        .join("cache")
+        .join("mymkt")
+        .join("plug")
+        .join("2.0.0");
+    std::fs::create_dir_all(&versioned).expect("mkdir");
+
+    // Exact requested version resolves to the version dir.
+    assert_eq!(
+        loader.resolve_cache_path("mymkt", "plug", Some("2.0.0")),
+        versioned
+    );
+    // No version → newest subdir (was the bug: returned the parent, one level too shallow).
+    assert_eq!(loader.resolve_cache_path("mymkt", "plug", None), versioned);
+}
+
+#[test]
+fn test_load_all_plugins_inline_disabled_and_reserved_dirs() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let loader = PluginLoader::new(tmp.path().to_path_buf());
+
+    let mk = |name: &str| {
+        let d = tmp.path().join(name);
+        std::fs::create_dir_all(&d).expect("mkdir");
+        write_toml(&d, &format!("name = \"{name}\"\ndescription = \"d\"\n"));
+        d
+    };
+    let foo = mk("foo");
+    let bar = mk("bar");
+    // A reserved infra dir and a non-plugin dir must be skipped (not errors).
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&cache).expect("mkdir");
+    let plain = tmp.path().join("not-a-plugin");
+    std::fs::create_dir_all(&plain).expect("mkdir");
+
+    let disabled: HashSet<String> = ["bar@inline".to_string()].into_iter().collect();
+    let result =
+        loader.load_all_plugins(&[foo, bar, cache, plain], &[], &HashSet::new(), &disabled);
+
+    assert!(
+        result.errors.is_empty(),
+        "reserved/non-plugin dirs must not error: {:?}",
+        result.errors
+    );
+    let by_id = |id: &str| result.plugins.iter().find(|p| p.id.as_str() == id);
+    assert!(
+        by_id("foo@inline").is_some_and(|p| p.enabled),
+        "foo enabled"
+    );
+    assert!(
+        by_id("bar@inline").is_some_and(|p| !p.enabled),
+        "bar disabled via disabled_ids"
+    );
 }

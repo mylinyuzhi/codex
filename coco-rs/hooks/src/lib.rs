@@ -167,6 +167,25 @@ pub enum HookExecutionResult {
     SdkOutput(coco_types::SdkHookOutput),
 }
 
+/// Sink used by `asyncRewake` hooks to enqueue a task-notification without
+/// routing through the async hook response registry.
+#[async_trait::async_trait]
+pub trait AsyncRewakeSink: Send + Sync + std::fmt::Debug {
+    async fn enqueue_rewake(&self, command: String, message: String);
+}
+
+#[derive(Clone)]
+pub struct AsyncCommandOptions {
+    pub registry: Option<Arc<async_registry::AsyncHookRegistry>>,
+    pub hook_id: String,
+    pub hook_name: String,
+    pub hook_event: String,
+    pub timeout: std::time::Duration,
+    pub forced_async: bool,
+    pub async_rewake: bool,
+    pub rewake_sink: Option<Arc<dyn AsyncRewakeSink>>,
+}
+
 /// Metadata returned alongside a hook execution result.
 #[derive(Debug, Clone, Default)]
 pub struct HookExecutionMeta {
@@ -904,112 +923,39 @@ pub async fn execute_hook(
     env_vars: &HashMap<String, String>,
     stdin_input: Option<&str>,
 ) -> crate::Result<HookExecutionResult> {
+    execute_hook_inner(handler, env_vars, stdin_input, None).await
+}
+
+pub async fn execute_hook_with_async_options(
+    handler: &HookHandler,
+    env_vars: &HashMap<String, String>,
+    stdin_input: Option<&str>,
+    async_options: AsyncCommandOptions,
+) -> crate::Result<HookExecutionResult> {
+    execute_hook_inner(handler, env_vars, stdin_input, Some(async_options)).await
+}
+
+async fn execute_hook_inner(
+    handler: &HookHandler,
+    env_vars: &HashMap<String, String>,
+    stdin_input: Option<&str>,
+    async_options: Option<AsyncCommandOptions>,
+) -> crate::Result<HookExecutionResult> {
     match handler {
         HookHandler::Command {
             command,
             timeout_ms,
             shell,
         } => {
-            let shell_kind = ShellKind::from_field(shell.as_deref());
-
-            // Plugin / skill / user_config substitution. TS:
-            // `utils/hooks.ts:execCommandHook` replaces
-            // `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` /
-            // `${user_config.<key>}` in the command body before spawn.
-            // The substitution happens BEFORE the optional shell-prefix
-            // wrap so the prefix can also reference these tokens.
-            let substituted = substitute_plugin_vars(command, env_vars, shell_kind);
-
-            // Windows-only: auto-prepend `bash ` to naked `.sh` script
-            // invocations so Git Bash actually executes them.
-            let with_sh_prefix = maybe_apply_sh_prefix(&substituted, shell_kind);
-
-            // Optional shell prefix support (bash only — TS skips this for
-            // PowerShell per `utils/hooks.ts:870-873`).
-            let final_command = match env::var(EnvKey::CocoShellPrefix) {
-                Ok(prefix) if !prefix.is_empty() && matches!(shell_kind, ShellKind::Bash) => {
-                    format!("{prefix} {with_sh_prefix}")
-                }
-                _ => with_sh_prefix,
-            };
-
-            let mut cmd = build_command_for_shell(&final_command, shell_kind).await?;
-            cmd.stdout(std::process::Stdio::piped());
-            cmd.stderr(std::process::Stdio::piped());
-            cmd.envs(env_vars);
-            apply_windows_hide(&mut cmd);
-
-            // CWD safety — validate cwd exists before spawn (TS parity).
-            if let Ok(cwd) = std::env::current_dir()
-                && cwd.exists()
-            {
-                cmd.current_dir(&cwd);
-            }
-
-            let timeout = std::time::Duration::from_millis(
-                timeout_ms
-                    .and_then(|ms| u64::try_from(ms).ok())
-                    .unwrap_or(30_000),
-            );
-
-            let output = if let Some(input) = stdin_input {
-                cmd.stdin(std::process::Stdio::piped());
-                let mut child = cmd.spawn().map_err(|e| {
-                    crate::HooksError::exec_failed(format!("failed to spawn hook command: {e}"))
-                })?;
-
-                // Write stdin input and close the pipe.
-                if let Some(mut stdin_handle) = child.stdin.take() {
-                    use tokio::io::AsyncWriteExt;
-                    if let Err(e) = stdin_handle.write_all(input.as_bytes()).await {
-                        // EPIPE is expected if hook exits before reading stdin.
-                        if e.kind() != std::io::ErrorKind::BrokenPipe {
-                            tracing::debug!("failed to write hook stdin: {e}");
-                        }
-                    }
-                    let _ = stdin_handle.shutdown().await;
-                }
-
-                tokio::time::timeout(timeout, child.wait_with_output())
-                    .await
-                    .map_err(|_| crate::HooksError::HookTimeout {
-                        timeout_ms: timeout_ms
-                            .and_then(|ms| u64::try_from(ms).ok())
-                            .unwrap_or(30_000),
-                    })?
-                    .map_err(|e| {
-                        crate::HooksError::exec_failed(format!("hook command failed: {e}"))
-                    })?
-            } else {
-                let child = cmd.spawn().map_err(|e| {
-                    crate::HooksError::exec_failed(format!("failed to spawn hook command: {e}"))
-                })?;
-
-                tokio::time::timeout(timeout, child.wait_with_output())
-                    .await
-                    .map_err(|_| crate::HooksError::HookTimeout {
-                        timeout_ms: timeout_ms
-                            .and_then(|ms| u64::try_from(ms).ok())
-                            .unwrap_or(30_000),
-                    })?
-                    .map_err(|e| {
-                        crate::HooksError::exec_failed(format!("hook command failed: {e}"))
-                    })?
-            };
-
-            let exit_code = output.status.code().unwrap_or(-1);
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-            if !output.status.success() {
-                tracing::warn!("hook command exited with code {exit_code}: {command}");
-            }
-
-            Ok(HookExecutionResult::CommandOutput {
-                exit_code,
-                stdout,
-                stderr,
-            })
+            execute_command_hook(
+                command,
+                *timeout_ms,
+                shell.as_deref(),
+                env_vars,
+                stdin_input,
+                async_options,
+            )
+            .await
         }
         HookHandler::Prompt { prompt, .. } => {
             // Prompt hooks need an LLM. With no `HookLlmHandle` wired
@@ -1132,6 +1078,259 @@ pub async fn execute_hook(
             "SDK hook callback {callback_id:?} cannot run without the SDK runtime bridge"
         ))),
     }
+}
+
+async fn execute_command_hook(
+    command: &str,
+    timeout_ms: Option<i64>,
+    shell: Option<&str>,
+    env_vars: &HashMap<String, String>,
+    stdin_input: Option<&str>,
+    async_options: Option<AsyncCommandOptions>,
+) -> crate::Result<HookExecutionResult> {
+    let shell_kind = ShellKind::from_field(shell);
+    let substituted = substitute_plugin_vars(command, env_vars, shell_kind);
+    let with_sh_prefix = maybe_apply_sh_prefix(&substituted, shell_kind);
+    let final_command = match env::var(EnvKey::CocoShellPrefix) {
+        Ok(prefix) if !prefix.is_empty() && matches!(shell_kind, ShellKind::Bash) => {
+            format!("{prefix} {with_sh_prefix}")
+        }
+        _ => with_sh_prefix,
+    };
+
+    let mut cmd = build_command_for_shell(&final_command, shell_kind).await?;
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.envs(env_vars);
+    if stdin_input.is_some() {
+        cmd.stdin(std::process::Stdio::piped());
+    }
+    apply_windows_hide(&mut cmd);
+    if let Ok(cwd) = std::env::current_dir()
+        && cwd.exists()
+    {
+        cmd.current_dir(&cwd);
+    }
+
+    let timeout = std::time::Duration::from_millis(
+        timeout_ms
+            .and_then(|ms| u64::try_from(ms).ok())
+            .unwrap_or(30_000),
+    );
+    let mut child = cmd.spawn().map_err(|e| {
+        crate::HooksError::exec_failed(format!("failed to spawn hook command: {e}"))
+    })?;
+    if let Some(input) = stdin_input
+        && let Some(mut stdin_handle) = child.stdin.take()
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut with_newline = input.to_string();
+        if !with_newline.ends_with('\n') {
+            with_newline.push('\n');
+        }
+        if let Err(e) = stdin_handle.write_all(with_newline.as_bytes()).await
+            && e.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            tracing::debug!("failed to write hook stdin: {e}");
+        }
+        let _ = stdin_handle.shutdown().await;
+    }
+
+    if let Some(options) = async_options.clone()
+        && options.async_rewake
+    {
+        spawn_rewake_command(child, options);
+        return Ok(empty_command_output());
+    }
+
+    if let Some(options) = async_options.clone()
+        && options.forced_async
+        && let Some(registry) = options.registry.clone()
+    {
+        registry
+            .register(
+                options.hook_id.clone(),
+                options.hook_name.clone(),
+                options.hook_event.clone(),
+                Some(options.timeout),
+            )
+            .await;
+        spawn_registry_command(child, options, String::new());
+        return Ok(empty_command_output());
+    }
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stderr_task = tokio::spawn(read_to_string_opt(stderr));
+    let mut stdout_prefix = String::new();
+    let mut stdout_rest = String::new();
+
+    if let Some(stdout) = stdout {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(stdout);
+        let mut first_line = String::new();
+        let bytes = reader.read_line(&mut first_line).await.map_err(|e| {
+            crate::HooksError::exec_failed(format!("failed to read hook stdout: {e}"))
+        })?;
+        if bytes > 0
+            && let Some(options) = async_options.clone()
+            && first_line_is_async(&first_line)
+            && let Some(registry) = options.registry.clone()
+        {
+            registry
+                .register(
+                    options.hook_id.clone(),
+                    options.hook_name.clone(),
+                    options.hook_event.clone(),
+                    Some(options.timeout),
+                )
+                .await;
+            spawn_registry_command_with_reader(child, options, reader, stderr_task);
+            return Ok(empty_command_output());
+        }
+        stdout_prefix = first_line;
+        use tokio::io::AsyncReadExt;
+        reader.read_to_string(&mut stdout_rest).await.map_err(|e| {
+            crate::HooksError::exec_failed(format!("failed to read hook stdout: {e}"))
+        })?;
+    }
+
+    let status = tokio::time::timeout(timeout, child.wait())
+        .await
+        .map_err(|_| crate::HooksError::HookTimeout {
+            timeout_ms: timeout_ms
+                .and_then(|ms| u64::try_from(ms).ok())
+                .unwrap_or(30_000),
+        })?
+        .map_err(|e| crate::HooksError::exec_failed(format!("hook command failed: {e}")))?;
+    let stderr = stderr_task.await.unwrap_or_default();
+    let exit_code = status.code().unwrap_or(-1);
+    if !status.success() {
+        tracing::warn!("hook command exited with code {exit_code}: {command}");
+    }
+    Ok(HookExecutionResult::CommandOutput {
+        exit_code,
+        stdout: format!("{stdout_prefix}{stdout_rest}"),
+        stderr,
+    })
+}
+
+fn empty_command_output() -> HookExecutionResult {
+    HookExecutionResult::CommandOutput {
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+    }
+}
+
+fn first_line_is_async(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line.trim())
+        .ok()
+        .and_then(|value| value.get("async").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
+async fn read_to_string_opt<R>(reader: Option<R>) -> String
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let Some(mut reader) = reader else {
+        return String::new();
+    };
+    let mut out = String::new();
+    use tokio::io::AsyncReadExt;
+    let _ = reader.read_to_string(&mut out).await;
+    out
+}
+
+fn spawn_registry_command(
+    mut child: tokio::process::Child,
+    options: AsyncCommandOptions,
+    prefix: String,
+) {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    tokio::spawn(async move {
+        let stdout_task = tokio::spawn(read_to_string_opt(stdout));
+        let stderr_task = tokio::spawn(read_to_string_opt(stderr));
+        let exit_code = tokio::time::timeout(options.timeout, child.wait())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|status| status.code())
+            .unwrap_or(-1);
+        let stdout = format!("{prefix}{}", stdout_task.await.unwrap_or_default());
+        let stderr = stderr_task.await.unwrap_or_default();
+        if let Some(registry) = options.registry {
+            registry
+                .update_output(&options.hook_id, &stdout, &stderr)
+                .await;
+            registry.complete(&options.hook_id, exit_code).await;
+        }
+    });
+}
+
+fn spawn_registry_command_with_reader<R>(
+    mut child: tokio::process::Child,
+    options: AsyncCommandOptions,
+    mut stdout_reader: tokio::io::BufReader<R>,
+    stderr_task: tokio::task::JoinHandle<String>,
+) where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let stdout_task = tokio::spawn(async move {
+            let mut out = String::new();
+            use tokio::io::AsyncReadExt;
+            let _ = stdout_reader.read_to_string(&mut out).await;
+            out
+        });
+        let exit_code = tokio::time::timeout(options.timeout, child.wait())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|status| status.code())
+            .unwrap_or(-1);
+        let stdout = stdout_task.await.unwrap_or_default();
+        let stderr = stderr_task.await.unwrap_or_default();
+        if let Some(registry) = options.registry {
+            registry
+                .update_output(&options.hook_id, &stdout, &stderr)
+                .await;
+            registry.complete(&options.hook_id, exit_code).await;
+        }
+    });
+}
+
+fn spawn_rewake_command(mut child: tokio::process::Child, options: AsyncCommandOptions) {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    tokio::spawn(async move {
+        let stdout_task = tokio::spawn(read_to_string_opt(stdout));
+        let stderr_task = tokio::spawn(read_to_string_opt(stderr));
+        let exit_code = tokio::time::timeout(options.timeout, child.wait())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|status| status.code())
+            .unwrap_or(-1);
+        let stdout = stdout_task.await.unwrap_or_default();
+        let stderr = stderr_task.await.unwrap_or_default();
+        if exit_code == 2
+            && let Some(sink) = options.rewake_sink
+        {
+            let detail = if stderr.trim().is_empty() {
+                stdout.trim().to_string()
+            } else {
+                stderr.trim().to_string()
+            };
+            let message = format!(
+                "Stop hook blocking error from command \"{}\": {}",
+                options.hook_name, detail
+            );
+            sink.enqueue_rewake(options.hook_name, message).await;
+        }
+    });
 }
 
 /// Loader-level policy gates.

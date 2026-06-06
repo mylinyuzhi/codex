@@ -55,6 +55,25 @@ fn test_parse_http_config() {
 }
 
 #[test]
+fn test_parse_http_config_headers_helper() {
+    let json = serde_json::json!({
+        "url": "https://mcp.example.com/api",
+        "transport": "http",
+        "headers": {"X-Static": "a"},
+        "headersHelper": "echo '{\"Authorization\":\"Bearer token\"}'"
+    });
+    let config = parse_server_config(&json).unwrap();
+    let McpServerConfig::Http(http) = config else {
+        panic!("expected http config");
+    };
+    assert_eq!(http.headers.get("X-Static").unwrap(), "a");
+    assert_eq!(
+        http.headers_helper.as_deref(),
+        Some("echo '{\"Authorization\":\"Bearer token\"}'")
+    );
+}
+
+#[test]
 fn test_parse_http_xaa_oauth_config() {
     let json = serde_json::json!({
         "url": "https://mcp.example.com/api",

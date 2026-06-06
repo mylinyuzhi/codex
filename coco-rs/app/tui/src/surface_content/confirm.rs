@@ -15,6 +15,7 @@ use crate::state::McpServerApprovalPromptState;
 use crate::state::PlanApprovalPromptState;
 use crate::state::PlanEntryPromptState;
 use crate::state::PlanExitPromptState;
+use crate::state::PluginHintState;
 use crate::state::SandboxPermissionPromptState;
 use crate::state::TaskDetailState;
 use crate::state::TrustState;
@@ -120,4 +121,11 @@ pub(super) fn plan_approval_content(
 
 pub(super) fn feedback_content(f: &FeedbackState, styles: UiStyles<'_>) -> (String, String, Color) {
     confirm::feedback_content(f, styles)
+}
+
+pub(super) fn plugin_hint_content(
+    ph: &PluginHintState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    confirm::plugin_hint_content(ph, styles)
 }

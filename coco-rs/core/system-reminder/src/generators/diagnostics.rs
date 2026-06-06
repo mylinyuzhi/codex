@@ -33,6 +33,16 @@ impl AttachmentGenerator for DiagnosticsGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
+        // #105 / TS attachments.ts:2854-2862: diagnostics are only useful
+        // when the agent has the Bash tool to act on them. Read-only
+        // subagents (no Bash) get un-actionable reminders, so suppress.
+        if !ctx
+            .tools
+            .iter()
+            .any(|t| t == coco_types::ToolName::Bash.as_str())
+        {
+            return Ok(None);
+        }
         if ctx.diagnostics.is_empty() {
             return Ok(None);
         }

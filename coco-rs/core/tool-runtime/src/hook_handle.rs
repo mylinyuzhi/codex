@@ -183,7 +183,7 @@ impl TaskHookOutcome {
 /// `execute_pre_tool_use()` / `execute_post_tool_use()`.
 ///
 /// All methods are async and must be cancellation-aware — the executor
-/// passes `ctx.cancel` transitively through its tool execution, and hook
+/// passes `ctx.cancel_token()` transitively through its tool execution, and hook
 /// execution should honor cancellation for long-running external hook
 /// commands (TS default: 10 minute timeout per hook).
 #[async_trait]

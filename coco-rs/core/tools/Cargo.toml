@@ -28,6 +28,7 @@ coco-apply-patch.workspace = true
 coco-exec-server.workspace = true
 coco-utils-absolute-path.workspace = true
 coco-git.workspace = true
+coco-plugins.workspace = true
 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

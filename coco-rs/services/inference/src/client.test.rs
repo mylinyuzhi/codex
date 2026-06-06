@@ -93,8 +93,86 @@ impl LanguageModelV4 for ErrorModel {
     }
 }
 
+/// Mock model that counts how many times `do_generate` is invoked, so a test
+/// can prove the retry loop short-circuited before issuing any request.
+struct CountingModel {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl LanguageModelV4 for CountingModel {
+    fn provider(&self) -> &str {
+        "mock"
+    }
+    fn model_id(&self) -> &str {
+        "counting-model"
+    }
+    async fn do_generate(
+        &self,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelV4GenerateResult, vercel_ai_provider::AISdkError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(LanguageModelV4GenerateResult {
+            content: vec![AssistantContentPart::Text(TextPart {
+                text: "ok".to_string(),
+                provider_metadata: None,
+            })],
+            usage: Usage::new(1, 1),
+            finish_reason: FinishReason::new(StopReason::EndTurn),
+            warnings: vec![],
+            provider_metadata: None,
+            request: None,
+            response: None,
+        })
+    }
+    async fn do_stream(
+        &self,
+        _options: &LanguageModelV4CallOptions,
+        _abort_signal: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<LanguageModelV4StreamResult, vercel_ai_provider::AISdkError> {
+        Err(vercel_ai_provider::AISdkError::new("unused"))
+    }
+}
+
 fn mock_client(text: &str) -> ApiClient {
     ApiClient::with_default_fingerprint(Arc::new(MockModel::new(text)), RetryConfig::default())
+}
+
+/// A token already cancelled before the call must short-circuit the retry loop
+/// at the top of the first attempt — the model is never invoked. Mirrors TS
+/// `withRetry.ts:190` checking `signal?.aborted` before each request (#137).
+#[tokio::test]
+async fn test_precancelled_token_short_circuits_before_request() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let client = ApiClient::with_default_fingerprint(
+        Arc::new(CountingModel {
+            calls: calls.clone(),
+        }),
+        RetryConfig::default(),
+    );
+    let token = tokio_util::sync::CancellationToken::new();
+    token.cancel();
+    let params = QueryParams {
+        prompt: vec![LlmMessage::user_text("hi")],
+        max_tokens: Some(100),
+        cancel: Some(token),
+        ..Default::default()
+    };
+
+    let err = client
+        .query(&params)
+        .await
+        .expect_err("a pre-cancelled token must abort the query");
+    assert!(
+        matches!(err, InferenceError::Cancelled { .. }),
+        "expected Cancelled, got {err:?}"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "model must not be invoked once the token is already cancelled"
+    );
 }
 
 #[tokio::test]

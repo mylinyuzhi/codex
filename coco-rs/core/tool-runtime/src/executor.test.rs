@@ -711,6 +711,58 @@ async fn test_execute_with_concurrent_batch_surfaces_in_completion_order() {
 }
 
 #[tokio::test]
+async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
+    let bash_tool = Arc::new(SafeTool {
+        name: "bash".into(),
+    });
+    let read_tool = Arc::new(SafeTool {
+        name: "read".into(),
+    });
+    let plans = vec![
+        ToolCallPlan::Runnable(PreparedToolCall {
+            tool_use_id: "bash-call".into(),
+            tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
+            tool: bash_tool,
+            parsed_input: json!({}),
+            model_index: 0,
+        }),
+        ToolCallPlan::Runnable(prepared_from(read_tool, "read-call", 1)),
+    ];
+    let observed_reason = Arc::new(Mutex::new(None));
+    let observed_reason_for_run = observed_reason.clone();
+
+    let exec = StreamingToolExecutor::new();
+    let outcomes = drive_capture(&exec, plans, move |prepared, runtime| {
+        let observed_reason = observed_reason_for_run.clone();
+        async move {
+            if prepared.tool_use_id == "bash-call" {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                let mut outcome = empty_unstamped(&prepared.tool_use_id, prepared.model_index);
+                outcome.tool_id = ToolId::Builtin(coco_types::ToolName::Bash);
+                outcome.message_path = ToolMessagePath::Failure;
+                outcome.error_kind = Some(crate::call_plan::ToolCallErrorKind::ExecutionFailed);
+                return outcome;
+            }
+
+            runtime.abort.cancelled().await;
+            *observed_reason.lock().unwrap() = runtime.abort.reason();
+            let mut outcome = empty_unstamped(&prepared.tool_use_id, prepared.model_index);
+            outcome.message_path = ToolMessagePath::Failure;
+            outcome.error_kind = Some(crate::call_plan::ToolCallErrorKind::ExecutionCancelled);
+            outcome
+        }
+    })
+    .await;
+
+    assert_eq!(outcomes.len(), 2);
+    assert!(matches!(
+        observed_reason.lock().unwrap().as_ref(),
+        Some(coco_types::ToolAbortReasonPayload::SiblingError { failed_tool })
+            if failed_tool == coco_types::ToolName::Bash.as_str()
+    ));
+}
+
+#[tokio::test]
 async fn test_execute_with_concurrent_batch_applies_patches_in_model_order() {
     // Two concurrent tools; A's patch sets permission_mode → Plan,
     // B's patch sets permission_mode → Default. After the batch the

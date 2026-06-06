@@ -54,6 +54,8 @@ pub use elicitation::ElicitationResult;
 pub use elicitation::ElicitationType;
 pub use naming::mcp_tool_id;
 pub use naming::parse_mcp_tool_id;
+pub use naming::parse_permission_reply;
+pub use naming::short_request_id;
 pub use types::ConfigScope;
 pub use types::ConnectedMcpServer;
 pub use types::McpCapabilities;

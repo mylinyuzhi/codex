@@ -425,16 +425,44 @@ pub async fn apply_tool_result_budget(
     };
     let (per_message_chars, seen_ids, replacements) = snapshot;
 
-    let aggregate: i64 = candidates
+    // Partition by prior decision (mirrors TS `partitionByPriorDecision` + the
+    // per-message budget walk). Already-replaced IDs (`mustReapply`) are
+    // re-applied by the caller from `state.replacements` and contribute 0 to
+    // the trigger total. `frozen` (seen, never replaced) counts at full size;
+    // `fresh` (never seen) is the new message's content, budgeted this pass.
+    let mut fresh: Vec<&ToolResultCandidate> = Vec::new();
+    let mut frozen_chars: i64 = 0;
+    for c in candidates {
+        if replacements.contains_key(&c.tool_use_id) {
+            // mustReapply — excluded from the trigger total.
+        } else if seen_ids.contains(&c.tool_use_id) {
+            frozen_chars += c.content_chars;
+        } else {
+            fresh.push(c);
+        }
+    }
+
+    // A re-processed message has no fresh candidates; freeze and return so the
+    // caller just re-applies cached replacements (TS `fresh.length === 0`).
+    if fresh.is_empty() {
+        let mut state = state.write().await;
+        for c in candidates {
+            state.seen_ids.insert(c.tool_use_id.clone());
+        }
+        return BudgetOutcome::default();
+    }
+
+    // Opted-out tools (Read, `Unbounded`) and content that is already a
+    // persisted reference never persist and never count toward the trigger —
+    // matching TS `eligible = fresh.filter(!shouldSkip)` (freshSize).
+    let mut eligible: Vec<&ToolResultCandidate> = fresh
         .iter()
-        .map(|c| {
-            replacements
-                .get(&c.tool_use_id)
-                .map(|replacement| replacement.len() as i64)
-                .unwrap_or(c.content_chars)
-        })
-        .sum();
-    let mut still_over = aggregate;
+        .copied()
+        .filter(|c| !c.persistence_opted_out && !is_content_already_persisted(&c.content))
+        .collect();
+    let fresh_chars: i64 = eligible.iter().map(|c| c.content_chars).sum();
+
+    let mut still_over = frozen_chars + fresh_chars;
     if still_over <= per_message_chars {
         let mut state = state.write().await;
         for c in candidates {
@@ -443,19 +471,10 @@ pub async fn apply_tool_result_budget(
         return BudgetOutcome::default();
     }
 
-    let mut fresh: Vec<&ToolResultCandidate> = candidates
-        .iter()
-        .filter(|c| {
-            !c.persistence_opted_out
-                && !seen_ids.contains(&c.tool_use_id)
-                && !replacements.contains_key(&c.tool_use_id)
-                && !is_content_already_persisted(&c.content)
-        })
-        .collect();
-    fresh.sort_by(|a, b| b.content_chars.cmp(&a.content_chars));
+    eligible.sort_by(|a, b| b.content_chars.cmp(&a.content_chars));
 
     let mut outcome = BudgetOutcome::default();
-    for cand in fresh {
+    for cand in eligible {
         if still_over <= per_message_chars {
             break;
         }

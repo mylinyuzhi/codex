@@ -187,8 +187,14 @@ fn test_load_settings_with_accepts_jsonc_layers() {
     )
     .expect("write managed settings");
 
-    let settings = load_settings_with(&cwd, Some(&flag_path), &user_path, &managed_path)
-        .expect("load JSONC settings");
+    let settings = load_settings_with(
+        &cwd,
+        Some(&flag_path),
+        &user_path,
+        &managed_path,
+        &all_setting_sources(),
+    )
+    .expect("load JSONC settings");
 
     assert_eq!(settings.merged.language.as_deref(), Some("fr"));
     assert_eq!(settings.merged.output_style.as_deref(), Some("project"));
@@ -197,5 +203,95 @@ fn test_load_settings_with_accepts_jsonc_layers() {
     assert!(settings.per_source.contains_key(&SettingSource::User));
     assert!(settings.per_source.contains_key(&SettingSource::Project));
     assert!(settings.per_source.contains_key(&SettingSource::Flag));
+    assert!(settings.per_source.contains_key(&SettingSource::Policy));
+}
+
+#[test]
+fn test_strict_plugin_only_customization_serde() {
+    // `true` → AllLocked(true); locks every surface.
+    let s: Settings =
+        serde_json::from_str(r#"{"strict_plugin_only_customization": true}"#).expect("true");
+    assert_eq!(
+        s.strict_plugin_only_customization,
+        StrictPluginOnlyCustomization::AllLocked(true)
+    );
+    assert!(
+        s.strict_plugin_only_customization
+            .is_restricted_to_plugin_only("skills")
+    );
+
+    // `false` → AllLocked(false); locks nothing.
+    let s: Settings =
+        serde_json::from_str(r#"{"strict_plugin_only_customization": false}"#).expect("false");
+    assert_eq!(
+        s.strict_plugin_only_customization,
+        StrictPluginOnlyCustomization::AllLocked(false)
+    );
+    assert!(
+        !s.strict_plugin_only_customization
+            .is_restricted_to_plugin_only("skills")
+    );
+
+    // Array → SurfacesLocked; only the listed surfaces are locked.
+    let s: Settings =
+        serde_json::from_str(r#"{"strict_plugin_only_customization": ["skills", "mcp"]}"#)
+            .expect("array");
+    assert_eq!(
+        s.strict_plugin_only_customization,
+        StrictPluginOnlyCustomization::SurfacesLocked(vec!["skills".into(), "mcp".into()])
+    );
+    assert!(
+        s.strict_plugin_only_customization
+            .is_restricted_to_plugin_only("skills")
+    );
+    assert!(
+        s.strict_plugin_only_customization
+            .is_restricted_to_plugin_only("mcp")
+    );
+    assert!(
+        !s.strict_plugin_only_customization
+            .is_restricted_to_plugin_only("agents")
+    );
+
+    // Absent → Disabled (the default); locks nothing.
+    let s: Settings = serde_json::from_str(r#"{}"#).expect("absent");
+    assert_eq!(
+        s.strict_plugin_only_customization,
+        StrictPluginOnlyCustomization::Disabled
+    );
+    assert!(
+        !s.strict_plugin_only_customization
+            .is_restricted_to_plugin_only("skills")
+    );
+}
+
+#[test]
+fn test_load_settings_with_skips_disabled_sources() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cwd = tmp.path().join("project");
+    std::fs::create_dir_all(cwd.join(".claude")).expect("project settings dir");
+
+    let user_path = tmp.path().join("settings.json");
+    let managed_path = tmp.path().join("managed-settings.json");
+
+    std::fs::write(&user_path, r#"{"output_style": "user"}"#).expect("write user settings");
+    std::fs::write(
+        cwd.join(".claude/settings.json"),
+        r#"{"output_style": "project"}"#,
+    )
+    .expect("write project settings");
+    std::fs::write(&managed_path, r#"{"strict_known_marketplaces": ["m"]}"#)
+        .expect("write managed settings");
+
+    // Only `project` enabled (plus the always-on Policy + Flag). The User
+    // layer is skipped, so the project value wins and User is absent from
+    // per_source.
+    let enabled = crate::parse_enabled_setting_sources(Some("project"));
+    let settings = load_settings_with(&cwd, None, &user_path, &managed_path, &enabled)
+        .expect("load filtered settings");
+    assert_eq!(settings.merged.output_style.as_deref(), Some("project"));
+    assert!(!settings.per_source.contains_key(&SettingSource::User));
+    assert!(settings.per_source.contains_key(&SettingSource::Project));
+    // Policy always loads even when not named in the CSV.
     assert!(settings.per_source.contains_key(&SettingSource::Policy));
 }

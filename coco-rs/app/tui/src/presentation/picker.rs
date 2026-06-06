@@ -11,6 +11,8 @@ use crate::i18n::t;
 use crate::state::McpServerSelectState;
 use crate::state::MemoryDialogRowKind;
 use crate::state::MemoryDialogScope;
+use crate::state::PluginDialogState;
+use crate::state::PluginDialogTab;
 use crate::state::SkillLockSource;
 use crate::state::SkillOverrideState;
 use crate::state::SkillRow;
@@ -227,6 +229,168 @@ pub(crate) fn skills_dialog_content(
     }
 
     (title, body, styles.primary())
+}
+
+pub(crate) fn plugin_dialog_content(
+    p: &PluginDialogState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    let mut body = String::new();
+    body.push_str(&render_plugin_tabs(p));
+    body.push_str(" · ↑/↓ move · Tab switch · / search · Enter action · Esc close\n\n");
+    body.push_str("⌕ ");
+    if p.filter_query.is_empty() {
+        body.push_str("Search plugins, marketplaces, errors");
+    } else {
+        body.push_str(&p.filter_query);
+    }
+    body.push('\n');
+
+    match p.selected_tab {
+        PluginDialogTab::Installed => render_installed_tab(p, &mut body),
+        PluginDialogTab::Marketplaces => render_marketplace_tab(p, &mut body),
+        PluginDialogTab::Errors => render_error_tab(p, &mut body),
+    }
+
+    ("Plugins".to_string(), body, styles.primary())
+}
+
+fn render_plugin_tabs(p: &PluginDialogState) -> String {
+    PluginDialogTab::ALL
+        .iter()
+        .map(|tab| {
+            let count = match tab {
+                PluginDialogTab::Installed => p.installed.len(),
+                PluginDialogTab::Marketplaces => p.marketplaces.len(),
+                PluginDialogTab::Errors => p.errors.len(),
+            };
+            if *tab == p.selected_tab {
+                format!("[{} {count}]", tab.label())
+            } else {
+                format!("{} {count}", tab.label())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn render_installed_tab(p: &PluginDialogState, body: &mut String) {
+    let view = p.filtered_installed_indices();
+    if view.is_empty() {
+        body.push_str("\nNo installed plugins match.\n");
+        return;
+    }
+    for (i, idx) in view.iter().enumerate() {
+        let row = &p.installed[*idx];
+        let cursor = if i == p.selected_idx { ">" } else { " " };
+        let state = if row.blocked_by_policy {
+            "blocked"
+        } else if row.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        let version = row
+            .version
+            .as_deref()
+            .map(|v| format!(" v{v}"))
+            .unwrap_or_default();
+        body.push_str(&format!(
+            "\n{cursor} {}{version} · {state} · {}",
+            row.id, row.source
+        ));
+    }
+    if let Some(idx) = view.get(p.selected_idx)
+        && let Some(row) = p.installed.get(*idx)
+    {
+        body.push_str("\n\n");
+        body.push_str(&format!("{}\n", row.name));
+        if let Some(desc) = &row.description {
+            body.push_str(desc);
+            body.push('\n');
+        }
+        body.push_str(&format!("Path: {}\n", row.path));
+        if !row.options.is_empty() {
+            body.push_str("\nOptions\n");
+            for option in &row.options {
+                let required = if option.required {
+                    "required"
+                } else {
+                    "optional"
+                };
+                let current = option
+                    .current_value
+                    .as_ref()
+                    .map_or("unset".to_string(), serde_json::Value::to_string);
+                body.push_str(&format!(
+                    "  {} ({}, {}) = {}\n",
+                    option.key, option.value_type, required, current
+                ));
+            }
+        }
+        if !row.mcp_servers.is_empty() {
+            body.push_str("\nMCP servers\n");
+            for server in &row.mcp_servers {
+                let state = if server.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                let cfg = if server.needs_config {
+                    ", needs config"
+                } else {
+                    ""
+                };
+                body.push_str(&format!("  {} · {state}{cfg}\n", server.display_name));
+                for tool in &server.tools {
+                    let desc = tool.description.as_deref().unwrap_or("");
+                    body.push_str(&format!("    - {} {}\n", tool.name, desc));
+                }
+            }
+        }
+        if let Some(action) = row.actions.first() {
+            body.push_str(&format!("\nEnter: {}", action.label));
+        }
+    }
+}
+
+fn render_marketplace_tab(p: &PluginDialogState, body: &mut String) {
+    let view = p.filtered_marketplace_indices();
+    if view.is_empty() {
+        body.push_str("\nNo marketplaces match.\n");
+        return;
+    }
+    for (i, idx) in view.iter().enumerate() {
+        let row = &p.marketplaces[*idx];
+        let cursor = if i == p.selected_idx { ">" } else { " " };
+        let official = if row.official { "official" } else { "custom" };
+        body.push_str(&format!(
+            "\n{cursor} {} · {} plugins · {official}",
+            row.name, row.plugin_count
+        ));
+        if let Some(source) = &row.source {
+            body.push_str(&format!(" · {source}"));
+        }
+    }
+    if let Some(idx) = view.get(p.selected_idx)
+        && let Some(row) = p.marketplaces.get(*idx)
+        && let Some(action) = row.actions.first()
+    {
+        body.push_str(&format!("\n\nEnter: {}", action.label));
+    }
+}
+
+fn render_error_tab(p: &PluginDialogState, body: &mut String) {
+    let view = p.filtered_error_indices();
+    if view.is_empty() {
+        body.push_str("\nNo plugin load errors.\n");
+        return;
+    }
+    for (i, idx) in view.iter().enumerate() {
+        let row = &p.errors[*idx];
+        let cursor = if i == p.selected_idx { ">" } else { " " };
+        body.push_str(&format!("\n{cursor} {} · {}", row.plugin_id, row.message));
+    }
 }
 
 /// Format the "Space to cycle, Enter to save, …" hint line. Two

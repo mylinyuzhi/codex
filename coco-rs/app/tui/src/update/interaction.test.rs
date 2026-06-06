@@ -699,3 +699,276 @@ fn team_roster_cycle_all_modes_empty_is_noop() {
     let mut s = roster_state(&[]);
     assert!(team_roster_cycle_all_modes(&mut s, 1).is_empty());
 }
+
+// === AskUserQuestion key + answer mechanics ===
+
+fn question_option(label: &str) -> crate::state::QuestionOption {
+    crate::state::QuestionOption {
+        label: label.into(),
+        description: String::new(),
+        preview: None,
+        kind: crate::state::OptionKind::Pick,
+    }
+}
+
+fn question_item(
+    options: Vec<crate::state::QuestionOption>,
+    multi_select: bool,
+) -> crate::state::QuestionItem {
+    crate::state::QuestionItem {
+        header: "h".into(),
+        question: "Q?".into(),
+        options,
+        multi_select,
+        selected: 0,
+        checked: Vec::new(),
+        notes: String::new(),
+    }
+}
+
+fn question_state(item: crate::state::QuestionItem) -> AppState {
+    let mut s = AppState::new();
+    s.ui.push_prompt(PanePromptState::Question(
+        crate::state::QuestionPromptState {
+            request_id: "q1".into(),
+            original_input: serde_json::json!({}),
+            questions: vec![item],
+            focus: crate::state::QuestionFocus::Question(0),
+            is_in_plan_mode: false,
+            submit_selected: 0,
+        },
+    ));
+    s
+}
+
+fn focused_selected(s: &AppState) -> i32 {
+    let Some(PanePromptState::Question(q)) = s.ui.interaction.active_prompt.as_ref() else {
+        panic!("expected a question prompt");
+    };
+    q.questions[0].selected
+}
+
+fn question_state_multi(items: Vec<crate::state::QuestionItem>) -> AppState {
+    let mut s = AppState::new();
+    s.ui.push_prompt(PanePromptState::Question(
+        crate::state::QuestionPromptState {
+            request_id: "q1".into(),
+            original_input: serde_json::json!({}),
+            questions: items,
+            focus: crate::state::QuestionFocus::Question(0),
+            is_in_plan_mode: false,
+            submit_selected: 0,
+        },
+    ));
+    s
+}
+
+fn focused_question(s: &AppState) -> crate::state::QuestionFocus {
+    let Some(PanePromptState::Question(q)) = s.ui.interaction.active_prompt.as_ref() else {
+        panic!("expected a question prompt");
+    };
+    q.focus
+}
+
+fn set_focus(s: &mut AppState, focus: crate::state::QuestionFocus) {
+    if let Some(PanePromptState::Question(q)) = s.ui.interaction.active_prompt.as_mut() {
+        q.focus = focus;
+    }
+}
+
+#[test]
+fn question_switch_question_walks_questions_then_submit_with_wrap() {
+    use crate::state::QuestionFocus;
+    // 3 questions → nav ring [Q0, Q1, Q2, Submit].
+    let mut s = question_state_multi(vec![
+        question_item(vec![question_option("A"), question_option("B")], false),
+        question_item(vec![question_option("C"), question_option("D")], false),
+        question_item(vec![question_option("E"), question_option("F")], false),
+    ]);
+    super::question_switch_question(&mut s, 1);
+    assert_eq!(focused_question(&s), QuestionFocus::Question(1));
+    super::question_switch_question(&mut s, 1);
+    assert_eq!(focused_question(&s), QuestionFocus::Question(2));
+    super::question_switch_question(&mut s, 1);
+    assert_eq!(
+        focused_question(&s),
+        QuestionFocus::Submit,
+        "after the last question → Submit tab"
+    );
+    super::question_switch_question(&mut s, 1);
+    assert_eq!(
+        focused_question(&s),
+        QuestionFocus::Question(0),
+        "Submit wraps to the first question"
+    );
+    super::question_switch_question(&mut s, -1);
+    assert_eq!(
+        focused_question(&s),
+        QuestionFocus::Submit,
+        "Left from the first question wraps to Submit"
+    );
+}
+
+#[test]
+fn question_switch_question_from_footer_reenters_ring() {
+    use crate::state::QuestionFocus;
+    // 2 questions → ring [Q0, Q1, Submit].
+    let mut s = question_state_multi(vec![
+        question_item(vec![question_option("A"), question_option("B")], false),
+        question_item(vec![question_option("C"), question_option("D")], false),
+    ]);
+    set_focus(&mut s, QuestionFocus::ChatAboutThis);
+    super::question_switch_question(&mut s, 1);
+    assert_eq!(
+        focused_question(&s),
+        QuestionFocus::Question(0),
+        "Right from footer → first tab"
+    );
+    set_focus(&mut s, QuestionFocus::ChatAboutThis);
+    super::question_switch_question(&mut s, -1);
+    assert_eq!(
+        focused_question(&s),
+        QuestionFocus::Submit,
+        "Left from footer → last tab (Submit)"
+    );
+}
+
+#[test]
+fn nav_on_submit_tab_toggles_submit_and_cancel() {
+    use crate::state::QuestionFocus;
+    let mut s = question_state_multi(vec![
+        question_item(vec![question_option("A"), question_option("B")], false),
+        question_item(vec![question_option("C"), question_option("D")], false),
+    ]);
+    set_focus(&mut s, QuestionFocus::Submit);
+    let submit_sel = |s: &AppState| -> i32 {
+        let Some(PanePromptState::Question(q)) = s.ui.interaction.active_prompt.as_ref() else {
+            panic!("expected a question prompt");
+        };
+        q.submit_selected
+    };
+    assert_eq!(submit_sel(&s), 0, "starts on Submit");
+    super::nav(&mut s, 1);
+    assert_eq!(submit_sel(&s), 1, "Down → Cancel");
+    super::nav(&mut s, 1);
+    assert_eq!(submit_sel(&s), 1, "clamps at Cancel");
+    super::nav(&mut s, -1);
+    assert_eq!(submit_sel(&s), 0, "Up → Submit");
+}
+
+#[test]
+fn question_switch_question_single_question_is_noop() {
+    use crate::state::QuestionFocus;
+    let mut s = question_state(question_item(
+        vec![question_option("A"), question_option("B")],
+        false,
+    ));
+    super::question_switch_question(&mut s, 1);
+    assert_eq!(focused_question(&s), QuestionFocus::Question(0));
+}
+
+#[test]
+fn question_digit_shortcut_moves_cursor_to_that_option() {
+    let mut s = question_state(question_item(
+        vec![
+            question_option("A"),
+            question_option("B"),
+            question_option("C"),
+        ],
+        false,
+    ));
+    super::question_select_digit(&mut s, 3);
+    assert_eq!(focused_selected(&s), 2);
+    // Out-of-range digit is a no-op.
+    super::question_select_digit(&mut s, 9);
+    assert_eq!(focused_selected(&s), 2);
+}
+
+#[test]
+fn question_digit_routes_through_filter_when_not_editing_other() {
+    let mut s = question_state(question_item(
+        vec![question_option("A"), question_option("B")],
+        false,
+    ));
+    super::filter(&mut s, '2');
+    assert_eq!(focused_selected(&s), 1);
+}
+
+#[test]
+fn multi_select_empty_submits_empty_answer_like_ts() {
+    // TS `SelectMulti` ships the selected array verbatim — an untouched
+    // multi-select question submits an empty answer, NOT the cursor option.
+    let q = crate::state::QuestionPromptState {
+        request_id: "q1".into(),
+        original_input: serde_json::json!({}),
+        questions: vec![question_item(
+            vec![question_option("A"), question_option("B")],
+            true,
+        )],
+        focus: crate::state::QuestionFocus::Question(0),
+        is_in_plan_mode: false,
+        submit_selected: 0,
+    };
+    let payload = super::build_answer_payload(&q);
+    let answer = payload["answers"]["Q?"].as_str().unwrap();
+    assert_eq!(answer, "", "untouched multi-select must submit empty");
+}
+
+fn question_other_option() -> crate::state::QuestionOption {
+    crate::state::QuestionOption {
+        label: crate::state::OTHER_OPTION_DISPLAY.into(),
+        description: String::new(),
+        preview: None,
+        kind: crate::state::OptionKind::Other,
+    }
+}
+
+#[test]
+fn question_notes_paste_appends_into_focused_other_composer() {
+    let mut item = question_item(vec![question_option("A"), question_other_option()], false);
+    item.selected = 1; // focus the injected Other composer
+    let mut s = question_state(item);
+    assert!(super::question_notes_paste(&mut s, "够清楚"));
+    let Some(PanePromptState::Question(q)) = s.ui.interaction.active_prompt.as_ref() else {
+        panic!("expected a question prompt");
+    };
+    assert_eq!(q.questions[0].notes, "够清楚", "paste lands in Other notes");
+}
+
+#[test]
+fn question_notes_paste_ignored_when_other_not_focused() {
+    let item = question_item(vec![question_option("A"), question_other_option()], false);
+    // selected stays 0 (a normal Pick), not the Other composer.
+    let mut s = question_state(item);
+    assert!(!super::question_notes_paste(&mut s, "x"));
+}
+
+#[tokio::test]
+async fn confirm_on_empty_other_keeps_prompt_open_instead_of_submitting() {
+    let mut item = question_item(vec![question_option("A"), question_other_option()], false);
+    item.selected = 1; // focus Other, notes empty
+    let mut s = question_state(item);
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    super::confirm(&mut s, &tx).await;
+    assert!(rx.try_recv().is_err(), "empty Other must not submit");
+    assert!(
+        s.ui.interaction.active_prompt.is_some(),
+        "prompt stays open so the user can type directly"
+    );
+}
+
+#[tokio::test]
+async fn confirm_on_other_with_typed_notes_submits() {
+    let mut item = question_item(vec![question_option("A"), question_other_option()], false);
+    item.selected = 1;
+    item.notes = "my answer".into();
+    let mut s = question_state(item);
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    super::confirm(&mut s, &tx).await;
+    match rx.try_recv() {
+        Ok(UserCommand::ApprovalResponse { approved, .. }) => {
+            assert!(approved, "non-empty Other on the last question submits")
+        }
+        other => panic!("expected ApprovalResponse, got {other:?}"),
+    }
+}

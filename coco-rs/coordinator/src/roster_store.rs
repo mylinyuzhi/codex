@@ -415,9 +415,19 @@ impl TeamRosterStore {
             .collect()
     }
 
+    /// Delete the active team.
+    ///
+    /// `notifier` is the session's task-list handle (when available). On
+    /// the success path — and only when the team's task-list directory was
+    /// actually removed — it fires a "tasks changed" notification so any
+    /// in-process subscriber refreshes its view. This mirrors TS, where
+    /// `cleanupTeamDirectories` calls `notifyTasksUpdated()` inside the
+    /// `rm(tasksDir)` `try` (never the `catch`). A `None` notifier (or a
+    /// failed tasks-dir removal) skips the notification.
     pub async fn delete_team(
         &self,
         _request: DeleteTeamRequest,
+        notifier: Option<&dyn coco_tool_runtime::TaskListHandle>,
     ) -> Result<DeleteTeamResult, String> {
         let Some(team_name) = self.active_team_name().await else {
             return Ok(DeleteTeamResult {
@@ -434,8 +444,14 @@ impl TeamRosterStore {
                 .join(", ");
             return Err(format!("Cannot delete team: active members: {names}"));
         }
-        team_file::cleanup_team_directories(&team_name)
+        let outcome = team_file::cleanup_team_directories(&team_name)
             .map_err(|e| format!("Failed to delete team '{team_name}': {e}"))?;
+        // Success path only: notify iff the task-list dir was removed.
+        if outcome.tasks_dir_removed
+            && let Some(notifier) = notifier
+        {
+            notifier.notify_change().await;
+        }
         team_file::unregister_team_for_session_cleanup(&team_name);
         crate::pane::layout::clear_teammate_colors();
         *self.active_team.write().await = None;

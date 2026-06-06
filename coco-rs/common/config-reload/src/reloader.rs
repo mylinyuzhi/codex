@@ -72,6 +72,10 @@ pub struct ReloadOptions {
     catalogs: CatalogPaths,
     env_factory: Box<dyn FnMut() -> EnvSnapshot + Send + 'static>,
     debounce: Duration,
+    /// Raw `--setting-sources` CSV. `None` ⇒ all sources enabled. Resolved
+    /// once at spawn and reused for every hot-reload rebuild so reloads
+    /// honor the same source filter the initial build used.
+    setting_sources: Option<String>,
 }
 
 impl ReloadOptions {
@@ -86,11 +90,19 @@ impl ReloadOptions {
             catalogs: CatalogPaths::default(),
             env_factory: Box::new(EnvSnapshot::from_current_process),
             debounce: DEFAULT_DEBOUNCE,
+            setting_sources: None,
         }
     }
 
     pub fn with_flag_settings(mut self, path: impl Into<PathBuf>) -> Self {
         self.flag_settings = Some(path.into());
+        self
+    }
+
+    /// Restrict which setting sources participate (`--setting-sources` CSV).
+    /// `None` ⇒ all sources.
+    pub fn with_setting_sources(mut self, csv: Option<String>) -> Self {
+        self.setting_sources = csv;
         self
     }
 
@@ -168,7 +180,11 @@ impl RuntimeReloader {
             catalogs,
             mut env_factory,
             debounce,
+            setting_sources,
         } = opts;
+
+        // Resolve the `--setting-sources` filter once; every rebuild reuses it.
+        let enabled = coco_config::parse_enabled_setting_sources(setting_sources.as_deref());
 
         // Install the watcher FIRST so any filesystem change between
         // the initial build and watch-install is captured by the
@@ -251,6 +267,7 @@ impl RuntimeReloader {
             &env_factory(),
             &overrides,
             &catalogs,
+            &enabled,
         )?;
         let publisher = Arc::new(RuntimePublisher::new(Arc::new(initial)));
         let (error_tx, _) = tokio::sync::broadcast::channel(32);
@@ -271,6 +288,7 @@ impl RuntimeReloader {
                     &env_factory(),
                     &overrides,
                     &catalogs,
+                    &enabled,
                 ) {
                     Ok(runtime) => {
                         info!(
@@ -371,6 +389,7 @@ fn build_with(
     env: &EnvSnapshot,
     overrides: &RuntimeOverrides,
     catalogs: &CatalogPaths,
+    enabled: &std::collections::HashSet<coco_config::SettingSource>,
 ) -> Result<RuntimeConfig, coco_error::BoxedError> {
     let to_boxed = |e| {
         coco_error::boxed_err(coco_error::PlainError::new(
@@ -383,10 +402,17 @@ fn build_with(
         flag_settings,
         &catalogs.user_settings,
         &catalogs.managed_settings,
+        enabled,
     )
     .map_err(to_boxed)?;
-    build_runtime_config_with(settings, env.clone(), overrides.clone(), catalogs.clone())
-        .map_err(to_boxed)
+    build_runtime_config_with(
+        settings,
+        env.clone(),
+        overrides.clone(),
+        catalogs.clone(),
+        enabled.clone(),
+    )
+    .map_err(to_boxed)
 }
 
 /// Install every watch in `watch_set`, returning the count of

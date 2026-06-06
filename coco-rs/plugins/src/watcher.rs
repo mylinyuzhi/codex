@@ -6,9 +6,9 @@
 //! behaviour with a debounced file watcher across the plugin scopes
 //! (user / project / managed) plus the `installed_plugins.json` ledger.
 //!
-//! The watcher is intentionally *not* hooked into the [`crate::PluginManager`]
-//! refresh path — that's the explicit `/reload-plugins` user action. This
-//! module only surfaces the *fact* that something changed.
+//! The watcher is intentionally *not* hooked into the plugin refresh path
+//! ([`crate::load_enabled_plugins`]) — that's the explicit `/reload-plugins`
+//! user action. This module only surfaces the *fact* that something changed.
 //!
 //! ## Reuse note
 //!

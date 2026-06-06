@@ -229,6 +229,47 @@ where
     })
 }
 
+/// Resolve the repository's default branch NAME (e.g. `"main"`), mirroring TS
+/// `computeDefaultBranch` (`utils/git/gitFilesystem.ts`): read the
+/// `refs/remotes/origin/HEAD` symref, else fall back to a local `origin/main`
+/// / `origin/master`, else `"main"`. Network-free — the caller fetches if it
+/// needs the base SHA. Always returns a name (never errors).
+pub fn get_default_branch(dir: &Path) -> String {
+    // 1. `refs/remotes/origin/HEAD` symref → `origin/<default>`.
+    if let Ok(symref) = run_git_for_stdout(
+        dir,
+        [
+            OsString::from("symbolic-ref"),
+            OsString::from("--short"),
+            OsString::from("refs/remotes/origin/HEAD"),
+        ],
+        None,
+    ) && let Some(branch) = symref.strip_prefix("origin/")
+        && !branch.is_empty()
+    {
+        return branch.to_string();
+    }
+    // 2. Local fallback: origin/main, then origin/master.
+    for cand in ["main", "master"] {
+        if run_git_for_stdout(
+            dir,
+            [
+                OsString::from("rev-parse"),
+                OsString::from("--verify"),
+                OsString::from("--quiet"),
+                OsString::from(format!("refs/remotes/origin/{cand}")),
+            ],
+            None,
+        )
+        .is_ok()
+        {
+            return cand.to_string();
+        }
+    }
+    // 3. Hardcoded fallback (TS `computeDefaultBranch` final default).
+    "main".to_string()
+}
+
 fn run_git<I, S>(
     dir: &Path,
     args: I,

@@ -245,6 +245,14 @@ pub fn check_fast_mode_availability(
     (true, None)
 }
 
+/// Fast mode currently only applies to Opus 4.6 family models.
+pub fn is_fast_mode_supported_by_model(model_id: &str) -> bool {
+    model_id
+        .to_ascii_lowercase()
+        .replace('.', "-")
+        .contains("opus-4-6")
+}
+
 /// Prefetch fast mode availability at startup.
 /// TS: prefetchFastModeStatus() — checks org settings, auth scope.
 /// Returns (available, unavailable_reason).

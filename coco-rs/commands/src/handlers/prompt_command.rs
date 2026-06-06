@@ -122,23 +122,30 @@ impl CommandHandler for StaticPromptHandler {
     }
 }
 
-/// Handler that pre-resolves `!`<shell-cmd>`` markers in the prompt body
-/// before sending to the model. Mirrors TS
+/// Handler that pre-resolves `` !`<shell-cmd>` `` (and block `` ```! ``)
+/// markers in the prompt body before sending to the model. Mirrors TS
 /// `utils/promptShellExecution.ts::executeShellCommandsInPrompt`.
 ///
-/// Each `!`cmd`` token (backticks around the command) is replaced with the
-/// captured stdout of running `cmd` through `bash -c`. A failing command
-/// is replaced with its stderr prefixed by `(error: ...)` so the model
-/// still sees something useful and can continue.
+/// Each command is routed through the injected [`BashToolHandle`], which
+/// performs the real per-command permission check + Bash execution. A
+/// denied or failing command ABORTS the whole expansion (mirroring TS
+/// `MalformedCommandError`). `allowed_tools` is empty for slash commands
+/// — only configured permission rules apply (unlike skills, which inject
+/// their frontmatter `allowed-tools`).
 ///
-/// Used by `/security-review` and any other Prompt command whose TS source
-/// originally went through `executeShellCommandsInPrompt`.
+/// When no handle is wired (tests / pre-bootstrap) the body is emitted
+/// verbatim — no unguarded `bash -c` runs from a slash command.
+///
+/// Used by `/security-review` and any other Prompt command whose TS
+/// source originally went through `executeShellCommandsInPrompt`.
 pub struct ShellExpandingPromptHandler {
     pub name: String,
     pub progress_message: String,
     pub body: String,
     /// How `args` are folded into the body. See [`ArgsHandling`].
     pub args_handling: ArgsHandling,
+    /// Shared, late-bound Bash handle (cloned from the registry cell).
+    pub bash_tool_handle: crate::SharedBashToolHandle,
 }
 
 impl ShellExpandingPromptHandler {
@@ -146,12 +153,14 @@ impl ShellExpandingPromptHandler {
         name: impl Into<String>,
         progress_message: impl Into<String>,
         body: impl Into<String>,
+        bash_tool_handle: crate::SharedBashToolHandle,
     ) -> Self {
         Self {
             name: name.into(),
             progress_message: progress_message.into(),
             body: body.into(),
             args_handling: ArgsHandling::Static,
+            bash_tool_handle,
         }
     }
 }
@@ -159,7 +168,18 @@ impl ShellExpandingPromptHandler {
 #[async_trait]
 impl CommandHandler for ShellExpandingPromptHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
-        let mut text = expand_shell_markers(&self.body).await;
+        // Slash commands carry no frontmatter `allowed-tools` — only
+        // configured permission rules apply (empty slice).
+        let mut text = match crate::snapshot_bash_handle(&self.bash_tool_handle) {
+            Some(handle) => coco_skills::shell_exec::execute_shell_in_prompt_with_tool(
+                &self.body,
+                &*handle,
+                &[],
+            )
+            .await
+            .map_err(|message| crate::CommandsError::ShellCommandError { message })?,
+            None => self.body.clone(),
+        };
         match self.args_handling {
             ArgsHandling::Static => {}
             ArgsHandling::AppendUnderTask => {
@@ -182,55 +202,6 @@ impl CommandHandler for ShellExpandingPromptHandler {
 
     fn handler_name(&self) -> &str {
         &self.name
-    }
-}
-
-/// Expand TS-style `!\`cmd\`` markers in `body` by running each command
-/// through `bash -c` and substituting captured stdout. Errors are
-/// inlined as `(error: ...)` so the prompt still produces something
-/// the model can act on.
-async fn expand_shell_markers(body: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut rest = body;
-    while let Some(start) = rest.find("!`") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        match after.find('`') {
-            Some(end) => {
-                let cmd = &after[..end];
-                let stdout = run_shell(cmd).await;
-                out.push_str(&stdout);
-                rest = &after[end + 1..];
-            }
-            None => {
-                // Unterminated marker — leave as-is.
-                out.push_str(&rest[start..]);
-                rest = "";
-                break;
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-async fn run_shell(cmd: &str) -> String {
-    match tokio::process::Command::new("bash")
-        .arg("-c")
-        .arg(cmd)
-        .output()
-        .await
-    {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-            .trim_end()
-            .to_string(),
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr)
-                .trim_end()
-                .to_string();
-            format!("(error: {stderr})")
-        }
-        Err(e) => format!("(error: {e})"),
     }
 }
 

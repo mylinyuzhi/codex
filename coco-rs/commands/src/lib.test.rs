@@ -126,8 +126,8 @@ fn test_lookup_by_alias() {
     assert!(by_alias.is_some());
     assert_eq!(by_alias.unwrap().base.name, "status");
 
-    // "configuration" is alias for "config"
-    let by_alias = registry.get("configuration");
+    // "settings" is alias for "config" (TS parity)
+    let by_alias = registry.get("settings");
     assert!(by_alias.is_some());
     assert_eq!(by_alias.unwrap().base.name, "config");
 }

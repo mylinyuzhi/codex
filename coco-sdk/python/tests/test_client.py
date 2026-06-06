@@ -236,6 +236,41 @@ async def test_client_auto_approval() -> None:
 
 
 @pytest.mark.asyncio
+async def test_client_denies_approval_without_callback() -> None:
+    # With no `can_use_tool` callback the client must still RESPOND to an
+    # approval request (denying it), or the server hangs waiting for a reply.
+    # Regression: AskUserQuestion now always asks, so a headless session that
+    # didn't set a callback used to hang on it.
+    transport = MockTransport(responses=[
+        _server_request(
+            ServerRequestMethod.APPROVAL_ASK_FOR_APPROVAL,
+            request_id="r1",
+            tool_name="AskUserQuestion",
+            tool_use_id="tu1",
+            input={},
+        ),
+        _notif(
+            NotificationMethod.TURN_ENDED,
+            turn_id="t1",
+            usage={"input_tokens": {"total": 1}, "output_tokens": {"total": 1}},
+            outcome={"kind": "completed", "data": {"stop_reason": "end_turn"}},
+        ),
+    ])
+
+    client = CocoClient(prompt="test", transport=transport)
+    client._started = True
+    events = [event async for event in client.events()]
+
+    assert len(events) == 1
+    assert events[0].method == NotificationMethod.TURN_ENDED
+
+    approval_sent = json.loads(transport.sent_lines[0])
+    assert approval_sent["type"] == "response"
+    assert approval_sent["result"]["decision"] == "deny"
+    assert approval_sent["result"]["request_id"] == "r1"
+
+
+@pytest.mark.asyncio
 async def test_client_interrupt() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)

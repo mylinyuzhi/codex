@@ -44,6 +44,7 @@ fn build_runtime_with(extra_provider: Option<(String, PartialProviderConfig)>) -
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         catalogs,
+        coco_config::parse_enabled_setting_sources(None),
     )
     .expect("runtime")
 }

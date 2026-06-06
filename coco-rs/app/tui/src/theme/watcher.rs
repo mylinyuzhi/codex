@@ -100,6 +100,11 @@ pub async fn install_theme() -> ThemeSetup {
     if matches!(persisted_active_setting(), ThemeSetting::Auto) {
         crate::system_theme_probe::probe_terminal_background_once(Duration::from_millis(100));
     }
+    // Probe synchronized-update (DECSET mode 2026) support once, in the same
+    // pre-`setup_terminal` window. The DA1 fence bounds the wait to one
+    // round-trip on responsive terminals; the native surface uses the result to
+    // pick a non-flickering grow-only viewport where mode 2026 is absent.
+    crate::sync_update_probe::probe_synchronized_update_once(Duration::from_millis(100));
     let initial = load_theme_runtime_or_default();
     let (reload_tx, reload_rx) = mpsc::channel::<ThemeLoadResult>(8);
     tokio::spawn(async move {

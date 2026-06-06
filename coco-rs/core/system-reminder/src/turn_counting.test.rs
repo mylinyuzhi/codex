@@ -8,6 +8,7 @@ use coco_messages::TextContent;
 use coco_messages::ToolCallContent;
 use coco_messages::UserMessage;
 use coco_types::AttachmentKind;
+use coco_types::AttachmentMessage;
 use coco_types::ToolName;
 use pretty_assertions::assert_eq;
 use uuid::Uuid;
@@ -90,6 +91,13 @@ fn user(text: &str) -> Message {
     })
 }
 
+fn attachment(kind: AttachmentKind) -> Message {
+    Message::Attachment(AttachmentMessage::api(
+        kind,
+        LlmMessage::user_text("reminder"),
+    ))
+}
+
 // ── count_assistant_turns_since_tool ──
 
 #[test]
@@ -170,6 +178,33 @@ fn empty_history_returns_zero() {
     assert_eq!(
         count_assistant_turns_since_tool(&msgs, ToolName::TodoWrite),
         0
+    );
+}
+
+// ── count_assistant_turns_since_attachment ──
+
+#[test]
+fn assistant_turns_since_attachment_counts_from_marker() {
+    let msgs = vec![
+        attachment(AttachmentKind::TodoReminder),
+        assistant_text("one"),
+        assistant_thinking_only(),
+        assistant_text("two"),
+    ];
+
+    assert_eq!(
+        count_assistant_turns_since_attachment(&msgs, AttachmentKind::TodoReminder),
+        2
+    );
+}
+
+#[test]
+fn assistant_turns_since_attachment_returns_sentinel_when_absent() {
+    let msgs = vec![assistant_text("one")];
+
+    assert_eq!(
+        count_assistant_turns_since_attachment(&msgs, AttachmentKind::TodoReminder),
+        i32::MAX
     );
 }
 

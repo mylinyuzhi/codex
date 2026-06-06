@@ -334,3 +334,21 @@ async fn test_unassign_teammate_tasks() {
     let c = store.get_task(&c.id).await.unwrap().unwrap();
     assert_eq!(c.owner.as_deref(), Some("bob"));
 }
+
+#[tokio::test]
+async fn test_notify_change_emits_to_subscribers_without_mutation() {
+    // Public hook used by team teardown (the task-list dir is removed
+    // out-of-band, so no task op fires the usual notification). A
+    // subscriber must observe the broadcast, and no task is created.
+    let (_dir, store) = fresh_store();
+    let mut rx = store.subscribe_changes();
+    store.notify_change();
+    assert!(
+        rx.try_recv().is_ok(),
+        "notify_change must reach an existing subscriber",
+    );
+    assert!(
+        store.list_tasks().await.unwrap().is_empty(),
+        "notify_change must not create any task",
+    );
+}

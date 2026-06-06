@@ -332,8 +332,8 @@ def test_server_notification_typed_dispatch() -> None:
             lambda d: d.error.message == "boom" and d.error.code == "provider",
         ),
         (
-            {"kind": "interrupted", "data": {"cancel_reason": "user_cancel"}},
-            lambda d: d.cancel_reason == "user_cancel",
+            {"kind": "interrupted", "data": {"abort_reason": "user_cancel"}},
+            lambda d: d.abort_reason == "user_cancel",
         ),
         (
             {"kind": "max_turns_reached", "data": {"max_turns": 5}},

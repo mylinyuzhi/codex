@@ -6,6 +6,34 @@ use crate::errors::InferenceError;
 /// model-runtime fallback chain take over. TS `MAX_529_RETRIES`.
 const MAX_CAPACITY_RETRIES: i32 = 3;
 
+/// Query sources that retry on a capacity cascade (503/529). Mirrors TS
+/// `FOREGROUND_529_RETRY_SOURCES`; every other tagged source is background and
+/// throws immediately so it doesn't amplify a saturated gateway.
+const FOREGROUND_529_RETRY_SOURCES: &[&str] = &[
+    "repl_main_thread",
+    "repl_main_thread:outputStyle:custom",
+    "repl_main_thread:outputStyle:Explanatory",
+    "repl_main_thread:outputStyle:Learning",
+    "sdk",
+    "agent:custom",
+    "agent:default",
+    "agent:builtin",
+    "compact",
+    "hook_agent",
+    "hook_prompt",
+    "verification_agent",
+    "side_question",
+    "auto_mode",
+];
+
+/// TS `shouldRetry529`: an untagged (`None`) source is treated as foreground.
+fn is_foreground_source(query_source: Option<&str>) -> bool {
+    match query_source {
+        None => true,
+        Some(src) => FOREGROUND_529_RETRY_SOURCES.contains(&src),
+    }
+}
+
 /// Retry configuration for API calls.
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
@@ -28,7 +56,8 @@ impl Default for RetryConfig {
         Self {
             max_retries: 10,
             base_delay_ms: 500,
-            max_delay_ms: 60_000,
+            // #134: TS `getRetryDelay` maxDelayMs default is 32000.
+            max_delay_ms: 32_000,
             jitter_factor: 0.25,
         }
     }
@@ -65,8 +94,12 @@ impl RetryConfig {
             .saturating_mul(2_i64.saturating_pow(attempt as u32));
         let delay = delay.min(self.max_delay_ms);
 
-        // Add jitter (deterministic for reproducibility)
-        let jitter = (delay as f64 * self.jitter_factor) as i64;
+        // #136 / TS `withRetry.ts:546` `Math.random() * 0.25 * baseDelay`:
+        // jitter is a UNIFORM random in [0, jitter_factor*delay] so
+        // concurrent clients de-correlate their retries (thundering-herd
+        // mitigation). The previous fixed +25% added the same delay to
+        // every client.
+        let jitter = (delay as f64 * self.jitter_factor * rand::random::<f64>()) as i64;
         let jittered = delay.saturating_add(jitter);
 
         Duration::from_millis(jittered as u64)
@@ -91,6 +124,22 @@ impl RetryConfig {
             self.max_retries
         };
         attempt < cap
+    }
+
+    /// Like [`Self::should_retry`] but throws background sources immediately on
+    /// a capacity cascade (TS `shouldRetry529`): titles / suggestions /
+    /// summaries / memory forks must not amplify a saturated gateway 3-10x.
+    /// Foreground sources (and untagged `None`) retry per [`Self::should_retry`].
+    pub fn should_retry_with_source(
+        &self,
+        attempt: i32,
+        error: &InferenceError,
+        query_source: Option<&str>,
+    ) -> bool {
+        if Self::is_capacity_error(error) && !is_foreground_source(query_source) {
+            return false;
+        }
+        self.should_retry(attempt, error)
     }
 
     /// Overload-cascade errors (503/529) — bounded in-client so the fallback

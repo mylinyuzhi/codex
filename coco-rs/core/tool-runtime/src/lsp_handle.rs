@@ -77,6 +77,12 @@ pub trait LspHandle: Send + Sync {
     /// arrive in the session, leaving the LSP server zombie until
     /// session exit.
     async fn shutdown_for_root(&self, root_path: &Path);
+
+    /// Re-read the on-disk LSP config and re-merge plugin-contributed servers,
+    /// then re-prewarm. Called from `/reload-plugins` so newly enabled/disabled
+    /// plugin LSP servers take effect (TS `reinitializeLspServerManager`).
+    /// Default no-op — `NoOpLspHandle` and sessions without LSP inherit it.
+    async fn reload(&self, _project_root: &Path) {}
 }
 
 pub type LspHandleRef = Arc<dyn LspHandle>;

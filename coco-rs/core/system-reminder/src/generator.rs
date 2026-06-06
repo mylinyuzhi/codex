@@ -236,6 +236,14 @@ pub struct GeneratorContext<'a> {
     /// latch. TS `getDateChangeAttachments` at `attachments.ts:1415`.
     pub new_date: Option<String>,
 
+    /// `Some(iso_date)` = today's local ISO date, injected by the engine
+    /// every turn so the [`UserContextGenerator`](crate::generators::UserContextGenerator)
+    /// can emit a baseline `Today's date is <date>.` reminder. Mirrors TS
+    /// `getUserContext().currentDate` (`context.ts:186`) prepended via
+    /// `prependUserContext` (`utils/api.ts:449`). `None` (the default,
+    /// e.g. in unit tests) suppresses the reminder.
+    pub current_date: Option<String>,
+
     // ── Phase E (verify-plan reminder) ──
     /// True when `ExitPlanModeTool` has flipped
     /// [`ToolAppState::pending_plan_verification`] and a follow-up
@@ -447,6 +455,7 @@ pub struct GeneratorContextBuilder<'a> {
     effective_context_window: i64,
     used_tokens: i64,
     new_date: Option<String>,
+    current_date: Option<String>,
     has_pending_plan_verification: bool,
     turns_since_plan_exit: i32,
     total_cost_usd: f64,
@@ -519,6 +528,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             effective_context_window: 0,
             used_tokens: 0,
             new_date: None,
+            current_date: None,
             has_pending_plan_verification: false,
             turns_since_plan_exit: 0,
             total_cost_usd: 0.0,
@@ -710,6 +720,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn new_date(mut self, d: Option<String>) -> Self {
         self.new_date = d;
+        self
+    }
+
+    pub fn current_date(mut self, d: Option<String>) -> Self {
+        self.current_date = d;
         self
     }
 
@@ -940,6 +955,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             effective_context_window: self.effective_context_window,
             used_tokens: self.used_tokens,
             new_date: self.new_date,
+            current_date: self.current_date,
             has_pending_plan_verification: self.has_pending_plan_verification,
             turns_since_plan_exit: self.turns_since_plan_exit,
             total_cost_usd: self.total_cost_usd,

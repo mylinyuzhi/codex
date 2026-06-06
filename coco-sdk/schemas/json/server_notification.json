@@ -1598,6 +1598,49 @@
         "context"
       ]
     },
+    "AskUserQuestionAnswered": {
+      "description": "One answered (or unanswered) question in an [`AskUserQuestionResult`].",
+      "type": "object",
+      "properties": {
+        "answers": {
+          "description": "Selected option label(s). Empty ⇒ unanswered.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "description": "Freeform note (the \"Other\" composer text / annotation), if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "question": {
+          "description": "The question text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "answers"
+      ]
+    },
+    "AskUserQuestionResult": {
+      "description": "Per-question answers for a completed AskUserQuestion call. Built by the tool\nfrom the spliced `answers`/`annotations` envelope; the model still sees the\nprose in `ToolResultMessage.message`.",
+      "type": "object",
+      "properties": {
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AskUserQuestionAnswered"
+          }
+        }
+      },
+      "required": [
+        "questions"
+      ]
+    },
     "AssistantContentPart": {
       "description": "Assistant message content parts.",
       "oneOf": [
@@ -1870,7 +1913,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every TS `Attachment.type` discriminator. 60 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
+      "description": "Every TS `Attachment.type` discriminator, plus coco-rs-synthetic\nreminder kinds. 61 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "type": "string",
@@ -1940,6 +1983,11 @@
           "description": "TS: user-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the TS-aligned case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
           "type": "string",
           "const": "critical_system_reminder"
+        },
+        {
+          "description": "coco-rs per-turn baseline user context (TS `prependUserContext`\n`utils/api.ts:449`, `currentDate` from `context.ts:186`). Injected\nevery turn as an `is_meta` `<system-reminder>` carrying\n`Today's date is <local ISO>.` — distinct from the one-shot\n[`DateChange`](Self::DateChange) rollover notice.",
+          "type": "string",
+          "const": "user_context"
         }
       ]
     },
@@ -2009,21 +2057,6 @@
       },
       "required": [
         "used_tokens"
-      ]
-    },
-    "CancelReason": {
-      "description": "Why a turn was interrupted. Lets the TUI distinguish \"user pressed\nCtrl+C — restore the input if conditions match\" from \"system cancelled\nthe in-flight turn to make room for `/clear` / `/compact` / `/rewind`\n/ shutdown / next submit — leave the conversation alone\".\n\nMirrors TS `abortController.signal.reason` discrimination at\n`REPL.tsx:3001`. Used inside `TurnOutcome::Interrupted`.",
-      "oneOf": [
-        {
-          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`\nin the SDK). The only reason that may trigger auto-restore.",
-          "type": "string",
-          "const": "user_cancel"
-        },
-        {
-          "description": "System pre-empted the in-flight turn so another session-level\noperation can run (Clear / Compact / Rewind / Shutdown / new\nSubmitInput). Auto-restore is suppressed — the user did not\nrequest a rewind.",
-          "type": "string",
-          "const": "system_preempt"
-        }
       ]
     },
     "CommandPermissionsPayload": {
@@ -3118,15 +3151,15 @@
       }
     },
     "InterruptedOutcome": {
-      "description": "Payload for [`TurnOutcome::Interrupted`]. `cancel_reason`\ndistinguishes user Ctrl+C from system pre-empt (Clear / Compact\n/ Rewind / Shutdown). Never carries a model `stop_reason`.",
+      "description": "Payload for [`TurnOutcome::Interrupted`]. `abort_reason`\ndistinguishes user Ctrl+C, submit interrupt, permission abort, and\nsystem pre-empt. Never carries a model `stop_reason`.",
       "type": "object",
       "properties": {
-        "cancel_reason": {
-          "$ref": "#/$defs/CancelReason"
+        "abort_reason": {
+          "$ref": "#/$defs/TurnAbortReason"
         }
       },
       "required": [
-        "cancel_reason"
+        "abort_reason"
       ]
     },
     "ItemStatus": {
@@ -6507,6 +6540,23 @@
             "kind",
             "data"
           ]
+        },
+        {
+          "description": "Structured answers for a completed AskUserQuestion exchange, rendered as\na styled transcript cell (mirrors codex `RequestUserInputResultCell`)\ninstead of the raw model-facing prose.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/AskUserQuestionResult"
+            },
+            "kind": {
+              "type": "string",
+              "const": "ask_user_question_result"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ]
         }
       ]
     },
@@ -7079,6 +7129,36 @@
         "preceding_tool_use_ids"
       ]
     },
+    "TurnAbortReason": {
+      "description": "Why a turn was aborted. Lets consumers distinguish user cancel,\nsubmit interrupt, permission abort, and system pre-emption.",
+      "oneOf": [
+        {
+          "description": "User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`\nin the SDK). The only reason that may trigger auto-restore.",
+          "type": "string",
+          "const": "user_cancel"
+        },
+        {
+          "description": "Streaming submit interruption: the user submitted new input while\nall running tools were cancel-interruptible.",
+          "type": "string",
+          "const": "submit_interrupt"
+        },
+        {
+          "description": "System pre-empted the in-flight turn so another session-level\noperation can run (Clear / Compact / Rewind / Shutdown / new\nSubmitInput). Auto-restore is suppressed — the user did not\nrequest a rewind.",
+          "type": "string",
+          "const": "system_preempt"
+        },
+        {
+          "description": "Permission flow aborted the turn instead of returning a normal\nmodel-visible denial.",
+          "type": "string",
+          "const": "permission_abort"
+        },
+        {
+          "description": "Turn moved to the background.",
+          "type": "string",
+          "const": "background"
+        }
+      ]
+    },
     "TurnEndedParams": {
       "description": "Terminal event for one logical user-prompt cycle. The\n`outcome` discriminator carries the per-variant payload —\n`stop_reason` lives only on `Completed` where it is\nsemantically meaningful. Other variants self-describe.\n\nPairing contract: every `TurnStartedParams` is followed by\n**at least one** `TurnEndedParams` sharing the same `turn_id`.\nA second `TurnEnded(Interrupted)` MAY follow a terminal outcome\nwhen the user cancel was observed after the engine had already\nreturned — this is the late-cancel signal the TUI uses to fire\nauto-restore. Consumers should treat the latest `Interrupted`\nevent as authoritative when it follows a same-id terminal.",
       "type": "object",
@@ -7148,7 +7228,7 @@
           ]
         },
         {
-          "description": "External cancellation (user Ctrl+C, system pre-empt).",
+          "description": "External cancellation (user Ctrl+C, submit interrupt, permission abort,\nsystem pre-empt).",
           "type": "object",
           "properties": {
             "data": {

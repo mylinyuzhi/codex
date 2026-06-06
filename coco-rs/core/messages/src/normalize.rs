@@ -379,6 +379,8 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
         _ => true,
     });
 
+    filtered = strip_oversized_media_from_api_messages(filtered);
+
     // Step 7: Strip empty assistant messages
     filtered.retain(|arc| match arc.as_ref() {
         Message::Assistant(a) => match &a.message {
@@ -463,6 +465,118 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
     }
 
     result
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct OversizedMediaTargets {
+    strip_images: bool,
+    strip_documents: bool,
+}
+
+fn strip_oversized_media_from_api_messages(
+    messages: Vec<std::sync::Arc<Message>>,
+) -> Vec<std::sync::Arc<Message>> {
+    let mut mutated = false;
+    let stripped: Vec<_> = messages
+        .iter()
+        .enumerate()
+        .map(|(idx, arc)| {
+            let Some(targets) = oversized_media_targets_after(&messages, idx) else {
+                return arc.clone();
+            };
+            let mut msg = arc.as_ref().clone();
+            if strip_oversized_media_from_user(&mut msg, targets) {
+                mutated = true;
+                std::sync::Arc::new(msg)
+            } else {
+                arc.clone()
+            }
+        })
+        .collect();
+
+    if mutated { stripped } else { messages }
+}
+
+fn oversized_media_targets_after(
+    messages: &[std::sync::Arc<Message>],
+    message_index: usize,
+) -> Option<OversizedMediaTargets> {
+    if !matches!(
+        messages.get(message_index).map(std::convert::AsRef::as_ref),
+        Some(Message::User(_))
+    ) {
+        return None;
+    }
+
+    let mut targets = OversizedMediaTargets::default();
+    for msg in messages.iter().skip(message_index + 1) {
+        if matches!(msg.as_ref(), Message::User(_)) {
+            break;
+        }
+        let Some((strip_images, strip_documents)) = oversized_media_error_targets(msg.as_ref())
+        else {
+            continue;
+        };
+        targets.strip_images |= strip_images;
+        targets.strip_documents |= strip_documents;
+    }
+
+    (targets.strip_images || targets.strip_documents).then_some(targets)
+}
+
+fn oversized_media_error_targets(msg: &Message) -> Option<(bool, bool)> {
+    let Message::Assistant(assistant) = msg else {
+        return None;
+    };
+    let error = assistant.api_error.as_ref()?;
+    let mut text = error.message.to_ascii_lowercase();
+    if let Some(error_type) = &error.error_type {
+        text.push(' ');
+        text.push_str(&error_type.to_ascii_lowercase());
+    }
+
+    if text.contains("request too large") || text.contains("413") {
+        return Some((true, true));
+    }
+    if text.contains("too large") && text.contains("image") {
+        return Some((true, false));
+    }
+    if text.contains("too large") && (text.contains("pdf") || text.contains("document")) {
+        return Some((false, true));
+    }
+    None
+}
+
+fn strip_oversized_media_from_user(msg: &mut Message, targets: OversizedMediaTargets) -> bool {
+    let Message::User(user) = msg else {
+        return false;
+    };
+    let LlmMessage::User { content, .. } = &mut user.message else {
+        return false;
+    };
+    let before = content.len();
+    content.retain(|part| match part {
+        crate::UserContent::File(file) if targets.strip_images && is_image_media(file) => false,
+        crate::UserContent::File(file) if targets.strip_documents && is_document_media(file) => {
+            false
+        }
+        _ => true,
+    });
+    content.len() != before
+}
+
+fn is_image_media(file: &crate::FileContent) -> bool {
+    file.media_type.to_ascii_lowercase().starts_with("image/")
+}
+
+fn is_document_media(file: &crate::FileContent) -> bool {
+    let media = file.media_type.to_ascii_lowercase();
+    media == "document"
+        || media == "application/pdf"
+        || file
+            .filename
+            .as_deref()
+            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".pdf"))
 }
 
 /// Strip the observable-input fields the query layer injects into
@@ -713,11 +827,14 @@ fn extract_llm_message(msg: &Message) -> Option<LlmMessage> {
         Message::Assistant(m) => Some(m.message.clone()),
         Message::Attachment(m) => m.as_api_message().cloned(),
         Message::ToolResult(m) => Some(m.message.clone()),
-        Message::System(_) => {
-            // System messages are sent as user messages with is_meta=true
-            // They become LlmMessage::User with system-reminder wrapping
-            None // handled by system-reminder injection, not normalization
+        // #82 / TS messages.ts:2078-2092: local_command system messages
+        // become user messages so the model can reference previous command
+        // output in later turns. Other system messages stay out of the API
+        // prompt (handled by system-reminder injection, not normalization).
+        Message::System(crate::SystemMessage::LocalCommand(m)) => {
+            Some(LlmMessage::user_text(m.output.clone()))
         }
+        Message::System(_) => None,
         Message::Progress(_) | Message::Tombstone(_) => None,
     }
 }
@@ -760,6 +877,16 @@ pub fn merge_consecutive_user_messages(messages: &mut Vec<Message>) {
                     },
                 ) = (&mut dest.message, src.message)
             {
+                // #83 / TS joinTextAtSeam (messages.ts:2505-2515): the
+                // Anthropic API concatenates adjacent text parts with NO
+                // separator, so insert a newline at the seam when both the
+                // trailing dest part and leading src part are text
+                // (otherwise '2+2' + '3+3' would merge to '2+23+3').
+                if let (Some(crate::UserContent::Text(last)), Some(crate::UserContent::Text(_))) =
+                    (dest_content.last_mut(), src_content.first())
+                {
+                    last.text.push('\n');
+                }
                 dest_content.extend(src_content);
             }
         } else {
@@ -1265,6 +1392,72 @@ pub fn filter_orphaned_thinking_only_messages(messages: &mut Vec<Message>) {
             None => false, // No id → cannot ever merge → orphaned.
         }
     });
+}
+
+/// One user-message image that exceeds the API base64 size cap (TS
+/// `ImageSizeError`). Carries the offending base64 length and the cap so the
+/// caller can surface a clear "please resize" error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageSizeError {
+    /// Base64 length of the offending image.
+    pub base64_len: usize,
+    /// The configured cap (`API_IMAGE_MAX_BASE64_SIZE`).
+    pub max_base64_len: usize,
+}
+
+impl ImageSizeError {
+    /// User-facing message mirroring TS "Please resize the image before sending".
+    pub fn message(&self) -> String {
+        format!(
+            "An image in the conversation is too large to send to the API \
+             ({} bytes base64, limit {}). Please resize the image before sending.",
+            self.base64_len, self.max_base64_len
+        )
+    }
+}
+
+/// Validate that no user-message image exceeds the API base64 size cap before
+/// it hits the wire — TS `validateImagesForAPI`, the final step of
+/// `normalizeMessagesForAPI` (`utils/messages.ts:2367`). `max_base64_len` is the
+/// provider cap (`coco_config::constants::API_IMAGE_MAX_BASE64_SIZE`). Returns
+/// the first offender so the caller can short-circuit the request with a clear
+/// error instead of letting the provider reject the whole prompt.
+pub fn validate_images_for_api(
+    prompt: &[LlmMessage],
+    max_base64_len: usize,
+) -> Result<(), ImageSizeError> {
+    for msg in prompt {
+        let LlmMessage::User { content, .. } = msg else {
+            continue;
+        };
+        for part in content {
+            let coco_llm_types::UserContentPart::File(f) = part else {
+                continue;
+            };
+            if !f.media_type.starts_with("image/") {
+                continue;
+            }
+            let Some(raw) = f.data.as_data() else {
+                continue;
+            };
+            // Match TS `block.source.data.length` (base64 string length). For
+            // raw bytes the equivalent base64 length is 4 chars per 3 bytes.
+            let base64_len = if let Some(s) = raw.as_base64() {
+                s.len()
+            } else if let Some(b) = raw.as_bytes() {
+                b.len().div_ceil(3) * 4
+            } else {
+                0
+            };
+            if base64_len > max_base64_len {
+                return Err(ImageSizeError {
+                    base64_len,
+                    max_base64_len,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -73,6 +73,19 @@ impl NotificationSink for CommandQueueNotificationSink {
     }
 }
 
+#[async_trait]
+impl coco_hooks::AsyncRewakeSink for CommandQueueNotificationSink {
+    async fn enqueue_rewake(&self, _command: String, message: String) {
+        let cmd = QueuedCommand::new(message, QueuePriority::Later)
+            .with_origin(QueueOrigin::TaskNotification);
+        self.queue.enqueue(cmd).await;
+        debug!(
+            target: "coco::hook_rewake",
+            "enqueued asyncRewake task notification"
+        );
+    }
+}
+
 fn kind_label(kind: &NotificationKind) -> &'static str {
     match kind {
         NotificationKind::ShellTerminal { .. } => "shell_terminal",

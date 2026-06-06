@@ -63,6 +63,44 @@ fn assistant_msg(text: &str) -> Message {
     })
 }
 
+fn assistant_api_error(message: &str, error_type: Option<&str>) -> Message {
+    Message::Assistant(AssistantMessage {
+        message: LlmMessage::assistant(vec![]),
+        uuid: Uuid::new_v4(),
+        model: "test".into(),
+        stop_reason: None,
+        usage: None,
+        cost_usd: None,
+        request_id: None,
+        api_error: Some(ApiError {
+            message: message.to_string(),
+            status_code: None,
+            error_type: error_type.map(str::to_string),
+        }),
+    })
+}
+
+fn user_with_files() -> Message {
+    Message::User(UserMessage {
+        message: LlmMessage::User {
+            content: vec![
+                UserContent::text("look"),
+                UserContent::image(vec![1, 2, 3], "image/png"),
+                UserContent::File(FileContent::from_base64("JVBERi0=", "application/pdf")),
+            ],
+            provider_options: None,
+        },
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    })
+}
+
 fn tombstone_msg() -> Message {
     Message::Tombstone(TombstoneMessage {
         uuid: Uuid::new_v4(),
@@ -82,6 +120,82 @@ fn test_filters_tombstones() {
     let msgs = vec![user_msg("hello"), tombstone_msg(), assistant_msg("hi")];
     let result = normalize_messages_for_api(&arc_vec(&msgs));
     assert_eq!(result.len(), 2); // tombstone filtered out
+}
+
+#[test]
+fn normalize_strips_prior_image_after_image_too_large_error() {
+    let msgs = vec![
+        user_with_files(),
+        assistant_api_error("An image in the conversation is too large", None),
+        user_with_files(),
+    ];
+
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+
+    let LlmMessage::User { content, .. } = &result[0] else {
+        panic!("expected first user message");
+    };
+    assert_eq!(
+        content
+            .iter()
+            .filter(|part| matches!(
+                part,
+                UserContent::File(file) if file.media_type == "image/png"
+            ))
+            .count(),
+        1,
+        "only the new post-error image should remain after user merge"
+    );
+    assert!(content.iter().any(|part| matches!(
+        part,
+        UserContent::File(file) if file.media_type == "application/pdf"
+    )));
+
+    let LlmMessage::User { content, .. } = result.last().unwrap() else {
+        panic!("expected last user message");
+    };
+    assert!(content.iter().any(|part| matches!(
+        part,
+        UserContent::File(file) if file.media_type == "image/png"
+    )));
+}
+
+#[test]
+fn normalize_strips_prior_document_after_pdf_too_large_error() {
+    let msgs = vec![
+        user_with_files(),
+        assistant_api_error("PDF document is too large to send", None),
+    ];
+
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+
+    let LlmMessage::User { content, .. } = &result[0] else {
+        panic!("expected user message");
+    };
+    assert!(content.iter().any(|part| matches!(
+        part,
+        UserContent::File(file) if file.media_type == "image/png"
+    )));
+    assert!(!content.iter().any(|part| matches!(
+        part,
+        UserContent::File(file) if file.media_type == "application/pdf"
+    )));
+}
+
+#[test]
+fn normalize_strips_prior_image_and_document_after_request_too_large_error() {
+    let msgs = vec![
+        user_with_files(),
+        assistant_api_error("Request too large", Some("request_too_large")),
+    ];
+
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+
+    let LlmMessage::User { content, .. } = &result[0] else {
+        panic!("expected user message");
+    };
+    assert_eq!(content.len(), 1);
+    assert!(matches!(&content[0], UserContent::Text(_)));
 }
 
 #[test]
@@ -138,6 +252,27 @@ fn test_merge_consecutive_user_messages_basic() {
     } else {
         panic!("expected User message");
     }
+}
+
+#[test]
+fn test_merge_consecutive_user_messages_inserts_seam_newline() {
+    // #83: merging two text user messages inserts a newline at the seam
+    // so the Anthropic API doesn't concatenate them ('2+2' + '3+3').
+    let mut msgs = vec![user_msg("2+2"), user_msg("3+3")];
+    merge_consecutive_user_messages(&mut msgs);
+    let Message::User(u) = &msgs[0] else {
+        panic!("expected User")
+    };
+    let LlmMessage::User { content, .. } = &u.message else {
+        panic!("expected User Llm")
+    };
+    let crate::UserContent::Text(first) = &content[0] else {
+        panic!("expected text part")
+    };
+    assert_eq!(
+        first.text, "2+2\n",
+        "seam newline must be appended to the first part"
+    );
 }
 
 #[test]
@@ -1237,4 +1372,75 @@ mod pipeline_invariants {
         assert!(!passes::MergeAssistantsByRequestId.would_mutate(&empty));
         assert!(!passes::StripExitPlanModeInjectedFields.would_mutate(&empty));
     }
+}
+
+#[test]
+fn test_local_command_system_message_becomes_user() {
+    // #82: local_command system messages must reach the API as user
+    // messages so the model can reference prior command output.
+    let cmd = Message::System(SystemMessage::LocalCommand(SystemLocalCommandMessage {
+        uuid: Uuid::new_v4(),
+        command: "ls".into(),
+        output: "file1.rs\nfile2.rs".into(),
+    }));
+    let msgs = vec![user_msg("run ls"), cmd];
+    let result = normalize_messages_for_api(&arc_vec(&msgs));
+    let joined: String = result
+        .iter()
+        .filter_map(|m| match m {
+            LlmMessage::User { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|p| match p {
+                        crate::UserContent::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        joined.contains("file1.rs"),
+        "local command output must reach the API as user text: {joined}"
+    );
+}
+
+// === validate_images_for_api ===
+
+#[test]
+fn test_validate_images_for_api_rejects_oversized_image() {
+    use crate::UserContent;
+    use coco_llm_types::FilePart;
+    use coco_llm_types::TextPart;
+    let big = "a".repeat(11); // base64 length 11 > cap 10
+    let prompt = vec![LlmMessage::User {
+        content: vec![
+            UserContent::Text(TextPart::new("caption")),
+            UserContent::File(FilePart::from_base64(big, "image/png")),
+        ],
+        provider_options: None,
+    }];
+    let err = validate_images_for_api(&prompt, 10).expect_err("oversized image must be rejected");
+    assert_eq!(err.base64_len, 11);
+    assert_eq!(err.max_base64_len, 10);
+    assert!(err.message().contains("resize"));
+}
+
+#[test]
+fn test_validate_images_for_api_allows_small_image_and_non_image_files() {
+    use crate::UserContent;
+    use coco_llm_types::FilePart;
+    let prompt = vec![LlmMessage::User {
+        content: vec![
+            // 3-char base64 image, under the 10-byte cap.
+            UserContent::File(FilePart::from_base64("abc", "image/png")),
+            // A large non-image file is not subject to the image cap.
+            UserContent::File(FilePart::from_base64("x".repeat(100), "application/pdf")),
+        ],
+        provider_options: None,
+    }];
+    assert!(validate_images_for_api(&prompt, 10).is_ok());
 }

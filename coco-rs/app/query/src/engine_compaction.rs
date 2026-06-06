@@ -95,6 +95,21 @@ impl QueryEngine {
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         request: ManualCompactRequest,
     ) -> coco_compact::CompactOutcome {
+        // #210 / TS commands/compact/index.ts:9: COCO_COMPACT_DISABLE
+        // removes /compact from the registry entirely, so the env disables
+        // BOTH auto and manual compaction. Honor the hard-kill here so the
+        // manual path (SDK / scripted / old transcript) can't bypass it.
+        if self.config.compact.auto.disabled_by_env {
+            append_manual_compact_notice(
+                history,
+                event_tx,
+                &request,
+                "Compaction is disabled via the COCO_COMPACT_DISABLE environment variable.",
+            )
+            .await;
+            emit_compaction_done(event_tx).await;
+            return coco_compact::CompactOutcome::Skipped;
+        }
         if history.is_empty() {
             append_manual_compact_notice(history, event_tx, &request, "No messages to compact.")
                 .await;
@@ -806,6 +821,7 @@ impl QueryEngine {
                 cache: None,
                 stop_sequences: None,
                 response_format: None,
+                cancel: None,
             };
             match self
                 .model_runtimes

@@ -158,7 +158,7 @@ pub enum UserCommand {
         images: Vec<coco_tui_ui::paste::ImageData>,
     },
     /// Interrupt current operation (Ctrl+C).
-    Interrupt,
+    Interrupt(coco_types::TurnAbortReason),
     /// Interrupt a teammate's active turn without killing the teammate.
     InterruptAgentCurrentWork { agent_id: String },
     /// Cancel a running subagent / background task. Fires the task's

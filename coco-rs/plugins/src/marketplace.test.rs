@@ -374,6 +374,202 @@ fn test_detect_delisted_plugins_empty_when_all_listed() {
     assert!(delisted.is_empty());
 }
 
+#[test]
+fn test_detect_and_uninstall_delisted_sweep_removes_persists_and_flags() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_home = tmp.path();
+    let plugins_dir = config_home.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("mkdir plugins");
+
+    // Installed ledger: alpha@mkt (still listed) + beta@mkt (delisted).
+    make_installed_manager(
+        &plugins_dir,
+        &[("alpha@mkt", Some("1.0.0")), ("beta@mkt", Some("1.0.0"))],
+    );
+
+    // Cached marketplace manifest listing only alpha.
+    let marketplace = make_marketplace("mkt", vec![make_entry("alpha", None, None)]);
+    let mkt_file = plugins_dir.join("marketplaces").join("mkt.json");
+    std::fs::create_dir_all(mkt_file.parent().expect("parent")).expect("mkdir mkt");
+    std::fs::write(&mkt_file, serde_json::to_string(&marketplace).expect("ser")).expect("write");
+
+    // Register so the sweep's MarketplaceManager can load the cached manifest.
+    let mut mgr = MarketplaceManager::new(plugins_dir.clone());
+    mgr.register_marketplace(
+        "mkt",
+        MarketplaceSource::Url {
+            url: "https://example.com/mkt.json".to_string(),
+            headers: None,
+        },
+        mkt_file.to_str().expect("utf8"),
+    )
+    .expect("register");
+
+    let delisted = detect_and_uninstall_delisted_plugins(config_home);
+    assert_eq!(delisted, vec!["beta@mkt".to_string()]);
+
+    // Persisted: beta removed, alpha retained.
+    let reloaded =
+        crate::loader::InstalledPluginsManager::load(plugins_dir.join("installed_plugins.json"))
+            .expect("reload");
+    assert!(reloaded.is_installed("alpha@mkt"));
+    assert!(!reloaded.is_installed("beta@mkt"));
+
+    // Audit trail recorded.
+    assert!(
+        load_flagged_plugins(&plugins_dir)
+            .iter()
+            .any(|f| f.plugin_id == "beta@mkt")
+    );
+}
+
+#[test]
+fn test_register_seed_marketplaces_writes_entry_with_seed_location_and_is_idempotent() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plugins_dir = tmp.path().join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("mkdir plugins");
+
+    // Build a seed dir: known_marketplaces.json + marketplaces/<name>/ content.
+    let seed = tmp.path().join("seed");
+    std::fs::create_dir_all(seed.join("marketplaces").join("seedmkt")).expect("mkdir seed mkt");
+    let mut seed_cfg: KnownMarketplacesFile = HashMap::new();
+    seed_cfg.insert(
+        "seedmkt".to_string(),
+        KnownMarketplace {
+            source: MarketplaceSource::Github {
+                repo: "acme/seed".into(),
+                git_ref: None,
+                path: None,
+                sparse_paths: None,
+            },
+            // A bogus build-time path that must be IGNORED in favor of the
+            // runtime seed location.
+            install_location: "/build/time/path".into(),
+            last_updated: "2024-01-01T00:00:00Z".into(),
+            auto_update: Some(true),
+        },
+    );
+    std::fs::write(
+        seed.join("known_marketplaces.json"),
+        serde_json::to_string(&seed_cfg).expect("ser"),
+    )
+    .expect("write seed json");
+
+    let changed = register_seed_marketplaces_from(&plugins_dir, std::slice::from_ref(&seed));
+    assert!(changed, "first registration writes the seed entry");
+
+    let mgr = MarketplaceManager::new(plugins_dir.clone());
+    let known = mgr.load_known_marketplaces();
+    let entry = known.get("seedmkt").expect("seedmkt registered");
+    assert_eq!(
+        entry.install_location,
+        seed.join("marketplaces").join("seedmkt").to_string_lossy()
+    );
+    assert_eq!(
+        entry.auto_update,
+        Some(false),
+        "seed forces auto_update off"
+    );
+
+    // Idempotent: a second call with unchanged seed writes nothing.
+    assert!(!register_seed_marketplaces_from(&plugins_dir, &[seed])); // no change
+}
+
+#[test]
+fn test_register_seed_marketplaces_skips_missing_content() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plugins_dir = tmp.path().join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("mkdir");
+    let seed = tmp.path().join("seed");
+    std::fs::create_dir_all(&seed).expect("mkdir seed");
+    // known_marketplaces.json references a marketplace with NO content on disk.
+    let mut seed_cfg: KnownMarketplacesFile = HashMap::new();
+    seed_cfg.insert(
+        "ghost".to_string(),
+        KnownMarketplace {
+            source: MarketplaceSource::Github {
+                repo: "acme/ghost".into(),
+                git_ref: None,
+                path: None,
+                sparse_paths: None,
+            },
+            install_location: "/x".into(),
+            last_updated: "2024-01-01T00:00:00Z".into(),
+            auto_update: None,
+        },
+    );
+    std::fs::write(
+        seed.join("known_marketplaces.json"),
+        serde_json::to_string(&seed_cfg).expect("ser"),
+    )
+    .expect("write");
+
+    assert!(!register_seed_marketplaces_from(&plugins_dir, &[seed]));
+    let mgr = MarketplaceManager::new(plugins_dir);
+    assert!(!mgr.load_known_marketplaces().contains_key("ghost"));
+}
+
+#[test]
+fn test_get_declared_marketplaces_parses_settings() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_home = tmp.path();
+    std::fs::write(
+        config_home.join("settings.json"),
+        r#"{ "extraKnownMarketplaces": { "foo": { "source": { "source": "github", "repo": "a/b" } } } }"#,
+    )
+    .expect("write settings");
+
+    let declared = get_declared_marketplaces(config_home);
+    assert_eq!(
+        declared.get("foo"),
+        Some(&MarketplaceSource::Github {
+            repo: "a/b".into(),
+            git_ref: None,
+            path: None,
+            sparse_paths: None,
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_reconcile_marketplaces_noop_when_none_declared() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // No settings.json → no declared marketplaces → empty result, no I/O.
+    assert!(
+        reconcile_marketplaces(&tmp.path().join("plugins"), tmp.path())
+            .await
+            .is_empty()
+    );
+}
+
+#[test]
+fn test_detect_and_uninstall_delisted_sweep_skips_unreadable_marketplace() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_home = tmp.path();
+    let plugins_dir = config_home.join("plugins");
+    std::fs::create_dir_all(&plugins_dir).expect("mkdir plugins");
+    make_installed_manager(&plugins_dir, &[("alpha@mkt", Some("1.0.0"))]);
+
+    // Register a marketplace whose cached manifest does not exist on disk.
+    let mut mgr = MarketplaceManager::new(plugins_dir.clone());
+    mgr.register_marketplace(
+        "mkt",
+        MarketplaceSource::Url {
+            url: "https://example.com/mkt.json".to_string(),
+            headers: None,
+        },
+        plugins_dir.join("missing.json").to_str().expect("utf8"),
+    )
+    .expect("register");
+
+    // An unreadable manifest must never be treated as "everything delisted".
+    assert!(detect_and_uninstall_delisted_plugins(config_home).is_empty());
+    let reloaded =
+        crate::loader::InstalledPluginsManager::load(plugins_dir.join("installed_plugins.json"))
+            .expect("reload");
+    assert!(reloaded.is_installed("alpha@mkt"));
+}
+
 // ---------------------------------------------------------------------------
 // flagged plugins I/O
 // ---------------------------------------------------------------------------
@@ -498,4 +694,54 @@ fn test_check_plugin_updates_needs_update_when_no_local_version() {
     let checks = check_plugin_updates(&installed, &marketplace, "mkt");
     assert_eq!(checks.len(), 1);
     assert!(checks[0].needs_update);
+}
+
+// ---------------------------------------------------------------------------
+// resolve_plugin_hint
+// ---------------------------------------------------------------------------
+
+fn make_hint(value: &str) -> crate::hints::ClaudeCodeHint {
+    crate::hints::ClaudeCodeHint {
+        v: 1,
+        hint_type: "plugin".to_string(),
+        value: value.to_string(),
+        source_command: "mytool".to_string(),
+    }
+}
+
+#[test]
+fn test_resolve_plugin_hint_found_in_cache() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut mgr = MarketplaceManager::new(tmp.path().to_path_buf());
+    let marketplace = make_marketplace(
+        "anthropic-plugins",
+        vec![make_entry("foo", Some("A foo plugin"), None)],
+    );
+    mgr.marketplace_cache
+        .insert("anthropic-plugins".to_string(), marketplace);
+
+    let hint = make_hint("foo@anthropic-plugins");
+    let rec = resolve_plugin_hint(&hint, &mgr).expect("should resolve");
+    assert_eq!(rec.plugin_id, "foo@anthropic-plugins");
+    assert_eq!(rec.plugin_name, "foo");
+    assert_eq!(rec.marketplace_name, "anthropic-plugins");
+    assert_eq!(rec.plugin_description.as_deref(), Some("A foo plugin"));
+    assert_eq!(rec.source_command, "mytool");
+}
+
+#[test]
+fn test_resolve_plugin_hint_not_in_cache_returns_none() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mgr = MarketplaceManager::new(tmp.path().to_path_buf());
+    let hint = make_hint("foo@anthropic-plugins");
+    assert!(resolve_plugin_hint(&hint, &mgr).is_none());
+}
+
+#[test]
+fn test_resolve_plugin_hint_bare_id_returns_none() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mgr = MarketplaceManager::new(tmp.path().to_path_buf());
+    // No '@' separator -> cannot resolve a marketplace.
+    let hint = make_hint("bare-name");
+    assert!(resolve_plugin_hint(&hint, &mgr).is_none());
 }

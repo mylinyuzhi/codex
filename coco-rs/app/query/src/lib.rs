@@ -84,6 +84,7 @@ pub use config::SessionBootstrap;
 pub use engine::QueryEngine;
 pub use engine_compaction::ManualCompactRequest;
 pub use engine_live_rules::EngineLiveRulesHandle;
+pub use helpers::queued_command_to_attachment;
 pub use session_start_hooks::SessionStartHookSideEffectSink;
 pub use session_start_hooks::SessionStartHookSideEffectSinkRef;
 pub use session_start_hooks::SessionStartHookSideEffects;

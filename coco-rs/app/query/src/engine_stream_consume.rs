@@ -387,11 +387,16 @@ impl QueryEngine {
                             completion_event_mode: crate::helpers::ToolCompletionEventMode::Defer,
                         };
                         let pre_prep_len = prep_args.history.len();
+                        let mut permission_aborted = false;
                         let prep_result = crate::tool_call_preparer::prepare_one_pending_tool_call(
                             &mut prep_args,
                             &tcp,
+                            &mut permission_aborted,
                         )
                         .await;
+                        if permission_aborted {
+                            self.cancel.cancel();
+                        }
                         let captured_errors = history.len().saturating_sub(pre_prep_len);
                         let captured: Vec<Message> = if captured_errors > 0 {
                             history.drain_pushed_since(pre_prep_len)

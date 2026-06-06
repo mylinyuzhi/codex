@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::compact_settings::PartialCompactSettings;
 use crate::model::ModelSelectionSettings;
@@ -247,9 +248,12 @@ pub struct Settings {
     /// When true, only managed (policy-level) hooks are allowed to run.
     #[serde(default)]
     pub allow_managed_hooks_only: bool,
-    /// When true, only plugin-level customization is permitted.
+    /// Managed policy: lock customization surfaces (skills/agents/hooks/mcp)
+    /// to plugin-only sources. `true` locks all four; an array locks only the
+    /// listed surfaces; absent/false locks nothing. TS:
+    /// `strictPluginOnlyCustomization` (`utils/settings/pluginOnlyPolicy.ts`).
     #[serde(default)]
-    pub strict_plugin_only_customization: bool,
+    pub strict_plugin_only_customization: StrictPluginOnlyCustomization,
     /// Managed allowlist of approved marketplace names. When non-empty, only
     /// these marketplaces may be installed from (TS `strictKnownMarketplaces`).
     #[serde(default)]
@@ -269,6 +273,42 @@ pub struct Settings {
     pub include_co_authored_by: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_git_instructions: Option<bool>,
+}
+
+/// Managed `strictPluginOnlyCustomization` policy. Locks customization
+/// surfaces (skills/agents/hooks/mcp) to plugin-only sources — user-level
+/// (`~/.coco/*`) and project-level (`.claude/*`) loaders are skipped for the
+/// locked surfaces. Managed (policy) and plugin sources always load.
+///
+/// `true` locks all surfaces; an array locks only the listed surfaces;
+/// absent/false (`Disabled`) locks nothing. TS:
+/// `isRestrictedToPluginOnly` in `utils/settings/pluginOnlyPolicy.ts`.
+///
+/// Untagged: the bool variant MUST precede the `Vec` variant so a JSON
+/// boolean deserializes into `AllLocked` rather than failing the array arm.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StrictPluginOnlyCustomization {
+    /// Absent / not configured — nothing locked.
+    #[default]
+    Disabled,
+    /// `true` locks all surfaces (`false` locks none). The bool is carried so
+    /// the round-trip preserves an explicit `false` distinct from absence.
+    AllLocked(bool),
+    /// Lock only the listed surfaces (e.g. `["skills", "mcp"]`).
+    SurfacesLocked(Vec<String>),
+}
+
+impl StrictPluginOnlyCustomization {
+    /// Whether `surface` is locked to plugin-only sources. Mirrors TS
+    /// `isRestrictedToPluginOnly(surface)`.
+    pub fn is_restricted_to_plugin_only(&self, surface: &str) -> bool {
+        match self {
+            Self::Disabled => false,
+            Self::AllLocked(b) => *b,
+            Self::SurfacesLocked(v) => v.iter().any(|s| s == surface),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -614,7 +654,9 @@ pub fn parse_settings(json: &str) -> crate::Result<Settings> {
 }
 
 /// Load and merge settings using the default user / managed paths
-/// (`~/.coco/settings.json` and the platform-managed file).
+/// (`~/.coco/settings.json` and the platform-managed file). Loads every
+/// source — callers that need `--setting-sources` filtering go through
+/// [`load_settings_with`] with an explicit enabled set.
 pub fn load_settings(
     cwd: &std::path::Path,
     flag_settings: Option<&std::path::Path>,
@@ -624,12 +666,30 @@ pub fn load_settings(
         flag_settings,
         &crate::global_config::user_settings_path(),
         &crate::global_config::managed_settings_path(),
+        &all_setting_sources(),
     )
+}
+
+/// The full enabled-source set (every source). Default for callers that
+/// don't honor `--setting-sources`.
+fn all_setting_sources() -> HashSet<SettingSource> {
+    HashSet::from([
+        SettingSource::User,
+        SettingSource::Project,
+        SettingSource::Local,
+        SettingSource::Flag,
+        SettingSource::Policy,
+    ])
 }
 
 /// Load and merge settings with explicit user / managed paths.
 /// Tests pass TempDir-rooted paths to isolate from the developer's
 /// real `~/.coco/`.
+///
+/// `enabled` is the `--setting-sources`-resolved set. User/Project/Local
+/// layers are skipped when their source is absent from the set; Flag and
+/// Policy ALWAYS load (admin/CLI-controlled, never user-disableable). Pass
+/// [`all_setting_sources`] to load everything.
 ///
 /// Merge order (later overrides earlier):
 ///   1. Plugin base
@@ -643,6 +703,7 @@ pub fn load_settings_with(
     flag_settings: Option<&std::path::Path>,
     user_path: &std::path::Path,
     managed_path: &std::path::Path,
+    enabled: &HashSet<SettingSource>,
 ) -> crate::Result<SettingsWithSource> {
     use crate::ResultExt;
     use crate::global_config;
@@ -665,6 +726,11 @@ pub fn load_settings_with(
     ];
 
     for (source, path) in &sources {
+        // Honor `--setting-sources`: a disabled user/project/local layer is
+        // skipped entirely (not merged, not recorded in per_source).
+        if !enabled.contains(source) {
+            continue;
+        }
         if path.exists() {
             load_and_merge(
                 &mut per_source,
@@ -703,6 +769,18 @@ pub fn load_settings_with(
     let settings: Settings = serde_json::from_value(merged)
         .with_ctx("failed to deserialize merged settings into Settings struct")?;
 
+    // Surface structured validation warnings (invalid mode combos, bad rules
+    // that survived per-source filtering, …) at load time instead of silently
+    // accepting them (TS validation.ts → user-visible ValidationErrors).
+    for err in validation::validate_settings(&settings) {
+        tracing::warn!(
+            target: "coco::config",
+            path = %err.path,
+            "settings validation: {}",
+            err.message
+        );
+    }
+
     Ok(SettingsWithSource {
         merged: settings,
         per_source,
@@ -724,8 +802,20 @@ fn load_and_merge(
     use crate::ResultExt;
     let contents = std::fs::read_to_string(path)
         .with_ctx_lazy(|| format!("failed to read settings file: {}", path.display()))?;
-    let value = crate::jsonc::parse_value(&contents)
+    let mut value = crate::jsonc::parse_value(&contents)
         .with_ctx_lazy(|| format!("failed to parse JSONC in settings file: {}", path.display()))?;
+    // Strip malformed permission rules per-source (TS validation.ts) so one bad
+    // rule can't poison the merged set, and warn so the user sees why a rule had
+    // no effect instead of it silently passing through verbatim.
+    let path_str = path.display().to_string();
+    for err in validation::filter_invalid_permission_rules(&mut value, &path_str) {
+        tracing::warn!(
+            target: "coco::config",
+            path = %err.path,
+            "invalid permission rule dropped: {}",
+            err.message
+        );
+    }
     per_source.insert(source, value.clone());
     source_paths.insert(source, path.to_path_buf());
     merge::deep_merge(merged, &value);

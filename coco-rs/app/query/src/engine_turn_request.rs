@@ -168,7 +168,8 @@ impl QueryEngine {
             prompt,
             max_tokens: None,
             thinking_level: self.config.thinking_level.clone(),
-            fast_mode: false,
+            fast_mode: self.config.fast_mode
+                && coco_config::is_fast_mode_supported_by_model(&self.config.model_id),
             tools: if tool_defs.is_empty() {
                 None
             } else {
@@ -183,6 +184,9 @@ impl QueryEngine {
             cache: self.config.prompt_cache.clone(),
             stop_sequences: None,
             response_format: None,
+            // Interruptible backoff: a user interrupt cancels a long capacity
+            // retry instead of waiting it out (TS `options.signal`).
+            cancel: Some(self.cancel.clone()),
         };
 
         let streaming_ctx: Option<Arc<ToolUseContext>> = if self.config.streaming_tool_execution {
@@ -211,7 +215,8 @@ impl QueryEngine {
             None
         };
         let streaming_handle = streaming_ctx.as_ref().map(|ctx_arc| {
-            let executor_base = coco_tool_runtime::StreamingToolExecutor::new();
+            let executor_base = coco_tool_runtime::StreamingToolExecutor::new()
+                .with_turn_abort(ctx_arc.abort.turn_signal());
             let executor_with_state = match self.app_state.as_ref() {
                 Some(state) => executor_base.with_app_state(state.clone()),
                 None => executor_base,
@@ -223,17 +228,19 @@ impl QueryEngine {
             let hooks_for_closure = self.hooks.clone();
             let orchestration_for_closure = self.orchestration_ctx();
             let hook_tx_for_closure = hook_tx_opt.cloned();
-            let run_one: StreamingRunFn = Box::new(move |prepared, _runtime| {
+            let run_one: StreamingRunFn = Box::new(move |prepared, runtime| {
                 let ctx = ctx_for_closure.clone();
                 let hooks = hooks_for_closure.clone();
                 let orchestration_ctx = orchestration_for_closure.clone();
                 let hook_tx = hook_tx_for_closure.clone();
                 Box::pin(async move {
                     let effective_input = prepared.parsed_input.clone();
-                    let call_ctx = ctx.clone_for_tool_call(prepared.tool_use_id.clone());
+                    let mut call_ctx = ctx.clone_for_tool_call(prepared.tool_use_id.clone());
+                    call_ctx.abort = runtime.abort.clone();
+                    call_ctx.progress_tx = runtime.progress_tx.clone();
                     let execute_result = tokio::select! {
                         r = prepared.tool.execute(effective_input.clone(), &call_ctx) => r,
-                        () = call_ctx.cancel.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
+                        () = call_ctx.abort.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
                     };
                     crate::tool_outcome_builder::build_outcome_from_execution(
                         crate::tool_outcome_builder::RunOneTail {

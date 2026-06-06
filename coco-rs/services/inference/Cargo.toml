@@ -8,6 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+rand.workspace = true
 coco-types.workspace = true
 coco-config.workspace = true
 coco-error.workspace = true
@@ -31,6 +32,7 @@ serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-util.workspace = true
 async-trait.workspace = true
 tracing.workspace = true
 futures.workspace = true

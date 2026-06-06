@@ -79,6 +79,15 @@ pub trait TaskListHandle: Send + Sync {
     /// none match `/verif/i`".
     async fn should_nudge_verification(&self, just_completed: bool, is_main_thread: bool) -> bool;
 
+    /// Fire a "tasks changed" notification without mutating any task.
+    /// Default no-op for in-memory / no-op stores; the disk-backed store
+    /// overrides it to emit its change broadcast. Used by team teardown,
+    /// which removes the whole task-list directory out-of-band (so no
+    /// task op runs to fire the usual notification). TS parity: the
+    /// `notifyTasksUpdated()` call inside `cleanupTeamDirectories`
+    /// (`teamHelpers.ts:677`).
+    async fn notify_change(&self) {}
+
     /// Clear ownership of every task owned by a stopping teammate,
     /// resetting each to its pending state so another teammate can
     /// claim it. Returns the `(task_id, subject)` pairs that were

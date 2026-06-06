@@ -101,6 +101,12 @@ pub struct RuntimeConfig {
     /// model_id)` pair via `model_registry`; subagents inherit this
     /// `Arc` and never widen it.
     pub tool_overrides: Arc<ToolOverrides>,
+    /// Which setting sources participate in loading + customization. Resolved
+    /// from the `--setting-sources` CSV flag (`None` ⇒ all five). `Policy` and
+    /// `Flag` are always present (read-only, admin/CLI controlled). Consumed by
+    /// the skill/agent/hook/mcp loaders to skip user/project/local scopes that
+    /// the operator disabled. TS: `getEnabledSettingSources`.
+    pub enabled_setting_sources: std::collections::HashSet<crate::settings::SettingSource>,
 }
 
 /// Resolved on-disk paths for settings + catalog files. Threaded
@@ -162,6 +168,8 @@ pub struct RuntimeConfigBuilder {
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
     catalogs: CatalogPaths,
+    /// Raw `--setting-sources` CSV. `None` ⇒ all five sources enabled.
+    setting_sources: Option<String>,
 }
 
 impl RuntimeConfigBuilder {
@@ -172,6 +180,7 @@ impl RuntimeConfigBuilder {
             env: EnvSnapshot::from_current_process(),
             overrides: RuntimeOverrides::default(),
             catalogs: CatalogPaths::default(),
+            setting_sources: None,
         }
     }
 
@@ -182,6 +191,7 @@ impl RuntimeConfigBuilder {
             env,
             overrides: RuntimeOverrides::default(),
             catalogs: CatalogPaths::default(),
+            setting_sources: None,
         }
     }
 
@@ -202,15 +212,72 @@ impl RuntimeConfigBuilder {
         self
     }
 
+    /// Restrict which setting sources participate via the `--setting-sources`
+    /// CSV (`user`/`project`/`local`/`flag`/`policy`). `None` (the default) ⇒
+    /// all five. `Policy` + `Flag` are always force-added downstream.
+    pub fn with_setting_sources(mut self, csv: Option<String>) -> Self {
+        self.setting_sources = csv;
+        self
+    }
+
     pub fn build(self) -> crate::Result<RuntimeConfig> {
+        let enabled = parse_enabled_setting_sources(self.setting_sources.as_deref());
         let settings = crate::settings::load_settings_with(
             &self.cwd,
             self.flag_settings.as_deref(),
             &self.catalogs.user_settings,
             &self.catalogs.managed_settings,
+            &enabled,
         )?;
-        build_runtime_config_with(settings, self.env, self.overrides, self.catalogs)
+        build_runtime_config_with(settings, self.env, self.overrides, self.catalogs, enabled)
     }
+}
+
+/// Parse the `--setting-sources` CSV into the enabled-source set.
+///
+/// `None` ⇒ all five sources. An explicit (possibly empty) string parses
+/// `user`/`project`/`local`/`flag`/`policy` tokens; unknown tokens are
+/// ignored. `Policy` and `Flag` are ALWAYS present — they're admin-managed
+/// (read-only) and CLI-supplied, so the operator can never disable them. TS:
+/// `parseSettingSourcesFlag` + `getEnabledSettingSources`.
+pub fn parse_enabled_setting_sources(
+    csv: Option<&str>,
+) -> std::collections::HashSet<crate::settings::SettingSource> {
+    use crate::settings::SettingSource;
+    let mut set = std::collections::HashSet::new();
+    match csv {
+        None => {
+            set.insert(SettingSource::User);
+            set.insert(SettingSource::Project);
+            set.insert(SettingSource::Local);
+        }
+        Some(raw) => {
+            for token in raw.split(',') {
+                match token.trim() {
+                    "user" => {
+                        set.insert(SettingSource::User);
+                    }
+                    "project" => {
+                        set.insert(SettingSource::Project);
+                    }
+                    "local" => {
+                        set.insert(SettingSource::Local);
+                    }
+                    "flag" => {
+                        set.insert(SettingSource::Flag);
+                    }
+                    "policy" => {
+                        set.insert(SettingSource::Policy);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Policy + Flag always participate.
+    set.insert(SettingSource::Policy);
+    set.insert(SettingSource::Flag);
+    set
 }
 
 /// Build a runtime using the default `CatalogPaths` (the developer's
@@ -222,7 +289,13 @@ pub fn build_runtime_config(
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
 ) -> crate::Result<RuntimeConfig> {
-    build_runtime_config_with(settings, env, overrides, CatalogPaths::default())
+    build_runtime_config_with(
+        settings,
+        env,
+        overrides,
+        CatalogPaths::default(),
+        parse_enabled_setting_sources(None),
+    )
 }
 
 /// Build a runtime with explicit catalog paths. Single-source for the
@@ -233,6 +306,7 @@ pub fn build_runtime_config_with(
     env: EnvSnapshot,
     overrides: RuntimeOverrides,
     catalogs: CatalogPaths,
+    enabled_setting_sources: std::collections::HashSet<crate::settings::SettingSource>,
 ) -> crate::Result<RuntimeConfig> {
     let env_only = EnvOnlyConfig::from_snapshot(&env);
     let providers = resolve_providers(&settings, &catalogs)?;
@@ -262,7 +336,7 @@ pub fn build_runtime_config_with(
     let skill_overrides = SkillOverrideTiers::from_per_source(&settings.per_source);
 
     Ok(RuntimeConfig {
-        api: ApiConfig::resolve(merged),
+        api: ApiConfig::resolve(merged, &env),
         loop_config: LoopConfig::resolve(merged, &overrides),
         tool: ToolConfig::resolve(merged, &env),
         shell: ShellConfig::resolve(merged, &env),
@@ -280,6 +354,7 @@ pub fn build_runtime_config_with(
         features,
         skill_overrides,
         tool_overrides,
+        enabled_setting_sources,
         settings,
         env_only,
         overrides,

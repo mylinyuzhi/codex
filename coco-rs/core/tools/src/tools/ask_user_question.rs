@@ -15,6 +15,10 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::AskUserQuestionAnswered;
+use coco_types::AskUserQuestionResult;
+use coco_types::ToolCheckResult;
+use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
@@ -93,6 +97,12 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
     )
 });
 
+/// Max display width of a question's `header` chip — mirrored in the schema
+/// description below and the TUI renderer's chip truncation
+/// (`app/tui::presentation::request::chip`). TS:
+/// `AskUserQuestionTool/prompt.ts` `ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12`.
+const ASK_USER_QUESTION_CHIP_WIDTH: usize = 12;
+
 pub struct AskUserQuestionTool;
 
 #[async_trait::async_trait]
@@ -111,39 +121,44 @@ impl Tool for AskUserQuestionTool {
                 "properties": {
                     "questions": {
                         "type": "array",
+                        // No hard `maxItems`: the description guides the model to
+                        // 1-4, but weak models over-generate and a hard reject
+                        // here triggers a retry loop (visible as bottom-bar
+                        // flicker). The TUI truncates to the cap on display
+                        // (`parse_question_items`).
                         "description": "Questions to ask the user (1-4 questions)",
                         "minItems": 1,
-                        "maxItems": 4,
                         "items": {
                             "type": "object",
                             "properties": {
                                 "question": {
                                     "type": "string",
-                                    "description": "The question text"
+                                    "description": "The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: \"Which library should we use for date formatting?\" If multiSelect is true, phrase it accordingly, e.g. \"Which features do you want to enable?\""
                                 },
                                 "header": {
                                     "type": "string",
-                                    "description": "Short label displayed as a chip/tag (max 20 chars)"
+                                    "description": format!("Very short label displayed as a chip/tag (max {ASK_USER_QUESTION_CHIP_WIDTH} chars). Examples: \"Auth method\", \"Library\", \"Approach\".")
                                 },
                                 "options": {
                                     "type": "array",
-                                    "description": "Available choices (2-4 options)",
+                                    // No hard `maxItems` — see the `questions`
+                                    // note above; the TUI truncates to the cap.
+                                    "description": "The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.",
                                     "minItems": 2,
-                                    "maxItems": 4,
                                     "items": {
                                         "type": "object",
                                         "properties": {
                                             "label": {
                                                 "type": "string",
-                                                "description": "Display text for this option (1-5 words)"
+                                                "description": "The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice."
                                             },
                                             "description": {
                                                 "type": "string",
-                                                "description": "Explanation of what this option means"
+                                                "description": "Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications."
                                             },
                                             "preview": {
                                                 "type": "string",
-                                                "description": "Optional preview content when option is focused"
+                                                "description": "Optional preview content rendered when this option is focused. Use for mockups, code snippets, or visual comparisons that help users compare options. See the tool description for the expected content format."
                                             }
                                         },
                                         "required": ["label", "description"]
@@ -151,7 +166,7 @@ impl Tool for AskUserQuestionTool {
                                 },
                                 "multiSelect": {
                                     "type": "boolean",
-                                    "description": "Allow multiple selections (default: false)"
+                                    "description": "Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive."
                                 }
                             },
                             "required": ["question", "header", "options"]
@@ -269,6 +284,30 @@ impl Tool for AskUserQuestionTool {
         }]
     }
 
+    /// Always require the user to answer — this is the seam that turns the tool
+    /// call into the interactive Question overlay.
+    ///
+    /// The tool is read-only (no side effects), so without this override the
+    /// evaluator auto-allows it and `execute()` just echoes the questions as a
+    /// raw JSON tool result. Returning `Ask` (at evaluator step 1c, before the
+    /// read-only mode fallthrough) routes through the permission bridge, which
+    /// emits `QuestionAsked` and pushes the Question overlay; the answer
+    /// round-trip (`updated_input` → `execute`) is already wired. Mirrors TS
+    /// `AskUserQuestionTool.checkPermissions` which unconditionally returns
+    /// `{ behavior: 'ask' }`. In `DontAsk` mode the evaluator converts this to
+    /// `Deny` (never prompt), which is the intended posture.
+    async fn check_permissions(
+        &self,
+        _input: &AskUserQuestionInput,
+        _ctx: &ToolUseContext,
+    ) -> ToolCheckResult {
+        ToolCheckResult::Ask {
+            message: "Answer questions?".to_string(),
+            suggestions: Vec::new(),
+            choices: None,
+        }
+    }
+
     async fn execute(
         &self,
         input: AskUserQuestionInput,
@@ -294,14 +333,68 @@ impl Tool for AskUserQuestionTool {
         if let Some(annotations) = input.annotations {
             data.insert("annotations".into(), annotations);
         }
+        // Structured answers for the styled transcript cell (the model still
+        // sees the prose via `render_for_model`). `None` when no answers were
+        // spliced (declined / test fixtures) — the renderer then falls back.
+        let display_data = ask_user_question_display(&data);
         Ok(ToolResult {
             data: Value::Object(data),
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
-            display_data: None,
+            display_data,
         })
     }
+}
+
+/// Build the structured [`ToolDisplayData::AskUserQuestionResult`] for the
+/// styled transcript cell from the spliced `answers`/`annotations` envelope.
+/// Question order follows the model's `questions` array (the answers map order
+/// is not guaranteed). Returns `None` when no answers were spliced — the
+/// renderer then falls back to the prose.
+fn ask_user_question_display(data: &serde_json::Map<String, Value>) -> Option<ToolDisplayData> {
+    let answers = data
+        .get("answers")
+        .and_then(Value::as_object)
+        .filter(|m| !m.is_empty())?;
+    let annotations = data.get("annotations").and_then(Value::as_object);
+    // Preserve the model's question order; fall back to the answers map order.
+    let ordered: Vec<String> = match data.get("questions").and_then(Value::as_array) {
+        Some(qs) => qs
+            .iter()
+            .filter_map(|q| q.get("question").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect(),
+        None => answers.keys().cloned().collect(),
+    };
+    let questions = ordered
+        .into_iter()
+        .map(|question| {
+            let answer = answers
+                .get(&question)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            // `build_answer_payload` joins multi-select labels with ", ".
+            let answers = if answer.is_empty() {
+                Vec::new()
+            } else {
+                answer.split(", ").map(str::to_string).collect()
+            };
+            let note = annotations
+                .and_then(|a| a.get(&question))
+                .and_then(|entry| entry.get("notes"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            AskUserQuestionAnswered {
+                question,
+                answers,
+                note,
+            }
+        })
+        .collect();
+    Some(ToolDisplayData::AskUserQuestionResult(
+        AskUserQuestionResult { questions },
+    ))
 }
 
 #[cfg(test)]

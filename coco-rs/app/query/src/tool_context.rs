@@ -38,13 +38,16 @@ use coco_tool_runtime::HookHandleRef;
 use coco_tool_runtime::LspHandleRef;
 use coco_tool_runtime::MailboxHandleRef;
 use coco_tool_runtime::McpHandleRef;
+use coco_tool_runtime::ScheduleStoreRef;
 use coco_tool_runtime::SkillHandleRef;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TeamTaskListRouterRef;
 use coco_tool_runtime::TodoListHandleRef;
+use coco_tool_runtime::ToolAbortSignal;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::TurnAbortSignal;
 use coco_types::AgentId;
 use coco_types::AppStateReadHandle;
 use coco_types::PermissionBehavior;
@@ -54,7 +57,6 @@ use coco_types::PermissionRulesBySource;
 use coco_types::ToolAppState;
 use coco_types::ToolPermissionContext;
 use tokio::sync::RwLock;
-use tokio_util::sync::CancellationToken;
 
 use crate::config::QueryEngineConfig;
 
@@ -68,7 +70,7 @@ use crate::config::QueryEngineConfig;
 pub(crate) struct ToolContextFactory {
     pub(crate) config: QueryEngineConfig,
     pub(crate) tools: Arc<ToolRegistry>,
-    pub(crate) cancel: CancellationToken,
+    pub(crate) turn_abort: TurnAbortSignal,
     pub(crate) mailbox: Option<MailboxHandleRef>,
     /// In-memory FIFO of per-recipient pending messages. Production
     /// wires the same `Arc<InMemoryPendingMessageStore>` here AND on the
@@ -117,6 +119,8 @@ pub(crate) struct ToolContextFactory {
     /// `mcp_handle_adapter::McpManagerAdapter`; TUI currently passes
     /// `None` (no MCP bootstrap yet in TUI runner).
     pub(crate) mcp_handle: Option<McpHandleRef>,
+    /// Optional scheduling backend. `None` resolves to `NoOpScheduleStore`.
+    pub(crate) schedule_store: Option<ScheduleStoreRef>,
     /// Active agent-definition catalog snapshot (T7). Surfaced on
     /// `ToolUseContext.agent_catalog` so AgentTool can resolve a
     /// `subagent_type` to its full `AgentDefinition` and thread the
@@ -376,7 +380,7 @@ impl ToolContextFactory {
                 self.config.plan_mode_settings.workflow,
                 coco_config::PlanModeWorkflow::Interview
             ),
-            cancel: self.cancel.clone(),
+            abort: ToolAbortSignal::from_turn(self.turn_abort.clone()),
             messages: overrides
                 .messages_snapshot
                 .unwrap_or_else(|| Arc::new(Vec::new())),
@@ -467,7 +471,10 @@ impl ToolContextFactory {
                 .lsp_handle
                 .clone()
                 .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpLspHandle)),
-            schedules: Arc::new(coco_tool_runtime::NoOpScheduleStore),
+            schedules: self
+                .schedule_store
+                .clone()
+                .unwrap_or_else(|| Arc::new(coco_tool_runtime::NoOpScheduleStore)),
             agent: self
                 .agent_handle
                 .clone()

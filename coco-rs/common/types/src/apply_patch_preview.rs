@@ -10,6 +10,32 @@ use serde::Serialize;
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ToolDisplayData {
     ApplyPatchPreview(ApplyPatchPreview),
+    /// Structured answers for a completed AskUserQuestion exchange, rendered as
+    /// a styled transcript cell (mirrors codex `RequestUserInputResultCell`)
+    /// instead of the raw model-facing prose.
+    AskUserQuestionResult(AskUserQuestionResult),
+}
+
+/// Per-question answers for a completed AskUserQuestion call. Built by the tool
+/// from the spliced `answers`/`annotations` envelope; the model still sees the
+/// prose in `ToolResultMessage.message`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskUserQuestionResult {
+    pub questions: Vec<AskUserQuestionAnswered>,
+}
+
+/// One answered (or unanswered) question in an [`AskUserQuestionResult`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AskUserQuestionAnswered {
+    /// The question text.
+    pub question: String,
+    /// Selected option label(s). Empty ⇒ unanswered.
+    pub answers: Vec<String>,
+    /// Freeform note (the "Other" composer text / annotation), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Bounded, structured preview of an `apply_patch` body for UI rendering.

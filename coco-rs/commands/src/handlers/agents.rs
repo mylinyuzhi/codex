@@ -24,7 +24,6 @@
 //!     scripted callers get a flat enumeration they can parse.
 
 use std::path::Path;
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use coco_subagent::AgentDefinitionStore;
@@ -261,7 +260,11 @@ fn render_paths(paths: &AgentSearchPaths) -> String {
     let mut out = String::from("Agent search paths (later sources override earlier):\n\n");
     out.push_str("  built-in     (compiled-in catalog)\n");
     for d in &paths.plugin_dirs {
-        out.push_str(&format!("  plugin       {}\n", d.display()));
+        out.push_str(&format!(
+            "  plugin       {} ({})\n",
+            d.dir.display(),
+            d.plugin_name
+        ));
     }
     if let Some(d) = &paths.user_dir {
         out.push_str(&format!("  user         {}\n", d.display()));
@@ -305,12 +308,22 @@ fn render_validate(report: &coco_subagent::AgentLoadReport) -> String {
 /// `<cwd>/.claude/agents` (project). Mirrors the CLI helper of the same
 /// shape — kept here so the handler stays self-contained.
 fn standard_search_paths(config_home: &Path, cwd: &Path) -> AgentSearchPaths {
+    let plugins = coco_plugins::load_enabled_plugins(config_home, cwd);
+    let plugin_dirs = coco_plugins::plugin_agent_dirs(&plugins)
+        .into_iter()
+        .map(
+            |(plugin_name, dir)| coco_subagent::definition_store::PluginAgentDir {
+                plugin_name,
+                dir,
+            },
+        )
+        .collect();
     AgentSearchPaths {
         user_dir: Some(config_home.join("agents")),
         project_dirs: vec![cwd.join(".claude").join("agents")],
-        flag_dirs: Vec::<PathBuf>::new(),
-        policy_dirs: Vec::<PathBuf>::new(),
-        plugin_dirs: Vec::<PathBuf>::new(),
+        flag_dirs: Vec::new(),
+        policy_dirs: Vec::new(),
+        plugin_dirs,
     }
 }
 

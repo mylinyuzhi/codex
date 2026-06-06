@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::builtins::BuiltinAgentCatalog;
-use crate::definition_store::{AgentDefinitionStore, AgentSearchPaths};
+use crate::definition_store::{AgentDefinitionStore, AgentSearchPaths, PluginAgentDir};
 use crate::filter::{AgentToolFilter, ToolFilterContext, parse_allowed_agent_types};
 use crate::prompt::{AgentToolPromptRenderer, PromptOptions, format_tools_description};
 
@@ -824,14 +824,52 @@ fn store_priority_chain_policy_overrides_everything() {
             project_dirs: vec![project.path().to_path_buf()],
             flag_dirs: vec![flag.path().to_path_buf()],
             policy_dirs: vec![policy.path().to_path_buf()],
-            plugin_dirs: vec![plugin.path().to_path_buf()],
+            plugin_dirs: vec![PluginAgentDir {
+                plugin_name: "myplugin".to_string(),
+                dir: plugin.path().to_path_buf(),
+            }],
         },
     );
     store.load();
     let active = store.snapshot();
+    // The bare `build` name resolves to policy (highest source). The plugin's
+    // `build` agent is namespaced `myplugin:build` and no longer collides.
     let build = active.find_active("build").unwrap();
     assert_eq!(build.source, AgentSource::PolicySettings);
     assert_eq!(build.model.as_deref(), Some("policy-model"));
+    assert!(active.find_active("myplugin:build").is_some());
+}
+
+#[test]
+fn store_plugin_agent_is_namespaced_and_security_gated() {
+    // A plugin agent is registered as `<plugin>:<name>` and has the fields a
+    // plugin is not trusted to declare (permissionMode / hooks / mcpServers)
+    // stripped. TS loadPluginAgents.
+    let plugin = TempDir::new().unwrap();
+    write_md(
+        plugin.path(),
+        "reviewer.md",
+        "---\nname: reviewer\ndescription: review code\npermission-mode: bypassPermissions\n---\nbody",
+    );
+    let mut store = AgentDefinitionStore::new(
+        BuiltinAgentCatalog::default(),
+        AgentSearchPaths {
+            plugin_dirs: vec![PluginAgentDir {
+                plugin_name: "acme".to_string(),
+                dir: plugin.path().to_path_buf(),
+            }],
+            ..Default::default()
+        },
+    );
+    store.load();
+    let snap = store.snapshot();
+    // Bare name is NOT registered; the namespaced one is.
+    assert!(snap.find_active("reviewer").is_none());
+    let def = snap.find_active("acme:reviewer").expect("namespaced agent");
+    assert_eq!(def.source, AgentSource::Plugin);
+    assert_eq!(def.filename.as_deref(), Some("reviewer"));
+    // Security gate: a plugin-declared permission_mode is stripped.
+    assert_eq!(def.permission_mode, None);
 }
 
 #[test]
@@ -1106,7 +1144,9 @@ fn store_includes_builtins_alongside_custom() {
 }
 
 #[test]
-fn prompt_lists_active_agents_in_alphabetical_order() {
+fn prompt_lists_active_agents_in_source_load_order() {
+    // #117 / TS `getActiveAgentsFromList`: built-in agents render first
+    // (in load order), then project agents — NOT alphabetical.
     let project = TempDir::new().unwrap();
     write_md(
         project.path(),
@@ -1128,9 +1168,9 @@ fn prompt_lists_active_agents_in_alphabetical_order() {
     assert_eq!(
         lines,
         vec![
-            "- build: Build verification (Tools: Bash, Read)",
             "- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: All tools)",
             "- statusline-setup: Use this agent to configure the user's Coco status line setting. (Tools: Read, Edit)",
+            "- build: Build verification (Tools: Bash, Read)",
         ]
     );
 }

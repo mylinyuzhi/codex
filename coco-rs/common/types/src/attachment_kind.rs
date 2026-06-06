@@ -22,7 +22,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Every TS `Attachment.type` discriminator. 60 variants.
+/// Every TS `Attachment.type` discriminator, plus coco-rs-synthetic
+/// reminder kinds. 61 variants.
 ///
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match TS `Attachment.type` exactly, so transcripts round-trip.
@@ -52,6 +53,12 @@ pub enum AttachmentKind {
     CriticalSystemReminder,
     CompactionReminder,
     DateChange,
+    /// coco-rs per-turn baseline user context (TS `prependUserContext`
+    /// `utils/api.ts:449`, `currentDate` from `context.ts:186`). Injected
+    /// every turn as an `is_meta` `<system-reminder>` carrying
+    /// `Today's date is <local ISO>.` — distinct from the one-shot
+    /// [`DateChange`](Self::DateChange) rollover notice.
+    UserContext,
     VerifyPlanReminder,
     UltrathinkEffort,
     TokenUsage,
@@ -130,6 +137,7 @@ impl AttachmentKind {
             Self::CriticalSystemReminder => "critical_system_reminder",
             Self::CompactionReminder => "compaction_reminder",
             Self::DateChange => "date_change",
+            Self::UserContext => "user_context",
             Self::VerifyPlanReminder => "verify_plan_reminder",
             Self::UltrathinkEffort => "ultrathink_effort",
             Self::TokenUsage => "token_usage",
@@ -207,6 +215,7 @@ impl AttachmentKind {
             | CriticalSystemReminder
             | CompactionReminder
             | DateChange
+            | UserContext
             | VerifyPlanReminder
             | UltrathinkEffort
             | TokenUsage
@@ -323,7 +332,8 @@ impl AttachmentKind {
             | VerifyPlanReminder
             | CurrentSessionMemory
             | CompactionReminder
-            | DateChange => false,
+            | DateChange
+            | UserContext => false,
             // Also treat silent-dedup / runtime-bookkeeping kinds as
             // non-rendering (not in TS NULL_RENDERING because TS doesn't
             // enumerate them there, but coco-rs intentionally hides them).
@@ -383,9 +393,9 @@ impl AttachmentKind {
         }
     }
 
-    /// Every variant in declaration order. Length must equal 60 (TS
-    /// `Attachment` union size at time of writing) — enforced by the
-    /// parity test.
+    /// Every variant in declaration order. Length must equal 61 (60 TS
+    /// `Attachment` union members + the coco-rs-synthetic `UserContext`
+    /// reminder) — enforced by the parity test.
     pub const fn all() -> &'static [AttachmentKind] {
         &[
             Self::PlanMode,
@@ -398,6 +408,7 @@ impl AttachmentKind {
             Self::CriticalSystemReminder,
             Self::CompactionReminder,
             Self::DateChange,
+            Self::UserContext,
             Self::VerifyPlanReminder,
             Self::UltrathinkEffort,
             Self::TokenUsage,
@@ -573,6 +584,9 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         DateChange => Coverage::Reminder {
             generator: "DateChangeGenerator",
+        },
+        UserContext => Coverage::Reminder {
+            generator: "UserContextGenerator",
         },
         VerifyPlanReminder => Coverage::Reminder {
             generator: "VerifyPlanReminderGenerator",

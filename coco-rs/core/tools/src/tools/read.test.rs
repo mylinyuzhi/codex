@@ -704,48 +704,15 @@ async fn test_read_malformed_pdf_errors_cleanly() {
     );
 }
 
-/// R5-T12: files with very long lines must respect the byte cap.
-/// TS `FileReadTool.ts` applies both line AND byte caps; coco-rs
-/// previously only capped lines, so minified files could emit
-/// megabytes of text. Regression guard.
+/// #25 / TS `readFileInRange`: a FULL read of a file larger than
+/// MAX_READ_OUTPUT_BYTES throws `FileTooLargeError` instead of
+/// truncating — the model must narrow with offset/limit.
 #[tokio::test]
-async fn test_read_byte_cap_on_long_lines() {
+async fn test_read_full_read_too_large_errors() {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("huge.json");
-    // One 500K-char line — well under the 2000-line cap but way over
-    // the 256K byte cap.
-    let long_line: String = "x".repeat(500_000);
-    std::fs::write(&file, &long_line).unwrap();
-
-    let ctx = ToolUseContext::test_default();
-    let result = <ReadTool as DynTool>::execute(
-        &ReadTool,
-        json!({"file_path": file.to_str().unwrap()}),
-        &ctx,
-    )
-    .await
-    .unwrap();
-
-    let text = result.data["file"]["content"].as_str().unwrap();
-    // The first line is emitted in full (the `!output.is_empty()` guard
-    // avoids returning zero content on single-giant-line files), but
-    // any subsequent content should be cut. Here there's only one line,
-    // so the cap doesn't kick in — we just verify the output starts
-    // with a line-number prefix and doesn't exceed a generous upper
-    // bound when the file has multiple long lines.
-    assert!(text.starts_with("1\t"), "output should start with line 1");
-}
-
-/// When multiple long lines are present, the byte cap stops emission
-/// after the budget is exhausted.
-#[tokio::test]
-async fn test_read_byte_cap_multiple_long_lines() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("many.txt");
-    // 10 lines × 50K chars each = 500K. Byte cap is 256K, so we
-    // should see ~5-6 lines before truncation.
-    let line: String = "y".repeat(50_000);
-    let content: String = (0..10).map(|_| line.clone()).collect::<Vec<_>>().join("\n");
+    let file = dir.path().join("huge.txt");
+    // 500K bytes — over the 256K full-read cap.
+    let content: String = "x".repeat(500_000);
     std::fs::write(&file, &content).unwrap();
 
     let ctx = ToolUseContext::test_default();
@@ -754,19 +721,59 @@ async fn test_read_byte_cap_multiple_long_lines() {
         json!({"file_path": file.to_str().unwrap()}),
         &ctx,
     )
+    .await;
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("exceeds maximum allowed size"),
+        "full read of an oversized file must error: {err}"
+    );
+}
+
+/// #25: a PARTIAL read (explicit `limit`) of a big file skips the
+/// full-file size cap — only the line and token caps apply.
+#[tokio::test]
+async fn test_read_partial_read_skips_size_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("big_lines.txt");
+    // 50K short lines → file well over 256K total, but the slice is tiny.
+    let content: String = (0..50_000).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(&file, &content).unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap(), "offset": 1, "limit": 3}),
+        &ctx,
+    )
     .await
     .unwrap();
-
     let text = result.data["file"]["content"].as_str().unwrap();
+    assert!(text.contains("1\tline 0"), "got: {text}");
+    assert!(text.contains("more lines not shown"));
+}
+
+/// #17 / TS `validateContentTokens`: a slice whose token estimate
+/// exceeds the budget throws `MaxFileReadTokenExceededError`.
+#[tokio::test]
+async fn test_read_token_cap_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("dense.txt");
+    // First line ~160K chars → /4 = 40K tokens > 25K cap. limit=1 skips
+    // the full-file size cap so the token cap is what fires.
+    let content = format!("{}\nsecond\n", "z".repeat(160_000));
+    std::fs::write(&file, &content).unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap(), "limit": 1}),
+        &ctx,
+    )
+    .await;
+    let err = result.unwrap_err().to_string();
     assert!(
-        text.contains("byte limit"),
-        "truncation footer should mention byte limit: {}",
-        &text[text.len().saturating_sub(200)..]
-    );
-    assert!(
-        text.len() < 280_000,
-        "output should be near the 256K cap + small footer, got {} bytes",
-        text.len()
+        err.contains("exceeds maximum allowed tokens"),
+        "oversized slice must hit the token cap: {err}"
     );
 }
 
@@ -1568,4 +1575,51 @@ fn render_for_model_notebook_non_python_code_cell_emits_language_tag() {
         text,
         "<cell id=\"cell-0\"><language>R</language>x <- 1</cell id=\"cell-0\">"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #24 — PDF pages parameter validation (errorCode 7/8)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_read_pages_validation() {
+    use coco_tool_runtime::DynTool;
+    let ctx = ToolUseContext::test_default();
+    let validate = |pages: &str| {
+        <ReadTool as DynTool>::validate_input(
+            &ReadTool,
+            &json!({"file_path": "/work/doc.pdf", "pages": pages}),
+            &ctx,
+        )
+    };
+    // Malformed → errorCode 7.
+    match validate("abc") {
+        coco_tool_runtime::ValidationResult::Invalid { error_code, .. } => {
+            assert_eq!(error_code.as_deref(), Some("7"));
+        }
+        other => panic!("expected Invalid(7), got {other:?}"),
+    }
+    // Range wider than 20 → errorCode 8.
+    match validate("1-25") {
+        coco_tool_runtime::ValidationResult::Invalid { error_code, .. } => {
+            assert_eq!(error_code.as_deref(), Some("8"));
+        }
+        other => panic!("expected Invalid(8), got {other:?}"),
+    }
+    // Open-ended "N-" is unbounded → errorCode 8.
+    match validate("5-") {
+        coco_tool_runtime::ValidationResult::Invalid { error_code, .. } => {
+            assert_eq!(error_code.as_deref(), Some("8"));
+        }
+        other => panic!("expected Invalid(8), got {other:?}"),
+    }
+    // Valid in-range spec passes.
+    assert!(matches!(
+        validate("1-5"),
+        coco_tool_runtime::ValidationResult::Valid
+    ));
+    assert!(matches!(
+        validate("3"),
+        coco_tool_runtime::ValidationResult::Valid
+    ));
 }

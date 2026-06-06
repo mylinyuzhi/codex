@@ -994,12 +994,14 @@ impl Tool for TaskUpdateTool {
                 .await;
         }
 
-        // Verification nudge — TS `TaskUpdateTool.ts:334-349`.
+        // Verification nudge — TS `TaskUpdateTool.ts:334-349`. #213: only
+        // fire when the verification agent is actually registered.
         let is_main_thread = ctx.agent_id.is_none();
-        let verification_nudge = ctx
-            .task_list
-            .should_nudge_verification(newly_completed, is_main_thread)
-            .await;
+        let verification_nudge = verification_agent_registered(ctx)
+            && ctx
+                .task_list
+                .should_nudge_verification(newly_completed, is_main_thread)
+                .await;
 
         // Teammate completion nudge — TS `TaskUpdateTool.ts:386-394`.
         // Fires when a swarm teammate (in-process or otherwise)
@@ -1133,24 +1135,84 @@ impl Tool for TaskStopTool {
                 source: None,
             });
         };
+        // #49 / TS `TaskStopTool.ts:60-91`: pre-check status so a
+        // not-running task reports errorCode 3 (distinct from not-found),
+        // and capture the real task type + command for the output.
+        let state = handle.task_state(&task_id).await;
+        if let Some(s) = &state
+            && s.status != coco_types::TaskStatus::Running
+        {
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "Task {task_id} is not running (status: {})",
+                    task_status_wire(s.status)
+                ),
+                error_code: Some("3".into()),
+            });
+        }
+
         match handle.kill_task(&task_id).await {
-            Ok(()) => Ok(ToolResult {
-                data: serde_json::json!({
-                    "message": format!("Successfully stopped task: {task_id}"),
-                    "task_id": task_id,
-                    "task_type": "background",
-                }),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-                display_data: None,
-            }),
+            Ok(()) => {
+                // TS `stopTask.ts:97-99`: command is the shell command for
+                // shell tasks, else the description. Type is the real wire
+                // name, not a hardcoded "background".
+                let (task_type, command) = match &state {
+                    Some(s) => (
+                        s.task_type().wire_name().to_string(),
+                        s.shell_extras()
+                            .map(|e| e.command.clone())
+                            .filter(|c| !c.is_empty())
+                            .unwrap_or_else(|| s.description.clone()),
+                    ),
+                    None => (
+                        coco_types::TaskType::Shell.wire_name().to_string(),
+                        task_id.clone(),
+                    ),
+                };
+                Ok(ToolResult {
+                    data: serde_json::json!({
+                        "message": format!("Successfully stopped task: {task_id} ({command})"),
+                        "task_id": task_id,
+                        "task_type": task_type,
+                        "command": command,
+                    }),
+                    new_messages: vec![],
+                    app_state_patch: None,
+                    permission_updates: Vec::new(),
+                    display_data: None,
+                })
+            }
             Err(e) => Err(ToolError::ExecutionFailed {
                 message: format!("No running task found with ID: {task_id} ({e})"),
                 display_data: None,
                 source: None,
             }),
         }
+    }
+}
+
+/// #213 / TS `builtInAgents.ts:64-69`: the verification nudge must only
+/// fire when the verification agent is actually registered (TS gates both
+/// the nudge and catalog inclusion on the same `VERIFICATION_AGENT` +
+/// `tengu_hive_evidence` conditions). coco-rs keys off the active agent
+/// catalog so 3P builds without the agent never get spawn-nonexistent-
+/// agent instructions.
+fn verification_agent_registered(ctx: &ToolUseContext) -> bool {
+    ctx.agent_catalog.as_ref().is_some_and(|c| {
+        c.find_active(coco_types::SubagentType::Verification.as_str())
+            .is_some()
+    })
+}
+
+/// Lowercase wire string for a [`coco_types::TaskStatus`] (TS status
+/// names). `TaskStatus` has no `as_str`, so spell it out here.
+fn task_status_wire(status: coco_types::TaskStatus) -> &'static str {
+    match status {
+        coco_types::TaskStatus::Pending => "pending",
+        coco_types::TaskStatus::Running => "running",
+        coco_types::TaskStatus::Completed => "completed",
+        coco_types::TaskStatus::Failed => "failed",
+        coco_types::TaskStatus::Killed => "killed",
     }
 }
 
@@ -1533,7 +1595,8 @@ impl Tool for TodoWriteTool {
         // Verification nudge — main-thread only, all done, ≥3 items,
         // no verify matches. Main-thread here = `ctx.agent_id.is_none()`.
         let is_main_thread = ctx.agent_id.is_none();
-        let verification_nudge = if is_main_thread && all_done {
+        let verification_nudge = if is_main_thread && all_done && verification_agent_registered(ctx)
+        {
             let contents: Vec<&str> = incoming.iter().map(|i| i.content.as_str()).collect();
             coco_tool_runtime::check_verification_nudge(&contents)
         } else {

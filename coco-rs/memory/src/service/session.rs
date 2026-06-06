@@ -357,6 +357,23 @@ impl SessionMemoryService {
                 if current_tokens < self.config.session_memory_init_tokens {
                     return SessionMemoryOutcome::Skipped(SkipReason::BelowInitThreshold);
                 }
+                // TS parity (`sessionMemory.ts:138-181`
+                // shouldExtractMemory): the tool-call / natural-break
+                // disjunction applies to EVERY extraction, init included
+                // — not just updates. Once the init-token threshold is
+                // met we still require (tool calls ≥ threshold) OR (no
+                // tool calls in the last turn) before firing.
+                let tool_call_gate =
+                    tool_calls_since_last_extraction >= self.config.session_memory_tool_calls;
+                let natural_break = !had_tool_calls_in_last_turn;
+                if !tool_call_gate && !natural_break {
+                    return SessionMemoryOutcome::Skipped(SkipReason::NeitherToolCallsNorBreak);
+                }
+                // TS parity (`sessionMemory.ts:142`
+                // markSessionMemoryInitialized): flip synchronously at
+                // gate-pass, independent of the fork outcome — so a
+                // failed init fork doesn't re-arm the init-token gate.
+                state.initialized = true;
             } else {
                 let token_growth = current_tokens - state.last_extraction_tokens;
                 if token_growth < self.config.session_memory_update_tokens {
@@ -712,8 +729,11 @@ impl SessionMemoryService {
                     duration_ms,
                 });
                 {
+                    // `state.initialized` is flipped synchronously at the
+                    // gate-pass point in `maybe_extract` (TS
+                    // `markSessionMemoryInitialized`), not here — a failed
+                    // fork must NOT re-arm the init-token gate.
                     let mut state = self.state.lock().await;
-                    state.initialized = true;
                     state.last_extraction_tokens = current_tokens;
                     state.last_extraction_tool_calls = tool_calls_since_last_extraction;
                     // TS parity (`sessionMemory.ts:488-494`

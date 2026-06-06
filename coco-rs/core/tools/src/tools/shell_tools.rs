@@ -1,5 +1,6 @@
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::InterruptBehavior;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -57,6 +58,9 @@ impl Tool for SleepTool {
     fn is_concurrency_safe(&self, _input: &SleepInput) -> bool {
         true
     }
+    fn interrupt_behavior(&self) -> InterruptBehavior {
+        InterruptBehavior::Cancel
+    }
     fn should_defer(&self) -> bool {
         true
     }
@@ -74,7 +78,7 @@ impl Tool for SleepTool {
     async fn execute(
         &self,
         input: SleepInput,
-        _ctx: &ToolUseContext,
+        ctx: &ToolUseContext,
     ) -> Result<ToolResult<SleepOutput>, ToolError> {
         let seconds = input.seconds.unwrap_or(1.0);
 
@@ -88,7 +92,10 @@ impl Tool for SleepTool {
         // Cap at 5 minutes to prevent indefinite blocking
         let capped = seconds.min(300.0);
         let duration = std::time::Duration::from_secs_f64(capped);
-        tokio::time::sleep(duration).await;
+        tokio::select! {
+            () = tokio::time::sleep(duration) => {}
+            () = ctx.abort.cancelled() => return Err(ToolError::Cancelled),
+        }
 
         Ok(ToolResult {
             data: SleepOutput {
@@ -100,6 +107,43 @@ impl Tool for SleepTool {
             permission_updates: Vec::new(),
             display_data: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod sleep_tool_tests {
+    use super::*;
+    use coco_tool_runtime::TurnAbortController;
+
+    #[test]
+    fn sleep_tool_is_cancel_interruptible() {
+        let tool = SleepTool;
+        assert_eq!(tool.interrupt_behavior(), InterruptBehavior::Cancel);
+    }
+
+    #[tokio::test]
+    async fn sleep_tool_exits_when_abort_signal_fires() {
+        let tool = SleepTool;
+        let turn_abort = TurnAbortController::new();
+        let mut ctx = ToolUseContext::test_default();
+        ctx.abort = coco_tool_runtime::ToolAbortSignal::from_turn(turn_abort.signal());
+
+        let task = tokio::spawn(async move {
+            tool.execute(
+                SleepInput {
+                    seconds: Some(30.0),
+                },
+                &ctx,
+            )
+            .await
+        });
+        turn_abort.abort(coco_types::TurnAbortReason::SubmitInterrupt);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("sleep should exit promptly after abort")
+            .expect("task should not panic");
+
+        assert!(matches!(result, Err(ToolError::Cancelled)));
     }
 }
 

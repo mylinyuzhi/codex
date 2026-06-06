@@ -30,6 +30,7 @@ fn build_test_runtime() -> coco_config::RuntimeConfig {
         coco_config::EnvSnapshot::default(),
         coco_config::RuntimeOverrides::default(),
         catalogs,
+        coco_config::parse_enabled_setting_sources(None),
     )
     .expect("runtime")
 }
@@ -507,18 +508,37 @@ async fn test_classifier_passes_through_when_side_query_unconfigured() {
     assert_eq!(out.as_deref(), Some("computed answer"));
 }
 
+/// A minimal `messages` vec that yields a non-empty handoff transcript
+/// so the transcript-gate in `classify_handoff_inline` runs the
+/// classifier. TS parity (`agentToolUtils.ts:411-412`): classification
+/// gates on a non-empty transcript, not on agent type or tool count.
+fn messages_with_transcript() -> Vec<Arc<coco_types::messages::Message>> {
+    use coco_types::messages::{Message, UserMessage};
+    vec![Arc::new(Message::User(UserMessage {
+        message: coco_types::LlmMessage::user_text("did some work"),
+        uuid: uuid::Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: None,
+        parent_tool_use_id: None,
+    }))]
+}
+
 #[tokio::test]
-async fn test_classifier_skips_for_read_only_agents() {
-    // `Explore` is read-only — `should_classify` returns false, so the
-    // SideQuery is never invoked. We assert by configuring a stub that
-    // would error if called.
+async fn test_classifier_skips_on_empty_transcript() {
+    // An empty transcript skips classification (TS `if (!agentTranscript)
+    // return null`). #113: this is NOT a read-only exemption — read-only
+    // agents WITH a transcript are now classified (see test below).
     let mut handle = create_test_handle();
     handle.set_side_query(Arc::new(StubSideQuery {
-        responses: tokio::sync::Mutex::new(Vec::new()), // would error
+        responses: tokio::sync::Mutex::new(Vec::new()), // would error if called
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
         response_text: Some("explored result".into()),
-        messages: Vec::new(),
+        messages: Vec::new(), // empty transcript
         turns: 1,
         input_tokens: 50,
         output_tokens: 25,
@@ -530,21 +550,81 @@ async fn test_classifier_skips_for_read_only_agents() {
 }
 
 #[tokio::test]
+async fn test_classifier_runs_for_read_only_agent_with_transcript() {
+    // #113: TS does not exempt read-only agents. With a non-empty
+    // transcript, `Explore` is classified like any other agent — a
+    // BLOCKED verdict surfaces the SECURITY payload.
+    let mut handle = create_test_handle();
+    handle.set_side_query(Arc::new(StubSideQuery {
+        responses: tokio::sync::Mutex::new(vec![
+            "VERDICT: BLOCKED\nREASON: wrote outside scope".into(),
+            "VERDICT: REVIEW".into(),
+        ]),
+    }));
+    let qr = coco_tool_runtime::AgentQueryResult {
+        response_text: Some("explored result".into()),
+        messages: messages_with_transcript(),
+        turns: 1,
+        input_tokens: 50,
+        output_tokens: 25,
+        tool_use_count: 0, // zero tools — still classified (gate is transcript)
+        cancelled: false,
+    };
+    let out = handle
+        .classify_handoff_if_needed("Explore", &qr)
+        .await
+        .expect("classifier returned None");
+    assert!(out.starts_with("SECURITY"), "got: {out}");
+}
+
+#[tokio::test]
+async fn test_classifier_unavailable_prepends_warning() {
+    // #120: when the classifier errors (unavailable), fail open but
+    // prepend the UNAVAILABLE_WARNING to the sub-agent's output so the
+    // parent verifies the work (TS agentToolUtils.ts:464-469).
+    let mut handle = create_test_handle();
+    handle.set_side_query(Arc::new(StubSideQuery {
+        responses: tokio::sync::Mutex::new(Vec::new()), // empty → query errors
+    }));
+    let qr = coco_tool_runtime::AgentQueryResult {
+        response_text: Some("partial work".into()),
+        messages: messages_with_transcript(),
+        turns: 1,
+        input_tokens: 50,
+        output_tokens: 25,
+        tool_use_count: 2,
+        cancelled: false,
+    };
+    let out = handle
+        .classify_handoff_if_needed("general-purpose", &qr)
+        .await
+        .expect("classifier returned None");
+    assert!(
+        out.starts_with("Note: The safety classifier was unavailable"),
+        "got: {out}"
+    );
+    assert!(
+        out.contains("partial work"),
+        "original output preserved: {out}"
+    );
+}
+
+#[tokio::test]
 async fn test_classifier_short_circuits_on_stage1_safe() {
     // Stage 1 SAFE → no stage 2 call. Only one canned response is
     // needed; if the classifier wrongly proceeds to stage 2 the test
     // would fail at the empty pop().
     let mut handle = create_test_handle();
     handle.set_side_query(Arc::new(StubSideQuery {
-        responses: tokio::sync::Mutex::new(vec!["VERDICT: SAFE".into()]),
+        responses: tokio::sync::Mutex::new(vec!["SAFE".into()]),
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
         response_text: Some("clean output".into()),
-        messages: Vec::new(),
+        messages: messages_with_transcript(),
         turns: 1,
         input_tokens: 50,
         output_tokens: 25,
-        tool_use_count: 3, // > 0 so should_classify true for non-read-only
+        tool_use_count: 3,
         cancelled: false,
     };
     let out = handle
@@ -571,7 +651,7 @@ async fn test_classifier_blocks_when_verdict_is_blocked() {
     }));
     let qr = coco_tool_runtime::AgentQueryResult {
         response_text: Some("malicious child output".into()),
-        messages: Vec::new(),
+        messages: messages_with_transcript(),
         turns: 1,
         input_tokens: 50,
         output_tokens: 25,
@@ -2063,4 +2143,102 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
     // Pinned system prompt — verbatim from the snapshot.
     let observed_system = captured.captured_system.lock().await.clone().unwrap();
     assert_eq!(observed_system, "PARENT SYSTEM PROMPT");
+}
+
+/// The team's task-list directory under `config_home()/tasks`, matching
+/// what `cleanup_team_directories` removes and what `TaskListStore::open`
+/// materializes. Used by the delete-notify tests below.
+fn team_tasks_dir(team_name: &str) -> std::path::PathBuf {
+    let task_list_id = crate::types::sanitize_name(team_name);
+    coco_config::global_config::config_home()
+        .join("tasks")
+        .join(coco_tasks::task_list::sanitize_path_component(
+            &task_list_id,
+        ))
+}
+
+#[tokio::test]
+async fn test_delete_team_notifies_task_list_subscriber_on_success() {
+    // TS parity: `cleanupTeamDirectories` fires `notifyTasksUpdated()`
+    // inside the `rm(tasksDir)` `try`. After deleting the team (and its
+    // task-list dir), a subscriber on the wired task-list store must
+    // observe the change notification.
+    let mut handle = create_test_handle();
+    let team_name = format!("agentteam-notify-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
+
+    create_team(&handle, &team_name).await;
+
+    // Wire a real disk-backed store at the same path cleanup removes, and
+    // materialize the dir so the removal actually succeeds (→ notify).
+    let tasks_root = coco_config::global_config::config_home().join("tasks");
+    let task_list_id = crate::types::sanitize_name(&team_name);
+    let store = coco_tasks::TaskListStore::open(&tasks_root, &task_list_id).unwrap();
+    let tasks_dir = team_tasks_dir(&team_name);
+    std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::write(tasks_dir.join("t.json"), "{}").unwrap();
+
+    let mut rx = store.subscribe_changes();
+    handle.set_task_list(store.clone() as TaskListHandleRef);
+
+    let result = handle.delete_team().await;
+    assert!(result.is_ok(), "delete_team failed: {result:?}");
+    assert!(!tasks_dir.exists(), "task-list dir should be removed");
+
+    assert!(
+        rx.try_recv().is_ok(),
+        "subscriber must observe a tasks-changed notification after successful delete",
+    );
+
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_delete_team_does_not_notify_when_tasks_dir_removal_fails() {
+    // TS parity: the `catch` path of `rm(tasksDir)` does NOT notify. Force
+    // the removal to fail (non-empty dir with no write permission → its
+    // child can't be unlinked) and assert no notification fires.
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut handle = create_test_handle();
+    let team_name = format!("agentteam-nonotify-{}", uuid::Uuid::new_v4().simple());
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
+
+    create_team(&handle, &team_name).await;
+
+    let tasks_root = coco_config::global_config::config_home().join("tasks");
+    let task_list_id = crate::types::sanitize_name(&team_name);
+    let store = coco_tasks::TaskListStore::open(&tasks_root, &task_list_id).unwrap();
+
+    // Materialize the dir with a child, then strip write perm so
+    // `remove_dir_all` fails unlinking the child.
+    let tasks_dir = team_tasks_dir(&team_name);
+    std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::write(tasks_dir.join("t.json"), "{}").unwrap();
+    std::fs::set_permissions(&tasks_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    let mut rx = store.subscribe_changes();
+    handle.set_task_list(store.clone() as TaskListHandleRef);
+
+    // delete_team swallows the tasks-dir failure (best-effort) and returns
+    // Ok; the notification must NOT fire because the removal failed.
+    let result = handle.delete_team().await;
+    assert!(
+        result.is_ok(),
+        "delete_team should still succeed: {result:?}"
+    );
+
+    assert!(
+        matches!(
+            rx.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ),
+        "no notification must fire when the tasks-dir removal fails",
+    );
+
+    // Restore perms so the dir can be cleaned up.
+    let _ = std::fs::set_permissions(&tasks_dir, std::fs::Permissions::from_mode(0o700));
+    let _ = std::fs::remove_dir_all(&tasks_dir);
+    let _ = crate::team_file::cleanup_team_directories(&team_name);
 }

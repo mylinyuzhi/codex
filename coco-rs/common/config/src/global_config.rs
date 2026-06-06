@@ -24,6 +24,24 @@ pub struct GlobalConfig {
     /// Cached org-level settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub org_settings_cache: Option<serde_json::Value>,
+    /// Plugin-hint recommendation state (show-once record + opt-out flag).
+    /// TS: `GlobalConfig.claudeCodeHints` in utils/config.ts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claude_code_hints: Option<ClaudeCodeHintsState>,
+}
+
+/// Persisted plugin-hint state. TS: `claudeCodeHints` block in GlobalConfig.
+///
+/// `plugin` is a show-once record per plugin slug — a plugin is prompted
+/// for at most once ever. `disabled` is set when the user picks "don't show
+/// plugin installation hints again".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClaudeCodeHintsState {
+    /// Plugin slugs (`name@marketplace`) already surfaced in a prompt.
+    pub plugin: Vec<String>,
+    /// User opted out of all plugin-installation hints.
+    pub disabled: bool,
 }
 
 /// Per-project config within GlobalConfig.

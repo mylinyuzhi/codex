@@ -85,13 +85,35 @@ impl LspManagerAdapter {
             .store(!started.is_empty(), Ordering::Relaxed);
     }
 
+    /// Merge plugin-contributed LSP servers into the live manager via its
+    /// `merge_config` seam. Call **before** [`Self::prewarm`] so plugin
+    /// servers are eagerly spawned alongside the disk-configured ones.
+    pub async fn merge_plugin_servers(&self, servers: coco_lsp::LspServersConfig) {
+        if servers.servers.is_empty() {
+            return;
+        }
+        self.manager.merge_config(servers).await;
+        self.has_active
+            .store(self.manager.has_configured_servers(), Ordering::Relaxed);
+    }
+
     /// Re-read `lsp_servers.json` from disk **and** re-prewarm.
     /// Intended for the future settings-watcher hook (`SettingsWatcher`
     /// detects a `.coco/lsp_servers.json` change) or a manual `/lsp
     /// reload` slash command. Idempotent: a cached client survives the
-    /// prewarm cache-check; only new entries spawn.
+    /// prewarm cache-check; only new entries spawn. Plugin-contributed
+    /// servers (dropped by the disk reload) are re-merged.
     pub async fn reload_and_prewarm(&self, project_root: &Path) {
         self.manager.reload_config().await;
+        let plugins = coco_plugins::load_enabled_plugins(
+            &coco_config::global_config::config_home(),
+            project_root,
+        );
+        let refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+        self.merge_plugin_servers(coco_plugins::lsp_bridge::extract_lsp_servers_from_plugins(
+            &refs,
+        ))
+        .await;
         self.prewarm(project_root).await;
     }
 }
@@ -169,6 +191,12 @@ impl LspHandle for LspManagerAdapter {
             "shutting down LSP servers for root"
         );
         self.manager.shutdown_for_root(root_path).await;
+    }
+
+    async fn reload(&self, project_root: &Path) {
+        // `/reload-plugins` parity (TS `reinitializeLspServerManager`): re-read
+        // the disk config + re-merge plugin LSP servers + re-prewarm.
+        self.reload_and_prewarm(project_root).await;
     }
 }
 

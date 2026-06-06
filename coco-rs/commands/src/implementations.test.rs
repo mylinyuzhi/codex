@@ -72,9 +72,22 @@ fn test_extended_builtins_no_overlap_with_base() {
     assert!(base_registry.get("help").is_some());
     assert!(base_registry.get("clear").is_some());
     let clear = ext_registry.get("clear").expect("extended clear exists");
+    // TS parity: `commands/clear/index.ts` declares aliases `['reset', 'new']`.
     assert!(
-        clear.base.aliases.is_empty(),
-        "/clear should not expose reset/new aliases"
+        clear.base.aliases.iter().any(|a| a == "reset")
+            && clear.base.aliases.iter().any(|a| a == "new"),
+        "/clear should expose reset/new aliases (TS parity)"
+    );
+    // Aliases resolve back to the canonical /clear via registry lookup.
+    assert_eq!(
+        ext_registry.get("reset").map(|c| c.base.name.as_str()),
+        Some("clear"),
+        "/reset should resolve to canonical /clear"
+    );
+    assert_eq!(
+        ext_registry.get("new").map(|c| c.base.name.as_str()),
+        Some("clear"),
+        "/new should resolve to canonical /clear"
     );
 
     // Quick sanity: base and extended together should not panic

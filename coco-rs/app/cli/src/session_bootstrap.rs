@@ -32,6 +32,7 @@ use crate::Cli;
 use crate::headless::StartupPermissionState;
 use crate::headless::build_output_style_manager;
 use crate::headless::build_system_prompt_for_model;
+use crate::headless::resolve_additional_dirs;
 use crate::headless::resolve_additional_dirs_display;
 use crate::headless::resolve_main_model;
 use crate::headless::resolve_startup_permission_state;
@@ -103,6 +104,15 @@ pub async fn build_lsp_handle_if_enabled(
     }
     let manager = coco_lsp::create_manager(Some(coco_home), Some(cwd.to_path_buf()));
     let adapter = crate::lsp_handle_adapter::LspManagerAdapter::new(manager);
+    // Merge plugin-contributed LSP servers before prewarm so they spawn
+    // eagerly alongside disk-configured servers (TS extractLspServersFromPlugins).
+    let plugins = coco_plugins::load_enabled_plugins(coco_home, cwd);
+    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+    adapter
+        .merge_plugin_servers(coco_plugins::lsp_bridge::extract_lsp_servers_from_plugins(
+            &plugin_refs,
+        ))
+        .await;
     adapter.prewarm(cwd).await;
     Some(Arc::new(adapter))
 }
@@ -127,10 +137,16 @@ pub fn build_engine_resources(
     let tool_count = registry.len();
     let tools = Arc::new(registry);
 
+    // Load the session's plugin set once, then reuse it for output-style,
+    // command, skill, and hook registration.
+    let plugins = load_session_plugins(cwd);
+
     // Resolve the active output style up front: it shapes the system
     // prompt cache prefix and surfaces on the SDK init message + the
-    // per-turn reminder generator.
-    let output_style_manager = build_output_style_manager(runtime_config, cwd, &[]);
+    // per-turn reminder generator. Plugin-contributed styles are folded in.
+    let plugin_style_sources = plugin_output_style_sources(&plugins);
+    let output_style_manager =
+        build_output_style_manager(runtime_config, cwd, &plugin_style_sources);
 
     // `--add-dir` flow into the env block. TS:
     // `enhanceSystemPromptWithEnvDetails([...], model, additionalWorkingDirectories)`.
@@ -148,7 +164,8 @@ pub fn build_engine_resources(
 
     let startup = resolve_startup_permission_state(cli, &runtime_config.settings.merged)?;
 
-    let (command_registry, skill_manager) = build_session_command_registry(runtime_config, cwd);
+    let (command_registry, skill_manager) =
+        build_session_command_registry(cli, runtime_config, cwd, &plugins);
     let command_count = command_registry.len();
     let skill_count = skill_manager.len();
 
@@ -203,19 +220,38 @@ pub fn build_engine_resources(
 /// caller threads the manager into `SessionRuntime` so the per-turn
 /// reminder pipeline's `SkillsSource` reads the same in-memory catalog.
 pub(crate) fn build_session_command_registry(
+    cli: &Cli,
     runtime_config: &RuntimeConfig,
     cwd: &Path,
+    plugins: &[coco_plugins::loader::LoadedPluginV2],
 ) -> (CommandRegistry, Arc<coco_skills::SkillManager>) {
     let config_home = global_config::config_home();
 
-    let skill_manager = Arc::new(coco_skills::build_session_skill_manager(&config_home, cwd));
+    let gates = resolve_skill_load_gates(cli, runtime_config, cwd);
+    let skill_manager = Arc::new(coco_skills::build_session_skill_manager(
+        &config_home,
+        cwd,
+        &gates,
+    ));
 
-    let mut plugin_manager = coco_plugins::PluginManager::new();
-    plugin_manager.load_from_dirs(&coco_plugins::get_plugin_dirs(&config_home, cwd));
+    // Plugin-contributed skills (namespaced `plugin:skill`) into the live
+    // SkillManager so the model catalog + dispatch see them (TS plugin skills).
+    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+    for skill in coco_plugins::skill_bridge::load_all_plugin_skills_v2(&plugin_refs) {
+        skill_manager.register(skill);
+    }
+
+    // Builtin (compiled-in) plugins: seed the registry once, then register any
+    // enabled builtin skills (TS `getBuiltinPluginSkillCommands`). No-op until a
+    // builtin is registered in `init_builtin_plugins`.
+    coco_plugins::builtins::init_builtin_plugins();
+    for skill in coco_plugins::builtin_plugin_skills(&config_home) {
+        skill_manager.register(skill);
+    }
 
     let registry = build_command_registry(
         skill_manager.as_ref(),
-        &plugin_manager,
+        plugins,
         UserType::from_env(),
         runtime_config.features.clone(),
         cwd.to_path_buf(),
@@ -224,6 +260,98 @@ pub(crate) fn build_session_command_registry(
         &runtime_config.skill_overrides,
     );
     (registry, skill_manager)
+}
+
+/// Load the active plugin set for this session once: marketplace versioned
+/// cache + local `inline` dirs, gated by settings.json `enabled_plugins`.
+/// Shared by the output-style, command, skill, and hook registration paths so
+/// a session loads plugins exactly once (TS `loadAllPlugins().enabled`).
+pub(crate) fn load_session_plugins(cwd: &Path) -> Vec<coco_plugins::loader::LoadedPluginV2> {
+    coco_plugins::load_enabled_plugins(&global_config::config_home(), cwd)
+}
+
+/// Derive the plugin output-style sources from a loaded plugin set (default
+/// `<plugin>/output-styles/` dir + manifest `output_styles` extras). Fed into
+/// [`build_output_style_manager`] so plugin-contributed styles surface
+/// alongside user / project / managed styles (TS `loadPluginOutputStyles`).
+pub(crate) fn plugin_output_style_sources(
+    plugins: &[coco_plugins::loader::LoadedPluginV2],
+) -> Vec<coco_output_styles::PluginOutputStyleSource> {
+    plugins
+        .iter()
+        .map(coco_output_styles::PluginOutputStyleSource::from_loaded_plugin)
+        .collect()
+}
+
+/// Resolve [`coco_skills::SkillLoadGates`] from the resolved `RuntimeConfig`,
+/// the `--setting-sources` set, the `strictPluginOnlyCustomization` policy
+/// (`skills` surface), `--add-dir`, and `COCO_DISABLE_POLICY_SKILLS`.
+///
+/// TS parity: `loadSkillsDir.ts::getSkillDirCommands` — the
+/// `isSettingSourceEnabled(...) && !skillsLocked` guards plus the managed-skill
+/// env gate.
+pub(crate) fn resolve_skill_load_gates(
+    cli: &Cli,
+    runtime_config: &RuntimeConfig,
+    cwd: &Path,
+) -> coco_skills::SkillLoadGates {
+    resolve_skill_load_gates_with_add_dirs(runtime_config, cwd, &resolve_additional_dirs(cli, cwd))
+}
+
+/// `cli`-free variant for reload paths (`reload_plugins_with`) that don't
+/// retain the `Cli`. `cli_add_dirs` are the resolved `--add-dir` roots ( `&[]`
+/// when unavailable); settings `permissions.additionalDirectories` are always
+/// folded in from `RuntimeConfig`.
+pub(crate) fn resolve_skill_load_gates_with_add_dirs(
+    runtime_config: &RuntimeConfig,
+    cwd: &Path,
+    cli_add_dirs: &[std::path::PathBuf],
+) -> coco_skills::SkillLoadGates {
+    use coco_config::SettingSource;
+    use coco_config::env::EnvKey;
+
+    let enabled = &runtime_config.enabled_setting_sources;
+    let skills_locked = runtime_config
+        .settings
+        .merged
+        .strict_plugin_only_customization
+        .is_restricted_to_plugin_only("skills");
+
+    // Managed/policy skills load unless explicitly disabled via env.
+    let managed_enabled =
+        !coco_config::env::env_truthy_opt(EnvKey::CocoDisablePolicySkills.as_str())
+            .unwrap_or(false);
+
+    let user_enabled = enabled.contains(&SettingSource::User);
+    let project_enabled = enabled.contains(&SettingSource::Project);
+
+    // `--add-dir` plus settings `permissions.additionalDirectories`, resolved
+    // to `.coco/skills` roots in `build_session_skill_manager`. TS folds both
+    // into `getAdditionalDirectoriesForClaudeMd`.
+    let mut additional_dirs = cli_add_dirs.to_vec();
+    for dir in &runtime_config
+        .settings
+        .merged
+        .permissions
+        .additional_directories
+    {
+        let p = Path::new(dir);
+        additional_dirs.push(if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(p)
+        });
+    }
+
+    coco_skills::SkillLoadGates {
+        managed_enabled,
+        user_enabled,
+        project_enabled,
+        legacy_enabled: project_enabled,
+        additional_dirs_enabled: project_enabled,
+        additional_dirs,
+        skills_locked,
+    }
 }
 
 /// Install the post-`SessionRuntime::build` late-binds shared by TUI
@@ -340,7 +468,175 @@ pub async fn install_session_late_binds(
     crate::fork_dispatcher::install(runtime.clone()).await;
     crate::hook_agent_runner::install(runtime).await;
 
+    // In-prompt skill / slash-command shell routing is wired at the
+    // engine-build site (`SessionRuntime::build_engine`): it calls
+    // `QueryEngine::build_base_tool_context()` and
+    // `crate::bash_tool_handle::inject_into_registry(&registry, base_ctx)`
+    // so skill / `ShellExpandingPromptHandler` markers route through the real
+    // Bash tool with a per-command permission check. Refreshing it there
+    // (rather than once here) also survives a `/reload-plugins` registry swap.
+
     Ok(())
+}
+
+/// Unified MCP bootstrap shared by SDK / headless / TUI (the single
+/// config-driven init the user asked for). Builds (or reuses) the
+/// `McpConnectionManager`, registers config-file servers
+/// (`McpConfigLoader::load` — `.mcp.json`, `.claude/mcp.json`,
+/// `~/.coco/mcp.json`, managed / enterprise, local) plus plugin-contributed
+/// servers, attaches the manager + an `McpManagerAdapter` handle to the runtime,
+/// then connects every registered server in the background (concurrent,
+/// per-server error-isolated) and registers each connected server's tools into
+/// the live `ToolRegistry` so they reach the model. A best-effort MCP skill sync
+/// follows.
+///
+/// Mirrors codex-rs (single session-owned manager, eager concurrent connect with
+/// per-server fault isolation) and the TS shared-connect funnel. `existing_manager`
+/// lets the SDK path share the manager it already handed to `SdkServer` (for
+/// `mcp/setServers`); `None` builds a fresh one for TUI / headless. No UI:
+/// server-initiated elicitations during the connect handshake are declined.
+pub async fn bootstrap_session_mcp(
+    runtime: &Arc<SessionRuntime>,
+    cwd: &Path,
+    existing_manager: Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>,
+    await_connect: bool,
+) {
+    let config_home = global_config::config_home();
+    let manager = existing_manager.unwrap_or_else(|| {
+        Arc::new(tokio::sync::Mutex::new(
+            coco_mcp::McpConnectionManager::new_with_runtime_config(
+                config_home.clone(),
+                &runtime.runtime_config.mcp,
+            ),
+        ))
+    });
+
+    // Register config-file + plugin servers (config-map seeding only; the actual
+    // connect is deferred to the background pass below).
+    let config_servers = coco_mcp::McpConfigLoader::load(cwd, &config_home);
+    let plugins = coco_plugins::load_enabled_plugins(&config_home, cwd);
+    let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
+    let plugin_servers = coco_plugins::mcp_bridge::extract_mcp_servers_from_plugins(&plugin_refs);
+    {
+        let mut mgr = manager.lock().await;
+        mgr.register_all(config_servers);
+        mgr.register_all(plugin_servers);
+    }
+
+    // Build + attach the handle (elicitation hooks for runtime `add_dynamic_server`
+    // + the MCP-skill bridge) and the concrete manager.
+    let skill_cache = Arc::new(tokio::sync::RwLock::new(
+        coco_mcp::discovery::DiscoveryCache::default(),
+    ));
+    let elicit_counter = runtime
+        .app_state
+        .read()
+        .await
+        .elicitation_pending_count
+        .clone();
+    let adapter = crate::mcp_handle_adapter::McpManagerAdapter::new(manager.clone())
+        .with_elicitation_hooks(
+            runtime.hook_registry(),
+            runtime.orchestration_ctx_factory(),
+            Some(elicit_counter),
+        )
+        .with_skill_bridge(
+            runtime.skill_manager(),
+            skill_cache.clone(),
+            runtime.runtime_config.clone(),
+        );
+    runtime.attach_mcp_manager(manager.clone()).await;
+    runtime.attach_mcp_handle(Arc::new(adapter)).await;
+
+    // Connect + tool registration. Each server connects concurrently; a failure /
+    // timeout logs and is skipped so the registry degrades gracefully. MCP skills
+    // sync once connections settle. `await_connect` chooses the timing:
+    //   - `true`  (headless / single-turn): block so MCP tools are registered
+    //     before the first turn (TS print awaits the connect batch). Bounded by
+    //     the per-server timeout in `connect_and_register_mcp`.
+    //   - `false` (interactive / long-lived SDK): connect in the background so
+    //     startup isn't blocked (codex-rs pattern); tools appear within seconds.
+    let registry = runtime.tools().clone();
+    let features = runtime.runtime_config.features.clone();
+    let skills = runtime.skill_manager();
+    let connect_task = async move {
+        connect_and_register_mcp(manager.clone(), registry).await;
+        let snapshot = manager.lock().await.clone();
+        let summary = coco_mcp_skills::sync_all(&snapshot, &skill_cache, &skills, &features).await;
+        if summary.servers > 0 || summary.errors > 0 {
+            tracing::info!(
+                servers = summary.servers,
+                registered = summary.total_registered,
+                errors = summary.errors,
+                "MCP skill sync (bootstrap)"
+            );
+        }
+    };
+    if await_connect {
+        connect_task.await;
+    } else {
+        tokio::spawn(connect_task);
+    }
+}
+
+/// Connect every registered-but-not-yet-connected MCP server concurrently
+/// (per-server error-isolated + time-boxed) and register each connected server's
+/// tools into `registry` so the model can see them. Best-effort: a failed or slow
+/// server logs a warning and is skipped (codex-rs / TS parity — a broken server
+/// never aborts the rest). No UI: elicitations during connect are declined.
+/// Reused by [`bootstrap_session_mcp`] and `SessionRuntime::reload_plugin_mcp_servers`.
+pub(crate) async fn connect_and_register_mcp(
+    manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
+    registry: Arc<coco_tool_runtime::ToolRegistry>,
+) {
+    let names = manager.lock().await.registered_server_names();
+    let mut set = tokio::task::JoinSet::new();
+    for name in names {
+        let snapshot = manager.lock().await.clone();
+        // Idempotent on reload: skip servers already connected.
+        if matches!(
+            snapshot.get_state(&name).await,
+            Some(coco_mcp::McpConnectionState::Connected(_))
+        ) {
+            continue;
+        }
+        let registry = registry.clone();
+        set.spawn(async move {
+            let send: coco_mcp::SendElicitation = Box::new(|_id, _req| {
+                Box::pin(async move {
+                    Err(coco_mcp::RmcpClientError::generic(
+                        "MCP elicitation is not supported without an interactive UI",
+                    ))
+                })
+            });
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                snapshot.connect(&name, send),
+            )
+            .await
+            {
+                Ok(Ok(())) => {
+                    let schemas =
+                        crate::sdk_server::handlers::mcp::collect_server_schemas_for_manager(
+                            &snapshot, &name,
+                        )
+                        .await;
+                    let report = coco_tools::register_mcp_tools(&registry, &name, schemas);
+                    tracing::info!(
+                        server = %name,
+                        tools = report.registered.len(),
+                        skipped = report.skipped.len(),
+                        "MCP server connected; tools registered"
+                    );
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(server = %name, error = %e, "MCP connect failed; skipping")
+                }
+                Err(_) => tracing::warn!(server = %name, "MCP connect timed out; skipping"),
+            }
+        });
+    }
+    while set.join_next().await.is_some() {}
 }
 
 #[cfg(test)]

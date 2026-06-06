@@ -27,7 +27,8 @@ const DEFAULT_GLOB_TIMEOUT_SECONDS: i32 = 10;
 // TS `withRetry.ts`: DEFAULT_MAX_RETRIES = 10, base delay 500ms.
 const DEFAULT_MAX_RETRIES: i32 = 10;
 const DEFAULT_RETRY_BASE_DELAY_MS: i64 = 500;
-const DEFAULT_RETRY_MAX_DELAY_MS: i64 = 60_000;
+// #134: TS `getRetryDelay` maxDelayMs default is 32000 (withRetry.ts:533).
+const DEFAULT_RETRY_MAX_DELAY_MS: i64 = 32_000;
 const DEFAULT_RETRY_JITTER: f64 = 0.25;
 /// 60-second HTTP fetch timeout — matches TS `WebFetchTool/utils.ts:116`
 /// `FETCH_TIMEOUT_MS = 60_000`. Long enough for slow origins, short
@@ -300,10 +301,13 @@ pub struct ApiConfig {
 }
 
 impl ApiConfig {
-    pub fn resolve(settings: &Settings) -> Self {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = Self::default();
         if let Some(retry) = &settings.api.retry {
             config.retry.apply_settings(retry);
+        }
+        if let Some(v) = env.get_i32(EnvKey::CocoApiMaxRetries) {
+            config.retry.max_retries = v;
         }
         config.retry.finalize();
         config

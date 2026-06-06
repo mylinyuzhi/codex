@@ -5,27 +5,57 @@ use coco_types::HookEventType;
 use coco_types::HookScope;
 use pretty_assertions::assert_eq;
 
-use crate::LoadedPlugin;
-use crate::PluginManifest;
-use crate::PluginSource;
+use crate::loader::LoadedPluginV2;
+use crate::loader::PluginLoadSource;
+use crate::schemas::ManifestHooks;
+use crate::schemas::PluginId;
+use crate::schemas::PluginManifestV2;
 
 use super::*;
 
-fn test_plugin(name: &str, path: &std::path::Path) -> LoadedPlugin {
-    LoadedPlugin {
-        name: name.to_string(),
-        manifest: PluginManifest {
+/// Build a minimal inline `LoadedPluginV2` with optional inline manifest hooks.
+fn test_plugin_with_hooks(
+    name: &str,
+    path: &std::path::Path,
+    hooks: Option<ManifestHooks>,
+) -> LoadedPluginV2 {
+    LoadedPluginV2 {
+        id: PluginId {
+            name: name.to_string(),
+            marketplace: "inline".to_string(),
+        },
+        manifest: PluginManifestV2 {
             name: name.to_string(),
             version: None,
-            description: "Test plugin".to_string(),
-            skills: vec![],
-            hooks: HashMap::new(),
-            mcp_servers: HashMap::new(),
+            description: Some("Test plugin".to_string()),
+            author: None,
+            homepage: None,
+            repository: None,
+            license: None,
+            keywords: None,
+            dependencies: None,
+            skills: None,
+            hooks,
+            agents: None,
+            commands: None,
+            mcp_servers: None,
+            lsp_servers: None,
+            output_styles: None,
+            channels: None,
+            user_config: None,
+            settings: None,
+            env_vars: None,
+            min_version: None,
+            max_version: None,
         },
         path: path.to_path_buf(),
-        source: PluginSource::User,
+        load_source: PluginLoadSource::SessionDir,
         enabled: true,
     }
+}
+
+fn test_plugin(name: &str, path: &std::path::Path) -> LoadedPluginV2 {
+    test_plugin_with_hooks(name, path, None)
 }
 
 #[test]
@@ -45,7 +75,7 @@ fn test_load_hooks_from_hooks_dir() {
     .unwrap();
 
     let plugin = test_plugin("my-plugin", dir.path());
-    let hooks = load_plugin_hooks(&plugin);
+    let hooks = load_plugin_hooks_v2(&plugin);
 
     assert_eq!(hooks.len(), 1);
     assert_eq!(hooks[0].event, HookEventType::PreToolUse);
@@ -66,22 +96,13 @@ fn test_load_hooks_from_manifest_inline() {
         serde_json::json!([{ "type": "prompt", "prompt": "hello from plugin" }]),
     );
 
-    let plugin = LoadedPlugin {
-        name: "inline-plugin".to_string(),
-        manifest: PluginManifest {
-            name: "inline-plugin".to_string(),
-            version: None,
-            description: "Test".to_string(),
-            skills: vec![],
-            hooks: manifest_hooks,
-            mcp_servers: HashMap::new(),
-        },
-        path: dir.path().to_path_buf(),
-        source: PluginSource::User,
-        enabled: true,
-    };
+    let plugin = test_plugin_with_hooks(
+        "inline-plugin",
+        dir.path(),
+        Some(ManifestHooks::Inline(manifest_hooks)),
+    );
 
-    let hooks = load_plugin_hooks(&plugin);
+    let hooks = load_plugin_hooks_v2(&plugin);
 
     assert_eq!(hooks.len(), 1);
     assert_eq!(hooks[0].event, HookEventType::SessionStart);
@@ -115,28 +136,19 @@ fn test_load_hooks_deduplication() {
     let mut manifest_hooks = HashMap::new();
     manifest_hooks.insert(HookEventType::PreToolUse.as_str().to_string(), make_def());
 
-    let plugin = LoadedPlugin {
-        name: "dup-plugin".to_string(),
-        manifest: PluginManifest {
-            name: "dup-plugin".to_string(),
-            version: None,
-            description: "Test".to_string(),
-            skills: vec![],
-            hooks: manifest_hooks,
-            mcp_servers: HashMap::new(),
-        },
-        path: dir.path().to_path_buf(),
-        source: PluginSource::User,
-        enabled: true,
-    };
+    let plugin = test_plugin_with_hooks(
+        "dup-plugin",
+        dir.path(),
+        Some(ManifestHooks::Inline(manifest_hooks)),
+    );
 
-    // load_plugin_hooks returns both (no dedup at load time)
-    let hooks = load_plugin_hooks(&plugin);
+    // load_plugin_hooks_v2 returns both (no dedup at load time)
+    let hooks = load_plugin_hooks_v2(&plugin);
     assert_eq!(hooks.len(), 2);
 
-    // register_plugin_hooks deduplicates via register_deduped
+    // register_plugin_hooks_v2 deduplicates via register_deduped
     let registry = HookRegistry::new();
-    register_plugin_hooks(&registry, &[&plugin]);
+    register_plugin_hooks_v2(&registry, &[&plugin]);
     // The two hooks have the same command, so one is deduplicated
     assert_eq!(registry.len(), 1);
 }
@@ -145,7 +157,7 @@ fn test_load_hooks_deduplication() {
 fn test_load_hooks_empty_plugin() {
     let dir = tempfile::tempdir().unwrap();
     let plugin = test_plugin("empty-plugin", dir.path());
-    let hooks = load_plugin_hooks(&plugin);
+    let hooks = load_plugin_hooks_v2(&plugin);
     assert!(hooks.is_empty());
 }
 
@@ -183,7 +195,7 @@ fn test_load_all_plugin_hooks_multiple_plugins() {
     let p1 = test_plugin("plugin-a", dir1.path());
     let p2 = test_plugin("plugin-b", dir2.path());
 
-    let hooks = load_all_plugin_hooks(&[&p1, &p2]);
+    let hooks = load_all_plugin_hooks_v2(&[&p1, &p2]);
     assert_eq!(hooks.len(), 2);
     assert_eq!(hooks[0].event, HookEventType::PreToolUse);
     assert_eq!(hooks[1].event, HookEventType::SessionStart);
@@ -206,7 +218,7 @@ fn test_status_message_preserves_existing() {
     .unwrap();
 
     let plugin = test_plugin("lint-plugin", dir.path());
-    let hooks = load_plugin_hooks(&plugin);
+    let hooks = load_plugin_hooks_v2(&plugin);
 
     assert_eq!(hooks.len(), 1);
     assert_eq!(

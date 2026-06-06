@@ -60,6 +60,7 @@ pub(super) fn hook_ctx_for_subagent(
         http_url_allowlist: None,
         http_env_var_policy: None,
         async_registry: None,
+        async_rewake_sink: None,
         llm_handle: None,
         workspace_trust_accepted: None,
     }

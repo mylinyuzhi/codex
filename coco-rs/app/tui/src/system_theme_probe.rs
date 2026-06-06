@@ -132,21 +132,34 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// Raw-mode guard that is a no-op when raw mode is already on — see the
+/// matching guard in `sync_update_probe`. If `setup_terminal` already armed raw
+/// mode for the session, unconditionally disabling it on drop would drop the
+/// whole session into cooked mode; only restore if THIS guard enabled raw.
 #[cfg(unix)]
-struct RawModeGuard;
+struct RawModeGuard {
+    enabled_here: bool,
+}
 
 #[cfg(unix)]
 impl RawModeGuard {
     fn enable() -> std::io::Result<Self> {
-        crossterm::terminal::enable_raw_mode()?;
-        Ok(Self)
+        let already_raw = crossterm::terminal::is_raw_mode_enabled()?;
+        if !already_raw {
+            crossterm::terminal::enable_raw_mode()?;
+        }
+        Ok(Self {
+            enabled_here: !already_raw,
+        })
     }
 }
 
 #[cfg(unix)]
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        let _ = crossterm::terminal::disable_raw_mode();
+        if self.enabled_here {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
     }
 }
 

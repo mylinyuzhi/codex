@@ -99,13 +99,11 @@ impl SurfaceHistoryDriver {
     pub(crate) fn note_viewport(
         &mut self,
         width: u16,
-        height: u16,
         stream_active: bool,
     ) -> HistoryViewportChange {
-        let change = self.reflow.note_viewport(width, height);
-        if change.changed && self.reflow.replay_needed_for_viewport(width, height) {
-            self.reflow
-                .schedule_viewport_replay(width, height, stream_active);
+        let change = self.reflow.note_viewport(width);
+        if change.changed && self.reflow.replay_needed_for_viewport(width) {
+            self.reflow.schedule_viewport_replay(width, stream_active);
         }
         change
     }
@@ -238,7 +236,7 @@ impl SurfaceHistoryDriver {
         )?;
         let area = terminal.viewport_area();
         self.reflow
-            .mark_replayed_viewport(area.width, area.height, stream_active);
+            .mark_replayed_viewport(area.width, stream_active);
         Ok(outcome)
     }
 
@@ -272,7 +270,7 @@ impl SurfaceHistoryDriver {
         )?;
         let area = terminal.viewport_area();
         self.reflow
-            .mark_replayed_viewport(area.width, area.height, mode.stream_active);
+            .mark_replayed_viewport(area.width, mode.stream_active);
         tracing::debug!(
             target: "tui::surface::replay",
             cause = mode.cause,

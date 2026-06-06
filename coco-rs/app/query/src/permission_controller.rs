@@ -16,14 +16,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::helpers::ToolCompletionEventMode;
+use crate::helpers::complete_tool_call_clarification;
 use crate::helpers::complete_tool_call_with_error_mode;
 use crate::session_state::SessionStateTracker;
+use coco_types::ToolName;
 
 pub(crate) enum PermissionOutcome {
     Allow {
         updated_input: Option<serde_json::Value>,
     },
     Denied,
+    Aborted,
 }
 
 pub(crate) struct PermissionController<'a> {
@@ -104,6 +107,21 @@ impl<'a> PermissionController<'a> {
                 )
                 .await;
                 PermissionOutcome::Denied
+            }
+            PermissionDecision::Abort { message, .. } => {
+                warn!(tool = tool_call.tool_name, %message, "tool permission aborted");
+                let output = format!("Permission aborted: {message}");
+                complete_tool_call_with_error_mode(
+                    self.event_tx,
+                    self.history,
+                    &tool_call.tool_call_id,
+                    &tool_call.tool_name,
+                    tool_id,
+                    &output,
+                    self.completion_event_mode,
+                )
+                .await;
+                PermissionOutcome::Aborted
             }
             PermissionDecision::Ask {
                 message,
@@ -296,6 +314,29 @@ impl<'a> PermissionController<'a> {
                     let feedback = resolution
                         .feedback
                         .unwrap_or_else(|| "Permission denied by client".into());
+                    // AskUserQuestion's "Chat about this" / "Skip interview" reach
+                    // here as `approved: false` + feedback. That is a deliberate
+                    // user REDIRECT, not a permission denial: render the feedback
+                    // as a neutral tool result (no red "Permission denied:" prefix)
+                    // and do NOT count it as a denial. The model still gets the
+                    // feedback and re-engages.
+                    if tool_call.tool_name == ToolName::AskUserQuestion.as_str() {
+                        warn!(tool = tool_call.tool_name, "approval bridge: clarify");
+                        complete_tool_call_clarification(
+                            self.event_tx,
+                            self.history,
+                            &tool_call.tool_call_id,
+                            &tool_call.tool_name,
+                            tool_id,
+                            &feedback,
+                            self.completion_event_mode,
+                        )
+                        .await;
+                        self.state_tracker
+                            .transition_to(SessionState::Running, self.event_tx)
+                            .await;
+                        return PermissionOutcome::Denied;
+                    }
                     warn!(tool = tool_call.tool_name, "approval bridge: rejected");
                     self.record_denial(tool_call, tool_input);
                     let output = format!("Permission denied: {feedback}");
@@ -314,15 +355,35 @@ impl<'a> PermissionController<'a> {
                         .await;
                     PermissionOutcome::Denied
                 }
+                coco_tool_runtime::ToolPermissionDecision::Aborted => {
+                    let feedback = resolution
+                        .feedback
+                        .unwrap_or_else(|| "Permission request aborted by client".into());
+                    warn!(tool = tool_call.tool_name, "approval bridge: aborted");
+                    let output = format!("Permission aborted: {feedback}");
+                    complete_tool_call_with_error_mode(
+                        self.event_tx,
+                        self.history,
+                        &tool_call.tool_call_id,
+                        &tool_call.tool_name,
+                        tool_id,
+                        &output,
+                        self.completion_event_mode,
+                    )
+                    .await;
+                    self.state_tracker
+                        .transition_to(SessionState::Running, self.event_tx)
+                        .await;
+                    PermissionOutcome::Aborted
+                }
             },
             Err(e) => {
                 warn!(
                     error = %e,
                     tool = tool_call.tool_name,
-                    "approval bridge failed; auto-denying"
+                    "approval bridge failed; aborting permission flow"
                 );
-                self.record_denial(tool_call, tool_input);
-                let output = format!("Approval bridge error: {e}");
+                let output = format!("Permission aborted: {e}");
                 complete_tool_call_with_error_mode(
                     self.event_tx,
                     self.history,
@@ -336,7 +397,7 @@ impl<'a> PermissionController<'a> {
                 self.state_tracker
                     .transition_to(SessionState::Running, self.event_tx)
                     .await;
-                PermissionOutcome::Denied
+                PermissionOutcome::Aborted
             }
         }
     }

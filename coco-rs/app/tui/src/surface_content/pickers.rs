@@ -7,6 +7,7 @@ use crate::presentation::picker;
 use crate::state::AgentsDialogState;
 use crate::state::McpServerSelectState;
 use crate::state::ModelPickerState;
+use crate::state::PluginDialogState;
 use crate::state::SkillsDialogState;
 use crate::state::SubagentInstance;
 use coco_tui_ui::style::UiStyles;
@@ -23,6 +24,13 @@ pub(super) fn skills_dialog_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::skills_dialog_content(s, styles)
+}
+
+pub(super) fn plugin_dialog_content(
+    p: &PluginDialogState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    picker::plugin_dialog_content(p, styles)
 }
 
 pub(super) fn agents_dialog_content(

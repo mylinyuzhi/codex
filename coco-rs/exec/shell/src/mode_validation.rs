@@ -12,15 +12,17 @@ const ACCEPT_EDITS_COMMANDS: &[&str] = &["mkdir", "touch", "rm", "rmdir", "mv", 
 
 /// Check if a command should be auto-allowed in acceptEdits mode.
 ///
-/// Returns true if the command's base executable is in the auto-allow list.
+/// Returns true if ANY subcommand's base executable is in the auto-allow list.
+/// TS `modeValidation.checkPermissionMode` splits the command and allows if any
+/// part is a filesystem command, so `cd src && rm old.txt` finds `rm` → allow.
 pub fn is_auto_allowed_in_accept_edits(command: &str) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return false;
     }
-
-    let base = extract_base_executable(trimmed);
-    ACCEPT_EDITS_COMMANDS.contains(&base)
+    crate::bash_permissions::split_compound_command(trimmed)
+        .iter()
+        .any(|sub| ACCEPT_EDITS_COMMANDS.contains(&extract_base_executable(sub.trim())))
 }
 
 /// Extract the base executable name from a command string.

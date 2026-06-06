@@ -41,7 +41,9 @@ const CHARS_PER_TOKEN: f64 = 4.0;
 const DEFAULT_MAX_TOKENS_PER_ATTACHMENT: i64 = 8_000;
 
 /// PDF page threshold: PDFs with more pages become lightweight references.
-const PDF_INLINE_THRESHOLD: i32 = 20;
+/// PDFs with more than this many pages stay a reference; smaller ones are
+/// inlined as extracted text. TS `PDF_AT_MENTION_INLINE_THRESHOLD`.
+const PDF_INLINE_THRESHOLD: i32 = 10;
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -528,10 +530,31 @@ pub fn generate_file_attachment(
         .to_string_lossy()
         .into_owned();
 
-    // PDF reference check
-    if is_pdf_path(&abs_path) {
-        return generate_pdf_reference(&abs_path, &display_path);
-    }
+    // PDF: large PDFs stay a reference; small ones (≤ threshold pages) inline
+    // their extracted text like a regular file (TS `tryGetPDFReference` returns
+    // null below the threshold so `generateFileAttachment` falls through).
+    let pdf_text: Option<String> = if is_pdf_path(&abs_path) {
+        match extract_pdf_text(&abs_path) {
+            Some(text) => {
+                let pages = pdf_page_count_from_text(&text);
+                if pages > PDF_INLINE_THRESHOLD {
+                    return generate_pdf_reference(&abs_path, &display_path, pages);
+                }
+                Some(text)
+            }
+            // Extraction failed (encrypted / malformed): keep a reference with a
+            // size-heuristic page count rather than read binary bytes as text.
+            None => {
+                return generate_pdf_reference(
+                    &abs_path,
+                    &display_path,
+                    pdf_page_count_heuristic(&abs_path),
+                );
+            }
+        }
+    } else {
+        None
+    };
 
     // Image file: read and base64-encode
     if is_image_path(&abs_path) {
@@ -546,7 +569,10 @@ pub fn generate_file_attachment(
         }));
     }
 
-    let content = std::fs::read_to_string(&abs_path).ok()?;
+    let content = match pdf_text {
+        Some(text) => text,
+        None => std::fs::read_to_string(&abs_path).ok()?,
+    };
     let max_tokens = options
         .max_tokens
         .unwrap_or(DEFAULT_MAX_TOKENS_PER_ATTACHMENT);
@@ -575,30 +601,43 @@ pub fn generate_file_attachment(
     }))
 }
 
-/// Generate a PDF reference attachment for large PDFs.
-fn generate_pdf_reference(path: &Path, display_path: &str) -> Option<Attachment> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let file_size = metadata.len() as i64;
-    // Heuristic: ~100KB per page when real page count is unavailable.
-    let estimated_pages = (file_size as f64 / (100.0 * 1024.0)).ceil() as i32;
+/// Generate a PDF reference attachment for a large PDF (page count already
+/// resolved by the caller).
+fn generate_pdf_reference(path: &Path, display_path: &str, page_count: i32) -> Option<Attachment> {
+    let file_size = std::fs::metadata(path).ok()?.len() as i64;
+    Some(Attachment::PdfReference(PdfReferenceAttachment {
+        filename: path.to_string_lossy().into_owned(),
+        page_count,
+        file_size,
+        display_path: display_path.to_owned(),
+    }))
+}
 
-    if estimated_pages > PDF_INLINE_THRESHOLD {
-        Some(Attachment::PdfReference(PdfReferenceAttachment {
-            filename: path.to_string_lossy().into_owned(),
-            page_count: estimated_pages,
-            file_size,
-            display_path: display_path.to_owned(),
-        }))
+/// Page count from already-extracted PDF text: `pdf-extract` separates pages
+/// with form feed (`\u{0C}`), matching `read.rs::read_pdf`. TS `getPDFPageCount`.
+fn pdf_page_count_from_text(text: &str) -> i32 {
+    let pages = if text.contains('\u{0C}') {
+        text.split('\u{0C}')
+            .filter(|s| !s.trim().is_empty())
+            .count()
     } else {
-        // Small PDF — caller should use a real PDF reader to inline content.
-        // Return a reference so the caller knows about it.
-        Some(Attachment::PdfReference(PdfReferenceAttachment {
-            filename: path.to_string_lossy().into_owned(),
-            page_count: estimated_pages,
-            file_size,
-            display_path: display_path.to_owned(),
-        }))
-    }
+        1
+    };
+    pages.max(1) as i32
+}
+
+/// Size-based page estimate (~100KB/page) used only when text extraction fails.
+/// TS `tryGetPDFReference` size-heuristic fallback.
+fn pdf_page_count_heuristic(path: &Path) -> i32 {
+    let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) as f64;
+    ((file_size / (100.0 * 1024.0)).ceil() as i32).max(1)
+}
+
+/// Extract a PDF's full text via `pdf-extract`. Returns `None` on read/parse
+/// failure (encrypted, malformed, …) so callers fall back to a reference.
+fn extract_pdf_text(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    pdf_extract::extract_text_from_mem(&bytes).ok()
 }
 
 // ---------------------------------------------------------------------------

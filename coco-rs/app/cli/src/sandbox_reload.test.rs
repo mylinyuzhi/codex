@@ -41,6 +41,7 @@ fn build_test_runtime(mut merged: Settings) -> (TempDir, RuntimeConfig) {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         catalogs,
+        coco_config::parse_enabled_setting_sources(None),
     )
     .expect("runtime build");
     (tmp, runtime)

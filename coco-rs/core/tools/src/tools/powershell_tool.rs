@@ -309,19 +309,21 @@ impl Tool for PowerShellTool {
             }
         }
 
-        if input.run_in_background {
-            return execute_background(&input, ctx).await;
-        }
-
         // Sandbox decision parity with Bash. Resolve the active state +
-        // bypass flag here; the foreground helper applies the platform
-        // wrap before spawning pwsh.
+        // bypass flag here — BEFORE the background branch — so the
+        // foreground AND background paths apply the same platform wrap.
+        // #38 / TS `PowerShellTool.tsx:746-750,767`: backgrounded pwsh is
+        // sandboxed identically to foreground.
         let sandbox_state = if ctx.features.enabled(coco_types::Feature::Sandbox) {
             ctx.sandbox_state.clone()
         } else {
             None
         };
         let sandbox_bypass = SandboxBypass::from_flag(input.dangerously_disable_sandbox);
+
+        if input.run_in_background {
+            return execute_background(&input, ctx, sandbox_state, sandbox_bypass).await;
+        }
 
         execute_foreground(&input, ctx, sandbox_state, sandbox_bypass).await
     }
@@ -331,6 +333,8 @@ impl Tool for PowerShellTool {
 async fn execute_background(
     input: &PowerShellInput,
     ctx: &ToolUseContext,
+    sandbox_state: Option<std::sync::Arc<coco_sandbox::SandboxState>>,
+    sandbox_bypass: SandboxBypass,
 ) -> Result<ToolResult<Value>, ToolError> {
     let task_handle = ctx
         .task_handle
@@ -370,11 +374,10 @@ async fn execute_background(
             auto_detach_ms: None,
             // Explicit bg spawn keeps the hard-kill-on-timeout behaviour.
             kill_on_timeout: true,
-            // W6: PowerShell bg path currently doesn't thread sandbox
-            // state — `pwsh` runs on macOS/Linux too but the sandbox
-            // wrap targets bash. Skip for now; this is a follow-up.
-            sandbox_state: None,
-            sandbox_bypass: coco_sandbox::SandboxBypass::No,
+            // #38: thread the resolved sandbox state/bypass so backgrounded
+            // pwsh is sandboxed identically to the foreground path.
+            sandbox_state,
+            sandbox_bypass,
         })
         .await
         .map_err(|e| ToolError::ExecutionFailed {
@@ -450,7 +453,7 @@ async fn execute_foreground(
 
     let opts = coco_shell::ExecOptions {
         timeout_ms: Some(timeout_ms as i64),
-        cancel: Some(ctx.cancel.clone()),
+        cancel: Some(ctx.cancel_token()),
         sandbox: sandbox_state.clone(),
         sandbox_bypass,
         ..Default::default()

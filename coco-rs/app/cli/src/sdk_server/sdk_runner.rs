@@ -615,13 +615,19 @@ impl TurnRunner for QueryEngineRunner {
                     // `/clear` / `/compact` / `/rewind` — SDK has no
                     // equivalent runner-level cancel arms.)
                     if result.cancelled || cancel_for_terminal.is_cancelled() {
+                        let reason = match result.stop_reason.as_deref() {
+                            Some("permission_abort") => {
+                                coco_types::TurnAbortReason::PermissionAbort
+                            }
+                            _ => coco_types::TurnAbortReason::UserCancel,
+                        };
                         let _ = event_tx_for_error
                             .send(CoreEvent::Protocol(
                                 coco_types::ServerNotification::TurnEnded(
                                     coco_types::TurnEndedParams::interrupted(
                                         cycle_turn_id.clone(),
                                         /*usage*/ None,
-                                        coco_types::CancelReason::UserCancel,
+                                        reason,
                                     ),
                                 ),
                             ))
@@ -648,7 +654,7 @@ impl TurnRunner for QueryEngineRunner {
                                     coco_types::TurnEndedParams::interrupted(
                                         cycle_turn_id.clone(),
                                         /*usage*/ None,
-                                        coco_types::CancelReason::UserCancel,
+                                        coco_types::TurnAbortReason::UserCancel,
                                     ),
                                 ),
                             ))

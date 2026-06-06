@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use coco_context::Phase4Variant;
 use coco_context::PlanWorkflow;
 use coco_messages::MessageHistory;
+use coco_types::AttachmentKind;
 use coco_types::PermissionMode;
 use coco_types::SkillDiscoveryPayload;
 use coco_types::ToolAppState;
@@ -29,6 +30,7 @@ use crate::generator::GeneratorContext;
 use crate::orchestrator::SystemReminderOrchestrator;
 use crate::turn_counting::TASK_MANAGEMENT_TOOLS;
 use crate::turn_counting::count_assistant_turns_since_any_tool;
+use crate::turn_counting::count_assistant_turns_since_attachment;
 use crate::turn_counting::count_assistant_turns_since_tool;
 use crate::turn_counting::count_human_turns_since_attachment;
 use crate::types::SystemReminder;
@@ -113,6 +115,12 @@ pub struct TurnReminderInput<'a> {
     /// `Some(iso_date)` when the local date has rolled over since the last
     /// date-change emission; `None` otherwise. Engine's per-session latch.
     pub new_date: Option<String>,
+
+    // ── Per-turn user context ──
+    /// Today's local ISO date, injected every turn for the
+    /// `user_context` reminder (TS `prependUserContext.currentDate`).
+    /// `Some` on the live engine path; `None` in tests suppresses it.
+    pub current_date: Option<String>,
 
     // ── Verify-plan reminder ──
     /// True when `ToolAppState::pending_plan_verification` is set.
@@ -230,6 +238,7 @@ pub async fn run_turn_reminders(
         effective_context_window,
         used_tokens,
         new_date,
+        current_date,
         has_pending_plan_verification,
         total_cost_usd,
         max_budget_usd,
@@ -280,20 +289,10 @@ pub async fn run_turn_reminders(
     let turns_since_plan_exit =
         count_human_turns_since_attachment(messages, coco_types::AttachmentKind::PlanModeExit);
 
-    // Reminder-to-reminder counters come from the throttle state the
-    // orchestrator owns — avoids a second history scan per attachment type
-    // and keeps the post-compaction behavior correct (compaction resets
-    // throttle, which re-arms reminders).
-    let turns_since_last_todo_reminder = throttle_gap(
-        orchestrator,
-        crate::types::AttachmentType::TodoReminder,
-        turn_number,
-    );
-    let turns_since_last_task_reminder = throttle_gap(
-        orchestrator,
-        crate::types::AttachmentType::TaskReminder,
-        turn_number,
-    );
+    let turns_since_last_todo_reminder =
+        count_assistant_turns_since_attachment(messages, AttachmentKind::TodoReminder);
+    let turns_since_last_task_reminder =
+        count_assistant_turns_since_attachment(messages, AttachmentKind::TaskReminder);
 
     let builder = GeneratorContext::builder(config)
         .turn_number(turn_number)
@@ -320,6 +319,7 @@ pub async fn run_turn_reminders(
         .effective_context_window(effective_context_window)
         .used_tokens(used_tokens)
         .new_date(new_date)
+        .current_date(current_date)
         .has_pending_plan_verification(has_pending_plan_verification)
         .turns_since_plan_exit(turns_since_plan_exit)
         .total_cost_usd(total_cost_usd)
@@ -368,21 +368,6 @@ pub async fn run_turn_reminders(
 /// Gap in turns since `at` was last generated, or a large sentinel (2×
 /// `turn_number` or `i32::MAX` when the throttle has never fired) that is
 /// guaranteed to exceed any per-generator threshold.
-fn throttle_gap(
-    orchestrator: &SystemReminderOrchestrator,
-    at: crate::types::AttachmentType,
-    turn_number: i32,
-) -> i32 {
-    match orchestrator
-        .throttle()
-        .get_state(at)
-        .and_then(|s| s.last_generated_turn)
-    {
-        Some(last) => turn_number.saturating_sub(last).max(0),
-        None => i32::MAX,
-    }
-}
-
 #[cfg(test)]
 #[path = "turn_runner.test.rs"]
 mod tests;

@@ -136,29 +136,44 @@ fn test_bash_missing_command_conservative() {
     assert!(<BashTool as DynTool>::is_destructive(&BashTool, &input));
 }
 
-/// Deny-severity security risks (eval, IFS injection, backtick substitution)
-/// must be hard-failed at execute time, before the command ever runs.
-/// TS: `bashPermissions.ts` Deny phase classifiers (`checkSemantics` Deny risks).
+/// shell-163 / TS parity: `eval` and `IFS=` injection are routed through the
+/// *ask* permission flow, NOT hard-failed at the Deny gate. TS
+/// `bashSecurity.ts` returns `behavior: 'ask'` (never `'deny'`) for these — the
+/// user can approve them through the normal permission prompt. BashTool only
+/// hard-fails on `SecuritySeverity::Deny` (bash.rs), which is now reserved for
+/// genuinely-catastrophic constructs (raw control chars, `/proc/*/environ`).
 #[tokio::test]
-async fn test_bash_security_deny_phase_eval() {
-    let ctx = ToolUseContext::test_default();
-    let result =
-        <BashTool as DynTool>::execute(&BashTool, json!({"command": "eval 'echo pwned'"}), &ctx)
-            .await;
-    assert!(result.is_err(), "eval must be blocked by Deny phase");
-    let err = result.unwrap_err().to_string();
+async fn test_bash_security_eval_routes_through_ask_not_deny() {
+    let checks = coco_shell::security::check_security("eval $user_input");
     assert!(
-        err.contains("security check") || err.contains("eval"),
-        "error should mention security: {err}"
+        checks
+            .iter()
+            .any(|c| c.severity == coco_shell::security::SecuritySeverity::Ask),
+        "eval must surface an Ask-severity check"
+    );
+    assert!(
+        !checks
+            .iter()
+            .any(|c| c.severity == coco_shell::security::SecuritySeverity::Deny),
+        "eval must NOT be hard-Deny — TS routes it through ask"
     );
 }
 
 #[tokio::test]
-async fn test_bash_security_deny_phase_ifs_injection() {
-    let ctx = ToolUseContext::test_default();
-    let result =
-        <BashTool as DynTool>::execute(&BashTool, json!({"command": "IFS=$'\\n' ls"}), &ctx).await;
-    assert!(result.is_err(), "IFS manipulation must be blocked");
+async fn test_bash_security_ifs_injection_routes_through_ask_not_deny() {
+    let checks = coco_shell::security::check_security("IFS=: read -r a b");
+    assert!(
+        checks
+            .iter()
+            .any(|c| c.severity == coco_shell::security::SecuritySeverity::Ask),
+        "IFS injection must surface an Ask-severity check"
+    );
+    assert!(
+        !checks
+            .iter()
+            .any(|c| c.severity == coco_shell::security::SecuritySeverity::Deny),
+        "IFS must NOT be hard-Deny — TS routes it through ask"
+    );
 }
 
 /// Read-only commands MUST skip the security Deny check so benign patterns
@@ -536,15 +551,17 @@ fn test_is_autobackgrounding_allowed_excludes_sleep() {
     assert!(is_autobackgrounding_allowed("cargo test"));
 }
 
-/// R6-T17: when ctx.cancel fires mid-execution, the child process is
-/// killed and the tool returns with interrupted=true. Previously
+/// R6-T17: when ctx.abort fires mid-execution, the child process is
+/// killed and the tool returns a cancellation error. Previously
 /// executor-level cancel dropped the Bash future but left the shell
 /// child orphaned. Regression guard.
 #[tokio::test]
-async fn test_bash_cancel_kills_child_and_sets_interrupted() {
+async fn test_bash_cancel_kills_child_and_returns_cancelled() {
     let mut ctx = ToolUseContext::test_default();
     let cancel = tokio_util::sync::CancellationToken::new();
-    ctx.cancel = cancel.clone();
+    ctx.abort = coco_tool_runtime::ToolAbortSignal::from_turn(
+        coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),
+    );
 
     // Fire cancel after 200ms; the command tries to sleep 10s.
     tokio::spawn(async move {
@@ -558,8 +575,7 @@ async fn test_bash_cancel_kills_child_and_sets_interrupted() {
         json!({"command": "sleep 10 && echo done"}),
         &ctx,
     )
-    .await
-    .unwrap();
+    .await;
 
     let elapsed = start.elapsed();
     // Should return well before 10s — ideally ~200ms plus shell startup.
@@ -567,10 +583,10 @@ async fn test_bash_cancel_kills_child_and_sets_interrupted() {
         elapsed < std::time::Duration::from_secs(3),
         "cancel should kill child promptly; elapsed={elapsed:?}"
     );
-    assert_eq!(
-        result.data["interrupted"], true,
-        "interrupted flag must be set on cancel"
-    );
+    assert!(matches!(
+        result,
+        Err(coco_tool_runtime::ToolError::Cancelled)
+    ));
 }
 
 /// R5-T14: structured output schema — regression guard. TS
@@ -1001,6 +1017,31 @@ async fn test_bash_simulated_sed_edit_does_not_run_command() {
 }
 
 // ---------------------------------------------------------------------------
+// Claude Code hints — model-facing stripping (TS BashTool.tsx:780-784)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_maybe_strip_and_record_hints_removes_tag() {
+    use crate::tools::bash::maybe_strip_and_record_hints;
+    let stdout =
+        "line1\n<claude-code-hint v=\"1\" type=\"plugin\" value=\"foo@bar\" />\nline2".to_string();
+    let out = maybe_strip_and_record_hints(stdout, "mytool run");
+    assert!(
+        !out.contains("<claude-code-hint"),
+        "hint tag must be stripped from model-visible stdout: {out:?}"
+    );
+    assert!(out.contains("line1") && out.contains("line2"));
+}
+
+#[test]
+fn test_maybe_strip_and_record_hints_passthrough_when_no_tag() {
+    use crate::tools::bash::maybe_strip_and_record_hints;
+    let stdout = "ordinary output\nno tags".to_string();
+    let out = maybe_strip_and_record_hints(stdout.clone(), "tool");
+    assert_eq!(out, stdout);
+}
+
+// ---------------------------------------------------------------------------
 // render_for_model — TS parity with BashTool.tsx::mapToolResultToToolResultBlockParam
 // ---------------------------------------------------------------------------
 
@@ -1229,4 +1270,83 @@ mod render_for_model_tests {
     // `format_byte_size` lives in `shell_render.rs`; its byte-identity
     // contract test (TS `utils/format.ts::formatFileSize`) lives in
     // `shell_render.test.rs` next to the implementation.
+}
+
+// ---------------------------------------------------------------------------
+// #34 — head-only output truncation with a lines marker
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_truncate_output_is_head_only_with_lines_marker() {
+    use super::truncate_output;
+    // 10 lines "L0".."L9", each 3 bytes incl newline → 30 bytes total.
+    let content: String = (0..10).map(|i| format!("L{i}\n")).collect();
+    let out = truncate_output(content.as_bytes(), 9); // keep ~first 3 lines
+    // Head retained from the start.
+    assert!(out.starts_with("L0\n"), "head should be kept: {out}");
+    // No tail half preserved (old behavior kept the end too).
+    assert!(
+        !out.contains("L9"),
+        "tail must be dropped (head-only): {out}"
+    );
+    // TS lines marker, not chars.
+    assert!(out.contains("lines truncated"), "got: {out}");
+    assert!(!out.contains("chars truncated"), "got: {out}");
+}
+
+// ---------------------------------------------------------------------------
+// check_permissions seam (shell#162/#164/#167)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_bash_check_permissions_jq_danger_asks() {
+    // jq system() is no longer treated as read-only; the curated security
+    // route sends it to a prompt (#162).
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "jq 'system(\"id\")' data.json"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "jq system() should Ask, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_check_permissions_common_substitution_not_prompted() {
+    // The broad substitution analyzers are deliberately NOT routed (they lack
+    // TS's safe-substitution carve-outs and would over-prompt). A common
+    // `$(...)` in a non-read-only command passes through, not Ask.
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "tar czf backup-$(date +%s).tgz src"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Passthrough),
+        "common $(...) must not prompt, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
+    // acceptEdits mode auto-allows a filesystem subcommand anywhere in a
+    // compound command (#164).
+    let mut ctx = ToolUseContext::test_default();
+    ctx.permission_context.mode = coco_types::PermissionMode::AcceptEdits;
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "cd src && rm old.txt"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Allow { .. }),
+        "acceptEdits filesystem subcommand should Allow, got {result:?}"
+    );
 }

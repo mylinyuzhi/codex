@@ -135,10 +135,7 @@ class AttachmentKind(str, Enum):
     teammate_shutdown_batch = 'teammate_shutdown_batch'
     bagel_console = 'bagel_console'
     critical_system_reminder = 'critical_system_reminder'
-
-class CancelReason(str, Enum):
-    user_cancel = 'user_cancel'
-    system_preempt = 'system_preempt'
+    user_context = 'user_context'
 
 class Capability(str, Enum):
     text_generation = 'text_generation'
@@ -497,6 +494,13 @@ class TaskListStatus(str, Enum):
     in_progress = 'in_progress'
     completed = 'completed'
 
+class TurnAbortReason(str, Enum):
+    user_cancel = 'user_cancel'
+    submit_interrupt = 'submit_interrupt'
+    system_preempt = 'system_preempt'
+    permission_abort = 'permission_abort'
+    background = 'background'
+
 class UnifiedFinishReason(str, Enum):
     end_turn = 'end_turn'
     stop_sequence = 'stop_sequence'
@@ -545,9 +549,6 @@ SystemMessage = Union["SystemInformationalMessage", "SystemApiErrorMessage", "Sy
 
 # Tool message content parts.
 ToolContentPart = Union["ToolResultPart", "ToolApprovalResponsePart"]
-
-# UI-only side channel for bounded display data produced by tools.
-ToolDisplayData = dict[str, Any]
 
 # User message content parts.
 UserContentPart = Union["TextPart", "FilePart"]
@@ -1517,6 +1518,41 @@ SlashCommandStatusKind = Annotated[
     Field(discriminator='kind'),
 ]
 
+class ToolAbortReasonPayloadTurn(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['turn'] = Field(default='turn', alias='kind')
+    reason: TurnAbortReason
+
+class ToolAbortReasonPayloadSelfAbort(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['self_abort'] = Field(default='self_abort', alias='kind')
+    message: str
+
+class ToolAbortReasonPayloadSiblingError(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['sibling_error'] = Field(default='sibling_error', alias='kind')
+    failed_tool: str
+
+ToolAbortReasonPayload = Annotated[
+    Union[ToolAbortReasonPayloadTurn, ToolAbortReasonPayloadSelfAbort, ToolAbortReasonPayloadSiblingError],
+    Field(discriminator='kind'),
+]
+
+class ToolDisplayDataApplyPatchPreview(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['apply_patch_preview'] = Field(default='apply_patch_preview', alias='kind')
+    data: ApplyPatchPreview
+
+class ToolDisplayDataAskUserQuestionResult(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['ask_user_question_result'] = Field(default='ask_user_question_result', alias='kind')
+    data: AskUserQuestionResult
+
+ToolDisplayData = Annotated[
+    Union[ToolDisplayDataApplyPatchPreview, ToolDisplayDataAskUserQuestionResult],
+    Field(discriminator='kind'),
+]
+
 class ToolInputInvalidReasonJsonParseFailed(BaseModel):
     model_config = {"populate_by_name": True}
     kind: Literal['json_parse_failed'] = Field(default='json_parse_failed', alias='kind')
@@ -1749,10 +1785,15 @@ class TuiOnlyEventToolProgress(BaseModel):
     data: Any
     tool_use_id: str
 
+class TuiOnlyEventToolInterruptibilityChanged(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['tool_interruptibility_changed'] = Field(default='tool_interruptibility_changed', alias='type')
+    interruptible: bool
+
 class TuiOnlyEventToolExecutionAborted(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['tool_execution_aborted'] = Field(default='tool_execution_aborted', alias='type')
-    reason: str
+    reason: ToolAbortReasonPayload
     tool_use_id: str
 
 class TuiOnlyEventRewindCompleted(BaseModel):
@@ -1842,6 +1883,10 @@ class TuiOnlyEventOpenModelPicker(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_model_picker'] = Field(default='open_model_picker', alias='type')
 
+class TuiOnlyEventOpenSettings(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_settings'] = Field(default='open_settings', alias='type')
+
 class TuiOnlyEventOpenThemePicker(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_theme_picker'] = Field(default='open_theme_picker', alias='type')
@@ -1850,6 +1895,11 @@ class TuiOnlyEventOpenSkillsDialog(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['open_skills_dialog'] = Field(default='open_skills_dialog', alias='type')
     payload: SkillsDialogPayload
+
+class TuiOnlyEventOpenPluginDialog(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_plugin_dialog'] = Field(default='open_plugin_dialog', alias='type')
+    payload: PluginDialogPayload
 
 class TuiOnlyEventOpenAgentsDialog(BaseModel):
     model_config = {"populate_by_name": True}
@@ -1862,7 +1912,7 @@ class TuiOnlyEventSkillOverridesSaved(BaseModel):
     result: SkillOverridesSaveResult
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolInterruptibilityChanged, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSettings, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenPluginDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -2958,6 +3008,14 @@ class ApiError(BaseModel):
 class ApplyPatchPreview(BaseModel):
     rows: list[ApplyPatchPreviewRow]
 
+class AskUserQuestionAnswered(BaseModel):
+    answers: list[str]
+    question: str
+    note: str | None = None
+
+class AskUserQuestionResult(BaseModel):
+    questions: list[AskUserQuestionAnswered]
+
 class AssistantMessage(BaseModel):
     message: LanguageModelV4Message
     uuid: str
@@ -3209,7 +3267,7 @@ class InstructionsLoadedInput(BaseModel):
     trigger_file_path: str | None = None
 
 class InterruptedOutcome(BaseModel):
-    cancel_reason: CancelReason
+    abort_reason: TurnAbortReason
 
 class JsonRpcError(BaseModel):
     code: int
@@ -3353,6 +3411,59 @@ class PersistedFileError(BaseModel):
 class PersistedFileInfo(BaseModel):
     file_id: str
     filename: str
+
+class PluginDialogAction(BaseModel):
+    label: str
+    plugin_args: str
+
+class PluginDialogErrorRow(BaseModel):
+    message: str
+    plugin_id: str
+
+class PluginDialogInstalledRow(BaseModel):
+    blocked_by_policy: bool
+    enabled: bool
+    id: str
+    name: str
+    path: str
+    source: str
+    actions: list[PluginDialogAction] = []
+    description: str | None = None
+    mcp_servers: list[PluginDialogMcpServerRow] = []
+    options: list[PluginDialogOptionRow] = []
+    version: str | None = None
+
+class PluginDialogMarketplaceRow(BaseModel):
+    name: str
+    official: bool
+    plugin_count: int
+    actions: list[PluginDialogAction] = []
+    source: str | None = None
+
+class PluginDialogMcpServerRow(BaseModel):
+    display_name: str
+    enabled: bool
+    name: str
+    needs_config: bool
+    actions: list[PluginDialogAction] = []
+    tools: list[PluginDialogMcpToolRow] = []
+
+class PluginDialogMcpToolRow(BaseModel):
+    name: str
+    description: str | None = None
+
+class PluginDialogOptionRow(BaseModel):
+    description: str
+    key: str
+    required: bool
+    title: str
+    value_type: str
+    current_value: Any = None
+
+class PluginDialogPayload(BaseModel):
+    errors: list[PluginDialogErrorRow]
+    installed: list[PluginDialogInstalledRow]
+    marketplaces: list[PluginDialogMarketplaceRow]
 
 class PluginInit(BaseModel):
     name: str
