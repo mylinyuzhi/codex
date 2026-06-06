@@ -10,6 +10,16 @@
 
 use super::SwarmAgentHandle;
 
+/// Prepend the classifier-unavailable warning to a sub-agent's output,
+/// mirroring TS `${handoffWarning}\n\n${finalMessage}` (AgentTool.tsx:972).
+/// An empty body yields the warning alone.
+fn prepend_unavailable_warning(body: Option<&str>) -> String {
+    match body.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(b) => format!("{}\n\n{b}", coco_subagent::UNAVAILABLE_WARNING),
+        None => coco_subagent::UNAVAILABLE_WARNING.to_string(),
+    }
+}
+
 /// Free-fn implementation of [`SwarmAgentHandle::classify_handoff_if_needed`].
 /// Pre-cloned `side_query` lets the function run inside a detached
 /// `tokio::spawn` body (W6.2 sync detach race).
@@ -18,14 +28,16 @@ pub(crate) async fn classify_handoff_inline(
     qr: &coco_tool_runtime::AgentQueryResult,
     side_query: Option<&coco_tool_runtime::SideQueryHandle>,
 ) -> Option<String> {
-    if !coco_subagent::should_classify(agent_type, qr.tool_use_count) {
-        return qr.response_text.clone();
-    }
     let Some(side_query) = side_query else {
         return qr.response_text.clone();
     };
 
+    // TS `agentToolUtils.ts:411-412`: build the transcript first, then
+    // skip when it is empty (no read-only / tool-count exemption).
     let transcript = coco_subagent::build_handoff_transcript_summary(&qr.messages);
+    if !coco_subagent::should_classify(&transcript) {
+        return qr.response_text.clone();
+    }
     let (sys1, user1) =
         coco_subagent::handoff_stage1_prompts(agent_type, &transcript, qr.tool_use_count);
 
@@ -38,7 +50,10 @@ pub(crate) async fn classify_handoff_inline(
         .await
     {
         Ok(resp) => resp.text.unwrap_or_default(),
-        Err(_) => return qr.response_text.clone(),
+        // Classifier unavailable (TS `classifierResult.unavailable`):
+        // fail-open but prepend the warning so the parent verifies the
+        // sub-agent's work (agentToolUtils.ts:464-469 + caller prepend).
+        Err(_) => return Some(prepend_unavailable_warning(qr.response_text.as_deref())),
     };
 
     let stage1_verdict = coco_subagent::parse_classifier_response(&stage1_text);
@@ -56,7 +71,7 @@ pub(crate) async fn classify_handoff_inline(
         .await
     {
         Ok(resp) => resp.text.unwrap_or_default(),
-        Err(_) => return qr.response_text.clone(),
+        Err(_) => return Some(prepend_unavailable_warning(qr.response_text.as_deref())),
     };
 
     let final_verdict = coco_subagent::parse_classifier_response(&stage2_text);

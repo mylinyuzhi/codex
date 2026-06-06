@@ -107,6 +107,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::empty_in(home.path()),
+        coco_config::parse_enabled_setting_sources(None),
     )
     .expect("runtime config");
 
@@ -143,6 +144,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
+        is_non_interactive: false,
     })
     .await
     .expect("build SessionRuntime")

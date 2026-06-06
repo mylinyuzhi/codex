@@ -14,31 +14,32 @@ use coco_config::global_config;
 pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_default();
     let config_home = global_config::config_home();
-    let plugin_dirs = coco_plugins::get_plugin_dirs(&config_home, &cwd);
 
     match action {
         PluginAction::List => {
-            let mut manager = coco_plugins::PluginManager::new();
-            manager.load_from_dirs(&plugin_dirs);
-            if manager.is_empty() {
+            // Same enabled set the session bootstrap registers contributions
+            // from — marketplace versioned cache + local `inline` dirs, gated by
+            // settings.json `enabled_plugins`.
+            let mut plugins = coco_plugins::load_enabled_plugins(&config_home, &cwd);
+            if plugins.is_empty() {
                 println!("No plugins installed.");
                 return Ok(());
             }
             println!("Installed plugins:");
-            let mut plugins: Vec<_> = manager.enabled();
-            plugins.sort_by_key(|p| p.name.clone());
-            for plugin in plugins {
+            plugins.sort_by(|a, b| a.id.name.cmp(&b.id.name));
+            for plugin in &plugins {
                 let version = plugin.manifest.version.as_deref().unwrap_or("—");
-                let source = match &plugin.source {
-                    coco_plugins::PluginSource::Builtin => "builtin".into(),
-                    coco_plugins::PluginSource::User => "user".into(),
-                    coco_plugins::PluginSource::Project => "project".into(),
-                    coco_plugins::PluginSource::Repository { url } => format!("repo {url}"),
+                let source = match &plugin.load_source {
+                    coco_plugins::loader::PluginLoadSource::Marketplace { marketplace } => {
+                        format!("marketplace {marketplace}")
+                    }
+                    coco_plugins::loader::PluginLoadSource::SessionDir => "local".into(),
+                    coco_plugins::loader::PluginLoadSource::Builtin => "builtin".into(),
                 };
+                let desc = plugin.manifest.description.as_deref().unwrap_or("");
                 println!(
                     "  {name} {version} ({source})  — {desc}",
-                    name = plugin.name,
-                    desc = plugin.manifest.description,
+                    name = plugin.id.name,
                 );
             }
             Ok(())
@@ -52,37 +53,44 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
                 // accept the same `name[@marketplace]` syntax.
                 return install_from_marketplace(name, &config_home).await;
             }
-            if !src.join("PLUGIN.toml").is_file() {
-                anyhow::bail!("'{name}' does not contain a PLUGIN.toml manifest");
+            if !src.join("PLUGIN.toml").is_file() && !src.join("plugin.json").is_file() {
+                anyhow::bail!("'{name}' does not contain a PLUGIN.toml or plugin.json manifest");
             }
-            let manifest = coco_plugins::load_plugin_manifest(&src.join("PLUGIN.toml"))?;
+            // Load + validate via the V2 loader (the single manifest reader).
+            let loader = coco_plugins::loader::PluginLoader::new(config_home.join("plugins"));
+            let plugin = loader
+                .load_from_dir(
+                    src,
+                    coco_plugins::loader::PluginLoadSource::SessionDir,
+                    None,
+                )
+                .map_err(|e| anyhow::anyhow!("invalid plugin manifest: {}", e.message))?;
+            let plugin_name = plugin.manifest.name;
             // Reject manifest names that could traverse the install root.
             // `Path::join` treats "../" literally and does not escape the root on
             // disk, but a normalized `..` chain can still confuse audit tooling.
-            if manifest.name.is_empty()
-                || manifest.name.contains('/')
-                || manifest.name.contains('\\')
-                || manifest.name == ".."
-                || manifest.name == "."
+            if plugin_name.is_empty()
+                || plugin_name.contains('/')
+                || plugin_name.contains('\\')
+                || plugin_name == ".."
+                || plugin_name == "."
             {
                 anyhow::bail!(
-                    "plugin manifest name '{}' contains path separators or reserved \
-                     component; refusing to install",
-                    manifest.name
+                    "plugin manifest name '{plugin_name}' contains path separators or reserved \
+                     component; refusing to install"
                 );
             }
             let dest_root = config_home.join("plugins");
             std::fs::create_dir_all(&dest_root)?;
-            let dest = dest_root.join(&manifest.name);
+            let dest = dest_root.join(&plugin_name);
             if dest.exists() {
                 anyhow::bail!(
-                    "plugin '{}' already installed at {}; uninstall first",
-                    manifest.name,
+                    "plugin '{plugin_name}' already installed at {}; uninstall first",
                     dest.display()
                 );
             }
             copy_dir_recursive(src, &dest)?;
-            println!("Installed plugin '{}' → {}", manifest.name, dest.display());
+            println!("Installed plugin '{plugin_name}' → {}", dest.display());
             Ok(())
         }
         PluginAction::Uninstall { name } => {
@@ -96,29 +104,49 @@ pub async fn run_plugin_subcommand(action: &PluginAction) -> Result<()> {
         }
         PluginAction::Validate { path } => {
             let path = std::path::Path::new(path);
-            let manifest_path = if path.is_file() {
-                path.to_path_buf()
+            // The V2 loader reads the manifest from a directory; accept either a
+            // dir or a path to the manifest file itself.
+            let dir = if path.is_file() {
+                path.parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_else(|| path.to_path_buf())
             } else {
-                path.join("PLUGIN.toml")
+                path.to_path_buf()
             };
-            if !manifest_path.is_file() {
-                anyhow::bail!("no PLUGIN.toml found at {}", manifest_path.display());
+            let loader = coco_plugins::loader::PluginLoader::new(config_home.join("plugins"));
+            let plugin = loader
+                .load_from_dir(
+                    &dir,
+                    coco_plugins::loader::PluginLoadSource::SessionDir,
+                    None,
+                )
+                .map_err(|e| anyhow::anyhow!("{}", e.message))?;
+            let m = &plugin.manifest;
+            println!("✓ {} v{}", m.name, m.version.as_deref().unwrap_or("—"));
+            if let Some(desc) = &m.description {
+                println!("  {desc}");
             }
-            let manifest = coco_plugins::load_plugin_manifest(&manifest_path)?;
-            println!(
-                "✓ {} v{}",
-                manifest.name,
-                manifest.version.as_deref().unwrap_or("—")
-            );
-            println!("  {}", manifest.description);
-            if !manifest.skills.is_empty() {
-                println!("  skills: {}", manifest.skills.join(", "));
+            let mut parts = Vec::new();
+            if m.skills.is_some() {
+                parts.push("skills");
             }
-            if !manifest.hooks.is_empty() {
-                println!("  hooks: {} event(s)", manifest.hooks.len());
+            if m.hooks.is_some() {
+                parts.push("hooks");
             }
-            if !manifest.mcp_servers.is_empty() {
-                println!("  mcp_servers: {}", manifest.mcp_servers.len());
+            if m.agents.is_some() {
+                parts.push("agents");
+            }
+            if m.commands.is_some() {
+                parts.push("commands");
+            }
+            if m.mcp_servers.is_some() {
+                parts.push("mcp_servers");
+            }
+            if m.lsp_servers.is_some() {
+                parts.push("lsp_servers");
+            }
+            if !parts.is_empty() {
+                println!("  contributes: {}", parts.join(", "));
             }
             Ok(())
         }

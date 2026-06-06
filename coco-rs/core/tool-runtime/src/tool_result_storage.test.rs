@@ -198,6 +198,84 @@ async fn test_apply_tool_result_budget_skips_opted_out() {
     assert!(outcome.newly_replaced.is_empty());
 }
 
+#[tokio::test]
+async fn test_apply_tool_result_budget_excludes_opted_out_from_trigger() {
+    // The trigger total must count only eligible candidates. A large opted-out
+    // Read (20K) plus a small fresh Bash (10K) is 30K of raw content, but only
+    // the 10K Bash is eligible — under the 15K cap — so nothing persists.
+    // (Old behavior counted the opted-out 20K and would have evicted the Bash.)
+    let state: ContentReplacementStateRef =
+        Arc::new(RwLock::new(ContentReplacementState::new(15_000)));
+    let tmp = tempfile::TempDir::new().unwrap();
+    let candidates = vec![
+        ToolResultCandidate {
+            tool_use_id: "read".into(),
+            content: "a".repeat(20_000),
+            content_chars: 20_000,
+            tool_name: Some("Read".into()),
+            persistence_opted_out: true,
+            is_json: false,
+        },
+        ToolResultCandidate {
+            tool_use_id: "bash".into(),
+            content: "b".repeat(10_000),
+            content_chars: 10_000,
+            tool_name: Some("Bash".into()),
+            persistence_opted_out: false,
+            is_json: false,
+        },
+    ];
+    let outcome = apply_tool_result_budget(&candidates, &state, tmp.path()).await;
+    assert!(
+        outcome.newly_replaced.is_empty(),
+        "eligible total (10K Bash) is under the 15K cap; opted-out Read must not count"
+    );
+    let s = state.read().await;
+    assert!(s.seen_ids.contains("read"));
+    assert!(s.seen_ids.contains("bash"));
+}
+
+#[tokio::test]
+async fn test_apply_tool_result_budget_excludes_already_replaced_from_trigger() {
+    // An already-replaced id contributes 0 to the trigger (mustReapply), so a
+    // lone fresh candidate under the cap persists nothing even though the raw
+    // sum of both contents exceeds the budget.
+    let state: ContentReplacementStateRef =
+        Arc::new(RwLock::new(ContentReplacementState::new(15_000)));
+    let tmp = tempfile::TempDir::new().unwrap();
+    {
+        let mut s = state.write().await;
+        s.seen_ids.insert("old".into());
+        s.replacements.insert(
+            "old".into(),
+            "<persisted-output>…</persisted-output>".into(),
+        );
+    }
+    let candidates = vec![
+        ToolResultCandidate {
+            tool_use_id: "old".into(),
+            content: "x".repeat(20_000),
+            content_chars: 20_000,
+            tool_name: Some("Bash".into()),
+            persistence_opted_out: false,
+            is_json: false,
+        },
+        ToolResultCandidate {
+            tool_use_id: "new".into(),
+            content: "y".repeat(10_000),
+            content_chars: 10_000,
+            tool_name: Some("Bash".into()),
+            persistence_opted_out: false,
+            is_json: false,
+        },
+    ];
+    let outcome = apply_tool_result_budget(&candidates, &state, tmp.path()).await;
+    assert!(
+        outcome.newly_replaced.is_empty(),
+        "already-replaced 'old' is excluded; fresh 'new' (10K) is under the 15K cap"
+    );
+}
+
 #[test]
 fn test_render_persisted_reference_includes_filepath_and_preview() {
     let p = PersistedToolResult {

@@ -37,7 +37,7 @@ use crate::wire_tagged::wire_tagged_enum;
 ///   engine had already returned — this is the late-cancel signal
 ///   the TUI uses to fire auto-restore. `TurnEnded.outcome` carries
 ///   the discriminated terminal reason (`Completed { stop_reason }`
-///   / `Failed { error }` / `Interrupted { cancel_reason }` /
+///   / `Failed { error }` / `Interrupted { abort_reason }` /
 ///   `MaxTurnsReached { max_turns }` / `BudgetExhausted { used_tokens,
 ///   budget_tokens }`).
 /// - **Session lifecycle** (`SessionStarted → (Running ↔ Idle ↔ RequiresAction)*
@@ -957,7 +957,8 @@ pub enum TurnOutcome {
     /// Engine error: provider failure, network, internal panic,
     /// config invalid, etc.
     Failed(FailedOutcome),
-    /// External cancellation (user Ctrl+C, system pre-empt).
+    /// External cancellation (user Ctrl+C, submit interrupt, permission abort,
+    /// system pre-empt).
     Interrupted(InterruptedOutcome),
     /// Turn budget exhausted — the cycle hit `config.max_turns`
     /// before the model issued a non-tool-use stop.
@@ -989,13 +990,13 @@ pub struct FailedOutcome {
     pub error: ErrorPayload,
 }
 
-/// Payload for [`TurnOutcome::Interrupted`]. `cancel_reason`
-/// distinguishes user Ctrl+C from system pre-empt (Clear / Compact
-/// / Rewind / Shutdown). Never carries a model `stop_reason`.
+/// Payload for [`TurnOutcome::Interrupted`]. `abort_reason`
+/// distinguishes user Ctrl+C, submit interrupt, permission abort, and
+/// system pre-empt. Never carries a model `stop_reason`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterruptedOutcome {
-    pub cancel_reason: CancelReason,
+    pub abort_reason: TurnAbortReason,
 }
 
 /// Payload for [`TurnOutcome::MaxTurnsReached`]. The variant IS the
@@ -1042,12 +1043,12 @@ impl TurnEndedParams {
     pub fn interrupted(
         turn_id: crate::TurnId,
         usage: Option<TokenUsage>,
-        cancel_reason: CancelReason,
+        abort_reason: TurnAbortReason,
     ) -> Self {
         Self {
             turn_id,
             usage,
-            outcome: TurnOutcome::Interrupted(InterruptedOutcome { cancel_reason }),
+            outcome: TurnOutcome::Interrupted(InterruptedOutcome { abort_reason }),
         }
     }
 
@@ -1147,25 +1148,41 @@ pub struct ReasoningMetadataAttachedParams {
     pub reasoning_tokens: i64,
 }
 
-/// Why a turn was interrupted. Lets the TUI distinguish "user pressed
-/// Ctrl+C — restore the input if conditions match" from "system cancelled
-/// the in-flight turn to make room for `/clear` / `/compact` / `/rewind`
-/// / shutdown / next submit — leave the conversation alone".
-///
-/// Mirrors TS `abortController.signal.reason` discrimination at
-/// `REPL.tsx:3001`. Used inside `TurnOutcome::Interrupted`.
+/// Why a turn was aborted. Lets consumers distinguish user cancel,
+/// submit interrupt, permission abort, and system pre-emption.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CancelReason {
+pub enum TurnAbortReason {
     /// User-initiated cancel (Ctrl+C in the TUI, `control/interrupt`
     /// in the SDK). The only reason that may trigger auto-restore.
     UserCancel,
+    /// Streaming submit interruption: the user submitted new input while
+    /// all running tools were cancel-interruptible.
+    SubmitInterrupt,
     /// System pre-empted the in-flight turn so another session-level
     /// operation can run (Clear / Compact / Rewind / Shutdown / new
     /// SubmitInput). Auto-restore is suppressed — the user did not
     /// request a rewind.
     SystemPreempt,
+    /// Permission flow aborted the turn instead of returning a normal
+    /// model-visible denial.
+    PermissionAbort,
+    /// Turn moved to the background.
+    Background,
+}
+
+/// Structured reason for a tool abort notification.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ToolAbortReasonPayload {
+    /// The whole turn was aborted.
+    Turn { reason: TurnAbortReason },
+    /// The tool itself was aborted independently of the turn.
+    SelfAbort { message: String },
+    /// A sibling shell tool failed and aborted this parallel tool.
+    SiblingError { failed_tool: String },
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1871,8 +1888,13 @@ pub enum TuiOnlyEvent {
         tool_use_id: String,
         data: serde_json::Value,
     },
+    /// Whether a streaming Enter can submit-interrupt the current turn.
+    ToolInterruptibilityChanged { interruptible: bool },
     /// Tool execution aborted notification.
-    ToolExecutionAborted { tool_use_id: String, reason: String },
+    ToolExecutionAborted {
+        tool_use_id: String,
+        reason: ToolAbortReasonPayload,
+    },
 
     // === coco-rs extensions (not in the design's 20) ===
     /// Rewind completed — TUI truncates messages and restores input state.
@@ -2008,6 +2030,10 @@ pub enum TuiOnlyEvent {
     /// `/model` from input bar). The TUI consumes the current
     /// `state.session.model` to mark the "current" entry.
     OpenModelPicker,
+    /// Tell the TUI to open the tabbed settings panel. Emitted when the slash
+    /// dispatcher resolves `/config` with no args (TS `/config` local-jsx
+    /// panel). Reuses the same overlay as the `Ctrl+,` keybind.
+    OpenSettings,
     /// Tell the TUI to open the standalone theme picker. Emitted when the
     /// slash dispatcher resolves `/theme` with no args. The TUI builds the
     /// choice list from its live `ThemeRuntimeState`.
@@ -2019,6 +2045,10 @@ pub enum TuiOnlyEvent {
     /// TS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog
     /// is read-only — Esc to close; selection has no side effects.
     OpenSkillsDialog { payload: SkillsDialogPayload },
+    /// `/plugin` overlay — opens the tabbed installed / marketplace / errors
+    /// manager. The payload is a CLI-built snapshot because the TUI cannot
+    /// reach plugin loader state directly.
+    OpenPluginDialog { payload: PluginDialogPayload },
     /// `/agents` overlay — opens the 2-tab `<AgentsDialog>` with the
     /// Library entries pre-grouped. The Running tab is sourced
     /// directly from `SessionState.subagents` on the TUI side.
@@ -2236,6 +2266,96 @@ pub enum SkillLockSource {
 pub struct SkillLock {
     pub source: SkillLockSource,
     pub forced_value: SkillOverrideState,
+}
+
+/// Payload for [`TuiOnlyEvent::OpenPluginDialog`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginDialogPayload {
+    pub installed: Vec<PluginDialogInstalledRow>,
+    pub marketplaces: Vec<PluginDialogMarketplaceRow>,
+    pub errors: Vec<PluginDialogErrorRow>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginDialogInstalledRow {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: String,
+    pub path: String,
+    pub enabled: bool,
+    pub blocked_by_policy: bool,
+    #[serde(default)]
+    pub options: Vec<PluginDialogOptionRow>,
+    #[serde(default)]
+    pub mcp_servers: Vec<PluginDialogMcpServerRow>,
+    #[serde(default)]
+    pub actions: Vec<PluginDialogAction>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginDialogMarketplaceRow {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub official: bool,
+    pub plugin_count: i64,
+    #[serde(default)]
+    pub actions: Vec<PluginDialogAction>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDialogErrorRow {
+    pub plugin_id: String,
+    pub message: String,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginDialogOptionRow {
+    pub key: String,
+    pub title: String,
+    pub description: String,
+    pub value_type: String,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_value: Option<serde_json::Value>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginDialogMcpServerRow {
+    pub name: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub needs_config: bool,
+    #[serde(default)]
+    pub tools: Vec<PluginDialogMcpToolRow>,
+    #[serde(default)]
+    pub actions: Vec<PluginDialogAction>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDialogMcpToolRow {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginDialogAction {
+    pub label: String,
+    /// Slash command args after `/plugin`.
+    pub plugin_args: String,
 }
 
 /// Payload for [`TuiOnlyEvent::OpenSkillsDialog`]. Built once by the

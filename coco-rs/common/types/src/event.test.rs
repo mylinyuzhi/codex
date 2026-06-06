@@ -185,13 +185,13 @@ fn server_notification_turn_ended_interrupted_wire_method() {
     let notif = ServerNotification::TurnEnded(TurnEndedParams::interrupted(
         crate::TurnId::from("t-3"),
         Some(TokenUsage::default()),
-        CancelReason::UserCancel,
+        TurnAbortReason::UserCancel,
     ));
     let json = serde_json::to_value(&notif).unwrap();
     assert_eq!(json["method"], "turn/ended");
     assert_eq!(json["params"]["outcome"]["kind"], "interrupted");
     assert_eq!(
-        json["params"]["outcome"]["data"]["cancel_reason"],
+        json["params"]["outcome"]["data"]["abort_reason"],
         "user_cancel"
     );
 }

@@ -75,9 +75,14 @@ pub(crate) struct PendingToolPreparation<'a> {
 
 pub(crate) async fn prepare_pending_tool_calls(
     mut args: PendingToolPreparation<'_>,
-) -> (Vec<PendingToolCall>, HashMap<String, ToolResultContext>) {
+) -> (
+    Vec<PendingToolCall>,
+    HashMap<String, ToolResultContext>,
+    bool,
+) {
     let mut pending = Vec::new();
     let mut tool_result_contexts = HashMap::new();
+    let mut permission_aborted = false;
 
     // Ownership gymnastics: `prepare_one_pending_tool_call` borrows
     // the args struct mutably for per-call state (history +
@@ -85,13 +90,15 @@ pub(crate) async fn prepare_pending_tool_calls(
     // so the inner loop can re-borrow args freely.
     let tool_calls = args.tool_calls;
     for tc in tool_calls {
-        if let Some((pending_call, ctx)) = prepare_one_pending_tool_call(&mut args, tc).await {
+        if let Some((pending_call, ctx)) =
+            prepare_one_pending_tool_call(&mut args, tc, &mut permission_aborted).await
+        {
             tool_result_contexts.insert(tc.tool_call_id.clone(), ctx);
             pending.push(pending_call);
         }
     }
 
-    (pending, tool_result_contexts)
+    (pending, tool_result_contexts, permission_aborted)
 }
 
 /// Run the full per-tool preparation pipeline (validate → pre-hook →
@@ -119,6 +126,7 @@ pub(crate) async fn prepare_pending_tool_calls(
 pub(crate) async fn prepare_one_pending_tool_call(
     args: &mut PendingToolPreparation<'_>,
     tc: &ToolCallPart,
+    permission_aborted: &mut bool,
 ) -> Option<(PendingToolCall, ToolResultContext)> {
     let prepared = prepare_committed_tool_call(
         args.event_tx,
@@ -241,6 +249,10 @@ pub(crate) async fn prepare_one_pending_tool_call(
     )
     .resolve(decision, tc, &effective_input, &tool_id)
     .await;
+    if matches!(permission_outcome, PermissionOutcome::Aborted) {
+        *permission_aborted = true;
+        return None;
+    }
 
     let effective_input = resolve_effective_input_from_permission(
         args.event_tx,
@@ -326,12 +338,28 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     let (hook_permission_behavior, hook_permission_reason) = hook_permission;
     let mut hook_permission_behavior = hook_permission_behavior;
 
+    // Subagent/fork isolation: prefer `ctx.local_denial_tracking` over the
+    // engine-level session tracker. TS parity (`permissions.ts:553-558`):
+    //   `context.localDenialTracking ?? appState.denialTracking`.
+    // Without this, a fork's denials would bump the parent's
+    // consecutive-denial circuit breaker.
+    let chosen_tracker: Option<Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>> = ctx
+        .local_denial_tracking
+        .clone()
+        .or_else(|| denial_tracker.cloned());
+
     if let Some(gate) =
         resolve_can_use_tool_decision(tool_call, effective_input, ctx, hook_permission_behavior)
             .await
     {
         match gate {
-            CanUseToolResolution::Decision(decision) => return decision,
+            CanUseToolResolution::Decision(decision) => {
+                // TS records success on ANY auto-mode allow, regardless of which
+                // branch produced it (permissions.ts:486-499).
+                reset_consecutive_on_allow(&decision, auto_mode_state, chosen_tracker.as_ref())
+                    .await;
+                return decision;
+            }
             CanUseToolResolution::Ask => {
                 if matches!(
                     hook_permission_behavior,
@@ -366,16 +394,6 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         },
         None => evaluate_with_rules(tool, effective_input, ctx).await,
     };
-
-    // Subagent/fork isolation: prefer `ctx.local_denial_tracking` over the
-    // engine-level session tracker. TS parity (`permissions.ts:553-558`):
-    //   `context.localDenialTracking ?? appState.denialTracking`.
-    // Without this, a fork's denials would bump the parent's
-    // consecutive-denial circuit breaker.
-    let chosen_tracker: Option<Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>> = ctx
-        .local_denial_tracking
-        .clone()
-        .or_else(|| denial_tracker.cloned());
 
     if matches!(decision, PermissionDecision::Ask { .. })
         && let (Some(state), Some(tracker)) = (auto_mode_state, chosen_tracker.as_ref())
@@ -421,7 +439,29 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         }
     }
 
+    // TS records success on ANY auto-mode allow — rule-based, hook, allowlist,
+    // acceptEdits fast-path, or classifier — to break a consecutive-denial
+    // streak (permissions.ts:486-499). The classifier path resets internally;
+    // this covers the rule/hook/allowlist Allow branches that bypass it.
+    reset_consecutive_on_allow(&decision, auto_mode_state, chosen_tracker.as_ref()).await;
+
     decision
+}
+
+/// Reset the consecutive-denial counter when an auto-mode permission resolves
+/// to `Allow`, regardless of which branch produced it. No-op outside auto mode,
+/// when no tracker is wired, or when the counter is already zero.
+async fn reset_consecutive_on_allow(
+    decision: &PermissionDecision,
+    auto_mode_state: Option<&Arc<coco_permissions::AutoModeState>>,
+    chosen_tracker: Option<&Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
+) {
+    if matches!(decision, PermissionDecision::Allow { .. })
+        && let (Some(state), Some(tracker)) = (auto_mode_state, chosen_tracker)
+        && state.is_active()
+    {
+        tracker.lock().await.reset_consecutive();
+    }
 }
 
 enum CanUseToolResolution {
@@ -447,7 +487,7 @@ async fn resolve_can_use_tool_decision(
     let handle = ctx.can_use_tool.clone()?;
     let cb_ctx = coco_tool_runtime::CanUseToolCallContext {
         tool_use_id: tool_call.tool_call_id.clone(),
-        abort: ctx.cancel.clone(),
+        abort: ctx.abort.turn_signal(),
         require_can_use_tool: ctx.require_can_use_tool,
         messages: ctx.messages.clone(),
     };
@@ -620,6 +660,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     // `yoloClassifier.ts:792`.
                     stop_sequences: req.stop_sequences.clone(),
                     response_format: None,
+                    cancel: None,
                 };
                 match model_runtimes
                     .query_once(ModelRuntimeSource::Role(ModelRole::Main), &params)
@@ -716,6 +757,7 @@ async fn resolve_effective_input_from_permission(
 ) -> Option<Value> {
     match permission_outcome {
         PermissionOutcome::Denied => None,
+        PermissionOutcome::Aborted => None,
         PermissionOutcome::Allow { updated_input } => {
             if let Some(updated_input) = updated_input {
                 return validate_effective_input_or_complete_error(

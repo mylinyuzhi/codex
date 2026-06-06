@@ -116,3 +116,11 @@ fn test_check_availability_per_session_opt_in() {
     assert!(available);
     set_session_opted_in(false);
 }
+
+#[test]
+fn test_fast_mode_supported_model_gate() {
+    assert!(is_fast_mode_supported_by_model("claude-opus-4-6-20250514"));
+    assert!(is_fast_mode_supported_by_model("anthropic/claude-opus-4.6"));
+    assert!(!is_fast_mode_supported_by_model("claude-opus-4-7"));
+    assert!(!is_fast_mode_supported_by_model("claude-sonnet-4-6"));
+}

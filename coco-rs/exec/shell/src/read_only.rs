@@ -232,10 +232,12 @@ fn is_safe_to_call(argv: &[&str]) -> bool {
         // command -v is safe
         "command" => argv.get(1).copied() == Some("-v"),
 
-        // jq: always safe (pure JSON processor, no side effects)
-        "jq" | "yq" => true,
-
-        // xargs with safe commands is handled elsewhere; bare xargs is not safe
+        // jq/yq are NOT blanket-safe: `jq 'system(...)'` and the file-reading
+        // flags (-f/--from-file/--rawfile/--slurpfile/-L/--library-path) have
+        // side effects. They fall through to `check_security` (JqDangerAnalyzer
+        // → Ask) via BashTool::check_permissions; benign jq passes there with no
+        // flag. TS routes all jq through validateJqCommand (ask/passthrough).
+        // xargs with safe commands is handled elsewhere; bare xargs is not safe.
         _ => false,
     }
 }

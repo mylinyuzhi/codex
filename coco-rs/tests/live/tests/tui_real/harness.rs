@@ -341,6 +341,7 @@ impl RealTuiHarness {
             agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             session_id_override: None,
+            is_non_interactive: false,
         })
         .await
         .with_context(|| "SessionRuntime::build")?;
@@ -715,7 +716,9 @@ impl RealTuiHarness {
     /// production. The driver fires the active turn's cancel token.
     pub async fn interrupt(&self) -> Result<()> {
         self.command_tx
-            .send(UserCommand::Interrupt)
+            .send(UserCommand::Interrupt(
+                coco_types::TurnAbortReason::UserCancel,
+            ))
             .await
             .map_err(|e| anyhow!("send Interrupt: {e}"))
     }
@@ -928,7 +931,7 @@ async fn run_real_agent_driver(
                 .await;
             }
 
-            UserCommand::Interrupt => {
+            UserCommand::Interrupt(_) => {
                 if let Some(state) = active_turn.lock().await.as_ref() {
                     state.cancel.cancel();
                 }

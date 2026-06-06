@@ -34,6 +34,7 @@ use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
 use coco_tool_runtime::PreparedToolCall;
 use coco_tool_runtime::StreamingToolExecutor;
+use coco_tool_runtime::ToolAbortSignal;
 use coco_tool_runtime::ToolCallPlan;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolPermissionBridgeRef;
@@ -41,6 +42,7 @@ use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
 use coco_types::PermissionDenialInfo;
+use coco_types::ToolAbortReasonPayload;
 use coco_types::ToolAppState;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
@@ -69,6 +71,7 @@ pub(crate) struct ToolCallRunOutcome {
     /// turns into `RunArtifacts.structured_output_attempts` for the
     /// retry-cap check.
     pub structured_output_attempts: u32,
+    pub permission_aborted: bool,
 }
 
 pub(crate) struct ToolCallRunner<'a> {
@@ -114,27 +117,28 @@ impl<'a> ToolCallRunner<'a> {
         //    committed tool_use and completes error tool results for
         //    any call that fails preparation (unknown tool / invalid
         //    input / hook block / permission denial).
-        let (pending, tool_result_contexts) = prepare_pending_tool_calls(PendingToolPreparation {
-            event_tx: self.event_tx,
-            history: self.history,
-            ctx: self.ctx,
-            tool_calls: self.tool_calls,
-            tools: self.tools,
-            hooks: self.hooks,
-            orchestration_ctx: self.orchestration_ctx.clone(),
-            hook_tx_opt: self.hook_tx_opt,
-            permission_denials: self.permission_denials,
-            state_tracker: self.state_tracker,
-            permission_bridge: self.permission_bridge,
-            session_id: self.session_id,
-            cancel: self.cancel,
-            auto_mode_state: self.auto_mode_state,
-            denial_tracker: self.denial_tracker,
-            model_runtimes: self.model_runtimes,
-            auto_mode_rules: self.auto_mode_rules,
-            completion_event_mode: ToolCompletionEventMode::Emit,
-        })
-        .await;
+        let (pending, tool_result_contexts, permission_aborted) =
+            prepare_pending_tool_calls(PendingToolPreparation {
+                event_tx: self.event_tx,
+                history: self.history,
+                ctx: self.ctx,
+                tool_calls: self.tool_calls,
+                tools: self.tools,
+                hooks: self.hooks,
+                orchestration_ctx: self.orchestration_ctx.clone(),
+                hook_tx_opt: self.hook_tx_opt,
+                permission_denials: self.permission_denials,
+                state_tracker: self.state_tracker,
+                permission_bridge: self.permission_bridge,
+                session_id: self.session_id,
+                cancel: self.cancel,
+                auto_mode_state: self.auto_mode_state,
+                denial_tracker: self.denial_tracker,
+                model_runtimes: self.model_runtimes,
+                auto_mode_rules: self.auto_mode_rules,
+                completion_event_mode: ToolCompletionEventMode::Emit,
+            })
+            .await;
 
         // 2. Build `Vec<ToolCallPlan>` from the pre-validated pending
         //    calls. Every plan here is `Runnable` — calls that failed
@@ -192,8 +196,9 @@ impl<'a> ToolCallRunner<'a> {
         //    `Fn + Sync` (called concurrently via
         //    `FuturesUnordered`), so it only captures immutable
         //    data.
-        let executor = create_executor(self.app_state, self.permission_rule_handle);
         let shared_ctx = self.ctx;
+        let executor = create_executor(self.app_state, self.permission_rule_handle, self.event_tx)
+            .with_turn_abort(shared_ctx.abort.turn_signal());
         let hooks = self.hooks;
         let orchestration_ctx = self.orchestration_ctx.clone();
         let hook_tx = self.hook_tx_opt;
@@ -201,12 +206,16 @@ impl<'a> ToolCallRunner<'a> {
         let event_tx = self.event_tx;
 
         let mut control = Control::default();
+        if permission_aborted {
+            control.continue_after_tools = false;
+            control.permission_aborted = true;
+        }
         let mut commit_log: Vec<PendingToolCommit> = Vec::new();
 
         executor
             .execute_with(
                 plans,
-                |prepared, _runtime| {
+                |prepared, runtime| {
                     let orchestration_ctx = orchestration_ctx.clone();
                     async move {
                         let ctx_entry = contexts.get(&prepared.tool_use_id);
@@ -216,12 +225,15 @@ impl<'a> ToolCallRunner<'a> {
                         let effective_input = ctx_entry
                             .map(|c| c.effective_input.clone())
                             .unwrap_or_else(|| prepared.parsed_input.clone());
-                        let call_ctx = shared_ctx.clone_for_tool_call(prepared.tool_use_id.clone());
+                        let mut call_ctx =
+                            shared_ctx.clone_for_tool_call(prepared.tool_use_id.clone());
+                        call_ctx.abort = runtime.abort.clone();
+                        call_ctx.progress_tx = runtime.progress_tx.clone();
 
                         // Execute the tool under cancellation.
                         let execute_result = tokio::select! {
                             r = prepared.tool.execute(effective_input.clone(), &call_ctx) => r,
-                            () = call_ctx.cancel.cancelled() => Err(ToolError::Cancelled),
+                            () = call_ctx.abort.cancelled() => Err(tool_error_from_abort(&call_ctx.abort)),
                         };
 
                         build_outcome_from_execution(RunOneTail {
@@ -353,6 +365,22 @@ fn render_completed_output(outcome: &coco_tool_runtime::ToolCallOutcome) -> Stri
     String::new()
 }
 
+fn tool_error_from_abort(signal: &ToolAbortSignal) -> ToolError {
+    match signal.reason() {
+        Some(ToolAbortReasonPayload::SiblingError { failed_tool }) => ToolError::ExecutionFailed {
+            message: format!("Cancelled: parallel tool call {failed_tool} errored"),
+            display_data: None,
+            source: None,
+        },
+        Some(ToolAbortReasonPayload::SelfAbort { message }) => ToolError::ExecutionFailed {
+            message,
+            display_data: None,
+            source: None,
+        },
+        Some(ToolAbortReasonPayload::Turn { .. }) | None => ToolError::Cancelled,
+    }
+}
+
 #[derive(Debug)]
 struct PendingCompletedEvent {
     call_id: String,
@@ -373,6 +401,7 @@ struct Control {
     stop_reason_override: Option<String>,
     structured_output: Option<serde_json::Value>,
     structured_output_attempts: u32,
+    permission_aborted: bool,
 }
 
 impl Default for Control {
@@ -382,6 +411,7 @@ impl Default for Control {
             stop_reason_override: None,
             structured_output: None,
             structured_output_attempts: 0,
+            permission_aborted: false,
         }
     }
 }
@@ -393,6 +423,7 @@ impl Control {
             stop_reason_override: self.stop_reason_override,
             structured_output: self.structured_output,
             structured_output_attempts: self.structured_output_attempts,
+            permission_aborted: self.permission_aborted,
         }
     }
 }
@@ -400,10 +431,15 @@ impl Control {
 fn create_executor(
     app_state: Option<&Arc<RwLock<ToolAppState>>>,
     permission_rule_handle: &coco_tool_runtime::PermissionRuleHandleRef,
+    event_tx: &Option<mpsc::Sender<CoreEvent>>,
 ) -> StreamingToolExecutor {
     let base = match app_state {
         Some(arc) => StreamingToolExecutor::new().with_app_state(arc.clone()),
         None => StreamingToolExecutor::new(),
     };
-    base.with_permission_rule_handle(permission_rule_handle.clone())
+    let base = base.with_permission_rule_handle(permission_rule_handle.clone());
+    match event_tx {
+        Some(tx) => base.with_event_sink(tx.clone()),
+        None => base,
+    }
 }

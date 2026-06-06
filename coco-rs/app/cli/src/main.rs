@@ -378,7 +378,8 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         cwd = %cwd.display(),
         "sdk mode starting"
     );
-    let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
+    let (sandbox_reloader, runtime_config) =
+        coco_cli::headless::build_runtime_config_with_reloader(cli, &cwd)?;
     coco_cli::model_card_refresh::spawn_if_enabled(&runtime_config);
 
     let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
@@ -395,6 +396,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             &runtime_config.mcp,
         ),
     ));
+
+    // Config-file + plugin MCP server registration + connect happens in the
+    // unified `bootstrap_session_mcp` below (shared with TUI/headless). The bare
+    // manager is created here only so `SdkServer` can hold it for `mcp/setServers`.
 
     // Slash-command registry — built once inside `build_engine_resources`
     // with the full TS-parity load order (builtins → extended → skills →
@@ -504,9 +509,24 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
             // SDK noninteractive paths can override.
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             session_id_override: None,
+            // SDK NDJSON: file-history checkpointing defaults OFF.
+            is_non_interactive: true,
         },
     )
     .await?;
+
+    // Sandbox hot-reload for the long-lived SDK NDJSON server: settings.json
+    // `sandbox.*` edits re-flow into the live SandboxState (TS `sandbox-adapter`
+    // covers REPL and print/SDK alike). Held for the session; the task exits
+    // when `sandbox_reloader` drops at the end of `run_sdk_mode`.
+    let _sandbox_reload = match (sandbox_reloader.as_ref(), session_runtime.sandbox_state()) {
+        (Some(reloader), Some(state)) => Some(coco_cli::sandbox_reload::spawn_sandbox_reload(
+            state,
+            &reloader.publisher(),
+            cwd.clone(),
+        )),
+        _ => None,
+    };
 
     // SDK NDJSON is a non-interactive session (TS parity:
     // `isNonInteractiveSession === true`). Inject the `StructuredOutput`
@@ -520,82 +540,27 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         &session_runtime.hook_registry(),
     )?;
 
-    // Late-binds shared with TUI: task runtime, agent transcript
-    // persistence, MCP handle (SDK-only today), agent-team wiring,
-    // fork dispatcher. Wraps the SDK-bootstrapped `McpConnectionManager`
-    // in an `McpManagerAdapter` so `mcp/setServers` and the per-engine
-    // `mcp_handle` slot share one source of truth.
-    // Install elicitation hook context so dynamic-MCP-server elicitations
-    // fire `Elicitation` / `ElicitationResult` hooks before falling back
-    // to the no-op dialog stub. TS parity: `elicitationHandler.ts:91-107`.
-    let elicit_registry = session_runtime.hook_registry();
-    let elicit_factory = session_runtime.orchestration_ctx_factory();
-    // Phase 7: pull the elicitation counter Arc so `wrap_send_elicitation_with_hooks`
-    // can hold an `ElicitationGuard` for each in-flight request. The
-    // counter is shared with `ToolAppState.elicitation_pending_count`
-    // — one Arc, two views.
-    let elicit_counter = session_runtime
-        .app_state
-        .read()
-        .await
-        .elicitation_pending_count
-        .clone();
-    // MCP-sourced skills bridge: every MCP connection (initial config +
-    // dynamic `mcp/setServers`) contributes `skill://` resources to the
-    // session-scoped `SkillManager`. Gating (Feature::McpSkills +
-    // server `resources` capability) lives inside `coco_mcp_skills`.
-    // TS parity: `services/mcp/client.ts:2342-2356` — every connection
-    // goes through the same skill-discovery pass.
-    let mcp_skill_manager = session_runtime.skill_manager();
-    let mcp_skill_cache = std::sync::Arc::new(tokio::sync::RwLock::new(
-        coco_mcp::discovery::DiscoveryCache::default(),
-    ));
-    let mcp_handle: coco_tool_runtime::McpHandleRef = Arc::new(
-        coco_cli::mcp_handle_adapter::McpManagerAdapter::new(mcp_manager.clone())
-            .with_elicitation_hooks(elicit_registry, elicit_factory, Some(elicit_counter))
-            .with_skill_bridge(
-                mcp_skill_manager.clone(),
-                mcp_skill_cache.clone(),
-                session_runtime.runtime_config.clone(),
-            ),
-    );
-
-    // Initial-server skill sync: TS `fetchMcpSkillsForClient` fires for
-    // *every* connection, not just dynamic ones. The
-    // `add_dynamic_server` hook only covers post-startup additions; we
-    // also need to sync whatever servers are connected by the time
-    // bootstrap completes. `sync_all` is idempotent — running it more
-    // than once just re-checks. Errors are logged at warn inside the
-    // helper; we don't surface them to the user.
-    let initial_sync_manager = mcp_manager.lock().await.clone();
-    let initial_sync_skills = mcp_skill_manager.clone();
-    let initial_sync_cache = mcp_skill_cache.clone();
-    let initial_sync_features = session_runtime.runtime_config.features.clone();
-    tokio::spawn(async move {
-        let summary = coco_mcp_skills::sync_all(
-            &initial_sync_manager,
-            &initial_sync_cache,
-            &initial_sync_skills,
-            &initial_sync_features,
-        )
-        .await;
-        if summary.servers > 0 || summary.errors > 0 {
-            tracing::info!(
-                servers = summary.servers,
-                registered = summary.total_registered,
-                resources_unsupported = summary.servers_resources_unsupported,
-                errors = summary.errors,
-                "initial MCP skill sync"
-            );
-        }
-    });
+    // Late-binds shared with TUI/headless: task runtime, agent transcript
+    // persistence, agent-team wiring, fork dispatcher.
     let lsp_handle = coco_cli::session_bootstrap::build_lsp_handle_if_enabled(
         &session_runtime.runtime_config,
         &global_config::config_home(),
         &cwd,
     )
     .await;
-    install_session_late_binds(session_runtime.clone(), &cwd, Some(mcp_handle), lsp_handle).await?;
+    install_session_late_binds(session_runtime.clone(), &cwd, None, lsp_handle).await?;
+    // Unified MCP bootstrap (shared with TUI/headless): registers config-file +
+    // plugin MCP servers, attaches the manager + `McpManagerAdapter` handle, and
+    // connects + registers tools in the background. Reuses the manager already
+    // handed to `SdkServer` (for `mcp/setServers`) so all surfaces share one
+    // source of truth.
+    coco_cli::session_bootstrap::bootstrap_session_mcp(
+        &session_runtime,
+        &cwd,
+        Some(mcp_manager),
+        /*await_connect*/ false,
+    )
+    .await;
 
     // Leader-side teammate inbox consumption (R1): a long-running SDK leader
     // that approves a teammate shutdown must run teardown, or it leaks stale

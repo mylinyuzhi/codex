@@ -1,5 +1,11 @@
 # TUI Streaming Scrollback-Commit Plan (the "codex model")
 
+> **SUPERSEDED (2026-06-07) by
+> [`tui-streaming-render-unification-plan.md`](tui-streaming-render-unification-plan.md).**
+> That plan keeps coco's block-granularity commit (per-line stays rejected, see
+> the verdict below) and instead fixes the provisional/finalized reconciliation
+> system coco built after this doc. Read it for the current, ROI-ranked fix set.
+
 > Goal: while an assistant turn is streaming, flush **completed** lines into the
 > terminal's native scrollback **incrementally** (once each), so the retained
 > ratatui viewport only ever paints the small **in-flight tail** — instead of

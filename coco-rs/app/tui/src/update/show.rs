@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 
+use coco_config::is_model_allowed;
 use coco_types::ModelRole;
 use tokio::sync::mpsc;
 
@@ -148,22 +149,14 @@ pub(crate) fn open_theme_picker(state: &mut AppState) {
 /// rows; tests and mock pre-bootstrap paths must seed catalog entries
 /// explicitly.
 pub(super) fn build_model_entries(state: &AppState, role: ModelRole) -> Vec<ModelEntry> {
-    let allowlist: Option<&[String]> = if state.session.available_models.is_empty() {
-        None
-    } else {
-        Some(state.session.available_models.as_slice())
-    };
+    let allowlist = state.session.available_models.as_deref();
     let current_for_role = current_model_for_role(state, role);
 
     let entries = state
         .session
         .model_catalog
         .iter()
-        .filter(|entry| {
-            allowlist
-                .map(|a| a.iter().any(|s| s == &entry.model_id))
-                .unwrap_or(true)
-        })
+        .filter(|entry| is_model_allowed(&entry.model_id, allowlist))
         .map(|entry| ModelEntry {
             provider: entry.provider.clone(),
             provider_display: entry.provider_display.clone(),
@@ -452,8 +445,10 @@ pub(super) fn doctor(state: &mut AppState) {
 }
 
 /// Open the tabbed settings state (display, output style, permissions, about).
-/// Theme selection lives in the standalone `/theme` picker.
-pub(super) fn settings(state: &mut AppState) {
+/// Theme selection lives in the standalone `/theme` picker. `pub(crate)` so the
+/// `OpenSettings` TuiOnlyEvent handler (from the `/config` slash command) can
+/// reuse it, mirroring `cycle_model` for `OpenModelPicker`.
+pub(crate) fn settings(state: &mut AppState) {
     state.ui.show_modal(ModalState::Settings(
         crate::widgets::settings_panel::SettingsPanelState::new(state.ui.display_settings.clone()),
     ));

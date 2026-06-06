@@ -40,6 +40,7 @@ pub async fn run(target: &LiveTarget) -> Result<()> {
         cache: None,
         stop_sequences: None,
         response_format: None,
+        cancel: None,
     };
 
     let (mut rx, token) = open_stream_client(&target.client, params).await?;
@@ -126,6 +127,7 @@ pub async fn run_with_tools(target: &LiveTarget) -> Result<()> {
         cache: None,
         stop_sequences: None,
         response_format: None,
+        cancel: None,
     };
 
     let (mut rx, token) = open_stream_client(&target.client, params).await?;
@@ -291,6 +293,7 @@ pub async fn run_thinking_with_option_typed_tools(target: &LiveTarget) -> Result
         cache: None,
         stop_sequences: None,
         response_format: None,
+        cancel: None,
     };
 
     let (mut rx, token) = open_stream_client(&target.client, params).await?;

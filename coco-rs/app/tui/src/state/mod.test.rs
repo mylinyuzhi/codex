@@ -228,6 +228,7 @@ fn test_prompt_queue_priority_ordered() {
             questions: vec![],
             focus: crate::state::QuestionFocus::Question(0),
             is_in_plan_mode: false,
+            submit_selected: 0,
         },
     )); // priority 2
     state

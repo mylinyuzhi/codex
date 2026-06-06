@@ -196,6 +196,8 @@ pub struct SessionState {
     pub auto_mode_available: bool,
     /// Active tool executions.
     pub tool_executions: Vec<ToolExecution>,
+    /// True when all currently running tools are cancel-interruptible.
+    pub has_submit_interruptible_tool_in_progress: bool,
     /// Side-cache for `ServerNotification::ToolUseSummary` payloads.
     ///
     /// Tool-use summaries are UI-only polish (mobile-row label
@@ -219,11 +221,6 @@ pub struct SessionState {
     /// Keyed by the assistant message UUID. Cleared on session reset
     /// and pruned on `MessageTruncated`.
     pub reasoning_metadata: HashMap<uuid::Uuid, ReasoningMetadata>,
-    /// Monotonic revision for reasoning metadata side-cache changes.
-    ///
-    /// Native scrollback renders history append-only, so metadata that
-    /// arrives after the assistant message needs an explicit replay trigger.
-    pub reasoning_metadata_revision: u64,
     /// Subagent instances.
     pub subagents: Vec<SubagentInstance>,
     /// Token usage.
@@ -280,8 +277,9 @@ pub struct SessionState {
     /// `CommandDequeued{id}` can remove the matching entry even if
     /// priority reordering caused the item not to be at the front.
     pub queued_commands: VecDeque<QueuedCommandDisplay>,
-    /// Available models for model picker.
-    pub available_models: Vec<String>,
+    /// Available models for model picker. `None` means unrestricted;
+    /// `Some([])` means the allowlist is explicitly empty.
+    pub available_models: Option<Vec<String>>,
     /// Whether file checkpointing is enabled for rewind.
     /// Set by the orchestrator (tui_runner) at startup.
     pub file_history_enabled: bool,
@@ -501,27 +499,25 @@ impl SessionState {
     }
 
     pub fn insert_reasoning_metadata(&mut self, uuid: uuid::Uuid, metadata: ReasoningMetadata) {
-        if self.reasoning_metadata.insert(uuid, metadata) != Some(metadata) {
-            self.reasoning_metadata_revision = self.reasoning_metadata_revision.wrapping_add(1);
-        }
+        // The renderer reads this side-cache at cell-build time
+        // (`history_options`), and the finalize draw emits the assistant cell
+        // append-only with the duration/tokens already baked in. So attaching
+        // metadata does NOT change `HistoryDisplayState` and does NOT force a
+        // full `replay_all_capped` — that per-turn rewrite was the cost we drop.
+        self.reasoning_metadata.insert(uuid, metadata);
     }
 
     pub fn retain_reasoning_metadata_for_messages(
         &mut self,
         surviving_uuids: &std::collections::HashSet<uuid::Uuid>,
     ) {
-        let before = self.reasoning_metadata.len();
+        // Prune anchors to surviving messages. The triggering `MessageTruncated`
+        // already replays history, so no extra invalidation is needed here.
         self.reasoning_metadata
             .retain(|uuid, _| surviving_uuids.contains(uuid));
-        if self.reasoning_metadata.len() != before {
-            self.reasoning_metadata_revision = self.reasoning_metadata_revision.wrapping_add(1);
-        }
     }
 
     pub fn clear_reasoning_metadata(&mut self) {
-        if !self.reasoning_metadata.is_empty() {
-            self.reasoning_metadata_revision = self.reasoning_metadata_revision.wrapping_add(1);
-        }
         self.reasoning_metadata.clear();
     }
 }
@@ -539,9 +535,9 @@ impl Default for SessionState {
             bypass_permissions_available: false,
             auto_mode_available: false,
             tool_executions: Vec::new(),
+            has_submit_interruptible_tool_in_progress: false,
             tool_group_summaries: HashMap::new(),
             reasoning_metadata: HashMap::new(),
-            reasoning_metadata_revision: 0,
             subagents: Vec::new(),
             token_usage: TokenUsage::default(),
             session_usage: None,
@@ -562,7 +558,7 @@ impl Default for SessionState {
             focused_subagent_index: None,
             current_turn_number: None,
             queued_commands: VecDeque::new(),
-            available_models: Vec::new(),
+            available_models: None,
             file_history_enabled: false,
             allow_summarize_up_to: false,
             available_commands: Vec::new(),

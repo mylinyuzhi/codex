@@ -71,10 +71,31 @@ impl QueryEngine {
         // Session-level dedup. Held across the whole drain so
         // sibling triggers (e.g. reading two files in the same subtree)
         // share the loaded set within one batch.
+        // Instruction-injection guard: only traverse nested memory for trigger
+        // files inside an allowed working root (cwd or an additional dir). A
+        // file the model Read elsewhere on disk must not pull in arbitrary
+        // CLAUDE.md. TS `getNestedMemoryAttachmentsForFile` early-returns on
+        // `!pathInAllowedWorkingPath`.
+        let cwd_str = cwd.to_string_lossy().into_owned();
+        let allowed_dirs: Vec<String> = ctx
+            .permission_context
+            .additional_dirs
+            .keys()
+            .cloned()
+            .collect();
+
         let mut loaded = self.loaded_nested_memory_paths.lock().await;
         let mut new_entries: Vec<NestedMemoryInfo> = Vec::new();
         let mut newly_loaded: Vec<(String, String, coco_context::MemoryFileSource)> = Vec::new();
+        let mut frs_records: Vec<(PathBuf, String)> = Vec::new();
         for path in triggered_paths {
+            if !coco_permissions::is_path_within_allowed_dirs(
+                &path.to_string_lossy(),
+                &cwd_str,
+                &allowed_dirs,
+            ) {
+                continue;
+            }
             let trigger_path = path.display().to_string();
             let entries = coco_context::traverse_for_file(&path, &cwd, &mut loaded);
             for entry in entries {
@@ -83,6 +104,7 @@ impl QueryEngine {
                     trigger_path.clone(),
                     entry.source,
                 ));
+                frs_records.push((entry.path.clone(), entry.content.clone()));
                 new_entries.push(NestedMemoryInfo {
                     path: entry.path.display().to_string(),
                     content: entry.content,
@@ -90,6 +112,35 @@ impl QueryEngine {
             }
         }
         drop(loaded);
+
+        // Record injected memory files in FileReadState so `detect_changed_files`
+        // surfaces mid-session edits to auto-injected CLAUDE.md/AGENTS.md. TS
+        // `memoryFilesToAttachments` calls `readFileState.set` for every injected
+        // file (offset/limit undefined). Skip files a prior tool read already
+        // tracks so we don't clobber a partial-view entry. mtimes are computed
+        // outside the lock so we never await while holding the write guard.
+        if let Some(frs_arc) = self.file_read_state.as_ref() {
+            let mut to_set: Vec<(PathBuf, String, i64)> = Vec::with_capacity(frs_records.len());
+            for (path, content) in frs_records {
+                let mtime_ms = coco_context::file_mtime_ms(&path).await.unwrap_or(0);
+                to_set.push((path, content, mtime_ms));
+            }
+            let mut frs = frs_arc.write().await;
+            for (path, content, mtime_ms) in to_set {
+                if frs.peek(&path).is_some() {
+                    continue;
+                }
+                frs.set(
+                    path,
+                    coco_context::FileReadEntry {
+                        content,
+                        mtime_ms,
+                        offset: None,
+                        limit: None,
+                    },
+                );
+            }
+        }
 
         // Fire `InstructionsLoaded` for each newly-loaded memory file.
         // TS: `executeInstructionsLoadedHooks` invoked per-file in

@@ -319,6 +319,48 @@ pub(crate) async fn complete_tool_call_with_error_mode(
     .await;
 }
 
+/// Complete a tool call with a NON-error result carrying user feedback.
+///
+/// Used when the user redirects an interactive tool rather than denying it —
+/// e.g. AskUserQuestion's "Chat about this" / "Skip interview". The feedback
+/// still reaches the model (so it re-engages), but the transcript renders it as
+/// a neutral result instead of a red "Permission denied" error, and it is NOT
+/// counted as a permission denial.
+pub(crate) async fn complete_tool_call_clarification(
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    history: &mut MessageHistory,
+    tool_call_id: &str,
+    tool_name: &str,
+    tool_id: &ToolId,
+    output: &str,
+    event_mode: ToolCompletionEventMode,
+) {
+    if event_mode == ToolCompletionEventMode::Emit {
+        let _delivered = emit_stream(
+            event_tx,
+            crate::AgentStreamEvent::ToolUseCompleted {
+                call_id: tool_call_id.to_string(),
+                name: tool_name.to_string(),
+                output: output.to_string(),
+                is_error: false,
+            },
+        )
+        .await;
+    }
+    crate::history_sync::history_push_and_emit(
+        history,
+        coco_messages::create_tool_result_message(
+            tool_call_id,
+            tool_name,
+            tool_id.clone(),
+            output,
+            /*is_error*/ false,
+        ),
+        event_tx,
+    )
+    .await;
+}
+
 /// Wrap a captured synthetic-error `tool_result` row into an
 /// [`UnstampedToolCallOutcome`] so the streaming agent loop can surface it
 /// via [`StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))`].

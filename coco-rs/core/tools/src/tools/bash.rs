@@ -353,6 +353,77 @@ impl Tool for BashTool {
         Some(display)
     }
 
+    /// Route shell security analysis through the permission pipeline instead of
+    /// only acting on `Deny` at execute time. `SecuritySeverity::Ask` results
+    /// (eval / IFS / jq-danger / dangerous-vars / …, demoted to Ask in
+    /// shell#163) now reach the user as a prompt; `Deny` blocks pre-execution.
+    /// In acceptEdits mode any filesystem subcommand (mkdir/rm/mv/…) auto-allows
+    /// (TS modeValidation). Read-only commands defer to the rule pipeline (no
+    /// false positives on quoted metacharacters). TS `bashSecurity` returns
+    /// ask / deny / passthrough.
+    async fn check_permissions(
+        &self,
+        input: &BashInput,
+        ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        let command = input.command.as_str();
+        if command.is_empty() {
+            return coco_types::ToolCheckResult::Passthrough;
+        }
+
+        // acceptEdits: a filesystem subcommand auto-allows (#164).
+        if ctx.permission_context.mode == coco_types::PermissionMode::AcceptEdits
+            && coco_shell::is_auto_allowed_in_accept_edits(command)
+        {
+            return coco_types::ToolCheckResult::Allow {
+                updated_input: None,
+                feedback: None,
+            };
+        }
+
+        // Read-only commands skip security analysis and defer to rules.
+        if is_read_only_command(command) {
+            return coco_types::ToolCheckResult::Passthrough;
+        }
+
+        let checks = check_security(command);
+        if let Some(deny) = checks.iter().find(|c| c.severity == SecuritySeverity::Deny) {
+            return coco_types::ToolCheckResult::Deny {
+                message: format!(
+                    "Command blocked by coco-rs security check (stricter than Claude Code): {}. \
+                     If you believe this is a false positive, use a sandbox or restructure the \
+                     command.",
+                    deny.message
+                ),
+            };
+        }
+        // Only a CURATED set of narrow, high-confidence risks routes to a prompt
+        // — the ones that map 1:1 to TS's specific `behavior:'ask'` validators.
+        // The broader analyzer suite (command substitution, metacharacters,
+        // code-exec, …) stays computed-but-informational: coco-rs's analyzers
+        // lack TS's safe-substitution carve-outs, so routing them all would
+        // prompt on common commands like `for f in $(ls)` or `tar …$(date)…`.
+        const ASK_SECURITY_CHECK_IDS: &[coco_shell::SecurityCheckId] = &[
+            coco_shell::SecurityCheckId::JQ_SYSTEM_FUNCTION, // jq system()/file flags (#162)
+            coco_shell::SecurityCheckId::DANGEROUS_VARIABLES, // $VAR adjacent to pipe/redirect (#167)
+            coco_shell::SecurityCheckId::IFS_INJECTION,       // IFS= reassignment
+        ];
+        if let Some(ask) = checks
+            .iter()
+            .find(|c| c.severity == SecuritySeverity::Ask && ASK_SECURITY_CHECK_IDS.contains(&c.id))
+        {
+            return coco_types::ToolCheckResult::Ask {
+                message: format!(
+                    "A security check flagged this command ({}). Run it?",
+                    ask.message
+                ),
+                suggestions: Vec::new(),
+                choices: None,
+            };
+        }
+        coco_types::ToolCheckResult::Passthrough
+    }
+
     /// Destructive iff NOT read-only. The upstream permission evaluator uses this
     /// flag to decide whether the command needs user approval — the old hardcoded
     /// `true` forced approval for every `ls`/`cat`/`git log`, which was a major UX
@@ -636,23 +707,23 @@ impl Tool for BashTool {
         // tools. Same behavior as TS `checkReadOnlyConstraints` returning
         // `{ behavior: 'allow' }`.
         //
-        // Stage 2 — **coco-rs security Deny extension** (stricter than TS).
-        // TS's `bashCommandIsSafe_DEPRECATED` returns `{behavior: 'ask'}` for
-        // risky patterns (eval, IFS=, backtick substitution, etc.) and routes
-        // them through the user approval flow. coco-rs chooses to HARD-FAIL
-        // a small set of patterns that are nearly always malicious
-        // (IFS injection, `eval`, `source /dev/tcp/...`) — we consider these
-        // footguns even with approval and want them blocked without prompting.
+        // Stage 2 — security analysis. `check_security` runs the full
+        // `coco_shell_parser` analyzer suite (29 quote/heredoc-aware
+        // validators mirroring TS `bashSecurity.ts`). Per TS parity, ALL
+        // analyzer-caught risks (eval, IFS=, backtick substitution, brace
+        // expansion, comment/quote desync, …) map to `SecuritySeverity::Ask`
+        // and pass through to the normal permission prompt below — TS uses
+        // `behavior: 'ask'` (never `deny`) for every one of these.
+        //
+        // `check_security` retains only TWO coco-rs-specific `Deny` checks for
+        // genuinely-catastrophic constructs with no legitimate use here: raw
+        // control / zero-width characters and `/proc/*/environ` access. Those
+        // hard-fail without prompting (a DELIBERATE divergence we keep because
+        // they are near-always obfuscation/secret-exfiltration attempts).
         //
         // TS's `behavior: 'deny'` paths (`bashPermissions.ts:1000, 2254, etc.`)
-        // cover user-configured deny rules and path validation — DIFFERENT
-        // concerns from the pattern-based checks below. Both systems hard-fail
-        // in their respective scopes.
-        //
-        // This is a DELIBERATE DIVERGENCE from TS. If an IFS-injecting script
-        // is a legitimate use case in a specific workflow, the user should use
-        // a sandbox or construct the env differently — coco-rs does not accept
-        // IFS manipulation via user approval.
+        // cover user-configured deny rules and path validation — a DIFFERENT
+        // concern from the pattern checks here.
         //
         // Read-only commands skip the security check to avoid false positives
         // on harmless `grep 'foo`bar'` patterns with metacharacters inside
@@ -663,10 +734,7 @@ impl Tool for BashTool {
         // informational advisory behind a default-off feature flag — it never
         // affects permission logic. coco-rs matches that: the
         // `coco_shell::destructive::get_destructive_warning` advisory is
-        // available for the permission-request UI but does not deny here. The
-        // `check_security` Deny below is a SEPARATE, DELIBERATE DIVERGENCE
-        // (IFS injection and similar genuinely-dangerous constructs that coco-rs
-        // blocks even with approval).
+        // available for the permission-request UI but does not deny here.
         if !is_read_only_command(command) {
             for check in check_security(command) {
                 if check.severity == SecuritySeverity::Deny {
@@ -739,7 +807,7 @@ impl Tool for BashTool {
 /// - `run_in_background: true` → return `{task_id, status: "background"}`
 ///   immediately. No await.
 /// - `run_in_background: false` → race four signals:
-///   1. `ctx.cancel.cancelled()` (Ctrl+C / explicit kill) → return
+///   1. `ctx.abort.cancelled()` (Ctrl+C / explicit kill) → return
 ///      `ToolError::Cancelled`.
 ///   2. `terminal_signal.await_terminal()` → read disk via
 ///      `read_terminal_outputs` and return fg-shape result.
@@ -879,13 +947,13 @@ async fn execute_via_task_runtime(
                 source: None,
             })?;
 
-    let kill_arm = ctx.cancel.clone();
+    let kill_arm = ctx.cancel_token();
 
     let outcome: BashOutcome = tokio::select! {
         biased;
         () = kill_arm.cancelled() => {
             // Cancel propagates into the task driver via its own cancel
-            // token (BashTool ctx.cancel is shared with the driver). The
+            // token (BashTool ctx.cancel_token() is shared with the driver). The
             // driver will fire `apply_shell_terminal_state(Killed)` and
             // push the notification — we don't need to do anything
             // beyond returning the cancellation error.
@@ -918,6 +986,9 @@ async fn execute_via_task_runtime(
             let max_bytes = max_output_bytes(&ctx.tool_config);
             let stdout = truncate_output(outputs.stdout.as_bytes(), max_bytes);
             let stderr = truncate_output(outputs.stderr.as_bytes(), max_bytes);
+            // Strip + record Claude Code hints on the terminal task path too,
+            // so the model never sees the tag (TS strips unconditionally).
+            let stdout = maybe_strip_and_record_hints(stdout, command);
             let mut result_obj = serde_json::json!({
                 "stdout": stdout,
                 "stderr": stderr,
@@ -1034,7 +1105,7 @@ async fn execute_foreground(
 
     let opts = coco_shell::ExecOptions {
         timeout_ms: Some(timeout_ms as i64),
-        cancel: Some(ctx.cancel.clone()),
+        cancel: Some(ctx.cancel_token()),
         sandbox: sandbox_state.clone(),
         sandbox_bypass,
         ..Default::default()
@@ -1146,6 +1217,14 @@ async fn execute_foreground(
     // the executor has already cleaned up (CWD-marker stripped via
     // `extract_cwd_from_output`). Truncate that for the inline view.
     let stdout = truncate_output(cmd_result.stdout.as_bytes(), max_bytes);
+
+    // Claude Code hints protocol: CLIs/SDKs emit a `<claude-code-hint />`
+    // tag to stderr (merged into stdout here). Scan, record for the TUI's
+    // pending-hint dialog to surface, then strip so the model never sees
+    // the tag — a zero-token side channel. Stripping runs unconditionally
+    // (subagent output must stay clean too); recording is best-effort and
+    // never affects the tool result. TS: `BashTool.tsx:780-784`.
+    let stdout = maybe_strip_and_record_hints(stdout, command);
     let stderr = truncate_output(cmd_result.stderr.as_bytes(), max_bytes);
     let exit_code = cmd_result.exit_code;
     // R7-T18: image detection inspects the executor's raw stdout bytes
@@ -1175,6 +1254,9 @@ async fn execute_foreground(
     // TS semantics where both AbortController and the timeout watchdog
     // set `interrupted=true`.
     let interrupted = cmd_result.interrupted || cmd_result.timed_out;
+    if cmd_result.interrupted && ctx.abort.is_aborted() {
+        return Err(ToolError::Cancelled);
+    }
 
     // R7-T12 fields:
     //
@@ -1217,6 +1299,23 @@ async fn execute_foreground(
         permission_updates: Vec::new(),
         display_data: None,
     })
+}
+
+/// Strip `<claude-code-hint />` tags from bash stdout and best-effort
+/// record any plugin hints for the TUI's pending-hint dialog. Returns the
+/// stripped stdout (what the model sees). Recording failures (disk I/O,
+/// policy lookups) are swallowed — they must never affect the tool result.
+///
+/// TS: `BashTool.tsx:780-784` — `extractClaudeCodeHints` + the
+/// `maybeRecordPluginHint` loop, gated on the main thread.
+pub(crate) fn maybe_strip_and_record_hints(stdout: String, command: &str) -> String {
+    let (hints, stripped) = coco_plugins::extract_claude_code_hints(&stdout, command);
+    for hint in &hints {
+        // `None` installed-manager: skip the per-call installed-check (the
+        // async resolve step still gates on marketplace-cache membership).
+        coco_plugins::maybe_record_plugin_hint(hint, None);
+    }
+    stripped
 }
 
 /// Detect whether a byte buffer is a known image format from its magic
@@ -1404,40 +1503,29 @@ async fn apply_sed_edit(
     })
 }
 
-/// Truncate output using a first+last pattern.
+/// Truncate output head-only, mirroring TS
+/// `BashTool/utils.ts::formatOutput`: keep the first `max_bytes` chars
+/// and append `\n\n... [N lines truncated] ...` where N counts the lines
+/// dropped from the tail (newlines after the cut, +1). #34: coco-rs
+/// previously kept a head+tail window with a *chars*-truncated marker;
+/// TS is head-only with a *lines* marker.
 ///
-/// TS `BashTool/utils.ts::formatOutput` keeps only the first
-/// `maxOutputLength` chars and appends a line-count footer. coco-rs uses a
-/// slightly richer first+last pattern — the tail usually contains the
-/// most actionable information (error messages, exit status) so
-/// preserving both halves beats a pure head-truncation for debuggability.
-/// Still TS-compatible at the byte-budget level: the caller passes the
-/// resolved `max_bytes` from [`max_output_bytes`].
-///
-/// Char boundaries are respected so the truncation never yields invalid
-/// UTF-8. If `max_bytes` is odd, the first half is one byte smaller than
-/// the last half (they're both char-boundary snapped).
+/// Char boundaries are respected so truncation never yields invalid UTF-8.
 fn truncate_output(bytes: &[u8], max_bytes: usize) -> String {
     let s = String::from_utf8_lossy(bytes);
     if s.len() <= max_bytes {
         return s.to_string();
     }
 
-    let half = max_bytes / 2;
-    // Snap the first slice to the nearest preceding char boundary.
-    let mut first_end = half;
-    while first_end > 0 && !s.is_char_boundary(first_end) {
-        first_end -= 1;
+    // Snap the cut to the nearest preceding char boundary.
+    let mut cut = max_bytes.min(s.len());
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
     }
-    // Snap the last slice to the nearest following char boundary.
-    let mut last_start = s.len() - half;
-    while last_start < s.len() && !s.is_char_boundary(last_start) {
-        last_start += 1;
-    }
-    let first = &s[..first_end];
-    let last = &s[last_start..];
-    let truncated_count = s.len() - first_end - (s.len() - last_start);
-    format!("{first}\n... [{truncated_count} chars truncated] ...\n{last}")
+    let head = &s[..cut];
+    // TS `countCharInString(content, '\n', maxOutputLength) + 1`.
+    let remaining_lines = s[cut..].matches('\n').count() + 1;
+    format!("{head}\n\n... [{remaining_lines} lines truncated] ...")
 }
 
 #[cfg(test)]

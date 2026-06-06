@@ -80,6 +80,7 @@ fn serde_roundtrip_preserves_all_fields() {
             auto_mode: true,
             compaction_reminder: false,
             date_change: true,
+            user_context: false,
             verify_plan_reminder: true,
             ultrathink_effort: true,
             token_usage: false,

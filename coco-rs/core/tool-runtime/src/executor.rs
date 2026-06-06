@@ -10,8 +10,10 @@
 use coco_config::EnvKey;
 use coco_config::env;
 use coco_messages::ToolResult;
+use coco_types::ToolAbortReasonPayload;
 use coco_types::ToolId;
 use coco_types::ToolName;
+use coco_types::TuiOnlyEvent;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use serde_json::Value;
@@ -19,7 +21,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use crate::call_plan::PreparedToolCall;
 use crate::call_plan::RunOneRuntime;
@@ -27,10 +28,15 @@ use crate::call_plan::ToolCallOutcome;
 use crate::call_plan::ToolCallPlan;
 use crate::call_plan::ToolSideEffects;
 use crate::call_plan::UnstampedToolCallOutcome;
+use crate::cancellation::ToolAbortController;
+use crate::cancellation::ToolAbortSignal;
+use crate::cancellation::TurnAbortController;
+use crate::cancellation::TurnAbortSignal;
 use crate::context::ToolUseContext;
 use crate::error::SyntheticToolError;
 use crate::error::ToolError;
 use crate::traits::DynTool;
+use crate::traits::InterruptBehavior;
 use crate::traits::ToolProgress;
 
 /// Default maximum concurrent tool executions.
@@ -129,7 +135,7 @@ struct TrackedTool {
 /// channel to the update_tx output channel.
 ///
 /// Sibling abort: When a tool fails in a concurrent batch, its siblings
-/// are cancelled via a shared CancellationToken.
+/// are cancelled via a shared abort controller.
 ///
 /// Streaming fallback: `discard()` generates SyntheticToolError::StreamingFallback
 /// for all unfinished tools when the stream fails and retries non-streaming.
@@ -137,9 +143,10 @@ pub struct StreamingToolExecutor {
     max_concurrency: usize,
     tracked: Vec<TrackedTool>,
     discarded: bool,
-    /// Child token for sibling abort. Cancelled when any tool in a
-    /// concurrent batch fails.
-    sibling_cancel: CancellationToken,
+    /// Current turn abort signal for scheduler-based execution.
+    turn_abort: TurnAbortSignal,
+    /// Structured sibling-abort controller.
+    sibling_abort: ToolAbortController,
     /// Output channel for streaming updates (results + progress).
     update_tx: mpsc::UnboundedSender<StreamingToolUpdate>,
     /// Receive end of the update channel.
@@ -175,7 +182,8 @@ impl StreamingToolExecutor {
             max_concurrency,
             tracked: Vec::new(),
             discarded: false,
-            sibling_cancel: CancellationToken::new(),
+            turn_abort: TurnAbortController::new().signal(),
+            sibling_abort: ToolAbortController::new(),
             update_tx,
             update_rx,
             app_state: None,
@@ -213,13 +221,19 @@ impl StreamingToolExecutor {
         self
     }
 
+    pub fn with_turn_abort(mut self, signal: TurnAbortSignal) -> Self {
+        self.turn_abort = signal;
+        self
+    }
+
     pub fn with_max_concurrency(max_concurrency: usize) -> Self {
         let (update_tx, update_rx) = mpsc::unbounded_channel();
         Self {
             max_concurrency,
             tracked: Vec::new(),
             discarded: false,
-            sibling_cancel: CancellationToken::new(),
+            turn_abort: TurnAbortController::new().signal(),
+            sibling_abort: ToolAbortController::new(),
             update_tx,
             update_rx,
             app_state: None,
@@ -304,7 +318,9 @@ impl StreamingToolExecutor {
     /// and the engine retries without streaming.
     pub fn discard(&mut self) {
         self.discarded = true;
-        self.sibling_cancel.cancel();
+        self.sibling_abort.abort(ToolAbortReasonPayload::SelfAbort {
+            message: SyntheticToolError::StreamingFallback.to_string(),
+        });
 
         for tracked in &mut self.tracked {
             if tracked.status == ToolStatus::Queued || tracked.status == ToolStatus::Executing {
@@ -390,7 +406,7 @@ impl StreamingToolExecutor {
         let mut all_results = Vec::new();
 
         for batch in batches {
-            if ctx.cancel.is_cancelled() {
+            if ctx.abort.is_aborted() {
                 break;
             }
             let batch_result = self.execute_batch(batch, ctx).await;
@@ -427,7 +443,7 @@ impl StreamingToolExecutor {
         let call_ctx = ctx.clone_for_tool_call(tool_use_id.clone());
         let result = tokio::select! {
             r = call.tool.execute(input, &call_ctx) => r,
-            () = call_ctx.cancel.cancelled() => Err(ToolError::Cancelled),
+            () = call_ctx.abort.cancelled() => Err(ToolError::Cancelled),
         };
 
         // Remove from in-progress
@@ -531,7 +547,7 @@ impl StreamingToolExecutor {
     ) -> Vec<ToolCallResult> {
         let semaphore = Arc::new(Semaphore::new(self.max_concurrency));
         let shared_ctx = Arc::new(ctx.clone_for_concurrent());
-        let sibling_cancel = CancellationToken::new();
+        let sibling_abort = ToolAbortController::new();
         let call_count = calls.len();
         tracing::info!(
             batch_type = "concurrent_safe",
@@ -551,7 +567,7 @@ impl StreamingToolExecutor {
             let tool_use_id = call.tool_use_id;
             let tool_id = tool.id();
             let tool_name = tool.name().to_string();
-            let sibling_tok = sibling_cancel.clone();
+            let sibling_abort_for_call = sibling_abort.clone();
             tracing::debug!(
                 tool_use_id = %tool_use_id,
                 tool_name = %tool_name,
@@ -579,17 +595,27 @@ impl StreamingToolExecutor {
                     ids.insert(tool_use_id.clone());
                 }
 
-                let call_ctx = ctx_clone.clone_for_tool_call(tool_use_id.clone());
+                let mut call_ctx = ctx_clone.clone_for_tool_call(tool_use_id.clone());
+                let self_abort = ToolAbortController::new();
+                call_ctx.abort = ToolAbortSignal::new(
+                    call_ctx.abort.turn_signal(),
+                    self_abort.signal(),
+                    Some(sibling_abort_for_call.signal()),
+                );
                 let result = tokio::select! {
                     r = tool.execute(input, &call_ctx) => r,
-                    () = call_ctx.cancel.cancelled() => Err(ToolError::Cancelled),
-                    () = sibling_tok.cancelled() => Err(ToolError::ExecutionFailed {
-                        message: SyntheticToolError::SiblingError {
-                            failed_tool: "sibling".into(),
-                        }.to_string(),
-                        display_data: None,
-                        source: None,
-                    }),
+                    () = call_ctx.abort.cancelled() => match call_ctx.abort.reason() {
+                        Some(ToolAbortReasonPayload::SiblingError { failed_tool }) => {
+                            Err(ToolError::ExecutionFailed {
+                                message: SyntheticToolError::SiblingError {
+                                    failed_tool,
+                                }.to_string(),
+                                display_data: None,
+                                source: None,
+                            })
+                        }
+                        _ => Err(ToolError::Cancelled),
+                    },
                 };
 
                 // Remove from in-progress
@@ -612,7 +638,9 @@ impl StreamingToolExecutor {
                         tool_name = %tool_name,
                         "shell tool failed; aborting concurrent siblings"
                     );
-                    sibling_tok.cancel();
+                    sibling_abort_for_call.abort(ToolAbortReasonPayload::SiblingError {
+                        failed_tool: tool_name.clone(),
+                    });
                 }
 
                 let duration_ms = start.elapsed().as_millis() as i64;
@@ -793,6 +821,8 @@ impl StreamingToolExecutor {
                     on_outcome(outcome);
                 }
                 PlanBlock::SerialUnsafe(prepared) => {
+                    self.emit_interruptibility(interruptible_set(std::slice::from_ref(&prepared)))
+                        .await;
                     let runtime = self.make_runtime(prepared.model_index);
                     let unstamped = run_one(prepared, runtime).await;
                     let (outcome, effects) = unstamped.stamp_and_extract_effects(completion_seq);
@@ -802,8 +832,11 @@ impl StreamingToolExecutor {
                     // serial-tool equivalent of "update.newContext()".
                     self.apply_side_effects(effects).await;
                     on_outcome(outcome);
+                    self.emit_interruptibility(false).await;
                 }
                 PlanBlock::ConcurrentSafe(prepared_calls) => {
+                    self.emit_interruptibility(interruptible_set(&prepared_calls))
+                        .await;
                     self.run_concurrent_batch(
                         prepared_calls,
                         &run_one,
@@ -811,6 +844,7 @@ impl StreamingToolExecutor {
                         &mut completion_seq,
                     )
                     .await;
+                    self.emit_interruptibility(false).await;
                 }
             }
         }
@@ -818,13 +852,13 @@ impl StreamingToolExecutor {
 
     /// Build a fresh per-tool runtime for one `run_one` invocation.
     pub(crate) fn make_runtime(&self, model_index: usize) -> RunOneRuntime {
+        let self_abort = ToolAbortController::new();
         RunOneRuntime {
-            // Child token of the turn cancel (the caller seeds
-            // `self.sibling_cancel` to match the current turn). Using
-            // a child keeps per-tool cancellation independent of
-            // siblings unless sibling-abort explicitly fires.
-            cancellation: self.sibling_cancel.child_token(),
-            sibling_abort: Some(self.sibling_cancel.clone()),
+            abort: ToolAbortSignal::new(
+                self.turn_abort.clone(),
+                self_abort.signal(),
+                Some(self.sibling_abort.signal()),
+            ),
             progress_tx: None,
             model_index,
         }
@@ -868,6 +902,12 @@ impl StreamingToolExecutor {
 
         while let Some(unstamped) = pending.next().await {
             let model_index = unstamped.model_index;
+            if unstamped.error_kind.is_some() && is_shell_tool_id(&unstamped.tool_id) {
+                self.sibling_abort
+                    .abort(ToolAbortReasonPayload::SiblingError {
+                        failed_tool: unstamped.tool_id.to_string(),
+                    });
+            }
             let (outcome, effects) = unstamped.stamp_and_extract_effects(*completion_seq);
             *completion_seq += 1;
             queued_effects.push((model_index, effects));
@@ -938,6 +978,31 @@ impl StreamingToolExecutor {
                 .await;
         }
     }
+
+    async fn emit_interruptibility(&self, interruptible: bool) {
+        let Some(tx) = self.event_tx.as_ref() else {
+            return;
+        };
+        let _ = tx
+            .send(coco_types::CoreEvent::Tui(
+                TuiOnlyEvent::ToolInterruptibilityChanged { interruptible },
+            ))
+            .await;
+    }
+}
+
+fn interruptible_set(prepared_calls: &[PreparedToolCall]) -> bool {
+    !prepared_calls.is_empty()
+        && prepared_calls
+            .iter()
+            .all(|prepared| prepared.tool.interrupt_behavior() == InterruptBehavior::Cancel)
+}
+
+fn is_shell_tool_id(tool_id: &ToolId) -> bool {
+    matches!(
+        tool_id,
+        ToolId::Builtin(ToolName::Bash) | ToolId::Builtin(ToolName::PowerShell)
+    )
 }
 
 /// One block in the executor's plan-partition output.

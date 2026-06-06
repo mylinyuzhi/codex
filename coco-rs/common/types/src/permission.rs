@@ -271,6 +271,18 @@ pub enum ToolCheckResult {
     Deny { message: String },
 }
 
+/// Why a permission flow aborted the current turn instead of returning a
+/// normal model-visible denial.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionAbortReason {
+    UserAbort,
+    ClassifierTranscriptTooLong,
+    ClassifierDenialLimit,
+    PermissionRequestCancelled,
+}
+
 /// One option in a multi-choice permission dialog.
 ///
 /// Used by `ToolCheckResult::Ask.choices` and surfaced on the wire via
@@ -315,6 +327,10 @@ pub enum PermissionDecision {
     Deny {
         message: String,
         reason: PermissionDecisionReason,
+    },
+    Abort {
+        message: String,
+        reason: PermissionAbortReason,
     },
 }
 

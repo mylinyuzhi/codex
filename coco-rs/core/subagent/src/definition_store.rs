@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use coco_frontmatter::parse;
-use coco_types::{AgentDefinition, AgentSource, MemoryScope};
+use coco_types::{AgentDefinition, AgentSource, AgentTypeId, MemoryScope};
 
 use crate::builtins::{BuiltinAgentCatalog, builtin_definitions};
 use crate::frontmatter::parse_agent_markdown;
@@ -133,7 +133,19 @@ pub struct AgentSearchPaths {
     pub project_dirs: Vec<PathBuf>,
     pub flag_dirs: Vec<PathBuf>,
     pub policy_dirs: Vec<PathBuf>,
-    pub plugin_dirs: Vec<PathBuf>,
+    /// Plugin-contributed agent directories. Each carries the owning plugin's
+    /// name so loaded agents are namespaced `<plugin>:<agent>` (TS
+    /// `loadPluginAgents`). The caller (`app/cli`) maps a plugin's `agents/`
+    /// dir + manifest `agents` dirs to these.
+    pub plugin_dirs: Vec<PluginAgentDir>,
+}
+
+/// A plugin's agent directory plus the plugin name used to namespace the
+/// agents loaded from it.
+#[derive(Debug, Clone)]
+pub struct PluginAgentDir {
+    pub plugin_name: String,
+    pub dir: PathBuf,
 }
 
 impl AgentSearchPaths {
@@ -261,8 +273,21 @@ impl AgentDefinitionStore {
         // `MetadataExt::dev/ino` aren't portable — Windows users get
         // the path-based sort behaviour we always had.
         let mut seen: HashSet<(u64, u64)> = HashSet::new();
-        let plan: [(&[PathBuf], AgentSource); 5] = [
-            (&self.paths.plugin_dirs, AgentSource::Plugin),
+        // Plugin agents first (lowest precedence after built-ins): each dir
+        // carries its plugin name so agents are namespaced `<plugin>:<agent>`
+        // and the plugin security gate is applied.
+        for ps in &self.paths.plugin_dirs {
+            collect_dir(
+                &ps.dir,
+                AgentSource::Plugin,
+                Some(&ps.plugin_name),
+                &mut all,
+                &mut failed,
+                &mut warnings,
+                &mut seen,
+            );
+        }
+        let plan: [(&[PathBuf], AgentSource); 4] = [
             (self.paths.user_dir.as_slice(), AgentSource::UserSettings),
             (&self.paths.project_dirs, AgentSource::ProjectSettings),
             (&self.paths.flag_dirs, AgentSource::FlagSettings),
@@ -270,7 +295,15 @@ impl AgentDefinitionStore {
         ];
         for (dirs, source) in plan {
             for dir in dirs {
-                collect_dir(dir, source, &mut all, &mut failed, &mut warnings, &mut seen);
+                collect_dir(
+                    dir,
+                    source,
+                    None,
+                    &mut all,
+                    &mut failed,
+                    &mut warnings,
+                    &mut seen,
+                );
             }
         }
 
@@ -326,9 +359,25 @@ impl AgentDefinitionStore {
     }
 }
 
+/// Namespace a plugin-sourced agent `<plugin>:<agent>` and strip the fields a
+/// plugin agent is not trusted to declare. TS `loadPluginAgents` deliberately
+/// drops `permissionMode` / `hooks` / `mcpServers` for plugin agents so a
+/// plugin cannot escalate beyond install-time trust.
+fn apply_plugin_namespace_and_gate(def: &mut AgentDefinition, plugin_name: &str) {
+    let base = def.name.clone();
+    let namespaced = format!("{plugin_name}:{base}");
+    def.agent_type = AgentTypeId::Custom(namespaced.clone());
+    def.name = namespaced;
+    def.filename = Some(base);
+    def.permission_mode = None;
+    def.hooks = serde_json::Value::Null;
+    def.mcp_servers = Vec::new();
+}
+
 fn collect_dir(
     dir: &Path,
     source: AgentSource,
+    plugin_name: Option<&str>,
     all: &mut Vec<LoadedAgentDefinition>,
     failed: &mut Vec<ValidationDiagnostic>,
     warnings: &mut Vec<ValidationDiagnostic>,
@@ -356,7 +405,10 @@ fn collect_dir(
             continue;
         }
         match load_one(&path, source) {
-            Ok((def, def_warnings)) => {
+            Ok((mut def, def_warnings)) => {
+                if let Some(plugin) = plugin_name {
+                    apply_plugin_namespace_and_gate(&mut def, plugin);
+                }
                 // Always surface frontmatter warnings, even when the
                 // semantic validator rejects the definition.
                 for w in &def_warnings {
@@ -448,7 +500,9 @@ fn inject_memory_tools(def: &mut AgentDefinition) {
         // Wildcard — every tool already visible.
         return;
     };
-    for tool in [ToolName::Read, ToolName::Edit, ToolName::Write] {
+    // TS injects in [Write, Edit, Read] order (loadAgentsDir.ts:458-462,
+    // 665-669); keep byte-faithful so the prompt-cache key matches TS.
+    for tool in [ToolName::Write, ToolName::Edit, ToolName::Read] {
         let name = tool.as_str();
         if !list.iter().any(|t| t == name) {
             list.push(name.to_owned());

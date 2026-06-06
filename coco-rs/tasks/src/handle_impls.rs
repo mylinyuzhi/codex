@@ -152,6 +152,10 @@ impl TaskListHandle for TaskListStore {
             .await
     }
 
+    async fn notify_change(&self) {
+        TaskListStore::notify_change(self);
+    }
+
     async fn unassign_teammate_tasks(
         &self,
         teammate_id: &str,

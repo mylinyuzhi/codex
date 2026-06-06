@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::TurnAbortController;
 use coco_types::PermissionMode;
 use coco_types::ThinkingLevel;
+use coco_types::ToolAbortReasonPayload;
 use coco_types::ToolAppState;
+use coco_types::TurnAbortReason;
 use pretty_assertions::assert_eq;
 use tokio::sync::RwLock;
-use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::config::QueryEngineConfig;
@@ -33,7 +35,7 @@ fn factory_with_live_rules(
     ToolContextFactory {
         config,
         tools: Arc::new(ToolRegistry::new()),
-        cancel: CancellationToken::new(),
+        turn_abort: TurnAbortSignal::from_token(tokio_util::sync::CancellationToken::new()),
         mailbox: None,
         pending_messages: None,
         task_list: None,
@@ -51,10 +53,30 @@ fn factory_with_live_rules(
         skill_handle: None,
         lsp_handle: None,
         mcp_handle: None,
+        schedule_store: None,
         agent_catalog: None,
         parent_runtime_snapshot: None,
         live_command_rules,
     }
+}
+
+#[tokio::test]
+async fn test_factory_preserves_structured_turn_abort_reason() {
+    let turn_abort = TurnAbortController::new();
+    turn_abort.abort(TurnAbortReason::SubmitInterrupt);
+    let ctx = ToolContextFactory {
+        turn_abort: turn_abort.signal(),
+        ..factory(test_config())
+    }
+    .build(Default::default())
+    .await;
+
+    assert_eq!(
+        ctx.abort.reason(),
+        Some(ToolAbortReasonPayload::Turn {
+            reason: TurnAbortReason::SubmitInterrupt,
+        })
+    );
 }
 
 #[tokio::test]

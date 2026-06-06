@@ -10,6 +10,7 @@
 //! catalog view, not a load journal.
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 use coco_types::AgentDefinition;
 
@@ -23,6 +24,13 @@ pub struct AgentCatalogSnapshot {
     /// PascalCase entries (`Explore`, `Plan`) sort before lowercase
     /// entries (`build`, `coco-guide`).
     active: BTreeMap<String, AgentDefinition>,
+    /// Active `agent_type`s in TS source-load order (built-in → plugin →
+    /// user → project → flag → managed; first-occurrence position within
+    /// that, mirroring JS `Map` key-insertion semantics in
+    /// `getActiveAgentsFromList`). Used only for prompt rendering so the
+    /// model-visible "Available agent types" block — and its prompt-cache
+    /// key — matches TS byte-for-byte. Lookups/counts use `active`.
+    load_order: Vec<String>,
     /// All loaded definitions (including those overridden by higher-priority
     /// sources). Used by `/agents show` to display source chains.
     all: Vec<LoadedAgentDefinition>,
@@ -30,12 +38,27 @@ pub struct AgentCatalogSnapshot {
 
 impl AgentCatalogSnapshot {
     pub fn new(active: BTreeMap<String, AgentDefinition>, all: Vec<LoadedAgentDefinition>) -> Self {
-        Self { active, all }
+        let load_order = compute_load_order(&all, &active);
+        Self {
+            active,
+            load_order,
+            all,
+        }
     }
 
-    /// All active agents in deterministic order.
+    /// All active agents in deterministic (alphabetical) order. Used by
+    /// lookups, counts, and any order-insensitive consumer.
     pub fn active(&self) -> impl Iterator<Item = &AgentDefinition> {
         self.active.values()
+    }
+
+    /// Active agents in TS source-load order. Prompt rendering uses this
+    /// so the "Available agent types" block matches TS
+    /// `getActiveAgentsFromList` (loadAgentsDir.ts:193-220).
+    pub fn active_in_load_order(&self) -> impl Iterator<Item = &AgentDefinition> {
+        self.load_order
+            .iter()
+            .filter_map(|name| self.active.get(name))
     }
 
     pub fn active_count(&self) -> usize {
@@ -77,6 +100,40 @@ impl AgentCatalogSnapshot {
             })
         })
     }
+}
+
+/// Compute the TS source-load order of active `agent_type`s. Mirrors
+/// `getActiveAgentsFromList` (loadAgentsDir.ts:193-220): iterate sources
+/// ascending by precedence (built-in → plugin → user → project → flag →
+/// managed), and within a source in load order, recording each name at
+/// its first occurrence (JS `Map` key-insertion position). Names not in
+/// `active` (fully overridden) are skipped — the winning definition is
+/// looked up via `active` at render time.
+fn compute_load_order(
+    all: &[LoadedAgentDefinition],
+    active: &BTreeMap<String, AgentDefinition>,
+) -> Vec<String> {
+    let mut indexed: Vec<(u8, usize, &str)> = all
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            (
+                l.definition.source.priority(),
+                i,
+                l.definition.name.as_str(),
+            )
+        })
+        .collect();
+    // Ascending priority, then stable original index within a source.
+    indexed.sort_by_key(|(priority, idx, _)| (*priority, *idx));
+    let mut order = Vec::new();
+    let mut seen = HashSet::new();
+    for (_, _, name) in indexed {
+        if active.contains_key(name) && seen.insert(name) {
+            order.push(name.to_owned());
+        }
+    }
+    order
 }
 
 /// Standalone-helper variant of `AgentCatalogSnapshot::active_with_mcp`.

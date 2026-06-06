@@ -31,7 +31,7 @@ const CATEGORIES: &[Category] = &[
             },
             CommandEntry {
                 name: "clear",
-                aliases: &[],
+                aliases: &["reset", "new"],
                 description: "Clear conversation history and start fresh",
                 usage: "/clear",
             },
@@ -66,7 +66,7 @@ const CATEGORIES: &[Category] = &[
         commands: &[
             CommandEntry {
                 name: "config",
-                aliases: &["configuration"],
+                aliases: &["settings"],
                 description: "Show or modify configuration",
                 usage: "/config [key] [value]",
             },
@@ -124,22 +124,10 @@ const CATEGORIES: &[Category] = &[
                 usage: "/keybindings",
             },
             CommandEntry {
-                name: "fast",
-                aliases: &[],
-                description: "Toggle fast mode (use smaller model)",
-                usage: "/fast",
-            },
-            CommandEntry {
                 name: "sandbox",
                 aliases: &[],
                 description: "Configure sandbox mode",
                 usage: "/sandbox [none|readonly|strict]",
-            },
-            CommandEntry {
-                name: "privacy-settings",
-                aliases: &[],
-                description: "Configure privacy settings",
-                usage: "/privacy-settings",
             },
         ],
     },
@@ -166,7 +154,9 @@ const CATEGORIES: &[Category] = &[
             },
             CommandEntry {
                 name: "resume",
-                aliases: &["continue"],
+                // Canonical name only — implementations.rs registers
+                // /resume with no /continue alias.
+                aliases: &[],
                 description: "Resume a previous conversation",
                 usage: "/resume [session-id]",
             },
@@ -223,12 +213,6 @@ const CATEGORIES: &[Category] = &[
                 aliases: &[],
                 description: "Create a git commit with staged changes",
                 usage: "/commit [message]",
-            },
-            CommandEntry {
-                name: "pr",
-                aliases: &["pr-create"],
-                description: "Create a pull request from current branch",
-                usage: "/pr [title]",
             },
             CommandEntry {
                 name: "review",
@@ -311,12 +295,6 @@ const CATEGORIES: &[Category] = &[
                 aliases: &[],
                 description: "Diagnose and verify installation and settings",
                 usage: "/doctor",
-            },
-            CommandEntry {
-                name: "feedback",
-                aliases: &["bug"],
-                description: "Submit feedback",
-                usage: "/feedback [message]",
             },
             CommandEntry {
                 name: "upgrade",

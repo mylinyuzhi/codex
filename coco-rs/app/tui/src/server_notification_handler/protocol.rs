@@ -542,6 +542,7 @@ pub(super) fn handle(
             true
         }
         ServerNotification::FastModeChanged { active } => {
+            state.session.fast_mode = active;
             let msg = if active {
                 t!("toast.fast_mode_on")
             } else {
@@ -852,8 +853,18 @@ pub(super) fn handle(
             state.ui.add_toast(Toast::info(msg));
             true
         }
-        ServerNotification::ElicitationComplete(_) => {
-            state.ui.dismiss_prompt();
+        ServerNotification::ElicitationComplete(p) => {
+            // No elicitation dialog UI exists yet, so there is no matching
+            // prompt to dismiss. Unconditionally calling `dismiss_prompt()`
+            // would close an UNRELATED active prompt (permission / plan / MCP
+            // approval). TS matches (server, elicitation_id) against the queued
+            // elicitation and dismisses only that entry; until the dialog lands
+            // we ignore the notification rather than dismiss the wrong prompt.
+            tracing::debug!(
+                server = %p.mcp_server_name,
+                elicitation_id = %p.elicitation_id,
+                "ElicitationComplete ignored (no elicitation dialog to match)"
+            );
             true
         }
         ServerNotification::ToolUseSummary(p) => {
@@ -1140,7 +1151,7 @@ fn on_turn_ended(
         coco_types::TurnOutcome::Completed(_) => on_turn_completed_outcome(state, &p),
         coco_types::TurnOutcome::Failed(data) => on_turn_failed_outcome(state, &data.error),
         coco_types::TurnOutcome::Interrupted(data) => {
-            on_turn_interrupted_outcome(state, data.cancel_reason, command_tx)
+            on_turn_interrupted_outcome(state, data.abort_reason, command_tx)
         }
         coco_types::TurnOutcome::MaxTurnsReached(data) => {
             on_max_turns_reached_outcome(state, Some(data.max_turns))
@@ -1244,7 +1255,7 @@ fn token_usage_from_session_snapshot(
 /// after `abortController.abort('user-cancel')` resolves the query.
 fn on_turn_interrupted_outcome(
     state: &mut AppState,
-    cancel_reason: coco_types::CancelReason,
+    abort_reason: coco_types::TurnAbortReason,
     command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
 ) -> bool {
     state.session.set_busy(false);
@@ -1262,13 +1273,13 @@ fn on_turn_interrupted_outcome(
     let dropped = before.saturating_sub(state.session.tool_executions.len());
     tracing::info!(
         target: "coco_tui::turn",
-        cancel_reason = ?cancel_reason,
+        abort_reason = ?abort_reason,
         tool_widgets_dropped = dropped,
         tool_widgets_remaining = state.session.tool_executions.len(),
         "TurnEnded(Interrupted)",
     );
 
-    let user_cancel = matches!(cancel_reason, coco_types::CancelReason::UserCancel);
+    let user_cancel = matches!(abort_reason, coco_types::TurnAbortReason::UserCancel);
 
     // Auto-restore is gated on:
     // - reason == UserCancel  → TS `signal.reason === 'user-cancel'`

@@ -22,6 +22,8 @@ use coco_mcp_types::CallToolRequestParams;
 use coco_mcp_types::CallToolResult;
 use coco_mcp_types::InitializeResult;
 use coco_mcp_types::JSONRPC_VERSION;
+use coco_mcp_types::ListPromptsResult;
+use coco_mcp_types::ListResourcesResult;
 use coco_mcp_types::ListToolsResult;
 use coco_mcp_types::ReadResourceRequestParams;
 use coco_mcp_types::ReadResourceResult;
@@ -32,6 +34,7 @@ use coco_rmcp_client::SendElicitation;
 use coco_rmcp_client::determine_streamable_http_auth_status;
 use coco_rmcp_client::perform_oauth_login_return_url;
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 use tracing::info;
 use tracing::warn;
 
@@ -235,11 +238,14 @@ impl McpConnectionManager {
             McpServerConfig::Sse(sse) => {
                 ensure_xaa_tokens(server_name, &sse.url, sse.oauth.as_ref(), &self.config_home)
                     .await?;
+                let headers =
+                    resolve_http_headers(server_name, &sse.url, &sse.headers, &sse.headers_helper)
+                        .await?;
                 RmcpClient::new_streamable_http_client(
                     server_name,
                     &sse.url,
                     /*bearer_token*/ None,
-                    Some(sse.headers.clone()),
+                    Some(headers),
                     /*env_http_headers*/ None,
                     OAuthCredentialsStoreMode::Auto,
                     self.config_home.clone(),
@@ -257,11 +263,18 @@ impl McpConnectionManager {
                     &self.config_home,
                 )
                 .await?;
+                let headers = resolve_http_headers(
+                    server_name,
+                    &http.url,
+                    &http.headers,
+                    &http.headers_helper,
+                )
+                .await?;
                 RmcpClient::new_streamable_http_client(
                     server_name,
                     &http.url,
                     /*bearer_token*/ None,
-                    Some(http.headers.clone()),
+                    Some(headers),
                     /*env_http_headers*/ None,
                     OAuthCredentialsStoreMode::Auto,
                     self.config_home.clone(),
@@ -465,10 +478,25 @@ impl McpConnectionManager {
             channel_permission: false,
         };
 
+        // Mirror the rmcp connect fan-out: fetch resources + prompts when the
+        // server advertises them, routing through the SDK control channel.
+        let resources = if capabilities.resources {
+            self.fetch_resources_for_sdk(&route, server_name).await
+        } else {
+            Vec::new()
+        };
+        let commands = if capabilities.prompts {
+            self.fetch_prompts_for_sdk(&route, server_name).await
+        } else {
+            Vec::new()
+        };
+
         info!(
             server = %server_name,
             sdk_name = %sdk.name,
             tools = tools.len(),
+            resources = resources.len(),
+            prompts = commands.len(),
             "SDK MCP server connected and initialized"
         );
 
@@ -477,9 +505,91 @@ impl McpConnectionManager {
             capabilities,
             instructions: init_result.instructions,
             tools,
-            resources: Vec::new(),
-            commands: Vec::new(),
+            resources,
+            commands,
         })
+    }
+
+    /// List an SDK-hosted server's resources via the control channel,
+    /// mapping into [`McpResource`]. Mirrors [`fetch_resources`] (rmcp path):
+    /// a failure is logged and treated as "no resources" — it must not abort
+    /// connect.
+    async fn fetch_resources_for_sdk(
+        &self,
+        route: &SdkRouteMessage,
+        server_name: &str,
+    ) -> Vec<McpResource> {
+        let response = match route_sdk_jsonrpc(
+            route,
+            server_name,
+            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            "resources/list",
+            serde_json::json!({}),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                warn!(server = %server_name, "failed to list SDK MCP resources: {e}");
+                return Vec::new();
+            }
+        };
+        match parse_sdk_jsonrpc_result::<ListResourcesResult>(response) {
+            Ok(result) => result
+                .resources
+                .into_iter()
+                .map(|r| McpResource {
+                    uri: r.uri,
+                    name: r.name,
+                    description: r.description,
+                    mime_type: r.mime_type,
+                })
+                .collect(),
+            Err(e) => {
+                warn!(server = %server_name, "failed to parse SDK MCP resources: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// List an SDK-hosted server's prompts via the control channel, mapping
+    /// into [`McpPrompt`] (surfaced as MCP slash-commands). Mirrors
+    /// [`fetch_prompts`] (rmcp path); failures are logged and treated as
+    /// "no prompts".
+    async fn fetch_prompts_for_sdk(
+        &self,
+        route: &SdkRouteMessage,
+        server_name: &str,
+    ) -> Vec<McpPrompt> {
+        let response = match route_sdk_jsonrpc(
+            route,
+            server_name,
+            self.sdk_route_next_id.fetch_add(1, Ordering::Relaxed),
+            "prompts/list",
+            serde_json::json!({}),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                warn!(server = %server_name, "failed to list SDK MCP prompts: {e}");
+                return Vec::new();
+            }
+        };
+        match parse_sdk_jsonrpc_result::<ListPromptsResult>(response) {
+            Ok(result) => result
+                .prompts
+                .into_iter()
+                .map(|p| McpPrompt {
+                    name: p.name,
+                    description: p.description,
+                })
+                .collect(),
+            Err(e) => {
+                warn!(server = %server_name, "failed to parse SDK MCP prompts: {e}");
+                Vec::new()
+            }
+        }
     }
 
     async fn call_sdk_tool(
@@ -552,11 +662,12 @@ impl McpConnectionManager {
                 name: server_name.to_string(),
             }
         })?;
-        let Some((url, headers)) = oauth_login_target(&config.config) else {
+        let Some((url, headers, headers_helper)) = oauth_login_target(&config.config) else {
             return Ok(format!(
                 "MCP server '{server_name}' does not use OAuth authentication."
             ));
         };
+        let headers = resolve_http_headers(server_name, &url, &headers, &headers_helper).await?;
 
         let status = determine_streamable_http_auth_status(
             server_name,
@@ -711,6 +822,17 @@ impl McpConnectionManager {
         let mut clients = self.rmcp_clients.write().await;
         clients.remove(server_name);
         info!(server = %server_name, "disconnected MCP server");
+    }
+
+    /// Fully unregister a server: drop its config entry AND its live connection
+    /// (state + rmcp client). Use when a server is removed for good — e.g. a
+    /// plugin is disabled/uninstalled — so it no longer appears in
+    /// [`Self::registered_server_names`] and can't be lazily reconnected.
+    /// [`Self::disconnect`] only tears down the connection; this also forgets the
+    /// config.
+    pub async fn unregister_server(&mut self, server_name: &str) {
+        self.configs.remove(server_name);
+        self.disconnect(server_name).await;
     }
 
     /// Disconnect all servers.
@@ -880,15 +1002,115 @@ fn required_xaa_field<'a>(
         })
 }
 
-fn oauth_login_target(config: &McpServerConfig) -> Option<(String, HashMap<String, String>)> {
+fn oauth_login_target(
+    config: &McpServerConfig,
+) -> Option<(String, HashMap<String, String>, Option<String>)> {
     match config {
-        McpServerConfig::Sse(sse) => Some((sse.url.clone(), sse.headers.clone())),
-        McpServerConfig::Http(http) => Some((http.url.clone(), http.headers.clone())),
+        McpServerConfig::Sse(sse) => Some((
+            sse.url.clone(),
+            sse.headers.clone(),
+            sse.headers_helper.clone(),
+        )),
+        McpServerConfig::Http(http) => Some((
+            http.url.clone(),
+            http.headers.clone(),
+            http.headers_helper.clone(),
+        )),
         McpServerConfig::Stdio(_)
         | McpServerConfig::WebSocket(_)
         | McpServerConfig::Sdk(_)
         | McpServerConfig::ClaudeAiProxy(_) => None,
     }
+}
+
+async fn resolve_http_headers(
+    server_name: &str,
+    server_url: &str,
+    static_headers: &HashMap<String, String>,
+    helper: &Option<String>,
+) -> Result<HashMap<String, String>, McpClientError> {
+    let mut headers = static_headers.clone();
+    let Some(helper) = helper.as_deref() else {
+        return Ok(headers);
+    };
+    let dynamic = run_headers_helper(server_name, server_url, helper).await?;
+    headers.extend(dynamic);
+    Ok(headers)
+}
+
+async fn run_headers_helper(
+    server_name: &str,
+    server_url: &str,
+    helper: &str,
+) -> Result<HashMap<String, String>, McpClientError> {
+    let mut cmd = shell_command(helper);
+    cmd.env("CLAUDE_CODE_MCP_SERVER_NAME", server_name)
+        .env("CLAUDE_CODE_MCP_SERVER_URL", server_url);
+    let output = timeout(Duration::from_secs(10), cmd.output())
+        .await
+        .map_err(|_| McpClientError::SpawnFailed {
+            message: format!("headersHelper timed out for MCP server '{server_name}'"),
+        })?
+        .map_err(|error| McpClientError::SpawnFailed {
+            message: format!("headersHelper failed for MCP server '{server_name}': {error}"),
+        })?;
+
+    if !output.status.success() {
+        return Err(McpClientError::SpawnFailed {
+            message: format!(
+                "headersHelper exited with status {} for MCP server '{}'",
+                output.status, server_name
+            ),
+        });
+    }
+
+    let stdout = String::from_utf8(output.stdout).map_err(|error| McpClientError::SpawnFailed {
+        message: format!("headersHelper output was not UTF-8: {error}"),
+    })?;
+    parse_headers_helper_output(server_name, &stdout)
+}
+
+fn shell_command(helper: &str) -> tokio::process::Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = tokio::process::Command::new("cmd");
+        cmd.arg("/C").arg(helper);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c").arg(helper);
+        cmd
+    }
+}
+
+fn parse_headers_helper_output(
+    server_name: &str,
+    stdout: &str,
+) -> Result<HashMap<String, String>, McpClientError> {
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).map_err(|error| McpClientError::SpawnFailed {
+            message: format!("headersHelper returned invalid JSON for '{server_name}': {error}"),
+        })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| McpClientError::SpawnFailed {
+            message: format!("headersHelper for '{server_name}' must return a JSON object"),
+        })?;
+
+    let mut out = HashMap::with_capacity(object.len());
+    for (key, value) in object {
+        let Some(value) = value.as_str() else {
+            return Err(McpClientError::SpawnFailed {
+                message: format!(
+                    "headersHelper for '{server_name}' returned non-string value for '{key}'"
+                ),
+            });
+        };
+        out.insert(key.clone(), value.to_string());
+    }
+    Ok(out)
 }
 
 async fn route_sdk_jsonrpc(

@@ -1,16 +1,19 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use coco_tool_runtime::{CanUseToolCallContext, CanUseToolDecision};
+use coco_tool_runtime::CanUseToolCallContext;
+use coco_tool_runtime::CanUseToolDecision;
+use coco_tool_runtime::TurnAbortSignal;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::{create_auto_mem_handle, create_session_mem_handle};
+use super::create_auto_mem_handle;
+use super::create_session_mem_handle;
 
 fn ctx() -> CanUseToolCallContext {
     CanUseToolCallContext {
         tool_use_id: "test".into(),
-        abort: CancellationToken::new(),
+        abort: TurnAbortSignal::from_token(CancellationToken::new()),
         require_can_use_tool: false,
         messages: Arc::new(Vec::new()),
     }

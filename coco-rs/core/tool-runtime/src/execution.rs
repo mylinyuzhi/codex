@@ -187,7 +187,7 @@ pub async fn execute_tool_call(
     if let Some(handle) = ctx.can_use_tool.clone() {
         let cb_ctx = crate::can_use_tool::CanUseToolCallContext {
             tool_use_id: tool_use_id.to_string(),
-            abort: ctx.cancel.clone(),
+            abort: ctx.abort.turn_signal(),
             require_can_use_tool: ctx.require_can_use_tool,
             messages: ctx.messages.clone(),
         };
@@ -315,7 +315,7 @@ pub async fn execute_tool_call(
     );
     let result = tokio::select! {
         r = tool.execute(input, ctx) => r,
-        () = ctx.cancel.cancelled() => Err(ToolError::Cancelled),
+        () = ctx.abort.cancelled() => Err(ToolError::Cancelled),
     };
 
     let duration_ms = start.elapsed().as_millis() as i64;

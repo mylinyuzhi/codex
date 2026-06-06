@@ -56,6 +56,7 @@ pub async fn single_turn_query(
             cache: None,
             stop_sequences: None,
             response_format: None,
+            cancel: None,
         };
         match model_runtimes.query_once(source.clone(), &params).await {
             ModelRuntimeQueryOutcome::Success {

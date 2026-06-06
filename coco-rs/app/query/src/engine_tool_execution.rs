@@ -23,6 +23,15 @@ pub(crate) enum ToolExecutionBranch {
     Return(Box<QueryResult>),
 }
 
+/// #3 / TS query.ts:1566 `toolUseBlocks.some(b => b.name === SLEEP_TOOL_NAME)`:
+/// did the just-executed batch include a Sleep tool? Gates the
+/// `later`-priority command-queue drain at the turn boundary.
+fn tool_batch_ran_sleep(tool_calls: &[ToolCallPart]) -> bool {
+    tool_calls
+        .iter()
+        .any(|tc| tc.tool_name == coco_types::ToolName::Sleep.as_str())
+}
+
 #[allow(clippy::too_many_arguments)]
 impl QueryEngine {
     pub(crate) async fn execute_or_finalize_tool_calls(
@@ -62,6 +71,7 @@ impl QueryEngine {
                 continuation,
                 cycle_turn_id.clone(),
                 parsed_stop_reason,
+                tool_batch_ran_sleep(tool_calls),
             )
             .await;
             if let Some(ref c) = streaming_ctx {
@@ -167,10 +177,24 @@ impl QueryEngine {
             continuation,
             cycle_turn_id.clone(),
             parsed_stop_reason,
+            tool_batch_ran_sleep(tool_calls),
         )
         .await;
         self.drain_dynamic_skill_triggers(&ctx, &mut *history, event_tx)
             .await;
+        if tool_run_outcome.permission_aborted {
+            return ToolExecutionBranch::Return(Box::new(make_query_result(
+                consts,
+                &*acc,
+                &*turn_state,
+                response_text,
+                /*cancelled*/ true,
+                /*budget_exhausted*/ false,
+                Some("permission_abort".into()),
+                history.to_vec(),
+                history.snapshot(),
+            )));
+        }
         if self.cancel.is_cancelled() {
             return ToolExecutionBranch::Return(Box::new(make_query_result(
                 consts,

@@ -139,6 +139,21 @@ pub fn list_team_names() -> Vec<String> {
         .collect()
 }
 
+/// Outcome of [`cleanup_team_directories`].
+///
+/// `tasks_dir_removed` mirrors the TS success-path guard: TS calls
+/// `notifyTasksUpdated()` **only** after `rm(tasksDir)` succeeds (the
+/// `catch` path does not notify). Callers that own a task-list change
+/// notifier (e.g. [`crate::roster_store::TeamRosterStore::delete_team`])
+/// fire it iff this flag is `true`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CleanupOutcome {
+    /// `true` when the team's task-list directory existed and was removed
+    /// (or did not exist — nothing orphaned). `false` only when the
+    /// removal was attempted and failed.
+    pub tasks_dir_removed: bool,
+}
+
 /// Clean up everything a team owns: per-member worktrees, the team dir,
 /// and the team's task-list directory.
 ///
@@ -147,7 +162,13 @@ pub fn list_team_names() -> Vec<String> {
 /// `getTasksDir(sanitizedName)`. The worktree + tasks-dir steps are
 /// best-effort (TS `Promise.allSettled`): a failure there is logged and
 /// must not abort the team-dir removal.
-pub fn cleanup_team_directories(team_name: &str) -> crate::Result<()> {
+///
+/// Returns [`CleanupOutcome::tasks_dir_removed`] so the caller can fire a
+/// task-list change notification on the success path only — TS notifies
+/// inside the `rm(tasksDir)` `try`, never the `catch`. The notification
+/// itself is wired at the caller (it owns the task-list handle); this
+/// low-level file-IO helper stays dependency-free.
+pub fn cleanup_team_directories(team_name: &str) -> crate::Result<CleanupOutcome> {
     // 1. Destroy each member's git worktree. Read the team file BEFORE the
     //    dir is removed below; skip members without an isolated worktree.
     if let Ok(Some(team_file)) = read_team_file(team_name) {
@@ -182,9 +203,15 @@ pub fn cleanup_team_directories(team_name: &str) -> crate::Result<()> {
         .join(coco_tasks::task_list::sanitize_path_component(
             &task_list_id,
         ));
+    // `tasks_dir_removed` stays `true` when the dir never existed (nothing
+    // orphaned) and flips to `false` only when an attempted removal failed
+    // — that flag gates the caller's task-list change notification, exactly
+    // like TS notifies inside the `rm(tasksDir)` `try` but not its `catch`.
+    let mut tasks_dir_removed = true;
     if tasks_dir.is_dir()
         && let Err(e) = std::fs::remove_dir_all(&tasks_dir)
     {
+        tasks_dir_removed = false;
         tracing::warn!(
             dir = %tasks_dir.display(),
             error = %e,
@@ -192,7 +219,7 @@ pub fn cleanup_team_directories(team_name: &str) -> crate::Result<()> {
         );
     }
 
-    Ok(())
+    Ok(CleanupOutcome { tasks_dir_removed })
 }
 
 /// Clean up teams owned by the current session.
@@ -215,6 +242,10 @@ pub fn cleanup_session_teams(session_id: &str) -> crate::Result<()> {
                 tracing::warn!(team = %name, error = %e,
                     "session cleanup: failed to kill orphaned teammate panes (continuing)");
             }
+            // Shutdown path: no live task-list subscriber to notify (the
+            // session UI is already torn down), so the cleanup outcome is
+            // discarded. The roster-store delete path is the one that fires
+            // the change notification.
             cleanup_team_directories(&name)?;
         }
     }

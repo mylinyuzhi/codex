@@ -146,8 +146,28 @@ pub fn standard_agent_search_paths(
     coco_subagent::definition_store::AgentSearchPaths {
         user_dir: Some(config_home.join("agents")),
         project_dirs,
+        plugin_dirs: plugin_agent_dirs(config_home, cwd),
         ..coco_subagent::definition_store::AgentSearchPaths::empty()
     }
+}
+
+/// Resolve the session's enabled plugins to namespaced agent directories.
+/// The discovery (which dirs) lives in `coco_plugins::plugin_agent_dirs`; this
+/// wraps each `(name, dir)` in the subagent loader's `PluginAgentDir`.
+fn plugin_agent_dirs(
+    config_home: &Path,
+    cwd: &Path,
+) -> Vec<coco_subagent::definition_store::PluginAgentDir> {
+    let plugins = coco_plugins::load_enabled_plugins(config_home, cwd);
+    coco_plugins::plugin_agent_dirs(&plugins)
+        .into_iter()
+        .map(
+            |(plugin_name, dir)| coco_subagent::definition_store::PluginAgentDir {
+                plugin_name,
+                dir,
+            },
+        )
+        .collect()
 }
 
 /// Resolve the worktree's own git root (the directory containing the

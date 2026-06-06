@@ -94,7 +94,9 @@ fn policy_strict_known_blocks_unlisted() {
 #[test]
 fn policy_strict_user_scope_forbids_user_install() {
     let p = EnterprisePolicy {
-        strict_plugin_only_customization: true,
+        strict_plugin_only_customization: coco_config::StrictPluginOnlyCustomization::AllLocked(
+            true,
+        ),
         ..Default::default()
     };
     let id = PluginId::parse("foo@m");
@@ -133,7 +135,9 @@ fn policy_per_plugin_block_takes_precedence_over_user_scope() {
     // names the specific plugin rather than the generic scope rule.
     let p = EnterprisePolicy {
         blocked_plugins: ["foo@m".to_string()].into_iter().collect(),
-        strict_plugin_only_customization: true,
+        strict_plugin_only_customization: coco_config::StrictPluginOnlyCustomization::AllLocked(
+            true,
+        ),
         ..Default::default()
     };
     assert_eq!(
@@ -195,7 +199,14 @@ fn from_policy_settings_maps_all_managed_fields() {
     assert!(p.strict_known_marketplaces);
     assert_eq!(p.known_marketplaces, vec!["approved".to_string()]);
     assert_eq!(p.blocked_marketplaces, vec!["evil".to_string()]);
-    assert!(p.strict_plugin_only_customization);
+    assert_eq!(
+        p.strict_plugin_only_customization,
+        coco_config::StrictPluginOnlyCustomization::AllLocked(true)
+    );
+    assert!(
+        p.strict_plugin_only_customization
+            .is_restricted_to_plugin_only("plugins")
+    );
 
     // And the verdicts wire through.
     assert_eq!(

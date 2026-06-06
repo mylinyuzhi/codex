@@ -38,7 +38,13 @@ fn build_isolated(
 ) -> anyhow::Result<RuntimeConfig> {
     let tmp = TempDir::new().expect("tempdir");
     let catalogs = CatalogPaths::empty_in(tmp.path());
-    let runtime = build_runtime_config_with(settings, env, overrides, catalogs);
+    let runtime = build_runtime_config_with(
+        settings,
+        env,
+        overrides,
+        catalogs,
+        crate::parse_enabled_setting_sources(None),
+    );
     drop(tmp);
     Ok(runtime?)
 }
@@ -435,6 +441,7 @@ fn settings_inline_provider_block_equals_providers_json_split() {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::rooted(tmp.path()),
+        crate::parse_enabled_setting_sources(None),
     )
     .expect("split runtime");
 
@@ -499,6 +506,7 @@ fn test_runtime_loads_jsonc_provider_catalog() {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::rooted(tmp.path()),
+        crate::parse_enabled_setting_sources(None),
     )
     .expect("runtime config");
 
@@ -543,6 +551,7 @@ fn test_role_validation_rejects_incomplete_user_catalog_entry() {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::rooted(tmp.path()),
+        crate::parse_enabled_setting_sources(None),
     )
     .expect_err("incomplete user_catalog entry must fail at config build");
     let msg = err.to_string();
@@ -712,4 +721,43 @@ fn test_subagent_role_defaults_to_main_when_unset() {
         .expect("Subagent defaulted from Main");
     assert_eq!(subagent.model_id, main.model_id);
     assert_eq!(subagent.provider, main.provider);
+}
+
+#[test]
+fn test_parse_enabled_setting_sources() {
+    use crate::SettingSource;
+
+    // None ⇒ all five sources.
+    let all = parse_enabled_setting_sources(None);
+    assert!(all.contains(&SettingSource::User));
+    assert!(all.contains(&SettingSource::Project));
+    assert!(all.contains(&SettingSource::Local));
+    assert!(all.contains(&SettingSource::Flag));
+    assert!(all.contains(&SettingSource::Policy));
+    assert_eq!(all.len(), 5);
+
+    // "user,project" ⇒ those two + always-on Policy + Flag.
+    let some = parse_enabled_setting_sources(Some("user,project"));
+    assert!(some.contains(&SettingSource::User));
+    assert!(some.contains(&SettingSource::Project));
+    assert!(!some.contains(&SettingSource::Local));
+    assert!(some.contains(&SettingSource::Flag));
+    assert!(some.contains(&SettingSource::Policy));
+    assert_eq!(some.len(), 4);
+
+    // "" (empty) ⇒ only the always-on Policy + Flag.
+    let empty = parse_enabled_setting_sources(Some(""));
+    assert!(!empty.contains(&SettingSource::User));
+    assert!(!empty.contains(&SettingSource::Project));
+    assert!(!empty.contains(&SettingSource::Local));
+    assert!(empty.contains(&SettingSource::Flag));
+    assert!(empty.contains(&SettingSource::Policy));
+    assert_eq!(empty.len(), 2);
+
+    // Whitespace + unknown tokens are tolerated.
+    let trimmed = parse_enabled_setting_sources(Some(" local , bogus "));
+    assert!(trimmed.contains(&SettingSource::Local));
+    assert!(trimmed.contains(&SettingSource::Flag));
+    assert!(trimmed.contains(&SettingSource::Policy));
+    assert_eq!(trimmed.len(), 3);
 }

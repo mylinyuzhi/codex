@@ -307,6 +307,19 @@ impl QueryEngine {
         // so the reminder sees today's date even for long-running
         // sessions that cross midnight.
         let reminder_new_date = self.observe_date_change().await;
+        // TS `prependUserContext.currentDate` (`context.ts:186`) — today's
+        // local ISO date injected every turn (independent of the rollover
+        // latch above) so the model always has the date. Cache-shared forks
+        // (`fork_label.is_some()`) are EXCLUDED: they reuse the parent's
+        // byte-for-byte prompt prefix, and TS `runForkedAgent` does not
+        // re-run `prependUserContext` — injecting a per-turn message would
+        // break cache parity (PR #18143). Main loop + real subagents
+        // (`fork_label` None) get it, mirroring TS `query.ts` / `generateAgent.ts`.
+        let reminder_current_date = self
+            .config
+            .fork_label
+            .is_none()
+            .then(|| chrono::Local::now().format("%Y-%m-%d").to_string());
 
         // TS `getAttachments(input, ...)` — the user's raw prompt
         // text for this turn. Extract from the most-recent non-meta
@@ -491,6 +504,7 @@ impl QueryEngine {
             effective_context_window: reminder_effective_window,
             used_tokens: total_usage.input_tokens.total,
             new_date: reminder_new_date,
+            current_date: reminder_current_date,
             has_pending_plan_verification: app_state_snapshot.pending_plan_verification,
             // Phase 1 engine-local inputs.
             total_cost_usd: cost_tracker.total_cost_usd(),

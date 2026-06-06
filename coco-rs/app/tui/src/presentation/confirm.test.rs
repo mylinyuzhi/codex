@@ -5,6 +5,7 @@ use crate::i18n::locale_test_guard;
 use crate::state::CostWarningPromptState;
 use crate::state::FeedbackState;
 use crate::state::PlanApprovalPromptState;
+use crate::state::PluginHintState;
 use crate::state::TaskDetailState;
 use crate::theme::Theme;
 use coco_tui_ui::style::UiStyles;
@@ -142,4 +143,54 @@ fn feedback_content_marks_selected_option() {
     assert!(body.contains("How was it?"));
     assert!(body.contains("  Good"));
     assert!(body.contains("▸ Needs work"));
+}
+
+#[test]
+fn plugin_hint_content_renders_recommendation_and_selection() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let state = PluginHintState {
+        plugin_id: "foo@anthropic-plugins".to_string(),
+        plugin_name: "foo".to_string(),
+        marketplace_name: "anthropic-plugins".to_string(),
+        plugin_description: Some("A foo plugin".to_string()),
+        source_command: "mytool".to_string(),
+        selected: 0,
+    };
+
+    let (title, body, border) = plugin_hint_content(&state, UiStyles::new(&theme));
+
+    assert_eq!(title, " Plugin Recommendation ");
+    assert_eq!(border, theme.primary);
+    assert!(body.contains("mytool"));
+    assert!(body.contains("foo"));
+    assert!(body.contains("anthropic-plugins"));
+    assert!(body.contains("A foo plugin"));
+    // Selection marker on the install option.
+    assert!(body.contains("▸ Yes, install foo"));
+    assert!(body.contains("  No"));
+    assert!(body.contains("don't show plugin installation hints again"));
+}
+
+#[test]
+fn plugin_hint_content_omits_missing_description() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let state = PluginHintState {
+        plugin_id: "bar@anthropic-plugins".to_string(),
+        plugin_name: "bar".to_string(),
+        marketplace_name: "anthropic-plugins".to_string(),
+        plugin_description: None,
+        source_command: "cli".to_string(),
+        selected: 2,
+    };
+
+    let (_, body, _) = plugin_hint_content(&state, UiStyles::new(&theme));
+
+    // Disable option is selected.
+    assert!(body.contains("▸ No, and don't show plugin installation hints again"));
+    assert_eq!(
+        state.selected_response(),
+        crate::state::PluginHintResponse::Disable
+    );
 }

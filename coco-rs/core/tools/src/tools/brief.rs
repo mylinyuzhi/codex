@@ -127,6 +127,55 @@ impl Tool for BriefTool {
         }]
     }
 
+    /// #48 / TS `BriefTool.ts:163-168` → `validateAttachmentPaths`
+    /// (attachments.ts:26-61): reject non-existent / not-a-regular-file /
+    /// inaccessible attachment paths up-front (errorCode 1) so the model
+    /// self-corrects instead of receiving a false success.
+    fn validate_input(
+        &self,
+        input: &BriefInput,
+        ctx: &ToolUseContext,
+    ) -> coco_tool_runtime::ValidationResult {
+        use coco_tool_runtime::ValidationResult;
+        let resolve_root = ctx
+            .cwd_override
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        for raw in &input.attachments {
+            let path = if std::path::Path::new(raw).is_absolute() {
+                std::path::PathBuf::from(raw)
+            } else {
+                resolve_root.join(raw)
+            };
+            match std::fs::metadata(&path) {
+                Ok(meta) => {
+                    if !meta.is_file() {
+                        return ValidationResult::invalid_with_code(
+                            format!("Attachment \"{raw}\" is not a regular file."),
+                            "1",
+                        );
+                    }
+                }
+                Err(e) => {
+                    let msg = match e.kind() {
+                        std::io::ErrorKind::NotFound => format!(
+                            "Attachment \"{raw}\" does not exist. \
+                             Current working directory: {}.",
+                            resolve_root.display()
+                        ),
+                        std::io::ErrorKind::PermissionDenied => {
+                            format!("Attachment \"{raw}\" is not accessible (permission denied).")
+                        }
+                        _ => format!("Attachment \"{raw}\" is not accessible ({e})."),
+                    };
+                    return ValidationResult::invalid_with_code(msg, "1");
+                }
+            }
+        }
+        ValidationResult::Valid
+    }
+
     async fn execute(
         &self,
         input: BriefInput,

@@ -18,6 +18,7 @@ use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::TurnAbortSignal;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
 
@@ -72,6 +73,7 @@ pub struct QueryEngine {
     pub(crate) config: QueryEngineConfig,
     pub(crate) tools: Arc<ToolRegistry>,
     pub(crate) cancel: CancellationToken,
+    pub(crate) turn_abort: TurnAbortSignal,
     pub(crate) hooks: Option<Arc<HookRegistry>>,
     /// Captures `is_async` hook output so the reminder pipeline can
     /// deliver it on later turns. Wired by `engine_builder` from the
@@ -153,6 +155,8 @@ pub struct QueryEngine {
     /// applies"). Wired by `session_runtime` via
     /// [`Self::with_mcp_handle`].
     pub(crate) mcp_handle: Option<coco_tool_runtime::McpHandleRef>,
+    /// Scheduling backend for Cron*/RemoteTrigger tools.
+    pub(crate) schedule_store: Option<coco_tool_runtime::ScheduleStoreRef>,
     /// LSP handle for code-intelligence operations exposed to tools
     /// (`LSPTool`). `None` ⇒ `ToolContextFactory` substitutes
     /// `NoOpLspHandle`, which reports `is_connected() = false` so
@@ -520,7 +524,7 @@ impl QueryEngine {
                 // engine. The runner layer (`tui_runner` / `sdk_runner`)
                 // owns the cancel-reason source of truth — a TUI
                 // `/compact` cancel sets `SystemPreempt` in the runner's
-                // `OnceLock<CancelReason>` while `UserCommand::Interrupt`
+                // `TurnAbortSignal` reason while `UserCommand::Interrupt`
                 // sets `UserCancel`. Engine has no visibility into which
                 // arm tripped `self.cancel`, so emitting from here would
                 // force a hardcoded reason and defeat the architecture.
@@ -735,6 +739,28 @@ impl QueryEngine {
                         .await);
                 }
                 crate::engine_recovery::BlockingLimitDecision::Proceed => {}
+            }
+
+            // Pre-API image-size guard (TS `validateImagesForAPI`): reject an
+            // oversized image before the wire with a clear "please resize" error
+            // instead of a raw provider 400. Terminal — the image can't be
+            // auto-shrunk here.
+            if let Err(img_err) = coco_messages::validate_images_for_api(
+                &params.prompt,
+                coco_config::constants::API_IMAGE_MAX_BASE64_SIZE as usize,
+            ) {
+                return Ok(self
+                    .handle_image_too_large_terminal(
+                        &consts,
+                        &acc,
+                        &turn_state,
+                        &img_err,
+                        history,
+                        &event_tx,
+                        cycle_turn_id.clone(),
+                        &*total_usage,
+                    )
+                    .await);
             }
 
             let api_start = std::time::Instant::now();

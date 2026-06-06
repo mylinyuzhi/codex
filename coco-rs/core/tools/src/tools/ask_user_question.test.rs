@@ -66,7 +66,17 @@ fn input_schema_has_questions_array() {
         .expect("questions property missing");
     assert_eq!(questions["type"], "array");
     assert_eq!(questions["minItems"], 1);
-    assert_eq!(questions["maxItems"], 4);
+    // No hard `maxItems` cap: weak models over-generate and a hard reject
+    // retry-loops + flickers; the TUI truncates to 4 on display instead. The
+    // description still guides the model to 1-4.
+    assert!(questions.get("maxItems").is_none(), "{questions}");
+    assert!(
+        questions["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("1-4"),
+        "{questions}"
+    );
     let items = &questions["items"];
     let required = items["required"]
         .as_array()
@@ -74,6 +84,40 @@ fn input_schema_has_questions_array() {
     assert!(required.iter().any(|v| v == "question"));
     assert!(required.iter().any(|v| v == "header"));
     assert!(required.iter().any(|v| v == "options"));
+}
+
+/// Field descriptions must carry the TS guidance verbatim. Weak models (e.g.
+/// deepseek-v4-flash) rely on these to know `question` is required — stripped
+/// descriptions caused real `questions[0].question is missing` failures.
+#[test]
+fn field_descriptions_are_ts_aligned() {
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let schema = t.runtime_validation_schema().as_value();
+    let props = &schema["properties"]["questions"]["items"]["properties"];
+    let desc = |v: &serde_json::Value| v["description"].as_str().unwrap_or_default().to_string();
+
+    assert!(
+        desc(&props["question"]).contains("end with a question mark"),
+        "question description lost its TS guidance"
+    );
+    // Chip width must read 12 (TS `ASK_USER_QUESTION_TOOL_CHIP_WIDTH`), not 20.
+    let header = desc(&props["header"]);
+    assert!(
+        header.contains("max 12 chars"),
+        "header chip width drifted: {header}"
+    );
+    assert!(
+        header.contains("Auth method"),
+        "header lost TS examples: {header}"
+    );
+    assert!(
+        desc(&props["options"]).contains("There should be no 'Other' option"),
+        "options description lost the auto-Other guidance"
+    );
+    assert!(
+        desc(&props["multiSelect"]).contains("mutually exclusive"),
+        "multiSelect description lost its TS guidance"
+    );
 }
 
 #[test]
@@ -99,6 +143,56 @@ async fn execute_echoes_questions_payload() {
     });
     let out = t.execute(input.clone(), &ctx).await.expect("execute ok");
     assert_eq!(out.data["questions"], input["questions"]);
+}
+
+#[tokio::test]
+async fn execute_emits_structured_display_data_for_styled_cell() {
+    use coco_types::ToolDisplayData;
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let ctx = ToolUseContext::test_default();
+    let input = json!({
+        "questions": [
+            {"question": "Pick a library?", "header": "Lib", "options": [{"label": "date-fns", "description": ""}]},
+            {"question": "Which features?", "header": "Feat", "options": [{"label": "i18n", "description": ""}]},
+            {"question": "Anything else?", "header": "More", "options": [{"label": "Other", "description": ""}]}
+        ],
+        // Note: answers map order differs from the questions array — the display
+        // cell must follow the questions order.
+        "answers": {
+            "Which features?": "i18n, timezones",
+            "Pick a library?": "date-fns",
+            "Anything else?": "a custom answer"
+        },
+        "annotations": {"Anything else?": {"notes": "extra context"}}
+    });
+    let out = t.execute(input, &ctx).await.expect("execute ok");
+    let Some(ToolDisplayData::AskUserQuestionResult(result)) = out.display_data else {
+        panic!("expected AskUserQuestionResult display data");
+    };
+    assert_eq!(result.questions.len(), 3);
+    // Order follows the questions array, not the answers map.
+    assert_eq!(result.questions[0].question, "Pick a library?");
+    assert_eq!(result.questions[0].answers, vec!["date-fns".to_string()]);
+    // Multi-select answers are ", "-joined by build_answer_payload → split back.
+    assert_eq!(
+        result.questions[1].answers,
+        vec!["i18n".to_string(), "timezones".to_string()]
+    );
+    assert_eq!(result.questions[2].note, Some("extra context".to_string()));
+}
+
+#[tokio::test]
+async fn execute_without_answers_has_no_display_data() {
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let ctx = ToolUseContext::test_default();
+    let input = json!({
+        "questions": [{"question": "Q?", "header": "h", "options": [{"label": "A", "description": ""}]}]
+    });
+    let out = t.execute(input, &ctx).await.expect("execute ok");
+    assert!(
+        out.display_data.is_none(),
+        "no answers spliced ⇒ render falls back to the prose"
+    );
 }
 
 // ── render_for_model — TS parity for answer envelopes ────────────────
@@ -204,4 +298,19 @@ mod render_tests {
         // whole envelope when it can't extract a flat string.
         assert!(text.contains("\"answers\""), "got: {text}");
     }
+}
+
+#[tokio::test]
+async fn check_permissions_always_asks_to_drive_question_overlay() {
+    // AskUserQuestion is read-only, so without an Ask override the evaluator
+    // auto-allows it and execute() echoes raw JSON. Returning Ask is what routes
+    // the call through the permission bridge into the interactive Question
+    // overlay (mirrors TS checkPermissions -> { behavior: 'ask' }).
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let ctx = ToolUseContext::test_default();
+    let result = t.check_permissions(&json!({ "questions": [] }), &ctx).await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "expected Ask to trigger the question overlay, got {result:?}"
+    );
 }

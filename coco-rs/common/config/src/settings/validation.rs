@@ -5,6 +5,7 @@
 
 use super::PermissionsConfig;
 use super::Settings;
+use crate::model_allowlist::is_model_allowed;
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::PermissionMode;
 use coco_types::PermissionRuleValue;
@@ -69,8 +70,7 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
 
     // Validate model allowlist vs selected model
     if let (Some(selected), Some(available)) = (&settings.model, &settings.available_models)
-        && !available.is_empty()
-        && !available.iter().any(|m| model_matches_spec(selected, m))
+        && !is_model_allowed(selected, Some(available.as_slice()))
     {
         errors.push(ValidationError {
             file: None,
@@ -775,25 +775,6 @@ fn has_unescaped_empty_parens(s: &str) -> bool {
         if bytes[i] == b'(' && bytes[i + 1] == b')' && !is_escaped(bytes, i) {
             return true;
         }
-    }
-    false
-}
-
-/// Check if a model string matches a model spec (family alias, version prefix, or full ID).
-fn model_matches_spec(model: &str, spec: &str) -> bool {
-    // Exact match
-    if model == spec {
-        return true;
-    }
-    // Family alias: "opus" matches "claude-opus-4-6", etc.
-    let model_lower = model.to_lowercase();
-    let spec_lower = spec.to_lowercase();
-    if model_lower.contains(&spec_lower) {
-        return true;
-    }
-    // Version prefix: "opus-4-5" matches "claude-opus-4-5-20250101"
-    if model_lower.contains(&spec_lower) {
-        return true;
     }
     false
 }

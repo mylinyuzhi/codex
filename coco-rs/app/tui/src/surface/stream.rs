@@ -18,6 +18,7 @@ use crate::surface::line_fingerprint::RenderedLineFingerprint;
 use crate::surface::line_fingerprint::fingerprint_lines;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::viewport::build_live_tail_lines;
+use crate::terminal::STREAMING_LIVE_TAIL_CAP;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SurfaceStreamDriver {
@@ -120,6 +121,21 @@ impl SurfaceStreamDriver {
             ));
         }
 
+        // Display-cap the streaming tail to a constant height so the inline
+        // viewport stops growing (then collapsing) with streamed content — the
+        // residual content-region flicker. Keep the LAST `CAP` rows (the newest
+        // text + cursor + collapsed-thinking, all appended at the bottom); the
+        // dropped leading rows already live in `streaming.visible_content()` and
+        // reach native scrollback via `stable_append` at the next markdown
+        // boundary and definitively at finalize, so nothing is lost. This is a
+        // VIEW cap only — the markdown commit boundary above is untouched, so a
+        // streaming code fence/list is never split. Skipped while the user is
+        // scrolling so they can read the full in-flight tail.
+        let cap = STREAMING_LIVE_TAIL_CAP as usize;
+        if !state.ui.user_scrolled && lines.len() > cap {
+            lines.drain(0..lines.len() - cap);
+        }
+
         PreparedLiveTail {
             lines,
             stable_append,
@@ -149,3 +165,7 @@ impl SurfaceStreamDriver {
 fn digest_state(state: &Sha256) -> [u8; 32] {
     state.clone().finalize().into()
 }
+
+#[cfg(test)]
+#[path = "stream.test.rs"]
+mod tests;

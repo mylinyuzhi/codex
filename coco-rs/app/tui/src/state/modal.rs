@@ -10,6 +10,7 @@ use crate::state::surface_payloads::ExportState;
 use crate::state::surface_payloads::GlobalSearchState;
 use crate::state::surface_payloads::MemoryDialogState;
 use crate::state::surface_payloads::ModelPickerState;
+use crate::state::surface_payloads::PluginDialogState;
 use crate::state::surface_payloads::QuickOpenState;
 use crate::state::surface_payloads::SessionBrowserState;
 use crate::state::surface_payloads::SkillsDialogState;
@@ -33,6 +34,7 @@ pub enum ModalState {
     Settings(crate::widgets::settings_panel::SettingsPanelState),
     MemoryDialog(MemoryDialogState),
     SkillsDialog(SkillsDialogState),
+    PluginDialog(PluginDialogState),
     AgentsDialog(AgentsDialogState),
     Transcript(crate::state::transcript::TranscriptState),
     Doctor(DoctorState),
@@ -48,6 +50,7 @@ pub enum ModalState {
     McpServerSelect(surface_payloads::McpServerSelectState),
     CopyPicker(CopyPickerState),
     TeamRoster(TeamRosterState),
+    PluginHint(surface_payloads::PluginHintState),
 }
 
 impl ModalState {
@@ -73,9 +76,11 @@ impl ModalState {
             | Self::Transcript(_)
             | Self::MemoryDialog(_)
             | Self::SkillsDialog(_)
+            | Self::PluginDialog(_)
             | Self::AgentsDialog(_)
             | Self::CopyPicker(_)
             | Self::TeamRoster(_)
+            | Self::PluginHint(_)
             | Self::IdleReturn(_) => 7,
             Self::Help => 8,
         }

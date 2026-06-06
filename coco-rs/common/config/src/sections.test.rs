@@ -134,6 +134,37 @@ fn test_tool_config_json_first_env_override() {
 }
 
 #[test]
+fn test_api_retry_env_max_retries_overrides_settings() {
+    let settings = Settings {
+        api: PartialApiSettings {
+            retry: Some(PartialApiRetrySettings {
+                max_retries: Some(3),
+                base_delay_ms: Some(750),
+                max_delay_ms: Some(500),
+                ..Default::default()
+            }),
+        },
+        ..Default::default()
+    };
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoApiMaxRetries, "12")]);
+
+    let config = ApiConfig::resolve(&settings, &env);
+
+    assert_eq!(config.retry.max_retries, 12);
+    assert_eq!(config.retry.base_delay_ms, 750);
+    assert_eq!(config.retry.max_delay_ms, 750);
+}
+
+#[test]
+fn test_api_retry_env_max_retries_is_clamped() {
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoApiMaxRetries, "-4")]);
+
+    let config = ApiConfig::resolve(&Settings::default(), &env);
+
+    assert_eq!(config.retry.max_retries, 0);
+}
+
+#[test]
 fn test_memory_config_resolves_sub_toggles() {
     // After feature-gate consolidation, top-level enable/disable lives on
     // `Feature::AutoMemory`, not on `MemoryConfig`. This struct only carries

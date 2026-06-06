@@ -7,7 +7,6 @@ use coco_messages::MessageHistory;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use coco_types::ToolName;
-use pretty_assertions::assert_eq;
 
 fn minimal_input<'a>(
     config: &'a SystemReminderConfig,
@@ -39,6 +38,7 @@ fn minimal_input<'a>(
         effective_context_window: 180_000,
         used_tokens: 10_000,
         new_date: None,
+        current_date: None,
         has_pending_plan_verification: false,
         total_cost_usd: 0.0,
         max_budget_usd: None,
@@ -262,15 +262,4 @@ async fn skill_discovery_payload_threads_to_model_visible_reminder() {
         .find(|r| r.attachment_type == AttachmentType::SkillDiscovery)
         .expect("skill_discovery fires when body is present");
     assert!(!hit.is_silent, "skill_discovery is model-visible");
-}
-
-#[tokio::test]
-async fn throttle_gap_uses_sentinel_for_never_emitted() {
-    // Indirect test: todo reminder fires when counter >= 10 AND throttle
-    // has never emitted (sentinel). Validated by the tool-presence test
-    // above; here we assert the pure gap helper via its observable effect.
-    let config = SystemReminderConfig::default();
-    let orchestrator = SystemReminderOrchestrator::new(config);
-    let gap = super::throttle_gap(&orchestrator, AttachmentType::TodoReminder, 5);
-    assert_eq!(gap, i32::MAX);
 }

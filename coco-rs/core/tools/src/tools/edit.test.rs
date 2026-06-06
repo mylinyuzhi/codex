@@ -570,3 +570,79 @@ fn edit_render_replace_all_branch() {
         "The file /abs/multi.rs has been updated. All occurrences were successfully replaced."
     );
 }
+
+// ---------------------------------------------------------------------------
+// #21 — empty old_string creates a new file
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_edit_creates_new_file_with_empty_old_string() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("sub/new.txt"); // parent dir does not exist yet
+    let ctx = ToolUseContext::test_default();
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "",
+            "new_string": "brand new content\n"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.data["replacementCount"], 1);
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "brand new content\n"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #22 — deletion strips the trailing newline
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_edit_deletion_strips_trailing_newline() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("del.txt");
+    std::fs::write(&file, "keep\nremove me\ntail\n").unwrap();
+    let ctx = ToolUseContext::test_default();
+    <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "remove me", // no trailing newline
+            "new_string": ""
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    // The "remove me\n" line is removed whole — no orphan blank line.
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep\ntail\n");
+}
+
+// ---------------------------------------------------------------------------
+// #26 — Edit rejects .ipynb files (route to NotebookEdit)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_edit_rejects_ipynb() {
+    let ctx = ToolUseContext::test_default();
+    let res = <EditTool as DynTool>::validate_input(
+        &EditTool,
+        &json!({"file_path": "/work/nb.ipynb", "old_string": "a", "new_string": "b"}),
+        &ctx,
+    );
+    match res {
+        coco_tool_runtime::ValidationResult::Invalid {
+            error_code,
+            message,
+        } => {
+            assert_eq!(error_code.as_deref(), Some("5"));
+            assert!(message.contains("NotebookEdit"), "got: {message}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}

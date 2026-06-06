@@ -16,7 +16,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -36,12 +35,14 @@ use coco_query::QueuedCommand;
 use coco_query::QueuedImage;
 use coco_query::ServerNotification;
 use coco_system_reminder::QueueOrigin;
+use coco_tool_runtime::TurnAbortController;
+use coco_tool_runtime::TurnAbortSignal;
 use coco_tui::App;
 use coco_tui::UserCommand;
 use coco_tui::app::create_channels;
-use coco_types::CancelReason;
 use coco_types::SlashCommandStatusKind;
 use coco_types::TuiOnlyEvent;
+use coco_types::TurnAbortReason;
 use tokio_util::sync::CancellationToken;
 
 use coco_cli::session_bootstrap::build_engine_resources;
@@ -83,7 +84,8 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // returns Err; in that case (which shouldn't happen here, but
     // surface gracefully if it does) we build the config directly.
     let reload_opts = coco_config_reload::ReloadOptions::new(cwd.clone())
-        .with_overrides(coco_cli::headless::cli_runtime_overrides(cli)?);
+        .with_overrides(coco_cli::headless::cli_runtime_overrides(cli)?)
+        .with_setting_sources(cli.setting_sources.clone());
     let reload_opts = if let Some(path) = cli.settings.as_deref() {
         reload_opts.with_flag_settings(path)
     } else {
@@ -272,6 +274,8 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             ),
             builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
             session_id_override: None,
+            // Interactive TUI: file-history checkpointing defaults ON.
+            is_non_interactive: false,
         },
     )
     .await?;
@@ -288,6 +292,13 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     )
     .await;
     install_session_late_binds(runtime.clone(), &cwd, None, lsp_handle).await?;
+    // Unified MCP bootstrap: load config-file + plugin MCP servers, attach the
+    // manager/handle, and connect in the background. The TUI now grows its own
+    // `McpConnectionManager` (was SDK-only) — `None` builds a fresh one.
+    coco_cli::session_bootstrap::bootstrap_session_mcp(
+        &runtime, &cwd, None, /*await_connect*/ false,
+    )
+    .await;
     coco_cli::startup_profile::mark("session_late_binds");
 
     // Install the SessionRuntime weak-ref on the permission bridge so
@@ -430,10 +441,24 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // startup — the `anthropics/claude-plugins-official` marketplace is fetched
     // once in the background and reused on subsequent launches.
     {
-        let plugins_dir = coco_config::global_config::config_home().join("plugins");
+        let config_home = coco_config::global_config::config_home();
+        let plugins_dir = config_home.join("plugins");
         tokio::spawn(async move {
             let outcome = coco_plugins::official::ensure_official_marketplace(plugins_dir).await;
             tracing::debug!(?outcome, "official marketplace auto-install");
+            // Startup marketplace maintenance (TS `installPluginsForHeadless`):
+            // register seed marketplaces (`COCO_PLUGIN_SEED_DIR`), reconcile
+            // declared `extraKnownMarketplaces`, then uninstall delisted plugins.
+            // Runs after the official ensure so freshly-cloned manifests are
+            // visible to the diff.
+            let delisted = coco_plugins::run_marketplace_startup(&config_home).await;
+            if !delisted.is_empty() {
+                tracing::info!(
+                    target: "coco::plugins",
+                    ?delisted,
+                    "uninstalled plugins delisted from their marketplace"
+                );
+            }
         });
     }
 
@@ -564,6 +589,12 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         state.session.model_catalog = std::mem::take(&mut catalog);
         state.session.provider_statuses = provider_statuses;
         state.session.model_by_role = by_role;
+        state.session.available_models = runtime
+            .runtime_config
+            .settings
+            .merged
+            .available_models
+            .clone();
     }
 
     // Seed `available_commands` so the `/` autocomplete popup and the
@@ -838,7 +869,7 @@ async fn run_agent_driver(
     info!("Agent driver started");
 
     // Active-turn tracker. SubmitInput spawns the engine work into a
-    // dedicated task and stores its `JoinHandle` + `CancellationToken`
+    // dedicated task and stores its `JoinHandle` + `TurnAbortController`
     // here; the dispatch loop continues to `recv()` so interrupting
     // commands (`Interrupt`, `Compact`, `Rewind`,
     // `Shutdown`) reach their arms without waiting for the engine to
@@ -871,6 +902,29 @@ async fn run_agent_driver(
                         &turn_done_tx,
                     )
                     .await;
+                }
+                continue;
+            }
+            _ = runtime.command_queue().wait_for_change() => {
+                if active_turn.lock().await.is_none() {
+                    drain_queued_slash_commands(
+                        &runtime,
+                        &event_tx,
+                        &active_turn,
+                        &mut pending_editor_requests,
+                        &title_gen_attempted,
+                        &turn_done_tx,
+                    )
+                    .await;
+                    if active_turn.lock().await.is_none() {
+                        spawn_command_queue_turn(
+                            &runtime,
+                            &event_tx,
+                            &active_turn,
+                            &turn_done_tx,
+                        )
+                        .await;
+                    }
                 }
                 continue;
             }
@@ -922,11 +976,9 @@ async fn run_agent_driver(
                 // onSubmit aborts the previous query() generator.
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
 
-                let turn_cancel = CancellationToken::new();
+                let turn_abort = TurnAbortController::new();
+                let turn_abort_signal = turn_abort.signal();
                 let turn_id = uuid::Uuid::new_v4();
-                let cancel_for_state = turn_cancel.clone();
-                let cancel_reason: Arc<OnceLock<CancelReason>> = Arc::new(OnceLock::new());
-                let cancel_reason_for_state = cancel_reason.clone();
 
                 let runtime_t = runtime.clone();
                 let event_tx_t = event_tx.clone();
@@ -954,8 +1006,7 @@ async fn run_agent_driver(
                         event_tx_t,
                         title_gen_attempted_t,
                         session_id_t,
-                        turn_cancel,
-                        cancel_reason,
+                        turn_abort_signal,
                     )
                     .await;
                 });
@@ -963,8 +1014,7 @@ async fn run_agent_driver(
                 *active_turn.lock().await = Some(ActiveTurn {
                     id: turn_id,
                     task,
-                    cancel: cancel_for_state,
-                    cancel_reason: cancel_reason_for_state,
+                    abort: turn_abort,
                 });
             }
 
@@ -1074,6 +1124,24 @@ async fn run_agent_driver(
                 });
             }
 
+            UserCommand::ToggleFastMode => {
+                let cfg = runtime.current_engine_config().await;
+                let requested = !cfg.fast_mode;
+                let active =
+                    requested && coco_config::is_fast_mode_supported_by_model(&cfg.model_id);
+                coco_config::fast_mode::set_session_opted_in(active);
+                runtime
+                    .update_engine_config(|cfg| {
+                        cfg.fast_mode = active;
+                    })
+                    .await;
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::FastModeChanged {
+                        active,
+                    }))
+                    .await;
+            }
+
             UserCommand::ExecuteSkill { name, args } => {
                 // Command-palette dispatch.
                 // Same registry lookup as the typed path, but with no
@@ -1113,6 +1181,7 @@ async fn run_agent_driver(
             }
 
             UserCommand::ExecuteSlashCommand { name, args } => {
+                let refresh_plugin_dialog = name.as_str() == "plugin";
                 let outcome =
                     dispatch_slash_command(name.as_str(), &args, &runtime, &event_tx).await;
                 match handle_slash_outcome(
@@ -1146,6 +1215,9 @@ async fn run_agent_driver(
                         )
                         .await;
                     }
+                }
+                if refresh_plugin_dialog {
+                    refresh_plugin_dialog_payload(&runtime, &event_tx).await;
                 }
             }
 
@@ -1247,9 +1319,9 @@ async fn run_agent_driver(
                 }
             }
 
-            UserCommand::Interrupt => {
-                // Mid-turn cancel: read the active turn's cancel token
-                // and fire it. The spawned turn task observes the
+            UserCommand::Interrupt(reason) => {
+                // Mid-turn cancel: abort the active turn with a structured
+                // reason. The spawned turn task observes the controller's
                 // token at the next `.await` point inside
                 // `engine.run_with_messages` (LLM streaming, tool
                 // execution, hook orchestration all check the parent
@@ -1259,15 +1331,8 @@ async fn run_agent_driver(
                 // TS parity: REPL.tsx Esc/Ctrl+C → abortController
                 // .abort('user-cancel') → query() generator yields,
                 // .finally reads `signal.reason` and may auto-restore.
-                //
-                // Record `UserCancel` BEFORE firing `.cancel()` so the
-                // turn task (which races at every `.await` point) is
-                // guaranteed to see it. `OnceLock::set` returning Err
-                // means a prior writer raced and won — keep going; the
-                // first reason wins regardless of who wrote it.
                 if let Some(state) = active_turn.lock().await.as_ref() {
-                    let _ = state.cancel_reason.set(CancelReason::UserCancel);
-                    state.cancel.cancel();
+                    state.abort.abort(reason);
                     info!("Interrupt: cancelled active turn");
                 }
             }
@@ -2717,6 +2782,131 @@ async fn drain_queued_slash_commands(
     }
 }
 
+async fn spawn_command_queue_turn(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+    active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
+    turn_done_tx: &mpsc::Sender<uuid::Uuid>,
+) {
+    let Some(first) = runtime
+        .command_queue()
+        .dequeue_first_matching(|c| !c.is_slash_command && c.agent_id.is_none())
+        .await
+    else {
+        return;
+    };
+    let first_priority = first.priority;
+    let first_origin = first.origin.clone();
+    let mut queued = vec![first];
+    let mut rest = runtime
+        .command_queue()
+        .dequeue_matching(|c| {
+            !c.is_slash_command
+                && c.agent_id.is_none()
+                && c.priority == first_priority
+                && c.origin == first_origin
+        })
+        .await;
+    queued.append(&mut rest);
+
+    let ids: Vec<String> = queued.iter().map(|cmd| cmd.id.to_string()).collect();
+    let messages = {
+        let mut h = runtime.history.lock().await;
+        let event_tx_opt = Some(event_tx.clone());
+        for cmd in &queued {
+            coco_query::history_sync::history_push_and_emit(
+                &mut h,
+                coco_query::queued_command_to_attachment(cmd),
+                &event_tx_opt,
+            )
+            .await;
+        }
+        h.to_vec()
+    };
+    for id in ids {
+        let _ = event_tx
+            .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
+                id,
+            }))
+            .await;
+    }
+    let _ = event_tx
+        .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged {
+            queued: runtime.command_queue().len().await as i32,
+        }))
+        .await;
+
+    let turn_abort = TurnAbortController::new();
+    let turn_abort_signal = turn_abort.signal();
+    let turn_id = uuid::Uuid::new_v4();
+    let runtime_t = runtime.clone();
+    let event_tx_t = event_tx.clone();
+    let turn_done_tx_t = turn_done_tx.clone();
+    let task = tokio::spawn(async move {
+        let _done = TurnDoneGuard {
+            turn_id,
+            tx: turn_done_tx_t,
+        };
+        process_queued_history_turn(messages, runtime_t, event_tx_t, turn_abort_signal).await;
+    });
+    *active_turn.lock().await = Some(ActiveTurn {
+        id: turn_id,
+        task,
+        abort: turn_abort,
+    });
+}
+
+async fn process_queued_history_turn(
+    messages: Vec<std::sync::Arc<coco_messages::Message>>,
+    runtime: Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: mpsc::Sender<CoreEvent>,
+    turn_abort: TurnAbortSignal,
+) {
+    let cycle_turn_id = coco_types::TurnId::generate();
+    let engine = runtime
+        .build_engine_with_turn_abort(turn_abort.clone())
+        .await;
+    let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
+    let event_tx_clone = event_tx.clone();
+    let forward_handle = tokio::spawn(async move {
+        while let Some(ev) = core_event_rx.recv().await {
+            let _ = event_tx_clone.send(ev).await;
+        }
+    });
+
+    let engine_observed_cancel;
+    let mut engine_stop_reason: Option<String> = None;
+    match engine
+        .run_with_messages(messages, core_event_tx, cycle_turn_id.clone())
+        .await
+    {
+        Ok(result) => {
+            engine_observed_cancel = result.cancelled;
+            engine_stop_reason = result.stop_reason.clone();
+            let mut h = runtime.history.lock().await;
+            *h = result.final_history;
+        }
+        Err(_) => {
+            engine_observed_cancel = false;
+        }
+    }
+    let _ = forward_handle.await;
+    if engine_observed_cancel || turn_abort.reason().is_some() {
+        let reason = turn_abort
+            .reason()
+            .unwrap_or_else(|| abort_reason_from_engine_stop(engine_stop_reason.as_deref()));
+        let _ = event_tx
+            .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
+                coco_types::TurnEndedParams::interrupted(
+                    cycle_turn_id,
+                    /*usage*/ None,
+                    reason,
+                ),
+            )))
+            .await;
+    }
+}
+
 /// Spawn the per-turn engine task for a slash command that expanded
 /// to a model prompt (`SlashFollowup::RunEngine`). Used by the
 /// command-palette + SDK invocation paths; the typed-input path
@@ -2735,11 +2925,9 @@ async fn spawn_slash_run_engine_turn(
     turn_done_tx: &mpsc::Sender<uuid::Uuid>,
     session_id: &str,
 ) {
-    let turn_cancel = CancellationToken::new();
+    let turn_abort = TurnAbortController::new();
+    let turn_abort_signal = turn_abort.signal();
     let turn_id = uuid::Uuid::new_v4();
-    let cancel_for_state = turn_cancel.clone();
-    let cancel_reason: Arc<OnceLock<CancelReason>> = Arc::new(OnceLock::new());
-    let cancel_reason_for_state = cancel_reason.clone();
     let runtime_t = runtime.clone();
     let event_tx_t = event_tx.clone();
     let title_gen_attempted_t = title_gen_attempted.clone();
@@ -2759,16 +2947,14 @@ async fn spawn_slash_run_engine_turn(
             event_tx_t,
             title_gen_attempted_t,
             session_id_t,
-            turn_cancel,
-            cancel_reason,
+            turn_abort_signal,
         )
         .await;
     });
     *active_turn.lock().await = Some(ActiveTurn {
         id: turn_id,
         task,
-        cancel: cancel_for_state,
-        cancel_reason: cancel_reason_for_state,
+        abort: turn_abort,
     });
 }
 
@@ -2808,11 +2994,30 @@ async fn dispatch_slash_command(
     // `/clear` mutates runtime state. Keep it in the command layer so
     // typed and palette dispatch both run the real clear flow instead
     // of letting a registry text handler print without clearing.
-    if name == "clear" {
+    // Resolve aliases (`/reset`, `/new`) to the canonical `clear` name
+    // first so they trigger the same flow instead of falling through to
+    // the generic registry handler. TS parity: `commands/clear/index.ts`
+    // declares aliases `['reset', 'new']`.
+    let resolves_to_clear = runtime
+        .current_command_registry()
+        .await
+        .get(name)
+        .is_some_and(|cmd| cmd.base.name == "clear");
+    if name == "clear" || resolves_to_clear {
         return SlashOutcome::TriggerClear;
     }
     if name == "context" {
         return dispatch_context(runtime, event_tx).await;
+    }
+    // `/config` (alias `/settings`) with no args opens the interactive settings
+    // panel (TS `commands/config` local-jsx panel), reusing the same overlay as
+    // the `Ctrl+,` keybind. `config <key> <value>` still falls through to the
+    // registry text handler that writes settings.json.
+    if matches!(name, "config" | "settings") && args.trim().is_empty() {
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::OpenSettings))
+            .await;
+        return SlashOutcome::Handled;
     }
     if name == "resume" {
         return dispatch_resume(args, runtime, event_tx).await;
@@ -3094,17 +3299,18 @@ async fn dispatch_slash_command(
                         .send(CoreEvent::Tui(TuiOnlyEvent::OpenAgentsDialog { payload }))
                         .await;
                 }
-                DialogSpec::PluginPicker
-                | DialogSpec::McpbConfig { .. }
-                | DialogSpec::Confirm { .. } => {
+                DialogSpec::PluginPicker => {
+                    refresh_plugin_dialog_payload(runtime, event_tx).await;
+                }
+                DialogSpec::McpbConfig { .. } | DialogSpec::Confirm { .. } => {
                     let dialog_kind = match spec {
-                        DialogSpec::PluginPicker => "plugin picker",
                         DialogSpec::McpbConfig { .. } => "MCPB config form",
                         DialogSpec::Confirm { .. } => "confirm dialog",
                         DialogSpec::MessageSelector
                         | DialogSpec::MemoryFileSelector { .. }
                         | DialogSpec::SkillsList { .. }
                         | DialogSpec::AgentsList { .. }
+                        | DialogSpec::PluginPicker
                         | DialogSpec::ModelPicker
                         | DialogSpec::ThemePicker => unreachable!(),
                     }
@@ -3289,18 +3495,10 @@ async fn dispatch_plan(
 struct ActiveTurn {
     id: uuid::Uuid,
     task: tokio::task::JoinHandle<()>,
-    cancel: CancellationToken,
-    /// Written by whoever fires `.cancel()` so the turn task can emit a
-    /// `TurnInterrupted{reason}` with the right discriminant after the
-    /// engine returns. `OnceLock` because every cancel callsite is a
-    /// first-writer (additional cancels are no-ops at the token level
-    /// too). `None` means the turn ended naturally — no terminal event
-    /// is synthesised by the runner.
-    ///
-    /// TS analogue: `abortController.abort(reason)` carries `reason` on
-    /// `signal.reason`. The `.finally` block in `REPL.tsx:3001` reads
-    /// the reason to decide whether auto-restore applies.
-    cancel_reason: Arc<OnceLock<CancelReason>>,
+    /// Turn-scoped abort controller. The controller owns both the plain
+    /// cancellation token consumed by `QueryEngine` and the structured
+    /// reason consumed by the runner after the engine returns.
+    abort: TurnAbortController,
 }
 
 /// Always-fires completion signaller for spawned turn tasks.
@@ -3389,15 +3587,13 @@ enum PendingEditorRequest {
 ///
 /// Always records `SystemPreempt` as the reason — these callers are
 /// running cleanup work, not honouring a user "stop this turn"
-/// request. `UserCommand::Interrupt` sets `UserCancel` *before*
-/// invoking `.cancel()` so the OnceLock has already been written by
-/// the time the loop reaches `drain_active_turn` (write-once means
-/// the subsequent `SystemPreempt` write here is silently dropped).
+/// request. `UserCommand::Interrupt` records `UserCancel`; the
+/// controller is first-writer-wins, so a subsequent `SystemPreempt`
+/// write here is silently ignored.
 async fn drain_active_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>, mode: ActiveTurnDrain) {
     let state = { slot.lock().await.take() };
     if let Some(s) = state {
-        let _ = s.cancel_reason.set(CancelReason::SystemPreempt);
-        s.cancel.cancel();
+        s.abort.abort(TurnAbortReason::SystemPreempt);
         match mode {
             ActiveTurnDrain::Wait => {
                 let _ = s.task.await;
@@ -3634,7 +3830,18 @@ async fn run_reload_plugins(
 ) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let count = runtime.reload_plugins(&cwd).await;
-    let body = format!("Reloaded — {count} commands now registered.");
+    // TS `refreshActivePlugins` rebuilds commands AND agents AND hooks in one
+    // action — chain the agent-catalog + hook reloads so `/reload-plugins` also
+    // picks up newly enabled/disabled plugin agents and hooks, not just commands
+    // + skills. MCP/LSP re-register is deferred (needs the MCP connection
+    // manager threaded into SessionRuntime).
+    runtime.reload_agent_catalog().await;
+    runtime.reload_lsp_servers(&cwd).await;
+    let hook_note = match runtime.reload_hooks().await {
+        Ok(n) => format!(" · {n} hook(s)"),
+        Err(e) => format!(" · hook reload failed: {e}"),
+    };
+    let body = format!("Reloaded — {count} commands{hook_note}; agents + LSP refreshed.");
     emit_slash_text(event_tx, "reload-plugins", "", &body).await;
 
     let snapshot = runtime.current_command_registry().await.snapshot_for_ui();
@@ -4006,8 +4213,7 @@ async fn process_submit_turn(
     event_tx: mpsc::Sender<CoreEvent>,
     title_gen_attempted: Arc<RwLock<std::collections::HashSet<String>>>,
     session_id: String,
-    turn_cancel: CancellationToken,
-    cancel_reason: Arc<OnceLock<CancelReason>>,
+    turn_abort: TurnAbortSignal,
 ) {
     // Resolve @-mentions through the shared cross-path helper.
     // TS parity: `processUserInput.ts:504` calls `getAttachmentMessages`
@@ -4119,7 +4325,9 @@ async fn process_submit_turn(
         h.to_vec()
     };
 
-    let engine = runtime.build_engine(turn_cancel.clone()).await;
+    let engine = runtime
+        .build_engine_with_turn_abort(turn_abort.clone())
+        .await;
 
     // Mention priority for post-compact restoration.
     if !inputs.mentioned_paths.is_empty() {
@@ -4166,15 +4374,17 @@ async fn process_submit_turn(
     // emitter because only it knows whether the cancel was UserCancel
     // (Esc / Ctrl+C) or SystemPreempt (Clear / Compact / Rewind /
     // Shutdown). `result.cancelled` only tells us "engine saw cancel";
-    // the runner's `OnceLock<CancelReason>` is the authoritative source
+    // the runner's `TurnAbortSignal` is the authoritative source
     // for *why*.
     let engine_observed_cancel;
+    let mut engine_stop_reason: Option<String> = None;
     match engine
         .run_with_messages(messages, core_event_tx, cycle_turn_id.clone())
         .await
     {
         Ok(result) => {
             engine_observed_cancel = result.cancelled;
+            engine_stop_reason = result.stop_reason.clone();
             let mut h = runtime.history.lock().await;
             *h = result.final_history;
         }
@@ -4202,15 +4412,16 @@ async fn process_submit_turn(
     // - the user-cancel raced the engine and arrived after Ok return
     //   (late-cancel path — TS REPL.tsx `.finally` analog).
     //
-    // The reason comes from `cancel_reason.get()` — `UserCommand::Interrupt`
+    // The reason comes from `turn_abort.reason()` — `UserCommand::Interrupt`
     // sets `UserCancel`; `drain_active_turn` sets `SystemPreempt`. When
-    // the engine cancelled but the OnceLock somehow stayed unset
+    // the engine cancelled but the signal somehow stayed unset
     // (defensive — every cancel path writes first), default to
     // `UserCancel` so auto-restore at least fires on the conservative
     // "user wanted out" interpretation.
-    let cancel_reason_emit = cancel_reason.get().copied();
-    if engine_observed_cancel || cancel_reason_emit.is_some() {
-        let reason = cancel_reason_emit.unwrap_or(CancelReason::UserCancel);
+    let abort_reason_emit = turn_abort.reason();
+    if engine_observed_cancel || abort_reason_emit.is_some() {
+        let reason = abort_reason_emit
+            .unwrap_or_else(|| abort_reason_from_engine_stop(engine_stop_reason.as_deref()));
         let _ = event_tx
             .send(CoreEvent::Protocol(ServerNotification::TurnEnded(
                 coco_types::TurnEndedParams::interrupted(
@@ -4223,6 +4434,13 @@ async fn process_submit_turn(
     }
 
     maybe_spawn_auto_title(&runtime, &title_gen_attempted, &session_id).await;
+}
+
+fn abort_reason_from_engine_stop(stop_reason: Option<&str>) -> TurnAbortReason {
+    match stop_reason {
+        Some("permission_abort") => TurnAbortReason::PermissionAbort,
+        _ => TurnAbortReason::UserCancel,
+    }
 }
 
 /// One-shot, fire-and-forget title generation. Returns immediately
@@ -4763,6 +4981,151 @@ fn image_data_to_queued(images: &[coco_tui::ImageData]) -> Vec<QueuedImage> {
             data_base64: base64::engine::general_purpose::STANDARD.encode(&img.bytes),
         })
         .collect()
+}
+
+async fn refresh_plugin_dialog_payload(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let payload = build_plugin_dialog_payload(runtime).await;
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::OpenPluginDialog { payload }))
+        .await;
+}
+
+async fn build_plugin_dialog_payload(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+) -> coco_types::PluginDialogPayload {
+    let cfg = runtime.current_engine_config().await;
+    let project_dir = cfg
+        .project_dir
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let config_home = runtime.config_home.clone();
+    let plugins = coco_plugins::load_all_installed_plugins(&config_home, &project_dir);
+    let policy = coco_plugins::security::EnterprisePolicy::from_managed_settings();
+
+    let installed = plugins
+        .iter()
+        .map(|plugin| {
+            let id = plugin.id.to_string();
+            let blocked_by_policy = {
+                let parsed = coco_plugins::identifier::PluginId::parse(&id);
+                matches!(
+                    coco_plugins::security::check_policy(&parsed, true, &policy),
+                    coco_plugins::security::PolicyVerdict::BlockedPlugin { .. }
+                        | coco_plugins::security::PolicyVerdict::BlockedMarketplace { .. }
+                        | coco_plugins::security::PolicyVerdict::UnapprovedMarketplace { .. }
+                        | coco_plugins::security::PolicyVerdict::UserScopeForbidden
+                )
+            };
+            let source = match &plugin.load_source {
+                coco_plugins::loader::PluginLoadSource::Marketplace { marketplace } => {
+                    format!("marketplace:{marketplace}")
+                }
+                coco_plugins::loader::PluginLoadSource::SessionDir => "local".to_string(),
+                coco_plugins::loader::PluginLoadSource::Builtin => "builtin".to_string(),
+            };
+            let options = plugin
+                .manifest
+                .user_config
+                .as_ref()
+                .map(|config| {
+                    let mut rows = config
+                        .iter()
+                        .map(|(key, option)| coco_types::PluginDialogOptionRow {
+                            key: key.clone(),
+                            title: option.title.clone(),
+                            description: option.description.clone(),
+                            value_type: format!("{:?}", option.config_type).to_ascii_lowercase(),
+                            required: option.required.unwrap_or(false),
+                            current_value: option.default.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    rows.sort_by(|a, b| a.key.cmp(&b.key));
+                    rows
+                })
+                .unwrap_or_default();
+            let mcp_servers = coco_plugins::mcp_bridge::load_plugin_mcp_servers(plugin)
+                .into_iter()
+                .map(|server| {
+                    let display_name = server
+                        .name
+                        .strip_prefix("plugin:")
+                        .unwrap_or(&server.name)
+                        .to_string();
+                    coco_types::PluginDialogMcpServerRow {
+                        name: server.name,
+                        display_name,
+                        enabled: true,
+                        needs_config: false,
+                        tools: Vec::new(),
+                        actions: vec![coco_types::PluginDialogAction {
+                            label: "Show plugin info".to_string(),
+                            plugin_args: format!("info {}", plugin.id.name),
+                        }],
+                    }
+                })
+                .collect();
+            let mut actions = Vec::new();
+            if plugin.enabled {
+                actions.push(coco_types::PluginDialogAction {
+                    label: "Disable plugin".to_string(),
+                    plugin_args: format!("disable {id}"),
+                });
+            } else {
+                actions.push(coco_types::PluginDialogAction {
+                    label: "Enable plugin".to_string(),
+                    plugin_args: format!("enable {id}"),
+                });
+            }
+            actions.push(coco_types::PluginDialogAction {
+                label: "Uninstall plugin".to_string(),
+                plugin_args: format!("uninstall {id}"),
+            });
+            coco_types::PluginDialogInstalledRow {
+                id,
+                name: plugin.manifest.name.clone(),
+                version: plugin.manifest.version.clone(),
+                description: plugin.manifest.description.clone(),
+                source,
+                path: plugin.path.display().to_string(),
+                enabled: plugin.enabled,
+                blocked_by_policy,
+                options,
+                mcp_servers,
+                actions,
+            }
+        })
+        .collect();
+
+    let plugins_dir = config_home.join("plugins");
+    let mut manager = coco_plugins::marketplace::MarketplaceManager::new(plugins_dir);
+    let known = manager.load_known_marketplaces();
+    let mut marketplaces = Vec::new();
+    for (name, known_marketplace) in known {
+        let _ = manager.load_cached_marketplace(&name);
+        let plugin_count = manager
+            .cached_marketplace(&name)
+            .map(|m| i64::try_from(m.plugins.len()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        marketplaces.push(coco_types::PluginDialogMarketplaceRow {
+            official: coco_plugins::marketplace::is_official_marketplace_name(&name),
+            source: Some(format!("{:?}", known_marketplace.source)),
+            name: name.clone(),
+            plugin_count,
+            actions: vec![coco_types::PluginDialogAction {
+                label: "Update marketplace".to_string(),
+                plugin_args: format!("marketplace update {name}"),
+            }],
+        });
+    }
+    marketplaces.sort_by(|a, b| a.name.cmp(&b.name));
+
+    coco_types::PluginDialogPayload {
+        installed,
+        marketplaces,
+        errors: Vec::new(),
+    }
 }
 
 /// Construct the engine `Message::System(...)` payload from a

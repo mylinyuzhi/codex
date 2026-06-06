@@ -854,19 +854,22 @@ impl StreamingState {
         &self.content[..end]
     }
 
-    /// Advance display cursor (returns true if changed).
+    /// Reveal one COMPLETE (newline-terminated) line per spinner tick; returns
+    /// whether the cursor moved.
+    ///
+    /// The in-progress trailing line is held back until its `\n` arrives. A
+    /// partial line has an unknown wrapped height, so revealing it would jitter
+    /// the live region (and the viewport bottom) on every delta; gating on the
+    /// newline keeps the live region's height changing only at line boundaries.
+    /// Mirrors claude-code-kim clipping the streaming preview to the last
+    /// newline. [`Self::reveal_all`] (at finalize) shows the final partial line.
     pub fn advance_display(&mut self) -> bool {
-        if self.display_cursor < self.content.len() {
-            // Advance by one line or to end
-            let remaining = &self.content[self.display_cursor..];
-            let advance = remaining
-                .find('\n')
-                .map(|i| i + 1)
-                .unwrap_or(remaining.len());
-            self.display_cursor += advance;
-            true
-        } else {
-            false
+        match self.content[self.display_cursor..].find('\n') {
+            Some(idx) => {
+                self.display_cursor += idx + 1;
+                true
+            }
+            None => false,
         }
     }
 

@@ -28,6 +28,13 @@ pub enum CommandsError {
     #[error("git failed: {message}")]
     GitFailed { message: String },
 
+    /// In-prompt shell expansion was aborted because a command was
+    /// permission-denied or failed. Mirrors TS `MalformedCommandError`,
+    /// which throws out of `getPromptForCommand` with no partial
+    /// substitution.
+    #[error("shell command failed: {message}")]
+    ShellCommandError { message: String },
+
     #[error("unknown command: /{name}")]
     UnknownCommand { name: String },
 
@@ -77,6 +84,7 @@ impl ErrorExt for CommandsError {
             Self::Io { .. } => StatusCode::IoError,
             Self::Json { .. } => StatusCode::InvalidJson,
             Self::GitFailed { .. } => StatusCode::External,
+            Self::ShellCommandError { .. } => StatusCode::External,
             Self::UnknownCommand { .. } | Self::CommandUnavailable { .. } => {
                 StatusCode::InvalidArguments
             }

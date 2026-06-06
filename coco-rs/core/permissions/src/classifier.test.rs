@@ -127,6 +127,44 @@ async fn test_classify_stage1_allow_short_circuits() {
 }
 
 #[tokio::test]
+async fn test_classify_empty_projection_fast_allows_without_llm() {
+    // A non-safe tool whose projection encodes to "" declares no
+    // classifier-relevant input → allow without invoking the LLM (TS toCompact
+    // empty contract). The classify_fn must never run.
+    let project = |_name: &str, _input: &serde_json::Value| Some(String::new());
+    let projector: Option<InputProjector> = Some(&project);
+    let result = classify_yolo_action(
+        EMPTY_MESSAGES,
+        "Bash",
+        &serde_json::json!({"command": "ls"}),
+        &AutoModeRules::default(),
+        |_req: ClassifyRequest| async { panic!("should not call LLM for empty projection") },
+        projector,
+    )
+    .await;
+    assert!(!result.should_block);
+    assert_eq!(result.reason, "Tool declares no classifier-relevant input");
+}
+
+#[tokio::test]
+async fn test_classify_none_projection_still_reaches_classifier() {
+    // A projector that returns None (un-annotated) must NOT auto-allow — the
+    // action reaches the classifier, which here blocks.
+    let project = |_name: &str, _input: &serde_json::Value| -> Option<String> { None };
+    let projector: Option<InputProjector> = Some(&project);
+    let result = classify_yolo_action(
+        EMPTY_MESSAGES,
+        "Bash",
+        &serde_json::json!({"command": "rm -rf /"}),
+        &AutoModeRules::default(),
+        |_req: ClassifyRequest| async { Ok("<block>yes</block>".to_string()) },
+        projector,
+    )
+    .await;
+    assert!(result.should_block);
+}
+
+#[tokio::test]
 async fn test_classify_stage1_block_escalates_to_stage2() {
     let call_count = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     let cc = call_count.clone();

@@ -9,9 +9,9 @@
 
 use pretty_assertions::assert_eq;
 
-use coco_types::CancelReason;
 use coco_types::ServerNotification;
 use coco_types::SessionStartedParams;
+use coco_types::TurnAbortReason;
 
 use super::on_turn_interrupted_outcome;
 use crate::state::AppState;
@@ -20,20 +20,20 @@ use crate::state::derive::test_helpers;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-fn user_cancel() -> CancelReason {
-    CancelReason::UserCancel
+fn user_cancel() -> TurnAbortReason {
+    TurnAbortReason::UserCancel
 }
 
-fn system_preempt() -> CancelReason {
-    CancelReason::SystemPreempt
+fn system_preempt() -> TurnAbortReason {
+    TurnAbortReason::SystemPreempt
 }
 
-// `CancelReason` is now non-Option in `TurnOutcome::Interrupted` — the
+// `TurnAbortReason` is now non-Option in `TurnOutcome::Interrupted` — the
 // legacy "no reason" wire shape is gone. Tests that previously
 // exercised the `None`-as-SystemPreempt fallback now exercise
 // `system_preempt()` directly.
-fn legacy_no_reason() -> CancelReason {
-    CancelReason::SystemPreempt
+fn legacy_no_reason() -> TurnAbortReason {
+    TurnAbortReason::SystemPreempt
 }
 
 /// Idle session with a single user message and a synthetic (empty)

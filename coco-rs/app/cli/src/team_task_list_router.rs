@@ -120,4 +120,8 @@ impl TaskListHandle for RoutedTaskList {
             .should_nudge_verification(just_completed, is_main_thread)
             .await
     }
+
+    async fn notify_change(&self) {
+        self.current().await.notify_change().await;
+    }
 }

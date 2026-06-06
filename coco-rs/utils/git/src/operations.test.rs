@@ -1,4 +1,5 @@
 use super::find_canonical_git_root;
+use super::get_default_branch;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::process::Command;
@@ -77,4 +78,42 @@ fn linked_worktrees_share_canonical_root() {
         main_root.canonicalize().unwrap(),
         wt_root.canonicalize().unwrap(),
     );
+}
+
+#[test]
+fn get_default_branch_falls_back_to_main_without_remote() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().canonicalize().unwrap();
+    init_test_repo(&repo);
+    // No origin remote/refs at all → hardcoded "main" fallback.
+    assert_eq!(get_default_branch(&repo), "main");
+}
+
+#[test]
+fn get_default_branch_reads_origin_head_symref() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().canonicalize().unwrap();
+    init_test_repo(&repo);
+    // Point a fake origin/master at HEAD and set origin/HEAD -> origin/master.
+    run_git_in(&repo, &["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    run_git_in(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/master",
+        ],
+    );
+    // Must READ the symref (master), not blindly default to "main".
+    assert_eq!(get_default_branch(&repo), "master");
+}
+
+#[test]
+fn get_default_branch_falls_back_to_local_origin_main() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().canonicalize().unwrap();
+    init_test_repo(&repo);
+    // origin/main exists locally but no origin/HEAD symref → resolves to it.
+    run_git_in(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    assert_eq!(get_default_branch(&repo), "main");
 }

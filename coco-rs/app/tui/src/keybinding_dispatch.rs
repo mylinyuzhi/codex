@@ -105,13 +105,10 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // `update.rs::CycleThinkingLevel`.
         ChatCycleThinking => TuiCommand::CycleThinkingLevel,
         ChatSubmit => {
-            // Streaming → queue; otherwise submit (mirrors
-            // keybinding_bridge.rs:259).
-            if state.is_streaming() {
-                TuiCommand::QueueInput
-            } else {
-                TuiCommand::SubmitInput
-            }
+            // SubmitInput owns the streaming decision: it queues by default
+            // and emits submit_interrupt only when every running tool is
+            // cancel-interruptible.
+            TuiCommand::SubmitInput
         }
         ChatNewline => TuiCommand::InsertNewline,
         ChatExternalEditor => TuiCommand::OpenExternalEditor,

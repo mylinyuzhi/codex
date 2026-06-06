@@ -827,8 +827,11 @@ async fn test_grep_respects_cancellation() {
     }
 
     let mut ctx = ToolUseContext::test_default();
-    ctx.cancel = tokio_util::sync::CancellationToken::new();
-    ctx.cancel.cancel(); // fire before execute
+    let cancel = tokio_util::sync::CancellationToken::new();
+    ctx.abort = coco_tool_runtime::ToolAbortSignal::from_turn(
+        coco_tool_runtime::TurnAbortSignal::from_token(cancel.clone()),
+    );
+    cancel.cancel(); // fire before execute
 
     let result = <GrepTool as DynTool>::execute(
         &GrepTool,

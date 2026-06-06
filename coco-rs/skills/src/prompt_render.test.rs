@@ -199,3 +199,22 @@ async fn render_text_with_args() {
         _ => panic!("expected text part"),
     }
 }
+
+#[test]
+fn test_substitute_skill_env_replaces_dir_and_session() {
+    let text = "Assets in ${CLAUDE_SKILL_DIR}; session ${CLAUDE_SESSION_ID}.";
+    let out = substitute_skill_env(text, Some("/home/u/.coco/skills/x"), Some("sess-123"));
+    assert_eq!(out, "Assets in /home/u/.coco/skills/x; session sess-123.");
+}
+
+#[test]
+fn test_substitute_skill_env_normalizes_backslashes_and_keeps_unknown() {
+    // Windows-style dir is normalized to forward slashes; a None session id
+    // leaves the placeholder untouched (TS getPromptForCommand).
+    let out = substitute_skill_env(
+        "${CLAUDE_SKILL_DIR} and ${CLAUDE_SESSION_ID}",
+        Some(r"C:\skills\x"),
+        None,
+    );
+    assert_eq!(out, "C:/skills/x and ${CLAUDE_SESSION_ID}");
+}

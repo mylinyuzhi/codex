@@ -138,6 +138,31 @@ pub fn count_human_turns_since_attachment<M: Borrow<Message>>(
     0
 }
 
+/// Count assistant turns since the most recent attachment of `kind`.
+///
+/// TS parity for todo/task reminder-to-reminder cadence: scan backwards,
+/// skip thinking-only assistant messages, and stop at the matching reminder
+/// attachment. If the marker is absent, return `i32::MAX` so the absence of a
+/// prior reminder does not suppress the first reminder.
+pub fn count_assistant_turns_since_attachment<M: Borrow<Message>>(
+    messages: &[M],
+    kind: AttachmentKind,
+) -> i32 {
+    let mut count: i32 = 0;
+    for msg in messages.iter().rev() {
+        match msg.borrow() {
+            Message::Assistant(a) if !is_thinking_only(&a.message) => {
+                count = count.saturating_add(1);
+            }
+            Message::Attachment(attachment) if attachment.kind == kind => {
+                return count;
+            }
+            _ => {}
+        }
+    }
+    i32::MAX
+}
+
 /// Returns true when this assistant message has content and every content
 /// part is a reasoning block. An empty-content message is treated as non-
 /// thinking so the count matches TS (TS doesn't skip empty messages).

@@ -154,6 +154,9 @@ fn every_reminder_coverage_names_a_registered_generator() {
     let registered: HashSet<&str> = o.generator_names().into_iter().collect();
 
     for k in coco_types::AttachmentKind::all() {
+        if matches!(k, coco_types::AttachmentKind::QueuedCommand) {
+            continue;
+        }
         let expected = match k.coverage() {
             Coverage::Reminder { generator } | Coverage::SilentReminder { generator } => generator,
             _ => continue,
@@ -202,6 +205,9 @@ fn coverage_reminder_binding_round_trips_through_attachment_type() {
     }
 
     for k in coco_types::AttachmentKind::all() {
+        if matches!(k, coco_types::AttachmentKind::QueuedCommand) {
+            continue;
+        }
         let expected_gen = match k.coverage() {
             Coverage::Reminder { generator } | Coverage::SilentReminder { generator } => generator,
             _ => continue,

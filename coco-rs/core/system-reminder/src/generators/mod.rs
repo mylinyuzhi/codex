@@ -32,6 +32,7 @@ pub mod team;
 pub mod todo_reminders;
 pub mod token_usage;
 pub mod ultrathink_effort;
+pub mod user_context;
 pub mod user_input;
 pub mod verify_plan;
 
@@ -72,6 +73,7 @@ pub use team::TeammateMailboxGenerator;
 pub use todo_reminders::TodoRemindersGenerator;
 pub use token_usage::TokenUsageGenerator;
 pub use ultrathink_effort::UltrathinkEffortGenerator;
+pub use user_context::UserContextGenerator;
 pub use user_input::AgentMentionsGenerator;
 pub use user_input::AtMentionedFilesGenerator;
 pub use user_input::IdeOpenedFileGenerator;

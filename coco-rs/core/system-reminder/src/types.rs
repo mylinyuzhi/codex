@@ -113,6 +113,15 @@ pub enum AttachmentType {
     /// the session (e.g. coding past midnight).
     DateChange,
 
+    /// coco-rs per-turn baseline user context. Mirrors TS
+    /// `prependUserContext` (`utils/api.ts:449`) which prepends an
+    /// `isMeta` `<system-reminder>` carrying `currentDate`
+    /// (`context.ts:186`) on every turn. Unlike [`DateChange`](Self::DateChange)
+    /// (a one-shot rollover notice), this fires unconditionally so the
+    /// model always has the date — the KAIROS memory instruction
+    /// (`memory/src/prompt/builders.rs`) references `currentDate` in context.
+    UserContext,
+
     // ── Verify-plan reminder (MainAgentOnly tier) ──
     /// TS `verify_plan_reminder` (`attachments.ts:3894`, `messages.ts:4240`).
     /// Fires every 10 human turns after ExitPlanMode while
@@ -303,6 +312,7 @@ impl AttachmentType {
             | Self::CriticalSystemReminder
             | Self::CompactionReminder
             | Self::DateChange
+            | Self::UserContext
             // TS `allThreadAttachments` batch — ultrathink + companion intro + deltas + swarm.
             | Self::UltrathinkEffort
             | Self::CompanionIntro
@@ -362,6 +372,7 @@ impl AttachmentType {
             | Self::CriticalSystemReminder
             | Self::CompactionReminder
             | Self::DateChange
+            | Self::UserContext
             | Self::VerifyPlanReminder
             | Self::UltrathinkEffort
             | Self::TokenUsage
@@ -418,6 +429,7 @@ impl AttachmentType {
             Self::CriticalSystemReminder => "critical_system_reminder",
             Self::CompactionReminder => "compaction_reminder",
             Self::DateChange => "date_change",
+            Self::UserContext => "user_context",
             Self::VerifyPlanReminder => "verify_plan_reminder",
             Self::UltrathinkEffort => "ultrathink_effort",
             Self::TokenUsage => "token_usage",
@@ -469,6 +481,7 @@ impl AttachmentType {
             Self::CriticalSystemReminder,
             Self::CompactionReminder,
             Self::DateChange,
+            Self::UserContext,
             Self::VerifyPlanReminder,
             Self::UltrathinkEffort,
             Self::TokenUsage,
@@ -540,6 +553,7 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
             AttachmentType::CriticalSystemReminder => K::CriticalSystemReminder,
             AttachmentType::CompactionReminder => K::CompactionReminder,
             AttachmentType::DateChange => K::DateChange,
+            AttachmentType::UserContext => K::UserContext,
             AttachmentType::VerifyPlanReminder => K::VerifyPlanReminder,
             AttachmentType::UltrathinkEffort => K::UltrathinkEffort,
             AttachmentType::TokenUsage => K::TokenUsage,

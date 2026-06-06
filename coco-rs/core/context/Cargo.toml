@@ -29,6 +29,7 @@ tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 tracing.workspace = true
 globset.workspace = true
 ignore.workspace = true
+pdf-extract.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

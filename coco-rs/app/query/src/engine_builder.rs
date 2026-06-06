@@ -23,6 +23,7 @@ use coco_inference::ModelRuntimeSource;
 use coco_messages::CostTracker;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolRegistry;
+use coco_tool_runtime::TurnAbortSignal;
 use coco_types::ToolAppState;
 
 use crate::command_queue::CommandQueue;
@@ -43,6 +44,23 @@ impl QueryEngine {
         cancel: CancellationToken,
         hooks: Option<Arc<HookRegistry>>,
     ) -> Self {
+        Self::new_with_turn_abort(
+            config,
+            model_runtimes,
+            tools,
+            TurnAbortSignal::from_token(cancel),
+            hooks,
+        )
+    }
+
+    pub fn new_with_turn_abort(
+        config: QueryEngineConfig,
+        model_runtimes: Arc<ModelRuntimeRegistry>,
+        tools: Arc<ToolRegistry>,
+        turn_abort: TurnAbortSignal,
+        hooks: Option<Arc<HookRegistry>>,
+    ) -> Self {
+        let cancel = turn_abort.token();
         let (attachment_tx, attachment_rx) = tokio::sync::mpsc::unbounded_channel();
         // Per-engine (= per-user-msg) skill-rule store + matching handle.
         // Shared via Arc with the factory's batch-time merge and with
@@ -58,6 +76,7 @@ impl QueryEngine {
             config,
             tools,
             cancel,
+            turn_abort,
             hooks,
             async_hook_registry: None,
             hook_llm_handle: None,
@@ -77,6 +96,7 @@ impl QueryEngine {
             mailbox: None,
             pending_messages: None,
             mcp_handle: None,
+            schedule_store: None,
             lsp_handle: None,
             agent_handle: None,
             skill_handle: None,
@@ -722,6 +742,12 @@ impl QueryEngine {
     /// makes the AgentTool prompt skip MCP filtering at the renderer.
     pub fn with_mcp_handle(mut self, handle: coco_tool_runtime::McpHandleRef) -> Self {
         self.mcp_handle = Some(handle);
+        self
+    }
+
+    /// Install the scheduling backend for Cron*/RemoteTrigger tools.
+    pub fn with_schedule_store(mut self, store: coco_tool_runtime::ScheduleStoreRef) -> Self {
+        self.schedule_store = Some(store);
         self
     }
 

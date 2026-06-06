@@ -2,8 +2,23 @@
 //!
 //! Runs a battery of checks against command strings to detect injection,
 //! obfuscation, and dangerous patterns before execution.
+//!
+//! The bulk of the breadth comes from the quote/heredoc-aware analyzer suite
+//! in `coco_shell_parser::security` (`default_analyzers()` + `analyze()`).
+//! Those 29 analyzers run against a tree-sitter parse and surface every risk
+//! TS's `bashSecurity.ts` validators catch. Per TS parity, every analyzer-caught
+//! risk maps to [`SecuritySeverity::Ask`] — TS routes all of these through the
+//! normal permission prompt (`behavior: 'ask'`), never an outright deny.
+//!
+//! A small set of additional checks (`Deny` for raw control characters /
+//! `/proc/*/environ` access) is a DELIBERATE coco-rs divergence: those are
+//! genuinely catastrophic, near-always-malicious constructs that we block
+//! without prompting.
 
 use crate::safety::SecurityCheckId;
+use coco_shell_parser::ShellParser;
+use coco_shell_parser::security;
+use coco_shell_parser::security::RiskKind;
 
 /// Result of a single security check.
 #[derive(Debug, Clone)]
@@ -23,122 +38,78 @@ pub enum SecuritySeverity {
 }
 
 /// Run all security checks on a command string.
+///
+/// Combines the full `coco_shell_parser` analyzer suite (mapped to `Ask`, per
+/// TS parity) with a couple of coco-rs-specific catastrophic `Deny` checks
+/// (raw control characters, `/proc/*/environ` access).
 pub fn check_security(command: &str) -> Vec<SecurityCheck> {
-    let checks: [fn(&str) -> Option<SecurityCheck>; 5] = [
-        check_ifs_injection,
-        check_dangerous_patterns,
-        check_shell_metacharacters,
-        check_control_characters,
-        check_proc_environ,
-    ];
+    let mut checks = analyzer_checks(command);
 
-    checks.iter().filter_map(|check| check(command)).collect()
+    // coco-rs-specific Deny checks that the analyzer suite does not cover.
+    let deny_checks: [fn(&str) -> Option<SecurityCheck>; 2] =
+        [check_control_characters, check_proc_environ];
+    checks.extend(deny_checks.iter().filter_map(|check| check(command)));
+
+    checks
 }
 
-/// Check for IFS variable manipulation.
-fn check_ifs_injection(command: &str) -> Option<SecurityCheck> {
-    if command.contains("IFS=") {
-        return Some(SecurityCheck {
-            id: SecurityCheckId::IFS_INJECTION,
-            severity: SecuritySeverity::Deny,
-            message: "IFS variable manipulation detected".into(),
-        });
-    }
-    None
-}
+/// Run the `coco_shell_parser` analyzer suite and map each risk to an `Ask`
+/// security check. TS asks (never denies) for every one of these patterns.
+fn analyzer_checks(command: &str) -> Vec<SecurityCheck> {
+    let mut parser = ShellParser::new();
+    let parsed = parser.parse(command);
+    let analysis = security::analyze(&parsed);
 
-/// Check for dangerous command patterns: eval, exec, source /dev/, backticks.
-fn check_dangerous_patterns(command: &str) -> Option<SecurityCheck> {
-    // Check for backtick command substitution
-    if command.contains('`') {
-        return Some(SecurityCheck {
-            id: SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
+    analysis
+        .risks
+        .iter()
+        .map(|risk| SecurityCheck {
+            id: risk_check_id(risk.kind),
             severity: SecuritySeverity::Ask,
-            message: "backtick command substitution detected".into(),
-        });
-    }
-
-    let words: Vec<&str> = command.split_whitespace().collect();
-    for (i, word) in words.iter().enumerate() {
-        match *word {
-            "eval" => {
-                return Some(SecurityCheck {
-                    id: SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
-                    severity: SecuritySeverity::Deny,
-                    message: "eval command detected".into(),
-                });
-            }
-            "exec" => {
-                return Some(SecurityCheck {
-                    id: SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
-                    severity: SecuritySeverity::Ask,
-                    message: "exec command detected".into(),
-                });
-            }
-            "source" | "." => {
-                if let Some(next) = words.get(i + 1)
-                    && next.starts_with("/dev/")
-                {
-                    return Some(SecurityCheck {
-                        id: SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
-                        severity: SecuritySeverity::Deny,
-                        message: "source from /dev/ detected".into(),
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    None
+            message: risk.message.clone(),
+        })
+        .collect()
 }
 
-/// Check for shell metacharacters: $(...) substitution, unescaped pipes
-/// chained with dangerous commands.
-fn check_shell_metacharacters(command: &str) -> Option<SecurityCheck> {
-    // $(...) command substitution
-    if command.contains("$(") {
-        return Some(SecurityCheck {
-            id: SecurityCheckId::SHELL_METACHARACTERS,
-            severity: SecuritySeverity::Ask,
-            message: "command substitution $(...) detected".into(),
-        });
+/// Map an analyzer [`RiskKind`] onto the closest [`SecurityCheckId`].
+fn risk_check_id(kind: RiskKind) -> SecurityCheckId {
+    match kind {
+        RiskKind::SingleQuoteBypass => SecurityCheckId::MALFORMED_TOKEN_INJECTION,
+        RiskKind::JqDanger => SecurityCheckId::JQ_SYSTEM_FUNCTION,
+        RiskKind::ObfuscatedFlags => SecurityCheckId::OBFUSCATED_FLAGS,
+        RiskKind::ShellMetacharacters => SecurityCheckId::SHELL_METACHARACTERS,
+        RiskKind::DangerousVariables => SecurityCheckId::DANGEROUS_VARIABLES,
+        RiskKind::NewlineInjection => SecurityCheckId::NEWLINES,
+        RiskKind::IfsInjection => SecurityCheckId::IFS_INJECTION,
+        RiskKind::ProcEnvironAccess => SecurityCheckId::PROC_ENVIRON_ACCESS,
+        RiskKind::BackslashEscapedWhitespace => SecurityCheckId::BACKSLASH_ESCAPED_WHITESPACE,
+        RiskKind::BackslashEscapedOperators => SecurityCheckId::BACKSLASH_ESCAPED_OPERATORS,
+        RiskKind::UnicodeWhitespace => SecurityCheckId::UNICODE_WHITESPACE,
+        RiskKind::MidWordHash => SecurityCheckId::MID_WORD_HASH,
+        RiskKind::BraceExpansion => SecurityCheckId::BRACE_EXPANSION,
+        RiskKind::ZshDangerousCommands => SecurityCheckId::ZSH_DANGEROUS_COMMANDS,
+        RiskKind::CommentQuoteDesync => SecurityCheckId::COMMENT_QUOTE_DESYNC,
+        RiskKind::QuotedNewlineHash => SecurityCheckId::QUOTED_NEWLINE,
+        RiskKind::ExcessClosingBraces => SecurityCheckId::MALFORMED_TOKEN_INJECTION,
+        RiskKind::EvalLikeBuiltin => SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
+        RiskKind::SubscriptEval => SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
+        RiskKind::ArithComparison => SecurityCheckId::DANGEROUS_PATTERNS_CONDITIONAL,
+        RiskKind::UnsafeHeredocSubstitution => SecurityCheckId::DANGEROUS_PATTERNS_SUBSHELL,
+        RiskKind::DangerousSubstitution => SecurityCheckId::DANGEROUS_PATTERNS_SUBSHELL,
+        RiskKind::MalformedTokens => SecurityCheckId::MALFORMED_TOKEN_INJECTION,
+        RiskKind::SensitiveRedirect => SecurityCheckId::DANGEROUS_PATTERNS_REDIRECTION,
+        RiskKind::NetworkExfiltration => SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
+        RiskKind::PrivilegeEscalation => SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
+        RiskKind::FileSystemTampering => SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
+        RiskKind::CodeExecution => SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
+        RiskKind::DangerousPath => SecurityCheckId::DANGEROUS_PATTERNS_GENERAL,
     }
-
-    // Piped dangerous commands: pipe into sh/bash/eval
-    if command.contains('|') {
-        let parts: Vec<&str> = command.split('|').collect();
-        for part in parts.iter().skip(1) {
-            let first_word = part.split_whitespace().next().unwrap_or("");
-            if matches!(first_word, "sh" | "bash" | "eval" | "exec") {
-                return Some(SecurityCheck {
-                    id: SecurityCheckId::SHELL_METACHARACTERS,
-                    severity: SecuritySeverity::Deny,
-                    message: format!("pipe into {first_word} detected"),
-                });
-            }
-        }
-    }
-
-    // && chaining with dangerous commands
-    if command.contains("&&") {
-        let parts: Vec<&str> = command.split("&&").collect();
-        for part in &parts {
-            let first_word = part.split_whitespace().next().unwrap_or("");
-            if matches!(first_word, "eval" | "exec") {
-                return Some(SecurityCheck {
-                    id: SecurityCheckId::SHELL_METACHARACTERS,
-                    severity: SecuritySeverity::Deny,
-                    message: format!("{first_word} in chained command detected"),
-                });
-            }
-        }
-    }
-
-    None
 }
 
 /// Check for Unicode control characters and zero-width characters.
+///
+/// Catastrophic-by-design `Deny`: raw control bytes in a command are almost
+/// always an obfuscation / injection attempt and have no legitimate use here.
 fn check_control_characters(command: &str) -> Option<SecurityCheck> {
     for ch in command.chars() {
         // Zero-width chars
@@ -162,6 +133,9 @@ fn check_control_characters(command: &str) -> Option<SecurityCheck> {
 }
 
 /// Check for /proc/*/environ access.
+///
+/// Catastrophic-by-design `Deny`: reading another process's environment leaks
+/// secrets and has no legitimate place in agent-issued commands.
 fn check_proc_environ(command: &str) -> Option<SecurityCheck> {
     if command.contains("/proc/") && command.contains("/environ") {
         return Some(SecurityCheck {

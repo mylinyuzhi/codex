@@ -12,41 +12,33 @@ use coco_skills::SkillDefinition;
 use coco_skills::SkillSource;
 use coco_skills::load_skill_from_file;
 
-use crate::LoadedPlugin;
-
-/// Load all skill definitions contributed by a plugin.
-///
-/// Skills are loaded from:
-/// 1. Paths listed in the plugin manifest's `skills` field
-/// 2. `.md` files in the plugin's `skills/` directory
-///
-/// Each skill is namespaced as `plugin-name:skill-name` (TS convention).
-///
-/// TS: `loadPluginCommands()` + `getPluginSkills()`.
-pub fn load_plugin_skills(plugin: &LoadedPlugin) -> Vec<SkillDefinition> {
+/// Load all skill definitions contributed by a plugin: reads `manifest.skills`
+/// (`ManifestPaths`) + scans `<path>/skills/`. Each skill is namespaced as
+/// `plugin-name:skill-name` (TS `loadPluginCommands()` + `getPluginSkills()`).
+pub fn load_plugin_skills_v2(plugin: &crate::loader::LoadedPluginV2) -> Vec<SkillDefinition> {
     let mut skills = Vec::new();
-    let plugin_name = &plugin.name;
+    let plugin_name = &plugin.id.name;
 
-    // 1. Skills from manifest paths
-    for skill_path_str in &plugin.manifest.skills {
-        let skill_path = plugin.path.join(skill_path_str);
-        load_skill_at_path(&skill_path, plugin_name, &mut skills);
+    if let Some(paths) = &plugin.manifest.skills {
+        for rel in paths.to_vec() {
+            load_skill_at_path(&plugin.path.join(rel), plugin_name, &mut skills);
+        }
     }
-
-    // 2. Skills from skills/ directory
     let skills_dir = plugin.path.join("skills");
     if skills_dir.is_dir() {
         load_skills_from_dir(&skills_dir, plugin_name, &mut skills);
     }
-
     skills
 }
 
-/// Load all skills from all enabled plugins in a manager.
-///
-/// Returns namespaced skills ready to register in a SkillManager.
-pub fn load_all_plugin_skills(plugins: &[&LoadedPlugin]) -> Vec<SkillDefinition> {
-    plugins.iter().flat_map(|p| load_plugin_skills(p)).collect()
+/// V2: load skills from every plugin in the slice.
+pub fn load_all_plugin_skills_v2(
+    plugins: &[&crate::loader::LoadedPluginV2],
+) -> Vec<SkillDefinition> {
+    plugins
+        .iter()
+        .flat_map(|p| load_plugin_skills_v2(p))
+        .collect()
 }
 
 /// Load a single skill from a file path, namespacing it to the plugin.

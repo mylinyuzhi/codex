@@ -87,6 +87,62 @@ impl QueryEngine {
         )
     }
 
+    /// Terminal handler for an oversized image at the API boundary (TS
+    /// `validateImagesForAPI` throws). Mirrors `handle_blocking_limit_terminal`:
+    /// push a synthetic api_error assistant message, emit `TurnEnded(failed)`,
+    /// and end the turn without sending the request — the image can't be
+    /// auto-shrunk here, so the user must resize and retry.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn handle_image_too_large_terminal(
+        &self,
+        consts: &LoopConstants,
+        acc: &LoopAccumulator,
+        turn_state: &LoopTurnState,
+        err: &coco_messages::ImageSizeError,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        cycle_turn_id: Option<coco_types::TurnId>,
+        total_usage: &TokenUsage,
+    ) -> QueryResult {
+        let message = err.message();
+        warn!(
+            base64_len = err.base64_len,
+            limit = err.max_base64_len,
+            "oversized image at API boundary — request not sent",
+        );
+        crate::history_sync::history_push_and_emit(
+            history,
+            coco_messages::create_assistant_error_message(&message, None, Some("invalid_request")),
+            event_tx,
+        )
+        .await;
+        if let Some(id) = cycle_turn_id.as_ref() {
+            let _ = emit_protocol(
+                event_tx,
+                crate::ServerNotification::TurnEnded(coco_types::TurnEndedParams::failed(
+                    id.clone(),
+                    Some(*total_usage),
+                    coco_types::ErrorPayload {
+                        message: message.clone(),
+                        code: coco_types::ErrorCode::Provider,
+                    },
+                )),
+            )
+            .await;
+        }
+        make_query_result(
+            consts,
+            acc,
+            turn_state,
+            String::new(),
+            /*cancelled*/ false,
+            /*budget_exhausted*/ false,
+            Some("image_too_large".into()),
+            history.to_vec(),
+            history.snapshot(),
+        )
+    }
+
     pub(crate) async fn handle_usd_budget_terminal(
         &self,
         consts: &LoopConstants,

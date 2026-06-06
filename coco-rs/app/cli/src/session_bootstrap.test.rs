@@ -39,6 +39,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::empty_in(home.path()),
+        coco_config::parse_enabled_setting_sources(None),
     )
     .expect("runtime config");
 
@@ -75,6 +76,7 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         agent_search_paths: coco_subagent::definition_store::AgentSearchPaths::empty(),
         builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog::interactive(),
         session_id_override: None,
+        is_non_interactive: false,
     })
     .await
     .expect("build SessionRuntime")
@@ -128,6 +130,31 @@ async fn install_session_late_binds_attaches_mcp_when_some() {
         runtime.current_mcp_handle().await.is_some(),
         "mcp_handle slot must be Some when caller passes Some"
     );
+}
+
+#[tokio::test]
+async fn bootstrap_session_mcp_attaches_handle_and_manager_with_no_servers() {
+    let home = TempDir::new().expect("home tempdir");
+    let runtime = build_runtime(&home).await;
+    let cwd = home.path().to_path_buf();
+
+    // Hermetic tempdir → no config-file or plugin MCP servers. Bootstrap must
+    // still attach the manager + an `McpManagerAdapter` handle (the background
+    // connect pass simply has nothing to connect).
+    crate::session_bootstrap::bootstrap_session_mcp(
+        &runtime, &cwd, None, /*await_connect*/ true,
+    )
+    .await;
+
+    assert!(
+        runtime.current_mcp_handle().await.is_some(),
+        "bootstrap must attach an MCP handle even with no servers"
+    );
+    // A manager is now attached, so `reload_plugin_mcp_servers` runs the manager
+    // path (returns 0 servers but bumps the reconnect key from 0 → 1). Without
+    // `attach_mcp_manager` it would have no-op'd at key 0.
+    assert_eq!(runtime.reload_plugin_mcp_servers(&cwd).await, 0);
+    assert_eq!(runtime.mcp_reconnect_key(), 1);
 }
 
 #[tokio::test]

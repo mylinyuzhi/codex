@@ -1,11 +1,11 @@
 //! `SkillsSource` impl on [`crate::SkillManager`].
 //!
 //! `listing()` renders the full skill catalog as a bullet list of
-//! `- name: description` entries — matches the TS `skill_listing`
-//! attachment shape well enough for the model to parse; exact-verbatim
-//! format of TS `generateSkillToolPrompt()` (1% context budget, 250-char
-//! description cap, bundled never truncated) is out of scope for the
-//! per-turn reminder path and stays in `skills::generate_skill_tool_prompt`
+//! `- name: description` entries with each description capped at
+//! [`MAX_LISTING_DESCRIPTION_CHARS`] (TS `formatCommandsWithinBudget`
+//! per-entry bound) and no skill ever dropped. The full 1%-context-budget
+//! shrink-to-names-only path needs the model context window threaded through
+//! `SkillsSource::listing` and stays in `skills::generate_skill_tool_prompt`
 //! for the static system-prompt injection.
 //!
 //! `invoked()` returns empty by default — tracking which skills were
@@ -26,6 +26,14 @@ use crate::SkillManager;
 use crate::overrides::effective_skill_state;
 
 const MAX_SKILL_DISCOVERY_DESCRIPTION_CHARS: usize = 500;
+
+/// Per-entry description cap for the per-turn skill listing. Mirrors TS
+/// `formatCommandsWithinBudget`'s per-command bound (`MAX_LISTING_DESC_CHARS`)
+/// so one verbose skill cannot bloat the reminder. Bundled-vs-budget shrink to
+/// names-only (1% context budget) needs the model context window threaded
+/// through `SkillsSource::listing` and remains a follow-up; capping each entry
+/// here bounds the size without dropping any skill.
+const MAX_LISTING_DESCRIPTION_CHARS: usize = 250;
 
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -88,7 +96,12 @@ impl SkillsSource for SkillManager {
             .iter()
             .filter(|(name, _)| delta_set.contains(*name))
             .map(|(name, desc)| match desc {
-                Some(d) if !d.is_empty() => format!("- {name}: {d}"),
+                Some(d) if !d.is_empty() => {
+                    format!(
+                        "- {name}: {}",
+                        truncate_chars(d, MAX_LISTING_DESCRIPTION_CHARS)
+                    )
+                }
                 _ => format!("- {name}"),
             })
             .collect::<Vec<_>>()

@@ -387,6 +387,60 @@ fn write_enabled_plugins(settings_dir: &Path, closure: &[PluginId]) -> std::io::
     Ok(())
 }
 
+/// Read the explicit `enabled_plugins[<id>].enabled` flag from settings.json.
+/// `None` when there is no entry (the plugin is enabled by default). Accepts
+/// both `{ "enabled": bool }` and a bare-bool legacy shape.
+pub fn read_plugin_enabled(settings_dir: &Path, plugin_id: &PluginId) -> Option<bool> {
+    let path = settings_dir.join("settings.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let obj = value
+        .get("enabled_plugins")
+        .or_else(|| value.get("enabledPlugins"))
+        .and_then(|v| v.as_object())?;
+    let entry = obj.get(&plugin_id.to_string())?;
+    entry
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .or_else(|| entry.as_bool())
+}
+
+/// Set `enabled_plugins[<id>] = { "enabled": <enabled> }` in settings.json,
+/// preserving every other field. This is the single source of truth the loader
+/// and policy layer read (TS `setPluginEnabledOp`), so `/plugin enable|disable`
+/// and the install path write the same place.
+pub fn set_plugin_enabled(
+    settings_dir: &Path,
+    plugin_id: &PluginId,
+    enabled: bool,
+) -> std::io::Result<()> {
+    let path = settings_dir.join("settings.json");
+    std::fs::create_dir_all(settings_dir)?;
+    let mut value: serde_json::Value = match std::fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(e),
+    };
+    let map = value
+        .as_object_mut()
+        .ok_or_else(|| std::io::Error::other("settings.json is not a JSON object"))?;
+    let entries = map
+        .entry("enabled_plugins".to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    let entries_map = entries
+        .as_object_mut()
+        .ok_or_else(|| std::io::Error::other("enabled_plugins is not a JSON object"))?;
+    entries_map.insert(
+        plugin_id.to_string(),
+        serde_json::json!({ "enabled": enabled }),
+    );
+    let json =
+        serde_json::to_string_pretty(&value).map_err(|e| std::io::Error::other(e.to_string()))?;
+    std::fs::write(&path, json)?;
+    Ok(())
+}
+
 fn policy_reason(verdict: &PolicyVerdict) -> String {
     match verdict {
         PolicyVerdict::BlockedPlugin { plugin } => {

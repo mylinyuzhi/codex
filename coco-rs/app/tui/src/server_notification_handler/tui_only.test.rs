@@ -645,3 +645,31 @@ fn prompt_editor_failed_surfaces_warning_toast() {
     assert_eq!(state.ui.toasts[0].severity, ToastSeverity::Warning);
     assert!(state.ui.toasts[0].message.contains("not found"));
 }
+
+#[test]
+fn parse_question_items_truncates_questions_and_options_to_four() {
+    // A weak model over-generated 5 questions, the 2nd with 6 options. The
+    // schema no longer hard-caps (avoids the validation retry-loop / flicker);
+    // the cap is enforced here on display instead.
+    let mk_q = |q: &str, opts: usize| {
+        let options: Vec<_> = (0..opts)
+            .map(|i| serde_json::json!({ "label": format!("{q}-opt{i}"), "description": "" }))
+            .collect();
+        serde_json::json!({ "header": q, "question": format!("{q}?"), "options": options })
+    };
+    let input = serde_json::json!({
+        "questions": [mk_q("A", 3), mk_q("B", 6), mk_q("C", 2), mk_q("D", 2), mk_q("E", 2)],
+    });
+
+    let items = super::parse_question_items(&input);
+
+    assert_eq!(items.len(), 4, "questions truncated to 4");
+    // Q2 (single-select) keeps its first 4 model options + the injected Other.
+    assert_eq!(items[1].options.len(), 5, "4 options + Other");
+    assert_eq!(items[1].options[0].label, "B-opt0");
+    assert_eq!(items[1].options[3].label, "B-opt3");
+    assert!(
+        items[1].options[4].is_other(),
+        "last option is the Other composer"
+    );
+}

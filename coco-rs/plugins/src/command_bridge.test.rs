@@ -3,27 +3,29 @@ use std::collections::HashMap;
 use coco_types::CommandSource;
 use pretty_assertions::assert_eq;
 
-use crate::LoadedPlugin;
-use crate::PluginManifest;
-use crate::PluginSource;
+use crate::loader::LoadedPluginV2;
+use crate::loader::PluginLoadSource;
 use crate::schemas::CommandMetadata;
 use crate::schemas::ManifestCommands;
+use crate::schemas::PluginId;
+use crate::schemas::PluginManifestV2;
 
 use super::*;
 
-fn test_plugin(name: &str, path: &std::path::Path) -> LoadedPlugin {
-    LoadedPlugin {
-        name: name.to_string(),
-        manifest: PluginManifest {
+/// Build a minimal inline `LoadedPluginV2` (no manifest commands) for the
+/// `commands/`-directory scanning tests.
+fn test_plugin(name: &str, path: &std::path::Path) -> LoadedPluginV2 {
+    LoadedPluginV2 {
+        id: PluginId {
             name: name.to_string(),
-            version: None,
-            description: "Test plugin".to_string(),
-            skills: vec![],
-            hooks: HashMap::new(),
-            mcp_servers: HashMap::new(),
+            marketplace: "inline".to_string(),
+        },
+        manifest: PluginManifestV2 {
+            name: name.to_string(),
+            ..default_manifest_v2()
         },
         path: path.to_path_buf(),
-        source: PluginSource::User,
+        load_source: PluginLoadSource::SessionDir,
         enabled: true,
     }
 }
@@ -40,7 +42,7 @@ fn test_load_commands_from_md_files() {
     .unwrap();
 
     let plugin = test_plugin("my-plugin", dir.path());
-    let commands = load_plugin_commands(&plugin);
+    let commands = load_plugin_commands_v2(&plugin);
 
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].base.name, "my-plugin:deploy");
@@ -67,7 +69,7 @@ fn test_load_commands_from_skill_md_subdir() {
     .unwrap();
 
     let plugin = test_plugin("code-tools", dir.path());
-    let commands = load_plugin_commands(&plugin);
+    let commands = load_plugin_commands_v2(&plugin);
 
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].base.name, "code-tools:lint");
@@ -78,7 +80,7 @@ fn test_load_commands_from_skill_md_subdir() {
 fn test_load_commands_empty_plugin() {
     let dir = tempfile::tempdir().unwrap();
     let plugin = test_plugin("empty", dir.path());
-    let commands = load_plugin_commands(&plugin);
+    let commands = load_plugin_commands_v2(&plugin);
     assert!(commands.is_empty());
 }
 
@@ -98,7 +100,7 @@ fn test_load_all_plugin_commands_multiple() {
     let p1 = test_plugin("plugin1", dir1.path());
     let p2 = test_plugin("plugin2", dir2.path());
 
-    let commands = load_all_plugin_commands(&[&p1, &p2]);
+    let commands = load_all_plugin_commands_v2(&[&p1, &p2]);
     assert_eq!(commands.len(), 2);
     let names: Vec<&str> = commands.iter().map(|c| c.base.name.as_str()).collect();
     assert!(names.contains(&"plugin1:a"));
@@ -336,7 +338,7 @@ fn test_nonexistent_commands_dir_returns_empty() {
     let dir = tempfile::tempdir().unwrap();
     // No commands/ dir exists
     let plugin = test_plugin("no-cmds", dir.path());
-    let commands = load_plugin_commands(&plugin);
+    let commands = load_plugin_commands_v2(&plugin);
     assert!(commands.is_empty());
 }
 

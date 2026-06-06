@@ -944,7 +944,16 @@ impl AgentHandle for SwarmAgentHandle {
         // TS `TeamDeleteTool.ts:74` reads `appState.teamContext?.teamName`
         // — when no team is active it returns success with a "nothing to
         // clean up" message. Mirror that idempotency.
-        let result = self.roster_store.delete_team(DeleteTeamRequest).await?;
+        // Pass the session task-list handle so the roster store can fire a
+        // "tasks changed" notification on the success path (TS
+        // `cleanupTeamDirectories` → `notifyTasksUpdated()`). At this point
+        // the route still points at the team list; the notification reaches
+        // its subscribers before `clear_team_task_list_route` restores the
+        // session list below.
+        let result = self
+            .roster_store
+            .delete_team(DeleteTeamRequest, self.task_list.as_deref())
+            .await?;
         if result.deleted
             && let Some(router) = &self.task_list_router
         {

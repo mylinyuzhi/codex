@@ -57,6 +57,10 @@ pub enum EnvKey {
     CocoBubblewrap,
     CocoConfigDir,
     CocoDisableFastMode,
+    /// Truthy ⇒ skip loading managed/policy-level skills from the platform
+    /// managed skills directory. TS parity:
+    /// `CLAUDE_CODE_DISABLE_POLICY_SKILLS` in `skills/loadSkillsDir.ts`.
+    CocoDisablePolicySkills,
     CocoDisableShellSnapshot,
     CocoFileReadIgnorePatterns,
     CocoFoundryResource,
@@ -164,6 +168,13 @@ pub enum EnvKey {
     /// [`Self::CocoRemoteMemoryDir`] does for the memory base).
     CocoTeamsDir,
     CocoVerifyPlan,
+    /// Opt non-interactive (SDK / headless) sessions INTO file-history
+    /// checkpointing. TS `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING` — those
+    /// sessions default OFF; interactive defaults ON.
+    CocoFileCheckpointingSdkEnable,
+    /// Disable file-history checkpointing for every session, overriding the
+    /// settings/interactive default. TS `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING`.
+    CocoFileCheckpointingDisable,
     /// Soft kill auto-compact only. Manual `/compact` keeps working.
     CocoCompactDisableAuto,
     /// Hard kill all compaction (auto + manual).
@@ -242,11 +253,19 @@ pub enum EnvKey {
     /// Useful for sandbox / CI environments that want deterministic
     /// blocking behavior.
     CocoBackgroundTasksDisable,
+    /// Override `api.retry.max_retries`. Applies after settings.json and is
+    /// clamped by `ApiRetryConfig::finalize`.
+    CocoApiMaxRetries,
     /// Disable the startup auto-install of the official plugin marketplace
     /// (`anthropics/claude-plugins-official`). When set truthy, coco does not
     /// fetch/register the official marketplace on launch. Replaces TS
     /// `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`.
     CocoPluginsDisableOfficialMarketplace,
+    /// Read-only plugin seed directories (PATH-delimited, precedence order).
+    /// Customers bake a populated plugins dir into a container image and point
+    /// this at it; seed marketplaces/plugin caches are used in place without
+    /// re-cloning. Replaces TS `CLAUDE_CODE_PLUGIN_SEED_DIR`.
+    CocoPluginSeedDir,
     /// Enable auto-detach of long-running foreground AgentTool spawns.
     /// When set to a positive integer (milliseconds), foreground sub-agents
     /// that haven't completed by this deadline fire `signal_detach` so the
@@ -322,6 +341,7 @@ impl EnvKey {
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",
             Self::CocoConfigDir => "COCO_CONFIG_DIR",
             Self::CocoDisableFastMode => "COCO_DISABLE_FAST_MODE",
+            Self::CocoDisablePolicySkills => "COCO_DISABLE_POLICY_SKILLS",
             Self::CocoDisableShellSnapshot => "COCO_DISABLE_SHELL_SNAPSHOT",
             Self::CocoFileReadIgnorePatterns => "COCO_FILE_READ_IGNORE_PATTERNS",
             Self::CocoFoundryResource => "COCO_FOUNDRY_RESOURCE",
@@ -364,6 +384,8 @@ impl EnvKey {
             Self::CocoTeammateCommand => "COCO_TEAMMATE_COMMAND",
             Self::CocoTeamsDir => "COCO_TEAMS_DIR",
             Self::CocoVerifyPlan => "COCO_VERIFY_PLAN",
+            Self::CocoFileCheckpointingSdkEnable => "COCO_FILE_CHECKPOINTING_SDK_ENABLE",
+            Self::CocoFileCheckpointingDisable => "COCO_FILE_CHECKPOINTING_DISABLE",
             Self::CocoCompactDisableAuto => "COCO_COMPACT_DISABLE_AUTO",
             Self::CocoCompactDisable => "COCO_COMPACT_DISABLE",
             Self::CocoCompactSessionMemoryEnable => "COCO_COMPACT_SESSION_MEMORY_ENABLE",
@@ -392,9 +414,11 @@ impl EnvKey {
             Self::CocoPromptSuggestionDisable => "COCO_PROMPT_SUGGESTION_DISABLE",
             Self::CocoBareMode => "COCO_BARE_MODE",
             Self::CocoBackgroundTasksDisable => "COCO_BACKGROUND_TASKS_DISABLE",
+            Self::CocoApiMaxRetries => "COCO_API_MAX_RETRIES",
             Self::CocoPluginsDisableOfficialMarketplace => {
                 "COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE"
             }
+            Self::CocoPluginSeedDir => "COCO_PLUGIN_SEED_DIR",
             Self::CocoAutoBackgroundTasks => "COCO_AUTO_BACKGROUND_TASKS",
             Self::CocoAgentSummaryEnable => "COCO_AGENT_SUMMARY_ENABLE",
             Self::CocoAgentListInMessages => "COCO_AGENT_LIST_IN_MESSAGES",

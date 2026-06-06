@@ -283,7 +283,7 @@ impl QueryEngine {
         // Cancel-aware: when `self.cancel.is_cancelled()`, the Err is the
         // bubbled cancellation, not a real failure. Skip the Failed emit
         // and let the runner emit Interrupted with the correct
-        // `CancelReason` (it owns the `OnceLock<CancelReason>`). Without
+        // `TurnAbortReason` (it owns the turn abort signal). Without
         // this gate the wire stream becomes `… → Failed → Interrupted`
         // for the same cycle — the Failed lights up the TUI error modal
         // milliseconds before Interrupted overrides it.
@@ -562,6 +562,7 @@ impl QueryEngine {
             http_url_allowlist: None,
             http_env_var_policy: None,
             async_registry: self.async_hook_registry.clone(),
+            async_rewake_sink: None,
             llm_handle: self.hook_llm_handle.clone(),
             workspace_trust_accepted: None,
         }

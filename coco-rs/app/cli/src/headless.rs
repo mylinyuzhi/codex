@@ -189,11 +189,45 @@ pub fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides>
 /// Build a `RuntimeConfig` honoring CLI-level overrides.
 pub fn build_runtime_config_for_cli(cli: &Cli, cwd: &Path) -> Result<coco_config::RuntimeConfig> {
     let mut builder = coco_config::RuntimeConfigBuilder::from_process(cwd)
-        .with_overrides(cli_runtime_overrides(cli)?);
+        .with_overrides(cli_runtime_overrides(cli)?)
+        .with_setting_sources(cli.setting_sources.clone());
     if let Some(path) = cli.settings.as_deref() {
         builder = builder.with_flag_settings(path);
     }
     Ok(builder.build()?)
+}
+
+/// Build a `RuntimeConfig` with a live `RuntimeReloader` so settings.json edits
+/// hot-reload (sandbox, …) on the SDK / headless paths too — not just the TUI.
+/// Falls back to a one-shot static build when the reloader can't spawn (e.g.
+/// outside a Tokio runtime). Mirrors `run_tui`'s reloader bootstrap. Callers
+/// must keep the returned reloader alive for the session and attach
+/// `sandbox_reload::spawn_sandbox_reload` after `SessionRuntime::build`.
+pub fn build_runtime_config_with_reloader(
+    cli: &Cli,
+    cwd: &Path,
+) -> Result<(
+    Option<coco_config_reload::RuntimeReloader>,
+    coco_config::RuntimeConfig,
+)> {
+    let reload_opts = coco_config_reload::ReloadOptions::new(cwd.to_path_buf())
+        .with_overrides(cli_runtime_overrides(cli)?)
+        .with_setting_sources(cli.setting_sources.clone());
+    let reload_opts = if let Some(path) = cli.settings.as_deref() {
+        reload_opts.with_flag_settings(path)
+    } else {
+        reload_opts
+    };
+    match coco_config_reload::RuntimeReloader::spawn(reload_opts) {
+        Ok(reloader) => {
+            let snapshot = reloader.current();
+            Ok((Some(reloader), Arc::unwrap_or_clone(snapshot)))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "config hot-reload disabled; using one-shot build");
+            Ok((None, build_runtime_config_for_cli(cli, cwd)?))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -245,8 +279,9 @@ pub fn resolve_main_model(runtime_config: &coco_config::RuntimeConfig) -> Resolv
 /// plugin sources.
 ///
 /// Headless and SDK paths share this helper so a future addition (e.g.,
-/// project-tree ancestor walk) lands in one place. The plugin
-/// pipeline isn't yet plumbed in headless — pass an empty slice.
+/// project-tree ancestor walk) lands in one place. `plugin_sources` are the
+/// plugin-contributed output-style directories (see
+/// [`crate::session_bootstrap::plugin_output_style_sources`]).
 pub fn build_output_style_manager(
     runtime_config: &coco_config::RuntimeConfig,
     cwd: &Path,
@@ -631,7 +666,7 @@ pub async fn run_chat_with_options(
         "headless run starting"
     );
 
-    let runtime_config = build_runtime_config_for_cli(cli, &cwd)?;
+    let (sandbox_reloader, runtime_config) = build_runtime_config_with_reloader(cli, &cwd)?;
     crate::model_card_refresh::spawn_if_enabled(&runtime_config);
     // Reconcile coordinator mode to a resumed session (TS `matchSessionMode`,
     // wired into the print/headless resume path too). Flips the env flag
@@ -644,12 +679,15 @@ pub async fn run_chat_with_options(
     }
     let settings = &runtime_config.settings;
 
-    // Resolve the active output style once — fed into the system
-    // prompt builder + threaded onto `SessionBootstrap` for the
-    // per-turn reminder generator. Plugin styles aren't loaded in the
-    // headless path (no plugin discovery yet); user / project /
-    // managed dirs are walked.
-    let output_style_manager = build_output_style_manager(&runtime_config, &cwd, &[]);
+    // Load the plugin set once and reuse for output styles + command/skill
+    // registration. Resolve the active output style here — fed into the system
+    // prompt builder + threaded onto `SessionBootstrap` for the per-turn
+    // reminder generator. Plugin-contributed styles are folded in alongside
+    // user / project / managed dirs.
+    let plugins = crate::session_bootstrap::load_session_plugins(&cwd);
+    let plugin_style_sources = crate::session_bootstrap::plugin_output_style_sources(&plugins);
+    let output_style_manager =
+        build_output_style_manager(&runtime_config, &cwd, &plugin_style_sources);
     let active_output_style = output_style_manager.active().cloned();
 
     let main_model = resolve_main_model(&runtime_config);
@@ -712,7 +750,12 @@ pub async fn run_chat_with_options(
     // subagents from a single context, not a second session container.
     let config_home = coco_config::global_config::config_home();
     let (command_registry, skill_manager) =
-        crate::session_bootstrap::build_session_command_registry(&runtime_config, &cwd);
+        crate::session_bootstrap::build_session_command_registry(
+            cli,
+            &runtime_config,
+            &cwd,
+            &plugins,
+        );
     let runtime = crate::session_runtime::SessionRuntime::build(
         crate::session_runtime::SessionRuntimeBuildOpts {
             cli,
@@ -734,9 +777,24 @@ pub async fn run_chat_with_options(
             // Resume / continue / fork: key every runtime subsystem off the
             // resumed id, else task dirs + agent transcripts orphan.
             session_id_override: opts.session_id_override.clone(),
+            // Headless / print: file-history checkpointing defaults OFF.
+            is_non_interactive: true,
         },
     )
     .await?;
+
+    // Sandbox hot-reload: re-flow settings.json `sandbox.*` edits into the live
+    // SandboxState on the headless/print path too (TS `sandbox-adapter` covers
+    // REPL and print/SDK alike). The task exits when the reloader drops at the
+    // end of this function. Held in `_sandbox_reload` for the session lifetime.
+    let _sandbox_reload = match (sandbox_reloader.as_ref(), runtime.sandbox_state()) {
+        (Some(reloader), Some(state)) => Some(crate::sandbox_reload::spawn_sandbox_reload(
+            state,
+            &reloader.publisher(),
+            cwd.clone(),
+        )),
+        _ => None,
+    };
 
     // `StructuredOutput` tool + Stop hook (TS `main.tsx:1879-1901`). The tool
     // registers into the shared `tools` Arc; the Stop hook MUST target the
@@ -753,6 +811,13 @@ pub async fn run_chat_with_options(
     {
         tracing::warn!(error = %e, "agent/task infrastructure unavailable in headless; spawns degrade");
     }
+    // Unified MCP bootstrap: load config-file + plugin MCP servers. Headless is
+    // single-turn, so await the connect batch (TS print parity) — MCP tools must
+    // be registered before the first (only) turn.
+    crate::session_bootstrap::bootstrap_session_mcp(
+        &runtime, &cwd, None, /*await_connect*/ true,
+    )
+    .await;
 
     // Leader-side teammate inbox consumption (R1): drives `ShutdownApproved`
     // → teardown so a headless leader doesn't leak stale team membership /
@@ -1001,7 +1066,7 @@ fn summarize_tool_filter(cli: &Cli) -> Option<ToolFilterSummary> {
 /// Used internally by `compose_system_prompt` to anchor `--add-dir`
 /// paths for fence checks; callers that need the rendered display form
 /// for the env block should use [`resolve_additional_dirs_display`].
-fn resolve_additional_dirs(cli: &Cli, cwd: &Path) -> Vec<PathBuf> {
+pub(crate) fn resolve_additional_dirs(cli: &Cli, cwd: &Path) -> Vec<PathBuf> {
     cli.add_dir
         .iter()
         .map(|raw| {

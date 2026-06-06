@@ -21,7 +21,6 @@ use coco_types::CommandSource;
 use coco_types::CommandType;
 use coco_types::PromptCommandData;
 
-use crate::LoadedPlugin;
 use crate::loader::LoadedPluginV2;
 use crate::schemas::CommandMetadata;
 use crate::schemas::ManifestCommands;
@@ -38,38 +37,10 @@ pub struct PluginCommand {
     pub prompt: String,
 }
 
-// ---------------------------------------------------------------------------
-// V1 loading
-// ---------------------------------------------------------------------------
-
-/// Load commands contributed by a V1 plugin.
-///
-/// Scans the `commands/` directory for `.md` files and `SKILL.md` subdirs.
-pub fn load_plugin_commands(plugin: &LoadedPlugin) -> Vec<PluginCommand> {
-    let mut commands = Vec::new();
-    let commands_dir = plugin.path.join("commands");
-    if commands_dir.is_dir() {
-        load_commands_from_dir(&commands_dir, &plugin.name, &mut commands);
-    }
-    commands
-}
-
-/// Load commands from all enabled V1 plugins.
-pub fn load_all_plugin_commands(plugins: &[&LoadedPlugin]) -> Vec<PluginCommand> {
-    plugins
-        .iter()
-        .flat_map(|p| load_plugin_commands(p))
-        .collect()
-}
-
-// ---------------------------------------------------------------------------
-// V2 loading
-// ---------------------------------------------------------------------------
-
-/// Load commands contributed by a V2 plugin.
+/// Load commands contributed by a plugin.
 ///
 /// Sources:
-/// 1. `commands/` directory (same as V1)
+/// 1. `commands/` directory (`.md` files and `SKILL.md` subdirs)
 /// 2. Manifest `commands` field: string path, array of paths, or object mapping
 pub fn load_plugin_commands_v2(plugin: &LoadedPluginV2) -> Vec<PluginCommand> {
     let plugin_name = &plugin.id.name;

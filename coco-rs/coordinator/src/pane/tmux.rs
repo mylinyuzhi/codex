@@ -311,7 +311,7 @@ impl TmuxBackend {
     async fn create_teammate_pane_external(
         &self,
         name: &str,
-        _color: AgentColorName,
+        color: AgentColorName,
         is_first: bool,
     ) -> crate::Result<CreatePaneResult> {
         // All ops route through `self.run`, which (external mode) addresses the
@@ -319,27 +319,86 @@ impl TmuxBackend {
         // send_command now target too.
         let swarm_window = format!("{SWARM_SESSION_NAME}:{SWARM_VIEW_WINDOW_NAME}");
         let pane_id = if is_first {
-            // Create the swarm session; its INITIAL pane IS the first
-            // teammate's pane. TS reuses `firstPaneId` here rather than
-            // splitting — an unconditional split would orphan that initial
-            // pane as a stray empty shell. TS:
-            // `createTeammatePaneExternal` first-teammate arm.
-            let output = self
-                .run(&[
-                    "new-session",
-                    "-d",
-                    "-s",
-                    SWARM_SESSION_NAME,
-                    "-n",
-                    SWARM_VIEW_WINDOW_NAME,
-                    "-P",
-                    "-F",
-                    "#{pane_id}",
-                ])
-                .await?;
-            // Enable per-window pane titles now that the swarm window exists.
-            let _ = self.enable_pane_border_status(Some(&swarm_window)).await;
-            output.trim().to_string()
+            // Reuse an already-running swarm session/window if present rather
+            // than recreating it — an unconditional `new-session` would orphan
+            // the prior session's panes. TS `createExternalSwarmSession`:
+            // has-session → list-windows → list-panes, reusing panes[0].
+            let has_session = self
+                .run(&["has-session", "-t", SWARM_SESSION_NAME])
+                .await
+                .is_ok();
+            if has_session {
+                let windows = self
+                    .run(&[
+                        "list-windows",
+                        "-t",
+                        SWARM_SESSION_NAME,
+                        "-F",
+                        "#{window_name}",
+                    ])
+                    .await
+                    .unwrap_or_default();
+                let has_view = windows.lines().any(|w| w.trim() == SWARM_VIEW_WINDOW_NAME);
+                if has_view {
+                    // Reuse the first pane of the existing swarm-view window.
+                    let panes = self
+                        .run(&["list-panes", "-t", &swarm_window, "-F", "#{pane_id}"])
+                        .await
+                        .unwrap_or_default();
+                    match panes.lines().map(str::trim).find(|s| !s.is_empty()) {
+                        Some(p) => p.to_string(),
+                        None => {
+                            // Window exists but has no panes (unexpected): split it.
+                            let output = self
+                                .run(&[
+                                    "split-window",
+                                    "-t",
+                                    &swarm_window,
+                                    "-P",
+                                    "-F",
+                                    "#{pane_id}",
+                                ])
+                                .await?;
+                            output.trim().to_string()
+                        }
+                    }
+                } else {
+                    // Session exists but the swarm-view window does not: add it.
+                    let output = self
+                        .run(&[
+                            "new-window",
+                            "-t",
+                            SWARM_SESSION_NAME,
+                            "-n",
+                            SWARM_VIEW_WINDOW_NAME,
+                            "-P",
+                            "-F",
+                            "#{pane_id}",
+                        ])
+                        .await?;
+                    let _ = self.enable_pane_border_status(Some(&swarm_window)).await;
+                    output.trim().to_string()
+                }
+            } else {
+                // No swarm session yet: create it. Its INITIAL pane IS the first
+                // teammate's pane — TS reuses `firstPaneId` rather than splitting.
+                let output = self
+                    .run(&[
+                        "new-session",
+                        "-d",
+                        "-s",
+                        SWARM_SESSION_NAME,
+                        "-n",
+                        SWARM_VIEW_WINDOW_NAME,
+                        "-P",
+                        "-F",
+                        "#{pane_id}",
+                    ])
+                    .await?;
+                // Enable per-window pane titles now that the swarm window exists.
+                let _ = self.enable_pane_border_status(Some(&swarm_window)).await;
+                output.trim().to_string()
+            }
         } else {
             // Subsequent teammates split an existing pane in the swarm window.
             let output = self
@@ -357,8 +416,14 @@ impl TmuxBackend {
 
         tokio::time::sleep(std::time::Duration::from_millis(PANE_SHELL_INIT_DELAY_MS)).await;
 
-        // Set title
-        let _ = self.run(&["select-pane", "-t", &pane_id, "-T", name]).await;
+        // Mirror the leader path: colored border + titled border, then tile
+        // the swarm window. TS `createTeammatePaneExternal` does the same after
+        // every external pane (TmuxBackend.ts:694-696). All ops route through
+        // `self.run`, which in external mode already addresses the dedicated
+        // swarm server, so no socket-aware variants are needed.
+        let _ = self.set_pane_border_color(&pane_id, color).await;
+        let _ = self.set_pane_title(&pane_id, name, color).await;
+        let _ = self.rebalance_panes_tiled(&swarm_window).await;
 
         Ok(CreatePaneResult {
             pane_id,

@@ -105,6 +105,17 @@ impl Tool for EditTool {
         if input.file_path.is_empty() {
             return ValidationResult::invalid("missing required field: file_path");
         }
+        // #26 / TS `FileEditTool.ts:266-273`: route notebooks to
+        // NotebookEdit (editing `.ipynb` JSON with Edit corrupts it).
+        if input.file_path.to_lowercase().ends_with(".ipynb") {
+            return ValidationResult::invalid_with_code(
+                format!(
+                    "File is a Jupyter Notebook. Use the {} to edit this file.",
+                    ToolName::NotebookEdit.as_str()
+                ),
+                "5",
+            );
+        }
         // `old_string` and `new_string` are required at the struct
         // level — schema-required, parse-required. The semantic check
         // is that they must differ; empty values are otherwise
@@ -158,6 +169,58 @@ impl Tool for EditTool {
         // Sandbox pre-flight — deny inadmissible writes before any I/O,
         // so SDK consumers can intercept via the approval bridge.
         super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true)?;
+
+        // #21 / TS `FileEditTool.ts:223-227`: an empty `old_string` on a
+        // nonexistent file is new-file creation — write `new_string` as
+        // the whole file (creating parent dirs). The read-before-edit and
+        // match logic below all assume an existing file, so this path
+        // short-circuits before them.
+        if old_string.is_empty() && !path.exists() {
+            if let Some(err) = crate::check_write_root_fence(ctx, path) {
+                return Err(ToolError::ExecutionFailed {
+                    message: err,
+                    display_data: None,
+                    source: None,
+                });
+            }
+            if let Some(err) = crate::check_team_mem_secret(ctx, path, new_string) {
+                return Err(ToolError::ExecutionFailed {
+                    message: err,
+                    display_data: None,
+                    source: None,
+                });
+            }
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(|e| ToolError::ExecutionFailed {
+                    message: format!("failed to create parent directories for {file_path}: {e}"),
+                    display_data: None,
+                    source: None,
+                })?;
+            }
+            crate::track_file_edit(ctx, path).await;
+            std::fs::write(file_path, new_string).map_err(|e| ToolError::ExecutionFailed {
+                message: format!("failed to write {file_path}: {e}"),
+                display_data: None,
+                source: None,
+            })?;
+            crate::record_file_edit(ctx, path, new_string.to_string()).await;
+            crate::track_skill_triggers(ctx, path).await;
+            ctx.lsp.notify_save(path).await;
+            return Ok(ToolResult {
+                data: EditOutput {
+                    file_path: file_path.to_string(),
+                    replace_all,
+                    user_modified: false,
+                    replacement_count: 1,
+                },
+                new_messages: vec![],
+                app_state_patch: None,
+                permission_updates: Vec::new(),
+                display_data: None,
+            });
+        }
 
         if !path.exists() {
             return Err(ToolError::ExecutionFailed {
@@ -306,7 +369,7 @@ impl Tool for EditTool {
                     error_code: Some("1".into()),
                 });
             }
-            content.replace(old_string, new_string)
+            crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, true)
         } else if count == 0 {
             // Matching fallback order (TS-aligned + coco-rs extension):
             //   1. Quote-normalized match — TS `findActualString()` at
@@ -325,9 +388,14 @@ impl Tool for EditTool {
             {
                 let preserved_new =
                     crate::tools::edit_utils::preserve_quote_style(old_string, actual, new_string);
-                content.replacen(actual, &preserved_new, 1)
+                crate::tools::edit_utils::apply_edit_to_file(
+                    &content,
+                    actual,
+                    &preserved_new,
+                    false,
+                )
             } else if let Some(actual) = find_fuzzy_match(&content, old_string) {
-                content.replacen(&actual, new_string, 1)
+                crate::tools::edit_utils::apply_edit_to_file(&content, &actual, new_string, false)
             } else {
                 return Err(ToolError::InvalidInput {
                     message: format!("old_string not found in {file_path}"),
@@ -342,7 +410,7 @@ impl Tool for EditTool {
                 error_code: Some("3".into()),
             });
         } else {
-            content.replacen(old_string, new_string, 1)
+            crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, false)
         };
 
         // Sandboxed write fence (memory-extraction / auto-dream

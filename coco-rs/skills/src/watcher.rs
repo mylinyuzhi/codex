@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 
+use crate::SkillDefinition;
 use crate::SkillManager;
 use crate::SkillScopes;
 
@@ -80,10 +81,9 @@ const SKILL_DEBOUNCE_MS: u64 = 300;
 pub struct SkillsChanged {
     /// Paths of files that changed (for diagnostics).
     pub changed_paths: Vec<PathBuf>,
-    /// Hook declarations from the reloaded skill set:
-    /// `(skill_name, hooks_json)`. Populated post-reload so subscribers
-    /// (the hooks layer) can re-register skill-declared hooks without a
-    /// session restart.
+    /// Hook declarations from the pending skill set:
+    /// `(skill_name, hooks_json)`. Populated before the live manager is
+    /// mutated so subscribers can run blocking ConfigChange hooks first.
     ///
     /// TS: `skillChangeDetector.ts` triggers both skill reload AND
     /// `hooksConfigSnapshot` invalidation. In Rust the snapshot refresh
@@ -109,9 +109,9 @@ pub struct SkillChangeDetector {
     /// Wrapped generic watcher — owns the OS-event pump, throttle
     /// timer, and post-debounce broadcast channel. The change-tx below
     /// is downstream of this: a tokio task lifts each debounced
-    /// `SkillsChanged` into a reload step then re-broadcasts so
+    /// `SkillsChanged` into a disk scan then re-broadcasts so
     /// subscribers see the enriched form (`skill_hook_declarations`
-    /// populated).
+    /// populated) before the live manager is changed.
     _inner: FileWatcher<SkillsChanged>,
     /// Shared skill manager that gets reloaded on changes.
     manager: Arc<SkillManager>,
@@ -119,7 +119,7 @@ pub struct SkillChangeDetector {
     watched_dirs: Vec<PathBuf>,
     /// Disk scopes rebuilt after each debounced change.
     reload_scopes: Vec<SkillReloadScope>,
-    /// Broadcast sender for change notifications (post-reload —
+    /// Broadcast sender for change notifications (pre-reload —
     /// `skill_hook_declarations` is filled in).
     change_tx: broadcast::Sender<SkillsChanged>,
 }
@@ -153,39 +153,24 @@ impl SkillChangeDetector {
 
         // Bridge: each debounced `SkillsChanged` from the FileWatcher
         // triggers a fresh skill scan, then we re-broadcast on
-        // `change_tx` with hook declarations populated. Subscribers
-        // (coco-hooks) need that enriched payload.
+        // `change_tx` with hook declarations populated. The live
+        // manager is mutated by the app layer after blocking hooks pass.
         let (change_tx, _) = broadcast::channel(32);
         let change_tx_clone = change_tx.clone();
-        let manager_clone = Arc::clone(&manager);
         let reload_scopes_clone = reload_scopes.clone();
         let mut rx = inner.subscribe();
         tokio::spawn(async move {
             while let Ok(mut event) = rx.recv().await {
                 tracing::info!(
                     paths = ?event.changed_paths,
-                    "skill files changed, reloading"
+                    "skill files changed, scanning"
                 );
-                let reloaded = SkillManager::new();
-                crate::bundled::register_bundled(&reloaded);
-                for scope in &reload_scopes_clone {
-                    scope.load_into(&reloaded);
-                }
-                let new_skills: Vec<_> = reloaded
-                    .all_including_conditional()
-                    .into_iter()
-                    .map(|skill| (*skill).clone())
-                    .collect();
+                let new_skills = load_scoped_skills(&reload_scopes_clone);
 
                 event.skill_hook_declarations = new_skills
                     .iter()
                     .filter_map(|s| s.hooks.as_ref().map(|h| (s.name.clone(), h.clone())))
                     .collect();
-
-                // Interior mutability — no Mutex needed since
-                // SkillManager has internal RwLock.
-                manager_clone.reload_disk_skills(new_skills);
-                tracing::info!(count = manager_clone.len(), "skills reloaded");
 
                 let _ = change_tx_clone.send(event);
             }
@@ -205,6 +190,15 @@ impl SkillChangeDetector {
         self.change_tx.subscribe()
     }
 
+    /// Reload the live manager from disk after the caller has accepted
+    /// the pending change event.
+    pub fn reload_now(&self) -> usize {
+        let new_skills = load_scoped_skills(&self.reload_scopes);
+        self.manager.reload_disk_skills(new_skills);
+        self.manager.reset_announcements();
+        self.manager.len()
+    }
+
     /// Get a reference to the managed [`SkillManager`].
     pub fn manager(&self) -> &Arc<SkillManager> {
         &self.manager
@@ -218,6 +212,19 @@ impl SkillChangeDetector {
     pub fn reload_scopes(&self) -> &[SkillReloadScope] {
         &self.reload_scopes
     }
+}
+
+fn load_scoped_skills(reload_scopes: &[SkillReloadScope]) -> Vec<SkillDefinition> {
+    let reloaded = SkillManager::new();
+    crate::bundled::register_bundled(&reloaded);
+    for scope in reload_scopes {
+        scope.load_into(&reloaded);
+    }
+    reloaded
+        .all_including_conditional()
+        .into_iter()
+        .map(|skill| (*skill).clone())
+        .collect()
 }
 
 // ─── classify + merge (testable, extracted from build()) ────────────────

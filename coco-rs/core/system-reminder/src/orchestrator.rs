@@ -109,10 +109,10 @@ impl SystemReminderOrchestrator {
             IdeSelectionGenerator, InvokedSkillsGenerator, McpInstructionsDeltaGenerator,
             McpResourcesGenerator, NestedMemoryGenerator, OutputStyleGenerator,
             OutputTokenUsageGenerator, PlanModeEnterGenerator, PlanModeExitGenerator,
-            PlanModeReentryGenerator, QueuedCommandGenerator, RelevantMemoriesGenerator,
-            SkillDiscoveryGenerator, SkillListingGenerator, TaskRemindersGenerator,
-            TaskStatusGenerator, TeamContextGenerator, TeammateMailboxGenerator,
-            TodoRemindersGenerator, TokenUsageGenerator, UltrathinkEffortGenerator,
+            PlanModeReentryGenerator, RelevantMemoriesGenerator, SkillDiscoveryGenerator,
+            SkillListingGenerator, TaskRemindersGenerator, TaskStatusGenerator,
+            TeamContextGenerator, TeammateMailboxGenerator, TodoRemindersGenerator,
+            TokenUsageGenerator, UltrathinkEffortGenerator, UserContextGenerator,
             VerifyPlanReminderGenerator,
         };
 
@@ -126,8 +126,9 @@ impl SystemReminderOrchestrator {
         // TS allThreadAttachments (`attachments.ts:822-941`), plus
         // relevant_memories which TS prefetches outside getAttachments but
         // renders through the same reminder path.
-        self.add_generator(Arc::new(QueuedCommandGenerator));
         self.add_generator(Arc::new(DateChangeGenerator));
+        // TS `prependUserContext` baseline (currentDate); fires every turn.
+        self.add_generator(Arc::new(UserContextGenerator));
         self.add_generator(Arc::new(UltrathinkEffortGenerator));
         self.add_generator(Arc::new(DeferredToolsDeltaGenerator));
         self.add_generator(Arc::new(AgentListingDeltaGenerator));

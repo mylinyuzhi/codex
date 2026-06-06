@@ -19,8 +19,14 @@ use crate::state::PanePromptState;
 /// Keybinding context — determines which key mappings are active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeybindingContext {
-    /// Permission/question state — Y/N/A approval.
+    /// Permission/approval state — Y/N/A approval.
     Confirmation,
+    /// AskUserQuestion multi-choice state. Distinct from [`Self::Confirmation`]
+    /// because a question is answered by selecting an option (Enter), never by
+    /// Y/N/A — routing it through the confirmation map would let the first
+    /// letter of an answer silently approve/deny and tear the prompt down, and
+    /// would leave the "Other" free-text composer unreachable.
+    Question,
     /// Filterable list state (model picker, command palette, etc.).
     Picker,
     /// Model picker state — filterable list plus effort/role controls.
@@ -61,6 +67,8 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | ModalState::Feedback(_)
             | ModalState::McpServerSelect(_)
             | ModalState::CopyPicker(_)
+            | ModalState::PluginHint(_)
+            | ModalState::PluginDialog(_)
             | ModalState::Rewind(_) => KeybindingContext::Picker,
 
             // Scrollable read-only modals
@@ -87,9 +95,15 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 
     if matches!(
         state.ui.interaction.active_prompt,
+        Some(PanePromptState::Question(_))
+    ) {
+        return KeybindingContext::Question;
+    }
+
+    if matches!(
+        state.ui.interaction.active_prompt,
         Some(
             PanePromptState::Permission(_)
-                | PanePromptState::Question(_)
                 | PanePromptState::SandboxPermission(_)
                 | PanePromptState::CostWarning(_)
                 | PanePromptState::PlanEntry(_)
@@ -262,6 +276,7 @@ fn resolve_key(
     // Layer 2: legacy hardcoded cascade (TUI-only shortcuts).
     let cmd = match ctx {
         KeybindingContext::Confirmation => map_confirmation_key(key),
+        KeybindingContext::Question => map_question_key(key),
         KeybindingContext::ModelPicker => map_model_picker_key(key),
         KeybindingContext::TeamRoster => map_team_roster_key(key),
         KeybindingContext::Picker => map_picker_key(key),
@@ -362,6 +377,42 @@ fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
+        }
+        _ => None,
+    }
+}
+
+/// Keys for the AskUserQuestion multi-choice prompt.
+///
+/// The option handlers (`interaction::{nav, filter, filter_backspace,
+/// confirm, question_cycle_focus}`) already do the right thing; the bug this
+/// map fixes is purely at the keymap layer. Unlike [`map_confirmation_key`]
+/// it never emits `Approve`/`Deny`/`ApproveAll`: a question commits only via
+/// Enter. Printable characters (and Space/Backspace) flow to `SurfaceFilter*`,
+/// which `interaction::filter` routes to the multi-select toggle or the
+/// "Other" free-text composer — the path that was previously dead.
+fn map_question_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Esc => Some(TuiCommand::Cancel),
+        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
+        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
+        KeyCode::Up => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down => Some(TuiCommand::SurfaceNext),
+        // Left/Right switch between questions (wrapping), mirroring codex
+        // `move_question` and the TS question tabs. Footer actions stay on Tab.
+        KeyCode::Left => Some(TuiCommand::QuestionSwitchQuestion(-1)),
+        KeyCode::Right => Some(TuiCommand::QuestionSwitchQuestion(1)),
+        // Tab/Shift+Tab cycle between questions and the footer actions
+        // ("Chat about this" / "Skip interview"), via question_cycle_focus.
+        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
+        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
+        KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
+        // Every printable char (Space included) routes through the filter
+        // path: Space toggles a multi-select option, other chars type into
+        // the focused "Other" composer, and are silently swallowed otherwise.
+        KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+            Some(TuiCommand::SurfaceFilter(c))
         }
         _ => None,
     }
@@ -541,7 +592,7 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // all read from.
         // keymap = "input:newline"
         KeyCode::Enter if shift || alt => Some(TuiCommand::InsertNewline),
-        KeyCode::Enter if is_streaming => Some(TuiCommand::QueueInput),
+        KeyCode::Enter if is_streaming => Some(TuiCommand::SubmitInput),
         KeyCode::Enter if prompt_suggestion_visible(state) => {
             Some(TuiCommand::SubmitPromptSuggestion)
         }

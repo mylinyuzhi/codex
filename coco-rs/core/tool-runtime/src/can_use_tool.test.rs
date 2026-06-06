@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use tokio_util::sync::CancellationToken;
 
 use super::CanUseToolCallContext;
 use super::CanUseToolDecision;
@@ -15,7 +14,7 @@ use super::deny_all_handle;
 fn ctx() -> CanUseToolCallContext {
     CanUseToolCallContext {
         tool_use_id: "test-id".into(),
-        abort: CancellationToken::new(),
+        abort: crate::TurnAbortSignal::from_token(tokio_util::sync::CancellationToken::new()),
         require_can_use_tool: false,
         messages: Arc::new(Vec::new()),
     }

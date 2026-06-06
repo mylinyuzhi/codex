@@ -124,6 +124,7 @@ pub(super) fn handle(
                     questions,
                     focus: crate::state::QuestionFocus::Question(0),
                     is_in_plan_mode,
+                    submit_selected: 0,
                 },
             ));
             true
@@ -336,10 +337,15 @@ pub(super) fn handle(
             }
             true
         }
+        TuiOnlyEvent::ToolInterruptibilityChanged { interruptible } => {
+            state.session.has_submit_interruptible_tool_in_progress = interruptible;
+            true
+        }
         TuiOnlyEvent::ToolExecutionAborted {
             tool_use_id: _,
             reason,
         } => {
+            let reason = format!("{reason:?}");
             state.ui.add_toast(Toast::warning(
                 t!("toast.tool_aborted_full", reason = reason.as_str()).to_string(),
             ));
@@ -421,6 +427,16 @@ pub(super) fn handle(
             state.ui.show_modal(ModalState::SkillsDialog(
                 crate::state::SkillsDialogState::from_wire(payload),
             ));
+            true
+        }
+        TuiOnlyEvent::OpenPluginDialog { payload } => {
+            if let Some(ModalState::PluginDialog(existing)) = state.ui.modal.as_mut() {
+                *existing = crate::state::PluginDialogState::from_wire(payload);
+            } else {
+                state.ui.show_modal(ModalState::PluginDialog(
+                    crate::state::PluginDialogState::from_wire(payload),
+                ));
+            }
             true
         }
         // /agents — 2-tab overlay (Running + Library). Running tab
@@ -554,6 +570,10 @@ pub(super) fn handle(
         }
         TuiOnlyEvent::OpenModelPicker => {
             crate::update::show::cycle_model(state);
+            true
+        }
+        TuiOnlyEvent::OpenSettings => {
+            crate::update::show::settings(state);
             true
         }
         TuiOnlyEvent::OpenThemePicker => {
@@ -896,10 +916,17 @@ fn on_rewind_completed(
 ///
 /// TS: `AskUserQuestionPermissionRequest.tsx` reads the same shape.
 fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::QuestionItem> {
+    // The tool schema dropped its hard `maxItems` caps so a weak model that
+    // over-generates doesn't hard-fail validation (which retry-loops and
+    // flickers the bottom bar). Enforce the intended cap here on display: keep
+    // the first 4 questions and the first 4 options per question.
+    const MAX_QUESTIONS: usize = 4;
+    const MAX_OPTIONS: usize = 4;
     let Some(arr) = input.get("questions").and_then(serde_json::Value::as_array) else {
         return Vec::new();
     };
     arr.iter()
+        .take(MAX_QUESTIONS)
         .map(|q| {
             let header = str_field(q, "header").to_string();
             let question = str_field(q, "question").to_string();
@@ -912,6 +939,7 @@ fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::Question
                 .and_then(serde_json::Value::as_array)
                 .map(|opts| {
                     opts.iter()
+                        .take(MAX_OPTIONS)
                         .map(|o| crate::state::QuestionOption {
                             label: str_field(o, "label").to_string(),
                             description: str_field(o, "description").to_string(),
@@ -919,22 +947,25 @@ fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::Question
                                 .get("preview")
                                 .and_then(serde_json::Value::as_str)
                                 .map(String::from),
+                            kind: crate::state::OptionKind::Pick,
                         })
                         .collect()
                 })
                 .unwrap_or_default();
-            // Inject the "Other" sentinel as the last option of every
+            // Inject the "Other" composer as the last option of every
             // question (single-select only — TS does the same; the
             // multiSelect widget hides Other). When the user focuses
             // it, typed chars route to `notes` and the answer-build
             // logic substitutes the typed text for the option label.
-            // TS: `QuestionView.tsx:85` `__other__` sentinel.
+            // The Other row is a typed [`OptionKind::Other`], not a
+            // magic label, so a model can't collide with it.
             let mut options = options;
             if !multi_select {
                 options.push(crate::state::QuestionOption {
-                    label: crate::state::OTHER_OPTION_LABEL.into(),
+                    label: crate::state::OTHER_OPTION_DISPLAY.into(),
                     description: "Type your own answer.".into(),
                     preview: None,
+                    kind: crate::state::OptionKind::Other,
                 });
             }
             crate::state::QuestionItem {
@@ -945,7 +976,6 @@ fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::Question
                 selected: 0,
                 checked: Vec::new(),
                 notes: String::new(),
-                editing_notes: false,
             }
         })
         .collect()

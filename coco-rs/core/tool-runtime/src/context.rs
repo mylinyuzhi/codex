@@ -18,6 +18,8 @@ use tokio_util::sync::CancellationToken;
 use std::path::PathBuf;
 
 use crate::agent_handle::AgentHandleRef;
+use crate::cancellation::ToolAbortSignal;
+use crate::cancellation::TurnAbortController;
 use crate::denial_tracking::DenialTracker;
 use crate::hook_handle::HookHandleRef;
 use crate::lsp_handle::LspHandleRef;
@@ -190,8 +192,8 @@ pub struct ToolUseContext {
     pub model_supports_client_side_tool_search: bool,
 
     // ── Core State ──
-    /// Cancellation token for aborting tool execution.
-    pub cancel: CancellationToken,
+    /// Structured abort signal for tool execution.
+    pub abort: ToolAbortSignal,
     /// Post-budget message snapshot the engine just sent to the model
     /// this turn. Shared via outer `Arc` so every tool in the batch
     /// observes byte-identical history; inner `Arc<Message>` lets
@@ -592,6 +594,12 @@ pub enum ToolDecisionKind {
 use coco_types::PermissionMode;
 
 impl ToolUseContext {
+    /// Legacy token adapter for subprocess/provider APIs that still accept a
+    /// plain [`CancellationToken`]. Semantic reason remains on [`Self::abort`].
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.abort.token()
+    }
+
     /// Clone the context for use in concurrent tool execution.
     ///
     /// Shares Arc-wrapped state (messages, in_progress IDs, app_state, denial tracking)
@@ -628,7 +636,7 @@ impl ToolUseContext {
             discovered_tool_names: self.discovered_tool_names.clone(),
             model_supports_tool_reference: self.model_supports_tool_reference,
             model_supports_client_side_tool_search: self.model_supports_client_side_tool_search,
-            cancel: self.cancel.clone(),
+            abort: self.abort.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
             tool_use_id: None, // each concurrent tool gets its own ID
@@ -837,7 +845,7 @@ impl ToolUseContext {
             discovered_tool_names: Arc::new(HashSet::new()),
             model_supports_tool_reference: false,
             model_supports_client_side_tool_search: false,
-            cancel: CancellationToken::new(),
+            abort: ToolAbortSignal::from_turn(TurnAbortController::new().signal()),
             messages: Arc::new(Vec::new()),
             permission_context: ToolPermissionContext {
                 mode: PermissionMode::BypassPermissions,

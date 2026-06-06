@@ -173,20 +173,48 @@ pub fn parse_hook_output(stdout: &str) -> ParsedHookOutput {
     if !trimmed.starts_with('{') {
         return ParsedHookOutput::PlainText(stdout.to_string());
     }
-    match serde_json::from_str::<HookJsonOutput>(trimmed) {
-        Ok(json) => ParsedHookOutput::Json(Box::new(json)),
+    // Distinguish "not valid JSON at all" (→ plain text) from "valid JSON but
+    // wrong shape" (→ validation error). TS `parseHookOutput` returns
+    // `validationError` only for the latter; the result loop surfaces it as a
+    // `hook_non_blocking_error` and does NOT inject the text as context.
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value) => match serde_json::from_value::<HookJsonOutput>(value) {
+            Ok(json) => ParsedHookOutput::Json(Box::new(json)),
+            Err(e) => {
+                tracing::debug!("hook JSON failed schema validation: {e}");
+                ParsedHookOutput::ValidationError(format!(
+                    "{e}\n\nExpected schema:\n{HOOK_OUTPUT_SCHEMA_HINT}"
+                ))
+            }
+        },
         Err(e) => {
-            tracing::debug!("failed to parse hook JSON output: {e}");
+            tracing::debug!("hook output starts with {{ but is not valid JSON: {e}");
             ParsedHookOutput::PlainText(stdout.to_string())
         }
     }
 }
+
+/// Schema hint appended to hook JSON validation errors (TS `parseHookOutput`).
+const HOOK_OUTPUT_SCHEMA_HINT: &str = "\
+{
+  \"continue\": \"boolean (optional)\",
+  \"suppressOutput\": \"boolean (optional)\",
+  \"stopReason\": \"string (optional)\",
+  \"decision\": \"\\\"approve\\\" | \\\"block\\\" (optional)\",
+  \"reason\": \"string (optional)\",
+  \"systemMessage\": \"string (optional)\",
+  \"permissionDecision\": \"\\\"allow\\\" | \\\"deny\\\" | \\\"ask\\\" (optional)\",
+  \"hookSpecificOutput\": \"object (optional, see docs for per-event fields)\"
+}";
 
 /// Result of parsing hook stdout.
 #[derive(Debug, Clone)]
 pub enum ParsedHookOutput {
     Json(Box<HookJsonOutput>),
     PlainText(String),
+    /// Stdout was valid JSON but did not match the hook output schema. Surfaced
+    /// as a `hook_non_blocking_error`; never injected as model context.
+    ValidationError(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +561,7 @@ pub async fn execute_hooks_parallel(
         /*http_url_allowlist*/ None,
         /*http_env_var_policy*/ None,
         /*async_registry*/ None,
+        /*async_rewake_sink*/ None,
         /*llm_handle*/ None,
         /*workspace_trust_accepted*/ None,
     )
@@ -569,6 +598,7 @@ async fn execute_hooks_parallel_filtered(
     http_url_allowlist: Option<&[String]>,
     http_env_var_policy: Option<&[String]>,
     async_registry: Option<&std::sync::Arc<crate::async_registry::AsyncHookRegistry>>,
+    async_rewake_sink: Option<&std::sync::Arc<dyn crate::AsyncRewakeSink>>,
     llm_handle: Option<&std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
     workspace_trust_accepted: Option<bool>,
 ) -> Vec<SingleHookResult> {
@@ -694,15 +724,16 @@ async fn execute_hooks_parallel_filtered(
         // out-of-band through `async_registry`; their result is later
         // surfaced to the model via the reminder pipeline
         // (TS `getAsyncHookResponseAttachments()`).
-        let tx = if is_async { None } else { Some(tx.clone()) };
+        let tx = if is_async || async_rewake {
+            None
+        } else {
+            Some(tx.clone())
+        };
         // Per-spawn handle to the async registry. Cloned outside the
         // spawn so the registry can be `Some(...)` and the spawn can
         // call `.register()` / completion methods.
-        let async_reg_for_spawn = if is_async {
-            async_registry.cloned()
-        } else {
-            None
-        };
+        let async_reg_for_spawn = async_registry.cloned();
+        let async_rewake_sink_for_spawn = async_rewake_sink.cloned();
         let async_hook_id = if is_async {
             format!("hook-{idx}-{}", uuid::Uuid::new_v4().simple())
         } else {
@@ -777,21 +808,33 @@ async fn execute_hooks_parallel_filtered(
                 }
                 res = tokio::time::timeout(
                     timeout,
-                    run_hook_via_handle_or_fallback(
-                        &handler,
-                        &env,
-                        Some(&input_json),
-                        llm_handle_clone.as_ref(),
-                        sdk_hook_callback.as_ref(),
+                    run_hook_via_handle_or_fallback(HookExecutionRequest {
+                        handler: &handler,
+                        env_vars: &env,
+                        stdin_input: Some(&input_json),
+                        llm_handle: llm_handle_clone.as_ref(),
+                        sdk_hook_callback: sdk_hook_callback.as_ref(),
                         event,
                         timeout,
-                    ),
+                        async_options: Some(crate::AsyncCommandOptions {
+                            registry: async_reg_for_spawn.clone(),
+                            hook_id: async_hook_id.clone(),
+                            hook_name: command_label.clone(),
+                            hook_event: async_event_label.clone(),
+                            timeout,
+                            forced_async: is_async,
+                            async_rewake,
+                            rewake_sink: async_rewake_sink_for_spawn.clone(),
+                        }),
+                    }),
                 ) => {
                     match res {
                         Ok(Ok(exec_result)) => process_execution_result(
                             exec_result,
                             &command_label,
                             handler_source.clone(),
+                            event,
+                            &emitter,
                         ),
                         Ok(Err(e)) => {
                             // TS `hook_error_during_execution`
@@ -865,45 +908,6 @@ async fn execute_hooks_parallel_filtered(
                         outcome: result.outcome,
                     })
                     .await;
-            }
-
-            // Async hooks: stash the completed result in the
-            // `AsyncHookRegistry` so the reminder pipeline can deliver
-            // it on a later turn. TS parity:
-            // `registerPendingAsyncHook` + `checkForAsyncHookResponses`.
-            // `async_rewake: true` would additionally enqueue a
-            // task-notification on exit-code-2 (TS
-            // `executeInBackground`); that wake path is tracked as a
-            // P3 follow-up — see `crate-coco-hooks.md`.
-            if is_async && let Some(reg) = async_reg_for_spawn {
-                reg.register(
-                    async_hook_id.clone(),
-                    result.command.clone(),
-                    async_event_label.clone(),
-                    /*timeout*/ None,
-                )
-                .await;
-                let exit_code = match &result.outcome {
-                    HookOutcome::Success => 0,
-                    HookOutcome::Blocking => 2,
-                    HookOutcome::NonBlockingError => 1,
-                    HookOutcome::Cancelled => -1,
-                };
-                reg.update_output(&async_hook_id, &result.output, "").await;
-                reg.complete(&async_hook_id, exit_code).await;
-                if async_rewake && exit_code == 2 {
-                    // TS `asyncRewake: true` + exit-code-2 rewake-on-block:
-                    // enqueue a task-notification and `wakeIfIdle()` so the
-                    // model resumes. Coco-rs marks the registry entry —
-                    // `CombinedHookEventsSource` then surfaces it through the
-                    // reminder pipeline, and the engine's between-turn poll
-                    // observes `rewake_requested` to drive the actual wake.
-                    reg.mark_rewake(&async_hook_id).await;
-                    tracing::debug!(
-                        hook = %result.command,
-                        "asyncRewake exit-code-2: rewake marked on async registry"
-                    );
-                }
             }
 
             // Sync result delivery. Async hooks already returned via
@@ -1116,6 +1120,12 @@ pub fn aggregate_results_for_event(
                 if !trimmed.is_empty() {
                     agg.additional_contexts.push(trimmed.to_string());
                 }
+            }
+            ParsedHookOutput::ValidationError(_) => {
+                // Valid-JSON-but-wrong-shape output is surfaced as a
+                // `hook_non_blocking_error` at execution time (see
+                // `process_execution_result`) and must NOT be injected as model
+                // context — mirroring TS `parseHookOutput` validationError.
             }
         }
     }
@@ -1437,6 +1447,9 @@ pub struct OrchestrationContext {
     /// `AsyncHookRegistry.ts` + `getAsyncHookResponseAttachments()`
     /// (`utils/attachments.ts:3464`).
     pub async_registry: Option<std::sync::Arc<crate::async_registry::AsyncHookRegistry>>,
+    /// Sink for `asyncRewake` exit-code-2 notifications. These bypass the
+    /// async registry and enqueue a task-notification directly.
+    pub async_rewake_sink: Option<std::sync::Arc<dyn crate::AsyncRewakeSink>>,
     /// Callback the orchestration uses to drive `Prompt` / `Agent`
     /// hook handlers through the parent session's LLM. `None` falls
     /// back to a passthrough that returns the prompt text verbatim
@@ -1484,6 +1497,7 @@ pub async fn execute_event(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -1533,6 +1547,7 @@ pub async fn execute_pre_tool_use(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -1587,6 +1602,7 @@ pub async fn execute_post_tool_use(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -1645,6 +1661,7 @@ pub async fn execute_post_tool_use_failure(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -1694,6 +1711,7 @@ pub async fn execute_pre_compact(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -1780,6 +1798,7 @@ pub async fn execute_post_compact(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -1890,6 +1909,7 @@ async fn execute_session_start_raw(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -1945,6 +1965,7 @@ pub async fn execute_user_prompt_submit(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2090,6 +2111,7 @@ pub async fn execute_subagent_start(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2153,6 +2175,7 @@ pub async fn execute_subagent_stop(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2201,6 +2224,7 @@ pub async fn execute_session_end(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2264,6 +2288,7 @@ pub async fn execute_stop(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2424,6 +2449,7 @@ pub async fn execute_stop_failure(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2477,6 +2503,7 @@ pub async fn execute_setup(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2529,6 +2556,7 @@ pub async fn execute_notification(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2583,6 +2611,7 @@ pub async fn execute_permission_request(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2638,6 +2667,7 @@ pub async fn execute_permission_denied(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2698,6 +2728,7 @@ pub async fn execute_elicitation(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2755,6 +2786,7 @@ pub async fn execute_elicitation_result(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2803,6 +2835,7 @@ pub async fn execute_config_change(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2863,6 +2896,7 @@ pub async fn execute_instructions_loaded(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2911,6 +2945,7 @@ pub async fn execute_cwd_changed(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -2966,6 +3001,7 @@ pub async fn execute_file_changed(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -3013,6 +3049,7 @@ pub async fn execute_worktree_create(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -3059,6 +3096,7 @@ pub async fn execute_worktree_remove(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -3105,6 +3143,7 @@ async fn run_event_with_input<I: serde::Serialize>(
         ctx.http_url_allowlist.as_deref(),
         ctx.http_env_var_policy.as_deref(),
         ctx.async_registry.as_ref(),
+        ctx.async_rewake_sink.as_ref(),
         ctx.llm_handle.as_ref(),
         ctx.workspace_trust_accepted,
     )
@@ -3212,16 +3251,32 @@ pub fn format_stop_hook_message(error: &HookBlockingError) -> String {
 /// JSON-output code path in `aggregate_results` interprets the
 /// blocking/success state without any new branches. When `llm_handle`
 /// is `None`, falls back to the legacy passthrough in [`execute_hook`].
-async fn run_hook_via_handle_or_fallback(
-    handler: &HookHandler,
-    env_vars: &std::collections::HashMap<String, String>,
-    stdin_input: Option<&str>,
-    llm_handle: Option<&std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
-    sdk_hook_callback: Option<&crate::SdkHookCallback>,
+struct HookExecutionRequest<'a> {
+    handler: &'a HookHandler,
+    env_vars: &'a std::collections::HashMap<String, String>,
+    stdin_input: Option<&'a str>,
+    llm_handle: Option<&'a std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
+    sdk_hook_callback: Option<&'a crate::SdkHookCallback>,
     event: HookEventType,
     timeout: Duration,
+    async_options: Option<crate::AsyncCommandOptions>,
+}
+
+async fn run_hook_via_handle_or_fallback(
+    request: HookExecutionRequest<'_>,
 ) -> crate::Result<HookExecutionResult> {
     use crate::llm_handle::HookEvaluationResult;
+
+    let HookExecutionRequest {
+        handler,
+        env_vars,
+        stdin_input,
+        llm_handle,
+        sdk_hook_callback,
+        event,
+        timeout,
+        async_options,
+    } = request;
 
     if let HookHandler::SdkCallback { callback_id, .. } = handler {
         let Some(callback) = sdk_hook_callback else {
@@ -3259,14 +3314,28 @@ async fn run_hook_via_handle_or_fallback(
     }
 
     let Some(llm) = llm_handle else {
-        return execute_hook(handler, env_vars, stdin_input).await;
+        return match async_options {
+            Some(options) => {
+                crate::execute_hook_with_async_options(handler, env_vars, stdin_input, options)
+                    .await
+            }
+            None => execute_hook(handler, env_vars, stdin_input).await,
+        };
     };
 
     let (prompt, model, is_agent) = match handler {
         HookHandler::Prompt { prompt, model, .. } => (prompt.clone(), model.clone(), false),
         HookHandler::Agent { prompt, model, .. } => (prompt.clone(), model.clone(), true),
         // Command / Http aren't LLM-driven — pass through.
-        _ => return execute_hook(handler, env_vars, stdin_input).await,
+        _ => {
+            return match async_options {
+                Some(options) => {
+                    crate::execute_hook_with_async_options(handler, env_vars, stdin_input, options)
+                        .await
+                }
+                None => execute_hook(handler, env_vars, stdin_input).await,
+            };
+        }
     };
 
     // TS hooks substitute `$ARGUMENTS` (and `$0`/`$1`/...) with the
@@ -3362,6 +3431,8 @@ fn process_execution_result(
     exec: HookExecutionResult,
     label: &str,
     source: HookBlockingSource,
+    event: HookEventType,
+    emitter: &AttachmentEmitter,
 ) -> SingleHookResult {
     match exec {
         HookExecutionResult::CommandOutput {
@@ -3370,8 +3441,21 @@ fn process_execution_result(
             stderr,
         } => {
             // Exit code 2 is the TS "blocking error" convention.
-            let stdout_has_json_control =
-                matches!(parse_hook_output(&stdout), ParsedHookOutput::Json(_));
+            let parsed = parse_hook_output(&stdout);
+            let stdout_has_json_control = matches!(parsed, ParsedHookOutput::Json(_));
+            // Valid-JSON-but-wrong-shape stdout is a non-blocking validation
+            // error (TS `parseHookOutput` validationError): surface it for
+            // UI/audit. Aggregation suppresses the raw text from model context.
+            if let ParsedHookOutput::ValidationError(msg) = &parsed {
+                emitter.emit(AttachmentMessage::silent_hook_non_blocking_error(
+                    HookNonBlockingErrorPayload {
+                        error: msg.clone(),
+                        hook_name: label.to_string(),
+                        tool_use_id: String::new(),
+                        hook_event: event,
+                    },
+                ));
+            }
             let blocked = exit_code == 2 && !stdout_has_json_control;
             let output = if stdout_has_json_control || exit_code == 0 {
                 stdout

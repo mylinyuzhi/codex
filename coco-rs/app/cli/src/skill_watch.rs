@@ -4,16 +4,11 @@
 //! TS parity: `utils/skills/skillChangeDetector.ts`, registered at
 //! startup in `main.tsx` (`void skillChangeDetector.initialize()`).
 //!
-//! Two layers of reload happen on each debounced burst:
-//! 1. [`SkillChangeDetector`] reloads the [`coco_skills::SkillManager`]
-//!    catalog **in place** — because `SkillManager` has interior
-//!    `RwLock`, the per-turn skill reminder ([`coco_system_reminder`]
-//!    `SkillsSource`) and the model-facing `SkillTool` listing pick up
-//!    the change with no further plumbing.
-//! 2. The forwarder rebuilds the slash-command registry (the coco-rs
-//!    equivalent of TS `clearCommandsCache()`) so user-typed
-//!    `/skill-name` commands reflect added/removed skills, and pushes
-//!    the fresh command list to the TUI's `/` autocomplete.
+//! The detector scans each debounced burst and emits the pending change;
+//! this forwarder runs blocking `ConfigChange(source=Skills)` hooks
+//! before mutating the live [`coco_skills::SkillManager`] and rebuilding
+//! the slash-command registry (the coco-rs equivalent of TS
+//! `clearCommandsCache()`).
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -60,11 +55,29 @@ pub fn spawn(
         Ok(detector) => {
             let mut rx = detector.subscribe();
             tokio::spawn(async move {
-                while rx.recv().await.is_ok() {
-                    // The catalog is already reloaded in place by the
-                    // detector. Rebuild the slash-command registry from the
-                    // fresh on-disk skills (TS `clearCommandsCache()`) and
-                    // push the refreshed list to the `/` autocomplete.
+                while let Ok(event) = rx.recv().await {
+                    let changed_path = event
+                        .changed_paths
+                        .first()
+                        .map(|path| path.to_string_lossy().into_owned());
+                    let hook_result = runtime
+                        .run_config_change_hooks(
+                            coco_hooks::orchestration::ConfigChangeSource::Skills,
+                            changed_path.as_deref(),
+                        )
+                        .await;
+                    if hook_result.is_blocked() {
+                        tracing::warn!(
+                            path = ?changed_path,
+                            "skill reload blocked by ConfigChange hook"
+                        );
+                        continue;
+                    }
+
+                    // Rebuild the live catalog and slash-command registry
+                    // from the fresh on-disk skills (TS
+                    // `clearCommandsCache()`), then push the refreshed list
+                    // to the `/` autocomplete.
                     let count = runtime.reload_plugins(&cwd).await;
                     tracing::info!(commands = count, "skills changed: command registry rebuilt");
                     let snapshot = runtime.current_command_registry().await.snapshot_for_ui();

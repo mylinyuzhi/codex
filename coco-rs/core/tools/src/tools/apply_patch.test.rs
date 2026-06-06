@@ -350,7 +350,9 @@ async fn malformed_apply_patch_failure_keeps_display_data() {
     else {
         panic!("expected display-data execution failure");
     };
-    let coco_types::ToolDisplayData::ApplyPatchPreview(preview) = display_data;
+    let coco_types::ToolDisplayData::ApplyPatchPreview(preview) = display_data else {
+        panic!("expected apply-patch preview display data");
+    };
     assert_eq!(
         preview.rows[0],
         coco_types::ApplyPatchPreviewRow::Raw {

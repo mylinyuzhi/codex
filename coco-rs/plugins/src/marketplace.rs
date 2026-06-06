@@ -4,6 +4,7 @@
 //! installCounts.ts + officialMarketplace.ts
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -151,6 +152,165 @@ pub struct PluginRecommendation {
     pub plugin_description: Option<String>,
     /// The CLI command / SDK call that triggered the hint.
     pub source_command: String,
+}
+
+// ---------------------------------------------------------------------------
+// Plugin hint recommendation pipeline (TS: hintRecommendation.ts)
+// ---------------------------------------------------------------------------
+
+/// Hard cap on `claude_code_hints.plugin[]` — bounds config growth. Each
+/// shown plugin appends one slug; past this point we stop prompting (and
+/// stop appending) rather than let the config grow without limit.
+///
+/// TS: `MAX_SHOWN_PLUGINS` in hintRecommendation.ts.
+pub const MAX_SHOWN_PLUGINS: usize = 100;
+
+/// Pre-store gate called by shell tools when a `type="plugin"` hint is
+/// detected. Drops the hint if:
+///
+///  - a dialog has already been shown this session
+///  - the user has disabled hints
+///  - the shown-plugins list has hit the config-growth cap
+///  - the plugin slug doesn't parse as `name@marketplace`
+///  - the marketplace isn't official (hardcoded for v1)
+///  - the plugin was already shown in a prior session
+///  - the plugin is already installed
+///  - the plugin is blocked by org policy
+///
+/// Synchronous on purpose — shell tools shouldn't await a marketplace
+/// lookup just to strip a stderr line. The async marketplace-cache check
+/// happens later in [`resolve_plugin_hint`].
+///
+/// `installed` is the loaded installed-plugins manager (for the
+/// already-installed check). When `None`, the installed check is skipped
+/// (best-effort; the resolve step still gates on cache membership).
+///
+/// TS: `maybeRecordPluginHint(hint)`.
+pub fn maybe_record_plugin_hint(
+    hint: &crate::hints::ClaudeCodeHint,
+    installed: Option<&crate::loader::InstalledPluginsManager>,
+) {
+    // Feature gate. TS: `getFeatureValue('tengu_lapis_finch', false)`. coco-rs
+    // has no GrowthBook; the behavior defaults on and is opt-out via the
+    // persisted `disabled` flag (checked below). See followups.
+    if crate::hints::has_shown_hint_this_session() {
+        return;
+    }
+
+    let global = coco_config::global_config::load_global_config().unwrap_or_default();
+    let state = global.claude_code_hints.unwrap_or_default();
+    if state.disabled {
+        return;
+    }
+    if state.plugin.len() >= MAX_SHOWN_PLUGINS {
+        return;
+    }
+
+    let plugin_id = hint.value.as_str();
+    // TS `parsePluginIdentifier`: first '@' splits name@marketplace.
+    let Some((name, marketplace)) = plugin_id.split_once('@') else {
+        return;
+    };
+    if name.is_empty() || marketplace.is_empty() {
+        return;
+    }
+    // TS `isOfficialMarketplaceName` lowercases before checking the set.
+    if !is_official_marketplace_name(&marketplace.to_lowercase()) {
+        return;
+    }
+    if state.plugin.iter().any(|p| p == plugin_id) {
+        return;
+    }
+    if installed.is_some_and(|m| m.is_installed(plugin_id)) {
+        return;
+    }
+    if is_plugin_blocked_by_policy(plugin_id) {
+        return;
+    }
+
+    // Bound repeat lookups on the same slug — a CLI that emits on every
+    // invocation shouldn't trigger N resolve cycles for the same plugin.
+    if !crate::hints::record_tried(plugin_id) {
+        return;
+    }
+
+    crate::hints::set_pending_hint(hint.clone());
+}
+
+/// Whether a plugin is force-disabled by org policy (managed settings).
+///
+/// TS: `isPluginBlockedByPolicy(pluginId)` in pluginPolicy.ts —
+/// `getSettingsForSource('policySettings')?.enabledPlugins?.[id] === false`.
+/// Reuses the existing managed-settings [`crate::security::EnterprisePolicy`].
+pub fn is_plugin_blocked_by_policy(plugin_id: &str) -> bool {
+    let policy = crate::security::EnterprisePolicy::from_managed_settings();
+    let id = crate::identifier::PluginId::parse(plugin_id);
+    matches!(
+        crate::security::check_policy(&id, /*is_user_scope*/ false, &policy),
+        crate::security::PolicyVerdict::BlockedPlugin { .. }
+    )
+}
+
+/// Resolve the pending hint to a renderable recommendation. Runs the
+/// marketplace lookup that the sync pre-store gate skipped. Returns `None`
+/// if the plugin isn't in the marketplace cache — the hint is discarded.
+///
+/// TS: `resolvePluginHint(hint)`.
+pub fn resolve_plugin_hint(
+    hint: &crate::hints::ClaudeCodeHint,
+    manager: &MarketplaceManager,
+) -> Option<PluginRecommendation> {
+    let plugin_id = hint.value.as_str();
+    let (_, marketplace) = plugin_id.split_once('@')?;
+
+    let (plugin, _entry) = manager.get_plugin_by_id(plugin_id)?;
+
+    Some(PluginRecommendation {
+        plugin_id: plugin_id.to_string(),
+        plugin_name: plugin.name,
+        marketplace_name: marketplace.to_string(),
+        plugin_description: plugin.description,
+        source_command: hint.source_command.clone(),
+    })
+}
+
+/// Record that a prompt for this plugin was surfaced. Called regardless of
+/// the user's yes/no response — show-once semantics. Best-effort: persistence
+/// failures are swallowed (hint state is opportunistic).
+///
+/// TS: `markHintPluginShown(pluginId)`.
+pub fn mark_hint_plugin_shown(plugin_id: &str) {
+    let mut global = match coco_config::global_config::load_global_config() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let state = global
+        .claude_code_hints
+        .get_or_insert_with(Default::default);
+    if state.plugin.iter().any(|p| p == plugin_id) {
+        return;
+    }
+    state.plugin.push(plugin_id.to_string());
+    let _ = coco_config::global_config::write_global_config(&global);
+}
+
+/// Set the opt-out flag when the user picks "don't show plugin installation
+/// hints again". Best-effort persistence.
+///
+/// TS: `disableHintRecommendations()`.
+pub fn disable_hint_recommendations() {
+    let mut global = match coco_config::global_config::load_global_config() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let state = global
+        .claude_code_hints
+        .get_or_insert_with(Default::default);
+    if state.disabled {
+        return;
+    }
+    state.disabled = true;
+    let _ = coco_config::global_config::write_global_config(&global);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +815,58 @@ pub fn flag_delisted_plugin(
     save_flagged_plugins(plugins_dir, &flagged)
 }
 
+/// Startup delisting sweep: uninstall every plugin installed from a known
+/// marketplace that is no longer listed in that marketplace's current manifest.
+///
+/// TS: `detectAndUninstallDelistedPlugins()` (`utils/plugins/pluginBlocklist.ts`),
+/// called from `installPluginsForHeadless` and the interactive startup. For each
+/// known marketplace it diffs the installed ledger against the cached manifest,
+/// flags newly-delisted plugins (`flagged_plugins.json`), removes them from the
+/// installed ledger, and persists. A marketplace whose manifest can't be read is
+/// skipped (a fetch failure must never nuke installed plugins). `config_home` is
+/// the coco config root; the plugins dir is `<config_home>/plugins`. Returns the
+/// uninstalled plugin ids (`name@marketplace`).
+pub fn detect_and_uninstall_delisted_plugins(config_home: &Path) -> Vec<String> {
+    let plugins_dir = config_home.join("plugins");
+    let installed_path = plugins_dir.join("installed_plugins.json");
+    let Ok(mut installed) = crate::loader::InstalledPluginsManager::load(installed_path) else {
+        return Vec::new();
+    };
+    if installed.installed_plugin_ids().is_empty() {
+        return Vec::new();
+    }
+
+    let mut mgr = MarketplaceManager::new(plugins_dir.clone());
+    let names: Vec<String> = mgr.load_known_marketplaces().into_keys().collect();
+
+    let mut delisted_all: Vec<String> = Vec::new();
+    for name in &names {
+        // A marketplace we can't load the manifest for is skipped — never treat
+        // an unreadable/uncached manifest as "everything delisted".
+        let Ok(marketplace) = mgr.load_cached_marketplace(name) else {
+            continue;
+        };
+        let delisted = detect_delisted_plugins(&installed, marketplace, name);
+        for id in delisted {
+            // Audit trail before removal (idempotent).
+            let _ = flag_delisted_plugin(&plugins_dir, &id, name);
+            installed.remove_plugin(&id);
+            delisted_all.push(id);
+        }
+    }
+
+    if !delisted_all.is_empty()
+        && let Err(e) = installed.save()
+    {
+        tracing::warn!(
+            target: "coco::plugins",
+            error = %e,
+            "failed to persist installed ledger after delisting sweep"
+        );
+    }
+    delisted_all
+}
+
 // ---------------------------------------------------------------------------
 // Plugin auto-update (TS: pluginAutoupdate.ts)
 // ---------------------------------------------------------------------------
@@ -668,6 +880,186 @@ pub struct AutoUpdateCheck {
     pub current_version: Option<String>,
     pub available_version: Option<String>,
     pub needs_update: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Seed marketplaces + reconcile-on-startup (TS: marketplaceManager.ts +
+// reconciler.ts, the file-config slice of installPluginsForHeadless)
+// ---------------------------------------------------------------------------
+
+/// Read-only plugin seed directories from `COCO_PLUGIN_SEED_DIR`
+/// (PATH-delimited, precedence order). Empty when unset. Seed dirs are expected
+/// to be absolute (the container-image use case); no tilde expansion. TS
+/// `getPluginSeedDirs`.
+pub fn get_plugin_seed_dirs() -> Vec<PathBuf> {
+    let Some(raw) = coco_config::env::env_opt(coco_config::EnvKey::CocoPluginSeedDir) else {
+        return Vec::new();
+    };
+    std::env::split_paths(&raw)
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect()
+}
+
+fn read_seed_known_marketplaces(seed_dir: &Path) -> Option<KnownMarketplacesFile> {
+    let content = std::fs::read_to_string(seed_dir.join("known_marketplaces.json")).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Resolve a seed marketplace's on-disk location relative to THIS seed dir
+/// (not the build-time path baked into the seed JSON). Returns the first of
+/// `<seed>/marketplaces/<name>` (dir) or `<seed>/marketplaces/<name>.json` that
+/// exists. TS `findSeedMarketplaceLocation`.
+fn find_seed_marketplace_location(seed_dir: &Path, name: &str) -> Option<PathBuf> {
+    let base = seed_dir.join("marketplaces");
+    let candidates = [base.join(name), base.join(format!("{name}.json"))];
+    candidates.into_iter().find(|c| c.exists())
+}
+
+/// Register seed marketplaces (`COCO_PLUGIN_SEED_DIR`) into the primary
+/// `known_marketplaces.json`. Idempotent; first-seed-wins across multiple seed
+/// dirs; seed entries win over the primary (admin-managed, baked into the image).
+/// `install_location` is recomputed from the runtime seed dir; `auto_update` is
+/// forced off (seed is read-only). Returns true if anything changed (caller
+/// should clear caches). TS `registerSeedMarketplaces`.
+pub fn register_seed_marketplaces(plugins_dir: &Path) -> bool {
+    register_seed_marketplaces_from(plugins_dir, &get_plugin_seed_dirs())
+}
+
+/// Env-free core of [`register_seed_marketplaces`] — takes the seed dirs
+/// explicitly so it's testable without mutating the process environment.
+fn register_seed_marketplaces_from(plugins_dir: &Path, seed_dirs: &[PathBuf]) -> bool {
+    if seed_dirs.is_empty() {
+        return false;
+    }
+    let mgr = MarketplaceManager::new(plugins_dir.to_path_buf());
+    let mut primary = mgr.load_known_marketplaces();
+    let mut claimed: HashSet<String> = HashSet::new();
+    let mut changed = 0usize;
+
+    for seed_dir in seed_dirs {
+        let Some(seed_cfg) = read_seed_known_marketplaces(seed_dir) else {
+            continue;
+        };
+        for (name, seed_entry) in seed_cfg {
+            if claimed.contains(&name) {
+                continue;
+            }
+            let Some(loc) = find_seed_marketplace_location(seed_dir, &name) else {
+                // Content missing (incomplete image) — don't claim the name; a
+                // later seed dir may carry working content.
+                tracing::warn!(
+                    target: "coco::plugins",
+                    seed = %seed_dir.display(),
+                    marketplace = %name,
+                    "seed marketplace content missing; skipping"
+                );
+                continue;
+            };
+            claimed.insert(name.clone());
+            let desired = KnownMarketplace {
+                source: seed_entry.source,
+                install_location: loc.to_string_lossy().into_owned(),
+                last_updated: seed_entry.last_updated,
+                auto_update: Some(false),
+            };
+            if primary.get(&name) == Some(&desired) {
+                continue; // idempotent no-op
+            }
+            primary.insert(name, desired); // seed wins
+            changed += 1;
+        }
+    }
+
+    if changed > 0 {
+        if let Err(e) = mgr.save_known_marketplaces(&primary) {
+            tracing::warn!(target: "coco::plugins", error = %e, "failed to save known_marketplaces after seed sync");
+            return false;
+        }
+        tracing::info!(target: "coco::plugins", changed, "synced marketplaces from seed dir(s)");
+        return true;
+    }
+    false
+}
+
+/// User-declared marketplaces from settings.json `extraKnownMarketplaces`
+/// (name → source). The implicit official marketplace is intentionally NOT
+/// included here — it is owned by [`crate::official::ensure_official_marketplace`]
+/// (retry/backoff-gated). TS `getDeclaredMarketplaces` (the explicit-extras
+/// slice).
+pub fn get_declared_marketplaces(config_home: &Path) -> HashMap<String, MarketplaceSource> {
+    let mut out = HashMap::new();
+    let Ok(raw) = std::fs::read_to_string(config_home.join("settings.json")) else {
+        return out;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return out;
+    };
+    let Some(obj) = value
+        .get("extra_known_marketplaces")
+        .or_else(|| value.get("extraKnownMarketplaces"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return out;
+    };
+    for (name, entry) in obj {
+        // DeclaredMarketplace = `{ source: MarketplaceSource, ... }`.
+        if let Some(src) = entry.get("source")
+            && let Ok(source) = serde_json::from_value::<MarketplaceSource>(src.clone())
+        {
+            out.insert(name.clone(), source);
+        }
+    }
+    out
+}
+
+/// Reconcile declared (settings `extraKnownMarketplaces`) marketplaces against
+/// materialized state: fetch + register any declared marketplace not present in
+/// `known_marketplaces.json`, or whose source changed. Best-effort, idempotent,
+/// additive — a fetch failure logs + skips (never aborts the rest). Returns the
+/// names installed/updated. TS `reconcileMarketplaces` (the file-declared slice;
+/// the implicit official marketplace is handled separately).
+pub async fn reconcile_marketplaces(plugins_dir: &Path, config_home: &Path) -> Vec<String> {
+    let declared = get_declared_marketplaces(config_home);
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let mut mgr = MarketplaceManager::new(plugins_dir.to_path_buf());
+    let known = mgr.load_known_marketplaces();
+    let cache_dir = mgr.marketplace_cache_dir();
+    let mut done = Vec::new();
+    for (name, source) in declared {
+        let needs = match known.get(&name) {
+            None => true,                          // missing → install
+            Some(entry) => entry.source != source, // source changed → update
+        };
+        if !needs {
+            continue;
+        }
+        match crate::fetch::fetch_marketplace(&source, &name, &cache_dir).await {
+            Ok(loc) => match mgr.register_marketplace(&name, source, &loc.to_string_lossy()) {
+                Ok(()) => done.push(name),
+                Err(e) => {
+                    tracing::warn!(target: "coco::plugins", marketplace = %name, error = %e, "reconcile: register failed")
+                }
+            },
+            Err(e) => {
+                tracing::warn!(target: "coco::plugins", marketplace = %name, error = %e, "reconcile: fetch failed; skipping")
+            }
+        }
+    }
+    done
+}
+
+/// Startup marketplace maintenance (TS `installPluginsForHeadless` minus the
+/// CCR zip-cache): register seed marketplaces, reconcile declared marketplaces,
+/// then uninstall delisted plugins. Best-effort + idempotent — safe to call
+/// fire-and-forget after [`crate::official::ensure_official_marketplace`].
+/// Returns the delisted plugin ids (for logging).
+pub async fn run_marketplace_startup(config_home: &Path) -> Vec<String> {
+    let plugins_dir = config_home.join("plugins");
+    register_seed_marketplaces(&plugins_dir);
+    let _reconciled = reconcile_marketplaces(&plugins_dir, config_home).await;
+    detect_and_uninstall_delisted_plugins(config_home)
 }
 
 /// Official marketplace names that should NOT auto-update by default.

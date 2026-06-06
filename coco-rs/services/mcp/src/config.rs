@@ -161,8 +161,11 @@ fn load_mcp_json(
     }
 }
 
-/// Parse a server config from JSON.
-fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
+/// Parse a server config from JSON. Detects the transport from the shape
+/// (`command` → stdio, `url` → http/sse), so callers (settings + plugins)
+/// don't need an explicit `transport` tag. Returns `None` for a disabled or
+/// unrecognized entry.
+pub fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
     // Check for disabled server
     if value
         .get("disabled")
@@ -179,6 +182,7 @@ fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
 
     if let Some(url) = value.get("url").and_then(|u| u.as_str()) {
         let headers = parse_headers(value);
+        let headers_helper = parse_headers_helper(value);
         let oauth = parse_oauth(value);
         let transport_type = value
             .get("transport")
@@ -189,11 +193,13 @@ fn parse_server_config(value: &serde_json::Value) -> Option<McpServerConfig> {
             "http" => Some(McpServerConfig::Http(McpHttpConfig {
                 url: url.to_string(),
                 headers,
+                headers_helper,
                 oauth,
             })),
             _ => Some(McpServerConfig::Sse(McpSseConfig {
                 url: url.to_string(),
                 headers,
+                headers_helper,
                 oauth,
             })),
         };
@@ -226,6 +232,16 @@ fn parse_stdio_config(value: &serde_json::Value) -> Option<McpServerConfig> {
 
 fn parse_headers(value: &serde_json::Value) -> HashMap<String, String> {
     parse_string_map(value, "headers")
+}
+
+fn parse_headers_helper(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("headersHelper")
+        .or_else(|| value.get("headers_helper"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_oauth(value: &serde_json::Value) -> Option<McpOAuthConfig> {
