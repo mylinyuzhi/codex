@@ -84,23 +84,6 @@ fn mark_replayed_viewport_clears_pending_state() {
 }
 
 #[test]
-fn stream_finish_replay_needed_when_resize_was_requested_during_stream() {
-    let mut state = HistoryReflowState::default();
-    state.schedule_viewport_replay(120, true);
-
-    assert!(state.take_stream_finish_replay_needed());
-    assert!(!state.take_stream_finish_replay_needed());
-}
-
-#[test]
-fn stream_finish_replay_needed_when_replay_ran_during_stream() {
-    let mut state = HistoryReflowState::default();
-    state.mark_replayed_viewport(120, true);
-
-    assert!(state.take_stream_finish_replay_needed());
-}
-
-#[test]
 fn clear_resets_reflow_state() {
     let mut state = HistoryReflowState::default();
     state.note_viewport(80);
@@ -109,7 +92,6 @@ fn clear_resets_reflow_state() {
     state.clear();
 
     assert_eq!(state.pending_viewport(), None);
-    assert!(!state.take_stream_finish_replay_needed());
     assert_eq!(
         state.note_viewport(100),
         HistoryViewportChange {

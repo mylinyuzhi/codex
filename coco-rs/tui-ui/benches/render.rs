@@ -46,6 +46,7 @@ use ratatui::widgets::Wrap;
 use coco_tui_markdown::MarkdownOptions;
 use coco_tui_markdown::render_markdown;
 use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::engine::history_insert::render_history_rows;
 use coco_tui_ui::engine::terminal::SurfaceFrame;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 use coco_tui_ui::style::UiStyles;
@@ -234,13 +235,14 @@ fn bench_history_insert(c: &mut Criterion) {
                 let mut term = surface(width, height);
                 term.set_viewport_area(Rect::new(0, height.saturating_sub(12), width, 12));
                 for i in 0..500 {
-                    term.insert_history_lines([Line::from(format!("seed {i}"))])
-                        .expect("seed");
+                    let rows = render_history_rows(vec![Line::from(format!("seed {i}"))], width);
+                    term.insert_history_rows(&rows).expect("seed");
                 }
                 term
             },
             |mut term| {
-                black_box(term.insert_history_lines(lines.clone()).expect("insert"));
+                let rows = render_history_rows(lines.clone(), width);
+                black_box(term.insert_history_rows(&rows).expect("insert"));
             },
             BatchSize::SmallInput,
         );
@@ -249,7 +251,8 @@ fn bench_history_insert(c: &mut Criterion) {
         b.iter_batched(
             || crossterm_surface(width, height),
             |mut term| {
-                black_box(term.insert_history_lines(lines.clone()).expect("insert"));
+                let rows = render_history_rows(lines.clone(), width);
+                black_box(term.insert_history_rows(&rows).expect("insert"));
             },
             BatchSize::SmallInput,
         );
@@ -258,10 +261,8 @@ fn bench_history_insert(c: &mut Criterion) {
         b.iter_batched(
             || crossterm_surface(width, height),
             |mut term| {
-                black_box(
-                    term.insert_history_lines(final_remainder_lines.clone())
-                        .expect("insert"),
-                );
+                let rows = render_history_rows(final_remainder_lines.clone(), width);
+                black_box(term.insert_history_rows(&rows).expect("insert"));
             },
             BatchSize::SmallInput,
         );

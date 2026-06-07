@@ -15,7 +15,6 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
-use ratatui::text::Line;
 use ratatui::widgets::Widget;
 use std::io::Write;
 use std::time::Duration;
@@ -23,7 +22,8 @@ use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 use super::CursorClaim;
-use super::history_insert::render_history_lines;
+use super::history_insert::HistoryRows;
+use super::history_insert::HistoryRowsSlice;
 
 pub trait SurfaceBackend: Backend {
     fn clear_scrollback_and_screen(&mut self) -> Result<(), Self::Error> {
@@ -48,6 +48,7 @@ pub trait SurfaceBackend: Backend {
         _source_start_row: u16,
         _row_count: u16,
         _target_top: u16,
+        _scratch: &mut String,
     ) -> Result<Option<usize>, Self::Error> {
         Ok(None)
     }
@@ -83,15 +84,16 @@ where
         source_start_row: u16,
         row_count: u16,
         target_top: u16,
+        scratch: &mut String,
     ) -> Result<Option<usize>, Self::Error> {
-        let mut out =
-            String::with_capacity((row_count as usize) * (rendered.area.width as usize + 16));
-        out.push_str("\x1b7");
+        scratch.clear();
+        scratch.reserve((row_count as usize) * (rendered.area.width as usize + 16));
+        scratch.push_str("\x1b7");
         for source_y in source_start_row..source_start_row.saturating_add(row_count) {
             let target_y = target_top + (source_y - source_start_row);
-            out.push_str("\x1b[");
-            push_u16(&mut out, target_y + 1);
-            out.push_str(";1H");
+            scratch.push_str("\x1b[");
+            push_u16(scratch, target_y + 1);
+            scratch.push_str(";1H");
             let mut current_style: Option<CellStyleKey> = None;
             // Cells occupied by the continuation half of a preceding wide
             // (CJK / emoji) grapheme. ratatui 0.30 fills these with a reset
@@ -104,17 +106,17 @@ where
                 if !cell.skip && to_skip == 0 {
                     let next_style = CellStyleKey::from(cell);
                     if current_style != Some(next_style) {
-                        push_ansi_style_prefix(&mut out, next_style);
+                        push_ansi_style_prefix(scratch, next_style);
                         current_style = Some(next_style);
                     }
-                    out.push_str(cell.symbol());
+                    scratch.push_str(cell.symbol());
                 }
                 to_skip = display_width(cell.symbol()).saturating_sub(1);
             }
         }
-        out.push_str("\x1b[0m\x1b8");
-        let bytes = out.len();
-        self.write_all(out.as_bytes())?;
+        scratch.push_str("\x1b[0m\x1b8");
+        let bytes = scratch.len();
+        self.write_all(scratch.as_bytes())?;
         Ok(Some(bytes))
     }
 }
@@ -144,8 +146,15 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     history_bottom_y: u16,
     invalidated: bool,
     perf_stats_enabled: bool,
+    history_row_scratch: String,
     last_viewport_draw_stats: ViewportDrawStats,
     last_history_insert_stats: HistoryInsertStats,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewportResizePolicy {
+    PreserveHistory,
+    ScrollHistoryOnGrowth,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +220,7 @@ where
             history_bottom_y: viewport_area.top(),
             invalidated: true,
             perf_stats_enabled: false,
+            history_row_scratch: String::new(),
             last_viewport_draw_stats: ViewportDrawStats::default(),
             last_history_insert_stats: HistoryInsertStats::default(),
         })
@@ -300,6 +310,19 @@ where
         area: Rect,
         scroll_history_on_growth: bool,
     ) -> Result<(), B::Error> {
+        let policy = if scroll_history_on_growth {
+            ViewportResizePolicy::ScrollHistoryOnGrowth
+        } else {
+            ViewportResizePolicy::PreserveHistory
+        };
+        self.apply_viewport_area_with_policy(area, policy)
+    }
+
+    pub fn apply_viewport_area_with_policy(
+        &mut self,
+        area: Rect,
+        policy: ViewportResizePolicy,
+    ) -> Result<(), B::Error> {
         let previous = self.viewport_area;
         if previous == area {
             return Ok(());
@@ -311,7 +334,7 @@ where
             && previous.width == size.width
             && previous.height == size.height;
 
-        if scroll_history_on_growth
+        if policy == ViewportResizePolicy::ScrollHistoryOnGrowth
             && !initial_fullscreen
             && area.y < previous.y
             && area.bottom() >= size.height
@@ -339,8 +362,98 @@ where
             previous = ?previous,
             next = ?area,
             history_bottom_y = self.history_bottom_y,
-            scroll_history_on_growth,
+            ?policy,
             "apply viewport area"
+        );
+        self.set_viewport_area(area);
+        Ok(())
+    }
+
+    pub fn fill_history_gap_rows(
+        &mut self,
+        rows_slice: HistoryRowsSlice<'_>,
+    ) -> Result<u16, B::Error> {
+        let gap = self
+            .viewport_area
+            .top()
+            .saturating_sub(self.history_bottom_y);
+        let row_count = rows_slice.height().min(gap);
+        if row_count == 0 || rows_slice.is_empty() || self.viewport_area.width == 0 {
+            return Ok(0);
+        }
+        if rows_slice.width() != self.viewport_area.width {
+            return Ok(0);
+        }
+        let rows = row_count;
+        if rows == 0 {
+            return Ok(0);
+        }
+
+        let source_start = rows_slice
+            .source_start_row()
+            .saturating_add(rows_slice.height().saturating_sub(rows));
+        let target_top = self.history_bottom_y;
+        let was_invalidated = self.invalidated;
+        let draw = self.draw_history_rows(rows_slice.buffer(), source_start, rows, target_top)?;
+        let flush_start = self.perf_stats_enabled.then(Instant::now);
+        self.backend.flush()?;
+        let flush_elapsed = flush_start.map(|start| start.elapsed()).unwrap_or_default();
+        self.history_bottom_y = self.history_bottom_y.saturating_add(rows);
+        self.visible_history_rows = self
+            .visible_history_rows
+            .saturating_add(rows)
+            .min(self.history_bottom_y);
+        self.invalidate_viewport();
+        self.last_history_insert_stats = HistoryInsertStats {
+            wrapped_rows: rows,
+            buffer_updates: draw.buffer_updates,
+            bytes_written: draw.bytes_written,
+            invalidated: was_invalidated,
+            build_elapsed: Duration::default(),
+            draw_elapsed: draw.elapsed,
+            flush_elapsed,
+        };
+        tracing::debug!(
+            target: "tui::surface",
+            rows,
+            history_bottom_y = self.history_bottom_y,
+            viewport_top = self.viewport_area.top(),
+            "fill history gap rows"
+        );
+        Ok(rows)
+    }
+
+    /// Move the retained viewport back to the given history bottom without
+    /// rewriting history. This is used after a streaming tail has already been
+    /// provisionally appended and finalization has no residual lines to insert.
+    pub fn reseat_viewport_to_history_row(
+        &mut self,
+        history_bottom_y: u16,
+    ) -> Result<(), B::Error> {
+        let size = self.size()?;
+        let height = self.viewport_area.height.min(size.height);
+        let y = history_bottom_y.min(size.height.saturating_sub(height));
+        let area = Rect {
+            y,
+            height,
+            ..self.viewport_area
+        };
+        let previous = self.viewport_area;
+        if previous == area {
+            return Ok(());
+        }
+        let clear_y = if area.y < previous.y {
+            previous.y
+        } else {
+            area.y
+        };
+        self.clear_after_position(Position { x: 0, y: clear_y })?;
+        tracing::debug!(
+            target: "tui::surface",
+            previous = ?previous,
+            next = ?area,
+            history_bottom_y,
+            "reseat viewport to history row"
         );
         self.set_viewport_area(area);
         Ok(())
@@ -444,20 +557,16 @@ where
     /// `TestBackend` uses ratatui's scrolling-region API so tests can verify
     /// visible behavior. Production crossterm backends use direct VT writes for
     /// inserted cells while preserving this same surface API.
-    pub fn insert_history_lines<I>(&mut self, lines: I) -> Result<u16, B::Error>
-    where
-        I: IntoIterator<Item = Line<'static>>,
-    {
-        let lines = lines.into_iter().collect::<Vec<_>>();
-        if lines.is_empty() || self.viewport_area.width == 0 {
+    pub fn insert_history_rows(&mut self, rendered: &HistoryRows) -> Result<u16, B::Error> {
+        if rendered.is_empty()
+            || self.viewport_area.width == 0
+            || rendered.width() != self.viewport_area.width
+        {
             self.last_history_insert_stats = HistoryInsertStats::default();
             return Ok(0);
         }
 
-        let build_start = self.perf_stats_enabled.then(Instant::now);
-        let rendered = render_history_lines(lines, self.viewport_area.width);
-        let build_elapsed = build_start.map(|start| start.elapsed()).unwrap_or_default();
-        let rows = rendered.area.height;
+        let rows = rendered.height();
         let previous = self.viewport_area;
         let was_invalidated = self.invalidated;
         let mut buffer_updates = 0usize;
@@ -472,7 +581,7 @@ where
                 buffer_updates,
                 bytes_written: 0,
                 invalidated: was_invalidated,
-                build_elapsed,
+                build_elapsed: Duration::default(),
                 draw_elapsed,
                 flush_elapsed: Duration::default(),
             };
@@ -484,7 +593,7 @@ where
         if gap_below_history > 0 {
             let rows_to_draw = rows.min(gap_below_history);
             let target_top = self.history_bottom_y;
-            let draw = self.draw_history_rows(&rendered, 0, rows_to_draw, target_top)?;
+            let draw = self.draw_history_rows(rendered.buffer(), 0, rows_to_draw, target_top)?;
             buffer_updates += draw.buffer_updates;
             bytes_written += draw.bytes_written;
             draw_elapsed += draw.elapsed;
@@ -496,7 +605,8 @@ where
             let chunk_rows = (rows - start_row).min(viewport_top);
             self.backend.scroll_region_up(0..viewport_top, chunk_rows)?;
             let target_top = viewport_top - chunk_rows;
-            let draw = self.draw_history_rows(&rendered, start_row, chunk_rows, target_top)?;
+            let draw =
+                self.draw_history_rows(rendered.buffer(), start_row, chunk_rows, target_top)?;
             buffer_updates += draw.buffer_updates;
             bytes_written += draw.bytes_written;
             draw_elapsed += draw.elapsed;
@@ -514,7 +624,7 @@ where
             next_viewport = ?self.viewport_area,
             history_bottom_y = self.history_bottom_y,
             visible_history_rows = self.visible_history_rows,
-            "insert history lines"
+            "insert history rows"
         );
         self.invalidate_viewport();
         self.last_history_insert_stats = HistoryInsertStats {
@@ -522,7 +632,7 @@ where
             buffer_updates,
             bytes_written,
             invalidated: was_invalidated,
-            build_elapsed,
+            build_elapsed: Duration::default(),
             draw_elapsed,
             flush_elapsed,
         };
@@ -542,6 +652,7 @@ where
             source_start_row,
             row_count,
             target_top,
+            &mut self.history_row_scratch,
         )? {
             let elapsed = draw_start.map(|start| start.elapsed()).unwrap_or_default();
             return Ok(HistoryRowsDraw {

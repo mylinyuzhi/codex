@@ -117,14 +117,17 @@ pub(super) fn try_render(
             Some(())
         }
         CellKind::AssistantThinking { text } => {
-            let meta = w
+            let side_meta = w
                 .reasoning_metadata
                 .and_then(|cache| cache.get(&cell.message_uuid));
+            let source_reasoning_tokens = assistant_source_reasoning_tokens(cell);
             lines.extend(render_thinking_block(
                 ThinkingRenderInput {
                     content: text,
-                    duration_ms: meta.and_then(|m| m.duration_ms),
-                    reasoning_tokens: meta.map(|m| m.reasoning_tokens),
+                    duration_ms: side_meta.and_then(|m| m.duration_ms),
+                    reasoning_tokens: side_meta
+                        .map(|m| m.reasoning_tokens)
+                        .or(source_reasoning_tokens),
                     toggle_hint: Some(&w.thinking_toggle_hint()),
                     display: if w.show_thinking {
                         ThinkingDisplay::Expanded {
@@ -194,6 +197,14 @@ pub(super) fn try_render(
         }
         _ => None,
     }
+}
+
+fn assistant_source_reasoning_tokens(cell: &RenderedCell) -> Option<i64> {
+    let coco_messages::Message::Assistant(assistant) = cell.source.as_ref() else {
+        return None;
+    };
+    let tokens = assistant.usage.as_ref()?.output_tokens.reasoning;
+    (tokens > 0).then_some(tokens)
 }
 
 fn tool_tone_color(

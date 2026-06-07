@@ -1,4 +1,4 @@
-//! History-line preparation for native scrollback insertion.
+//! History-row preparation for native scrollback insertion.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -7,7 +7,160 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 
-/// Render finalized history lines into a buffer at the target width.
+/// Rendered history rows ready to be inserted into native scrollback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryRows {
+    buffer: Buffer,
+}
+
+/// Borrowed suffix rows from a [`HistoryRows`] buffer.
+#[derive(Debug, Clone, Copy)]
+pub struct HistoryRowsSlice<'a> {
+    rows: &'a HistoryRows,
+    source_start_row: u16,
+    row_count: u16,
+}
+
+impl HistoryRows {
+    pub fn new(buffer: Buffer) -> Self {
+        Self { buffer }
+    }
+
+    pub fn width(&self) -> u16 {
+        self.buffer.area.width
+    }
+
+    pub fn height(&self) -> u16 {
+        self.buffer.area.height
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.height() == 0
+    }
+
+    pub fn buffer(&self) -> &Buffer {
+        &self.buffer
+    }
+
+    pub fn estimated_bytes(&self) -> usize {
+        self.buffer
+            .content
+            .iter()
+            .map(|cell| cell.symbol().len() + 8)
+            .sum()
+    }
+
+    pub fn tail_slice(&self, rows: u16) -> HistoryRowsSlice<'_> {
+        let row_count = rows.min(self.height());
+        HistoryRowsSlice {
+            rows: self,
+            source_start_row: self.height().saturating_sub(row_count),
+            row_count,
+        }
+    }
+
+    pub fn tail_rows_copy(&self, rows: u16) -> Self {
+        Self::copy_tail_from_slices(self.width(), &[self.tail_slice(rows)], rows)
+    }
+
+    pub fn copy_tail_from_slices(
+        width: u16,
+        slices: &[HistoryRowsSlice<'_>],
+        max_rows: u16,
+    ) -> Self {
+        Self::copy_tail_from_matching_slices(width, slices, max_rows)
+    }
+
+    pub fn try_copy_tail_from_slices(
+        width: u16,
+        slices: &[HistoryRowsSlice<'_>],
+        max_rows: u16,
+    ) -> Option<Self> {
+        if slices
+            .iter()
+            .any(|slice| !slice.is_empty() && slice.width() != width)
+        {
+            return None;
+        }
+        Some(Self::copy_tail_from_matching_slices(
+            width, slices, max_rows,
+        ))
+    }
+
+    fn copy_tail_from_matching_slices(
+        width: u16,
+        slices: &[HistoryRowsSlice<'_>],
+        max_rows: u16,
+    ) -> Self {
+        if width == 0 || max_rows == 0 {
+            return Self::new(Buffer::empty(Rect::new(0, 0, width, 0)));
+        }
+
+        let total_rows = slices
+            .iter()
+            .filter(|slice| slice.width() == width)
+            .map(HistoryRowsSlice::height)
+            .fold(0u16, u16::saturating_add);
+        let rows_to_copy = total_rows.min(max_rows);
+        if rows_to_copy == 0 {
+            return Self::new(Buffer::empty(Rect::new(0, 0, width, 0)));
+        }
+
+        let mut skip_rows = total_rows.saturating_sub(rows_to_copy);
+        let mut target_y = 0u16;
+        let mut buffer = Buffer::empty(Rect::new(0, 0, width, rows_to_copy));
+        for slice in slices.iter().filter(|slice| slice.width() == width) {
+            if skip_rows >= slice.height() {
+                skip_rows -= slice.height();
+                continue;
+            }
+            let source_offset = skip_rows;
+            skip_rows = 0;
+            let source_start = slice.source_start_row() + source_offset;
+            let source_end = slice.source_start_row() + slice.height();
+            for source_y in source_start..source_end {
+                if target_y >= rows_to_copy {
+                    break;
+                }
+                copy_row_from(slice.buffer(), source_y, &mut buffer, target_y, width);
+                target_y += 1;
+            }
+        }
+        Self::new(buffer)
+    }
+}
+
+fn copy_row_from(source: &Buffer, source_y: u16, target: &mut Buffer, target_y: u16, width: u16) {
+    let source_start = source.index_of(0, source_y);
+    let target_start = target.index_of(0, target_y);
+    let width = width as usize;
+    target.content[target_start..target_start + width]
+        .clone_from_slice(&source.content[source_start..source_start + width]);
+}
+
+impl<'a> HistoryRowsSlice<'a> {
+    pub fn width(&self) -> u16 {
+        self.rows.width()
+    }
+
+    pub fn height(&self) -> u16 {
+        self.row_count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.row_count == 0
+    }
+
+    pub fn buffer(&self) -> &'a Buffer {
+        self.rows.buffer()
+    }
+
+    pub fn source_start_row(&self) -> u16 {
+        self.source_start_row
+    }
+}
+
+/// Render finalized history lines into rows at the target width.
 ///
 /// Lines are **wrapped** to `width` (word-wrap, `trim: false`) so a committed
 /// scrollback line occupies the exact same rows it did in the live tail — which
@@ -17,9 +170,9 @@ use ratatui::widgets::Wrap;
 /// from the live render. The buffer height is the wrapped row count
 /// (`Paragraph::line_count`, the same `WordWrapper` the renderer uses), not
 /// `lines.len()`, so the caller inserts the correct number of scrollback rows.
-pub fn render_history_lines(lines: Vec<Line<'static>>, width: u16) -> Buffer {
+pub fn render_history_rows(lines: Vec<Line<'static>>, width: u16) -> HistoryRows {
     if width == 0 || lines.is_empty() {
-        return Buffer::empty(Rect::new(0, 0, width, 0));
+        return HistoryRows::new(Buffer::empty(Rect::new(0, 0, width, 0)));
     }
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let height = paragraph.line_count(width).min(u16::MAX as usize) as u16;
@@ -28,7 +181,7 @@ pub fn render_history_lines(lines: Vec<Line<'static>>, width: u16) -> Buffer {
     if height > 0 {
         paragraph.render(area, &mut buffer);
     }
-    buffer
+    HistoryRows::new(buffer)
 }
 
 #[cfg(test)]

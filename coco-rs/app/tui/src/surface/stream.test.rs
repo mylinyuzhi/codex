@@ -61,7 +61,7 @@ fn cap_is_display_only_and_does_not_change_committed_lines() {
     let capped = build(/*user_scrolled*/ false);
     let uncapped = build(/*user_scrolled*/ true);
 
-    let committed = |p: &PreparedLiveTail| p.stable_append.as_ref().map(|s| s.append_lines.len());
+    let committed = |p: &PreparedLiveTail| p.stable_append.as_ref().map(|s| s.line_count);
     assert_eq!(
         committed(&capped),
         committed(&uncapped),
@@ -69,6 +69,29 @@ fn cap_is_display_only_and_does_not_change_committed_lines() {
     );
     assert!(capped.lines.len() <= STREAMING_LIVE_TAIL_CAP as usize);
     assert!(uncapped.lines.len() > STREAMING_LIVE_TAIL_CAP as usize);
+}
+
+#[test]
+fn stable_append_preserves_blank_line_between_streamed_blocks() {
+    let mut state = AppState::new();
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\n");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+
+    let mut driver = SurfaceStreamDriver::default();
+    let first = driver.prepare(&state, /*width*/ 40, native_plan());
+    let first_append = first.stable_append.expect("first stable append");
+    assert_eq!(plain_rows(&first_append.rows), vec!["⏺ alpha"]);
+    driver.mark_stable_appended();
+
+    let streaming = state.ui.streaming.as_mut().expect("streaming");
+    streaming.append_text("beta\n\n");
+    streaming.reveal_all();
+    let second = driver.prepare(&state, /*width*/ 40, native_plan());
+    let second_append = second.stable_append.expect("second stable append");
+
+    assert_eq!(plain_rows(&second_append.rows), vec!["", "  beta"]);
 }
 
 #[test]
@@ -86,4 +109,17 @@ fn prepare_does_not_cap_while_user_is_scrolling() {
         prepared.lines.len(),
         STREAMING_LIVE_TAIL_CAP
     );
+}
+
+fn plain_rows(rows: &coco_tui_ui::engine::history_insert::HistoryRows) -> Vec<String> {
+    let buffer = rows.buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
 }

@@ -1,9 +1,12 @@
 //! Native-surface live stream preparation and provisional history append.
 
+use std::time::Duration;
+use std::time::Instant;
+
+use coco_tui_ui::engine::history_insert::HistoryRows;
+use coco_tui_ui::engine::history_insert::render_history_rows;
 use coco_tui_ui::style::UiStyles;
 use ratatui::text::Line;
-use sha2::Digest;
-use sha2::Sha256;
 
 use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
@@ -14,8 +17,6 @@ use crate::streaming::render_controller::StreamRenderController;
 use crate::streaming::render_controller::StreamRenderInput;
 use crate::streaming::render_controller::StreamRenderKey;
 use crate::streaming::render_controller::streaming_cursor_line;
-use crate::surface::line_fingerprint::RenderedLineFingerprint;
-use crate::surface::line_fingerprint::fingerprint_lines;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::viewport::build_live_tail_lines;
 use crate::terminal::STREAMING_LIVE_TAIL_CAP;
@@ -23,23 +24,28 @@ use crate::terminal::STREAMING_LIVE_TAIL_CAP;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SurfaceStreamDriver {
     controller: StreamRenderController,
-    committed_prefix_digest: Sha256,
-    pending_append_source: Option<String>,
+    committed_prefix: CommittedStablePrefix,
+    pending_prefix: Option<CommittedStablePrefix>,
 }
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PreparedLiveTail {
     pub(crate) lines: Vec<Line<'static>>,
-    pub(crate) stable_append: Option<ProvisionalStableAppend>,
+    pub(crate) stable_append: Option<PreparedProvisionalAppend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProvisionalStableAppend {
-    pub(crate) prior_prefix_digest: [u8; 32],
-    pub(crate) prefix_digest: [u8; 32],
-    pub(crate) append_source: String,
-    pub(crate) append_lines: Vec<Line<'static>>,
-    pub(crate) append_line_fingerprints: Vec<RenderedLineFingerprint>,
+pub(crate) struct PreparedProvisionalAppend {
+    pub(crate) committed_prefix: CommittedStablePrefix,
+    pub(crate) line_count: usize,
+    pub(crate) rows: HistoryRows,
+    pub(crate) render_elapsed: Duration,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct CommittedStablePrefix {
+    pub(crate) source: String,
+    pub(crate) line_count: usize,
     pub(crate) render_key: StreamRenderKey,
 }
 
@@ -52,7 +58,7 @@ impl SurfaceStreamDriver {
     ) -> PreparedLiveTail {
         let styles = UiStyles::new(&state.ui.theme);
         if width == 0 || plan.finalized_history_in_viewport() {
-            self.pending_append_source = None;
+            self.pending_prefix = None;
             return PreparedLiveTail {
                 lines: build_live_tail_lines(state, styles, width, plan),
                 stable_append: None,
@@ -66,8 +72,8 @@ impl SurfaceStreamDriver {
                 width,
                 syntax_highlighting: state.ui.display_settings.syntax_highlighting,
             });
-            self.committed_prefix_digest = Sha256::new();
-            self.pending_append_source = None;
+            self.committed_prefix = CommittedStablePrefix::default();
+            self.pending_prefix = None;
             return PreparedLiveTail::default();
         };
 
@@ -80,31 +86,32 @@ impl SurfaceStreamDriver {
         };
         let frame = self.controller.render_live_frame(render_key_input);
         if frame.render_reset {
-            self.committed_prefix_digest = Sha256::new();
+            self.committed_prefix = CommittedStablePrefix::default();
         }
         let render_key = self.controller.render_key();
-        self.pending_append_source = None;
+        self.pending_prefix = None;
         let stable_append = (!frame.stable_append_lines.is_empty()).then(|| {
-            let prior_prefix_digest = digest_state(&self.committed_prefix_digest);
-            let mut next = self.committed_prefix_digest.clone();
-            next.update(frame.stable_append_source.as_bytes());
-            let prefix_digest = digest_state(&next);
-            self.pending_append_source = Some(frame.stable_append_source.clone());
-            ProvisionalStableAppend {
-                prior_prefix_digest,
-                prefix_digest,
-                append_source: frame.stable_append_source,
-                append_line_fingerprints: fingerprint_lines(&frame.stable_append_lines),
-                append_lines: frame.stable_append_lines.clone(),
+            let mut prefix_source = self.committed_prefix.source.clone();
+            prefix_source.push_str(&frame.stable_append_source);
+            let committed_prefix = CommittedStablePrefix {
+                source: prefix_source,
+                line_count: frame.stable_line_count,
                 render_key: render_key.unwrap_or_default(),
+            };
+            self.pending_prefix = Some(committed_prefix.clone());
+            let render_started = Instant::now();
+            let line_count = frame.stable_append_lines.len();
+            let rows = render_history_rows(frame.stable_append_lines, width);
+            let render_elapsed = render_started.elapsed();
+            PreparedProvisionalAppend {
+                committed_prefix,
+                line_count,
+                rows,
+                render_elapsed,
             }
         });
 
-        let mut lines = if stable_append.is_some() {
-            frame.live_tail_lines[frame.stable_append_lines.len()..].to_vec()
-        } else {
-            frame.live_tail_lines
-        };
+        let mut lines = frame.live_tail_lines;
         if !lines.is_empty() {
             lines.push(streaming_cursor_line(styles));
         }
@@ -143,27 +150,23 @@ impl SurfaceStreamDriver {
     }
 
     pub(crate) fn mark_stable_appended(&mut self) {
-        if let Some(source) = self.pending_append_source.take() {
-            self.committed_prefix_digest.update(source.as_bytes());
+        if let Some(prefix) = self.pending_prefix.take() {
+            self.committed_prefix = prefix;
         }
         self.controller.mark_stable_appended();
     }
 
     pub(crate) fn forget_stable_appended(&mut self) {
-        self.committed_prefix_digest = Sha256::new();
-        self.pending_append_source = None;
+        self.committed_prefix = CommittedStablePrefix::default();
+        self.pending_prefix = None;
         self.controller.forget_stable_appended();
     }
 
     pub(crate) fn reset(&mut self) {
         self.controller.clear();
-        self.committed_prefix_digest = Sha256::new();
-        self.pending_append_source = None;
+        self.committed_prefix = CommittedStablePrefix::default();
+        self.pending_prefix = None;
     }
-}
-
-fn digest_state(state: &Sha256) -> [u8; 32] {
-    state.clone().finalize().into()
 }
 
 #[cfg(test)]

@@ -393,11 +393,15 @@ fn insert_replay_lines(
     height: u16,
     lines: impl IntoIterator<Item = ratatui::text::Line<'static>>,
 ) -> u16 {
+    let rows = coco_tui_ui::engine::history_insert::render_history_rows(
+        lines.into_iter().collect(),
+        width,
+    );
     let backend = TestBackend::new(width, height);
     let mut terminal = SurfaceTerminal::new(backend).expect("test backend is infallible");
     terminal.set_viewport_area(Rect::new(0, height.saturating_sub(1), width, height.min(1)));
     terminal
-        .insert_history_lines(lines)
+        .insert_history_rows(&rows)
         .expect("test backend is infallible")
 }
 
