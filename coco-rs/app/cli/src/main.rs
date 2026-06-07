@@ -471,6 +471,10 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let (plugin_notif_tx, plugin_notif_rx) = tokio::sync::mpsc::channel(16);
     let _plugin_watcher_guard =
         coco_cli::plugin_watch::spawn(plugin_notif_tx, &cwd, &global_config::config_home());
+    // Startup marketplace maintenance (seed/reconcile/delist) on the SDK
+    // surface too — mirrors the TUI/headless so delisted-plugin enforcement
+    // runs for SDK NDJSON sessions. Background + non-fatal.
+    coco_cli::session_bootstrap::spawn_marketplace_startup(global_config::config_home());
     let server = SdkServer::new(transport)
         .with_session_manager(session_manager)
         .with_mcp_manager(mcp_manager.clone())

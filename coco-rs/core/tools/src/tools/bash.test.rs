@@ -213,17 +213,17 @@ fn test_bash_default_timeout_zero_clamps_to_one() {
     assert_eq!(super::default_timeout_ms(&config), 1);
 }
 
+// TS `BashTool` does not enforce a max timeout (the configured max is only an
+// advisory schema hint), so there is no `max_timeout_ms` helper to test.
 #[test]
-fn test_bash_max_timeout_from_default_config() {
-    let config = coco_config::ToolConfig::default();
-    assert_eq!(super::max_timeout_ms(&config), 600_000);
-}
-
-#[test]
-fn test_bash_max_timeout_from_runtime_config() {
-    let mut config = coco_config::ToolConfig::default();
-    config.bash.max_timeout_ms = 900_000;
-    assert_eq!(super::max_timeout_ms(&config), 900_000);
+fn test_bash_timeout_above_config_max_is_not_rejected() {
+    let ctx = ToolUseContext::test_default();
+    let vr = <BashTool as DynTool>::validate_input(
+        &BashTool,
+        &json!({"command": "echo hi", "timeout": 9_999_999u64}),
+        &ctx,
+    );
+    assert!(matches!(vr, coco_tool_runtime::ValidationResult::Valid));
 }
 
 // ---------------------------------------------------------------------------

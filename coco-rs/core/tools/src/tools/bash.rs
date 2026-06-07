@@ -33,7 +33,8 @@ pub struct BashInput {
     /// at the boundary instead of an opaque Serde failure.
     #[serde(default)]
     pub command: String,
-    /// Optional timeout (ms). Clamped to `ToolConfig::bash.max_timeout_ms`.
+    /// Optional timeout (ms). Defaults to `ToolConfig::bash.default_timeout_ms`
+    /// when absent or zero; the model's value is otherwise honored (TS parity).
     #[serde(default)]
     pub timeout: Option<u64>,
     /// Short description of what the command does. Falls back to the
@@ -68,14 +69,6 @@ pub struct SimulatedSedEdit {
 
 fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
     config.bash.default_timeout_ms.max(1) as u64
-}
-
-fn max_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
-    config
-        .bash
-        .max_timeout_ms
-        .max(config.bash.default_timeout_ms)
-        .max(1) as u64
 }
 
 /// Long-form tool description shown to the model.
@@ -269,7 +262,7 @@ impl Tool for BashTool {
                     "timeout": {
                         "type": "number",
                         "description": "Optional timeout in milliseconds. Defaults to the resolved \
-                                        Bash tool config and cannot exceed its configured max timeout."
+                                        Bash tool config (typically 120000ms / 2 minutes)."
                     },
                     "description": {
                         "type": "string",
@@ -611,18 +604,13 @@ impl Tool for BashTool {
         }]
     }
 
-    fn validate_input(&self, input: &BashInput, ctx: &ToolUseContext) -> ValidationResult {
+    fn validate_input(&self, input: &BashInput, _ctx: &ToolUseContext) -> ValidationResult {
         if input.command.is_empty() {
             return ValidationResult::invalid("missing required field: command");
         }
-        let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
-        if let Some(timeout) = input.timeout
-            && timeout > max_timeout_ms
-        {
-            return ValidationResult::invalid(format!(
-                "timeout must not exceed {max_timeout_ms}ms"
-            ));
-        }
+        // TS `BashTool` does not enforce a max timeout — the configured max is
+        // only an advisory hint in the schema description. The model's raw
+        // timeout is honored.
         ValidationResult::Valid
     }
 
@@ -665,12 +653,12 @@ impl Tool for BashTool {
         }
         let command = input.command.as_str();
 
-        let default_timeout_ms = default_timeout_ms(&ctx.tool_config);
-        let max_timeout_ms = max_timeout_ms(&ctx.tool_config);
+        // TS `timeout || getDefaultTimeoutMs()`: a falsy (0) or absent value
+        // falls back to the default; no max clamp (the raw value is honored).
         let timeout_ms = input
             .timeout
-            .unwrap_or(default_timeout_ms)
-            .min(max_timeout_ms);
+            .filter(|&t| t > 0)
+            .unwrap_or_else(|| default_timeout_ms(&ctx.tool_config));
 
         let run_in_background = input.run_in_background;
 

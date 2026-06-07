@@ -208,19 +208,20 @@ pub fn memory_age_string(mtime_ms: i64) -> String {
 }
 
 /// Stale-memory caveat prepended to surfaced content when the memory
-/// is older than one day. TS `memoryAge.ts:33-42 memoryFreshnessText`
-/// — surfaced via `attachments.ts:2328-2331`. The warning informs the
-/// model that referenced file paths / line numbers may be out of date.
-/// Returns an empty string for memories ≤1 day old (treat as fresh).
+/// is older than one day. Verbatim port of TS `memoryAge.ts:33-42
+/// memoryFreshnessText` — surfaced via `attachments.ts:2327-2332
+/// memoryHeader`, which owns the spacing (the caller inserts the blank
+/// line). Returns an empty string for memories ≤1 day old (treat as fresh).
 pub fn memory_freshness_text(mtime_ms: i64) -> String {
     let days = memory_age_days(mtime_ms);
     if days <= 1 {
         return String::new();
     }
     format!(
-        "This memory is {days} days old. Treat referenced file paths, \
-         line numbers, and code as potentially stale — verify before \
-         acting on them.\n\n"
+        "This memory is {days} days old. Memories are point-in-time \
+         observations, not live state — claims about code behavior or \
+         file:line citations may be outdated. Verify against current code \
+         before asserting as fact."
     )
 }
 

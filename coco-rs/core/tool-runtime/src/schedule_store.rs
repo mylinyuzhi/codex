@@ -1,6 +1,10 @@
-//! Schedule store trait — abstraction for cron/trigger persistence.
+//! Schedule store — cron-task + remote-trigger persistence.
 //!
-//! Same injection pattern as `SideQuery` and `McpHandle`.
+//! Faithful port of TS `utils/cronTasks.ts` (`CronTask` + add/remove/list/
+//! markFired) and the trigger surface used by `RemoteTriggerTool`. Injected
+//! into tools via `ToolUseContext.schedules`, same pattern as `SideQuery` /
+//! `McpHandle`. The disk-backed implementation lives in
+//! [`crate::disk_backed_schedule_store`].
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -9,18 +13,46 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// A stored schedule entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScheduleEntry {
+/// A scheduled prompt. Mirrors TS `CronTask` (`utils/cronTasks.ts`). The on-disk
+/// JSON uses camelCase (`createdAt`, `lastFiredAt`); the runtime-only `durable`
+/// and `agent_id` fields are never serialized.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CronTask {
     pub id: String,
-    pub name: String,
-    pub schedule: String,
-    pub command: String,
-    #[serde(default)]
-    pub enabled: bool,
+    /// 5-field cron string (local time), validated on write + re-validated on read.
+    pub cron: String,
+    /// Prompt enqueued when the task fires.
+    pub prompt: String,
+    /// Epoch ms when created — anchor for missed-task detection.
+    pub created_at: i64,
+    /// Epoch ms of the most recent fire (recurring only); lets next-fire
+    /// computation survive restarts. Never set for one-shots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fired_at: Option<i64>,
+    /// When `Some(true)`, reschedule after firing instead of deleting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recurring: Option<bool>,
+    /// When `Some(true)`, exempt from recurring auto-expiry (system tasks only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permanent: Option<bool>,
+    /// Runtime-only: `Some(false)` = session-scoped (never written to disk).
+    /// File-backed tasks leave this `None`. Stripped on write.
+    #[serde(skip)]
+    pub durable: Option<bool>,
+    /// Runtime-only: set when created by an in-process teammate. Never on disk.
+    #[serde(skip)]
+    pub agent_id: Option<String>,
 }
 
-/// A remote trigger entry.
+impl CronTask {
+    /// `true` when the task reschedules after firing (TS: missing/false = one-shot).
+    pub fn is_recurring(&self) -> bool {
+        self.recurring.unwrap_or(false)
+    }
+}
+
+/// A remote trigger entry (CCR-backed; see `RemoteTriggerTool`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriggerEntry {
     pub id: String,
@@ -28,22 +60,69 @@ pub struct TriggerEntry {
     pub description: Option<String>,
 }
 
-/// Trait for schedule/trigger CRUD operations.
-///
-/// TS: CronCreateTool, CronDeleteTool, CronListTool, RemoteTriggerTool
+/// Current wall-clock in epoch ms.
+pub(crate) fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 8-hex-char id (mirrors TS `randomUUID().slice(0, 8)`).
+pub(crate) fn short_task_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
+}
+
+/// Build a fresh `CronTask` with `created_at = now`. Shared by the in-memory and
+/// disk stores so id/timestamp generation stays identical.
+pub(crate) fn new_cron_task(
+    cron: &str,
+    prompt: &str,
+    recurring: bool,
+    durable: bool,
+    agent_id: Option<&str>,
+) -> CronTask {
+    CronTask {
+        id: short_task_id(),
+        cron: cron.to_string(),
+        prompt: prompt.to_string(),
+        created_at: now_epoch_ms(),
+        last_fired_at: None,
+        recurring: recurring.then_some(true),
+        permanent: None,
+        durable: Some(durable),
+        agent_id: agent_id.map(str::to_string),
+    }
+}
+
+/// Cron-task + trigger CRUD. Mirrors TS `utils/cronTasks.ts` + the trigger
+/// surface. The scheduler tick driver and the `Cron*` / `RemoteTrigger` tools
+/// share one injected store.
 #[async_trait::async_trait]
 pub trait ScheduleStore: Send + Sync {
-    // ── Schedule (Cron) CRUD ──
-    async fn create_schedule(
+    // ── Cron tasks (TS cronTasks.ts) ──
+    /// Append a task; returns the created record. `durable=false` → session
+    /// (in-memory) only; `durable=true` → persisted to disk.
+    async fn add_cron_task(
         &self,
-        name: &str,
-        schedule: &str,
-        command: &str,
-    ) -> Result<ScheduleEntry, coco_error::BoxedError>;
-    async fn delete_schedule(&self, id: &str) -> Result<(), coco_error::BoxedError>;
-    async fn list_schedules(&self) -> Result<Vec<ScheduleEntry>, coco_error::BoxedError>;
+        cron: &str,
+        prompt: &str,
+        recurring: bool,
+        durable: bool,
+        agent_id: Option<&str>,
+    ) -> Result<CronTask, coco_error::BoxedError>;
+    /// Remove tasks by id (no-op for ids that don't match).
+    async fn remove_cron_tasks(&self, ids: &[&str]) -> Result<(), coco_error::BoxedError>;
+    /// All tasks (file-backed + session), merged.
+    async fn list_all_cron_tasks(&self) -> Result<Vec<CronTask>, coco_error::BoxedError>;
+    /// Stamp `last_fired_at` on the given (file-backed) recurring tasks.
+    async fn mark_cron_tasks_fired(
+        &self,
+        ids: &[&str],
+        fired_at: i64,
+    ) -> Result<(), coco_error::BoxedError>;
 
-    // ── Trigger CRUD ──
+    // ── Remote triggers (RemoteTriggerTool — CCR; see its struct doc) ──
     async fn create_trigger(
         &self,
         name: &str,
@@ -61,10 +140,11 @@ pub trait ScheduleStore: Send + Sync {
 
 pub type ScheduleStoreRef = Arc<dyn ScheduleStore>;
 
-/// Session-scoped in-memory schedule store.
+/// Session-scoped in-memory store. All tasks live in memory (no disk), so it's
+/// the natural fallback for sessions without a project dir + the test double.
 #[derive(Debug, Default)]
 pub struct InMemoryScheduleStore {
-    schedules: RwLock<HashMap<String, ScheduleEntry>>,
+    tasks: RwLock<Vec<CronTask>>,
     triggers: RwLock<HashMap<String, TriggerEntry>>,
 }
 
@@ -76,33 +156,43 @@ impl InMemoryScheduleStore {
 
 #[async_trait::async_trait]
 impl ScheduleStore for InMemoryScheduleStore {
-    async fn create_schedule(
+    async fn add_cron_task(
         &self,
-        name: &str,
-        schedule: &str,
-        command: &str,
-    ) -> Result<ScheduleEntry, coco_error::BoxedError> {
-        let entry = ScheduleEntry {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.to_string(),
-            schedule: schedule.to_string(),
-            command: command.to_string(),
-            enabled: true,
-        };
-        self.schedules
-            .write()
-            .await
-            .insert(entry.id.clone(), entry.clone());
-        Ok(entry)
+        cron: &str,
+        prompt: &str,
+        recurring: bool,
+        durable: bool,
+        agent_id: Option<&str>,
+    ) -> Result<CronTask, coco_error::BoxedError> {
+        let task = new_cron_task(cron, prompt, recurring, durable, agent_id);
+        self.tasks.write().await.push(task.clone());
+        Ok(task)
     }
 
-    async fn delete_schedule(&self, id: &str) -> Result<(), coco_error::BoxedError> {
-        self.schedules.write().await.remove(id);
+    async fn remove_cron_tasks(&self, ids: &[&str]) -> Result<(), coco_error::BoxedError> {
+        self.tasks
+            .write()
+            .await
+            .retain(|t| !ids.contains(&t.id.as_str()));
         Ok(())
     }
 
-    async fn list_schedules(&self) -> Result<Vec<ScheduleEntry>, coco_error::BoxedError> {
-        Ok(self.schedules.read().await.values().cloned().collect())
+    async fn list_all_cron_tasks(&self) -> Result<Vec<CronTask>, coco_error::BoxedError> {
+        Ok(self.tasks.read().await.clone())
+    }
+
+    async fn mark_cron_tasks_fired(
+        &self,
+        ids: &[&str],
+        fired_at: i64,
+    ) -> Result<(), coco_error::BoxedError> {
+        let mut tasks = self.tasks.write().await;
+        for t in tasks.iter_mut() {
+            if ids.contains(&t.id.as_str()) {
+                t.last_fired_at = Some(fired_at);
+            }
+        }
+        Ok(())
     }
 
     async fn create_trigger(
@@ -149,73 +239,77 @@ impl ScheduleStore for InMemoryScheduleStore {
     }
 }
 
-fn not_found(message: String) -> coco_error::BoxedError {
+pub(crate) fn not_found(message: String) -> coco_error::BoxedError {
     Box::new(coco_error::PlainError::new(
         message,
         coco_error::StatusCode::FileNotFound,
     ))
 }
 
-/// In-memory no-op store for contexts without scheduling.
+fn unavailable<T>() -> Result<T, coco_error::BoxedError> {
+    Err(Box::new(coco_error::PlainError::new(
+        "scheduling not available in this context",
+        coco_error::StatusCode::Internal,
+    )))
+}
+
+/// No-op store for contexts without scheduling (test double / headless helpers).
 #[derive(Debug, Clone)]
 pub struct NoOpScheduleStore;
 
 #[async_trait::async_trait]
 impl ScheduleStore for NoOpScheduleStore {
-    async fn create_schedule(
+    async fn add_cron_task(
         &self,
-        _name: &str,
-        _schedule: &str,
-        _command: &str,
-    ) -> Result<ScheduleEntry, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "scheduling not available in this context",
-            coco_error::StatusCode::Internal,
-        )))
+        _cron: &str,
+        _prompt: &str,
+        _recurring: bool,
+        _durable: bool,
+        _agent_id: Option<&str>,
+    ) -> Result<CronTask, coco_error::BoxedError> {
+        unavailable()
     }
-    async fn delete_schedule(&self, _id: &str) -> Result<(), coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "scheduling not available in this context",
-            coco_error::StatusCode::Internal,
-        )))
+    async fn remove_cron_tasks(&self, _ids: &[&str]) -> Result<(), coco_error::BoxedError> {
+        Ok(())
     }
-    async fn list_schedules(&self) -> Result<Vec<ScheduleEntry>, coco_error::BoxedError> {
+    async fn list_all_cron_tasks(&self) -> Result<Vec<CronTask>, coco_error::BoxedError> {
         Ok(vec![])
+    }
+    async fn mark_cron_tasks_fired(
+        &self,
+        _ids: &[&str],
+        _fired_at: i64,
+    ) -> Result<(), coco_error::BoxedError> {
+        Ok(())
     }
     async fn create_trigger(
         &self,
         _name: &str,
         _description: Option<&str>,
     ) -> Result<TriggerEntry, coco_error::BoxedError> {
-        Err(Box::new(coco_error::PlainError::new(
-            "scheduling not available in this context",
-            coco_error::StatusCode::Internal,
-        )))
+        unavailable()
     }
     async fn list_triggers(&self) -> Result<Vec<TriggerEntry>, coco_error::BoxedError> {
         Ok(vec![])
     }
     async fn get_trigger(&self, id: &str) -> Result<TriggerEntry, coco_error::BoxedError> {
-        return Err(Box::new(coco_error::PlainError::new(
-            format!("trigger '{id}' not found (scheduling not available)"),
-            coco_error::StatusCode::Internal,
-        )));
+        Err(not_found(format!(
+            "trigger '{id}' not found (scheduling not available)"
+        )))
     }
     async fn update_trigger(
         &self,
         id: &str,
         _body: Value,
     ) -> Result<TriggerEntry, coco_error::BoxedError> {
-        return Err(Box::new(coco_error::PlainError::new(
-            format!("trigger '{id}' not found (scheduling not available)"),
-            coco_error::StatusCode::Internal,
-        )));
+        Err(not_found(format!(
+            "trigger '{id}' not found (scheduling not available)"
+        )))
     }
     async fn run_trigger(&self, id: &str) -> Result<String, coco_error::BoxedError> {
-        return Err(Box::new(coco_error::PlainError::new(
-            format!("trigger '{id}' not found (scheduling not available)"),
-            coco_error::StatusCode::Internal,
-        )));
+        Err(not_found(format!(
+            "trigger '{id}' not found (scheduling not available)"
+        )))
     }
 }
 

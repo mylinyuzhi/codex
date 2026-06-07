@@ -11,10 +11,103 @@ Update these as boxes get ticked.
 | Bucket | Total | Done |
 |---|---:|---:|
 | **P1** (wiring; small) | 18 | 17 |
-| **P2** (parity tail) | 78 | 57 |
-| **P3** (cosmetic/edge) | 58 | 0 |
-| **Open total** | 155 | 74 |
+| **P2** (parity tail) | 78 | 75 |
+| **P3** (cosmetic/edge) | 58 | 19 (+2 partial) |
+| **Open total** | 155 | 111 |
 
+> **2026-06-07 — P3 implementation pass (16 fixes landed + tested, `just pre-commit` green: 11041 tests pass).**
+> After the two verification workflows, implemented the Tier-0 (real bugs) + Tier-1 (quick wins) +
+> cheap Tier-2 (finish-the-partial) set. **Newly `[x]` (16):**
+> - **Behavioral bugs (Tier 0):** tool-runtime#13 (`COCO_MAX_TOOL_USE_CONCURRENCY=0` deadlock →
+>   `>0` filter), sandbox#175 (`allow_pty` default flipped to true, both serde + Default impl),
+>   tool-runtime#15 (pre-execute abort now emits `PreExecutionCancelled` + `CANCEL_MESSAGE`, no
+>   PostToolUseFailure), hooks#187 (failed-hook stderr no longer injected as success-context +
+>   missing `hook_non_blocking_error` now emitted).
+> - **MEDIUM:** tools-file#23 (empty/offset reads emit `<system-reminder>` warnings at render).
+> - **Quick wins (Tier 1):** messages#88 (cost `>0.5` threshold), memory#226 (verbatim freshness
+>   text + caller spacing), commands#211 (`/status` no alias, `/tasks`→`bashes`), plugins#237
+>   (canonical `(+ N)` suffix, dead `format_dep_note` deleted), tools-web-mcp#63 (`required:[url,prompt]`),
+>   system-reminder#108 (trailing-newline parity for todo+task), tools-exec#35 (no max-timeout
+>   enforcement; dead `max_timeout_ms` helper deleted).
+> - **Finished partials (Tier 2):** tools-exec#42 (pwsh hint-strip), tools-web-mcp#60 (teammate-durable
+>   guard via `is_in_process_teammate`), mcp#156 (Unicode `…` marker + server-instructions truncated +
+>   2 dead dup impls deleted), context#102 (`COCO_DISABLE_GIT_INSTRUCTIONS` EnvKey + `gitsettings`
+>   helper + `get_environment_info` gate threaded through all callers).
+>
+> **system-reminder#104 → REFUTED** (removed from open set): the prior audit analyzed a DEAD path —
+> `QueuedCommandGenerator` is not registered; the live drain (`queued_command_to_attachment`) renders
+> human commands correctly (visibility is `AttachmentKind`-derived, not per-message `is_meta`). No bug.
+>
+> **Still deferred (2 — largest, lowest-impact, most cascade risk):**
+> - **tool-runtime#11** `[~]` — phrasing already matches TS; remaining = `<tool_use_error>` wrapper +
+>   `Bash(cmd)` descriptor. Needs `ToolCallErrorKind::SiblingCancelled` + an `errored_tool_descriptor`
+>   field threaded onto `UnstampedToolCallOutcome` (≈6 construction sites) + delete dead
+>   `SyntheticToolError::SiblingError`. Spec validated (workflow `waksbnfdu`).
+> - **tools-exec#40** `[ ]` — auto-detach mislabeled `backgroundedByUser`. Needs a `DetachSource`
+>   enum threaded through `signal_detach` (signature change) across running.rs/controller.rs/agent.rs/
+>   the `TaskHandle` trait + bash.rs. Note: `assistantAutoBackgrounded` is KAIROS-only — NOT a coco
+>   target; the fix is the generic message, not that flag.
+>
+> The broader **Tier-3 parity tail** (hooks#186/#188, system-reminder#106/#107, coordinator#259/261/262,
+> config#245/249, messages#85/86/87, mcp#149/150, query#5/6/7, sandbox#174/176, plugins#236/238,
+> tools-exec#37/39, context#99, tasks#215, shell#161/165, skills#199, tools-file#27, tools-web-mcp#58/61)
+> remains open — medium-effort, batched-by-subsystem follow-ups.
+
+> **2026-06-07 — P3 verification pass (18-agent workflow `w2c61u25v`, 586 tool-uses, live HEAD `f79861273f` + `claude-code-kim` TS mirror).**
+> The "P3 done = 0" line was stale. Re-verified every one of the 58 by re-locating
+> symbols live (the audit's line numbers are off the old `748580242` baseline):
+> - **3 fully fixed → `[x]`:** **tools-web-mcp#59** (CronList recurring/durable — closed by the recent
+>   cron commits `c258d88..f798612`), **config#252** (no `get_fast_mode_model`; fast mode is a
+>   same-model `speed=fast` capability flag by design — already_fixed-by-redesign), **tasks#218**
+>   (premise refuted — Rust `truncate_output` is head-only + 8MB tail-read = TS parity; the middle-elide
+>   was removed with #34).
+> - **7 partials → `[~]`** (one half already landed): **tools-exec#42** (bash hint-strip done, pwsh
+>   missing), **tools-exec#43** (prod TaskRuntime path already merges stdout+stderr; only byte-exact
+>   interleave + legacy fallback residual — candidate `wont_fix`), **tools-web-mcp#60** (next-run
+>   reachability done; teammate-durable guard missing), **config#250** (file managed-settings done;
+>   OS-MDM missing [large], remote-sync is a non-goal), **mcp#156** (truncation is char-safe + wired;
+>   suffix char + untruncated server-instructions + 2 dead dup impls remain), **tool-runtime#11**
+>   (phrasing already matches TS; `<tool_use_error>` wrapper + `(cmd)` descriptor missing — and #8 is
+>   actually WIRED, so this is no longer "dead code"), **context#102** (2k truncation done;
+>   `include_git_instructions` gate is a no-op with zero consumers).
+> - **48 confirmed open.** Several LOW-labelled items are genuine behavioral bugs, not cosmetics
+>   (see the prioritized fix plan handed back this session): **tool-runtime#13** (concurrency=0
+>   deadlock), **sandbox#175** (allow_pty default silently denies PTY), **tool-runtime#15** (pre-exec
+>   cancel wrongly fires PostToolUseFailure), **system-reminder#104** (mid-turn human input vanishes
+>   from transcript), **hooks#187** (non-zero hook stderr injected as success context), **tools-exec#40**
+>   (auto-detach mislabeled "backgrounded by user").
+> - **Sanctioned reframes applied:** every `CLAUDE_CODE_*` env finding (config#245, system-reminder#107,
+>   context#102, skills#199, tools-exec#37) is retargeted to its `COCO_*` equivalent, never the
+>   CLAUDE_ name. **tools-file#23 is the only MEDIUM** in P3.
+
+> **2026-06-07 — adversarial re-audit of the 12 'remaining' P2 items (12-agent workflow `w53jmyhgi` + independent greps on live HEAD).**
+> The tracker **undercounted done**. **6 of the 12 were stale-mislabeled** as open/partial and are
+> actually fully wired — verified by tracing live call chains, not trusting the (stale) RUST POINTER
+> line numbers: **tool-runtime#9, query#2, permissions#70, hooks#184, hooks#185, commands#208** → all
+> flipped `[x]` below with evidence. **P2 done 57 → 72.** Only **4 genuine gaps remain** (+2 large defers).
+>
+> The two plugin items previously stamped **"effectively complete" were NOT** — both are unreachable on
+> the headless + SDK surfaces:
+> - **plugins#235** — `run_marketplace_startup` has exactly ONE caller (`tui_runner.rs:454`); the
+>   seed→reconcile→**delist** sweep silently never runs for `coco --print`, piped, `coco chat`,
+>   `coco review`, or SDK NDJSON (TS runs it headless: `print.ts:1721`). Genuine **do-now** gap.
+> - **plugins#239** — SDK `handle_plugin_reload` (`sdk_server/handlers/runtime.rs:323`) is a `_ctx`
+>   no-op stub returning empty vecs; an SDK client's `plugin/reload` reloads nothing. Genuine **do-now** gap.
+>
+> **UPDATE 2026-06-07 (same day): the two do-now items are now FIXED** — plugins#235 (marketplace startup
+> wired into headless + SDK via `session_bootstrap::spawn_marketplace_startup`) and plugins#239 (SDK
+> `handle_plugin_reload` now runs the real reload chain). `just quick-check` + `just test-crate coco-cli`
+> green; uncommitted. **P2 done 72 → 74.** Remaining: tool-runtime#8 (own PR), config#247 (capability
+> gating), tools-web-mcp#54 + plugins#234 (large defers).
+>
+> **Original remaining-work plan (now partly done):** do-now = ~~plugins#235 + plugins#239~~ (FIXED above).
+> Defer-own-PR = **tool-runtime#8** (sibling-abort missing on the **default streaming** path — see
+> its entry for the defer rationale; it is sequenced after the plugin wiring, not dropped). Partial =
+> **config#247** (now also a **multi-provider correctness bug** — the model-support gate hardcodes
+> `contains("opus-4-6")` instead of the capability-driven, provider-agnostic
+> `capabilities.contains(Capability::FastMode)`; see its entry).
+> Large defer = tools-web-mcp#54, plugins#234.
+>
 > **2026-06-06 — P2 verification + tracker reconciliation on `feat/review`.**
 > The P2 work landed across **Wave 1–5** commits (`a8110cb`, `4b3da2f`,
 > `46472336`, `adafd60` + the earlier first-pass), but the checkboxes below were
@@ -70,15 +163,15 @@ Update these as boxes get ticked.
 >   blocker). Also: builtin-plugin scaffold (`init_builtin_plugins` + skill merge)
 >   wired at bootstrap/reload (clears the "builtins-dormant" follow-up).
 >
-> **Genuinely open — grouped for the fix plan:**
-> - **Wave 4 — interrupt/abort fabric (deferred; high-risk / low-value):**
->   tool-runtime#8 (Bash sibling-abort), tool-runtime#9 (interrupt_behavior),
->   query#2 (Enter-while-streaming interrupt), permissions#70 (headless
->   denial-limit abort — needs a `CancelReason` variant + runner plumbing).
-> - **Interactive TUI overlays:** commands#208 (/plugin picker).
-> - **Hooks async fabric:** hooks#184 (asyncRewake idle wake), hooks#185 (stdout
->   `{"async":true}`).
-> - **Partial misc:** config#247 (full fast-mode state machine),
+> **Genuinely open — grouped for the fix plan.** ⚠️ **SUPERSEDED by the 2026-06-07 audit above** —
+> most of the items below were verified RESOLVED (tool-runtime#9, query#2, permissions#70, commands#208,
+> hooks#184, hooks#185). Kept for history; the live remaining set is in the 2026-06-07 note.
+> - ~~**Wave 4 — interrupt/abort fabric:**~~ only **tool-runtime#8** (streaming sibling-abort) remains;
+>   tool-runtime#9 / query#2 / permissions#70 are RESOLVED (were never actually open).
+> - ~~**Interactive TUI overlays:** commands#208~~ — RESOLVED (real `PluginDialogState` overlay).
+> - ~~**Hooks async fabric:** hooks#184 / hooks#185~~ — RESOLVED (only hooks#185 `forceSyncExecution`
+>   residual remains).
+> - **Partial misc (still open):** config#247 (fast-mode — now also a multi-provider gating bug),
 >   tools-web-mcp#54 (real cron wake loop).
 >
 > Run `just pre-commit` before committing.
@@ -380,16 +473,78 @@ since been implemented on `feat/review`:
 
 ### tool-runtime — interrupt / sibling-abort / budget (4)
 
-### [ ] tool-runtime#8 — Bash-error sibling abort never fires on the production tool path
-`● genuinely_open` · **MEDI** · effort **medium** · fix-sketch *sound*
+### [~] tool-runtime#8 — Bash-error sibling abort never fires on the production tool path
+`◑ partially_fixed` · **MEDI** · effort **medium** · fix-sketch *sound*
+
+> **✅ PART A LANDED 2026-06-07 (commit `d08c8ef630`).** Streaming path now fires the sibling-abort:
+> shared `StreamingToolExecutor::abort_siblings_if_shell_error` called in-task from `start_safe_now`
+> (+ `run_concurrent_batch` refactored to it), `is_shell_tool_id` made `pub(crate)`, streaming test added.
+> **PART B still deferred** (predicate parity for ordinary non-zero-exit Bash, which returns `Ok`/
+> `error_kind:None`): needs a new `is_error` signal threaded through the Tool trait + outcome model —
+> disproportionate to its efficiency-only value (coco serializes all mutating Bash, so concurrent siblings
+> are always read-only; no correctness/safety benefit). See the deep-validation note below.
+
+> **2026-06-07 audit — corrects the framing + records the defer rationale.** The original "execute_concurrent
+> is dead code → no sibling-abort anywhere" framing is HALF WRONG: the **non-streaming** live path
+> (`ToolCallRunner::execute_with` → `run_concurrent_batch`) DOES implement sibling-abort correctly
+> (`executor.rs:905-910`, tested `executor.test.rs:714`). But streaming is the production **default**
+> (`config.rs:396 streaming_tool_execution=true`), and the streaming path (`executor_streaming.rs`
+> `commit_flush`/`terminal_drain`) has ZERO sibling references — so a Bash failure in a concurrent batch
+> does not cancel its siblings. This is a real **default-path** gap, NOT a dead-path one; the old
+> "Wave-4 high-risk/low-value" label understated it.
+>
+> **Why deferred (sequencing, not dropped — answers "why defer"):** (1) *Risk* — it edits the concurrent
+> streaming join loop where abort fires on JoinSet completion order; getting the synthetic
+> "Cancelled: parallel tool call errored" outcome + ordering right needs a focused test, unlike the
+> trivial `app/cli` plugin wiring. (2) *Impact is efficiency, not safety* — un-aborted siblings merely
+> run to completion and commit wasted results; the turn still proceeds and the model still sees the Bash
+> error. No data loss / no security hole. (3) *Isolation* — it is wholly inside `core/tool-runtime` and
+> deserves its own review, so it is **PR #2** (after the plugin-wiring PR #1), not a drop.
+> **Fix is mostly wired already:** `make_runtime` already passes `Some(self.sibling_abort.signal())` into
+> spawned safe tools (`executor.rs:860`) — they already *listen*; only the *trigger* is missing. Make
+> `is_shell_tool_id` (`executor.rs:1001`) `pub(crate)` and, in `commit_flush`'s + `terminal_drain`'s join
+> loops, after each `unstamped` resolves with `error_kind.is_some() && is_shell_tool_id(tool_id)`, call
+> `sibling_abort.abort(SiblingError{..})` before stamping the next; mirror `executor.test.rs:714` through
+> `feed_plan`+`commit_flush`.
+>
+> **2026-06-07 DEEP VALIDATION — the fix above is INCOMPLETE; two compounding gaps + a placement error.**
+> Verified end-to-end (field + listen exist; trigger missing on the streaming default path). But:
+> - **(a) Placement: `commit_flush`/`terminal_drain` is the WRONG insertion point.** Safe tools are spawned
+>   during streaming (`start_safe_now`); by the time `commit_flush` drains the JoinSet via `join_next`, the
+>   concurrent siblings have often already finished → aborting there is frequently a no-op (too late). The
+>   abort must fire **inside the spawned task at completion time** — wrap `run_one` in `start_safe_now` so a
+>   shell-tool error calls `sibling_abort.abort(SiblingError)` the moment it resolves (during streaming),
+>   while siblings are still inflight. Share the predicate with `run_concurrent_batch`.
+> - **(b) Predicate is keyed on the wrong signal — the trigger is inert even on the NON-streaming path.**
+>   `tool_outcome_builder::from_execution` sets `error_kind` to `Some` only when `execute()` returns `Err`
+>   (ExecutionFailed/Cancelled). Bash returns **`Ok`** with `error_kind: None` on ordinary non-zero exit
+>   (`bash.rs:584-591` composes an "Exit code N" string but still `Ok`s). So `error_kind.is_some() &&
+>   is_shell_tool_id` NEVER fires for normal command failure — the only "passing" test (`executor.test.rs:714`)
+>   hand-forces `error_kind`. Fix = propagate the command-level `is_error` (coco already computes
+>   `interpret_command_result(...).is_error` at `bash.rs:588`) into the outcome and OR it into the predicate
+>   (cleaner than changing Bash's Ok/Err contract, which would ripple into budget/retry/display).
+> - **VALUE NUANCE (why this stays its own low-urgency PR despite being "more broken"):** in coco's model
+>   *all* concurrent siblings are read-only/safe (mutating Bash is serialized — "no mixed safe+unsafe
+>   inflight", `executor_streaming.rs:44-49`). Aborting read-only siblings is a pure **efficiency** win
+>   (stop wasted work), NOT a correctness/safety guard — read-only tools have no side effects to prevent.
+>   TS's dependency-safety motivation (`mkdir && write`) doesn't apply here. Real gap, bounded value →
+>   do it when touching this code; not urgent. Effort medium, risk medium (touches concurrent-abort
+>   ordering + the outcome `is_error` signal).
 
 - **Gap:** Sibling abort on Bash error never fires in production; execute_concurrent path is dead code
 - **TS:** StreamingToolExecutor.ts:354-363: when a tool yields an error tool_result AND tool.block.name === BASH_TOOL_NAME, it sets hasErrored, captures erroredToolDescription, and calls siblingAbortController.abort('sibling_error'). Sibling concurrent tools detect getAbortReason()==='sibling_error' (:216-218), break their generator loop (:336-345), and get a synthet…
 - **Rust (HEAD):** /lyz/codespace/codex/coco-rs/core/tool-runtime/src/executor.rs:368-398 exist but ZERO production callers across coco-rs (only lib.rs:21 pub mod re-export). /lyz/codespace/codex/coco-rs/app/query/src/engine_turn_request.rs:226-238 and tool_call_runner.rs:209-225 both use bare tokio::select! with no sibling-error handling.
 - **Fix:** In both live run_one closures, fork a child token off RunOneRuntime.cancellation + RunOneRuntime.sibling_abort into call_ctx.cancel, and after build_outcome_from_execution detect a Bash/PowerShell error outcome and call runtime.sibling_abort.cancel(); have run_concurrent_batch/StreamingHandle seed sibling_cancel per batch.
 
-### [ ] tool-runtime#9 — Tool::interrupt_behavior (Cancel vs Block) is never consulted in production
-`● genuinely_open` · **MEDI** · effort **medium** · fix-sketch *sound*
+### [x] tool-runtime#9 — Tool::interrupt_behavior (Cancel vs Block) is never consulted in production ✅ VERIFIED RESOLVED (2026-06-07)
+`✅ fixed` · **MEDI** · effort **medium** · fix-sketch *done*
+
+> **2026-06-07 audit (tracker was WRONG):** `interrupt_behavior()` IS consumed in production at
+> `core/tool-runtime/src/executor.rs:998` (`interruptible_set`, on both the SerialUnsafe and ConcurrentSafe
+> batch paths via `emit_interruptibility` at :824/:838). Per-tool assignment matches TS: `SleepTool`=Cancel
+> (`core/tools/src/tools/shell_tools.rs:61`), Bash/PowerShell=Block (default `traits.rs:548`). The submit-time
+> gate is `app/tui/src/update.rs:391` (`has_submit_interruptible_tool_in_progress`, fed by
+> `tui_only.rs:341`). The "zero callers" claim cited the wrong file (`tool_call_runner.rs`).
 
 - **Gap:** Tool::interrupt_behavior enum defined but never consulted; all tools cancelled uniformly via turn-wide token
 - **TS:** StreamingToolExecutor.ts:210-241: getAbortReason() consults getToolInterruptBehavior(tool) — on user interrupt, only tools whose interruptBehavior()==='cancel' get user_interrupted; 'block' tools return null (not cancelled). :254-260 updateInterruptibleState() calls toolUseContext.setHasInterruptibleToolInProgress(...) so the UI knows ESC can interrupt only…
@@ -423,7 +578,100 @@ since been implemented on `feat/review`:
 - **Fix:** Port isModelAllowed (segment-boundary prefixMatchesModel + familyHasSpecificEntries + empty-list-blocks-all) into a shared fn; use it for the picker filter at show.rs:75 and treat empty available_models as block-all, not None.
 
 ### [~] config#247 — Fast-mode org prefetch is a stub and availability/model-support gates are unwir…
-`● genuinely_open` · **MEDI** · effort **small** · fix-sketch *sound*
+`◑ partially_fixed` · **MEDI** · effort **medium** · fix-sketch *sound*
+
+> **✅ CORE LANDED 2026-06-07 (commit `e39ed258d1`).** Fast mode now actually works + is provider-agnostic:
+> (1) gate is capability-driven — engine checks `active_snapshot.model_info.has_capability(FastMode)`;
+> `is_fast_mode_supported_by_model` rewritten to a builtin-registry capability lookup (fixes the always-false
+> `opus-4-6` substring; TUI toggle inherits the fix). (2) wire producer added — `PerCallOverrides.fast_mode`
+> → `build_call_options` writes `speed=fast` into `provider_options["anthropic"]` (Anthropic-only lane) so
+> the `fast-mode-2026-02-01` beta fires. Tests: capability gate + 3 wire cases.
+>
+> **GLOBAL-SINGLETON REMOVED (commit after `85bd6ccc83`).** The `fast_mode_global()` process-wide
+> `OnceLock<Mutex<…>>` and its entire cooldown/org/availability/opt-in API were **0-production-reader dead
+> code** — deleted outright (per "delete dead code" + "no global singleton" — instance state, not a global).
+> This is the root-cause fix for the test race: the earlier `#[serial(fast_mode_global)]` patch
+> (`85bd6ccc83`) treated the symptom and is now reverted (no global ⇒ no race ⇒ no serialization needed; the
+> one surviving test is pure). The only live fast-mode state is `config.fast_mode: bool` on the engine config,
+> already instance-level. **Still deferred (when implemented, hold state on the `SessionRuntime` INSTANCE —
+> never re-introduce a global):** availability gating (env-disable + per-session opt-in provider-agnostic;
+> first-party/org Anthropic-scoped), `getInitialFastModeSetting` seeding (+ a `Settings.fast_mode_per_session_opt_in`),
+> 429/503 cooldown, SDK `fast_mode_state()` accessor, and Tier-B org prefetch (vercel-ai-anthropic).
+
+> **2026-06-07 audit — landed + a NEW multi-provider correctness bug + the understated surface.**
+>
+> **Landed (since the original entry):** `UserCommand::ToggleFastMode` IS now consumed
+> (`app/cli/src/tui_runner.rs:1127-1143` — toggles `set_session_opted_in` + `update_engine_config` +
+> emits `FastModeChanged`), and the per-turn flag is threaded (`engine_turn_request.rs:171-172`,
+> no longer hardcoded false). So the original "dead-end toggle" is fixed.
+>
+> **NEW — multi-provider correctness bug (the important part).** coco-rs is a **multi-LLM-provider** SDK;
+> fast-mode support is a **per-model capability** and must be **capability-driven, provider-agnostic** —
+> NOT provider-gated. Any provider/model that declares `Capability::FastMode` supports fast mode; whichever
+> provider crate owns that model is responsible for the wire translation (Anthropic → beta header
+> `fast-mode-2026-02-01`, `vercel-ai/anthropic/src/beta_capabilities.rs:32`; another provider → its own
+> mechanism). But `is_fast_mode_supported_by_model(model_id: &str)` (`common/config/src/fast_mode.rs:249`)
+> is a **literal TS port** — `model_id.to_lowercase().contains("opus-4-6")` — which is wrong for
+> multi-provider: (a) it ignores `Capability::FastMode`, which is ALREADY declared per-model in the catalog
+> (`common/config/src/builtin/anthropic.rs:55/88/121`) and is the **single, data-driven source of truth**;
+> (b) the hardcoded substring won't extend to future or non-Anthropic fast-capable models without a code
+> edit, and could mis-fire on an unrelated id containing `opus-4-6`. The per-turn gate
+> (`engine_turn_request.rs:172`) consults ONLY this substring — no `Capability::FastMode` check, no
+> `check_fast_mode_availability`. **The fix is capability-only; do NOT add a `provider == Anthropic` gate.**
+>
+> **Also dead/absent (tracker understated "just the prefetch stub"):**
+> - `check_fast_mode_availability` (`fast_mode.rs:211`) is **not consulted** by the toggle or the per-turn
+>   gate (dead). Note: its env-disable (`COCO_DISABLE_FAST_MODE`) + per-session opt-in gates are
+>   provider-agnostic and fine to keep, but its blanket `is_first_party` requirement + org-status (penguin
+>   mode) checks are **Anthropic-org-specific** — consistent with capability-driven support they must NOT
+>   blanket-block a non-Anthropic model that declares `Capability::FastMode`; scope them to the Anthropic
+>   provider (Tier B) rather than gating all providers.
+> - `getInitialFastModeSetting` not mirrored: `Settings.fast_mode` is never read to seed the session
+>   (`config.rs:402` hardcodes `fast_mode: false`); fast mode always starts off.
+> - cooldown (`trigger_cooldown*`, `fast_mode.rs:119-138`) has zero production callers — not driven from
+>   the inference 429/503 path.
+> - SDK `fast_mode_state()` (`app/cli/.../mod.rs:229` impls) returns hardcoded `None` instead of computing
+>   `FastModeState` (Off/Cooldown/On).
+>
+> **Fix — Tier A (do-now eligible, no network, restores correct multi-provider gating):**
+> (1) Rewrite the support gate to be **capability-driven (no provider check)**: resolve the model's
+> `ModelInfo`/`ResolvedModel` via `RuntimeConfig` and return `capabilities.contains(Capability::FastMode)`
+> — replacing the `opus-4-6` substring; thread that (not the bare `model_id` string) into
+> `engine_turn_request.rs:172`. (2) Seed `config.fast_mode` from `Settings.fast_mode` gated by the new
+> support check + `check_fast_mode_availability` at `SessionRuntime` build (mirror `getInitialFastModeSetting`).
+> (3) Gate the toggle (`tui_runner.rs:1127`) on `check_fast_mode_availability`, emitting the unavailable reason.
+> (4) Drive `trigger_cooldown_from_status` from the inference 429/503 retry path. (5) Compute SDK
+> `fast_mode_state()`. **Tier B (defer — multi-provider boundary):** the real org prefetch HTTP to
+> `/api/claude_code_penguin_mode` + `penguinModeOrgEnabled` persistence belongs in **vercel-ai-anthropic**
+> (per CLAUDE.md "provider concerns stay in provider crates"); `set_org_fast_mode_status` is the seam.
+> **2026-06-07 DEEP VALIDATION — two findings that change the severity + the remediation.**
+> - **(a) The substring is ALWAYS-FALSE for every shipped model (worse than provider-narrow).** The builtin
+>   catalog ships `claude-sonnet-4-6` / `claude-opus-4-7` / `claude-haiku-4-5` (`builtin/anthropic.rs:42/75/110`)
+>   — **none contains `"opus-4-6"`** (`rg opus-4-6 builtin/` = no match), yet all three declare
+>   `Capability::FastMode` (:55/88/121). So `is_fast_mode_supported_by_model` returns **false for every
+>   fast-capable model**; pressing the toggle computes `active=false` and fast mode can never turn on. The
+>   capability-driven rewrite fixes this for free. Also: capability is already reachable at the engine gate —
+>   `active_snapshot.model_info` is in scope (`engine_turn_request.rs:90`) and `has_capability` is already
+>   called ~20 lines below (:194-200); **no `RuntimeConfig` threading needed** for the engine path (the
+>   original fix-sketch over-scoped this). **Delete** `is_fast_mode_supported_by_model(&str)` — a bare string
+>   cannot answer a capability question — and inline `info.has_capability(Capability::FastMode)` at both sites.
+> - **(b) MISSING SHIP-BLOCKER: there is no `speed=Fast` wire producer.** Even with the gate fixed,
+>   `QueryParams.fast_mode` is consumed ONLY by the cache-break detector (`client.rs`); **nothing in
+>   `services/inference` or `app/` ever sets `AnthropicProviderOptions.speed = Speed::Fast`** (verified
+>   repo-wide). The anthropic provider emits the `fast-mode-2026-02-01` beta ONLY when `speed == Fast`
+>   (`vercel-ai/anthropic/src/messages/anthropic_messages_language_model.rs`). So today the toggle is a pure
+>   no-op on the wire, and Tier A as originally written (fix the gate) would STILL do nothing. **Tier A must
+>   also add the producer** at the inference seam (`build_call_options`/`model_factory`) translating
+>   `fast_mode==true` → `provider_options[anthropic].speed=Fast` (provider-agnostic: only Anthropic consumes
+>   it today; other providers ignore the flag until they add their own translation).
+> - **Other prereqs the sketch missed:** `check_fast_mode_availability` hard-returns on `!is_first_party`
+>   (`fast_mode.rs:221`) — for capability-driven parity that org/first-party check must be **Anthropic-scoped**,
+>   not blanket; and `getInitialFastModeSetting` seeding needs a **net-new `Settings.fast_mode_per_session_opt_in`**
+>   field that does not exist yet. SDK `supports_fast_mode` (`session.rs:207/217`) is hardcoded `Some(true)` —
+>   low-impact, but should derive from `Capability::FastMode` for true parity.
+>
+> `get_fast_mode_model` returning a hardcoded dated id is a related P3 (config#252) — fast mode is a *mode*
+> (beta header on the same model), not a separate model.
 
 - **Gap:** Fast-mode toggle is wired dead-end: TUI emits ToggleFastMode but it falls into unhandled catch-all; every request hardcodes fast_mode:false
 - **TS:** fastMode.ts:407 prefetchFastModeStatus makes a real /api/claude_code_penguin_mode call with auth retry + cache fallback; :167 isFastModeSupportedByModel gates fast mode to opus-4-6; getInitialFastModeSetting/getFastModeState wire the toggle into request behavior.
@@ -556,8 +804,73 @@ since been implemented on `feat/review`:
 - **Rust (HEAD):** Live code verified: - /lyz/codespace/codex/coco-rs/core/tools/src/tools/web.rs:727-766 — WebFetchTool::check_permissions override with is_preapproved_url call - /lyz/codespace/codex/coco-rs/core/tools/src/tools/web.rs:206-309 — PREAPPROVED_WEB_HOSTS constant (73+ hosts) - /lyz/codespace/codex/coco-rs/core/tools/src/tools/web.rs:318-357 — is_preapproved_host…
 - **Fix:** Add WebFetchTool::check_permissions that parses the URL, calls is_preapproved_host, and returns ToolCheckResult::Allow on match; remove the dead_code markers. Also short-circuit auto_mode.rs:113 for preapproved WebFetch URLs.
 
-### [~] tools-web-mcp#54 — Cron + RemoteTrigger tools registered and model-visible but backed only by NoOp…
-`◑ partially_fixed` · **HIGH** · effort **small** · fix-sketch *sound*
+### [x] tools-web-mcp#54 — Cron + RemoteTrigger tools registered and model-visible but backed only by NoOp… ✅ FIXED (2026-06-07 — firing wake-loop wired)
+`✅ fixed` · **HIGH** · effort **small** · fix-sketch *done*
+
+> **✅ FIRING SUBSYSTEM LANDED 2026-06-07 (commits `6c824a4d4b`, `989b3ebdb5`, `c258d88d51`, `56fb12bffb`).**
+> Scheduled tasks now actually fire, mirroring TS `cronScheduler.ts` + `cronTasks.ts`, in a clean 3-layer
+> architecture:
+> - **`coco-cron`** owns the pure, I/O-free scheduler core (`CronTickState::tick` — first-sight anchoring,
+>   recurring reschedule-from-now, one-shot/aged drop, eviction; `find_missed`; `RECURRING_MAX_AGE_MS`). 19 tests.
+> - **`core/tool-runtime`** owns `CronTask` + the `ScheduleStore` trait (TS `cronTasks.ts` semantics) with a
+>   `DiskBackedScheduleStore` (durable → `<cwd>/.coco/scheduled_tasks.json`, camelCase/LF via
+>   coco-file-encoding; session tasks in-memory; corrupt/invalid rows dropped on read). 7 tests.
+> - **`app/cli::cron_tick`** is the 1s tokio-interval driver: reads the store → drives the core → enqueues each
+>   due task's prompt with **`QueueOrigin::Cron`**. The enqueue wakes the idle agent driver
+>   (`tui_runner::run_agent_driver` selects on `command_queue().wait_for_change`), so the prompt runs as a turn;
+>   mid-turn it drains at the next boundary. Startup `find_missed` → batched "ask first" notification (TS
+>   `buildMissedTaskNotification`, injection-fenced). 3 tests.
+> - Tools rewired to the new store; CronCreate persists (durable→disk) + honest "Scheduled …" copy + errorCode-2
+>   reachability; CronList renders `cron_to_human`. **RemoteTrigger** = *remote execution* on Anthropic's CCR
+>   backend → explicit struct-level DEFER doc, sanctioned non-goal, stays behind `Feature::AgentTriggersRemote`.
+>
+> **Surface scope:** TUI-only (headless `-p` is one-shot, SDK has no queue-drain pump — a fired prompt would
+> have nobody to run it). Durable tasks created in those modes still persist and fire in a later interactive
+> session. **Feature gate stays `AgentTriggers` default-OFF** (deliberate divergence from TS `isKairosCronEnabled`
+> GA-true); it now genuinely WORKS when enabled. **Deferred refinements (documented in `cron_tick.rs`, not core
+> fire-path parity):** cross-process lease lock (`cronTasksLock.ts`), chokidar file-watcher (the 1s tick re-reads
+> every pass), jitter (`cronJitterConfig.ts`), and the missed-task AskUserQuestion variant (a batched
+> notification is used instead).
+
+> **✅ TIER A LANDED 2026-06-07 (commit `436318f90f`).** `CronCreateTool` no longer claims disk persistence
+> it never does: `render_for_model` always emits honest session-only wording and warns the job will NOT fire
+> (scheduling under development); `durable` field doc + `description()` updated; tests assert the honest copy.
+> **✅ TIER B partially LANDED 2026-06-07 (commits `3e228fb170`, `02bae43e9c`).** The deterministic cron core
+> is ported faithfully from TS `utils/cron.ts` into a new `coco-cron` crate (parse / next-run / human /
+> reachability; 12 tests, incl. DOM-OR-DOW, 7=Sunday, Feb-30-unreachable). Wired into the tools: CronCreate
+> now rejects unreachable expressions (TS errorCode-2 `nextCronRunMs` check), `is_valid_cron_expression`
+> delegates to the range-aware parser, and CronList renders `cron_to_human`. **RemoteTrigger** carries an
+> explicit struct-level DEFER doc — it is *remote execution* of scheduled agents on Anthropic's CCR backend
+> (claude.ai OAuth + `/v1/code/triggers` + `ccr-triggers` beta), a sanctioned non-goal; stays behind
+> `Feature::AgentTriggersRemote` (off).
+>
+> ~~**STILL DEFERRED — the firing subsystem**~~ **— SUPERSEDED: the firing wake-loop landed (see the
+> FIRING SUBSYSTEM note above).** The idle-session wake reused the existing `tui_runner::run_agent_driver`
+> `wait_for_change` arm (no new wake path needed). Only the non-core refinements remain (lock / watcher /
+> jitter / missed-AskUserQuestion variant).
+
+> **2026-06-07 DEEP VALIDATION — split into a do-now correctness fix + the deferred scheduler.**
+> - **Production store is NOT NoOp — it's a wired `InMemoryScheduleStore`** (`session_runtime.rs:1348` →
+>   `with_schedule_store`). The `is_enabled` gates (`Feature::AgentTriggers`, default-off) are
+>   **user-overridable** (`settings.json features.agent_triggers=true` / `COCO_FEATURE_AGENT_TRIGGERS=true`).
+>   So an opt-in user hits LIVE broken behavior — not dead code.
+> - **The `durable` flag + success message are ACTIVELY DECEPTIVE.** `CronCreateTool::execute` never reads
+>   `input.durable` for persistence, and `render_for_model` claims the job is **"Persisted to
+>   `.coco/scheduled_tasks.json`"** — but it is never written, never fires (no tick loop), and is lost on
+>   session exit. This is the real near-term hazard.
+> - **TIER A — DO-NOW (trivial, independent of the scheduler):** in `scheduling.rs::CronCreateTool`, drop the
+>   `durable` branch that claims disk persistence; always emit session-only wording ("under development; will
+>   NOT fire"), and stop advertising firing/`durable` semantics in `CronCreateInput` docs/`description()` (or
+>   hide `durable` from the model schema until persistence exists). Removes the lie with zero new subsystem.
+>   Keep `AgentTriggers` default-off.
+> - **TIER B — DEFER (correctly):** the real subsystem (extend `ScheduleEntry` with cron/created_at/
+>   last_fired_at/recurring/permanent/durable; port `cron.ts` parse+next-run via the `cron`/`saffron` crate;
+>   disk persistence to `.coco/scheduled_tasks.json`; `cronTasksLock.ts` O_EXCL lease; a 1s tokio-interval
+>   wake loop pushing a `QueuedCommand` with a new `QueueOrigin::Cron` at the turn boundary; missed-task
+>   recovery; next-year reachability validation). Only then flip the feature posture.
+> - **Record as DIVERGENCE, not parity:** TS `isKairosCronEnabled()` defaults **true** (GA); coco defaults
+>   `AgentTriggers` **off**. Defensible (no real scheduler ⇒ correctly hidden) but it's a deliberate divergence.
+> - **RemoteTrigger** stays a sanctioned non-goal (claude.ai OAuth + Anthropic-internal endpoint).
 
 - **Gap:** Cron/RemoteTrigger tools are now gated from model visibility via is_enabled Feature checks (fixing parity divergence), but NoOp backend remains unimplemented; recommend P2 for real ScheduleStore implementation when feature is enabled
 - **TS:** tools.ts:29-35 registers the three cron tools only behind feature('AGENT_TRIGGERS'); each tool's isEnabled() returns isKairosCronEnabled() (prompt.ts:36-45, GrowthBook default true / GA). The cron engine is fully present in the external tree (utils/cronTasks.ts addCronTask/listAllCronTasks, cronScheduler.ts, cron.ts, bootstrap/state setScheduledTasksEnabled…
@@ -614,8 +927,16 @@ since been implemented on `feat/review`:
 - **Rust (HEAD):** coco-rs/core/permissions/src/classifier.rs:667-670 (AssistantContent::Text explicitly dropped with comment), lines 241-244 (Tool results catchall with comment), lines 575-596 (format_transcript uses saturating_sub(10) to cap to 10 entries); TS /lyz/codespace/3rd/claude-code/src/utils/permissions/yoloClassifier.ts:341-360 (buildTranscriptEntries returns full…
 - **Fix:** In extract_assistant_blocks, drop the AssistantContent::Text arm (keep only ToolCall). Remove the Message::ToolResult => TranscriptBlock::ToolResult synthesis. Remove the `.take(10)` cap in format_transcript (rely on upstream compaction for bounding).
 
-### [ ] permissions#70 — Denial-limit circuit breaker silently falls through instead of prompting the us…
-`◑ partially_fixed` · **HIGH** · effort **small** · fix-sketch *sound_with_caveats*
+### [x] permissions#70 — Denial-limit circuit breaker silently falls through instead of prompting the us… ✅ VERIFIED RESOLVED (2026-06-07 — 4/4, not 3/4)
+`✅ fixed` · **HIGH** · effort **small** · fix-sketch *done*
+
+> **2026-06-07 audit (tracker was WRONG — claimed headless abort missing):** all 4 TS behaviors are
+> present. When `avoid_permission_prompts` is set, the classifier denial returns
+> `PermissionDecision::Abort { reason: PermissionAbortReason::ClassifierDenialLimit }`
+> (`core/permissions/src/auto_mode_decision.rs:202`; variant `common/types/src/permission.rs:282`), wired
+> through `PermissionOutcome::Aborted` → `cancel.cancel()` / `cancelled=true` on BOTH the batched
+> (`engine_tool_execution.rs`) and streaming (`engine_stream_consume.rs`) paths. Test
+> `test_denial_limit_headless_aborts` (`auto_mode_decision.test.rs:358`) locks it. It does NOT return Deny.
 
 - **Gap:** Denial-limit circuit breaker implemented with 3/4 TS behaviors: total>=20 trip, warning message, and total-cap reset work. Headless abort (throw AbortError) is missing—Rust returns Deny instead, completing tool call with error rather than aborting the session.
 - **TS:** permissions.ts handleDenialLimitExceeded (984-1058): when shouldFallbackToPrompting (denialTracking.ts:40-45 = consecutive>=3 || total>=20), it converts the deny into an 'ask' carrying a warning ('N consecutive/total actions were blocked. Please review the transcript'); throws AbortError in headless; and resets totalDenials+consecutiveDenials to 0 when the …
@@ -654,8 +975,18 @@ since been implemented on `feat/review`:
 - **Rust (HEAD):** /lyz/codespace/codex/coco-rs/commands/src/implementations.rs:268-275 /config registered with config_extended_handler (text handler, BuiltinCommand); tui_runner.rs:2502-2591 dispatch_slash_command does not intercept config; config falls through to text handler emit_slash_text. No DialogSpec or interactive overlay wired.
 - **Fix:** Intercept name=="config" in tui_runner and open a real settings overlay (analogous to the agents/model dialogs), or at minimum apply writes to the live RuntimeConfig hot-reload path instead of only settings.json next-session.
 
-### [ ] commands#208 — /plugin returns a text listing instead of opening the TS interactive plugin pic…
-`● genuinely_open` · **MEDI** · effort **medium** · fix-sketch *sound*
+### [x] commands#208 — /plugin returns a text listing instead of opening the TS interactive plugin pic… ✅ VERIFIED RESOLVED (2026-06-07 — residual: 4th "Discover" tab)
+`✅ fixed` · **MEDI** · effort **medium** · fix-sketch *done*
+
+> **2026-06-07 audit (tracker + commands/CLAUDE.md were stale):** a real interactive overlay exists.
+> `DialogSpec::PluginPicker` → `refresh_plugin_dialog_payload` (`app/cli/src/tui_runner.rs:3302`) opens
+> `PluginDialogState` (`app/tui/src/state/surface_payloads.rs:1088`, tabs `Installed`/`Marketplace`/`Error`)
+> rendered by `app/tui/src/presentation/picker.rs` (`render_plugin_tabs`/`render_installed_tab`/
+> `render_marketplace_tab`) with live refresh. The old `DialogPending` info-message path is now the
+> `unreachable!()` arm for PluginPicker. **Residual (minor):** TS has a 4th "Discover" tab
+> (`DiscoverPlugins.tsx`: in-overlay marketplace browse + install-count + one-keystroke install); Rust has
+> 3 tabs and routes discovery through text `/plugin search` + `/plugin install`. Delete the stale
+> PluginPicker bullet from `commands/CLAUDE.md`.
 
 - **Gap:** /plugin returns text listing instead of interactive plugin/marketplace picker; text subcommands remain functional so degraded UX not breakage
 - **TS:** commands/plugin/index.tsx is type:'local-jsx', immediate:true (sibling ManagePlugins.tsx / DiscoverPlugins.tsx / BrowseMarketplace.tsx confirm the Ink picker) -> opens an interactive plugin/marketplace browser with install/enable/disable.
@@ -678,16 +1009,31 @@ since been implemented on `feat/review`:
 - **Rust (HEAD):** /lyz/codespace/codex/coco-rs/coordinator/src/pane/tmux.rs:311-367 create_teammate_pane_external: _color parameter unused (line 314), only sets title via select-pane (line 361); no set_pane_border_color call, no enable_pane_border_status call, no rebalance call. Contrast in-leader path (lines 276-306) which calls set_pane_border_color (296), set_pane_title (…
 - **Fix:** In create_teammate_pane_external, after creating the pane call set_pane_border_color, enable_pane_border_status(window) on first teammate, set_pane_title with color, and rebalance_panes_tiled(window) — mirroring the leader path (will need socket-aware variants for the external session).
 
-### [ ] hooks#184 — asyncRewake exit-code-2 does not enqueue a task-notification to wake the model
-`● genuinely_open` · **MEDI** · effort **medium** · fix-sketch *sound*
+### [x] hooks#184 — asyncRewake exit-code-2 does not enqueue a task-notification to wake the model ✅ VERIFIED RESOLVED (2026-06-07)
+`✅ fixed` · **MEDI** · effort **medium** · fix-sketch *done*
+
+> **2026-06-07 audit (tracker CONFLATED two things):** the wake path does NOT use `rewake_requested` —
+> TS bypasses the registry (`utils/hooks.ts:206`) and coco mirrors that via `spawn_rewake_command`
+> (`hooks/src/lib.rs:1142,1305`) → `AsyncRewakeSink` (`lib.rs:173`), impl'd by
+> `CommandQueueNotificationSink` (`app/cli/src/command_queue_sink.rs:77`) and wired with live (non-None)
+> sinks across the `OrchestrationContext` sites (`session_runtime.rs:106`). The `rewake_requested` field
+> the tracker grepped is a vestigial struct snapshot with no behavioral consumer (candidate for deletion).
 
 - **Gap:** asyncRewake exit-code-2 marks rewake flag but never wakes idle session; missing CommandQueue::TaskNotification enqueue into SessionRuntime
 - **TS:** utils/hooks.ts:205-245 executeInBackground — asyncRewake hooks, on exit code 2, call enqueuePendingNotification({value: wrapInSystemReminder(...), mode:'task-notification'}) which wakes an idle model via the queue processor or injects mid-query.
 - **Rust (HEAD):** coco-rs/hooks/src/orchestration.rs:894-901 calls reg.mark_rewake() on async_rewake+exit-code-2, but grep -rn 'rewake_requested' app/ finds zero consumers in app/query or app/cli; async_registry.rs:110-113 sets the flag but reminder_source.rs:76-92 to_hook_event() never checks it
 - **Fix:** On rewake_requested completion, push a TaskNotification-origin QueuedCommand (system-reminder-wrapped blocking text) into the SessionRuntime CommandQueue and signal the idle-session wake path, mirroring enqueuePendingNotification(mode:'task-notification').
 
-### [ ] hooks#185 — Async/background execution not detected from hook's stdout {"async":true}
-`● genuinely_open` · **MEDI** · effort **medium** · fix-sketch *sound*
+### [x] hooks#185 — Async/background execution not detected from hook's stdout {"async":true} ✅ VERIFIED RESOLVED (2026-06-07 — residual: forceSyncExecution only)
+`✅ fixed` · **MEDI** · effort **medium** · fix-sketch *done*
+
+> **2026-06-07 audit (tracker's central claims were FABRICATED):** there is no `wait_with_output()` —
+> `hooks/src/lib.rs` uses `BufReader::read_line` + `read_to_string` + `child.wait()`. The dynamic first-line
+> `{"async":true}` detection IS implemented (`first_line_is_async`, `lib.rs:1226`, consumed at `lib.rs:1177`)
+> and reachable alongside the static `forced_async` config flag. Feature is DONE. **Sole residual gap** (small,
+> low value, tracked here): no `forceSyncExecution` override — async-declaring setup/shutdown hooks detach to
+> the registry and are lost on immediate exit; TS passes `forceSyncExecution:true` for those paths. Add
+> `force_sync` to `AsyncCommandOptions` and short-circuit the three background branches.
 
 - **Gap:** Dynamic stdout {'async':true} detection missing; only static config flag checked
 - **TS:** utils/hooks.ts:1117-1164 — on the first stdout line, isAsyncHookJSONOutput(parsed) backgrounds the hook dynamically via executeInBackground even when hook.async was unset (forceSyncExecution overrides).
@@ -719,7 +1065,41 @@ since been implemented on `feat/review`:
 - **Fix:** Add EnvKey::CocoApiMaxRetries (e.g. COCO_API_MAX_RETRIES) and fold it into ApiRetryConfig resolution as an override layer over settings.json api.retry, mirroring getDefaultMaxRetries.
 
 ### [~] plugins#234 — MCPB config validation only checks 'required'; no type/range checks or sensitiv… ◑ PARTIAL (Stage 4, 2026-06-06)
-`◑ partially_fixed` · **MEDI** · effort **medium** · fix-sketch *sound*
+`◑ partially_fixed` · **MEDI** · effort **large** · fix-sketch *sound*
+
+> **✅ SECURITY HARDENING LANDED 2026-06-07 (commit `6551d090fe`).** `merge_env` no longer exposes every
+> string user_config value as its own env var (a coco-only divergence that risked leaking sensitive values
+> into the MCP child process env) — only manifest-declared env is emitted, with `${user_config.X}`
+> substitution (TS parity). **Slice A (wire the non-sensitive local `.mcpb` dispatch) and Slice B (the
+> sensitive→keyring split) remain DEFERRED — they need a design decision:** there is no `pluginConfigs`
+> persistence layer in `coco_config`, `plugins` has no `coco-keyring-store` dep, and the keyring's
+> `service+account→String` shape must be mapped onto TS's flat `pluginSecrets` bucket. `mcpb.rs` stays
+> caller-less until that subsystem is designed (and a real plugin ships a `.mcpb`/`.dxt` bundle).
+
+> **2026-06-07 DEEP VALIDATION — "split done, just wire" UNDERSTATES it; net-new subsystem + a security bug.**
+> Confirmed dead: `load_mcpb` has zero production callers; `mcp_bridge::merge_manifest_value` has no
+> `.mcpb/.dxt` branch, so a manifest value `"server.mcpb"` is treated as a JSON path → `serde_json::from_str`
+> fails on ZIP bytes → server silently dropped. Hidden prerequisites the sketch missed:
+> - **No `pluginConfigs[pluginId].mcpServers` read/write exists anywhere in `coco_config`** (grep = empty).
+>   `load/saveMcpServerUserConfig` cannot be ported until that persistence layer (with bidirectional
+>   scrub-via-delete, TS `settings.ts:349`) is built — a net-new subsystem, not wiring.
+> - **`plugins` does not depend on `coco-keyring-store`**, and the store is `service+account→String` whereas
+>   TS `pluginSecrets` is a flat JSON bucket under a composite `${pluginId}/${serverName}` key — needs a
+>   deliberate serialization (store the JSON map as the value under a fixed account, keychain-first fail-closed).
+> - **`load_mcpb` is NOT a drop-in for `loadMcpbFile`** — no URL-download branch, no `checkMcpbChanged` mtime
+>   recheck, different placeholder engine. The bridge is **sync**; URL download forces an async refactor of
+>   `merge_manifest_value`/`extract_mcp_servers_from_plugins` + its 3 call sites.
+> - **SECURITY: `merge_env` is a coco-only divergence** — it injects every user_config string value as its
+>   own env var, which risks leaking sensitive values into the child process env. Must be removed/guarded
+>   (only substitute manifest-declared env).
+>
+> **Two-slice remediation:** **Slice A (smaller, do-first if a real plugin needs local `.mcpb`):** add the
+> `.mcpb/.dxt` dispatch in `merge_manifest_value` for the **non-sensitive, local-file** path (read bytes →
+> `mcpb::load_mcpb`; skip+log on `NeedsConfig`, TS parity), **fix the `merge_env` leak**, and thread
+> `config_home` into the bridge (currently absent). **Slice B (defer — the actual security fix):** the
+> sensitive→keyring split, gated on the `pluginConfigs` persistence layer + `coco-keyring-store` dep above.
+> URL-download `.mcpb` is a third slice, defer until needed. **Net: correctly a large defer** (Slice A is the
+> only do-now-able sliver, and only if local `.mcpb` loading is actually wanted).
 
 - **Done (2026-06-06):** `mcpb::validate_config` now mirrors TS `validateUserConfig` — required + per-field type (string / string[] when `multiple` / number / boolean / file|directory) + numeric min/max with `title`-prefixed messages; `${user_config.X}` + `${__dirname}` substitution wired into command/args/env (`substitute_template`). 4 new tests. **Remaining:** sensitive→keyring split (needs a live `saveMcpServerUserConfig` install flow — the whole `mcpb.rs` module is still caller-less, so the keyring split has nothing to drive yet).
 - **Gap:** Three sub-gaps confirmed: (1) validate_config skips type/range checks (TODO at line 216); (2) no sensitive->keyring split; (3) no ${user_config.X} substitution. load_mcpb has zero production callers (ported-but-unwired).
@@ -727,21 +1107,41 @@ since been implemented on `feat/review`:
 - **Rust (HEAD):** /lyz/codespace/codex/coco-rs/plugins/src/mcpb.rs:203-221 validate_config reads only `prop.get("required")` line 210-211 with explicit TODO at line 216. No type/range/enum checks. No sensitive->keyring split (merge_env at line 223 only stringifies str, no special handling). No ${user_config.X} substitution in mcp_config build (line 125-129). load_mcpb is tes…
 - **Fix:** Extend validate_config to enforce type + min/max per JSONSchema field with TS-shaped messages; split sensitive fields into a secure store (utils/keyring-store) and implement ${user_config.X} substitution in command/args/env when building mcp_config.
 
-### [~] plugins#235 — Headless install, seed marketplaces, and delisting auto-uninstall not wired ◑ PARTIAL (Stage 4, 2026-06-06)
-`◑ partially_fixed` · **MEDI** · effort **medium** · fix-sketch *sound*
+### [x] plugins#235 — Headless install, seed marketplaces, and delisting auto-uninstall not wired ✅ FIXED (2026-06-07 — headless + SDK wired)
+`✅ fixed` · **MEDI** · effort **medium** · fix-sketch *done*
+
+> **FIXED 2026-06-07.** Extracted the TUI startup block into
+> `session_bootstrap::spawn_marketplace_startup(config_home)` (fire-and-forget: `ensure_official_marketplace`
+> → `run_marketplace_startup` = seed→reconcile→delist) and called it from all three surfaces:
+> `tui_runner.rs` (refactored to the helper, no behavior change), `headless.rs::run_chat_with_options`
+> (after `load_session_plugins`), and `main.rs::run_sdk_mode` (after `plugin_watch::spawn`). So delisted-plugin
+> enforcement + seed-marketplace registration now run for `--print`/`chat`/`review`/SDK, not just the TUI.
+> Delisting core already covered by `marketplace.test.rs` (7 tests). `just quick-check` + `just test-crate
+> coco-cli` green. **Note:** kept best-effort/background on all paths (TS awaits only under
+> `CLAUDE_CODE_SYNC_PLUGIN_INSTALL`); CCR zip-cache remains a sanctioned skip.
 
 - **Done (2026-06-06):** the **delisting sweep** is live — `marketplace::detect_and_uninstall_delisted_plugins(config_home)` (TS `detectAndUninstallDelistedPlugins`) diffs the installed ledger against each known marketplace's cached manifest, flags + uninstalls + persists, and skips unreadable manifests (never false-delists). This drives all 4 formerly-dead fns.
-- **Done (2026-06-06, seed + reconcile):** `register_seed_marketplaces` (TS `registerSeedMarketplaces`) reads `COCO_PLUGIN_SEED_DIR` (PATH-delimited, env-free testable core), registers seed marketplaces into `known_marketplaces.json` with runtime-recomputed `install_location` + `auto_update=false`, first-seed-wins, idempotent. `reconcile_marketplaces` (TS `reconcileMarketplaces`) reads settings `extraKnownMarketplaces` (`get_declared_marketplaces`) and fetch+registers any declared marketplace missing/source-changed (best-effort, per-entry error-isolated). `run_marketplace_startup` chains seed → reconcile → delisting and is wired into the startup task after `ensure_official_marketplace`. 4 new tests. The implicit official marketplace stays owned by `ensure_official_marketplace` (retry/backoff). **plugins#235 effectively complete.** **Remaining (minor):** the startup task runs on the interactive (tui) path only — a headless/SDK-specific `installPluginsForHeadless` entry (+ CCR zip-cache, intentionally skipped) would broaden coverage, consistent with the existing official+delist being tui-only.
+- **Done (2026-06-06, seed + reconcile):** `register_seed_marketplaces` (TS `registerSeedMarketplaces`) reads `COCO_PLUGIN_SEED_DIR` (PATH-delimited, env-free testable core), registers seed marketplaces into `known_marketplaces.json` with runtime-recomputed `install_location` + `auto_update=false`, first-seed-wins, idempotent. `reconcile_marketplaces` (TS `reconcileMarketplaces`) reads settings `extraKnownMarketplaces` (`get_declared_marketplaces`) and fetch+registers any declared marketplace missing/source-changed (best-effort, per-entry error-isolated). `run_marketplace_startup` chains seed → reconcile → delisting and is wired into the startup task after `ensure_official_marketplace`. 4 new tests. The implicit official marketplace stays owned by `ensure_official_marketplace` (retry/backoff). ~~plugins#235 effectively complete.~~ **CORRECTED 2026-06-07 — NOT complete; genuine do-now gap.** `run_marketplace_startup` (`plugins/src/marketplace.rs:1058`) has EXACTLY ONE caller, `app/cli/src/tui_runner.rs:454` — verified by repo-wide grep. So seed + reconcile + **delisting auto-uninstall** silently never run on the headless path (`app/cli/src/headless.rs::run_chat_with_options`, reached by `coco --print`/piped/`chat`/`review`) or the SDK path (`main.rs::run_sdk_mode`). TS treats headless plugin install/delist as first-class (`utils/plugins/headlessPluginInstall.ts` `installPluginsForHeadless`, invoked at `print.ts:1721`), so delisted-plugin enforcement is **functionally absent on every non-interactive surface** — not "minor tui-only coverage". **Fix (small, `app/cli`-only):** extract the `tui_runner.rs:444-463` block (`ensure_official_marketplace` → `run_marketplace_startup`) into `session_bootstrap::spawn_marketplace_startup(config_home, cwd)`; call it from `headless.rs::run_chat_with_options` (after `load_session_plugins`, before `bootstrap_session_mcp`) and `main.rs::run_sdk_mode` (near `plugin_watch::spawn`). Add a headless test asserting a seeded delisted plugin is uninstalled. CCR zip-cache stays a sanctioned skip.
 - **Gap:** Delisting detection functions exist but are dead (zero production callers). No seed-marketplace support anywhere. No headless plugin-install entry point. Gap persists fully.
 - **TS:** headlessPluginInstall.ts installPluginsForHeadless:43 registers seed marketplaces, reconciles declared marketplaces, syncs zip cache, and calls detectAndUninstallDelistedPlugins on startup; marketplaceManager.registerSeedMarketplaces:380 + pluginBlocklist.detectAndUninstallDelistedPlugins.
 - **Rust (HEAD):** /lyz/codespace/codex/coco-rs/plugins/src/marketplace.rs:585-656 defines detect_delisted_plugins, load_flagged_plugins, save_flagged_plugins, flag_delisted_plugin. Grep shows ZERO production callers outside marketplace.rs definition. /lyz/codespace/codex/coco-rs/app/cli/src/session_runtime.rs:2938-2956 reload_plugins_with loads plugins via load_from_dirs but…
 - **Fix:** Add a startup entry point that registers seed marketplaces, runs reconcile_marketplaces, and calls detect_delisted_plugins → uninstall for each flagged id; invoke it from the headless/non-interactive bootstrap path.
 
-### [~] plugins#239 — Layer-3 refresh loads only PLUGIN.toml dirs and merely counts contributions ◑ PARTIAL (Stage 4, 2026-06-06)
-`◑ partially_fixed` · **MEDI** · effort **large** · fix-sketch *sound*
+### [x] plugins#239 — Layer-3 refresh loads only PLUGIN.toml dirs and merely counts contributions ✅ FIXED (2026-06-07 — SDK reload wired)
+`✅ fixed` · **MEDI** · effort **large** · fix-sketch *done*
+
+> **FIXED 2026-06-07.** SDK `handle_plugin_reload` (`sdk_server/handlers/runtime.rs`) is no longer a no-op:
+> it fetches the live runtime via `ctx.state.session_runtime` and runs the TUI `/reload-plugins` chain
+> (`reload_plugins` → `reload_agent_catalog` → `reload_lsp_servers` → `reload_hooks`), then returns the real
+> `PluginReloadResult` (live `snapshot_for_ui()` command names, `current_agent_catalog().active()` agent
+> names, `load_all_installed_plugins` plugin ids, hook-reload `error_count`). Falls back to the empty ack
+> only when no `SessionRuntime` is wired (handler-level tests). Test renamed to
+> `plugin_reload_without_session_runtime_returns_empty` (covers the fallback; the wired chain's `reload_*`
+> methods are covered on `SessionRuntime`). `just quick-check` + `just test-crate coco-cli` green.
+> **Note:** `mcp_reconnect_key()` getter stays vestigial (reconnect work is done inline) — cleanup, not a gap.
 
 - **Correction:** the original sub-gap (1) is STALE — `reload_plugins_with` already uses the V2 `load_enabled_plugins` and the V2 loader already understands the `cache/{mkt}/{plugin}/{version}` layout (`loader::resolve_cache_path`); the plugin-V2 unification fixed it.
-- **Done (2026-06-06):** (a) `/reload-plugins` (`run_reload_plugins`) now chains `reload_agent_catalog()` + `reload_hooks()` after the command/skill rebuild (TS `refreshActivePlugins` rebuilds all). (b) **Unified config-driven MCP across SDK/headless/TUI.** New `session_bootstrap::bootstrap_session_mcp(runtime, cwd, existing_manager)` — the single init all three entry points call: builds/reuses the manager, registers **config-file servers** (`McpConfigLoader::load` — was dead, zero callers) + plugin servers, attaches the manager (`attach_mcp_manager`) + an `McpManagerAdapter` handle, then **connects every server in the background** (concurrent, per-server error-isolated + 30s-timeboxed via `connect_and_register_mcp`) and **registers each connected server's tools** into the live `ToolRegistry` so they reach the model (`connect → collect_server_schemas → register_mcp_tools`), then a best-effort `sync_all` for MCP skills. Mirrors codex-rs (single session-owned manager, eager concurrent fault-isolated connect) + TS (shared connect funnel). The SDK path's ~80-line inline block is deleted and replaced by this call (reuses its `SdkServer` manager); TUI/headless pass `None`. `SessionRuntime` holds the manager + an `mcp_reconnect_key` (TS `pluginReconnectKey`); `reload_plugin_mcp_servers` now also connects+registers new servers. No UI: connect-time elicitations are declined (the SDK `mcp/setServers` client-bridge path is separate + untouched). Tests: `bootstrap_session_mcp_attaches_handle_and_manager_with_no_servers`, `reload_plugin_mcp_servers_noops_without_manager_then_bumps_key_when_attached`; SDK setServers/status + adapter tests still green. (c) **Tails closed (2026-06-06):** **LSP re-register** — `LspHandle::reload` (default no-op) + `LspManagerAdapter::reload`→`reload_and_prewarm`; `SessionRuntime::reload_lsp_servers`; `/reload-plugins` now refreshes LSP too. **MCP server removal on disable** — `McpConnectionManager::unregister_server` (drops config + connection) + `reload_plugin_mcp_servers` reconciles: `plugin:`-namespaced servers no longer enabled are unregistered + `deregister_mcp_server`'d (config-file servers untouched). **Headless connect race** — `bootstrap_session_mcp(await_connect)`: headless passes `true` (awaits the connect batch, TS-print parity, bounded by the 30s per-server timeout), TUI/SDK pass `false` (background). New tests: `unregister_server_drops_config_and_connection_state`. plugins#239 is now effectively complete.
+- **Done (2026-06-06):** (a) `/reload-plugins` (`run_reload_plugins`) now chains `reload_agent_catalog()` + `reload_hooks()` after the command/skill rebuild (TS `refreshActivePlugins` rebuilds all). (b) **Unified config-driven MCP across SDK/headless/TUI.** New `session_bootstrap::bootstrap_session_mcp(runtime, cwd, existing_manager)` — the single init all three entry points call: builds/reuses the manager, registers **config-file servers** (`McpConfigLoader::load` — was dead, zero callers) + plugin servers, attaches the manager (`attach_mcp_manager`) + an `McpManagerAdapter` handle, then **connects every server in the background** (concurrent, per-server error-isolated + 30s-timeboxed via `connect_and_register_mcp`) and **registers each connected server's tools** into the live `ToolRegistry` so they reach the model (`connect → collect_server_schemas → register_mcp_tools`), then a best-effort `sync_all` for MCP skills. Mirrors codex-rs (single session-owned manager, eager concurrent fault-isolated connect) + TS (shared connect funnel). The SDK path's ~80-line inline block is deleted and replaced by this call (reuses its `SdkServer` manager); TUI/headless pass `None`. `SessionRuntime` holds the manager + an `mcp_reconnect_key` (TS `pluginReconnectKey`); `reload_plugin_mcp_servers` now also connects+registers new servers. No UI: connect-time elicitations are declined (the SDK `mcp/setServers` client-bridge path is separate + untouched). Tests: `bootstrap_session_mcp_attaches_handle_and_manager_with_no_servers`, `reload_plugin_mcp_servers_noops_without_manager_then_bumps_key_when_attached`; SDK setServers/status + adapter tests still green. (c) **Tails closed (2026-06-06):** **LSP re-register** — `LspHandle::reload` (default no-op) + `LspManagerAdapter::reload`→`reload_and_prewarm`; `SessionRuntime::reload_lsp_servers`; `/reload-plugins` now refreshes LSP too. **MCP server removal on disable** — `McpConnectionManager::unregister_server` (drops config + connection) + `reload_plugin_mcp_servers` reconciles: `plugin:`-namespaced servers no longer enabled are unregistered + `deregister_mcp_server`'d (config-file servers untouched). **Headless connect race** — `bootstrap_session_mcp(await_connect)`: headless passes `true` (awaits the connect batch, TS-print parity, bounded by the 30s per-server timeout), TUI/SDK pass `false` (background). New tests: `unregister_server_drops_config_and_connection_state`. ~~plugins#239 is now effectively complete.~~ **CORRECTED 2026-06-07 — the TUI reload chain is complete, but the SDK reload path is NOT.** `bootstrap_session_mcp` unifies MCP *bootstrap* across SDK/headless/TUI (true), but SDK *reload* `handle_plugin_reload` (`app/cli/src/sdk_server/handlers/runtime.rs:323`) is a `_ctx` **no-op stub** that returns empty `PluginReloadResult` vecs and never calls `reload_plugins` — so an SDK client's `plugin/reload` reloads nothing (commands/agents/hooks/MCP/LSP all unchanged). **Fix (small):** change `_ctx`→`ctx`, fetch the live runtime via `ctx.state.session_runtime.read().await.clone()` (mirror siblings at `runtime.rs:255/295`), then run `runtime.reload_plugins(&cwd)` → `reload_agent_catalog` → `reload_lsp_servers` → `reload_hooks` (mirror `tui_runner.rs:3832-3843`) and populate `PluginReloadResult` from the live registry/catalog snapshots. Sub-gaps the tracker worried about are confirmed N/A: marketplace-cache-layout reload IS closed (V2 loader); no `clearAllCaches` mirror needed (no in-memory plugin cache in Rust); `mcp_reconnect_key()` getter is vestigial (work is done inline) — drop it or annotate.
 - **Gap:** Two sub-gaps confirmed: (1) marketplace-installed plugins under cache/{mkt}/{plugin} are invisible to reload_plugins because it uses discover_plugins, not V2 PluginLoader; (2) reload only swaps CommandRegistry, omitting hooks/MCP/agents/LSP and no pluginReconnectKey bump.
 - **TS:** refresh.ts refreshActivePlugins clears all caches, reloads via loadAllPlugins (which understands the marketplace cache layout), then rebuilds commands/agents/hooks/MCP via loadPluginCommands/loadPluginHooks/loadPluginMcpServers/getAgentDefinitions, bumps the MCP pluginReconnectKey, and calls reinitializeLspServerManager.
 - **Rust (HEAD):** /lyz/codespace/codex/coco-rs/app/cli/src/session_runtime.rs:2938-2956 reload_plugins_with calls PluginManager::load_from_dirs (plugins/src/lib.rs does discovery) which uses discover_plugins, NOT the V2 PluginLoader. Rebuild only CommandRegistry (line 2941), no hooks/MCP/agents/LSP. No MCP pluginReconnectKey bump. /lyz/codespace/codex/coco-rs/plugins/src/loa…
@@ -867,8 +1267,15 @@ since been implemented on `feat/review`:
 - **Rust (HEAD):** coco-rs/app/query/src/tool_call_preparer.rs:347-368 (hook Allow at 348 and rule-based Allow at 367 both exit function at line 424 without touching denial_tracker). Auto-mode classifier path only entered at line 380 if decision==Ask. Denial tracker reset only happens inside can_use_tool_in_auto_mode (line 91 is_safe_tool, line 113 AllowInCwd, line 124 heuris…
 - **Fix:** Add a top-of-wrapper hook in resolve_permission_decision: when the final decision is Allow and auto-mode is active, call denial_tracker.reset_consecutive() (no-op when consecutive==0) regardless of which branch produced the Allow.
 
-### [ ] query#2 — No submit-interrupt: Enter-while-streaming only queues, never interrupts the ru…
-`● genuinely_open` · **LOW** · effort **medium** · fix-sketch *sound*
+### [x] query#2 — No submit-interrupt: Enter-while-streaming only queues, never interrupts the ru… ✅ VERIFIED RESOLVED (2026-06-07)
+`✅ fixed` · **LOW** · effort **medium** · fix-sketch *done*
+
+> **2026-06-07 audit (tracker was WRONG):** the full submit-interrupt fabric is live. Marker exists
+> (`coco_types::TurnAbortReason::SubmitInterrupt`, `common/types/src/event.rs:1162`). Enter-while-streaming
+> fires `UserCommand::Interrupt(SubmitInterrupt)` only when `has_submit_interruptible_tool_in_progress`
+> (`app/tui/src/update.rs:388-396`) — i.e. only when every in-progress tool is Cancel-behavior, sparing
+> Block tools, exactly mirroring TS `handlePromptSubmit.ts:313-343` + `getAbortReason`. Same fabric as
+> tool-runtime#9. The "no marker / no per-tool cancel" claim was stale.
 
 - **Gap:** Enter-while-streaming only queues, never interrupts: InterruptBehavior enum is defined but never used; no interrupt-aware per-tool cancel; no CancelReason::Interrupt marker
 - **TS:** handlePromptSubmit.ts:313-343 — when queryGuard.isActive and `params.hasInterruptibleToolInProgress` (all in-progress tools have interruptBehavior()==='cancel', e.g. SleepTool), it calls abortController.abort('interrupt') THEN enqueues. StreamingToolExecutor.ts:219-228: on 'interrupt' reason only 'cancel'-behavior tools are aborted ('user_interrupted'), 'bl…
@@ -919,38 +1326,38 @@ since been implemented on `feat/review`:
 
 | ☐ | Finding | Sev | Gap → Fix |
 |:-:|---|---|---|
-| [ ] | tools-file#23 | MEDI | Empty/offset-beyond-EOF read warnings are plain text, not <system-reminder> blocks — *For the empty and offset-beyond-EOF cases, emit the exact TS <system-reminder> strings (parame…* |
-| [ ] | commands#211 | LOW | /status adds non-TS alias 'st'; /tasks adds non-TS alias 'todo' while dropping genuine TS alia… — *Drop the 'st' and 'todo' aliases (canonical-names-only); if the /tasks 'bashes' alias is inten…* |
+| [x] | tools-file#23 | MEDI | Empty/offset-beyond-EOF read warnings are plain text, not <system-reminder> blocks — *For the empty and offset-beyond-EOF cases, emit the exact TS <system-reminder> strings (parame…* |
+| [x] | commands#211 | LOW | /status adds non-TS alias 'st'; /tasks adds non-TS alias 'todo' while dropping genuine TS alia… — *Drop the 'st' and 'todo' aliases (canonical-names-only); if the /tasks 'bashes' alias is inten…* |
 | [ ] | config#245 | LOW | CLAUDE_CODE_EFFORT_LEVEL env override with 'unset'/'auto' suppress semantics missing entirely;… — *Add a COCO_EFFORT_LEVEL EnvKey + EnvOnlyConfig field with 'unset'/'auto'->None and numeric par…* |
 | [ ] | config#249 | LOW | Plugin settings-base layer (ONE key: 'agent') documented but never merged; triage overstated p… — *Add a getPluginSettingsBase-equivalent that gathers allowlisted plugin-contributed settings an…* |
-| [ ] | config#250 | LOW | OS-level MDM (plist/HKLM/HKCU) unimplemented; remote API-sync is sanctioned Anthropic-only. Fi… — *Add the MDM (macOS plist / Windows HKLM/HKCU) readers and a remote-managed cache reader to loa…* |
-| [ ] | config#252 | LOW | get_fast_mode_model returns hardcoded dated ID ('claude-opus-4-6-20250514') matching no catalo… — *Return the fast-mode model via ModelRole resolution / a family selector rather than a hardcode…* |
+| [~] | config#250 | LOW | OS-level MDM (plist/HKLM/HKCU) unimplemented; remote API-sync is sanctioned Anthropic-only. Fi… — *Add the MDM (macOS plist / Windows HKLM/HKCU) readers and a remote-managed cache reader to loa…* |
+| [x] | config#252 | LOW | get_fast_mode_model returns hardcoded dated ID ('claude-opus-4-6-20250514') matching no catalo… — *Return the fast-mode model via ModelRole resolution / a family selector rather than a hardcode…* |
 | [ ] | config#254 | LOW | 'max' effort persists unconditionally to settings.json for all users; TS treats max as session… — *Add a toPersistableEffort-equivalent in the /effort handler that drops 'max' before write_user…* |
 | [ ] | context#99 | LOW | File-history keys are absolute paths, not relative to cwd (TS stores relative); JSONL persiste… — *Store tracking keys relative to original cwd when under it (maybe_shorten equivalent) and expa…* |
-| [ ] | context#102 | LOW | Git status not truncated (2k chars) and not gated on include_git_instructions; remote-session … — *When wiring the git block (context#92): truncate status to 2000 chars with the TS suffix, and …* |
+| [x] | context#102 | LOW | Git status not truncated (2k chars) and not gated on include_git_instructions; remote-session … — *When wiring the git block (context#92): truncate status to 2000 chars with the TS suffix, and …* |
 | [ ] | coordinator#259 | LOW | show_pane omits layout reapply and leader pane resize operations — *After the join-pane in show_pane, run select-layout main-vertical, list-panes -F #{pane_id}, t…* |
 | [ ] | coordinator#261 | LOW | set_pane_title drops colored pane-border-format, rendering titles without per-teammate bold co… — *After select-pane -T, add a `set-option -p -t <pane> pane-border-format '#[fg=<tmux_color>,bol…* |
 | [ ] | coordinator#262 | LOW | Subsequent teammate panes use bare split without list-panes target logic or rebalancing — *In the else branch, list-panes for the window, compute splitVertically = teammateCount%2==1 an…* |
 | [ ] | hooks#186 | LOW | Unknown decision/permissionDecision values silently dropped instead of surfaced as non-blockin… — *On an unrecognized decision/permissionDecision value, set a non-blocking error on the aggregat…* |
-| [ ] | hooks#187 | LOW | Non-zero-exit stderr injected into model context instead of surfaced as non-blocking error — *Gate the PlainText->additional_contexts push on a clean exit (succeeded/exit 0); route non-zer…* |
+| [x] | hooks#187 | LOW | Non-zero-exit stderr injected into model context instead of surfaced as non-blocking error — *Gate the PlainText->additional_contexts push on a clean exit (succeeded/exit 0); route non-zer…* |
 | [ ] | hooks#188 | LOW | Both flat and nested additionalContext pushed to Vec, causing duplication vs TS single-slot se… — *Use a single per-hook additional-context slot during aggregation with nested-overrides-flat pr…* |
 | [ ] | mcp#149 | LOW | Elicitation input validation (format/range/enum constraints and format hints) not ported; Elic… — *Add a validate_elicitation_input(value, schema) and get_format_hint(schema) over the elicitati…* |
 | [ ] | mcp#150 | LOW | Natural-language datetime parsing for elicitation date fields absent; Date/DateTime field type… — *After sync validation fails on a date/date-time field and the input isn't ISO-8601, route a sm…* |
-| [ ] | mcp#156 | LOW | Tool-description truncation suffix (ASCII '...' vs TS Unicode) and length-unit threshold (byte… — *Unify on a single truncation helper using char-aware length and the TS marker '… [truncated]';…* |
-| [ ] | memory#226 | LOW | Rust caveat wording differs from TS; Rust omits 'point-in-time observations, not live state' a… — *Replace the format! body in memory_freshness_text with the verbatim TS sentence ('Memories are…* |
+| [x] | mcp#156 | LOW | Tool-description truncation suffix (ASCII '...' vs TS Unicode) and length-unit threshold (byte… — *Unify on a single truncation helper using char-aware length and the TS marker '… [truncated]';…* |
+| [x] | memory#226 | LOW | Rust caveat wording differs from TS; Rust omits 'point-in-time observations, not live state' a… — *Replace the format! body in memory_freshness_text with the verbatim TS sentence ('Memories are…* |
 | [ ] | memory#227 | LOW | Rust extraction prompt places manifest after 'if user asks to remember' line; TS places it bef… — *Move the 'If the user explicitly asks...' line out of extract.md and append it AFTER manifest_…* |
 | [ ] | messages#85 | LOW | Web-search-request count never recorded; cost accumulation omits ~$0.01/req charge — *Add a web_search_requests field to TokenUsage (mirroring vercel-ai server_tool_use), populate …* |
 | [ ] | messages#86 | LOW | No reorderAttachmentsForAPI (defensive bubble pass); narrow impact since turn-boundary append … — *Port reorderAttachmentsForAPI as a leading pass (bottom-up bubble of Message::Attachment to th…* |
 | [ ] | messages#87 | LOW | Assistant merge skips intervening tool_results in TS but not in Rust; latent on streaming path… — *Replace the strictly-adjacent write/read coalesce with a backward walk that, for each Assistan…* |
-| [ ] | messages#88 | LOW | Decimal precision threshold differs (0.01 vs 0.5); cosmetic UX divergence in cost display — *Change the threshold to match TS: render {:.2} only when cost_usd > 0.5, otherwise {:.4}.* |
+| [x] | messages#88 | LOW | Decimal precision threshold differs (0.01 vs 0.5); cosmetic UX divergence in cost display — *Change the threshold to match TS: render {:.2} only when cost_usd > 0.5, otherwise {:.4}.* |
 | [ ] | plugins#236 | LOW | Install counts never fetched; cache infrastructure exists but fetch path missing. downloads al… — *Add an HTTP fetch (reqwest) of INSTALL_COUNTS_URL with TTL check, persist via InstallCountsCac…* |
-| [ ] | plugins#237 | LOW | Install-success suffix says '(with N dependencies)' in production; TS spec says '(+ N dependen… — *Replace install.rs::format_dep_note usage with dependency.rs::format_dependency_count_suffix (…* |
+| [x] | plugins#237 | LOW | Install-success suffix says '(with N dependencies)' in production; TS spec says '(+ N dependen… — *Replace install.rs::format_dep_note usage with dependency.rs::format_dependency_count_suffix (…* |
 | [ ] | plugins#238 | LOW | V1->V2 migration keeps stale V1 installPath instead of recomputing from pluginId+version. vers… — *In migrate_v1_to_v2, ignore the V1 installPath and set install_path = versioned cache path com…* |
 | [ ] | query#5 | LOW | max_turns_reached attachment reports turn N instead of N+1 (off-by-one, cosmetic) — *Set payload.turn_count = turn_state.turn + 1 (the turn it refused to start) at engine.rs:572 t…* |
 | [ ] | query#6 | LOW | Model-fallback notice emitted as ephemeral TextDelta, not persisted as durable SystemMessage; … — *After emitting the stream TextDelta, also history_push_and_emit a SystemMessage(level=Warning)…* |
 | [ ] | query#7 | LOW | Cancel/abort path skips max_turns_reached check; never emits silent attachment even when abort… — *In the engine.rs:507 cancel branch (and after cancel_epilogue), if config.max_turns.is_some_an…* |
 | [ ] | sandbox#174 | LOW | getLinuxGlobPatternWarnings not ported. No user-facing warning about glob patterns on Linux wi… — *Add a linux_glob_pattern_warnings(settings) helper that, on cfg!(linux)/WSL when sandbox enabl…* |
-| [ ] | sandbox#175 | LOW | allow_pty defaults to false in SandboxSettings, overwriting the true default in SandboxConfig.… — *Flip SandboxSettings::default allow_pty to true to match SandboxConfig::default and the TS/san…* |
+| [x] | sandbox#175 | LOW | allow_pty defaults to false in SandboxSettings, overwriting the true default in SandboxConfig.… — *Flip SandboxSettings::default allow_pty to true to match SandboxConfig::default and the TS/san…* |
 | [ ] | sandbox#176 | LOW | describe_filesystem/describe_network produce JSON but have zero production callers. Bash tool … — *Inject SandboxState::describe_filesystem()/describe_network() into the bash tool description (…* |
 | [ ] | shell#161 | LOW | Sed parser tokenizes via split_whitespace (breaks quoted patterns), accepts any delimiter, and… — *Tokenize via the shell-parser tokenizer instead of split_whitespace; add an `arg.starts_with("…* |
 | [ ] | shell#165 | LOW | Deleted cwd not recovered at spawn time; no friendly error message when cwd no longer exists — *In read_cwd_file / the post-exec cwd assignment, verify the new cwd exists (canonicalize/metad…* |
@@ -958,25 +1365,25 @@ since been implemented on `feat/review`:
 | [ ] | system-reminder#104 | LOW | Queued-command replay loses source_uuid provenance and human-visibility origin on both reminde… — *Thread source_uuid through QueuedCommandInfo and QueuedCommand→attachment so AttachmentMessage…* |
 | [ ] | system-reminder#106 | LOW | Multiple same-type hook events joined into one reminder instead of one attachment each; N same… — *Emit a SystemReminder::messages with one ReminderMessage per hook event (each individually sys…* |
 | [ ] | system-reminder#107 | LOW | CLAUDE_CODE_DISABLE_ATTACHMENTS / CLAUDE_CODE_SIMPLE queued-only fallback not implemented; no … — *Add a COCO_* env / settings flag (e.g. COCO_SYSTEM_REMINDER_QUEUED_ONLY) that, when set, makes…* |
-| [ ] | system-reminder#108 | LOW | Todo reminder body omits TS trailing newline when todo list is empty; empty case: TS ends with… — *Append '\n' to the empty-case return (out.push('\n') before returning when todos.is_empty()), …* |
+| [x] | system-reminder#108 | LOW | Todo reminder body omits TS trailing newline when todo list is empty; empty case: TS ends with… — *Append '\n' to the empty-case return (out.push('\n') before returning when todos.is_empty()), …* |
 | [ ] | tasks#215 | LOW | Agent terminal notification escapes summary/result/worktree XML; TS emits them raw for agent v… — *Split rendering so the AgentTerminal arm interpolates summary/result/worktree raw (no escape_x…* |
-| [ ] | tasks#218 | LOW | Shell terminal output reads last 8MB (tail) with middle-elide truncation; TS reads first 30k (… — *On the backgrounded-shell terminal read path, read from the HEAD (offset 0) up to max_output_b…* |
-| [ ] | tool-runtime#11 | LOW | Sibling error message lacks <tool_use_error> wrapper and Bash(cmd) descriptor; latent in dead … — *When wiring #8, format the synthetic sibling result as `<tool_use_error>Cancelled: parallel to…* |
-| [ ] | tool-runtime#13 | LOW | max-tool-concurrency=0 deadlocks; TS treats 0 as falsy and falls back to 10 — *Clamp parsed value: `.and_then(\|v\| v.parse::<usize>().ok()).filter(\|n\| *n > 0).unwrap_or(DEFAU…* |
-| [ ] | tool-runtime#15 | LOW | Both pre-execution and mid-execution cancels classified as ExecutionCancelled (fires PostToolU… — *Before the run_one select!, check call_ctx.cancel.is_cancelled() and, if set, return an Unstam…* |
+| [x] | tasks#218 | LOW | Shell terminal output reads last 8MB (tail) with middle-elide truncation; TS reads first 30k (… — *On the backgrounded-shell terminal read path, read from the HEAD (offset 0) up to max_output_b…* |
+| [~] | tool-runtime#11 | LOW | Sibling error message lacks <tool_use_error> wrapper and Bash(cmd) descriptor; latent in dead … — *When wiring #8, format the synthetic sibling result as `<tool_use_error>Cancelled: parallel to…* |
+| [x] | tool-runtime#13 | LOW | max-tool-concurrency=0 deadlocks; TS treats 0 as falsy and falls back to 10 — *Clamp parsed value: `.and_then(\|v\| v.parse::<usize>().ok()).filter(\|n\| *n > 0).unwrap_or(DEFAU…* |
+| [x] | tool-runtime#15 | LOW | Both pre-execution and mid-execution cancels classified as ExecutionCancelled (fires PostToolU… — *Before the run_one select!, check call_ctx.cancel.is_cancelled() and, if set, return an Unstam…* |
 | [ ] | tools-exec#32 | LOW | Model-facing exit-code interpretation wired; TUI display fields (returnCodeInterpretation/noOu… — *In the TUI bash result renderer, when stdout/stderr are empty, show returnCodeInterpretation (…* |
-| [ ] | tools-exec#35 | LOW | Timeout above max is rejected and clamped; TS honors raw model value — *Remove the timeout>max check from validate_input and drop the .min(max_timeout_ms) clamp; use …* |
+| [x] | tools-exec#35 | LOW | Timeout above max is rejected and clamped; TS honors raw model value — *Remove the timeout>max check from validate_input and drop the .min(max_timeout_ms) clamp; use …* |
 | [ ] | tools-exec#37 | LOW | run_in_background ignores ctx.background_tasks_disabled gate — *In bash/powershell execute, when ctx.background_tasks_disabled, ignore run_in_background and f…* |
 | [ ] | tools-exec#39 | LOW | PowerShell ignores configurable bash timeout/output limits — *Replace the powershell module-const reads with the shared default_timeout_ms/max_timeout_ms(&c…* |
 | [ ] | tools-exec#40 | LOW | Auto-detach is reported as backgroundedByUser; assistantAutoBackgrounded never set — *Thread a source discriminant through signal_detach/detach handle (auto-detach-timer vs externa…* |
-| [ ] | tools-exec#42 | LOW | Bash <claude-code-hint /> tag is never stripped from stdout — *Add a coco-side extract_claude_code_hint(stdout, command) (HINT_TAG_RE parser) called in bash/…* |
-| [ ] | tools-exec#43 | LOW | Bash captures stdout/stderr separately; TS merges into single chronologically-interleaved stre… — *Run the shell with merged stdout+stderr (redirect child stderr to the stdout fd / a shared fil…* |
+| [x] | tools-exec#42 | LOW | Bash <claude-code-hint /> tag is never stripped from stdout — *Add a coco-side extract_claude_code_hint(stdout, command) (HINT_TAG_RE parser) called in bash/…* |
+| [~] | tools-exec#43 | LOW | Bash captures stdout/stderr separately; TS merges into single chronologically-interleaved stre… — *Run the shell with merged stdout+stderr (redirect child stderr to the stdout fd / a shared fil…* |
 | [ ] | tools-file#27 | LOW | Glob does not extract base directory from absolute pattern; silently returns no matches — *Before compiling, if the pattern is absolute, split off the static prefix up to the first glob…* |
 | [ ] | tools-web-mcp#58 | LOW | WebFetch URL validation omits userinfo, max-length, and public-hostname checks before fetch — *Add the three checks in execute() before fetch: reject url.len()>2000, reject parsed.username(…* |
-| [ ] | tools-web-mcp#59 | LOW | CronList derives recurring/durable from wrong fields; durable dropped on create; ScheduleEntry… — *Add recurring/durable fields to ScheduleEntry and ScheduleStore::create_schedule signature; Cr…* |
-| [ ] | tools-web-mcp#60 | LOW | CronCreate skips next-run reachability and teammate-durable validation that TS enforces — *Add a next-occurrence-within-a-year computation to reject unreachable expressions and, when te…* |
+| [x] | tools-web-mcp#59 | LOW | CronList derives recurring/durable from wrong fields; durable dropped on create; ScheduleEntry… — *Add recurring/durable fields to ScheduleEntry and ScheduleStore::create_schedule signature; Cr…* |
+| [x] | tools-web-mcp#60 | LOW | CronCreate skips next-run reachability and teammate-durable validation that TS enforces — *Add a next-occurrence-within-a-year computation to reject unreachable expressions and, when te…* |
 | [ ] | tools-web-mcp#61 | LOW | AskUserQuestion omits uniqueness validation that TS enforces via zod .refine — *Add AskUserQuestionTool::validate_input that rejects duplicate question texts and duplicate op…* |
-| [ ] | tools-web-mcp#63 | LOW | WebFetch schema declares no required fields, diverging from TS strictObject({url, prompt}) — *Set 'required': ["url", "prompt"] in WebFetchTool's runtime_validation_schema to match the TS …* |
+| [x] | tools-web-mcp#63 | LOW | WebFetch schema declares no required fields, diverging from TS strictObject({url, prompt}) — *Set 'required': ["url", "prompt"] in WebFetchTool's runtime_validation_schema to match the TS …* |
 
 ## Closed — fixed / sanctioned (reference; do not re-open)
 

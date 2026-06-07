@@ -489,6 +489,9 @@ async fn execute_foreground(
         .as_deref()
         .map(decode_ps_output)
         .unwrap_or_else(|| cmd_result.stdout.clone());
+    // Strip + record any `<claude-code-hint />` tags (TS PowerShellTool strips
+    // in both foreground and background, same as Bash).
+    let stdout = crate::tools::bash::maybe_strip_and_record_hints(stdout, command);
     let mut stderr = cmd_result
         .stderr_bytes
         .as_deref()

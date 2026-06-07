@@ -313,8 +313,19 @@ where
     fn start_safe_now(&mut self, prepared: PreparedToolCall) {
         let runtime = self.executor.make_runtime(prepared.model_index);
         let run_one = self.run_one.clone();
-        self.inflight
-            .spawn(async move { run_one(prepared, runtime).await });
+        // tool-runtime#8: fire the sibling-abort the moment a concurrent shell
+        // tool (Bash/PowerShell) fails, so still-running safe siblings
+        // self-cancel (they listen via `make_runtime`'s sibling_abort signal).
+        // In-task placement — NOT `commit_flush` — because the safe tasks were
+        // spawned during streaming and by drain time the siblings may already
+        // have finished, making a drain-loop abort a no-op. Shares the predicate
+        // with the non-streaming `run_concurrent_batch`.
+        let executor = self.executor.clone();
+        self.inflight.spawn(async move {
+            let outcome = run_one(prepared, runtime).await;
+            executor.abort_siblings_if_shell_error(outcome.error_kind.as_ref(), &outcome.tool_id);
+            outcome
+        });
     }
 }
 

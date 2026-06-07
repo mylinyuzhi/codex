@@ -322,7 +322,7 @@ fn render_shell_line(shell: crate::ShellKind) -> String {
 
 /// Build a minimal system prompt (for testing or non-interactive mode).
 pub fn build_minimal_prompt(cwd: &std::path::Path) -> SystemPrompt {
-    let env = crate::get_environment_info(cwd, "");
+    let env = crate::get_environment_info(cwd, "", /*include_git_status*/ true);
     let claude_files = crate::discover_memory_files(cwd);
 
     build_system_prompt(

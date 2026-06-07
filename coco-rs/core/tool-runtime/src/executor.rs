@@ -24,6 +24,7 @@ use tokio::sync::mpsc;
 
 use crate::call_plan::PreparedToolCall;
 use crate::call_plan::RunOneRuntime;
+use crate::call_plan::ToolCallErrorKind;
 use crate::call_plan::ToolCallOutcome;
 use crate::call_plan::ToolCallPlan;
 use crate::call_plan::ToolSideEffects;
@@ -172,11 +173,21 @@ pub struct StreamingToolExecutor {
     event_tx: Option<mpsc::Sender<coco_types::CoreEvent>>,
 }
 
+/// Resolve the tool concurrency cap from the raw `COCO_MAX_TOOL_USE_CONCURRENCY`
+/// value. TS `getMaxToolUseConcurrency()` uses `parseInt(...) || 10`, so any
+/// falsy result — including `0` — falls back to the default. A `0` here would
+/// build `Semaphore::new(0)` and deadlock every concurrent-safe tool, so we
+/// filter non-positive values out.
+fn resolve_max_concurrency(raw: Option<String>) -> usize {
+    raw.and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_MAX_CONCURRENCY)
+}
+
 impl StreamingToolExecutor {
     pub fn new() -> Self {
-        let max_concurrency = env::env_opt(EnvKey::CocoMaxToolUseConcurrency)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_MAX_CONCURRENCY);
+        let max_concurrency =
+            resolve_max_concurrency(env::env_opt(EnvKey::CocoMaxToolUseConcurrency));
         let (update_tx, update_rx) = mpsc::unbounded_channel();
         Self {
             max_concurrency,
@@ -864,6 +875,26 @@ impl StreamingToolExecutor {
         }
     }
 
+    /// Fire the sibling-abort controller when a shell tool (Bash/PowerShell)
+    /// fails, so concurrently-running safe siblings self-cancel (they listen on
+    /// the same controller via [`make_runtime`](Self::make_runtime)). Shared by
+    /// the non-streaming `run_concurrent_batch` and the streaming
+    /// `start_safe_now` completion path so both surfaces behave identically.
+    /// TS parity: `StreamingToolExecutor.ts` `siblingAbortController.abort('sibling_error')`.
+    /// tool-runtime#8.
+    pub(crate) fn abort_siblings_if_shell_error(
+        &self,
+        error_kind: Option<&ToolCallErrorKind>,
+        tool_id: &ToolId,
+    ) {
+        if error_kind.is_some() && is_shell_tool_id(tool_id) {
+            self.sibling_abort
+                .abort(ToolAbortReasonPayload::SiblingError {
+                    failed_tool: tool_id.to_string(),
+                });
+        }
+    }
+
     /// Run one concurrent-safe batch end-to-end.
     ///
     /// Surfaces each outcome through `on_outcome` the moment
@@ -902,12 +933,7 @@ impl StreamingToolExecutor {
 
         while let Some(unstamped) = pending.next().await {
             let model_index = unstamped.model_index;
-            if unstamped.error_kind.is_some() && is_shell_tool_id(&unstamped.tool_id) {
-                self.sibling_abort
-                    .abort(ToolAbortReasonPayload::SiblingError {
-                        failed_tool: unstamped.tool_id.to_string(),
-                    });
-            }
+            self.abort_siblings_if_shell_error(unstamped.error_kind.as_ref(), &unstamped.tool_id);
             let (outcome, effects) = unstamped.stamp_and_extract_effects(*completion_seq);
             *completion_seq += 1;
             queued_effects.push((model_index, effects));
@@ -998,7 +1024,7 @@ fn interruptible_set(prepared_calls: &[PreparedToolCall]) -> bool {
             .all(|prepared| prepared.tool.interrupt_behavior() == InterruptBehavior::Cancel)
 }
 
-fn is_shell_tool_id(tool_id: &ToolId) -> bool {
+pub(crate) fn is_shell_tool_id(tool_id: &ToolId) -> bool {
     matches!(
         tool_id,
         ToolId::Builtin(ToolName::Bash) | ToolId::Builtin(ToolName::PowerShell)

@@ -320,9 +320,10 @@ pub fn build_system_prompt(
     base_instructions: Option<&str>,
     output_style: Option<&coco_output_styles::OutputStyleConfig>,
     additional_working_directories: &[String],
+    include_git_status: bool,
 ) -> String {
     let claude_files = coco_context::discover_memory_files(cwd);
-    let env_info = coco_context::get_environment_info(cwd, model_id);
+    let env_info = coco_context::get_environment_info(cwd, model_id, include_git_status);
     let identity = base_instructions.unwrap_or(DEFAULT_SYSTEM_PROMPT_IDENTITY);
     let section = output_style.map(output_style_section);
     coco_context::build_system_prompt(
@@ -352,12 +353,22 @@ pub fn build_system_prompt_for_model(
     let base_instructions = resolved
         .as_ref()
         .and_then(|model| model.info.base_instructions.as_deref());
+    // TS `context.ts`: suppress the git-status block under COCO_REMOTE or a
+    // disabled `include_git_instructions` setting (COCO_DISABLE_GIT_INSTRUCTIONS
+    // overrides the setting either way).
+    let env = coco_config::EnvSnapshot::from_current_process();
+    let include_git_status = !env.is_truthy(coco_config::EnvKey::CocoRemote)
+        && coco_config::gitsettings::should_include_git_instructions(
+            &runtime_config.settings.merged,
+            &env,
+        );
     build_system_prompt(
         cwd,
         model_id,
         base_instructions,
         output_style,
         additional_working_directories,
+        include_git_status,
     )
 }
 
@@ -685,6 +696,10 @@ pub async fn run_chat_with_options(
     // reminder generator. Plugin-contributed styles are folded in alongside
     // user / project / managed dirs.
     let plugins = crate::session_bootstrap::load_session_plugins(&cwd);
+    // Startup marketplace maintenance (seed/reconcile/delist) on the headless
+    // surface too — TS runs `installPluginsForHeadless` for `--print`/`chat`/
+    // `review`; background + non-fatal, mirroring the TUI.
+    crate::session_bootstrap::spawn_marketplace_startup(coco_config::global_config::config_home());
     let plugin_style_sources = crate::session_bootstrap::plugin_output_style_sources(&plugins);
     let output_style_manager =
         build_output_style_manager(&runtime_config, &cwd, &plugin_style_sources);

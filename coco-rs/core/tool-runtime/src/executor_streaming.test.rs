@@ -391,3 +391,90 @@ async fn test_commit_flush_stamps_monotonic_completion_seq() {
     seqs.sort();
     assert_eq!(seqs, vec![10, 11, 12]);
 }
+
+// ── tool-runtime#8: streaming-path sibling-abort on shell-tool failure ──
+//
+// Mirrors the non-streaming `test_execute_with_bash_failure_aborts_concurrent_
+// sibling_runtime` but drives through `feed_plan` + `commit_flush`. A
+// concurrency-safe Bash plan fails (error_kind set); the concurrently-running
+// sibling must observe a `SiblingError` abort and self-cancel. Before the fix
+// the streaming path had no sibling-abort trigger and the sibling would run to
+// completion (the test would hang waiting on its `abort.cancelled()`).
+#[tokio::test]
+async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
+    use std::sync::Mutex;
+
+    let executor = Arc::new(StreamingToolExecutor::new());
+    let observed = Arc::new(Mutex::new(None));
+    let observed_for_run = observed.clone();
+
+    let run_one = move |prepared: PreparedToolCall, runtime: crate::call_plan::RunOneRuntime| {
+        let observed = observed_for_run.clone();
+        async move {
+            let mut outcome = UnstampedToolCallOutcome {
+                tool_use_id: prepared.tool_use_id.clone(),
+                tool_id: prepared.tool_id.clone(),
+                model_index: prepared.model_index,
+                ordered_messages: Vec::new(),
+                message_path: crate::call_plan::ToolMessagePath::Failure,
+                error_kind: None,
+                permission_denial: None,
+                prevent_continuation: None,
+                structured_output: None,
+                effects: ToolSideEffects::none(),
+            };
+            if prepared.tool_use_id == "bash-call" {
+                // Fail after a tick so the sibling is already awaiting.
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                outcome.error_kind = Some(crate::call_plan::ToolCallErrorKind::ExecutionFailed);
+            } else {
+                // Sibling: block until the sibling-abort fires, then record why.
+                runtime.abort.cancelled().await;
+                *observed.lock().unwrap() = runtime.abort.reason();
+                outcome.error_kind = Some(crate::call_plan::ToolCallErrorKind::ExecutionCancelled);
+            }
+            outcome
+        }
+    };
+
+    let mut handle = executor.streaming_handle(run_one);
+
+    // Bash plan — concurrency-safe (read-only), tool_id = Bash so the shell
+    // predicate matches; runs concurrently in the inflight JoinSet.
+    let bash = PreparedToolCall {
+        tool_use_id: "bash-call".into(),
+        tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
+        tool: Arc::new(ConfigurableTool {
+            name: "bash".into(),
+            safe: true,
+            started_counter: Arc::new(AtomicI32::new(0)),
+            sleep_ms: 0,
+        }),
+        parsed_input: json!({}),
+        model_index: 0,
+    };
+    handle.feed_plan(ToolCallPlan::Runnable(bash));
+    handle.feed_plan(ToolCallPlan::Runnable(prepared(
+        "sibling",
+        1,
+        /*safe*/ true,
+        Arc::new(AtomicI32::new(0)),
+        0,
+    )));
+
+    let mut collected: Vec<String> = Vec::new();
+    handle
+        .commit_flush(0, |o| collected.push(o.tool_use_id().to_string()))
+        .await;
+
+    assert_eq!(collected.len(), 2);
+    assert!(
+        matches!(
+            observed.lock().unwrap().as_ref(),
+            Some(coco_types::ToolAbortReasonPayload::SiblingError { failed_tool })
+                if failed_tool == coco_types::ToolName::Bash.as_str()
+        ),
+        "sibling must observe SiblingError(Bash); got {:?}",
+        observed.lock().unwrap()
+    );
+}

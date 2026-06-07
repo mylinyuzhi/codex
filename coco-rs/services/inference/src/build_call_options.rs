@@ -89,6 +89,13 @@ pub struct PerCallOverrides {
     ///   * OpenAI Chat / OpenAI-Compatible → `stop: [...]`
     ///   * Gemini → `stopSequences: [...]`
     pub stop_sequences: Option<Vec<String>>,
+    /// Per-call fast-mode flag (config#247). When set and the provider is
+    /// Anthropic, `build_call_options` writes `speed=fast` into
+    /// `provider_options["anthropic"]`, which the adapter turns into the
+    /// `fast-mode-2026-02-01` beta. Capability gating happens upstream (the
+    /// engine only sets this when the resolved model declares
+    /// `Capability::FastMode`); other providers ignore the flag.
+    pub fast_mode: bool,
 }
 
 /// Build a fresh `LanguageModelV4CallOptions` for a turn, returning
@@ -234,6 +241,21 @@ pub fn build_call_options_with_extra(
         } else {
             extra.insert("contextManagement".to_string(), ctx);
         }
+    }
+
+    // Lane C2: Anthropic-only fast mode (config#247). The provider's
+    // `extract_anthropic_options` reads `provider_options["anthropic"]["speed"]`
+    // and emits the `fast-mode-2026-02-01` beta when it's `"fast"`. Capability
+    // gating happens upstream (the engine sets `per_call.fast_mode` only when
+    // the resolved model declares `Capability::FastMode`); here we just
+    // translate the resolved flag into the Anthropic-specific wire option.
+    // Other providers have no speed concept and ignore the flag. A
+    // user-supplied `speed` in `extra_body` takes precedence (escape hatch).
+    if api == ProviderApi::Anthropic && per_call.fast_mode && !extra.contains_key("speed") {
+        extra.insert(
+            "speed".to_string(),
+            serde_json::Value::String("fast".to_string()),
+        );
     }
 
     // Lane D: prompt-cache pass-through. Non-Anthropic / disabled →

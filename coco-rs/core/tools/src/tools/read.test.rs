@@ -129,8 +129,18 @@ async fn test_read_empty_file() {
     .await
     .unwrap();
 
-    let text = result.data["file"]["content"].as_str().unwrap();
-    assert!(text.contains("empty"));
+    // Content is empty; TS routes an empty file through the offset warning
+    // (readFileInRangeFast yields one empty line → totalLines == 1).
+    assert_eq!(result.data["file"]["content"].as_str().unwrap(), "");
+    assert_eq!(result.data["file"]["totalLines"].as_i64().unwrap(), 1);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &result.data);
+    let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
+        panic!("expected one Text part, got {parts:?}");
+    };
+    assert_eq!(
+        text,
+        "<system-reminder>Warning: the file exists but is shorter than the provided offset (1). The file has 1 lines.</system-reminder>"
+    );
 }
 
 /// Helper — generate real image bytes in the requested format. Returns
@@ -794,10 +804,18 @@ async fn test_read_offset_beyond_file() {
     .await
     .unwrap();
 
-    let text = result.data["file"]["content"].as_str().unwrap();
-    assert!(text.contains("shorter than provided offset"), "got: {text}");
-    assert!(text.contains("100"));
-    assert!(text.contains("3 line"));
+    // Content is empty; the warning is produced at render time (TS map layer).
+    assert_eq!(result.data["file"]["content"].as_str().unwrap(), "");
+    assert_eq!(result.data["file"]["startLine"].as_i64().unwrap(), 100);
+    assert_eq!(result.data["file"]["totalLines"].as_i64().unwrap(), 3);
+    let parts = <ReadTool as DynTool>::render_for_model(&ReadTool, &result.data);
+    let [ToolResultContentPart::Text { text, .. }] = parts.as_slice() else {
+        panic!("expected one Text part, got {parts:?}");
+    };
+    assert_eq!(
+        text,
+        "<system-reminder>Warning: the file exists but is shorter than the provided offset (100). The file has 3 lines.</system-reminder>"
+    );
 }
 
 // ── R7-T16: notebook structured cells tests ──

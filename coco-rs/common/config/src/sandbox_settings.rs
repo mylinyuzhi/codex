@@ -293,7 +293,10 @@ pub struct SandboxSettings {
     pub enable_weaker_network_isolation: bool,
 
     /// Allow pseudo-terminal access inside the sandbox (macOS).
-    #[serde(default)]
+    /// Mirrors `SandboxConfig`'s `default_true` so an omitted key and
+    /// `..Default::default()` agree with the runtime default (PTY allowed
+    /// unless explicitly disabled — matches the codex-rs seatbelt base policy).
+    #[serde(default = "default_true")]
     pub allow_pty: bool,
 
     /// Directory search depth for mandatory deny path discovery (Linux).
@@ -341,7 +344,7 @@ impl Default for SandboxSettings {
             ignore_violations: HashMap::new(),
             enable_weaker_nested_sandbox: false,
             enable_weaker_network_isolation: false,
-            allow_pty: false,
+            allow_pty: true,
             mandatory_deny_search_depth: default_mandatory_deny_search_depth(),
             ripgrep: None,
         }

@@ -368,7 +368,13 @@ pub fn load_relevant_memories(
         // prepended for memories older than one day so the model
         // doesn't blindly trust stale file/line references.
         let freshness = memory_freshness_text(mtime_ms);
-        let header = format!("{freshness}[{age}] {filename}");
+        let header = if freshness.is_empty() {
+            format!("[{age}] {filename}")
+        } else {
+            // TS `memoryHeader` inserts the blank line between the staleness
+            // caveat and the entry (spacing owned by the caller, not the text).
+            format!("{freshness}\n\n[{age}] {filename}")
+        };
         let bytes = truncated.len() as i64;
         state.mark_surfaced(path_str, bytes);
         out.push(RelevantMemory {

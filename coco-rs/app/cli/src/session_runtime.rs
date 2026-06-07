@@ -1345,7 +1345,12 @@ impl SessionRuntime {
             runtime_config,
             session_manager,
             fast_model_spec,
-            schedule_store: Arc::new(coco_tool_runtime::InMemoryScheduleStore::new()),
+            // Disk-backed so `durable` cron tasks survive restarts. coco uses
+            // the project-local `.coco/` convention (NOT TS's `.claude/`);
+            // session tasks stay in-memory. The cron tick driver shares this store.
+            schedule_store: Arc::new(coco_tool_runtime::DiskBackedScheduleStore::new(
+                cwd.join(".coco").join("scheduled_tasks.json"),
+            )),
             model_runtimes,
             side_query,
             auto_title_enabled,
@@ -2104,6 +2109,19 @@ impl SessionRuntime {
     /// free function reading the module-level singleton).
     pub fn command_queue(&self) -> &CommandQueue {
         &self.command_queue
+    }
+
+    /// The session's schedule store (cron tasks + triggers). Shared with the
+    /// cron tick driver ([`crate::cron_tick`]) so it reads/writes the same
+    /// tasks the `Cron*` tools persist.
+    pub fn schedule_store(&self) -> coco_tool_runtime::ScheduleStoreRef {
+        self.schedule_store.clone()
+    }
+
+    /// Session shutdown signal — long-lived background tasks (e.g. the cron
+    /// tick) observe it for clean teardown.
+    pub fn shutdown_signal(&self) -> CancellationToken {
+        self.cancel.clone()
     }
 
     /// Build a closure that materialises an

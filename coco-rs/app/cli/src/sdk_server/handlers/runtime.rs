@@ -315,18 +315,72 @@ pub(super) async fn handle_context_usage(ctx: &HandlerContext) -> HandlerResult 
 
 /// `plugin/reload` — hot-reload plugins.
 ///
-/// Returns an empty result since the SDK server does not yet expose a
-/// plugin manager. Acknowledges the client's request so heartbeat-style
-/// usage works.
+/// Mirrors the TUI `/reload-plugins` chain (`tui_runner::run_reload_plugins`)
+/// against the process-shared `SessionRuntime`: reload plugins (commands +
+/// skills) → agent catalog → LSP servers → hooks, then report the live
+/// command/agent/plugin snapshots. When no `SessionRuntime` is wired (e.g.
+/// handler-level test harnesses), acks with an empty result.
 ///
-/// TS reference: `SDKControlReloadPluginsResponseSchema`.
-pub(super) async fn handle_plugin_reload(_ctx: &HandlerContext) -> HandlerResult {
-    info!("SdkServer: plugin/reload (no plugin manager wired, returning empty)");
+/// TS reference: `refreshActivePlugins` / `SDKControlReloadPluginsResponseSchema`.
+pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult {
+    let runtime_arc = {
+        let slot = ctx.state.session_runtime.read().await;
+        slot.as_ref().cloned()
+    };
+    let Some(runtime) = runtime_arc else {
+        info!("SdkServer: plugin/reload (no SessionRuntime wired, returning empty)");
+        return HandlerResult::ok(coco_types::PluginReloadResult {
+            plugins: Vec::new(),
+            commands: Vec::new(),
+            agents: Vec::new(),
+            error_count: 0,
+        });
+    };
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let command_count = runtime.reload_plugins(&cwd).await;
+    runtime.reload_agent_catalog().await;
+    runtime.reload_lsp_servers(&cwd).await;
+    let error_count = match runtime.reload_hooks().await {
+        Ok(_) => 0,
+        Err(e) => {
+            tracing::warn!(target: "coco::plugins", error = %e, "SDK plugin/reload: hook reload failed");
+            1
+        }
+    };
+
+    // Enumerate the live registry/catalog snapshots for the result.
+    let command_registry = runtime.current_command_registry().await;
+    let commands: Vec<String> = command_registry
+        .snapshot_for_ui()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    let agent_catalog = runtime.current_agent_catalog().await;
+    let agents: Vec<String> = agent_catalog.active().map(|a| a.name.clone()).collect();
+    let config_home = runtime.config_home.clone();
+    let project_dir = runtime
+        .current_engine_config()
+        .await
+        .project_dir
+        .unwrap_or_else(|| cwd.clone());
+    let plugins: Vec<String> = coco_plugins::load_all_installed_plugins(&config_home, &project_dir)
+        .iter()
+        .map(|p| p.id.to_string())
+        .collect();
+
+    info!(
+        commands = command_count,
+        agents = agents.len(),
+        plugins = plugins.len(),
+        error_count,
+        "SdkServer: plugin/reload"
+    );
     HandlerResult::ok(coco_types::PluginReloadResult {
-        plugins: Vec::new(),
-        commands: Vec::new(),
-        agents: Vec::new(),
-        error_count: 0,
+        plugins,
+        commands,
+        agents,
+        error_count,
     })
 }
 

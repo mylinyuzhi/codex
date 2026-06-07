@@ -102,7 +102,9 @@ fn tools_contain(tools: &[String], builtin: ToolName) -> bool {
 }
 
 fn render_todo_reminder_body(todos: &[TodoRecord]) -> String {
-    let mut out = String::from(TODO_REMINDER_BODY);
+    // TS `messages.ts:3668` always terminates the base body with `\n`; the
+    // optional list suffix then adds `\n\n` (3 newlines total before "Here").
+    let mut out = format!("{TODO_REMINDER_BODY}\n");
     if todos.is_empty() {
         return out;
     }
@@ -114,7 +116,7 @@ fn render_todo_reminder_body(todos: &[TodoRecord]) -> String {
         .map(|(i, t)| format!("{n}. [{s}] {c}", n = i + 1, s = t.status, c = t.content))
         .collect::<Vec<_>>()
         .join("\n");
-    out.push_str("\n\n\nHere are the existing contents of your todo list:\n\n[");
+    out.push_str("\n\nHere are the existing contents of your todo list:\n\n[");
     out.push_str(&items);
     out.push(']');
     out

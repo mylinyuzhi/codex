@@ -331,10 +331,13 @@ fn merge_env(
     extracted_dir: &str,
     user_config: &HashMap<String, serde_json::Value>,
 ) -> serde_json::Value {
-    // Manifest-declared env values get template substitution; string user
-    // values are additionally exposed under their own key (coco-rs convenience
-    // retained from the original loader).
-    let mut merged: HashMap<String, String> = base
+    // Only manifest-declared env values are emitted, with `${user_config.X}`
+    // template substitution (TS `getMcpConfigForManifest`). plugins#234: the
+    // previous coco-only loop that exposed EVERY string user_config value under
+    // its own env key was removed — it diverged from TS and risked leaking
+    // sensitive user_config values into the child process environment. Sensitive
+    // values belong in the keyring split (Slice B), never in env.
+    let merged: HashMap<String, String> = base
         .iter()
         .map(|(k, v)| {
             (
@@ -343,11 +346,6 @@ fn merge_env(
             )
         })
         .collect();
-    for (k, v) in user_config {
-        if let Some(s) = v.as_str() {
-            merged.insert(k.clone(), s.to_string());
-        }
-    }
     serde_json::to_value(merged).unwrap_or(serde_json::Value::Null)
 }
 

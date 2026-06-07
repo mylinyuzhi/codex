@@ -215,3 +215,22 @@ async fn respects_config_flag() {
     c.attachments.task_reminder = false;
     assert!(!TaskRemindersGenerator.is_enabled(&c));
 }
+
+// ── Trailing-newline byte parity (TS messages.ts:3680-3690) ──
+
+#[test]
+fn empty_body_has_trailing_newline() {
+    assert_eq!(
+        render_task_reminder_body(&[]),
+        format!("{}\n", task_reminder_body())
+    );
+}
+
+#[test]
+fn nonempty_body_has_three_newlines_before_list() {
+    let body = render_task_reminder_body(&[task("1", "x", TaskListStatus::Pending)]);
+    assert!(
+        body.contains("the user\n\n\nHere are the existing tasks:\n\n"),
+        "expected 3 newlines before the list, got: {body:?}"
+    );
+}

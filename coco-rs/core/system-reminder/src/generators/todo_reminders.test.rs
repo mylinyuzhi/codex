@@ -191,3 +191,23 @@ async fn uses_todo_reminder_throttle() {
     let t = TodoRemindersGenerator.throttle_config();
     assert_eq!(t.min_turns_between, 10);
 }
+
+// ── Trailing-newline byte parity (TS messages.ts:3663-3671) ──
+
+#[test]
+fn empty_body_has_trailing_newline() {
+    // TS base body always ends with `\n` even when the list is empty.
+    assert_eq!(
+        render_todo_reminder_body(&[]),
+        format!("{TODO_REMINDER_BODY}\n")
+    );
+}
+
+#[test]
+fn nonempty_body_has_three_newlines_before_list() {
+    let body = render_todo_reminder_body(&[todo("a", "pending")]);
+    assert!(
+        body.contains("the user\n\n\nHere are the existing contents of your todo list:\n\n["),
+        "expected 3 newlines before the list, got: {body:?}"
+    );
+}
