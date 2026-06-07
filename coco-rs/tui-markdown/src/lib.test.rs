@@ -25,6 +25,40 @@ fn render_text(text: &str) -> Vec<String> {
     render(text).iter().map(line_text).collect()
 }
 
+fn stable_boundaries(source: &str) -> Vec<usize> {
+    let mut boundaries = Vec::new();
+    for end in source
+        .char_indices()
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .filter(|end| source[..*end].ends_with('\n'))
+    {
+        let stable_end = stable_prefix_end(&source[..end]);
+        if stable_end > 0 && boundaries.last() != Some(&stable_end) {
+            boundaries.push(stable_end);
+        }
+    }
+    boundaries
+}
+
+fn progressive_sources() -> &'static [&'static str] {
+    &[
+        "alpha\n\nbeta\n\n",
+        "# Heading\nparagraph\n\n",
+        "Title\n---\n\nbody\n\n",
+        "- one\n- two\n\nnext\n\n",
+        "- outer\n  - inner\n  continuation\n\n",
+        "> quoted\n> continuation\n\noutside\n\n",
+        "lazy\ncontinuation\n\nnext\n\n",
+        "- [ ] todo\n\nnext\n\n",
+        "Use [inline](https://example.com)\n\nnext\n\n",
+        "| a | b |\n| - | - |\n| 1 | 2 |\n\nnext\n\n",
+        "```rust\nfn main() {}\n```\nafter\n\n",
+        "[label]\n\n[label]: https://example.com\n\n",
+        "<div>\nraw html\n</div>\n\nafter\n\n",
+        "```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```\n\nafter\n\n",
+    ]
+}
+
 #[test]
 fn paragraph_is_indented_two_columns() {
     let lines = render_text("hello world");
@@ -167,6 +201,127 @@ fn empty_text_with_marker_emits_marker_line() {
 fn empty_text_without_marker_is_empty() {
     let _ = Style::default();
     assert!(render("").is_empty());
+}
+
+#[test]
+fn stable_prefix_holds_back_unterminated_line() {
+    assert_eq!(stable_prefix_end("one\ntwo"), 0);
+}
+
+#[test]
+fn stable_prefix_uses_blank_line_boundary() {
+    assert_eq!(stable_prefix_end("one\n\ntwo"), "one\n\n".len());
+}
+
+#[test]
+fn stable_prefix_holds_back_setext_heading_candidate() {
+    assert_eq!(stable_prefix_end("Title\n---"), 0);
+    assert_eq!(stable_prefix_end("Title\n---\nbody"), 0);
+    assert_eq!(
+        stable_prefix_end("Title\n---\n\nbody"),
+        "Title\n---\n\n".len()
+    );
+}
+
+#[test]
+fn stable_prefix_holds_back_reference_link_candidate() {
+    assert_eq!(stable_prefix_end("[label]\n\nbody"), 0);
+}
+
+#[test]
+fn stable_prefix_allows_task_list_checkbox() {
+    assert_eq!(
+        stable_prefix_end("- [ ] todo\n\nbody"),
+        "- [ ] todo\n\n".len()
+    );
+    assert_eq!(
+        stable_prefix_end("- [x] done\n\nbody"),
+        "- [x] done\n\n".len()
+    );
+}
+
+#[test]
+fn stable_prefix_allows_inline_link() {
+    let prefix = "Use [inline](https://example.com)\n\n";
+    assert_eq!(stable_prefix_end(&format!("{prefix}body")), prefix.len());
+}
+
+#[test]
+fn stable_prefix_holds_back_unresolved_full_reference_link() {
+    assert_eq!(stable_prefix_end("[label][missing]\n\nbody"), 0);
+}
+
+#[test]
+fn stable_prefix_allows_resolved_reference_link_after_definition() {
+    let prefix = "[label][target]\n\n[target]: https://example.com\n\n";
+    assert_eq!(stable_prefix_end(&format!("{prefix}body")), prefix.len());
+}
+
+#[test]
+fn stable_prefix_allows_atx_heading_without_blank_line() {
+    assert_eq!(stable_prefix_end("# Heading\nbody"), "# Heading\n".len());
+}
+
+#[test]
+fn stable_prefix_tracks_fence_marker_length() {
+    let source = "````\n```rust\nlet value = 1;\n```\n";
+    assert_eq!(stable_prefix_end(source), 0);
+    assert_eq!(
+        stable_prefix_end("````\n```rust\nlet value = 1;\n```\n````\n\nbody"),
+        "````\n```rust\nlet value = 1;\n```\n````\n\n".len()
+    );
+}
+
+#[test]
+fn stable_prefix_allows_closed_code_fence_without_blank_line() {
+    let source = "```rust\nlet values = [1, 2, 3];\n```\nbody";
+    assert_eq!(
+        stable_prefix_end(source),
+        "```rust\nlet values = [1, 2, 3];\n```\n".len()
+    );
+}
+
+#[test]
+fn stable_prefix_rejects_invalid_closing_code_fence() {
+    let source = "```rust\nlet value = 1;\n``` not closed\nbody\n";
+    assert_eq!(stable_prefix_end(source), 0);
+}
+
+#[test]
+fn stable_prefix_does_not_close_fence_on_info_string() {
+    let source = "```\n```rust\nlet value = 1;\n```\nbody";
+    assert_eq!(
+        stable_prefix_end(source),
+        "```\n```rust\nlet value = 1;\n```\n".len()
+    );
+}
+
+#[test]
+fn stable_prefix_holds_back_markdown_table_region() {
+    let source = "intro\n| a | b |\n| - | - |\n| 1 | 2 |\n";
+    assert_eq!(stable_prefix_end(source), 0);
+}
+
+#[test]
+fn stable_prefix_holds_back_open_code_fence() {
+    let source = "intro\n```rust\nfn main() {}\n";
+    assert_eq!(stable_prefix_end(source), 0);
+}
+
+#[test]
+fn stable_prefix_render_matches_finalized_line_prefix() {
+    for source in progressive_sources() {
+        let full = render(source);
+        for end in stable_boundaries(source) {
+            let prefix = render(&source[..end]);
+            assert!(
+                full.starts_with(&prefix),
+                "stable render diverged at byte {end} for source:\n{source}\nprefix:\n{:#?}\nfull:\n{:#?}",
+                render_text(&source[..end]),
+                render_text(source),
+            );
+        }
+    }
 }
 
 #[test]

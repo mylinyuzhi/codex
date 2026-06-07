@@ -33,6 +33,7 @@ use crate::FrameLayout;
 use crate::job_control::SuspendContext;
 use crate::state::AppState;
 use crate::surface::controller::NativeSurfaceController;
+use crate::surface::controller::NativeSurfaceFramePlan;
 use crate::surface::modal::ModalSurfacePlacement;
 use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
@@ -205,16 +206,32 @@ pub struct Tui {
     compatibility: TerminalCompatibility,
     alt_screen_active: bool,
     alt_saved_viewport: Option<Rect>,
-    /// Grow-only viewport-height watermark held during streaming so the
-    /// live-tail viewport stops oscillating as lines commit to scrollback
-    /// (see `apply_streaming_height_floor`). 0 when idle.
-    streaming_height_high_water: u16,
-    /// Grow-only viewport-height watermark held while an interactive prompt
-    /// (AskUserQuestion / permission) is open, so switching between questions of
-    /// different option counts never SHRINKS the pane and the bottom edge stays
-    /// put. Separate from `streaming_height_high_water` because it resets when
-    /// the prompt closes (not at turn end). 0 when no prompt is active.
-    prompt_height_high_water: u16,
+    main_screen_viewport_pin: NativeViewportPin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeViewportPin {
+    Flowing,
+    BottomPinned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeViewportGeometry {
+    area: Rect,
+    pin: NativeViewportPin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeViewportGeometryCommit {
+    previous_viewport: Rect,
+    desired_viewport: Rect,
+    committed_viewport: Rect,
+    history_bottom_y_before: u16,
+    shrink_requested_rows: u16,
+    shrink_committed_rows: u16,
+    reveal_tail_rows: u16,
+    append_fill_rows: u16,
+    shrink_deferred_rows: u16,
 }
 
 impl Tui {
@@ -230,8 +247,7 @@ impl Tui {
             compatibility,
             alt_screen_active: false,
             alt_saved_viewport: None,
-            streaming_height_high_water: 0,
-            prompt_height_high_water: 0,
+            main_screen_viewport_pin: NativeViewportPin::Flowing,
         })
     }
 
@@ -261,10 +277,11 @@ impl Tui {
 
         let size = self.terminal.size()?;
         self.terminal.sync_screen_size(size);
+        let now = std::time::Instant::now();
         let plan = self.modal_surface.plan_for_native_viewport(
             state,
             self.compatibility,
-            std::time::Instant::now(),
+            now,
             size.width,
             NATIVE_VIEWPORT_MAX_HEIGHT,
         );
@@ -275,8 +292,9 @@ impl Tui {
         // This is pure CPU work (no terminal writes) and therefore stays
         // OUTSIDE the synchronized-update window opened below.
         let live_start = perf_config.enabled.then(std::time::Instant::now);
-        let live =
-            (size.width > 0).then(|| self.surface.prepare_live_tail(state, size.width, plan));
+        let native_frame = self
+            .surface
+            .prepare_native_frame(state, size.width, plan, now);
         let live_elapsed = live_start.map(|start| start.elapsed());
         if let Some(elapsed) = live_elapsed
             && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
@@ -286,7 +304,7 @@ impl Tui {
                 frame_index,
                 stage = "build_live_tail_lines",
                 duration_us = crate::perf::duration_us(elapsed),
-                lines = live.as_ref().map_or(0, Vec::len),
+                lines = native_frame.live_lines.as_ref().map_or(0, Vec::len),
                 width = size.width,
                 "tui frame stage completed",
             );
@@ -300,7 +318,7 @@ impl Tui {
         // frame. ESU is emitted even when the inner draw errors so the terminal
         // never stays stuck in deferred-present.
         self.terminal.begin_synchronized_update()?;
-        let drawn = self.draw_native_frame(state, plan, size, live, frame_index);
+        let drawn = self.draw_native_frame(state, plan, size, native_frame, frame_index);
         let present_start = perf_config.enabled.then(std::time::Instant::now);
         let ended = self.terminal.end_synchronized_update();
         if let Some(start) = present_start {
@@ -338,18 +356,22 @@ impl Tui {
         state: &AppState,
         plan: SurfaceFramePlan,
         size: ratatui::layout::Size,
-        live: Option<Vec<ratatui::text::Line<'static>>>,
+        native_frame: NativeSurfaceFramePlan,
         frame_index: u64,
     ) -> io::Result<crate::surface::controller::NativeSurfaceDrawOutcome> {
         let perf_config = state.ui.display_settings.performance;
         // The live tail is one display row per line, so its length is the
         // precomputed viewport content height for the sizing pass.
-        let live_height = live.as_ref().map(|lines| lines.len() as u16);
+        let live_height = native_frame
+            .live_lines
+            .as_ref()
+            .map(|lines| lines.len() as u16);
         // Pass the size read by the caller so the precomputed live tail (built
         // at `size.width`) and the viewport area are derived from one consistent
         // size, even if the terminal resizes mid-frame.
         let sync_start = perf_config.enabled.then(std::time::Instant::now);
-        self.sync_surface_area(state, plan, size, live_height)?;
+        let geometry_commit =
+            self.sync_surface_area(state, plan, size, live_height, &native_frame)?;
         let sync_elapsed = sync_start.map(|start| start.elapsed());
         if let Some(elapsed) = sync_elapsed
             && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
@@ -365,14 +387,70 @@ impl Tui {
                 "tui frame stage completed",
             );
         }
+        if geometry_commit.reveal_tail_rows > 0 {
+            let gap_before_fill = self
+                .terminal
+                .viewport_area()
+                .top()
+                .saturating_sub(self.terminal.history_bottom_y());
+            let filled = self
+                .surface
+                .fill_history_tail_gap(&mut self.terminal, geometry_commit.reveal_tail_rows)?;
+            let remaining_gap_rows = self
+                .terminal
+                .viewport_area()
+                .top()
+                .saturating_sub(self.terminal.history_bottom_y());
+            let fill_status = if filled > 0 {
+                "filled"
+            } else if gap_before_fill == 0 {
+                "already_aligned_after_viewport_apply"
+            } else {
+                "no_cached_tail_rows"
+            };
+            tracing::debug!(
+                target: "tui::surface::geometry",
+                requested_rows = geometry_commit.reveal_tail_rows,
+                gap_before_fill,
+                filled_rows = filled,
+                remaining_gap_rows,
+                fill_status,
+                "filled native history tail gap"
+            );
+        }
         let surface_start = perf_config.enabled.then(std::time::Instant::now);
         let outcome = self.surface.draw_with_plan_at_frame(
             &mut self.terminal,
             state,
             plan,
-            live,
+            native_frame,
             frame_index,
         )?;
+        let history_bottom_y_after = self.terminal.history_bottom_y();
+        let unbacked_gap_rows = self
+            .terminal
+            .viewport_area()
+            .top()
+            .saturating_sub(history_bottom_y_after);
+        tracing::debug!(
+            target: "tui::surface::geometry",
+            pin = ?self.main_screen_viewport_pin,
+            previous_viewport = ?geometry_commit.previous_viewport,
+            desired_viewport = ?geometry_commit.desired_viewport,
+            committed_viewport = ?geometry_commit.committed_viewport,
+            terminal_height = size.height,
+            history_bottom_y_before = geometry_commit.history_bottom_y_before,
+            history_bottom_y_after,
+            shrink_requested_rows = geometry_commit.shrink_requested_rows,
+            shrink_committed_rows = geometry_commit.shrink_committed_rows,
+            reveal_tail_rows = geometry_commit.reveal_tail_rows,
+            append_fill_rows = geometry_commit.append_fill_rows,
+            shrink_deferred_rows = geometry_commit.shrink_deferred_rows,
+            unbacked_gap_rows,
+            input_bottom = outcome.layout.input.bottom(),
+            viewport_bottom = self.terminal.viewport_area().bottom(),
+            "native surface geometry committed"
+        );
         let surface_elapsed = surface_start.map(|start| start.elapsed());
         if let Some(elapsed) = surface_elapsed
             && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
@@ -428,6 +506,7 @@ impl Tui {
     pub fn clear(&mut self) -> io::Result<()> {
         self.terminal.clear_owned_scrollback()?;
         self.surface.reset();
+        self.main_screen_viewport_pin = NativeViewportPin::Flowing;
         Ok(())
     }
 
@@ -439,6 +518,7 @@ impl Tui {
     fn clear_surface_after_resume(&mut self) -> io::Result<()> {
         self.terminal.clear_owned_scrollback()?;
         self.surface.reset();
+        self.main_screen_viewport_pin = NativeViewportPin::Flowing;
         Ok(())
     }
 
@@ -448,26 +528,17 @@ impl Tui {
         std::io::Write::flush(self.terminal.backend_mut())
     }
 
-    /// Floor the live-tail viewport height at its grow-only high-water mark
-    /// when `freeze` is set, removing the per-frame size change that bounces the
-    /// input bar; pass `freeze = false` to relax back to the natural height and
-    /// clear the watermark. The freeze predicate (`streaming_height_freeze`)
-    /// spans the whole active turn, not just streaming spans — see that helper.
-    fn apply_streaming_height_floor(&mut self, desired: u16, freeze: bool) -> u16 {
-        let (height, high_water) =
-            streaming_height_floor(desired, self.streaming_height_high_water, freeze);
-        self.streaming_height_high_water = high_water;
-        height
-    }
-
     fn sync_surface_area(
         &mut self,
         state: &AppState,
         plan: SurfaceFramePlan,
         size: ratatui::layout::Size,
         precomputed_live_height: Option<u16>,
-    ) -> io::Result<()> {
+        native_frame: &NativeSurfaceFramePlan,
+    ) -> io::Result<NativeViewportGeometryCommit> {
         let wants_alt = matches!(plan.modal_placement, Some(ModalSurfacePlacement::AltScreen));
+        let previous_viewport = self.terminal.viewport_area();
+        let history_bottom_y_before = self.terminal.history_bottom_y();
 
         if wants_alt && !self.alt_screen_active {
             self.alt_saved_viewport = Some(self.terminal.viewport_area());
@@ -483,7 +554,7 @@ impl Tui {
             self.leave_modal_alt_screen()?;
         }
 
-        let area = if self.alt_screen_active {
+        let desired_area = if self.alt_screen_active {
             Rect::new(0, 0, size.width, size.height)
         } else {
             // An active interactive prompt (AskUserQuestion / permission) may
@@ -498,73 +569,44 @@ impl Tui {
                 plan,
                 precomputed_live_height,
             );
-            // Freeze the live-tail height grow-only for the whole active turn so
-            // the viewport stops oscillating as lines grow and then commit to
-            // scrollback (the bottom-bar jitter). The viewport top anchors to the
-            // bottom of finalized history; `native_viewport_area_with_max` pins
-            // it to the screen bottom once history fills the screen, so a stable
-            // height keeps the input bar's bottom edge fixed. Gating on the turn
-            // (not just streaming) matters because `is_streaming()` flips off at
-            // every tool call and message boundary mid-turn — see
-            // `streaming_height_freeze`.
-            let prev = self.terminal.viewport_area();
-            let was_floored = self.streaming_height_high_water > 0;
-            let freeze = streaming_height_freeze(state);
-            let turn_height = self.apply_streaming_height_floor(desired_height, freeze);
-            // Prompt-scoped grow-only floor: while an interactive prompt is open
-            // its height only grows, so switching between questions of different
-            // option counts never shrinks the pane (the in-prompt bottom-edge
-            // wobble). The turn floor above is prompt-exempt and reset its own
-            // watermark to 0, so this never double-counts. Reset + repin when the
-            // prompt closes so the post-prompt content re-pins to the bottom.
-            let active_prompt = state.ui.interaction.active_prompt.is_some();
-            let prompt_was_floored = self.prompt_height_high_water > 0;
-            let desired_height = if active_prompt {
-                let (h, hw) =
-                    streaming_height_floor(turn_height, self.prompt_height_high_water, true);
-                self.prompt_height_high_water = hw;
-                h
-            } else {
-                self.prompt_height_high_water = 0;
-                turn_height
-            };
-            let relaxing = (was_floored && !freeze) || (prompt_was_floored && !active_prompt);
-            let anchor = self.terminal.history_bottom_y();
-            let area = native_viewport_area_with_max(anchor, size, desired_height, max_h);
-            // Hold the input bar's bottom edge steady for the single frame the
-            // freeze relaxes (turn end, or an interactive prompt taking over):
-            // the grow-only height drops (e.g. 12→5) one frame before
-            // `history_bottom_y` advances, which would slide the input UP. Pin
-            // the bottom to the prior frame's bottom for that one transition
-            // frame; the next frame re-anchors to history normally. `relaxing`
-            // matches every relax cause, not just stream-finish.
-            let area = hold_bottom_edge_on_relax(area, prev, size, relaxing);
-            // The held bottom is cosmetic for one frame: the viewport top stays
-            // at the tall streaming `history_bottom_y`, so without a re-pin the
-            // next frame re-anchors there and the input settles high with a blank
-            // gap below (once the conversation has overflowed the screen). Force a
-            // history replay this frame so `move_viewport_down_for_history`
-            // re-seats the viewport right after history — bottom-pinned when full,
-            // below-content when short.
-            if needs_repin_on_relax(relaxing, area, prev) {
-                self.surface.request_repin_replay();
-            }
-            area
+            let geometry = native_viewport_geometry_with_max(
+                self.terminal.history_bottom_y(),
+                size,
+                desired_height,
+                max_h,
+                self.main_screen_viewport_pin,
+            );
+            self.main_screen_viewport_pin = geometry.pin;
+            geometry.area
         };
-        if self.terminal.viewport_area() != area {
+        let commit = commit_native_viewport_geometry(
+            self.main_screen_viewport_pin,
+            previous_viewport,
+            desired_area,
+            history_bottom_y_before,
+            size.height,
+            native_frame.history_tail_reveal_rows,
+            native_frame.expected_append_rows(),
+        );
+        if self.terminal.viewport_area() != commit.committed_viewport {
             tracing::debug!(
                 target: "tui::surface",
                 previous = ?self.terminal.viewport_area(),
-                next = ?area,
-                viewport_height = area.height,
+                next = ?commit.committed_viewport,
+                desired = ?commit.desired_viewport,
+                viewport_height = commit.committed_viewport.height,
+                viewport_bottom = commit.committed_viewport.bottom(),
+                terminal_height = size.height,
                 history_bottom_y = self.terminal.history_bottom_y(),
                 alt_screen_active = self.alt_screen_active,
+                bottom_pinned = commit.committed_viewport.bottom() == size.height,
+                pin = ?self.main_screen_viewport_pin,
                 "sync surface area"
             );
             self.terminal
-                .apply_viewport_area(area, !self.alt_screen_active)?;
+                .apply_viewport_area(commit.committed_viewport, !self.alt_screen_active)?;
         }
-        Ok(())
+        Ok(commit)
     }
 
     fn leave_modal_alt_screen(&mut self) -> io::Result<()> {
@@ -584,6 +626,53 @@ impl Tui {
     }
 }
 
+fn commit_native_viewport_geometry(
+    pin: NativeViewportPin,
+    previous_viewport: Rect,
+    desired_viewport: Rect,
+    history_bottom_y_before: u16,
+    terminal_height: u16,
+    history_tail_reveal_rows: u16,
+    expected_append_rows: u16,
+) -> NativeViewportGeometryCommit {
+    let mut committed_viewport = desired_viewport;
+    let mut shrink_requested_rows = 0;
+    let mut shrink_committed_rows = 0;
+    let mut reveal_tail_rows = 0;
+    let mut append_fill_rows = 0;
+
+    let bottom_pinned_shrink = pin == NativeViewportPin::BottomPinned
+        && previous_viewport.bottom() == terminal_height
+        && desired_viewport.bottom() == terminal_height
+        && desired_viewport.top() > previous_viewport.top();
+
+    if bottom_pinned_shrink {
+        shrink_requested_rows = desired_viewport.top() - previous_viewport.top();
+        let backed_rows = history_tail_reveal_rows.saturating_add(expected_append_rows);
+        shrink_committed_rows = shrink_requested_rows.min(backed_rows);
+        if shrink_committed_rows < shrink_requested_rows {
+            committed_viewport.y = previous_viewport
+                .top()
+                .saturating_add(shrink_committed_rows);
+            committed_viewport.height = terminal_height.saturating_sub(committed_viewport.y);
+        }
+        reveal_tail_rows = history_tail_reveal_rows.min(shrink_committed_rows);
+        append_fill_rows = shrink_committed_rows.saturating_sub(reveal_tail_rows);
+    }
+
+    NativeViewportGeometryCommit {
+        previous_viewport,
+        desired_viewport,
+        committed_viewport,
+        history_bottom_y_before,
+        shrink_requested_rows,
+        shrink_committed_rows,
+        reveal_tail_rows,
+        append_fill_rows,
+        shrink_deferred_rows: shrink_requested_rows.saturating_sub(shrink_committed_rows),
+    }
+}
+
 impl Drop for Tui {
     fn drop(&mut self) {
         let _ = self.prepare_shell_prompt_after_exit();
@@ -598,43 +687,14 @@ impl Drop for Tui {
 
 #[cfg(test)]
 pub(crate) fn native_viewport_area(anchor_y: u16, size: Size, desired_height: u16) -> Rect {
-    native_viewport_area_with_max(anchor_y, size, desired_height, NATIVE_VIEWPORT_MAX_HEIGHT)
-}
-
-/// Grow-only viewport height while `freeze` holds.
-///
-/// Returns `(height_to_use, next_high_water)`. While `freeze`, the height never
-/// drops below the running high-water mark, so the live-tail viewport stops
-/// oscillating as lines grow and then commit to scrollback — the root cause of
-/// the bottom-bar jitter. When `freeze` clears it passes `desired` through and
-/// clears the watermark so the viewport relaxes to its natural size.
-/// Terminal-sync-independent on purpose: DEC mode 2026 only makes each frame's
-/// *presentation* atomic; it cannot stop consecutive frames from having
-/// different heights, so the freeze is what actually holds the bottom edge
-/// steady (mirrors codex-rs's fixed-height inline viewport).
-fn streaming_height_floor(desired: u16, high_water: u16, freeze: bool) -> (u16, u16) {
-    if freeze {
-        let height = desired.max(high_water);
-        (height, height)
-    } else {
-        (desired, 0)
-    }
-}
-
-/// Whether the live-tail viewport height should be frozen grow-only this frame.
-///
-/// True for the whole active turn (`turn_active`) or any streaming span, so the
-/// floor spans tool calls and message boundaries. `is_streaming()` alone flips
-/// to `None` at every `ToolUseQueued` (→ `flush_streaming_to_messages`) and
-/// assistant `MessageAppended` within a turn; gating the floor on it resets the
-/// watermark mid-turn and the top-anchored input bar bounces UP each time the
-/// live tail collapses. `turn_active()` stays true across the whole turn, so the
-/// union holds the bottom edge steady through tool calls and message boundaries.
-/// Interactive prompts (AskUserQuestion / permission) are exempt: their viewport
-/// sizes to content and must stay free to shrink as the user navigates options.
-fn streaming_height_freeze(state: &AppState) -> bool {
-    (state.is_streaming() || state.ui.ephemeral.turn_active())
-        && state.ui.interaction.active_prompt.is_none()
+    native_viewport_geometry_with_max(
+        anchor_y,
+        size,
+        desired_height,
+        NATIVE_VIEWPORT_MAX_HEIGHT,
+        NativeViewportPin::Flowing,
+    )
+    .area
 }
 
 /// Max inline-viewport height for this frame. Streaming/idle is capped at
@@ -655,38 +715,35 @@ fn interactive_viewport_max_height(state: &AppState, screen_height: u16) -> u16 
     }
 }
 
-/// Hold the viewport's bottom edge at `prev`'s bottom when it would otherwise
-/// rise (input bar jumping up). Used for the single stream→idle transition
-/// frame where the grow-only height relaxes before `history_bottom_y` catches
-/// up. No-op unless `transitioning` and the bottom would actually move up.
-fn hold_bottom_edge_on_relax(area: Rect, prev: Rect, size: Size, transitioning: bool) -> Rect {
-    if !transitioning || area.height == 0 || area.bottom() >= prev.bottom() {
-        return area;
-    }
-    let max_y = size.height.saturating_sub(area.height);
-    let y = prev.bottom().saturating_sub(area.height).min(max_y);
-    Rect::new(area.x, y, area.width, area.height)
-}
-
-/// Whether the turn-end relax needs a one-shot history re-pin replay. True when
-/// the grow-only freeze just released (`relaxing`) and the viewport is shrinking
-/// (`area.height < prev.height`). The shrink alone keeps the tall streaming
-/// `history_bottom_y`, so the finalized content must be replayed to re-seat the
-/// viewport right after history; otherwise the input bar settles high with a
-/// blank gap below once the conversation has overflowed the screen. A growing
-/// relax (an interactive prompt taking over) needs no re-pin.
-fn needs_repin_on_relax(relaxing: bool, area: Rect, prev: Rect) -> bool {
-    relaxing && area.height < prev.height
-}
-
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn native_viewport_area_with_max(
     anchor_y: u16,
     size: Size,
     desired_height: u16,
     max_height: u16,
 ) -> Rect {
+    native_viewport_geometry_with_max(
+        anchor_y,
+        size,
+        desired_height,
+        max_height,
+        NativeViewportPin::Flowing,
+    )
+    .area
+}
+
+fn native_viewport_geometry_with_max(
+    anchor_y: u16,
+    size: Size,
+    desired_height: u16,
+    max_height: u16,
+    pin: NativeViewportPin,
+) -> NativeViewportGeometry {
     if size.height == 0 {
-        return Rect::new(0, 0, size.width, 0);
+        return NativeViewportGeometry {
+            area: Rect::new(0, 0, size.width, 0),
+            pin,
+        };
     }
     let height = desired_height
         .clamp(
@@ -694,8 +751,20 @@ pub(crate) fn native_viewport_area_with_max(
             max_height.max(NATIVE_VIEWPORT_MIN_HEIGHT),
         )
         .min(size.height);
-    let y = anchor_y.min(size.height.saturating_sub(height));
-    Rect::new(0, y, size.width, height)
+    let bottom_pinned_y = size.height.saturating_sub(height);
+    let next_pin = if pin == NativeViewportPin::BottomPinned || anchor_y >= bottom_pinned_y {
+        NativeViewportPin::BottomPinned
+    } else {
+        NativeViewportPin::Flowing
+    };
+    let y = match next_pin {
+        NativeViewportPin::Flowing => anchor_y,
+        NativeViewportPin::BottomPinned => bottom_pinned_y,
+    };
+    NativeViewportGeometry {
+        area: Rect::new(0, y, size.width, height),
+        pin: next_pin,
+    }
 }
 
 #[cfg(test)]

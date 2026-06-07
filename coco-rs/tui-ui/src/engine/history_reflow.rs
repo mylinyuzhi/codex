@@ -23,8 +23,6 @@ pub struct HistoryReflowState {
     last_replayed_width: Option<u16>,
     pending_width: Option<u16>,
     pending_until: Option<Instant>,
-    replayed_during_stream: bool,
-    resize_requested_during_stream: bool,
 }
 
 impl HistoryReflowState {
@@ -47,16 +45,13 @@ impl HistoryReflowState {
         self.last_replayed_width != Some(width) && self.pending_width != Some(width)
     }
 
-    pub fn schedule_viewport_replay(&mut self, width: u16, stream_active: bool) {
+    pub fn schedule_viewport_replay(&mut self, width: u16, _stream_active: bool) {
         self.pending_width = Some(width);
-        self.schedule_pending(stream_active);
+        self.schedule_pending();
     }
 
-    fn schedule_pending(&mut self, stream_active: bool) {
+    fn schedule_pending(&mut self) {
         self.pending_until = Some(Instant::now() + HISTORY_REFLOW_DEBOUNCE);
-        if stream_active {
-            self.resize_requested_during_stream = true;
-        }
     }
 
     pub fn schedule_immediate(&mut self) {
@@ -76,19 +71,9 @@ impl HistoryReflowState {
         self.pending_until = None;
     }
 
-    pub fn mark_replayed_viewport(&mut self, width: u16, stream_active: bool) {
+    pub fn mark_replayed_viewport(&mut self, width: u16, _stream_active: bool) {
         self.last_replayed_width = Some(width);
         self.clear_pending();
-        if stream_active {
-            self.replayed_during_stream = true;
-        }
-    }
-
-    pub fn take_stream_finish_replay_needed(&mut self) -> bool {
-        let needed = self.replayed_during_stream || self.resize_requested_during_stream;
-        self.replayed_during_stream = false;
-        self.resize_requested_during_stream = false;
-        needed
     }
 
     #[cfg(any(test, feature = "testing"))]

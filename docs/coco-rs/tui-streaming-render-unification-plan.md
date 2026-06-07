@@ -19,6 +19,30 @@
 
 ## Context
 
+## Implementation update — 2026-06-07
+
+WS2a has landed with one deliberate correction to the original wording:
+the heavyweight parity machinery is gone, but the finalized path still keeps
+the cheap safety guards that matter for correctness after resize/theme/syntax
+changes.
+
+- `coco-tui-markdown` now owns `stable_prefix_end(source: &str) -> usize`.
+  The TUI no longer carries its own Markdown boundary scanner.
+- `StreamRenderController` renders the whole stable source prefix in finalized
+  mode and appends only the newly grown rendered-line suffix to native
+  scrollback. The mutable tail remains a separate `.streaming()` render.
+- Provisional reconciliation now stores only `prefix_source`, rendered
+  `line_count`, and `render_key`. Finalization replays if the finalized
+  assistant text does not start with `prefix_source`, or if `render_key`
+  differs; otherwise it renders finalized history and appends only the residual
+  tail after `line_count`.
+- SHA prefix digests and rendered-line fingerprint parity were removed from the
+  streaming provisional path. `line_fingerprint.rs` remains because header
+  fingerprinting still uses it.
+- Tests moved the boundary scanner coverage into `coco-tui-markdown` and add a
+  progressive invariant: every stable prefix render must be a prefix of the
+  finalized full-source render.
+
 The streaming renderer is **not one design — it is a stack of patches** all
 chasing one symptom (input-bar jitter while the model streams): `anchor the
 streaming viewport`, `reflow on width change only`, `probe synchronized-update`,
@@ -65,9 +89,9 @@ A replays — see the decision below.
    call** (not per-tick whole-*source* like codex, not per-block like today). One
    `Writer` ⇒ the inter-block blank (`tui-markdown/lib.rs:311` `block_gap()` only
    emits it when `!lines.is_empty()`) is present and byte-identical to finalize.
-   This makes parity hold **by construction**, so the entire SHA-digest / fingerprint
-   / render-key reconciliation layer is **dead code to delete**, not to keep "as a
-   fallback" (repo hygiene: no deprecated code).
+   This makes line parity hold **by construction**, so the SHA-digest and rendered-line
+   fingerprint checks are dead code. Keep the source-prefix and render-key replay
+   guards so resize/theme/syntax changes do not leave stale native scrollback rows.
 3. **Correction — there is no second named turn-end replay in this build.**
    `"stream_finish_pending_replay"` / `stream_finish=true` had **0 log hits**; all
    relax replays log `stream_finish=false`. The observed double-replay is the **A+B
@@ -88,11 +112,11 @@ A replays — see the decision below.
    `drawable_cell_indices` is the drift source), dropping `.max(1)` on the skip width
    (provably behavior-neutral vs ratatui-core-0.1.0 `buffer.rs:538`), and adding a
    codex-style `last_nonblank_column` + `ESC[K` cutoff.
-7. **Keep block-commit's safety trade-off explicit:** deleting the parity detector
-   (decision 2) also deletes a **safety net** — a `stable_source_end` boundary
-   mis-detection that previously triggered a corrective replay now becomes a *silent
-   wrong commit*. Accepted, mitigated by tests; the hand-rolled boundary scanner is a
-   named deferred follow-up (below).
+7. **Keep block-commit's safety trade-off explicit:** deleting the rendered-line
+   parity detector (decision 2) also deletes a **safety net** — a
+   `stable_prefix_end` boundary mis-detection could become a silent wrong commit.
+   Accepted, mitigated by renderer-prefix tests in `coco-tui-markdown` and by
+   keeping source-prefix/render-key replay guards in `app/tui`.
 
 ## Workstreams
 
@@ -117,29 +141,26 @@ unrelated namesakes / struct-field reads).
   byte assertions survive.
 - **Independent** of WS2; no shared files.
 
-### WS2a — One-render stable prefix + delete reconciliation (BUG B) · `app/tui` · +150 / −430 (~280 net deleted) · risk MEDIUM
+### WS2a — One-render stable prefix + simplify reconciliation (BUG B) · `app/tui` · LANDED 2026-06-07
 
-**Files:** `streaming/render_controller.rs`, `surface/history_driver.rs`,
-`surface/stream.rs`, `surface/controller.rs` (+ `history_driver.test.rs`,
-`stream.test.rs`).
-- `render_live_frame`: render `source[0..stable_end]` in ONE `render_markdown` call
-  (FinalizedStable mode, marker once on the first line); emit only the newly-grown
-  suffix by line count. Replace `self.stable_lines.append(&mut rendered)`
-  (render_controller.rs:106 — the bug).
-- **Delete** `ProvisionalStreamLedger`, `consolidated_final_tail_lines`, the
-  SHA-digest dance in `stream.rs` (~87-101), the fingerprint/render-key parity check,
-  and `ProvisionalAppendOutcome`'s parity arm → track a simple emitted-line count.
-- **Do NOT delete `line_fingerprint.rs`** — still used by `header_fingerprint` in
-  `emit_append_only`/`replay_lines`.
-- **Re-render cost:** O(stable_prefix × blocks) per turn, bounded by the CAP +
-  blank-line-only advancement (not per-delta). Sub-ms for typical turns; cache keyed
-  on `stable_source_end` is the contingency for pathological many-tiny-block output.
-- **Tests:** the 6 self-fulfilling `history_driver.test.rs` tests (build provisional
-  lines by **slicing the finalized render** — tautological, never caught BUG B) →
-  delete the digest/render-key/style-mismatch ones, rewrite the rest to drive the real
-  `StreamRenderController` across a blank-line boundary and assert the inter-block
-  blank survives and **no `ReplayRequired` fires**.
-- **Lands first** (mandatory — WS2b depends on it).
+**Files changed:** `tui-markdown/src/lib.rs`, `streaming/render_controller.rs`,
+`surface/history_driver.rs`, `surface/stream.rs`, plus focused tests.
+- `render_live_frame` now asks `coco_tui_markdown::stable_prefix_end` for the
+  source boundary, renders `source[0..stable_end]` in one finalized
+  `render_markdown` call, and emits only the newly grown suffix by line count.
+- `surface/stream.rs` removed the SHA digest state and emits provisional appends
+  with cumulative `prefix_source`, cumulative rendered `line_count`, and
+  `render_key`.
+- `surface/history_driver.rs` removed rendered-line fingerprint parity from
+  finalization. It still replays on source-prefix mismatch, render-key mismatch,
+  or impossible line-count state; otherwise it appends the finalized residual
+  tail after `line_count`.
+- `line_fingerprint.rs` remains in use for `header_fingerprint`.
+- Perf tracing now records stable-prefix render `source_bytes`, `lines`, and
+  `elapsed_us`.
+- Tests cover the blank-line multi-append regression, cumulative line-count
+  finalization, source-prefix/render-key guards, and the markdown-layer
+  progressive-prefix invariant.
 
 ### WS2b — Same-frame commit + bounded re-seat (BUG A) · `app/tui` + engine seam · +210 / −320 (~110 net deleted) · risk HIGH
 
@@ -166,6 +187,28 @@ unrelated namesakes / struct-field reads).
 - **Shares `controller.rs`** with WS2a → sequence after WS2a (merge conflict in the
   provisional-append match + the repin/replay-cause branches).
 
+**Current implementation note:** WS2b is now landed in code. The normal
+turn-end path no longer carries `streaming_height_high_water`,
+`request_repin_replay`/`pending_repin`, `"viewport_relax_repin"`, or
+`stream_finish_replay_needed`; full replay remains only for display/reflow
+changes and provisional finalization guards. Native history finalization uses
+the named `native_history_projection` / `native_history_append_compatible`
+policy so source-order transcript/chat rendering stays separate from the
+append-compatibility text-before-leading-thinking path. The history/stream
+boundary now passes a single `CommittedStablePrefix { source, line_count,
+render_key }`.
+
+**Follow-up implementation note:** the retained viewport now has a two-stage
+main-screen geometry contract. Before the conversation fills the screen, it
+flows directly after native history (`history_bottom_y`). Once natural growth
+reaches the terminal bottom, the surface latches into bottom-pinned mode:
+subsequent live tail, activity, prompts, and tool progress consume rows upward
+from the terminal bottom. The patch-state height model
+(`streaming_viewport_height_floor`, prompt high-water, grow-only floor, and
+one-frame bottom-edge hold) is gone, and zero-residual stream finalization no
+longer re-seats the viewport to history. History append/replay still owns the
+scrollback content above the viewport.
+
 ## ROI
 
 | Workstream | Fixes | Cost (net LoC / risk) | Value | **ROI** |
@@ -186,11 +229,10 @@ append flush time); stray wide-grapheme spaces in native scrollback are gone; an
 
 ## Problems NOT fixed (honest residual)
 
-1. **Hand-rolled `stable_source_end` markdown scanner stays** (render_controller.rs:226-322)
-   — a second CommonMark approximation beside pulldown-cmark. Worse: WS2a deletes the
-   parity detector, so a boundary mis-detection now surfaces as a **silent wrong commit**
-   (dropped/extra blank, mis-rendered block) instead of a corrective flash. **Deferred
-   follow-up:** ask the markdown layer for the safe boundary.
+1. **The stable boundary scanner is still conservative, not parser-derived.**
+   It now lives in `coco-tui-markdown` and is covered by renderer-prefix tests,
+   but it remains a source scanner beside pulldown-cmark. Over-conservative
+   boundaries keep text in the live tail; over-committing would still be a bug.
 2. **Non-DEC-2026 terminals** still single-frame-flash on the shrink (reduced from a
    ~360-row full-screen flash to a ≤8-row band, not eliminated).
 3. **CJK/wide-char in surfaces other than native scrollback** (Ctrl+O transcript reader

@@ -130,6 +130,12 @@ pub(crate) struct TranscriptProjection {
     pub cells: Vec<TranscriptCell>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssistantPresentationOrder {
+    Source,
+    TextBeforeLeadingThinking,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TranscriptPresentationInput<'cells, 'state> {
     /// Engine-derived cells — single source of truth. `'cells` is
@@ -152,6 +158,32 @@ pub(crate) fn transcript_projection(
     cells: &[RenderedCell],
     options: TranscriptProjectionOptions,
 ) -> TranscriptProjection {
+    transcript_projection_with_assistant_order(cells, options, AssistantPresentationOrder::Source)
+}
+
+/// Projection used by native scrollback append/finalize paths.
+///
+/// During streaming, assistant text is appended before the finalized reasoning
+/// cell exists in transcript order. For the simple finalized shape
+/// `thinking* + text`, native history keeps text first so finalization can
+/// append only the residual thinking tail instead of replaying already-written
+/// text. General chat/transcript presentation stays source-order.
+pub(crate) fn native_history_projection(
+    cells: &[RenderedCell],
+    options: TranscriptProjectionOptions,
+) -> TranscriptProjection {
+    transcript_projection_with_assistant_order(
+        cells,
+        options,
+        AssistantPresentationOrder::TextBeforeLeadingThinking,
+    )
+}
+
+pub(crate) fn transcript_projection_with_assistant_order(
+    cells: &[RenderedCell],
+    options: TranscriptProjectionOptions,
+    assistant_order: AssistantPresentationOrder,
+) -> TranscriptProjection {
     let show_system_reminders = options.show_system_reminders;
     let show_compact_internals = options.show_compact_internals;
     let mut out = Vec::new();
@@ -163,6 +195,13 @@ pub(crate) fn transcript_projection(
             continue;
         }
         let cell = &cells[i];
+
+        if assistant_order == AssistantPresentationOrder::TextBeforeLeadingThinking
+            && let Some(end) = push_text_first_assistant_group(cells, i, &mut out)
+        {
+            i = end;
+            continue;
+        }
 
         if !show_compact_internals && is_compact_internal(cell) {
             i += 1;
@@ -231,7 +270,28 @@ pub(crate) fn transcript_projection(
 pub(crate) fn transcript_presentation<'cells, 'state>(
     input: TranscriptPresentationInput<'cells, 'state>,
 ) -> TranscriptPresentation<'state> {
-    let mut cells = transcript_projection(input.cells, input.options)
+    transcript_presentation_with_assistant_order(input, AssistantPresentationOrder::Source)
+}
+
+pub(crate) fn native_history_presentation<'cells, 'state>(
+    input: TranscriptPresentationInput<'cells, 'state>,
+) -> TranscriptPresentation<'state> {
+    transcript_presentation_with_assistant_order(
+        input,
+        AssistantPresentationOrder::TextBeforeLeadingThinking,
+    )
+}
+
+pub(crate) fn transcript_presentation_with_assistant_order<'cells, 'state>(
+    input: TranscriptPresentationInput<'cells, 'state>,
+    assistant_order: AssistantPresentationOrder,
+) -> TranscriptPresentation<'state> {
+    let projection = if assistant_order == AssistantPresentationOrder::Source {
+        transcript_projection(input.cells, input.options)
+    } else {
+        transcript_projection_with_assistant_order(input.cells, input.options, assistant_order)
+    };
+    let mut cells = projection
         .cells
         .into_iter()
         .map(TranscriptSourceCell::Committed)
@@ -242,6 +302,46 @@ pub(crate) fn transcript_presentation<'cells, 'state>(
         cells.push(TranscriptSourceCell::Active(active));
     }
     TranscriptPresentation { cells }
+}
+
+fn push_text_first_assistant_group(
+    cells: &[RenderedCell],
+    start: usize,
+    out: &mut Vec<TranscriptCell>,
+) -> Option<usize> {
+    if !is_assistant_thinking(&cells[start]) {
+        return None;
+    }
+
+    let uuid = cells[start].message_uuid;
+    let mut end = start;
+    while end < cells.len() && cells[end].message_uuid == uuid {
+        end += 1;
+    }
+
+    let mut first_non_thinking = start;
+    while first_non_thinking < end && is_assistant_thinking(&cells[first_non_thinking]) {
+        first_non_thinking += 1;
+    }
+    if first_non_thinking == end
+        || !matches!(
+            cells[first_non_thinking].kind,
+            CellKind::AssistantText { .. }
+        )
+    {
+        return None;
+    }
+    if first_non_thinking + 1 != end {
+        return None;
+    }
+
+    out.push(TranscriptCell::Cell {
+        index: first_non_thinking,
+    });
+    for index in start..first_non_thinking {
+        out.push(TranscriptCell::Cell { index });
+    }
+    Some(end)
 }
 
 pub(crate) fn active_transcript_cell<'a>(
@@ -393,6 +493,13 @@ fn find_tool_result(
 
 fn is_tool_result(cell: &RenderedCell) -> bool {
     matches!(cell.kind, CellKind::ToolResult { .. })
+}
+
+fn is_assistant_thinking(cell: &RenderedCell) -> bool {
+    matches!(
+        cell.kind,
+        CellKind::AssistantThinking { .. } | CellKind::AssistantRedactedThinking
+    )
 }
 
 impl TranscriptCell {

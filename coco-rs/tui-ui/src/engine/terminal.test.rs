@@ -15,7 +15,18 @@ use std::io;
 use std::io::Write;
 use std::rc::Rc;
 
+use crate::engine::history_insert::HistoryRows;
+use crate::engine::history_insert::render_history_rows;
+
 use super::*;
+
+fn history_rows(lines: impl IntoIterator<Item = Line<'static>>) -> HistoryRows {
+    render_history_rows(lines.into_iter().collect(), 8)
+}
+
+fn history_rows_width(lines: impl IntoIterator<Item = Line<'static>>, width: u16) -> HistoryRows {
+    render_history_rows(lines.into_iter().collect(), width)
+}
 
 #[test]
 fn surface_terminal_draws_inside_configured_viewport() {
@@ -227,17 +238,73 @@ fn apply_viewport_area_closes_gap_without_scrolling_history() {
 }
 
 #[test]
-fn insert_history_lines_after_viewport_shrink_closes_live_tail_gap() {
+fn fill_history_gap_rows_draws_cached_tail_without_moving_viewport() {
+    let backend = TestBackend::new(8, 8);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 2, 8, 2));
+    terminal.note_history_rows_inserted(2);
+    terminal.set_viewport_area(Rect::new(0, 6, 8, 2));
+
+    let filled = terminal
+        .fill_history_gap_rows(
+            history_rows([
+                Line::from("tail 1"),
+                Line::from("tail 2"),
+                Line::from("tail 3"),
+                Line::from("tail 4"),
+            ])
+            .tail_slice(4),
+        )
+        .expect("fill gap");
+
+    assert_eq!(filled, 4);
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 6, 8, 2));
+    assert_eq!(terminal.history_bottom_y(), 6);
+    terminal.backend().assert_buffer_lines([
+        "        ", "        ", "tail 1  ", "tail 2  ", "tail 3  ", "tail 4  ", "        ",
+        "        ",
+    ]);
+}
+
+#[test]
+fn insert_history_rows_fills_gap_remaining_after_tail_reveal() {
+    let backend = TestBackend::new(8, 8);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 2, 8, 2));
+    terminal.note_history_rows_inserted(2);
+    terminal.set_viewport_area(Rect::new(0, 6, 8, 2));
+
+    terminal
+        .fill_history_gap_rows(
+            history_rows([Line::from("tail 1"), Line::from("tail 2")]).tail_slice(2),
+        )
+        .expect("fill reveal rows");
+    terminal
+        .insert_history_rows(&history_rows([
+            Line::from("append1"),
+            Line::from("append2"),
+        ]))
+        .expect("append remaining rows");
+
+    assert_eq!(terminal.history_bottom_y(), 6);
+    terminal.backend().assert_buffer_lines([
+        "        ", "        ", "tail 1  ", "tail 2  ", "append1 ", "append2 ", "        ",
+        "        ",
+    ]);
+}
+
+#[test]
+fn insert_history_rows_after_viewport_shrink_closes_live_tail_gap() {
     let backend = TestBackend::new(8, 10);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 8, 8, 2));
     terminal
-        .insert_history_lines([
+        .insert_history_rows(&history_rows([
             Line::from("header"),
             Line::default(),
             Line::from("❯ hello"),
             Line::default(),
-        ])
+        ]))
         .expect("insert first history");
     terminal
         .apply_viewport_area(Rect::new(0, 5, 8, 5), true)
@@ -247,7 +314,7 @@ fn insert_history_lines_after_viewport_shrink_closes_live_tail_gap() {
         .expect("shrink viewport");
 
     terminal
-        .insert_history_lines([Line::from("⏺ hi"), Line::default()])
+        .insert_history_rows(&history_rows([Line::from("⏺ hi"), Line::default()]))
         .expect("insert assistant history");
 
     terminal.backend().assert_buffer_lines([
@@ -265,13 +332,39 @@ fn insert_history_lines_after_viewport_shrink_closes_live_tail_gap() {
 }
 
 #[test]
-fn insert_history_lines_writes_above_viewport_and_preserves_viewport() {
+fn reseat_viewport_to_history_bottom_closes_gap_without_inserting_history() {
+    let backend = TestBackend::new(8, 10);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 8, 8, 2));
+    terminal
+        .insert_history_rows(&history_rows([Line::from("hist"), Line::default()]))
+        .expect("insert history");
+    terminal
+        .apply_viewport_area(Rect::new(0, 6, 8, 4), true)
+        .expect("grow viewport");
+    terminal
+        .apply_viewport_area(Rect::new(0, 8, 8, 2), true)
+        .expect("shrink viewport");
+
+    terminal
+        .reseat_viewport_to_history_row(2)
+        .expect("reseat viewport");
+
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 2, 8, 2));
+    assert_eq!(terminal.history_bottom_y(), 2);
+}
+
+#[test]
+fn insert_history_rows_writes_above_viewport_and_preserves_viewport() {
     let backend = TestBackend::with_lines(["old0  ", "old1  ", "old2  ", "view0 ", "view1 "]);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 3, 6, 2));
 
     let inserted = terminal
-        .insert_history_lines([Line::from("hist0"), Line::from("hist1")])
+        .insert_history_rows(&history_rows_width(
+            [Line::from("hist0"), Line::from("hist1")],
+            6,
+        ))
         .expect("insert history");
 
     assert_eq!(inserted, 2);
@@ -311,7 +404,7 @@ fn surface_terminal_reports_history_insert_stats() {
     terminal.set_viewport_area(Rect::new(0, 4, 8, 2));
 
     let inserted = terminal
-        .insert_history_lines([Line::from("history line")])
+        .insert_history_rows(&history_rows([Line::from("history line")]))
         .expect("insert history");
 
     let stats = terminal.last_history_insert_stats();
@@ -319,17 +412,20 @@ fn surface_terminal_reports_history_insert_stats() {
     assert_eq!(stats.wrapped_rows, 2);
     assert_eq!(stats.buffer_updates, 16);
     assert!(stats.invalidated);
-    assert!(stats.build_elapsed.as_nanos() > 0);
+    assert_eq!(stats.build_elapsed.as_nanos(), 0);
 }
 
 #[test]
-fn insert_history_lines_pushes_viewport_down_when_screen_has_room() {
+fn insert_history_rows_pushes_viewport_down_when_screen_has_room() {
     let backend = TestBackend::with_lines(["view0 ", "view1 ", "      ", "      ", "      "]);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 6, 2));
 
     let inserted = terminal
-        .insert_history_lines([Line::from("hist0"), Line::from("hist1")])
+        .insert_history_rows(&history_rows_width(
+            [Line::from("hist0"), Line::from("hist1")],
+            6,
+        ))
         .expect("insert history");
 
     assert_eq!(inserted, 2);
@@ -341,7 +437,7 @@ fn insert_history_lines_pushes_viewport_down_when_screen_has_room() {
 }
 
 #[test]
-fn insert_history_lines_uses_synced_screen_size_when_moving_viewport() {
+fn insert_history_rows_uses_synced_screen_size_when_moving_viewport() {
     let backend = TestBackend::with_lines(["view0   ", "view1   ", "        "]);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 0, 8, 2));
@@ -349,7 +445,7 @@ fn insert_history_lines_uses_synced_screen_size_when_moving_viewport() {
     terminal.sync_screen_size(Size::new(8, 5));
 
     terminal
-        .insert_history_lines([Line::from("hist0"), Line::from("hist1")])
+        .insert_history_rows(&history_rows([Line::from("hist0"), Line::from("hist1")]))
         .expect("insert history");
 
     assert_eq!(terminal.last_known_screen_size(), Size::new(8, 5));
@@ -357,13 +453,16 @@ fn insert_history_lines_uses_synced_screen_size_when_moving_viewport() {
 }
 
 #[test]
-fn insert_history_lines_scrolls_overflow_into_scrollback() {
+fn insert_history_rows_scrolls_overflow_into_scrollback() {
     let backend = TestBackend::with_lines(["old0 ", "view "]);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 1, 5, 1));
 
     let inserted = terminal
-        .insert_history_lines([Line::from("hist0"), Line::from("hist1")])
+        .insert_history_rows(&history_rows_width(
+            [Line::from("hist0"), Line::from("hist1")],
+            5,
+        ))
         .expect("insert history");
 
     assert_eq!(inserted, 2);
@@ -428,7 +527,7 @@ fn crossterm_surface_backend_direct_inserts_plain_history_rows() {
     terminal.set_viewport_area(Rect::new(0, 1, 8, 1));
 
     let rows = terminal
-        .insert_history_lines([Line::from("plain")])
+        .insert_history_rows(&history_rows([Line::from("plain")]))
         .expect("insert history");
 
     assert_eq!(rows, 1);
@@ -455,7 +554,10 @@ fn crossterm_surface_backend_direct_inserts_styled_and_wide_rows() {
     terminal.set_viewport_area(Rect::new(0, 1, 8, 1));
 
     terminal
-        .insert_history_lines([Line::from(vec!["界".red().bold(), " url".underlined()])])
+        .insert_history_rows(&history_rows([Line::from(vec![
+            "界".red().bold(),
+            " url".underlined(),
+        ])]))
         .expect("insert history");
 
     let stats = terminal.last_history_insert_stats();
@@ -479,7 +581,7 @@ fn crossterm_surface_backend_direct_omits_wide_char_continuation_space() {
     terminal.set_viewport_area(Rect::new(0, 1, 12, 1));
 
     terminal
-        .insert_history_lines([Line::from("运动选择")])
+        .insert_history_rows(&history_rows_width([Line::from("运动选择")], 12))
         .expect("insert history");
 
     let bytes = capture.ansi_bytes();
@@ -498,22 +600,25 @@ fn crossterm_surface_backend_direct_inserts_extended_modifiers() {
     terminal.set_viewport_area(Rect::new(0, 1, 20, 1));
 
     terminal
-        .insert_history_lines([Line::from(vec![
-            ratatui::text::Span::styled(
-                "gone",
-                Style::default().add_modifier(Modifier::CROSSED_OUT),
-            ),
-            ratatui::text::Span::styled(
-                " blink",
-                Style::default().add_modifier(Modifier::SLOW_BLINK | Modifier::HIDDEN),
-            ),
-            ratatui::text::Span::styled(
-                " loud",
-                Style::default()
-                    .fg(ratatui::style::Color::LightRed)
-                    .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK),
-            ),
-        ])])
+        .insert_history_rows(&history_rows_width(
+            [Line::from(vec![
+                ratatui::text::Span::styled(
+                    "gone",
+                    Style::default().add_modifier(Modifier::CROSSED_OUT),
+                ),
+                ratatui::text::Span::styled(
+                    " blink",
+                    Style::default().add_modifier(Modifier::SLOW_BLINK | Modifier::HIDDEN),
+                ),
+                ratatui::text::Span::styled(
+                    " loud",
+                    Style::default()
+                        .fg(ratatui::style::Color::LightRed)
+                        .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK),
+                ),
+            ])],
+            20,
+        ))
         .expect("insert history");
 
     let bytes = capture.ansi_bytes();

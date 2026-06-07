@@ -1,10 +1,12 @@
 //! Native-scrollback draw orchestration.
 
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::FrameLayout;
 use crate::state::AppState;
 use crate::surface::history_driver::HistoryReplayMode;
+use crate::surface::history_driver::PreparedFinalizedHistory;
 use crate::surface::history_driver::ProvisionalAppendOutcome;
 use crate::surface::history_driver::SurfaceHistoryDriver;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
@@ -12,7 +14,7 @@ use crate::surface::history_lines::HistoryLineRenderOptions;
 #[cfg(any(test, feature = "testing"))]
 use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
-use crate::surface::stream::ProvisionalStableAppend;
+use crate::surface::stream::PreparedProvisionalAppend;
 use crate::surface::stream::SurfaceStreamDriver;
 use crate::surface::viewport::build_live_tail_lines;
 use crate::surface::viewport::render_interactive_viewport;
@@ -29,15 +31,8 @@ use ratatui::text::Line;
 pub(crate) struct NativeSurfaceController {
     history: SurfaceHistoryDriver,
     stream: SurfaceStreamDriver,
-    pending_stable_append: Option<ProvisionalStableAppend>,
     transcript_layout: TranscriptLayoutIndex,
     history_display: Option<HistoryDisplayState>,
-    /// One-shot: force a full history replay on the next frame so finalized
-    /// content re-seats the viewport after a turn-end height relax (see
-    /// `Tui::sync_surface_area`). Without it the viewport keeps the tall
-    /// streaming `history_bottom_y` and the input bar settles high with a blank
-    /// gap below once the conversation has overflowed the screen.
-    pending_repin: bool,
 }
 
 /// Display-mode inputs whose change requires a full history re-render (the
@@ -60,24 +55,72 @@ pub(crate) struct NativeSurfaceDrawOutcome {
     pub(crate) layout: FrameLayout,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NativeSurfaceFramePlan {
+    pub(crate) live_lines: Option<Vec<Line<'static>>>,
+    pub(crate) finalized_history: PreparedFinalizedHistory,
+    pub(crate) provisional_history: Option<PreparedProvisionalAppend>,
+    pub(crate) history_tail_reveal_rows: u16,
+}
+
+impl NativeSurfaceFramePlan {
+    pub(crate) fn expected_append_rows(&self) -> u16 {
+        self.finalized_history.expected_rows().saturating_add(
+            self.provisional_history
+                .as_ref()
+                .map_or(0, |append| append.rows.height()),
+        )
+    }
+}
+
 impl NativeSurfaceController {
-    pub(crate) fn prepare_live_tail(
+    pub(crate) fn prepare_native_frame(
         &mut self,
         state: &AppState,
         width: u16,
         plan: SurfaceFramePlan,
-    ) -> Vec<Line<'static>> {
-        let prepared = self.stream.prepare(state, width, plan);
-        self.pending_stable_append = prepared.stable_append;
-        prepared.lines
+        now: Instant,
+    ) -> NativeSurfaceFramePlan {
+        let prepared_live = (width > 0).then(|| self.stream.prepare(state, width, plan));
+        let live_lines = prepared_live
+            .as_ref()
+            .map(|prepared| prepared.lines.clone());
+        let provisional_history = prepared_live.and_then(|prepared| prepared.stable_append);
+        let options = history_options(state, width);
+        let session_header = session_header_lines(state, width);
+        let cells = state.session.transcript.cells();
+        let transcript_revision = state.session.transcript.revision();
+        let history_display = HistoryDisplayState::from(state);
+        let history_display_changed = self
+            .history_display
+            .as_ref()
+            .is_some_and(|previous| *previous != history_display);
+        let finalized_history = if plan.native_history_enabled()
+            && !history_display_changed
+            && !self.history.replay_due(now)
+        {
+            self.history
+                .prepare_append(session_header, cells, transcript_revision, options)
+        } else {
+            PreparedFinalizedHistory::ReplayRequired
+        };
+        NativeSurfaceFramePlan {
+            live_lines,
+            finalized_history,
+            provisional_history,
+            history_tail_reveal_rows: self.history.tail_reveal_rows(width),
+        }
     }
 
-    /// Force a full history replay on the next frame so finalized content
-    /// re-pins the viewport to the bottom of native scrollback. Called by
-    /// `Tui::sync_surface_area` when the grow-only height freeze releases at
-    /// turn end and the viewport shrinks.
-    pub(crate) fn request_repin_replay(&mut self) {
-        self.pending_repin = true;
+    pub(crate) fn fill_history_tail_gap<B>(
+        &self,
+        terminal: &mut SurfaceTerminal<B>,
+        rows: u16,
+    ) -> Result<u16, B::Error>
+    where
+        B: SurfaceBackend,
+    {
+        self.history.fill_tail_gap(terminal, rows)
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -118,7 +161,7 @@ impl NativeSurfaceController {
         terminal: &mut SurfaceTerminal<B>,
         state: &AppState,
         plan: SurfaceFramePlan,
-        precomputed_live: Option<Vec<Line<'static>>>,
+        native_frame: NativeSurfaceFramePlan,
         frame_index: u64,
     ) -> Result<NativeSurfaceDrawOutcome, B::Error>
     where
@@ -129,7 +172,7 @@ impl NativeSurfaceController {
             state,
             Instant::now(),
             plan,
-            precomputed_live,
+            native_frame,
             frame_index,
         )
     }
@@ -166,8 +209,13 @@ impl NativeSurfaceController {
     where
         B: SurfaceBackend,
     {
+        let mut native_frame =
+            self.prepare_native_frame(state, terminal.viewport_area().width, plan, now);
+        if let Some(precomputed_live) = precomputed_live {
+            native_frame.live_lines = Some(precomputed_live);
+        }
         terminal.begin_synchronized_update()?;
-        let outcome = self.draw_at_inner(terminal, state, now, plan, precomputed_live, frame_index);
+        let outcome = self.draw_at_inner(terminal, state, now, plan, native_frame, frame_index);
         let end = terminal.end_synchronized_update();
         match (outcome, end) {
             (Ok(outcome), Ok(())) => Ok(outcome),
@@ -181,7 +229,7 @@ impl NativeSurfaceController {
         state: &AppState,
         now: Instant,
         plan: SurfaceFramePlan,
-        precomputed_live: Option<Vec<Line<'static>>>,
+        native_frame: NativeSurfaceFramePlan,
         frame_index: u64,
     ) -> Result<NativeSurfaceDrawOutcome, B::Error>
     where
@@ -191,8 +239,8 @@ impl NativeSurfaceController {
         let width = viewport.width;
         let stream_active = state.is_streaming();
         let perf_config = state.ui.display_settings.performance;
-        let mut precomputed_live =
-            precomputed_live.or_else(|| Some(self.prepare_live_tail(state, width, plan)));
+        let mut native_frame = native_frame;
+        let mut precomputed_live = native_frame.live_lines.take();
         self.history.note_viewport(width, stream_active);
 
         let options = history_options(state, width);
@@ -205,9 +253,6 @@ impl NativeSurfaceController {
         let cells = state.session.transcript.cells();
         let transcript_revision = state.session.transcript.revision();
         let history_start = perf_config.enabled.then(Instant::now);
-        // Taken unconditionally so a relax request can never leak into a later
-        // frame if native history is briefly disabled (alt-screen / modal).
-        let needs_repin_replay = std::mem::take(&mut self.pending_repin);
         let mut history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
@@ -215,19 +260,9 @@ impl NativeSurfaceController {
                 .history_display
                 .replace(history_display)
                 .is_some_and(|previous| previous != history_display);
-            let needs_stream_finish_replay =
-                !stream_active && self.history.stream_finish_replay_needed();
             let needs_reflow_replay = self.history.replay_due(now);
-            if history_display_changed
-                || needs_reflow_replay
-                || needs_stream_finish_replay
-                || needs_repin_replay
-            {
-                let cause = if needs_repin_replay {
-                    "viewport_relax_repin"
-                } else if needs_stream_finish_replay {
-                    "stream_finish_pending_replay"
-                } else if history_display_changed {
+            if history_display_changed || needs_reflow_replay {
+                let cause = if history_display_changed {
                     "history_display_changed"
                 } else {
                     "reflow_debounce_due"
@@ -236,7 +271,6 @@ impl NativeSurfaceController {
                     target: "tui::surface::replay",
                     cause,
                     reflow_due = needs_reflow_replay,
-                    stream_finish = needs_stream_finish_replay,
                     history_display_changed,
                     cells = cells.len(),
                     width = viewport.width,
@@ -257,16 +291,16 @@ impl NativeSurfaceController {
                 )?;
                 if stream_active {
                     self.stream.forget_stable_appended();
-                    precomputed_live = Some(self.prepare_live_tail(state, width, plan));
+                    let prepared = self.stream.prepare(state, width, plan);
+                    precomputed_live = Some(prepared.lines);
+                    native_frame.provisional_history = prepared.stable_append;
                 }
                 outcome
             } else {
-                let outcome = self.history.emit_append_only(
+                let outcome = self.history.commit_prepared_append(
                     terminal,
-                    session_header(),
+                    &native_frame.finalized_history,
                     cells,
-                    transcript_revision,
-                    options,
                 )?;
                 if matches!(outcome, HistoryEmissionOutcome::ReplayRequired) {
                     let outcome = self.history.replay_all_capped(
@@ -282,7 +316,9 @@ impl NativeSurfaceController {
                     )?;
                     if stream_active {
                         self.stream.forget_stable_appended();
-                        precomputed_live = Some(self.prepare_live_tail(state, width, plan));
+                        let prepared = self.stream.prepare(state, width, plan);
+                        precomputed_live = Some(prepared.lines);
+                        native_frame.provisional_history = prepared.stable_append;
                     }
                     outcome
                 } else {
@@ -293,11 +329,11 @@ impl NativeSurfaceController {
         let mut finalized_history_stats = history_insert_stats_for(terminal, &history);
         let mut provisional_stats = HistoryInsertStats::default();
         if plan.native_history_enabled()
-            && let Some(stable_append) = self.pending_stable_append.take()
+            && let Some(stable_append) = native_frame.provisional_history.as_ref()
         {
             match self
                 .history
-                .emit_provisional_stream(terminal, stable_append.clone())?
+                .emit_provisional_stream(terminal, stable_append)?
             {
                 ProvisionalAppendOutcome::Written { .. } => {
                     provisional_stats = terminal.last_history_insert_stats();
@@ -349,6 +385,7 @@ impl NativeSurfaceController {
         if let Some(elapsed) = history_elapsed
             && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
         {
+            let tail_cache = self.history.tail_cache_stats();
             tracing::debug!(
                 target: crate::perf::TARGET,
                 stage = "history",
@@ -363,13 +400,23 @@ impl NativeSurfaceController {
                 bytes_written = finalized_history_stats.bytes_written,
                 invalidated = finalized_history_stats.invalidated,
                 build_us = crate::perf::duration_us(finalized_history_stats.build_elapsed),
+                render_us = crate::perf::duration_us(native_frame.finalized_history.render_elapsed()),
                 draw_us = crate::perf::duration_us(finalized_history_stats.draw_elapsed),
                 flush_us = crate::perf::duration_us(finalized_history_stats.flush_elapsed),
                 provisional_rows = provisional_stats.wrapped_rows,
                 provisional_bytes = provisional_stats.bytes_written,
                 provisional_build_us = crate::perf::duration_us(provisional_stats.build_elapsed),
+                provisional_render_us = crate::perf::duration_us(
+                    native_frame
+                        .provisional_history
+                        .as_ref()
+                        .map_or(Duration::default(), |append| append.render_elapsed),
+                ),
                 provisional_draw_us = crate::perf::duration_us(provisional_stats.draw_elapsed),
                 provisional_flush_us = crate::perf::duration_us(provisional_stats.flush_elapsed),
+                tail_cache_rows = tail_cache.rows,
+                tail_cache_width = tail_cache.width,
+                tail_cache_bytes_estimate = tail_cache.bytes_estimate,
                 "tui frame history stage completed",
             );
         }
@@ -399,6 +446,8 @@ impl NativeSurfaceController {
                 duration_us = crate::perf::duration_us(elapsed),
                 buffer_updates = stats.buffer_updates,
                 invalidated = stats.invalidated,
+                input_bottom = layout.input.bottom(),
+                viewport_bottom = terminal.viewport_area().bottom(),
                 diff_us = crate::perf::duration_us(stats.diff_elapsed),
                 draw_us = crate::perf::duration_us(stats.draw_elapsed),
                 flush_us = crate::perf::duration_us(stats.flush_elapsed),
@@ -416,9 +465,7 @@ impl NativeSurfaceController {
     pub(crate) fn reset(&mut self) {
         self.history.reset();
         self.stream.reset();
-        self.pending_stable_append = None;
         self.transcript_layout.reset();
-        self.pending_repin = false;
     }
 }
 
