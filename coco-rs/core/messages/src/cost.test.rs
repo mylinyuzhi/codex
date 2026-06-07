@@ -141,8 +141,14 @@ fn snapshot_totals_include_web_search_requests_from_loaded_entries() {
 }
 
 #[test]
-fn format_cost_uses_four_decimals_below_one_cent() {
+fn format_cost_threshold_at_half_dollar() {
+    // TS parity (cost-tracker.ts:177): strict `> 0.5` => 2 decimals, else 4.
     assert_eq!(format_cost(1.23), "$1.23");
+    assert_eq!(format_cost(0.6), "$0.60");
+    assert_eq!(format_cost(0.51), "$0.51");
+    // 0.50 boundary takes the 4-decimal branch (strict `>`).
+    assert_eq!(format_cost(0.50), "$0.5000");
+    assert_eq!(format_cost(0.30), "$0.3000");
     assert_eq!(format_cost(0.005), "$0.0050");
 }
 
@@ -192,9 +198,10 @@ fn format_session_cost_renders_per_model_and_total() {
     assert!(out.contains("openai / gpt-5"));
     assert!(out.contains("local / mystery"));
     // Priced model shows its cost; unpriced model is flagged, not mispriced.
-    assert!(out.contains("$0.30"));
+    // 0.30 <= 0.5 => 4-decimal branch (TS parity).
+    assert!(out.contains("$0.3000"));
     assert!(out.contains("unpriced model"));
-    // Thousands grouping + total.
+    // Thousands grouping + total (0.42 <= 0.5 => 4 decimals).
     assert!(out.contains("1,000"));
-    assert!(out.contains("**Total cost:  $0.42**"));
+    assert!(out.contains("**Total cost:  $0.4200**"));
 }

@@ -94,6 +94,34 @@ pub struct EngineResources {
 /// servers that fail to spawn just flip the adapter's `is_connected`
 /// gate to `false`, hiding the tool cleanly instead of throwing on the
 /// first call.
+/// Fire-and-forget startup marketplace maintenance, shared by the TUI,
+/// headless, and SDK entry points. TS parity: `installPluginsForHeadless`
+/// (`print.ts:1721`) + `useOfficialMarketplaceNotification` — ensure the
+/// official marketplace, register seed marketplaces (`COCO_PLUGIN_SEED_DIR`),
+/// reconcile declared `extraKnownMarketplaces`, then uninstall plugins that
+/// were delisted from their marketplace.
+///
+/// Runs on every surface (not just the interactive TUI) so delisting +
+/// seed-marketplace enforcement applies to `coco --print` / `chat` / `review`
+/// and SDK NDJSON sessions too. Non-fatal and never blocks startup: the
+/// official ensure runs first so freshly-cloned manifests are visible to the
+/// delisting diff.
+pub fn spawn_marketplace_startup(config_home: std::path::PathBuf) {
+    tokio::spawn(async move {
+        let plugins_dir = config_home.join("plugins");
+        let outcome = coco_plugins::official::ensure_official_marketplace(plugins_dir).await;
+        tracing::debug!(?outcome, "official marketplace auto-install");
+        let delisted = coco_plugins::run_marketplace_startup(&config_home).await;
+        if !delisted.is_empty() {
+            tracing::info!(
+                target: "coco::plugins",
+                ?delisted,
+                "uninstalled plugins delisted from their marketplace"
+            );
+        }
+    });
+}
+
 pub async fn build_lsp_handle_if_enabled(
     runtime_config: &RuntimeConfig,
     coco_home: &Path,

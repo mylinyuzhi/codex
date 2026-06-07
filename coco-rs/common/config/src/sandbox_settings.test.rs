@@ -47,7 +47,9 @@ fn test_sandbox_settings_default_disabled() {
     assert!(settings.ignore_violations.is_empty());
     assert!(!settings.enable_weaker_nested_sandbox);
     assert!(!settings.enable_weaker_network_isolation);
-    assert!(!settings.allow_pty);
+    // PTY is allowed by default (codex-rs seatbelt base policy parity); only an
+    // explicit `"allow_pty": false` disables it (covered below).
+    assert!(settings.allow_pty);
     assert_eq!(settings.mandatory_deny_search_depth, 3);
     assert!(settings.ripgrep.is_none());
 }
@@ -338,6 +340,14 @@ fn test_sandbox_settings_nested_json() {
     assert_eq!(settings.network.http_proxy_port, Some(3128));
     assert!(settings.allow_pty);
     assert_eq!(settings.mandatory_deny_search_depth, 5);
+}
+
+#[test]
+fn test_allow_pty_opt_out_is_honored() {
+    // The default is true (PTY allowed); an explicit false must disable it.
+    let settings: SandboxSettings =
+        serde_json::from_str(r#"{ "allow_pty": false }"#).expect("parse");
+    assert!(!settings.allow_pty);
 }
 
 #[test]

@@ -128,9 +128,15 @@ pub struct GitStatus {
 }
 
 /// Build environment info for the given working directory.
-pub fn get_environment_info(cwd: &Path, model: &str) -> EnvironmentInfo {
+///
+/// `include_git_status` gates the git-status snapshot (TS:
+/// `context.ts` suppresses `gitStatus` under `CLAUDE_CODE_REMOTE` or a
+/// disabled `includeGitInstructions`). `is_git_repo` is reported
+/// independently — TS keeps the `<env>` repo flag even when the status
+/// block is suppressed.
+pub fn get_environment_info(cwd: &Path, model: &str, include_git_status: bool) -> EnvironmentInfo {
     let is_git_repo = cwd.join(".git").exists();
-    let git_status = if is_git_repo {
+    let git_status = if is_git_repo && include_git_status {
         get_git_status(cwd).ok()
     } else {
         None

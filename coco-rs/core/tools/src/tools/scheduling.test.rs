@@ -88,6 +88,70 @@ fn test_cron_create_validate_input_accepts_valid() {
     assert!(matches!(result, ValidationResult::Valid));
 }
 
+#[test]
+fn test_cron_create_validate_input_rejects_unreachable() {
+    // tools-web-mcp#54: syntactically valid but never fires (Feb 30) — the
+    // coco-cron reachability check (TS errorCode 2) must reject before execute.
+    let ctx = ToolUseContext::test_default();
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "30 14 30 2 *", "prompt": "ping"}),
+        &ctx,
+    );
+    match result {
+        ValidationResult::Invalid { message, .. } => {
+            assert!(message.contains("no scheduled run"), "got: {message}");
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+// ── tools-web-mcp#60: durable-cron teammate guard (TS getTeammateContext) ──
+
+#[test]
+fn test_cron_create_rejects_durable_for_in_process_teammate() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.is_in_process_teammate = true;
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "*/15 * * * *", "prompt": "ping", "durable": true}),
+        &ctx,
+    );
+    match result {
+        ValidationResult::Invalid { message, .. } => {
+            assert!(
+                message.contains("durable crons are not supported for teammates"),
+                "got: {message}"
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_cron_create_allows_durable_for_non_teammate() {
+    // Main session / regular subagent (agent_id may be set, but not a teammate).
+    let ctx = ToolUseContext::test_default();
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "*/15 * * * *", "prompt": "ping", "durable": true}),
+        &ctx,
+    );
+    assert!(matches!(result, ValidationResult::Valid));
+}
+
+#[test]
+fn test_cron_create_allows_session_cron_for_teammate() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.is_in_process_teammate = true;
+    let result = <CronCreateTool as DynTool>::validate_input(
+        &CronCreateTool,
+        &json!({"cron": "*/15 * * * *", "prompt": "ping", "durable": false}),
+        &ctx,
+    );
+    assert!(matches!(result, ValidationResult::Valid));
+}
+
 // ── R7-T21: CronList output shape tests ──
 
 #[tokio::test]
@@ -122,23 +186,21 @@ fn cron_create_render_recurring_durable() {
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    // TS `CronCreateTool.ts:151` recurring branch: id, schedule,
-    // durable persistence string, TTL-in-days, CronDelete hint.
+    // Durable recurring: now actually scheduled + persisted (firing wired).
     assert!(
         text.starts_with("Scheduled recurring job abc-123"),
         "got: {text}"
     );
     assert!(text.contains("(every Monday at 09:00)"), "got: {text}");
     assert!(
-        text.contains("Persisted to .claude/scheduled_tasks.json"),
+        text.contains("persisted to .coco/scheduled_tasks.json"),
         "got: {text}"
     );
     assert!(text.contains("Auto-expires after 7 days"), "got: {text}");
-    assert!(text.contains("CronDelete"), "got: {text}");
 }
 
 #[test]
-fn cron_create_render_one_shot_in_memory() {
+fn cron_create_render_one_shot_session_only() {
     use coco_tool_runtime::ToolResultContentPart;
     let data = json!({
         "id": "x",
@@ -151,13 +213,9 @@ fn cron_create_render_one_shot_in_memory() {
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    // TS `CronCreateTool.ts:152` one-shot branch.
     assert!(text.starts_with("Scheduled one-shot task x"), "got: {text}");
-    assert!(text.contains("Session-only"), "got: {text}");
-    assert!(
-        text.contains("It will fire once then auto-delete."),
-        "got: {text}"
-    );
+    assert!(text.contains("session-only"), "got: {text}");
+    assert!(text.contains("fires once"), "got: {text}");
 }
 
 #[test]

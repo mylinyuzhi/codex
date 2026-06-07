@@ -950,3 +950,27 @@ async fn test_execute_with_every_plan_gets_one_outcome() {
         .collect();
     assert_eq!(ids, vec!["A", "B", "C"]);
 }
+
+#[test]
+fn resolve_max_concurrency_zero_falls_back_to_default() {
+    // TS `parseInt(...) || 10`: 0 is falsy → default (would otherwise build a
+    // 0-permit Semaphore and deadlock every concurrent-safe tool).
+    assert_eq!(
+        resolve_max_concurrency(Some("0".to_string())),
+        DEFAULT_MAX_CONCURRENCY
+    );
+}
+
+#[test]
+fn resolve_max_concurrency_invalid_or_unset_falls_back_to_default() {
+    assert_eq!(
+        resolve_max_concurrency(Some("abc".to_string())),
+        DEFAULT_MAX_CONCURRENCY
+    );
+    assert_eq!(resolve_max_concurrency(None), DEFAULT_MAX_CONCURRENCY);
+}
+
+#[test]
+fn resolve_max_concurrency_valid_positive_is_honored() {
+    assert_eq!(resolve_max_concurrency(Some("3".to_string())), 3);
+}

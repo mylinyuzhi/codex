@@ -756,3 +756,62 @@ fn parallel_tool_calls_absent_capability_leaves_flag_unset() {
         "Capability absent ⇒ generic flag stays None (provider default applies)"
     );
 }
+
+// ── config#247: fast-mode → Anthropic `speed=fast` wire translation ──
+
+#[test]
+fn fast_mode_writes_anthropic_speed_when_enabled() {
+    let info = info_with_defaults(BTreeMap::new());
+    let per_call = PerCallOverrides {
+        fast_mode: true,
+        ..Default::default()
+    };
+    let (_call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    assert_eq!(
+        merged.get("speed"),
+        Some(&serde_json::Value::String("fast".into())),
+        "anthropic + fast_mode must write speed=fast for the beta to fire"
+    );
+}
+
+#[test]
+fn fast_mode_off_writes_no_speed() {
+    let info = info_with_defaults(BTreeMap::new());
+    let (_call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Anthropic,
+        "anthropic",
+        &PerCallOverrides::default(),
+        Vec::new(),
+        None,
+    );
+    assert!(!merged.contains_key("speed"));
+}
+
+#[test]
+fn fast_mode_skipped_for_non_anthropic() {
+    let info = info_with_defaults(BTreeMap::new());
+    let per_call = PerCallOverrides {
+        fast_mode: true,
+        ..Default::default()
+    };
+    let (_call, merged) = build_call_options_with_extra(
+        &info,
+        ProviderApi::Openai,
+        "openai",
+        &per_call,
+        Vec::new(),
+        None,
+    );
+    assert!(
+        !merged.contains_key("speed"),
+        "non-Anthropic providers have no speed concept and ignore fast_mode"
+    );
+}

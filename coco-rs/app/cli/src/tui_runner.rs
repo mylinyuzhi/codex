@@ -363,6 +363,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         coco_config::global_config::config_home(),
     );
 
+    // Cron tick driver — fires scheduled tasks (.coco/scheduled_tasks.json +
+    // session tasks) into the command queue. TUI-only: headless/SDK have no
+    // queue-drain pump. Self-terminates on session shutdown; held as a guard.
+    let _cron_tick_guard = coco_cli::cron_tick::spawn(runtime.clone());
+
     // Team-memory server sync — TS parity: `startTeamMemoryWatcher`
     // (`setup.ts:365-368`). Pulls server team memory at session start,
     // then debounce-pushes local edits. Fire-and-forget on the
@@ -440,27 +445,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // `COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE`, and non-fatal. Never blocks
     // startup — the `anthropics/claude-plugins-official` marketplace is fetched
     // once in the background and reused on subsequent launches.
-    {
-        let config_home = coco_config::global_config::config_home();
-        let plugins_dir = config_home.join("plugins");
-        tokio::spawn(async move {
-            let outcome = coco_plugins::official::ensure_official_marketplace(plugins_dir).await;
-            tracing::debug!(?outcome, "official marketplace auto-install");
-            // Startup marketplace maintenance (TS `installPluginsForHeadless`):
-            // register seed marketplaces (`COCO_PLUGIN_SEED_DIR`), reconcile
-            // declared `extraKnownMarketplaces`, then uninstall delisted plugins.
-            // Runs after the official ensure so freshly-cloned manifests are
-            // visible to the diff.
-            let delisted = coco_plugins::run_marketplace_startup(&config_home).await;
-            if !delisted.is_empty() {
-                tracing::info!(
-                    target: "coco::plugins",
-                    ?delisted,
-                    "uninstalled plugins delisted from their marketplace"
-                );
-            }
-        });
-    }
+    coco_cli::session_bootstrap::spawn_marketplace_startup(
+        coco_config::global_config::config_home(),
+    );
 
     // Honor `--resume` / `--continue` / `--fork-session`. The binary
     // entry has already loaded the source transcript; here we repoint
@@ -1129,7 +1116,10 @@ async fn run_agent_driver(
                 let requested = !cfg.fast_mode;
                 let active =
                     requested && coco_config::is_fast_mode_supported_by_model(&cfg.model_id);
-                coco_config::fast_mode::set_session_opted_in(active);
+                // The live fast-mode state is `config.fast_mode` on the engine
+                // config (instance-level). Per-session opt-in / cooldown / org
+                // availability are config#247-deferred and, when added, belong on
+                // the SessionRuntime instance — not a process global.
                 runtime
                     .update_engine_config(|cfg| {
                         cfg.fast_mode = active;

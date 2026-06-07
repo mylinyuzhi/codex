@@ -3179,8 +3179,13 @@ async fn mcp_status_returns_empty_list_when_no_manager_wired() {
     server_task.await.unwrap();
 }
 
+// The handler-level `spawn_server` wires no `SessionRuntime`, so `plugin/reload`
+// takes the no-runtime fallback branch and acks with an empty result. The wired
+// path (reload plugins/agents/LSP/hooks + live snapshots) mirrors the TUI
+// `run_reload_plugins` chain, whose `reload_*` methods are covered on
+// `SessionRuntime` directly.
 #[tokio::test]
-async fn plugin_reload_returns_empty_result() {
+async fn plugin_reload_without_session_runtime_returns_empty() {
     let (server_task, client) = spawn_server().await;
 
     client

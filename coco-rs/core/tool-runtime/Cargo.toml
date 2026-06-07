@@ -15,6 +15,10 @@ coco-types.workspace = true
 coco-error.workspace = true
 coco-messages.workspace = true
 coco-config.workspace = true
+# Cron parsing + reachability for the schedule store (read-time validation).
+coco-cron.workspace = true
+# Disk-backed schedule store round-trips .coco/scheduled_tasks.json.
+coco-file-encoding.workspace = true
 coco-context.workspace = true
 coco-sandbox.workspace = true
 coco-shell.workspace = true
@@ -43,7 +47,7 @@ jsonschema.workspace = true
 # the typed parse.
 schemars.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "fs"] }
 tokio-util = { workspace = true }
 tracing.workspace = true
 uuid = { workspace = true }

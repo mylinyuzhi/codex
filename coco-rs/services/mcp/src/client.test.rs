@@ -11,17 +11,6 @@ fn noop_elicitation() -> SendElicitation {
 }
 
 #[test]
-fn test_truncate_tool_description() {
-    let short = "A short description";
-    assert_eq!(truncate_tool_description(short), short);
-
-    let long = "x".repeat(3000);
-    let truncated = truncate_tool_description(&long);
-    assert!(truncated.len() < 3000);
-    assert!(truncated.ends_with("...(truncated)"));
-}
-
-#[test]
 fn headers_helper_output_must_be_string_map() {
     let ok = parse_headers_helper_output("srv", r#"{"Authorization":"Bearer x"}"#).unwrap();
     assert_eq!(ok.get("Authorization").unwrap(), "Bearer x");

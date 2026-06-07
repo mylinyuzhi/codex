@@ -202,7 +202,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         (
             names::STATUS,
             "Show current session status and model info",
-            &["st"],
+            &[],
             status_extended_handler,
             true,
             LocalOnly,
@@ -211,7 +211,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         (
             names::TASKS,
             "List and manage active tasks",
-            &["todo"],
+            &["bashes"],
             tasks_extended_handler,
             true,
             LocalOnly,

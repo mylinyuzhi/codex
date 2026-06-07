@@ -40,6 +40,22 @@ fn human_template_matches_ts() {
 }
 
 #[test]
+fn cron_template_frames_as_scheduled_fire() {
+    assert_eq!(
+        wrap_command_text("back up files", Some(&QueueOrigin::Cron)),
+        "A scheduled task fired:\nback up files"
+    );
+}
+
+#[test]
+fn cron_uses_kebab_case_wire_form() {
+    let json = serde_json::to_string(&QueueOrigin::Cron).unwrap();
+    assert_eq!(json, r#"{"kind":"cron"}"#);
+    let back: QueueOrigin = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, QueueOrigin::Cron);
+}
+
+#[test]
 fn none_origin_falls_back_to_human() {
     let none_form = wrap_command_text("status?", None);
     let human_form = wrap_command_text("status?", Some(&QueueOrigin::Human));

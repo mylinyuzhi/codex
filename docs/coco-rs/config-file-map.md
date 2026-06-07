@@ -22,8 +22,8 @@ Every file coco-rs reads from or writes to, which crate owns it.
 | `.claude/agents/*.md` | Markdown+YAML | `coco-query` | R | Project-scoped agent definitions |
 | `.claude/output-styles/*.md` | Markdown | `coco-tui` | R | Project output formatting styles |
 | `.claude/workflows/` | Markdown | `coco-skills` | R | Project workflow definitions |
-| `.claude/scheduled_tasks.json` | JSON | `coco-tasks` | RW | Persistent cron tasks |
-| `.claude/scheduled_tasks.lock` | Lock | `coco-tasks` | RW | File lock for cron task access |
+| `.coco/scheduled_tasks.json` | JSON | `coco-tool-runtime` | RW | Persistent (durable) cron tasks |
+| `.coco/scheduled_tasks.lock` | Lock | `coco-tool-runtime` | RW | (deferred) cross-process lease lock for cron |
 | `.claude/agent-memory/<type>/` | Text | `memory/` | RW | Project-scope agent persistent memory |
 | `.claude/agent-memory-local/<type>/` | Text | `memory/` | RW | Local-scope agent memory (not shared) |
 | `.claude/agent-memory-snapshots/<type>/` | Text | `memory/` | RW | Agent memory snapshots |

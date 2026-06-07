@@ -112,7 +112,9 @@ fn tools_contain(tools: &[String], builtin: ToolName) -> bool {
 }
 
 fn render_task_reminder_body(tasks: &[TaskRecord]) -> String {
-    let mut out = task_reminder_body();
+    // TS `messages.ts:3688` always terminates the base body with `\n`; the
+    // optional list suffix then adds `\n\n` (3 newlines total before "Here").
+    let mut out = format!("{}\n", task_reminder_body());
     if tasks.is_empty() {
         return out;
     }

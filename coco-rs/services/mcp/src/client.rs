@@ -375,7 +375,12 @@ impl McpConnectionManager {
         Ok(ConnectedMcpServer {
             name: server_name.to_string(),
             capabilities,
-            instructions: init_result.instructions,
+            // TS `client.ts:1160-1171` caps server instructions at the same
+            // 2048 limit as tool descriptions (they reach the model via a
+            // <system-reminder>); reuse the single wired truncator.
+            instructions: init_result
+                .instructions
+                .map(|s| crate::tool_call::truncate_description(&s)),
             tools,
             resources,
             commands,
@@ -503,7 +508,12 @@ impl McpConnectionManager {
         Ok(ConnectedMcpServer {
             name: server_name.to_string(),
             capabilities,
-            instructions: init_result.instructions,
+            // TS `client.ts:1160-1171` caps server instructions at the same
+            // 2048 limit as tool descriptions (they reach the model via a
+            // <system-reminder>); reuse the single wired truncator.
+            instructions: init_result
+                .instructions
+                .map(|s| crate::tool_call::truncate_description(&s)),
             tools,
             resources,
             commands,
@@ -1151,16 +1161,6 @@ where
     serde_json::from_value(result).map_err(|e| McpClientError::ToolCallFailed {
         message: format!("parse SDK MCP response: {e}"),
     })
-}
-
-/// Truncate a tool description to the maximum length.
-pub fn truncate_tool_description(description: &str) -> String {
-    const MAX_LEN: usize = 2048;
-    if description.len() <= MAX_LEN {
-        description.to_string()
-    } else {
-        format!("{}...(truncated)", &description[..MAX_LEN])
-    }
 }
 
 /// MCP client errors.

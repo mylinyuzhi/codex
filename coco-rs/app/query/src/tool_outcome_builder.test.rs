@@ -365,3 +365,39 @@ async fn plain_tool_error_has_no_display_data() {
 
     assert!(tool_result_display_data(&outcome.ordered_messages[0]).is_none());
 }
+
+#[test]
+fn build_early_outcome_pre_execution_cancelled_skips_failure_hooks() {
+    // tool-runtime#15: a pre-execute turn abort yields PreExecutionCancelled
+    // on the EarlyReturn path (no PostToolUseFailure) carrying CANCEL_MESSAGE
+    // verbatim with is_error=true — distinct from a mid-execute cancel.
+    let outcome = build_early_outcome(
+        "tc-1".to_string(),
+        coco_types::ToolId::Builtin(coco_types::ToolName::Bash),
+        "Bash",
+        0,
+        coco_tool_runtime::ToolCallErrorKind::PreExecutionCancelled,
+        coco_messages::CANCEL_MESSAGE,
+        None,
+    );
+    assert_eq!(
+        outcome.error_kind,
+        Some(coco_tool_runtime::ToolCallErrorKind::PreExecutionCancelled)
+    );
+    assert!(
+        !coco_tool_runtime::ToolCallErrorKind::PreExecutionCancelled.runs_post_tool_use_failure(),
+        "pre-execution cancel must NOT fire PostToolUseFailure"
+    );
+    assert!(matches!(
+        outcome.message_path,
+        coco_tool_runtime::ToolMessagePath::EarlyReturn
+    ));
+    let (text, is_error) = tool_result_text(&outcome.ordered_messages[0]);
+    assert_eq!(text, coco_messages::CANCEL_MESSAGE);
+    assert!(is_error);
+    // Mid-execute cancel keeps the failure-hook-firing classification.
+    assert!(
+        coco_tool_runtime::ToolCallErrorKind::ExecutionCancelled.runs_post_tool_use_failure(),
+        "mid-execution cancel still fires PostToolUseFailure (TS parity)"
+    );
+}

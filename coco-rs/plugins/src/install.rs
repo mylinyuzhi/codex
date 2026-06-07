@@ -51,10 +51,10 @@ pub struct InstallOutcome {
     pub marketplace_name: String,
     /// Plugin name (root only).
     pub plugin_name: String,
-    /// Closure resolved during install (always includes the root). Plus
-    /// suffix string for messages (`" (with 2 dependencies)"`) — TS
-    /// `formatDependencyCountSuffix`.
+    /// Closure resolved during install (always includes the root).
     pub closure: Vec<PluginId>,
+    /// Suffix string for install-success messages (`" (+ 2 dependencies)"`) —
+    /// TS `formatDependencyCountSuffix`.
     pub dep_note: String,
 }
 
@@ -281,8 +281,14 @@ pub async fn install_plugin_from_marketplace(
         }
     }
 
-    let dep_count = closure.iter().filter(|id| *id != &root_id).count();
-    let dep_note = format_dep_note(dep_count);
+    // TS `pluginInstallationHelpers.ts`: depNote = formatDependencyCountSuffix(
+    // closure.filter(id => id !== pluginId)).
+    let installed_deps: Vec<PluginId> = closure
+        .iter()
+        .filter(|id| *id != &root_id)
+        .cloned()
+        .collect();
+    let dep_note = crate::dependency::format_dependency_count_suffix(&installed_deps);
     Ok(InstallOutcome {
         plugin_id: root_id.to_string(),
         install_path,
@@ -485,16 +491,6 @@ fn format_resolution(r: &ResolutionResult) -> String {
             missing.marketplace.as_deref().unwrap_or("unknown")
         ),
         ResolutionResult::Ok { .. } => String::new(),
-    }
-}
-
-/// TS `formatDependencyCountSuffix`: empty / ` (with 1 dependency)` /
-/// ` (with N dependencies)`. Singular vs plural handled.
-fn format_dep_note(count: usize) -> String {
-    match count {
-        0 => String::new(),
-        1 => " (with 1 dependency)".to_string(),
-        n => format!(" (with {n} dependencies)"),
     }
 }
 

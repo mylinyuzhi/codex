@@ -637,7 +637,8 @@ impl Tool for WebFetchTool {
                     "url": {"type": "string", "description": "The URL to fetch content from"},
                     "prompt": {"type": "string", "description": "The prompt to run on the fetched content"}
                 },
-                "required": []
+                // TS `z.strictObject({url, prompt})`: both keys are mandatory.
+                "required": ["url", "prompt"]
             }))
         })
     }

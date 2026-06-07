@@ -56,6 +56,10 @@ pub enum EnvKey {
     CocoBashMaintainProjectWorkingDir,
     CocoBubblewrap,
     CocoConfigDir,
+    /// Truthy ⇒ suppress the git-status block in the system prompt; defined-falsy
+    /// ⇒ force it on (overriding the `include_git_instructions` setting). TS
+    /// parity: `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` in `utils/gitSettings.ts`.
+    CocoDisableGitInstructions,
     CocoDisableFastMode,
     /// Truthy ⇒ skip loading managed/policy-level skills from the platform
     /// managed skills directory. TS parity:
@@ -340,6 +344,7 @@ impl EnvKey {
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",
             Self::CocoConfigDir => "COCO_CONFIG_DIR",
+            Self::CocoDisableGitInstructions => "COCO_DISABLE_GIT_INSTRUCTIONS",
             Self::CocoDisableFastMode => "COCO_DISABLE_FAST_MODE",
             Self::CocoDisablePolicySkills => "COCO_DISABLE_POLICY_SKILLS",
             Self::CocoDisableShellSnapshot => "COCO_DISABLE_SHELL_SNAPSHOT",

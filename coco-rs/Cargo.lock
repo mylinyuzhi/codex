@@ -1072,6 +1072,7 @@ dependencies = [
  "coco-config-reload",
  "coco-context",
  "coco-coordinator",
+ "coco-cron",
  "coco-error",
  "coco-file-watch",
  "coco-frontmatter",
@@ -1269,6 +1270,14 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "coco-cron"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "pretty_assertions",
 ]
 
 [[package]]
@@ -2245,7 +2254,9 @@ dependencies = [
  "async-trait",
  "coco-config",
  "coco-context",
+ "coco-cron",
  "coco-error",
+ "coco-file-encoding",
  "coco-messages",
  "coco-sandbox",
  "coco-shell",
@@ -2279,6 +2290,7 @@ dependencies = [
  "coco-apply-patch",
  "coco-config",
  "coco-context",
+ "coco-cron",
  "coco-error",
  "coco-exec-server",
  "coco-file-encoding",

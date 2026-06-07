@@ -71,7 +71,7 @@ fn test_convert_server_tools_description_truncation() {
 
     let discovered = convert_server_tools("server", &tools);
     assert!(discovered[0].description.len() < 5000);
-    assert!(discovered[0].description.ends_with("... [truncated]"));
+    assert!(discovered[0].description.ends_with("… [truncated]"));
 }
 
 #[test]

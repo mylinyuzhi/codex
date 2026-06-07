@@ -1116,8 +1116,12 @@ pub fn aggregate_results_for_event(
                 }
             }
             ParsedHookOutput::PlainText(text) => {
+                // TS only turns plain stdout into model context on a clean exit
+                // (`result.status === 0` → hook_success). A failed hook's stderr
+                // is surfaced as a `hook_non_blocking_error` attachment (emitted
+                // in `process_execution_result`), never injected as success-context.
                 let trimmed = text.trim();
-                if !trimmed.is_empty() {
+                if r.succeeded && !trimmed.is_empty() {
                     agg.additional_contexts.push(trimmed.to_string());
                 }
             }
@@ -3457,6 +3461,26 @@ fn process_execution_result(
                 ));
             }
             let blocked = exit_code == 2 && !stdout_has_json_control;
+            // TS (`hooks.ts`): a non-zero, non-2 plain exit yields ONLY a
+            // `hook_non_blocking_error` carrying the stderr — it never becomes
+            // model context. Emit that attachment here (the aggregator already
+            // suppresses the failed-hook stdout from `additional_contexts`).
+            if exit_code != 0 && exit_code != 2 && !stdout_has_json_control {
+                let trimmed = stderr.trim();
+                let detail = if trimmed.is_empty() {
+                    "No stderr output".to_string()
+                } else {
+                    trimmed.to_string()
+                };
+                emitter.emit(AttachmentMessage::silent_hook_non_blocking_error(
+                    HookNonBlockingErrorPayload {
+                        error: format!("Failed with non-blocking status code: {detail}"),
+                        hook_name: label.to_string(),
+                        tool_use_id: String::new(),
+                        hook_event: event,
+                    },
+                ));
+            }
             let output = if stdout_has_json_control || exit_code == 0 {
                 stdout
             } else {

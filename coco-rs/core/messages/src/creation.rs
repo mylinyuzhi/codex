@@ -254,6 +254,12 @@ pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
 /// TS: `utils/messages.ts:208`.
 pub const INTERRUPT_MESSAGE_FOR_TOOL_USE: &str = "[Request interrupted by user for tool use]";
 
+/// Tool-result content for a tool whose turn was already aborted *before*
+/// execution started. TS `utils/messages.ts:210` — yielded by
+/// `createToolResultStopMessage` on the pre-execute abort path (with
+/// `is_error: true`), distinct from the mid-execution interrupt messages.
+pub const CANCEL_MESSAGE: &str = "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";
+
 /// Create the typed user-interruption SystemMessage variant. The
 /// engine cancel finalizer is the single writer; downstream consumers
 /// (TUI render, SDK observers) read `for_tool_use` from this struct

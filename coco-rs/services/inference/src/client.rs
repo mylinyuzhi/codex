@@ -895,6 +895,7 @@ impl ApiClient {
             agentic_query: params.agentic,
             query_source: params.query_source.clone(),
             stop_sequences: params.stop_sequences.clone(),
+            fast_mode: params.fast_mode,
             ..Default::default()
         };
         let (mut call, merged_extra) = build_call_options_with_extra(

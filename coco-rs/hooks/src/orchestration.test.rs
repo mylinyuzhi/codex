@@ -327,6 +327,28 @@ fn test_aggregate_results_additional_context() {
     assert_eq!(agg.additional_contexts[1], "context beta");
 }
 
+#[test]
+fn test_aggregate_results_failed_plaintext_not_injected() {
+    // TS: a failed (non-zero, non-2) hook's stderr is NOT injected as
+    // model context — it surfaces only as a hook_non_blocking_error.
+    let results = vec![SingleHookResult {
+        command: "boom.sh".to_string(),
+        succeeded: false,
+        output: "boom on stderr".to_string(),
+        blocked: false,
+        outcome: HookOutcome::NonBlockingError,
+        status_message: None,
+        async_rewake: false,
+        source: HookBlockingSource::Command(String::new()),
+        sdk_output: None,
+    }];
+    let agg = aggregate_results(&results);
+    assert!(
+        agg.additional_contexts.is_empty(),
+        "failed-hook stderr must not become model context"
+    );
+}
+
 // -----------------------------------------------------------------------
 // build_hook_env tests
 // -----------------------------------------------------------------------

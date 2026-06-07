@@ -1,21 +1,31 @@
 use super::*;
 
 #[tokio::test]
-async fn in_memory_schedule_store_creates_lists_and_deletes() {
+async fn in_memory_schedule_store_adds_lists_marks_and_removes() {
     let store = InMemoryScheduleStore::new();
 
-    let entry = store
-        .create_schedule("standup", "0 9 * * *", "summarize work")
+    let task = store
+        .add_cron_task("0 9 * * *", "summarize work", true, false, None)
         .await
         .unwrap();
-    assert_eq!(entry.name, "standup");
+    assert_eq!(task.prompt, "summarize work");
+    assert!(task.is_recurring());
+    assert_eq!(task.durable, Some(false));
 
-    let listed = store.list_schedules().await.unwrap();
+    let listed = store.list_all_cron_tasks().await.unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].id, entry.id);
+    assert_eq!(listed[0].id, task.id);
+    assert!(listed[0].last_fired_at.is_none());
 
-    store.delete_schedule(&entry.id).await.unwrap();
-    assert!(store.list_schedules().await.unwrap().is_empty());
+    store
+        .mark_cron_tasks_fired(&[&task.id], 1_700_000_000_000)
+        .await
+        .unwrap();
+    let listed = store.list_all_cron_tasks().await.unwrap();
+    assert_eq!(listed[0].last_fired_at, Some(1_700_000_000_000));
+
+    store.remove_cron_tasks(&[&task.id]).await.unwrap();
+    assert!(store.list_all_cron_tasks().await.unwrap().is_empty());
 }
 
 #[tokio::test]

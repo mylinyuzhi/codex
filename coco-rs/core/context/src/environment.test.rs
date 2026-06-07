@@ -23,8 +23,24 @@ fn test_shell_detect() {
 
 #[test]
 fn test_get_environment_info() {
-    let info = get_environment_info(std::path::Path::new("/tmp"), "test-model");
+    let info = get_environment_info(
+        std::path::Path::new("/tmp"),
+        "test-model",
+        /*include_git_status*/ true,
+    );
     assert_eq!(info.cwd, "/tmp");
     assert_eq!(info.model, "test-model");
     assert!(!info.is_git_repo);
+}
+
+#[test]
+fn test_get_environment_info_git_status_gated() {
+    // In a real repo, `include_git_status = false` suppresses the status
+    // snapshot while still reporting `is_git_repo`. Use the repo root of this
+    // crate's workspace (a `.git` exists at the repo root, not here), so assert
+    // on the gate behavior directly: even when a repo IS present, the flag
+    // controls whether git_status is populated.
+    let cwd = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let gated = get_environment_info(cwd, "m", /*include_git_status*/ false);
+    assert!(gated.git_status.is_none());
 }

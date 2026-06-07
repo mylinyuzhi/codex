@@ -100,3 +100,38 @@ fn manifest_omits_type_tag_when_no_frontmatter() {
         "expected no description suffix when frontmatter absent, got: {m}"
     );
 }
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+#[test]
+fn freshness_text_fresh_returns_empty() {
+    // ≤1 day old → no caveat.
+    assert_eq!(memory_freshness_text(now_ms()), "");
+    assert_eq!(memory_freshness_text(now_ms() - 24 * 60 * 60 * 1000), "");
+}
+
+#[test]
+fn freshness_text_stale_matches_ts_verbatim() {
+    let forty_seven_days = now_ms() - 47 * 24 * 60 * 60 * 1000;
+    assert_eq!(
+        memory_freshness_text(forty_seven_days),
+        "This memory is 47 days old. Memories are point-in-time observations, \
+         not live state — claims about code behavior or file:line citations \
+         may be outdated. Verify against current code before asserting as fact."
+    );
+}
+
+#[test]
+fn freshness_text_has_no_trailing_newline() {
+    let stale = now_ms() - 10 * 24 * 60 * 60 * 1000;
+    let text = memory_freshness_text(stale);
+    assert!(
+        !text.ends_with('\n'),
+        "spacing is the caller's job, got: {text:?}"
+    );
+}
