@@ -8,6 +8,7 @@ pub mod at_mention_turn;
 pub mod bash_tool_handle;
 pub mod command_queue_sink;
 pub mod coordinator_mode_resume;
+pub mod cron_tick;
 pub mod disk_task_output;
 pub mod elicitation_hooks;
 pub mod file_changed_watcher;

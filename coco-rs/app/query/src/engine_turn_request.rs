@@ -168,8 +168,16 @@ impl QueryEngine {
             prompt,
             max_tokens: None,
             thinking_level: self.config.thinking_level.clone(),
+            // config#247: fast-mode support is capability-driven and
+            // provider-agnostic — gate on the resolved model's
+            // `Capability::FastMode`, not a hardcoded id substring. The owning
+            // provider crate translates the flag to its wire option (Anthropic
+            // → `speed=fast` beta, set in build_call_options).
             fast_mode: self.config.fast_mode
-                && coco_config::is_fast_mode_supported_by_model(&self.config.model_id),
+                && active_snapshot
+                    .model_info
+                    .as_ref()
+                    .is_some_and(|info| info.has_capability(coco_types::Capability::FastMode)),
             tools: if tool_defs.is_empty() {
                 None
             } else {

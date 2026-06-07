@@ -43,7 +43,7 @@ const CATEGORIES: &[Category] = &[
             },
             CommandEntry {
                 name: "status",
-                aliases: &["st"],
+                aliases: &[],
                 description: "Show current session status and model info",
                 usage: "/status",
             },
@@ -251,7 +251,7 @@ const CATEGORIES: &[Category] = &[
             },
             CommandEntry {
                 name: "tasks",
-                aliases: &["todo"],
+                aliases: &["bashes"],
                 description: "List and manage active tasks",
                 usage: "/tasks",
             },

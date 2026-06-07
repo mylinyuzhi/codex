@@ -230,6 +230,25 @@ impl<'a> ToolCallRunner<'a> {
                         call_ctx.abort = runtime.abort.clone();
                         call_ctx.progress_tx = runtime.progress_tx.clone();
 
+                        // Pre-execute abort guard (TS `toolExecution.ts:414`):
+                        // when the turn is already aborted before the tool runs,
+                        // emit a PreExecutionCancelled outcome (EarlyReturn path,
+                        // no PostToolUseFailure hooks) carrying CANCEL_MESSAGE.
+                        // Without this the `select!` below would resolve the
+                        // cancel arm into a mid-execute ExecutionCancelled, which
+                        // wrongly fires failure hooks for a tool that never ran.
+                        if call_ctx.abort.is_aborted() {
+                            return crate::tool_outcome_builder::build_early_outcome(
+                                prepared.tool_use_id.clone(),
+                                prepared.tool_id.clone(),
+                                &tool_name,
+                                prepared.model_index,
+                                coco_tool_runtime::ToolCallErrorKind::PreExecutionCancelled,
+                                coco_messages::CANCEL_MESSAGE,
+                                None,
+                            );
+                        }
+
                         // Execute the tool under cancellation.
                         let execute_result = tokio::select! {
                             r = prepared.tool.execute(effective_input.clone(), &call_ctx) => r,

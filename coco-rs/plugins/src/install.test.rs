@@ -2,9 +2,10 @@
 //!
 //! Full end-to-end install requires a populated marketplace cache, which
 //! the [`MarketplaceManager`] tests already cover. These tests focus on
-//! the slim slice this module owns: argument parsing, the
-//! no-marketplaces-configured early return, and the
-//! `format_resolution` / `format_dep_note` display helpers.
+//! the slim slice this module owns: argument parsing and the
+//! no-marketplaces-configured early return. The install-success dependency
+//! suffix is the canonical `dependency::format_dependency_count_suffix`
+//! (covered in `dependency.test.rs`).
 
 use super::*;
 use crate::dependency::ResolutionResult;
@@ -51,11 +52,20 @@ async fn install_returns_no_marketplaces_when_unconfigured() {
 }
 
 #[test]
-fn format_dep_note_handles_singular_and_plural() {
-    assert_eq!(format_dep_note(0), "");
-    assert_eq!(format_dep_note(1), " (with 1 dependency)");
-    assert_eq!(format_dep_note(2), " (with 2 dependencies)");
-    assert_eq!(format_dep_note(5), " (with 5 dependencies)");
+fn dep_note_uses_canonical_plus_n_suffix() {
+    use crate::dependency::format_dependency_count_suffix;
+    use crate::identifier::PluginId;
+    let dep = |n: usize| -> Vec<PluginId> {
+        (0..n)
+            .map(|i| PluginId::new(format!("dep{i}"), "mkt".to_string()))
+            .collect()
+    };
+    assert_eq!(format_dependency_count_suffix(&dep(0)), "");
+    assert_eq!(format_dependency_count_suffix(&dep(1)), " (+ 1 dependency)");
+    assert_eq!(
+        format_dependency_count_suffix(&dep(2)),
+        " (+ 2 dependencies)"
+    );
 }
 
 #[test]

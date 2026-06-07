@@ -16,6 +16,7 @@ members = [
     "utils/async-utils",
     "utils/cache",
     "utils/cargo-bin",
+    "utils/coco-cron",
     "utils/coco-paths",
     "utils/common",
     "utils/cursor",
@@ -141,6 +142,7 @@ coco-file-search = { path = "utils/file-search" }
 coco-file-watch = { path = "utils/file-watch" }
 coco-symbol-search = { path = "utils/symbol-search" }
 coco-git = { path = "utils/git" }
+coco-cron = { path = "utils/coco-cron" }
 coco-paths = { path = "utils/coco-paths" }
 coco-utils-absolute-path = { path = "utils/absolute-path" }
 coco-utils-cache = { path = "utils/cache" }

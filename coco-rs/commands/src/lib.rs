@@ -1248,12 +1248,7 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
             &[],
             compact_handler,
         ),
-        (
-            "status",
-            "Show current session status",
-            &["st"],
-            status_handler,
-        ),
+        ("status", "Show current session status", &[], status_handler),
         // ── Configuration ──
         (
             "config",
@@ -1337,7 +1332,7 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
             &[],
             agents_handler,
         ),
-        ("tasks", "List active tasks", &["todo"], tasks_handler),
+        ("tasks", "List active tasks", &["bashes"], tasks_handler),
         // ── System ──
         ("doctor", "Run diagnostic checks", &[], doctor_handler),
         (

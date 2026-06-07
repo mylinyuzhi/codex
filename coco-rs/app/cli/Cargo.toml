@@ -31,6 +31,7 @@ coco-tool-runtime.workspace = true
 coco-tools.workspace = true
 coco-query.workspace = true
 coco-system-reminder.workspace = true
+coco-cron.workspace = true
 coco-messages.workspace = true
 coco-context.workspace = true
 coco-mcp.workspace = true

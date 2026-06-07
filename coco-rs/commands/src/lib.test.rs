@@ -121,10 +121,13 @@ fn test_lookup_by_alias() {
     assert!(by_alias.is_some());
     assert_eq!(by_alias.unwrap().base.name, "help");
 
-    // "st" is alias for "status"
-    let by_alias = registry.get("st");
+    // "bashes" is the only TS alias for "tasks"; "status" has none, and the
+    // coco-invented "st"/"todo" aliases were removed (TS parity).
+    let by_alias = registry.get("bashes");
     assert!(by_alias.is_some());
-    assert_eq!(by_alias.unwrap().base.name, "status");
+    assert_eq!(by_alias.unwrap().base.name, "tasks");
+    assert!(registry.get("st").is_none());
+    assert!(registry.get("todo").is_none());
 
     // "settings" is alias for "config" (TS parity)
     let by_alias = registry.get("settings");

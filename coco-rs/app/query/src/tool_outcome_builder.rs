@@ -356,10 +356,12 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             let ordered_messages = buckets.flatten(order);
 
             // Classify cancellation vs other execution errors so the
-            // error_kind enum is accurate. The preparer already
-            // short-circuits Cancelled-before-execute into an
-            // EarlyOutcome, so anything we see here is either a
-            // plain execution failure or a mid-execute cancel.
+            // error_kind enum is accurate. A pre-execute turn abort is
+            // short-circuited in `run_one` into a PreExecutionCancelled
+            // EarlyReturn outcome (no failure hooks), so a `Cancelled`
+            // seen here is a genuine MID-execution cancel — kept as
+            // ExecutionCancelled, which DOES fire PostToolUseFailure
+            // (TS `toolExecution.ts:1696`).
             let error_kind = match &error {
                 coco_tool_runtime::ToolError::Cancelled => ToolCallErrorKind::ExecutionCancelled,
                 _ => ToolCallErrorKind::ExecutionFailed,
@@ -394,10 +396,9 @@ fn display_data_from_tool_error(error: &ToolError) -> Option<&ToolDisplayData> {
 
 /// Build an `UnstampedToolCallOutcome` for an EarlyReturn path —
 /// unknown tool, schema failure, validation failure, pre-hook block,
-/// or permission denial. The runner uses this when it decides pre-
-/// execution that no tool run is going to happen, so `run_one` never
-/// sees these calls.
-#[allow(dead_code)]
+/// permission denial, or a pre-execute turn abort (`run_one` emits this
+/// when the turn is already cancelled before the tool runs). The
+/// EarlyReturn path skips PostToolUseFailure hooks.
 pub(crate) fn build_early_outcome(
     tool_use_id: String,
     tool_id: ToolId,

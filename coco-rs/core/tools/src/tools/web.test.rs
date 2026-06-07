@@ -1218,3 +1218,25 @@ fn test_persist_binary_content_writes_file() {
     assert_eq!(on_disk, bytes);
     let _ = std::fs::remove_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// WebFetch schema requires both url and prompt (TS z.strictObject({url, prompt}))
+// ---------------------------------------------------------------------------
+
+#[test]
+fn webfetch_schema_requires_url_and_prompt() {
+    let schema = coco_tool_runtime::Tool::runtime_validation_schema(&WebFetchTool);
+    assert!(schema.validate(&json!({"prompt": "summarize"})).is_err());
+    assert!(schema.validate(&json!({"url": "https://x"})).is_err());
+    assert!(
+        schema
+            .validate(&json!({"url": "https://x", "prompt": "y"}))
+            .is_ok()
+    );
+    // additionalProperties:false still rejects unknown keys.
+    assert!(
+        schema
+            .validate(&json!({"url": "https://x", "prompt": "y", "extra": 1}))
+            .is_err()
+    );
+}

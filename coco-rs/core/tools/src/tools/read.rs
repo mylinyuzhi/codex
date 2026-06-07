@@ -544,20 +544,6 @@ impl Tool for ReadTool {
                 source: None,
             })?;
 
-        // Check empty
-        if content.is_empty() {
-            return Ok(ToolResult {
-                data: text_output(file_path, "[file is empty]", 0, 1, 0),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-                display_data: None,
-            });
-        }
-
-        let lines: Vec<&str> = content.lines().collect();
-        let total_lines = lines.len();
-
         // TS: `FileReadTool.ts:497` — default `offset = 1` (1-based).
         // `validate_input` already rejected negative `offset` / non-positive
         // `limit`, so casting to `usize` here is safe. Both `0` and `1`
@@ -574,28 +560,35 @@ impl Tool for ReadTool {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_LINE_LIMIT);
 
+        // Empty file. TS `readFileInRangeFast('')` yields one empty selected
+        // line → `totalLines = 1`, so this routes to the offset warning in
+        // `render_for_model` (`content` empty, `startLine` = the effective
+        // offset). The warning string itself is emitted at render time.
+        if content.is_empty() {
+            return Ok(ToolResult {
+                data: text_output(file_path, "", 0, offset, 1),
+                new_messages: vec![],
+                app_state_patch: None,
+                permission_updates: Vec::new(),
+                display_data: None,
+            });
+        }
+
+        let lines: Vec<&str> = content.lines().collect();
+        let total_lines = lines.len();
+
         // Convert user-facing 1-based offset → internal 0-based start index.
         // Matches TS `FileReadTool.ts:1020`: `offset === 0 ? 0 : offset - 1`.
         let start = if offset == 0 { 0 } else { offset - 1 };
 
-        // Offset-beyond-file warning. TS: `FileReadTool.ts:707` emits a
+        // Offset-beyond-file. TS: `FileReadTool.ts:707` emits a
         // `<system-reminder>` when the requested 1-based offset exceeds the
-        // total line count. We keep the warning text short and TS-compatible:
-        // it includes the original (1-based) offset and total line count.
+        // total line count. The content is left empty here; the warning string
+        // (with the effective offset + total line count) is produced in
+        // `render_for_model` exactly as TS does at the map layer.
         if start >= total_lines && total_lines > 0 {
-            // Wrapped in the TS `text` discriminated-union shape so the
-            // model receives a consistent envelope across all Read paths.
             return Ok(ToolResult {
-                data: text_output(
-                    file_path,
-                    &format!(
-                        "[file exists but is shorter than provided offset: \
-                         file has {total_lines} line(s), offset is {offset}]"
-                    ),
-                    0,
-                    1,
-                    total_lines,
-                ),
+                data: text_output(file_path, "", 0, offset, total_lines),
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
@@ -759,8 +752,30 @@ impl Tool for ReadTool {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
+                // TS `mapToolResultToToolResultBlockParam` 'text' branch: when
+                // `data.file.content` is empty, emit a `<system-reminder>`
+                // warning instead of empty text (only for `text`, not `pdf`).
+                let text = if content.is_empty() && kind == "text" {
+                    let total_lines = file
+                        .and_then(|f| f.get("totalLines"))
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    let start_line = file
+                        .and_then(|f| f.get("startLine"))
+                        .and_then(Value::as_i64)
+                        .unwrap_or(1);
+                    if total_lines == 0 {
+                        "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>".to_string()
+                    } else {
+                        format!(
+                            "<system-reminder>Warning: the file exists but is shorter than the provided offset ({start_line}). The file has {total_lines} lines.</system-reminder>"
+                        )
+                    }
+                } else {
+                    content
+                };
                 vec![ToolResultContentPart::Text {
-                    text: content,
+                    text,
                     provider_options: None,
                 }]
             }

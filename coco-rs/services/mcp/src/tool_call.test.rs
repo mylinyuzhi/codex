@@ -19,7 +19,9 @@ fn test_truncate_description_over_limit() {
     let long = "x".repeat(3000);
     let truncated = truncate_description(&long);
     assert!(truncated.len() < 3000);
-    assert!(truncated.ends_with("... [truncated]"));
+    // TS marker: a single U+2026 ellipsis, not three ASCII dots.
+    assert!(truncated.ends_with("… [truncated]"));
+    assert!(!truncated.contains("..."));
     assert!(truncated.starts_with(&"x".repeat(MAX_DESCRIPTION_LENGTH)));
 }
 
@@ -45,7 +47,7 @@ fn test_truncate_description_multibyte_boundary_no_panic() {
     // (starts at byte 2047), which would panic with a raw `&s[..2048]`.
     let s = format!("{}{}{}", "a".repeat(2047), "€", "z".repeat(20));
     let out = super::truncate_description(&s);
-    assert!(out.ends_with("... [truncated]"));
+    assert!(out.ends_with("… [truncated]"));
     // The '€' straddling the cut was dropped; head is the 2047 'a's.
     assert!(out.starts_with(&"a".repeat(2047)));
     assert!(

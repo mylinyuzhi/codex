@@ -1000,7 +1000,19 @@ impl SwarmAgentHandle {
                 } else {
                     coco_context::discover_memory_files(&cwd_for_prompt)
                 };
-            let env_info = coco_context::get_environment_info(&cwd_for_prompt, &model_for_env);
+            // TS `context.ts`: suppress git status under COCO_REMOTE or a
+            // disabled `include_git_instructions` setting.
+            let git_env = coco_config::EnvSnapshot::from_current_process();
+            let include_git_status = !git_env.is_truthy(coco_config::EnvKey::CocoRemote)
+                && coco_config::gitsettings::should_include_git_instructions(
+                    &self.runtime_config().settings.merged,
+                    &git_env,
+                );
+            let env_info = coco_context::get_environment_info(
+                &cwd_for_prompt,
+                &model_for_env,
+                include_git_status,
+            );
             coco_context::build_system_prompt(
                 identity,
                 &claude_md_files,
