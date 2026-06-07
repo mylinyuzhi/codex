@@ -35,11 +35,13 @@ use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
 use crate::presentation::thinking::render_thinking_block;
 use crate::presentation::transcript::ActiveTranscriptCell;
+use crate::presentation::transcript::AssistantPresentationOrder;
 use crate::presentation::transcript::TRANSCRIPT_LINE_CHAR_CAP;
 use crate::presentation::transcript::TranscriptCell;
 use crate::presentation::transcript::TranscriptPresentationInput;
 use crate::presentation::transcript::TranscriptProjectionOptions;
 use crate::presentation::transcript::TranscriptSourceCell;
+use crate::presentation::transcript::native_history_presentation;
 use crate::presentation::transcript::transcript_presentation;
 use crate::state::session::ToolExecution;
 use crate::state::transcript_view::CellKind;
@@ -82,6 +84,7 @@ pub struct ChatWidget<'a> {
     pub(crate) styles: UiStyles<'a>,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
     pub(crate) width: u16,
+    assistant_presentation_order: AssistantPresentationOrder,
     /// Session working directory, used to show memory-chip paths relative to it.
     /// `None` (tests / no session) falls back to the absolute path.
     pub(crate) cwd: Option<&'a str>,
@@ -107,6 +110,7 @@ impl<'a> ChatWidget<'a> {
             styles,
             syntax_highlighting: SyntaxHighlighting::Enabled,
             width: 80,
+            assistant_presentation_order: AssistantPresentationOrder::Source,
             cwd: None,
             kb_handle: None,
             show_thinking_internal: false,
@@ -164,13 +168,17 @@ impl<'a> ChatWidget<'a> {
         self.syntax_highlighting = syntax_highlighting;
         self
     }
+    pub(crate) fn native_history_append_compatible(mut self) -> Self {
+        self.assistant_presentation_order = AssistantPresentationOrder::TextBeforeLeadingThinking;
+        self
+    }
     /// Build lines that own their text for native history emission.
     pub fn build_lines_owned(&self) -> Vec<Line<'static>> {
         self.build_lines()
     }
 
     fn build_lines(&self) -> Vec<Line<'static>> {
-        let presentation = transcript_presentation(TranscriptPresentationInput {
+        let input = TranscriptPresentationInput {
             cells: self.cells,
             options: TranscriptProjectionOptions {
                 show_system_reminders: self.show_system_reminders,
@@ -179,7 +187,13 @@ impl<'a> ChatWidget<'a> {
             streaming: self.streaming,
             show_thinking: self.show_thinking,
             tool_executions: self.tool_executions,
-        });
+        };
+        let presentation =
+            if self.assistant_presentation_order == AssistantPresentationOrder::Source {
+                transcript_presentation(input)
+            } else {
+                native_history_presentation(input)
+            };
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         for cell in presentation.cells {

@@ -10,11 +10,11 @@ fn test_stream_render_controller_reuses_stable_prefix_for_new_tail() {
     let mut controller = StreamRenderController::new();
 
     let first = controller.render(input("first\n\nsecond", &theme));
-    let stable_after_first = controller.stable_source_end;
+    let stable_after_first = controller.stable_prefix_end;
     let second = controller.render(input("first\n\nsecond\n\nthird", &theme));
 
     assert!(stable_after_first > 0);
-    assert_eq!(controller.stable_source_end, "first\n\nsecond\n\n".len());
+    assert_eq!(controller.stable_prefix_end, "first\n\nsecond\n\n".len());
     assert!(second.len() >= first.len());
 }
 
@@ -32,67 +32,6 @@ fn test_stream_render_controller_render_does_not_duplicate_new_stable_lines() {
 
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
-}
-
-#[test]
-fn test_stable_source_end_holds_back_unterminated_line() {
-    assert_eq!(stable_source_end("one\ntwo"), 0);
-}
-
-#[test]
-fn test_stable_source_end_uses_blank_line_boundary() {
-    assert_eq!(stable_source_end("one\n\ntwo"), "one\n\n".len());
-}
-
-#[test]
-fn test_stable_source_end_holds_back_setext_heading_candidate() {
-    assert_eq!(stable_source_end("Title\n---"), 0);
-    assert_eq!(stable_source_end("Title\n---\nbody"), 0);
-    assert_eq!(
-        stable_source_end("Title\n---\n\nbody"),
-        "Title\n---\n\n".len()
-    );
-}
-
-#[test]
-fn test_stable_source_end_holds_back_reference_link_candidate() {
-    assert_eq!(stable_source_end("[label]\n\nbody"), 0);
-}
-
-#[test]
-fn test_stable_source_end_allows_atx_heading_without_blank_line() {
-    assert_eq!(stable_source_end("# Heading\nbody"), "# Heading\n".len());
-}
-
-#[test]
-fn test_stable_source_end_tracks_fence_marker_length() {
-    let source = "````\n```rust\nlet value = 1;\n```\n";
-    assert_eq!(stable_source_end(source), 0);
-    assert_eq!(
-        stable_source_end("````\n```rust\nlet value = 1;\n```\n````\n\nbody"),
-        "````\n```rust\nlet value = 1;\n```\n````\n\n".len()
-    );
-}
-
-#[test]
-fn test_stable_source_end_allows_closed_code_fence_without_blank_line() {
-    let source = "```rust\nlet values = [1, 2, 3];\n```\nbody";
-    assert_eq!(
-        stable_source_end(source),
-        "```rust\nlet values = [1, 2, 3];\n```\n".len()
-    );
-}
-
-#[test]
-fn test_stable_source_end_holds_back_markdown_table_region() {
-    let source = "intro\n| a | b |\n| - | - |\n| 1 | 2 |\n";
-    assert_eq!(stable_source_end(source), 0);
-}
-
-#[test]
-fn test_stable_source_end_holds_back_open_code_fence() {
-    let source = "intro\n```rust\nfn main() {}\n";
-    assert_eq!(stable_source_end(source), 0);
 }
 
 fn input<'a>(source: &'a str, theme: &'a Theme) -> StreamRenderInput<'a> {

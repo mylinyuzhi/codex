@@ -239,40 +239,37 @@ fn native_draw_repairs_provisional_append_after_mid_stream_resize() {
 }
 
 #[test]
-fn native_draw_repins_history_on_requested_replay() {
-    let backend = TestBackend::new(48, 9);
+fn native_draw_finalizes_after_turn_end_shrink_without_full_replay() {
+    let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 10, 64, 8));
     let mut state = AppState::new();
     let mut controller = NativeSurfaceController::default();
     controller
         .draw(&mut terminal, &state)
         .expect("initial draw");
 
-    test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta");
-    controller.draw(&mut terminal, &state).expect("append draw");
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    controller.draw(&mut terminal, &state).expect("stream draw");
 
-    // A turn-end relax requests a re-pin. With nothing else changed the next
-    // draw would normally be a no-op; the flag must force a full replay so
-    // finalized content re-seats the viewport at the bottom of native scrollback.
-    controller.request_repin_replay();
-    let outcome = controller.draw(&mut terminal, &state).expect("repin draw");
-    assert!(matches!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed { .. }
-    ));
+    state.ui.streaming = None;
+    test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta");
+    terminal.set_viewport_area(Rect::new(0, 14, 64, 4));
+    let outcome = controller
+        .draw(&mut terminal, &state)
+        .expect("final shrink draw");
+
+    assert!(
+        !matches!(outcome.history, HistoryEmissionOutcome::Replayed { .. }),
+        "ordinary turn-end shrink must finalize by appending the residual tail: {:?}",
+        outcome.history
+    );
     let text = plain_terminal_text(&terminal);
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
-
-    // One-shot: a follow-up draw with nothing changed must NOT replay again —
-    // the flag was consumed, so the re-pin fires at most once per request.
-    let after = controller
-        .draw(&mut terminal, &state)
-        .expect("post-repin draw");
-    assert!(
-        !matches!(after.history, HistoryEmissionOutcome::Replayed { .. }),
-        "pending_repin must be one-shot"
-    );
 }
 
 #[test]
@@ -528,7 +525,7 @@ fn native_draw_bakes_reasoning_metadata_without_full_replay() {
 }
 
 #[test]
-fn native_draw_replays_after_resize_requested_during_stream_finishes() {
+fn native_draw_appends_after_resize_requested_during_stream_finishes() {
     let backend = TestBackend::new(48, 8);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 20, 3));
@@ -546,19 +543,17 @@ fn native_draw_replays_after_resize_requested_during_stream_finishes() {
     test_helpers::push_assistant_text(&mut state.session, "done");
     let outcome = controller.draw(&mut terminal, &state).expect("finish draw");
 
-    assert_eq!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed {
-            message_count: 1,
-            rows: 6,
-        }
+    assert!(
+        !matches!(outcome.history, HistoryEmissionOutcome::Replayed { .. }),
+        "stream finish must not force a replay before width reflow is due: {:?}",
+        outcome.history
     );
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
     assert!(text.contains("done"));
 }
 
 #[test]
-fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
+fn native_draw_stream_finish_append_does_not_leave_gap_before_input() {
     let backend = TestBackend::new(64, 30);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 26, 64, 4));
@@ -574,9 +569,8 @@ fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
     streaming.append_text("short reply");
     streaming.reveal_all();
     state.ui.streaming = Some(streaming);
-    // Resize the terminal *width* mid-stream: that requests a stream-finish
-    // replay (reflow is width-keyed; a height-only change would not, and would
-    // not exercise the finish-replay gap path this test guards).
+    // Resize the terminal *width* mid-stream. Reflow is still width-keyed, but
+    // merely finishing the stream must not force an immediate full replay.
     apply_native_viewport(&mut terminal, Rect::new(0, 18, 60, 12));
     controller.draw(&mut terminal, &state).expect("stream draw");
 
@@ -585,19 +579,62 @@ fn native_draw_stream_finish_replay_does_not_leave_gap_before_input() {
     apply_native_viewport(&mut terminal, Rect::new(0, 26, 64, 4));
     let outcome = controller.draw(&mut terminal, &state).expect("finish draw");
 
-    assert!(matches!(
-        outcome.history,
-        HistoryEmissionOutcome::Replayed { .. }
-    ));
-    let lines = plain_terminal_lines(&terminal);
-    let assistant = line_index(&lines, "⏺ short reply");
-    let input = empty_input_index_after(&lines, assistant);
-    let gap = input.saturating_sub(assistant + 1);
     assert!(
-        gap <= 3,
-        "stream-finish replay left {gap} rows before input:\n{}",
-        lines.join("\n")
+        !matches!(outcome.history, HistoryEmissionOutcome::Replayed { .. }),
+        "stream finish must append residual history, not replay: {:?}",
+        outcome.history
     );
+    let text = plain_terminal_text(&terminal);
+    assert_eq!(text.matches("⏺ short reply").count(), 1, "{text}");
+}
+
+#[test]
+fn native_draw_keeps_input_bottom_stable_across_bottom_pinned_turn_states() {
+    let backend = TestBackend::new(64, 24);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    let mut state = AppState::new();
+    let mut controller = NativeSurfaceController::default();
+
+    let mut streaming = StreamingState::new();
+    streaming.append_text("first\n\nsecond\n\nthird");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 12);
+    let streaming = controller
+        .draw(&mut terminal, &state)
+        .expect("streaming draw");
+    let input_bottom = streaming.layout.input.bottom();
+    assert_eq!(input_bottom, 23);
+
+    state.ui.streaming = None;
+    test_helpers::push_assistant_text(&mut state.session, "first\n\nsecond\n\nthird");
+    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 4);
+    let turn_end = controller
+        .draw(&mut terminal, &state)
+        .expect("turn-end draw");
+    assert_eq!(turn_end.layout.input.bottom(), input_bottom);
+
+    state.session.prompt_suggestions = vec!["Run the focused surface tests".into()];
+    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 4);
+    let prompt_suggestion = controller
+        .draw(&mut terminal, &state)
+        .expect("prompt suggestion draw");
+    assert_eq!(prompt_suggestion.layout.input.bottom(), input_bottom);
+
+    state.session.prompt_suggestions.clear();
+    test_helpers::push_tool_use(&mut state.session, "call-1", "Read", "Cargo.toml");
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "call-1",
+        "Read",
+        "[workspace]\nmembers = []",
+        false,
+    );
+    apply_bottom_pinned_viewport(&mut terminal, /*height*/ 4);
+    let tool_result = controller
+        .draw(&mut terminal, &state)
+        .expect("tool-result draw");
+    assert_eq!(tool_result.layout.input.bottom(), input_bottom);
 }
 
 #[test]
@@ -705,17 +742,16 @@ fn line_index(lines: &[String], needle: &str) -> usize {
         .unwrap_or_else(|| panic!("missing {needle:?} in {lines:#?}"))
 }
 
-fn empty_input_index_after(lines: &[String], after: usize) -> usize {
-    lines
-        .iter()
-        .enumerate()
-        .skip(after + 1)
-        .find_map(|(index, line)| (line.trim() == "❯").then_some(index))
-        .unwrap_or_else(|| panic!("missing empty input prompt after row {after} in {lines:#?}"))
-}
-
 fn apply_native_viewport(terminal: &mut SurfaceTerminal<TestBackend>, area: Rect) {
     terminal
         .apply_viewport_area(area, true)
         .expect("apply viewport area");
+}
+
+fn apply_bottom_pinned_viewport(terminal: &mut SurfaceTerminal<TestBackend>, height: u16) {
+    let size = terminal.size().expect("test backend size");
+    apply_native_viewport(
+        terminal,
+        Rect::new(0, size.height.saturating_sub(height), size.width, height),
+    );
 }

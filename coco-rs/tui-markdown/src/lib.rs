@@ -11,6 +11,8 @@
 //! `body_indent`-column left margin and are wrapped downstream at paint time
 //! (`Paragraph::wrap`). This crate performs no internal width wrapping.
 
+use std::collections::HashSet;
+
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 use pulldown_cmark::Alignment;
@@ -119,6 +121,233 @@ pub fn highlight_code_lines(
     syntax: SyntaxHighlighting,
 ) -> Option<std::sync::Arc<Vec<Vec<Span<'static>>>>> {
     highlight::highlight_code(code, lang, styles, syntax)
+}
+
+/// Return the byte index of the longest conservative Markdown source prefix
+/// whose finalized render should remain a line prefix after more source arrives.
+///
+/// This is intentionally conservative: returning too little only keeps more text
+/// in the mutable streaming tail, while returning too much can commit rows whose
+/// Markdown interpretation later changes.
+pub fn stable_prefix_end(source: &str) -> usize {
+    let Some(scan_end) = source.rfind('\n').map(|idx| idx + 1) else {
+        return 0;
+    };
+
+    let mut offset = 0usize;
+    let mut safe_end = 0usize;
+    let mut fence_open: Option<FenceMarker> = None;
+    for line in source[..scan_end].split_inclusive('\n') {
+        let trimmed = line.trim();
+        let mut closed_fence = false;
+        if let Some(marker) = fence_marker(line) {
+            match fence_open {
+                Some(open) if marker.closes(open) => {
+                    fence_open = None;
+                    closed_fence = true;
+                }
+                None => {
+                    fence_open = Some(marker);
+                }
+                Some(_) => {}
+            }
+        }
+
+        offset += line.len();
+        if fence_open.is_none()
+            && (trimmed.is_empty() || closed_fence || atx_heading_marker(trimmed))
+            && stable_prefix_is_context_free(&source[..offset])
+        {
+            safe_end = offset;
+        }
+    }
+
+    safe_end
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FenceMarker {
+    ch: char,
+    len: usize,
+    can_close: bool,
+}
+
+impl FenceMarker {
+    fn closes(self, open: Self) -> bool {
+        self.can_close && self.ch == open.ch && self.len >= open.len
+    }
+}
+
+fn fence_marker(trimmed: &str) -> Option<FenceMarker> {
+    let candidate = trimmed.strip_suffix('\n').unwrap_or(trimmed);
+    let candidate = candidate.strip_suffix('\r').unwrap_or(candidate);
+    let indent = candidate.len() - candidate.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+
+    let candidate = &candidate[indent..];
+    let mut chars = candidate.chars();
+    let ch = chars.next()?;
+    if ch != '`' && ch != '~' {
+        return None;
+    }
+    let len = candidate
+        .chars()
+        .take_while(|candidate| *candidate == ch)
+        .count();
+    if len < 3 {
+        return None;
+    }
+    let rest = &candidate[len..];
+    let can_close = rest.chars().all(char::is_whitespace);
+
+    // Opening backtick fences cannot contain backticks in the info string.
+    if !can_close && ch == '`' && rest.contains('`') {
+        return None;
+    }
+
+    Some(FenceMarker { ch, len, can_close })
+}
+
+fn atx_heading_marker(trimmed: &str) -> bool {
+    let marker_len = trimmed.chars().take_while(|ch| *ch == '#').count();
+    (1..=6).contains(&marker_len)
+        && trimmed
+            .chars()
+            .nth(marker_len)
+            .is_none_or(char::is_whitespace)
+}
+
+fn stable_prefix_is_context_free(prefix: &str) -> bool {
+    // Link reference definitions are global in CommonMark, so later stream
+    // bytes can change unresolved reference-style links. Hold only actual
+    // reference candidates; harmless brackets such as task-list checkboxes and
+    // inline links may still commit.
+    let definitions = reference_definitions(prefix);
+    let mut fence_open: Option<FenceMarker> = None;
+    for line in prefix.split_inclusive('\n') {
+        if let Some(marker) = fence_marker(line) {
+            match fence_open {
+                Some(open) if marker.closes(open) => {
+                    fence_open = None;
+                }
+                None => {
+                    fence_open = Some(marker);
+                }
+                Some(_) => {}
+            }
+            continue;
+        }
+        if fence_open.is_some() || reference_definition_label(line).is_some() {
+            continue;
+        }
+        if contains_unresolved_reference_candidate(line, &definitions) {
+            return false;
+        }
+    }
+    true
+}
+
+fn reference_definitions(source: &str) -> HashSet<String> {
+    source
+        .lines()
+        .filter_map(reference_definition_label)
+        .collect()
+}
+
+fn reference_definition_label(line: &str) -> Option<String> {
+    let candidate = line.strip_prefix("   ").or_else(|| {
+        line.strip_prefix("  ")
+            .or_else(|| line.strip_prefix(' ').or(Some(line)))
+    })?;
+    let rest = candidate.strip_prefix('[')?;
+    let close = rest.find("]:")?;
+    normalize_reference_label(&rest[..close])
+}
+
+fn contains_unresolved_reference_candidate(line: &str, definitions: &HashSet<String>) -> bool {
+    let bytes = line.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let Some(rel_open) = line[idx..].find('[') else {
+            return false;
+        };
+        let open = idx + rel_open;
+        if is_task_marker_at(line, open) {
+            idx = open + 3;
+            continue;
+        }
+
+        let label_start = open + 1;
+        let Some(rel_close) = line[label_start..].find(']') else {
+            return false;
+        };
+        let close = label_start + rel_close;
+        let Some(label) = normalize_reference_label(&line[label_start..close]) else {
+            idx = close + 1;
+            continue;
+        };
+
+        let after_close = close + 1;
+        match line[after_close..].chars().next() {
+            Some('(') => {
+                idx = after_close + 1;
+            }
+            Some('[') => {
+                let target_start = after_close + 1;
+                let Some(rel_target_close) = line[target_start..].find(']') else {
+                    return false;
+                };
+                let target_close = target_start + rel_target_close;
+                let target = if target_start == target_close {
+                    label
+                } else if let Some(target) =
+                    normalize_reference_label(&line[target_start..target_close])
+                {
+                    target
+                } else {
+                    idx = target_close + 1;
+                    continue;
+                };
+                if !definitions.contains(&target) {
+                    return true;
+                }
+                idx = target_close + 1;
+            }
+            _ => {
+                if !definitions.contains(&label) {
+                    return true;
+                }
+                idx = after_close;
+            }
+        }
+    }
+    false
+}
+
+fn is_task_marker_at(line: &str, open: usize) -> bool {
+    let before = line[..open].trim();
+    let has_list_marker = before == "-"
+        || before == "+"
+        || before == "*"
+        || before.strip_suffix('.').is_some_and(|digits| {
+            !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
+        });
+    has_list_marker
+        && matches!(
+            line[open..].chars().take(3).collect::<Vec<_>>().as_slice(),
+            ['[', ' ', ']'] | ['[', 'x' | 'X', ']']
+        )
+}
+
+fn normalize_reference_label(label: &str) -> Option<String> {
+    let normalized = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() || normalized.len() > 999 {
+        None
+    } else {
+        Some(normalized.to_ascii_lowercase())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -207,6 +207,21 @@ fn replay_history_lines_keeps_all_rows_under_cap() {
 }
 
 #[test]
+fn replay_history_lines_caps_wrapped_rendered_rows() {
+    let theme = Theme::default();
+    let cells = vec![test_helpers::assistant_text_cell(&"wrapped ".repeat(200))];
+
+    let replay = render_replay_history_lines(&cells, options(&theme, 24), 6);
+
+    assert_eq!(replay.omitted_messages, 1);
+    assert!(
+        replay.rows.height() <= 6,
+        "rendered rows exceeded cap: {}",
+        replay.rows.height()
+    );
+}
+
+#[test]
 fn replay_history_lines_truncates_at_message_boundaries_with_marker() {
     let theme = Theme::default();
     let cells = vec![
@@ -215,9 +230,10 @@ fn replay_history_lines_truncates_at_message_boundaries_with_marker() {
         test_helpers::assistant_text_cell("three"),
     ];
 
-    let replay = render_replay_history_lines(&cells, options(&theme, 40), 5);
+    let replay = render_replay_history_lines(&cells, options(&theme, 80), 5);
 
     assert_eq!(replay.omitted_messages, 2);
+    assert!(replay.rows.height() <= 5);
     assert_eq!(
         plain_lines(&replay.lines),
         vec![
@@ -240,10 +256,10 @@ fn replay_history_lines_binary_search_picks_smallest_fitting_suffix() {
 
     // marker = 3 rows, each message = 2 rows. Budget 13 ⇒ keep 5 messages
     // (msg45..msg49) ⇒ omit 45. Exercises the binary search over boundaries.
-    let replay = render_replay_history_lines(&cells, options(&theme, 40), 13);
+    let replay = render_replay_history_lines(&cells, options(&theme, 80), 13);
 
     assert_eq!(replay.omitted_messages, 45);
-    assert!(replay.lines.len() <= 13);
+    assert!(replay.rows.height() <= 13);
     let rendered = plain_lines(&replay.lines);
     assert_eq!(
         rendered.first().map(String::as_str),
@@ -279,9 +295,15 @@ fn replay_cache_hit_returns_shared_lines() {
     assert!(second.stats.cache_hit);
     assert_eq!(second.stats.cache_lookup, HistoryReplayCacheLookup::Hit);
     assert!(std::sync::Arc::ptr_eq(&first.lines, &second.lines));
+    assert!(std::sync::Arc::ptr_eq(&first.rows, &second.rows));
     assert_eq!(second.stats.finalized_render_calls, 0);
     assert!(
         plain_lines(&second.lines)
+            .iter()
+            .any(|line| line.contains("cached 31"))
+    );
+    assert!(
+        plain_history_rows(&second.rows)
             .iter()
             .any(|line| line.contains("cached 31"))
     );
@@ -653,6 +675,27 @@ fn replay_cache_stats_track_entry_bytes_and_oversize_skip() {
 }
 
 #[test]
+fn replay_cache_entry_bytes_include_lines_and_rows() {
+    let theme = Theme::default();
+    let cells = cacheable_cells("entry-size");
+    let mut cache = HistoryReplayCache::default();
+
+    let replay = render_replay_history_lines_cached(
+        &cells,
+        options(&theme, 40),
+        CACHE_TEST_MAX_ROWS,
+        &mut cache,
+    );
+
+    assert!(replay.stats.cache_admitted);
+    assert!(replay.stats.replay_estimated_bytes > replay.rows.estimated_bytes());
+    assert_eq!(
+        replay.stats.cache_estimated_bytes,
+        replay.stats.replay_estimated_bytes
+    );
+}
+
+#[test]
 fn replay_cached_output_matches_uncached_output() {
     let theme = Theme::default();
     let cells = cacheable_cells("same-output");
@@ -785,6 +828,19 @@ fn plain_lines(lines: &[Line<'_>]) -> Vec<String> {
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>()
+        })
+        .collect()
+}
+
+fn plain_history_rows(rows: &coco_tui_ui::engine::history_insert::HistoryRows) -> Vec<String> {
+    let buffer = rows.buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
         })
         .collect()
 }

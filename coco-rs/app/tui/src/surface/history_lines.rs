@@ -28,6 +28,8 @@ use crate::state::transcript_view::RenderedCell;
 use crate::state::transcript_view::SystemCellKind;
 use crate::widgets::ChatWidget;
 use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::engine::history_insert::HistoryRows;
+use coco_tui_ui::engine::history_insert::render_history_rows;
 use coco_tui_ui::style::UiStyles;
 
 pub(crate) const DEFAULT_MAX_REFLOW_ROWS: usize = 9_000;
@@ -84,6 +86,7 @@ pub(crate) struct HistoryLineRenderOptions<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HistoryReplayLines {
     pub(crate) lines: Arc<[Line<'static>]>,
+    pub(crate) rows: Arc<HistoryRows>,
     pub(crate) omitted_messages: usize,
     pub(crate) stats: HistoryReplayRenderStats,
 }
@@ -125,6 +128,7 @@ pub(crate) enum HistoryReplayCacheSkipReason {
 #[derive(Debug, Clone)]
 struct HistoryReplayCacheEntry {
     lines: Arc<[Line<'static>]>,
+    rows: Arc<HistoryRows>,
     omitted_messages: usize,
     bytes: usize,
 }
@@ -207,9 +211,10 @@ impl HistoryReplayCache {
         &mut self,
         key: HistoryReplayCacheKey,
         lines: Arc<[Line<'static>]>,
+        rows: Arc<HistoryRows>,
         omitted_messages: usize,
     ) -> HistoryReplayCacheInsertOutcome {
-        let estimated_bytes = estimate_lines_bytes(&lines);
+        let estimated_bytes = estimate_replay_entry_bytes(&lines, &rows);
         if self.max_entries == 0 || self.max_bytes == 0 {
             return HistoryReplayCacheInsertOutcome {
                 inserted: false,
@@ -239,6 +244,7 @@ impl HistoryReplayCache {
             key,
             HistoryReplayCacheEntry {
                 lines,
+                rows,
                 omitted_messages,
                 bytes: estimated_bytes,
             },
@@ -276,6 +282,7 @@ pub(crate) fn render_finalized_history_lines(
         .show_thinking(options.show_thinking)
         .width(options.width)
         .syntax_highlighting(options.syntax_highlighting)
+        .native_history_append_compatible()
         .cwd(options.cwd);
     if let Some(kb_handle) = options.kb_handle {
         chat = chat.kb_handle(kb_handle);
@@ -293,8 +300,10 @@ pub(crate) fn render_replay_history_lines(
 ) -> HistoryReplayLines {
     let mut stats = HistoryReplayRenderStats::default();
     let replay = render_replay_history_lines_uncached(cells, options, max_rows, &mut stats);
+    let rows = Arc::new(render_history_rows(replay.lines.clone(), options.width));
     HistoryReplayLines {
         lines: Arc::from(replay.lines),
+        rows,
         omitted_messages: replay.omitted_messages,
         stats,
     }
@@ -316,7 +325,7 @@ pub(crate) fn render_replay_history_lines_cached(
         replay.stats.cache_entries = cache.entry_count();
         replay.stats.cache_estimated_bytes = cache.estimated_bytes();
         replay.stats.cell_content_estimated_bytes = content_bytes;
-        replay.stats.replay_estimated_bytes = estimate_lines_bytes(&replay.lines);
+        replay.stats.replay_estimated_bytes = replay.rows.estimated_bytes();
         return replay;
     }
 
@@ -327,7 +336,7 @@ pub(crate) fn render_replay_history_lines_cached(
         replay.stats.cache_entries = cache.entry_count();
         replay.stats.cache_estimated_bytes = cache.estimated_bytes();
         replay.stats.cell_content_estimated_bytes = content_bytes;
-        replay.stats.replay_estimated_bytes = estimate_lines_bytes(&replay.lines);
+        replay.stats.replay_estimated_bytes = replay.rows.estimated_bytes();
         return replay;
     };
 
@@ -341,7 +350,7 @@ pub(crate) fn render_replay_history_lines_cached(
         replay.stats.cache_entries = cache.entry_count();
         replay.stats.cache_estimated_bytes = cache.estimated_bytes();
         replay.stats.cell_content_estimated_bytes = content_bytes;
-        replay.stats.replay_estimated_bytes = estimate_lines_bytes(&replay.lines);
+        replay.stats.replay_estimated_bytes = replay.rows.estimated_bytes();
         return replay;
     };
     let key_build_elapsed_us = key_started.elapsed().as_micros();
@@ -349,6 +358,7 @@ pub(crate) fn render_replay_history_lines_cached(
     if let Some(hit) = cache.get(key) {
         return HistoryReplayLines {
             lines: hit.lines.clone(),
+            rows: hit.rows.clone(),
             omitted_messages: hit.omitted_messages,
             stats: HistoryReplayRenderStats {
                 cache_hit: true,
@@ -367,7 +377,7 @@ pub(crate) fn render_replay_history_lines_cached(
     let render_started = Instant::now();
     let mut replay = render_replay_history_lines(cells, options, max_rows);
     let render_elapsed = render_started.elapsed();
-    let estimated_bytes = estimate_lines_bytes(&replay.lines);
+    let estimated_bytes = replay.rows.estimated_bytes();
     replay.stats.cacheable = true;
     replay.stats.cache_lookup = HistoryReplayCacheLookup::Miss;
     replay.stats.key_build_elapsed_us = key_build_elapsed_us;
@@ -376,7 +386,12 @@ pub(crate) fn render_replay_history_lines_cached(
     if render_elapsed >= policy.admit_min_render_elapsed
         || estimated_bytes >= policy.admit_min_result_bytes
     {
-        let outcome = cache.insert(key, replay.lines.clone(), replay.omitted_messages);
+        let outcome = cache.insert(
+            key,
+            replay.lines.clone(),
+            replay.rows.clone(),
+            replay.omitted_messages,
+        );
         replay.stats.replay_estimated_bytes = outcome.estimated_bytes;
         replay.stats.cache_admitted = outcome.inserted;
         replay.stats.cache_evictions = outcome.evictions;
@@ -402,7 +417,7 @@ fn render_replay_history_lines_uncached(
     stats: &mut HistoryReplayRenderStats,
 ) -> UncachedHistoryReplayLines {
     let all_lines = render_counted(cells, options, stats);
-    if all_lines.len() <= max_rows || cells.is_empty() {
+    if rendered_line_row_count(&all_lines, options.width) <= max_rows || cells.is_empty() {
         return UncachedHistoryReplayLines {
             lines: all_lines,
             omitted_messages: 0,
@@ -420,12 +435,13 @@ fn render_replay_history_lines_uncached(
     // cells)); this is O(messages × cells × log messages) and renders the
     // chosen suffix at most a handful of times.
     let message_starts = engine_message_starts(cells);
-    let marker_rows = replay_truncation_marker(0).len();
     let n = message_starts.len();
 
     let mut fits = |omitted: usize| -> bool {
         let start = message_starts[omitted];
-        marker_rows + render_counted(&cells[start..], options, stats).len() <= max_rows
+        let mut lines = replay_truncation_marker(omitted);
+        lines.extend(render_counted(&cells[start..], options, stats));
+        rendered_line_row_count(&lines, options.width) <= max_rows
     };
 
     // Smallest `omitted` in `1..n` whose suffix fits; `n` ⇒ none fits.
@@ -466,6 +482,10 @@ fn render_counted(
     stats.finalized_render_calls += 1;
     stats.cells_rendered += cells.len();
     render_finalized_history_lines(cells, options)
+}
+
+fn rendered_line_row_count(lines: &[Line<'static>], width: u16) -> usize {
+    render_history_rows(lines.to_vec(), width).height() as usize
 }
 
 fn replay_cache_key(
@@ -730,6 +750,10 @@ fn hash_i32(hasher: &mut Sha256, value: i32) {
 
 fn hash_i64(hasher: &mut Sha256, value: i64) {
     hasher.update(value.to_le_bytes());
+}
+
+fn estimate_replay_entry_bytes(lines: &[Line<'_>], rows: &HistoryRows) -> usize {
+    estimate_lines_bytes(lines).saturating_add(rows.estimated_bytes())
 }
 
 fn estimate_lines_bytes(lines: &[Line<'_>]) -> usize {

@@ -150,7 +150,11 @@ impl HistoryEmissionTracker {
             HistoryEmissionPlan::Append { start } => start,
         };
 
-        let rows = terminal.insert_history_lines(render_tail(&cells[start..]))?;
+        let rendered = coco_tui_ui::engine::history_insert::render_history_rows(
+            render_tail(&cells[start..]),
+            terminal.viewport_area().width,
+        );
+        let rows = terminal.insert_history_rows(&rendered)?;
         self.mark_emitted_through(cells, cells.len());
         Ok(HistoryEmissionOutcome::Appended {
             start,
@@ -170,7 +174,11 @@ impl HistoryEmissionTracker {
         F: FnOnce(&[RenderedCell]) -> Vec<ratatui::text::Line<'static>>,
     {
         terminal.clear_owned_scrollback()?;
-        let rows = terminal.insert_history_lines(render_all(cells))?;
+        let rendered = coco_tui_ui::engine::history_insert::render_history_rows(
+            render_all(cells),
+            terminal.viewport_area().width,
+        );
+        let rows = terminal.insert_history_rows(&rendered)?;
         self.mark_emitted_through(cells, cells.len());
         Ok(HistoryEmissionOutcome::Replayed {
             message_count: cells.len(),
