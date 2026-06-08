@@ -90,9 +90,18 @@ pub fn prepare_responses_tools(
                         tool_obj["name"] = Value::String(pt.name.clone());
                     }
 
-                    // Merge args into the tool object
-                    for (k, v) in &pt.args {
-                        tool_obj[k] = v.clone();
+                    // Merge args into the tool object in sorted key order.
+                    // `pt.args` is a `HashMap` whose iteration order varies per
+                    // instance (per-`HashMap` `RandomState` seed), and
+                    // `serde_json::Value` preserves insertion order
+                    // (`preserve_order` is enabled via the dep tree). Inserting
+                    // in HashMap order would make the tool-definition bytes —
+                    // which sit at the request prefix — non-deterministic across
+                    // turns and silently break prompt caching. Sorting pins it.
+                    let mut keys: Vec<&String> = pt.args.keys().collect();
+                    keys.sort();
+                    for k in keys {
+                        tool_obj[k] = pt.args[k].clone();
                     }
                     openai_tools.push(tool_obj);
                 }

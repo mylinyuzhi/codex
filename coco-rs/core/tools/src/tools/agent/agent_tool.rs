@@ -54,11 +54,12 @@ pub struct AgentInput {
     /// Team name for spawning. Uses current team context if omitted.
     #[serde(default)]
     pub team_name: Option<String>,
-    /// Permission mode for spawned teammate (camelCase wire format,
-    /// e.g. "plan", "acceptEdits"). Parsed by
-    /// `coco_types::PermissionMode`.
+    /// Permission mode for spawned teammate. Typed as
+    /// [`coco_types::PermissionMode`] (camelCase wire, e.g. "plan",
+    /// "acceptEdits") so an invalid value is rejected at deserialize
+    /// instead of silently dropping to the parent mode.
     #[serde(default)]
-    pub mode: Option<String>,
+    pub mode: Option<coco_types::PermissionMode>,
     /// Absolute path to run the agent in. Mutually exclusive with
     /// `isolation: "worktree"`.
     #[serde(default)]
@@ -148,7 +149,7 @@ impl Tool for AgentTool {
             std::sync::OnceLock::new();
         SCHEMA.get_or_init(|| {
             // Runtime schema also accepts `mcp_servers` (permission/hook-injected,
-            // never model-set); the model view omits it (see `model_schema`).
+            // never model-set); the model view omits it (see `tool_spec`).
             coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -199,12 +200,18 @@ impl Tool for AgentTool {
                     },
                     "mode": {
                         "type": "string",
-                        // PermissionMode wire form (camelCase). Listing the enum lets
-                        // the model know which values round-trip through
-                        // `serde_json::from_value::<PermissionMode>`.
+                        // The `PermissionMode` wire values (camelCase) — these are
+                        // the modes that round-trip through
+                        // `serde_json::from_value::<PermissionMode>`. Mirrors TS
+                        // `permissionModeSchema()` = `z.enum(PERMISSION_MODES)` (the
+                        // INTERNAL set: the 5 external modes + `bubble`, plus `auto`
+                        // under a feature gate). `ask`/`deny` are NOT modes — they
+                        // are `PermissionBehavior` values and must not appear here
+                        // (they fail to parse and are silently dropped to the parent
+                        // mode by `resolve_subagent_mode`).
                         "enum": [
                             "default", "plan", "dontAsk", "acceptEdits", "bubble",
-                            "bypassPermissions", "auto", "ask", "deny"
+                            "bypassPermissions", "auto"
                         ],
                         "description": "Permission mode for spawned teammate (e.g., \"plan\" to require plan approval)."
                     },
@@ -212,7 +219,7 @@ impl Tool for AgentTool {
                         "type": "string",
                         "description": "Absolute path to run the agent in. Overrides the working directory for all filesystem and shell operations within this agent. Mutually exclusive with isolation: \"worktree\"."
                     },
-                    // Runtime-only allowlist; `model_schema` omits it from the model view.
+                    // Runtime-only allowlist; `tool_spec` omits it from the model view.
                     "mcp_servers": {
                         "type": "array",
                         "items": { "type": "string" },
@@ -226,20 +233,26 @@ impl Tool for AgentTool {
         })
     }
 
-    fn model_schema(
+    async fn tool_spec(
         &self,
         ctx: &coco_tool_runtime::SchemaContext,
-    ) -> std::borrow::Cow<'_, serde_json::Value> {
+        prompt_opts: &coco_tool_runtime::PromptOptions,
+    ) -> coco_tool_runtime::ToolSpec {
         // Always hide `mcp_servers`; hide `run_in_background` when the runtime
         // would veto it (background disabled / fork mode) — TS lazySchema().omit().
         let mut drop = vec!["mcp_servers"];
         if ctx.background_tasks_disabled || ctx.fork_mode_active {
             drop.push("run_in_background");
         }
-        std::borrow::Cow::Owned(coco_tool_runtime::schema_omit_properties(
-            self.runtime_validation_schema().as_value(),
-            &drop,
-        ))
+        coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
+            name: self.name().to_string(),
+            description: self.prompt(prompt_opts).await,
+            parameters: coco_tool_runtime::schema_omit_properties(
+                self.runtime_validation_schema().as_value(),
+                &drop,
+            ),
+            strict: self.strict(),
+        })
     }
 
     fn to_auto_classifier_input(&self, input: &AgentInput) -> Option<String> {
@@ -250,8 +263,12 @@ impl Tool for AgentTool {
         if let Some(subagent_type) = input.subagent_type.as_deref().filter(|s| !s.is_empty()) {
             tags.push(subagent_type.to_string());
         }
-        if let Some(mode) = input.mode.as_deref().filter(|s| !s.is_empty()) {
-            tags.push(format!("mode={mode}"));
+        if let Some(mode) = input.mode
+            && let Some(wire) = serde_json::to_value(mode)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+        {
+            tags.push(format!("mode={wire}"));
         }
         let prefix = if tags.is_empty() {
             ": ".to_string()
@@ -461,14 +478,11 @@ impl Tool for AgentTool {
             check_mcp_ready(&names, ctx).await?;
         }
 
-        let requested_mode_str = input.mode.clone();
-        let requested_mode_enum = requested_mode_str.as_deref().and_then(|s| {
-            serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
-        });
-        let effective_mode = coco_permissions::resolve_subagent_mode(
-            ctx.permission_context.mode,
-            requested_mode_enum,
-        );
+        // `input.mode` is already typed as `PermissionMode` (invalid values
+        // were rejected at deserialize), so no string re-parse / silent
+        // fallback is needed.
+        let effective_mode =
+            coco_permissions::resolve_subagent_mode(ctx.permission_context.mode, input.mode);
         let effective_mode_str = serde_json::to_value(effective_mode)
             .ok()
             .and_then(|v| v.as_str().map(String::from));

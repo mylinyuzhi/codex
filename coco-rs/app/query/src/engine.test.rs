@@ -16,6 +16,7 @@ use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolResultContent;
 use coco_llm_types::Usage;
 use coco_tool_runtime::ToolRegistry;
+use coco_tools::AskUserQuestionTool;
 use coco_tools::ExitPlanModeTool;
 use coco_tools::ReadTool;
 use tokio_util::sync::CancellationToken;
@@ -189,6 +190,10 @@ struct BudgetUnsafeTool {
 impl coco_tool_runtime::Tool for BudgetUnsafeTool {
     type Input = serde_json::Value;
     type Output = serde_json::Value;
+
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
 
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("budget_unsafe".into())
@@ -1796,6 +1801,39 @@ fn appended_tool_result_count(events: &[CoreEvent], tool_use_id: &str) -> usize 
         .count()
 }
 
+fn message_appended_tool_result_index(events: &[CoreEvent], tool_use_id: &str) -> Option<usize> {
+    events.iter().position(|event| {
+        let CoreEvent::Protocol(ServerNotification::MessageAppended { message, .. }) = event else {
+            return false;
+        };
+        let coco_messages::Message::ToolResult(result) = message.as_ref() else {
+            return false;
+        };
+        result.tool_use_id == tool_use_id
+    })
+}
+
+fn message_appended_assistant_tool_call_index(
+    events: &[CoreEvent],
+    tool_use_id: &str,
+) -> Option<usize> {
+    events.iter().position(|event| {
+        let CoreEvent::Protocol(ServerNotification::MessageAppended { message, .. }) = event
+        else {
+            return false;
+        };
+        let coco_messages::Message::Assistant(assistant) = message.as_ref() else {
+            return false;
+        };
+        let coco_messages::LlmMessage::Assistant { content, .. } = &assistant.message else {
+            return false;
+        };
+        content.iter().any(|part| {
+            matches!(part, AssistantContentPart::ToolCall(tool_call) if tool_call.tool_call_id == tool_use_id)
+        })
+    })
+}
+
 #[tokio::test]
 async fn unknown_tool_call_gets_error_result_and_completed_event() {
     let model = Arc::new(OneToolThenTextMock {
@@ -1870,7 +1908,9 @@ async fn invalid_tool_input_gets_error_result_and_completed_event() {
     assert_eq!(result.turns, 2);
     let output = tool_result_error_text(&result.final_messages, "invalid_read_1")
         .expect("invalid input should produce an error tool result");
-    assert!(output.contains("Invalid input"));
+    // `file_path` is a required field, so `{}` fails input-schema
+    // validation (`InputValidationError`) before the tool ever runs.
+    assert!(output.contains("InputValidationError"));
     assert!(output.contains("file_path"));
 
     let (queued, started, completed, completed_is_error) =
@@ -1879,6 +1919,131 @@ async fn invalid_tool_input_gets_error_result_and_completed_event() {
     assert_eq!(started, 0, "validation failure is never runnable");
     assert_eq!(completed, 1, "queued invalid tool call must complete");
     assert_eq!(completed_is_error, Some(true));
+    assert_eq!(
+        appended_tool_result_count(&events, "invalid_read_1"),
+        1,
+        "synthetic validation result must be externally appended once"
+    );
+    let assistant_idx = message_appended_assistant_tool_call_index(&events, "invalid_read_1")
+        .expect("assistant tool-call message should be appended");
+    let result_idx = message_appended_tool_result_index(&events, "invalid_read_1")
+        .expect("tool result should be appended");
+    assert!(
+        assistant_idx < result_idx,
+        "assistant tool call must be appended before synthetic result"
+    );
+}
+
+#[tokio::test]
+async fn valid_ask_user_question_reaches_permission_bridge() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "question_1".into(),
+        tool_name: "AskUserQuestion".into(),
+        input: serde_json::json!({
+            "questions": [{
+                "question": "Which approach?",
+                "header": "Approach",
+                "options": [
+                    {"label": "A", "description": "Use A"},
+                    {"label": "B", "description": "Use B"}
+                ],
+                "multiSelect": false
+            }]
+        }),
+        final_text: "done".into(),
+    });
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(AskUserQuestionTool));
+    let tools = Arc::new(registry);
+    let client = crate::test_support::model_runtime_registry(model);
+    let cancel = CancellationToken::new();
+    let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Approved));
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
+        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+
+    let result = engine.run("ask me").await.expect("should succeed");
+
+    assert_eq!(result.response_text, "done");
+    let calls = bridge.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].tool_name, "AskUserQuestion");
+    assert!(calls[0].input["questions"].is_array());
+}
+
+#[tokio::test]
+async fn rejected_ask_user_question_streaming_completion_is_non_error() {
+    let model = Arc::new(OneToolThenTextMock {
+        call_count: AtomicI32::new(0),
+        tool_call_id: "question_rejected_1".into(),
+        tool_name: "AskUserQuestion".into(),
+        input: serde_json::json!({
+            "questions": [{
+                "question": "Which approach?",
+                "header": "Approach",
+                "options": [
+                    {"label": "A", "description": "Use A"},
+                    {"label": "B", "description": "Use B"}
+                ],
+                "multiSelect": false
+            }]
+        }),
+        final_text: "done".into(),
+    });
+    let registry = ToolRegistry::new();
+    registry.register(Arc::new(AskUserQuestionTool));
+    let tools = Arc::new(registry);
+    let client = crate::test_support::model_runtime_registry(model);
+    let cancel = CancellationToken::new();
+    let bridge = Arc::new(RecordingBridge::new(ToolPermissionDecision::Rejected));
+    let engine = QueryEngine::new(QueryEngineConfig::default(), client, tools, cancel, None)
+        .with_permission_bridge(bridge.clone() as Arc<dyn ToolPermissionBridge>);
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(ev) = event_rx.recv().await {
+            events.push(ev);
+        }
+        events
+    });
+
+    let result = engine
+        .run_with_events("ask me", event_tx, coco_types::TurnId::generate())
+        .await
+        .expect("should succeed");
+    let events = collector.await.unwrap();
+
+    assert_eq!(result.response_text, "done");
+    assert!(result.permission_denials.is_empty());
+    assert_eq!(bridge.calls().len(), 1);
+    let feedback = tool_result_text(&result.final_messages, "question_rejected_1")
+        .expect("AskUserQuestion redirect should be a neutral tool result");
+    assert_eq!(feedback, "recorded");
+    assert!(
+        tool_result_error_text(&result.final_messages, "question_rejected_1").is_none(),
+        "AskUserQuestion redirect must not be stored as an error"
+    );
+
+    let (queued, started, completed, completed_is_error) =
+        tool_lifecycle_counts(&events, "question_rejected_1");
+    assert_eq!(queued, 1);
+    assert_eq!(started, 0, "redirected question is never executed");
+    assert_eq!(completed, 1);
+    assert_eq!(completed_is_error, Some(false));
+    assert_eq!(
+        appended_tool_result_count(&events, "question_rejected_1"),
+        1,
+        "redirect result must be externally appended once"
+    );
+    let assistant_idx = message_appended_assistant_tool_call_index(&events, "question_rejected_1")
+        .expect("assistant tool-call message should be appended");
+    let result_idx = message_appended_tool_result_index(&events, "question_rejected_1")
+        .expect("tool result should be appended");
+    assert!(
+        assistant_idx < result_idx,
+        "assistant tool call must be appended before redirect result"
+    );
 }
 
 #[tokio::test]
@@ -1958,6 +2123,10 @@ impl coco_tool_runtime::Tool for PermissionRewriteTool {
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("permission_rewrite".into())
     }
@@ -2015,6 +2184,10 @@ impl coco_tool_runtime::Tool for HookEchoTool {
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_echo".into())
     }
@@ -2060,6 +2233,10 @@ impl coco_tool_runtime::Tool for HookMcpTool {
     // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
+
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
 
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Mcp {
@@ -2121,6 +2298,10 @@ impl coco_tool_runtime::Tool for HookOrderingTool {
     type Input = serde_json::Value;
     type Output = serde_json::Value;
 
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
+
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_ordering".into())
     }
@@ -2172,6 +2353,10 @@ impl coco_tool_runtime::Tool for HookOrderingMcpTool {
     // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
+
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
 
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Mcp {
@@ -2236,6 +2421,10 @@ impl coco_tool_runtime::Tool for HookFailTool {
     // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
+
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
 
     fn id(&self) -> coco_types::ToolId {
         coco_types::ToolId::Custom("hook_fail".into())
@@ -3478,6 +3667,10 @@ impl Tool for AskingMockTool {
     // Migration scaffold: assoc types pinned to `Value`.
     type Input = serde_json::Value;
     type Output = serde_json::Value;
+
+    async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Custom("asking_mock".into())

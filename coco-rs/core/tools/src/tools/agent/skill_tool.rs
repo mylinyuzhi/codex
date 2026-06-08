@@ -17,10 +17,13 @@ use serde::Serialize;
 use serde_json::Value;
 
 /// Typed input for [`SkillTool`].
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+///
+/// TS parity: `SkillTool.ts:291-298 inputSchema` — `skill` is required,
+/// `args` is optional. (No `#[derive(Default)]`: `skill` is a required
+/// non-`Option` field per the TS `z.string()` without `.optional()`.)
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SkillInput {
-    /// The skill name to invoke (e.g. 'commit', 'review-pr', 'pdf')
-    #[serde(default)]
+    /// The skill name. E.g., "commit", "review-pr", or "pdf"
     pub skill: String,
     /// Optional arguments for the skill
     #[serde(default)]
@@ -87,10 +90,43 @@ impl Tool for SkillTool {
     fn name(&self) -> &str {
         ToolName::Skill.as_str()
     }
-    fn description(&self, _input: &SkillInput, _options: &DescriptionOptions) -> String {
-        "Execute a skill within the main conversation. Skills provide specialized \
-         capabilities and domain knowledge."
-            .into()
+    /// Short UI label. TS parity:
+    /// `SkillTool.ts:342 description: async ({ skill }) => `Execute skill: ${skill}``.
+    fn description(&self, input: &SkillInput, _options: &DescriptionOptions) -> String {
+        format!("Execute skill: {}", input.skill)
+    }
+
+    /// Full model-facing tool description. TS parity:
+    /// `SkillTool.ts:344 prompt: async () => getPrompt(...)` →
+    /// `SkillTool/prompt.ts getPrompt()`. The `<command-name>` literal
+    /// matches TS `COMMAND_NAME_TAG` (`constants/xml.ts`).
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        "Execute a skill within the main conversation\n\
+         \n\
+         When users ask you to perform tasks, check if any of the available skills match. \
+         Skills provide specialized capabilities and domain knowledge.\n\
+         \n\
+         When users reference a \"slash command\" or \"/<something>\" (e.g., \"/commit\", \
+         \"/review-pr\"), they are referring to a skill. Use this tool to invoke it.\n\
+         \n\
+         How to invoke:\n\
+         - Use this tool with the skill name and optional arguments\n\
+         - Examples:\n\
+         \u{20}\u{20}- `skill: \"pdf\"` - invoke the pdf skill\n\
+         \u{20}\u{20}- `skill: \"commit\", args: \"-m 'Fix bug'\"` - invoke with arguments\n\
+         \u{20}\u{20}- `skill: \"review-pr\", args: \"123\"` - invoke with arguments\n\
+         \u{20}\u{20}- `skill: \"ms-office-suite:pdf\"` - invoke using fully qualified name\n\
+         \n\
+         Important:\n\
+         - Available skills are listed in system-reminder messages in the conversation\n\
+         - When a skill matches the user's request, this is a BLOCKING REQUIREMENT: invoke the \
+         relevant Skill tool BEFORE generating any other response about the task\n\
+         - NEVER mention a skill without actually calling this tool\n\
+         - Do not invoke a skill that is already running\n\
+         - Do not use this tool for built-in CLI commands (like /help, /clear, etc.)\n\
+         - If you see a <command-name> tag in the current conversation turn, the skill has \
+         ALREADY been loaded - follow the instructions directly instead of calling this tool again\n"
+            .to_string()
     }
 
     /// Render the skill envelope. TS parity:

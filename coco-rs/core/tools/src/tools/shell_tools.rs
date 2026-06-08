@@ -1,6 +1,7 @@
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::InterruptBehavior;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -31,6 +32,22 @@ pub struct SleepOutput {
     pub seconds: f64,
 }
 
+/// Model-facing Sleep tool description. Byte-aligned port of TS
+/// `tools/SleepTool/prompt.ts:7-17` `SLEEP_TOOL_PROMPT` with `${TICK_TAG}`
+/// resolved to `tick` (TS `constants/xml.ts:25`). Surfaced to the model
+/// via [`SleepTool::prompt`].
+const SLEEP_TOOL_PROMPT: &str = "Wait for a specified duration. The user can interrupt the sleep at any time.
+
+Use this when the user tells you to sleep or rest, when you have nothing to do, or when you're waiting for something.
+
+You may receive <tick> prompts — these are periodic check-ins. Look for useful work to do before sleeping.
+
+You can call this concurrently with other tools — it won't interfere with them.
+
+Prefer this over `Bash(sleep ...)` — it doesn't hold a shell process.
+
+Each wake-up costs an API call, but the prompt cache expires after 5 minutes of inactivity — balance accordingly.";
+
 pub struct SleepTool;
 
 #[async_trait::async_trait]
@@ -45,8 +62,15 @@ impl Tool for SleepTool {
     fn name(&self) -> &str {
         ToolName::Sleep.as_str()
     }
+    /// Short UI label. TS `tools/SleepTool/prompt.ts:5` `DESCRIPTION`. The
+    /// long model-facing guidance lives in [`Self::prompt`].
     fn description(&self, _input: &SleepInput, _options: &DescriptionOptions) -> String {
-        "Sleep for a specified number of seconds.".into()
+        "Wait for a specified duration".into()
+    }
+    /// Model-facing tool description. TS `SleepTool` `prompt()` returns
+    /// `SLEEP_TOOL_PROMPT`.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        SLEEP_TOOL_PROMPT.into()
     }
     fn is_read_only(&self, _input: &SleepInput) -> bool {
         true
@@ -198,6 +222,16 @@ impl Tool for ReplTool {
         ToolName::Repl.as_str()
     }
     fn description(&self, _input: &ReplInput, _options: &DescriptionOptions) -> String {
+        "Start an interactive REPL session for a supported language.".into()
+    }
+    /// Model-facing tool description. The TS REPL tool
+    /// (`tools/REPLTool/REPLTool.js`) is an ant-only build that is
+    /// dead-code-eliminated from the available source tree, so there is no
+    /// upstream `prompt()` text to port. Returning the short label keeps
+    /// the model's tool description non-empty instead of the trait default
+    /// empty string. Replace with the real TS guidance if/when the
+    /// `REPLTool` source becomes available.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
         "Start an interactive REPL session for a supported language.".into()
     }
 

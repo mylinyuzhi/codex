@@ -62,12 +62,15 @@ pub enum ToolName {
     AskUserQuestion,
     ToolSearch,
     Config,
-    Brief,
+    /// TS wire name `SendUserMessage`.
+    SendUserMessage,
     #[serde(rename = "LSP")]
     Lsp,
     // MCP management (3)
     McpAuth,
+    #[serde(rename = "ListMcpResourcesTool")]
     ListMcpResources,
+    #[serde(rename = "ReadMcpResourceTool")]
     ReadMcpResource,
     // Scheduling (4)
     CronCreate,
@@ -125,11 +128,11 @@ impl ToolName {
             Self::AskUserQuestion => "AskUserQuestion",
             Self::ToolSearch => "ToolSearch",
             Self::Config => "Config",
-            Self::Brief => "Brief",
+            Self::SendUserMessage => "SendUserMessage",
             Self::Lsp => "LSP",
             Self::McpAuth => "McpAuth",
-            Self::ListMcpResources => "ListMcpResources",
-            Self::ReadMcpResource => "ReadMcpResource",
+            Self::ListMcpResources => "ListMcpResourcesTool",
+            Self::ReadMcpResource => "ReadMcpResourceTool",
             Self::CronCreate => "CronCreate",
             Self::CronDelete => "CronDelete",
             Self::CronList => "CronList",
@@ -195,11 +198,11 @@ impl FromStr for ToolName {
             "AskUserQuestion" => Ok(Self::AskUserQuestion),
             "ToolSearch" => Ok(Self::ToolSearch),
             "Config" => Ok(Self::Config),
-            "Brief" => Ok(Self::Brief),
+            "SendUserMessage" => Ok(Self::SendUserMessage),
             "LSP" => Ok(Self::Lsp),
             "McpAuth" => Ok(Self::McpAuth),
-            "ListMcpResources" => Ok(Self::ListMcpResources),
-            "ReadMcpResource" => Ok(Self::ReadMcpResource),
+            "ListMcpResourcesTool" => Ok(Self::ListMcpResources),
+            "ReadMcpResourceTool" => Ok(Self::ReadMcpResource),
             "CronCreate" => Ok(Self::CronCreate),
             "CronDelete" => Ok(Self::CronDelete),
             "CronList" => Ok(Self::CronList),
@@ -223,10 +226,6 @@ impl FromStr for ToolName {
 /// - `Task` → `Agent`
 /// - `KillShell` → `TaskStop`
 /// - `AgentOutputTool` / `BashOutputTool` → `TaskOutput`
-///
-/// The TS `Brief` alias is feature-gated (KAIROS) and only meaningful
-/// when the brief tool exists; coco-rs ships `ToolName::Brief` directly,
-/// so the alias is a no-op here.
 pub fn normalize_legacy_tool_name(name: &str) -> &str {
     match name {
         "Task" => "Agent",

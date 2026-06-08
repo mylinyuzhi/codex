@@ -1,5 +1,6 @@
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::SideQueryRequest;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
@@ -17,19 +18,18 @@ use serde_json::Value;
 /// deserialiser.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct WebFetchInput {
-    /// The URL to fetch content from
-    #[serde(default)]
+    /// The URL to fetch content from. Required — the runtime schema declares
+    /// `required: ["url", "prompt"]` (TS `z.strictObject`).
     pub url: String,
-    /// The prompt to run on the fetched content
-    #[serde(default)]
+    /// The prompt to run on the fetched content. Required (see `url`).
     pub prompt: String,
 }
 
 /// Typed input for [`WebSearchTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct WebSearchInput {
-    /// The search query
-    #[serde(default)]
+    /// The search query. Required — the runtime schema declares
+    /// `required: ["query"]` with `minLength: 2`.
     pub query: String,
     /// Maximum number of results to return. Clamped to
     /// `[1, SEARCH_MAX_RESULTS_CEILING]`.
@@ -70,6 +70,32 @@ specific prompt. Your job is to answer the prompt using ONLY information \
 from the provided content. \
 If the content does not contain enough information to answer the prompt, \
 say so clearly rather than guessing. Be concise.";
+
+/// Model-facing WebFetch tool description body. Byte-aligned port of TS
+/// `WebFetchTool/prompt.ts:3-21` `DESCRIPTION`. Includes the MCP-
+/// preference hint, the 15-minute cache note, and the cross-origin
+/// redirect handling guidance — all of which inform model behavior when
+/// the fetch encounters edge cases. Surfaced to the model via
+/// [`WebFetchTool::prompt`] (prepended with the auth-warning prefix).
+const WEB_FETCH_DESCRIPTION: &str = "
+- Fetches content from a specified URL and processes it using an AI model
+- Takes a URL and a prompt as input
+- Fetches the URL content, converts HTML to markdown
+- Processes the content with the prompt using a small, fast model
+- Returns the model's response about the content
+- Use this tool when you need to retrieve and analyze web content
+
+Usage notes:
+  - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.
+  - The URL must be a fully-formed valid URL
+  - HTTP URLs will be automatically upgraded to HTTPS
+  - The prompt should describe what information you want to extract from the page
+  - This tool is read-only and does not modify any files
+  - Results may be summarized if the content is very large
+  - Includes a self-cleaning 15-minute cache for faster responses when repeatedly accessing the same URL
+  - When a URL redirects to a different host, the tool will inform you and provide the redirect URL in a special format. You should then make a new WebFetch request with the redirect URL to fetch the content.
+  - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr view, gh issue view, gh api).
+";
 
 /// Response guidelines appended to the extraction prompt, selected by
 /// whether the fetched URL is a preapproved documentation host.
@@ -667,32 +693,29 @@ impl Tool for WebFetchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebFetch)
     }
-    fn description(&self, _input: &WebFetchInput, _options: &DescriptionOptions) -> String {
-        // R7-T25: byte-aligned port of TS `WebFetchTool/prompt.ts:3-21`
-        // `DESCRIPTION`. Includes the MCP-preference hint, the
-        // 15-minute cache note, and the cross-origin redirect handling
-        // guidance — all of which inform model behavior when the
-        // fetch encounters edge cases.
-        "
-- Fetches content from a specified URL and processes it using an AI model
-- Takes a URL and a prompt as input
-- Fetches the URL content, converts HTML to markdown
-- Processes the content with the prompt using a small, fast model
-- Returns the model's response about the content
-- Use this tool when you need to retrieve and analyze web content
-
-Usage notes:
-  - IMPORTANT: If an MCP-provided web fetch tool is available, prefer using that tool instead of this one, as it may have fewer restrictions.
-  - The URL must be a fully-formed valid URL
-  - HTTP URLs will be automatically upgraded to HTTPS
-  - The prompt should describe what information you want to extract from the page
-  - This tool is read-only and does not modify any files
-  - Results may be summarized if the content is very large
-  - Includes a self-cleaning 15-minute cache for faster responses when repeatedly accessing the same URL
-  - When a URL redirects to a different host, the tool will inform you and provide the redirect URL in a special format. You should then make a new WebFetch request with the redirect URL to fetch the content.
-  - For GitHub URLs, prefer using the gh CLI via Bash instead (e.g., gh pr view, gh issue view, gh api).
-"
-        .into()
+    /// Short UI label. TS `WebFetchTool.ts:72-80` `async description(input)`
+    /// returns `Claude wants to fetch content from ${hostname}` (or a
+    /// generic fallback when the URL can't be parsed). The long model-
+    /// facing guidance lives in [`Self::prompt`].
+    fn description(&self, input: &WebFetchInput, _options: &DescriptionOptions) -> String {
+        let host = extract_host(&input.url);
+        if host.is_empty() {
+            "Claude wants to fetch content from this URL".into()
+        } else {
+            format!("Claude wants to fetch content from {host}")
+        }
+    }
+    /// Model-facing tool description. TS `WebFetchTool.ts:181-190`
+    /// `async prompt(_options)` always prepends the authenticated/private
+    /// URL warning to `DESCRIPTION` (kept unconditional in TS to avoid
+    /// prompt-cache invalidation from ToolSearch flicker).
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        format!(
+            "IMPORTANT: WebFetch WILL FAIL for authenticated or private URLs. Before using this \
+             tool, check if the URL points to an authenticated service (e.g. Google Docs, \
+             Confluence, Jira, GitHub). If so, look for a specialized MCP tool that provides \
+             authenticated access.\n{WEB_FETCH_DESCRIPTION}"
+        )
     }
     fn is_read_only(&self, _input: &WebFetchInput) -> bool {
         true
@@ -1556,6 +1579,46 @@ fn current_month_year_local() -> String {
     format!("{month_name} {}", now.year())
 }
 
+/// Model-facing WebSearch tool description. Byte-aligned port of TS
+/// `WebSearchTool/prompt.ts:5-33` `getWebSearchPrompt()`. The CRITICAL
+/// REQUIREMENT block is mandatory — TS marks it as "MUST follow" and the
+/// model is expected to add a `Sources:` section to every response. The
+/// current month/year is injected at request time so the model uses the
+/// right year for recent-events queries. Surfaced to the model via
+/// [`WebSearchTool::prompt`].
+fn web_search_prompt_text() -> String {
+    let current_month_year = current_month_year_local();
+    format!(
+        "
+- Allows Claude to search the web and use the results to inform responses
+- Provides up-to-date information for current events and recent data
+- Returns search result information formatted as search result blocks, including links as markdown hyperlinks
+- Use this tool for accessing information beyond Claude's knowledge cutoff
+- Searches are performed automatically within a single API call
+
+CRITICAL REQUIREMENT - You MUST follow this:
+  - After answering the user's question, you MUST include a \"Sources:\" section at the end of your response
+  - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
+  - This is MANDATORY - never skip including sources in your response
+  - Example format:
+
+    [Your answer here]
+
+    Sources:
+    - [Source Title 1](https://example.com/1)
+    - [Source Title 2](https://example.com/2)
+
+Usage notes:
+  - Domain filtering is supported to include or block specific websites
+  - Web search is only available in the US
+
+IMPORTANT - Use the correct year in search queries:
+  - The current month is {current_month_year}. You MUST use this year when searching for recent information, documentation, or current events.
+  - Example: If the user asks for \"latest React docs\", search for \"React documentation\" with the current year, NOT last year
+"
+    )
+}
+
 pub struct WebSearchTool;
 
 #[async_trait::async_trait]
@@ -1601,7 +1664,12 @@ impl Tool for WebSearchTool {
                         "description": "Never include search results from these domains (post-filtered client-side)"
                     }
                 },
-                "required": []
+                // TS `z.strictObject({ query: z.string().min(2), ... })`:
+                // `query` is the only non-optional field. `max_results` is a
+                // coco-rs client-side extension (TS has no such field) and
+                // stays optional. `allowed_domains`/`blocked_domains` are
+                // `.optional()` in TS.
+                "required": ["query"]
             }))
         })
     }
@@ -1623,44 +1691,16 @@ impl Tool for WebSearchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebSearch)
     }
-    fn description(&self, _input: &WebSearchInput, _options: &DescriptionOptions) -> String {
-        // R7-T25: byte-aligned port of TS `WebSearchTool/prompt.ts:5-33`
-        // `getWebSearchPrompt()`. The CRITICAL REQUIREMENT block is
-        // mandatory — TS marks it as "MUST follow" and the model is
-        // expected to add a `Sources:` section to every response. The
-        // current month/year injection is computed at request time
-        // from the system clock so the model uses the right year for
-        // recent-events queries.
-        let current_month_year = current_month_year_local();
-        format!(
-            "
-- Allows Claude to search the web and use the results to inform responses
-- Provides up-to-date information for current events and recent data
-- Returns search result information formatted as search result blocks, including links as markdown hyperlinks
-- Use this tool for accessing information beyond Claude's knowledge cutoff
-- Searches are performed automatically within a single API call
-
-CRITICAL REQUIREMENT - You MUST follow this:
-  - After answering the user's question, you MUST include a \"Sources:\" section at the end of your response
-  - In the Sources section, list all relevant URLs from the search results as markdown hyperlinks: [Title](URL)
-  - This is MANDATORY - never skip including sources in your response
-  - Example format:
-
-    [Your answer here]
-
-    Sources:
-    - [Source Title 1](https://example.com/1)
-    - [Source Title 2](https://example.com/2)
-
-Usage notes:
-  - Domain filtering is supported to include or block specific websites
-  - Web search is only available in the US
-
-IMPORTANT - Use the correct year in search queries:
-  - The current month is {current_month_year}. You MUST use this year when searching for recent information, documentation, or current events.
-  - Example: If the user asks for \"latest React docs\", search for \"React documentation\" with the current year, NOT last year
-"
-        )
+    /// Short UI label. TS `WebSearchTool.ts:157-159` `async description(input)`
+    /// returns `Claude wants to search the web for: ${input.query}`. The
+    /// long model-facing guidance lives in [`Self::prompt`].
+    fn description(&self, input: &WebSearchInput, _options: &DescriptionOptions) -> String {
+        format!("Claude wants to search the web for: {}", input.query)
+    }
+    /// Model-facing tool description. TS `WebSearchTool.ts:223-225`
+    /// `async prompt()` returns `getWebSearchPrompt()`.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        web_search_prompt_text()
     }
     fn is_read_only(&self, _input: &WebSearchInput) -> bool {
         true
@@ -1735,13 +1775,6 @@ IMPORTANT - Use the correct year in search queries:
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         let query = input.query.trim().to_string();
-
-        if query.is_empty() {
-            return Err(ToolError::InvalidInput {
-                message: "query parameter is required".into(),
-                error_code: None,
-            });
-        }
 
         let allowed: Vec<String> = input
             .allowed_domains
@@ -1860,7 +1893,7 @@ fn format_results(query: &str, results: &[SearchResult]) -> String {
         "Search results for \"{query}\" ({} hit(s)):\n\n",
         results.len()
     );
-    // No trailing reminder — `WebSearchTool::description()` already
+    // No trailing reminder — `WebSearchTool::prompt()` already
     // mandates the `Sources:` section as a CRITICAL REQUIREMENT;
     // duplicating it here competes for model attention.
     for (i, r) in results.iter().enumerate() {

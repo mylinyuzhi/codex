@@ -40,9 +40,9 @@ pub struct EditInput {
     pub file_path: String,
     /// The text to replace
     pub old_string: String,
-    /// The replacement text (must differ from old_string)
+    /// The text to replace it with (must be different from old_string)
     pub new_string: String,
-    /// Replace all occurrences (default false)
+    /// Replace all occurrences of old_string (default false)
     #[serde(default)]
     pub replace_all: bool,
 }
@@ -85,7 +85,17 @@ impl Tool for EditTool {
         ToolName::Edit.as_str()
     }
 
+    /// Short per-call UI label. TS `FileEditTool.ts:91-93`
+    /// `async description()` → `'A tool for editing files'`.
     fn description(&self, _input: &EditInput, _options: &DescriptionOptions) -> String {
+        "A tool for editing files".into()
+    }
+
+    /// Model-facing tool description (schema-listing time). TS
+    /// `FileEditTool.ts:94-96` `async prompt()` →
+    /// `getEditToolDescription()`; we hold the ported text in
+    /// [`EDIT_TOOL_DESCRIPTION`].
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         EDIT_TOOL_DESCRIPTION.into()
     }
 

@@ -137,6 +137,7 @@ impl<'a> ToolCallRunner<'a> {
                 model_runtimes: self.model_runtimes,
                 auto_mode_rules: self.auto_mode_rules,
                 completion_event_mode: ToolCompletionEventMode::Emit,
+                deferred_tool_completions: None,
             })
             .await;
 

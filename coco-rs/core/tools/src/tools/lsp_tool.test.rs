@@ -63,7 +63,7 @@ fn requires_position_matches_ts_schema() {
 
 #[test]
 fn build_params_converts_one_based_to_zero_based() {
-    let p = build_params(LspAction::GoToDefinition, "file:///a.rs", Some(10), Some(5));
+    let p = build_params(LspAction::GoToDefinition, "file:///a.rs", 10, 5);
     assert_eq!(p["textDocument"]["uri"], "file:///a.rs");
     assert_eq!(p["position"]["line"], 9);
     assert_eq!(p["position"]["character"], 4);
@@ -71,21 +71,22 @@ fn build_params_converts_one_based_to_zero_based() {
 
 #[test]
 fn build_params_find_references_includes_declaration() {
-    let p = build_params(LspAction::FindReferences, "file:///a.rs", Some(1), Some(1));
+    let p = build_params(LspAction::FindReferences, "file:///a.rs", 1, 1);
     assert_eq!(p["context"]["includeDeclaration"], true);
     assert_eq!(p["position"]["line"], 0);
 }
 
 #[test]
 fn build_params_document_symbol_omits_position() {
-    let p = build_params(LspAction::DocumentSymbol, "file:///a.rs", None, None);
+    // `line` / `character` are schema-required but ignored for documentSymbol.
+    let p = build_params(LspAction::DocumentSymbol, "file:///a.rs", 1, 1);
     assert_eq!(p["textDocument"]["uri"], "file:///a.rs");
     assert!(p.get("position").is_none());
 }
 
 #[test]
 fn build_params_workspace_symbol_is_empty_query() {
-    let p = build_params(LspAction::WorkspaceSymbol, "file:///a.rs", None, None);
+    let p = build_params(LspAction::WorkspaceSymbol, "file:///a.rs", 1, 1);
     assert_eq!(p["query"], "");
     assert!(p.get("textDocument").is_none());
 }
@@ -146,7 +147,10 @@ async fn is_enabled_requires_both_feature_and_connected_handle() {
 }
 
 #[tokio::test]
-async fn execute_rejects_missing_position_for_position_based_op() {
+async fn execute_rejects_missing_position() {
+    // `line` / `character` are schema-required for every operation (TS
+    // parity: tool-facing `inputSchema` makes both mandatory). Omitting
+    // them is rejected at input deserialization, before dispatch.
     let ctx = ToolUseContext::test_default();
     let input = json!({
         "operation": "goToDefinition",
@@ -162,7 +166,7 @@ async fn execute_rejects_missing_position_for_position_based_op() {
         other => panic!("expected InvalidInput, got {other:?}"),
     };
     assert!(
-        msg.contains("requires both `line` and `character`"),
+        msg.contains("invalid tool input") && msg.contains("line"),
         "missing-position error message changed: {msg}"
     );
 }

@@ -11,7 +11,7 @@ use crate::context::ToolUseContext;
 use crate::error::ToolError;
 use crate::validation::ValidationResult;
 
-/// Session context for [`Tool::model_schema`]. Carries
+/// Session context for [`Tool::tool_spec`]. Carries
 /// the per-session knobs that drive TS-parity dynamic schema omits
 /// (e.g. `AgentTool.tsx:110-125 lazySchema`'s
 /// `isBackgroundTasksDisabled || isForkSubagentEnabled()` gate).
@@ -33,6 +33,14 @@ pub struct SchemaContext {
     /// on capability flags consult this. `None` when the seam can't
     /// resolve features (test / minimal SDK embedding).
     pub features: Option<std::sync::Arc<coco_types::Features>>,
+    /// The active model's `apply_patch` tool shape, from
+    /// `ModelInfo.apply_patch_tool_type` (`None` → the default `Freeform`). Read
+    /// by `ApplyPatchTool::tool_spec`. `Freeform` is the only variant today, so
+    /// this currently always yields the grammar tool — it is retained as the
+    /// **extension point**: adding a future apply-type variant forces a new
+    /// `tool_spec` match arm emitting a different wire shape (the exhaustive
+    /// match guarantees it can't be silently defaulted).
+    pub apply_patch_tool_type: Option<coco_types::ApplyPatchToolType>,
 }
 
 /// Info about whether a tool use is a search or read operation for UI collapse.
@@ -137,6 +145,10 @@ pub struct PromptOptions {
     /// FileRead/Glob/Grep hints for `find` / `grep` via Bash. TS parity:
     /// `hasEmbeddedSearchTools()` in `prompt.ts:222-231`.
     pub has_embedded_search_tools: bool,
+    /// Agent-team tools are available in this session. Task prompts use
+    /// this to include teammate/owner coordination guidance only when
+    /// `Feature::AgentTeams` is enabled.
+    pub agent_teams_available: bool,
     /// Parent session is itself an in-process teammate. Drops the
     /// run_in_background / name / team_name / mode bullets and adds the
     /// "only synchronous subagents" notice in the AgentTool prompt. TS
@@ -278,7 +290,7 @@ pub trait DynTool: Send + Sync + 'static {
     // -- Schema --
 
     fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema;
-    fn model_schema(&self, ctx: &SchemaContext) -> std::borrow::Cow<'_, Value>;
+    async fn tool_spec(&self, schema_ctx: &SchemaContext, prompt_opts: &PromptOptions) -> ToolSpec;
     fn strict(&self) -> bool;
 
     // -- Description --
@@ -312,6 +324,7 @@ pub trait DynTool: Send + Sync + 'static {
     // -- Validation --
 
     fn validate_input(&self, input: &Value, ctx: &ToolUseContext) -> ValidationResult;
+    fn coerce_raw_string_input(&self, raw: &str) -> Option<Value>;
     fn inputs_equivalent(&self, a: &Value, b: &Value) -> bool;
     fn backfill_observable_input(&self, input: &mut Value);
 
@@ -333,6 +346,63 @@ pub trait DynTool: Send + Sync + 'static {
     // -- Rendering --
 
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart>;
+}
+
+// =========================================================================
+// `ToolSpec` — the model-facing wire shape (single source of truth).
+// =========================================================================
+
+/// How a tool is presented to the model in the request tool list. The single
+/// source of truth, returned by [`Tool::tool_spec`] and converted to the
+/// provider wire format once in `app/query::engine_prompt`. Mirrors codex-rs
+/// `ToolSpec`. Deliberately *exhaustive*: the wire-conversion boundary MUST
+/// handle every shape, so adding a future variant (provider built-ins, MCP)
+/// is a compile error there until serialized — never a silent fallback.
+#[derive(Debug, Clone)]
+pub enum ToolSpec {
+    /// A JSON function tool (`{name, description, parameters}`). The default
+    /// for every tool — the model calls it with a JSON object argument.
+    Function(FunctionToolSpec),
+    /// A freeform/grammar tool (OpenAI Responses custom tool): the model emits
+    /// raw text constrained by `format`, not a JSON object. Realized as a
+    /// provider-defined custom tool at the wire edge. OpenAI-Responses-only.
+    Freeform(FreeformToolSpec),
+}
+
+/// A JSON function tool definition.
+#[derive(Debug, Clone)]
+pub struct FunctionToolSpec {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+    pub strict: bool,
+}
+
+/// A freeform/grammar tool definition.
+#[derive(Debug, Clone)]
+pub struct FreeformToolSpec {
+    pub name: String,
+    pub description: String,
+    pub format: GrammarFormat,
+}
+
+/// The grammar constraint carried by a [`FreeformToolSpec`].
+#[derive(Debug, Clone)]
+pub struct GrammarFormat {
+    /// Grammar syntax, e.g. `"lark"`.
+    pub syntax: String,
+    /// The grammar definition text.
+    pub definition: String,
+}
+
+impl ToolSpec {
+    /// The model-facing description, regardless of variant.
+    pub fn description(&self) -> &str {
+        match self {
+            ToolSpec::Function(f) => &f.description,
+            ToolSpec::Freeform(f) => &f.description,
+        }
+    }
 }
 
 // =========================================================================
@@ -421,17 +491,45 @@ pub trait Tool: Send + Sync + 'static {
     /// owns the compiled validator; validated on every tool call (including
     /// hook-rewritten input at `tool_call_preparer.rs`). No default ⇒ E0046
     /// forces every tool to declare it (a `Value`-Input tool can't fall through
-    /// to a derive). MUST be a superset of every `model_schema(ctx)` view;
-    /// internally-built schemas carry `additionalProperties:false`.
+    /// to a derive). MUST be a superset of every `tool_spec(ctx)` parameters
+    /// view; internally-built schemas carry `additionalProperties:false`.
     fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema;
 
-    /// **Model-facing schema** (v4.2) — a plain `Value`, never validated, only
-    /// serialized into the prompt tool list. Default borrows the runtime
-    /// schema's value; tools with runtime-only hook-injected fields (AgentTool
-    /// `mcp_servers`, Bash `_simulatedSedEdit`) override to omit them via
-    /// [`crate::schema::schema_omit_properties`].
-    fn model_schema(&self, _ctx: &SchemaContext) -> std::borrow::Cow<'_, Value> {
-        std::borrow::Cow::Borrowed(self.runtime_validation_schema().as_value())
+    /// **The model-facing wire shape** — the single source of truth for how
+    /// this tool appears in the request tool list. `app/query::engine_prompt`
+    /// calls only this (not `prompt()` / a separate schema hook) and converts
+    /// the [`ToolSpec`] to the provider wire format. Mirrors codex-rs
+    /// `ToolExecutor::spec`.
+    ///
+    /// Default: a JSON [`ToolSpec::Function`] built from `name()`, the
+    /// model-facing `prompt()` description, the runtime validation schema, and
+    /// `strict()`. Override to present a different shape:
+    /// - a [`ToolSpec::Freeform`] grammar tool (apply_patch), or
+    /// - a `Function` with runtime-only hook-injected fields omitted — AgentTool
+    ///   `mcp_servers`, Bash `_simulatedSedEdit`, ExitPlanMode `plan` — via
+    ///   [`crate::schema::schema_omit_properties`] on the runtime schema value.
+    async fn tool_spec(
+        &self,
+        _schema_ctx: &SchemaContext,
+        prompt_opts: &PromptOptions,
+    ) -> ToolSpec {
+        ToolSpec::Function(FunctionToolSpec {
+            name: self.name().to_string(),
+            description: self.prompt(prompt_opts).await,
+            parameters: self.runtime_validation_schema().as_value().clone(),
+            strict: self.strict(),
+        })
+    }
+
+    /// Coerce a raw-string tool-call input into the typed JSON this tool's
+    /// schema expects. Freeform/custom tool calls (e.g. apply_patch) deliver
+    /// the model's output as a bare string, not a JSON object; the tool
+    /// declares how to wrap it (apply_patch → `{"patch": raw}`) so schema
+    /// validation and `Self::Input` deserialization succeed. Default: `None`
+    /// (normal tools always receive a JSON object). Invoked before schema
+    /// validation only when the raw input is a `Value::String`.
+    fn coerce_raw_string_input(&self, _raw: &str) -> Option<Value> {
+        None
     }
 
     /// Whether to enforce strict schema validation.
@@ -448,15 +546,19 @@ pub trait Tool: Send + Sync + 'static {
     /// For schema-listing time (no input yet), use [`Tool::prompt`].
     fn description(&self, input: &Self::Input, options: &DescriptionOptions) -> String;
 
-    /// User-facing prompt description (called at schema-listing time
-    /// when no input exists yet).
+    /// Model-facing tool description — the LLM-visible text in the tool
+    /// definition's `description` field. Assembled at schema-listing time
+    /// (before any input exists), so it is input-independent and must stay
+    /// session-stable for prompt caching.
     ///
-    /// TS: `prompt(options)` is async — tools may need permission context
-    /// or other async data to generate their prompt. Default returns an
-    /// empty string; tools should override (most do).
-    async fn prompt(&self, _options: &PromptOptions) -> String {
-        String::new()
-    }
+    /// REQUIRED (no default, like [`Tool::runtime_validation_schema`]):
+    /// `app/query::engine_prompt` sources the wire `description` from this
+    /// method, NOT from [`Tool::description`] (the per-call UI label). An
+    /// empty default would silently ship a tool the model knows nothing
+    /// about, so the compiler (E0046) forces every tool to declare it.
+    ///
+    /// TS: async `prompt(options)` — may read permission/agent context.
+    async fn prompt(&self, options: &PromptOptions) -> String;
 
     // -- Capability Flags --
 
@@ -478,27 +580,24 @@ pub trait Tool: Send + Sync + 'static {
     }
 
     /// Whether this tool is **statically** read-only — known to be safe
-    /// without inspecting input. Used by error wrap (`PermissionMode::Plan`)
-    /// to filter the schema at definitions-time, before any input exists.
-    /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
+    /// without inspecting input. A coarse, input-independent companion to
+    /// [`Tool::is_read_only`], mirroring TS `Tool.isReadOnly`-style static
+    /// metadata.
     ///
-    /// **Contract**: the answer must not depend on input. Tools whose
-    /// read/write nature genuinely varies with input (e.g. `Bash`)
-    /// **must** leave the default — Plan mode then hides them.
+    /// **Not a security boundary, and no longer a schema filter.** Plan
+    /// mode does NOT narrow the model's tool schema (TS parity); plan-mode
+    /// read-only is enforced at *call time* by `coco_permissions` (see
+    /// `core/permissions/src/evaluate.rs`), which keys off its own
+    /// tool-name allow-list, not this method. Retained as a tool-level
+    /// property for diagnostics / potential future reuse; it currently has
+    /// no registry consumer.
     ///
-    /// Default: try to synthesize an `Input` from `Value::Null` and
-    /// delegate to [`Tool::is_read_only`]. Tools whose `Self::Input`
-    /// is `Value` (e.g. `McpTool`) or only has optional fields get
-    /// the legacy behaviour for free — their `is_read_only` impl
-    /// typically ignores input and returns a constant. Tools whose
-    /// typed `Self::Input` requires fields fall through to `false`
-    /// (the conservative answer Plan mode wants).
+    /// **Contract**: the answer must not depend on input.
     ///
-    /// Override explicitly when:
-    /// - You want `true` but your `Input` has required fields (e.g.
-    ///   `Read` / `WebFetch` / `WebSearch`).
-    /// - You want `false` even though `is_read_only` returns `true`
-    ///   for null input (rare — see the `Bash` contract above).
+    /// Default: synthesize an `Input` from `Value::Null` and delegate to
+    /// [`Tool::is_read_only`]. Tools whose `Self::Input` is `Value` or has
+    /// only optional fields inherit their constant `is_read_only`; tools
+    /// whose typed `Self::Input` requires fields fall through to `false`.
     fn is_always_read_only(&self) -> bool {
         serde_json::from_value::<Self::Input>(Value::Null)
             .ok()
@@ -846,8 +945,8 @@ impl<T: Tool> DynTool for T {
     fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
         Tool::runtime_validation_schema(self)
     }
-    fn model_schema(&self, ctx: &SchemaContext) -> std::borrow::Cow<'_, Value> {
-        Tool::model_schema(self, ctx)
+    async fn tool_spec(&self, schema_ctx: &SchemaContext, prompt_opts: &PromptOptions) -> ToolSpec {
+        Tool::tool_spec(self, schema_ctx, prompt_opts).await
     }
     fn strict(&self) -> bool {
         Tool::strict(self)
@@ -961,6 +1060,9 @@ impl<T: Tool> DynTool for T {
             Ok(typed) => Tool::validate_input(self, &typed, ctx),
             Err(e) => ValidationResult::invalid(format!("input does not match schema: {e}")),
         }
+    }
+    fn coerce_raw_string_input(&self, raw: &str) -> Option<Value> {
+        Tool::coerce_raw_string_input(self, raw)
     }
     fn inputs_equivalent(&self, a: &Value, b: &Value) -> bool {
         match (

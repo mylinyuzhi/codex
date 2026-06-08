@@ -194,10 +194,10 @@ const SAFE_TOOLS: &[&str] = &[
     ToolName::SendMessage.as_str(),
     // Misc safe
     ToolName::Sleep.as_str(),
-    // NB: `Brief` is intentionally NOT allowlisted here — TS
+    // NB: `SendUserMessage` is intentionally NOT allowlisted here — TS
     // `SAFE_YOLO_ALLOWLISTED_TOOLS` omits it. It is still auto-allowed in
-    // auto-mode via the read-only fast path (`BriefTool::is_read_only` is
-    // always true), so this only keeps the allowlist faithful to TS without
+    // auto-mode via the read-only fast path (`SendUserMessageTool::is_read_only`
+    // is always true), so this only keeps the allowlist faithful to TS without
     // changing behavior.
 ];
 

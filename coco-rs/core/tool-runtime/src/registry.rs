@@ -1,5 +1,4 @@
 use coco_types::MCP_TOOL_PREFIX;
-use coco_types::PermissionMode;
 use coco_types::ToolId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,44 +7,29 @@ use std::sync::RwLock;
 use crate::context::ToolUseContext;
 use crate::traits::DynTool;
 
-/// Whether the given mode permits exposing this tool to the model
-/// **at schema-definition time** (before any input exists).
-///
-/// `Plan` is the only mode that filters at this layer — it narrows the
-/// schema to statically-read-only tools. Every other mode lets the
-/// schema through unchanged; runtime permission rules still apply on
-/// the actual call.
-fn mode_permits_tool(mode: PermissionMode, tool: &dyn DynTool) -> bool {
-    match mode {
-        PermissionMode::Plan => tool.is_always_read_only(),
-        PermissionMode::Default
-        | PermissionMode::AcceptEdits
-        | PermissionMode::BypassPermissions
-        | PermissionMode::DontAsk
-        | PermissionMode::Auto
-        | PermissionMode::Bubble => true,
-    }
-}
-
-/// Run the full filter pipeline against one tool.
+/// Run the schema-time filter pipeline against one tool.
 ///
 /// 1. `Tool::is_enabled(ctx)`     — Feature gate / OS / hard deps
 /// 2. `ToolOverrides::permits`    — what the active model accepts
-/// 3. `PermissionMode::permits`   — Plan-mode read-only narrowing
-/// 4. `ToolFilter::allows`        — agent allow/deny lists
+/// 3. `ToolFilter::allows`        — agent allow/deny lists
 ///
-/// Layer 5 (MCP server reachability) is **not** implemented here; MCP
-/// tools whose backing server disconnects are removed from the registry
-/// via `ToolRegistry::deregister_by_server`, so they never reach this
-/// pipeline. If a future requirement needs schema-time probing
-/// (e.g. show as "unavailable" without deregistering), add a 5th
-/// filter using `ctx.mcp` here.
+/// **No `PermissionMode` layer (TS parity).** Plan mode does NOT narrow
+/// the model's tool schema — the full tool set is exposed in every mode.
+/// Plan-mode read-only is enforced at *call time* by `coco_permissions`
+/// (read-only / session-plan-file write → allow; any other write → ask,
+/// deny when non-interactive) plus the `<system-reminder>` plan
+/// attachment. Filtering the schema here would strip the very tools the
+/// model needs to make progress in plan mode (ExitPlanMode,
+/// AskUserQuestion, writing the plan file) and double-enforce a policy
+/// the permission layer already owns. See `core/permissions/src/evaluate.rs`
+/// and `docs/coco-rs/feature-gates-and-tool-filtering.md` §7/§9.
+///
+/// MCP server reachability is likewise not checked here; MCP tools whose
+/// backing server disconnects are removed from the registry via
+/// `ToolRegistry::deregister_by_server`, so they never reach this pipeline.
 fn passes_filter_pipeline(tool: &dyn DynTool, ctx: &ToolUseContext) -> bool {
     let id = tool.id();
-    tool.is_enabled(ctx)
-        && ctx.tool_overrides.permits(&id)
-        && mode_permits_tool(ctx.permission_context.mode, tool)
-        && ctx.tool_filter.allows(&id)
+    tool.is_enabled(ctx) && ctx.tool_overrides.permits(&id) && ctx.tool_filter.allows(&id)
 }
 
 /// Inner state protected by a single RwLock.
@@ -168,7 +152,9 @@ impl ToolRegistry {
         inner.tools.values().cloned().collect()
     }
 
-    /// Get enabled tools after running the full 5-layer filter pipeline.
+    /// Get enabled tools after running the schema-time filter pipeline
+    /// (`is_enabled` × `ToolOverrides` × `ToolFilter`). Plan-mode
+    /// read-only is a call-time permission concern, not a filter here.
     /// See `docs/coco-rs/feature-gates-and-tool-filtering.md` §7.
     pub fn enabled(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
         let inner = self
@@ -241,6 +227,31 @@ impl ToolRegistry {
                     && t.should_defer()
                     && !t.always_load()
                     && !ctx.discovered_tool_names.contains(t.name())
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Deferred tools eligible to be surfaced by `ToolSearch`.
+    ///
+    /// Same pipeline gate as [`Self::loaded_tools`] / [`Self::deferred_tools`]
+    /// (`is_enabled` × `ToolOverrides` × `ToolFilter`), so `ToolSearch` can
+    /// never match a tool the registry would refuse to surface — a match
+    /// that doesn't pass the pipeline is inert (it can't enter
+    /// `loaded_tools`) and would make the model re-search forever. Unlike
+    /// [`Self::deferred_tools`] this does NOT exclude already-discovered
+    /// names: re-selecting a discovered tool is an idempotent no-op
+    /// (TS `select:` semantics).
+    pub fn searchable_deferred(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
+        let inner = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner
+            .tools
+            .values()
+            .filter(|t| {
+                passes_filter_pipeline(t.as_ref(), ctx) && t.should_defer() && !t.always_load()
             })
             .cloned()
             .collect()

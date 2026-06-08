@@ -2193,6 +2193,27 @@ async fn test_delete_team_notifies_task_list_subscriber_on_success() {
     let _ = crate::team_file::cleanup_team_directories(&team_name);
 }
 
+/// Whether the process is actually bound by Unix directory permissions.
+/// Root / `CAP_DAC_OVERRIDE` bypass them, which would make the 0o500-based
+/// removal-failure simulation below succeed instead of fail. Probe the real
+/// behavior rather than guess at the uid (portable across Linux/macOS).
+#[cfg(unix)]
+fn unix_dir_perms_enforced() -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let dir =
+        std::env::temp_dir().join(format!("coco-perm-probe-{}", uuid::Uuid::new_v4().simple()));
+    let inner = dir.join("inner");
+    if std::fs::create_dir_all(&inner).is_err() {
+        return true;
+    }
+    let _ = std::fs::write(inner.join("f"), "x");
+    let _ = std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o500));
+    let enforced = std::fs::remove_dir_all(&inner).is_err();
+    let _ = std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700));
+    let _ = std::fs::remove_dir_all(&dir);
+    enforced
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn test_delete_team_does_not_notify_when_tasks_dir_removal_fails() {
@@ -2200,6 +2221,13 @@ async fn test_delete_team_does_not_notify_when_tasks_dir_removal_fails() {
     // the removal to fail (non-empty dir with no write permission → its
     // child can't be unlinked) and assert no notification fires.
     use std::os::unix::fs::PermissionsExt;
+
+    // Privileged environments (root / CAP_DAC_OVERRIDE) bypass the 0o500
+    // permission this simulation relies on, so the removal would succeed and
+    // the premise can't hold — skip rather than assert a false failure.
+    if !unix_dir_perms_enforced() {
+        return;
+    }
 
     let mut handle = create_test_handle();
     let team_name = format!("agentteam-nonotify-{}", uuid::Uuid::new_v4().simple());

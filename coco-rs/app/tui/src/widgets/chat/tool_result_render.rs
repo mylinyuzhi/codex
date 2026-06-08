@@ -188,9 +188,9 @@ fn render_known(
         // ── Everything else → structured default (pretty JSON / text) ──
         Agent | Skill | SendMessage | TeamCreate | TeamDelete | TaskCreate | TaskGet | TaskList
         | TaskUpdate | TaskStop | TaskOutput | EnterPlanMode | ExitPlanMode
-        | VerifyPlanExecution | EnterWorktree | ExitWorktree | ToolSearch | Config | Brief
-        | Lsp | McpAuth | ListMcpResources | ReadMcpResource | CronCreate | CronDelete
-        | CronList | RemoteTrigger | Sleep | StructuredOutput => {
+        | VerifyPlanExecution | EnterWorktree | ExitWorktree | ToolSearch | Config
+        | SendUserMessage | Lsp | McpAuth | ListMcpResources | ReadMcpResource | CronCreate
+        | CronDelete | CronList | RemoteTrigger | Sleep | StructuredOutput => {
             render_structured_default(cx, output, lines)
         }
     }

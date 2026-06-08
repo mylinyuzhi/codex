@@ -2,19 +2,24 @@
 
 use ratatui::prelude::Color;
 
-use super::layout;
 use crate::i18n::t;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
-use crate::state::QuestionFocus;
+use crate::state::QuestionFocusTarget;
+use crate::state::QuestionFooterAction;
+use crate::state::QuestionPage;
 use crate::state::QuestionPromptState;
 use crate::state::RiskLevel;
+use crate::state::SubmitAction;
 use crate::state::surface_payloads::PermissionAction;
 use coco_tui_ui::style::UiStyles;
-use coco_tui_ui::widgets::FooterAction;
+use coco_tui_ui::widgets::ActionRow;
+use coco_tui_ui::widgets::ChoiceRow;
+use coco_tui_ui::widgets::InputRow;
 use coco_tui_ui::widgets::NavTab;
-use coco_tui_ui::widgets::OptionRow;
+use coco_tui_ui::widgets::QuestionHeader;
 use coco_tui_ui::widgets::QuestionNav;
+use coco_tui_ui::widgets::QuestionRow;
 use coco_tui_ui::widgets::QuestionView;
 use coco_tui_ui::widgets::RowMark;
 use coco_tui_ui::widgets::SubmitNavTab;
@@ -110,7 +115,7 @@ fn classic_permission_actions(p: &PermissionPromptState) -> String {
 
 /// Project the domain [`QuestionPromptState`] into the pure, area-based
 /// [`QuestionView`] rendered by `coco_tui_ui::widgets::QuestionWidget`. All
-/// i18n + chip truncation + Other-composer logic lives here so the widget crate
+/// i18n + chip truncation + free-text input logic lives here so the widget crate
 /// stays domain-free. Replaces the former flat-`String` `question_content`.
 pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
     let title = t!("dialog.title_question").to_string();
@@ -118,117 +123,124 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
 
     if q.questions.is_empty() {
         return QuestionView {
-            title,
-            chip: None,
-            nav: None,
-            prompt: String::new(),
+            header: QuestionHeader {
+                title,
+                chip: None,
+                nav: None,
+            },
+            body: String::new(),
             rows: Vec::new(),
+            submit_review: None,
             preview: None,
-            composer: None,
-            footer: Vec::new(),
+            footer_actions: Vec::new(),
             hints: t!("dialog.hints_nav_select").to_string(),
         };
     }
 
-    let focused_q_idx = match q.focus {
-        QuestionFocus::Question(i) => layout::selected_in_bounds(i, total).unwrap_or(0),
-        QuestionFocus::Submit | QuestionFocus::ChatAboutThis | QuestionFocus::SkipInterview => 0,
+    let on_submit = matches!(q.current_question, QuestionPage::Submit);
+    let focused_q_idx = match q.current_question {
+        QuestionPage::Question(i) => i.min(total - 1),
+        QuestionPage::Submit => total - 1,
     };
-    let on_submit = matches!(q.focus, QuestionFocus::Submit);
-    let on_this_question = matches!(q.focus, QuestionFocus::Question(_));
     let qi = &q.questions[focused_q_idx];
-    let selected_idx = layout::selected_in_bounds(qi.selected, qi.options.len());
 
-    let rows = qi
-        .options
-        .iter()
-        .enumerate()
-        .map(|(i, opt)| {
-            let focused = on_this_question && selected_idx == Some(i);
-            let mark = if qi.multi_select {
-                RowMark::Check {
-                    checked: qi.checked.contains(&(i as i32)),
-                    focused,
-                }
-            } else {
-                RowMark::Radio { focused }
-            };
-            OptionRow {
-                number: i + 1,
-                label: opt.label.clone(),
-                description: opt.description.clone(),
-                mark,
-            }
-        })
-        .collect();
-
-    // Preview + Other composer track the focused option (only while a question,
-    // not a footer item, is focused).
-    let focused_opt = selected_idx
-        .filter(|_| on_this_question)
-        .and_then(|idx| qi.options.get(idx));
-    let preview = focused_opt.and_then(|o| o.preview.clone());
-    let composer = (on_this_question && qi.is_editing()).then(|| qi.notes.clone());
-
-    let mut footer = vec![FooterAction {
-        label: "Chat about this".to_string(),
-        focused: matches!(q.focus, QuestionFocus::ChatAboutThis),
-    }];
-    if q.is_in_plan_mode {
-        footer.push(FooterAction {
-            label: "Skip interview and plan immediately".to_string(),
-            focused: matches!(q.focus, QuestionFocus::SkipInterview),
-        });
-    }
-
-    let hints = if on_submit {
-        "↑/↓: choose   Enter: confirm   ←/→: back to questions".to_string()
-    } else {
-        let mut hints = t!("dialog.hints_nav_select").to_string();
-        if !qi.options.is_empty() {
-            hints.push_str(&format!("  1-{}: pick", qi.options.len().min(9)));
-        }
-        // ←/→ switch questions + the Submit tab (codex `move_question`); Tab
-        // reaches the footer actions, so surface the escape hatch there.
-        if total > 1 {
-            hints.push_str("  ←/→: question / submit");
-        }
-        if qi.multi_select {
-            hints.push_str("  Space: toggle");
-        }
-        hints.push_str(if q.is_in_plan_mode {
-            "  Tab: chat / skip"
-        } else {
-            "  Tab: chat about this"
-        });
-        hints
-    };
-
-    // On the Submit tab, replace the option list with a read-only review of
-    // every answer plus a Submit / Cancel confirmation list (TS "Review your
-    // answers" → "Ready to submit your answers?").
-    let (prompt, rows, preview, composer) = if on_submit {
-        let confirm_rows = vec![
-            OptionRow {
+    let (body, rows, preview, submit_review, footer) = if on_submit {
+        let rows = vec![
+            QuestionRow::Action(ActionRow {
                 number: 1,
                 label: "Submit answers".to_string(),
-                description: String::new(),
-                mark: RowMark::Radio {
-                    focused: q.submit_selected == 0,
-                },
-            },
-            OptionRow {
+                focused: q.focus_target
+                    == QuestionFocusTarget::SubmitAction(SubmitAction::SubmitAnswers),
+            }),
+            QuestionRow::Action(ActionRow {
                 number: 2,
                 label: "Cancel".to_string(),
-                description: String::new(),
-                mark: RowMark::Radio {
-                    focused: q.submit_selected == 1,
-                },
-            },
+                focused: q.focus_target == QuestionFocusTarget::SubmitAction(SubmitAction::Cancel),
+            }),
         ];
-        (submit_review_text(q), confirm_rows, None, None)
+        (
+            String::new(),
+            rows,
+            None,
+            Some(submit_review_text(q)),
+            Vec::new(),
+        )
     } else {
-        (qi.question.clone(), rows, preview, composer)
+        let selected_idx = qi.selected.filter(|idx| *idx < qi.options.len());
+        let mut rows = qi
+            .options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let focused = q.focus_target == QuestionFocusTarget::QuestionOption(i);
+                let mark = if qi.multi_select {
+                    RowMark::Check {
+                        checked: qi.checked.contains(&i),
+                        focused,
+                    }
+                } else {
+                    RowMark::Radio {
+                        selected: Some(i) == selected_idx,
+                        focused,
+                    }
+                };
+                QuestionRow::Choice(ChoiceRow {
+                    number: i + 1,
+                    label: opt.label.clone(),
+                    description: opt.description.clone(),
+                    mark,
+                })
+            })
+            .collect::<Vec<_>>();
+        rows.push(QuestionRow::Input(InputRow {
+            number: qi.options.len() + 1,
+            label: "Type something.".to_string(),
+            value: qi.other_input.value.clone(),
+            selected: qi.other_input.committed && !qi.other_input.value.trim().is_empty(),
+            focused: q.focus_target == QuestionFocusTarget::OtherInput,
+        }));
+
+        let focused_opt = match q.focus_target {
+            QuestionFocusTarget::QuestionOption(idx) => qi.options.get(idx),
+            QuestionFocusTarget::OtherInput
+            | QuestionFocusTarget::QuestionFooter(_)
+            | QuestionFocusTarget::SubmitAction(_) => {
+                selected_idx.and_then(|idx| qi.options.get(idx))
+            }
+        };
+        let mut footer = vec![ActionRow {
+            number: qi.options.len() + 2,
+            label: "Chat about this".to_string(),
+            focused: q.focus_target
+                == QuestionFocusTarget::QuestionFooter(QuestionFooterAction::ChatAboutThis),
+        }];
+        if q.is_in_plan_mode {
+            footer.push(ActionRow {
+                number: qi.options.len() + 3,
+                label: "Skip interview and plan immediately".to_string(),
+                focused: q.focus_target
+                    == QuestionFocusTarget::QuestionFooter(QuestionFooterAction::SkipInterview),
+            });
+        }
+        (
+            qi.question.clone(),
+            rows,
+            focused_opt.and_then(|o| o.preview.clone()),
+            None,
+            footer,
+        )
+    };
+
+    let hints = if on_submit {
+        "Enter to select · Tab/Arrow keys to navigate · Esc to cancel".to_string()
+    } else {
+        let mut hints = String::from(
+            "Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Vim · Esc to cancel",
+        );
+        if qi.multi_select {
+            hints.push_str(" · Space to toggle");
+        }
+        hints
     };
 
     // >1 question → a nav strip (every header + the trailing Submit tab, current
@@ -250,14 +262,16 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
     });
 
     QuestionView {
-        title,
-        chip: (total == 1 && !qi.header.is_empty()).then(|| chip(&qi.header)),
-        nav,
-        prompt,
+        header: QuestionHeader {
+            title,
+            chip: (total == 1 && !qi.header.is_empty()).then(|| chip(&qi.header)),
+            nav,
+        },
+        body,
         rows,
+        submit_review,
         preview,
-        composer,
-        footer,
+        footer_actions: footer,
         hints,
     }
 }
@@ -271,7 +285,7 @@ fn submit_review_text(q: &QuestionPromptState) -> String {
         out.push_str("\n\n⚠ You have not answered all questions");
     }
     for item in &q.questions {
-        let answer = q.peek_answer_for(item);
+        let answer = q.committed_answer_for(item);
         let answer = answer.trim();
         let answer = if answer.is_empty() {
             "(unanswered)"

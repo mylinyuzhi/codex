@@ -271,17 +271,18 @@ pub struct RuntimeConfig {
 
 LLM 实际看到的 tool schema = **多层 filter 的交集**。每层职责单一，不交叉。
 
-### 7.1 5 层过滤序列
+### 7.1 过滤序列（schema-time）
 
 ```
 all registered tools
   ├─ Layer 1: Tool::is_enabled(ctx)         ← 基础要求（Feature gate / OS / 硬依赖）
   ├─ Layer 2: ToolOverrides (per-model)     ← 模型在基线上的工具差异（extra/excluded）
-  ├─ Layer 3: PermissionMode                ← 模式收窄（Plan 去掉写工具）
-  ├─ Layer 4: Agent allow/deny              ← subagent 进一步限定
-  ├─ Layer 5: MCP 运行时可用性              ← 外部依赖
+  ├─ Layer 3: Agent allow/deny              ← subagent 进一步限定
+  ├─ Layer 4: MCP 运行时可用性              ← 外部依赖（断开时清出 registry）
   └─ → tool schema 注入 LLM
 ```
+
+> **没有 PermissionMode 这一层（对齐 TS）。** Plan 模式**不**收窄模型看到的 tool schema —— 任何模式下都注入完整工具集。Plan 模式的"只读"约束在**调用时**由 `coco_permissions` 强制执行（只读 / 写会话计划文件 → allow；其他写 → ask，非交互下 deny），外加 `<system-reminder>` plan 附件做软提示。在 schema 层裁剪会把模型推进所必需的工具一并删掉（`ExitPlanMode`、`AskUserQuestion`、写计划文件），并与权限层重复执法。详见 §9 与 `core/permissions/src/evaluate.rs`。
 
 ### 7.2 顺序的语义解释
 
@@ -289,30 +290,27 @@ all registered tools
 |-------|------|-------------|
 | 1 | 这个 tool 在当前 build/配置下存在吗？ | 编译/Feature/OS 层面是否可用 |
 | 2 | 当前模型在基线之上有什么调整？ | `ToolOverrides` 声明的 `extra`（gpt-5 引入 `apply_patch`）+ `excluded`（gpt-5 拒绝 `Edit`）|
-| 3 | 当前操作模式允许吗？ | Plan 模式从模型工具集中**去掉**写工具，包括 gpt-5 的 `apply_patch` |
-| 4 | subagent 配置允许吗？ | 在已存活集合里再筛 |
-| 5 | 外部依赖在线吗？ | 仅 MCP tool 受影响 |
+| 3 | subagent 配置允许吗？ | 在已存活集合里再筛 |
+| 4 | 外部依赖在线吗？ | 仅 MCP tool 受影响 |
 
-> **为什么 ToolOverrides 在 Layer 2 而不是更后**：Plan 模式的"去写工具"必须作用于**真实可用的工具集**之上。如果 ToolOverrides 在 PermissionMode 之后，gpt-5 的 `apply_patch` 还没被引入就过早判定通过/拒绝，语义错乱。
+> **PermissionMode 不在这条流水线里。** Plan 模式不裁剪 schema（见 §7.1 注），写工具在任何模式下都对模型可见；是否放行由调用时的权限评估决定（§9）。
 
 ### 7.3 Registry 实现
 
 ```rust
 // coco-rs/core/tool-runtime/src/registry.rs
 
-fn passes_filter_pipeline(tool: &dyn Tool, ctx: &ToolUseContext) -> bool {
+fn passes_filter_pipeline(tool: &dyn DynTool, ctx: &ToolUseContext) -> bool {
     let id = tool.id();
     // Layer 1: Tool 自检（含 Feature gate）
     tool.is_enabled(ctx)
         // Layer 2: 模型在基线上的差异（excluded 集合）
         && ctx.tool_overrides.permits(&id)
-        // Layer 3: 权限/操作模式（Plan 模式收窄）
-        && mode_permits_tool(ctx.permission_context.mode, tool)
-        // Layer 4: agent allow/deny
+        // Layer 3: agent allow/deny
         && ctx.tool_filter.allows(&id)
 }
-// Layer 5（MCP 运行时）实际上通过断开时 `deregister_by_server` 清出 registry
-// 实现，未在此函数中显式过滤。
+// 无 PermissionMode 层：Plan 只读在调用时由 coco_permissions 执法（§9）。
+// MCP 运行时可用性通过断开时 `deregister_by_server` 清出 registry，不在此函数显式过滤。
 ```
 
 ### 7.4 Tool::is_enabled 签名重构
@@ -482,18 +480,18 @@ Layer 2 (ToolOverrides = gpt-5):
   builtin diff: extra={apply_patch}, excluded={Edit}
   → { Read, Write, Bash, apply_patch, web_search, web_fetch, ... }
 
-Layer 3 (PermissionMode = Plan):
-  Plan 模式禁用所有写工具 (Write / apply_patch / Bash写操作)
-  → { Read, web_search, web_fetch, Bash(read-only) }
-
-Layer 4 (Agent allow_tools = None / 继承父):
+Layer 3 (Agent allow_tools = None / 继承父):
   → 不变
 
-Layer 5 (MCP):
+Layer 4 (MCP):
   → 不变
 
-最终注入 LLM 的 schema: { Read, web_search, web_fetch, Bash(read-only) }
+最终注入 LLM 的 schema: { Read, Write, Bash, apply_patch, web_search, web_fetch, ... }
 ```
+
+> **Plan 模式不裁剪 schema（对齐 TS）。** 写工具仍对模型可见；运行 `Write` /
+> `Bash` 等会在调用时落到 `coco_permissions` 的 Plan 分支：只读 / 写会话计划文件
+> 放行，其余写 → ask，非交互 → deny。见 §9 与 `core/permissions/src/evaluate.rs`。
 
 ## 9. Execute 二次校验
 
@@ -507,7 +505,7 @@ async fn execute_call(name: &str, args: Value, ctx: &ToolUseContext) -> ToolCall
         return ToolCallResult::error("unknown tool");
     };
 
-    // 二次校验：必须仍然通过 5 层 filter
+    // 二次校验：必须仍然通过 schema-time filter
     if !self.registry.definitions_for(ctx).iter().any(|t| t.name() == name) {
         return ToolCallResult::error(SyntheticToolError::ToolNotEnabledInContext);
     }
@@ -552,7 +550,7 @@ pub fn experimental_menu_entries() -> Vec<&'static FeatureSpec> {
 | `apply_map` 处理未知 key | warn log 但不 panic |
 | Layer 1 单层过滤 | Feature off → tool 不出现在 `definitions_for` 输出 |
 | Layer 1+2 组合 | gpt-5 + WebSearch off → `apply_patch` 在但 `web_search` 不在 |
-| Layer 1+2+3 组合 | gpt-5 + Plan mode → `apply_patch` 不在（被 Plan 过滤）|
+| Plan 不裁剪 schema | gpt-5 + Plan mode → 完整工具集（含写工具 / `apply_patch`）仍注入；只读约束改由调用时权限层验证 |
 | Layer 1+2 不可放大父级 | subagent 的 `Features` / `ToolOverrides` 直接 clone 父级 Arc，无法启用父级未启用的 Feature |
 | `ToolOverrides::merge` 语义 | builtin diff + user `tool_overrides`（settings.json）合并后，user `excluded` 赢过 builtin `extra` |
 | Execute 二次校验 | 模拟 model 召回已过滤 tool → 返回 `ToolNotEnabledInContext` |

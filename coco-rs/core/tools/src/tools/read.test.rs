@@ -1,21 +1,21 @@
 use crate::tools::read::ReadTool;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
-// ── R7-T25: read description content check ──
+// ── R7-T25: read prompt content check ──
 //
-// Regression guard: the description must include the multimodal
-// capabilities (images/PDF/notebooks), the 2000-line default, and
-// the cat -n format hint. Without these the model won't discover
-// the tool's full surface.
-#[test]
-fn test_read_description_mentions_multimodal_capabilities() {
-    let fixture = json!({"file_path": "/tmp/x"});
-    let desc =
-        <ReadTool as DynTool>::description(&ReadTool, &fixture, &DescriptionOptions::default());
+// Regression guard: the model-facing prompt() must include the
+// multimodal capabilities (images/PDF/notebooks), the 2000-line
+// default, and the cat -n format hint. Without these the model won't
+// discover the tool's full surface. The short description() is only
+// the per-call UI label.
+#[tokio::test]
+async fn test_read_prompt_mentions_multimodal_capabilities() {
+    let desc = <ReadTool as DynTool>::prompt(&ReadTool, &PromptOptions::default()).await;
     assert!(desc.contains("PNG"), "missing image format hint");
     assert!(desc.contains("PDF"), "missing PDF support hint");
     assert!(
@@ -24,6 +24,14 @@ fn test_read_description_mentions_multimodal_capabilities() {
     );
     assert!(desc.contains("2000 lines"), "missing 2000-line default");
     assert!(desc.contains("cat -n"), "missing cat -n format hint");
+}
+
+#[test]
+fn test_read_description_is_short_label() {
+    let fixture = json!({"file_path": "/tmp/x"});
+    let desc =
+        <ReadTool as DynTool>::description(&ReadTool, &fixture, &DescriptionOptions::default());
+    assert_eq!(desc, "Read a file from the local filesystem.");
 }
 
 #[tokio::test]

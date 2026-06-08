@@ -259,6 +259,9 @@ mod execute_tests {
         fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
             self.desc.clone()
         }
+        async fn prompt(&self, _: &coco_tool_runtime::PromptOptions) -> String {
+            self.desc.clone()
+        }
         fn search_hint(&self) -> Option<&str> {
             self.hint
         }
@@ -383,6 +386,64 @@ mod execute_tests {
             .map(|v| v.as_str().unwrap())
             .collect();
         assert_eq!(matches, vec!["Read"]);
+    }
+
+    /// A deferred tool that fails the filter pipeline (here: excluded via
+    /// `ToolOverrides`) must NOT be matched — neither by `select:` nor by
+    /// keyword. Matching an unsurfaceable tool is inert (it can't enter
+    /// `loaded_tools`) and makes the model loop. Regression guard for the
+    /// pre-fix pool that ignored `passes_filter_pipeline`.
+    #[tokio::test]
+    async fn search_pool_excludes_filtered_out_deferred_tools() {
+        let mut ctx = ctx_with_tools(vec![
+            deferred("WebFetch", "Fetch a URL", Some("fetch a URL")),
+            deferred("WebSearch", "Search the web", Some("search the web")),
+        ]);
+        // Model-level exclusion of WebFetch (Layer 2 of the pipeline).
+        ctx.tool_overrides = Arc::new(
+            coco_types::ToolOverrides::default().with_excluded(ToolId::Custom("WebFetch".into())),
+        );
+
+        // select: drops the excluded tool silently; the pool count reflects
+        // only surfaceable tools.
+        let sel = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "select:WebFetch,WebSearch"}),
+            &ctx,
+        )
+        .await
+        .expect("select executes");
+        let sel_matches: Vec<&str> = sel.data["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            sel_matches,
+            vec!["WebSearch"],
+            "excluded WebFetch must not match"
+        );
+        assert_eq!(
+            sel.data["total_deferred_tools"],
+            json!(1),
+            "pool counts only pipeline-passing deferred tools"
+        );
+
+        // keyword exact-name must also drop it (fallback corpus is the
+        // enabled set, which excludes WebFetch).
+        let kw = <ToolSearchTool as DynTool>::execute(
+            &ToolSearchTool,
+            json!({"query": "WebFetch"}),
+            &ctx,
+        )
+        .await
+        .expect("keyword executes");
+        let kw_matches = kw.data["matches"].as_array().unwrap();
+        assert!(
+            kw_matches.is_empty(),
+            "excluded WebFetch must not match by exact name: {kw_matches:?}"
+        );
     }
 
     #[tokio::test]

@@ -71,6 +71,7 @@ pub(crate) struct PendingToolPreparation<'a> {
     pub model_runtimes: &'a Arc<ModelRuntimeRegistry>,
     pub auto_mode_rules: &'a AutoModeRules,
     pub completion_event_mode: ToolCompletionEventMode,
+    pub deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
 }
 
 pub(crate) async fn prepare_pending_tool_calls(
@@ -135,6 +136,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.ctx,
         tc,
         args.completion_event_mode,
+        args.deferred_tool_completions.as_deref_mut(),
     )
     .await?;
 
@@ -178,7 +180,9 @@ pub(crate) async fn prepare_one_pending_tool_call(
             &tc.tool_name,
             &tool_id,
             &message,
+            coco_tool_runtime::ToolCallErrorKind::SchemaFailed,
             args.completion_event_mode,
+            args.deferred_tool_completions.as_deref_mut(),
         )
         .await;
         return None;
@@ -195,6 +199,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
             tc,
             &tool_id,
             args.completion_event_mode,
+            args.deferred_tool_completions.as_deref_mut(),
         )
         .await;
 
@@ -208,6 +213,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
             &tool,
             pre_tool_outcome,
             args.completion_event_mode,
+            args.deferred_tool_completions.as_deref_mut(),
         )
         .await?;
 
@@ -246,6 +252,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         Some(&args.orchestration_ctx),
         args.completion_event_mode,
         args.ctx.avoid_permission_prompts,
+        args.deferred_tool_completions.as_deref_mut(),
     )
     .resolve(decision, tc, &effective_input, &tool_id)
     .await;
@@ -264,6 +271,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         permission_outcome,
         effective_input,
         args.completion_event_mode,
+        args.deferred_tool_completions.as_deref_mut(),
     )
     .await?;
 
@@ -290,6 +298,7 @@ async fn resolve_effective_input_from_pre_hook(
     tool: &Arc<dyn DynTool>,
     pre_tool_outcome: PreToolUseOutcome,
     completion_event_mode: ToolCompletionEventMode,
+    deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
 ) -> Option<(
     Value,
     Option<coco_types::PermissionBehavior>,
@@ -312,6 +321,7 @@ async fn resolve_effective_input_from_pre_hook(
                     tool,
                     updated_input,
                     completion_event_mode,
+                    deferred_tool_completions,
                 )
                 .await
                 .map(|input| (input, permission_behavior, reason));
@@ -754,6 +764,7 @@ async fn resolve_effective_input_from_permission(
     permission_outcome: PermissionOutcome,
     effective_input: Value,
     completion_event_mode: ToolCompletionEventMode,
+    deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
 ) -> Option<Value> {
     match permission_outcome {
         PermissionOutcome::Denied => None,
@@ -769,6 +780,7 @@ async fn resolve_effective_input_from_permission(
                     tool,
                     updated_input,
                     completion_event_mode,
+                    deferred_tool_completions,
                 )
                 .await;
             }
@@ -830,7 +842,9 @@ async fn validate_effective_input_or_complete_error(
     tool: &Arc<dyn DynTool>,
     input: Value,
     completion_event_mode: ToolCompletionEventMode,
+    deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
 ) -> Option<Value> {
+    let mut deferred_tool_completions = deferred_tool_completions;
     // Schema validation (plan I3 Rust-side tightening): check the
     // (possibly hook-rewritten) input against the tool's JSON
     // schema BEFORE running `tool.validate_input`. A hook that
@@ -852,7 +866,9 @@ async fn validate_effective_input_or_complete_error(
             &tool_call.tool_name,
             tool_id,
             &message,
+            coco_tool_runtime::ToolCallErrorKind::SchemaFailed,
             completion_event_mode,
+            deferred_tool_completions.take(),
         )
         .await;
         return None;
@@ -876,7 +892,9 @@ async fn validate_effective_input_or_complete_error(
         &tool_call.tool_name,
         tool_id,
         &message,
+        coco_tool_runtime::ToolCallErrorKind::ValidationFailed,
         completion_event_mode,
+        deferred_tool_completions.take(),
     )
     .await;
     None

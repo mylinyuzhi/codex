@@ -10,10 +10,13 @@ pub mod spinner_verbs;
 pub mod status_indicator;
 pub mod textarea;
 
-pub use question::FooterAction;
+pub use question::ActionRow;
+pub use question::ChoiceRow;
+pub use question::InputRow;
 pub use question::NavTab;
-pub use question::OptionRow;
+pub use question::QuestionHeader;
 pub use question::QuestionNav;
+pub use question::QuestionRow;
 pub use question::QuestionView;
 pub use question::QuestionWidget;
 pub use question::RowMark;

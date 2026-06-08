@@ -344,18 +344,17 @@ pub enum Capability {
     ClientSideToolSearch,
 }
 
-/// How a model handles file editing / apply_patch tool.
+/// How a model's `apply_patch` tool is presented to the model. Per-model,
+/// **optional** (`None` → the default `Freeform`). Mirrors codex-rs, whose
+/// `ApplyPatchToolType` likewise carries only `Freeform`. Read by
+/// `apply_patch.rs::tool_spec` via `SchemaContext`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
-    /// String-schema function tool (GPT-5.2+, codex models).
+    /// Freeform/grammar custom tool (GPT-5.2+, codex models).
     #[default]
     Freeform,
-    /// JSON function tool (gpt-oss).
-    Function,
-    /// Shell-based, prompt instructions only (GPT-5, o3, o4-mini).
-    Shell,
 }
 
 /// Communication protocol (OpenAI has two APIs).

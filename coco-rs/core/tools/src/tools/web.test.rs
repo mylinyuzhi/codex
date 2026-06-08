@@ -33,7 +33,9 @@ fn test_webfetch_classifier_input_url_only_when_no_prompt() {
     assert_eq!(
         <WebFetchTool as DynTool>::to_auto_classifier_input(
             &WebFetchTool,
-            &json!({"url": "https://example.com"}),
+            // `prompt` is required; an explicit empty prompt exercises the
+            // url-only classifier branch.
+            &json!({"url": "https://example.com", "prompt": ""}),
         ),
         Some("https://example.com".to_string())
     );
@@ -85,7 +87,7 @@ async fn test_webfetch_domain_allow_rule_grants_access() {
     );
     let allowed = <WebFetchTool as DynTool>::check_permissions(
         &WebFetchTool,
-        &json!({"url": "https://example.com/a"}),
+        &json!({"url": "https://example.com/a", "prompt": "summarize"}),
         &ctx,
     )
     .await;
@@ -94,7 +96,7 @@ async fn test_webfetch_domain_allow_rule_grants_access() {
     // A different host is NOT covered by the domain rule → still Ask.
     let other = <WebFetchTool as DynTool>::check_permissions(
         &WebFetchTool,
-        &json!({"url": "https://other.com/a"}),
+        &json!({"url": "https://other.com/a", "prompt": "summarize"}),
         &ctx,
     )
     .await;
@@ -117,7 +119,7 @@ async fn test_webfetch_domain_deny_rule_blocks_access() {
     );
     let denied = <WebFetchTool as DynTool>::check_permissions(
         &WebFetchTool,
-        &json!({"url": "https://blocked.com/x"}),
+        &json!({"url": "https://blocked.com/x", "prompt": "summarize"}),
         &ctx,
     )
     .await;
@@ -129,7 +131,7 @@ fn test_webfetch_prepare_matcher_is_domain_scoped() {
     assert_eq!(
         <WebFetchTool as DynTool>::prepare_permission_matcher(
             &WebFetchTool,
-            &json!({"url": "https://docs.example.com/x"}),
+            &json!({"url": "https://docs.example.com/x", "prompt": "summarize"}),
         ),
         "domain:docs.example.com"
     );
@@ -401,48 +403,42 @@ async fn test_websearch_accepts_allowed_domains_alone() {
     assert!(matches!(vr, coco_tool_runtime::ValidationResult::Valid));
 }
 
-// ── R7-T25: websearch description content checks ──
+// ── R7-T25: websearch prompt content checks ──
 //
-// TS `WebSearchTool/prompt.ts:5-33` includes a "CRITICAL REQUIREMENT"
-// block that the model MUST follow (always include a Sources section).
-// Also injects the current month/year so the model uses the right
-// year for recent-events queries.
-#[test]
-fn test_websearch_description_includes_sources_requirement() {
-    use coco_tool_runtime::DescriptionOptions;
-    let desc = <WebSearchTool as DynTool>::description(
-        &WebSearchTool,
-        &json!({}),
-        &DescriptionOptions::default(),
-    );
+// TS `WebSearchTool/prompt.ts:5-33` `getWebSearchPrompt()` (surfaced via
+// the tool's `prompt()`) includes a "CRITICAL REQUIREMENT" block that the
+// model MUST follow (always include a Sources section). Also injects the
+// current month/year so the model uses the right year for recent-events
+// queries. The short `description()` label only mirrors TS
+// `Claude wants to search the web for: ${query}`.
+#[tokio::test]
+async fn test_websearch_prompt_includes_sources_requirement() {
+    use coco_tool_runtime::PromptOptions;
+    let desc = <WebSearchTool as DynTool>::prompt(&WebSearchTool, &PromptOptions::default()).await;
     assert!(
         desc.contains("CRITICAL REQUIREMENT"),
-        "WebSearch description must include the CRITICAL REQUIREMENT block"
+        "WebSearch prompt must include the CRITICAL REQUIREMENT block"
     );
     assert!(
         desc.contains("Sources:"),
-        "WebSearch description must instruct model to add a Sources section"
+        "WebSearch prompt must instruct model to add a Sources section"
     );
     assert!(
         desc.contains("MANDATORY"),
-        "WebSearch description must mark the sources requirement as MANDATORY"
+        "WebSearch prompt must mark the sources requirement as MANDATORY"
     );
 }
 
-#[test]
-fn test_websearch_description_includes_current_year() {
-    use coco_tool_runtime::DescriptionOptions;
-    let desc = <WebSearchTool as DynTool>::description(
-        &WebSearchTool,
-        &json!({}),
-        &DescriptionOptions::default(),
-    );
+#[tokio::test]
+async fn test_websearch_prompt_includes_current_year() {
+    use coco_tool_runtime::PromptOptions;
+    let desc = <WebSearchTool as DynTool>::prompt(&WebSearchTool, &PromptOptions::default()).await;
     // Today's date is 2026 — the dynamic month/year injection should
     // include "2026" (or whatever year chrono::Local::now() reports).
     let now_year = chrono::Datelike::year(&chrono::Local::now());
     assert!(
         desc.contains(&now_year.to_string()),
-        "WebSearch description must contain the current year ({now_year}) for date-aware queries, got:\n{desc}"
+        "WebSearch prompt must contain the current year ({now_year}) for date-aware queries, got:\n{desc}"
     );
 }
 

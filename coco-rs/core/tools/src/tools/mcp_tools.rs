@@ -13,6 +13,24 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+/// Max chars of an MCP server-supplied tool description surfaced to the
+/// model. TS `services/mcp/client.ts:218 MAX_MCP_DESCRIPTION_LENGTH`.
+const MAX_MCP_DESCRIPTION_LENGTH: usize = 2048;
+
+const MCP_AUTH_PROMPT: &str = "Authenticate with an MCP server to enable its tools and resources. Call this tool with the server name to start the OAuth flow — you'll receive an authorization URL to share with the user. Once the user completes authorization in their browser, the server's real tools become available automatically.";
+
+/// TS `ListMcpResourcesTool/prompt.ts` `DESCRIPTION`.
+const LIST_MCP_RESOURCES_DESCRIPTION: &str = "Lists available resources from configured MCP servers.\nEach resource object includes a 'server' field indicating which server it's from.\n\nUsage examples:\n- List all resources from all servers: `listMcpResources`\n- List resources from a specific server: `listMcpResources({ server: \"myserver\" })`";
+
+/// TS `ListMcpResourcesTool/prompt.ts` `PROMPT`.
+const LIST_MCP_RESOURCES_PROMPT: &str = "List available resources from configured MCP servers.\nEach returned resource will include all standard MCP resource fields plus a 'server' field\nindicating which server the resource belongs to.\n\nParameters:\n- server (optional): The name of a specific MCP server to get resources from. If not provided,\n  resources from all servers will be returned.";
+
+/// TS `ReadMcpResourceTool/prompt.ts` `DESCRIPTION`.
+const READ_MCP_RESOURCE_DESCRIPTION: &str = "Reads a specific resource from an MCP server.\n- server: The name of the MCP server to read from\n- uri: The URI of the resource to read\n\nUsage examples:\n- Read a resource from a server: `readMcpResource({ server: \"myserver\", uri: \"my-resource-uri\" })`";
+
+/// TS `ReadMcpResourceTool/prompt.ts` `PROMPT`.
+const READ_MCP_RESOURCE_PROMPT: &str = "Reads a specific resource from an MCP server, identified by server name and resource URI.\n\nParameters:\n- server (required): The name of the MCP server from which to read the resource\n- uri (required): The URI of the resource to read";
+
 /// Typed input for [`McpAuthTool`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct McpAuthInput {
@@ -46,6 +64,9 @@ impl Tool for McpAuthTool {
     }
     fn description(&self, _input: &McpAuthInput, _options: &DescriptionOptions) -> String {
         "Authenticate with an MCP server to enable tool and resource access.".into()
+    }
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        MCP_AUTH_PROMPT.into()
     }
 
     async fn check_permissions(
@@ -103,8 +124,8 @@ impl Tool for McpAuthTool {
 /// Typed input for [`ListMcpResourcesTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ListMcpResourcesInput {
-    /// Optional MCP server name to filter resources
-    #[serde(default)]
+    /// Optional server name to filter resources by
+    #[serde(default, rename = "server")]
     pub server_name: Option<String>,
 }
 
@@ -130,7 +151,10 @@ impl Tool for ListMcpResourcesTool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
     fn description(&self, _input: &ListMcpResourcesInput, _options: &DescriptionOptions) -> String {
-        "List resources available on MCP servers.".into()
+        LIST_MCP_RESOURCES_DESCRIPTION.into()
+    }
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        LIST_MCP_RESOURCES_PROMPT.into()
     }
     fn is_read_only(&self, _input: &ListMcpResourcesInput) -> bool {
         true
@@ -217,11 +241,11 @@ impl Tool for ListMcpResourcesTool {
 /// Typed input for [`ReadMcpResourceTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ReadMcpResourceInput {
-    /// Name of the MCP server
-    #[serde(default)]
+    /// The MCP server name
+    #[serde(rename = "server")]
     pub server_name: String,
-    /// URI of the resource to read
-    #[serde(default)]
+    /// The resource URI to read
+    #[serde(rename = "uri")]
     pub resource_uri: String,
 }
 
@@ -246,7 +270,10 @@ impl Tool for ReadMcpResourceTool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
     fn description(&self, _input: &ReadMcpResourceInput, _options: &DescriptionOptions) -> String {
-        "Read a specific resource from an MCP server.".into()
+        READ_MCP_RESOURCE_DESCRIPTION.into()
+    }
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        READ_MCP_RESOURCE_PROMPT.into()
     }
     fn is_read_only(&self, _input: &ReadMcpResourceInput) -> bool {
         true
@@ -420,6 +447,22 @@ impl Tool for McpTool {
 
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         self.tool_description.clone()
+    }
+
+    /// Model-facing description = the server-supplied tool description,
+    /// truncated to [`MAX_MCP_DESCRIPTION_LENGTH`]. TS
+    /// `services/mcp/client.ts:1789-1793` `async prompt()`.
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        if self.tool_description.chars().count() > MAX_MCP_DESCRIPTION_LENGTH {
+            let truncated: String = self
+                .tool_description
+                .chars()
+                .take(MAX_MCP_DESCRIPTION_LENGTH)
+                .collect();
+            format!("{truncated}… [truncated]")
+        } else {
+            self.tool_description.clone()
+        }
     }
 
     fn mcp_info(&self) -> Option<&McpToolInfo> {

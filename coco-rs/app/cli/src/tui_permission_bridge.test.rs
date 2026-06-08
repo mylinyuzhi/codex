@@ -15,6 +15,30 @@ fn dummy_request(id: &str) -> ToolPermissionRequest {
     }
 }
 
+fn ask_user_question_request(id: &str) -> ToolPermissionRequest {
+    ToolPermissionRequest {
+        id: id.into(),
+        tool_use_id: format!("use-{id}"),
+        agent_id: "leader".into(),
+        tool_name: coco_types::ToolName::AskUserQuestion.as_str().into(),
+        description: "Answer questions?".into(),
+        input: serde_json::json!({
+            "questions": [{
+                "question": "Which approach?",
+                "header": "Approach",
+                "options": [
+                    {"label": "A", "description": "Use A"},
+                    {"label": "B", "description": "Use B"}
+                ],
+                "multiSelect": false
+            }]
+        }),
+        suggestions: vec![],
+        choices: None,
+        worker_badge: None,
+    }
+}
+
 #[tokio::test]
 async fn approve_flow_sends_approved_decision() {
     let pending = new_pending_map();
@@ -77,6 +101,49 @@ async fn reject_flow_propagates_feedback() {
     let resolution = handle.await.unwrap().unwrap();
     assert_eq!(resolution.decision, ToolPermissionDecision::Rejected);
     assert_eq!(resolution.feedback.as_deref(), Some("not safe"));
+}
+
+#[tokio::test]
+async fn ask_user_question_emits_question_asked_event() {
+    let pending = new_pending_map();
+    let (tx, mut rx) = mpsc::channel::<CoreEvent>(8);
+    let bridge = TuiPermissionBridge::new(tx, pending.clone());
+
+    let handle = tokio::spawn(async move {
+        bridge
+            .request_permission(ask_user_question_request("q1"))
+            .await
+    });
+
+    let event = rx.recv().await.expect("bridge emits an event");
+    let input = match event {
+        CoreEvent::Tui(TuiOnlyEvent::QuestionAsked { request_id, input }) => {
+            assert_eq!(request_id, "q1");
+            input
+        }
+        other => panic!("expected Tui(QuestionAsked); got {other:?}"),
+    };
+    assert!(input["questions"].is_array());
+
+    let updated_input = serde_json::json!({
+        "questions": input["questions"].clone(),
+        "answers": {"Which approach?": "A"}
+    });
+    let resolved = resolve_pending(
+        &pending,
+        "q1",
+        true,
+        None,
+        Vec::new(),
+        Some(updated_input.clone()),
+        None,
+    )
+    .await;
+    assert!(resolved);
+
+    let resolution = handle.await.unwrap().unwrap();
+    assert_eq!(resolution.decision, ToolPermissionDecision::Approved);
+    assert_eq!(resolution.updated_input, Some(updated_input));
 }
 
 #[tokio::test]

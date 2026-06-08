@@ -218,6 +218,46 @@ fn test_snapshot_attachment_chips() {
 }
 
 #[test]
+fn test_snapshot_memory_then_tool_error_order() {
+    use std::sync::Arc;
+
+    use coco_messages::AttachmentMessage;
+    use coco_messages::LlmMessage;
+    use coco_messages::Message;
+    use coco_types::AttachmentKind;
+
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    state.session.working_dir = Some("/repo".to_string());
+    test_helpers::push_user_text(&mut state.session, "1", "read the memory-guided file");
+    state
+        .session
+        .transcript
+        .on_message_appended(Arc::new(Message::Attachment(AttachmentMessage::api(
+            AttachmentKind::NestedMemory,
+            LlmMessage::user_text(
+                "<system-reminder>\nContents of /repo/CLAUDE.md:\n\n# repo rules\n</system-reminder>",
+            ),
+        ))));
+    test_helpers::push_tool_use_input(
+        &mut state.session,
+        "read-error-1",
+        "Read",
+        serde_json::json!({"file_path": "missing.txt"}),
+    );
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "read-error-1",
+        "Read",
+        "File does not exist: missing.txt",
+        true,
+    );
+
+    let output = render_to_string(&state, 84, 20);
+    insta::assert_snapshot!("memory_then_tool_error_order", output);
+}
+
+#[test]
 fn test_snapshot_edit_diff() {
     // The headline feature: an Edit invocation renders a colored unified diff
     // synthesized from old_string/new_string (not raw text).

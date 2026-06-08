@@ -431,7 +431,7 @@ impl NativeSurfaceController {
                 &mut self.transcript_layout,
                 precomputed_live,
             );
-            if let Some(claim) = crate::cursor::compute_cursor(state, layout.input) {
+            if let Some(claim) = crate::cursor::compute_cursor(state, layout) {
                 frame.set_cursor_claim(claim);
             }
         })?;

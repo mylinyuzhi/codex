@@ -76,6 +76,21 @@ pub fn validate_tool_call(tc: &mut ToolCallPart, tool: Option<&Arc<dyn DynTool>>
     // 2. Value::String recovery (mirrors TS recursive-parse).
     normalize_value_string(&mut tc.input);
 
+    // 2b. Freeform/custom-tool coercion. A freeform tool (apply_patch) is
+    //     called with a bare string (the raw `*** Begin Patch …` envelope);
+    //     the tool wraps it into the typed JSON its schema expects
+    //     (`{patch: raw}`) so schema validation + `Self::Input`
+    //     deserialization succeed. This mutates the validation clone only —
+    //     the persisted assistant message keeps the raw string for the wire
+    //     round-trip (`tool_runner.rs` validates a `tool_call.clone()`).
+    let coerced = match &tc.input {
+        Value::String(raw) => tool.coerce_raw_string_input(raw),
+        _ => None,
+    };
+    if let Some(coerced) = coerced {
+        tc.input = coerced;
+    }
+
     // 3. Schema validation — synchronous and lock-free; the validator is
     //    owned by the schema (v4.2). A schema-compile failure is impossible
     //    here: a tool is only registered if its schema compiled at

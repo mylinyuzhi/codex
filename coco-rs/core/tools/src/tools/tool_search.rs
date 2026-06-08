@@ -418,15 +418,19 @@ fn build_discovery_patch(matches: &[String]) -> Option<coco_types::AppStatePatch
     }))
 }
 
+/// Serde default for `max_results` — mirrors TS `.default(5)`.
+fn default_tool_search_max_results() -> Option<i64> {
+    Some(DEFAULT_MAX_RESULTS as i64)
+}
+
 /// Typed input for [`ToolSearchTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ToolSearchInput {
     /// Query to find deferred tools. Use "select:<tool_name>" for
     /// direct selection, or keywords to search.
-    #[serde(default)]
     pub query: String,
     /// Maximum number of results to return (default: 5)
-    #[serde(default)]
+    #[serde(default = "default_tool_search_max_results")]
     pub max_results: Option<i64>,
 }
 
@@ -579,24 +583,20 @@ impl Tool for ToolSearchTool {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_MAX_RESULTS);
 
-        // Snapshot the registry once so deferred / loaded partitions
-        // see a consistent state. `ctx.tools.all()` clones Arc handles
-        // — cheap.
+        // Snapshot the registry once so the searchable pools see a
+        // consistent state. `ctx.tools.*` clone Arc handles — cheap.
         let all_tools = ctx.tools.all();
-        let deferred: Vec<Arc<dyn DynTool>> = all_tools
-            .iter()
-            .filter(|t| {
-                // A tool is in the searchable "deferred" pool when it
-                // would be filtered out of `loaded_tools` purely on
-                // defer state — TS parity `isDeferredTool` (`prompt.ts:62`).
-                // `always_load` opt-out short-circuits;
-                // `discovered_tool_names` is intentionally NOT consulted
-                // so the model can re-select an already-discovered tool
-                // (idempotent, matches TS `select:` semantics).
-                t.should_defer() && !t.always_load()
-            })
-            .cloned()
-            .collect();
+        // Pipeline-filtered candidate pools. ToolSearch must never match a
+        // tool the registry would refuse to surface: a match that fails
+        // `passes_filter_pipeline` is inert (it can't enter `loaded_tools`)
+        // and would make the model re-search forever. `searchable_deferred`
+        // is the deferred pool that passes the pipeline (discovered names
+        // kept so re-select is an idempotent no-op — TS `select:`
+        // semantics); `enabled` is the exact-name fallback corpus of
+        // pipeline-passing tools that aren't deferred (already loaded →
+        // harmless no-op match, TS `ToolSearchTool.ts:199-204`).
+        let deferred: Vec<Arc<dyn DynTool>> = ctx.tools.searchable_deferred(ctx);
+        let enabled_tools = ctx.tools.enabled(ctx);
         let total_deferred_tools = deferred.len() as i64;
 
         // Build a DescriptionOptions for the description-aware path.
@@ -641,7 +641,7 @@ impl Tool for ToolSearchTool {
                             || t.aliases().iter().any(|a| a.eq_ignore_ascii_case(name))
                     })
                     .or_else(|| {
-                        all_tools.iter().find(|t| {
+                        enabled_tools.iter().find(|t| {
                             t.name().eq_ignore_ascii_case(name)
                                 || t.aliases().iter().any(|a| a.eq_ignore_ascii_case(&lowered))
                         })
@@ -675,8 +675,13 @@ impl Tool for ToolSearchTool {
         }
 
         // Keyword path.
-        let matches =
-            search_with_keywords(&deferred, &all_tools, &desc_opts, &raw_query, max_results);
+        let matches = search_with_keywords(
+            &deferred,
+            &enabled_tools,
+            &desc_opts,
+            &raw_query,
+            max_results,
+        );
 
         let envelope = build_envelope(
             &matches,

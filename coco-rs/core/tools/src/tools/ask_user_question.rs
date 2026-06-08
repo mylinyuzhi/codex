@@ -15,6 +15,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::ValidationResult;
 use coco_types::AskUserQuestionAnswered;
 use coco_types::AskUserQuestionResult;
 use coco_types::ToolCheckResult;
@@ -24,6 +25,7 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// Typed input for [`AskUserQuestionTool`].
 ///
@@ -40,7 +42,6 @@ pub struct AskUserQuestionInput {
     /// Questions array — model-supplied. See `input_schema()` for the
     /// full constraint set (1-4 questions, each with 2-4 options,
     /// optional `multiSelect`, optional `preview` per option).
-    #[serde(default)]
     pub questions: Value,
     /// (Internal) User answers, spliced into the input by the
     /// TUI/CLI host before `tool_call_preparer` re-validates.
@@ -121,15 +122,12 @@ impl Tool for AskUserQuestionTool {
                 "properties": {
                     "questions": {
                         "type": "array",
-                        // No hard `maxItems`: the description guides the model to
-                        // 1-4, but weak models over-generate and a hard reject
-                        // here triggers a retry loop (visible as bottom-bar
-                        // flicker). The TUI truncates to the cap on display
-                        // (`parse_question_items`).
                         "description": "Questions to ask the user (1-4 questions)",
                         "minItems": 1,
+                        "maxItems": 4,
                         "items": {
                             "type": "object",
+                            "additionalProperties": false,
                             "properties": {
                                 "question": {
                                     "type": "string",
@@ -141,12 +139,12 @@ impl Tool for AskUserQuestionTool {
                                 },
                                 "options": {
                                     "type": "array",
-                                    // No hard `maxItems` — see the `questions`
-                                    // note above; the TUI truncates to the cap.
                                     "description": "The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.",
                                     "minItems": 2,
+                                    "maxItems": 4,
                                     "items": {
                                         "type": "object",
+                                        "additionalProperties": false,
                                         "properties": {
                                             "label": {
                                                 "type": "string",
@@ -166,7 +164,8 @@ impl Tool for AskUserQuestionTool {
                                 },
                                 "multiSelect": {
                                     "type": "boolean",
-                                    "description": "Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive."
+                                    "description": "Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.",
+                                    "default": false
                                 }
                             },
                             "required": ["question", "header", "options"]
@@ -205,7 +204,7 @@ impl Tool for AskUserQuestionTool {
                         }
                     }
                 },
-                "required": []
+                "required": ["questions"]
             }))
         })
     }
@@ -237,6 +236,47 @@ impl Tool for AskUserQuestionTool {
     /// serializing.
     fn is_concurrency_safe(&self, _input: &AskUserQuestionInput) -> bool {
         true
+    }
+
+    fn validate_input(
+        &self,
+        input: &AskUserQuestionInput,
+        _ctx: &ToolUseContext,
+    ) -> ValidationResult {
+        let Some(questions) = input.questions.as_array() else {
+            return ValidationResult::invalid("questions must be an array");
+        };
+
+        let mut seen_questions = HashSet::new();
+        for question in questions {
+            let question_text = question
+                .get("question")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !seen_questions.insert(question_text) {
+                return ValidationResult::invalid(format!(
+                    "question text must be unique: {question_text}"
+                ));
+            }
+
+            let Some(options) = question.get("options").and_then(Value::as_array) else {
+                continue;
+            };
+            let mut seen_labels = HashSet::new();
+            for option in options {
+                let label = option
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !seen_labels.insert(label) {
+                    return ValidationResult::invalid(format!(
+                        "option labels must be unique for question '{question_text}': {label}"
+                    ));
+                }
+            }
+        }
+
+        ValidationResult::Valid
     }
 
     /// Render the user's answers as TS-shaped prose. The TUI/CLI

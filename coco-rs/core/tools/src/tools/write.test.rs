@@ -9,28 +9,34 @@ use coco_types::PermissionRuleValue;
 use coco_types::ToolCheckResult;
 use serde_json::json;
 
-// ── R7-T25: write description content check ──
-#[test]
-fn test_write_description_includes_read_before_write_warning() {
-    use coco_tool_runtime::DescriptionOptions;
-    // Description is input-independent, but the blanket DynTool path
-    // needs a valid Input fixture to deserialize before calling the
-    // typed Tool::description.
-    let fixture = json!({"file_path": "/tmp/x", "content": ""});
-    let desc =
-        <WriteTool as DynTool>::description(&WriteTool, &fixture, &DescriptionOptions::default());
+// ── R7-T25: write prompt content check ──
+#[tokio::test]
+async fn test_write_prompt_includes_read_before_write_warning() {
+    use coco_tool_runtime::PromptOptions;
+    // The full guidance lives in the model-facing prompt() (TS
+    // `getWriteToolDescription()`); description() is the short label.
+    let desc = <WriteTool as DynTool>::prompt(&WriteTool, &PromptOptions::default()).await;
     assert!(
         desc.contains("MUST use the `Read` tool first"),
-        "Write description should warn about read-before-write requirement, got:\n{desc}"
+        "Write prompt should warn about read-before-write requirement, got:\n{desc}"
     );
     assert!(
         desc.contains("Prefer the Edit tool"),
-        "Write description should suggest Edit for modifications"
+        "Write prompt should suggest Edit for modifications"
     );
     assert!(
         desc.contains("NEVER create documentation files"),
-        "Write description should discourage docs files"
+        "Write prompt should discourage docs files"
     );
+}
+
+#[test]
+fn test_write_description_is_short_label() {
+    use coco_tool_runtime::DescriptionOptions;
+    let fixture = json!({"file_path": "/tmp/x", "content": ""});
+    let desc =
+        <WriteTool as DynTool>::description(&WriteTool, &fixture, &DescriptionOptions::default());
+    assert_eq!(desc, "Write a file to the local filesystem.");
 }
 
 #[tokio::test]

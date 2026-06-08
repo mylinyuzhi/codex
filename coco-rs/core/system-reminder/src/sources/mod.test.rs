@@ -16,6 +16,7 @@ async fn empty_sources_materializes_all_defaults() {
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
             skill_overrides: &coco_config::SkillOverrideTiers::default(),
+            skill_listing_enabled: true,
         })
         .await;
     assert!(out.hook_events.is_empty());
@@ -48,6 +49,7 @@ async fn noop_bundle_also_materializes_defaults_through_trait_dispatch() {
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
             skill_overrides: &coco_config::SkillOverrideTiers::default(),
+            skill_listing_enabled: true,
         })
         .await;
     // Every field should still be default — NoOps return empty/None.
@@ -101,6 +103,7 @@ async fn disabled_config_skips_sources_even_when_present() {
             just_compacted: false,
             per_source_timeout: Duration::from_millis(1000),
             skill_overrides: &coco_config::SkillOverrideTiers::default(),
+            skill_listing_enabled: true,
         })
         .await;
 
@@ -108,5 +111,67 @@ async fn disabled_config_skips_sources_even_when_present() {
     assert!(
         !spy.called.load(std::sync::atomic::Ordering::Relaxed),
         "config-gated source must not be called when disabled"
+    );
+}
+
+#[tokio::test]
+async fn skill_listing_gate_skips_listing_source_when_skill_tool_unavailable() {
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    #[derive(Debug, Default)]
+    struct SpySkillsSource {
+        listing_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl SkillsSource for SpySkillsSource {
+        async fn listing(
+            &self,
+            _agent_id: Option<&str>,
+            _tiers: &coco_config::SkillOverrideTiers,
+        ) -> Option<String> {
+            self.listing_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some("- review: test skill".into())
+        }
+
+        async fn invoked(&self, _agent_id: Option<&str>) -> Vec<crate::InvokedSkillEntry> {
+            Vec::new()
+        }
+
+        async fn activate_skills_for_paths(
+            &self,
+            _file_paths: &[std::path::PathBuf],
+            _cwd: &std::path::Path,
+        ) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    let spy = Arc::new(SpySkillsSource::default());
+    let sources = ReminderSources {
+        skills: Some(spy.clone()),
+        ..Default::default()
+    };
+    let cfg = SystemReminderConfig::default();
+    let out = sources
+        .materialize(MaterializeContext {
+            config: &cfg,
+            agent_id: None,
+            user_input: None,
+            mentioned_paths: &[],
+            recent_tools: &[],
+            just_compacted: false,
+            per_source_timeout: Duration::from_millis(1000),
+            skill_overrides: &coco_config::SkillOverrideTiers::default(),
+            skill_listing_enabled: false,
+        })
+        .await;
+
+    assert!(out.skill_listing.is_none());
+    assert_eq!(
+        spy.listing_calls.load(std::sync::atomic::Ordering::Relaxed),
+        0
     );
 }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::ToolCallErrorKind;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
@@ -39,7 +40,9 @@ pub(crate) async fn prepare_committed_tool_call(
     ctx: &ToolUseContext,
     tool_call: &ToolCallPart,
     completion_event_mode: ToolCompletionEventMode,
+    deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
 ) -> Option<PreparedToolCall> {
+    let mut deferred_tool_completions = deferred_tool_completions;
     let tool_id: ToolId = tool_call
         .tool_name
         .parse()
@@ -73,7 +76,9 @@ pub(crate) async fn prepare_committed_tool_call(
             &tool_call.tool_name,
             &tool_id,
             &output,
+            ToolCallErrorKind::UnknownTool,
             completion_event_mode,
+            deferred_tool_completions.take(),
         )
         .await;
         return None;
@@ -115,7 +120,9 @@ pub(crate) async fn prepare_committed_tool_call(
             &tool_call.tool_name,
             &tool_id,
             &message,
+            ToolCallErrorKind::SchemaFailed,
             completion_event_mode,
+            deferred_tool_completions.take(),
         )
         .await;
         return None;
@@ -142,7 +149,9 @@ pub(crate) async fn prepare_committed_tool_call(
             &tool_call.tool_name,
             &tool_id,
             &message,
+            ToolCallErrorKind::ValidationFailed,
             completion_event_mode,
+            deferred_tool_completions.take(),
         )
         .await;
         return None;

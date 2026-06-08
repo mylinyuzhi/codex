@@ -9,7 +9,9 @@
 
 use super::TaskCreateTool;
 use super::TaskStopTool;
+use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::{
     BackgroundShellRequest, TaskHandle, TaskOutputDelta, TerminalSignal, ToolUseContext,
 };
@@ -197,9 +199,9 @@ impl TaskHandle for RecordingTaskHandle {
 // TaskStop: unified entry for shell + agent + TODO tasks
 // ---------------------------------------------------------------------------
 
-/// TaskStop must accept `task_id` (canonical), `shell_id` (deprecated), and
-/// `taskId` (legacy camelCase) as equivalent parameter names. Missing all
-/// three is an InvalidInput error.
+/// TaskStop accepts `task_id` (canonical) and `shell_id` (deprecated
+/// KillShell alias) as equivalent parameter names (TS `z.strictObject`
+/// advertises exactly these two). Missing both is an InvalidInput error.
 #[tokio::test]
 async fn test_task_stop_rejects_missing_id() {
     let ctx = ToolUseContext::test_default();
@@ -246,24 +248,6 @@ async fn test_task_stop_accepts_shell_id_alias() {
             .await
             .unwrap();
     assert_eq!(stop_result.data["task_id"], "bg-2");
-    assert_eq!(
-        stop_result.data["task_type"],
-        coco_types::TaskType::Shell.wire_name()
-    );
-}
-
-#[tokio::test]
-async fn test_task_stop_accepts_legacy_taskid_alias() {
-    let handle = RecordingTaskHandle::new();
-    handle.register("bg-3");
-    let mut ctx = ToolUseContext::test_default();
-    ctx.task_handle = Some(handle.clone());
-
-    let stop_result =
-        <TaskStopTool as DynTool>::execute(&TaskStopTool, json!({"taskId": "bg-3"}), &ctx)
-            .await
-            .unwrap();
-    assert_eq!(stop_result.data["task_id"], "bg-3");
     assert_eq!(
         stop_result.data["task_type"],
         coco_types::TaskType::Shell.wire_name()
@@ -351,9 +335,11 @@ async fn test_task_output_returns_null_for_plan_item_id() {
     assert!(result.data["task"].is_null());
 }
 
-/// TaskOutput accepts both `task_id` (canonical) and `taskId` (legacy).
+/// TaskOutput resolves output for a registered background task by its
+/// canonical `task_id` (TS `TaskOutputTool.tsx:31` — the only key; no
+/// camelCase alias).
 #[tokio::test]
-async fn test_task_output_accepts_legacy_taskid() {
+async fn test_task_output_accepts_task_id() {
     let handle = RecordingTaskHandle::new();
     handle.register("bg-output");
     let mut ctx = ToolUseContext::test_default();
@@ -361,7 +347,7 @@ async fn test_task_output_accepts_legacy_taskid() {
 
     let result = <TaskOutputTool as DynTool>::execute(
         &TaskOutputTool,
-        json!({"taskId": "bg-output", "block": false}),
+        json!({"task_id": "bg-output", "block": false}),
         &ctx,
     )
     .await
@@ -411,6 +397,47 @@ fn test_task_output_schema_documents_block_default_true() {
     assert!(
         desc.contains("true (default)") || desc.contains("default true"),
         "block param description should advertise default=true, got: {desc}"
+    );
+}
+
+/// TS `TaskOutputTool.tsx:31-33`: `task_id` is required, `timeout` is
+/// `z.number().min(0).max(600000).default(30000)`. Lock the constraints
+/// into the model-facing schema.
+#[test]
+fn test_task_output_schema_required_id_and_timeout_bounds() {
+    let schema = <TaskOutputTool as DynTool>::runtime_validation_schema(&TaskOutputTool);
+    assert!(
+        required_fields(schema.as_value()).contains(&"task_id"),
+        "task_id must be required (TS has no .optional())"
+    );
+    // No camelCase alias property (TS strictObject has only task_id).
+    assert!(
+        schema.as_value()["properties"].get("taskId").is_none(),
+        "TaskOutput must not advertise a taskId alias"
+    );
+    let timeout = &schema.as_value()["properties"]["timeout"];
+    assert_eq!(timeout["maximum"], json!(600000));
+    assert_eq!(timeout["default"], json!(30000));
+    // Strict object: an unknown key is rejected.
+    assert!(
+        schema
+            .validate(&json!({"task_id": "x", "bogus": 1}))
+            .is_err(),
+        "TaskOutput is a strict object"
+    );
+}
+
+/// TS `TaskStopTool.ts:11-18` strictObject advertises only `task_id` and
+/// `shell_id` — no camelCase `taskId` alias.
+#[test]
+fn test_task_stop_schema_has_no_taskid_alias() {
+    let schema = <TaskStopTool as DynTool>::runtime_validation_schema(&TaskStopTool);
+    let props = schema.as_value()["properties"].as_object().unwrap();
+    assert!(props.contains_key("task_id"));
+    assert!(props.contains_key("shell_id"));
+    assert!(
+        !props.contains_key("taskId"),
+        "TaskStop must not advertise a taskId alias property"
     );
 }
 
@@ -482,6 +509,16 @@ fn test_todo_write_schema_matches_ts() {
         ["pending", "in_progress", "completed"]
             .into_iter()
             .collect()
+    );
+
+    // TS `TodoItemSchema`: content/activeForm carry `.min(1)`.
+    assert_eq!(items["properties"]["content"]["minLength"], json!(1));
+    assert_eq!(items["properties"]["activeForm"]["minLength"], json!(1));
+
+    // TS `todos` field is required (no `.optional()`/`.default()`).
+    assert!(
+        required_fields(schema).contains(&"todos"),
+        "todos must be a required field"
     );
 }
 
@@ -592,6 +629,394 @@ async fn test_todo_write_rejects_bad_status() {
 use super::TaskGetTool;
 use super::TaskListTool;
 use super::TaskUpdateTool;
+
+fn required_fields(schema: &serde_json::Value) -> Vec<&str> {
+    schema["required"]
+        .as_array()
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn test_task_v2_input_schema_required_fields_and_strict_aliases() {
+    let create_schema = <TaskCreateTool as DynTool>::runtime_validation_schema(&TaskCreateTool);
+    let create_required = required_fields(create_schema.as_value());
+    assert!(create_required.contains(&"subject"));
+    assert!(create_required.contains(&"description"));
+    assert!(
+        create_schema
+            .validate(&json!({"name": "legacy", "description": "x"}))
+            .is_err(),
+        "TaskCreate must not accept name as a subject alias"
+    );
+    assert!(
+        create_schema
+            .validate(&json!({"description": "x"}))
+            .is_err(),
+        "TaskCreate subject is required"
+    );
+
+    let get_schema = <TaskGetTool as DynTool>::runtime_validation_schema(&TaskGetTool);
+    assert!(required_fields(get_schema.as_value()).contains(&"taskId"));
+    assert!(
+        get_schema.validate(&json!({})).is_err(),
+        "TaskGet taskId is required"
+    );
+
+    let update_schema = <TaskUpdateTool as DynTool>::runtime_validation_schema(&TaskUpdateTool);
+    assert!(required_fields(update_schema.as_value()).contains(&"taskId"));
+    assert!(
+        update_schema
+            .validate(&json!({"status": "completed"}))
+            .is_err(),
+        "TaskUpdate taskId is required"
+    );
+    // TS `TaskUpdateTool.ts:35` advertises status enum incl. `deleted`.
+    let status_enum: std::collections::HashSet<&str> =
+        update_schema.as_value()["properties"]["status"]["enum"]
+            .as_array()
+            .expect("status enum present")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+    assert_eq!(
+        status_enum,
+        ["pending", "in_progress", "completed", "deleted"]
+            .into_iter()
+            .collect()
+    );
+    // An out-of-enum status is rejected at validation (TS `z.enum`).
+    assert!(
+        update_schema
+            .validate(&json!({"taskId": "1", "status": "bogus"}))
+            .is_err(),
+        "TaskUpdate status must be one of the advertised enum values"
+    );
+
+    let list_schema = <TaskListTool as DynTool>::runtime_validation_schema(&TaskListTool);
+    assert!(
+        list_schema.validate(&json!({"status": "pending"})).is_err(),
+        "TaskList is a strict empty object"
+    );
+}
+
+#[tokio::test]
+async fn test_task_v2_description_search_hint_and_prompt_text_matches_ts() {
+    let default_opts = PromptOptions::default();
+    let team_opts = PromptOptions {
+        agent_teams_available: true,
+        ..Default::default()
+    };
+    let description_opts = DescriptionOptions::default();
+
+    assert_eq!(
+        <TaskCreateTool as DynTool>::description(
+            &TaskCreateTool,
+            &json!({"subject": "s", "description": "d"}),
+            &description_opts
+        ),
+        "Create a new task in the task list"
+    );
+    assert_eq!(
+        <TaskCreateTool as DynTool>::search_hint(&TaskCreateTool),
+        Some("create a task in the task list")
+    );
+    assert_eq!(
+        <TaskGetTool as DynTool>::description(
+            &TaskGetTool,
+            &json!({"taskId": "1"}),
+            &description_opts
+        ),
+        "Get a task by ID from the task list"
+    );
+    assert_eq!(
+        <TaskGetTool as DynTool>::search_hint(&TaskGetTool),
+        Some("retrieve a task by ID")
+    );
+    assert_eq!(
+        <TaskListTool as DynTool>::description(&TaskListTool, &json!({}), &description_opts),
+        "List all tasks in the task list"
+    );
+    assert_eq!(
+        <TaskListTool as DynTool>::search_hint(&TaskListTool),
+        Some("list all tasks")
+    );
+    assert_eq!(
+        <TaskUpdateTool as DynTool>::description(
+            &TaskUpdateTool,
+            &json!({"taskId": "1"}),
+            &description_opts
+        ),
+        "Update a task in the task list"
+    );
+    assert_eq!(
+        <TaskUpdateTool as DynTool>::search_hint(&TaskUpdateTool),
+        Some("update a task")
+    );
+
+    let create_prompt = <TaskCreateTool as DynTool>::prompt(&TaskCreateTool, &default_opts).await;
+    assert_eq!(create_prompt, TASK_CREATE_PROMPT_NO_TEAMS);
+
+    let create_team_prompt = <TaskCreateTool as DynTool>::prompt(&TaskCreateTool, &team_opts).await;
+    assert_eq!(create_team_prompt, TASK_CREATE_PROMPT_TEAMS);
+
+    let get_prompt = <TaskGetTool as DynTool>::prompt(&TaskGetTool, &default_opts).await;
+    assert_eq!(get_prompt, TASK_GET_PROMPT_TS);
+
+    let list_prompt = <TaskListTool as DynTool>::prompt(&TaskListTool, &default_opts).await;
+    assert_eq!(list_prompt, TASK_LIST_PROMPT_NO_TEAMS);
+
+    let list_prompt = <TaskListTool as DynTool>::prompt(&TaskListTool, &team_opts).await;
+    assert_eq!(list_prompt, TASK_LIST_PROMPT_TEAMS);
+
+    let update_prompt = <TaskUpdateTool as DynTool>::prompt(&TaskUpdateTool, &default_opts).await;
+    assert_eq!(update_prompt, TASK_UPDATE_PROMPT_TS);
+
+    let update_prompt = <TaskUpdateTool as DynTool>::prompt(&TaskUpdateTool, &team_opts).await;
+    assert_eq!(update_prompt, TASK_UPDATE_PROMPT_TS);
+}
+
+const TASK_CREATE_PROMPT_NO_TEAMS: &str = "Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+It also helps the user understand the progress of the task and overall progress of their requests.
+
+## When to Use This Tool
+
+Use this tool proactively in these scenarios:
+
+- Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
+- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
+- Plan mode - When using plan mode, create a task list to track the work
+- User explicitly requests todo list - When the user directly asks you to use the todo list
+- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+- After receiving new instructions - Immediately capture user requirements as tasks
+- When you start working on a task - Mark it as in_progress BEFORE beginning work
+- After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
+
+## When NOT to Use This Tool
+
+Skip using this tool when:
+- There is only a single, straightforward task
+- The task is trivial and tracking it provides no organizational benefit
+- The task can be completed in less than 3 trivial steps
+- The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+
+## Task Fields
+
+- **subject**: A brief, actionable title in imperative form (e.g., \"Fix authentication bug in login flow\")
+- **description**: What needs to be done
+- **activeForm** (optional): Present continuous form shown in the spinner when the task is in_progress (e.g., \"Fixing authentication bug\"). If omitted, the spinner shows the subject instead.
+
+All tasks are created with status `pending`.
+
+## Tips
+
+- Create tasks with clear, specific subjects that describe the outcome
+- After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
+- Check TaskList first to avoid creating duplicate tasks
+";
+
+const TASK_CREATE_PROMPT_TEAMS: &str = "Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+It also helps the user understand the progress of the task and overall progress of their requests.
+
+## When to Use This Tool
+
+Use this tool proactively in these scenarios:
+
+- Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
+- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations and potentially assigned to teammates
+- Plan mode - When using plan mode, create a task list to track the work
+- User explicitly requests todo list - When the user directly asks you to use the todo list
+- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+- After receiving new instructions - Immediately capture user requirements as tasks
+- When you start working on a task - Mark it as in_progress BEFORE beginning work
+- After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
+
+## When NOT to Use This Tool
+
+Skip using this tool when:
+- There is only a single, straightforward task
+- The task is trivial and tracking it provides no organizational benefit
+- The task can be completed in less than 3 trivial steps
+- The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+
+## Task Fields
+
+- **subject**: A brief, actionable title in imperative form (e.g., \"Fix authentication bug in login flow\")
+- **description**: What needs to be done
+- **activeForm** (optional): Present continuous form shown in the spinner when the task is in_progress (e.g., \"Fixing authentication bug\"). If omitted, the spinner shows the subject instead.
+
+All tasks are created with status `pending`.
+
+## Tips
+
+- Create tasks with clear, specific subjects that describe the outcome
+- After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
+- Include enough detail in the description for another agent to understand and complete the task
+- New tasks are created with status 'pending' and no owner - use TaskUpdate with the `owner` parameter to assign them
+- Check TaskList first to avoid creating duplicate tasks
+";
+
+const TASK_GET_PROMPT_TS: &str = "Use this tool to retrieve a task by its ID from the task list.
+
+## When to Use This Tool
+
+- When you need the full description and context before starting work on a task
+- To understand task dependencies (what it blocks, what blocks it)
+- After being assigned a task, to get complete requirements
+
+## Output
+
+Returns full task details:
+- **subject**: Task title
+- **description**: Detailed requirements and context
+- **status**: 'pending', 'in_progress', or 'completed'
+- **blocks**: Tasks waiting on this one to complete
+- **blockedBy**: Tasks that must complete before this one can start
+
+## Tips
+
+- After fetching a task, verify its blockedBy list is empty before beginning work.
+- Use TaskList to see all tasks in summary form.
+";
+
+const TASK_LIST_PROMPT_NO_TEAMS: &str = "Use this tool to list all tasks in the task list.
+
+## When to Use This Tool
+
+- To see what tasks are available to work on (status: 'pending', no owner, not blocked)
+- To check overall progress on the project
+- To find tasks that are blocked and need dependencies resolved
+- After completing a task, to check for newly unblocked work or claim the next available task
+- **Prefer working on tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+
+## Output
+
+Returns a summary of each task:
+- **id**: Task identifier (use with TaskGet, TaskUpdate)
+- **subject**: Brief description of the task
+- **status**: 'pending', 'in_progress', or 'completed'
+- **owner**: Agent ID if assigned, empty if available
+- **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
+
+Use TaskGet with a specific task ID to view full details including description and comments.
+";
+
+const TASK_LIST_PROMPT_TEAMS: &str = "Use this tool to list all tasks in the task list.
+
+## When to Use This Tool
+
+- To see what tasks are available to work on (status: 'pending', no owner, not blocked)
+- To check overall progress on the project
+- To find tasks that are blocked and need dependencies resolved
+- Before assigning tasks to teammates, to see what's available
+- After completing a task, to check for newly unblocked work or claim the next available task
+- **Prefer working on tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+
+## Output
+
+Returns a summary of each task:
+- **id**: Task identifier (use with TaskGet, TaskUpdate)
+- **subject**: Brief description of the task
+- **status**: 'pending', 'in_progress', or 'completed'
+- **owner**: Agent ID if assigned, empty if available
+- **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
+
+Use TaskGet with a specific task ID to view full details including description and comments.
+
+## Teammate Workflow
+
+When working as a teammate:
+1. After completing your current task, call TaskList to find available work
+2. Look for tasks with status 'pending', no owner, and empty blockedBy
+3. **Prefer tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+4. Claim an available task using TaskUpdate (set `owner` to your name), or wait for leader assignment
+5. If blocked, focus on unblocking tasks or notify the team lead
+";
+
+const TASK_UPDATE_PROMPT_TS: &str = "Use this tool to update a task in the task list.
+
+## When to Use This Tool
+
+**Mark tasks as resolved:**
+- When you have completed the work described in a task
+- When a task is no longer needed or has been superseded
+- IMPORTANT: Always mark your assigned tasks as resolved when you finish them
+- After resolving, call TaskList to find your next task
+
+- ONLY mark a task as completed when you have FULLY accomplished it
+- If you encounter errors, blockers, or cannot finish, keep the task as in_progress
+- When blocked, create a new task describing what needs to be resolved
+- Never mark a task as completed if:
+  - Tests are failing
+  - Implementation is partial
+  - You encountered unresolved errors
+  - You couldn't find necessary files or dependencies
+
+**Delete tasks:**
+- When a task is no longer relevant or was created in error
+- Setting status to `deleted` permanently removes the task
+
+**Update task details:**
+- When requirements change or become clearer
+- When establishing dependencies between tasks
+
+## Fields You Can Update
+
+- **status**: The task status (see Status Workflow below)
+- **subject**: Change the task title (imperative form, e.g., \"Run tests\")
+- **description**: Change the task description
+- **activeForm**: Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")
+- **owner**: Change the task owner (agent name)
+- **metadata**: Merge metadata keys into the task (set a key to null to delete it)
+- **addBlocks**: Mark tasks that cannot start until this one completes
+- **addBlockedBy**: Mark tasks that must complete before this one can start
+
+## Status Workflow
+
+Status progresses: `pending` → `in_progress` → `completed`
+
+Use `deleted` to permanently remove a task.
+
+## Staleness
+
+Make sure to read a task's latest state using `TaskGet` before updating it.
+
+## Examples
+
+Mark task as in progress when starting work:
+```json
+{\"taskId\": \"1\", \"status\": \"in_progress\"}
+```
+
+Mark task as completed after finishing work:
+```json
+{\"taskId\": \"1\", \"status\": \"completed\"}
+```
+
+Delete a task:
+```json
+{\"taskId\": \"1\", \"status\": \"deleted\"}
+```
+
+Claim a task by setting owner:
+```json
+{\"taskId\": \"1\", \"owner\": \"my-name\"}
+```
+
+Set up task dependencies:
+```json
+{\"taskId\": \"2\", \"addBlockedBy\": [\"1\"]}
+```
+";
 
 /// TS `TaskCreateTool.ts:36-43` — output is `{task: {id, subject}}` only.
 /// No description, metadata, owner, etc.

@@ -370,6 +370,7 @@ async fn test_notebook_delete_by_index() {
         json!({
             "notebook_path": file.path().to_str().unwrap(),
             "cell_id": "1",
+            "new_source": "",
             "edit_mode": "delete"
         }),
         &ctx,
@@ -654,6 +655,7 @@ async fn test_notebook_delete_returns_cell_id() {
         json!({
             "notebook_path": file.path().to_str().unwrap(),
             "cell_id": "target-cell-id",
+            "new_source": "",
             "edit_mode": "delete"
         }),
         &ctx,
@@ -821,6 +823,7 @@ async fn test_notebook_delete_message_uses_cell_id() {
         json!({
             "notebook_path": file.path().to_str().unwrap(),
             "cell_id": "doomed-cell",
+            "new_source": "",
             "edit_mode": "delete"
         }),
         &ctx,

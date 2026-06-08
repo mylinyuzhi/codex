@@ -39,8 +39,7 @@ fn test_model_spec_equality_ignores_display_name() {
 
 #[test]
 fn test_apply_patch_tool_type_default() {
-    let default = ApplyPatchToolType::default();
-    assert_eq!(default, ApplyPatchToolType::Freeform);
+    assert_eq!(ApplyPatchToolType::default(), ApplyPatchToolType::Freeform);
 }
 
 #[test]

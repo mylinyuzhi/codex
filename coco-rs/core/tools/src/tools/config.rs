@@ -1,11 +1,11 @@
-//! ConfigTool — read/list/set/reset known config keys.
+//! ConfigTool — get/set known config keys.
 //!
-//! TS: `tools/ConfigTool/ConfigTool.ts`. Mutating actions currently
-//! emit instructional messages instead of writing config — the
-//! authoritative path is the CLI `config` subcommand or direct edits
-//! to `~/.coco/config.json`.
+//! TS: `tools/ConfigTool/ConfigTool.ts` — input is `setting` (required)
+//! plus `value` (optional; omit to read). Mutating sets currently emit an
+//! instructional message instead of writing config — the authoritative
+//! path is the CLI `config` subcommand or direct edits to
+//! `~/.coco/config.json`.
 
-use crate::input_types::ConfigAction;
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::Tool;
@@ -19,48 +19,73 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-/// Known configuration keys for documentation.
-const KNOWN_CONFIG_KEYS: &[&str] = &[
-    "model",
-    "provider",
-    "thinking_level",
-    "max_budget_usd",
-    "permission_mode",
-    "sandbox_mode",
-    "custom_system_prompt",
-    "append_system_prompt",
-    "verbose",
-    "debug",
-];
+/// Model-facing prompt. Mirrors the structure of TS
+/// `ConfigTool/prompt.ts` `generatePrompt()` (intro + get/set usage +
+/// configurable-settings list), adapted to coco's setting keys.
+const CONFIG_PROMPT: &str = "Get or set coco configuration settings.
 
-/// Typed input for [`ConfigTool`].
+View or change coco settings. Use when the user requests configuration changes, asks about current settings, or when adjusting a setting would benefit them.
+
+## Usage
+- **Get current value:** Omit the \"value\" parameter
+- **Set new value:** Include the \"value\" parameter
+
+## Configurable settings
+- model — the active model
+- provider — the active provider
+- thinking_level — reasoning effort level
+- max_budget_usd — per-session budget ceiling
+- permission_mode — default permission mode
+- sandbox_mode — sandbox enforcement mode
+- custom_system_prompt — replace the system prompt
+- append_system_prompt — append to the system prompt
+- verbose — true/false — verbose output
+- debug — true/false — debug logging";
+
+/// Typed input for [`ConfigTool`]. Mirrors TS `ConfigTool` strictObject:
+/// `setting` (required) + `value` (optional — omit to read).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ConfigInput {
-    /// Configuration action to perform.
+    /// The setting key (e.g., "model", "provider", "permission_mode")
+    pub setting: String,
+    /// The new value. Omit to get current value.
     #[serde(default)]
-    pub action: ConfigAction,
-    /// Configuration key (required for `get`/`set`/`reset`).
-    #[serde(default)]
-    pub key: Option<String>,
-    /// Configuration value (for `set`). Free-form JSON — the
-    /// authoritative writer is the CLI, so we don't type-narrow.
-    #[serde(default)]
-    pub value: Option<Value>,
+    pub value: Option<ConfigValue>,
 }
 
-/// Typed output. Mirrors the legacy flat JSON shape so transcript
-/// replay across the migration boundary round-trips without surprises;
-/// optional fields are only populated on the relevant action branches.
+/// A config value — `string | boolean | number`, mirroring TS
+/// `z.union([z.string(), z.boolean(), z.number()])`. Untagged so the
+/// model can pass any of the three scalar JSON types.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ConfigValue {
+    Bool(bool),
+    Number(f64),
+    String(String),
+}
+
+/// Which side of the get/set request a [`ConfigOutput`] describes.
+/// Closed 2-value set produced and consumed inside coco-rs — typed rather
+/// than a stringly `"get"`/`"set"`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigOperation {
+    Get,
+    Set,
+}
+
+/// Typed output. `operation` is `get`/`set`; `setting`/`value` echo the
+/// resolved request. Mirrors TS `ConfigTool` output object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigOutput {
     /// Human-readable status / next-step instruction.
     pub message: String,
-    /// Populated only for `list` — the documented key surface.
+    /// `get` or `set`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keys: Option<Vec<String>>,
-    /// Populated for `get`/`set`/`reset`.
+    pub operation: Option<ConfigOperation>,
+    /// The setting key the request targeted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
+    pub setting: Option<String>,
     /// Populated for `set` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<Value>,
@@ -81,43 +106,40 @@ impl Tool for ConfigTool {
         ToolName::Config.as_str()
     }
     fn description(&self, _input: &ConfigInput, _options: &DescriptionOptions) -> String {
-        "Manage configuration settings. Supports get, set, list, and reset actions.".into()
+        "Get or set coco configuration settings.".into()
+    }
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        CONFIG_PROMPT.into()
     }
 
-    /// TS `ConfigTool.ts`: `isConcurrencySafe() { return true }`. Read paths
-    /// (get/list) are obviously safe; mutating paths (set/reset) currently
-    /// just emit an instructional message rather than writing config, so
-    /// they're safe too. Should the tool ever start mutating a shared
-    /// settings file, demote to input-conditional safety like BashTool.
+    /// TS `ConfigTool.ts`: `isConcurrencySafe() { return true }`. Reads
+    /// are obviously safe; sets currently just emit an instructional
+    /// message rather than writing config, so they're safe too. Should
+    /// the tool ever start mutating a shared settings file, demote to
+    /// input-conditional safety like BashTool.
     fn is_concurrency_safe(&self, _input: &ConfigInput) -> bool {
         true
     }
     fn is_read_only(&self, input: &ConfigInput) -> bool {
-        // `set`/`reset` are documented as future mutations even though the
-        // current impl just emits prose. Be conservative.
-        matches!(input.action, ConfigAction::Get | ConfigAction::List)
+        // A read is `value` omitted (TS `value === undefined` ⇒ get).
+        input.value.is_none()
     }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("get set list or reset config settings")
+        Some("get or set coco settings (model, provider)")
     }
 
     /// Render the prebuilt `message` field, optionally followed by the
     /// list of available keys (for the `list` action). Skips JSON
     /// envelope overhead — the model only needs the human prose.
     fn render_for_model(&self, out: &ConfigOutput) -> Vec<ToolResultContentPart> {
-        let mut text = out.message.clone();
-        if let Some(keys) = &out.keys
-            && !keys.is_empty()
-        {
-            text.push_str(":\n");
-            text.push_str(&keys.join("\n"));
-        }
-        if text.is_empty() {
-            text = serde_json::to_string(out).unwrap_or_default();
-        }
+        let text = if out.message.is_empty() {
+            serde_json::to_string(out).unwrap_or_default()
+        } else {
+            out.message.clone()
+        };
         vec![ToolResultContentPart::Text {
             text,
             provider_options: None,
@@ -129,61 +151,33 @@ impl Tool for ConfigTool {
         input: ConfigInput,
         _ctx: &ToolUseContext,
     ) -> Result<ToolResult<ConfigOutput>, ToolError> {
-        let key = input.key.clone().unwrap_or_default();
+        let setting = input.setting;
+        if setting.is_empty() {
+            return Err(ToolError::InvalidInput {
+                message: "setting parameter is required".into(),
+                error_code: None,
+            });
+        }
 
-        let data = match input.action {
-            ConfigAction::List => ConfigOutput {
-                message: "Available configuration keys".into(),
-                keys: Some(KNOWN_CONFIG_KEYS.iter().map(|s| (*s).to_string()).collect()),
-                key: None,
+        // TS `ConfigTool.ts`: `value === undefined` ⇒ get, else set.
+        let data = match input.value {
+            None => ConfigOutput {
+                message: format!(
+                    "Configuration value for '{setting}' is managed by ConfigManager. Use the CLI 'config' subcommand to view or edit settings."
+                ),
+                operation: Some(ConfigOperation::Get),
+                setting: Some(setting),
                 value: None,
             },
-            ConfigAction::Get => {
-                if key.is_empty() {
-                    return Err(ToolError::InvalidInput {
-                        message: "key parameter is required for 'get' action".into(),
-                        error_code: None,
-                    });
-                }
+            Some(value) => {
+                let value = serde_json::to_value(&value).unwrap_or(Value::Null);
                 ConfigOutput {
                     message: format!(
-                        "Configuration value for '{key}' is managed by ConfigManager. Use the CLI 'config' subcommand to view or edit settings."
+                        "To set '{setting}', use the CLI 'config set {setting} <value>' command or edit the config file directly."
                     ),
-                    keys: None,
-                    key: Some(key),
-                    value: None,
-                }
-            }
-            ConfigAction::Set => {
-                if key.is_empty() {
-                    return Err(ToolError::InvalidInput {
-                        message: "key parameter is required for 'set' action".into(),
-                        error_code: None,
-                    });
-                }
-                ConfigOutput {
-                    message: format!(
-                        "To set '{key}', use the CLI 'config set {key} <value>' command or edit the config file directly."
-                    ),
-                    keys: None,
-                    key: Some(key),
-                    value: Some(input.value.unwrap_or(Value::Null)),
-                }
-            }
-            ConfigAction::Reset => {
-                if key.is_empty() {
-                    return Err(ToolError::InvalidInput {
-                        message: "key parameter is required for 'reset' action".into(),
-                        error_code: None,
-                    });
-                }
-                ConfigOutput {
-                    message: format!(
-                        "To reset '{key}' to default, use the CLI 'config reset {key}' command."
-                    ),
-                    keys: None,
-                    key: Some(key),
-                    value: None,
+                    operation: Some(ConfigOperation::Set),
+                    setting: Some(setting),
+                    value: Some(value),
                 }
             }
         };
