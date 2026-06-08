@@ -65,6 +65,7 @@ impl<'a> HookController<'a> {
         tool_call: &ToolCallPart,
         tool_id: &ToolId,
         completion_event_mode: ToolCompletionEventMode,
+        deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
     ) -> PreToolUseOutcome {
         let Some(hooks) = self.hooks else {
             return PreToolUseOutcome::Continue {
@@ -101,7 +102,9 @@ impl<'a> HookController<'a> {
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    coco_tool_runtime::ToolCallErrorKind::HookBlocked,
                     completion_event_mode,
+                    deferred_tool_completions,
                 )
                 .await;
                 PreToolUseOutcome::Blocked

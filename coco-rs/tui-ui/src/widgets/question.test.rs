@@ -2,30 +2,36 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 
-use super::FooterAction;
-use super::OptionRow;
+use super::ActionRow;
+use super::ChoiceRow;
+use super::InputRow;
+use super::QuestionHeader;
+use super::QuestionRow;
 use super::QuestionView;
 use super::QuestionWidget;
 use super::RowMark;
 use crate::style::UiStyles;
 use crate::theme::Theme;
 
-fn radio(number: usize, label: &str, description: &str, focused: bool) -> OptionRow {
-    OptionRow {
+fn radio(number: usize, label: &str, description: &str, focused: bool) -> QuestionRow {
+    QuestionRow::Choice(ChoiceRow {
         number,
         label: label.into(),
         description: description.into(),
-        mark: RowMark::Radio { focused },
-    }
+        mark: RowMark::Radio {
+            selected: number == 1,
+            focused,
+        },
+    })
 }
 
-fn check(number: usize, label: &str, checked: bool, focused: bool) -> OptionRow {
-    OptionRow {
+fn check(number: usize, label: &str, checked: bool, focused: bool) -> QuestionRow {
+    QuestionRow::Choice(ChoiceRow {
         number,
         label: label.into(),
         description: String::new(),
         mark: RowMark::Check { checked, focused },
-    }
+    })
 }
 
 fn render(view: &QuestionView, width: u16, height: u16) -> Vec<String> {
@@ -46,17 +52,26 @@ fn render(view: &QuestionView, width: u16, height: u16) -> Vec<String> {
 
 fn base() -> QuestionView {
     QuestionView {
-        title: " Question ".into(),
-        chip: Some("Auth".into()),
-        nav: None,
-        prompt: "Which auth flow?".into(),
+        header: QuestionHeader {
+            title: " Question ".into(),
+            chip: Some("Auth".into()),
+            nav: None,
+        },
+        body: "Which auth flow?".into(),
         rows: vec![
             radio(1, "OAuth", "browser login", true),
-            radio(2, "Other", "type your own", false),
+            QuestionRow::Input(InputRow {
+                number: 2,
+                label: "Type something.".into(),
+                value: String::new(),
+                selected: false,
+                focused: false,
+            }),
         ],
+        submit_review: None,
         preview: None,
-        composer: None,
-        footer: vec![FooterAction {
+        footer_actions: vec![ActionRow {
+            number: 3,
             label: "Chat about this".into(),
             focused: false,
         }],
@@ -69,17 +84,35 @@ fn single_select_renders_chip_numbers_cursor_and_footer() {
     let joined = render(&base(), 60, 20).join("\n");
     assert!(joined.contains("[Auth]"), "single-question chip:\n{joined}");
     assert!(joined.contains("1. OAuth"), "numbered option:\n{joined}");
-    assert!(joined.contains("2. Other"), "numbered option:\n{joined}");
+    assert!(
+        joined.contains("2. Type something."),
+        "input row:\n{joined}"
+    );
     assert!(joined.contains('❯'), "focus cursor:\n{joined}");
     assert!(joined.contains("browser login"), "description:\n{joined}");
-    assert!(joined.contains("Chat about this"), "footer:\n{joined}");
+    assert!(joined.contains("3. Chat about this"), "footer:\n{joined}");
+    assert!(joined.contains("OAuth ✔"), "selected marker:\n{joined}");
+    let lines = render(&base(), 60, 20);
+    let chat_idx = lines
+        .iter()
+        .position(|line| line.contains("3. Chat about this"))
+        .expect("chat row");
+    assert_eq!(
+        lines.get(chat_idx + 1).map(String::as_str),
+        Some(""),
+        "footer action and hints should be separated:\n{joined}"
+    );
+    assert!(
+        !joined.contains('┌') && !joined.contains('│'),
+        "question prompt should be unbordered:\n{joined}"
+    );
 }
 
 #[test]
 fn multi_question_nav_strip_renders_tabs_arrows_and_checkboxes() {
     let mut view = base();
-    view.chip = None;
-    view.nav = Some(super::QuestionNav {
+    view.header.chip = None;
+    view.header.nav = Some(super::QuestionNav {
         tabs: vec![
             super::NavTab {
                 header: "Auth".into(),
@@ -117,8 +150,8 @@ fn multi_question_nav_strip_renders_tabs_arrows_and_checkboxes() {
 #[test]
 fn nav_strip_submit_tab_shows_check_when_ready_and_focused() {
     let mut view = base();
-    view.chip = None;
-    view.nav = Some(super::QuestionNav {
+    view.header.chip = None;
+    view.header.nav = Some(super::QuestionNav {
         tabs: vec![super::NavTab {
             header: "Q1".into(),
             answered: true,
@@ -149,14 +182,66 @@ fn multi_select_renders_checkboxes() {
 }
 
 #[test]
-fn other_composer_renders_answer_buffer_with_caret() {
+fn free_text_input_renders_answer_buffer_with_caret() {
     let mut view = base();
-    view.composer = Some("device code".into());
+    view.rows.push(QuestionRow::Input(InputRow {
+        number: 2,
+        label: "Type something.".into(),
+        value: "device code".into(),
+        selected: true,
+        focused: true,
+    }));
     let joined = render(&view, 60, 18).join("\n");
+    assert!(joined.contains("device code▌"), "input line:\n{joined}");
+}
+
+#[test]
+fn focused_empty_free_text_replaces_placeholder_with_caret() {
+    let mut view = base();
+    view.rows = vec![QuestionRow::Input(InputRow {
+        number: 1,
+        label: "Type something.".into(),
+        value: String::new(),
+        selected: false,
+        focused: true,
+    })];
+
+    let joined = render(&view, 60, 14).join("\n");
     assert!(
-        joined.contains("your answer: device code▌"),
-        "composer line:\n{joined}"
+        !joined.contains("Type something."),
+        "focused empty input should not show placeholder:\n{joined}"
     );
+    assert!(joined.contains("❯ 1. ▌"), "focused input caret:\n{joined}");
+}
+
+#[test]
+fn free_text_input_wraps_long_unbroken_values() {
+    let mut view = base();
+    view.rows = vec![QuestionRow::Input(InputRow {
+        number: 1,
+        label: "Type something.".into(),
+        value: "abcdefghijklmnopqrstuvwxyz0123456789".into(),
+        selected: true,
+        focused: true,
+    })];
+
+    let mut short = base();
+    short.rows = vec![QuestionRow::Input(InputRow {
+        number: 1,
+        label: "Type something.".into(),
+        value: "abc".into(),
+        selected: true,
+        focused: true,
+    })];
+    let short_height = short.desired_height(30, UiStyles::new(&Theme::default()));
+    let wrapped_height = view.desired_height(30, UiStyles::new(&Theme::default()));
+    assert!(
+        wrapped_height > short_height,
+        "long free-text input should add wrapped body rows"
+    );
+    let joined = render(&view, 30, 20).join("\n");
+    assert!(joined.contains("abcdefghij"), "first chunk:\n{joined}");
+    assert!(joined.contains("yz012345"), "later chunk:\n{joined}");
 }
 
 #[test]
@@ -175,11 +260,10 @@ fn wide_preview_renders_side_by_side_with_options() {
         joined.contains("flowchart"),
         "preview body present:\n{joined}"
     );
-    // Side-by-side: the left column (chip) and the right column (preview) share
-    // a row, which only happens when they are laid out as two columns.
+    // Side-by-side: the body and the preview share a row below the fixed header.
     let has_side_by_side = rows
         .iter()
-        .any(|r| r.contains("Auth") && r.contains("preview"));
+        .any(|r| r.contains("Which auth flow?") && r.contains("preview"));
     assert!(has_side_by_side, "expected a side-by-side row:\n{joined}");
 }
 
@@ -189,7 +273,7 @@ fn narrow_preview_stacks_under_options() {
     view.preview = Some("stacked preview body".into());
     let rows = render(&view, 50, 22);
     let joined = rows.join("\n");
-    assert!(joined.contains("— preview —"), "stacked marker:\n{joined}");
+    assert!(joined.contains("preview"), "stacked marker:\n{joined}");
     assert!(
         joined.contains("stacked preview body"),
         "stacked body:\n{joined}"

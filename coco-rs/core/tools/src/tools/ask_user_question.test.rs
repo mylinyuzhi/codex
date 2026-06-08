@@ -6,6 +6,19 @@ use coco_tool_runtime::ToolUseContext;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+fn minimal_input() -> serde_json::Value {
+    json!({
+        "questions": [{
+            "question": "Pick one?",
+            "header": "Pick",
+            "options": [
+                {"label": "A", "description": "first"},
+                {"label": "B", "description": "second"}
+            ]
+        }]
+    })
+}
+
 #[test]
 fn name_matches_tool_name_enum() {
     let t: &dyn DynTool = &AskUserQuestionTool;
@@ -15,7 +28,7 @@ fn name_matches_tool_name_enum() {
 #[test]
 fn description_is_ts_aligned() {
     let t: &dyn DynTool = &AskUserQuestionTool;
-    let d = t.description(&json!({}), &DescriptionOptions::default());
+    let d = t.description(&minimal_input(), &DescriptionOptions::default());
     // Must mention the TS DESCRIPTION's distinctive phrase.
     assert!(
         d.contains("multiple choice questions"),
@@ -61,15 +74,16 @@ async fn prompt_includes_plan_mode_and_preview_guidance() {
 fn input_schema_has_questions_array() {
     let t: &dyn DynTool = &AskUserQuestionTool;
     let schema = t.runtime_validation_schema().as_value();
+    let top_required = schema["required"]
+        .as_array()
+        .expect("top-level required missing");
+    assert!(top_required.iter().any(|v| v == "questions"));
     let questions = schema["properties"]
         .get("questions")
         .expect("questions property missing");
     assert_eq!(questions["type"], "array");
     assert_eq!(questions["minItems"], 1);
-    // No hard `maxItems` cap: weak models over-generate and a hard reject
-    // retry-loops + flickers; the TUI truncates to 4 on display instead. The
-    // description still guides the model to 1-4.
-    assert!(questions.get("maxItems").is_none(), "{questions}");
+    assert_eq!(questions["maxItems"], 4);
     assert!(
         questions["description"]
             .as_str()
@@ -84,6 +98,82 @@ fn input_schema_has_questions_array() {
     assert!(required.iter().any(|v| v == "question"));
     assert!(required.iter().any(|v| v == "header"));
     assert!(required.iter().any(|v| v == "options"));
+    let options = &items["properties"]["options"];
+    assert_eq!(options["minItems"], 2);
+    assert_eq!(options["maxItems"], 4);
+    assert_eq!(
+        items["properties"]["multiSelect"]["default"],
+        serde_json::Value::Bool(false)
+    );
+}
+
+#[test]
+fn input_schema_rejects_legacy_message_field() {
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let err = t
+        .runtime_validation_schema()
+        .validate(&json!({"message": "What do you need?"}))
+        .expect_err("message must not be accepted as a questions alias");
+    assert!(
+        err.iter().any(|issue| matches!(
+            issue,
+            coco_tool_runtime::schema::SchemaIssue::UnexpectedField { field, .. }
+                if field == "message"
+        ) || matches!(
+            issue,
+            coco_tool_runtime::schema::SchemaIssue::MissingRequired { field, .. }
+                if field == "questions"
+        )),
+        "expected schema error to mention message or questions: {err:?}"
+    );
+}
+
+#[test]
+fn input_schema_rejects_more_than_four_questions_or_options() {
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let question = json!({
+        "question": "Pick?",
+        "header": "Pick",
+        "options": [
+            {"label": "A", "description": "a"},
+            {"label": "B", "description": "b"}
+        ]
+    });
+    let too_many_questions = json!({
+        "questions": [
+            question.clone(),
+            question.clone(),
+            question.clone(),
+            question.clone(),
+            question
+        ]
+    });
+    assert!(
+        t.runtime_validation_schema()
+            .validate(&too_many_questions)
+            .is_err(),
+        "questions.maxItems must be enforced"
+    );
+
+    let too_many_options = json!({
+        "questions": [{
+            "question": "Pick?",
+            "header": "Pick",
+            "options": [
+                {"label": "A", "description": "a"},
+                {"label": "B", "description": "b"},
+                {"label": "C", "description": "c"},
+                {"label": "D", "description": "d"},
+                {"label": "E", "description": "e"}
+            ]
+        }]
+    });
+    assert!(
+        t.runtime_validation_schema()
+            .validate(&too_many_options)
+            .is_err(),
+        "options.maxItems must be enforced"
+    );
 }
 
 /// Field descriptions must carry the TS guidance verbatim. Weak models (e.g.
@@ -124,7 +214,59 @@ fn field_descriptions_are_ts_aligned() {
 fn tool_requires_user_interaction_and_is_concurrency_safe() {
     let t: &dyn DynTool = &AskUserQuestionTool;
     assert!(t.requires_user_interaction());
-    assert!(t.is_concurrency_safe(&json!({})));
+    assert!(t.is_concurrency_safe(&minimal_input()));
+}
+
+#[test]
+fn validate_input_rejects_duplicate_question_text() {
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let ctx = ToolUseContext::test_default();
+    let input = json!({
+        "questions": [
+            {
+                "question": "Pick one?",
+                "header": "First",
+                "options": [
+                    {"label": "A", "description": "a"},
+                    {"label": "B", "description": "b"}
+                ]
+            },
+            {
+                "question": "Pick one?",
+                "header": "Second",
+                "options": [
+                    {"label": "C", "description": "c"},
+                    {"label": "D", "description": "d"}
+                ]
+            }
+        ]
+    });
+    let result = t.validate_input(&input, &ctx);
+    assert!(
+        !result.is_valid(),
+        "duplicate question text must be rejected"
+    );
+}
+
+#[test]
+fn validate_input_rejects_duplicate_option_labels_per_question() {
+    let t: &dyn DynTool = &AskUserQuestionTool;
+    let ctx = ToolUseContext::test_default();
+    let input = json!({
+        "questions": [{
+            "question": "Pick one?",
+            "header": "Pick",
+            "options": [
+                {"label": "A", "description": "a"},
+                {"label": "A", "description": "duplicate"}
+            ]
+        }]
+    });
+    let result = t.validate_input(&input, &ctx);
+    assert!(
+        !result.is_valid(),
+        "duplicate option labels must be rejected"
+    );
 }
 
 #[tokio::test]

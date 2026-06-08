@@ -43,7 +43,10 @@ async fn skips_when_todowrite_absent() {
 #[tokio::test]
 async fn skips_when_brief_tool_present() {
     let c = cfg();
-    let ctx = ctx_with_tools(&c, vec!["TodoWrite", "Brief"]);
+    let ctx = ctx_with_tools(
+        &c,
+        vec!["TodoWrite", coco_types::ToolName::SendUserMessage.as_str()],
+    );
     assert!(
         TodoRemindersGenerator
             .generate(&ctx)

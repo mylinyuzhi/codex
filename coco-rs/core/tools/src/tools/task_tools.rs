@@ -10,6 +10,7 @@
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::MailboxEnvelope;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TaskListStatus;
 use coco_tool_runtime::TaskRecord;
@@ -222,17 +223,230 @@ fn todo_key(ctx: &ToolUseContext) -> String {
         .unwrap_or_else(|| "main-session".to_string())
 }
 
+const TASK_CREATE_DESCRIPTION: &str = "Create a new task in the task list";
+const TASK_CREATE_SEARCH_HINT: &str = "create a task in the task list";
+
+fn task_create_prompt(agent_teams_available: bool) -> String {
+    let teammate_context = if agent_teams_available {
+        " and potentially assigned to teammates"
+    } else {
+        ""
+    };
+    let teammate_tips = if agent_teams_available {
+        "- Include enough detail in the description for another agent to understand and complete the task
+- New tasks are created with status 'pending' and no owner - use TaskUpdate with the `owner` parameter to assign them
+"
+    } else {
+        ""
+    };
+
+    format!(
+        "Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+It also helps the user understand the progress of the task and overall progress of their requests.
+
+## When to Use This Tool
+
+Use this tool proactively in these scenarios:
+
+- Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
+- Non-trivial and complex tasks - Tasks that require careful planning or multiple operations{teammate_context}
+- Plan mode - When using plan mode, create a task list to track the work
+- User explicitly requests todo list - When the user directly asks you to use the todo list
+- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+- After receiving new instructions - Immediately capture user requirements as tasks
+- When you start working on a task - Mark it as in_progress BEFORE beginning work
+- After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
+
+## When NOT to Use This Tool
+
+Skip using this tool when:
+- There is only a single, straightforward task
+- The task is trivial and tracking it provides no organizational benefit
+- The task can be completed in less than 3 trivial steps
+- The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+
+## Task Fields
+
+- **subject**: A brief, actionable title in imperative form (e.g., \"Fix authentication bug in login flow\")
+- **description**: What needs to be done
+- **activeForm** (optional): Present continuous form shown in the spinner when the task is in_progress (e.g., \"Fixing authentication bug\"). If omitted, the spinner shows the subject instead.
+
+All tasks are created with status `pending`.
+
+## Tips
+
+- Create tasks with clear, specific subjects that describe the outcome
+- After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
+{teammate_tips}- Check TaskList first to avoid creating duplicate tasks
+"
+    )
+}
+
+const TASK_GET_DESCRIPTION: &str = "Get a task by ID from the task list";
+const TASK_GET_SEARCH_HINT: &str = "retrieve a task by ID";
+const TASK_GET_PROMPT: &str = "Use this tool to retrieve a task by its ID from the task list.
+
+## When to Use This Tool
+
+- When you need the full description and context before starting work on a task
+- To understand task dependencies (what it blocks, what blocks it)
+- After being assigned a task, to get complete requirements
+
+## Output
+
+Returns full task details:
+- **subject**: Task title
+- **description**: Detailed requirements and context
+- **status**: 'pending', 'in_progress', or 'completed'
+- **blocks**: Tasks waiting on this one to complete
+- **blockedBy**: Tasks that must complete before this one can start
+
+## Tips
+
+- After fetching a task, verify its blockedBy list is empty before beginning work.
+- Use TaskList to see all tasks in summary form.
+";
+
+const TASK_LIST_DESCRIPTION: &str = "List all tasks in the task list";
+const TASK_LIST_SEARCH_HINT: &str = "list all tasks";
+
+fn task_list_prompt(agent_teams_available: bool) -> String {
+    let teammate_use_case = if agent_teams_available {
+        "- Before assigning tasks to teammates, to see what's available
+"
+    } else {
+        ""
+    };
+    let id_description = "- **id**: Task identifier (use with TaskGet, TaskUpdate)";
+    let teammate_workflow = if agent_teams_available {
+        "
+## Teammate Workflow
+
+When working as a teammate:
+1. After completing your current task, call TaskList to find available work
+2. Look for tasks with status 'pending', no owner, and empty blockedBy
+3. **Prefer tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+4. Claim an available task using TaskUpdate (set `owner` to your name), or wait for leader assignment
+5. If blocked, focus on unblocking tasks or notify the team lead
+"
+    } else {
+        ""
+    };
+
+    format!(
+        "Use this tool to list all tasks in the task list.
+
+## When to Use This Tool
+
+- To see what tasks are available to work on (status: 'pending', no owner, not blocked)
+- To check overall progress on the project
+- To find tasks that are blocked and need dependencies resolved
+{teammate_use_case}- After completing a task, to check for newly unblocked work or claim the next available task
+- **Prefer working on tasks in ID order** (lowest ID first) when multiple tasks are available, as earlier tasks often set up context for later ones
+
+## Output
+
+Returns a summary of each task:
+{id_description}
+- **subject**: Brief description of the task
+- **status**: 'pending', 'in_progress', or 'completed'
+- **owner**: Agent ID if assigned, empty if available
+- **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
+
+Use TaskGet with a specific task ID to view full details including description and comments.
+{teammate_workflow}"
+    )
+}
+
+const TASK_UPDATE_DESCRIPTION: &str = "Update a task in the task list";
+const TASK_UPDATE_SEARCH_HINT: &str = "update a task";
+const TASK_UPDATE_PROMPT: &str = "Use this tool to update a task in the task list.
+
+## When to Use This Tool
+
+**Mark tasks as resolved:**
+- When you have completed the work described in a task
+- When a task is no longer needed or has been superseded
+- IMPORTANT: Always mark your assigned tasks as resolved when you finish them
+- After resolving, call TaskList to find your next task
+
+- ONLY mark a task as completed when you have FULLY accomplished it
+- If you encounter errors, blockers, or cannot finish, keep the task as in_progress
+- When blocked, create a new task describing what needs to be resolved
+- Never mark a task as completed if:
+  - Tests are failing
+  - Implementation is partial
+  - You encountered unresolved errors
+  - You couldn't find necessary files or dependencies
+
+**Delete tasks:**
+- When a task is no longer relevant or was created in error
+- Setting status to `deleted` permanently removes the task
+
+**Update task details:**
+- When requirements change or become clearer
+- When establishing dependencies between tasks
+
+## Fields You Can Update
+
+- **status**: The task status (see Status Workflow below)
+- **subject**: Change the task title (imperative form, e.g., \"Run tests\")
+- **description**: Change the task description
+- **activeForm**: Present continuous form shown in spinner when in_progress (e.g., \"Running tests\")
+- **owner**: Change the task owner (agent name)
+- **metadata**: Merge metadata keys into the task (set a key to null to delete it)
+- **addBlocks**: Mark tasks that cannot start until this one completes
+- **addBlockedBy**: Mark tasks that must complete before this one can start
+
+## Status Workflow
+
+Status progresses: `pending` → `in_progress` → `completed`
+
+Use `deleted` to permanently remove a task.
+
+## Staleness
+
+Make sure to read a task's latest state using `TaskGet` before updating it.
+
+## Examples
+
+Mark task as in progress when starting work:
+```json
+{\"taskId\": \"1\", \"status\": \"in_progress\"}
+```
+
+Mark task as completed after finishing work:
+```json
+{\"taskId\": \"1\", \"status\": \"completed\"}
+```
+
+Delete a task:
+```json
+{\"taskId\": \"1\", \"status\": \"deleted\"}
+```
+
+Claim a task by setting owner:
+```json
+{\"taskId\": \"1\", \"owner\": \"my-name\"}
+```
+
+Set up task dependencies:
+```json
+{\"taskId\": \"2\", \"addBlockedBy\": [\"1\"]}
+```
+";
+
 // ── TaskCreateTool ────────────────────────────────────────────────────
 
 /// Typed input for [`TaskCreateTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskCreateInput {
     /// Task subject/title
-    #[serde(default)]
-    pub subject: Option<String>,
+    pub subject: String,
     /// Detailed task description
-    #[serde(default)]
-    pub description: Option<String>,
+    pub description: String,
     /// Present continuous form shown in spinner when in_progress
     /// (e.g., 'Running tests')
     #[serde(default, rename = "activeForm")]
@@ -255,7 +469,7 @@ impl Tool for TaskCreateTool {
     type Output = Value;
 
     fn to_auto_classifier_input(&self, input: &TaskCreateInput) -> Option<String> {
-        Some(input.subject.clone().unwrap_or_default())
+        Some(input.subject.clone())
     }
 
     fn id(&self) -> ToolId {
@@ -265,7 +479,10 @@ impl Tool for TaskCreateTool {
         ToolName::TaskCreate.as_str()
     }
     fn description(&self, _input: &TaskCreateInput, _options: &DescriptionOptions) -> String {
-        "Create a new task with a subject and description.".into()
+        TASK_CREATE_DESCRIPTION.into()
+    }
+    async fn prompt(&self, options: &PromptOptions) -> String {
+        task_create_prompt(options.agent_teams_available)
     }
 
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
@@ -279,7 +496,7 @@ impl Tool for TaskCreateTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("create a persistent task in the plan-item store")
+        Some(TASK_CREATE_SEARCH_HINT)
     }
 
     /// Render the create envelope as `Task #{id} created successfully: {subject}`.
@@ -305,11 +522,8 @@ impl Tool for TaskCreateTool {
         input: TaskCreateInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let subject = input
-            .subject
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "Untitled task".to_string());
-        let description = input.description.unwrap_or_default();
+        let subject = input.subject;
+        let description = input.description;
         let active_form = input.active_form;
         let metadata = input.metadata;
 
@@ -369,7 +583,7 @@ impl Tool for TaskCreateTool {
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskGetInput {
     /// The task ID to look up
-    #[serde(default, rename = "taskId")]
+    #[serde(rename = "taskId")]
     pub task_id: String,
 }
 
@@ -388,7 +602,10 @@ impl Tool for TaskGetTool {
         ToolName::TaskGet.as_str()
     }
     fn description(&self, _input: &TaskGetInput, _options: &DescriptionOptions) -> String {
-        "Get the status and details of a task by its ID.".into()
+        TASK_GET_DESCRIPTION.into()
+    }
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        TASK_GET_PROMPT.into()
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::TaskV2)
@@ -406,7 +623,7 @@ impl Tool for TaskGetTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("fetch a single task record by id")
+        Some(TASK_GET_SEARCH_HINT)
     }
 
     /// Render the task envelope as a multi-line text block, or
@@ -510,7 +727,10 @@ impl Tool for TaskListTool {
         ToolName::TaskList.as_str()
     }
     fn description(&self, _input: &TaskListInput, _options: &DescriptionOptions) -> String {
-        "List all tasks and their current status.".into()
+        TASK_LIST_DESCRIPTION.into()
+    }
+    async fn prompt(&self, options: &PromptOptions) -> String {
+        task_list_prompt(options.agent_teams_available)
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::TaskV2)
@@ -528,7 +748,7 @@ impl Tool for TaskListTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("list persistent tasks filtered by status or owner")
+        Some(TASK_LIST_SEARCH_HINT)
     }
 
     /// Render `{tasks: [...]}` as `#{id} [{status}] {subject}{owner}{blocked}`
@@ -615,19 +835,42 @@ impl Tool for TaskListTool {
 
 // ── TaskUpdateTool ────────────────────────────────────────────────────
 
+/// Wire status values for [`TaskUpdateInput`]. TS
+/// `TaskStatusSchema().or(z.literal('deleted'))`. `deleted` routes to a task
+/// deletion in `execute`, not a persistent status set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskUpdateStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Deleted,
+}
+
+impl TaskUpdateStatus {
+    /// The persistent-store status, or `None` for `Deleted` (routed to a
+    /// delete, not a status set).
+    fn to_list_status(self) -> Option<TaskListStatus> {
+        match self {
+            Self::Pending => Some(TaskListStatus::Pending),
+            Self::InProgress => Some(TaskListStatus::InProgress),
+            Self::Completed => Some(TaskListStatus::Completed),
+            Self::Deleted => None,
+        }
+    }
+}
+
 /// Typed input for [`TaskUpdateTool`]. Wire keys preserve TS camelCase
 /// (`taskId`, `activeForm`, `addBlocks`, `addBlockedBy`).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskUpdateInput {
     /// The task ID to update
-    #[serde(default, rename = "taskId")]
+    #[serde(rename = "taskId")]
     pub task_id: String,
-    /// New status — 'deleted' permanently removes the task. Stored as
-    /// `Option<String>` (not an enum) because the legal-value check
-    /// happens inside `execute` and produces a TS-shaped error for
-    /// unknown values instead of a generic serde error.
+    /// New status for the task — `deleted` routes to a delete (not a
+    /// status set). TS `TaskStatusSchema().or(z.literal('deleted'))`.
     #[serde(default)]
-    pub status: Option<String>,
+    pub status: Option<TaskUpdateStatus>,
     /// New subject for the task
     #[serde(default)]
     pub subject: Option<String>,
@@ -656,6 +899,10 @@ pub struct TaskUpdateTool;
 #[async_trait::async_trait]
 impl Tool for TaskUpdateTool {
     type Input = TaskUpdateInput;
+    // `status` is the typed [`TaskUpdateStatus`] enum (TS
+    // `TaskStatusSchema().or(z.literal('deleted'))` =
+    // enum[pending, in_progress, completed, deleted]), so the derived
+    // schema carries the enum and is auto-closed — no hand-patching.
     coco_tool_runtime::impl_runtime_schema!(TaskUpdateInput);
     type Output = Value;
 
@@ -666,7 +913,10 @@ impl Tool for TaskUpdateTool {
         ToolName::TaskUpdate.as_str()
     }
     fn description(&self, _input: &TaskUpdateInput, _options: &DescriptionOptions) -> String {
-        "Update a task's status, dependencies, or metadata.".into()
+        TASK_UPDATE_DESCRIPTION.into()
+    }
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        TASK_UPDATE_PROMPT.into()
     }
 
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
@@ -680,7 +930,7 @@ impl Tool for TaskUpdateTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("update task status fields owner or notes")
+        Some(TASK_UPDATE_SEARCH_HINT)
     }
 
     /// Render the update envelope. TS parity:
@@ -771,7 +1021,7 @@ impl Tool for TaskUpdateTool {
 
         // ── Handle `status=deleted` — delete the task and return early.
         // TS `TaskUpdateTool.ts:213-226`.
-        if input.status.as_deref() == Some("deleted") {
+        if input.status == Some(TaskUpdateStatus::Deleted) {
             let deleted = ctx.task_list.delete_task(&task_id).await.map_err(|e| {
                 ToolError::ExecutionFailed {
                     message: format!("task_list.delete_task failed: {e}"),
@@ -837,7 +1087,7 @@ impl Tool for TaskUpdateTool {
         // Auto-owner assignment: when a teammate sets status=in_progress
         // without an explicit owner and the task is unclaimed, auto-
         // assign. TS `TaskUpdateTool.ts:188-199`.
-        if input.status.as_deref() == Some("in_progress")
+        if input.status == Some(TaskUpdateStatus::InProgress)
             && requested_owner.is_none()
             && existing.owner.is_none()
             && ctx.is_teammate
@@ -850,34 +1100,22 @@ impl Tool for TaskUpdateTool {
             }
         }
 
-        // Status transition — reject "deleted" (handled above) and
-        // unknown enum values.
-        if let Some(status_str) = input.status.as_deref() {
-            let new_status = match status_str {
-                "pending" => TaskListStatus::Pending,
-                "in_progress" => TaskListStatus::InProgress,
-                "completed" => TaskListStatus::Completed,
-                other => {
-                    return Err(ToolError::InvalidInput {
-                        message: format!(
-                            "Invalid status '{other}'. Must be pending, in_progress, completed, or deleted"
-                        ),
-                        error_code: None,
-                    });
-                }
-            };
-            if new_status != existing.status {
-                // Fire pre-hook via task-list store: the store runs
-                // `HookEventType::TaskCompleted` on transition to
-                // Completed (see `task_list.rs`). We could also run
-                // local pre-checks here, but to match TS `TaskUpdateTool.ts:232-265`
-                // the hook fires from inside `update_task`.
-                update.status = Some(new_status);
-                status_change = Some((existing.status.as_str().into(), new_status.as_str().into()));
-                updated_fields.push("status");
-                if new_status == TaskListStatus::Completed {
-                    newly_completed = true;
-                }
+        // Status transition. `Deleted` is routed to a delete above (early
+        // return) so `to_list_status` yields `None` and is skipped here; the
+        // typed enum makes an "invalid status" impossible.
+        if let Some(new_status) = input.status.and_then(TaskUpdateStatus::to_list_status)
+            && new_status != existing.status
+        {
+            // Fire pre-hook via task-list store: the store runs
+            // `HookEventType::TaskCompleted` on transition to Completed (see
+            // `task_list.rs`). We could also run local pre-checks here, but to
+            // match TS `TaskUpdateTool.ts:232-265` the hook fires from inside
+            // `update_task`.
+            update.status = Some(new_status);
+            status_change = Some((existing.status.as_str().into(), new_status.as_str().into()));
+            updated_fields.push("status");
+            if new_status == TaskListStatus::Completed {
+                newly_completed = true;
             }
         }
 
@@ -1042,24 +1280,27 @@ fn now_iso() -> String {
 
 // ── TaskStopTool ──────────────────────────────────────────────────────
 
-/// Typed input for [`TaskStopTool`]. The model can supply any of three
-/// aliased keys — `task_id` (canonical), `shell_id` (KillShell
-/// compatibility), or `taskId` (legacy camelCase). Schemars derives a
-/// schema that advertises ALL three as separate fields so the model
-/// sees the same surface as the hand-written schema; `serde(alias)`
-/// would only accept multiple wire names but emit one in the schema.
+/// TS `TaskStopTool/prompt.ts::DESCRIPTION` (verbatim, incl. leading
+/// and trailing newlines).
+const TASK_STOP_PROMPT: &str = "
+- Stops a running background task by its ID
+- Takes a task_id parameter identifying the task to stop
+- Returns a success or failure status
+- Use this tool when you need to terminate a long-running task
+";
+
+/// Typed input for [`TaskStopTool`]. TS `TaskStopTool.ts:11-18`
+/// `z.strictObject` advertises exactly two optional keys — `task_id`
+/// (canonical) and `shell_id` (deprecated KillShell compatibility).
+/// Both are optional; `execute` enforces that at least one resolves.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskStopInput {
-    /// The task ID to stop. Accepts IDs returned by TaskCreate,
-    /// Agent (subagent spawn), or Bash (run_in_background=true).
+    /// The ID of the background task to stop.
     #[serde(default)]
     pub task_id: Option<String>,
-    /// Deprecated alias for task_id (KillShell compatibility).
+    /// Deprecated: use task_id instead.
     #[serde(default)]
     pub shell_id: Option<String>,
-    /// Legacy camelCase alias for task_id.
-    #[serde(default, rename = "taskId")]
-    pub task_id_camel: Option<String>,
 }
 
 pub struct TaskStopTool;
@@ -1077,11 +1318,10 @@ impl Tool for TaskStopTool {
         ToolName::TaskStop.as_str()
     }
     fn description(&self, _input: &TaskStopInput, _options: &DescriptionOptions) -> String {
-        "Stop a running background task by its ID. For TODO-style plan \
-         items (created via TaskCreate), use TaskUpdate with status \
-         'completed' or 'deleted' instead — plan items are not tracked \
-         in the running-task registry."
-            .into()
+        "Stop a running background task by ID".into()
+    }
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        TASK_STOP_PROMPT.into()
     }
 
     fn is_concurrency_safe(&self, _input: &TaskStopInput) -> bool {
@@ -1104,16 +1344,12 @@ impl Tool for TaskStopTool {
         input: TaskStopInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let task_id = [
-            input.task_id.as_deref(),
-            input.shell_id.as_deref(),
-            input.task_id_camel.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|s| !s.is_empty())
-        .map(String::from)
-        .unwrap_or_default();
+        let task_id = [input.task_id.as_deref(), input.shell_id.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|s| !s.is_empty())
+            .map(String::from)
+            .unwrap_or_default();
         if task_id.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "Missing required parameter: task_id".into(),
@@ -1218,26 +1454,41 @@ fn task_status_wire(status: coco_types::TaskStatus) -> &'static str {
 
 // ── TaskOutputTool ────────────────────────────────────────────────────
 
-/// Typed input for [`TaskOutputTool`].
+/// TS `TaskOutputTool.tsx:172-181::prompt()` — verbatim deprecated notice.
+const TASK_OUTPUT_PROMPT: &str = "DEPRECATED: Prefer using the Read tool on the task's output file path instead. Background tasks return their output file path in the tool result, and you receive a <task-notification> with the same path when the task completes — Read that file directly.
+
+- Retrieves output from a running or completed task (background shell, agent, or remote session)
+- Takes a task_id parameter identifying the task
+- Returns the task output along with status information
+- Use block=true (default) to wait for task completion
+- Use block=false for non-blocking check of current status
+- Task IDs can be found using the /tasks command
+- Works with all task types: background shells, async agents, and remote sessions";
+
+/// Typed input for [`TaskOutputTool`]. TS `TaskOutputTool.tsx:30-34`
+/// `z.strictObject`: `task_id` is required (no `.optional()`), `block`
+/// defaults to true, `timeout` is `0..=600000` defaulting to 30000.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskOutputInput {
-    /// The task ID to get output for (canonical name)
-    #[serde(default)]
-    pub task_id: Option<String>,
-    /// Legacy camelCase alias for task_id
-    #[serde(default, rename = "taskId")]
-    pub task_id_camel: Option<String>,
+    /// The task ID to get output from
+    pub task_id: String,
     /// When true (default), wait for the task to complete before
     /// returning. Set to false for an immediate snapshot.
     #[serde(default = "default_true")]
+    #[schemars(extend("default" = true))]
     pub block: bool,
     /// Blocking timeout in milliseconds (default 30000).
-    #[serde(default)]
-    pub timeout: Option<u64>,
+    #[serde(default = "default_timeout_ms")]
+    #[schemars(range(min = 0, max = 600000), extend("default" = 30000))]
+    pub timeout: u64,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_timeout_ms() -> u64 {
+    30_000
 }
 
 pub struct TaskOutputTool;
@@ -1245,6 +1496,10 @@ pub struct TaskOutputTool;
 #[async_trait::async_trait]
 impl Tool for TaskOutputTool {
     type Input = TaskOutputInput;
+    // `block`/`timeout` bounds + defaults are declared via `#[schemars(...)]`
+    // attrs on the struct (TS `.default(true)` / `.min(0).max(600000)
+    // .default(30000)`), so the derived schema is correct and auto-closed —
+    // no hand-patching.
     coco_tool_runtime::impl_runtime_schema!(TaskOutputInput);
     type Output = Value;
 
@@ -1255,12 +1510,10 @@ impl Tool for TaskOutputTool {
         ToolName::TaskOutput.as_str()
     }
     fn description(&self, _input: &TaskOutputInput, _options: &DescriptionOptions) -> String {
-        "Retrieves output from a running or completed background task — a shell \
-         launched with `run_in_background`, an async agent spawn, or a remote \
-         session. With block=true (default), waits for the task to complete \
-         (or reach `timeout` milliseconds) before returning. For plan items \
-         created via TaskCreate, use TaskGet — they live in a separate namespace."
-            .into()
+        "[Deprecated] — prefer Read on the task output file path".into()
+    }
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        TASK_OUTPUT_PROMPT.into()
     }
     fn is_read_only(&self, _input: &TaskOutputInput) -> bool {
         true
@@ -1332,20 +1585,15 @@ impl Tool for TaskOutputTool {
         input: TaskOutputInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        let task_id = [input.task_id.as_deref(), input.task_id_camel.as_deref()]
-            .into_iter()
-            .flatten()
-            .find(|s| !s.is_empty())
-            .map(String::from)
-            .unwrap_or_default();
+        let task_id = input.task_id;
         if task_id.is_empty() {
             return Err(ToolError::InvalidInput {
-                message: "task_id (or taskId) parameter is required".into(),
+                message: "task_id parameter is required".into(),
                 error_code: None,
             });
         }
         let block = input.block;
-        let timeout_ms = input.timeout.unwrap_or(30_000);
+        let timeout_ms = input.timeout;
 
         // Stage 1: background task namespace.
         if let Some(handle) = ctx.task_handle.as_ref()
@@ -1444,14 +1692,199 @@ fn task_status_wire_string(status: coco_types::TaskStatus) -> &'static str {
 
 // ── TodoWriteTool ─────────────────────────────────────────────────────
 
+/// TS `TodoWriteTool/prompt.ts::DESCRIPTION`.
+const TODO_WRITE_DESCRIPTION: &str = "Update the todo list for the current session. To be used proactively and often to track progress and pending tasks. Make sure that at least one task is in_progress at all times. Always provide both content (imperative) and activeForm (present continuous) for each task.";
+
+/// TS `TodoWriteTool/prompt.ts::PROMPT` (with `${FILE_EDIT_TOOL_NAME}`
+/// resolved to `Edit`).
+const TODO_WRITE_PROMPT: &str = "Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+It also helps the user understand the progress of the task and overall progress of their requests.
+
+## When to Use This Tool
+Use this tool proactively in these scenarios:
+
+1. Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
+2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
+3. User explicitly requests todo list - When the user directly asks you to use the todo list
+4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+5. After receiving new instructions - Immediately capture user requirements as todos
+6. When you start working on a task - Mark it as in_progress BEFORE beginning work. Ideally you should only have one todo as in_progress at a time
+7. After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
+
+## When NOT to Use This Tool
+
+Skip using this tool when:
+1. There is only a single, straightforward task
+2. The task is trivial and tracking it provides no organizational benefit
+3. The task can be completed in less than 3 trivial steps
+4. The task is purely conversational or informational
+
+NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
+
+## Examples of When to Use the Todo List
+
+<example>
+User: I want to add a dark mode toggle to the application settings. Make sure you run the tests and build when you're done!
+Assistant: *Creates todo list with the following items:*
+1. Creating dark mode toggle component in Settings page
+2. Adding dark mode state management (context/store)
+3. Implementing CSS-in-JS styles for dark theme
+4. Updating existing components to support theme switching
+5. Running tests and build process, addressing any failures or errors that occur
+*Begins working on the first task*
+
+<reasoning>
+The assistant used the todo list because:
+1. Adding dark mode is a multi-step feature requiring UI, state management, and styling changes
+2. The user explicitly requested tests and build be run afterward
+3. The assistant inferred that tests and build need to pass by adding \"Ensure tests and build succeed\" as the final task
+</reasoning>
+</example>
+
+<example>
+User: Help me rename the function getCwd to getCurrentWorkingDirectory across my project
+Assistant: *Uses grep or search tools to locate all instances of getCwd in the codebase*
+I've found 15 instances of 'getCwd' across 8 different files.
+*Creates todo list with specific items for each file that needs updating*
+
+<reasoning>
+The assistant used the todo list because:
+1. First, the assistant searched to understand the scope of the task
+2. Upon finding multiple occurrences across different files, it determined this was a complex task with multiple steps
+3. The todo list helps ensure every instance is tracked and updated systematically
+4. This approach prevents missing any occurrences and maintains code consistency
+</reasoning>
+</example>
+
+
+<example>
+User: I need to implement these features for my e-commerce site: user registration, product catalog, shopping cart, and checkout flow.
+Assistant: *Creates a todo list breaking down each feature into specific tasks based on the project architecture*
+Let's start with user registration. This will involve creating database models, API endpoints, and frontend forms that integrate with your existing authentication system.
+
+<reasoning>
+The assistant used the todo list because:
+1. The user provided multiple complex features to implement in a comma separated list
+2. The todo list helps organize these large features into manageable tasks
+3. This approach allows for tracking progress across the entire implementation
+</reasoning>
+</example>
+
+<example>
+User: Can you help optimize my React application? It's rendering slowly and has performance issues.
+Assistant: *Reviews component structure, render patterns, state management, and data fetching*
+After analyzing your codebase, I've identified several performance issues.
+*Creates todo list with items like: 1) Implementing memoization for expensive calculations in ProductList, 2) Adding virtualization for long lists in Dashboard, 3) Optimizing image loading in Gallery component, 4) Fixing state update loops in ShoppingCart, 5) Reviewing bundle size and implementing code splitting*
+Let's start by implementing memoization for the expensive calculations in your ProductList component.
+
+<reasoning>
+The assistant used the todo list because:
+1. First, the assistant examined the codebase to identify specific performance issues
+2. Based on this analysis, it identified multiple optimization opportunities
+3. Performance optimization is a non-trivial task requiring multiple steps
+4. The todo list helps methodically track improvements across different components
+5. This systematic approach ensures all performance bottlenecks are addressed
+</reasoning>
+</example>
+
+## Examples of When NOT to Use the Todo List
+
+<example>
+User: How do I print 'Hello World' in Python?
+Assistant: In Python, you can print \"Hello World\" with this simple code:
+
+python
+print(\"Hello World\")
+
+This will output the text \"Hello World\" to the console when executed.
+
+<reasoning>
+The assistant did not use the todo list because this is a single, trivial task that can be completed in one step. There's no need to track multiple tasks or steps for such a straightforward request.
+</reasoning>
+</example>
+
+<example>
+User: What does the git status command do?
+Assistant: The git status command shows the current state of your working directory and staging area. It displays which changes have been staged, which haven't, and which files aren't being tracked by Git. This is a fundamental command for understanding the current state of your repository before making commits.
+
+<reasoning>
+The assistant did not use the todo list because this is an informational request with no actual coding task to complete. The user is simply asking for an explanation, not for the assistant to perform multiple steps or tasks.
+</reasoning>
+</example>
+
+<example>
+User: Can you add a comment to the calculateTotal function to explain what it does?
+Assistant: Sure, let me add a comment to the calculateTotal function to explain what it does.
+* Uses the Edit tool to add a comment to the calculateTotal function *
+
+<reasoning>
+The assistant did not use the todo list because this is a single, straightforward task confined to one location in the code. Adding a comment doesn't require tracking multiple steps or systematic organization.
+</reasoning>
+</example>
+
+<example>
+User: Run npm install for me and tell me what happens.
+Assistant: I'll run the npm install command for you.
+
+*Executes: npm install*
+
+The command completed successfully. Here's the output:
+[Output of npm install command]
+
+All dependencies have been installed according to your package.json file.
+
+<reasoning>
+The assistant did not use the todo list because this is a single command execution with immediate results. There are no multiple steps to track or organize, making the todo list unnecessary for this straightforward task.
+</reasoning>
+</example>
+
+## Task States and Management
+
+1. **Task States**: Use these states to track progress:
+   - pending: Task not yet started
+   - in_progress: Currently working on (limit to ONE task at a time)
+   - completed: Task finished successfully
+
+   **IMPORTANT**: Task descriptions must have two forms:
+   - content: The imperative form describing what needs to be done (e.g., \"Run tests\", \"Build the project\")
+   - activeForm: The present continuous form shown during execution (e.g., \"Running tests\", \"Building the project\")
+
+2. **Task Management**:
+   - Update task status in real-time as you work
+   - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)
+   - Exactly ONE task must be in_progress at any time (not less, not more)
+   - Complete current tasks before starting new ones
+   - Remove tasks that are no longer relevant from the list entirely
+
+3. **Task Completion Requirements**:
+   - ONLY mark a task as completed when you have FULLY accomplished it
+   - If you encounter errors, blockers, or cannot finish, keep the task as in_progress
+   - When blocked, create a new task describing what needs to be resolved
+   - Never mark a task as completed if:
+     - Tests are failing
+     - Implementation is partial
+     - You encountered unresolved errors
+     - You couldn't find necessary files or dependencies
+
+4. **Task Breakdown**:
+   - Create specific, actionable items
+   - Break complex tasks into smaller, manageable steps
+   - Use clear, descriptive task names
+   - Always provide both forms:
+     - content: \"Fix authentication bug\"
+     - activeForm: \"Fixing authentication bug\"
+
+When in doubt, use this tool. Being proactive with task management demonstrates attentiveness and ensures you complete all requirements successfully.
+";
+
 /// Typed input for [`TodoWriteTool`]. Items deserialize directly into
 /// the existing `TodoRecord` type (already `Serialize +
 /// Deserialize`); we add a `JsonSchema` derive at its definition.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TodoWriteInput {
     /// The updated todo list. Pass the full list each call; the
-    /// prior list is replaced.
-    #[serde(default)]
+    /// prior list is replaced. TS `TodoWriteTool.ts:15` `todos` is a
+    /// required field (no `.optional()`/`.default()`).
     pub todos: Vec<TodoRecord>,
 }
 
@@ -1460,43 +1893,10 @@ pub struct TodoWriteTool;
 #[async_trait::async_trait]
 impl Tool for TodoWriteTool {
     type Input = TodoWriteInput;
-    // Static schema from a literal `json!`; a parse failure means the literal
-    // is malformed (a programmer error), so panicking on first build is correct.
-    #[allow(clippy::expect_used)]
-    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
-        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
-            std::sync::OnceLock::new();
-        SCHEMA.get_or_init(|| {
-            // Derive from `TodoWriteInput`, then inject the `status` enum
-            // constraint: `TodoRecord.status` is a `String` in Rust (TUI/store
-            // paths pre-date this typing pass) so schemars can't synthesize the
-            // enum. TS `TodoItemSchema.status: z.enum([...])` restored here.
-            let mut derived = coco_tool_runtime::derive_input_schema_value::<TodoWriteInput>();
-            if let Some(status) = derived
-                .pointer_mut("/properties/todos/items/properties/status")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                status.insert(
-                    "enum".into(),
-                    serde_json::json!(["pending", "in_progress", "completed"]),
-                );
-            }
-            let properties = derived
-                .get("properties")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            let required = derived
-                .get("required")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([]));
-            coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": properties,
-                "required": required,
-            }))
-        })
-    }
+    // `todos` items derive from `TodoRecord`, whose `#[schemars(...)]` attrs
+    // carry the `content`/`activeForm` `minLength:1` and the `status` enum
+    // (TS `TodoItemSchema`), so the derived schema is correct + auto-closed.
+    coco_tool_runtime::impl_runtime_schema!(TodoWriteInput);
     type Output = Value;
 
     fn to_auto_classifier_input(&self, input: &TodoWriteInput) -> Option<String> {
@@ -1510,9 +1910,10 @@ impl Tool for TodoWriteTool {
         ToolName::TodoWrite.as_str()
     }
     fn description(&self, _input: &TodoWriteInput, _options: &DescriptionOptions) -> String {
-        "Write or update the in-conversation TODO list. Pass the full list each call; \
-         the prior list is replaced. Each item requires content, status, and activeForm."
-            .into()
+        TODO_WRITE_DESCRIPTION.into()
+    }
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        TODO_WRITE_PROMPT.into()
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         !ctx.features.enabled(Feature::TaskV2)

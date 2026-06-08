@@ -51,11 +51,11 @@ fn plan_approval_preserves_from_field_for_response_routing() {
 // Drift = transcript-interchangeability break.
 
 mod question_feedback {
-    use super::super::OTHER_OPTION_DISPLAY;
-    use super::super::OptionKind;
-    use super::super::QuestionFocus;
+    use super::super::OtherInputState;
+    use super::super::QuestionFocusTarget;
     use super::super::QuestionItem;
     use super::super::QuestionOption;
+    use super::super::QuestionPage;
     use super::super::QuestionPromptState;
 
     fn opt(label: &str) -> QuestionOption {
@@ -63,29 +63,18 @@ mod question_feedback {
             label: label.into(),
             description: String::new(),
             preview: None,
-            kind: OptionKind::Pick,
         }
     }
 
-    /// The injected free-text "Other" composer row.
-    fn other() -> QuestionOption {
-        QuestionOption {
-            label: OTHER_OPTION_DISPLAY.into(),
-            description: String::new(),
-            preview: None,
-            kind: OptionKind::Other,
-        }
-    }
-
-    fn q(text: &str, selected: i32, options: Vec<QuestionOption>) -> QuestionItem {
+    fn q(text: &str, selected: usize, options: Vec<QuestionOption>) -> QuestionItem {
         QuestionItem {
             header: "h".into(),
             question: text.into(),
             options,
             multi_select: false,
-            selected,
+            selected: Some(selected),
             checked: Vec::new(),
-            notes: String::new(),
+            other_input: OtherInputState::default(),
         }
     }
 
@@ -94,21 +83,22 @@ mod question_feedback {
             request_id: "rid".into(),
             original_input: serde_json::json!({}),
             questions,
-            focus: QuestionFocus::Question(0),
+            current_question: QuestionPage::Question(0),
+            focus_target: QuestionFocusTarget::QuestionOption(0),
             is_in_plan_mode: plan_mode,
-            submit_selected: 0,
         }
     }
 
     #[test]
     fn chat_about_this_matches_ts_with_partial_answers() {
-        let o = state(
+        let mut o = state(
             vec![
                 q("Which library?", 0, vec![opt("Tokio"), opt("Async-std")]),
-                q("Custom name?", 1, vec![opt("Default"), other()]),
+                q("Custom name?", 0, vec![opt("Default")]),
             ],
             false,
         );
+        o.questions[1].other_input.focused = true;
 
         let actual = o.chat_about_this_feedback();
         let expected = "\
@@ -141,31 +131,24 @@ Questions asked and answers provided:\n\
     }
 
     #[test]
-    fn other_option_with_notes_uses_typed_text_as_answer() {
-        let mut o = state(
-            vec![q(
-                "Pick:",
-                1, // focus on the Other composer
-                vec![opt("Tokio"), other()],
-            )],
-            false,
-        );
-        o.questions[0].notes = "  rayon  ".into();
+    fn other_input_with_text_uses_typed_text_as_answer() {
+        let mut o = state(vec![q("Pick:", 0, vec![opt("Tokio")])], false);
+        o.questions[0].other_input.value = "  rayon  ".into();
 
         let actual = o.chat_about_this_feedback();
         assert!(
             actual.contains("Answer: rayon"),
-            "Other-with-notes must trim and use typed text; got: {actual}"
+            "free-text input must trim and use typed text; got: {actual}"
         );
         assert!(
-            !actual.contains("Answer: Other"),
-            "must use the typed text, not the Other label; got: {actual}"
+            !actual.contains("Answer: Tokio"),
+            "typed text should override the selected pick; got: {actual}"
         );
     }
 
     #[test]
     fn multi_select_joins_checked_labels_with_comma_space() {
-        let mut item = q("Pick many:", 0, vec![opt("A"), opt("B"), opt("C"), other()]);
+        let mut item = q("Pick many:", 0, vec![opt("A"), opt("B"), opt("C")]);
         item.multi_select = true;
         item.checked = vec![0, 2];
         let o = state(vec![item], false);
@@ -175,18 +158,20 @@ Questions asked and answers provided:\n\
     }
 
     #[test]
-    fn no_answer_when_other_focused_with_no_notes() {
-        let o = state(vec![q("Q?", 0, vec![other(), opt("Skip")])], false);
+    fn no_answer_when_free_text_focused_with_no_value() {
+        let mut o = state(vec![q("Q?", 0, vec![opt("Skip")])], false);
+        o.questions[0].other_input.focused = true;
+        o.focus_target = QuestionFocusTarget::OtherInput;
         let actual = o.chat_about_this_feedback();
         assert!(actual.contains("(No answer provided)"), "got: {actual}");
     }
 
     #[test]
-    fn is_editing_tracks_focused_other_composer() {
-        // Focus on the Other row → editing; focus on a normal pick → not.
-        let mut item = q("Q?", 1, vec![opt("Pick"), other()]);
+    fn is_editing_tracks_focused_free_text_input() {
+        let mut item = q("Q?", 0, vec![opt("Pick")]);
+        item.other_input.focused = true;
         assert!(item.is_editing(), "Other focused must report editing");
-        item.selected = 0;
+        item.other_input.focused = false;
         assert!(!item.is_editing(), "normal pick focused must not edit");
     }
 }

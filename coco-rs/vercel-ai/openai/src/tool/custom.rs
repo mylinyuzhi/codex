@@ -3,27 +3,35 @@ use std::collections::HashMap;
 use serde_json::json;
 use vercel_ai_provider::LanguageModelV4ProviderTool;
 
-/// Create a custom provider tool for the Responses API.
+/// Create an OpenAI Responses **custom grammar tool** — a provider-defined tool
+/// whose body is constrained by a grammar instead of a JSON schema (the
+/// mechanism behind freeform tools like `apply_patch`).
 ///
-/// The tool name is derived from the `id` field (`"openai.custom"`).
-///
-/// # Arguments
-/// - `description` - Optional description of the tool
-/// - `format` - Optional format config (e.g., `{ "type": "grammar", "syntax": ..., "definition": ... }` or `{ "type": "text" }`)
-pub fn openai_custom_tool(
-    description: Option<&str>,
-    format: Option<serde_json::Value>,
+/// Encapsulates the OpenAI-specific realization so callers (e.g.
+/// `app/query::engine_prompt`, via the `coco_inference` re-export) only supply
+/// the neutral `(name, description, syntax, definition)` and never spell out
+/// the `openai.custom` id or the `{type:"grammar", …}` wire shape. The id
+/// prefix makes `prepare_tools` serialize it as `{type:"custom", name, format}`.
+pub fn openai_custom_grammar_tool(
+    name: impl Into<String>,
+    description: impl Into<String>,
+    syntax: impl Into<String>,
+    definition: impl Into<String>,
 ) -> LanguageModelV4ProviderTool {
-    let mut args: HashMap<String, serde_json::Value> = HashMap::new();
-    if let Some(desc) = description {
-        args.insert("description".into(), json!(desc));
-    }
-    if let Some(fmt) = format {
-        args.insert("format".into(), fmt);
-    }
+    let args: HashMap<String, serde_json::Value> = HashMap::from([
+        ("description".into(), json!(description.into())),
+        (
+            "format".into(),
+            json!({
+                "type": "grammar",
+                "syntax": syntax.into(),
+                "definition": definition.into(),
+            }),
+        ),
+    ]);
     LanguageModelV4ProviderTool {
         id: "openai.custom".into(),
-        name: "custom".into(),
+        name: name.into(),
         args,
     }
 }

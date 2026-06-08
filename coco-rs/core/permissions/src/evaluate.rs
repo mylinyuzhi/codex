@@ -748,7 +748,7 @@ fn is_read_only_tool(tool_name: &str) -> bool {
         ToolName::CronList.as_str(),
         // Misc safe
         ToolName::Sleep.as_str(),
-        ToolName::Brief.as_str(),
+        ToolName::SendUserMessage.as_str(),
     ];
     READ_ONLY_TOOLS.contains(&tool_name)
 }

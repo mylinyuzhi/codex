@@ -44,6 +44,21 @@ pub(crate) struct BuiltToolDefinition {
     pub deferred: bool,
 }
 
+/// Realize a `Freeform` [`ToolSpec`](coco_tool_runtime::ToolSpec) as the OpenAI
+/// Responses custom-grammar wire tool. The provider-specific realization (the
+/// `openai.custom` id + `{type:"grammar", …}` shape) lives in
+/// `coco_inference::openai_custom_grammar_tool` — this layer only forwards the
+/// neutral `(name, description, syntax, definition)`. A `Freeform` tool is
+/// OpenAI-Responses-only by construction (e.g. apply_patch).
+fn freeform_provider_tool(ff: coco_tool_runtime::FreeformToolSpec) -> LanguageModelTool {
+    LanguageModelTool::Provider(coco_inference::openai_custom_grammar_tool(
+        ff.name,
+        ff.description,
+        ff.format.syntax,
+        ff.format.definition,
+    ))
+}
+
 /// Per-turn prompt + the post-budget message snapshot the engine threads
 /// into every tool invocation's `ctx.messages`.
 ///
@@ -476,6 +491,10 @@ impl QueryEngine {
         // off — the AgentTool description points at them rather than
         // `find` / `grep` via Bash.
         let has_embedded_search_tools = false;
+        let agent_teams_available = self
+            .config
+            .features
+            .enabled(coco_types::Feature::AgentTeams);
         // Subscription tier and teammate flags do not yet have a
         // resolved source in coco-rs. Defaulting to `false` keeps the
         // inline concurrency hint and full subagent prompt — the most
@@ -497,6 +516,7 @@ impl QueryEngine {
             fork_enabled,
             is_plan_interview_phase,
             has_embedded_search_tools,
+            agent_teams_available,
             is_in_process_teammate,
             is_teammate,
             agent_list_via_attachment,
@@ -505,7 +525,7 @@ impl QueryEngine {
             ant_build,
         };
 
-        // Session context for `Tool::model_schema`. Lets AgentTool drop
+        // Session context for `Tool::tool_spec`. Lets AgentTool drop
         // `run_in_background` from its model-facing schema when the runtime
         // would silently veto it. TS parity:
         // `AgentTool.tsx:110-125 lazySchema().omit({...})`.
@@ -513,6 +533,12 @@ impl QueryEngine {
             background_tasks_disabled,
             fork_mode_active: fork_enabled,
             features: Some(self.config.features.clone()),
+            // Active model's apply_patch shape (None → Freeform). ApplyPatchTool
+            // reads this to choose its `tool_spec` (Freeform grammar vs JSON).
+            apply_patch_tool_type: snapshot
+                .as_ref()
+                .and_then(|s| s.model_info.as_ref())
+                .and_then(|i| i.apply_patch_tool_type),
         };
 
         // Cache breakpoint at the built-in/MCP boundary. When MCP/dynamic tools
@@ -535,15 +561,14 @@ impl QueryEngine {
 
         let mut out = Vec::with_capacity(model_tools.len());
         for (idx, tool) in model_tools.into_iter().enumerate() {
-            // `model_schema(ctx)` is the model-facing JSON Schema — a plain
-            // Value, never validated, only serialized into the prompt tool
-            // list. The default borrows the runtime schema; AgentTool/Bash
-            // override it to omit runtime-only hook-injected fields
-            // (`mcp_servers`, `_simulatedSedEdit`), and AgentTool also drops
-            // `run_in_background` under `background_tasks_disabled ||
-            // fork_mode_active` (TS `AgentTool.tsx:110-125 lazySchema().omit(...)`).
-            let json_schema = tool.model_schema(&schema_ctx).into_owned();
-            let description = tool.prompt(&prompt_options).await;
+            // `tool_spec(ctx)` is the single source of truth for the tool's
+            // model-facing wire shape (description + parameters/grammar). The
+            // default builds a JSON `Function` from `prompt()` + the runtime
+            // schema; AgentTool/Bash/ExitPlanMode override to omit runtime-only
+            // hook-injected fields (`mcp_servers`, `_simulatedSedEdit`,
+            // `plan`), and ApplyPatch overrides to a `Freeform` grammar tool
+            // (codex `ToolSpec::Freeform`).
+            let spec = tool.tool_spec(&schema_ctx, &prompt_options).await;
             // Build the `anthropic` provider-options block. `deferLoading: true`
             // hides a not-yet-discovered tool's schema from the model (ToolSearch);
             // `cacheBoundary: true` flags the built-in/MCP boundary tool for the
@@ -577,15 +602,29 @@ impl QueryEngine {
                 po_map.insert("anthropic".to_string(), anthropic);
                 Some(coco_llm_types::ProviderOptions(po_map))
             };
+            // Convert the neutral `ToolSpec` to the provider wire form. A
+            // `Freeform` tool becomes an OpenAI provider-defined custom tool
+            // (`id: "openai.custom"`) carrying the lark grammar; `prepare_tools`
+            // serializes it to `{type:"custom", name, format}`. The anthropic
+            // cache/defer hints only apply to `Function` tools — the `Provider`
+            // variant has no provider-options slot (and Freeform tools never
+            // defer: `should_defer()` is false, so they are never in
+            // `deferred_marker`).
+            let wire = match spec {
+                coco_tool_runtime::ToolSpec::Function(f) => {
+                    LanguageModelTool::Function(LanguageModelFunctionTool {
+                        name: f.name,
+                        description: Some(f.description),
+                        input_schema: f.parameters,
+                        input_examples: None,
+                        strict: f.strict.then_some(true),
+                        provider_options,
+                    })
+                }
+                coco_tool_runtime::ToolSpec::Freeform(ff) => freeform_provider_tool(ff),
+            };
             out.push(BuiltToolDefinition {
-                tool: LanguageModelTool::Function(LanguageModelFunctionTool {
-                    name: tool_name.to_string(),
-                    description: Some(description),
-                    input_schema: json_schema,
-                    input_examples: None,
-                    strict: None,
-                    provider_options,
-                }),
+                tool: wire,
                 source,
                 deferred,
             });

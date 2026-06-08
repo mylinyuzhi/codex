@@ -192,6 +192,9 @@ pub use tool_result_storage::ContentReplacementRecord;
 pub use tool_result_storage::ResultSizeBound;
 pub use traits::DescriptionOptions;
 pub use traits::DynTool;
+pub use traits::FreeformToolSpec;
+pub use traits::FunctionToolSpec;
+pub use traits::GrammarFormat;
 pub use traits::InterruptBehavior;
 pub use traits::McpToolInfo;
 pub use traits::ProgressReceiver;
@@ -201,6 +204,7 @@ pub use traits::SchemaContext;
 pub use traits::SearchReadInfo;
 pub use traits::Tool;
 pub use traits::ToolProgress;
+pub use traits::ToolSpec;
 pub use traits::render_text_or_json;
 // Re-export the SDK content-part type so tool implementors can
 // override `Tool::render_for_model` without depending on

@@ -3,7 +3,6 @@ pub mod apply_patch;
 pub mod ask_user_question;
 pub mod bash;
 pub mod bash_advanced;
-pub mod brief;
 pub mod config;
 pub mod edit;
 pub mod edit_utils;
@@ -20,6 +19,7 @@ pub mod read;
 pub mod read_permissions;
 pub(crate) mod sandbox_preflight;
 pub mod scheduling;
+pub mod send_user_message;
 pub mod shell_cwd;
 pub mod shell_render;
 pub mod shell_tools;
@@ -78,9 +78,9 @@ pub use worktree::ExitWorktreeTool;
 
 // Utility (5)
 pub use ask_user_question::AskUserQuestionTool;
-pub use brief::BriefTool;
 pub use config::ConfigTool;
 pub use lsp_tool::LspTool;
+pub use send_user_message::SendUserMessageTool;
 pub use tool_search::ToolSearchTool;
 
 // MCP management (4)

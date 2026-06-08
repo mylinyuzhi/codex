@@ -526,21 +526,11 @@
       "type": "string"
     },
     "ApplyPatchToolType": {
-      "description": "How a model handles file editing / apply_patch tool.",
+      "description": "How a model's `apply_patch` tool is presented to the model. Per-model,\n**optional** (`None` \u2192 the default `Freeform`). Mirrors codex-rs, whose\n`ApplyPatchToolType` likewise carries only `Freeform`. Read by\n`apply_patch.rs::tool_spec` via `SchemaContext`.",
       "oneOf": [
         {
           "const": "freeform",
-          "description": "String-schema function tool (GPT-5.2+, codex models).",
-          "type": "string"
-        },
-        {
-          "const": "function",
-          "description": "JSON function tool (gpt-oss).",
-          "type": "string"
-        },
-        {
-          "const": "shell",
-          "description": "Shell-based, prompt instructions only (GPT-5, o3, o4-mini).",
+          "description": "Freeform/grammar custom tool (GPT-5.2+, codex models).",
           "type": "string"
         }
       ],
@@ -10947,12 +10937,22 @@
       "description": "A TodoWrite item \u2014 byte-matches TS `TodoItemSchema` (no `id` field,\npositional identity).",
       "properties": {
         "activeForm": {
+          "description": "TS `TodoItemSchema.activeForm: z.string().min(1)`.",
+          "minLength": 1,
           "type": "string"
         },
         "content": {
+          "description": "TS `TodoItemSchema.content: z.string().min(1)`.",
+          "minLength": 1,
           "type": "string"
         },
         "status": {
+          "description": "`status` is a plain `String` (TUI/store paths pre-date typing); the\nallowed values are declared on the schema. TS `z.enum([...])`.",
+          "enum": [
+            "pending",
+            "in_progress",
+            "completed"
+          ],
           "type": "string"
         }
       },

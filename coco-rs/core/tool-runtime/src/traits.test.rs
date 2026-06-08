@@ -29,6 +29,10 @@ impl Tool for EchoTool {
         "Echoes input back".into()
     }
 
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        "test tool".into()
+    }
+
     fn is_read_only(&self, _input: &Value) -> bool {
         true
     }
@@ -111,6 +115,9 @@ fn test_is_mcp_derives_from_mcp_info() {
         }
         fn description(&self, _: &serde_json::Value, _: &DescriptionOptions) -> String {
             "stub".into()
+        }
+        async fn prompt(&self, _options: &PromptOptions) -> String {
+            "test tool".into()
         }
         fn mcp_info(&self) -> Option<&super::super::McpToolInfo> {
             static INFO: std::sync::LazyLock<super::super::McpToolInfo> =

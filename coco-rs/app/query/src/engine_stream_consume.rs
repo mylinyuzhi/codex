@@ -366,6 +366,10 @@ impl QueryEngine {
                             provider_metadata: None,
                         };
                         let slice = std::slice::from_ref(&tcp);
+                        let mut deferred_tool_completions =
+                            crate::helpers::DeferredToolCompletionBuffer::new(
+                                *streaming_model_index,
+                            );
                         let mut prep_args = crate::tool_call_preparer::PendingToolPreparation {
                             event_tx,
                             history: &mut *history,
@@ -385,8 +389,8 @@ impl QueryEngine {
                             model_runtimes: &self.model_runtimes,
                             auto_mode_rules: &self.auto_mode_rules,
                             completion_event_mode: crate::helpers::ToolCompletionEventMode::Defer,
+                            deferred_tool_completions: Some(&mut deferred_tool_completions),
                         };
-                        let pre_prep_len = prep_args.history.len();
                         let mut permission_aborted = false;
                         let prep_result = crate::tool_call_preparer::prepare_one_pending_tool_call(
                             &mut prep_args,
@@ -394,21 +398,18 @@ impl QueryEngine {
                             &mut permission_aborted,
                         )
                         .await;
+                        drop(prep_args);
                         if permission_aborted {
                             self.cancel.cancel();
                         }
-                        let captured_errors = history.len().saturating_sub(pre_prep_len);
-                        let captured: Vec<Message> = if captured_errors > 0 {
-                            history.drain_pushed_since(pre_prep_len)
-                        } else {
-                            Vec::new()
-                        };
+                        *streaming_model_index = deferred_tool_completions.next_model_index();
+                        let deferred_outcomes = deferred_tool_completions.into_outcomes();
 
                         match prep_result {
                             Some((pending, _ctx)) => {
                                 debug_assert!(
-                                    captured.is_empty(),
-                                    "preparation succeeded but pushed messages"
+                                    deferred_outcomes.is_empty(),
+                                    "preparation succeeded but staged deferred completions"
                                 );
                                 let _ = crate::emit::emit_stream(
                                     event_tx,
@@ -429,7 +430,7 @@ impl QueryEngine {
                                     model_index,
                                 }));
                             }
-                            None if !captured.is_empty() => {
+                            None if !deferred_outcomes.is_empty() => {
                                 if self.cancel.is_cancelled() {
                                     let mut content_parts = Vec::new();
                                     if !response_text.is_empty() {
@@ -460,38 +461,18 @@ impl QueryEngine {
                                         event_tx,
                                     )
                                     .await;
-                                    for msg in captured {
-                                        crate::history_sync::history_push_and_emit(
-                                            history, msg, event_tx,
-                                        )
-                                        .await;
+                                    for outcome in deferred_outcomes {
+                                        for msg in outcome.ordered_messages {
+                                            crate::history_sync::history_push_and_emit(
+                                                history, msg, event_tx,
+                                            )
+                                            .await;
+                                        }
                                     }
                                 } else {
-                                    // Re-wrap and feed as EarlyOutcome
-                                    // so commit_flush surfaces it
-                                    // after the assistant message
-                                    // commits (I1 ordering fix).
-                                    // The streaming preparer runs in
-                                    // `ToolCompletionEventMode::Defer`,
-                                    // so it did NOT emit
-                                    // `ToolUseCompleted` inline —
-                                    // commit_flush's `on_outcome`
-                                    // callback is the sole emitter
-                                    // for this id and must not be
-                                    // suppressed by dedup.
-                                    let tool_id_for_outcome: coco_types::ToolId =
-                                        buf.tool_name.parse().unwrap_or_else(|_| {
-                                            coco_types::ToolId::Custom(buf.tool_name.clone())
-                                        });
-                                    let model_index = *streaming_model_index;
-                                    *streaming_model_index += 1;
-                                    let outcome = crate::helpers::build_streaming_early_outcome(
-                                        &id,
-                                        tool_id_for_outcome,
-                                        model_index,
-                                        captured,
-                                    );
-                                    handle.feed_plan(ToolCallPlan::EarlyOutcome(outcome));
+                                    for outcome in deferred_outcomes {
+                                        handle.feed_plan(ToolCallPlan::EarlyOutcome(outcome));
+                                    }
                                 }
                             }
                             None => {

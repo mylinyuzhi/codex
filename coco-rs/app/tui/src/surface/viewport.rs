@@ -147,6 +147,17 @@ struct InteractionPaneBottomReservation {
     bottom_height: u16,
 }
 
+fn input_height_for_state(state: &AppState) -> u16 {
+    if matches!(
+        state.ui.interaction.active_prompt,
+        Some(PanePromptState::Question(_))
+    ) {
+        0
+    } else {
+        3.min(constants::MAX_INPUT_HEIGHT as u16)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn interaction_pane_bottom_reservation(
     state: &AppState,
@@ -163,7 +174,7 @@ fn interaction_pane_bottom_reservation(
         } else {
             0
         };
-    let input_height = 3.min(constants::MAX_INPUT_HEIGHT as u16);
+    let input_height = input_height_for_state(state);
     let inline_popup = inline_popup_view(state);
     let popup_items = inline_popup
         .as_ref()
@@ -207,7 +218,7 @@ fn render_live_viewport(
     layout: &mut FrameLayout,
     precomputed_live: Option<Vec<Line<'static>>>,
 ) {
-    let input_height = 3.min(constants::MAX_INPUT_HEIGHT as u16);
+    let input_height = input_height_for_state(state);
     let activity = turn_activity_view(state, area.width);
     let activity_rows = inline_activity_height(&activity, area.height, area.width);
     let queue_rows: u16 =
@@ -391,6 +402,12 @@ fn render_live_viewport(
         );
     }
     if prompt_rows > 0 {
+        if matches!(
+            state.ui.interaction.active_prompt,
+            Some(PanePromptState::Question(_))
+        ) {
+            layout.question_prompt = prompt;
+        }
         render_interaction_prompt(frame, prompt, state, styles);
     }
     render_input(frame, state, input, styles);
@@ -506,20 +523,45 @@ fn interaction_prompt_height(state: &AppState, width: u16, max_height: u16) -> u
         return 0;
     };
     let styles = UiStyles::new(&state.ui.theme);
-    let box_width = interaction_prompt_box_width(width);
     if let PanePromptState::Question(q) = prompt {
-        let view = crate::presentation::request::project_question(q);
-        return view
-            .desired_height(box_width, styles)
+        return question_prompt_max_height(q, width, styles)
             .min(max_height.saturating_sub(4))
             .max(3);
     }
+    let box_width = interaction_prompt_box_width(width);
     let Some(text_surface) = crate::surface_content::prompt_text_surface(prompt) else {
         return 0;
     };
     required_text_surface_height_for_box(text_surface, state, styles, box_width, max_height)
         .min(max_height.saturating_sub(4))
         .max(3)
+}
+
+fn question_prompt_max_height(
+    q: &crate::state::QuestionPromptState,
+    box_width: u16,
+    styles: UiStyles<'_>,
+) -> u16 {
+    use crate::state::QuestionPage;
+
+    let mut max_height = 0;
+    for idx in 0..q.questions.len() {
+        let mut projected = q.clone();
+        projected.set_question_page(idx);
+        let view = crate::presentation::request::project_question(&projected);
+        max_height = max_height.max(view.desired_height(box_width, styles));
+    }
+    if q.questions.len() > 1 {
+        let mut projected = q.clone();
+        projected.current_question = QuestionPage::Submit;
+        projected.focus_target = crate::state::QuestionFocusTarget::SubmitAction(
+            crate::state::SubmitAction::SubmitAnswers,
+        );
+        projected.sync_other_focus();
+        let view = crate::presentation::request::project_question(&projected);
+        max_height = max_height.max(view.desired_height(box_width, styles));
+    }
+    max_height
 }
 
 fn render_interaction_prompt(
@@ -536,17 +578,13 @@ fn render_interaction_prompt(
     };
     // AskUserQuestion renders through the dedicated area-based widget, pinned to
     // the lower-left above the composer (mirrors TS/codex bottom-pane) instead
-    // of horizontally centered like the modal text prompts below. The prompt
-    // slot is already bottom-anchored by the viewport layout, so left-aligning
-    // the box is the whole "左下角" fix.
+    // of horizontally centered like the modal text prompts below.
     if let PanePromptState::Question(q) = prompt {
-        let width = interaction_prompt_box_width(area.width).min(area.width);
-        let box_area = Rect::new(area.x, area.y, width, area.height);
         let view = crate::presentation::request::project_question(q);
-        frame.render_widget(Clear, box_area);
+        frame.render_widget(Clear, area);
         frame.render_widget(
             coco_tui_ui::widgets::QuestionWidget::new(&view, styles),
-            box_area,
+            area,
         );
         return;
     }

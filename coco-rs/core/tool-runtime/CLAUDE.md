@@ -133,6 +133,9 @@ construction by `from_input_type::<T>()` (Bucket-A derive, auto-closed with
 MCP-wire / `--json-schema`). The old `coco_types::ToolInputSchema
 { properties, required }` data struct and the `Tool::input_schema()` bridge are
 **deleted** — every tool declares `runtime_validation_schema()` (no default ⇒
-E0046 forces it) and optionally `model_schema(&SchemaContext)` to hide
-hook-injected runtime-only fields. There is no separate validator cache. See
-`docs/coco-rs/tool-schema-final-plan.md` (v4.3).
+E0046 forces it). The model-facing wire shape is the single source of truth
+`tool_spec(&SchemaContext, &PromptOptions) -> ToolSpec` (`Function`/`Freeform`);
+its default builds a `Function` from `prompt()` + the runtime schema, and tools
+override it to hide hook-injected runtime-only fields (Bash/Agent/ExitPlanMode)
+or to present a `Freeform` grammar tool (apply_patch). There is no separate
+validator cache. See `docs/coco-rs/tool-schema-final-plan.md` (v4.3).

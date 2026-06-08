@@ -17,7 +17,7 @@ pub mod web_search_preview;
 
 pub use apply_patch::openai_apply_patch_tool;
 pub use code_interpreter::openai_code_interpreter_tool;
-pub use custom::openai_custom_tool;
+pub use custom::openai_custom_grammar_tool;
 pub use file_search::openai_file_search_tool;
 pub use image_generation::ImageGenerationToolOptions;
 pub use image_generation::openai_image_generation_tool;

@@ -28,10 +28,9 @@ use serde_json::Value;
 /// `SedEditPermissionRequest` TUI dialog).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct BashInput {
-    /// The shell command to execute. Required by validation, but
-    /// `#[serde(default)]` lets us emit a clean "missing command" error
-    /// at the boundary instead of an opaque Serde failure.
-    #[serde(default)]
+    /// The shell command to execute. Required — the runtime validation
+    /// schema declares `"required": ["command"]`, so a missing command is
+    /// rejected before deserialize.
     pub command: String,
     /// Optional timeout (ms). Defaults to `ToolConfig::bash.default_timeout_ms`
     /// when absent or zero; the model's value is otherwise honored (TS parity).
@@ -250,7 +249,7 @@ impl Tool for BashTool {
         SCHEMA.get_or_init(|| {
             // Runtime schema additionally declares `_simulatedSedEdit` — the TUI
             // sed-edit dialog injects it before re-validation. The model schema
-            // omits it (see `model_schema`).
+            // omits it (see `tool_spec`).
             coco_tool_runtime::ToolInputSchema::from_static_value(serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -261,16 +260,15 @@ impl Tool for BashTool {
                     },
                     "timeout": {
                         "type": "number",
-                        "description": "Optional timeout in milliseconds. Defaults to the resolved \
-                                        Bash tool config (typically 120000ms / 2 minutes)."
+                        "description": "Optional timeout in milliseconds (max 600000)"
                     },
                     "description": {
                         "type": "string",
-                        "description": "Clear description of what this command does"
+                        "description": "Clear, concise description of what this command does in active voice. Never use words like \"complex\" or \"risk\" in the description - just describe what it does.\n\nFor simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):\n- ls → \"List files in current directory\"\n- git status → \"Show working tree status\"\n- npm install → \"Install package dependencies\"\n\nFor commands that are harder to parse at a glance (piped commands, obscure flags, etc.), add enough context to clarify what it does:\n- find . -name \"*.tmp\" -exec rm {} \\; → \"Find and delete all .tmp files recursively\"\n- git reset --hard origin/main → \"Discard all local changes and match remote main\"\n- curl -s url | jq '.data[]' → \"Fetch JSON from URL and extract data array elements\""
                     },
                     "run_in_background": {
                         "type": "boolean",
-                        "description": "Set to true to run this command in the background. You will be notified when it completes."
+                        "description": "Set to true to run this command in the background. Use Read to read the output later."
                     },
                     "dangerouslyDisableSandbox": {
                         "type": "boolean",
@@ -287,19 +285,35 @@ impl Tool for BashTool {
                         "description": "(internal) TUI-injected sed-edit payload"
                     }
                 },
-                "required": []
+                "required": ["command"]
             }))
         })
     }
 
-    fn model_schema(
+    /// Model-facing spec. Always strips the internal `_simulatedSedEdit`
+    /// field (TS omits it unconditionally). When background tasks are
+    /// disabled (`COCO_BACKGROUND_TASKS_DISABLE`), also drops
+    /// `run_in_background` — TS `BashTool` does the same via
+    /// `fullInputSchema().omit({ run_in_background: true })`.
+    async fn tool_spec(
         &self,
-        _ctx: &coco_tool_runtime::SchemaContext,
-    ) -> std::borrow::Cow<'_, serde_json::Value> {
-        std::borrow::Cow::Owned(coco_tool_runtime::schema_omit_properties(
-            self.runtime_validation_schema().as_value(),
-            &["_simulatedSedEdit"],
-        ))
+        ctx: &coco_tool_runtime::SchemaContext,
+        prompt_opts: &coco_tool_runtime::PromptOptions,
+    ) -> coco_tool_runtime::ToolSpec {
+        let omit: &[&str] = if ctx.background_tasks_disabled {
+            &["_simulatedSedEdit", "run_in_background"]
+        } else {
+            &["_simulatedSedEdit"]
+        };
+        coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
+            name: self.name().to_string(),
+            description: self.prompt(prompt_opts).await,
+            parameters: coco_tool_runtime::schema_omit_properties(
+                self.runtime_validation_schema().as_value(),
+                omit,
+            ),
+            strict: self.strict(),
+        })
     }
 
     fn id(&self) -> ToolId {
@@ -310,7 +324,21 @@ impl Tool for BashTool {
         ToolName::Bash.as_str()
     }
 
-    fn description(&self, _input: &BashInput, _options: &DescriptionOptions) -> String {
+    /// Short per-call UI label. TS `BashTool.tsx:426-430`:
+    /// `description || 'Run shell command'`.
+    fn description(&self, input: &BashInput, _options: &DescriptionOptions) -> String {
+        input
+            .description
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "Run shell command".to_string())
+    }
+
+    /// Model-facing tool description (schema-listing time). TS
+    /// `BashTool.tsx:431-433` returns `getSimplePrompt()`; we hold that
+    /// ported text in [`BASH_TOOL_DESCRIPTION`].
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         BASH_TOOL_DESCRIPTION.into()
     }
 
@@ -645,12 +673,6 @@ impl Tool for BashTool {
             return apply_sed_edit(sed_input, ctx).await;
         }
 
-        if input.command.is_empty() {
-            return Err(ToolError::InvalidInput {
-                message: "missing command".into(),
-                error_code: None,
-            });
-        }
         let command = input.command.as_str();
 
         // TS `timeout || getDefaultTimeoutMs()`: a falsy (0) or absent value

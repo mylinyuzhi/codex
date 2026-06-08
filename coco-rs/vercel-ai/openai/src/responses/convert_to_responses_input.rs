@@ -46,12 +46,19 @@ impl ProviderToolFlags {
         ];
         for tool in tools {
             if let LanguageModelV4Tool::Provider(pt) = tool {
-                match pt.name.as_str() {
+                // Route by the provider-tool *id* (`openai.<type>`), not the
+                // wire name — mirrors `prepare_tools`. A freeform custom tool
+                // (apply_patch) is `{id:"openai.custom", name:"apply_patch"}`
+                // and must be treated as a custom tool (→ `custom_tool_call`),
+                // while the @ai-sdk built-in apply_patch is
+                // `{id:"openai.apply_patch"}` (→ `apply_patch_call`).
+                let tool_type = pt.id.strip_prefix("openai.").unwrap_or(pt.name.as_str());
+                match tool_type {
                     "local_shell" => flags.has_local_shell = true,
                     "shell" => flags.has_shell = true,
                     "apply_patch" => flags.has_apply_patch = true,
-                    name if !builtin_types.contains(&name) => {
-                        flags.custom_tool_names.insert(name.to_string());
+                    t if !builtin_types.contains(&t) => {
+                        flags.custom_tool_names.insert(pt.name.clone());
                     }
                     _ => {}
                 }

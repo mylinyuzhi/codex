@@ -1,57 +1,74 @@
 use crate::tools::bash::BashTool;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
-// ── R7-T25: tool description content checks ──
+// ── R7-T25: tool prompt content checks ──
 //
-// Verify that the BashTool description includes the critical TS
-// instructional content (avoid-native-commands list, parallel calls
+// Verify that the BashTool model-facing prompt() includes the critical
+// TS instructional content (avoid-native-commands list, parallel calls
 // guidance, git safety protocol, sandbox-related notes). Regression
-// guard against the description being silently truncated to a stub.
+// guard against the prompt being silently truncated to a stub. The full
+// guidance lives in prompt() (TS `getSimplePrompt()`); description() is
+// only the short per-call UI label ("Run shell command").
 
-#[test]
-fn test_bash_description_includes_avoid_native_commands_list() {
-    let desc =
-        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
+#[tokio::test]
+async fn test_bash_prompt_includes_avoid_native_commands_list() {
+    let desc = <BashTool as DynTool>::prompt(&BashTool, &PromptOptions::default()).await;
     // Every native command the model is told to avoid.
     for forbidden in &["find", "grep", "cat", "head", "tail", "sed", "awk", "echo"] {
         assert!(
             desc.contains(&format!("`{forbidden}`")),
-            "Bash description should warn about `{forbidden}`, got:\n{desc}"
+            "Bash prompt should warn about `{forbidden}`, got:\n{desc}"
         );
     }
 }
 
-#[test]
-fn test_bash_description_includes_tool_preferences() {
-    let desc =
-        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
+#[tokio::test]
+async fn test_bash_prompt_includes_tool_preferences() {
+    let desc = <BashTool as DynTool>::prompt(&BashTool, &PromptOptions::default()).await;
     for tool in &["Glob", "Grep", "Read", "Edit", "Write"] {
         assert!(
             desc.contains(tool),
-            "Bash description should mention {tool} as a preferred tool"
+            "Bash prompt should mention {tool} as a preferred tool"
         );
     }
 }
 
-#[test]
-fn test_bash_description_includes_git_safety_protocol() {
-    let desc =
-        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
+#[tokio::test]
+async fn test_bash_prompt_includes_git_safety_protocol() {
+    let desc = <BashTool as DynTool>::prompt(&BashTool, &PromptOptions::default()).await;
     assert!(desc.contains("Git Safety Protocol"));
     assert!(desc.contains("force push to main/master"));
     assert!(desc.contains("destructive git commands"));
     assert!(desc.contains("hooks (--no-verify"));
 }
 
-#[test]
-fn test_bash_description_includes_pr_creation_guidance() {
-    let desc =
-        <BashTool as DynTool>::description(&BashTool, &json!({}), &DescriptionOptions::default());
+#[tokio::test]
+async fn test_bash_prompt_includes_pr_creation_guidance() {
+    let desc = <BashTool as DynTool>::prompt(&BashTool, &PromptOptions::default()).await;
     assert!(desc.contains("Creating pull requests"));
     assert!(desc.contains("gh pr create"));
+}
+
+#[test]
+fn test_bash_description_is_short_label() {
+    // `command` is required (no `#[serde(default)]`), so the no-description
+    // fallback is exercised with a command present but `description` omitted.
+    let desc = <BashTool as DynTool>::description(
+        &BashTool,
+        &json!({ "command": "ls" }),
+        &DescriptionOptions::default(),
+    );
+    assert_eq!(desc, "Run shell command");
+    let desc_with_input = <BashTool as DynTool>::description(
+        &BashTool,
+        &json!({ "command": "ls", "description": "List files" }),
+        &DescriptionOptions::default(),
+    );
+    assert_eq!(desc_with_input, "List files");
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +142,13 @@ fn test_bash_destructive_commands() {
     }
 }
 
-/// Missing command → conservative false (matches previous default behavior).
+/// Missing command → `command` is now required, so `{}` fails to deserialize
+/// into `BashInput`. The `DynTool` blanket impls fall back to their
+/// deserialize-failure defaults: not read-only, not concurrency-safe, and
+/// (since `is_destructive` cannot prove the command is read-only) not flagged
+/// destructive either. The net effect is still conservative — such input never
+/// gets auto-batched as a safe read-only call; it's rejected at validation
+/// before any execution decision matters.
 #[test]
 fn test_bash_missing_command_conservative() {
     let input = json!({});
@@ -133,7 +156,7 @@ fn test_bash_missing_command_conservative() {
     assert!(!<BashTool as DynTool>::is_concurrency_safe(
         &BashTool, &input
     ));
-    assert!(<BashTool as DynTool>::is_destructive(&BashTool, &input));
+    assert!(!<BashTool as DynTool>::is_destructive(&BashTool, &input));
 }
 
 /// shell-163 / TS parity: `eval` and `IFS=` injection are routed through the
@@ -770,6 +793,9 @@ async fn test_bash_simulated_sed_edit_writes_new_content() {
     let result = <BashTool as DynTool>::execute(
         &BashTool,
         serde_json::json!({
+            // Production sed-edit input always carries the original `sed -i …`
+            // command alongside the TUI-injected payload (schema requires it).
+            "command": "sed -i 's/before/after/' file",
             "_simulatedSedEdit": {
                 "filePath": file.to_str().unwrap(),
                 "newContent": "after\n",
@@ -799,6 +825,7 @@ async fn test_bash_simulated_sed_edit_enoent_returns_sed_error() {
     let result = <BashTool as DynTool>::execute(
         &BashTool,
         serde_json::json!({
+            "command": "sed -i 's/x/y/' /this/path/does/not/exist.txt",
             "_simulatedSedEdit": {
                 "filePath": "/this/path/does/not/exist.txt",
                 "newContent": "irrelevant",
@@ -835,6 +862,7 @@ async fn test_bash_simulated_sed_edit_preserves_crlf_line_endings() {
     let _result = <BashTool as DynTool>::execute(
         &BashTool,
         serde_json::json!({
+            "command": "sed -i 's/alpha/gamma/' crlf.txt",
             "_simulatedSedEdit": {
                 "filePath": file.to_str().unwrap(),
                 "newContent": "gamma\ndelta\n",
@@ -863,6 +891,7 @@ async fn test_bash_simulated_sed_edit_missing_file_path_errors() {
     let result = <BashTool as DynTool>::execute(
         &BashTool,
         serde_json::json!({
+            "command": "sed -i 's/a/b/' file",
             "_simulatedSedEdit": {
                 "newContent": "no path provided"
             }

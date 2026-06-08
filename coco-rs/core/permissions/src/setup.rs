@@ -485,7 +485,7 @@ pub fn get_default_rules_for_mode(mode: PermissionMode) -> Vec<PermissionRule> {
                 ToolName::TaskList,
                 ToolName::TaskGet,
                 ToolName::TaskOutput,
-                ToolName::Brief,
+                ToolName::SendUserMessage,
                 ToolName::CronList,
                 ToolName::Lsp,
                 ToolName::ListMcpResources,

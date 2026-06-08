@@ -205,6 +205,9 @@ fn test_runnable_plan_carries_prepared_call() {
         ) -> String {
             "dummy".into()
         }
+        async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+            "test tool".into()
+        }
         async fn execute(
             &self,
             _input: serde_json::Value,

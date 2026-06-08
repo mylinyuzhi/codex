@@ -16,3 +16,13 @@ fn ui_hidden_attachment_derives_no_cells() {
 
     assert!(message_to_cells(Arc::new(msg)).is_empty());
 }
+
+#[test]
+fn skill_listing_attachment_derives_no_cells() {
+    let msg = Message::Attachment(AttachmentMessage::api(
+        AttachmentKind::SkillListing,
+        LlmMessage::user_text("- review: test skill"),
+    ));
+
+    assert!(message_to_cells(Arc::new(msg)).is_empty());
+}

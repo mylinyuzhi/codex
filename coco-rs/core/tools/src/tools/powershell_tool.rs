@@ -16,6 +16,7 @@ use coco_messages::ToolResult;
 use coco_sandbox::SandboxBypass;
 use coco_sandbox::SandboxState;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -39,11 +40,105 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// Max pwsh command timeout (10 minutes) — matches Bash max.
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
+/// Model-facing PowerShell tool description. Byte-aligned port of TS
+/// `tools/PowerShellTool/prompt.ts:73-145` `getPrompt()`. Runtime
+/// interpolations are resolved to coco-rs's constants:
+/// - edition section: TS `getEditionSection(null)` (detection-unresolved
+///   default — coco-rs does not resolve the pwsh edition at prompt-build
+///   time, so the conservative 5.1-safe guidance is emitted);
+/// - `getMaxTimeoutMs()` = 600000ms / 10 min ([`MAX_TIMEOUT_MS`]);
+/// - `getDefaultTimeoutMs()` = 120000ms / 2 min ([`DEFAULT_TIMEOUT_MS`]);
+/// - `getMaxOutputLength()` = 30000 chars (TS `BASH_MAX_OUTPUT_DEFAULT`,
+///   matching [`PowerShellTool::max_result_size_bound`]);
+/// - background-usage note and sleep guidance are included (TS default-on;
+///   gated off only by `COCO_SHELL_DISABLE_BACKGROUND_TASKS`).
+///
+/// Tool-name placeholders (`Glob`/`Grep`/`Read`/`Edit`/`Write`/
+/// `PowerShell`) are resolved from their TS `*_TOOL_NAME` constants.
+const POWERSHELL_PROMPT: &str = "Executes a given PowerShell command with optional timeout. Working directory persists between commands; shell state (variables, functions) does not.
+
+IMPORTANT: This tool is for terminal operations via PowerShell: git, npm, docker, and PS cmdlets. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.
+
+PowerShell edition: unknown — assume Windows PowerShell 5.1 for compatibility
+   - Do NOT use `&&`, `||`, ternary `?:`, null-coalescing `??`, or null-conditional `?.`. These are PowerShell 7+ only and parser-error on 5.1.
+   - To chain commands conditionally: `A; if ($?) { B }`. Unconditionally: `A; B`.
+
+Before executing the command, please follow these steps:
+
+1. Directory Verification:
+   - If the command will create new directories or files, first use `Get-ChildItem` (or `ls`) to verify the parent directory exists and is the correct location
+
+2. Command Execution:
+   - Always quote file paths that contain spaces with double quotes
+   - Capture the output of the command.
+
+PowerShell Syntax Notes:
+   - Variables use $ prefix: $myVar = \"value\"
+   - Escape character is backtick (`), not backslash
+   - Use Verb-Noun cmdlet naming: Get-ChildItem, Set-Location, New-Item, Remove-Item
+   - Common aliases: ls (Get-ChildItem), cd (Set-Location), cat (Get-Content), rm (Remove-Item)
+   - Pipe operator | works similarly to bash but passes objects, not text
+   - Use Select-Object, Where-Object, ForEach-Object for filtering and transformation
+   - String interpolation: \"Hello $name\" or \"Hello $($obj.Property)\"
+   - Registry access uses PSDrive prefixes: `HKLM:\\SOFTWARE\\...`, `HKCU:\\...` — NOT raw `HKEY_LOCAL_MACHINE\\...`
+   - Environment variables: read with `$env:NAME`, set with `$env:NAME = \"value\"` (NOT `Set-Variable` or bash `export`)
+   - Call native exe with spaces in path via call operator: `& \"C:\\Program Files\\App\\app.exe\" arg1 arg2`
+
+Interactive and blocking commands (will hang — this tool runs with -NonInteractive):
+   - NEVER use `Read-Host`, `Get-Credential`, `Out-GridView`, `$Host.UI.PromptForChoice`, or `pause`
+   - Destructive cmdlets (`Remove-Item`, `Stop-Process`, `Clear-Content`, etc.) may prompt for confirmation. Add `-Confirm:$false` when you intend the action to proceed. Use `-Force` for read-only/hidden items.
+   - Never use `git rebase -i`, `git add -i`, or other commands that open an interactive editor
+
+Passing multiline strings (commit messages, file content) to native executables:
+   - Use a single-quoted here-string so PowerShell does not expand `$` or backticks inside. The closing `'@` MUST be at column 0 (no leading whitespace) on its own line — indenting it is a parse error:
+<example>
+git commit -m @'
+Commit message here.
+Second line with $literal dollar signs.
+'@
+</example>
+   - Use `@'...'@` (single-quoted, literal) not `@\"...\"@` (double-quoted, interpolated) unless you need variable expansion
+   - For arguments containing `-`, `@`, or other characters PowerShell parses as operators, use the stop-parsing token: `git log --% --format=%H`
+
+Usage notes:
+  - The command argument is required.
+  - You can specify an optional timeout in milliseconds (up to 600000ms / 10 minutes). If not specified, commands will timeout after 120000ms (2 minutes).
+  - It is very helpful if you write a clear, concise description of what this command does.
+  - If the output exceeds 30000 characters, output will be truncated before being returned to you.
+  - You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes.
+  - Avoid using PowerShell to run commands that have dedicated tools, unless explicitly instructed:
+    - File search: Use Glob (NOT Get-ChildItem -Recurse)
+    - Content search: Use Grep (NOT Select-String)
+    - Read files: Use Read (NOT Get-Content)
+    - Edit files: Use Edit
+    - Write files: Use Write (NOT Set-Content/Out-File)
+    - Communication: Output text directly (NOT Write-Output/Write-Host)
+  - When issuing multiple commands:
+    - If the commands are independent and can run in parallel, make multiple PowerShell tool calls in a single message.
+    - If the commands depend on each other and must run sequentially, chain them in a single PowerShell call (see edition-specific chaining syntax above).
+    - Use `;` only when you need to run commands sequentially but don't care if earlier commands fail.
+    - DO NOT use newlines to separate commands (newlines are ok in quoted strings and here-strings)
+  - Do NOT prefix commands with `cd` or `Set-Location` -- the working directory is already set to the correct project directory automatically.
+  - Avoid unnecessary `Start-Sleep` commands:
+    - Do not sleep between commands that can run immediately — just run them.
+    - If your command is long running and you would like to be notified when it finishes — simply run your command using `run_in_background`. There is no need to sleep in this case.
+    - Do not retry failing commands in a sleep loop — diagnose the root cause or consider an alternative approach.
+    - If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.
+    - If you must poll an external process, use a check command rather than sleeping first.
+    - If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.
+  - For git commands:
+    - Prefer to create a new commit rather than amending an existing commit.
+    - Before running destructive operations (e.g., git reset --hard, git push --force, git checkout --), consider whether there is a safer alternative that achieves the same goal. Only use destructive operations when they are truly the best approach.
+    - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c commit.gpgsign=false) unless the user has explicitly asked for it. If a hook fails, investigate and fix the underlying issue.";
+
 /// Typed input for [`PowerShellTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct PowerShellInput {
     /// The PowerShell command to execute
-    #[serde(default)]
+    ///
+    /// TS `z.strictObject({ command: z.string(), ... })`: `command` is the
+    /// only non-optional field, so it must be plain (no `#[serde(default)]`)
+    /// to stay in the derived `required` array.
     pub command: String,
     /// Optional timeout in milliseconds. Defaults to 120000 (2 min)
     /// and cannot exceed 600000 (10 min).
@@ -93,11 +188,20 @@ impl Tool for PowerShellTool {
         ToolName::PowerShell.as_str()
     }
 
-    fn description(&self, _input: &PowerShellInput, _options: &DescriptionOptions) -> String {
-        "Execute a PowerShell command via pwsh. Subject to CLM type allowlist \
-         and git-internal-path safety checks — unsafe commands are rejected \
-         without running."
-            .into()
+    /// Short UI label. TS `PowerShellTool.tsx:277-281`
+    /// `async description({ description })` returns the caller-supplied
+    /// `description` field, falling back to `'Run PowerShell command'`. The
+    /// long model-facing guidance lives in [`Self::prompt`].
+    fn description(&self, input: &PowerShellInput, _options: &DescriptionOptions) -> String {
+        match input.description.as_deref() {
+            Some(d) if !d.is_empty() => d.to_string(),
+            _ => "Run PowerShell command".into(),
+        }
+    }
+    /// Model-facing tool description. TS `PowerShellTool.tsx:282-284`
+    /// `async prompt()` returns `getPrompt()`.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        POWERSHELL_PROMPT.into()
     }
 
     /// Mirror Bash's read-only fast path. TS

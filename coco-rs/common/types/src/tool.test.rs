@@ -20,6 +20,34 @@ fn test_tool_name_as_str_roundtrip() {
 }
 
 #[test]
+fn test_tool_name_ts_wire_names() {
+    // Wire names that mirror claude-code TS (`*_TOOL_NAME` consts).
+    assert_eq!(ToolName::SendUserMessage.as_str(), "SendUserMessage");
+    assert_eq!(ToolName::ListMcpResources.as_str(), "ListMcpResourcesTool");
+    assert_eq!(ToolName::ReadMcpResource.as_str(), "ReadMcpResourceTool");
+}
+
+#[test]
+fn test_tool_name_renamed_wire_names_parse() {
+    assert_eq!(
+        ToolName::from_str("SendUserMessage").unwrap(),
+        ToolName::SendUserMessage
+    );
+    assert_eq!(
+        ToolName::from_str("ListMcpResourcesTool").unwrap(),
+        ToolName::ListMcpResources
+    );
+    assert_eq!(
+        ToolName::from_str("ReadMcpResourceTool").unwrap(),
+        ToolName::ReadMcpResource
+    );
+    // The old names are gone — no legacy alias parsing.
+    assert!(ToolName::from_str("Brief").is_err());
+    assert!(ToolName::from_str("ListMcpResources").is_err());
+    assert!(ToolName::from_str("ReadMcpResource").is_err());
+}
+
+#[test]
 fn test_tool_name_from_str_unknown() {
     assert!(ToolName::from_str("Unknown").is_err());
 }

@@ -17,6 +17,10 @@ use std::path::Path;
 /// Default number of lines to read if no limit specified.
 const DEFAULT_LINE_LIMIT: usize = 2000;
 
+/// Short per-call UI label. TS `tools/FileReadTool/prompt.ts:11`
+/// `DESCRIPTION`, returned by `async description()`.
+const READ_TOOL_SHORT_DESCRIPTION: &str = "Read a file from the local filesystem.";
+
 /// Long-form tool description shown to the model.
 ///
 /// TS: `tools/FileReadTool/prompt.ts:27-49` `renderPromptTemplate()`.
@@ -137,16 +141,13 @@ const BLOCKED_DEVICE_PATHS: &[&str] = &[
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ReadInput {
     /// The absolute path to the file to read
-    #[serde(default)]
     pub file_path: String,
-    /// The line number to start reading from. Only provide if the
-    /// file is too large to read at once. 1-based — TS converts via
-    /// `offset === 0 ? 0 : offset - 1`, so both 0 and 1 mean "start
-    /// from the first line".
+    // 1-based — TS converts via `offset === 0 ? 0 : offset - 1`, so both 0
+    // and 1 mean "start from the first line".
+    /// The line number to start reading from. Only provide if the file is too large to read at once
     #[serde(default)]
     pub offset: Option<i64>,
-    /// The number of lines to read. Only provide if the file is too
-    /// large to read at once.
+    /// The number of lines to read. Only provide if the file is too large to read at once.
     #[serde(default)]
     pub limit: Option<i64>,
     /// Page range for PDF files (e.g., "1-5", "3", "10-20"). Only
@@ -191,6 +192,14 @@ impl Tool for ReadTool {
     }
 
     fn description(&self, _input: &ReadInput, _options: &DescriptionOptions) -> String {
+        READ_TOOL_SHORT_DESCRIPTION.into()
+    }
+
+    /// Model-facing tool description (schema-listing time). TS
+    /// `tools/FileReadTool/FileReadTool.ts:347` `async prompt()` →
+    /// `renderPromptTemplate(...)`; we hold the ported text in
+    /// [`READ_TOOL_DESCRIPTION`].
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         READ_TOOL_DESCRIPTION.into()
     }
 

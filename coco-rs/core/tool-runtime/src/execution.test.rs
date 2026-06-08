@@ -131,6 +131,10 @@ impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
         String::new()
     }
 
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
+    }
+
     fn validate_input(
         &self,
         input: &serde_json::Value,
@@ -224,6 +228,9 @@ impl crate::traits::Tool for EchoTool {
     }
     fn description(&self, _: &serde_json::Value, _: &crate::traits::DescriptionOptions) -> String {
         String::new()
+    }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
     }
     fn validate_input(
         &self,

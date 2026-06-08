@@ -19,6 +19,7 @@
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -30,12 +31,80 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
 
+/// Model-facing tool prompt — TS parity:
+/// `EnterWorktreeTool/prompt.ts::getEnterWorktreeToolPrompt()`. The path /
+/// brand details are adapted to coco-rs (worktrees live under
+/// `../worktrees/`, isolation is git-only) — see this module's header for
+/// why the TS cache-invalidation behavior is a no-op here.
+const ENTER_WORKTREE_PROMPT: &str = r#"Use this tool ONLY when the user explicitly asks to work in a worktree. This tool creates an isolated git worktree and switches the current session into it.
+
+## When to Use
+
+- The user explicitly says "worktree" (e.g., "start a worktree", "work in a worktree", "create a worktree", "use a worktree")
+
+## When NOT to Use
+
+- The user asks to create a branch, switch branches, or work on a different branch — use git commands instead
+- The user asks to fix a bug or work on a feature — use normal git workflow unless they specifically mention worktrees
+- Never use this tool unless the user explicitly mentions "worktree"
+
+## Requirements
+
+- Must be in a git repository
+- Must not already be in a worktree
+
+## Behavior
+
+- Creates a new git worktree inside `../worktrees/` with a new branch based on the repository's default branch
+- Switches the session's working directory to the new worktree
+- Use ExitWorktree to leave the worktree mid-session (keep or remove). On session exit, if still in the worktree, the user will be prompted to keep or remove it
+
+## Parameters
+
+- `name` (optional): A name for the worktree. If not provided, a random name is generated.
+"#;
+
+/// Model-facing tool prompt — TS parity:
+/// `ExitWorktreeTool/prompt.ts::getExitWorktreeToolPrompt()`. The tmux note
+/// is dropped (coco-rs worktrees have no tmux session) and the
+/// cache-clearing detail is adapted (no memoized caches to clear here).
+const EXIT_WORKTREE_PROMPT: &str = r#"Exit a worktree session created by EnterWorktree and return the session to the original working directory.
+
+## Scope
+
+This tool ONLY operates on worktrees created by EnterWorktree in this session. It will NOT touch:
+- Worktrees you created manually with `git worktree add`
+- Worktrees from a previous session (even if created by EnterWorktree then)
+- The directory you're in if EnterWorktree was never called
+
+If called outside an EnterWorktree session, the tool is a **no-op**: it reports that no worktree session is active and takes no action. Filesystem state is unchanged.
+
+## When to Use
+
+- The user explicitly asks to "exit the worktree", "leave the worktree", "go back", or otherwise end the worktree session
+- Do NOT call this proactively — only when the user asks
+
+## Parameters
+
+- `action` (required): `"keep"` or `"remove"`
+  - `"keep"` — leave the worktree directory and branch intact on disk. Use this if the user wants to come back to the work later, or if there are changes to preserve.
+  - `"remove"` — delete the worktree directory and its branch. Use this for a clean exit when the work is done or abandoned.
+- `discard_changes` (optional, default false): only meaningful with `action: "remove"`. If the worktree has uncommitted files or commits not on the original branch, the tool will REFUSE to remove it unless this is set to `true`. If the tool returns an error listing changes, confirm with the user before re-invoking with `discard_changes: true`.
+
+## Behavior
+
+- Restores the session's working directory to where it was before EnterWorktree
+- Once exited, EnterWorktree can be called again to create a fresh worktree
+"#;
+
 // ── EnterWorktreeTool ──
 
 /// Typed input for [`EnterWorktreeTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct EnterWorktreeInput {
-    /// Optional descriptive name for the worktree.
+    /// Optional name for the worktree. Each "/"-separated segment may contain
+    /// only letters, digits, dots, underscores, and dashes; max 64 chars
+    /// total. A random name is generated if not provided.
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -72,13 +141,21 @@ impl Tool for EnterWorktreeTool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
     fn description(&self, _input: &EnterWorktreeInput, _options: &DescriptionOptions) -> String {
-        "Create and enter a git worktree for isolated work.".into()
+        // TS parity: `EnterWorktreeTool.ts::description()`.
+        "Creates an isolated worktree (via git or configured hooks) and switches the session into it"
+            .into()
+    }
+    /// TS parity: `EnterWorktreeTool/prompt.ts::getEnterWorktreeToolPrompt()`.
+    /// The model's tool description is sourced from `prompt()`, not the
+    /// short `description()` UI label.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        ENTER_WORKTREE_PROMPT.to_string()
     }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("create and enter a git worktree")
+        Some("create an isolated git worktree and switch into it")
     }
 
     /// Emit the prebuilt `message` field as plain text — the model
@@ -287,12 +364,10 @@ impl Tool for EnterWorktreeTool {
 /// Typed input for [`ExitWorktreeTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ExitWorktreeInput {
-    /// What to do with the active worktree.
+    /// "keep" leaves the worktree and branch on disk; "remove" deletes both.
     pub action: ExitWorktreeAction,
-    /// Required `true` when the worktree has uncommitted files (or its git
-    /// state can't be verified). Without it the tool refuses removal and
-    /// lists the pending work, so the model can confirm with the user first —
-    /// removal is otherwise permanent. Mirrors TS `discard_changes`.
+    /// Required true when action is "remove" and the worktree has uncommitted
+    /// files or unmerged commits. The tool will refuse and list them otherwise.
     #[serde(default)]
     pub discard_changes: bool,
 }
@@ -356,13 +431,19 @@ impl Tool for ExitWorktreeTool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
     fn description(&self, _input: &ExitWorktreeInput, _options: &DescriptionOptions) -> String {
-        "Exit the active git worktree, optionally removing it.".into()
+        // TS parity: `ExitWorktreeTool.ts::description()`.
+        "Exits a worktree session created by EnterWorktree and restores the original working directory"
+            .into()
+    }
+    /// TS parity: `ExitWorktreeTool/prompt.ts::getExitWorktreeToolPrompt()`.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        EXIT_WORKTREE_PROMPT.to_string()
     }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("exit or remove an active git worktree")
+        Some("exit a worktree session and return to the original directory")
     }
 
     /// Emit the prebuilt `message` field; restoration metadata is for

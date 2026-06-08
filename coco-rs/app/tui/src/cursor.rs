@@ -19,9 +19,14 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
 use coco_tui_ui::engine::CursorClaim;
+use coco_tui_ui::style::UiStyles;
 
+use crate::FrameLayout;
+use crate::presentation::request::project_question;
 use crate::state::AppState;
 use crate::state::FocusTarget;
+use crate::state::PanePromptState;
+use crate::state::QuestionFocusTarget;
 use crate::widgets::InputRenderModel;
 
 /// Decide where (and whether) the cursor goes for the next frame.
@@ -31,19 +36,41 @@ use crate::widgets::InputRenderModel;
 /// input text, as the command palette does. Returning `None` tells
 /// `Tui::draw` to hide the cursor explicitly — see module docs for why hide
 /// alone isn't enough on iTerm2 / macOS Terminal.
-pub fn compute_cursor(state: &AppState, input_area: Rect) -> Option<CursorClaim> {
+pub fn compute_cursor(state: &AppState, layout: FrameLayout) -> Option<CursorClaim> {
+    if let Some(claim) = compute_question_cursor(state, layout.question_prompt) {
+        return Some(claim);
+    }
     if state.ui.focus != FocusTarget::Input {
         return None;
     }
     if state.ui.has_blocking_interaction() {
         return None;
     }
-    if input_area.width == 0 || input_area.height == 0 {
+    if layout.input.width == 0 || layout.input.height == 0 {
         return None;
     }
-    let (x, y) = compute_input_xy(state, input_area);
+    let (x, y) = compute_input_xy(state, layout.input);
     Some(CursorClaim {
         position: Position { x, y },
+        style: SetCursorStyle::DefaultUserShape,
+    })
+}
+
+fn compute_question_cursor(state: &AppState, area: Rect) -> Option<CursorClaim> {
+    let Some(PanePromptState::Question(q)) = state.ui.interaction.active_prompt.as_ref() else {
+        return None;
+    };
+    if q.focus_target != QuestionFocusTarget::OtherInput {
+        return None;
+    }
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let styles = UiStyles::new(&state.ui.theme);
+    let view = project_question(q);
+    let position = view.input_cursor_position(area, styles)?;
+    Some(CursorClaim {
+        position,
         style: SetCursorStyle::DefaultUserShape,
     })
 }

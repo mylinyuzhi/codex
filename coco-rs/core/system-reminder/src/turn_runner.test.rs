@@ -203,7 +203,7 @@ async fn brief_tool_suppresses_todo_reminder() {
     let input = TurnReminderInput {
         tools: vec![
             ToolName::TodoWrite.as_str().to_string(),
-            ToolName::Brief.as_str().to_string(),
+            ToolName::SendUserMessage.as_str().to_string(),
         ],
         ..minimal_input(&config, &app_state, &history)
     };

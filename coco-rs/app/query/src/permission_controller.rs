@@ -44,6 +44,7 @@ pub(crate) struct PermissionController<'a> {
     hooks: Option<&'a Arc<HookRegistry>>,
     orchestration_ctx: Option<&'a OrchestrationContext>,
     completion_event_mode: ToolCompletionEventMode,
+    deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
     /// True when the session cannot show an interactive permission prompt
     /// (coco equivalent of TS `shouldAvoidPermissionPrompts`). When set, a
     /// residual `Ask` with no permission bridge fails closed (Deny) rather
@@ -65,6 +66,7 @@ impl<'a> PermissionController<'a> {
         orchestration_ctx: Option<&'a OrchestrationContext>,
         completion_event_mode: ToolCompletionEventMode,
         avoid_permission_prompts: bool,
+        deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
     ) -> Self {
         Self {
             event_tx,
@@ -77,6 +79,7 @@ impl<'a> PermissionController<'a> {
             hooks,
             orchestration_ctx,
             completion_event_mode,
+            deferred_tool_completions,
             avoid_permission_prompts,
         }
     }
@@ -103,7 +106,9 @@ impl<'a> PermissionController<'a> {
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
                     self.completion_event_mode,
+                    self.deferred_tool_completions.as_deref_mut(),
                 )
                 .await;
                 PermissionOutcome::Denied
@@ -118,7 +123,9 @@ impl<'a> PermissionController<'a> {
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,
                     self.completion_event_mode,
+                    self.deferred_tool_completions.as_deref_mut(),
                 )
                 .await;
                 PermissionOutcome::Aborted
@@ -201,7 +208,9 @@ impl<'a> PermissionController<'a> {
                                     &tool_call.tool_name,
                                     tool_id,
                                     &output,
+                                    coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
                                     self.completion_event_mode,
+                                    self.deferred_tool_completions.as_deref_mut(),
                                 )
                                 .await;
                                 self.state_tracker
@@ -250,7 +259,9 @@ impl<'a> PermissionController<'a> {
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
                     self.completion_event_mode,
+                    self.deferred_tool_completions.as_deref_mut(),
                 )
                 .await;
                 self.state_tracker
@@ -330,6 +341,7 @@ impl<'a> PermissionController<'a> {
                             tool_id,
                             &feedback,
                             self.completion_event_mode,
+                            self.deferred_tool_completions.as_deref_mut(),
                         )
                         .await;
                         self.state_tracker
@@ -347,7 +359,9 @@ impl<'a> PermissionController<'a> {
                         &tool_call.tool_name,
                         tool_id,
                         &output,
+                        coco_tool_runtime::ToolCallErrorKind::PermissionDenied,
                         self.completion_event_mode,
+                        self.deferred_tool_completions.as_deref_mut(),
                     )
                     .await;
                     self.state_tracker
@@ -368,7 +382,9 @@ impl<'a> PermissionController<'a> {
                         &tool_call.tool_name,
                         tool_id,
                         &output,
+                        coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,
                         self.completion_event_mode,
+                        self.deferred_tool_completions.as_deref_mut(),
                     )
                     .await;
                     self.state_tracker
@@ -391,7 +407,9 @@ impl<'a> PermissionController<'a> {
                     &tool_call.tool_name,
                     tool_id,
                     &output,
+                    coco_tool_runtime::ToolCallErrorKind::PermissionBridgeFailed,
                     self.completion_event_mode,
+                    self.deferred_tool_completions.as_deref_mut(),
                 )
                 .await;
                 self.state_tracker

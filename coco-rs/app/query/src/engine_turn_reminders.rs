@@ -31,6 +31,7 @@ use coco_types::Feature;
 use coco_types::PermissionMode;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
+use coco_types::ToolName;
 
 use crate::engine::QueryEngine;
 use crate::engine_helpers::compute_agents_delta;
@@ -66,6 +67,10 @@ pub(crate) struct TurnReminderContext<'a> {
     /// wire (forked agents, tests).
     pub event_tx: &'a Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 }
+
+#[cfg(test)]
+#[path = "engine_turn_reminders.test.rs"]
+mod tests;
 
 impl QueryEngine {
     /// Run the per-turn system-reminder pipeline (TS QueryEngine.ts Phase D.3).
@@ -177,6 +182,14 @@ impl QueryEngine {
         // (loaded) tool list — used by `TurnReminderInput::tools` and
         // unchanged consumers below.
         let reminder_tools = reminder_loaded_tools.clone();
+        let reminder_skill_listing_enabled = reminder_loaded_tools
+            .iter()
+            .any(|name| name == ToolName::Skill.as_str());
+        tracing::debug!(
+            loaded_tools = ?reminder_loaded_tools,
+            skill_listing_enabled = reminder_skill_listing_enabled,
+            "turn reminder loaded tool set resolved"
+        );
         let pm_settings = &self.config.plan_mode_settings;
         let workflow_rm = match pm_settings.workflow {
             coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
@@ -430,6 +443,7 @@ impl QueryEngine {
                 just_compacted,
                 per_source_timeout: reminder_source_timeout,
                 skill_overrides: &self.config.skill_overrides,
+                skill_listing_enabled: reminder_skill_listing_enabled,
             })
             .await;
 
@@ -550,18 +564,22 @@ impl QueryEngine {
             task_statuses: materialized.task_statuses,
             // SkillsSource wins when present; else fall back to
             // SessionBootstrap names-only listing.
-            skill_listing: materialized.skill_listing.or_else(|| {
-                self.session_bootstrap
-                    .as_ref()
-                    .filter(|b| !b.skills.is_empty())
-                    .map(|b| {
-                        b.skills
-                            .iter()
-                            .map(|s| format!("- {s}"))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-            }),
+            skill_listing: if reminder_skill_listing_enabled {
+                materialized.skill_listing.or_else(|| {
+                    self.session_bootstrap
+                        .as_ref()
+                        .filter(|b| !b.skills.is_empty())
+                        .map(|b| {
+                            b.skills
+                                .iter()
+                                .map(|s| format!("- {s}"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                })
+            } else {
+                None
+            },
             invoked_skills: materialized.invoked_skills,
             teammate_mailbox: materialized.teammate_mailbox,
             team_context: materialized.team_context,

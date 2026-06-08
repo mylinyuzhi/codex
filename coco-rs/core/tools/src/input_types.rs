@@ -15,18 +15,6 @@ pub enum GrepOutputMode {
     Count,
 }
 
-/// Action for the Config tool.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigAction {
-    Get,
-    Set,
-    /// Default — listing the known keys is the safe no-arg action.
-    #[default]
-    List,
-    Reset,
-}
-
 /// Action for the LSP tool — mirrors TS `LSPTool` `operation` discriminated
 /// union (`tools/LSPTool/schemas.ts`).
 ///

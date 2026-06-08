@@ -117,6 +117,19 @@ pub async fn execute_tool_call(
         }
     };
 
+    // Step 1b: Freeform/custom-tool input coercion. The agent loop coerces in
+    // `tool_input_validate::validate_tool_call`; this mirror covers direct
+    // executors (subagents, tests) that pass a bare-string freeform input
+    // (apply_patch's raw patch) straight here. Wrap it into the typed JSON the
+    // schema + `Self::Input` expect; non-coercing tools / non-string inputs
+    // pass through unchanged.
+    let input = match input {
+        Value::String(raw) => tool
+            .coerce_raw_string_input(&raw)
+            .unwrap_or(Value::String(raw)),
+        other => other,
+    };
+
     // Step 2: Validate raw model input
     //
     // R7-T24: validation runs BEFORE permission check to match TS

@@ -182,6 +182,9 @@ impl coco_tool_runtime::traits::Tool for MockTool {
     fn description(&self, _input: &serde_json::Value, _options: &DescriptionOptions) -> String {
         String::new()
     }
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         &self.runtime_schema
     }
@@ -409,6 +412,24 @@ async fn matrix_anthropic_value_string_nested_is_recovered_in_layer_2() {
     validate_tool_call(&mut tc, Some(&tool));
     assert!(!tc.invalid);
     assert_eq!(tc.input, json!({"file_path": "/tmp/recovered"}));
+}
+
+#[tokio::test]
+async fn apply_patch_freeform_string_input_is_coerced_to_patch_object() {
+    // The freeform `apply_patch` tool call arrives as a bare string (the raw
+    // patch envelope). `validate_tool_call` must run the tool's
+    // `coerce_raw_string_input` (→ `{patch: raw}`) before schema validation,
+    // so the call is NOT marked invalid and the patch survives intact.
+    let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool);
+    let raw = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n";
+    let mut tc = mk_tc("apply_patch", json!(raw));
+    validate_tool_call(&mut tc, Some(&tool));
+    assert!(
+        !tc.invalid,
+        "coerced patch must pass schema validation: {:?}",
+        tc.invalid_reason
+    );
+    assert_eq!(tc.input, json!({ "patch": raw }));
 }
 
 #[tokio::test]

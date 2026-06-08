@@ -45,6 +45,18 @@ pub struct ApplyPatchOutput {
     pub stderr: String,
 }
 
+/// Model-facing description for the freeform `apply_patch` tool. Mirrors codex
+/// `create_apply_patch_freeform_tool`'s one-liner — the lark grammar
+/// ([`APPLY_PATCH_LARK_GRAMMAR`]) constrains the body, so the description only
+/// needs to tell the model this is a freeform (non-JSON) tool. There is no
+/// claude-code TS counterpart (gpt-5 / codex-family only).
+const APPLY_PATCH_FREEFORM_DESCRIPTION: &str = "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.";
+
+/// The lark grammar the model's freeform output is constrained to — a verbatim
+/// mirror of codex `apply_patch.lark`. The `coco_apply_patch` parser accepts
+/// exactly this envelope (`*** Begin Patch` … `*** End Patch`).
+const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("apply_patch.lark");
+
 pub struct ApplyPatchTool;
 
 #[async_trait]
@@ -71,6 +83,45 @@ impl Tool for ApplyPatchTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.tool_overrides
             .is_extra(&ToolId::Builtin(ToolName::ApplyPatch))
+    }
+
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        APPLY_PATCH_FREEFORM_DESCRIPTION.into()
+    }
+
+    /// `apply_patch` is the one built-in that is NOT a JSON function tool: it
+    /// is the codex freeform/grammar custom tool (`ToolSpec::Freeform`), where
+    /// the model emits the raw `*** Begin Patch …` envelope lark-constrained
+    /// instead of a JSON object. The model's `apply_patch_tool_type` (threaded
+    /// via `SchemaContext`) selects the shape; today the only variant is
+    /// `Freeform`, so the match is exhaustive — a future variant would force a
+    /// new arm here rather than silently defaulting.
+    async fn tool_spec(
+        &self,
+        schema_ctx: &coco_tool_runtime::SchemaContext,
+        prompt_opts: &coco_tool_runtime::PromptOptions,
+    ) -> coco_tool_runtime::ToolSpec {
+        match schema_ctx.apply_patch_tool_type {
+            None | Some(coco_types::ApplyPatchToolType::Freeform) => {
+                coco_tool_runtime::ToolSpec::Freeform(coco_tool_runtime::FreeformToolSpec {
+                    name: ToolName::ApplyPatch.as_str().to_string(),
+                    // Source the description from `prompt()` so that method
+                    // stays the single owner of the const (and isn't dead).
+                    description: self.prompt(prompt_opts).await,
+                    format: coco_tool_runtime::GrammarFormat {
+                        syntax: "lark".to_string(),
+                        definition: APPLY_PATCH_LARK_GRAMMAR.to_string(),
+                    },
+                })
+            }
+        }
+    }
+
+    /// The freeform tool call delivers the patch as a bare string; wrap it into
+    /// the `{ "patch": <raw> }` shape that [`ApplyPatchInput`] and the runtime
+    /// validation schema expect, so validation + deserialization succeed.
+    fn coerce_raw_string_input(&self, raw: &str) -> Option<serde_json::Value> {
+        Some(serde_json::json!({ "patch": raw }))
     }
 
     fn description(&self, _input: &ApplyPatchInput, _options: &DescriptionOptions) -> String {

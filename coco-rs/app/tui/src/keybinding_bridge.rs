@@ -25,7 +25,7 @@ pub enum KeybindingContext {
     /// because a question is answered by selecting an option (Enter), never by
     /// Y/N/A — routing it through the confirmation map would let the first
     /// letter of an answer silently approve/deny and tear the prompt down, and
-    /// would leave the "Other" free-text composer unreachable.
+    /// would leave the question free-text input unreachable.
     Question,
     /// Filterable list state (model picker, command palette, etc.).
     Picker,
@@ -390,7 +390,7 @@ fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
 /// it never emits `Approve`/`Deny`/`ApproveAll`: a question commits only via
 /// Enter. Printable characters (and Space/Backspace) flow to `SurfaceFilter*`,
 /// which `interaction::filter` routes to the multi-select toggle or the
-/// "Other" free-text composer — the path that was previously dead.
+/// question free-text input — the path that was previously dead.
 fn map_question_key(key: KeyEvent) -> Option<TuiCommand> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
@@ -410,7 +410,7 @@ fn map_question_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
         // Every printable char (Space included) routes through the filter
         // path: Space toggles a multi-select option, other chars type into
-        // the focused "Other" composer, and are silently swallowed otherwise.
+        // the focused free-text input, and are silently swallowed otherwise.
         KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
             Some(TuiCommand::SurfaceFilter(c))
         }

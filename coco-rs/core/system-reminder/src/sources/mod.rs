@@ -75,6 +75,7 @@ impl ReminderSources {
             just_compacted,
             per_source_timeout,
             skill_overrides,
+            skill_listing_enabled,
         } = mctx;
         let a = agent_id;
         let t = per_source_timeout;
@@ -121,7 +122,7 @@ impl ReminderSources {
             let so = so.clone();
             gate(
                 self.skills.as_ref(),
-                config.attachments.skill_listing,
+                config.attachments.skill_listing && skill_listing_enabled,
                 t,
                 move |s| {
                     let s = s.clone();

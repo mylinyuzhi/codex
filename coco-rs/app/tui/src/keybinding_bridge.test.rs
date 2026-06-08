@@ -139,28 +139,19 @@ fn install_question_prompt(state: &mut AppState) {
             questions: vec![crate::state::QuestionItem {
                 header: "Auth".into(),
                 question: "Which?".into(),
-                options: vec![
-                    crate::state::QuestionOption {
-                        label: "OAuth".into(),
-                        description: String::new(),
-                        preview: None,
-                        kind: crate::state::OptionKind::Pick,
-                    },
-                    crate::state::QuestionOption {
-                        label: crate::state::OTHER_OPTION_DISPLAY.into(),
-                        description: String::new(),
-                        preview: None,
-                        kind: crate::state::OptionKind::Other,
-                    },
-                ],
+                options: vec![crate::state::QuestionOption {
+                    label: "OAuth".into(),
+                    description: String::new(),
+                    preview: None,
+                }],
                 multi_select: false,
-                selected: 0,
+                selected: None,
                 checked: Vec::new(),
-                notes: String::new(),
+                other_input: crate::state::OtherInputState::default(),
             }],
-            focus: crate::state::QuestionFocus::Question(0),
+            current_question: crate::state::QuestionPage::Question(0),
+            focus_target: crate::state::QuestionFocusTarget::QuestionOption(0),
             is_in_plan_mode: false,
-            submit_selected: 0,
         },
     ));
 }
@@ -193,7 +184,7 @@ fn test_question_letter_keys_never_approve_or_deny() {
         map_key(&state, press(KeyCode::Enter)),
         Some(TuiCommand::SurfaceConfirm)
     ));
-    // C2 critical: the "Other" composer needs a Backspace + printable route.
+    // C2 critical: the question free-text input needs a Backspace + printable route.
     assert!(matches!(
         map_key(&state, press(KeyCode::Backspace)),
         Some(TuiCommand::SurfaceFilterBackspace)

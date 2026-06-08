@@ -1,28 +1,34 @@
 use crate::tools::edit::EditTool;
 
-// ── R7-T25: edit description content check ──
-#[test]
-fn test_edit_description_includes_uniqueness_warning() {
-    use coco_tool_runtime::DescriptionOptions;
+// ── R7-T25: edit prompt content check ──
+#[tokio::test]
+async fn test_edit_prompt_includes_uniqueness_warning() {
+    use coco_tool_runtime::PromptOptions;
 
-    // Description is input-independent, but the blanket DynTool path
-    // needs a valid Input fixture to deserialize before calling the
-    // typed Tool::description.
-    let fixture = serde_json::json!({"file_path": "/tmp/x", "old_string": "a", "new_string": "b"});
-    let desc =
-        <EditTool as DynTool>::description(&EditTool, &fixture, &DescriptionOptions::default());
+    // The full guidance lives in the model-facing prompt() (TS
+    // `getEditToolDescription()`); description() is the short label.
+    let desc = <EditTool as DynTool>::prompt(&EditTool, &PromptOptions::default()).await;
     assert!(
         desc.contains("must use your `Read` tool"),
-        "Edit description should warn about read-before-edit requirement"
+        "Edit prompt should warn about read-before-edit requirement"
     );
     assert!(
         desc.contains("FAIL if `old_string` is not unique"),
-        "Edit description should warn about uniqueness requirement"
+        "Edit prompt should warn about uniqueness requirement"
     );
     assert!(
         desc.contains("`replace_all`"),
-        "Edit description should mention replace_all"
+        "Edit prompt should mention replace_all"
     );
+}
+
+#[test]
+fn test_edit_description_is_short_label() {
+    use coco_tool_runtime::DescriptionOptions;
+    let fixture = serde_json::json!({"file_path": "/tmp/x", "old_string": "a", "new_string": "b"});
+    let desc =
+        <EditTool as DynTool>::description(&EditTool, &fixture, &DescriptionOptions::default());
+    assert_eq!(desc, "A tool for editing files");
 }
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
