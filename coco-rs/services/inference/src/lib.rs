@@ -123,6 +123,11 @@ pub use vercel_ai_provider::LanguageModelV4ToolChoice as LanguageModelToolChoice
 pub use vercel_ai_provider::ProviderV4 as Provider;
 pub use vercel_ai_provider::ResponseFormat;
 pub use vercel_ai_provider::language_model::v4::LanguageModelV4FunctionTool as LanguageModelFunctionTool;
+pub use vercel_ai_provider::language_model::v4::LanguageModelV4ProviderTool as LanguageModelProviderTool;
+// OpenAI custom-grammar tool constructor — the provider-specific realization of
+// a Freeform `ToolSpec` (apply_patch). Kept in the provider crate so callers
+// pass only neutral (name, description, syntax, definition).
+pub use vercel_ai_openai::tool::openai_custom_grammar_tool;
 
 // Provider-internal content variants not part of the DTO seam (used by
 // vercel-ai's own conversion code and by streaming-side rebuild logic

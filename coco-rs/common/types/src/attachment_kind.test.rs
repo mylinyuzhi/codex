@@ -101,6 +101,12 @@ fn display_matches_as_str() {
     );
 }
 
+#[test]
+fn skill_listing_is_api_visible_but_transcript_hidden() {
+    assert!(AttachmentKind::SkillListing.is_api_visible());
+    assert!(!AttachmentKind::SkillListing.renders_in_transcript());
+}
+
 /// TS parity guard: every kind listed in
 /// `components/messages/nullRenderingAttachments.ts:14-49` (TS
 /// `NULL_RENDERING_TYPES`) must return `renders_in_transcript() == false`

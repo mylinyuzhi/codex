@@ -32,6 +32,51 @@ fn is_enabled_only_when_model_adds_apply_patch() {
 }
 
 #[tokio::test]
+async fn tool_spec_is_freeform_lark_grammar() {
+    let tool: &dyn DynTool = &ApplyPatchTool;
+    let spec = tool
+        .tool_spec(
+            &coco_tool_runtime::SchemaContext::default(),
+            &coco_tool_runtime::PromptOptions::default(),
+        )
+        .await;
+    let coco_tool_runtime::ToolSpec::Freeform(spec) = spec else {
+        panic!("apply_patch must be a Freeform tool, not Function");
+    };
+    assert_eq!(spec.name, ToolName::ApplyPatch.as_str());
+    assert_eq!(spec.format.syntax, "lark");
+    // The grammar is the codex envelope (begin/end + EOF marker).
+    assert!(spec.format.definition.contains("*** Begin Patch"));
+    assert!(spec.format.definition.contains("*** End of File"));
+    assert!(!spec.description.trim().is_empty());
+}
+
+#[test]
+fn coerce_raw_string_input_wraps_patch() {
+    let tool: &dyn DynTool = &ApplyPatchTool;
+    let raw = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n";
+    let coerced = tool
+        .coerce_raw_string_input(raw)
+        .expect("apply_patch coerces a raw string");
+    assert_eq!(coerced, serde_json::json!({ "patch": raw }));
+    // The wrapped shape deserializes into the typed input.
+    let input: ApplyPatchInput = serde_json::from_value(coerced).unwrap();
+    assert_eq!(input.patch, raw);
+}
+
+#[test]
+fn apply_patch_is_never_tool_search_deferred() {
+    // A Freeform tool has no JSON schema to defer and the `Provider` wire
+    // variant can't carry `deferLoading` — apply_patch must always eager-load,
+    // so it must never opt into ToolSearch deferral.
+    let tool: &dyn DynTool = &ApplyPatchTool;
+    assert!(
+        !tool.should_defer(),
+        "apply_patch (Freeform) must never be ToolSearch-deferred"
+    );
+}
+
+#[tokio::test]
 async fn check_permissions_accept_edits_allows_cwd_patch() {
     let dir = tempfile::tempdir().unwrap();
     let mut ctx = ToolUseContext::test_default();

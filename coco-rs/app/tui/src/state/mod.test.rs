@@ -226,9 +226,9 @@ fn test_prompt_queue_priority_ordered() {
             request_id: "question-1".into(),
             original_input: serde_json::json!({}),
             questions: vec![],
-            focus: crate::state::QuestionFocus::Question(0),
+            current_question: crate::state::QuestionPage::Question(0),
+            focus_target: crate::state::QuestionFocusTarget::QuestionOption(0),
             is_in_plan_mode: false,
-            submit_selected: 0,
         },
     )); // priority 2
     state

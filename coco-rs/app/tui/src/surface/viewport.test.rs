@@ -141,6 +141,72 @@ fn interactive_viewport_reports_input_rect_for_cursor_policy() {
 }
 
 #[test]
+fn question_prompt_sets_input_height_to_zero() {
+    let backend = TestBackend::new(48, 10);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 48, 10));
+    let state = question_state(vec![question_item("Short", "Short?", 1)]);
+    let mut layout = FrameLayout::default();
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
+
+    terminal
+        .draw_viewport(|frame| {
+            layout = render_interactive_viewport(
+                frame,
+                &state,
+                native_plan(),
+                &mut transcript_layout,
+                None,
+            );
+        })
+        .expect("draw");
+
+    assert_eq!(layout.input.height, 0);
+}
+
+#[test]
+fn question_prompt_uses_full_viewport_width() {
+    let backend = TestBackend::new(140, 14);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, 140, 14));
+    let state = question_state(vec![question_item("Short", "Short?", 1)]);
+    let mut layout = FrameLayout::default();
+    let mut transcript_layout = crate::widgets::TranscriptLayoutIndex::default();
+
+    terminal
+        .draw_viewport(|frame| {
+            layout = render_interactive_viewport(
+                frame,
+                &state,
+                native_plan(),
+                &mut transcript_layout,
+                None,
+            );
+        })
+        .expect("draw");
+
+    assert_eq!(layout.question_prompt.width, 140);
+}
+
+#[test]
+fn question_prompt_desired_height_uses_tallest_question_tab() {
+    let state = question_state(vec![
+        question_item("Short", "Short?", 1),
+        question_item("Long", &"Long question ".repeat(20), 4),
+    ]);
+    let short_only = question_state(vec![question_item("Short", "Short?", 1)]);
+
+    let with_tall_tab = interactive_viewport_desired_height(&state, 48, 24, native_plan(), None);
+    let short_height =
+        interactive_viewport_desired_height(&short_only, 48, 24, native_plan(), None);
+
+    assert!(
+        with_tall_tab > short_height,
+        "question prompt should reserve tallest tab height"
+    );
+}
+
+#[test]
 fn compact_prompt_body_preserves_tail_action_block() {
     let body = "\
 Execute shell command
@@ -184,6 +250,41 @@ fn viewport_history_plan() -> SurfaceFramePlan {
     SurfaceFramePlan {
         history_surface: HistorySurfaceMode::Viewport,
         ..native_plan()
+    }
+}
+
+fn question_state(items: Vec<crate::state::QuestionItem>) -> AppState {
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(crate::state::PanePromptState::Question(
+            crate::state::QuestionPromptState {
+                request_id: "q".into(),
+                original_input: serde_json::json!({}),
+                questions: items,
+                current_question: crate::state::QuestionPage::Question(0),
+                focus_target: crate::state::QuestionFocusTarget::QuestionOption(0),
+                is_in_plan_mode: false,
+            },
+        ));
+    state
+}
+
+fn question_item(header: &str, question: &str, option_count: usize) -> crate::state::QuestionItem {
+    crate::state::QuestionItem {
+        header: header.into(),
+        question: question.into(),
+        options: (0..option_count)
+            .map(|idx| crate::state::QuestionOption {
+                label: format!("Option {}", idx + 1),
+                description: "description".into(),
+                preview: None,
+            })
+            .collect(),
+        multi_select: false,
+        selected: None,
+        checked: Vec::new(),
+        other_input: crate::state::OtherInputState::default(),
     }
 }
 

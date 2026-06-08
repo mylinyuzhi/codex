@@ -780,13 +780,13 @@ impl App {
                     lines = text.lines().count(),
                     "bracketed paste",
                 );
-                // Route the paste into the active AskUserQuestion "Other"
-                // composer when one is focused; otherwise the main input. Some
+                // Route the paste into the active AskUserQuestion free-text
+                // input when it is focused; otherwise the main input. Some
                 // terminals deliver IME-committed CJK as a bracketed paste, so
                 // without this the text would silently land in the hidden
-                // background composer instead of the question's notes.
-                if crate::update::route_question_notes_paste(&mut self.state, &text) {
-                    // consumed by the Other composer
+                // background composer instead of the question input.
+                if crate::update::route_question_free_text_paste(&mut self.state, &text) {
+                    // consumed by the question free-text input
                 } else {
                     // Batch insertion via TextArea is O(text.len()) and only
                     // recomputes the wrap cache once, vs N times for per-char insert.

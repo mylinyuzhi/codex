@@ -929,6 +929,49 @@ fn build_instructions_with_plan_and_edited_flag() {
     assert!(out.contains("step 1"));
 }
 
+#[tokio::test]
+async fn exit_plan_mode_tool_spec_hides_internal_fields_and_tightens_allowed_prompts() {
+    let coco_tool_runtime::ToolSpec::Function(spec) = <ExitPlanModeTool as DynTool>::tool_spec(
+        &ExitPlanModeTool,
+        &coco_tool_runtime::SchemaContext::default(),
+        &coco_tool_runtime::PromptOptions::default(),
+    )
+    .await
+    else {
+        panic!("ExitPlanMode should produce a Function spec");
+    };
+    let schema = spec.parameters;
+    let props = schema["properties"].as_object().expect("object schema");
+    // Internal splice fields must be hidden from the model.
+    assert!(!props.contains_key("plan"), "plan leaked into model schema");
+    assert!(
+        !props.contains_key("planFilePath"),
+        "planFilePath leaked into model schema"
+    );
+    assert!(
+        !props.contains_key("user_choice"),
+        "user_choice leaked into model schema"
+    );
+    // `allowedPrompts` stays — and its item mirrors TS:
+    // `{ tool: enum["Bash"], prompt }` with both required.
+    let items = &schema["properties"]["allowedPrompts"]["items"];
+    let required: Vec<&str> = items["required"]
+        .as_array()
+        .expect("allowedPrompts item must declare `required`")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        required.contains(&"tool") && required.contains(&"prompt"),
+        "allowedPrompts item must require tool+prompt; got {required:?}"
+    );
+    assert_eq!(
+        items["properties"]["tool"]["enum"],
+        json!(["Bash"]),
+        "allowedPrompts item `tool` must be enum[\"Bash\"]"
+    );
+}
+
 // ── Prompt + post-execute parity tests (G5.1) ──
 //
 // Byte-precise comparisons against the TS reference at

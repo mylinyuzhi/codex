@@ -14,6 +14,40 @@ fn converts_system_as_developer() {
 }
 
 #[test]
+fn from_tools_routes_apply_patch_by_id_not_name() {
+    use std::collections::HashMap;
+    use vercel_ai_provider::LanguageModelV4ProviderTool;
+
+    // coco's freeform apply_patch: id "openai.custom", name "apply_patch".
+    // It must be treated as a CUSTOM tool (→ custom_tool_call), NOT the
+    // @ai-sdk built-in apply_patch path — routing keys on id, not name.
+    let custom = LanguageModelV4Tool::Provider(LanguageModelV4ProviderTool {
+        id: "openai.custom".to_string(),
+        name: "apply_patch".to_string(),
+        args: HashMap::new(),
+    });
+    let flags = ProviderToolFlags::from_tools(&Some(vec![custom]));
+    assert!(
+        !flags.has_apply_patch,
+        "custom (openai.custom) apply_patch must not trip the built-in path"
+    );
+    assert!(
+        flags.custom_tool_names.contains("apply_patch"),
+        "custom apply_patch must be a custom tool"
+    );
+
+    // The @ai-sdk built-in apply_patch (id "openai.apply_patch") keeps its path.
+    let builtin = LanguageModelV4Tool::Provider(LanguageModelV4ProviderTool {
+        id: "openai.apply_patch".to_string(),
+        name: "apply_patch".to_string(),
+        args: HashMap::new(),
+    });
+    let flags = ProviderToolFlags::from_tools(&Some(vec![builtin]));
+    assert!(flags.has_apply_patch);
+    assert!(flags.custom_tool_names.is_empty());
+}
+
+#[test]
 fn converts_developer_message() {
     let prompt = vec![LanguageModelV4Message::developer_text("Follow app policy")];
     let (items, warnings) = convert_to_openai_responses_input(&prompt, SystemMessageMode::System);

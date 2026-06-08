@@ -224,17 +224,29 @@ impl AgentHandle for CapturingAgentHandle {
     }
 }
 
+/// Test helper: resolve `AgentTool`'s model-facing parameters schema via
+/// `tool_spec()` (the `Function` variant's `parameters`) for a given context.
+async fn agent_model_params(ctx: &coco_tool_runtime::SchemaContext) -> serde_json::Value {
+    match <AgentTool as DynTool>::tool_spec(
+        &AgentTool,
+        ctx,
+        &coco_tool_runtime::PromptOptions::default(),
+    )
+    .await
+    {
+        coco_tool_runtime::ToolSpec::Function(spec) => spec.parameters,
+        coco_tool_runtime::ToolSpec::Freeform(_) => panic!("AgentTool must be a Function tool"),
+    }
+}
+
 /// Verifies the AgentTool model-facing schema exposes exactly the
 /// nine TS-mirrored user fields. The five PR11 "internal-only knobs"
 /// (`effort`, `use_exact_tools`, `mcp_servers`, `disallowed_tools`,
 /// `max_turns`, `initial_prompt`) were intentionally removed — the
 /// coordinator now reads them off the resolved `AgentDefinition` only.
-#[test]
-fn test_agent_tool_input_schema_exposes_nine_user_fields() {
-    let schema = <AgentTool as DynTool>::model_schema(
-        &AgentTool,
-        &coco_tool_runtime::SchemaContext::default(),
-    );
+#[tokio::test]
+async fn test_agent_tool_input_schema_exposes_nine_user_fields() {
+    let schema = agent_model_params(&coco_tool_runtime::SchemaContext::default()).await;
     let p = schema["properties"].as_object().unwrap();
     let mut keys: Vec<&str> = p.keys().map(String::as_str).collect();
     keys.sort();
@@ -255,7 +267,11 @@ fn test_agent_tool_input_schema_exposes_nine_user_fields() {
         "schema must expose exactly the 9 user fields"
     );
 
-    // `mode` enum carries every PermissionMode wire variant.
+    // `mode` enum carries the PermissionMode wire variants — the TS
+    // INTERNAL `permissionModeSchema` set (the 5 external modes + `bubble`
+    // + feature-gated `auto`). `ask`/`deny` are `PermissionBehavior`
+    // values, NOT modes, and must be absent (they fail to parse and are
+    // silently dropped to the parent mode by `resolve_subagent_mode`).
     let mode_enum = p["mode"].get("enum").unwrap().as_array().unwrap();
     let mode_values: Vec<&str> = mode_enum.iter().filter_map(|v| v.as_str()).collect();
     for expected in [
@@ -266,12 +282,16 @@ fn test_agent_tool_input_schema_exposes_nine_user_fields() {
         "bubble",
         "bypassPermissions",
         "auto",
-        "ask",
-        "deny",
     ] {
         assert!(
             mode_values.contains(&expected),
             "mode enum missing {expected}; got {mode_values:?}"
+        );
+    }
+    for behavior in ["ask", "deny"] {
+        assert!(
+            !mode_values.contains(&behavior),
+            "mode enum must not contain PermissionBehavior value {behavior}; got {mode_values:?}"
         );
     }
     // Isolation accepts only "worktree" — remote isolation is
@@ -299,8 +319,8 @@ fn test_agent_tool_input_schema_exposes_nine_user_fields() {
 /// honour `run_in_background` (env disable OR fork-subagent mode),
 /// the model-facing schema MUST drop the field. TS parity:
 /// `AgentTool.tsx:110-125 lazySchema().omit({ run_in_background: true })`.
-#[test]
-fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
+#[tokio::test]
+async fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
     let static_schema = <AgentTool as DynTool>::runtime_validation_schema(&AgentTool).as_value();
     let static_props = static_schema["properties"]
         .as_object()
@@ -315,8 +335,9 @@ fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
         background_tasks_disabled: true,
         fork_mode_active: false,
         features: None,
+        apply_patch_tool_type: None,
     };
-    let session_schema = <AgentTool as DynTool>::model_schema(&AgentTool, &ctx).into_owned();
+    let session_schema = agent_model_params(&ctx).await;
     let session_props = session_schema["properties"]
         .as_object()
         .expect("session schema has properties");
@@ -330,9 +351,9 @@ fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
         background_tasks_disabled: false,
         fork_mode_active: true,
         features: None,
+        apply_patch_tool_type: None,
     };
-    let session_schema_fork =
-        <AgentTool as DynTool>::model_schema(&AgentTool, &ctx_fork).into_owned();
+    let session_schema_fork = agent_model_params(&ctx_fork).await;
     let session_props_fork = session_schema_fork["properties"]
         .as_object()
         .expect("session schema has properties");
@@ -343,8 +364,7 @@ fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
 
     // Neither flag → keep the field.
     let ctx_default = coco_tool_runtime::SchemaContext::default();
-    let session_schema_default =
-        <AgentTool as DynTool>::model_schema(&AgentTool, &ctx_default).into_owned();
+    let session_schema_default = agent_model_params(&ctx_default).await;
     let session_props_default = session_schema_default["properties"]
         .as_object()
         .expect("session schema has properties");

@@ -32,7 +32,7 @@ Usage:
 /// Typed input for [`WriteTool`].
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct WriteInput {
-    /// The absolute path to the file to write
+    /// The absolute path to the file to write (must be absolute, not relative)
     pub file_path: String,
     /// The content to write to the file
     pub content: String,
@@ -86,7 +86,17 @@ impl Tool for WriteTool {
         ToolName::Write.as_str()
     }
 
+    /// Short per-call UI label. TS `FileWriteTool.ts:99-101`
+    /// `async description()` → `'Write a file to the local filesystem.'`.
     fn description(&self, _input: &WriteInput, _options: &DescriptionOptions) -> String {
+        "Write a file to the local filesystem.".into()
+    }
+
+    /// Model-facing tool description (schema-listing time). TS
+    /// `FileWriteTool.ts:108-110` `async prompt()` →
+    /// `getWriteToolDescription()`; we hold the ported text in
+    /// [`WRITE_TOOL_DESCRIPTION`].
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         WRITE_TOOL_DESCRIPTION.into()
     }
 

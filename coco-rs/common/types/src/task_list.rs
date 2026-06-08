@@ -95,9 +95,16 @@ pub enum TaskClaimOutcome {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoRecord {
+    /// TS `TodoItemSchema.content: z.string().min(1)`.
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub content: String,
+    /// `status` is a plain `String` (TUI/store paths pre-date typing); the
+    /// allowed values are declared on the schema. TS `z.enum([...])`.
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = ["pending", "in_progress", "completed"])))]
     pub status: String,
+    /// TS `TodoItemSchema.activeForm: z.string().min(1)`.
     #[serde(rename = "activeForm")]
+    #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub active_form: String,
 }
 

@@ -41,7 +41,7 @@ const TURNS_BETWEEN_REMINDERS: i32 = 10;
 /// Tools gating the reminder. Canonical wire strings come from the
 /// [`ToolName`] enum's `as_str()`, so a rename flows through automatically.
 const REQUIRED_TOOL: ToolName = ToolName::TaskUpdate;
-const SUPPRESS_TOOL: ToolName = ToolName::Brief;
+const SUPPRESS_TOOL: ToolName = ToolName::SendUserMessage;
 
 /// Verbatim body from `messages.ts:3688` V2 `task_reminder` case, with TS
 /// `${TASK_CREATE_TOOL_NAME}` / `${TASK_UPDATE_TOOL_NAME}` substitutions

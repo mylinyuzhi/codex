@@ -334,30 +334,6 @@ pub struct SessionOption {
 }
 
 /// Question state (AskUserQuestion tool).
-///
-/// Mirrors the TS `AskUserQuestionPermissionRequest.tsx` data model:
-/// up to 4 questions per call, each with 2-4 options, optional preview
-/// content per option, and optional per-option notes captured by the
-/// user. Supports both single-select (radio) and multi-select (checkbox)
-/// modes per question, plus the two TS footer affordances:
-/// "Chat about this" (always shown) and "Skip interview and plan
-/// immediately" (plan-mode only).
-///
-/// Submit semantics:
-/// - Enter on [`QuestionFocus::Question`] when on the LAST question →
-///   ship `UserCommand::ApprovalResponse { approved: true, updated_input:
-///   Some({...original_input, answers, annotations}) }`. TS:
-///   `submitAnswers` (`AskUserQuestionPermissionRequest.tsx:407`).
-/// - Enter on `QuestionFocus::Question` (not last) → advance focus to
-///   next question. TS: `nextQuestion` / `Submit` button on intermediate
-///   questions.
-/// - Enter on [`QuestionFocus::ChatAboutThis`] → ship
-///   `ApprovalResponse { approved: false, feedback: Some(<synthesized>) }`
-///   with the TS-mirrored clarification prose. TS:
-///   `handleRespondToClaude`.
-/// - Enter on [`QuestionFocus::SkipInterview`] → same with skip-interview
-///   prose. TS: `handleFinishPlanInterview`. Only reachable when
-///   `is_in_plan_mode`.
 #[derive(Debug, Clone)]
 pub struct QuestionPromptState {
     pub request_id: String,
@@ -369,40 +345,43 @@ pub struct QuestionPromptState {
     /// `original_input` spread would silently strip those fields.
     pub original_input: serde_json::Value,
     pub questions: Vec<QuestionItem>,
-    /// Currently focused element (question index OR a footer item).
-    /// Tab cycles forward, Shift+Tab cycles backward.
-    pub focus: QuestionFocus,
+    /// Currently visible question page, or the multi-question submit page.
+    pub current_question: QuestionPage,
+    /// Focus within the currently visible page. This never encodes which page
+    /// is visible, so footer/submit focus can no longer fall back to question 0.
+    pub focus_target: QuestionFocusTarget,
     /// Plan-mode gate for the Skip-interview footer item. Set from
     /// `state.session.permission_mode == PermissionMode::Plan` when the
     /// state is constructed.
     pub is_in_plan_mode: bool,
-    /// Selection on the Submit tab's confirmation list (0 = "Submit answers",
-    /// 1 = "Cancel"). Only meaningful while `focus == QuestionFocus::Submit`;
-    /// `Default` (0) everywhere else. Mirrors the TS "Ready to submit your
-    /// answers?" Submit/Cancel choice.
-    pub submit_selected: i32,
 }
 
-/// What the user is currently focused on in the question state.
-///
-/// TS reference: `AskUserQuestionPermissionRequest.tsx` tracks
-/// `currentQuestionIndex` + `isFooterFocused` + `footerIndex`. Coco
-/// collapses these into a single enum so the focus state machine is
-/// linearizable.
+/// Page shown by the AskUserQuestion prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuestionFocus {
-    /// On the Nth question (0-indexed). `selected` within that question
-    /// drives radio/checkbox selection.
-    Question(i32),
-    /// The nav-strip "Submit" tab (only present with >1 question). Shows a
-    /// review of all answers; Enter submits them all. Mirrors the TS
-    /// `✔ Submit` tab at the end of the question navigation bar.
+pub enum QuestionPage {
+    Question(usize),
     Submit,
-    /// Footer "Chat about this" item — always available.
+}
+
+/// What the user is focused on inside the active question page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionFocusTarget {
+    QuestionOption(usize),
+    OtherInput,
+    QuestionFooter(QuestionFooterAction),
+    SubmitAction(SubmitAction),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionFooterAction {
     ChatAboutThis,
-    /// Footer "Skip interview and plan immediately" item — only
-    /// reachable when `QuestionPromptState.is_in_plan_mode`.
     SkipInterview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitAction {
+    SubmitAnswers,
+    Cancel,
 }
 
 /// One question in the AskUserQuestion state.
@@ -415,41 +394,28 @@ pub struct QuestionItem {
     pub options: Vec<QuestionOption>,
     /// `true` allows checkbox-style multi-selection, `false` is radio.
     pub multi_select: bool,
-    /// Currently focused option index (drives navigation + radio selection).
-    pub selected: i32,
+    /// Committed option index for radio-style questions. `None` means the user
+    /// has focused a row but has not pressed Enter / a number shortcut yet.
+    pub selected: Option<usize>,
     /// Indices toggled on for multi-select. Empty in single-select mode
     /// (the Enter handler then falls back to `selected`).
-    pub checked: Vec<i32>,
-    /// Free-form text typed by the user. Used both as "notes" annotation
-    /// (TS `questionStates[q].textInputValue`) AND as the answer body
-    /// when the focused option is the injected "Other" option. The
-    /// answer-build logic differentiates via [`QuestionOption::is_other`].
-    pub notes: String,
+    pub checked: Vec<usize>,
+    /// Free-form answer state rendered as the final `Type something.` row.
+    pub other_input: OtherInputState,
 }
 
 impl QuestionItem {
-    /// True when the focused option is the injected "Other" composer, so
-    /// typed characters edit [`Self::notes`] instead of moving the option
-    /// cursor. Derived from the focused option on demand — never stored,
-    /// so it cannot desync from `selected`.
+    /// True when typed characters should edit [`Self::other_input`].
     pub fn is_editing(&self) -> bool {
-        self.options
-            .get(self.selected.max(0) as usize)
-            .is_some_and(QuestionOption::is_other)
+        self.other_input.focused
     }
 }
 
-/// Whether an option is a model-supplied pick or the injected free-text
-/// "Other" composer. Replaces the former `"__other__"` label sentinel so
-/// the free-text slot is a typed concept the model cannot collide with.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum OptionKind {
-    /// A normal model-supplied choice.
-    #[default]
-    Pick,
-    /// The injected free-text slot: focusing it routes typed characters
-    /// into [`QuestionItem::notes`], which becomes the answer body.
-    Other,
+#[derive(Debug, Clone, Default)]
+pub struct OtherInputState {
+    pub focused: bool,
+    pub value: String,
+    pub committed: bool,
 }
 
 /// One choice within a [`QuestionItem`].
@@ -462,21 +428,154 @@ pub struct QuestionOption {
     /// Optional preview content (Markdown / monospace) shown side-by-side
     /// when this option is focused. `None` for plain options.
     pub preview: Option<String>,
-    /// Distinguishes a normal pick from the injected Other composer.
-    pub kind: OptionKind,
 }
-
-impl QuestionOption {
-    /// True for the injected free-text "Other" slot.
-    pub fn is_other(&self) -> bool {
-        matches!(self.kind, OptionKind::Other)
-    }
-}
-
-/// Visible label for the injected "Other" free-text option.
-pub const OTHER_OPTION_DISPLAY: &str = "Other";
 
 impl QuestionPromptState {
+    pub(crate) fn current_question_index(&self) -> Option<usize> {
+        let QuestionPage::Question(idx) = self.current_question else {
+            return None;
+        };
+        (idx < self.questions.len()).then_some(idx)
+    }
+
+    pub(crate) fn current_question_item(&self) -> Option<&QuestionItem> {
+        self.current_question_index()
+            .and_then(|idx| self.questions.get(idx))
+    }
+
+    pub(crate) fn current_question_item_mut(&mut self) -> Option<&mut QuestionItem> {
+        let idx = self.current_question_index()?;
+        self.questions.get_mut(idx)
+    }
+
+    pub(crate) fn set_question_page(&mut self, idx: usize) {
+        if self.questions.is_empty() {
+            return;
+        }
+        let idx = idx.min(self.questions.len() - 1);
+        self.current_question = QuestionPage::Question(idx);
+        self.focus_target = if self.questions[idx].options.is_empty() {
+            QuestionFocusTarget::OtherInput
+        } else {
+            QuestionFocusTarget::QuestionOption(
+                self.questions[idx]
+                    .selected
+                    .unwrap_or(0)
+                    .min(self.questions[idx].options.len().saturating_sub(1)),
+            )
+        };
+        self.sync_other_focus();
+    }
+
+    pub(crate) fn set_submit_page(&mut self) {
+        self.current_question = QuestionPage::Submit;
+        self.focus_target = QuestionFocusTarget::SubmitAction(SubmitAction::SubmitAnswers);
+        self.sync_other_focus();
+    }
+
+    pub(crate) fn advance_question_or_submit(&mut self) -> bool {
+        let Some(idx) = self.current_question_index() else {
+            return false;
+        };
+        if idx + 1 < self.questions.len() {
+            self.set_question_page(idx + 1);
+            return true;
+        }
+        if self.questions.len() > 1 {
+            self.set_submit_page();
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn switch_page(&mut self, delta: i32) {
+        if self.questions.len() <= 1 {
+            return;
+        }
+        let len = self.questions.len() + 1;
+        let current = match self.current_question {
+            QuestionPage::Question(idx) => idx.min(self.questions.len() - 1),
+            QuestionPage::Submit => self.questions.len(),
+        };
+        let next = (current as i32 + delta).rem_euclid(len as i32) as usize;
+        if next == self.questions.len() {
+            self.set_submit_page();
+        } else {
+            self.set_question_page(next);
+        }
+    }
+
+    pub(crate) fn cycle_focus(&mut self, delta: i32) {
+        use QuestionFocusTarget as Target;
+        use QuestionFooterAction as Footer;
+        use QuestionPage as Page;
+        use SubmitAction as Action;
+
+        let order = match self.current_question {
+            Page::Question(idx) => {
+                let Some(item) = self.questions.get(idx) else {
+                    return;
+                };
+                let mut order: Vec<Target> = (0..item.options.len())
+                    .map(Target::QuestionOption)
+                    .collect();
+                order.push(Target::OtherInput);
+                order.push(Target::QuestionFooter(Footer::ChatAboutThis));
+                if self.is_in_plan_mode {
+                    order.push(Target::QuestionFooter(Footer::SkipInterview));
+                }
+                order
+            }
+            Page::Submit => vec![
+                Target::SubmitAction(Action::SubmitAnswers),
+                Target::SubmitAction(Action::Cancel),
+            ],
+        };
+        if order.is_empty() {
+            return;
+        }
+        let idx = order
+            .iter()
+            .position(|target| *target == self.focus_target)
+            .unwrap_or(0) as i32;
+        self.focus_target = order[(idx + delta).rem_euclid(order.len() as i32) as usize];
+        self.sync_other_focus();
+    }
+
+    pub(crate) fn commit_focused_answer(&mut self) {
+        let QuestionPage::Question(qidx) = self.current_question else {
+            return;
+        };
+        let Some(item) = self.questions.get_mut(qidx) else {
+            return;
+        };
+        match self.focus_target {
+            QuestionFocusTarget::QuestionOption(oidx)
+                if !item.multi_select && oidx < item.options.len() =>
+            {
+                item.selected = Some(oidx);
+                item.other_input.committed = false;
+            }
+            QuestionFocusTarget::OtherInput if !item.other_input.value.trim().is_empty() => {
+                item.other_input.committed = true;
+                if !item.multi_select {
+                    item.selected = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn sync_other_focus(&mut self) {
+        let focused_idx = match (self.current_question, self.focus_target) {
+            (QuestionPage::Question(idx), QuestionFocusTarget::OtherInput) => Some(idx),
+            _ => None,
+        };
+        for (idx, item) in self.questions.iter_mut().enumerate() {
+            item.other_input.focused = focused_idx == Some(idx);
+        }
+    }
+
     /// Build the "Chat about this" rejection-feedback prose.
     ///
     /// Byte-for-byte mirror of TS `handleRespondToClaude` at
@@ -514,7 +613,7 @@ impl QuestionPromptState {
         self.questions
             .iter()
             .map(|q| {
-                let answer = self.peek_answer_for(q);
+                let answer = self.answer_for(q, /*include_uncommitted_other=*/ true);
                 if answer.is_empty() {
                     format!("- \"{}\"\n  (No answer provided)", q.question)
                 } else {
@@ -528,30 +627,42 @@ impl QuestionPromptState {
     /// Peek the would-be answer for `q` without committing. Used by the
     /// feedback synthesizers — they show what the user partially answered
     /// before deciding to bail out via Chat-about-this / Skip-interview.
-    /// Single-select picks the focused option label (or the typed `notes`
-    /// when "Other" is focused); multi-select joins all checked labels.
-    pub(crate) fn peek_answer_for(&self, q: &QuestionItem) -> String {
-        let label_for = |idx: i32| -> Option<&str> {
-            let opt = q.options.get(idx as usize)?;
-            if opt.is_other() {
-                let trimmed = q.notes.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed)
-                }
-            } else {
-                Some(opt.label.as_str())
-            }
+    /// Single-select picks the selected option label unless the free-text input
+    /// is focused with content; multi-select joins checked labels plus typed
+    /// free text when present.
+    pub(crate) fn committed_answer_for(&self, q: &QuestionItem) -> String {
+        self.answer_for(q, /*include_uncommitted_other=*/ false)
+    }
+
+    fn answer_for(&self, q: &QuestionItem, include_uncommitted_other: bool) -> String {
+        let typed = q.other_input.value.trim();
+        if include_uncommitted_other && q.other_input.focused {
+            return typed.to_string();
+        }
+        if include_uncommitted_other && !typed.is_empty() {
+            return typed.to_string();
+        }
+        if q.other_input.committed && !typed.is_empty() {
+            return typed.to_string();
+        }
+
+        let label_for = |idx: usize| -> Option<&str> {
+            let opt = q.options.get(idx)?;
+            Some(opt.label.as_str())
         };
         if q.multi_select {
-            q.checked
+            let mut labels = q
+                .checked
                 .iter()
                 .filter_map(|i| label_for(*i))
-                .collect::<Vec<_>>()
-                .join(", ")
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if (q.other_input.committed || include_uncommitted_other) && !typed.is_empty() {
+                labels.push(typed.to_string());
+            }
+            labels.join(", ")
         } else {
-            label_for(q.selected).unwrap_or("").to_string()
+            q.selected.and_then(label_for).unwrap_or("").to_string()
         }
     }
 
@@ -561,7 +672,7 @@ impl QuestionPromptState {
     /// first option, so they read as answered unless "Other" is focused with an
     /// empty buffer; multi-select reads unanswered until something is checked.
     pub(crate) fn question_has_answer(&self, q: &QuestionItem) -> bool {
-        !self.peek_answer_for(q).trim().is_empty()
+        !self.committed_answer_for(q).trim().is_empty()
     }
 
     /// True when every question resolves to an answer — drives the Submit tab's

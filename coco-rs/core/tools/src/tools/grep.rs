@@ -243,7 +243,6 @@ impl Default for ContentFormatOptions {
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct GrepInput {
     /// The regular expression pattern to search for in file contents
-    #[serde(default)]
     pub pattern: String,
     /// File or directory to search in (rg PATH). Defaults to current
     /// working directory.
@@ -282,16 +281,12 @@ pub struct GrepInput {
     /// Case insensitive search (rg -i)
     #[serde(default, rename = "-i")]
     pub case_insensitive: bool,
-    /// File type to search (rg --type). Common types: js, py, rust,
-    /// go, java, etc. More efficient than `glob` for standard file
-    /// types. Wire key is `type`; Rust ident is `file_type` to avoid
-    /// the keyword collision.
+    // Wire key is `type`; Rust ident is `file_type` to avoid the keyword
+    // collision.
+    /// File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types.
     #[serde(default, rename = "type")]
     pub file_type: Option<String>,
-    /// Limit output to first N lines/entries, equivalent to "| head -N".
-    /// Works across all output modes. Defaults to 250 when
-    /// unspecified. Pass 0 for unlimited (use sparingly — large
-    /// result sets waste context).
+    /// Limit output to first N lines/entries, equivalent to "| head -N". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 250 when unspecified. Pass 0 for unlimited (use sparingly — large result sets waste context).
     #[serde(default)]
     pub head_limit: Option<i64>,
     /// Skip first N lines/entries before applying head_limit,
@@ -334,6 +329,13 @@ impl Tool for GrepTool {
     }
 
     fn description(&self, _input: &GrepInput, _options: &DescriptionOptions) -> String {
+        GREP_DESCRIPTION.into()
+    }
+
+    /// Model-facing tool description (schema-listing time). TS
+    /// `GrepTool.ts:241-242` `async prompt()` returns the SAME
+    /// `getDescription()` text as `async description()`.
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         GREP_DESCRIPTION.into()
     }
 

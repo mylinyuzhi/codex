@@ -6,6 +6,7 @@
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -74,19 +75,24 @@ pub struct CronCreateInput {
     /// Standard 5-field cron expression in local time: "M H DoM Mon
     /// DoW" (e.g. "*/5 * * * *" = every 5 minutes, "30 14 28 2 *" =
     /// Feb 28 at 2:30pm local once).
-    #[serde(default)]
+    ///
+    /// TS `CronCreateTool.ts:29-33` `z.string()` with no `.optional()`
+    /// / `.default()` — REQUIRED, no `default:""`.
     pub cron: String,
     /// The prompt to enqueue at each fire time.
-    #[serde(default)]
+    ///
+    /// TS `CronCreateTool.ts:34` `z.string()` — REQUIRED.
     pub prompt: String,
     /// true (default) = fire on every cron match until deleted or
-    /// auto-expired. false = fire once at the next match, then
-    /// auto-delete. Use false for "remind me at X" one-shot requests.
+    /// auto-expired after 7 days. false = fire once at the next match,
+    /// then auto-delete. Use false for "remind me at X" one-shot
+    /// requests with pinned minute/hour/dom/month.
     #[serde(default = "default_true")]
     pub recurring: bool,
-    /// true = persist to `.coco/scheduled_tasks.json` and survive restarts.
-    /// false (default) = session-only, dies when this session ends. TS
-    /// `CronCreateTool.ts` `durable`.
+    /// true = persist to .coco/scheduled_tasks.json and survive
+    /// restarts. false (default) = in-memory only, dies when this Claude
+    /// session ends. Use true only when the user asks the task to
+    /// survive across sessions.
     #[serde(default)]
     pub durable: bool,
 }
@@ -134,14 +140,61 @@ impl Tool for CronCreateTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
+    /// TS `prompt.ts:68-72 buildCronCreateDescription` (durable branch —
+    /// coco-rs always exposes the durable path via `.coco/scheduled_tasks.json`).
     fn description(&self, _input: &CronCreateInput, _options: &DescriptionOptions) -> String {
-        "Create a scheduled task that enqueues a prompt on a cron schedule.".into()
+        "Schedule a prompt to run at a future time — either recurring on a cron schedule, or once at a specific time. Pass durable: true to persist to .coco/scheduled_tasks.json; otherwise session-only.".into()
     }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("schedule a recurring cron job to run later")
+        Some("schedule a recurring or one-shot prompt")
+    }
+
+    /// Full model-facing description. TS `prompt.ts:74-121
+    /// buildCronCreatePrompt` (durable branch). Engine builds the tool
+    /// def from `prompt()`, not `description()` (`engine_prompt.rs`), so
+    /// this is what the model actually reads.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        format!(
+            "Schedule a prompt to be enqueued at a future time. Use for both recurring schedules and one-shot reminders.\n\
+\n\
+Uses standard 5-field cron in the user's local timezone: minute hour day-of-month month day-of-week. \"0 9 * * *\" means 9am local — no timezone conversion needed.\n\
+\n\
+## One-shot tasks (recurring: false)\n\
+\n\
+For \"remind me at X\" or \"at <time>, do Y\" requests — fire once then auto-delete.\n\
+Pin minute/hour/day-of-month/month to specific values:\n\
+  \"remind me at 2:30pm today to check the deploy\" → cron: \"30 14 <today_dom> <today_month> *\", recurring: false\n\
+  \"tomorrow morning, run the smoke test\" → cron: \"57 8 <tomorrow_dom> <tomorrow_month> *\", recurring: false\n\
+\n\
+## Recurring jobs (recurring: true, the default)\n\
+\n\
+For \"every N minutes\" / \"every hour\" / \"weekdays at 9am\" requests:\n\
+  \"*/5 * * * *\" (every 5 min), \"0 * * * *\" (hourly), \"0 9 * * 1-5\" (weekdays at 9am local)\n\
+\n\
+## Avoid the :00 and :30 minute marks when the task allows it\n\
+\n\
+Every user who asks for \"9am\" gets `0 9`, and every user who asks for \"hourly\" gets `0 *` — which means requests from across the planet land on the API at the same instant. When the user's request is approximate, pick a minute that is NOT 0 or 30:\n\
+  \"every morning around 9\" → \"57 8 * * *\" or \"3 9 * * *\" (not \"0 9 * * *\")\n\
+  \"hourly\" → \"7 * * * *\" (not \"0 * * * *\")\n\
+  \"in an hour or so, remind me to...\" → pick whatever minute you land on, don't round\n\
+\n\
+Only use minute 0 or 30 when the user names that exact time and clearly means it (\"at 9:00 sharp\", \"at half past\", coordinating with a meeting). When in doubt, nudge a few minutes early or late — the user will not notice, and the fleet will.\n\
+\n\
+## Durability\n\
+\n\
+By default (durable: false) the job lives only in this Claude session — nothing is written to disk, and the job is gone when Claude exits. Pass durable: true to write to .coco/scheduled_tasks.json so the job survives restarts. Only use durable: true when the user explicitly asks for the task to persist (\"keep doing this every day\", \"set this up permanently\"). Most \"remind me in 5 minutes\" / \"check back in an hour\" requests should stay session-only.\n\
+\n\
+## Runtime behavior\n\
+\n\
+Jobs only fire while the REPL is idle (not mid-query). Durable jobs persist to .coco/scheduled_tasks.json and survive session restarts — on next launch they resume automatically. One-shot durable tasks that were missed while the REPL was closed are surfaced for catch-up. Session-only jobs die with the process. The scheduler adds a small deterministic jitter on top of whatever you pick: recurring tasks fire up to 10% of their period late (max 15 min); one-shot tasks landing on :00 or :30 fire up to 90 s early. Picking an off-minute is still the bigger lever.\n\
+\n\
+Recurring tasks auto-expire after {DEFAULT_MAX_AGE_DAYS} days — they fire one final time, then are deleted. This bounds session lifetime. Tell the user about the {DEFAULT_MAX_AGE_DAYS}-day limit when scheduling recurring jobs.\n\
+\n\
+Returns a job ID you can pass to CronDelete."
+        )
     }
 
     /// Render the create envelope as a single-line confirmation. TS
@@ -236,13 +289,6 @@ impl Tool for CronCreateTool {
             });
         }
 
-        if input.cron.is_empty() || input.prompt.is_empty() {
-            return Err(ToolError::InvalidInput {
-                message: "cron and prompt are required".into(),
-                error_code: None,
-            });
-        }
-
         // Persist via the store (TS `addCronTask`): durable → disk
         // (.coco/scheduled_tasks.json), else session-only. The scheduler tick
         // (coco_cli::cron_tick) picks it up and fires the prompt.
@@ -289,8 +335,12 @@ impl Tool for CronCreateTool {
 /// Typed input for [`CronDeleteTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct CronDeleteInput {
-    /// ID of the schedule to delete
-    #[serde(default)]
+    /// Job ID returned by CronCreate.
+    ///
+    /// TS `CronDeleteTool.ts:22` field is `id` (`z.string()`, REQUIRED).
+    /// Wire/schema key is `id`; the Rust field stays `schedule_id` to
+    /// avoid colliding with the `id()` tool-name method.
+    #[serde(rename = "id")]
     pub schedule_id: String,
 }
 
@@ -330,14 +380,21 @@ impl Tool for CronDeleteTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
+    /// TS `prompt.ts:123 CRON_DELETE_DESCRIPTION`.
     fn description(&self, _input: &CronDeleteInput, _options: &DescriptionOptions) -> String {
-        "Delete a scheduled task by ID.".into()
+        "Cancel a scheduled cron job by ID".into()
     }
     fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("delete a scheduled cron job by id")
+        Some("cancel a scheduled cron job")
+    }
+
+    /// Full model-facing description. TS `prompt.ts:124-128
+    /// buildCronDeletePrompt` (durable branch).
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        "Cancel a cron job previously scheduled with CronCreate. Removes it from .coco/scheduled_tasks.json (durable jobs) or the in-memory session store (session-only jobs).".into()
     }
 
     /// TS `CronDeleteTool.ts:86-92 mapToolResultToToolResultBlockParam`.
@@ -439,8 +496,15 @@ impl Tool for CronListTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
+    /// TS `prompt.ts:130 CRON_LIST_DESCRIPTION`.
     fn description(&self, _input: &CronListInput, _options: &DescriptionOptions) -> String {
-        "List all scheduled tasks.".into()
+        "List scheduled cron jobs".into()
+    }
+
+    /// Full model-facing description. TS `prompt.ts:131-135
+    /// buildCronListPrompt` (durable branch).
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        "List all cron jobs scheduled via CronCreate, both durable (.coco/scheduled_tasks.json) and session-only.".into()
     }
     fn is_read_only(&self, _input: &CronListInput) -> bool {
         true
@@ -458,7 +522,7 @@ impl Tool for CronListTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("list active cron jobs and schedules")
+        Some("list active cron jobs")
     }
 
     /// Render `{jobs: [...]}` as a human-readable summary list.
@@ -555,17 +619,22 @@ impl RemoteTriggerAction {
 /// Typed input for [`RemoteTriggerTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct RemoteTriggerInput {
-    /// The action to perform on triggers
-    #[serde(default)]
+    /// The action to perform on triggers.
+    ///
+    /// TS `RemoteTriggerTool.ts:20` `z.enum([...])` with no `.optional()`
+    /// / `.default()` — REQUIRED, no default emitted.
     pub action: RemoteTriggerAction,
-    /// Trigger ID (required for get, update, and run)
+    /// Required for get, update, and run.
+    ///
+    /// TS `RemoteTriggerTool.ts:21-25` `z.string().regex(/^[\w-]+$/).optional()`.
     #[serde(default)]
+    #[schemars(regex(pattern = "^[\\w-]+$"))]
     pub trigger_id: Option<String>,
-    /// JSON body for create and update actions. Free-form Value
-    /// because the schema of each backend's trigger config is
-    /// backend-defined and not modeled here.
+    /// JSON body for create and update. TS `RemoteTriggerTool.ts:26-29`
+    /// `z.record(z.string(), z.unknown()).optional()` — constrained to an
+    /// object (string keys → arbitrary values), not arbitrary JSON.
     #[serde(default)]
-    pub body: Option<Value>,
+    pub body: Option<serde_json::Map<String, Value>>,
 }
 
 /// Remote scheduled-agent triggers — **remote execution**, intentionally
@@ -615,11 +684,26 @@ impl Tool for RemoteTriggerTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggersRemote)
     }
+    /// TS `RemoteTriggerTool/prompt.ts:3-4 DESCRIPTION`.
     fn description(&self, _input: &RemoteTriggerInput, _options: &DescriptionOptions) -> String {
-        "Manage remote trigger endpoints that can invoke agents.".into()
+        "Manage scheduled remote Claude Code agents (triggers) via the claude.ai CCR API. Auth is handled in-process — the token never reaches the shell.".into()
     }
     fn search_hint(&self) -> Option<&str> {
         Some("manage scheduled remote agent triggers")
+    }
+
+    /// Full model-facing description. TS `RemoteTriggerTool/prompt.ts:6-15 PROMPT`.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        "Call the claude.ai remote-trigger API. Use this instead of curl — the OAuth token is added automatically in-process and never exposed.\n\
+\n\
+Actions:\n\
+- list: GET /v1/code/triggers\n\
+- get: GET /v1/code/triggers/{trigger_id}\n\
+- create: POST /v1/code/triggers (requires body)\n\
+- update: POST /v1/code/triggers/{trigger_id} (requires body, partial update)\n\
+- run: POST /v1/code/triggers/{trigger_id}/run\n\
+\n\
+The response is the raw JSON from the API.".into()
     }
     fn should_defer(&self) -> bool {
         true
@@ -751,7 +835,11 @@ impl Tool for RemoteTriggerTool {
                 let id = trigger_id.unwrap_or_default();
                 match ctx
                     .schedules
-                    .update_trigger(id, body.cloned().unwrap_or(Value::Null))
+                    .update_trigger(
+                        id,
+                        body.map(|m| Value::Object(m.clone()))
+                            .unwrap_or(Value::Null),
+                    )
                     .await
                 {
                     Ok(trigger) => Ok(ToolResult {

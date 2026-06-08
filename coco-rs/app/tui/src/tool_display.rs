@@ -157,7 +157,7 @@ pub fn tool_name_tone(tool_name: &str) -> ToolNameTone {
         | ToolName::ExitWorktree => ToolNameTone::Plan,
         ToolName::AskUserQuestion
         | ToolName::McpAuth
-        | ToolName::Brief
+        | ToolName::SendUserMessage
         | ToolName::Sleep
         | ToolName::StructuredOutput => ToolNameTone::Utility,
     }

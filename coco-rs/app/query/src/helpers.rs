@@ -35,6 +35,46 @@ pub(crate) enum ToolCompletionEventMode {
     Defer,
 }
 
+pub(crate) struct DeferredToolCompletionBuffer {
+    next_model_index: usize,
+    outcomes: Vec<coco_tool_runtime::UnstampedToolCallOutcome>,
+}
+
+impl DeferredToolCompletionBuffer {
+    pub(crate) fn new(next_model_index: usize) -> Self {
+        Self {
+            next_model_index,
+            outcomes: Vec::new(),
+        }
+    }
+
+    pub(crate) fn next_model_index(&self) -> usize {
+        self.next_model_index
+    }
+
+    pub(crate) fn into_outcomes(self) -> Vec<coco_tool_runtime::UnstampedToolCallOutcome> {
+        self.outcomes
+    }
+
+    fn stage(
+        &mut self,
+        tool_use_id: &str,
+        tool_id: ToolId,
+        ordered_messages: Vec<Message>,
+        error_kind: Option<coco_tool_runtime::ToolCallErrorKind>,
+    ) {
+        let model_index = self.next_model_index;
+        self.next_model_index += 1;
+        self.outcomes.push(build_streaming_early_outcome(
+            tool_use_id,
+            tool_id,
+            model_index,
+            ordered_messages,
+            error_kind,
+        ));
+    }
+}
+
 /// Convert between the two-name alias for `AssistantContent`.
 ///
 /// `coco_messages::AssistantContent` and `coco_llm_types::AssistantContentPart`
@@ -282,14 +322,12 @@ pub(crate) fn extract_last_assistant_text(history: &MessageHistory) -> String {
 /// **Streaming-mode note (I1 ordering).** In the streaming agent loop, the
 /// assistant message is committed *after* this helper runs (when the stream
 /// hits `Finish`). For multi-tool streams where one call passes preparation
-/// and another fails, the failing call's error `tool_result` lands in
-/// `history` at index N while the assistant message lands at N+1 — a
+/// and another fails, inline history insertion would produce
 /// `user(tool_result) → assistant(tool_use)` ordering that violates Anthropic's
-/// adjacency invariant. The streaming path therefore captures synthetic-error
-/// rows via [`MessageHistory::drain_pushed_since`] and replays them as
-/// `StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))` so
-/// `commit_flush` surfaces them in the correct post-assistant slot. See
-/// [`build_streaming_early_outcome`] for the wrap routine.
+/// adjacency invariant. The streaming path therefore stages a typed
+/// [`UnstampedToolCallOutcome`] in [`DeferredToolCompletionBuffer`] so
+/// `commit_flush` surfaces it in the correct post-assistant slot.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn complete_tool_call_with_error_mode(
     event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     history: &mut MessageHistory,
@@ -297,26 +335,38 @@ pub(crate) async fn complete_tool_call_with_error_mode(
     tool_name: &str,
     tool_id: &ToolId,
     output: &str,
+    error_kind: coco_tool_runtime::ToolCallErrorKind,
     event_mode: ToolCompletionEventMode,
+    deferred: Option<&mut DeferredToolCompletionBuffer>,
 ) {
-    if event_mode == ToolCompletionEventMode::Emit {
-        let _delivered = emit_stream(
-            event_tx,
-            crate::AgentStreamEvent::ToolUseCompleted {
-                call_id: tool_call_id.to_string(),
-                name: tool_name.to_string(),
-                output: output.to_string(),
-                is_error: true,
-            },
-        )
-        .await;
+    let message = create_error_tool_result(tool_call_id, tool_name, tool_id.clone(), output);
+    match event_mode {
+        ToolCompletionEventMode::Emit => {
+            let _delivered = emit_stream(
+                event_tx,
+                crate::AgentStreamEvent::ToolUseCompleted {
+                    call_id: tool_call_id.to_string(),
+                    name: tool_name.to_string(),
+                    output: output.to_string(),
+                    is_error: true,
+                },
+            )
+            .await;
+            crate::history_sync::history_push_and_emit(history, message, event_tx).await;
+        }
+        ToolCompletionEventMode::Defer => {
+            if let Some(deferred) = deferred {
+                deferred.stage(
+                    tool_call_id,
+                    tool_id.clone(),
+                    vec![message],
+                    Some(error_kind),
+                );
+            } else {
+                history.push(message);
+            }
+        }
     }
-    crate::history_sync::history_push_and_emit(
-        history,
-        create_error_tool_result(tool_call_id, tool_name, tool_id.clone(), output),
-        event_tx,
-    )
-    .await;
 }
 
 /// Complete a tool call with a NON-error result carrying user feedback.
@@ -326,6 +376,7 @@ pub(crate) async fn complete_tool_call_with_error_mode(
 /// still reaches the model (so it re-engages), but the transcript renders it as
 /// a neutral result instead of a red "Permission denied" error, and it is NOT
 /// counted as a permission denial.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn complete_tool_call_clarification(
     event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
     history: &mut MessageHistory,
@@ -334,57 +385,52 @@ pub(crate) async fn complete_tool_call_clarification(
     tool_id: &ToolId,
     output: &str,
     event_mode: ToolCompletionEventMode,
+    deferred: Option<&mut DeferredToolCompletionBuffer>,
 ) {
-    if event_mode == ToolCompletionEventMode::Emit {
-        let _delivered = emit_stream(
-            event_tx,
-            crate::AgentStreamEvent::ToolUseCompleted {
-                call_id: tool_call_id.to_string(),
-                name: tool_name.to_string(),
-                output: output.to_string(),
-                is_error: false,
-            },
-        )
-        .await;
+    let message = coco_messages::create_tool_result_message(
+        tool_call_id,
+        tool_name,
+        tool_id.clone(),
+        output,
+        /*is_error*/ false,
+    );
+    match event_mode {
+        ToolCompletionEventMode::Emit => {
+            let _delivered = emit_stream(
+                event_tx,
+                crate::AgentStreamEvent::ToolUseCompleted {
+                    call_id: tool_call_id.to_string(),
+                    name: tool_name.to_string(),
+                    output: output.to_string(),
+                    is_error: false,
+                },
+            )
+            .await;
+            crate::history_sync::history_push_and_emit(history, message, event_tx).await;
+        }
+        ToolCompletionEventMode::Defer => {
+            if let Some(deferred) = deferred {
+                deferred.stage(tool_call_id, tool_id.clone(), vec![message], None);
+            } else {
+                history.push(message);
+            }
+        }
     }
-    crate::history_sync::history_push_and_emit(
-        history,
-        coco_messages::create_tool_result_message(
-            tool_call_id,
-            tool_name,
-            tool_id.clone(),
-            output,
-            /*is_error*/ false,
-        ),
-        event_tx,
-    )
-    .await;
 }
 
-/// Wrap a captured synthetic-error `tool_result` row into an
-/// [`UnstampedToolCallOutcome`] so the streaming agent loop can surface it
-/// via [`StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))`].
+/// Build a typed early-return outcome so the streaming agent loop can surface
+/// staged preparation results via
+/// [`StreamingHandle::feed_plan(ToolCallPlan::EarlyOutcome(...))`].
 ///
-/// The preparer pushes its synthetic-error rows directly to history; the
-/// streaming caller drains them via [`MessageHistory::drain_pushed_since`]
-/// and uses this routine to re-enqueue them through the same channel as
-/// permission-deny / hook-block outcomes. `commit_flush` then commits the
-/// outcome's `ordered_messages` *after* the assistant message lands, fixing
-/// the tool_use/tool_result adjacency violation that the inline push would
-/// otherwise cause.
-///
-/// `error_kind` is set to [`ToolCallErrorKind::ValidationFailed`] as the
-/// catch-all bucket for early-return paths that lost their finer-grained
-/// classification during the drain (unknown tool, schema fail, hook block,
-/// permission deny all collapse here for streaming). Telemetry that cares
-/// about the exact bucket should consume the non-streaming path or the
-/// PostToolUseFailure hook channel; this kind is purely a placeholder so
-/// `runs_post_tool_use_failure()` stays `false` (TS `:413` parity).
+/// `error_kind` is carried from the exact source branch. Non-error
+/// clarification feedback, such as AskUserQuestion redirect text, passes
+/// `None` so `ToolUseCompleted.is_error` remains false.
 pub(crate) fn build_streaming_early_outcome(
     tool_use_id: &str,
     tool_id: ToolId,
     model_index: usize,
     captured_messages: Vec<Message>,
+    error_kind: Option<coco_tool_runtime::ToolCallErrorKind>,
 ) -> coco_tool_runtime::UnstampedToolCallOutcome {
     coco_tool_runtime::UnstampedToolCallOutcome {
         tool_use_id: tool_use_id.to_string(),
@@ -392,7 +438,7 @@ pub(crate) fn build_streaming_early_outcome(
         model_index,
         ordered_messages: captured_messages,
         message_path: coco_tool_runtime::ToolMessagePath::EarlyReturn,
-        error_kind: Some(coco_tool_runtime::ToolCallErrorKind::ValidationFailed),
+        error_kind,
         permission_denial: None,
         prevent_continuation: None,
         structured_output: None,

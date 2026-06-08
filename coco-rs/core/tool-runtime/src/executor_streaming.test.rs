@@ -51,6 +51,9 @@ impl crate::traits::Tool for ConfigurableTool {
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
         "configurable".into()
     }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
+    }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         self.safe
     }

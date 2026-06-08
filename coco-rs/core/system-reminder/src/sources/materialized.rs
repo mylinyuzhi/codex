@@ -68,6 +68,12 @@ pub struct MaterializeContext<'a> {
     /// are no-ops. PR2 ships the plumbing with this defaulted shape
     /// so observable behavior is unchanged.
     pub skill_overrides: &'a SkillOverrideTiers,
+
+    /// Whether the current loaded tool set includes the `Skill` tool.
+    /// The listing teaches the model to call `Skill`, so skip both
+    /// source work and reminder injection when that tool is filtered
+    /// out for this turn.
+    pub skill_listing_enabled: bool,
 }
 
 /// Output of [`super::ReminderSources::materialize`] — flat data,

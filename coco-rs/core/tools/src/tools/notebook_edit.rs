@@ -38,6 +38,16 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+/// Short per-call UI label. TS `tools/NotebookEditTool/prompt.ts`
+/// `DESCRIPTION`, returned by `async description()`.
+const NOTEBOOK_EDIT_SHORT_DESCRIPTION: &str =
+    "Replace the contents of a specific cell in a Jupyter notebook.";
+
+/// Long-form model-facing description. TS
+/// `tools/NotebookEditTool/prompt.ts` `PROMPT`, returned by
+/// `async prompt()`.
+const NOTEBOOK_EDIT_PROMPT: &str = "Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new source. Jupyter notebooks are interactive documents that combine code, text, and visualizations, commonly used for data analysis and scientific computing. The notebook_path parameter must be an absolute path, not a relative path. The cell_id identifies the target cell — either a cell ID/UUID, or \"cell-N\" for the N-th cell (0-indexed). Use edit_mode=insert to add a new cell at the position of cell_id (or at the top when cell_id is omitted). Use edit_mode=delete to delete the cell identified by cell_id.";
+
 /// Cell type for the `insert` mode. `raw` is not supported (matches TS
 /// `NotebookEditTool.ts` limitation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
@@ -85,19 +95,17 @@ impl NotebookEditMode {
 /// Typed input for [`NotebookEditTool`].
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct NotebookEditInput {
-    /// Absolute path to the .ipynb notebook file
-    #[serde(default)]
+    /// The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)
     pub notebook_path: String,
-    /// Cell ID or 'cell-N' numeric index
+    /// The ID of the cell to edit. When inserting a new cell, the new cell will be inserted after the cell with this ID, or at the beginning if not specified.
     #[serde(default)]
     pub cell_id: String,
-    /// New source content for the cell
-    #[serde(default)]
+    /// The new source for the cell
     pub new_source: String,
-    /// Cell type (required for insert mode)
+    /// The type of the cell (code or markdown). If not specified, it defaults to the current cell type. If using edit_mode=insert, this is required.
     #[serde(default)]
     pub cell_type: Option<NotebookCellType>,
-    /// Edit operation: replace (default), insert (new cell), or delete
+    /// The type of edit to make (replace, insert, delete). Defaults to replace.
     #[serde(default)]
     pub edit_mode: NotebookEditMode,
 }
@@ -185,8 +193,15 @@ impl Tool for NotebookEditTool {
         ctx.features.enabled(coco_types::Feature::NotebookEdit)
     }
     fn description(&self, _input: &NotebookEditInput, _options: &DescriptionOptions) -> String {
-        "Edit a cell in a Jupyter notebook (.ipynb file). Supports replace, insert, and delete operations.".into()
+        NOTEBOOK_EDIT_SHORT_DESCRIPTION.into()
     }
+
+    /// Model-facing tool description (schema-listing time). TS
+    /// `NotebookEditTool.ts:98-99` `async prompt()` → `PROMPT`.
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        NOTEBOOK_EDIT_PROMPT.into()
+    }
+
     fn should_defer(&self) -> bool {
         true
     }

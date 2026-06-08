@@ -20,6 +20,7 @@ use std::path::PathBuf;
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolUseContext;
@@ -52,29 +53,54 @@ use crate::tools::lsp::format_workspace_symbols;
 use crate::tools::lsp::path_to_file_uri;
 use crate::tools::lsp::validate_lsp_file;
 
-/// Typed tool input — mirrors TS `LSPTool` discriminated-union schema.
+/// Model-facing tool description AND prompt — TS parity:
+/// `tools/LSPTool/prompt.ts::DESCRIPTION`. TS returns this same string from
+/// both `description()` and `prompt()`. Multi-line enumeration is what the
+/// model expects — single-line summaries hurt operation-name retrieval on
+/// small models.
+const LSP_DESCRIPTION: &str = "Interact with Language Server Protocol (LSP) servers to get code intelligence features.
+
+Supported operations:
+- goToDefinition: Find where a symbol is defined
+- findReferences: Find all references to a symbol
+- hover: Get hover information (documentation, type info) for a symbol
+- documentSymbol: Get all symbols (functions, classes, variables) in a document
+- workspaceSymbol: Search for symbols across the entire workspace
+- goToImplementation: Find implementations of an interface or abstract method
+- prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)
+- incomingCalls: Find all functions/methods that call the function at a position
+- outgoingCalls: Find all functions/methods called by the function at a position
+
+All operations require:
+- filePath: The file to operate on
+- line: The line number (1-based, as shown in editors)
+- character: The character offset (1-based, as shown in editors)
+
+Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.";
+
+/// Typed tool input — mirrors TS `LSPTool` tool-facing `inputSchema`.
 ///
-/// `line` / `character` are 1-based (user-facing), converted to LSP's
-/// 0-based positions in [`build_params`]. `WorkspaceSymbol` ignores
-/// position; `DocumentSymbol` ignores position; everything else requires
-/// it.
+/// `line` / `character` are 1-based (user-facing) `int().positive()` and
+/// REQUIRED for every operation (TS parity: the tool-facing schema makes
+/// both mandatory). They are converted to LSP's 0-based positions in
+/// [`build_params`], which ignores them for the file-scoped
+/// (`DocumentSymbol`) and workspace-scoped (`WorkspaceSymbol`) operations.
 ///
 /// `filePath` (camelCase) preserved on the wire for TS parity
 /// (`tools/LSPTool/schemas.ts`).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct LspInput {
-    /// LSP operation to perform
+    /// The LSP operation to perform
     pub operation: LspAction,
-    /// Absolute path to the file the query is anchored on. For
-    /// `workspaceSymbol` this anchors the server selection.
+    /// The absolute or relative path to the file
     #[serde(rename = "filePath")]
     pub file_path: String,
-    /// 1-based line number (required for position-based operations)
-    #[serde(default)]
-    pub line: Option<i32>,
-    /// 1-based character column (required for position-based operations)
-    #[serde(default)]
-    pub character: Option<i32>,
+    /// The line number (1-based, as shown in editors)
+    #[schemars(range(min = 1))]
+    pub line: i32,
+    /// The character offset (1-based, as shown in editors)
+    #[schemars(range(min = 1))]
+    pub character: i32,
 }
 
 pub struct LspTool;
@@ -98,29 +124,13 @@ impl Tool for LspTool {
     }
 
     fn description(&self, _input: &LspInput, _options: &DescriptionOptions) -> String {
-        // TS parity: `tools/LSPTool/prompt.ts::DESCRIPTION`. Multi-line
-        // enumeration is what the model expects — single-line summaries
-        // hurt operation-name retrieval on small models.
-        "Interact with Language Server Protocol (LSP) servers to get code intelligence features.
-
-Supported operations:
-- goToDefinition: Find where a symbol is defined
-- findReferences: Find all references to a symbol
-- hover: Get hover information (documentation, type info) for a symbol
-- documentSymbol: Get all symbols (functions, classes, variables) in a document
-- workspaceSymbol: Search for symbols across the entire workspace
-- goToImplementation: Find implementations of an interface or abstract method
-- prepareCallHierarchy: Get call hierarchy item at a position (functions/methods)
-- incomingCalls: Find all functions/methods that call the function at a position
-- outgoingCalls: Find all functions/methods called by the function at a position
-
-All operations require:
-- filePath: The file to operate on
-- line: The line number (1-based, as shown in editors)
-- character: The character offset (1-based, as shown in editors)
-
-Note: LSP servers must be configured for the file type. If no server is available, an error will be returned."
-            .into()
+        LSP_DESCRIPTION.into()
+    }
+    /// TS parity: `LSPTool.ts::prompt()` returns the same `DESCRIPTION`
+    /// string as `description()`. The model's tool description is sourced
+    /// from `prompt()`, not the short `description()` UI label.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        LSP_DESCRIPTION.to_string()
     }
 
     fn is_read_only(&self, _input: &LspInput) -> bool {
@@ -153,18 +163,11 @@ Note: LSP servers must be configured for the file type. If no server is availabl
         input: LspInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<LspOutput>, ToolError> {
-        if input.operation.requires_position()
-            && (input.line.is_none() || input.character.is_none())
-        {
-            return Err(ToolError::InvalidInput {
-                message: format!(
-                    "operation `{}` requires both `line` and `character`",
-                    input.operation.as_str()
-                ),
-                error_code: None,
-            });
-        }
-
+        // `line` / `character` are schema-required for every operation (TS
+        // parity: the tool-facing `inputSchema` makes both `int().positive()`
+        // mandatory; `build_params` simply ignores them for the file- and
+        // workspace-scoped operations that don't carry a position).
+        //
         // Worktree-isolated subagents pass `cwd_override` so a
         // relative `filePath` resolves against the worktree, not the
         // process cwd. Falls back to `env::current_dir()` for normal
@@ -221,7 +224,7 @@ Note: LSP servers must be configured for the file type. If no server is availabl
 
 /// Build the initial LSP request params for an operation. Positions are
 /// converted 1-based → 0-based. TS parity: `LSPTool.ts:getMethodAndParams`.
-fn build_params(op: LspAction, uri: &str, line: Option<i32>, character: Option<i32>) -> Value {
+fn build_params(op: LspAction, uri: &str, line: i32, character: i32) -> Value {
     if matches!(op, LspAction::WorkspaceSymbol) {
         return json!({ "query": "" });
     }
@@ -229,8 +232,8 @@ fn build_params(op: LspAction, uri: &str, line: Option<i32>, character: Option<i
         return json!({ "textDocument": { "uri": uri } });
     }
     let position = json!({
-        "line": line.unwrap_or(1) - 1,
-        "character": character.unwrap_or(1) - 1,
+        "line": line - 1,
+        "character": character - 1,
     });
     if matches!(op, LspAction::FindReferences) {
         return json!({

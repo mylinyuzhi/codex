@@ -403,8 +403,8 @@ async fn read_mcp_resource_persists_blob_to_session_tool_results() {
     let result = <ReadMcpResourceTool as DynTool>::execute(
         &ReadMcpResourceTool,
         json!({
-            "server_name": "srv",
-            "resource_uri": "mcp://file",
+            "server": "srv",
+            "uri": "mcp://file",
         }),
         &ctx,
     )
@@ -439,8 +439,8 @@ async fn read_mcp_resource_preserves_multiple_contents() {
     let result = <ReadMcpResourceTool as DynTool>::execute(
         &ReadMcpResourceTool,
         json!({
-            "server_name": "srv",
-            "resource_uri": "mcp://bundle",
+            "server": "srv",
+            "uri": "mcp://bundle",
         }),
         &ctx,
     )

@@ -1,4 +1,4 @@
-//! BriefTool — sends structured messages to the user with optional file attachments.
+//! SendUserMessageTool — sends structured messages to the user with optional file attachments.
 //!
 //! TS: `tools/BriefTool/BriefTool.ts`. Status distinguishes normal
 //! replies from proactive (unsolicited) updates so the UI can render
@@ -6,6 +6,7 @@
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::PromptOptions;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
@@ -16,13 +17,24 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Message intent — controls how the UI renders the brief.
+/// Short model-facing label — TS parity: `BriefTool/prompt.ts::DESCRIPTION`.
+const SEND_USER_MESSAGE_DESCRIPTION: &str = "Send a message to the user";
+
+/// Full model-facing tool prompt — TS parity:
+/// `BriefTool/prompt.ts::BRIEF_TOOL_PROMPT`.
+const SEND_USER_MESSAGE_TOOL_PROMPT: &str = "Send a message the user will read. Text outside this tool is visible in the detail view, but most won't open it — the answer lives here.
+
+`message` supports markdown. `attachments` takes file paths (absolute or cwd-relative) for images, diffs, logs.
+
+`status` labels intent: 'normal' when replying to what they just asked; 'proactive' when you're initiating — a scheduled task finished, a blocker surfaced during background work, you need input on something they haven't asked about. Set it honestly; downstream routing uses it.";
+
+/// Message intent — controls how the UI renders the message.
 ///
 /// TS parity: `BriefTool.ts` `status: z.enum(['normal', 'proactive'])`.
 /// Wire format stays lowercase (matches TS).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum BriefStatus {
+pub enum SendUserMessageStatus {
     /// Direct reply to a user request.
     #[default]
     Normal,
@@ -30,27 +42,30 @@ pub enum BriefStatus {
     Proactive,
 }
 
-/// Typed input for [`BriefTool`].
+/// Typed input for [`SendUserMessageTool`].
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-pub struct BriefInput {
-    /// Markdown-formatted message to the user
+pub struct SendUserMessageInput {
+    /// The message for the user. Supports markdown formatting.
     pub message: String,
-    /// File paths (absolute or relative to cwd) to attach
+    /// Optional file paths (absolute or relative to cwd) to attach. Use for
+    /// photos, screenshots, diffs, logs, or any file the user should see
+    /// alongside your message.
     #[serde(default)]
     pub attachments: Vec<String>,
-    /// Message intent: `normal` for direct replies, `proactive` for
-    /// unsolicited updates
-    #[serde(default)]
-    pub status: BriefStatus,
+    /// Use 'proactive' when you're surfacing something the user hasn't asked
+    /// for and needs to see now — task completion while they're away, a
+    /// blocker you hit, an unsolicited status update. Use 'normal' when
+    /// replying to something the user just said.
+    pub status: SendUserMessageStatus,
 }
 
-/// Per-attachment metadata returned by [`BriefTool::execute`].
+/// Per-attachment metadata returned by [`SendUserMessageTool::execute`].
 ///
 /// The shape stays close to the legacy `serde_json::json!({...})`
 /// envelope so transcript replay across the migration boundary
 /// round-trips without surprises.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BriefAttachment {
+pub struct SendUserMessageAttachment {
     pub path: String,
     pub exists: bool,
     /// File size in bytes. Cast from `u64` (`std::fs::Metadata::len`)
@@ -60,54 +75,60 @@ pub struct BriefAttachment {
     pub is_image: bool,
 }
 
-/// Typed output for [`BriefTool::execute`]. Mirrors the legacy JSON
+/// Typed output for [`SendUserMessageTool::execute`]. Mirrors the legacy JSON
 /// envelope (`message`/`status`/`attachments`/`timestamp`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BriefOutput {
+pub struct SendUserMessageOutput {
     pub message: String,
-    pub status: BriefStatus,
-    pub attachments: Vec<BriefAttachment>,
+    pub status: SendUserMessageStatus,
+    pub attachments: Vec<SendUserMessageAttachment>,
     /// Millisecond Unix timestamp captured at delivery time, encoded
     /// as a decimal string (mirrors TS where JS numbers can't safely
     /// represent ms-precision Unix timestamps).
     pub timestamp: String,
 }
 
-pub struct BriefTool;
+pub struct SendUserMessageTool;
 
 #[async_trait::async_trait]
-impl Tool for BriefTool {
-    type Input = BriefInput;
-    coco_tool_runtime::impl_runtime_schema!(BriefInput);
-    type Output = BriefOutput;
+impl Tool for SendUserMessageTool {
+    type Input = SendUserMessageInput;
+    coco_tool_runtime::impl_runtime_schema!(SendUserMessageInput);
+    type Output = SendUserMessageOutput;
 
-    fn to_auto_classifier_input(&self, input: &BriefInput) -> Option<String> {
+    fn to_auto_classifier_input(&self, input: &SendUserMessageInput) -> Option<String> {
         Some(input.message.clone())
     }
 
     fn id(&self) -> ToolId {
-        ToolId::Builtin(ToolName::Brief)
+        ToolId::Builtin(ToolName::SendUserMessage)
     }
     fn name(&self) -> &str {
-        ToolName::Brief.as_str()
+        ToolName::SendUserMessage.as_str()
     }
-    fn description(&self, _input: &BriefInput, _options: &DescriptionOptions) -> String {
-        "Send a structured message to the user with optional file attachments.".into()
+    fn description(&self, _input: &SendUserMessageInput, _options: &DescriptionOptions) -> String {
+        SEND_USER_MESSAGE_DESCRIPTION.into()
+    }
+    /// TS parity: `BriefTool.ts::prompt()` → `BRIEF_TOOL_PROMPT`. The
+    /// model's tool description is sourced from `prompt()`, not the short
+    /// `description()` UI label.
+    async fn prompt(&self, _options: &PromptOptions) -> String {
+        SEND_USER_MESSAGE_TOOL_PROMPT.to_string()
     }
 
-    fn is_read_only(&self, _input: &BriefInput) -> bool {
+    fn is_read_only(&self, _input: &SendUserMessageInput) -> bool {
         true
     }
     /// Side-channel UI delivery — semantically read-only regardless of
-    /// input shape; Plan mode keeps Brief visible.
+    /// input shape; Plan mode keeps SendUserMessage visible.
     fn is_always_read_only(&self) -> bool {
         true
     }
 
-    /// TS `BriefTool.ts`: `isConcurrencySafe() { return true }`. Brief
-    /// messages are a side-channel to the user — multiple briefs in the
+    /// TS `BriefTool.ts`: `isConcurrencySafe() { return true }`. These
+    /// messages are a side-channel to the user — multiple messages in the
     /// same turn are independent and stamped with their own timestamps.
-    fn is_concurrency_safe(&self, _input: &BriefInput) -> bool {
+    fn is_concurrency_safe(&self, _input: &SendUserMessageInput) -> bool {
         true
     }
 
@@ -115,7 +136,7 @@ impl Tool for BriefTool {
     /// The model only needs the delivery confirmation; the message body
     /// + attachments + timestamp are TUI/state concerns and would waste
     /// tokens if JSON-stringified for the model.
-    fn render_for_model(&self, out: &BriefOutput) -> Vec<ToolResultContentPart> {
+    fn render_for_model(&self, out: &SendUserMessageOutput) -> Vec<ToolResultContentPart> {
         let suffix = match out.attachments.len() {
             0 => String::new(),
             1 => " (1 attachment included)".to_string(),
@@ -133,7 +154,7 @@ impl Tool for BriefTool {
     /// self-corrects instead of receiving a false success.
     fn validate_input(
         &self,
-        input: &BriefInput,
+        input: &SendUserMessageInput,
         ctx: &ToolUseContext,
     ) -> coco_tool_runtime::ValidationResult {
         use coco_tool_runtime::ValidationResult;
@@ -178,9 +199,9 @@ impl Tool for BriefTool {
 
     async fn execute(
         &self,
-        input: BriefInput,
+        input: SendUserMessageInput,
         ctx: &ToolUseContext,
-    ) -> Result<ToolResult<BriefOutput>, ToolError> {
+    ) -> Result<ToolResult<SendUserMessageOutput>, ToolError> {
         // Defensive empty-string guard. Pre-typed-migration this caught
         // omitted `message`; the typed `Input` now rejects missing
         // fields at deserialize time so this only catches the
@@ -203,7 +224,7 @@ impl Tool for BriefTool {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
 
-        let mut resolved_attachments: Vec<BriefAttachment> = Vec::new();
+        let mut resolved_attachments: Vec<SendUserMessageAttachment> = Vec::new();
         for path_str in &input.attachments {
             let path = if std::path::Path::new(path_str).is_absolute() {
                 std::path::PathBuf::from(path_str)
@@ -224,7 +245,7 @@ impl Tool for BriefTool {
                     )
                 });
 
-            resolved_attachments.push(BriefAttachment {
+            resolved_attachments.push(SendUserMessageAttachment {
                 path: path.display().to_string(),
                 exists,
                 size,
@@ -239,7 +260,7 @@ impl Tool for BriefTool {
             .to_string();
 
         Ok(ToolResult {
-            data: BriefOutput {
+            data: SendUserMessageOutput {
                 message: input.message,
                 status: input.status,
                 attachments: resolved_attachments,

@@ -400,16 +400,24 @@ fn exit_plan_mode_prompt() -> String {
     )
 }
 
+/// The tool an `allowedPrompts` entry pre-approves. TS `z.enum(['Bash'])`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+pub enum AllowedPromptTool {
+    #[default]
+    Bash,
+}
+
 /// Single entry in the `allowedPrompts` array — pre-approved tool / prompt
 /// pair that the model is signaling it intends to use when plan is approved.
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+/// Both fields are required (TS `z.object({ tool, prompt })`), so the
+/// derived schema carries `required: [tool, prompt]` and the `tool` enum —
+/// no hand-patching of the model schema needed.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ExitPlanAllowedPrompt {
-    /// The tool this prompt applies to
-    #[serde(default)]
-    pub tool: Option<String>,
-    /// Semantic description of the action
-    #[serde(default)]
-    pub prompt: Option<String>,
+    /// The tool this prompt applies to (only `Bash` is supported).
+    pub tool: AllowedPromptTool,
+    /// The exact command/prompt to pre-approve.
+    pub prompt: String,
 }
 
 /// Typed input for [`ExitPlanModeTool`].
@@ -459,6 +467,30 @@ impl Tool for ExitPlanModeTool {
     fn name(&self) -> &str {
         ToolName::ExitPlanMode.as_str()
     }
+
+    /// Model-facing spec exposes ONLY `allowedPrompts` (TS
+    /// `ExitPlanModeV2Tool` inputSchema). `plan` / `planFilePath` /
+    /// `user_choice` stay in the runtime schema (CCR UI / hooks / SDK /
+    /// TUI splice them) but are hidden from the model. The `allowedPrompts`
+    /// item shape (`{ tool: enum["Bash"], prompt }`, both required) is
+    /// derived from [`ExitPlanAllowedPrompt`] — so the model-facing and
+    /// runtime schemas agree, and there is nothing to hand-patch here.
+    async fn tool_spec(
+        &self,
+        _ctx: &coco_tool_runtime::SchemaContext,
+        prompt_opts: &coco_tool_runtime::PromptOptions,
+    ) -> coco_tool_runtime::ToolSpec {
+        coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
+            name: self.name().to_string(),
+            description: self.prompt(prompt_opts).await,
+            parameters: coco_tool_runtime::schema_omit_properties(
+                self.runtime_validation_schema().as_value(),
+                &["plan", "planFilePath", "user_choice"],
+            ),
+            strict: self.strict(),
+        })
+    }
+
     fn description(&self, _input: &ExitPlanModeInput, _options: &DescriptionOptions) -> String {
         "Prompts the user to exit plan mode and start coding".into()
     }

@@ -52,6 +52,10 @@ impl Tool for RenderOnlyTool {
         "render only".into()
     }
 
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        "test tool".into()
+    }
+
     async fn execute(
         &self,
         _: Value,

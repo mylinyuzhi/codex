@@ -8,7 +8,6 @@ use std::path::Path;
 pub mod input_types;
 pub mod tools;
 
-pub use input_types::ConfigAction;
 pub use input_types::GrepOutputMode;
 pub use input_types::LspAction;
 
@@ -65,7 +64,7 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(AskUserQuestionTool));
     registry.register(Arc::new(ToolSearchTool));
     registry.register(Arc::new(ConfigTool));
-    registry.register(Arc::new(BriefTool));
+    registry.register(Arc::new(SendUserMessageTool));
     registry.register(Arc::new(LspTool));
 
     // MCP management (3)

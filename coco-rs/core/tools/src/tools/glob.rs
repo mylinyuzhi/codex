@@ -74,8 +74,8 @@ pub struct GlobInput {
     pub pattern: String,
     /// The directory to search in. If not specified, the current
     /// working directory will be used. IMPORTANT: Omit this field to
-    /// use the default directory. DO NOT enter "undefined" or "null"
-    /// — simply omit it for the default behavior. Must be a valid
+    /// use the default directory. DO NOT enter "undefined" or "null" —
+    /// simply omit it for the default behavior. Must be a valid
     /// directory path if provided.
     #[serde(default)]
     pub path: Option<String>,
@@ -110,6 +110,13 @@ impl Tool for GlobTool {
     }
 
     fn description(&self, _input: &GlobInput, _options: &DescriptionOptions) -> String {
+        GLOB_DESCRIPTION.into()
+    }
+
+    /// Model-facing tool description (schema-listing time). TS
+    /// `GlobTool.ts:143-144` `async prompt()` returns the SAME
+    /// `DESCRIPTION` as `async description()`.
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         GLOB_DESCRIPTION.into()
     }
 

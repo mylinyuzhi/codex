@@ -41,11 +41,11 @@ mod transcript;
 #[path = "update.test.rs"]
 mod tests;
 
-/// Route a bracketed paste into the active AskUserQuestion "Other" composer.
+/// Route a bracketed paste into the active AskUserQuestion free-text input.
 /// Returns `true` if consumed. Lets `app.rs` redirect clipboard / IME-committed
 /// paste away from the hidden main input while a question prompt is open.
-pub(crate) fn route_question_notes_paste(state: &mut AppState, text: &str) -> bool {
-    interaction::question_notes_paste(state, text)
+pub(crate) fn route_question_free_text_paste(state: &mut AppState, text: &str) -> bool {
+    interaction::question_free_text_paste(state, text)
 }
 
 /// How a picker/dialog reports being closed with Esc. Mirrors TS local-jsx
@@ -780,7 +780,23 @@ pub async fn handle_command(
 
         // ── Surface navigation ──
         TuiCommand::SurfaceFilter(c) => {
-            interaction::filter(state, c);
+            let handled_question_digit = if let Some(digit) = c.to_digit(10) {
+                matches!(
+                    state.ui.interaction.active_prompt,
+                    Some(PanePromptState::Question(_))
+                ) && digit > 0
+                    && interaction::question_select_digit_and_confirm(
+                        state,
+                        digit as i32,
+                        command_tx,
+                    )
+                    .await
+            } else {
+                false
+            };
+            if !handled_question_digit {
+                interaction::filter(state, c);
+            }
             true
         }
         TuiCommand::SurfaceFilterBackspace => {

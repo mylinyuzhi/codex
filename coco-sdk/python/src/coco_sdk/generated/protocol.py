@@ -67,8 +67,6 @@ class ApplyPatchPreviewSign(str, Enum):
 
 class ApplyPatchToolType(str, Enum):
     freeform = 'freeform'
-    function = 'function'
-    shell = 'shell'
 
 class ApprovalDecision(str, Enum):
     allow = 'allow'

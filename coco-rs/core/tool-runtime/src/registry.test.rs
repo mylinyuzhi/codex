@@ -39,6 +39,9 @@ impl Tool for StubTool {
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
         "stub".into()
     }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
+    }
     fn mcp_info(&self) -> Option<&McpToolInfo> {
         self.mcp.as_ref()
     }
@@ -181,7 +184,7 @@ fn test_qualified_name_format() {
 }
 
 // ---------------------------------------------------------------------------
-// 5-layer filter pipeline (docs/coco-rs/feature-gates-and-tool-filtering.md §7)
+// Schema-time filter pipeline (docs/coco-rs/feature-gates-and-tool-filtering.md §7)
 // ---------------------------------------------------------------------------
 
 /// Stub variant that supports per-instance read-only and feature-gate
@@ -209,6 +212,9 @@ impl Tool for GatedTool {
     }
     fn description(&self, _: &Value, _: &DescriptionOptions) -> String {
         "gated".into()
+    }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
     }
     fn is_enabled(&self, ctx: &crate::context::ToolUseContext) -> bool {
         match self.feature_gate {
@@ -319,8 +325,13 @@ fn pipeline_layer2_tool_overrides_drop_excluded() {
     assert!(visible.contains(ToolName::Bash.as_str()));
 }
 
+/// Mirror TS: plan mode does NOT narrow the model's tool schema. Write
+/// tools stay visible (the schema is identical to Default mode); plan-mode
+/// read-only is enforced at call time by `coco_permissions`, not by
+/// removing tools here. Regression guard for the old layer-3 strip that
+/// hid ExitPlanMode / AskUserQuestion / Write and broke plan mode.
 #[test]
-fn pipeline_layer3_plan_mode_hides_writes() {
+fn plan_mode_keeps_full_tool_schema() {
     let reg = doc_example_registry();
     let ctx = crate::context::ToolUseContext::stub_for_filtering(
         Arc::new(coco_types::Features::with_defaults()),
@@ -329,19 +340,19 @@ fn pipeline_layer3_plan_mode_hides_writes() {
         coco_types::PermissionMode::Plan,
     );
     let visible = names(&reg.loaded_tools(&ctx));
-    // Read-only survives.
+    // Read-only tools present (as always).
     assert!(visible.contains(ToolName::Read.as_str()));
     assert!(visible.contains(ToolName::WebSearch.as_str()));
     assert!(visible.contains(ToolName::WebFetch.as_str()));
-    // Writes hidden.
-    assert!(!visible.contains(ToolName::Edit.as_str()));
-    assert!(!visible.contains(ToolName::Write.as_str()));
-    assert!(!visible.contains(ToolName::ApplyPatch.as_str()));
-    assert!(!visible.contains(ToolName::Bash.as_str()));
+    // Write tools are NOT stripped in plan mode any more.
+    assert!(visible.contains(ToolName::Edit.as_str()));
+    assert!(visible.contains(ToolName::Write.as_str()));
+    assert!(visible.contains(ToolName::ApplyPatch.as_str()));
+    assert!(visible.contains(ToolName::Bash.as_str()));
 }
 
 #[test]
-fn pipeline_layer4_agent_filter_narrows() {
+fn pipeline_agent_filter_narrows() {
     let reg = doc_example_registry();
     let filter = coco_types::ToolFilter::new(
         vec![
@@ -367,10 +378,10 @@ fn pipeline_layer4_agent_filter_narrows() {
 
 /// End-to-end design-doc §8 trace: gpt-5 + Plan mode.
 ///
-/// Expected final visible set: `{ Read, web_search, web_fetch }` —
-/// `Bash` survives because it's still in the model's universe and
-/// passes the agent filter, but Plan mode hides it (not statically
-/// read-only).
+/// Mirror TS: plan mode no longer narrows the schema, so the visible set
+/// is exactly the gpt-5 tool universe — `Edit` excluded, `apply_patch`
+/// added, writes (`Write`/`Bash`/`apply_patch`) all present. Plan-mode
+/// read-only is a call-time permission concern, not a schema filter.
 #[test]
 fn pipeline_design_doc_gpt5_plan_mode_trace() {
     let reg = doc_example_registry();
@@ -384,8 +395,8 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
         .with_extra(ToolId::Builtin(ToolName::ApplyPatch))
         .with_excluded(ToolId::Builtin(ToolName::Edit));
 
-    // Layer 3 — Plan mode.
-    // Layer 4 — top-level session, no agent restriction.
+    // Plan mode — no schema narrowing.
+    // Top-level session, no agent restriction.
     let ctx = crate::context::ToolUseContext::stub_for_filtering(
         Arc::new(features),
         Arc::new(overrides),
@@ -396,6 +407,9 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
     let visible = names(&reg.loaded_tools(&ctx));
     let expected: std::collections::HashSet<String> = [
         ToolName::Read.as_str(),
+        ToolName::Write.as_str(),
+        ToolName::Bash.as_str(),
+        ToolName::ApplyPatch.as_str(),
         ToolName::WebSearch.as_str(),
         ToolName::WebFetch.as_str(),
     ]
@@ -404,7 +418,7 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
     .collect();
     assert_eq!(
         visible, expected,
-        "design doc §8 trace: only Read + web_search + web_fetch should remain"
+        "plan mode keeps the full gpt-5 schema (Edit excluded, writes present)"
     );
 }
 

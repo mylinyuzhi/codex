@@ -664,12 +664,9 @@ fn parse_question_items_truncates_questions_and_options_to_four() {
     let items = super::parse_question_items(&input);
 
     assert_eq!(items.len(), 4, "questions truncated to 4");
-    // Q2 (single-select) keeps its first 4 model options + the injected Other.
-    assert_eq!(items[1].options.len(), 5, "4 options + Other");
+    // Q2 keeps only its first 4 model options; free text is tracked separately.
+    assert_eq!(items[1].options.len(), 4, "4 model options");
     assert_eq!(items[1].options[0].label, "B-opt0");
     assert_eq!(items[1].options[3].label, "B-opt3");
-    assert!(
-        items[1].options[4].is_other(),
-        "last option is the Other composer"
-    );
+    assert!(items[1].other_input.value.is_empty());
 }

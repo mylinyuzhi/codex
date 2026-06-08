@@ -122,9 +122,9 @@ pub(super) fn handle(
                     request_id,
                     original_input: input,
                     questions,
-                    focus: crate::state::QuestionFocus::Question(0),
+                    current_question: crate::state::QuestionPage::Question(0),
+                    focus_target: crate::state::QuestionFocusTarget::QuestionOption(0),
                     is_in_plan_mode,
-                    submit_selected: 0,
                 },
             ));
             true
@@ -947,35 +947,18 @@ fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::Question
                                 .get("preview")
                                 .and_then(serde_json::Value::as_str)
                                 .map(String::from),
-                            kind: crate::state::OptionKind::Pick,
                         })
                         .collect()
                 })
                 .unwrap_or_default();
-            // Inject the "Other" composer as the last option of every
-            // question (single-select only — TS does the same; the
-            // multiSelect widget hides Other). When the user focuses
-            // it, typed chars route to `notes` and the answer-build
-            // logic substitutes the typed text for the option label.
-            // The Other row is a typed [`OptionKind::Other`], not a
-            // magic label, so a model can't collide with it.
-            let mut options = options;
-            if !multi_select {
-                options.push(crate::state::QuestionOption {
-                    label: crate::state::OTHER_OPTION_DISPLAY.into(),
-                    description: "Type your own answer.".into(),
-                    preview: None,
-                    kind: crate::state::OptionKind::Other,
-                });
-            }
             crate::state::QuestionItem {
                 header,
                 question,
                 options,
                 multi_select,
-                selected: 0,
+                selected: None,
                 checked: Vec::new(),
-                notes: String::new(),
+                other_input: crate::state::OtherInputState::default(),
             }
         })
         .collect()

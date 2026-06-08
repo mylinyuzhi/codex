@@ -6299,13 +6299,23 @@
       "type": "object",
       "properties": {
         "activeForm": {
-          "type": "string"
+          "description": "TS `TodoItemSchema.activeForm: z.string().min(1)`.",
+          "type": "string",
+          "minLength": 1
         },
         "content": {
-          "type": "string"
+          "description": "TS `TodoItemSchema.content: z.string().min(1)`.",
+          "type": "string",
+          "minLength": 1
         },
         "status": {
-          "type": "string"
+          "description": "`status` is a plain `String` (TUI/store paths pre-date typing); the\nallowed values are declared on the schema. TS `z.enum([...])`.",
+          "type": "string",
+          "enum": [
+            "pending",
+            "in_progress",
+            "completed"
+          ]
         }
       },
       "required": [

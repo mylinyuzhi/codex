@@ -126,3 +126,23 @@ fn test_all_tool_schemas_force_initialize() {
         }
     }
 }
+
+/// `tool_spec()` is the single source of truth for a tool's model-facing wire
+/// shape — `engine_prompt` builds the wire `description` from it. This guards
+/// the gap where a tool ships with an *empty* description (Function via the
+/// default `prompt()` path, or a hand-built Freeform spec).
+#[tokio::test]
+async fn test_all_registered_tools_have_nonempty_spec_description() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let prompt_opts = coco_tool_runtime::PromptOptions::default();
+    let schema_ctx = coco_tool_runtime::SchemaContext::default();
+    for tool in registry.all() {
+        let spec = tool.tool_spec(&schema_ctx, &prompt_opts).await;
+        assert!(
+            !spec.description().trim().is_empty(),
+            "tool `{}` has an empty model-facing tool_spec() description",
+            tool.name()
+        );
+    }
+}

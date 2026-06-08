@@ -605,15 +605,19 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
                 } => {
                     has_function_call = true;
                     let tool_name = name.clone().unwrap_or_default();
-                    let parsed_input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
-                        input.as_deref().unwrap_or(""),
-                        &tool_name,
-                    );
+                    // Custom (freeform/grammar) tools deliver the model output as
+                    // raw text, NOT JSON — keep it verbatim as a string. Running
+                    // JSON-repair here would mangle a patch body containing
+                    // `{ }`. The tool's `coerce_raw_string_input` wraps the raw
+                    // string into the typed shape downstream. Custom tools are
+                    // client-executed (`provider_executed: None`), matching the
+                    // function-call path.
+                    let raw_input = input.clone().unwrap_or_default();
                     content.push(AssistantContentPart::ToolCall(ToolCallPart {
                         tool_call_id: id.clone().unwrap_or_default(),
                         tool_name,
-                        input: parsed_input,
-                        provider_executed: Some(true),
+                        input: Value::String(raw_input),
+                        provider_executed: None,
                         invalid: false,
                         invalid_reason: None,
                         provider_metadata: None,
@@ -1517,7 +1521,9 @@ impl ResponsesStreamState {
                             .push_back(LanguageModelV4StreamPart::ToolInputStart {
                                 id: ct.id.clone(),
                                 tool_name: ct.name.clone(),
-                                provider_executed: Some(true),
+                                // Custom (freeform/grammar) tools are client-
+                                // executed — coco runs them locally (apply_patch).
+                                provider_executed: None,
                                 dynamic: None,
                                 title: None,
                                 provider_metadata: None,

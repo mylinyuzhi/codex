@@ -56,7 +56,7 @@ async fn skips_when_brief_tool_present() {
     let ctx = GeneratorContext::builder(&c)
         .tools(vec![
             ToolName::TaskUpdate.as_str().to_string(),
-            ToolName::Brief.as_str().to_string(),
+            ToolName::SendUserMessage.as_str().to_string(),
         ])
         .is_task_v2_enabled(true)
         .turns_since_last_task_tool(100)

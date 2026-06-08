@@ -33,7 +33,7 @@ use coco_config::SystemReminderConfig;
 /// [`ToolName`] enum's `as_str()`, so renaming a variant flows through
 /// automatically and there are no hand-written magic strings here.
 const TRIGGER_TOOL: ToolName = ToolName::TodoWrite;
-const SUPPRESS_TOOL: ToolName = ToolName::Brief;
+const SUPPRESS_TOOL: ToolName = ToolName::SendUserMessage;
 
 /// TS thresholds from `TODO_REMINDER_CONFIG` (`attachments.ts:254-257`).
 const TURNS_SINCE_WRITE: i32 = 10;

@@ -69,6 +69,10 @@ pub struct ModelInfo {
     pub auto_compact_pct: Option<i32>,
 
     // === Tools ===
+    /// Optional per-model shape for the dedicated `apply_patch` tool
+    /// (`None` → `Freeform`). Read by `apply_patch.rs::tool_spec` via
+    /// `SchemaContext`. Enablement is separate — driven by
+    /// `with_extra(ApplyPatch)` on `tool_overrides`.
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     /// Per-model tool-availability adjustments. Layered on top of the
     /// built-in registry. See `docs/coco-rs/feature-gates-and-tool-filtering.md`.

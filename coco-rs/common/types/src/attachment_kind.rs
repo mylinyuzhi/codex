@@ -333,7 +333,8 @@ impl AttachmentKind {
             | CurrentSessionMemory
             | CompactionReminder
             | DateChange
-            | UserContext => false,
+            | UserContext
+            | SkillListing => false,
             // Also treat silent-dedup / runtime-bookkeeping kinds as
             // non-rendering (not in TS NULL_RENDERING because TS doesn't
             // enumerate them there, but coco-rs intentionally hides them).
@@ -346,7 +347,6 @@ impl AttachmentKind {
             | Diagnostics
             | QueuedCommand
             | TaskStatus
-            | SkillListing
             | InvokedSkills
             | TeammateMailbox
             | McpResource

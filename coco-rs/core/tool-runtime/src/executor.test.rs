@@ -31,6 +31,9 @@ impl crate::traits::Tool for SafeTool {
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "safe".into()
     }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
+    }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
@@ -70,6 +73,9 @@ impl crate::traits::Tool for UnsafeTool {
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "unsafe".into()
+    }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         false
@@ -192,6 +198,9 @@ impl crate::traits::Tool for SlowSafeTool {
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "slow safe".into()
     }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
+    }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
     }
@@ -240,6 +249,9 @@ impl crate::traits::Tool for PatchSafeTool {
     }
     fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
         "patch safe".into()
+    }
+    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
+        "test tool".into()
     }
     fn is_concurrency_safe(&self, _: &Value) -> bool {
         true
