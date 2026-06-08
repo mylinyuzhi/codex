@@ -484,7 +484,17 @@ fn driver_replay_all_replaces_owned_history_and_marks_stream_replay() {
     let mut driver = SurfaceHistoryDriver::default();
 
     let outcome = driver
-        .replay_all(&mut terminal, header(), &cells, 1, options(&theme, 8), true)
+        .replay_all_capped(
+            &mut terminal,
+            header(),
+            &cells,
+            1,
+            options(&theme, 8),
+            HistoryReplayMode {
+                stream_active: true,
+                cause: "test_stream_replay",
+            },
+        )
         .expect("replay");
 
     assert_eq!(
@@ -495,7 +505,9 @@ fn driver_replay_all_replaces_owned_history_and_marks_stream_replay() {
         }
     );
     assert_eq!(terminal.visible_history_rows(), 3);
-    assert_eq!(terminal.viewport_area(), Rect::new(0, 6, 8, 1));
+    // History shrank to 3 rows, so the previously bottom-pinned viewport reseats
+    // flush under it (y == history_bottom_y) instead of staying latched at y=6.
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 3, 8, 1));
     assert_eq!(
         plain_buffer_lines(terminal.backend().buffer()),
         vec![
@@ -511,10 +523,16 @@ fn driver_replay_all_replaces_owned_history_and_marks_stream_replay() {
 }
 
 #[test]
-fn driver_replay_all_preserves_bottom_pinned_viewport_area() {
+fn driver_replay_reseats_bottom_pinned_viewport_when_history_shrinks() {
+    // Regression (bottom-pinned sibling of the /clear gap): a viewport pinned
+    // at the screen bottom over a tall history, then replayed down to a short
+    // history (reflow / display-toggle / rewind), must reseat flush against the
+    // new (shorter) history. The old behavior kept the viewport latched at the
+    // bottom, stranding a large unbacked gap until the next redraw.
     let theme = Theme::default();
     let backend = TestBackend::new(48, 30);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    // Bottom-pinned: viewport at y=26 (bottom 30 == screen), history fills 0..26.
     terminal.set_viewport_area(Rect::new(0, 26, 48, 4));
     terminal.note_history_rows_inserted(26);
     let cells = vec![
@@ -524,31 +542,117 @@ fn driver_replay_all_preserves_bottom_pinned_viewport_area() {
     let mut driver = SurfaceHistoryDriver::default();
 
     let outcome = driver
-        .replay_all(
+        .replay_all_capped(
             &mut terminal,
             header(),
             &cells,
             1,
             options(&theme, 48),
-            false,
+            HistoryReplayMode {
+                stream_active: false,
+                cause: "test_bottom_pinned_shrink",
+            },
         )
         .expect("replay");
 
     let HistoryEmissionOutcome::Replayed { rows, .. } = outcome else {
         panic!("expected replay outcome, got {outcome:?}");
     };
-    assert!(rows > 0);
-    assert_eq!(terminal.viewport_area(), Rect::new(0, 26, 48, 4));
+    assert!(rows > 0 && rows < 26, "replay must shrink history: {rows}");
 
-    let lines = plain_buffer_lines(terminal.backend().buffer());
-    let assistant = line_index(&lines, "⏺ short reply");
-    let input_top = terminal.viewport_area().top() as usize;
-    let gap = input_top.saturating_sub(assistant + 1);
-    assert!(
-        gap > 3,
-        "replay should not move the bottom-pinned viewport to history:\n{}",
-        lines.join("\n")
+    // Viewport sits flush on the new (short) history bottom — no unbacked gap —
+    // and is reseated up from the stale pinned row (y=26).
+    assert_eq!(
+        terminal.viewport_area().top(),
+        terminal.history_bottom_y(),
+        "bottom-pinned viewport must reseat flush under the shrunken history:\n{}",
+        plain_buffer_lines(terminal.backend().buffer()).join("\n"),
     );
+    assert!(
+        terminal.viewport_area().top() < 26,
+        "viewport must move up from the stale pinned row"
+    );
+}
+
+#[test]
+fn driver_replay_reseats_flowing_viewport_to_shrunken_history() {
+    // Regression: `/clear` / SessionResetForResume shrinks history within one
+    // frame. `sync_surface_area` ran first off the stale (pre-clear) history
+    // bottom, committing a viewport far below the new short history. The replay
+    // must reseat the flowing viewport flush against the freshly inserted
+    // history rather than reasserting the stale committed top (which left a
+    // large blank gap until the next redraw event).
+    let theme = Theme::default();
+    let width = 48;
+    let backend = TestBackend::new(width, 54);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    // Stale committed geometry: history filled rows 0..12, viewport pinned just
+    // below at y=12 (flowing — viewport bottom 16 is well above screen 54).
+    terminal.set_viewport_area(Rect::new(0, 12, width, 4));
+    terminal.note_history_rows_inserted(12);
+    assert_eq!(terminal.history_bottom_y(), 12);
+
+    // After the reset only the header survives.
+    let cells: Vec<RenderedCell> = vec![];
+    let mut driver = SurfaceHistoryDriver::default();
+
+    let outcome = driver
+        .replay_all_capped(
+            &mut terminal,
+            header(),
+            &cells,
+            2,
+            options(&theme, width),
+            HistoryReplayMode {
+                stream_active: false,
+                cause: "test_flowing_shrink",
+            },
+        )
+        .expect("replay");
+
+    let HistoryEmissionOutcome::Replayed { rows, .. } = outcome else {
+        panic!("expected replay outcome, got {outcome:?}");
+    };
+    assert_eq!(rows, 1, "header is a single row");
+    assert_eq!(terminal.history_bottom_y(), 1);
+    // Viewport must sit flush against the new 1-row history, not the stale y=12.
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 1, width, 4));
+}
+
+#[test]
+fn driver_replay_capped_requires_replay_on_row_width_mismatch() {
+    // Prod-only path (no analog in the deleted replay_lines mirror): replay_rows
+    // assembles header rows (rendered at the viewport width) and message rows
+    // (rendered at options.width) via try_copy_tail_from_slices, which returns
+    // None on a width mismatch → ReplayRequired. The early-return must leave the
+    // driver's emission bookkeeping untouched.
+    let theme = Theme::default();
+    let backend = TestBackend::new(48, 30);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 6, 48, 4)); // viewport width 48
+    let cells = vec![test_helpers::assistant_text_cell("hello")];
+    let mut driver = SurfaceHistoryDriver::default();
+
+    // Render the message rows at a different width (24) than the viewport (48).
+    let outcome = driver
+        .replay_all_capped(
+            &mut terminal,
+            header(),
+            &cells,
+            1,
+            options(&theme, 24),
+            HistoryReplayMode {
+                stream_active: false,
+                cause: "test_width_mismatch",
+            },
+        )
+        .expect("replay");
+
+    assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
+    // ReplayRequired leaves emission state untouched.
+    assert_eq!(driver.emitted_history_rows, 0);
+    assert!(driver.header_fingerprint.is_none());
+    assert!(driver.emitted_transcript_revision.is_none());
 }
 
 fn header() -> Vec<Line<'static>> {
@@ -670,11 +774,4 @@ fn plain_rows(rows: &HistoryRows) -> Vec<String> {
                 .to_string()
         })
         .collect()
-}
-
-fn line_index(lines: &[String], needle: &str) -> usize {
-    lines
-        .iter()
-        .position(|line| line.contains(needle))
-        .unwrap_or_else(|| panic!("missing {needle:?} in {lines:#?}"))
 }
