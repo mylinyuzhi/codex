@@ -19,11 +19,9 @@ use crossterm::event::DisableFocusChange;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
 use crossterm::execute;
-use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::enable_raw_mode;
-use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
@@ -39,6 +37,7 @@ use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::viewport::interactive_viewport_desired_height;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
+use coco_tui_ui::engine::terminal::SurfaceBackend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 /// Type alias for the terminal backend.
@@ -59,8 +58,10 @@ pub(crate) const NATIVE_VIEWPORT_MAX_HEIGHT: u16 = 12;
 pub(crate) const STREAMING_LIVE_TAIL_CAP: u16 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 struct EnableAlternateScroll;
 
+#[cfg(test)]
 impl Command for EnableAlternateScroll {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         write!(f, "\x1b[?1007h")
@@ -198,8 +199,8 @@ fn install_panic_hook_once() {
 }
 
 /// TUI manager wrapping the native scrollback terminal surface.
-pub struct Tui {
-    terminal: NativeTerminal,
+pub struct Tui<B: SurfaceBackend = TerminalBackend> {
+    terminal: SurfaceTerminal<B>,
     surface: NativeSurfaceController,
     modal_surface: ModalSurfaceState,
     suspend_context: SuspendContext,
@@ -207,6 +208,9 @@ pub struct Tui {
     alt_screen_active: bool,
     alt_saved_viewport: Option<Rect>,
     main_screen_viewport_pin: NativeViewportPin,
+    restore_terminal_on_drop: bool,
+    #[cfg(test)]
+    last_geometry_commit: Option<NativeViewportGeometryCommit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,7 +230,6 @@ struct NativeViewportGeometryCommit {
     previous_viewport: Rect,
     desired_viewport: Rect,
     committed_viewport: Rect,
-    history_bottom_y_before: u16,
     shrink_requested_rows: u16,
     shrink_committed_rows: u16,
     reveal_tail_rows: u16,
@@ -234,12 +237,87 @@ struct NativeViewportGeometryCommit {
     shrink_deferred_rows: u16,
 }
 
-impl Tui {
+impl NativeViewportGeometryCommit {
+    fn without_shrink(previous_viewport: Rect, desired_viewport: Rect) -> Self {
+        Self {
+            previous_viewport,
+            desired_viewport,
+            committed_viewport: desired_viewport,
+            shrink_requested_rows: 0,
+            shrink_committed_rows: 0,
+            reveal_tail_rows: 0,
+            append_fill_rows: 0,
+            shrink_deferred_rows: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeViewportCommitInputs {
+    pin: NativeViewportPin,
+    previous_viewport: Rect,
+    desired_viewport: Rect,
+    terminal_height: u16,
+    history_tail_reveal_rows: u16,
+    guaranteed_append_rows: u16,
+}
+
+impl Tui<TerminalBackend> {
     /// Create a new Tui with a fresh terminal.
     pub fn new() -> io::Result<Self> {
         let terminal = setup_terminal()?;
-        let compatibility = TerminalCompatibility::detect();
-        Ok(Self {
+        Ok(Self::from_terminal(
+            terminal,
+            TerminalCompatibility::detect(),
+            /*restore_terminal_on_drop*/ true,
+        ))
+    }
+
+    /// Initiate the Ctrl+Z suspend dance. Blocks until SIGCONT delivered
+    /// (typically by `fg` in the parent shell), at which point we
+    /// re-arm TUI modes and a [`PreparedResumeAction`] is queued for the
+    /// next [`draw`].
+    ///
+    /// No-op on non-Unix platforms.
+    pub fn trigger_suspend(&mut self) -> io::Result<()> {
+        self.leave_modal_alt_screen()?;
+        self.suspend_context.suspend()?;
+        Ok(())
+    }
+
+    /// Leave TUI-private terminal modes before running an interactive
+    /// child process such as `$EDITOR`.
+    pub fn prepare_external_process(&mut self) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        self.leave_modal_alt_screen()?;
+        leave_tui_modes()?;
+        if let Err(err) = execute!(stdout, MoveToNextLine(1), Show) {
+            let _ = enter_tui_modes(&mut stdout);
+            return Err(err);
+        }
+        stdout.flush()
+    }
+
+    /// Re-enter TUI modes after an external process exits and force the
+    /// next frame to repaint the native surface.
+    pub fn restore_after_external_process(&mut self) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        enter_tui_modes(&mut stdout)?;
+        self.leave_modal_alt_screen()?;
+        self.clear_surface_after_resume()
+    }
+}
+
+impl<B> Tui<B>
+where
+    B: SurfaceBackend,
+{
+    fn from_terminal(
+        terminal: SurfaceTerminal<B>,
+        compatibility: TerminalCompatibility,
+        restore_terminal_on_drop: bool,
+    ) -> Self {
+        Self {
             terminal,
             surface: NativeSurfaceController::default(),
             modal_surface: ModalSurfaceState::default(),
@@ -248,7 +326,29 @@ impl Tui {
             alt_screen_active: false,
             alt_saved_viewport: None,
             main_screen_viewport_pin: NativeViewportPin::Flowing,
-        })
+            restore_terminal_on_drop,
+            #[cfg(test)]
+            last_geometry_commit: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_for_test(terminal: SurfaceTerminal<B>, compatibility: TerminalCompatibility) -> Self {
+        Self::from_terminal(
+            terminal,
+            compatibility,
+            /*restore_terminal_on_drop*/ false,
+        )
+    }
+
+    #[cfg(test)]
+    fn terminal(&self) -> &SurfaceTerminal<B> {
+        &self.terminal
+    }
+
+    #[cfg(test)]
+    fn last_geometry_commit_for_test(&self) -> Option<NativeViewportGeometryCommit> {
+        self.last_geometry_commit
     }
 
     pub(crate) fn native_scrollback_status_message(&self) -> Option<&'static str> {
@@ -260,7 +360,7 @@ impl Tui {
     }
 
     /// Draw one native surface frame.
-    pub fn draw(&mut self, state: &AppState) -> io::Result<TuiDrawOutcome> {
+    pub fn draw(&mut self, state: &AppState) -> Result<TuiDrawOutcome, B::Error> {
         self.draw_with_frame_index(state, 0)
     }
 
@@ -268,11 +368,11 @@ impl Tui {
         &mut self,
         state: &AppState,
         frame_index: u64,
-    ) -> io::Result<TuiDrawOutcome> {
+    ) -> Result<TuiDrawOutcome, B::Error> {
         let perf_config = state.ui.display_settings.performance;
         self.terminal.set_perf_stats_enabled(perf_config.enabled);
-        if let Some(prepared) = self.suspend_context.prepare_resume_action() {
-            prepared.apply(|| self.clear_surface_after_resume())?;
+        if self.suspend_context.prepare_resume_action().is_some() {
+            self.clear_surface_after_resume()?;
         }
 
         let size = self.terminal.size()?;
@@ -358,7 +458,7 @@ impl Tui {
         size: ratatui::layout::Size,
         native_frame: NativeSurfaceFramePlan,
         frame_index: u64,
-    ) -> io::Result<crate::surface::controller::NativeSurfaceDrawOutcome> {
+    ) -> Result<crate::surface::controller::NativeSurfaceDrawOutcome, B::Error> {
         let perf_config = state.ui.display_settings.performance;
         // The live tail is one display row per line, so its length is the
         // precomputed viewport content height for the sizing pass.
@@ -372,6 +472,10 @@ impl Tui {
         let sync_start = perf_config.enabled.then(std::time::Instant::now);
         let geometry_commit =
             self.sync_surface_area(state, plan, size, live_height, &native_frame)?;
+        #[cfg(test)]
+        {
+            self.last_geometry_commit = Some(geometry_commit);
+        }
         let sync_elapsed = sync_start.map(|start| start.elapsed());
         if let Some(elapsed) = sync_elapsed
             && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
@@ -429,17 +533,18 @@ impl Tui {
         let history_bottom_y_after = self.terminal.history_bottom_y();
         let viewport_top_after = self.terminal.viewport_area().top();
         let unbacked_gap_rows = viewport_top_after.saturating_sub(history_bottom_y_after);
+        let flowing_seats_flush = flowing_viewport_seats_flush(
+            self.main_screen_viewport_pin,
+            viewport_top_after,
+            history_bottom_y_after,
+        );
         // Invariant (post de-stick): a Flowing viewport seats flush on history.
         // A non-zero gap under a Flowing pin means a stale-anchor / second-writer
         // regression (the /clear-gap class). A BottomPinned viewport may carry a
         // transient backed gap pending tail-reveal (shrink_deferred_rows > 0), so
         // the pin guard is load-bearing — do NOT drop it.
         debug_assert!(
-            flowing_viewport_seats_flush(
-                self.main_screen_viewport_pin,
-                viewport_top_after,
-                history_bottom_y_after,
-            ),
+            flowing_seats_flush,
             "flowing viewport must seat flush against history: pin={:?} viewport_top={} \
              history_bottom_y={} unbacked_gap_rows={} committed={:?} reveal_tail_rows={} \
              append_fill_rows={} shrink_deferred_rows={}",
@@ -452,6 +557,20 @@ impl Tui {
             geometry_commit.append_fill_rows,
             geometry_commit.shrink_deferred_rows,
         );
+        if !flowing_seats_flush {
+            tracing::warn!(
+                target: "tui::surface::geometry",
+                pin = ?self.main_screen_viewport_pin,
+                viewport_top = viewport_top_after,
+                history_bottom_y = history_bottom_y_after,
+                unbacked_gap_rows,
+                committed_viewport = ?geometry_commit.committed_viewport,
+                reveal_tail_rows = geometry_commit.reveal_tail_rows,
+                append_fill_rows = geometry_commit.append_fill_rows,
+                shrink_deferred_rows = geometry_commit.shrink_deferred_rows,
+                "flowing viewport is not seated flush against history"
+            );
+        }
         tracing::debug!(
             target: "tui::surface::geometry",
             pin = ?self.main_screen_viewport_pin,
@@ -459,7 +578,6 @@ impl Tui {
             desired_viewport = ?geometry_commit.desired_viewport,
             committed_viewport = ?geometry_commit.committed_viewport,
             terminal_height = size.height,
-            history_bottom_y_before = geometry_commit.history_bottom_y_before,
             history_bottom_y_after,
             shrink_requested_rows = geometry_commit.shrink_requested_rows,
             shrink_committed_rows = geometry_commit.shrink_committed_rows,
@@ -488,42 +606,8 @@ impl Tui {
         Ok(outcome)
     }
 
-    /// Initiate the Ctrl+Z suspend dance. Blocks until SIGCONT delivered
-    /// (typically by `fg` in the parent shell), at which point we
-    /// re-arm TUI modes and a [`PreparedResumeAction`] is queued for the
-    /// next [`draw`].
-    ///
-    /// No-op on non-Unix platforms.
-    pub fn trigger_suspend(&mut self) -> io::Result<()> {
-        self.leave_modal_alt_screen()?;
-        self.suspend_context.suspend()?;
-        Ok(())
-    }
-
-    /// Leave TUI-private terminal modes before running an interactive
-    /// child process such as `$EDITOR`.
-    pub fn prepare_external_process(&mut self) -> io::Result<()> {
-        let mut stdout = io::stdout();
-        self.leave_modal_alt_screen()?;
-        leave_tui_modes()?;
-        if let Err(err) = execute!(stdout, MoveToNextLine(1), Show) {
-            let _ = enter_tui_modes(&mut stdout);
-            return Err(err);
-        }
-        stdout.flush()
-    }
-
-    /// Re-enter TUI modes after an external process exits and force the
-    /// next frame to repaint the native surface.
-    pub fn restore_after_external_process(&mut self) -> io::Result<()> {
-        let mut stdout = io::stdout();
-        enter_tui_modes(&mut stdout)?;
-        self.leave_modal_alt_screen()?;
-        self.clear_surface_after_resume()
-    }
-
     /// Clear the terminal.
-    pub fn clear(&mut self) -> io::Result<()> {
+    pub fn clear(&mut self) -> Result<(), B::Error> {
         self.terminal.clear_owned_scrollback()?;
         self.surface.reset();
         self.main_screen_viewport_pin = NativeViewportPin::Flowing;
@@ -531,21 +615,21 @@ impl Tui {
     }
 
     /// Get terminal size.
-    pub fn size(&self) -> io::Result<ratatui::layout::Size> {
+    pub fn size(&self) -> Result<ratatui::layout::Size, B::Error> {
         self.terminal.size()
     }
 
-    fn clear_surface_after_resume(&mut self) -> io::Result<()> {
+    fn clear_surface_after_resume(&mut self) -> Result<(), B::Error> {
         self.terminal.clear_owned_scrollback()?;
         self.surface.reset();
         self.main_screen_viewport_pin = NativeViewportPin::Flowing;
         Ok(())
     }
 
-    fn prepare_shell_prompt_after_exit(&mut self) -> io::Result<()> {
+    fn prepare_shell_prompt_after_exit(&mut self) -> Result<(), B::Error> {
         self.leave_modal_alt_screen()?;
         self.terminal.prepare_shell_prompt_after_exit()?;
-        std::io::Write::flush(self.terminal.backend_mut())
+        self.terminal.backend_mut().flush()
     }
 
     fn sync_surface_area(
@@ -555,18 +639,12 @@ impl Tui {
         size: ratatui::layout::Size,
         precomputed_live_height: Option<u16>,
         native_frame: &NativeSurfaceFramePlan,
-    ) -> io::Result<NativeViewportGeometryCommit> {
+    ) -> Result<NativeViewportGeometryCommit, B::Error> {
         let wants_alt = matches!(plan.modal_placement, Some(ModalSurfacePlacement::AltScreen));
-        let previous_viewport = self.terminal.viewport_area();
-        let history_bottom_y_before = self.terminal.history_bottom_y();
 
         if wants_alt && !self.alt_screen_active {
             self.alt_saved_viewport = Some(self.terminal.viewport_area());
-            execute!(
-                self.terminal.backend_mut(),
-                EnterAlternateScreen,
-                EnableAlternateScroll
-            )?;
+            self.terminal.backend_mut().enter_modal_alt_screen()?;
             self.alt_screen_active = true;
             self.terminal.backend_mut().clear_region(ClearType::All)?;
             self.terminal.invalidate_viewport();
@@ -574,74 +652,37 @@ impl Tui {
             self.leave_modal_alt_screen()?;
         }
 
-        let desired_area = if self.alt_screen_active {
-            Rect::new(0, 0, size.width, size.height)
-        } else {
-            // An active interactive prompt (AskUserQuestion / permission) may
-            // grow past the streaming cap so all its options are visible,
-            // pushing finalized history up into scrollback (codex bottom-pane
-            // sizes to content). Streaming/idle keeps the smaller cap.
-            let max_h = interactive_viewport_max_height(state, size.height);
-            let desired_height = interactive_viewport_desired_height(
-                state,
-                size.width,
-                max_h,
-                plan,
-                precomputed_live_height,
-            );
-            // Anchor on the OWNED viewport top, not `history_bottom_y()`.
-            // history_bottom_y mutates mid-frame (clear/insert/reveal), and this
-            // pass runs BEFORE the history emission — anchoring on it re-derived
-            // a stale position and raced the emission (the /clear-gap class).
-            // The owned viewport top is the previous frame's settled seat; the
-            // emission (clear→0, insert advances, scroll) is the single writer
-            // that moves it, and this pass preserves it (codex's owned model).
-            let geometry = native_viewport_geometry_with_max(
-                self.terminal.viewport_area().top(),
-                size,
-                desired_height,
-                max_h,
-            );
-            self.main_screen_viewport_pin = geometry.pin;
-            geometry.area
-        };
-        let commit = commit_native_viewport_geometry(
-            self.main_screen_viewport_pin,
-            previous_viewport,
-            desired_area,
-            history_bottom_y_before,
-            size.height,
-            native_frame.history_tail_reveal_rows,
-            native_frame.expected_append_rows(),
-        );
-        if self.terminal.viewport_area() != commit.committed_viewport {
-            tracing::debug!(
-                target: "tui::surface",
-                previous = ?self.terminal.viewport_area(),
-                next = ?commit.committed_viewport,
-                desired = ?commit.desired_viewport,
-                viewport_height = commit.committed_viewport.height,
-                viewport_bottom = commit.committed_viewport.bottom(),
-                terminal_height = size.height,
-                history_bottom_y = self.terminal.history_bottom_y(),
-                alt_screen_active = self.alt_screen_active,
-                bottom_pinned = commit.committed_viewport.bottom() == size.height,
-                pin = ?self.main_screen_viewport_pin,
-                "sync surface area"
-            );
-            self.terminal
-                .apply_viewport_area(commit.committed_viewport, !self.alt_screen_active)?;
+        if self.alt_screen_active {
+            let previous_viewport = self.terminal.viewport_area();
+            let history_bottom_y_before = self.terminal.history_bottom_y();
+            let desired_area = Rect::new(0, 0, size.width, size.height);
+            let commit =
+                NativeViewportGeometryCommit::without_shrink(previous_viewport, desired_area);
+            apply_native_viewport_commit(
+                &mut self.terminal,
+                commit,
+                history_bottom_y_before,
+                size.height,
+                self.alt_screen_active,
+                self.main_screen_viewport_pin,
+            )?;
+            return Ok(commit);
         }
-        Ok(commit)
+
+        sync_main_surface_area(
+            &mut self.terminal,
+            &mut self.main_screen_viewport_pin,
+            state,
+            plan,
+            size,
+            precomputed_live_height,
+            native_frame,
+        )
     }
 
-    fn leave_modal_alt_screen(&mut self) -> io::Result<()> {
+    fn leave_modal_alt_screen(&mut self) -> Result<(), B::Error> {
         if self.alt_screen_active {
-            execute!(
-                self.terminal.backend_mut(),
-                DisableAlternateScroll,
-                LeaveAlternateScreen
-            )?;
+            self.terminal.backend_mut().leave_modal_alt_screen()?;
             self.alt_screen_active = false;
         }
         if let Some(saved) = self.alt_saved_viewport.take() {
@@ -652,15 +693,104 @@ impl Tui {
     }
 }
 
-fn commit_native_viewport_geometry(
-    pin: NativeViewportPin,
-    previous_viewport: Rect,
-    desired_viewport: Rect,
+fn sync_main_surface_area<B>(
+    terminal: &mut SurfaceTerminal<B>,
+    main_screen_viewport_pin: &mut NativeViewportPin,
+    state: &AppState,
+    plan: SurfaceFramePlan,
+    size: ratatui::layout::Size,
+    precomputed_live_height: Option<u16>,
+    native_frame: &NativeSurfaceFramePlan,
+) -> Result<NativeViewportGeometryCommit, B::Error>
+where
+    B: SurfaceBackend,
+{
+    let previous_viewport = terminal.viewport_area();
+    let history_bottom_y_before = terminal.history_bottom_y();
+    let max_h = interactive_viewport_max_height(state, size.height);
+    let desired_height = interactive_viewport_desired_height(
+        state,
+        size.width,
+        max_h,
+        plan,
+        precomputed_live_height,
+    );
+    // Anchor on the OWNED viewport top, not `history_bottom_y()`.
+    // history_bottom_y mutates mid-frame (clear/insert/reveal), and this pass
+    // runs BEFORE the history emission. The owned viewport top is the previous
+    // frame's settled seat; the emission is the single seat-mover.
+    let viewport_height = native_viewport_height(size, desired_height, max_h);
+    let bottom_pinned_y = size.height.saturating_sub(viewport_height);
+    let geometry = native_viewport_geometry_with_max(
+        terminal.viewport_area().top(),
+        size,
+        desired_height,
+        max_h,
+        terminal.history_backs_row(bottom_pinned_y),
+    );
+    *main_screen_viewport_pin = geometry.pin;
+    let commit = commit_native_viewport_geometry(NativeViewportCommitInputs {
+        pin: *main_screen_viewport_pin,
+        previous_viewport,
+        desired_viewport: geometry.area,
+        terminal_height: size.height,
+        history_tail_reveal_rows: native_frame.history_tail_reveal_rows,
+        guaranteed_append_rows: native_frame.guaranteed_append_rows(),
+    });
+    apply_native_viewport_commit(
+        terminal,
+        commit,
+        history_bottom_y_before,
+        size.height,
+        /*alt_screen_active*/ false,
+        *main_screen_viewport_pin,
+    )?;
+    Ok(commit)
+}
+
+fn apply_native_viewport_commit<B>(
+    terminal: &mut SurfaceTerminal<B>,
+    commit: NativeViewportGeometryCommit,
     history_bottom_y_before: u16,
     terminal_height: u16,
-    history_tail_reveal_rows: u16,
-    expected_append_rows: u16,
+    alt_screen_active: bool,
+    pin: NativeViewportPin,
+) -> Result<(), B::Error>
+where
+    B: SurfaceBackend,
+{
+    if terminal.viewport_area() != commit.committed_viewport {
+        tracing::debug!(
+            target: "tui::surface",
+            previous = ?terminal.viewport_area(),
+            next = ?commit.committed_viewport,
+            desired = ?commit.desired_viewport,
+            viewport_height = commit.committed_viewport.height,
+            viewport_bottom = commit.committed_viewport.bottom(),
+            terminal_height,
+            history_bottom_y_before,
+            history_bottom_y = terminal.history_bottom_y(),
+            alt_screen_active,
+            bottom_pinned = commit.committed_viewport.bottom() == terminal_height,
+            pin = ?pin,
+            "sync surface area"
+        );
+        terminal.apply_viewport_area(commit.committed_viewport, !alt_screen_active)?;
+    }
+    Ok(())
+}
+
+fn commit_native_viewport_geometry(
+    inputs: NativeViewportCommitInputs,
 ) -> NativeViewportGeometryCommit {
+    let NativeViewportCommitInputs {
+        pin,
+        previous_viewport,
+        desired_viewport,
+        terminal_height,
+        history_tail_reveal_rows,
+        guaranteed_append_rows,
+    } = inputs;
     let mut committed_viewport = desired_viewport;
     let mut shrink_requested_rows = 0;
     let mut shrink_committed_rows = 0;
@@ -674,7 +804,7 @@ fn commit_native_viewport_geometry(
 
     if bottom_pinned_shrink {
         shrink_requested_rows = desired_viewport.top() - previous_viewport.top();
-        let backed_rows = history_tail_reveal_rows.saturating_add(expected_append_rows);
+        let backed_rows = history_tail_reveal_rows.saturating_add(guaranteed_append_rows);
         shrink_committed_rows = shrink_requested_rows.min(backed_rows);
         if shrink_committed_rows < shrink_requested_rows {
             committed_viewport.y = previous_viewport
@@ -690,7 +820,6 @@ fn commit_native_viewport_geometry(
         previous_viewport,
         desired_viewport,
         committed_viewport,
-        history_bottom_y_before,
         shrink_requested_rows,
         shrink_committed_rows,
         reveal_tail_rows,
@@ -699,22 +828,70 @@ fn commit_native_viewport_geometry(
     }
 }
 
-impl Drop for Tui {
+#[cfg(test)]
+fn draw_native_frame_for_test<B>(
+    terminal: &mut SurfaceTerminal<B>,
+    surface: &mut NativeSurfaceController,
+    main_screen_viewport_pin: &mut NativeViewportPin,
+    state: &AppState,
+    plan: SurfaceFramePlan,
+    size: Size,
+    native_frame: NativeSurfaceFramePlan,
+) -> Result<NativeViewportGeometryCommit, B::Error>
+where
+    B: SurfaceBackend,
+{
+    let live_height = native_frame
+        .live_lines
+        .as_ref()
+        .map(|lines| lines.len() as u16);
+    let commit = sync_main_surface_area(
+        terminal,
+        main_screen_viewport_pin,
+        state,
+        plan,
+        size,
+        live_height,
+        &native_frame,
+    )?;
+    if commit.reveal_tail_rows > 0 {
+        surface.fill_history_tail_gap(terminal, commit.reveal_tail_rows)?;
+    }
+    surface.draw_with_plan_at_frame(terminal, state, plan, native_frame, 0)?;
+    assert!(flowing_viewport_seats_flush(
+        *main_screen_viewport_pin,
+        terminal.viewport_area().top(),
+        terminal.history_bottom_y(),
+    ));
+    Ok(commit)
+}
+
+impl<B> Drop for Tui<B>
+where
+    B: SurfaceBackend,
+{
     fn drop(&mut self) {
         let _ = self.prepare_shell_prompt_after_exit();
-        let _ = restore_terminal();
+        if self.restore_terminal_on_drop {
+            let _ = restore_terminal();
+        }
         // zsh shows PROMPT_EOL_MARK (`%`) when the command's final output
         // does not end in a newline. Terminal mode restore emits escape
         // sequences, so the newline must be the last best-effort write.
-        let _ = self.terminal.backend_mut().write_all(b"\r\n");
-        let _ = std::io::Write::flush(self.terminal.backend_mut());
+        let _ = self.terminal.backend_mut().write_drop_trailing_newline();
     }
 }
 
 #[cfg(test)]
 pub(crate) fn native_viewport_area(anchor_y: u16, size: Size, desired_height: u16) -> Rect {
-    native_viewport_geometry_with_max(anchor_y, size, desired_height, NATIVE_VIEWPORT_MAX_HEIGHT)
-        .area
+    native_viewport_geometry_with_max(
+        anchor_y,
+        size,
+        desired_height,
+        NATIVE_VIEWPORT_MAX_HEIGHT,
+        /*history_backs_pinned_row*/ false,
+    )
+    .area
 }
 
 /// Max inline-viewport height for this frame. Streaming/idle is capped at
@@ -742,7 +919,14 @@ pub(crate) fn native_viewport_area_with_max(
     desired_height: u16,
     max_height: u16,
 ) -> Rect {
-    native_viewport_geometry_with_max(anchor_y, size, desired_height, max_height).area
+    native_viewport_geometry_with_max(
+        anchor_y,
+        size,
+        desired_height,
+        max_height,
+        /*history_backs_pinned_row*/ false,
+    )
+    .area
 }
 
 /// The flowing-seat invariant: a Flowing viewport must sit flush on history
@@ -771,6 +955,7 @@ fn native_viewport_geometry_with_max(
     size: Size,
     desired_height: u16,
     max_height: u16,
+    history_backs_pinned_row: bool,
 ) -> NativeViewportGeometry {
     if size.height == 0 {
         return NativeViewportGeometry {
@@ -778,14 +963,9 @@ fn native_viewport_geometry_with_max(
             pin: NativeViewportPin::Flowing,
         };
     }
-    let height = desired_height
-        .clamp(
-            NATIVE_VIEWPORT_MIN_HEIGHT,
-            max_height.max(NATIVE_VIEWPORT_MIN_HEIGHT),
-        )
-        .min(size.height);
+    let height = native_viewport_height(size, desired_height, max_height);
     let bottom_pinned_y = size.height.saturating_sub(height);
-    let pin = if anchor_y >= bottom_pinned_y {
+    let pin = if anchor_y >= bottom_pinned_y || history_backs_pinned_row {
         NativeViewportPin::BottomPinned
     } else {
         NativeViewportPin::Flowing
@@ -798,6 +978,18 @@ fn native_viewport_geometry_with_max(
         area: Rect::new(0, y, size.width, height),
         pin,
     }
+}
+
+fn native_viewport_height(size: Size, desired_height: u16, max_height: u16) -> u16 {
+    if size.height == 0 {
+        return 0;
+    }
+    desired_height
+        .clamp(
+            NATIVE_VIEWPORT_MIN_HEIGHT,
+            max_height.max(NATIVE_VIEWPORT_MIN_HEIGHT),
+        )
+        .min(size.height)
 }
 
 #[cfg(test)]

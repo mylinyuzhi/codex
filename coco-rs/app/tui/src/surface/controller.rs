@@ -64,12 +64,8 @@ pub(crate) struct NativeSurfaceFramePlan {
 }
 
 impl NativeSurfaceFramePlan {
-    pub(crate) fn expected_append_rows(&self) -> u16 {
-        self.finalized_history.expected_rows().saturating_add(
-            self.provisional_history
-                .as_ref()
-                .map_or(0, |append| append.rows.height()),
-        )
+    pub(crate) fn guaranteed_append_rows(&self) -> u16 {
+        self.finalized_history.expected_rows()
     }
 }
 
