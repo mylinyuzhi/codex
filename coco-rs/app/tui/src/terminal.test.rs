@@ -32,21 +32,22 @@ fn native_viewport_bottom_pins_once_history_reaches_terminal_bottom() {
 #[test]
 fn native_viewport_pin_state_keeps_later_height_changes_bottom_pinned() {
     let size = Size::new(80, 24);
+    // Tall history (anchor_y at/above the bottom-pinned row) pins the viewport,
+    // and a later height grow stays pinned because history still backs the row.
     let first = native_viewport_geometry_with_max(
         /*anchor_y*/ 22,
         size,
         /*desired_height*/ 4,
         NATIVE_VIEWPORT_MAX_HEIGHT,
-        NativeViewportPin::Flowing,
     );
     let grown = native_viewport_geometry_with_max(
         /*anchor_y*/ 20,
         size,
         /*desired_height*/ 10,
         NATIVE_VIEWPORT_MAX_HEIGHT,
-        first.pin,
     );
 
+    assert_eq!(first.pin, NativeViewportPin::BottomPinned);
     assert_eq!(first.area.bottom(), 24);
     assert_eq!(grown.area.bottom(), 24);
     assert_eq!(grown.pin, NativeViewportPin::BottomPinned);
@@ -117,18 +118,41 @@ fn native_viewport_uses_minimum_height_for_idle_composer() {
 }
 
 #[test]
-fn native_viewport_bottom_pin_uses_terminal_bottom_after_latch() {
-    assert_eq!(
-        native_viewport_geometry_with_max(
-            /*anchor_y*/ 8,
-            Size::new(80, 40),
-            /*desired_height*/ 4,
-            NATIVE_VIEWPORT_MAX_HEIGHT,
-            NativeViewportPin::BottomPinned,
-        )
-        .area,
-        Rect::new(0, 36, 80, 4)
+fn native_viewport_reverts_to_flowing_when_history_below_pinned_row() {
+    // History shrank below the bottom-pinned row: the pin is not sticky, so the
+    // viewport reverts to flowing and seats flush against history at anchor_y
+    // instead of stranding an unbacked gap above a latched bottom position.
+    let geometry = native_viewport_geometry_with_max(
+        /*anchor_y*/ 8,
+        Size::new(80, 40),
+        /*desired_height*/ 4,
+        NATIVE_VIEWPORT_MAX_HEIGHT,
     );
+    assert_eq!(geometry.pin, NativeViewportPin::Flowing);
+    assert_eq!(geometry.area, Rect::new(0, 8, 80, 4));
+}
+
+#[test]
+fn flowing_viewport_seat_invariant_guards_off_bottom_pinned() {
+    // The draw_native_frame debug_assert uses this predicate. A Flowing viewport
+    // with a gap is the /clear-class regression and MUST be flagged; a Flowing
+    // viewport seated flush is fine; a BottomPinned viewport with a transient
+    // backed gap is exempt — the pin guard is load-bearing.
+    assert!(!flowing_viewport_seats_flush(
+        NativeViewportPin::Flowing,
+        18,
+        4
+    ));
+    assert!(flowing_viewport_seats_flush(
+        NativeViewportPin::Flowing,
+        4,
+        4
+    ));
+    assert!(flowing_viewport_seats_flush(
+        NativeViewportPin::BottomPinned,
+        18,
+        4
+    ));
 }
 
 #[test]

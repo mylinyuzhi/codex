@@ -339,32 +339,6 @@ impl SurfaceHistoryDriver {
         self.commit_prepared_append(terminal, &prepared, cells)
     }
 
-    #[cfg(test)]
-    pub(crate) fn replay_all<B>(
-        &mut self,
-        terminal: &mut SurfaceTerminal<B>,
-        session_header: Vec<Line<'static>>,
-        cells: &[RenderedCell],
-        transcript_revision: u64,
-        options: HistoryLineRenderOptions<'_>,
-        stream_active: bool,
-    ) -> Result<HistoryEmissionOutcome, B::Error>
-    where
-        B: SurfaceBackend,
-    {
-        let outcome = self.replay_lines(
-            terminal,
-            session_header,
-            cells,
-            transcript_revision,
-            render_finalized_history_lines(cells, options),
-        )?;
-        let area = terminal.viewport_area();
-        self.reflow
-            .mark_replayed_viewport(area.width, stream_active);
-        Ok(outcome)
-    }
-
     pub(crate) fn replay_all_capped<B>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
@@ -447,48 +421,6 @@ impl SurfaceHistoryDriver {
         self.provisional = None;
     }
 
-    #[cfg(test)]
-    fn replay_lines<B, I>(
-        &mut self,
-        terminal: &mut SurfaceTerminal<B>,
-        session_header: Vec<Line<'static>>,
-        cells: &[RenderedCell],
-        transcript_revision: u64,
-        message_lines: I,
-    ) -> Result<HistoryEmissionOutcome, B::Error>
-    where
-        B: SurfaceBackend,
-        I: IntoIterator<Item = Line<'static>>,
-    {
-        let header_fingerprint = fingerprint_lines(&session_header);
-        let mut lines = session_header;
-        lines.extend(message_lines);
-        let viewport_area = terminal.viewport_area();
-        terminal.clear_owned_scrollback()?;
-        let width = viewport_area.width;
-        let rendered = render_history_rows(lines, width);
-        let rows = terminal.insert_history_rows(&rendered)?;
-        if terminal.viewport_area() != viewport_area {
-            terminal.set_viewport_area(viewport_area);
-        }
-        self.emitted_history_rows = rows;
-        self.tail_cache.replace_from_rows(width, &rendered);
-        self.header_fingerprint = Some(header_fingerprint);
-        self.emitter.mark_emitted_through(cells, cells.len());
-        self.emitted_transcript_revision = Some(transcript_revision);
-        self.provisional = None;
-        tracing::debug!(
-            target: "tui::surface::replay",
-            message_count = cells.len(),
-            rows,
-            "history full replay completed",
-        );
-        Ok(HistoryEmissionOutcome::Replayed {
-            message_count: cells.len(),
-            rows,
-        })
-    }
-
     fn replay_rows<B>(
         &mut self,
         terminal: &mut SurfaceTerminal<B>,
@@ -523,10 +455,13 @@ impl SurfaceHistoryDriver {
             );
             return Ok(HistoryEmissionOutcome::ReplayRequired);
         };
+        // No viewport reseat after insert: `clear_owned_scrollback` zeroed the
+        // viewport and `insert_history_rows` flowed it back down to the freshly
+        // inserted history bottom (or pinned it at the screen bottom on
+        // overflow). That seat is already correct — the old clamp/restore only
+        // existed to undo `sync_surface_area`'s stale-anchor reposition, which
+        // no longer happens (it anchors on the owned viewport top).
         let rows = terminal.insert_history_rows(&rendered)?;
-        if terminal.viewport_area() != viewport_area {
-            terminal.set_viewport_area(viewport_area);
-        }
         self.emitted_history_rows = rows;
         self.tail_cache.replace_from_rows(width, &rendered);
         self.header_fingerprint = Some(header_fingerprint);
