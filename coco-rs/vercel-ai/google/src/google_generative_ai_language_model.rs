@@ -43,8 +43,8 @@ use vercel_ai_provider_utils::extract_namespaced;
 use vercel_ai_provider_utils::is_custom_reasoning;
 use vercel_ai_provider_utils::map_reasoning_to_provider_budget;
 use vercel_ai_provider_utils::map_reasoning_to_provider_effort;
-use vercel_ai_provider_utils::post_json_to_api_with_client;
-use vercel_ai_provider_utils::post_stream_to_api_with_client;
+use vercel_ai_provider_utils::post_json_to_api_with_client_tapped;
+use vercel_ai_provider_utils::post_stream_to_api_with_client_tapped;
 use vercel_ai_provider_utils::without_trailing_slash;
 
 use crate::convert_google_generative_ai_usage::GoogleUsageMetadata;
@@ -955,7 +955,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
             model_path
         );
 
-        let response: GoogleGenerateContentResponse = post_json_to_api_with_client(
+        let response: GoogleGenerateContentResponse = post_json_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
@@ -963,6 +963,7 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
             GoogleFailedResponseHandler,
             abort_signal.clone(),
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 
@@ -984,12 +985,13 @@ impl LanguageModelV4 for GoogleGenerativeAILanguageModel {
             model_path
         );
 
-        let byte_stream = post_stream_to_api_with_client(
+        let byte_stream = post_stream_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
             abort_signal.clone(),
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 

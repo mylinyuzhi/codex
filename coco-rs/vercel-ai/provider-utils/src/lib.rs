@@ -87,9 +87,14 @@ pub use api::get_from_api_with_client;
 pub use api::post_json_to_api;
 pub use api::post_json_to_api_with_client;
 pub use api::post_json_to_api_with_client_and_headers;
+pub use api::post_json_to_api_with_client_and_headers_tapped;
+pub use api::post_json_to_api_with_client_tapped;
 pub use api::post_stream_to_api;
 pub use api::post_stream_to_api_with_client;
 pub use api::post_stream_to_api_with_client_and_headers;
+pub use api::post_stream_to_api_with_client_and_headers_tapped;
+pub use api::post_stream_to_api_with_client_tapped;
+pub use api::tap_byte_stream;
 
 pub use delay::delay;
 pub use delay::parse_retry_after;

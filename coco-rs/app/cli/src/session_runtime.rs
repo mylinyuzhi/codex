@@ -1233,6 +1233,19 @@ impl SessionRuntime {
             web_search_config: runtime_config.web_search.clone(),
             lsp_config: runtime_config.lsp.clone(),
             compact: runtime_config.compact.clone(),
+            // Per-session raw-wire dumper. Built only when the operator
+            // opts in via settings.json / env; `None` is zero overhead.
+            wire_dump: {
+                let d = &runtime_config.diagnostics;
+                (!d.wire_dump.is_off()).then(|| {
+                    coco_query::WireDumpConfig::new(
+                        project_paths.session_dir(&session_id),
+                        d.wire_dump,
+                        d.wire_dump_max_body_bytes.max(0) as usize,
+                        d.wire_dump_redact,
+                    )
+                })
+            },
             features: Arc::new(runtime_config.features.clone()),
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),

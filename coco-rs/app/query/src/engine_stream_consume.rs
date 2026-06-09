@@ -509,6 +509,14 @@ impl QueryEngine {
                         tool_call_count = tool_order.len(),
                         "LLM stream finished"
                     );
+                    // Report the authoritative outcome to the wire dumper:
+                    // an abnormal stop (content_filter / max_tokens) is a
+                    // failure, a clean finish is a success.
+                    if let Some(rec) = turn_state.wire_recorder.as_ref() {
+                        rec.finish(coco_wire_dump::WireOutcome::from_is_normal(
+                            stop_reason.unified.is_normal(),
+                        ));
+                    }
                     outcome = StreamOutcome::Finished {
                         snapshot,
                         usage,
@@ -527,6 +535,9 @@ impl QueryEngine {
                         tool_call_count = tool_order.len(),
                         "LLM stream errored"
                     );
+                    if let Some(rec) = turn_state.wire_recorder.as_ref() {
+                        rec.finish(coco_wire_dump::WireOutcome::Failure);
+                    }
                     outcome = StreamOutcome::Errored { message };
                     break;
                 }

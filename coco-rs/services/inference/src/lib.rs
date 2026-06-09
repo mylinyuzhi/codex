@@ -139,6 +139,12 @@ pub use vercel_ai_provider::ReasoningFilePart;
 // Errors + primitive — runtime/error-shape, not DTO. Stay in inference.
 pub use vercel_ai_provider::AISdkError;
 pub use vercel_ai_provider::JSONValue;
+// Raw wire-traffic debug sink interface (no version digit → passes
+// through unchanged). Runtime-seam re-export so consumers like
+// `app/query` reach it via `coco_inference::*` instead of declaring a
+// `vercel-ai*` dep (enforced by `check-vercel-ai-seam.sh`).
+pub use vercel_ai_provider::WireTap;
+pub use vercel_ai_provider::WireTapHandle;
 
 /// One-line `use coco_inference::prelude::*;` to bring the common subset
 /// of model-runtime + LLM types into scope.

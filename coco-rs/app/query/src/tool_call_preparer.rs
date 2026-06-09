@@ -671,6 +671,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     stop_sequences: req.stop_sequences.clone(),
                     response_format: None,
                     cancel: None,
+                    wire_tap: None,
                 };
                 match model_runtimes
                     .query_once(ModelRuntimeSource::Role(ModelRole::Main), &params)

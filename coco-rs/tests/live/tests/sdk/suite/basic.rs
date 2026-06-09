@@ -32,6 +32,7 @@ fn params_for(prompt: Vec<LlmMessage>, source: &str) -> QueryParams {
         stop_sequences: None,
         response_format: None,
         cancel: None,
+        wire_tap: None,
     }
 }
 

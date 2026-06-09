@@ -31,3 +31,5 @@ pub use v4::StreamError;
 pub use v4::ToolApprovalRequest;
 pub use v4::UnifiedFinishReason;
 pub use v4::Usage;
+pub use v4::WireTap;
+pub use v4::WireTapHandle;

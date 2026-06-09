@@ -134,6 +134,12 @@ pub struct QueryParams {
     /// serializable; scenario fixtures default it to `None`.
     #[serde(skip)]
     pub cancel: Option<tokio_util::sync::CancellationToken>,
+    /// Optional raw wire-traffic debug sink. Threaded onto
+    /// `LanguageModelV4CallOptions::wire_tap` so the transport layer
+    /// feeds it request/response bytes. `#[serde(skip)]` — the handle is
+    /// a trait object, not serializable; fixtures default it to `None`.
+    #[serde(skip)]
+    pub wire_tap: Option<vercel_ai_provider::WireTapHandle>,
 }
 
 /// Sleep for `delay`, returning `Err(())` immediately if `cancel` fires so a
@@ -907,6 +913,7 @@ impl ApiClient {
             params.tools.clone(),
         );
         call.tool_choice = params.tool_choice.clone();
+        call.wire_tap = params.wire_tap.clone();
 
         // Layout adapter: route the System / Developer text into the
         // provider's native top-level slot and stash provider-agnostic
