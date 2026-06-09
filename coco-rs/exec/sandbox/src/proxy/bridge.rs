@@ -143,6 +143,18 @@ impl BridgeManager {
     }
 }
 
+impl Drop for BridgeManager {
+    /// Wind down host-side socat tasks and clean up the UDS sockets when the
+    /// owning [`crate::SandboxState`] is dropped. `stop()` additionally awaits
+    /// the `JoinHandle`s; `Drop` cannot await, but cancelling (the socat
+    /// children spawn with `kill_on_drop`) is enough.
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+        let _ = std::fs::remove_file(&self.http_socket);
+        let _ = std::fs::remove_file(&self.socks_socket);
+    }
+}
+
 /// Spawn a host-side socat process: `socat UNIX-LISTEN:<socket>,fork TCP:localhost:<port>`.
 ///
 /// Waits briefly for socat to create the socket file before returning.

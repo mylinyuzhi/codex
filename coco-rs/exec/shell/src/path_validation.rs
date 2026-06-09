@@ -84,6 +84,133 @@ pub fn check_redirect_paths(redirects: &[(String, String)], cwd: &str) -> Option
     None
 }
 
+// ── Force-ask gates (consumed by BashTool::check_permissions) ──
+//
+// These run BEFORE any allow rule / acceptEdits auto-allow, so a match returns
+// an Ask the model can't override (mirrors TS checkDangerousRemovalPaths /
+// checkReadOnlyConstraints git gates returning ask/passthrough). All pure
+// (plus an FS stat for the bare-repo probe) — no cross-crate dependency, so
+// they stay in `coco-shell` (avoids a coco-shell → coco-permissions cycle).
+
+const GIT_INTERNAL_SEGMENTS: &[&str] = &["HEAD", "objects", "refs", "hooks"];
+
+/// `argv` of a single (non-compound) subcommand, with leading env-var
+/// assignments stripped. Whitespace-split (quote-stripped) — sufficient for
+/// flag/positional extraction.
+fn subcommand_argv(sub: &str) -> Vec<String> {
+    let stripped =
+        crate::bash_permissions::strip_all_env_vars(sub.trim(), /*check_hijack*/ false);
+    stripped
+        .split_whitespace()
+        .map(|t| t.trim_matches(['\'', '"']).to_string())
+        .collect()
+}
+
+/// Force-ask if a destructive removal/copy/move targets a critical system path
+/// (`rm -rf /`, `rm -rf ~`, `cp x /etc`, …). TS `checkDangerousRemovalPaths`:
+/// such a target "cannot be auto-allowed by permission rules".
+pub fn check_dangerous_removal(command: &str, cwd: &str) -> Option<String> {
+    for sub in crate::bash_permissions::split_compound_command(command) {
+        let base = crate::mode_validation::extract_base_executable(sub.trim());
+        if !matches!(base, "rm" | "rmdir" | "cp" | "mv") {
+            continue;
+        }
+        let argv = subcommand_argv(&sub);
+        let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
+        for target in extract_paths_from_command(base, &args) {
+            if check_dangerous_path(base, &target, cwd).is_some() {
+                return Some(format!(
+                    "Dangerous `{base}` operation on '{target}' requires explicit approval \
+                     and cannot be auto-allowed by permission rules."
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Cheap (no-FS) git sandbox-escape detection: a compound `cd … && git …`, or a
+/// command that writes git-internal files (`HEAD`/`objects`/`refs`/`hooks`)
+/// then runs git. Used by `BashTool::is_read_only` so such commands are NOT
+/// auto-classified read-only (TS `checkReadOnlyConstraints` returns passthrough).
+pub fn has_git_escape_pattern(command: &str) -> bool {
+    let subs = crate::bash_permissions::split_compound_command(command);
+    let mut has_cd = false;
+    let mut has_git = false;
+    for sub in &subs {
+        match crate::mode_validation::extract_base_executable(sub.trim()) {
+            "cd" => has_cd = true,
+            "git" => has_git = true,
+            _ => {}
+        }
+    }
+    has_git && (has_cd || command_writes_git_internal(&subs))
+}
+
+/// Force-ask gate for git sandbox-escape: `cd`+`git` compound, git-internal
+/// writes before git, or git run inside a bare-repo cwd.
+pub fn check_git_escape(command: &str, cwd: &str) -> Option<String> {
+    let subs = crate::bash_permissions::split_compound_command(command);
+    let base_of = |s: &str| crate::mode_validation::extract_base_executable(s.trim()).to_string();
+    let has_git = subs.iter().any(|s| base_of(s) == "git");
+    if !has_git {
+        return None;
+    }
+    if subs.iter().any(|s| base_of(s) == "cd") {
+        return Some(
+            "Compound commands with `cd` and `git` require approval to prevent \
+             bare-repository attacks."
+                .into(),
+        );
+    }
+    if command_writes_git_internal(&subs) {
+        return Some(
+            "Commands that create git-internal files (HEAD/objects/refs/hooks) and run \
+             git require approval."
+                .into(),
+        );
+    }
+    if is_current_dir_bare_git_repo(cwd) {
+        return Some(
+            "Git commands in a directory with bare-repository structure require approval.".into(),
+        );
+    }
+    None
+}
+
+/// Whether any subcommand writes a path whose first segment is a git-internal
+/// directory/file (`HEAD`/`objects`/`refs`/`hooks`).
+fn command_writes_git_internal(subs: &[String]) -> bool {
+    for sub in subs {
+        let base = crate::mode_validation::extract_base_executable(sub.trim());
+        if !matches!(base, "mkdir" | "touch" | "cp" | "mv") {
+            continue;
+        }
+        let argv = subcommand_argv(sub);
+        let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
+        for target in extract_paths_from_command(base, &args) {
+            let norm = target.trim_start_matches("./").trim_start_matches('/');
+            let head = norm.split('/').next().unwrap_or(norm);
+            if GIT_INTERNAL_SEGMENTS.contains(&head) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// TS `isCurrentDirectoryBareGitRepo`: the cwd itself looks like a git dir
+/// (`HEAD` + `objects/` + `refs/`) but is NOT a normal working tree (`.git`
+/// absent) — a planted bare repo a `git` command could be tricked into using.
+fn is_current_dir_bare_git_repo(cwd: &str) -> bool {
+    use std::path::Path;
+    let dir = Path::new(cwd);
+    if dir.join(".git").exists() {
+        return false;
+    }
+    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+}
+
 /// Filter out flags from args, returning only positional arguments.
 /// Handles the `--` end-of-options delimiter.
 fn filter_flags(args: &[&str]) -> Vec<String> {

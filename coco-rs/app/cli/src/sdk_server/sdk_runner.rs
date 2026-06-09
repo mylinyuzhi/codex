@@ -170,6 +170,13 @@ impl TurnRunner for QueryEngineRunner {
                 // stored engine config so SDK turns honour the flag the
                 // session was started with.
                 include_hook_events: runtime.current_engine_config().await.include_hook_events,
+                // Inherit the session working-dir allowlist (seeded at build
+                // from --add-dir + settings additionalDirectories, plus any
+                // runtime /add-dir) so per-turn SDK rebuilds don't drop it (P17).
+                session_additional_dirs: runtime
+                    .current_engine_config()
+                    .await
+                    .session_additional_dirs,
                 ..Default::default()
             };
 

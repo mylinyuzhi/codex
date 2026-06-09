@@ -39,7 +39,8 @@ use crate::platform::SandboxPlatform;
 use crate::error::sandbox_error::*;
 
 /// Arg1 flag for the Windows sandbox inner stage dispatch.
-pub const APPLY_WINDOWS_SANDBOX_ARG1: &str = "--apply-windows-sandbox";
+/// Canonical definition lives in [`crate::inner_stage`].
+pub use crate::inner_stage::APPLY_WINDOWS_SANDBOX_ARG1;
 
 /// Windows sandbox implementation using restricted tokens + ACL enforcement.
 ///
@@ -54,10 +55,12 @@ pub struct WindowsSandbox;
 
 impl SandboxPlatform for WindowsSandbox {
     fn available(&self) -> bool {
-        // On Windows, check if the inner stage binary is reachable.
-        // The implementation uses in-process Windows APIs (token + ACL)
-        // via the `coco-windows-sandbox` crate.
-        cfg!(target_os = "windows")
+        // coco-rs ships no in-tree native Windows sandbox backend (TS's
+        // sandbox-runtime is the closed npm package; the inner stage here is a
+        // stub that exits 1). Report unavailable so the enable gate fail-closes
+        // to unsandboxed rather than emitting an `--apply-windows-sandbox`
+        // re-exec the stub would reject. TS only claims macOS/Linux/WSL2.
+        false
     }
 
     fn wrap_command(

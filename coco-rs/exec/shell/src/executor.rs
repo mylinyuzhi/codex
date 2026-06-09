@@ -138,9 +138,15 @@ impl ShellExecutor {
         };
         let sandbox_tmp_path = sandbox_tmp_dir.as_ref().map(|d| d.path().to_path_buf());
 
-        let built = self
+        let mut built = self
             .build_command(command, options, sandbox_tmp_path.clone())
             .await;
+        // Linux netns bridge: prepend the inner socat listeners (forwarding the
+        // netns-local proxy ports to the bind-mounted host UDS) so the sandboxed
+        // command's egress reaches the host proxy. No-op on macOS / no bridge.
+        if let Some(prefix) = sandbox_inner_bridge_prefix(options, command) {
+            built.command_string = format!("{prefix}{}", built.command_string);
+        }
         let merged_env = self
             .merge_env(command, options, sandbox_tmp_path.clone())
             .await;
@@ -232,6 +238,8 @@ impl ShellExecutor {
             }
         };
 
+        record_seccomp_violation_if_killed(options, command, &output.status).await;
+
         let stdout_raw = output.stdout;
         let stderr_raw = output.stderr;
         let stdout = String::from_utf8_lossy(&stdout_raw).to_string();
@@ -305,9 +313,15 @@ impl ShellExecutor {
         };
         let sandbox_tmp_path = sandbox_tmp_dir.as_ref().map(|d| d.path().to_path_buf());
 
-        let built = self
+        let mut built = self
             .build_command(command, options, sandbox_tmp_path.clone())
             .await;
+        // Linux netns bridge: prepend the inner socat listeners (forwarding the
+        // netns-local proxy ports to the bind-mounted host UDS) so the sandboxed
+        // command's egress reaches the host proxy. No-op on macOS / no bridge.
+        if let Some(prefix) = sandbox_inner_bridge_prefix(options, command) {
+            built.command_string = format!("{prefix}{}", built.command_string);
+        }
         let merged_env = self
             .merge_env(command, options, sandbox_tmp_path.clone())
             .await;
@@ -460,6 +474,10 @@ impl ShellExecutor {
 
         let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
 
+        if let Some(s) = &status {
+            record_seccomp_violation_if_killed(options, command, s).await;
+        }
+
         scrub_bare_repo_after_command(options, &effective_cwd, &original_cwd);
 
         Ok(CommandResult {
@@ -518,6 +536,35 @@ fn should_use_sandbox(options: &ExecOptions, command: &str) -> bool {
     state
         .command_snapshot(command, options.sandbox_bypass)
         .should_wrap
+}
+
+/// Record a Linux seccomp SIGSYS kill as a sandbox violation so the model sees
+/// it in the `<sandbox_violations>` annotation. No-op off Linux / no sandbox.
+async fn record_seccomp_violation_if_killed(
+    options: &ExecOptions,
+    command: &str,
+    status: &std::process::ExitStatus,
+) {
+    #[cfg(target_os = "linux")]
+    if let Some(state) = &options.sandbox
+        && coco_sandbox::is_seccomp_violation(status)
+    {
+        let tag = coco_sandbox::generate_command_tag(command, state.session_tag());
+        state
+            .record_violation(coco_sandbox::seccomp_violation(Some(tag)))
+            .await;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (options, command, status);
+}
+
+/// Linux netns-bridge shell prefix for a sandboxed command, derived from the
+/// live sandbox snapshot. `None` on macOS / when no bridge is active.
+fn sandbox_inner_bridge_prefix(options: &ExecOptions, command: &str) -> Option<String> {
+    options.sandbox.as_ref().and_then(|s| {
+        s.command_snapshot(command, options.sandbox_bypass)
+            .inner_command_prefix
+    })
 }
 
 fn read_cwd_file(path: &Path) -> Option<PathBuf> {

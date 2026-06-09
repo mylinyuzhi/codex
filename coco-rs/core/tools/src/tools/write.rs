@@ -159,7 +159,7 @@ impl Tool for WriteTool {
 
         // Sandbox pre-flight — deny inadmissible writes before any I/O,
         // so SDK consumers can intercept via the approval bridge.
-        super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true)?;
+        super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true).await?;
 
         let is_new = !path.exists();
 

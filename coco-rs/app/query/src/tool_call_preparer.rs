@@ -590,6 +590,7 @@ async fn evaluate_with_rules(
           -> ToolCheckResult { tool_opinion.clone() };
 
     let tool_id = tool.id();
+    let sandbox_auto_allow_bash = sandbox_auto_allow_bash(&tool_id, effective_input, ctx);
     // `evaluate_with_tool_check` step 1c short-circuits with the
     // tool's own `Allow { updated_input, feedback }` before any rule
     // evaluation, so the returned decision already preserves
@@ -602,8 +603,41 @@ async fn evaluate_with_rules(
         Some(&tool_check),
         coco_permissions::PermissionEvaluationOptions {
             dynamic_read_only: tool.is_read_only(effective_input),
+            sandbox_auto_allow_bash,
         },
     )
+}
+
+/// Mirror TS `canSandboxAutoAllow` (permissions.ts:1189-1193): true iff this is
+/// a Bash command that WILL be sandboxed AND `autoAllowBashIfSandboxed` is on.
+/// When true, the evaluator skips a tool-wide Bash ask rule and auto-allows.
+fn sandbox_auto_allow_bash(tool_id: &ToolId, input: &Value, ctx: &ToolUseContext) -> bool {
+    if !matches!(tool_id, ToolId::Builtin(coco_types::ToolName::Bash)) {
+        return false;
+    }
+    // Mirror bash.rs `active_sandbox_state`: feature-gated installed state.
+    if !ctx.features.enabled(coco_types::Feature::Sandbox) {
+        return false;
+    }
+    let Some(state) = ctx.sandbox_state.as_ref() else {
+        return false;
+    };
+    // `auto_allow_enabled` folds isSandboxingEnabled && autoAllowBashIfSandboxed.
+    if !state.auto_allow_enabled() {
+        return false;
+    }
+    let command = input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let bypass = coco_sandbox::SandboxBypass::from_flag(
+        input
+            .get("dangerouslyDisableSandbox")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    );
+    // `should_sandbox_command` is the `shouldUseSandbox(input)` mirror.
+    state.should_sandbox_command(command, bypass)
 }
 
 #[allow(clippy::too_many_arguments)]

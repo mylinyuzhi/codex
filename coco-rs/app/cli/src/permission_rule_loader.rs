@@ -18,13 +18,60 @@ use coco_config::SettingSource;
 use coco_config::SettingsWithSource;
 use coco_config::SourcedRule;
 use coco_permissions::parse_rule_string;
+use coco_types::AdditionalWorkingDir;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionRulesBySource;
+use coco_types::PermissionUpdateDestination;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+
+use crate::Cli;
+
+/// Seed the per-session additional-working-directory map from settings
+/// `permissions.additionalDirectories` (first) and `--add-dir` flags (second),
+/// for [`coco_query::QueryEngineConfig::session_additional_dirs`].
+///
+/// TS: `initializeToolPermissionContext` (permissionSetup.ts:993-1014) — both
+/// flow through `addDirectories` with destination `cliArg`. Relative paths are
+/// resolved to absolute against `cwd`; the map key is the absolute path string
+/// (matches TS `additionalWorkingDirectories.set(path, …)` and the `/add-dir`
+/// runner). Non-existent directories are seeded as-is (TS treats `pathNotFound`
+/// as a silent skip — the evaluator simply never matches them).
+pub fn seed_session_additional_dirs(
+    cli: &Cli,
+    settings: &SettingsWithSource,
+    cwd: &Path,
+) -> HashMap<String, AdditionalWorkingDir> {
+    let resolve = |p: &str| -> String {
+        let path = Path::new(p);
+        if path.is_absolute() {
+            p.to_string()
+        } else {
+            cwd.join(path).to_string_lossy().into_owned()
+        }
+    };
+    let mut out = HashMap::new();
+    for dir in settings
+        .merged
+        .permissions
+        .additional_directories
+        .iter()
+        .chain(cli.add_dir.iter())
+    {
+        let abs = resolve(dir);
+        out.insert(
+            abs.clone(),
+            AdditionalWorkingDir {
+                path: abs,
+                source: PermissionUpdateDestination::CliArg,
+            },
+        );
+    }
+    out
+}
 
 /// Map a config-layer [`SettingSource`] to the matching
 /// permission-layer [`PermissionRuleSource`].
@@ -75,11 +122,37 @@ pub fn typed_permission_rules(
     PermissionRulesBySource,
 ) {
     let (allow, deny, ask) = settings.sourced_permission_rules();
-    (
-        build_rules_by_source(&allow, PermissionBehavior::Allow),
-        build_rules_by_source(&deny, PermissionBehavior::Deny),
-        build_rules_by_source(&ask, PermissionBehavior::Ask),
-    )
+    let allow = build_rules_by_source(&allow, PermissionBehavior::Allow);
+    let deny = build_rules_by_source(&deny, PermissionBehavior::Deny);
+    let ask = build_rules_by_source(&ask, PermissionBehavior::Ask);
+
+    // Enterprise `allowManagedPermissionRulesOnly`: when set in managed/policy
+    // settings, ONLY `policySettings`-sourced rules are honored for every
+    // behavior — user/project/local/flag/CLI rules are all dropped so the
+    // managed admin owns the entire rule set. TS: loadAllPermissionRulesFromDisk
+    // returns only the policySettings source (permissionsLoader.ts:120-133).
+    // Enforced here in the LIVE load path (the single source the evaluator
+    // consumes), not the dead store loader.
+    if settings
+        .merged
+        .permissions
+        .allow_managed_permission_rules_only
+    {
+        (
+            filter_to_policy_only(allow),
+            filter_to_policy_only(deny),
+            filter_to_policy_only(ask),
+        )
+    } else {
+        (allow, deny, ask)
+    }
+}
+
+/// Drop every non-`PolicySettings` source from a rule map (used when
+/// `allowManagedPermissionRulesOnly` is active).
+fn filter_to_policy_only(mut rules: PermissionRulesBySource) -> PermissionRulesBySource {
+    rules.retain(|source, _| *source == PermissionRuleSource::PolicySettings);
+    rules
 }
 
 /// Resolve the source root used for leading-`/` file permission rules.

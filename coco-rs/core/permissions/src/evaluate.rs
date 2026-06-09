@@ -49,6 +49,13 @@ pub struct PermissionEvaluationOptions {
     /// The concrete tool/input pair is read-only even though the tool name
     /// itself may not be statically read-only, e.g. `Bash(ls | head)`.
     pub dynamic_read_only: bool,
+    /// TS `canSandboxAutoAllow` (permissions.ts:1189-1193): the caller has
+    /// determined this is a Bash command that WILL be sandboxed AND
+    /// `autoAllowBashIfSandboxed` is enabled. When true, a tool-wide Bash ASK
+    /// rule is skipped and (absent a deny/content-ask/allow match) the command
+    /// auto-allows. Computed in `app/query` (which holds `ctx.sandbox_state`) so
+    /// `coco-permissions` keeps no `exec/sandbox` dependency.
+    pub sandbox_auto_allow_bash: bool,
 }
 
 /// Permission evaluator. Implements the multi-step evaluation pipeline.
@@ -141,37 +148,32 @@ impl PermissionEvaluator {
             "permission_eval: enter",
         );
 
-        // Step 1: Deny rules (deny always wins)
+        // Step 1: Deny rules (deny always wins). Only tool-WIDE denies and
+        // CONTENT-MATCHED shell/file denies fire here; content-bearing denies
+        // for Agent/WebFetch/Read/Grep/Glob defer to the tool's step-1b
+        // check_permissions (the central over-deny fail-closed-bug fix).
         for rules in context.deny_rules.values() {
             for rule in rules {
-                if matches_tool_pattern(&rule.value.tool_pattern, &tool_str) {
-                    // Content-specific deny: only deny if command matches
-                    if is_shell_tool(&rule.value.tool_pattern) && rule.value.rule_content.is_some()
-                    {
-                        let content = rule.value.rule_content.as_deref().unwrap_or("");
-                        if let Some(command) = extract_shell_command(input)
-                            && !shell_rules::matches_bash_rule(content, &command)
-                        {
-                            continue;
-                        }
-                    } else if is_file_rule_for_tool(&rule.value.tool_pattern, &tool_str)
-                        && rule.value.rule_content.is_some()
-                        && !file_rule_matches_input(rule, &tool_str, input, context)
-                    {
-                        continue;
-                    }
-                    tracing::debug!(
-                        tool_name = %tool_str,
-                        permission_decision = "deny",
-                        rule_pattern = %rule.value.tool_pattern,
-                        rule_content = ?rule.value.rule_content,
-                        "permission_eval: deny rule matched",
-                    );
-                    return PermissionDecision::Deny {
-                        message: format!("denied by rule: {}", rule.value.tool_pattern),
-                        reason: PermissionDecisionReason::Rule { rule: rule.clone() },
-                    };
+                if !central_rule_applies(
+                    rule,
+                    &tool_str,
+                    input,
+                    context,
+                    shell_rules::RuleMatchPolicy::DenyOrAsk,
+                ) {
+                    continue;
                 }
+                tracing::debug!(
+                    tool_name = %tool_str,
+                    permission_decision = "deny",
+                    rule_pattern = %rule.value.tool_pattern,
+                    rule_content = ?rule.value.rule_content,
+                    "permission_eval: deny rule matched",
+                );
+                return PermissionDecision::Deny {
+                    message: format!("denied by rule: {}", rule.value.tool_pattern),
+                    reason: PermissionDecisionReason::Rule { rule: rule.clone() },
+                };
             }
         }
 
@@ -232,58 +234,54 @@ impl PermissionEvaluator {
             }
         }
 
-        // Step 2: Allow rules (sorted by source priority)
+        // Step 2/3: Allow rules (sorted by source priority). Tool-WIDE allows
+        // and CONTENT-MATCHED shell/file allows fire here; content-bearing
+        // allows for Agent/WebFetch/Read defer to the tool's step-1b check.
+        // NOTE: a content-bearing shell allow with no `command` field no longer
+        // broadly allows (central_rule_applies returns false) — TS keys allow
+        // rules on content, and a missing command never matches.
         for source in RULE_PRIORITY_ORDER {
             if let Some(rules) = context.allow_rules.get(source) {
                 for rule in rules {
-                    if matches_tool_pattern(&rule.value.tool_pattern, &tool_str) {
-                        // Step 3: Content-specific allow
-                        if is_shell_tool(&rule.value.tool_pattern)
-                            && rule.value.rule_content.is_some()
-                        {
-                            let content = rule.value.rule_content.as_deref().unwrap_or("");
-                            if let Some(command) = extract_shell_command(input) {
-                                if shell_rules::matches_bash_rule(content, &command) {
-                                    tracing::debug!(
-                                        tool_name = %tool_str,
-                                        permission_decision = "allow",
-                                        rule_source = ?source,
-                                        rule_pattern = %rule.value.tool_pattern,
-                                        rule_content = %content,
-                                        "permission_eval: shell allow rule matched",
-                                    );
-                                    return PermissionDecision::Allow {
-                                        updated_input: None,
-                                        feedback: None,
-                                    };
-                                }
-                                continue;
-                            }
-                        } else if is_file_rule_for_tool(&rule.value.tool_pattern, &tool_str)
-                            && rule.value.rule_content.is_some()
-                            && !file_rule_matches_input(rule, &tool_str, input, context)
-                        {
-                            continue;
-                        }
-                        tracing::debug!(
-                            tool_name = %tool_str,
-                            permission_decision = "allow",
-                            rule_source = ?source,
-                            rule_pattern = %rule.value.tool_pattern,
-                            rule_content = ?rule.value.rule_content,
-                            "permission_eval: tool-wide allow rule matched",
-                        );
-                        return PermissionDecision::Allow {
-                            updated_input: None,
-                            feedback: None,
-                        };
+                    if !central_rule_applies(
+                        rule,
+                        &tool_str,
+                        input,
+                        context,
+                        shell_rules::RuleMatchPolicy::Allow,
+                    ) {
+                        continue;
                     }
+                    tracing::debug!(
+                        tool_name = %tool_str,
+                        permission_decision = "allow",
+                        rule_source = ?source,
+                        rule_pattern = %rule.value.tool_pattern,
+                        rule_content = ?rule.value.rule_content,
+                        "permission_eval: allow rule matched",
+                    );
+                    return PermissionDecision::Allow {
+                        updated_input: None,
+                        feedback: None,
+                    };
                 }
             }
         }
 
+        // When a tool-wide Bash ask rule is skipped because the command will be
+        // sandboxed (TS `canSandboxAutoAllow`), the evaluator must auto-allow on
+        // fall-through rather than re-prompt via mode_fallthrough.
+        let mut sandbox_skip_allow = false;
+
         // Step 4: Ask rules — tool-wide ask
         if let Some(ask_rule) = get_tool_wide_rule(context, &tool_str, PermissionBehavior::Ask) {
+            // TS canSandboxAutoAllow (permissions.ts:1189-1206): skip a tool-wide
+            // Bash ask rule when the command will be sandboxed and
+            // autoAllowBashIfSandboxed is on. Content-specific Bash ask rules are
+            // STILL honored below (TS checkSandboxAutoAllow keeps per-command asks).
+            let skip_tool_wide_ask =
+                options.sandbox_auto_allow_bash && is_shell_tool(&ask_rule.value.tool_pattern);
+
             // If this is a shell tool, check if there are content-specific rules first
             if is_shell_tool(&ask_rule.value.tool_pattern)
                 && let Some(command) = extract_shell_command(input)
@@ -293,7 +291,12 @@ impl PermissionEvaluator {
                     for rule in rules {
                         if matches_tool_pattern(&rule.value.tool_pattern, &tool_str)
                             && let Some(content) = &rule.value.rule_content
-                            && shell_rules::matches_bash_rule(content, &command)
+                            && shell_rules::match_bash_rule(
+                                content,
+                                &command,
+                                shell_rules::RuleMatchPolicy::DenyOrAsk,
+                                shell_case_for(&rule.value.tool_pattern),
+                            )
                         {
                             tracing::debug!(
                                 tool_name = %tool_str,
@@ -312,17 +315,28 @@ impl PermissionEvaluator {
                 }
             }
 
-            tracing::debug!(
-                tool_name = %tool_str,
-                permission_decision = "ask",
-                rule_pattern = %ask_rule.value.tool_pattern,
-                "permission_eval: tool-wide ask rule matched",
-            );
-            return PermissionDecision::Ask {
-                message: format!("tool-wide ask rule for {tool_str}"),
-                suggestions: vec![],
-                choices: None,
-            };
+            if skip_tool_wide_ask {
+                tracing::debug!(
+                    tool_name = %tool_str,
+                    rule_pattern = %ask_rule.value.tool_pattern,
+                    "permission_eval: tool-wide Bash ask rule skipped (sandbox auto-allow)",
+                );
+                // Defer the auto-allow to after the remaining ask/path/MCP steps
+                // so a content-specific ask or MCP rule can still pre-empt it.
+                sandbox_skip_allow = true;
+            } else {
+                tracing::debug!(
+                    tool_name = %tool_str,
+                    permission_decision = "ask",
+                    rule_pattern = %ask_rule.value.tool_pattern,
+                    "permission_eval: tool-wide ask rule matched",
+                );
+                return PermissionDecision::Ask {
+                    message: format!("tool-wide ask rule for {tool_str}"),
+                    suggestions: vec![],
+                    choices: None,
+                };
+            }
         }
 
         for rules in context.ask_rules.values() {
@@ -376,12 +390,23 @@ impl PermissionEvaluator {
 
         // Step 7: MCP server-level rules
         if let ToolId::Mcp { server, .. } = tool_id {
-            // Check server-level allow: "mcp__server" matches "mcp__server__tool"
+            // Check server-level allow: "mcp__server" matches "mcp__server__tool".
+            // Server-level rules are tool-wide (no content); content-bearing
+            // tool-level MCP rules go through central_rule_applies so they stay
+            // scoped (no unconditional fire).
             let server_pattern = format!("{MCP_TOOL_PREFIX}{server}");
             for rules in context.allow_rules.values() {
                 for rule in rules {
-                    if rule.value.tool_pattern == server_pattern
-                        || matches_tool_pattern(&rule.value.tool_pattern, &tool_str)
+                    let server_level = rule.value.tool_pattern == server_pattern
+                        && rule.value.rule_content.is_none();
+                    if server_level
+                        || central_rule_applies(
+                            rule,
+                            &tool_str,
+                            input,
+                            context,
+                            shell_rules::RuleMatchPolicy::Allow,
+                        )
                     {
                         tracing::debug!(
                             tool_name = %tool_str,
@@ -398,10 +423,12 @@ impl PermissionEvaluator {
                 }
             }
 
-            // Check server-level ask
+            // Check server-level ask (tool-wide by definition)
             for rules in context.ask_rules.values() {
                 for rule in rules {
-                    if rule.value.tool_pattern == server_pattern {
+                    if rule.value.tool_pattern == server_pattern
+                        && rule.value.rule_content.is_none()
+                    {
                         tracing::debug!(
                             tool_name = %tool_str,
                             permission_decision = "ask",
@@ -416,6 +443,22 @@ impl PermissionEvaluator {
                     }
                 }
             }
+        }
+
+        // Sandbox auto-allow (TS `checkSandboxAutoAllow`, bashPermissions.ts:1351):
+        // a tool-wide Bash ask rule was skipped and no deny / content-ask / allow
+        // / MCP rule matched, so the sandboxed command auto-allows here instead of
+        // falling to mode_fallthrough (which would re-prompt a non-read-only Bash).
+        if sandbox_skip_allow {
+            tracing::debug!(
+                tool_name = %tool_str,
+                permission_decision = "allow",
+                "permission_eval: sandbox auto-allow (autoAllowBashIfSandboxed)",
+            );
+            return PermissionDecision::Allow {
+                updated_input: None,
+                feedback: None,
+            };
         }
 
         // Step 8: Mode-based fallthrough
@@ -758,6 +801,17 @@ fn is_shell_tool(tool_pattern: &str) -> bool {
     tool_pattern == ToolName::Bash.as_str() || tool_pattern == ToolName::PowerShell.as_str()
 }
 
+/// Case sensitivity for a shell tool's content matching. PowerShell is
+/// case-insensitive (TS `powershellPermissions` lowercasing); Bash is
+/// case-sensitive.
+fn shell_case_for(tool_pattern: &str) -> shell_rules::ShellCase {
+    if tool_pattern == ToolName::PowerShell.as_str() {
+        shell_rules::ShellCase::Insensitive
+    } else {
+        shell_rules::ShellCase::Sensitive
+    }
+}
+
 /// Whether a tool modifies files (Write, Edit, NotebookEdit).
 pub(crate) fn is_file_modifying_tool(tool_name: &str) -> bool {
     tool_name == ToolName::Write.as_str()
@@ -838,6 +892,56 @@ fn matches_tool_pattern(pattern: &str, tool: &str) -> bool {
         }
     }
     pattern == tool
+}
+
+/// Whether `rule` applies to this tool call at the CENTRAL evaluation step
+/// (deny step-1 / allow step-2/3 / MCP step-7). Mirrors TS `toolMatchesRule`
+/// (permissions.ts:238-269) for the tool-WIDE case, plus coco-rs's inline
+/// content-scoping for shell + file-modifying tools.
+///
+/// Returns `false` (defer to the tool's step-1b `check_permissions`) when the
+/// rule carries content AND the tool is neither a shell tool nor a
+/// file-modifying tool — e.g. `Agent(Explore)`, `WebFetch(domain:bad.com)`,
+/// `Read(/secret/**)`, `Grep(x)`. Those content rules are scoped by the tool
+/// itself; firing them centrally over-denies / over-allows (the fail-closed
+/// bug this carve-out fixes).
+fn central_rule_applies(
+    rule: &PermissionRule,
+    tool_str: &str,
+    input: &Value,
+    context: &ToolPermissionContext,
+    policy: shell_rules::RuleMatchPolicy,
+) -> bool {
+    if !matches_tool_pattern(&rule.value.tool_pattern, tool_str) {
+        return false;
+    }
+    // Tool-wide rule (no content) always applies centrally.
+    let Some(content) = rule.value.rule_content.as_deref() else {
+        return true;
+    };
+    // Shell content rule (Bash/PowerShell): apply only if the command matches
+    // the pattern under the caller's posture (deny/ask strip env+wrappers and
+    // re-split; allow keeps the compound guard). A missing `command` field
+    // cannot be scoped → do not match centrally.
+    if is_shell_tool(&rule.value.tool_pattern) {
+        return match extract_shell_command(input) {
+            Some(command) => shell_rules::match_bash_rule(
+                content,
+                &command,
+                policy,
+                shell_case_for(&rule.value.tool_pattern),
+            ),
+            None => false,
+        };
+    }
+    // File content rule (Write/Edit/NotebookEdit/ApplyPatch): apply only if the
+    // path matches the rule's glob; otherwise defer.
+    if is_file_rule_for_tool(&rule.value.tool_pattern, tool_str) {
+        return file_rule_matches_input(rule, tool_str, input, context);
+    }
+    // Any OTHER tool with a content-bearing rule (Agent/WebFetch/Read/Grep/Glob)
+    // NEVER matches centrally — defer to the tool's own scoped check_permissions.
+    false
 }
 
 #[cfg(test)]

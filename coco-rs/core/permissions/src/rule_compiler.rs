@@ -9,6 +9,7 @@ use coco_types::PermissionBehavior;
 use coco_types::PermissionRule;
 use coco_types::PermissionRuleSource;
 use coco_types::PermissionRuleValue;
+use coco_types::normalize_legacy_tool_name;
 
 /// Result of matching a tool against a compiled rule set.
 #[derive(Debug, Clone)]
@@ -132,7 +133,7 @@ pub fn parse_rule_string(rule_string: &str) -> PermissionRuleValue {
         Some(idx) => idx,
         None => {
             return PermissionRuleValue {
-                tool_pattern: rule_string.to_string(),
+                tool_pattern: normalize_legacy_tool_name(rule_string).to_string(),
                 rule_content: None,
             };
         }
@@ -142,7 +143,7 @@ pub fn parse_rule_string(rule_string: &str) -> PermissionRuleValue {
         Some(idx) if idx > open => idx,
         _ => {
             return PermissionRuleValue {
-                tool_pattern: rule_string.to_string(),
+                tool_pattern: normalize_legacy_tool_name(rule_string).to_string(),
                 rule_content: None,
             };
         }
@@ -151,7 +152,7 @@ pub fn parse_rule_string(rule_string: &str) -> PermissionRuleValue {
     // Closing paren must be at the end
     if close != rule_string.len() - 1 {
         return PermissionRuleValue {
-            tool_pattern: rule_string.to_string(),
+            tool_pattern: normalize_legacy_tool_name(rule_string).to_string(),
             rule_content: None,
         };
     }
@@ -161,7 +162,7 @@ pub fn parse_rule_string(rule_string: &str) -> PermissionRuleValue {
     // Missing tool name (e.g. "(foo)") is malformed
     if tool_name.is_empty() {
         return PermissionRuleValue {
-            tool_pattern: rule_string.to_string(),
+            tool_pattern: normalize_legacy_tool_name(rule_string).to_string(),
             rule_content: None,
         };
     }
@@ -171,14 +172,14 @@ pub fn parse_rule_string(rule_string: &str) -> PermissionRuleValue {
     // Empty content or standalone wildcard → tool-wide rule
     if raw_content.is_empty() || raw_content == "*" {
         return PermissionRuleValue {
-            tool_pattern: tool_name.to_string(),
+            tool_pattern: normalize_legacy_tool_name(tool_name).to_string(),
             rule_content: None,
         };
     }
 
     let unescaped = unescape_rule_content(raw_content);
     PermissionRuleValue {
-        tool_pattern: tool_name.to_string(),
+        tool_pattern: normalize_legacy_tool_name(tool_name).to_string(),
         rule_content: Some(unescaped),
     }
 }

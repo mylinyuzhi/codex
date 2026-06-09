@@ -151,10 +151,141 @@ fn redirect_target_is_discard(command: &str, gt: usize) -> bool {
     &command[start..j] == "/dev/null"
 }
 
+/// Classification for a command whose read-only safety is decided by its name
+/// alone, or by its name plus a per-command argument validator.
+///
+/// Mirrors the TS permission engine's two read-only mechanisms:
+/// - `AlwaysSafe` — the command is in `READONLY_COMMANDS` (or a hand-written
+///   read-only regex) with no dangerous-arg callback.
+/// - `SafeIfArgs(validator)` — the command is a `COMMAND_ALLOWLIST` entry with
+///   an `additionalCommandIsDangerousCallback`/regex. `validator(&argv[1..])`
+///   returns `true` when the trailing args are SAFE (the negation of TS's
+///   "is dangerous" predicate).
+enum ReadOnlyRule {
+    AlwaysSafe,
+    /// `validator(args)` where `args == &argv[1..]`; returns `true` if safe.
+    SafeIfArgs(fn(&[&str]) -> bool),
+}
+
+/// Map an executable basename to its read-only rule. `None` means the command
+/// is not classified here — `is_safe_to_call` falls through to the
+/// conditional-command match (find/rg/git/sed/curl/…) or to "not read-only".
+///
+/// Derived from TS `READONLY_COMMANDS` + `COMMAND_ALLOWLIST`
+/// (readOnlyValidation.ts). Notable removals vs a naive "looks harmless" list:
+/// `env`/`printenv` (env exfiltration + `env FOO=1 sh -c` arbitrary exec),
+/// pagers/`top` (`!`/shell-escape), and network tools (`ping`/`dig`/…) are NOT
+/// read-only in TS and are intentionally absent here.
+fn read_only_rule(cmd: &str) -> Option<ReadOnlyRule> {
+    use ReadOnlyRule::{AlwaysSafe, SafeIfArgs};
+    let rule = match cmd {
+        // TS READONLY_COMMANDS + hand-written read-only regexes (name-only safe).
+        "cat" | "cd" | "cut" | "echo" | "expr" | "false" | "grep" | "egrep" | "fgrep" | "head"
+        | "id" | "ls" | "nl" | "paste" | "pwd" | "rev" | "seq" | "stat" | "tail" | "tr"
+        | "true" | "uname" | "uniq" | "wc" | "which" | "whoami" | "numfmt" | "tac" | "file"
+        | "tree" | "diff" | "comm" | "uptime" | "df" | "du" | "free" | "type" | "readlink"
+        | "basename" | "dirname" | "realpath" | "md5sum" | "sha256sum" | "sha1sum" | "column"
+        | "fmt" | "fold" | "expand" | "unexpand" | "strings" | "od" | "hexdump" => AlwaysSafe,
+
+        // TS COMMAND_ALLOWLIST entries with dangerous-arg callbacks/regex.
+        "date" => SafeIfArgs(date_args_safe),
+        "hostname" => SafeIfArgs(hostname_args_safe),
+        "ps" => SafeIfArgs(ps_args_safe),
+        "sort" => SafeIfArgs(sort_args_safe),
+
+        _ => return None,
+    };
+    Some(rule)
+}
+
+/// `date`: read-only only when every positional is a `+FORMAT` string and no
+/// system-time-setting flag is present. Mirrors TS date callback
+/// (readOnlyValidation.ts:756-794) + safeFlags-by-omission (no `-s`/`--set`,
+/// no `-f`/`--file`). `args` are the tokens after `date`.
+///
+/// Conservative under whitespace tokenization: a quoted format like
+/// `date '+%Y %m'` tokenizes to `'+%Y` / `%m'`, which fail the `+` prefix
+/// check and over-prompt — never under-approve.
+fn date_args_safe(args: &[&str]) -> bool {
+    // Flags that consume the following token as their (display-only) argument.
+    const FLAGS_WITH_ARGS: &[&str] = &["-d", "--date", "-r", "--reference"];
+    // Flags that SET system time — blocked by omission in TS safeFlags.
+    const SET_FLAGS: &[&str] = &["-s", "--set", "-f", "--file"];
+    let mut i = 0;
+    while i < args.len() {
+        let token = args[i];
+        if let Some(eq) = token.strip_prefix("--").and_then(|_| token.find('=')) {
+            if SET_FLAGS.contains(&&token[..eq]) {
+                return false;
+            }
+            i += 1;
+        } else if token.starts_with('-') {
+            if SET_FLAGS.contains(&token) {
+                return false;
+            }
+            i += if FLAGS_WITH_ARGS.contains(&token) {
+                2
+            } else {
+                1
+            };
+        } else {
+            // Positional must be a `+FORMAT` string, else it can set the clock.
+            if !token.starts_with('+') {
+                return false;
+            }
+            i += 1;
+        }
+    }
+    true
+}
+
+/// `hostname`: display-only. Read-only iff every token is a short single-letter
+/// flag (`-x`) or a long flag (`--name`) with NO positional (a positional sets
+/// the hostname) and no `-F`/`-b`-style value flags. Mirrors TS regex
+/// `^hostname(?:\s+(?:-[a-zA-Z]|--[a-zA-Z-]+))*\s*$` (readOnlyValidation.ts:827).
+fn hostname_args_safe(args: &[&str]) -> bool {
+    args.iter().all(|t| {
+        if let Some(long) = t.strip_prefix("--") {
+            !long.is_empty() && long.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-')
+        } else if let Some(short) = t.strip_prefix('-') {
+            // Exactly one ASCII letter (TS `-[a-zA-Z]`): no bundles, no value.
+            short.len() == 1 && short.as_bytes()[0].is_ascii_alphabetic()
+        } else {
+            false // positional ⇒ sets hostname
+        }
+    })
+}
+
+/// `ps`: dangerous if any dash-less BSD-style letter group contains `e` — the
+/// `e` modifier dumps each process's environment. Mirrors the TS callback regex
+/// `/^[a-zA-Z]*e[a-zA-Z]*$/` on non-dashed tokens (readOnlyValidation.ts:426).
+/// UNIX-style `-e` (dashed) is fine; only the BSD `axe`/`e` form leaks env.
+fn ps_args_safe(args: &[&str]) -> bool {
+    !args.iter().any(|t| {
+        !t.starts_with('-')
+            && !t.is_empty()
+            && t.bytes().all(|b| b.is_ascii_alphabetic())
+            && t.bytes().any(|b| b == b'e')
+    })
+}
+
+/// `sort`: read-only unless writing output to a file. TS safeFlags omit
+/// `-o`/`--output` (readOnlyValidation.ts:247-303); `-S`/`--buffer-size` is
+/// allowed. Mirrors the `base64` attached-form handling above.
+fn sort_args_safe(args: &[&str]) -> bool {
+    !args.iter().any(|arg| {
+        matches!(*arg, "-o" | "--output")
+            || arg.starts_with("--output=")
+            || (arg.starts_with("-o") && *arg != "-o")
+    })
+}
+
 /// Check if an argv array represents a safe (read-only) command.
 ///
-/// Matches the TS permission engine: always-safe commands, conditional
-/// safety for find/rg/git/sed/curl/wget/docker/gh/kubectl.
+/// First consults the [`read_only_rule`] table (name-only and arg-validated
+/// commands, mirroring TS `READONLY_COMMANDS` + `COMMAND_ALLOWLIST`), then
+/// falls through to the conditional commands (find/rg/git/sed/curl/wget/
+/// docker/gh/kubectl/base64/python/node) that need bespoke flag analysis.
 fn is_safe_to_call(argv: &[&str]) -> bool {
     let Some(&cmd0) = argv.first() else {
         return false;
@@ -162,20 +293,14 @@ fn is_safe_to_call(argv: &[&str]) -> bool {
 
     let cmd = executable_name(cmd0);
 
+    if let Some(rule) = read_only_rule(cmd) {
+        return match rule {
+            ReadOnlyRule::AlwaysSafe => true,
+            ReadOnlyRule::SafeIfArgs(validator) => validator(&argv[1..]),
+        };
+    }
+
     match cmd {
-        // Always-safe commands (no side effects)
-        "cat" | "cd" | "cut" | "echo" | "expr" | "false" | "grep" | "egrep" | "fgrep" | "head"
-        | "id" | "ls" | "nl" | "paste" | "pwd" | "rev" | "seq" | "stat" | "tail" | "tr"
-        | "true" | "uname" | "uniq" | "wc" | "which" | "whoami" | "numfmt" | "tac" => true,
-
-        // Additional read-only commands
-        "less" | "more" | "file" | "tree" | "locate" | "ag" | "ack" | "diff" | "comm"
-        | "hostname" | "date" | "uptime" | "df" | "du" | "free" | "top" | "ps" | "env"
-        | "printenv" | "ping" | "dig" | "nslookup" | "host" | "whereis" | "type" | "readlink"
-        | "basename" | "dirname" | "realpath" | "md5sum" | "sha256sum" | "sha1sum" | "sort"
-        | "column" | "fmt" | "fold" | "expand" | "unexpand" | "strings" | "xxd" | "od"
-        | "hexdump" => true,
-
         // base64: safe unless writing to file
         "base64" => !argv.iter().skip(1).any(|arg| {
             matches!(*arg, "-o" | "--output")

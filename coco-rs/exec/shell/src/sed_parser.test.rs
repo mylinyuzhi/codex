@@ -49,3 +49,24 @@ fn test_parse_different_delimiter() {
     assert_eq!(info.pattern, "/usr/old");
     assert_eq!(info.replacement, "/usr/new");
 }
+
+// ── has_dangerous_sed (P5) ──
+
+#[test]
+fn test_has_dangerous_sed() {
+    // Execute (`e`) is always dangerous, even in acceptEdits.
+    assert!(has_dangerous_sed(
+        "sed 's/.*/x/e' f",
+        /*allow_file_writes*/ true
+    ));
+    assert!(has_dangerous_sed("sed -e 'e rm -rf /' f", true));
+    // File write (`w` command / `s///w` flag): dangerous unless acceptEdits.
+    assert!(has_dangerous_sed("sed 'w /etc/cron.d/x' f", false));
+    assert!(has_dangerous_sed("sed 's/a/b/w /tmp/out' f", false));
+    assert!(!has_dangerous_sed("sed 'w /tmp/out' f", true)); // acceptEdits allows writes
+    // Benign substitution is never dangerous.
+    assert!(!has_dangerous_sed("sed -i 's/old/new/g' f", false));
+    assert!(!has_dangerous_sed("sed -n '1,10p' f", false));
+    // Non-sed command → not dangerous.
+    assert!(!has_dangerous_sed("echo hi", false));
+}

@@ -16,17 +16,23 @@ use coco_types::ToolPermissionContext;
 use crate::setup::is_dangerous_bash_permission;
 use crate::setup::is_dangerous_powershell_permission;
 
-/// Strip dangerous classifier-bypassing rules from the permission context.
+/// Filter dangerous classifier-bypassing allow rules out of a raw
+/// `allow_rules` map (python:*, node:*, eval, ssh, curl, git, sudo, any Agent,
+/// …). Dangerous rules from non-restorable sources (Flag/Policy/Command) are
+/// still REMOVED (so they cannot bypass the classifier) but are NOT returned
+/// for stashing — they are never restored. Mirrors TS
+/// `stripDangerousPermissionsForAutoMode` + `removeDangerousPermissions`
+/// (permissionSetup.ts:481-553).
 ///
-/// Scans `allow_rules` for dangerous patterns (python:*, node:*, eval, ssh,
-/// curl, git, sudo, etc.) and moves them to `stripped_dangerous_rules`.
-///
-/// TS: `stripDangerousPermissionsForAutoMode(context)`
-pub fn strip_dangerous_rules(context: &mut ToolPermissionContext, is_ant_user: bool) {
+/// Returns `None` when nothing was stripped (caller leaves the stash untouched).
+pub fn strip_dangerous_allow_rules(
+    allow_rules: &mut PermissionRulesBySource,
+    is_ant_user: bool,
+) -> Option<PermissionRulesBySource> {
     let mut stripped = PermissionRulesBySource::new();
 
-    for (source, rules) in &mut context.allow_rules {
-        let mut safe = Vec::new();
+    for (source, rules) in allow_rules.iter_mut() {
+        let mut safe = Vec::with_capacity(rules.len());
         let mut dangerous = Vec::new();
 
         for rule in rules.drain(..) {
@@ -47,15 +53,27 @@ pub fn strip_dangerous_rules(context: &mut ToolPermissionContext, is_ant_user: b
         }
 
         *rules = safe;
-        // Only stash rules from restorable sources.
-        // Policy/flag/command rules are removed but NOT restored on exit.
-        // TS: isPermissionUpdateDestination() filters to user/project/local/session/cliArg.
+        // Only stash rules from restorable sources. Policy/flag/command rules
+        // are removed but NOT restored on exit (restoring them would bypass
+        // enterprise controls). TS: isPermissionUpdateDestination().
         if !dangerous.is_empty() && is_restorable_source(*source) {
             stripped.entry(*source).or_default().extend(dangerous);
         }
     }
 
-    if !stripped.is_empty() {
+    if stripped.is_empty() {
+        None
+    } else {
+        Some(stripped)
+    }
+}
+
+/// Strip dangerous classifier-bypassing rules from the permission context,
+/// stashing the removed (restorable) rules in `stripped_dangerous_rules`.
+///
+/// TS: `stripDangerousPermissionsForAutoMode(context)`
+pub fn strip_dangerous_rules(context: &mut ToolPermissionContext, is_ant_user: bool) {
+    if let Some(stripped) = strip_dangerous_allow_rules(&mut context.allow_rules, is_ant_user) {
         context.stripped_dangerous_rules = Some(stripped);
     }
 }

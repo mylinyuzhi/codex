@@ -12,6 +12,11 @@ coco-types.workspace = true
 coco-error.workspace = true
 coco-messages.workspace = true
 coco-config.workspace = true
+# Pure split/strip shell primitives for Bash rule decomposition
+# (split_compound_command, strip_safe_wrappers, strip_all_env_vars,
+# strip_output_redirections). Legal Core→Exec edge; no cycle —
+# coco-shell depends on neither coco-permissions nor coco-tool-runtime.
+coco-shell.workspace = true
 coco-paths.workspace = true
 # DenialTracker lives in `coco-tool-runtime` because it is per-
 # `ToolUseContext` runtime state (fork-isolated when

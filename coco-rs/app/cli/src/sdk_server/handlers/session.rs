@@ -331,10 +331,14 @@ pub(super) async fn handle_session_start(
         handle.permission_mode = Some(mode);
         let mut app_state = handle.app_state.write().await;
         let prev_mode = app_state.permission_mode.unwrap_or_default();
+        // Brand-new session: the engine config / rules aren't wired yet, so the
+        // Auto-entry stash starts empty. The evaluator-facing strip in
+        // ToolContextFactory::build (keyed on live mode==Auto) is the real guard.
         coco_permissions::apply_permission_mode_transition_to_app_state(
             &mut app_state,
             prev_mode,
             mode,
+            &coco_types::PermissionRulesBySource::new(),
         );
     }
     // TS parity: copy the SDK-level agentProgressSummaries flag onto

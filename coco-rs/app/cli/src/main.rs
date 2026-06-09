@@ -27,6 +27,15 @@ use coco_cli::session_runtime;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Sandbox inner-stage self-re-exec: when argv is
+    // `--apply-seccomp <mode> -- <prog> <args>` (Linux) or
+    // `--apply-windows-sandbox <b64> -- <prog> <args>`, this applies the
+    // sandbox filter and execs the real program (never returns). For a normal
+    // invocation it returns immediately and we fall through to clap parsing.
+    // MUST precede `Cli::parse()` — clap would otherwise reject the unknown
+    // `--apply-*` flag and the inner stage would die before applying the filter.
+    coco_sandbox::dispatch_or_continue(std::env::args_os());
+
     let cli = Cli::parse();
     // `--bare` is the flag form of bare mode (TS `isBareMode` = env OR
     // `--bare`); export the env so every downstream
@@ -531,6 +540,17 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
         )),
         _ => None,
     };
+
+    // Install the SDK sandbox approval bridge onto the live SandboxState so a
+    // denied sandbox path/network operation can be approved over the SDK
+    // control channel (TS `createSandboxAskCallback`). The bridge is
+    // interior-mutable on the persistent `Arc<SandboxState>`, so it survives
+    // hot-reload. No-op when sandbox is disabled.
+    if let Some(sandbox_state) = session_runtime.sandbox_state() {
+        sandbox_state.set_approval_bridge(Arc::new(
+            coco_cli::sdk_server::SdkSandboxApprovalBridge::new(state.clone()),
+        ));
+    }
 
     // SDK NDJSON is a non-interactive session (TS parity:
     // `isNonInteractiveSession === true`). Inject the `StructuredOutput`

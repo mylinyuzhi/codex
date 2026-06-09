@@ -4,13 +4,10 @@
 //! [`coco_sandbox::PermissionChecker`] gets a chance to deny *before* the
 //! tool issues the syscall. This is a UX/SDK feature, not a security
 //! boundary: the platform sandboxes (bwrap, Seatbelt) catch the same
-//! violations at the kernel level — pre-flight just lets SDK consumers
-//! intercept via the approval bridge, and gives users a structured deny
+//! violations at the kernel level — pre-flight consults the installed
+//! approval bridge (SDK / TUI) via the async `check_path_async` so a denied
+//! path can be interactively approved, and gives users a structured deny
 //! reason instead of an opaque `EACCES` from the OS.
-//!
-//! Closes the deferral documented in `docs/coco-rs/audit-gaps.md` Round 12:
-//! "PermissionChecker — type + bridge are correct, no production consumer
-//! wires it into Read/Write/Edit pre-flight."
 
 use std::path::Path;
 
@@ -28,7 +25,12 @@ use coco_tool_runtime::ToolUseContext;
 /// Returns [`ToolError::PermissionDenied`] otherwise. Tools should call
 /// this *after* input parsing but *before* the first I/O syscall so the
 /// model gets a structured deny rather than an opaque OS error.
-pub(crate) fn preflight_path(
+///
+/// Uses the bridge-aware [`check_path_async`](coco_sandbox::PermissionChecker::check_path_async):
+/// when an approval bridge is installed on the `SandboxState`, a denied path
+/// can be interactively approved (the deny becomes `Ok`); otherwise it behaves
+/// like the sync check.
+pub(crate) async fn preflight_path(
     ctx: &ToolUseContext,
     path: &Path,
     write: bool,
@@ -38,7 +40,8 @@ pub(crate) fn preflight_path(
     };
     let checker = state.permission_checker();
     checker
-        .check_path(path, write)
+        .check_path_async(path, write)
+        .await
         .map_err(|e| ToolError::PermissionDenied {
             message: e.to_string(),
         })

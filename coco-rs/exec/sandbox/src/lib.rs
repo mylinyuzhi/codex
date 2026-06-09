@@ -17,6 +17,7 @@ pub mod config;
 pub mod deps;
 pub mod error;
 pub mod glob_expansion;
+pub mod inner_stage;
 pub mod monitor;
 pub mod platform;
 pub mod proxy;
@@ -48,11 +49,17 @@ pub use config::SandboxConfig;
 pub use config::SandboxSettings;
 pub use config::WritableRoot;
 pub use error::SandboxError;
+pub use inner_stage::dispatch_or_continue;
+pub use inner_stage::{APPLY_SECCOMP_ARG1, APPLY_WINDOWS_SANDBOX_ARG1};
 pub use monitor::ViolationMonitor;
+pub use monitor::{
+    generate_command_tag, is_seccomp_violation, network_deny_violation, seccomp_violation,
+};
 pub use platform::SandboxPlatform;
 pub use state::CommandSandboxSnapshot;
 pub use state::ProxyPorts;
 pub use state::SandboxState;
+pub use violation::Violation;
 pub use violation::ViolationStore;
 
 // Re-export bridge types for Linux network namespace proxy bridging
