@@ -598,6 +598,16 @@ impl Tool for ToolSearchTool {
         let deferred: Vec<Arc<dyn DynTool>> = ctx.tools.searchable_deferred(ctx);
         let enabled_tools = ctx.tools.enabled(ctx);
         let total_deferred_tools = deferred.len() as i64;
+        let deferred_tool_names: Vec<&str> = deferred.iter().map(|t| t.name()).collect();
+        let enabled_tool_names: Vec<&str> = enabled_tools.iter().map(|t| t.name()).collect();
+        tracing::debug!(
+            query = %raw_query,
+            max_results,
+            total_deferred_tools,
+            deferred_tools = ?deferred_tool_names,
+            enabled_tools = ?enabled_tool_names,
+            "ToolSearch candidate pools resolved"
+        );
 
         // Build a DescriptionOptions for the description-aware path.
         // Includes the full tool-name list so tools whose description
@@ -653,6 +663,12 @@ impl Tool for ToolSearchTool {
                     }
                 }
             }
+            tracing::debug!(
+                query = %raw_query,
+                mode = "select",
+                matches = ?matches,
+                "ToolSearch resolved matches"
+            );
             let envelope = build_envelope(
                 &matches,
                 &raw_query,
@@ -681,6 +697,12 @@ impl Tool for ToolSearchTool {
             &desc_opts,
             &raw_query,
             max_results,
+        );
+        tracing::debug!(
+            query = %raw_query,
+            mode = "keyword",
+            matches = ?matches,
+            "ToolSearch resolved matches"
         );
 
         let envelope = build_envelope(

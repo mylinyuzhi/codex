@@ -1,8 +1,11 @@
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::Feature;
+use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::ToolName;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 #[test]
 fn test_register_all_tools_count() {
@@ -102,6 +105,53 @@ fn test_plan_mode_tool_list_includes_verify_plan_execution() {
     assert!(
         visible.contains(ToolName::VerifyPlanExecution.as_str()),
         "VerifyPlanExecution is read-only and must stay visible in Plan mode"
+    );
+}
+
+#[test]
+fn kairos_brief_and_proactive_tools_are_hidden_by_default() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+
+    let visible: HashSet<String> = registry
+        .loaded_tools(&ToolUseContext::test_default())
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    assert!(
+        !visible.contains(ToolName::SendUserMessage.as_str()),
+        "SendUserMessage must require Feature::KairosBrief"
+    );
+    assert!(
+        !visible.contains(ToolName::Sleep.as_str()),
+        "Sleep must require Feature::Proactive"
+    );
+}
+
+#[test]
+fn kairos_brief_and_proactive_features_expose_their_tools() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::KairosBrief);
+    features.enable(Feature::Proactive);
+    let mut ctx = ToolUseContext::test_default();
+    ctx.features = Arc::new(features);
+
+    let visible: HashSet<String> = registry
+        .loaded_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    assert!(
+        visible.contains(ToolName::SendUserMessage.as_str()),
+        "Feature::KairosBrief should expose SendUserMessage"
+    );
+    assert!(
+        visible.contains(ToolName::Sleep.as_str()),
+        "Feature::Proactive should expose Sleep"
     );
 }
 

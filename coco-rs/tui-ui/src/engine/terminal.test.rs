@@ -122,10 +122,39 @@ fn set_viewport_area_reclamps_visible_history_rows() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 10, 3));
     terminal.note_history_rows_inserted(5);
+    assert!(terminal.history_backs_row(5));
 
     terminal.set_viewport_area(Rect::new(0, 2, 10, 3));
 
     assert_eq!(terminal.visible_history_rows(), 2);
+    assert!(terminal.history_backs_row(5));
+}
+
+#[test]
+fn history_backing_extent_survives_viewport_clamp_until_clear() {
+    let backend = TestBackend::new(10, 8);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 4, 10, 4));
+
+    terminal.note_history_rows_inserted(10);
+    assert_eq!(terminal.history_bottom_y(), 4);
+    assert!(terminal.history_backs_row(10));
+
+    terminal.set_viewport_area(Rect::new(0, 2, 10, 4));
+    assert_eq!(terminal.history_bottom_y(), 2);
+    assert!(terminal.history_backs_row(10));
+
+    terminal.clear_owned_scrollback().expect("clear");
+    assert!(!terminal.history_backs_row(1));
+}
+
+#[test]
+fn history_backing_row_zero_is_vacuously_backed() {
+    let backend = TestBackend::new(10, 8);
+    let terminal = SurfaceTerminal::new(backend).expect("terminal");
+
+    assert!(terminal.history_backs_row(0));
+    assert!(!terminal.history_backs_row(1));
 }
 
 #[test]
@@ -329,29 +358,6 @@ fn insert_history_rows_after_viewport_shrink_closes_live_tail_gap() {
         "        ",
         "        ",
     ]);
-}
-
-#[test]
-fn reseat_viewport_to_history_bottom_closes_gap_without_inserting_history() {
-    let backend = TestBackend::new(8, 10);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 8, 8, 2));
-    terminal
-        .insert_history_rows(&history_rows([Line::from("hist"), Line::default()]))
-        .expect("insert history");
-    terminal
-        .apply_viewport_area(Rect::new(0, 6, 8, 4), true)
-        .expect("grow viewport");
-    terminal
-        .apply_viewport_area(Rect::new(0, 8, 8, 2), true)
-        .expect("shrink viewport");
-
-    terminal
-        .reseat_viewport_to_history_row(2)
-        .expect("reseat viewport");
-
-    assert_eq!(terminal.viewport_area(), Rect::new(0, 2, 8, 2));
-    assert_eq!(terminal.history_bottom_y(), 2);
 }
 
 #[test]

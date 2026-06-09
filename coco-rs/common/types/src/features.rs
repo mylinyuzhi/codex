@@ -125,8 +125,14 @@ pub enum Feature {
     Worktree,
     /// LSP-backed code intelligence tool.
     Lsp,
+    /// Autonomous/tick-driven assistant loop helpers.
+    /// TS: `feature('PROACTIVE') || feature('KAIROS')` for Sleep/tick pacing.
+    Proactive,
 
     // Skill / command feature gates (TS `feature(...)` calls).
+    /// Brief user-message channel (`SendUserMessage`).
+    /// TS: `feature('KAIROS') || feature('KAIROS_BRIEF')` in `BriefTool.ts`.
+    KairosBrief,
     /// `/loop` skill — recurring task scheduling.
     /// TS: `feature('AGENT_TRIGGERS')` in `skills/bundled/index.ts:47`.
     AgentTriggers,
@@ -402,7 +408,19 @@ const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
+    FeatureSpec {
+        id: Feature::Proactive,
+        key: "proactive",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
     // Skill / command bundled-feature gates (TS `feature(...)` parity).
+    FeatureSpec {
+        id: Feature::KairosBrief,
+        key: "kairos_brief",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
     FeatureSpec {
         id: Feature::AgentTriggers,
         key: "agent_triggers",

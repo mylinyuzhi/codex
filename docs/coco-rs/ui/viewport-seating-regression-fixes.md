@@ -6,6 +6,12 @@ commit `4be8942ca9`). Scopes a confirmed HIGH regression plus supporting
 hardening. Constraints inherited from `terminal-surface-design.md` and
 `rendering-hardening-and-rollback.md` remain in force.
 
+This is a viewport-seating contract fix, not a tactical patch plan. C1 must
+repair the state contract between the geometry layer and the paint engine by
+preserving the unclamped, overflow-aware history extent that the pin decision
+depends on. It is not a request to restore sticky pinning or add a localized
+conditional around the failing shrink.
+
 Document map: this sits under `terminal-surface-design.md` (surface constraints)
 and `native-scrollback-architecture.md` (backend / history emission). It records
 decisions for the geometry seating path in
@@ -45,14 +51,14 @@ seam.
 
 | ID | Severity | Status | Area |
 |----|----------|--------|------|
-| C1 | **HIGH** | confirmed | de-stick un-pins an overflow-backed viewport on height shrink → lost history + blank rows |
-| A4 | Medium | confirmed | `sync_surface_area` reads `previous_viewport` before leaving alt-screen → spurious shrink on the alt-leave frame |
-| OBS | Low | confirmed | flowing-seat invariant guarded only by `debug_assert`; release builds have no signal (was A2/R4/C2) |
-| DEAD | Low | confirmed | `reseat_viewport_to_history_row` is dead `pub` engine API after the clamp deletion (was A6) |
-| TEST | Low | confirmed | no frame-level test exercises `sync_surface_area` / `draw_native_frame`; C1 and A4 live in untested code (was A9) |
-| N1 | Nit | confirmed | `history_bottom_y_before` is a diagnostics-only param threaded through fn + struct (was C4/A7/R2) |
-| N2 | Nit | confirmed | `commit_native_viewport_geometry` takes 7 positional args (2 `Rect` + 4 `u16` adjacent) — transposition hazard (was R1) |
-| N3 | Nit | confirmed | alt-screen frames feed a stale `main_screen_viewport_pin` to `commit_native_viewport_geometry`; safety is an unasserted geometric coincidence (was C5/R3) |
+| C1 | **HIGH** | implemented | de-stick un-pins an overflow-backed viewport on height shrink → lost history + blank rows |
+| A4 | Medium | implemented | `sync_surface_area` reads `previous_viewport` before leaving alt-screen → spurious shrink on the alt-leave frame |
+| OBS | Low | implemented | flowing-seat invariant guarded only by `debug_assert`; release builds have no signal (was A2/R4/C2) |
+| DEAD | Low | implemented | `reseat_viewport_to_history_row` was dead `pub` engine API after the clamp deletion (was A6) |
+| TEST | Low | implemented | no frame-level test exercises `sync_surface_area` / `draw_native_frame`; C1 and A4 live in untested code (was A9) |
+| N1 | Nit | implemented | `history_bottom_y_before` is a diagnostics-only param threaded through fn + struct (was C4/A7/R2) |
+| N2 | Nit | implemented | `commit_native_viewport_geometry` takes 7 positional args (2 `Rect` + 4 `u16` adjacent) — transposition hazard (was R1) |
+| N3 | Nit | implemented | alt-screen frames feed a stale `main_screen_viewport_pin` to `commit_native_viewport_geometry`; safety is an unasserted geometric coincidence (was C5/R3) |
 
 Refuted during adversarial verification (recorded so they are not re-raised):
 **C3** (`shrink_deferred_rows` is diagnostics-only, not cross-frame carry; the
@@ -141,22 +147,33 @@ the overflow information the rule depends on. The fix is to feed the predicate a
 **Chosen approach (Option A): make the pin decision consume "does finalized
 history still back the pinned row".**
 
-1. The engine tracks finalized history extent independent of the viewport clamp.
-   Add a monotonic counter updated where history is inserted / cleared /
-   truncated, and expose a predicate:
+1. The engine tracks finalized history extent independent of the viewport clamp,
+   using a field named for the projection it represents, for example
+   `finalized_history_extent_rows` or `projected_history_rows`. This is the
+   current terminal projection's finalized history-row extent, including rows
+   already scrolled into native scrollback. It is **not** the full transcript line
+   count and must not advance for rows the engine has not projected.
 
    ```rust
    // coco-rs/tui-ui/src/engine/terminal.rs
    /// True while finalized history still reaches `row` (i.e. there are at least
    /// `row` finalized rows above the viewport, including rows scrolled into
-   /// native scrollback). Unlike `history_bottom_y`, this is NOT clamped to the
-   /// viewport top, so it survives overflow.
-   pub fn history_backs_row(&self, row: u16) -> bool { /* counter >= row */ }
+   /// native scrollback). Unlike `history_bottom_y`, this extent is NOT clamped
+   /// to the viewport top, so it survives overflow.
+   pub fn history_backs_row(&self, row: u16) -> bool {
+       self.finalized_history_extent_rows >= row
+   }
    ```
 
-   The counter is reset by `clear_owned_scrollback` and decremented on history
-   truncation so it can never outlive its rows (mirrors the `history_bottom_y`
-   lifecycle, just un-clamped).
+   Lifecycle:
+
+   - `clear_owned_scrollback` resets it.
+   - `insert_history_rows` / `note_history_rows_inserted` increase it by the
+     finalized rows the engine actually projected.
+   - replay sets it to the replayed finalized-row extent after reconstruction.
+   - `set_viewport_area`, viewport resize, and `fill_history_gap_rows` do not
+     change it; those operations move or fill the viewport but do not create a
+     new finalized-history extent.
 
 2. The geometry function takes the signal and keeps the viewport pinned while
    history backs the pinned row:
@@ -171,7 +188,10 @@ history still back the pinned row".**
    ```
 
    `history_backs_pinned_row = history_backs_row(bottom_pinned_y)` is computed by
-   the caller (`sync_surface_area`) from the engine and threaded in. When history
+   the caller (`sync_surface_area`) from the engine's overflow-aware predicate
+   and threaded into `native_viewport_geometry_with_max` as an explicit boolean
+   input. `native_viewport_geometry_with_max` must not read `history_bottom_y` or
+   any other clamp-after-overflow viewport proxy to infer this fact. When history
    has genuinely shrunk below the row (`/clear`, rewind, reflow), the predicate is
    false and de-stick still reverts to `Flowing` — the `/clear` fix is preserved.
 
@@ -227,6 +247,10 @@ Then `desired.top() > previous.top()` is false on the restore frame and the
 spurious shrink cannot trigger. (This pairs with N1: once the read moves, log the
 value directly from `sync_surface_area` rather than threading it through `commit`.)
 
+This is a local baseline-read ordering bug. It does not change C1's architecture
+conclusion: the pin decision still needs an overflow-aware history-extent
+contract rather than a clamped viewport proxy.
+
 ## 5. OBS + DEAD — observability for the flowing-seat invariant
 
 The only runtime check on the load-bearing flowing-seat invariant is the
@@ -242,23 +266,23 @@ To be precise: the `debug_assert` is *verification*, not the gap-prevention
 reintroduce a gap; the gap is the loss of *detection* for future regressions
 (exactly the C1 class).
 
-**Fix (reuses the dead `reseat_viewport_to_history_row` API, closing DEAD):**
+**Fix:**
 
 1. Keep the `debug_assert` — tests fail loudly.
 2. Add a release-active guard in `draw_native_frame`: on a flowing-seat
    violation, `tracing::warn!(target: "tui::surface::geometry", …)` with the same
    fields. `warn` clears the default `info` fallback, so it surfaces without a
    custom filter.
-3. Self-heal: reseat the viewport to `history_bottom_y_after` via the engine's
-   `reseat_viewport_to_history_row` (`engine/terminal.rs:429`), which currently
-   has zero production callers. This gives the dead `pub` API a real caller and
-   converts a silent visual regression into a one-frame self-correcting event
-   plus a telemetry signal. The `flowing_viewport_seats_flush` predicate is shared
-   by the assert and the warn path at zero cost.
+3. Enable self-heal only if the frame path can guarantee the reseat schedules or
+   performs the needed redraw. A draw-after-clear reseat can otherwise create a
+   one-frame blank because `clear_after_position` has already cleared the
+   viewport before history is repainted. If safe, reintroduce a redraw-safe
+   engine API to reseat to `history_bottom_y_after` and share the
+   `flowing_viewport_seats_flush` predicate between the assert and warn path.
 
-If the self-heal is judged too aggressive for an initial landing, ship steps 1-2
-(assert + warn) and delete `reseat_viewport_to_history_row` instead — but do not
-leave it as dead seam API.
+The implementation landing includes the release `warn!` and deletes
+`reseat_viewport_to_history_row`. Self-heal remains intentionally unimplemented
+until a future frame path can prove redraw scheduling safety.
 
 ## 6. TEST — frame-level coverage gap
 
@@ -272,19 +296,37 @@ the pure-helper layer. `terminal.test.rs` never calls `sync_surface_area` /
 `NativeSurfaceController::draw`, which does not run sync, hold the pin, or
 evaluate the assert. C1 and A4 both live in this untested region.
 
-**Required frame-level tests (drive `Tui::draw` / `draw_native_frame` over a
-`TestBackend`):**
+`Tui` is currently fixed to
+`SurfaceTerminal<CrosstermBackend<std::io::Stdout>>`, so the regression suite
+cannot directly drive `Tui::draw` with Ratatui's `TestBackend`. Before these
+tests can be authoritative, extract a backend-generic frame harness or expose a
+test-only backend-generic entry for the sync/draw frame path.
+
+The required tests must cover the full
+`sync_surface_area -> commit -> tail fill -> history emission -> viewport draw`
+sequence. Pure helper tests and direct `NativeSurfaceController::draw` coverage
+remain useful, but they are not sufficient for C1 because they skip the seating
+contract and frame ordering where the bug lives.
+
+**Required frame-level tests:**
 
 - **C1 (must-add):** bottom-pinned viewport over overflowing history → shrink
-  `desired_height` → assert the committed viewport stays bottom-pinned
-  (`bottom == screen.height`), the freed rows reveal history, and no blank band
-  remains. This test fails on current code.
+  `desired_height` after a high prompt returns to normal height → assert the
+  committed viewport stays bottom-pinned (`bottom == screen.height`), the freed
+  rows reveal history, and no blank band remains. If the tail cache cannot supply
+  enough rows, the shrink must defer instead of jumping the viewport to
+  mid-screen. This test fails on current code.
 - **A4:** enter then leave alt-screen over a bottom-pinned inline viewport →
   assert the restore frame keeps the saved seat and does not full-screen-overwrite
   / fire the assert.
 - `/clear` over tall (overflowing) history → assert the viewport seats flush
-  (`viewport_top == history_bottom_y`), no gap — protects the original fix.
+  (`viewport_top == history_bottom_y`) after clear/replay shrink, no gap —
+  protects the original fix.
 - live-height growth on short history → assert no mis-pin (guards the A8 boundary).
+
+For a documentation-only update, `just quick-check` from `coco-rs/` is enough.
+If implementation or tests are changed in the same branch, finish with
+`just pre-commit` once after the last code edit.
 
 ## 7. Nits
 
@@ -325,11 +367,11 @@ evaluate the assert. C1 and A4 both live in this untested region.
 
 | Priority | ID | Action |
 |----------|-----|--------|
-| **P0** | C1 | Thread an overflow-aware `history_backs_row` signal into `native_viewport_geometry_with_max`; restore the deferred-shrink reveal on overflow-backed shrink. Add the C1 regression test. |
-| **P1** | A4 | Move the `previous_viewport` / `history_bottom_y_before` read after the alt-screen transition. |
-| **P1** | OBS + DEAD | Add the release `warn!` + self-heal via `reseat_viewport_to_history_row` (or delete the dead API). |
-| **P2** | TEST | Add the alt-enter, `/clear`-over-tall-history, and live-growth frame-level tests. |
-| **P3** | N1 / N2 / N3 | Remove the diagnostics-only param; introduce the inputs struct; stop calling `commit` on alt frames. |
+| **P0** | C1 + TEST | Done: defined the overflow-aware history-extent contract (`history_backs_row` / `history_backs_pinned_row`) and added the C1 frame regression harness. |
+| **P1** | A4 | Done: moved the `previous_viewport` / `history_bottom_y_before` read after the alt-screen transition. |
+| **P1** | OBS + DEAD | Done: added the release `warn!` and deleted `reseat_viewport_to_history_row`; self-heal is deferred until redraw scheduling is safe. |
+| **P2** | TEST | Done: added frame/sync coverage for C1, alt-screen leave baseline, short-history growth, and backing-insufficient shrink; existing replay tests protect `/clear` shrink behavior. |
+| **P3** | N1 / N2 / N3 | Done: removed the diagnostics-only commit param; introduced the inputs struct; cleaned diagnostic fields; stopped calling `commit` on alt frames. |
 
 C1 is the only ship blocker. The rest are hardening and hygiene and may follow.
 
@@ -337,12 +379,12 @@ C1 is the only ship blocker. The rest are hardening and hygiene and may follow.
 
 - **I-V1** A `Flowing` viewport seats flush on finalized history
   (`viewport_top == history_bottom_y`). Verified by `debug_assert` in debug and a
-  `warn` + self-heal in release.
+  `warn` in release; self-heal is optional until redraw safety is proven.
 - **I-V2** The pin predicate is computed from an overflow-aware history-extent
   signal, never from a viewport-clamped quantity.
 - **I-V3** The seating baseline (`previous_viewport`) is read after all
   alt-screen transitions for the frame, so `commit_native_viewport_geometry`
   always compares against the real current seat.
 - **I-V4** Every geometry/seating change is covered by a frame-level test that
-  drives the full `sync → commit → emission` path over a `TestBackend`, not only
-  the pure helpers.
+  drives the full `sync → commit → tail fill → history emission → viewport draw`
+  path through a backend-generic frame harness, not only the pure helpers.
