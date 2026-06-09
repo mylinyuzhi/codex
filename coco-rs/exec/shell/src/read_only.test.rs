@@ -18,11 +18,134 @@ fn test_basic_safe_commands() {
         "which cargo",
         "stat file.txt",
         "diff a.txt b.txt",
-        "env",
-        "printenv HOME",
         "hostname",
         "date",
         "ps aux",
+    ] {
+        assert!(is_read_only_command(cmd), "expected safe: {cmd}");
+    }
+}
+
+// ── Commands TS deliberately excludes from read-only (P6/P7/P11) ──
+
+#[test]
+fn test_env_printenv_no_longer_read_only() {
+    // TS removed env/printenv: env exposes secrets and `env FOO=1 sh -c` execs.
+    for cmd in &["env", "env FOO=1 sh -c id", "printenv", "printenv HOME"] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_pagers_and_top_not_read_only() {
+    // Pagers (`!cmd`) and top (`!`/shell-escape) are absent from TS read-only.
+    for cmd in &["less file", "more file", "top", "top -b -n1"] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_network_tools_not_read_only() {
+    for cmd in &[
+        "ping host",
+        "dig example.com",
+        "nslookup x",
+        "host example.com",
+    ] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_misc_removed_commands_not_read_only() {
+    for cmd in &[
+        "whereis ls",
+        "locate foo",
+        "ag pattern",
+        "ack pattern",
+        "xxd file",
+    ] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_date_format_safe_vs_set_dangerous() {
+    for cmd in &[
+        "date",
+        "date -u",
+        "date +%s",
+        "date -d yesterday",
+        "date --reference file",
+    ] {
+        assert!(is_read_only_command(cmd), "expected safe: {cmd}");
+    }
+    for cmd in &[
+        "date -s 2020-01-01",
+        "date --set=2020",
+        "date 010203042020",
+        "date -f dates.txt",
+    ] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_hostname_display_vs_set() {
+    for cmd in &["hostname", "hostname -f", "hostname -I", "hostname --fqdn"] {
+        assert!(is_read_only_command(cmd), "expected safe: {cmd}");
+    }
+    for cmd in &["hostname newname", "hostname -F file", "hostname -b name"] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_ps_e_modifier_dangerous() {
+    for cmd in &["ps", "ps aux", "ps -ef", "ps -e", "ps -p 123"] {
+        assert!(is_read_only_command(cmd), "expected safe: {cmd}");
+    }
+    for cmd in &["ps axe", "ps e", "ps aux e"] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_sort_output_flag_dangerous() {
+    for cmd in &[
+        "sort file",
+        "sort -n file",
+        "sort -r -u file",
+        "sort -S 1G file",
+    ] {
+        assert!(is_read_only_command(cmd), "expected safe: {cmd}");
+    }
+    for cmd in &[
+        "sort -o out.txt file",
+        "sort --output=out file",
+        "sort -oout file",
+    ] {
+        assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
+    }
+}
+
+#[test]
+fn test_still_safe_commands_unchanged() {
+    for cmd in &[
+        "uptime",
+        "df -h",
+        "du -sh",
+        "free -m",
+        "column -t",
+        "strings bin",
+        "od -c f",
+        "hexdump f",
+        "comm a b",
+        "readlink -f x",
+        "realpath x",
+        "md5sum f",
+        "sha256sum f",
+        "diff a b",
     ] {
         assert!(is_read_only_command(cmd), "expected safe: {cmd}");
     }

@@ -42,3 +42,29 @@ fn test_expand_home() {
     assert!(expanded.ends_with("/Documents"));
     assert!(!expanded.starts_with('~'));
 }
+
+// ── force-ask gates (P4/P15) ──
+
+#[test]
+fn test_check_dangerous_removal() {
+    // Catastrophic removals → force-ask (even compounded / wrapped).
+    assert!(check_dangerous_removal("rm -rf /", "/home/u/proj").is_some());
+    assert!(check_dangerous_removal("rm -rf /etc", "/home/u/proj").is_some());
+    assert!(check_dangerous_removal("ls && rm -rf /usr", "/home/u/proj").is_some());
+    // Safe removals under cwd → no gate.
+    assert!(check_dangerous_removal("rm -rf build", "/home/u/proj").is_none());
+    assert!(check_dangerous_removal("rm foo.txt", "/home/u/proj").is_none());
+    // Non-removal commands → no gate.
+    assert!(check_dangerous_removal("ls /etc", "/home/u/proj").is_none());
+}
+
+#[test]
+fn test_has_git_escape_pattern() {
+    // cd + git compound → escape pattern.
+    assert!(has_git_escape_pattern("cd /tmp/x && git status"));
+    // mkdir of a git-internal dir then git → escape.
+    assert!(has_git_escape_pattern("mkdir refs && git init"));
+    // Plain git / plain cd → not an escape.
+    assert!(!has_git_escape_pattern("git status"));
+    assert!(!has_git_escape_pattern("cd /tmp/x && ls"));
+}

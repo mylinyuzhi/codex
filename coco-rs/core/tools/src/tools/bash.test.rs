@@ -1364,18 +1364,35 @@ async fn test_bash_check_permissions_common_substitution_not_prompted() {
 
 #[tokio::test]
 async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
-    // acceptEdits mode auto-allows a filesystem subcommand anywhere in a
-    // compound command (#164).
+    // acceptEdits auto-allows a pure-create subcommand anywhere in a compound
+    // command (#164), but `rm`/`mv`/`cp`/`sed` are NO LONGER blanket-allowed —
+    // they route through the dangerous-removal/sed gates and defer to the rule
+    // pipeline (TS acceptEdits auto-accepts file-edit tools, not bash `rm`).
     let mut ctx = ToolUseContext::test_default();
     ctx.permission_context.mode = coco_types::PermissionMode::AcceptEdits;
-    let result = <BashTool as DynTool>::check_permissions(
+
+    let mkdir = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "cd src && mkdir -p out"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(mkdir, coco_types::ToolCheckResult::Allow { .. }),
+        "acceptEdits pure-create subcommand should Allow, got {mkdir:?}"
+    );
+
+    // A safe `rm` no longer auto-allows via acceptEdits — it passes the
+    // dangerous-removal gate (target is in-tree) and defers to the rule
+    // pipeline / mode fallthrough rather than short-circuiting to Allow.
+    let rm = <BashTool as DynTool>::check_permissions(
         &BashTool,
         &json!({"command": "cd src && rm old.txt"}),
         &ctx,
     )
     .await;
     assert!(
-        matches!(result, coco_types::ToolCheckResult::Allow { .. }),
-        "acceptEdits filesystem subcommand should Allow, got {result:?}"
+        matches!(rm, coco_types::ToolCheckResult::Passthrough),
+        "acceptEdits should no longer blanket-allow `rm`; got {rm:?}"
     );
 }

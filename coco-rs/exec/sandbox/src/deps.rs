@@ -66,6 +66,18 @@ pub fn all_required_available() -> bool {
         .all(|d| d.available)
 }
 
+/// Path to the `socat` binary, if installed. Needed to start the Linux netns
+/// proxy bridge ([`crate::SandboxState::start_network_proxy_with_bridge`]).
+/// Same candidate list as [`check_dependencies`].
+pub fn socat_path() -> Option<PathBuf> {
+    check_binary(
+        "socat",
+        &["/usr/bin/socat", "/usr/local/bin/socat"],
+        /*required=*/ false,
+    )
+    .path
+}
+
 fn check_binary(name: &'static str, paths: &[&str], required: bool) -> DependencyCheck {
     let found = paths.iter().map(PathBuf::from).find(|p| p.exists());
     DependencyCheck {

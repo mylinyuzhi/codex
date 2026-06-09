@@ -94,6 +94,42 @@ mod linux {
     }
 
     #[tokio::test]
+    async fn test_seccomp_restricted_emitted_when_network_isolated() -> anyhow::Result<()> {
+        skip_if_unavailable!();
+        // `allow_network: false` forces `determine_seccomp_mode` → Restricted,
+        // exercising the seccomp inner-stage emit path that every OTHER test
+        // skips by setting `allow_network: true`. The rebuilt argv must carry
+        // the `--apply-seccomp restricted --` inner stage that the binary's
+        // `dispatch_or_continue` consumes (S1 regression guard).
+        let config = SandboxConfig {
+            enforcement: EnforcementLevel::ReadOnly,
+            allow_network: false,
+            ..Default::default()
+        };
+        let platform = create_platform();
+        let mut cmd = tokio::process::Command::new("/bin/sh");
+        cmd.arg("-c").arg("echo coco-sbx-ok");
+        platform
+            .wrap_command(&config, "echo coco-sbx-ok", "_test_SBX", &[], &mut cmd)
+            .map_err(|e| anyhow::anyhow!("wrap failed: {e}"))?;
+
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        // bwrap … -- <coco_exe> --apply-seccomp restricted -- /bin/sh -c …
+        let sec_idx = args
+            .iter()
+            .position(|a| a == coco_sandbox::APPLY_SECCOMP_ARG1)
+            .expect("--apply-seccomp must be emitted when network is isolated");
+        assert_eq!(args[sec_idx + 1], "restricted");
+        assert_eq!(args[sec_idx + 2], "--");
+        assert_eq!(args[sec_idx + 3], "/bin/sh");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_readonly_allows_read() -> anyhow::Result<()> {
         skip_if_unavailable!();
         let config = SandboxConfig {

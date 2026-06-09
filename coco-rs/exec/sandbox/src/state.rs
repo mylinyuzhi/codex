@@ -54,6 +54,10 @@ struct MutableConfig {
     /// shut down (via its `Drop`) when the state is dropped. `Some` once
     /// [`SandboxState::start_network_proxy`] has run.
     proxy_server: Option<crate::proxy::ProxyServer>,
+    /// The running netns socat bridge (Linux only), owned here so its
+    /// host-side socat tasks live for the session and tear down on `Drop`.
+    /// `Some` once [`SandboxState::start_network_proxy_with_bridge`] has run.
+    bridge: Option<crate::proxy::BridgeManager>,
 }
 
 /// Pre-computed snapshot for per-command sandbox decisions.
@@ -73,6 +77,10 @@ pub struct CommandSandboxSnapshot {
     pub allow_network: bool,
     /// Current enforcement level (for tracing).
     pub enforcement: EnforcementLevel,
+    /// Shell prefix prepended to the inner command (Linux netns bridge: starts
+    /// inner socat listeners forwarding `localhost:<inner_port>` → bind-mounted
+    /// UDS → host proxy). `None` on macOS / when no bridge is active.
+    pub inner_command_prefix: Option<String>,
 }
 
 /// Runtime sandbox state, shared via `Arc` across the system.
@@ -95,6 +103,12 @@ pub struct SandboxState {
     platform: Box<dyn SandboxPlatform>,
     /// Session-unique tag for macOS log stream filtering and command correlation.
     session_tag: String,
+    /// Optional interactive approval bridge, installed after construction by the
+    /// runner (SDK: `SdkSandboxApprovalBridge`; TUI: `TuiSandboxApprovalBridge`).
+    /// `RwLock` because it is set post-build; [`Self::permission_checker`]
+    /// propagates it so the async `check_path_async` / `check_network_async`
+    /// variants consult the bridge before returning a deny.
+    approval_bridge: std::sync::RwLock<Option<crate::bridge::SandboxApprovalBridgeRef>>,
 }
 
 impl std::fmt::Debug for SandboxState {
@@ -141,9 +155,11 @@ impl SandboxState {
                 cached_proxy_env: HashMap::new(),
                 bridge_bind_paths: Vec::new(),
                 proxy_server: None,
+                bridge: None,
             }),
             platform,
             session_tag: generate_session_tag(),
+            approval_bridge: std::sync::RwLock::new(None),
         }
     }
 
@@ -280,7 +296,37 @@ impl SandboxState {
     /// the checker automatically observes hot-reloaded config changes
     /// without extra wiring; cost is negligible compared to file I/O.
     pub fn permission_checker(&self) -> crate::checker::PermissionChecker {
-        crate::checker::PermissionChecker::new(self.config())
+        let checker = crate::checker::PermissionChecker::new(self.config());
+        // Propagate the installed approval bridge so the async check_*_async
+        // variants can surface an interactive "allow?" prompt before denying.
+        match self
+            .approval_bridge
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        {
+            Some(bridge) => checker.with_approval_bridge(bridge),
+            None => checker,
+        }
+    }
+
+    /// Install (or replace) the interactive approval bridge. Called by the
+    /// runner after [`SessionRuntime`](../../../app/cli) is built: SDK installs
+    /// `SdkSandboxApprovalBridge`, interactive TUI installs a TUI bridge.
+    /// Interior-mutable (`&self`) so it survives hot-reload on the persistent
+    /// `Arc<SandboxState>`.
+    pub fn set_approval_bridge(&self, bridge: crate::bridge::SandboxApprovalBridgeRef) {
+        *self
+            .approval_bridge
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bridge);
+    }
+
+    /// Record a sandbox violation into the store so it surfaces to the model
+    /// via [`Self::format_violations_since`]. Producers: the Linux executor
+    /// (SIGSYS on a seccomp kill) and the egress proxy (denied CONNECT).
+    pub async fn record_violation(&self, violation: crate::violation::Violation) {
+        self.violations.lock().await.push(violation);
     }
 
     /// Get the session-unique tag for log filtering and command correlation.
@@ -384,7 +430,7 @@ impl SandboxState {
     /// "network isolated" would degrade to "block all network" (Linux
     /// `--unshare-net`) because no egress path exists.
     pub async fn start_network_proxy(&self) -> anyhow::Result<()> {
-        let filter = {
+        let (filter, fixed_http, fixed_socks) = {
             let m = self
                 .mutable
                 .read()
@@ -392,13 +438,21 @@ impl SandboxState {
             if m.network_active {
                 return Ok(());
             }
-            std::sync::Arc::new(crate::proxy::DomainFilter::from_network_config(
-                &m.settings.network,
-            ))
+            (
+                std::sync::Arc::new(crate::proxy::DomainFilter::from_network_config(
+                    &m.settings.network,
+                )),
+                m.settings.network.http_proxy_port,
+                m.settings.network.socks_proxy_port,
+            )
         };
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let proxy = crate::proxy::ProxyServer::start(filter, cancel).await?;
+        // `start_with_ports` honors the configured fixed http/socks ports
+        // (auto-assigned when `None`).
+        let proxy =
+            crate::proxy::ProxyServer::start_with_ports(filter, cancel, fixed_http, fixed_socks)
+                .await?;
         let ports = ProxyPorts {
             http_port: proxy.http_port(),
             socks_port: proxy.socks_port(),
@@ -412,6 +466,86 @@ impl SandboxState {
         m.proxy_server = Some(proxy);
         m.proxy_ports = Some(ports);
         m.cached_proxy_env = env;
+        m.network_active = true;
+        Ok(())
+    }
+
+    /// Start the egress proxy AND a Linux netns socat bridge so a
+    /// `--unshare-net` sandbox can reach the host proxy.
+    ///
+    /// The host proxy listens on `host_*_port` (loopback). A
+    /// [`crate::proxy::BridgeManager`] spawns host-side socat processes that
+    /// forward bind-mounted UDS sockets → those TCP ports. Inside the netns the
+    /// wrapped command runs an inner socat (via
+    /// [`CommandSandboxSnapshot::inner_command_prefix`]) that listens on the
+    /// netns-local proxy ports and forwards to the UDS. The proxy env therefore
+    /// points at the **inner** (netns-local) ports, not the host ports.
+    ///
+    /// Idempotent. Returns `Err` if the proxy or bridge fails to start; the
+    /// caller logs and falls closed (network blocked).
+    pub async fn start_network_proxy_with_bridge(
+        &self,
+        socat_path: std::path::PathBuf,
+        session_id: &str,
+    ) -> anyhow::Result<()> {
+        let (filter, fixed_http, fixed_socks) = {
+            let m = self
+                .mutable
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if m.network_active {
+                return Ok(());
+            }
+            (
+                std::sync::Arc::new(crate::proxy::DomainFilter::from_network_config(
+                    &m.settings.network,
+                )),
+                m.settings.network.http_proxy_port,
+                m.settings.network.socks_proxy_port,
+            )
+        };
+
+        let proxy_cancel = tokio_util::sync::CancellationToken::new();
+        let proxy = crate::proxy::ProxyServer::start_with_ports(
+            filter,
+            proxy_cancel,
+            fixed_http,
+            fixed_socks,
+        )
+        .await?;
+        let host_http = proxy.http_port();
+        let host_socks = proxy.socks_port();
+
+        let bridge_cancel = tokio_util::sync::CancellationToken::new();
+        let bridge = crate::proxy::BridgeManager::start(
+            socat_path,
+            host_http,
+            host_socks,
+            session_id,
+            bridge_cancel,
+        )
+        .await?;
+        let bind_paths: Vec<std::path::PathBuf> =
+            bridge.socket_paths().iter().map(|p| (*p).clone()).collect();
+
+        // Proxy env points at the netns-local inner ports (the inner socat
+        // listeners), not the host proxy ports.
+        let inner = crate::proxy::BridgePorts::default();
+        let inner_ports = ProxyPorts {
+            http_port: inner.http_port,
+            socks_port: inner.socks_port,
+        };
+        let env = Self::build_proxy_env_vars(inner_ports);
+
+        let mut m = self
+            .mutable
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        m.proxy_server = Some(proxy);
+        m.bridge = Some(bridge);
+        m.proxy_ports = Some(inner_ports);
+        m.cached_proxy_env = env;
+        m.bridge_bind_paths = bind_paths;
         m.network_active = true;
         Ok(())
     }
@@ -459,6 +593,21 @@ impl SandboxState {
         let active = m.enforcement != EnforcementLevel::Disabled && has_enforcement_backing;
         let should_wrap = active && m.settings.is_sandboxed(command, bypass);
 
+        // Linux netns bridge: when a bridge is running, the wrapped command must
+        // start inner socat listeners forwarding the netns-local proxy ports to
+        // the bind-mounted host UDS. `proxy_ports` carries the inner (netns-local)
+        // ports on Linux (set by start_network_proxy_with_bridge).
+        let inner_command_prefix = if should_wrap && m.network_active {
+            m.bridge.as_ref().map(|b| {
+                b.inner_bridge_prefix(&crate::proxy::BridgePorts {
+                    http_port: m.proxy_ports.map(|p| p.http_port).unwrap_or(3128),
+                    socks_port: m.proxy_ports.map(|p| p.socks_port).unwrap_or(1080),
+                })
+            })
+        } else {
+            None
+        };
+
         CommandSandboxSnapshot {
             should_wrap,
             network_active: m.network_active,
@@ -481,6 +630,7 @@ impl SandboxState {
             },
             allow_network: m.config.allow_network,
             enforcement: m.enforcement,
+            inner_command_prefix,
         }
     }
 

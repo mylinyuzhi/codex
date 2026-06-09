@@ -3,8 +3,9 @@ use super::*;
 #[test]
 fn test_windows_sandbox_available() {
     let sandbox = WindowsSandbox;
-    // Only available on Windows
-    assert_eq!(sandbox.available(), cfg!(target_os = "windows"));
+    // coco-rs ships no native Windows sandbox backend → always unavailable
+    // (the enable gate fail-closes to unsandboxed).
+    assert!(!sandbox.available());
 }
 
 #[test]

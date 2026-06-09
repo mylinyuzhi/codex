@@ -59,6 +59,7 @@ Each piece of information has exactly one owner. No duplication across docs.
 | Keybinding resolution: 18 contexts, 50+ actions, chord, platform defaults | `crate-coco-keybindings.md` | |
 | Per-crate plan (dependencies, modules, data definitions) | `crate-coco-{name}.md` | |
 | Current prioritized gap fix plan | `current-gap-fix-plan.md` | `audit-gaps.md` remains the historical/deferred tracker; this doc owns near-term fix ordering and stale-gap cleanup |
+| Permission/sandbox hardening — refactor background, decisions, status & prioritized TODO (resume handoff) | `permission-sandbox-hardening.md` | owns the permission/sandbox parity-fix status + remaining work; crate internals stay in `crate-coco-{permissions,sandbox,shell}.md` |
 
 ### Rules
 

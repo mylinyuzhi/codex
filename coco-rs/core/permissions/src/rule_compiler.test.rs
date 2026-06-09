@@ -47,6 +47,28 @@ fn test_parse_tool_empty_parens_is_tool_wide() {
 }
 
 #[test]
+fn test_parse_normalizes_legacy_tool_names() {
+    // P9: legacy tool names normalize to canonical at parse time so the rules
+    // match the real tools (TS permissionRuleValueFromString).
+    assert_eq!(parse_rule_string("Task").tool_pattern, "Agent");
+    let agent_typed = parse_rule_string("Task(Explore)");
+    assert_eq!(agent_typed.tool_pattern, "Agent");
+    assert_eq!(agent_typed.rule_content.as_deref(), Some("Explore"));
+    assert_eq!(parse_rule_string("KillShell").tool_pattern, "TaskStop");
+    assert_eq!(
+        parse_rule_string("AgentOutputTool").tool_pattern,
+        "TaskOutput"
+    );
+    assert_eq!(
+        parse_rule_string("BashOutputTool").tool_pattern,
+        "TaskOutput"
+    );
+    // Canonical / non-alias names are untouched.
+    assert_eq!(parse_rule_string("Bash").tool_pattern, "Bash");
+    assert_eq!(parse_rule_string("Read(/x)").tool_pattern, "Read");
+}
+
+#[test]
 fn test_parse_tool_wildcard_parens_is_tool_wide() {
     let value = parse_rule_string("Bash(*)");
     assert_eq!(value.tool_pattern, "Bash");

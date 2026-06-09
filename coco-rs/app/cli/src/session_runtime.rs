@@ -1250,6 +1250,13 @@ impl SessionRuntime {
             skill_overrides: Arc::new(runtime_config.skill_overrides.clone()),
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,
+            // Seed --add-dir + settings additionalDirectories into the session
+            // working-dir allowlist (P17). TS initializeToolPermissionContext.
+            session_additional_dirs: crate::permission_rule_loader::seed_session_additional_dirs(
+                cli,
+                &runtime_config.settings,
+                &cwd,
+            ),
             ..Default::default()
         };
 
@@ -3562,22 +3569,40 @@ pub(crate) async fn build_sandbox_state(
     let state = Arc::new(state);
 
     if network_isolated {
-        // macOS: the sandboxed process reaches the egress proxy over loopback,
-        // so start it — the `DomainFilter` then enforces deny-by-default
-        // per-domain filtering. Other platforms (Linux): the proxy is not
-        // reachable from the `--unshare-net` namespace until the netns socat
-        // bridge is wired, so isolated network is fail-closed (ALL egress
-        // blocked). Either way the posture is secure — no unrestricted egress.
-        // The coarse `sandbox.allow_network` toggle opts back into network.
-        if cfg!(target_os = "macos") {
+        // Start the egress proxy so the `DomainFilter` enforces deny-by-default
+        // per-domain filtering. macOS reaches the proxy over loopback directly;
+        // Linux runs inside a `--unshare-net` namespace and needs the netns
+        // socat bridge (requires `socat`) to forward egress through the proxy.
+        // On any failure / missing socat the posture stays fail-closed (network
+        // blocked) — never unrestricted egress. The coarse
+        // `sandbox.allow_network` toggle opts back into full network.
+        #[cfg(target_os = "macos")]
+        {
             if let Err(e) = state.start_network_proxy().await {
                 warn!(error = %e, "sandbox egress proxy failed to start; network is blocked this session");
             }
-        } else {
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let tag = state.session_tag().to_string();
+            match coco_sandbox::deps::socat_path() {
+                Some(socat) => {
+                    if let Err(e) = state.start_network_proxy_with_bridge(socat, &tag).await {
+                        warn!(error = %e, "sandbox network bridge failed to start; network is blocked this session");
+                    }
+                }
+                None => warn!(
+                    "socat not found — install socat (apt install socat) to enable \
+                     per-domain network filtering; network is blocked this session"
+                ),
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
             warn!(
                 "sandbox network isolation blocks ALL egress on this platform — \
-                 per-domain filtering (netns bridge) is not yet wired; set \
-                 sandbox.allow_network = true to allow network"
+                 per-domain filtering is unsupported; set sandbox.allow_network = true \
+                 to allow network"
             );
         }
     }

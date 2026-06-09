@@ -1,14 +1,16 @@
 //! Mode-based command validation.
 //!
-//! TS: modeValidation.ts — in acceptEdits mode, auto-allow certain file
-//! manipulation commands (mkdir, touch, rm, rmdir, mv, cp, sed) without
-//! requiring user approval.
+//! TS: modeValidation.ts — in acceptEdits mode, auto-allow certain pure-create
+//! file-manipulation commands without requiring user approval.
 
 /// Commands that are auto-allowed in acceptEdits mode.
 ///
-/// These are file-manipulation commands that are expected side effects
-/// when the model is editing files. No flag restriction — any usage is allowed.
-const ACCEPT_EDITS_COMMANDS: &[&str] = &["mkdir", "touch", "rm", "rmdir", "mv", "cp", "sed"];
+/// Only pure-create commands. `rm`/`rmdir`/`mv`/`cp`/`sed` are intentionally
+/// NOT here — they route through the dangerous-removal and sed-danger gates in
+/// [`BashTool::check_permissions`](../../../core/tools), which run BEFORE this
+/// acceptEdits auto-allow so `rm -rf /` and code-executing `sed` still prompt
+/// (a benign `rm foo.txt` / `sed -i s/a/b/ f` falls through to the mode allow).
+const ACCEPT_EDITS_COMMANDS: &[&str] = &["mkdir", "touch"];
 
 /// Check if a command should be auto-allowed in acceptEdits mode.
 ///
@@ -27,7 +29,7 @@ pub fn is_auto_allowed_in_accept_edits(command: &str) -> bool {
 
 /// Extract the base executable name from a command string.
 /// Strips path prefixes and env var assignments.
-fn extract_base_executable(command: &str) -> &str {
+pub(crate) fn extract_base_executable(command: &str) -> &str {
     let mut rest = command;
 
     // Skip env var assignments (VAR=value ...)

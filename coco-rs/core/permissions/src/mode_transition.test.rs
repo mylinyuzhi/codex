@@ -276,6 +276,7 @@ fn app_state_transition_enter_plan_stashes_previous_mode_and_timestamp() {
         &mut state,
         PermissionMode::AcceptEdits,
         PermissionMode::Plan,
+        &coco_types::PermissionRulesBySource::new(),
     );
 
     assert!(modified);
@@ -284,6 +285,44 @@ fn app_state_transition_enter_plan_stashes_previous_mode_and_timestamp() {
     assert!(state.has_exited_plan_mode);
     assert!(!state.needs_plan_mode_exit_attachment);
     assert!(state.plan_mode_entry_ms.unwrap_or_default() > 0);
+}
+
+#[test]
+fn app_state_transition_default_to_auto_stashes_dangerous_allow_rules() {
+    // P1: entering Auto snapshots+strips dangerous classifier-bypassing allow
+    // rules into the stash (provenance for the exit banner / restore). The
+    // evaluator-facing strip is additionally applied at context-build time.
+    let mut live = coco_types::PermissionRulesBySource::new();
+    live.entry(coco_types::PermissionRuleSource::UserSettings)
+        .or_default()
+        .push(coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::UserSettings,
+            behavior: coco_types::PermissionBehavior::Allow,
+            // Any `Agent` allow rule bypasses the sub-agent classifier → dangerous.
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: "Agent".into(),
+                rule_content: None,
+            },
+        });
+
+    let mut state = coco_types::ToolAppState {
+        permission_mode: Some(PermissionMode::Default),
+        ..Default::default()
+    };
+
+    let modified = apply_permission_mode_transition_to_app_state(
+        &mut state,
+        PermissionMode::Default,
+        PermissionMode::Auto,
+        &live,
+    );
+
+    assert!(modified);
+    assert_eq!(state.permission_mode, Some(PermissionMode::Auto));
+    assert!(
+        state.stripped_dangerous_rules.is_some(),
+        "entering Auto must stash the dangerous Agent allow rule"
+    );
 }
 
 #[test]
@@ -299,6 +338,7 @@ fn app_state_transition_plan_to_default_sets_exit_latches_and_clears_stash() {
         &mut state,
         PermissionMode::Plan,
         PermissionMode::Default,
+        &coco_types::PermissionRulesBySource::new(),
     );
 
     assert!(modified);
@@ -326,6 +366,7 @@ fn app_state_transition_plan_to_plan_preserves_existing_entry_timestamp() {
         &mut state,
         PermissionMode::Plan,
         PermissionMode::Plan,
+        &coco_types::PermissionRulesBySource::new(),
     );
 
     assert!(!modified);
@@ -346,6 +387,7 @@ fn app_state_transition_plan_to_auto_preserves_classifier_stash() {
         &mut state,
         PermissionMode::Plan,
         PermissionMode::Auto,
+        &coco_types::PermissionRulesBySource::new(),
     );
 
     assert!(modified);

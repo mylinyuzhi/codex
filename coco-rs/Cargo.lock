@@ -1710,6 +1710,7 @@ dependencies = [
  "coco-error",
  "coco-messages",
  "coco-paths",
+ "coco-shell",
  "coco-tool-runtime",
  "coco-types",
  "globset",

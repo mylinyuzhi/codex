@@ -315,6 +315,22 @@ impl ToolContextFactory {
             &live_permission_rules,
             PermissionBehavior::Allow,
         );
+        // Auto-mode classifier-bypass guard: physically remove dangerous
+        // classifier-bypassing allow rules (`Bash(python:*)`, `Agent`, …) from
+        // the evaluator-facing `allow_rules` whenever the live mode is Auto.
+        // Without this, evaluate.rs step-2 returns Allow on a dangerous allow
+        // rule BEFORE the classifier gate in tool_call_preparer.rs — a fail-OPEN
+        // bypass. TS `stripDangerousPermissionsForAutoMode` removes them from
+        // `alwaysAllowRules` on Auto entry; coco-rs applies the same filter at
+        // build time keyed on mode, so it is mandatory regardless of which entry
+        // path (SDK / bridge / startup / plan-exit) set Auto. `is_ant_user=false`
+        // mirrors the non-ant external-user path.
+        if live_mode == coco_types::PermissionMode::Auto {
+            let _ = coco_permissions::strip_dangerous_allow_rules(
+                &mut allow_rules,
+                /*is_ant_user*/ false,
+            );
+        }
         let mut deny_rules = self.config.deny_rules.clone();
         merge_rules_by_behavior(
             &mut deny_rules,

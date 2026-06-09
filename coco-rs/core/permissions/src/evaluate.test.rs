@@ -294,6 +294,7 @@ fn test_default_mode_allows_dynamic_read_only_tool_input_without_rules() {
         None,
         PermissionEvaluationOptions {
             dynamic_read_only: true,
+            ..Default::default()
         },
     );
 
@@ -319,6 +320,7 @@ fn test_dynamic_read_only_does_not_override_explicit_ask_rule() {
         None,
         PermissionEvaluationOptions {
             dynamic_read_only: true,
+            ..Default::default()
         },
     );
 

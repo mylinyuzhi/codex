@@ -13,6 +13,32 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
+/// Case sensitivity for shell-rule command matching. Bash matches
+/// case-sensitively; PowerShell case-insensitively. Mirrors TS
+/// `matchWildcardPattern(..., caseInsensitive)` + the PowerShell
+/// `strEquals`/`strStartsWith` lowercasing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShellCase {
+    Sensitive,
+    Insensitive,
+}
+
+/// Case-aware string equality (mirrors TS `strEquals`).
+fn str_eq(a: &str, b: &str, case: ShellCase) -> bool {
+    match case {
+        ShellCase::Sensitive => a == b,
+        ShellCase::Insensitive => a.to_lowercase() == b.to_lowercase(),
+    }
+}
+
+/// Case-aware prefix test (mirrors TS `strStartsWith`).
+fn str_starts_with(s: &str, prefix: &str, case: ShellCase) -> bool {
+    match case {
+        ShellCase::Sensitive => s.starts_with(prefix),
+        ShellCase::Insensitive => s.to_lowercase().starts_with(&prefix.to_lowercase()),
+    }
+}
+
 /// A parsed shell permission rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -102,12 +128,18 @@ impl ShellPermissionRule {
         }
     }
 
-    /// Check if a command matches this rule.
+    /// Check if a command matches this rule (case-sensitive — Bash posture).
     pub fn matches(&self, command: &str) -> bool {
+        self.matches_cased(command, ShellCase::Sensitive)
+    }
+
+    /// Check if a command matches this rule under the given case sensitivity.
+    /// PowerShell uses [`ShellCase::Insensitive`].
+    pub fn matches_cased(&self, command: &str, case: ShellCase) -> bool {
         match self {
-            Self::Exact { command: expected } => command == expected,
-            Self::Prefix { prefix } => command.starts_with(prefix.as_str()),
-            Self::Wildcard { pattern } => match_wildcard_pattern(pattern, command),
+            Self::Exact { command: expected } => str_eq(expected, command, case),
+            Self::Prefix { prefix } => str_starts_with(command, prefix.as_str(), case),
+            Self::Wildcard { pattern } => match_wildcard_pattern_cased(pattern, command, case),
         }
     }
 }
@@ -122,7 +154,11 @@ impl ShellPermissionRule {
 /// compiled on-demand but NOT cached — this caps memory at O(cap × avg regex
 /// size) even if a compromised plugin feeds unbounded unique patterns. In
 /// practice rule sets are small (~dozens), so the cap is rarely hit.
-static WILDCARD_REGEX_CACHE: LazyLock<Mutex<HashMap<String, Option<regex::Regex>>>> =
+/// Compiled-wildcard cache, keyed by `(pattern, case)` so a case-sensitive
+/// compile never poisons a case-insensitive lookup (and vice-versa).
+type WildcardRegexCache = Mutex<HashMap<(String, ShellCase), Option<regex::Regex>>>;
+
+static WILDCARD_REGEX_CACHE: LazyLock<WildcardRegexCache> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const WILDCARD_REGEX_CACHE_MAX: usize = 1024;
@@ -135,26 +171,37 @@ const WILDCARD_REGEX_CACHE_MAX: usize = 1024;
 /// - `\*` matches a literal `*`
 /// - `\\` matches a literal `\`
 /// - Trailing ` *` (space + single wildcard) is optional — `git *` matches bare `git`
+///
+/// Case-sensitive convenience wrapper (Bash posture) used by the wildcard
+/// unit tests; production code calls [`match_wildcard_pattern_cased`] directly.
+#[cfg(test)]
 fn match_wildcard_pattern(pattern: &str, command: &str) -> bool {
+    match_wildcard_pattern_cased(pattern, command, ShellCase::Sensitive)
+}
+
+/// Case-aware wildcard match. `Insensitive` compiles the regex with the `(?i)`
+/// flag (mirrors TS `matchWildcardPattern(..., caseInsensitive)`).
+fn match_wildcard_pattern_cased(pattern: &str, command: &str, case: ShellCase) -> bool {
     // PoisonError handling: if a thread panicked while holding the cache lock,
     // the cache contents are still consistent (we only store Option<Regex> and
     // never break invariants mid-write). Recover via `into_inner()`.
+    let key = (pattern.to_string(), case);
     {
         let cache = WILDCARD_REGEX_CACHE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(entry) = cache.get(pattern) {
+        if let Some(entry) = cache.get(&key) {
             return entry.as_ref().is_some_and(|re| re.is_match(command));
         }
     }
 
-    let compiled = compile_wildcard_regex(pattern);
+    let compiled = compile_wildcard_regex(pattern, case);
     let result = compiled.as_ref().is_some_and(|re| re.is_match(command));
     let mut cache = WILDCARD_REGEX_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if cache.len() < WILDCARD_REGEX_CACHE_MAX {
-        cache.insert(pattern.to_string(), compiled);
+        cache.insert(key, compiled);
     }
     // Cache full: skip insertion — the pattern will be recompiled on each call,
     // which is acceptable degradation compared to unbounded memory growth.
@@ -163,7 +210,7 @@ fn match_wildcard_pattern(pattern: &str, command: &str) -> bool {
 
 /// Build a regex from a wildcard rule pattern. Returns `None` if compilation
 /// fails (invalid pattern — we log once and treat as no-match).
-fn compile_wildcard_regex(pattern: &str) -> Option<regex::Regex> {
+fn compile_wildcard_regex(pattern: &str, case: ShellCase) -> Option<regex::Regex> {
     let trimmed = pattern.trim();
 
     // Phase 1: Process escape sequences, collecting regex-ready segments
@@ -217,8 +264,13 @@ fn compile_wildcard_regex(pattern: &str) -> Option<regex::Regex> {
         regex_pattern.replace_range(len - 3.., "( .*)?");
     }
 
-    // Phase 6: Match entire string with dotAll semantics
-    let full_pattern = format!("(?s)^{regex_pattern}$");
+    // Phase 6: Match entire string with dotAll semantics (+ case-insensitive
+    // for PowerShell, mirroring TS `matchWildcardPattern(..., true)`).
+    let flags = match case {
+        ShellCase::Sensitive => "(?s)",
+        ShellCase::Insensitive => "(?si)",
+    };
+    let full_pattern = format!("{flags}^{regex_pattern}$");
     match regex::Regex::new(&full_pattern) {
         Ok(re) => Some(re),
         Err(e) => {
@@ -247,11 +299,138 @@ fn regex_escape_except_star(s: &str) -> String {
     out
 }
 
-/// Check if a Bash rule_content matches a command.
-/// This is the entry point for content-specific permission matching (step 3).
-pub fn matches_bash_rule(rule_content: &str, command: &str) -> bool {
+/// Posture for matching a Bash rule against a command. Mirrors the
+/// allow-vs-deny/ask asymmetry of TS `filterRulesByContentsMatchingInput`
+/// (bashPermissions.ts:778-935).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleMatchPolicy {
+    /// Deny or Ask: strip ALL leading env vars to a fixed point and re-split
+    /// into subcommands so a denied/asked command cannot be hidden behind
+    /// wrappers, env prefixes, or compounds (`FOO=1 curl`, `timeout 5 curl`,
+    /// `echo hi && curl`). TS passes `stripAllEnvVars:true, skipCompoundCheck:true`.
+    DenyOrAsk,
+    /// Allow: safe-wrapper/redirection stripping only; prefix/wildcard rules
+    /// MUST NOT match a compound candidate (cannot widen an allow by chaining,
+    /// e.g. `Bash(cd:*)` must not auto-allow `cd /p && curl evil`). TS keeps the
+    /// compound guard and does not strip arbitrary env vars.
+    Allow,
+}
+
+/// Build the candidate-command set a rule is tested against. Mirrors TS
+/// `filterRulesByContentsMatchingInput` (bashPermissions.ts:787-853): the
+/// original command (quotes preserved, for exact rules), the
+/// redirection-stripped form, safe-wrapper-stripped forms, and — for deny/ask
+/// — the env-var fixed-point expansion.
+fn build_candidate_commands(command: &str, policy: RuleMatchPolicy) -> Vec<String> {
+    let command = command.trim().to_string();
+    let without_redir = coco_shell::strip_output_redirections(&command);
+    let base: Vec<String> = if without_redir != command {
+        vec![command, without_redir]
+    } else {
+        vec![command]
+    };
+
+    let mut candidates: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let push =
+        |v: String, candidates: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+            if seen.insert(v.clone()) {
+                candidates.push(v);
+            }
+        };
+    for c in &base {
+        push(c.clone(), &mut candidates, &mut seen);
+        let w = coco_shell::strip_safe_wrappers(c);
+        push(w, &mut candidates, &mut seen);
+    }
+
+    // Deny/ask: fixed-point env-var + wrapper expansion so a deny rule cannot be
+    // bypassed by a leading `FOO=1 ` / `timeout 5 ` prefix.
+    if policy == RuleMatchPolicy::DenyOrAsk {
+        let mut start = 0;
+        while start < candidates.len() {
+            let end = candidates.len();
+            for i in start..end {
+                let cmd = candidates[i].clone();
+                let env_stripped =
+                    coco_shell::strip_all_env_vars(&cmd, /*check_hijack*/ false);
+                push(env_stripped, &mut candidates, &mut seen);
+                let wrapper_stripped = coco_shell::strip_safe_wrappers(&cmd);
+                push(wrapper_stripped, &mut candidates, &mut seen);
+            }
+            start = end;
+        }
+    }
+    candidates
+}
+
+/// Whether `rule` matches `candidate` with the allow-posture compound guard:
+/// a prefix/wildcard rule never matches a compound command (so chaining cannot
+/// widen an allow). Mirrors TS `filterRulesByContentsMatchingInput:884-928`.
+fn rule_matches_candidate_with_compound_guard(
+    rule: &ShellPermissionRule,
+    candidate: &str,
+    case: ShellCase,
+) -> bool {
+    match rule {
+        ShellPermissionRule::Exact { .. } => rule.matches_cased(candidate, case),
+        ShellPermissionRule::Prefix { prefix } => {
+            if coco_shell::split_compound_command(candidate).len() > 1 {
+                return false;
+            }
+            // TS bashRule.prefix is the bare word; normalize legacy/literal
+            // trailing-space forms and also allow an `xargs <prefix>` wrapper.
+            let bare = prefix.trim_end();
+            str_eq(candidate, bare, case)
+                || str_starts_with(candidate, &format!("{bare} "), case)
+                || str_eq(candidate, &format!("xargs {bare}"), case)
+                || str_starts_with(candidate, &format!("xargs {bare} "), case)
+        }
+        ShellPermissionRule::Wildcard { pattern } => {
+            if coco_shell::split_compound_command(candidate).len() > 1 {
+                return false;
+            }
+            match_wildcard_pattern_cased(pattern, candidate, case)
+        }
+    }
+}
+
+/// Check if a shell `rule_content` matches `command` under the given posture
+/// and case sensitivity. The entry point for content-specific permission
+/// matching (deny / allow / ask). `case` is [`ShellCase::Sensitive`] for Bash
+/// and [`ShellCase::Insensitive`] for PowerShell. Replaces the old
+/// whole-command `matches_bash_rule` so a deny rule can no longer be bypassed
+/// by wrapping, env prefixes, or command chaining.
+pub fn match_bash_rule(
+    rule_content: &str,
+    command: &str,
+    policy: RuleMatchPolicy,
+    case: ShellCase,
+) -> bool {
     let rule = ShellPermissionRule::parse(rule_content);
-    rule.matches(command)
+    let candidates = build_candidate_commands(command, policy);
+    match policy {
+        RuleMatchPolicy::Allow => candidates
+            .iter()
+            .any(|c| rule_matches_candidate_with_compound_guard(&rule, c, case)),
+        RuleMatchPolicy::DenyOrAsk => {
+            // (a) skipCompoundCheck: raw match against each candidate.
+            if candidates.iter().any(|c| rule.matches_cased(c, case)) {
+                return true;
+            }
+            // (b) per-segment: a denied/asked command can't hide inside a compound.
+            for c in &candidates {
+                for seg in coco_shell::split_compound_command(c) {
+                    if rule.matches_cased(&seg, case)
+                        || rule_matches_candidate_with_compound_guard(&rule, &seg, case)
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+    }
 }
 
 /// Check if a rule_content represents a dangerous bash permission.

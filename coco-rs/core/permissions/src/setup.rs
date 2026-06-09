@@ -342,7 +342,10 @@ pub fn find_dangerous_classifier_permissions(
             &rule.value.tool_pattern,
             rule.value.rule_content.as_deref(),
         );
-        if is_bash_dangerous || is_ps_dangerous {
+        // Any `Agent` allow rule bypasses the sub-agent classifier — flag it at
+        // startup, mirroring the strip-path predicate (is_dangerous_agent_permission).
+        let is_agent_dangerous = rule.value.tool_pattern == coco_types::ToolName::Agent.as_str();
+        if is_bash_dangerous || is_ps_dangerous || is_agent_dangerous {
             let display = match &rule.value.rule_content {
                 Some(c) => format!("{}({c})", rule.value.tool_pattern),
                 None => format!("{}(*)", rule.value.tool_pattern),
@@ -361,6 +364,7 @@ pub fn find_dangerous_classifier_permissions(
         let (tool_name, rule_content) = parse_tool_spec(spec);
         if is_dangerous_bash_permission(tool_name, rule_content, is_ant_user)
             || is_dangerous_powershell_permission(tool_name, rule_content)
+            || tool_name == coco_types::ToolName::Agent.as_str()
         {
             let display =
                 rule_content.map_or_else(|| format!("{tool_name}(*)"), |_| spec.to_string());
