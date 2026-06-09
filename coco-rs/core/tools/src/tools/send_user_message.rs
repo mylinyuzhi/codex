@@ -11,6 +11,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::Feature;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
@@ -114,6 +115,10 @@ impl Tool for SendUserMessageTool {
     /// `description()` UI label.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         SEND_USER_MESSAGE_TOOL_PROMPT.to_string()
+    }
+
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::KairosBrief)
     }
 
     fn is_read_only(&self, _input: &SendUserMessageInput) -> bool {

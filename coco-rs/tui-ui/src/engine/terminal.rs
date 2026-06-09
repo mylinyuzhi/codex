@@ -4,6 +4,8 @@ use crossterm::cursor::SetCursorStyle;
 use crossterm::queue;
 use crossterm::terminal::BeginSynchronizedUpdate;
 use crossterm::terminal::EndSynchronizedUpdate;
+use crossterm::terminal::EnterAlternateScreen;
+use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
 use ratatui::backend::CrosstermBackend;
@@ -42,6 +44,18 @@ pub trait SurfaceBackend: Backend {
         Ok(())
     }
 
+    fn enter_modal_alt_screen(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn leave_modal_alt_screen(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn write_drop_trailing_newline(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     fn insert_history_rows_direct(
         &mut self,
         _rendered: &Buffer,
@@ -75,6 +89,23 @@ where
 
     fn end_synchronized_update(&mut self) -> Result<(), Self::Error> {
         queue!(self, EndSynchronizedUpdate)?;
+        Write::flush(self)
+    }
+
+    fn enter_modal_alt_screen(&mut self) -> Result<(), Self::Error> {
+        queue!(self, EnterAlternateScreen)?;
+        write!(self, "\x1b[?1007h")?;
+        Write::flush(self)
+    }
+
+    fn leave_modal_alt_screen(&mut self) -> Result<(), Self::Error> {
+        write!(self, "\x1b[?1007l")?;
+        queue!(self, LeaveAlternateScreen)?;
+        Write::flush(self)
+    }
+
+    fn write_drop_trailing_newline(&mut self) -> Result<(), Self::Error> {
+        self.write_all(b"\r\n")?;
         Write::flush(self)
     }
 
@@ -144,6 +175,7 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     last_known_screen_size: Size,
     visible_history_rows: u16,
     history_bottom_y: u16,
+    finalized_history_extent_rows: u16,
     invalidated: bool,
     perf_stats_enabled: bool,
     history_row_scratch: String,
@@ -218,6 +250,7 @@ where
             last_known_screen_size: screen_size,
             visible_history_rows: 0,
             history_bottom_y: viewport_area.top(),
+            finalized_history_extent_rows: 0,
             invalidated: true,
             perf_stats_enabled: false,
             history_row_scratch: String::new(),
@@ -244,6 +277,15 @@ where
     /// Row immediately after the finalized history owned by this surface.
     pub fn history_bottom_y(&self) -> u16 {
         self.history_bottom_y
+    }
+
+    /// Whether projected finalized history reaches `row`, including rows that
+    /// have overflowed into native scrollback.
+    ///
+    /// Row 0 is vacuously backed: the history extent starts at the top of the
+    /// screen, so asking whether it reaches the first row is always true.
+    pub fn history_backs_row(&self, row: u16) -> bool {
+        self.finalized_history_extent_rows >= row
     }
 
     /// Last backend screen size observed by the surface terminal.
@@ -423,42 +465,6 @@ where
         Ok(rows)
     }
 
-    /// Move the retained viewport back to the given history bottom without
-    /// rewriting history. This is used after a streaming tail has already been
-    /// provisionally appended and finalization has no residual lines to insert.
-    pub fn reseat_viewport_to_history_row(
-        &mut self,
-        history_bottom_y: u16,
-    ) -> Result<(), B::Error> {
-        let size = self.size()?;
-        let height = self.viewport_area.height.min(size.height);
-        let y = history_bottom_y.min(size.height.saturating_sub(height));
-        let area = Rect {
-            y,
-            height,
-            ..self.viewport_area
-        };
-        let previous = self.viewport_area;
-        if previous == area {
-            return Ok(());
-        }
-        let clear_y = if area.y < previous.y {
-            previous.y
-        } else {
-            area.y
-        };
-        self.clear_after_position(Position { x: 0, y: clear_y })?;
-        tracing::debug!(
-            target: "tui::surface",
-            previous = ?previous,
-            next = ?area,
-            history_bottom_y,
-            "reseat viewport to history row"
-        );
-        self.set_viewport_area(area);
-        Ok(())
-    }
-
     /// Mark the next draw as a full repaint.
     pub fn invalidate_viewport(&mut self) {
         self.invalidated = true;
@@ -467,6 +473,8 @@ where
 
     /// Record history rows inserted above the retained viewport.
     pub fn note_history_rows_inserted(&mut self, rows: u16) {
+        self.finalized_history_extent_rows =
+            self.finalized_history_extent_rows.saturating_add(rows);
         self.history_bottom_y = self
             .history_bottom_y
             .saturating_add(rows)
@@ -484,6 +492,7 @@ where
         self.backend.clear_scrollback_and_screen()?;
         self.visible_history_rows = 0;
         self.history_bottom_y = 0;
+        self.finalized_history_extent_rows = 0;
         self.viewport_area.y = 0;
         self.buffers[0].resize(self.viewport_area);
         self.buffers[1].resize(self.viewport_area);
