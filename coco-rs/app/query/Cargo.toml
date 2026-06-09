@@ -13,6 +13,7 @@ coco-llm-types.workspace = true
 coco-config.workspace = true
 coco-error.workspace = true
 coco-inference.workspace = true
+coco-wire-dump.workspace = true
 coco-tool-runtime.workspace = true
 coco-utils-json-repair.workspace = true
 coco-tools.workspace = true

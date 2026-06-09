@@ -195,6 +195,8 @@ impl QueryEngine {
             // Interruptible backoff: a user interrupt cancels a long capacity
             // retry instead of waiting it out (TS `options.signal`).
             cancel: Some(self.cancel.clone()),
+            // Set below once the active model snapshot is known.
+            wire_tap: None,
         };
 
         let streaming_ctx: Option<Arc<ToolUseContext>> = if self.config.streaming_tool_execution {
@@ -274,6 +276,25 @@ impl QueryEngine {
         let effective_max_tokens =
             crate::engine_recovery::effective_max_tokens(&active_snapshot, turn_state);
         params.max_tokens = effective_max_tokens;
+
+        // Attach the per-session wire dumper (no-op unless
+        // `diagnostics.wire_dump` is enabled). The recorder rides
+        // `params.wire_tap` → `CallOptions.wire_tap` → the transport tap;
+        // a concrete handle is parked on `turn_state` so `consume_stream`
+        // can report the typed outcome via `finish`.
+        if let Some(wire_dump) = self.config.wire_dump.as_ref() {
+            let recorder = wire_dump.begin(coco_wire_dump::WireTurnCtx {
+                turn_id,
+                provider: &active_snapshot.provider,
+                model: &active_snapshot.model_id,
+            });
+            // The recorder is provider-agnostic; a thin adapter bridges it
+            // to the transport's `WireTap` sink.
+            params.wire_tap = Some(std::sync::Arc::new(
+                crate::wire_tap_adapter::WireTapAdapter(recorder.clone()),
+            ));
+            turn_state.wire_recorder = Some(recorder);
+        }
 
         tracing::debug!(
             turn = turn_state.turn,

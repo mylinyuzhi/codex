@@ -162,6 +162,10 @@ pub struct LanguageModelV4CallOptions {
     pub include_raw_chunks: Option<bool>,
     /// Headers to include in the request.
     pub headers: Option<HashMap<String, String>>,
+    /// Optional debug sink for raw wire traffic. When set, the transport
+    /// layer feeds it the outgoing request bytes and the raw response
+    /// bytes as they arrive. `None` (the default) means zero overhead.
+    pub wire_tap: Option<super::wire_tap::WireTapHandle>,
 }
 
 impl LanguageModelV4CallOptions {

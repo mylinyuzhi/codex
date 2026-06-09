@@ -115,6 +115,11 @@ pub(crate) struct LoopTurnState {
     /// by `ContinueReason` because they are runtime-policy retries
     /// rather than query-control transitions.
     pub(crate) count_next_iteration_as_turn: bool,
+    /// Per-stream raw-wire recorder for this iteration (when wire-dump is
+    /// enabled). Set by `enter_turn_and_prepare_request`; `consume_stream`
+    /// calls `finish(outcome)` on it. Overwritten each iteration; the
+    /// previous one is already finished (or `Drop`-flushed).
+    pub(crate) wire_recorder: Option<std::sync::Arc<coco_wire_dump::SessionWireRecorder>>,
 }
 
 impl LoopTurnState {
@@ -135,6 +140,7 @@ impl LoopTurnState {
             reminder_last_user_input_uuid: None,
             budget: BudgetTracker::new(total_token_budget, max_turns, max_continuations),
             count_next_iteration_as_turn: true,
+            wire_recorder: None,
         }
     }
 }

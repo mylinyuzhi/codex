@@ -29,8 +29,8 @@ use vercel_ai_provider::Warning;
 use vercel_ai_provider::content::ToolApprovalRequestPart;
 use vercel_ai_provider_utils::JsonResponseHandler;
 use vercel_ai_provider_utils::is_custom_reasoning;
-use vercel_ai_provider_utils::post_json_to_api_with_client;
-use vercel_ai_provider_utils::post_stream_to_api_with_client;
+use vercel_ai_provider_utils::post_json_to_api_with_client_tapped;
+use vercel_ai_provider_utils::post_stream_to_api_with_client_tapped;
 
 use crate::openai_capabilities::SystemMessageMode;
 use crate::openai_capabilities::get_capabilities;
@@ -488,7 +488,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
         let url = self.config.url("/responses");
         let headers = self.config.get_headers();
 
-        let response: OpenAIResponsesResponse = post_json_to_api_with_client(
+        let response: OpenAIResponsesResponse = post_json_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
@@ -496,6 +496,7 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
             OpenAIFailedResponseHandler,
             abort_signal,
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 
@@ -983,12 +984,13 @@ impl LanguageModelV4 for OpenAIResponsesLanguageModel {
         let url = self.config.url("/responses");
         let headers = self.config.get_headers();
 
-        let byte_stream = post_stream_to_api_with_client(
+        let byte_stream = post_stream_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
             abort_signal,
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 
@@ -1177,7 +1179,17 @@ impl ResponsesStreamState {
 
         let event: ResponsesStreamEvent = match serde_json::from_str(data) {
             Ok(e) => e,
-            Err(_) => return,
+            Err(err) => {
+                // Don't silently drop an SSE payload we can't model — an
+                // unmodeled shape is often exactly what's needed when a turn
+                // fails with no typed signal.
+                tracing::warn!(
+                    error = %err,
+                    raw = %data,
+                    "responses stream: undecodable SSE data event",
+                );
+                return;
+            }
         };
 
         match event {
@@ -1227,6 +1239,15 @@ impl ResponsesStreamState {
                     .and_then(|d| d.get("reason"))
                     .and_then(|r| r.as_str())
                     .map(String::from);
+                // `resp.error` carries the provider's failure detail; surface
+                // it so a `response.failed` doesn't collapse to a bare status.
+                if let Some(err) = &resp.error {
+                    tracing::warn!(
+                        error = %err,
+                        reason = reason.as_deref().unwrap_or(""),
+                        "responses stream: response.failed",
+                    );
+                }
                 self.status = Some(reason.unwrap_or_else(|| "error".into()));
             }
 
@@ -1922,9 +1943,26 @@ impl ResponsesStreamState {
             }
 
             ResponsesStreamEvent::Error { message, code } => {
+                // The raw SSE payload is the only place the provider's real
+                // failure detail reliably survives — `message`/`code` are
+                // frequently null on server-side errors. Log it verbatim so
+                // the failure is diagnosable without a wire capture, and fall
+                // back to the raw text (not the opaque "Unknown error") when
+                // both fields are absent.
+                tracing::warn!(
+                    code = code.as_deref().unwrap_or(""),
+                    raw = %data,
+                    "responses stream: error event",
+                );
+                let message = message
+                    .or_else(|| {
+                        code.clone()
+                            .map(|c| format!("OpenAI responses error (code: {c})"))
+                    })
+                    .unwrap_or_else(|| format!("OpenAI responses error: {data}"));
                 self.pending.push_back(LanguageModelV4StreamPart::Error {
                     error: vercel_ai_provider::StreamError {
-                        message: message.unwrap_or_else(|| "Unknown error".into()),
+                        message,
                         code,
                         is_retryable: false,
                     },

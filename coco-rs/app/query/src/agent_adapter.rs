@@ -187,6 +187,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
             compact: coco_config::CompactConfig::default(),
+            // Subagent LLM traffic is not wire-captured (scope: main session).
+            wire_dump: None,
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: coco_config::ToolConfig::default(),
             sandbox_config: coco_config::SandboxSettings::default(),
