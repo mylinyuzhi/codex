@@ -427,11 +427,31 @@ impl Tui {
             frame_index,
         )?;
         let history_bottom_y_after = self.terminal.history_bottom_y();
-        let unbacked_gap_rows = self
-            .terminal
-            .viewport_area()
-            .top()
-            .saturating_sub(history_bottom_y_after);
+        let viewport_top_after = self.terminal.viewport_area().top();
+        let unbacked_gap_rows = viewport_top_after.saturating_sub(history_bottom_y_after);
+        // Invariant (post de-stick): a Flowing viewport seats flush on history.
+        // A non-zero gap under a Flowing pin means a stale-anchor / second-writer
+        // regression (the /clear-gap class). A BottomPinned viewport may carry a
+        // transient backed gap pending tail-reveal (shrink_deferred_rows > 0), so
+        // the pin guard is load-bearing — do NOT drop it.
+        debug_assert!(
+            flowing_viewport_seats_flush(
+                self.main_screen_viewport_pin,
+                viewport_top_after,
+                history_bottom_y_after,
+            ),
+            "flowing viewport must seat flush against history: pin={:?} viewport_top={} \
+             history_bottom_y={} unbacked_gap_rows={} committed={:?} reveal_tail_rows={} \
+             append_fill_rows={} shrink_deferred_rows={}",
+            self.main_screen_viewport_pin,
+            viewport_top_after,
+            history_bottom_y_after,
+            unbacked_gap_rows,
+            geometry_commit.committed_viewport,
+            geometry_commit.reveal_tail_rows,
+            geometry_commit.append_fill_rows,
+            geometry_commit.shrink_deferred_rows,
+        );
         tracing::debug!(
             target: "tui::surface::geometry",
             pin = ?self.main_screen_viewport_pin,
@@ -569,12 +589,18 @@ impl Tui {
                 plan,
                 precomputed_live_height,
             );
+            // Anchor on the OWNED viewport top, not `history_bottom_y()`.
+            // history_bottom_y mutates mid-frame (clear/insert/reveal), and this
+            // pass runs BEFORE the history emission — anchoring on it re-derived
+            // a stale position and raced the emission (the /clear-gap class).
+            // The owned viewport top is the previous frame's settled seat; the
+            // emission (clear→0, insert advances, scroll) is the single writer
+            // that moves it, and this pass preserves it (codex's owned model).
             let geometry = native_viewport_geometry_with_max(
-                self.terminal.history_bottom_y(),
+                self.terminal.viewport_area().top(),
                 size,
                 desired_height,
                 max_h,
-                self.main_screen_viewport_pin,
             );
             self.main_screen_viewport_pin = geometry.pin;
             geometry.area
@@ -687,14 +713,8 @@ impl Drop for Tui {
 
 #[cfg(test)]
 pub(crate) fn native_viewport_area(anchor_y: u16, size: Size, desired_height: u16) -> Rect {
-    native_viewport_geometry_with_max(
-        anchor_y,
-        size,
-        desired_height,
-        NATIVE_VIEWPORT_MAX_HEIGHT,
-        NativeViewportPin::Flowing,
-    )
-    .area
+    native_viewport_geometry_with_max(anchor_y, size, desired_height, NATIVE_VIEWPORT_MAX_HEIGHT)
+        .area
 }
 
 /// Max inline-viewport height for this frame. Streaming/idle is capped at
@@ -722,27 +742,40 @@ pub(crate) fn native_viewport_area_with_max(
     desired_height: u16,
     max_height: u16,
 ) -> Rect {
-    native_viewport_geometry_with_max(
-        anchor_y,
-        size,
-        desired_height,
-        max_height,
-        NativeViewportPin::Flowing,
-    )
-    .area
+    native_viewport_geometry_with_max(anchor_y, size, desired_height, max_height).area
 }
 
+/// The flowing-seat invariant: a Flowing viewport must sit flush on history
+/// (`viewport_top == history_bottom_y`). BottomPinned viewports are exempt —
+/// they may carry a transient backed gap pending tail-reveal
+/// (`shrink_deferred_rows > 0`). The pin guard is load-bearing; a Flowing gap
+/// is the `/clear`-class stale-anchor / second-writer regression.
+fn flowing_viewport_seats_flush(
+    pin: NativeViewportPin,
+    viewport_top: u16,
+    history_bottom_y: u16,
+) -> bool {
+    pin != NativeViewportPin::Flowing || viewport_top == history_bottom_y
+}
+
+/// Compute the inline viewport geometry for a frame.
+///
+/// The bottom-pin state is a pure function of whether finalized history still
+/// reaches the bottom-pinned row: once history can no longer back that row
+/// (`anchor_y < bottom_pinned_y`) the viewport reverts to flowing and seats
+/// flush against history. It is intentionally NOT sticky — a latched pin that
+/// outlived its history is exactly what strands an unbacked gap when history
+/// shrinks (`/clear`, reflow, display-toggle, rewind).
 fn native_viewport_geometry_with_max(
     anchor_y: u16,
     size: Size,
     desired_height: u16,
     max_height: u16,
-    pin: NativeViewportPin,
 ) -> NativeViewportGeometry {
     if size.height == 0 {
         return NativeViewportGeometry {
             area: Rect::new(0, 0, size.width, 0),
-            pin,
+            pin: NativeViewportPin::Flowing,
         };
     }
     let height = desired_height
@@ -752,18 +785,18 @@ fn native_viewport_geometry_with_max(
         )
         .min(size.height);
     let bottom_pinned_y = size.height.saturating_sub(height);
-    let next_pin = if pin == NativeViewportPin::BottomPinned || anchor_y >= bottom_pinned_y {
+    let pin = if anchor_y >= bottom_pinned_y {
         NativeViewportPin::BottomPinned
     } else {
         NativeViewportPin::Flowing
     };
-    let y = match next_pin {
+    let y = match pin {
         NativeViewportPin::Flowing => anchor_y,
         NativeViewportPin::BottomPinned => bottom_pinned_y,
     };
     NativeViewportGeometry {
         area: Rect::new(0, y, size.width, height),
-        pin: next_pin,
+        pin,
     }
 }
 

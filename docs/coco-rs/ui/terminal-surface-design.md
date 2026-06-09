@@ -17,6 +17,7 @@ owns terminal surface constraints.
 | `native-scrollback-architecture.md` | Detailed terminal backend and source-backed scrollback design. |
 | `codex-rs-tui-comparison.md` | Deep comparison of `codex-rs/tui` visible UI capability versus coco boundaries. |
 | `rendering-hardening-and-rollback.md` | Landed cursor/suspend hardening plus rollback record for failed inline attempts. |
+| `viewport-seating-regression-fixes.md` | Technical-decision record + fix plan for the owned-top viewport-seating refactor (C1 overflow-shrink regression and hardening). |
 | `migration-roadmap.md` | Historical implementation notes; not the final product organization. |
 | `../crate-coco-tui.md` | Current implementation baseline for the `coco-tui` crate. |
 
