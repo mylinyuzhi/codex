@@ -643,6 +643,27 @@ impl Tool for AgentTool {
             });
         }
 
+        // Per-agentType deny enforcement (TS `AgentTool.tsx:337-355`
+        // `filterDeniedAgents` + the call-body throw). The central permission
+        // evaluator defers `Agent(<type>)` content denies to the tool (see
+        // core/permissions `central_rule_applies`), so the agentType scoping
+        // MUST happen here or denied agents leak through. Skipped for pure forks
+        // (no model-chosen agentType — TS skips filterDeniedAgents there).
+        if !is_fork
+            && let Some(denied) =
+                find_agent_deny_rule(&ctx.permission_context, &effective_subagent_type)
+        {
+            return Err(ToolError::InvalidInput {
+                message: format!(
+                    "Agent type '{effective_subagent_type}' has been denied by permission \
+                     rule '{}({effective_subagent_type})' from {:?}.",
+                    ToolName::Agent.as_str(),
+                    denied.source,
+                ),
+                error_code: None,
+            });
+        }
+
         if let Some(def) = resolved_definition.as_ref() {
             let servers_with_tools = mcp_servers_with_tools(ctx).await;
             if !coco_subagent::has_required_mcp_servers(def, &servers_with_tools) {
@@ -1038,4 +1059,18 @@ async fn mcp_servers_with_tools(ctx: &ToolUseContext) -> Vec<String> {
         }
     }
     servers
+}
+
+/// Find an `Agent(<agent_type>)` deny rule. TS `getDenyRuleForAgent`
+/// (utils/permissions/permissions.ts:308-320): matches deny rules whose
+/// `tool_pattern == Agent` and `rule_content == agent_type`. The central
+/// evaluator defers these content denies to the tool, so `execute` enforces them.
+fn find_agent_deny_rule<'a>(
+    context: &'a coco_types::ToolPermissionContext,
+    agent_type: &str,
+) -> Option<&'a coco_types::PermissionRule> {
+    context.deny_rules.values().flatten().find(|r| {
+        r.value.tool_pattern == ToolName::Agent.as_str()
+            && r.value.rule_content.as_deref() == Some(agent_type)
+    })
 }

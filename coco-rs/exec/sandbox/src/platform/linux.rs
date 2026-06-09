@@ -27,7 +27,8 @@ use crate::seccomp;
 const BWRAP_PATHS: &[&str] = &["/usr/bin/bwrap", "/usr/local/bin/bwrap"];
 
 /// Arg1 flag for the seccomp-apply inner stage dispatch.
-pub const APPLY_SECCOMP_ARG1: &str = "--apply-seccomp";
+/// Canonical definition lives in [`crate::inner_stage`].
+pub use crate::inner_stage::APPLY_SECCOMP_ARG1;
 
 /// Linux bubblewrap sandbox implementation.
 pub struct LinuxSandbox;

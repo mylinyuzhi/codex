@@ -7,8 +7,10 @@
 //! Two filter modes are supported (from codex-rs):
 //! - **Restricted**: allows AF_UNIX sockets, blocks all IP sockets and network
 //!   syscalls. Used when network namespace is fully isolated.
-//! - **ProxyRouted**: allows AF_INET/AF_INET6 for proxy bridge, blocks AF_UNIX
-//!   to prevent bypass. Used when traffic routes through a managed proxy.
+//! - **ProxyRouted**: allows AF_INET/AF_INET6 (proxy bridge) and AF_UNIX (the
+//!   inner netns socat UNIX-CONNECTs to the bind-mounted bridge socket),
+//!   blocking only exotic socket domains. Used when traffic routes through a
+//!   managed proxy.
 //!
 //! Both modes always block `ptrace` and `io_uring` syscalls.
 
@@ -34,8 +36,9 @@ mod linux {
         /// AF_UNIX sockets allowed, all IP sockets denied.
         /// Used inside fully-isolated network namespace (`bwrap --unshare-net`).
         Restricted,
-        /// AF_INET/AF_INET6 allowed (for proxy bridge loopback), AF_UNIX denied.
-        /// Applied AFTER proxy bridge sockets are established to prevent bypass.
+        /// AF_INET/AF_INET6 allowed (proxy bridge loopback) plus AF_UNIX (the
+        /// inner netns socat needs UDS to reach the bind-mounted bridge);
+        /// exotic socket domains denied.
         ProxyRouted,
     }
 
@@ -114,12 +117,15 @@ mod linux {
                 rules.insert(libc::SYS_socketpair, vec![deny_non_unix]);
             }
             NetworkSeccompMode::ProxyRouted => {
-                // Applied AFTER bridge sockets are live — new AF_UNIX sockets
-                // are blocked to prevent proxy bypass via direct IPC.
-
+                // AF_INET/AF_INET6 are allowed for the proxy bridge; AF_UNIX is
+                // ALSO allowed because the inner netns socat does a UNIX-CONNECT
+                // to the bind-mounted bridge socket (blocking it would EPERM the
+                // bridge and silently break egress). Only exotic socket domains
+                // are denied.
+                //
                 // seccompiler AND-combines conditions within a single rule:
-                // deny if NOT AF_INET AND NOT AF_INET6
-                let deny_non_ip = SeccompRule::new(vec![
+                // deny if NOT AF_INET AND NOT AF_INET6 AND NOT AF_UNIX.
+                let deny_exotic = SeccompRule::new(vec![
                     SeccompCondition::new(
                         0,
                         SeccompCmpArgLen::Dword,
@@ -132,17 +138,15 @@ mod linux {
                         SeccompCmpOp::Ne,
                         libc::AF_INET6 as u64,
                     )?,
+                    SeccompCondition::new(
+                        0,
+                        SeccompCmpArgLen::Dword,
+                        SeccompCmpOp::Ne,
+                        libc::AF_UNIX as u64,
+                    )?,
                 ])?;
-                rules.insert(libc::SYS_socket, vec![deny_non_ip]);
-
-                // Prevent IPC bypass via socketpair
-                let deny_unix_pair = SeccompRule::new(vec![SeccompCondition::new(
-                    0,
-                    SeccompCmpArgLen::Dword,
-                    SeccompCmpOp::Eq,
-                    libc::AF_UNIX as u64,
-                )?])?;
-                rules.insert(libc::SYS_socketpair, vec![deny_unix_pair]);
+                rules.insert(libc::SYS_socket, vec![deny_exotic]);
+                // socketpair (AF_UNIX) is left allowed — the bridge needs it.
             }
         }
 

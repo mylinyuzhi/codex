@@ -221,6 +221,87 @@ pub fn split_compound_command(command: &str) -> Vec<String> {
     subcommands
 }
 
+/// Remove unquoted output-redirection clauses (`> file`, `>> file`, `2> file`,
+/// `&> file`, `2>&1`, `>&2`, `>&-`, …) from a command, mirroring the observable
+/// effect of TS `extractOutputRedirections().commandWithoutRedirections`
+/// (commands.ts:634) for the common single-line case.
+///
+/// Used to build rule-matching candidates so e.g. `Bash(python:*)` matches
+/// `python s.py > out.txt`. Quote-guarded: redirections inside single/double
+/// quotes are preserved. Heredoc/subshell parsing is deliberately NOT
+/// attempted — redirection *target* security lives in path validation.
+pub fn strip_output_redirections(command: &str) -> String {
+    if !command.contains('>') {
+        return command.trim().to_string();
+    }
+    let chars: Vec<char> = command.chars().collect();
+    let mut out = String::with_capacity(command.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if !in_single && !in_double {
+            let next_is_gt = chars.get(i + 1) == Some(&'>');
+            // `>`, `>>`, `&>`, `2>`, `2>>`, or a dup form like `2>&1`.
+            let is_redir_start =
+                c == '>' || (c == '&' && next_is_gt) || (c.is_ascii_digit() && next_is_gt);
+            if is_redir_start {
+                let mut j = i;
+                if c != '>' {
+                    j += 1; // skip leading `&` or FD digit; chars[j] is now `>`
+                }
+                j += 1; // past first `>`
+                if chars.get(j) == Some(&'>') {
+                    j += 1; // `>>`
+                }
+                if chars.get(j) == Some(&'&') {
+                    // dup form `>&N` / `>&-` — no separate file token
+                    j += 1;
+                    while chars.get(j).is_some_and(char::is_ascii_digit) {
+                        j += 1;
+                    }
+                    if chars.get(j) == Some(&'-') {
+                        j += 1;
+                    }
+                } else {
+                    // skip whitespace, then drop the target token
+                    while matches!(chars.get(j), Some(' ' | '\t')) {
+                        j += 1;
+                    }
+                    while j < chars.len()
+                        && !chars[j].is_whitespace()
+                        && !matches!(chars[j], '>' | '<' | '|' | ';' | '&')
+                    {
+                        j += 1;
+                    }
+                }
+                i = j;
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    // Collapse the whitespace left behind by removed clauses.
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Check if a command prefix is a dangerous bare shell prefix.
 pub fn is_dangerous_bare_prefix(prefix: &str) -> bool {
     BARE_SHELL_PREFIXES.contains(prefix)

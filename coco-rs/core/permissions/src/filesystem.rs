@@ -69,19 +69,27 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
         }
     }
 
-    // Check if any path component is a dangerous directory
-    for component in lower.split(&['/', '\\']) {
+    // Check if any path component is a dangerous directory. Mirror TS
+    // filesystem.ts:460-468, which inspects `pathSegments[i + 1]` — so the
+    // `.claude/worktrees/` exemption is anchored at a component boundary, not a
+    // position-agnostic substring. A nested `.claude` deeper in the path (e.g. a
+    // settings.json inside a worktree) is still evaluated and blocked.
+    let segments: Vec<&str> = lower.split(['/', '\\']).collect();
+    for i in 0..segments.len() {
+        let component = segments[i];
         if component.is_empty() {
             continue;
         }
         for &dangerous_dir in DANGEROUS_DIRECTORIES {
-            if component == dangerous_dir {
-                // Special case: .claude/worktrees/ is allowed (structural path)
-                if dangerous_dir == ".claude" && lower.contains(".claude/worktrees/") {
-                    continue;
-                }
-                return true;
+            if component != dangerous_dir {
+                continue;
             }
+            // Structural git-worktree path: skip ONLY this `.claude` segment
+            // when the immediately-following component is `worktrees`.
+            if dangerous_dir == ".claude" && segments.get(i + 1).copied() == Some("worktrees") {
+                break;
+            }
+            return true;
         }
     }
 
@@ -95,13 +103,21 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
 
 /// Check if a path is a Claude settings or config file.
 ///
-/// TS: `isClaudeConfigFilePath()` in filesystem.ts
+/// TS: `isClaudeConfigFilePath()` (filesystem.ts:225-242) — treats
+/// `commands/`, `agents/`, `skills/` and `settings(.local).json` under
+/// `{originalCwd}/.claude` as config. TS anchors these to the cwd via
+/// `pathInWorkingPath`; coco has no cwd param threaded through
+/// `check_path_safety_for_auto_edit`, so it uses a path-substring
+/// over-approximation, which is safe for an approval gate (it can only
+/// over-prompt). `.coco/skills/` is coco's intentional divergence from
+/// TS `.claude/skills`.
 pub fn is_claude_config_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/").to_lowercase();
     normalized.contains("/.claude/settings.json")
         || normalized.contains("/.claude/settings.local.json")
-        || normalized.contains("/.coco/skills/")
+        || normalized.contains("/.claude/commands/")
         || normalized.contains("/.claude/agents/")
+        || normalized.contains("/.coco/skills/")
 }
 
 // ── Suspicious Windows path patterns ──
@@ -273,22 +289,18 @@ pub fn path_in_working_path(path: &str, working_path: &str) -> bool {
 
 /// Check if a path is within the allowed working directories.
 ///
-/// TS: isPathWithinAllowedDirs()
+/// Mirrors TS `pathInAllowedWorkingPath` — cwd + `additionalWorkingDirectories`
+/// only. The per-user `/tmp/claude-{uid}` project-temp and scratchpad
+/// exemptions deliberately live in [`is_readable_internal_path`] /
+/// [`is_editable_internal_path`], NOT here: conflating them let an arbitrary
+/// `/tmp/evil` write auto-pass the cwd gate.
 pub fn is_path_within_allowed_dirs(path: &str, cwd: &str, additional_dirs: &[String]) -> bool {
-    let resolved = resolve_path(path, cwd);
-    let normalized = normalize_for_comparison(&resolved);
-
-    // Always allow /tmp
-    if normalized.starts_with("/tmp") {
-        return true;
-    }
-
     // Check cwd
     if path_in_working_path(path, cwd) {
         return true;
     }
 
-    // Check additional directories
+    // Check additional working directories
     for dir in additional_dirs {
         if path_in_working_path(path, dir) {
             return true;

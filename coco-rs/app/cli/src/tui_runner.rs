@@ -1537,7 +1537,10 @@ async fn run_agent_driver(
                     let mut guard = runtime.app_state.write().await;
                     prev_mode = guard.permission_mode.unwrap_or(cfg_mode);
                     coco_permissions::apply_permission_mode_transition_to_app_state(
-                        &mut guard, prev_mode, mode,
+                        &mut guard,
+                        prev_mode,
+                        mode,
+                        &cfg.allow_rules,
                     );
                 }
                 info!(

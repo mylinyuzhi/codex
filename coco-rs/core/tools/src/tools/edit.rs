@@ -178,7 +178,7 @@ impl Tool for EditTool {
 
         // Sandbox pre-flight — deny inadmissible writes before any I/O,
         // so SDK consumers can intercept via the approval bridge.
-        super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true)?;
+        super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true).await?;
 
         // #21 / TS `FileEditTool.ts:223-227`: an empty `old_string` on a
         // nonexistent file is new-file creation — write `new_string` as

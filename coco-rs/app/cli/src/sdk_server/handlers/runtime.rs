@@ -108,6 +108,13 @@ pub(super) async fn handle_set_permission_mode(
     // Drop the session write lock before taking app_state's lock to
     // keep lock order consistent (session → app_state never inverted).
     drop(slot);
+    // Live allow rules for the Auto-entry dangerous-rule snapshot. The
+    // evaluator-facing strip runs per-batch in ToolContextFactory::build, so an
+    // empty map here only weakens the exit-banner provenance, never the guard.
+    let live_allow_rules = match ctx.state.session_runtime.read().await.as_ref() {
+        Some(rt) => rt.current_engine_config().await.allow_rules.clone(),
+        None => coco_types::PermissionRulesBySource::new(),
+    };
     let mut guard = app_state.write().await;
     let prev_mode = guard
         .permission_mode
@@ -116,6 +123,7 @@ pub(super) async fn handle_set_permission_mode(
         &mut guard,
         prev_mode,
         params.mode,
+        &live_allow_rules,
     );
     drop(guard);
 

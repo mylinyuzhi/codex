@@ -493,7 +493,7 @@ fn enforce_dangerous_skip_safety(requesting_bypass: bool) -> Result<()> {
     if !requesting_bypass {
         return Ok(());
     }
-    if is_root_like_env() && !is_sandboxed_env() {
+    if is_running_as_root() && !is_sandboxed_env() {
         return Err(anyhow::anyhow!(
             "Bypass permissions refuses to run as root/sudo outside a \
              sandbox. Set IS_SANDBOX=1 (or run under bubblewrap) if you \
@@ -503,16 +503,23 @@ fn enforce_dangerous_skip_safety(requesting_bypass: bool) -> Result<()> {
     Ok(())
 }
 
-fn is_root_like_env() -> bool {
-    if std::env::var_os("SUDO_USER").is_some() || std::env::var_os("SUDO_UID").is_some() {
-        return true;
+/// True when the process runs with effective root privileges (euid 0) — actual
+/// root or under `sudo`. Mirrors TS `setup.ts:402-414`
+/// (`process.getuid() === 0`); coco-rs checks the *effective* uid so `sudo coco`
+/// is also caught (the prior env-name heuristic — `SUDO_USER`/`USER == root` —
+/// was a fragile, spoofable proxy for this). Non-Unix has no uid → false
+/// (TS gates on `platform !== 'win32'`).
+fn is_running_as_root() -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: `geteuid` is an always-succeeds libc call — no preconditions,
+        // no arguments, no memory effects.
+        unsafe { libc::geteuid() == 0 }
     }
-    let is_root_name = |var: &str| -> bool {
-        std::env::var(var)
-            .map(|v| v.trim() == "root")
-            .unwrap_or(false)
-    };
-    is_root_name("USER") || is_root_name("LOGNAME") || is_root_name("USERNAME")
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 fn is_sandboxed_env() -> bool {
@@ -892,6 +899,13 @@ pub async fn run_chat_with_options(
     config.deny_rules = deny_rules;
     config.ask_rules = ask_rules;
     config.permission_rule_source_roots = permission_rule_source_roots;
+    // Seed --add-dir + settings additionalDirectories into the session
+    // working-dir allowlist (P17). TS initializeToolPermissionContext.
+    config.session_additional_dirs = crate::permission_rule_loader::seed_session_additional_dirs(
+        cli,
+        &runtime_config.settings,
+        &cwd,
+    );
     // `--print`: honor `--max-turns` then `loop.max_turns`; unbounded when
     // neither is set (TS `query.ts:1705` only caps when maxTurns is given).
     config.max_turns = cli.max_turns.or(runtime_config.loop_config.max_turns);

@@ -82,10 +82,13 @@ struct ExitPlanModeOutput {
 /// re-prompting the user.
 pub fn build_enter_plan_mode_patch(current_mode: PermissionMode) -> coco_types::AppStatePatch {
     Box::new(move |state| {
+        // Plan entry only — the Auto-entry stash branch is inert here, so an
+        // empty allow-rules map suffices.
         coco_permissions::apply_permission_mode_transition_to_app_state(
             state,
             current_mode,
             PermissionMode::Plan,
+            &coco_types::PermissionRulesBySource::new(),
         );
     })
 }

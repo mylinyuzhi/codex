@@ -43,6 +43,7 @@ pub use classifier::YoloClassifierResult;
 pub use classifier::classify_yolo_action;
 pub use classifier::is_safe_tool;
 pub use dangerous_rules::restore_dangerous_rules;
+pub use dangerous_rules::strip_dangerous_allow_rules;
 pub use dangerous_rules::strip_dangerous_rules;
 // `DenialTracker` lives in `coco-tool-runtime` (per-`ToolUseContext`
 // runtime state); re-exported here so existing permission-side call

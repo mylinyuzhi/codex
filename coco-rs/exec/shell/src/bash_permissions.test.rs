@@ -102,3 +102,25 @@ fn test_is_dangerous_bare_prefix() {
     assert!(!is_dangerous_bare_prefix("git"));
     assert!(!is_dangerous_bare_prefix("cargo"));
 }
+
+#[test]
+fn test_strip_output_redirections() {
+    assert_eq!(strip_output_redirections("cmd"), "cmd");
+    assert_eq!(
+        strip_output_redirections("python s.py > out.txt"),
+        "python s.py"
+    );
+    assert_eq!(strip_output_redirections("cmd >>log 2>&1"), "cmd");
+    assert_eq!(strip_output_redirections("cmd 2>&1"), "cmd");
+    assert_eq!(strip_output_redirections("cmd &> out"), "cmd");
+    assert_eq!(strip_output_redirections("cmd 2> err.txt"), "cmd");
+    // Redirections inside quotes are preserved.
+    assert_eq!(
+        strip_output_redirections("echo '> not a redir'"),
+        "echo '> not a redir'"
+    );
+    assert_eq!(
+        strip_output_redirections("echo \"a > b\""),
+        "echo \"a > b\""
+    );
+}

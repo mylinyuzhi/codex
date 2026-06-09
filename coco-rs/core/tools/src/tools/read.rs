@@ -345,7 +345,7 @@ impl Tool for ReadTool {
         // catch the same violations at kernel level after `read()`, but
         // the structured `PermissionDenied` here surfaces a usable
         // reason to the model instead of an opaque `EACCES`.
-        super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ false)?;
+        super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ false).await?;
 
         // Check existence
         if !path.exists() {

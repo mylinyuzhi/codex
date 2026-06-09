@@ -1,25 +1,22 @@
 //! Permission checking for sandbox-enforced operations.
 //!
-//! ## Status (audit, May 2026)
+//! `PermissionChecker` is a fail-closed validator. When an approval bridge is
+//! installed (via [`SandboxState::set_approval_bridge`](crate::SandboxState),
+//! propagated through [`SandboxState::permission_checker`](crate::SandboxState)),
+//! the async variants [`PermissionChecker::check_path_async`] /
+//! [`PermissionChecker::check_network_async`] consult the bridge before
+//! returning a deny — mirroring TS's interactive "Allow this network call?"
+//! prompt (`createSandboxAskCallback`). Without a bridge they are identical to
+//! the sync `check_path` / `check_network`.
 //!
-//! `PermissionChecker` is a fail-closed validator that pairs cleanly with
-//! [`SandboxApprovalBridge`](crate::bridge::SandboxApprovalBridge) to
-//! support an interactive approval surface (mirroring TS's
-//! `wrapWithSandbox` validation flow). The SDK side is fully wired
-//! (`app/cli/src/sdk_server::SdkSandboxApprovalBridge`).
+//! Production consumers:
+//! - Read/Write/Edit pre-flight → [`PermissionChecker::check_path_async`]
+//!   (`core/tools/src/tools/sandbox_preflight.rs`).
+//! - SDK control channel → `SdkSandboxApprovalBridge`
+//!   (`app/cli/src/sdk_server`), installed onto the live `SandboxState`.
 //!
-//! **What's NOT wired yet**: tool-side consumers. The platform sandboxes
-//! (bwrap, Seatbelt) already enforce path/network restrictions at the
-//! kernel level, so the in-process `PermissionChecker` is currently
-//! redundant for command execution. To make this checker pull its
-//! weight, it should be invoked as a *pre-flight* check from
-//! `core/tools/src/tools/{file_read,file_write,file_edit}.rs` so SDK
-//! consumers get a chance to approve before the tool ever spawns a
-//! child.
-//!
-//! See `audit-gaps.md` (sandbox section) for tracking. Removing the type
-//! is also an option; we keep it because the SDK approval bridge wiring
-//! is non-trivial to recreate.
+//! The egress-proxy denied-CONNECT → `check_network_async` path and the
+//! interactive TUI approval bridge are tracked follow-ups (`audit-gaps.md`).
 
 use std::path::Path;
 

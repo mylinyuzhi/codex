@@ -44,6 +44,29 @@ fn test_claude_worktrees_allowed() {
     assert!(!is_dangerous_file_path(
         "/project/.claude/worktrees/feature/src/main.rs"
     ));
+    assert!(!is_dangerous_file_path(
+        "/project/.claude/worktrees/feat/lib/util.rs"
+    ));
+}
+
+#[test]
+fn test_nested_claude_under_worktree_still_dangerous() {
+    // P12b: the `.claude/worktrees` exemption is component-anchored, so a
+    // SECOND nested `.claude` (a settings file inside the worktree) is still
+    // blocked even though an earlier `.claude/worktrees/` segment exists.
+    assert!(is_dangerous_file_path(
+        "/project/.claude/worktrees/feature/.claude/settings.json"
+    ));
+}
+
+#[test]
+fn test_worktrees_not_under_claude_not_exempt() {
+    // `.claude` followed by `config` (not `worktrees`) blocks.
+    assert!(is_dangerous_file_path(
+        "/project/.claude/config/worktrees/x.rs"
+    ));
+    // Plain `.claude` segment still blocks.
+    assert!(is_dangerous_file_path("/project/.claude/settings.json"));
 }
 
 #[test]
@@ -73,11 +96,34 @@ fn test_claude_config_detected() {
 }
 
 #[test]
-fn test_legacy_claude_skills_and_commands_are_not_project_skill_config() {
+fn test_legacy_claude_skills_are_not_project_skill_config() {
+    // coco maps project skills to `.coco/skills`, so the legacy `.claude/skills`
+    // path is NOT a coco skill-config path (intentional divergence).
     assert!(!is_claude_config_path(
         "/project/.claude/skills/foo/SKILL.md"
     ));
-    assert!(!is_claude_config_path("/project/.claude/commands/foo.md"));
+}
+
+#[test]
+fn test_claude_commands_is_config_path() {
+    // P12: `.claude/commands/` now counts as a config path requiring approval
+    // (mirrors TS isClaudeConfigFilePath treating commands/agents/skills alike).
+    assert!(is_claude_config_path("/project/.claude/commands/foo.md"));
+    assert!(is_claude_config_path("/project/.claude/agents/reviewer.md"));
+    assert!(is_claude_config_path("/project/.claude/settings.json"));
+    assert!(is_claude_config_path("/project/.coco/skills/foo/SKILL.md"));
+    assert!(!is_claude_config_path("/project/src/config.json"));
+}
+
+#[test]
+fn test_check_path_safety_blocks_claude_commands() {
+    assert!(matches!(
+        check_path_safety_for_auto_edit("/project/.claude/commands/run.md"),
+        PathSafetyResult::Blocked {
+            classifier_approvable: true,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -220,12 +266,30 @@ fn test_path_within_cwd() {
 }
 
 #[test]
-fn test_path_within_tmp() {
-    assert!(is_path_within_allowed_dirs(
+fn test_bare_tmp_not_allowed() {
+    // P12a: a bare /tmp path is NO LONGER blanket-allowed — it must fall to the
+    // cwd/additional-dir gate (the /tmp/claude-* project-temp exemption lives in
+    // is_readable_internal_path / is_editable_internal_path instead).
+    assert!(!is_path_within_allowed_dirs(
         "/tmp/test.txt",
         "/home/user/project",
         &[]
     ));
+    // But /tmp passed explicitly as an additional working dir IS allowed.
+    assert!(is_path_within_allowed_dirs(
+        "/tmp/work/f",
+        "/home/user/project",
+        &["/tmp/work".to_string()]
+    ));
+}
+
+#[test]
+fn test_arbitrary_tmp_write_gated() {
+    // P12a end-to-end: an arbitrary /tmp write outside cwd/additional dirs now
+    // reports as outside allowed directories rather than silently passing.
+    let r = validate_write_path("/tmp/evil.sh", "/home/user/project", &[]);
+    assert!(r.is_some());
+    assert!(r.unwrap().contains("outside allowed directories"));
 }
 
 #[test]

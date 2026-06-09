@@ -210,6 +210,21 @@ fn active_sandbox_state(ctx: &ToolUseContext) -> Option<std::sync::Arc<SandboxSt
     ctx.sandbox_state.clone()
 }
 
+/// Working directory for the bash force-ask path gates (dangerous-removal /
+/// git-escape relativize relative targets against it). Worktree-aware: prefers
+/// the session `cwd_override`, then `original_cwd`, then the process cwd.
+fn bash_gate_cwd(ctx: &ToolUseContext) -> String {
+    ctx.cwd_override
+        .as_deref()
+        .or(ctx.original_cwd.as_deref())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "/".to_string())
+        })
+}
+
 /// Effective max Bash output byte budget.
 ///
 /// Clamp to `[0, BASH_MAX_OUTPUT_BYTES_UPPER]` is enforced by
@@ -350,7 +365,16 @@ impl Tool for BashTool {
     /// Delegates to `coco_shell::read_only::is_read_only_command` which wraps the
     /// 40+ safe-command allowlist + conditional safety rules for git/sed/find/rg/etc.
     fn is_read_only(&self, input: &BashInput) -> bool {
-        !input.command.is_empty() && is_read_only_command(&input.command)
+        if input.command.is_empty() {
+            return false;
+        }
+        // Git sandbox-escape commands (cd+git, git-internal writes) are NOT
+        // read-only — TS `checkReadOnlyConstraints` returns passthrough for them
+        // so they reach the permission prompt instead of auto-allowing.
+        if coco_shell::has_git_escape_pattern(&input.command) {
+            return false;
+        }
+        is_read_only_command(&input.command)
     }
 
     /// Concurrency-safe iff read-only. TS `isConcurrencySafe` is driven by the
@@ -390,6 +414,39 @@ impl Tool for BashTool {
         let command = input.command.as_str();
         if command.is_empty() {
             return coco_types::ToolCheckResult::Passthrough;
+        }
+
+        // Force-ask gates (TS `bashToolCheckPermissions`): run BEFORE the
+        // acceptEdits auto-allow and the allow-rule pipeline so a dangerous
+        // removal, a code-executing/file-writing `sed`, or a git sandbox-escape
+        // cannot be auto-allowed. A returned `Ask` short-circuits at the
+        // evaluator's step-1b — no allow rule or mode overrides it (only
+        // `DontAsk` converts it to deny).
+        let cwd = bash_gate_cwd(ctx);
+        if let Some(reason) = coco_shell::check_dangerous_removal(command, &cwd) {
+            return coco_types::ToolCheckResult::Ask {
+                message: reason,
+                suggestions: Vec::new(),
+                choices: None,
+            };
+        }
+        let allow_file_writes =
+            ctx.permission_context.mode == coco_types::PermissionMode::AcceptEdits;
+        if coco_shell::has_dangerous_sed(command, allow_file_writes) {
+            return coco_types::ToolCheckResult::Ask {
+                message: "This `sed` command performs a shell-execute or file-write \
+                          operation and requires approval."
+                    .into(),
+                suggestions: Vec::new(),
+                choices: None,
+            };
+        }
+        if let Some(reason) = coco_shell::check_git_escape(command, &cwd) {
+            return coco_types::ToolCheckResult::Ask {
+                message: reason,
+                suggestions: Vec::new(),
+                choices: None,
+            };
         }
 
         // acceptEdits: a filesystem subcommand auto-allows (#164).
