@@ -6,6 +6,7 @@ use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::Feature;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
@@ -71,6 +72,9 @@ impl Tool for SleepTool {
     /// `SLEEP_TOOL_PROMPT`.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         SLEEP_TOOL_PROMPT.into()
+    }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(Feature::Proactive)
     }
     fn is_read_only(&self, _input: &SleepInput) -> bool {
         true

@@ -55,6 +55,8 @@ fn defaults_for_experimental_gates() {
         Feature::AgentTeams,
         Feature::Worktree,
         Feature::Lsp,
+        Feature::Proactive,
+        Feature::KairosBrief,
         Feature::NotebookEdit,
     ] {
         assert!(!f.enabled(feat), "{feat:?} must default off");
