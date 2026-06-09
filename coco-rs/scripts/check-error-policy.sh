@@ -71,6 +71,11 @@ is_tier3_main_trunk() {
         common/types|services/mcp-types)      return 1 ;;
         common/llm-types)                     return 1 ;;
         common/model-card)                    return 1 ;;
+        # Infallible diagnostics sink: no Result-returning public API
+        # (capture/finish/sink swallow their own I/O errors after a
+        # tracing::warn!), so the "must depend on coco-error" rule does
+        # not apply — same rationale as services/mcp-types.
+        services/wire-dump)                   return 1 ;;
         keybindings)                          return 1 ;;
         app/state|core/messages)              return 1 ;;
         *) return 0 ;;

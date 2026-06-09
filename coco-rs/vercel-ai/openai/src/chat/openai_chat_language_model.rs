@@ -32,8 +32,8 @@ use vercel_ai_provider_utils::StreamingToolCallTracker;
 use vercel_ai_provider_utils::ToolCallDeltaFunction;
 use vercel_ai_provider_utils::TypeValidation;
 use vercel_ai_provider_utils::is_custom_reasoning;
-use vercel_ai_provider_utils::post_json_to_api_with_client;
-use vercel_ai_provider_utils::post_stream_to_api_with_client;
+use vercel_ai_provider_utils::post_json_to_api_with_client_tapped;
+use vercel_ai_provider_utils::post_stream_to_api_with_client_tapped;
 
 use crate::openai_capabilities::SystemMessageMode;
 use crate::openai_capabilities::get_capabilities;
@@ -385,7 +385,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
         let url = self.config.url("/chat/completions");
         let headers = self.config.get_headers();
 
-        let response: OpenAIChatResponse = post_json_to_api_with_client(
+        let response: OpenAIChatResponse = post_json_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
@@ -393,6 +393,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
             OpenAIFailedResponseHandler,
             abort_signal,
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 
@@ -532,12 +533,13 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
         let url = self.config.url("/chat/completions");
         let headers = self.config.get_headers();
 
-        let byte_stream = post_stream_to_api_with_client(
+        let byte_stream = post_stream_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
             abort_signal,
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 

@@ -28,6 +28,7 @@ pub mod tool_call;
 pub mod tool_choice;
 pub mod tool_result;
 pub mod usage;
+pub mod wire_tap;
 
 // Re-export main types
 pub use call_options::LanguageModelV4CallOptions;
@@ -59,6 +60,10 @@ pub use prompt::PromptBuilder;
 // Re-export from stream module
 pub use stream::LanguageModelV4StreamPart;
 pub use stream::StreamError;
+
+// Re-export from wire_tap module
+pub use wire_tap::WireTap;
+pub use wire_tap::WireTapHandle;
 
 // Re-export new content types (matching TS SDK naming)
 pub use content::LanguageModelV4Content;

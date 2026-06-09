@@ -52,6 +52,7 @@ pub async fn run(provider: &str, model_id: &str) -> Result<()> {
         stop_sequences: None,
         response_format: None,
         cancel: None,
+        wire_tap: None,
     };
 
     let result = query_client(&client, params).await?;

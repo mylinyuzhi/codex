@@ -39,6 +39,7 @@ fn factual_params(prompt: Vec<LlmMessage>, scenario: &str) -> QueryParams {
         stop_sequences: None,
         response_format: None,
         cancel: None,
+        wire_tap: None,
     }
 }
 

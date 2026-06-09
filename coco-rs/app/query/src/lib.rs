@@ -70,6 +70,7 @@ mod tool_message;
 mod tool_outcome_builder;
 mod tool_runner;
 pub mod tool_use_summary;
+mod wire_tap_adapter;
 
 pub use budget::BudgetDecision;
 pub use budget::BudgetTracker;
@@ -88,6 +89,9 @@ pub use helpers::queued_command_to_attachment;
 pub use session_start_hooks::SessionStartHookSideEffectSink;
 pub use session_start_hooks::SessionStartHookSideEffectSinkRef;
 pub use session_start_hooks::SessionStartHookSideEffects;
+// Re-export so the bootstrap (`app/cli`) keeps building it as
+// `coco_query::WireDumpConfig` while the impl lives in `coco-wire-dump`.
+pub use coco_wire_dump::WireDumpConfig;
 
 // Re-export CoreEvent from coco-types for consumers of run_with_events().
 // The old QueryEvent enum has been deleted per event-system-design.md Phase 0:

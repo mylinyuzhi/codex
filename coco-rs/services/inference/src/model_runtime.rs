@@ -1592,6 +1592,7 @@ fn recovery_probe_params() -> QueryParams {
         stop_sequences: None,
         response_format: None,
         cancel: None,
+        wire_tap: None,
     }
 }
 

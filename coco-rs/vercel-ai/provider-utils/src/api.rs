@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use vercel_ai_provider::AISdkError;
 use vercel_ai_provider::APICallError;
+use vercel_ai_provider::WireTapHandle;
 
 use crate::response_handler::ResponseHandler;
 
@@ -340,6 +341,151 @@ pub async fn post_stream_to_api_with_client_and_headers(
     }
 
     Ok((Box::pin(response.bytes_stream()), response_headers))
+}
+
+// --- Wire-tap variants -------------------------------------------------
+//
+// These mirror the helpers above but feed a `WireTap` debug sink the raw
+// request bytes and the raw response. They delegate to the untapped
+// helpers so error/parse semantics are identical when no tap is
+// installed. On success the streaming variants tee every chunk; on a
+// non-2xx HTTP failure the error body is recovered from the returned
+// `AISdkError` (whose cause is the `APICallError` carrying
+// `response_body` + `status_code`) and fed to the sink — so HTTP 4xx/5xx
+// bodies are captured on both the streaming and JSON paths.
+
+/// Wrap a byte stream so each chunk is mirrored to `tap` as it flows.
+/// Returns the stream unchanged when `tap` is `None` (zero overhead).
+pub fn tap_byte_stream(stream: ByteStream, tap: Option<WireTapHandle>) -> ByteStream {
+    use futures::StreamExt;
+    match tap {
+        Some(t) => Box::pin(stream.inspect(move |item| {
+            if let Ok(bytes) = item {
+                t.on_response_chunk(bytes.as_ref());
+            }
+        })),
+        None => stream,
+    }
+}
+
+/// Feed the outgoing request to `tap` before send.
+fn tap_request(
+    tap: &Option<WireTapHandle>,
+    url: &str,
+    headers: &Option<HashMap<String, String>>,
+    body: &Value,
+) {
+    if let Some(t) = tap {
+        let header_map = headers.clone().unwrap_or_default();
+        let body_bytes = serde_json::to_vec(body).unwrap_or_default();
+        t.on_request(url, &header_map, &body_bytes);
+    }
+}
+
+/// Feed a failed HTTP response's body to `tap`. The body + status are
+/// recovered from the `APICallError` cause that the transport helpers
+/// attach on a non-2xx response; if that's absent (a transport-level
+/// failure), the error message itself is captured so the dump is never
+/// silently empty.
+fn tap_error(tap: &Option<WireTapHandle>, err: &AISdkError) {
+    let Some(t) = tap else { return };
+    if let Some(api) = err
+        .cause
+        .as_deref()
+        .and_then(|c| c.downcast_ref::<APICallError>())
+    {
+        let status = api.status_code.unwrap_or(0);
+        let body = api.response_body.as_deref().unwrap_or(&api.message);
+        t.on_response_body(status, &HashMap::new(), body.as_bytes());
+    } else {
+        t.on_response_body(0, &HashMap::new(), err.message.as_bytes());
+    }
+}
+
+/// [`post_json_to_api_with_client`] with a wire-tap sink.
+#[allow(clippy::too_many_arguments)]
+pub async fn post_json_to_api_with_client_tapped<T>(
+    url: &str,
+    headers: Option<HashMap<String, String>>,
+    body: &Value,
+    success_handler: impl ResponseHandler<T>,
+    error_handler: impl ResponseHandler<AISdkError>,
+    abort_signal: Option<CancellationToken>,
+    client: Option<Arc<reqwest::Client>>,
+    tap: Option<WireTapHandle>,
+) -> Result<T, AISdkError> {
+    tap_request(&tap, url, &headers, body);
+    post_json_to_api_with_client(
+        url,
+        headers,
+        body,
+        success_handler,
+        error_handler,
+        abort_signal,
+        client,
+    )
+    .await
+    .inspect_err(|e| tap_error(&tap, e))
+}
+
+/// [`post_json_to_api_with_client_and_headers`] with a wire-tap sink.
+#[allow(clippy::too_many_arguments)]
+pub async fn post_json_to_api_with_client_and_headers_tapped<T>(
+    url: &str,
+    headers: Option<HashMap<String, String>>,
+    body: &Value,
+    success_handler: impl ResponseHandler<T>,
+    error_handler: impl ResponseHandler<AISdkError>,
+    abort_signal: Option<CancellationToken>,
+    client: Option<Arc<reqwest::Client>>,
+    tap: Option<WireTapHandle>,
+) -> Result<ApiResponse<T>, AISdkError> {
+    tap_request(&tap, url, &headers, body);
+    post_json_to_api_with_client_and_headers(
+        url,
+        headers,
+        body,
+        success_handler,
+        error_handler,
+        abort_signal,
+        client,
+    )
+    .await
+    .inspect_err(|e| tap_error(&tap, e))
+}
+
+/// [`post_stream_to_api_with_client`] with a wire-tap sink: feeds the
+/// request, then tees every response chunk to `tap`.
+pub async fn post_stream_to_api_with_client_tapped(
+    url: &str,
+    headers: Option<HashMap<String, String>>,
+    body: &Value,
+    abort_signal: Option<CancellationToken>,
+    client: Option<Arc<reqwest::Client>>,
+    tap: Option<WireTapHandle>,
+) -> Result<ByteStream, AISdkError> {
+    tap_request(&tap, url, &headers, body);
+    let stream = post_stream_to_api_with_client(url, headers, body, abort_signal, client)
+        .await
+        .inspect_err(|e| tap_error(&tap, e))?;
+    Ok(tap_byte_stream(stream, tap))
+}
+
+/// [`post_stream_to_api_with_client_and_headers`] with a wire-tap sink.
+pub async fn post_stream_to_api_with_client_and_headers_tapped(
+    url: &str,
+    headers: Option<HashMap<String, String>>,
+    body: &Value,
+    abort_signal: Option<CancellationToken>,
+    client: Option<Arc<reqwest::Client>>,
+    tap: Option<WireTapHandle>,
+) -> Result<(ByteStream, HashMap<String, String>), AISdkError> {
+    tap_request(&tap, url, &headers, body);
+    let (stream, response_headers) =
+        post_stream_to_api_with_client_and_headers(url, headers, body, abort_signal, client)
+            .await
+            .inspect_err(|e| tap_error(&tap, e))?;
+    Ok((tap_byte_stream(stream, tap), response_headers))
 }
 
 /// Error handler trait for API errors.

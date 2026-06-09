@@ -22,6 +22,7 @@ use crate::provider::PartialProviderConfig;
 use crate::sandbox_settings::SandboxSettings;
 use crate::sections::PartialAgentTeamsSettings;
 use crate::sections::PartialApiSettings;
+use crate::sections::PartialDiagnosticsSettings;
 use crate::sections::PartialLoopSettings;
 use crate::sections::PartialLspSettings;
 use crate::sections::PartialMcpRuntimeSettings;
@@ -100,6 +101,10 @@ pub struct Settings {
     pub web_fetch: PartialWebFetchSettings,
     #[serde(default)]
     pub web_search: PartialWebSearchSettings,
+    /// Diagnostics knobs (LLM wire-traffic dumper). Resolved into
+    /// `RuntimeConfig.diagnostics` (`DiagnosticsConfig`).
+    #[serde(default)]
+    pub diagnostics: PartialDiagnosticsSettings,
     /// LSP tool-layer knobs. Resolved into `RuntimeConfig.lsp`
     /// (`LspConfig`); the file-size gate ships today, future fields
     /// (per-server overrides, prewarm policy) land in the same slot.

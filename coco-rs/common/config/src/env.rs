@@ -56,6 +56,13 @@ pub enum EnvKey {
     CocoBashMaintainProjectWorkingDir,
     CocoBubblewrap,
     CocoConfigDir,
+    /// LLM wire-traffic dump verbosity: `off` (default) / `error` / `all`.
+    /// Overrides `diagnostics.wire_dump` in settings.json. Dumps land under
+    /// `<session_dir>/wire/`.
+    CocoDiagnosticsWireDump,
+    /// Max bytes persisted per request/response body before truncation
+    /// (default 1 MiB). Overrides `diagnostics.wire_dump_max_body_bytes`.
+    CocoDiagnosticsWireMaxBytes,
     /// Truthy ⇒ suppress the git-status block in the system prompt; defined-falsy
     /// ⇒ force it on (overriding the `include_git_instructions` setting). TS
     /// parity: `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` in `utils/gitSettings.ts`.
@@ -344,6 +351,8 @@ impl EnvKey {
             Self::CocoBashMaintainProjectWorkingDir => "COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR",
             Self::CocoBubblewrap => "COCO_BUBBLEWRAP",
             Self::CocoConfigDir => "COCO_CONFIG_DIR",
+            Self::CocoDiagnosticsWireDump => "COCO_DIAGNOSTICS_WIRE_DUMP",
+            Self::CocoDiagnosticsWireMaxBytes => "COCO_DIAGNOSTICS_WIRE_MAX_BYTES",
             Self::CocoDisableGitInstructions => "COCO_DISABLE_GIT_INSTRUCTIONS",
             Self::CocoDisableFastMode => "COCO_DISABLE_FAST_MODE",
             Self::CocoDisablePolicySkills => "COCO_DISABLE_POLICY_SKILLS",

@@ -263,6 +263,11 @@ pub struct QueryEngineConfig {
     /// (`DISABLE_COMPACT`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, …) are
     /// folded in by `coco_config::CompactConfig::resolve` at startup.
     pub compact: coco_config::CompactConfig,
+    /// Per-session raw-wire debug dumper. `Some` only when
+    /// `diagnostics.wire_dump` is `error`/`all`; built by the bootstrap
+    /// with the session's `wire/` directory. `None` means no capture and
+    /// zero overhead.
+    pub wire_dump: Option<coco_wire_dump::WireDumpConfig>,
     /// System-reminder subsystem configuration (per-generator toggles,
     /// timeout, critical-instruction payload). Bootstrap reads
     /// `settings.system_reminder` from `coco-config::Settings` and
@@ -420,6 +425,7 @@ impl Default for QueryEngineConfig {
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
             compact: coco_config::CompactConfig::default(),
+            wire_dump: None,
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: ToolConfig::default(),
             sandbox_config: SandboxSettings::default(),

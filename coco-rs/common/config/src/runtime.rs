@@ -27,6 +27,7 @@ use crate::provider::ProviderConfig;
 use crate::sandbox_settings::SandboxSettings;
 use crate::sections::AgentTeamsConfig;
 use crate::sections::ApiConfig;
+use crate::sections::DiagnosticsConfig;
 use crate::sections::LoopConfig;
 use crate::sections::LspConfig;
 use crate::sections::McpRuntimeConfig;
@@ -67,6 +68,9 @@ pub struct RuntimeConfig {
     pub mcp: McpRuntimeConfig,
     pub web_fetch: WebFetchConfig,
     pub web_search: WebSearchConfig,
+    /// Diagnostics knobs (LLM wire-traffic dumper). Consumed by
+    /// `app/query` to build the per-session wire recorder.
+    pub diagnostics: DiagnosticsConfig,
     /// LSP tool-layer knobs. Server roster (`lsp_servers.json`) lives
     /// in `coco-lsp`; this struct only carries cross-server tool-side
     /// limits (file-size gate, future timeout / prewarm policy).
@@ -345,6 +349,7 @@ pub fn build_runtime_config_with(
         mcp: McpRuntimeConfig::resolve(merged, &env),
         web_fetch: WebFetchConfig::resolve(merged),
         web_search: WebSearchConfig::resolve(merged),
+        diagnostics: DiagnosticsConfig::resolve(merged, &env),
         lsp: LspConfig::resolve(merged, &env),
         paths: PathConfig::resolve(merged),
         compact: CompactConfig::resolve(merged, &env),

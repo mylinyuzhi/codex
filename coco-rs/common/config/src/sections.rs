@@ -754,6 +754,113 @@ pub struct PartialWebFetchSettings {
     pub user_agent: Option<String>,
 }
 
+/// 1 MiB default cap per persisted request/response body.
+const DEFAULT_WIRE_DUMP_MAX_BODY_BYTES: i64 = 1024 * 1024;
+
+/// Verbosity for raw LLM wire-traffic dumps written under the session
+/// directory (`<session_dir>/wire/`). Off by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireDumpLevel {
+    /// No capture; zero overhead.
+    #[default]
+    Off,
+    /// Capture every call, but persist a request/response triplet only
+    /// when the call fails; successful calls write only an index line.
+    Error,
+    /// Persist every call's request and response.
+    All,
+}
+
+impl WireDumpLevel {
+    /// Canonical lowercase token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Error => "error",
+            Self::All => "all",
+        }
+    }
+
+    /// Parse a settings / env token. Tolerant of common synonyms so a
+    /// `COCO_DIAGNOSTICS_WIRE_DUMP=1` still does something sensible.
+    pub fn from_token(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "false" | "0" | "none" | "" => Some(Self::Off),
+            "error" | "errors" | "error_only" => Some(Self::Error),
+            "all" | "true" | "1" | "full" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    /// Whether capture is disabled.
+    pub fn is_off(self) -> bool {
+        matches!(self, Self::Off)
+    }
+}
+
+/// Diagnostics knobs (currently only the LLM wire-traffic dumper).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticsConfig {
+    /// Verbosity for the wire-traffic dumper.
+    pub wire_dump: WireDumpLevel,
+    /// Max bytes persisted per request/response body before truncation.
+    pub wire_dump_max_body_bytes: i64,
+    /// Redact known secret patterns before writing. Leave on except for
+    /// self-host debugging.
+    pub wire_dump_redact: bool,
+}
+
+impl Default for DiagnosticsConfig {
+    fn default() -> Self {
+        Self {
+            wire_dump: WireDumpLevel::Off,
+            wire_dump_max_body_bytes: DEFAULT_WIRE_DUMP_MAX_BODY_BYTES,
+            wire_dump_redact: true,
+        }
+    }
+}
+
+impl DiagnosticsConfig {
+    pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
+        let mut config = Self::default();
+        if let Some(v) = &settings.diagnostics.wire_dump
+            && let Some(level) = WireDumpLevel::from_token(v)
+        {
+            config.wire_dump = level;
+        }
+        if let Some(v) = settings.diagnostics.wire_dump_max_body_bytes {
+            config.wire_dump_max_body_bytes = v;
+        }
+        if let Some(v) = settings.diagnostics.wire_dump_redact {
+            config.wire_dump_redact = v;
+        }
+        // Env layer wins over settings.
+        if let Some(s) = env.get(EnvKey::CocoDiagnosticsWireDump) {
+            match WireDumpLevel::from_token(s) {
+                Some(level) => config.wire_dump = level,
+                None => tracing::warn!(
+                    value = s,
+                    "ignoring COCO_DIAGNOSTICS_WIRE_DUMP: expected off|error|all"
+                ),
+            }
+        }
+        if let Some(v) = env.get_i64(EnvKey::CocoDiagnosticsWireMaxBytes) {
+            config.wire_dump_max_body_bytes = v;
+        }
+        config.wire_dump_max_body_bytes = config.wire_dump_max_body_bytes.max(0);
+        config
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PartialDiagnosticsSettings {
+    pub wire_dump: Option<String>,
+    pub wire_dump_max_body_bytes: Option<i64>,
+    pub wire_dump_redact: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebFetchConfig {
     pub timeout_secs: i64,

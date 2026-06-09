@@ -33,8 +33,8 @@ use vercel_ai_provider_utils::StreamingToolCallTracker;
 use vercel_ai_provider_utils::StreamingToolCallTrackerOptions;
 use vercel_ai_provider_utils::ToolCallDeltaFunction;
 use vercel_ai_provider_utils::is_custom_reasoning;
-use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers;
-use vercel_ai_provider_utils::post_stream_to_api_with_client_and_headers;
+use vercel_ai_provider_utils::post_json_to_api_with_client_and_headers_tapped;
+use vercel_ai_provider_utils::post_stream_to_api_with_client_and_headers_tapped;
 
 use crate::metadata_extractor::StreamMetadataExtractor;
 use crate::openai_compatible_config::OpenAICompatibleConfig;
@@ -255,7 +255,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
         let provider_name = self.config.provider_options_name();
 
         let api_response =
-            post_json_to_api_with_client_and_headers::<OpenAICompatibleChatResponse>(
+            post_json_to_api_with_client_and_headers_tapped::<OpenAICompatibleChatResponse>(
                 &url,
                 Some(headers),
                 &body,
@@ -263,6 +263,7 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
                 self.config.error_handler.clone(),
                 abort_signal,
                 self.config.client.clone(),
+                options.wire_tap.clone(),
             )
             .await?;
 
@@ -468,12 +469,13 @@ impl LanguageModelV4 for OpenAICompatibleChatLanguageModel {
         let headers = self.config.get_headers();
         let provider_name = self.config.provider_options_name();
 
-        let (byte_stream, response_headers) = post_stream_to_api_with_client_and_headers(
+        let (byte_stream, response_headers) = post_stream_to_api_with_client_and_headers_tapped(
             &url,
             Some(headers),
             &body,
             abort_signal,
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 

@@ -29,8 +29,8 @@ use vercel_ai_provider::TextPart;
 use vercel_ai_provider::ToolCallPart;
 use vercel_ai_provider::Warning;
 use vercel_ai_provider_utils::JsonResponseHandler;
-use vercel_ai_provider_utils::post_json_to_api_with_client;
-use vercel_ai_provider_utils::post_stream_to_api_with_client;
+use vercel_ai_provider_utils::post_json_to_api_with_client_tapped;
+use vercel_ai_provider_utils::post_stream_to_api_with_client_tapped;
 
 use crate::anthropic_config::AnthropicConfig;
 use crate::anthropic_error::AnthropicFailedResponseHandler;
@@ -1029,7 +1029,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
         let (body, headers, warnings) = self.get_args(options, false)?;
         let url = self.config.url("/messages");
 
-        let response: AnthropicMessagesResponse = post_json_to_api_with_client(
+        let response: AnthropicMessagesResponse = post_json_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
@@ -1037,6 +1037,7 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
             AnthropicFailedResponseHandler,
             abort_signal,
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 
@@ -1475,12 +1476,13 @@ impl LanguageModelV4 for AnthropicMessagesLanguageModel {
         let url = self.config.url("/messages");
         let include_raw = options.include_raw_chunks.unwrap_or(false);
 
-        let byte_stream = post_stream_to_api_with_client(
+        let byte_stream = post_stream_to_api_with_client_tapped(
             &url,
             Some(headers),
             &body,
             abort_signal,
             self.config.client.clone(),
+            options.wire_tap.clone(),
         )
         .await?;
 

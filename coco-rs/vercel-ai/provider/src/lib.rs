@@ -182,6 +182,8 @@ pub use language_model::LanguageModelV4StreamPart;
 pub use language_model::Source;
 pub use language_model::StreamError;
 pub use language_model::ToolApprovalRequest;
+pub use language_model::WireTap;
+pub use language_model::WireTapHandle;
 
 // Response metadata
 pub use response_metadata::ResponseMetadata;

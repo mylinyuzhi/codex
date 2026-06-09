@@ -679,6 +679,7 @@ Added in Round 2 review:
 | `ui/migration-roadmap.md` | Historical TUI migration notes; not the final product organization. |
 | `ui/rendering-hardening-and-rollback.md` | TUI rendering-layer hardening: cursor pin (single decision point + post-draw queue) and suspend/resume (Ctrl+Z keystroke + libc::kill). Records why the stock-ratatui inline viewport experiment was rolled back. |
 | `ui/native-scrollback-architecture.md` | Native terminal scrollback architecture for coco-tui, based on codex-rs custom terminal / insert-history / transcript-reflow design rather than stock ratatui inline viewport. |
+| `ui/single-render-path-refactor.md` | Refactor plan to collapse the streaming→scrollback seam onto a single render path (codex-rs stable/tail watermark model), removing the `#160` provisional-commit / finalize-reconcile machinery and restoring native-scrollback Core Decision #4. |
 | `config-file-map.md` | Every file coco-rs reads/writes, which crate owns it |
 | `audit-gaps.md` | Gap analysis with fix status and priority |
 | `current-gap-fix-plan.md` | Current prioritized fix plan for active gaps, plus stale audit rows to clean up before assigning implementation work. |

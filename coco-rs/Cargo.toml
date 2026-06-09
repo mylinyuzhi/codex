@@ -57,7 +57,7 @@ members = [
     "vercel-ai/anthropic",
     "vercel-ai/bytedance",
 
-    # ─── services/ (8) ───
+    # ─── services/ (9) ───
     "services/inference",
     "services/mcp",
     "services/mcp-skills",
@@ -66,6 +66,7 @@ members = [
     "services/lsp",
     "services/compact",
     "services/provider-auth",
+    "services/wire-dump",
 
     # ─── core/ (7) ───
     "core/messages",
@@ -184,6 +185,7 @@ coco-mcp-types = { path = "services/mcp-types" }
 coco-rmcp-client = { path = "services/rmcp-client" }
 coco-lsp = { path = "services/lsp" }
 coco-compact = { path = "services/compact" }
+coco-wire-dump = { path = "services/wire-dump" }
 coco-test-harness = { path = "tests/harness" }
 
 # Internal - core

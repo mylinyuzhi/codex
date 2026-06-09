@@ -1823,6 +1823,7 @@ dependencies = [
  "coco-tools",
  "coco-types",
  "coco-utils-json-repair",
+ "coco-wire-dump",
  "futures",
  "lru",
  "once_cell",
@@ -2574,6 +2575,19 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+]
+
+[[package]]
+name = "coco-wire-dump"
+version = "0.0.0"
+dependencies = [
+ "coco-config",
+ "coco-secret-redact",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
