@@ -576,6 +576,26 @@ pub async fn bootstrap_session_mcp(
     runtime.attach_mcp_manager(manager.clone()).await;
     runtime.attach_mcp_handle(Arc::new(adapter)).await;
 
+    // Post-OAuth reconnect → registry re-reconcile. The manager can't touch
+    // the `ToolRegistry` (layering), so it notifies this app-layer listener
+    // with the server name after each background reconnect settles; we then
+    // install real tools (success) or re-surface the authenticate tool (login
+    // failed). This is what makes the model-driven authenticate flow complete:
+    // the per-server pseudo-tool starts OAuth, and on completion the real tools
+    // swap in automatically (TS: the McpAuthTool background `setAppState`).
+    {
+        let (reconnect_tx, mut reconnect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        manager.lock().await.set_reconnect_notifier(reconnect_tx);
+        let listener_manager = manager.clone();
+        let listener_registry = runtime.tools().clone();
+        tokio::spawn(async move {
+            while let Some(server) = reconnect_rx.recv().await {
+                let snapshot = listener_manager.lock().await.clone();
+                reconcile_mcp_server_registration(&snapshot, &listener_registry, &server).await;
+            }
+        });
+    }
+
     // Connect + tool registration. Each server connects concurrently; a failure /
     // timeout logs and is skipped so the registry degrades gracefully. MCP skills
     // sync once connections settle. `await_connect` chooses the timing:
@@ -628,6 +648,16 @@ pub(crate) async fn connect_and_register_mcp(
         ) {
             continue;
         }
+        // Skip a doomed connect and surface the authenticate tool directly,
+        // either because the server recently 401'd (cached, TS `isMcpAuthCached`)
+        // or because we hold OAuth discovery for it but no usable token (TS
+        // `hasMcpDiscoveryButNoToken`). Both avoid a network round-trip.
+        if snapshot.is_needs_auth_cached(&name).await || snapshot.needs_auth_without_connect(&name)
+        {
+            snapshot.mark_needs_auth(&name).await;
+            reconcile_mcp_server_registration(&snapshot, &registry, &name).await;
+            continue;
+        }
         let registry = registry.clone();
         set.spawn(async move {
             let send: coco_mcp::SendElicitation = Box::new(|_id, _req| {
@@ -643,28 +673,57 @@ pub(crate) async fn connect_and_register_mcp(
             )
             .await
             {
-                Ok(Ok(())) => {
-                    let schemas =
-                        crate::sdk_server::handlers::mcp::collect_server_schemas_for_manager(
-                            &snapshot, &name,
-                        )
-                        .await;
-                    let report = coco_tools::register_mcp_tools(&registry, &name, schemas);
-                    tracing::info!(
-                        server = %name,
-                        tools = report.registered.len(),
-                        skipped = report.skipped.len(),
-                        "MCP server connected; tools registered"
-                    );
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(server = %name, error = %e, "MCP connect failed; skipping")
+                // A connect `Err` is no longer terminal: it may have landed in
+                // NeedsAuth (a 401 for lack of credentials). Reconcile by the
+                // resulting state rather than the `Result`.
+                Ok(Ok(())) | Ok(Err(_)) => {
+                    reconcile_mcp_server_registration(&snapshot, &registry, &name).await;
                 }
                 Err(_) => tracing::warn!(server = %name, "MCP connect timed out; skipping"),
             }
         });
     }
     while set.join_next().await.is_some() {}
+}
+
+/// Reconcile the tool registry for one MCP server against its current
+/// connection state: install real tools when `Connected`, surface the
+/// per-server `mcp__<server>__authenticate` pseudo-tool when `NeedsAuth`, and
+/// leave existing registrations untouched otherwise. The "leave untouched"
+/// arm is the fix for the strand hole — a transient `Failed`/`Pending` must not
+/// deregister an already-surfaced auth tool (TS keeps it alive via the
+/// needs-auth cache). Reused by [`connect_and_register_mcp`] and the
+/// post-OAuth reconnect listener in [`bootstrap_session_mcp`].
+pub(crate) async fn reconcile_mcp_server_registration(
+    manager: &coco_mcp::McpConnectionManager,
+    registry: &coco_tool_runtime::ToolRegistry,
+    name: &str,
+) {
+    match manager.get_state(name).await {
+        Some(coco_mcp::McpConnectionState::Connected(_)) => {
+            let schemas =
+                crate::sdk_server::handlers::mcp::collect_server_schemas_for_manager(manager, name)
+                    .await;
+            let report = coco_tools::register_mcp_tools(registry, name, schemas);
+            tracing::info!(
+                server = %name,
+                tools = report.registered.len(),
+                skipped = report.skipped.len(),
+                "MCP server connected; tools registered"
+            );
+        }
+        Some(coco_mcp::McpConnectionState::NeedsAuth { .. }) => {
+            if let Some((transport, url)) = manager.auth_descriptor(name) {
+                coco_tools::register_mcp_auth_tool(registry, name, &transport, url.as_deref());
+                tracing::info!(
+                    server = %name,
+                    %transport,
+                    "MCP server needs auth; surfaced per-server authenticate tool"
+                );
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

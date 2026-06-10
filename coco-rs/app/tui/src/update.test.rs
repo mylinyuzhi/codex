@@ -1733,3 +1733,73 @@ async fn ctrl_a_moves_cursor_to_start_visually_correct_for_cjk() {
 
     assert_eq!(state.ui.input.textarea.cursor(), 0);
 }
+
+fn toggle_test_prompt(request_id: &str) -> crate::state::PermissionPromptState {
+    crate::state::PermissionPromptState {
+        request_id: request_id.to_string(),
+        tool_name: "Bash".to_string(),
+        description: "Run?".to_string(),
+        detail: crate::state::PermissionDetail::Generic {
+            input_preview: "ls".to_string(),
+        },
+        risk_level: None,
+        show_always_allow: false,
+        classifier_checking: false,
+        classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Text("ls".to_string()),
+        original_input: None,
+        permission_suggestions: vec![],
+        worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
+    }
+}
+
+#[tokio::test]
+async fn toggle_permission_explanation_opens_panel_and_requests_fetch() {
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(toggle_test_prompt("req-1")));
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::TogglePermissionExplanation, &tx).await;
+
+    // Panel opens, fetch kicked off (Loading), and a request is dispatched.
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(PanePromptState::Permission(p)) => {
+            assert!(p.explanation_visible);
+            assert!(matches!(
+                p.explanation,
+                crate::state::ExplainerFetch::Loading
+            ));
+        }
+        _ => panic!("expected permission prompt"),
+    }
+    match rx.try_recv() {
+        Ok(UserCommand::RequestPermissionExplanation { request_id, .. }) => {
+            assert_eq!(request_id, "req-1");
+        }
+        other => panic!("expected RequestPermissionExplanation, got {other:?}"),
+    }
+
+    // Toggling again collapses the panel — no re-fetch (already Loading).
+    handle_command(&mut state, TuiCommand::TogglePermissionExplanation, &tx).await;
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(PanePromptState::Permission(p)) => assert!(!p.explanation_visible),
+        _ => panic!("expected permission prompt"),
+    }
+    assert!(rx.try_recv().is_err(), "must not re-request on re-toggle");
+}
+
+#[tokio::test]
+async fn toggle_permission_explanation_noop_without_prompt() {
+    let mut state = AppState::new();
+    let (tx, mut rx) = drained_channel();
+    // No active permission prompt → Ctrl+E does nothing and dispatches nothing.
+    let changed = handle_command(&mut state, TuiCommand::TogglePermissionExplanation, &tx).await;
+    assert!(!changed);
+    assert!(rx.try_recv().is_err());
+}

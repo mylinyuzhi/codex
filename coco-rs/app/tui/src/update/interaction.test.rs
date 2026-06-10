@@ -242,6 +242,8 @@ fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
         original_input: Some(serde_json::json!({"plan": "do the thing"})),
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     }));
     s
 }
@@ -346,6 +348,8 @@ async fn confirm_classic_yes_no_approves_selected_action() {
         original_input: None,
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -387,6 +391,8 @@ async fn confirm_classic_always_allow_sends_session_update() {
         original_input: None,
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -430,6 +436,8 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
         original_input: Some(serde_json::json!({"file_path": file.to_string_lossy()})),
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -504,6 +512,8 @@ fn build_choice_payload_merges_with_original_input() {
         original_input: Some(serde_json::json!({"existing": 42, "other": "v"})),
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     };
     let out = build_choice_payload(&p).expect("payload built");
     assert_eq!(out["existing"], 42);
@@ -533,6 +543,8 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         original_input: None,
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     };
     assert!(build_choice_payload(&p).is_none());
 }

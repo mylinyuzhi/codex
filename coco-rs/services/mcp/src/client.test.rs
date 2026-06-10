@@ -162,3 +162,202 @@ async fn ensure_xaa_tokens_errors_on_missing_idp_token_without_stored_tokens() {
     .expect_err("missing idp token should fail before exchange");
     assert!(err.to_string().contains("oauth.xaa.idpIdToken"));
 }
+
+// ---------------------------------------------------------------------------
+// auth_descriptor + needs_auth_without_connect — per-server auth surfacing
+// ---------------------------------------------------------------------------
+
+fn register_http(
+    manager: &mut McpConnectionManager,
+    name: &str,
+    oauth: Option<crate::types::McpOAuthConfig>,
+) {
+    manager.register_server(crate::types::ScopedMcpServerConfig {
+        name: name.into(),
+        config: crate::types::McpServerConfig::Http(crate::types::McpHttpConfig {
+            url: "https://mcp.example.test/api".into(),
+            headers: Default::default(),
+            headers_helper: None,
+            oauth,
+        }),
+        scope: crate::types::ConfigScope::User,
+        plugin_source: None,
+    });
+}
+
+#[test]
+fn auth_descriptor_reports_http_transport_and_url() {
+    let mut manager = McpConnectionManager::new(std::env::temp_dir());
+    register_http(&mut manager, "remote", None);
+    assert_eq!(
+        manager.auth_descriptor("remote"),
+        Some((
+            "http".to_string(),
+            Some("https://mcp.example.test/api".to_string())
+        ))
+    );
+}
+
+#[test]
+fn auth_descriptor_reports_stdio_without_url() {
+    let mut manager = McpConnectionManager::new(std::env::temp_dir());
+    manager.register_server(crate::types::ScopedMcpServerConfig {
+        name: "local".into(),
+        config: crate::types::McpServerConfig::Stdio(crate::types::McpStdioConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: Default::default(),
+            cwd: None,
+        }),
+        scope: crate::types::ConfigScope::User,
+        plugin_source: None,
+    });
+    assert_eq!(
+        manager.auth_descriptor("local"),
+        Some(("stdio".to_string(), None))
+    );
+}
+
+#[test]
+fn auth_descriptor_none_for_unregistered_server() {
+    let manager = McpConnectionManager::new(std::env::temp_dir());
+    assert_eq!(manager.auth_descriptor("ghost"), None);
+}
+
+#[test]
+fn needs_auth_without_connect_false_for_stdio() {
+    let mut manager = McpConnectionManager::new(std::env::temp_dir());
+    manager.register_server(crate::types::ScopedMcpServerConfig {
+        name: "local".into(),
+        config: crate::types::McpServerConfig::Stdio(crate::types::McpStdioConfig {
+            command: "echo".into(),
+            args: vec![],
+            env: Default::default(),
+            cwd: None,
+        }),
+        scope: crate::types::ConfigScope::User,
+        plugin_source: None,
+    });
+    assert!(!manager.needs_auth_without_connect("local"));
+}
+
+#[test]
+fn needs_auth_without_connect_false_for_xaa_server() {
+    // XAA guard: an xaa-configured server can silently re-auth from a cached
+    // IdP id_token, so it must NOT be skip-surfaced (else the silent re-auth
+    // branch is unreachable). Mirrors TS hasMcpDiscoveryButNoToken XAA guard.
+    let mut manager = McpConnectionManager::new(std::env::temp_dir());
+    register_http(
+        &mut manager,
+        "xaa-srv",
+        Some(crate::types::McpOAuthConfig {
+            client_id: None,
+            xaa: Some(crate::types::McpXaaConfig {
+                client_id: None,
+                client_secret: None,
+                idp_client_id: None,
+                idp_client_secret: None,
+                idp_id_token: None,
+                idp_token_endpoint: None,
+                scope: None,
+            }),
+        }),
+    );
+    assert!(!manager.needs_auth_without_connect("xaa-srv"));
+}
+
+#[test]
+fn needs_auth_without_connect_false_when_no_discovery_entry() {
+    // A plain OAuth-capable server with no stored token entry has no discovery
+    // state yet, so we should still attempt the connect (returns false).
+    let mut manager = McpConnectionManager::new(std::env::temp_dir());
+    register_http(&mut manager, "fresh", None);
+    assert!(!manager.needs_auth_without_connect("fresh"));
+}
+
+// ---------------------------------------------------------------------------
+// has_discovery_but_no_token skip + XAA guard (discriminating cases) + notifier
+// ---------------------------------------------------------------------------
+
+/// URL hardcoded by `register_http` above — must match for the token store key.
+const REGISTERED_HTTP_URL: &str = "https://mcp.example.test/api";
+
+/// Seed the coco OAuth store with an entry that has no usable credentials
+/// (empty access token, no refresh token) — the steady-state "discovery but no
+/// token" condition `has_discovery_but_no_token` detects.
+fn seed_empty_token(home: &std::path::Path, name: &str, url: &str) {
+    let store = crate::auth::OAuthTokenStore::from_config_home(home);
+    let key = crate::auth::server_key(name, url);
+    store
+        .save(
+            &key,
+            &crate::auth::OAuthTokens {
+                access_token: String::new(),
+                refresh_token: None,
+                expires_at: None,
+                token_type: String::new(),
+            },
+        )
+        .unwrap();
+}
+
+fn xaa_oauth() -> crate::types::McpOAuthConfig {
+    crate::types::McpOAuthConfig {
+        client_id: None,
+        xaa: Some(crate::types::McpXaaConfig {
+            client_id: None,
+            client_secret: None,
+            idp_client_id: None,
+            idp_client_secret: None,
+            idp_id_token: None,
+            idp_token_endpoint: None,
+            scope: None,
+        }),
+    }
+}
+
+#[test]
+fn needs_auth_without_connect_true_when_discovery_but_no_token() {
+    let home = tempfile::tempdir().unwrap();
+    let mut manager = McpConnectionManager::new(home.path().to_path_buf());
+    register_http(&mut manager, "remote", None);
+    seed_empty_token(home.path(), "remote", REGISTERED_HTTP_URL);
+    assert!(
+        manager.needs_auth_without_connect("remote"),
+        "a non-XAA server with discovery state but no token would 401 → skip + surface auth tool"
+    );
+}
+
+#[test]
+fn needs_auth_without_connect_false_for_xaa_even_with_discovery_but_no_token() {
+    // XAA guard: even with the exact discovery-but-no-token condition that
+    // triggers a skip for a normal server, an XAA server must NOT be skipped —
+    // it can silently re-auth from a cached IdP id_token, so we must still
+    // attempt the connect (else the silent-reauth path is unreachable).
+    let home = tempfile::tempdir().unwrap();
+    let mut manager = McpConnectionManager::new(home.path().to_path_buf());
+    register_http(&mut manager, "xaa-srv", Some(xaa_oauth()));
+    seed_empty_token(home.path(), "xaa-srv", REGISTERED_HTTP_URL);
+    assert!(
+        !manager.needs_auth_without_connect("xaa-srv"),
+        "XAA silent-reauth servers must still attempt the connect"
+    );
+}
+
+#[tokio::test]
+async fn reconnect_notifier_receives_server_after_notify() {
+    // Layer C plumbing: a background reconnect notifies the app-layer listener
+    // with the server name so it can re-reconcile the tool registry.
+    let manager = McpConnectionManager::new(std::env::temp_dir());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    manager.set_reconnect_notifier(tx);
+    manager.notify_reconnect("remote");
+    assert_eq!(rx.recv().await, Some("remote".to_string()));
+}
+
+#[tokio::test]
+async fn reconnect_notifier_is_noop_without_listener() {
+    // No listener wired → notify must not panic (SDK / test paths).
+    let manager = McpConnectionManager::new(std::env::temp_dir());
+    manager.notify_reconnect("remote");
+}

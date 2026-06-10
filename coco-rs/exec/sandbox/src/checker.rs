@@ -3,11 +3,9 @@
 //! `PermissionChecker` is a fail-closed validator. When an approval bridge is
 //! installed (via [`SandboxState::set_approval_bridge`](crate::SandboxState),
 //! propagated through [`SandboxState::permission_checker`](crate::SandboxState)),
-//! the async variants [`PermissionChecker::check_path_async`] /
-//! [`PermissionChecker::check_network_async`] consult the bridge before
-//! returning a deny — mirroring TS's interactive "Allow this network call?"
-//! prompt (`createSandboxAskCallback`). Without a bridge they are identical to
-//! the sync `check_path` / `check_network`.
+//! the async variant [`PermissionChecker::check_path_async`] consults the bridge
+//! before returning a deny — mirroring TS's interactive "Allow this read/write?"
+//! prompt. Without a bridge it is identical to the sync `check_path`.
 //!
 //! Production consumers:
 //! - Read/Write/Edit pre-flight → [`PermissionChecker::check_path_async`]
@@ -15,8 +13,10 @@
 //! - SDK control channel → `SdkSandboxApprovalBridge`
 //!   (`app/cli/src/sdk_server`), installed onto the live `SandboxState`.
 //!
-//! The egress-proxy denied-CONNECT → `check_network_async` path and the
-//! interactive TUI approval bridge are tracked follow-ups (`audit-gaps.md`).
+//! Network approval is handled at the egress proxy itself (a `NetworkAskCallback`
+//! built from the installed bridge in `state.rs::build_network_ask_callback`),
+//! not here — a denied CONNECT consults the bridge before refusing, so the
+//! checker has no `check_network_async` counterpart.
 
 use std::path::Path;
 
@@ -334,31 +334,6 @@ impl PermissionChecker {
                             decision = "approved_by_bridge",
                             "sandbox.permission_check"
                         );
-                        Ok(())
-                    }
-                    SandboxApprovalDecision::Rejected => Err(e),
-                }
-            }
-        }
-    }
-
-    /// Async variant of [`Self::check_network`] — same semantics as
-    /// [`Self::check_path_async`] but for network access.
-    pub async fn check_network_async(&self) -> Result<()> {
-        match self.check_network() {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let Some(bridge) = self.approval_bridge.as_ref() else {
-                    return Err(e);
-                };
-                let request = SandboxApprovalRequest {
-                    operation: SandboxOperation::Network,
-                    path: String::new(),
-                    reason: e.to_string(),
-                };
-                match bridge.request_approval(request).await {
-                    SandboxApprovalDecision::Approved => {
-                        tracing::info!(decision = "approved_by_bridge", "sandbox.network_check");
                         Ok(())
                     }
                     SandboxApprovalDecision::Rejected => Err(e),

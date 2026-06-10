@@ -345,6 +345,16 @@ pub enum UserCommand {
         message_id: String,
         mode: RewindMode,
     },
+    /// Lazily fetch the LLM risk explanation for a permission prompt (the user
+    /// toggled the Ctrl+E explainer panel). The runner runs the explainer via
+    /// the session SideQuery handle and replies with
+    /// `TuiOnlyEvent::PermissionExplanationReady`. TS: `confirm:toggleExplanation`
+    /// → `generatePermissionExplanation`.
+    RequestPermissionExplanation {
+        request_id: String,
+        tool_name: String,
+        tool_input: serde_json::Value,
+    },
     /// Request selected-message restore diff stats.
     /// TS: fileHistoryGetDiffStats() before showing restore options.
     RequestDiffStats { message_id: String },

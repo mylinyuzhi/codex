@@ -237,3 +237,20 @@ async fn channel_close_returns_error() {
     // Pending map should not retain the entry.
     assert!(pending.read().await.is_empty());
 }
+
+#[tokio::test]
+async fn test_explain_risk_none_without_runtime() {
+    // No SessionRuntime bound -> the Weak upgrade fails -> graceful None
+    // (the explainer panel simply shows no risk badge).
+    let pending = new_pending_map();
+    let (tx, _rx) = mpsc::channel::<CoreEvent>(8);
+    let bridge = TuiPermissionBridge::new(tx, pending);
+    let input = serde_json::json!({"command": "rm -rf /"});
+    let params = coco_permissions::ExplainerParams {
+        tool_name: "Bash",
+        tool_input: &input,
+        tool_description: None,
+        messages: None,
+    };
+    assert!(bridge.explain_risk(params).await.is_none());
+}

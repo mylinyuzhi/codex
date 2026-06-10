@@ -29,18 +29,20 @@ use futures::stream::BoxStream;
 use reqwest::header::ACCEPT;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
-use rmcp::model::CallToolRequestParam;
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
+use rmcp::model::CallToolRequestParams as RmcpCallToolRequestParams;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
-use rmcp::model::CreateElicitationRequestParam;
+use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
 use rmcp::model::CustomNotification;
 use rmcp::model::CustomRequest;
 use rmcp::model::Extensions;
-use rmcp::model::InitializeRequestParam;
-use rmcp::model::PaginatedRequestParam;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::InitializeRequestParams as RmcpInitializeRequestParams;
+use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ReadResourceRequestParams as RmcpReadResourceRequestParams;
 use rmcp::model::ServerResult;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
@@ -150,6 +152,7 @@ impl StreamableHttpClient for SessionAwareHttpClient {
         message: ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
             .inner
@@ -160,6 +163,9 @@ impl StreamableHttpClient for SessionAwareHttpClient {
         }
         if let Some(sid) = session_id.as_ref() {
             request = request.header(HEADER_SESSION_ID, sid.as_ref());
+        }
+        for (name, value) in custom_headers {
+            request = request.header(name, value);
         }
 
         let response = request
@@ -217,10 +223,14 @@ impl StreamableHttpClient for SessionAwareHttpClient {
         uri: Arc<str>,
         session_id: Arc<str>,
         auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut request = self.inner.delete(uri.as_ref());
         if let Some(auth) = auth_header {
             request = request.bearer_auth(auth);
+        }
+        for (name, value) in custom_headers {
+            request = request.header(name, value);
         }
         let response = request
             .header(HEADER_SESSION_ID, session_id.as_ref())
@@ -244,6 +254,7 @@ impl StreamableHttpClient for SessionAwareHttpClient {
         session_id: Arc<str>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> std::result::Result<
         BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
@@ -258,6 +269,9 @@ impl StreamableHttpClient for SessionAwareHttpClient {
         }
         if let Some(auth) = auth_header {
             request = request.bearer_auth(auth);
+        }
+        for (name, value) in custom_headers {
+            request = request.header(name, value);
         }
 
         let response = request.send().await.map_err(Self::wrap_reqwest_error)?;
@@ -373,7 +387,7 @@ impl From<ClientOperationError> for RmcpClientError {
     }
 }
 
-pub type Elicitation = CreateElicitationRequestParam;
+pub type Elicitation = CreateElicitationRequestParams;
 pub type ElicitationResponse = CreateElicitationResult;
 
 /// Interface for sending elicitation requests to the UI and awaiting a response.
@@ -470,7 +484,7 @@ impl RmcpClient {
         timeout: Option<Duration>,
         send_elicitation: SendElicitation,
     ) -> Result<InitializeResult> {
-        let rmcp_params: InitializeRequestParam = convert_to_rmcp(params.clone())?;
+        let rmcp_params: RmcpInitializeRequestParams = convert_to_rmcp(params.clone())?;
         let client_handler = LoggingClientHandler::new(rmcp_params, send_elicitation);
 
         // Save initialization context so session recovery can re-handshake.
@@ -532,7 +546,7 @@ impl RmcpClient {
     ) -> Result<ListToolsWithConnectorIdResult> {
         self.refresh_oauth_if_needed().await;
         let rmcp_params = params
-            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .map(convert_to_rmcp::<_, PaginatedRequestParams>)
             .transpose()?;
         let result = self
             .run_service_operation("tools/list", timeout, {
@@ -581,7 +595,7 @@ impl RmcpClient {
     ) -> Result<ListResourcesResult> {
         self.refresh_oauth_if_needed().await;
         let rmcp_params = params
-            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .map(convert_to_rmcp::<_, PaginatedRequestParams>)
             .transpose()?;
         let result = self
             .run_service_operation("resources/list", timeout, {
@@ -604,7 +618,7 @@ impl RmcpClient {
     ) -> Result<ListPromptsResult> {
         self.refresh_oauth_if_needed().await;
         let rmcp_params = params
-            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .map(convert_to_rmcp::<_, PaginatedRequestParams>)
             .transpose()?;
         let result = self
             .run_service_operation("prompts/list", timeout, {
@@ -627,7 +641,7 @@ impl RmcpClient {
     ) -> Result<ListResourceTemplatesResult> {
         self.refresh_oauth_if_needed().await;
         let rmcp_params = params
-            .map(convert_to_rmcp::<_, PaginatedRequestParam>)
+            .map(convert_to_rmcp::<_, PaginatedRequestParams>)
             .transpose()?;
         let result = self
             .run_service_operation("resources/templates/list", timeout, {
@@ -649,7 +663,7 @@ impl RmcpClient {
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
         self.refresh_oauth_if_needed().await;
-        let rmcp_params: ReadResourceRequestParam = convert_to_rmcp(params)?;
+        let rmcp_params: RmcpReadResourceRequestParams = convert_to_rmcp(params)?;
         let result = self
             .run_service_operation("resources/read", timeout, {
                 let p = rmcp_params.clone();
@@ -678,7 +692,7 @@ impl RmcpClient {
             arguments,
             name: name.clone(),
         };
-        let rmcp_params: CallToolRequestParam = convert_to_rmcp(params)?;
+        let rmcp_params: RmcpCallToolRequestParams = convert_to_rmcp(params)?;
         let result = self
             .run_service_operation("tools/call", timeout, {
                 let p = rmcp_params.clone();
@@ -1105,7 +1119,9 @@ async fn create_oauth_transport_and_runtime(
     let manager = match oauth_state {
         OAuthState::Authorized(manager) => manager,
         OAuthState::Unauthorized(manager) => manager,
-        OAuthState::Session(_) | OAuthState::AuthorizedHttpClient(_) => {
+        // OAuthState is #[non_exhaustive] as of rmcp 1.7: Session /
+        // AuthorizedHttpClient and any future variants are unexpected here.
+        _ => {
             return Err(RmcpClientError::InvalidState {
                 state: "unexpected OAuth state during client setup",
             });

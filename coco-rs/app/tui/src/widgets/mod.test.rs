@@ -460,6 +460,8 @@ fn test_snapshot_with_permission_prompt() {
                 original_input: None,
                 permission_suggestions: vec![],
                 worker_badge: None,
+                explanation_visible: false,
+                explanation: crate::state::ExplainerFetch::NotFetched,
             },
         ));
     mark_retained_surface_visible(&mut state);

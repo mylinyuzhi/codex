@@ -70,18 +70,37 @@ pub fn extract_paths_from_command(command_name: &str, args: &[&str]) -> Vec<Stri
     }
 }
 
-/// Validate all output redirections in a command.
-///
-/// Returns Some(reason) if a redirection is to a dangerous path.
-pub fn check_redirect_paths(redirects: &[(String, String)], cwd: &str) -> Option<String> {
-    for (operator, target) in redirects {
-        if matches!(operator.as_str(), ">" | ">>" | "&>")
-            && let Some(reason) = check_dangerous_path("redirect", target, cwd)
-        {
-            return Some(reason);
+/// Commands whose positional arguments WRITE or CREATE filesystem entries.
+/// A target outside the allowed working dirs is force-asked by the bash
+/// permission gate (TS `validateCommandPaths` for write/create operation
+/// types). Read commands (`cat`/`ls`/`grep`/`cd`/…) are intentionally NOT
+/// fenced here: gating routine out-of-cwd navigation/inspection (`ls ..`,
+/// `cat ../x`) would be too noisy, and reads are non-destructive — they rely on
+/// the Read tool's own fence plus the kernel sandbox layer when enabled.
+const WRITE_PATH_COMMANDS: &[&str] = &["rm", "rmdir", "mv", "cp", "touch", "mkdir"];
+
+/// Extract write/create path targets from each subcommand (env + wrapper
+/// stripped) for out-of-tree validation by the bash permission gate. Reuses the
+/// per-command `PATH_EXTRACTORS` shapes. Pure — the allowed-dirs decision lives
+/// in `core/tools` (it needs `coco_permissions`, which `coco-shell` must not
+/// depend on; see the layering note in the hardening doc §3.3).
+pub fn extract_write_path_targets(command: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    for sub in crate::bash_permissions::split_compound_command(command) {
+        // Strip leading env vars + safe wrappers (`timeout`/`nice`/…) so a
+        // wrapped write (`FOO=1 timeout 5 cp x /etc`) can't bypass the gate.
+        let stripped = crate::bash_permissions::strip_safe_wrappers(
+            &crate::bash_permissions::strip_all_env_vars(sub.trim(), /*check_hijack*/ false),
+        );
+        let base = crate::mode_validation::extract_base_executable(&stripped);
+        if !WRITE_PATH_COMMANDS.contains(&base) {
+            continue;
         }
+        let argv = subcommand_argv(&stripped);
+        let args: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
+        targets.extend(extract_paths_from_command(base, &args));
     }
-    None
+    targets
 }
 
 // ── Force-ask gates (consumed by BashTool::check_permissions) ──

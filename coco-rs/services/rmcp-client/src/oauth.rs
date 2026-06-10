@@ -20,12 +20,12 @@ use crate::Result;
 use crate::ResultExt;
 use crate::RmcpClientError;
 use oauth2::AccessToken;
-use oauth2::EmptyExtraTokenFields;
 use oauth2::RefreshToken;
 use oauth2::Scope;
 use oauth2::TokenResponse;
 use oauth2::basic::BasicTokenType;
 use rmcp::transport::auth::OAuthTokenResponse;
+use rmcp::transport::auth::VendorExtraTokenFields;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -222,7 +222,7 @@ pub fn save_oauth_access_token(params: OAuthAccessTokenSave<'_>) -> Result<()> {
     let mut token_response = OAuthTokenResponse::new(
         AccessToken::new(params.access_token),
         BasicTokenType::Bearer,
-        EmptyExtraTokenFields {},
+        VendorExtraTokenFields::default(),
     );
     if let Some(refresh_token) = params.refresh_token {
         token_response.set_refresh_token(Some(RefreshToken::new(refresh_token)));
@@ -509,7 +509,7 @@ fn load_oauth_tokens_from_file(
         let mut token_response = OAuthTokenResponse::new(
             AccessToken::new(entry.access_token.clone()),
             BasicTokenType::Bearer,
-            EmptyExtraTokenFields {},
+            VendorExtraTokenFields::default(),
         );
 
         if let Some(refresh) = entry.refresh_token.clone() {

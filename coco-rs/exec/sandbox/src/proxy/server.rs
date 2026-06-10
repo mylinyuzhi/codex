@@ -9,6 +9,7 @@ use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use super::NetworkAskCallback;
 use super::filter::DomainFilter;
 
 /// Combined HTTP CONNECT and SOCKS5 proxy server.
@@ -34,15 +35,19 @@ impl ProxyServer {
         filter: Arc<DomainFilter>,
         cancel_token: CancellationToken,
     ) -> anyhow::Result<Self> {
-        Self::start_with_ports(filter, cancel_token, None, None).await
+        Self::start_with_ports(filter, cancel_token, None, None, None).await
     }
 
     /// Start proxy servers with optional fixed ports.
+    ///
+    /// `ask_cb`, when `Some`, is consulted on a denied CONNECT before refusing —
+    /// an approving callback (the user said yes) lets the connection through.
     pub async fn start_with_ports(
         filter: Arc<DomainFilter>,
         cancel_token: CancellationToken,
         fixed_http_port: Option<u16>,
         fixed_socks_port: Option<u16>,
+        ask_cb: Option<NetworkAskCallback>,
     ) -> anyhow::Result<Self> {
         let http_addr = match fixed_http_port {
             Some(port) => format!("127.0.0.1:{port}"),
@@ -63,16 +68,18 @@ impl ProxyServer {
         let http_handle = {
             let filter = Arc::clone(&filter);
             let token = cancel_token.clone();
+            let ask_cb = ask_cb.clone();
             tokio::spawn(async move {
-                run_http_proxy(http_listener, filter, token).await;
+                run_http_proxy(http_listener, filter, token, ask_cb).await;
             })
         };
 
         let socks_handle = {
             let filter = Arc::clone(&filter);
             let token = cancel_token.clone();
+            let ask_cb = ask_cb.clone();
             tokio::spawn(async move {
-                run_socks_proxy(socks_listener, filter, token).await;
+                run_socks_proxy(socks_listener, filter, token, ask_cb).await;
             })
         };
 
@@ -122,6 +129,7 @@ async fn run_http_proxy(
     listener: TcpListener,
     filter: Arc<DomainFilter>,
     cancel_token: CancellationToken,
+    ask_cb: Option<NetworkAskCallback>,
 ) {
     loop {
         tokio::select! {
@@ -131,8 +139,9 @@ async fn run_http_proxy(
                     Ok((stream, addr)) => {
                         tracing::debug!(%addr, "HTTP proxy: new connection");
                         let filter = Arc::clone(&filter);
+                        let ask_cb = ask_cb.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_http_connect(stream, &filter).await {
+                            if let Err(e) = handle_http_connect(stream, &filter, ask_cb.as_ref()).await {
                                 tracing::debug!(error = %e, "HTTP proxy: connection error");
                             }
                         });
@@ -151,7 +160,11 @@ async fn run_http_proxy(
 /// Reads the request line, extracts the method and target host, checks
 /// the domain filter and network mode, and either tunnels/proxies the
 /// connection or responds with 403.
-async fn handle_http_connect(mut client: TcpStream, filter: &DomainFilter) -> anyhow::Result<()> {
+async fn handle_http_connect(
+    mut client: TcpStream,
+    filter: &DomainFilter,
+    ask_cb: Option<&NetworkAskCallback>,
+) -> anyhow::Result<()> {
     let mut buf = vec![0u8; 4096];
     let n = client.read(&mut buf).await?;
     if n == 0 {
@@ -200,13 +213,23 @@ async fn handle_http_connect(mut client: TcpStream, filter: &DomainFilter) -> an
     let host = extract_host(target);
 
     if !filter.is_allowed(host) {
-        tracing::info!(host, "HTTP proxy: domain denied");
-        send_http_forbidden(
-            &mut client,
-            &format!("Domain '{host}' is not allowed by sandbox policy"),
-        )
-        .await?;
-        return Ok(());
+        // Denied by policy: consult the interactive ask-callback (if installed)
+        // before refusing. An approving user converts the deny to a tunnel —
+        // TS `createSandboxAskCallback` "Allow network connection to {host}?".
+        let approved = match ask_cb {
+            Some(cb) => cb(host.to_string()).await,
+            None => false,
+        };
+        if !approved {
+            tracing::info!(host, "HTTP proxy: domain denied");
+            send_http_forbidden(
+                &mut client,
+                &format!("Domain '{host}' is not allowed by sandbox policy"),
+            )
+            .await?;
+            return Ok(());
+        }
+        tracing::info!(host, "HTTP proxy: domain approved via interactive prompt");
     }
 
     let mut upstream = TcpStream::connect(target).await?;
@@ -245,6 +268,7 @@ async fn run_socks_proxy(
     listener: TcpListener,
     filter: Arc<DomainFilter>,
     cancel_token: CancellationToken,
+    ask_cb: Option<NetworkAskCallback>,
 ) {
     loop {
         tokio::select! {
@@ -254,8 +278,9 @@ async fn run_socks_proxy(
                     Ok((stream, addr)) => {
                         tracing::debug!(%addr, "SOCKS5 proxy: new connection");
                         let filter = Arc::clone(&filter);
+                        let ask_cb = ask_cb.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_socks5(stream, &filter).await {
+                            if let Err(e) = handle_socks5(stream, &filter, ask_cb.as_ref()).await {
                                 tracing::debug!(error = %e, "SOCKS5 proxy: connection error");
                             }
                         });
@@ -289,7 +314,11 @@ const SOCKS5_REPLY_CMD_NOT_SUPPORTED: u8 = 0x07;
 ///
 /// In Limited network mode, SOCKS5 is blocked entirely because HTTP methods
 /// cannot be inspected through SOCKS tunnels.
-async fn handle_socks5(mut client: TcpStream, filter: &DomainFilter) -> anyhow::Result<()> {
+async fn handle_socks5(
+    mut client: TcpStream,
+    filter: &DomainFilter,
+    ask_cb: Option<&NetworkAskCallback>,
+) -> anyhow::Result<()> {
     // Limited mode: block SOCKS5 entirely (can't inspect HTTP methods through tunnel).
     if filter.network_mode() == crate::config::NetworkMode::Limited {
         tracing::info!("SOCKS5 proxy: blocked by limited network mode");
@@ -367,9 +396,21 @@ async fn handle_socks5(mut client: TcpStream, filter: &DomainFilter) -> anyhow::
     };
 
     if !filter.is_allowed(&domain) {
-        tracing::info!(domain, "SOCKS5 proxy: domain denied");
-        send_socks5_reply(&mut client, SOCKS5_REPLY_REFUSED).await?;
-        return Ok(());
+        // Denied by policy: consult the interactive ask-callback (if installed)
+        // before refusing — an approving user converts the deny to a tunnel.
+        let approved = match ask_cb {
+            Some(cb) => cb(domain.clone()).await,
+            None => false,
+        };
+        if !approved {
+            tracing::info!(domain, "SOCKS5 proxy: domain denied");
+            send_socks5_reply(&mut client, SOCKS5_REPLY_REFUSED).await?;
+            return Ok(());
+        }
+        tracing::info!(
+            domain,
+            "SOCKS5 proxy: domain approved via interactive prompt"
+        );
     }
 
     let mut upstream = TcpStream::connect(&target_addr).await?;

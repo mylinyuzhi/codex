@@ -7,6 +7,7 @@
 //! TS: services/mcp/ (23 files, 12K LOC)
 
 pub mod auth;
+pub mod auth_cache;
 pub mod channel_permission;
 pub mod client;
 pub mod config;
@@ -73,6 +74,7 @@ pub use coco_mcp_types::ReadResourceResultContents;
 pub use coco_mcp_types::TextResourceContents;
 /// Re-export the rmcp wire enum so consumers (CLI / SDK) can build
 /// elicitation responses without depending on `rmcp` directly.
+pub use coco_rmcp_client::Elicitation;
 pub use coco_rmcp_client::ElicitationAction as RmcpElicitationAction;
 pub use coco_rmcp_client::ElicitationResponse;
 pub use coco_rmcp_client::McpAuthStatus;

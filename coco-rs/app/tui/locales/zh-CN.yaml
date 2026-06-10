@@ -334,6 +334,11 @@ dialog.hints_invalid_config: "Esc 关闭"
 dialog.risk_low: " [低] "
 dialog.risk_medium: " [中] "
 dialog.risk_high: " [高] "
+dialog.explainer_loading: "⟳ 正在分析风险…"
+dialog.explainer_risk_low: "风险：低"
+dialog.explainer_risk_medium: "风险：中"
+dialog.explainer_risk_high: "风险：高"
+dialog.explainer_unavailable: "无法获取说明"
 
 # 权限详情标签
 dialog.perm_command: "命令:\n  $ %{command}"

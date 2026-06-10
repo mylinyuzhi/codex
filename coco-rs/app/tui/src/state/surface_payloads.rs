@@ -55,6 +55,28 @@ pub struct PermissionPromptState {
     /// Rendered in the prompt title so the leader sees who is asking;
     /// `None` for the leader's own in-process requests.
     pub worker_badge: Option<coco_types::WorkerBadge>,
+    /// Lazy Ctrl+E risk-explainer panel (TS `PermissionExplanation.tsx`):
+    /// whether the panel is currently expanded.
+    pub explanation_visible: bool,
+    /// Lazily-fetched LLM risk explanation. Fetched on first Ctrl+E toggle and
+    /// cached so re-toggling doesn't re-query (TS `createExplanationPromise`).
+    pub explanation: ExplainerFetch,
+}
+
+/// Lifecycle of the lazily-fetched permission risk explanation. Mirrors TS,
+/// which fetches the explanation once on the first `confirm:toggleExplanation`
+/// (Ctrl+E) press rather than eagerly on every prompt.
+#[derive(Debug, Clone, Default)]
+pub enum ExplainerFetch {
+    /// Not yet requested (panel never opened, or the explainer is disabled).
+    #[default]
+    NotFetched,
+    /// Fetch in flight — the panel shows a loading line.
+    Loading,
+    /// Explanation available.
+    Ready(coco_types::PermissionExplanation),
+    /// Fetch failed or the explainer is disabled — "explanation unavailable".
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

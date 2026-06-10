@@ -332,6 +332,40 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         ));
     }
 
+    // Spawn the sandbox violation monitor (macOS `log stream`; passive
+    // elsewhere) and drain its observer into `SandboxViolationsDetected`
+    // flash events. The drain task self-terminates when the `SandboxState`
+    // (and thus the observer sender) drops at session end; the monitor is
+    // owned by the `SandboxState` and cancelled on the same drop. The
+    // consumer lives in coco-tui (`server_notification_handler`), so this
+    // producer is TUI-only — the SDK path surfaces violations to the model
+    // via `<sandbox_violations>` instead.
+    if let Some(state) = runtime.sandbox_state() {
+        // Install the interactive sandbox approval bridge so a denied sandbox
+        // path/network op surfaces a prompt in this terminal (the SDK path
+        // installs `SdkSandboxApprovalBridge` in `main.rs`). Reuses the shared
+        // `pending_approvals` map so the `ApprovalResponse` arm resolves it.
+        state.set_approval_bridge(std::sync::Arc::new(
+            coco_cli::sandbox_approval_bridge_tui::TuiSandboxApprovalBridge::new(
+                notification_tx.clone(),
+                pending_approvals.clone(),
+            ),
+        ));
+        state.start_violation_monitor();
+        if let Some(mut rx) = state.take_violation_observer() {
+            let tx = notification_tx.clone();
+            tokio::spawn(async move {
+                while let Some(count) = rx.recv().await {
+                    let _ = tx
+                        .send(CoreEvent::Protocol(
+                            ServerNotification::SandboxViolationsDetected { count },
+                        ))
+                        .await;
+                }
+            });
+        }
+    }
+
     if let Some(reloader) = _reloader.as_ref() {
         std::mem::drop(spawn_model_runtime_reload(
             runtime.model_runtimes(),
@@ -1237,6 +1271,35 @@ async fn run_agent_driver(
                         handle_auto_truncate(&message_id, &event_tx, &runtime).await;
                     }
                 }
+            }
+
+            UserCommand::RequestPermissionExplanation {
+                request_id,
+                tool_name,
+                tool_input,
+            } => {
+                // Lazily fetch the risk explanation off the hot path (Ctrl+E
+                // panel) and reply with PermissionExplanationReady.
+                // `explain_permission_risk` gates on the setting + bounds the
+                // call, so a disabled/slow explainer resolves to None and the
+                // panel shows "unavailable".
+                let runtime = runtime.clone();
+                let tx = event_tx.clone();
+                tokio::spawn(async move {
+                    let params = coco_permissions::ExplainerParams {
+                        tool_name: &tool_name,
+                        tool_input: &tool_input,
+                        tool_description: None,
+                        messages: None,
+                    };
+                    let explanation = runtime.explain_permission_risk(params).await;
+                    let _ = tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::PermissionExplanationReady {
+                            request_id,
+                            explanation,
+                        }))
+                        .await;
+                });
             }
 
             UserCommand::RequestDiffStats { message_id } => {

@@ -298,6 +298,10 @@ pub enum TuiCommand {
     ToggleToolCollapse,
     /// Toggle system reminder visibility.
     ToggleSystemReminders,
+    /// Toggle the permission-prompt risk-explainer panel (Ctrl+E). Lazily
+    /// fetches the LLM explanation on first open. No-op unless a permission
+    /// prompt is active. TS: `confirm:toggleExplanation`.
+    TogglePermissionExplanation,
 
     // ── Clipboard ──
     /// Paste from clipboard (image first, text fallback).
