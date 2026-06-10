@@ -18,6 +18,7 @@ owns terminal surface constraints.
 | `codex-rs-tui-comparison.md` | Deep comparison of `codex-rs/tui` visible UI capability versus coco boundaries. |
 | `rendering-hardening-and-rollback.md` | Landed cursor/suspend hardening plus rollback record for failed inline attempts. |
 | `viewport-seating-regression-fixes.md` | Technical-decision record + fix plan for the owned-top viewport-seating refactor (C1 overflow-shrink regression and hardening). |
+| `tui-v2-design.md` | Forward target: three-way comparison (coco / codex-rs / jcode), anchored finalize without fingerprint reconciliation, engine-owned seating, staged Scope B implementation plan. |
 | `migration-roadmap.md` | Historical implementation notes; not the final product organization. |
 | `../crate-coco-tui.md` | Current implementation baseline for the `coco-tui` crate. |
 

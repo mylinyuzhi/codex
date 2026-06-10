@@ -8,6 +8,7 @@
 //!
 //! See `engine-tui-phase3d-renderer-migration-plan.md` §6.
 
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 
 use crate::presentation::streaming::StreamingTailInput;
@@ -422,6 +423,29 @@ fn tool_use_count(cells: &[RenderedCell], start: usize, end: usize) -> usize {
         .iter()
         .filter(|cell| matches!(cell.kind, CellKind::ToolUse { .. }))
         .count()
+}
+
+/// Tool names inside a batch range, sorted by name with repeats collapsed as
+/// `Name ×N` — so the batch header tells the user which tools are running
+/// before any result lands.
+pub(crate) fn tool_batch_name_summary(cells: &[RenderedCell], start: usize, end: usize) -> String {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for cell in &cells[start..end.min(cells.len())] {
+        if let CellKind::ToolUse { tool_name, .. } = &cell.kind {
+            *counts.entry(tool_name.as_str()).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(name, n)| {
+            if n > 1 {
+                format!("{name} ×{n}")
+            } else {
+                name.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn log_tool_batch(

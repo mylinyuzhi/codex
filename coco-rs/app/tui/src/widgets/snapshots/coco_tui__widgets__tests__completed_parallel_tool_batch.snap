@@ -8,7 +8,7 @@ expression: output
                                                                                 
 ❯ Investigate                                                                   
                                                                                 
-  ‖ 2 in parallel                                                               
+  ‖ 2 in parallel · Bash, Glob                                                  
                                                                                 
 ● Bash(ls -la)                                                                  
   └ Cargo.toml                                                                  
