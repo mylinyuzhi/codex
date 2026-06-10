@@ -29,8 +29,14 @@ const DANGEROUS_FILES: &[&str] = &[
 
 /// Directories whose contents should not be auto-edited.
 ///
-/// TS: DANGEROUS_DIRECTORIES in filesystem.ts
-const DANGEROUS_DIRECTORIES: &[&str] = &[".git", ".vscode", ".idea", ".claude"];
+/// TS: DANGEROUS_DIRECTORIES in filesystem.ts. `.claude` and `.codex` are kept
+/// because coco reads those agents' config dirs for compat (see
+/// `is_protected_config`; Codex/AGENTS.md convention); `.coco` is coco's own
+/// config home and must be guarded the same way TS guards `.claude`. Coco-managed
+/// sub-paths the agent legitimately writes (the session plan file, agent memory)
+/// are carved out earlier in the write check via `is_editable_internal_path`,
+/// which runs before this safety gate.
+const DANGEROUS_DIRECTORIES: &[&str] = &[".git", ".vscode", ".idea", ".claude", ".coco", ".codex"];
 
 /// System directories blocked for all writes.
 const BLOCKED_SYSTEM_DIRS: &[&str] = &[
@@ -290,10 +296,9 @@ pub fn path_in_working_path(path: &str, working_path: &str) -> bool {
 /// Check if a path is within the allowed working directories.
 ///
 /// Mirrors TS `pathInAllowedWorkingPath` — cwd + `additionalWorkingDirectories`
-/// only. The per-user `/tmp/claude-{uid}` project-temp and scratchpad
-/// exemptions deliberately live in [`is_readable_internal_path`] /
-/// [`is_editable_internal_path`], NOT here: conflating them let an arbitrary
-/// `/tmp/evil` write auto-pass the cwd gate.
+/// only. The coco-managed exemptions (session plan file, agent memory) live in
+/// [`is_readable_internal_path`] / [`is_editable_internal_path`], NOT here:
+/// conflating them let an arbitrary out-of-tree write auto-pass the cwd gate.
 pub fn is_path_within_allowed_dirs(path: &str, cwd: &str, additional_dirs: &[String]) -> bool {
     // Check cwd
     if path_in_working_path(path, cwd) {
@@ -577,25 +582,57 @@ fn resolve_deepest_existing_ancestor(path: &Path) -> Option<PathBuf> {
 
 // ── Internal path exemptions ──
 
+/// Resolved per-session inputs the internal-path carve-outs key on.
+///
+/// Bundles the values the exemptions need so callers pass one struct instead
+/// of a widening list of positional args (CLAUDE.md: typed params over
+/// ambiguous positionals). All fields are borrows — the struct is built fresh
+/// at each call site from the live tool permission context.
+pub struct InternalPathContext<'a> {
+    /// Working directory the target path is resolved against.
+    pub cwd: &'a str,
+    /// Pre-resolved session plan file (`<plansDir>/<slug>.md`). Plan-file
+    /// reads/writes are exempted when the target shares this prefix. The
+    /// engine resolves it once and threads it through the permission context
+    /// (TS resolves it on demand via module-global `getPlansDirectory()` +
+    /// `getPlanSlug()`).
+    pub session_plan_file: Option<&'a Path>,
+}
+
+/// TS parity: `isSessionPlanFile` in `filesystem.ts:245`.
+///
+/// The plan file is `<plansDir>/<slug>.md`; subagent plans are
+/// `<slug>-agent-<id>.md`. Strip the `.md` suffix off the resolved session
+/// plan file to recover the `<plansDir>/<slug>` prefix so both forms match
+/// from a single context. `normalized` is produced by the caller via
+/// [`resolve_path`] (which collapses `..` lexically) + [`normalize_for_comparison`]
+/// (lowercase), so this is a traversal-safe pure string prefix test; we run
+/// the stored plan file through the same lowercasing for case-consistent
+/// comparison.
+fn is_session_plan_file(normalized: &str, session_plan_file: Option<&Path>) -> bool {
+    let Some(plan_file) = session_plan_file else {
+        return false;
+    };
+    let plan = normalize_for_comparison(&plan_file.to_string_lossy());
+    let Some(prefix) = plan.strip_suffix(".md") else {
+        return false;
+    };
+    normalized.ends_with(".md") && normalized.starts_with(prefix)
+}
+
 /// Paths within the project memory directory that are auto-writable.
 ///
 /// TS: `checkEditableInternalPath()` in filesystem.ts
-/// Exemptions: plan files, scratchpad, agent memory.
-pub fn is_editable_internal_path(path: &str, cwd: &str, session_id: Option<&str>) -> bool {
-    let normalized = normalize_for_comparison(&resolve_path(path, cwd));
-    let _cwd_lower = cwd.to_lowercase();
+/// Exemptions: plan files, scratchpad, agent memory, CLAUDE.md.
+pub fn is_editable_internal_path(path: &str, ctx: &InternalPathContext) -> bool {
+    let normalized = normalize_for_comparison(&resolve_path(path, ctx.cwd));
 
-    // Plan files: {cwd}/.claude/plans/*.md
-    if normalized.contains("/.claude/plans/") && normalized.ends_with(".md") {
+    // Plan files: the session's own `<plansDir>/<slug>.md` (cocohome by
+    // default). Keyed on the resolved session plan file, NOT a path substring,
+    // so it lands wherever `plansDirectory` actually resolves and stays scoped
+    // to this session's slug.
+    if is_session_plan_file(&normalized, ctx.session_plan_file) {
         return true;
-    }
-
-    // Scratchpad: /tmp/claude-*/{cwd}/{session}/scratchpad/
-    if let Some(_sid) = session_id {
-        let scratchpad_pattern = "/tmp/claude-".to_string();
-        if normalized.starts_with(&scratchpad_pattern) && normalized.contains("/scratchpad/") {
-            return true;
-        }
     }
 
     // Agent memory: ~/.coco/projects/{cwd}/memory/
@@ -614,7 +651,7 @@ pub fn is_editable_internal_path(path: &str, cwd: &str, session_id: Option<&str>
         .and_then(|n| n.to_str())
         .unwrap_or("");
     if filename == "CLAUDE.md" || filename == "CLAUDE.local.md" {
-        return is_path_within_allowed_dirs(path, cwd, &[]);
+        return is_path_within_allowed_dirs(path, ctx.cwd, &[]);
     }
 
     false
@@ -625,31 +662,21 @@ pub fn is_editable_internal_path(path: &str, cwd: &str, session_id: Option<&str>
 /// TS: `checkReadableInternalPath()` in filesystem.ts
 /// Exemptions: session memory, project dir, plan files, tool results,
 /// scratchpad, project temp, agent memory.
-pub fn is_readable_internal_path(path: &str, cwd: &str) -> bool {
-    let normalized = normalize_for_comparison(&resolve_path(path, cwd));
+pub fn is_readable_internal_path(path: &str, ctx: &InternalPathContext) -> bool {
+    let normalized = normalize_for_comparison(&resolve_path(path, ctx.cwd));
     let config_home = coco_config::global_config::config_home()
         .to_string_lossy()
         .to_lowercase();
 
-    // Project dir: ~/.coco/projects/{sanitized-cwd}/
+    // Project dir: ~/.coco/projects/{sanitized-cwd}/ (covers agent memory).
     if normalized.starts_with(&format!("{config_home}/projects/")) {
         return true;
     }
 
-    // Plan files (readable in all modes)
-    if normalized.contains("/.claude/plans/") && normalized.ends_with(".md") {
-        return true;
-    }
-
-    // Scratchpad and project temp
-    if normalized.starts_with("/tmp/claude-") {
-        return true;
-    }
-
-    // Agent memory
-    if normalized.starts_with(&format!("{config_home}/projects/"))
-        && normalized.contains("/memory/")
-    {
+    // Plan files (readable in all modes) — the session's own plan file. Same
+    // key as the write carve-out (TS: `checkReadableInternalPath` reuses
+    // `isSessionPlanFile`).
+    if is_session_plan_file(&normalized, ctx.session_plan_file) {
         return true;
     }
 

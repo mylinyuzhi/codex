@@ -3,7 +3,7 @@ source: app/tui/src/presentation/transcript.test.rs
 expression: "render_transcript_text(&app_state, &state, 84, 14)"
 ---
 ┌ Transcript ──────────────────────────────────────────────────────────────────────┐
-│  ‖ 2 in parallel                                                                 │
+│  ‖ 2 in parallel · Glob ×2                                                       │
 │                                                                                  │
 │● Glob(**/*.rs)                                                                   │
 │  └ src/lib.rs                                                                    │

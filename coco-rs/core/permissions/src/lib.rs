@@ -64,6 +64,7 @@ pub use file_rules::FileRuleMatchContext;
 pub use file_rules::FileRuleToolType;
 pub use file_rules::file_rule_matches_paths;
 pub use file_rules::matching_file_rule;
+pub use filesystem::InternalPathContext;
 pub use filesystem::PathSafetyResult;
 pub use filesystem::check_path_safety_for_auto_edit;
 pub use filesystem::contains_path_traversal;

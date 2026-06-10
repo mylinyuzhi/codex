@@ -254,9 +254,13 @@ pub fn check_read_permission_for_path(
     let in_working_dirs = paths_to_check
         .iter()
         .all(|p| path_is_in_working_dirs(p, &cwd_str, ctx));
+    let internal_ctx = coco_permissions::filesystem::InternalPathContext {
+        cwd: &cwd_str,
+        session_plan_file: ctx.permission_context.session_plan_file.as_deref(),
+    };
     let internal_readable = paths_to_check
         .iter()
-        .any(|p| coco_permissions::filesystem::is_readable_internal_path(p, &cwd_str));
+        .any(|p| coco_permissions::filesystem::is_readable_internal_path(p, &internal_ctx));
 
     if in_working_dirs || internal_readable {
         tracing::debug!(

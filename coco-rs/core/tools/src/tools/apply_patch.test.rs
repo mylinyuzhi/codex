@@ -220,6 +220,36 @@ async fn check_permissions_move_to_disallowed_destination_is_denied() {
     );
 }
 
+#[tokio::test]
+async fn check_permissions_allows_session_plan_file_in_sandboxed_agent() {
+    // A sandboxed sub-agent (allowed_write_roots set) must still patch its own
+    // session plan file (cocohome), which lives outside the worktree fence. The
+    // internal-path exemption covers apply_patch's fence + permission checks.
+    let cwd = tempfile::tempdir().unwrap();
+    let plans = tempfile::tempdir().unwrap();
+    let plan_file = plans.path().join("typed-conjuring-fox.md");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.allowed_write_roots = vec![cwd.path().to_path_buf()];
+    ctx.permission_context.mode = PermissionMode::Plan;
+    ctx.permission_context.bypass_available = false;
+    ctx.permission_context.session_plan_file = Some(plan_file.clone());
+    let input = serde_json::json!({
+        "patch": format!(
+            "*** Begin Patch\n*** Add File: {}\n+# plan\n*** End Patch\n",
+            plan_file.display()
+        )
+    });
+
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, &input, &ctx).await;
+
+    assert!(
+        matches!(result, ToolCheckResult::Allow { .. }),
+        "{result:?}"
+    );
+}
+
 #[test]
 fn apply_patch_preview_add_file_uses_header_and_added_rows() {
     let preview = build_apply_patch_preview(

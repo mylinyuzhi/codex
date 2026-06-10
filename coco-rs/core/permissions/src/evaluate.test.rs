@@ -666,65 +666,16 @@ fn test_mcp_server_level_pattern_matching() {
     assert!(matches_tool_pattern("mcp__slack__send", "mcp__slack__send"));
 }
 
-// ── Plan-mode plan-file auto-allow (TS: checkEditableInternalPath) ──
-
-#[test]
-fn plan_mode_auto_allows_write_to_session_plan_file() {
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/test.md"));
-
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/plans/test.md"),
-        &ctx,
-    );
-    assert!(
-        matches!(decision, PermissionDecision::Allow { .. }),
-        "Write to plan file must auto-allow in Plan mode, got: {decision:?}"
-    );
-}
-
-#[test]
-fn plan_mode_auto_allows_edit_to_session_plan_file() {
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/test.md"));
-
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Edit),
-        &file_input("/tmp/plans/test.md"),
-        &ctx,
-    );
-    assert!(matches!(decision, PermissionDecision::Allow { .. }));
-}
-
-#[test]
-fn plan_mode_asks_for_write_to_other_files() {
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/test.md"));
-
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/other/file.rs"),
-        &ctx,
-    );
-    assert!(
-        matches!(decision, PermissionDecision::Ask { .. }),
-        "Writes outside the plan file must still ask in Plan mode"
-    );
-}
-
-#[test]
-fn plan_mode_no_auto_allow_without_resolved_plan_file() {
-    // If the engine forgot to populate session_plan_file, fall back to
-    // the safe default: ask. No plan file = no auto-allow.
-    let ctx = empty_context(PermissionMode::Plan);
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/plans/test.md"),
-        &ctx,
-    );
-    assert!(matches!(decision, PermissionDecision::Ask { .. }));
-}
+// ── Plan-mode fallthrough (evaluator layer) ──
+//
+// The plan-file write carve-out moved OUT of the evaluator into the file-tool
+// `check_permissions` layer (step 1b → `is_editable_internal_path` /
+// `is_session_plan_file`), which runs before this fallthrough — so a
+// plan-file write is allowed there and never reaches the evaluator's Plan
+// branch. Predicate coverage (slug prefix, `-agent-*` variant, wrong
+// extension, traversal) lives in `filesystem.test.rs`; the Plan-mode Write
+// integration lives in the Write tool's tests. Here we only assert the
+// evaluator's own Plan-mode behavior.
 
 #[test]
 fn plan_mode_read_only_still_allowed() {
@@ -738,90 +689,15 @@ fn plan_mode_read_only_still_allowed() {
 }
 
 #[test]
-fn plan_mode_allows_subagent_plan_variant_from_main_ctx() {
-    // TS `isSessionPlanFile` (filesystem.ts:245-255) prefix-matches on
-    // `<plansDir>/<slug>`, so both the main-agent plan (`<slug>.md`) and
-    // the sub-agent variants (`<slug>-agent-<id>.md`) auto-allow from the
-    // same context.
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/lucid-otter.md"));
+fn plan_mode_asks_for_non_readonly_write_at_evaluator_layer() {
+    // With no tool-level check supplied, the evaluator's Plan branch asks for
+    // any non-read-only tool. (Production routes Write/Edit through their
+    // `check_permissions` first, which is where the plan-file exemption lives.)
+    let ctx = empty_context(PermissionMode::Plan);
     let decision = PermissionEvaluator::evaluate(
         &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/plans/lucid-otter-agent-a1b2c3d4.md"),
+        &file_input("/tmp/other/file.rs"),
         &ctx,
     );
-    assert!(
-        matches!(decision, PermissionDecision::Allow { .. }),
-        "Write to sub-agent plan variant must auto-allow in Plan mode, got: {decision:?}"
-    );
-}
-
-#[test]
-fn plan_mode_rejects_neighbor_md_file_with_different_slug() {
-    // Prefix match must not bleed into a neighboring .md file that
-    // happens to share the plans dir but has a different slug.
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/lucid-otter.md"));
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/plans/other-plan.md"),
-        &ctx,
-    );
-    assert!(
-        matches!(decision, PermissionDecision::Ask { .. }),
-        "Writes to unrelated plans-dir files must still ask, got: {decision:?}"
-    );
-}
-
-#[test]
-fn plan_mode_rejects_non_md_file_with_matching_slug_prefix() {
-    // Extension check prevents `<slug>.txt` or `<slug>.rs` from slipping
-    // through. TS: `normalizedPath.endsWith('.md')`.
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/lucid-otter.md"));
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/plans/lucid-otter.rs"),
-        &ctx,
-    );
-    assert!(
-        matches!(decision, PermissionDecision::Ask { .. }),
-        "Non-.md files must not auto-allow, got: {decision:?}"
-    );
-}
-
-#[test]
-fn plan_mode_rejects_path_traversal_escape_from_plans_dir() {
-    // SECURITY: a crafted target like `<prefix>/../../etc/passwd.md`
-    // starts with the slug prefix as a raw string but must not auto-allow
-    // — `..` segments escape the plans dir. TS parity: `normalize()` in
-    // filesystem.ts:251 collapses the `..` before the prefix check.
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/lucid-otter.md"));
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/plans/lucid-otter/../../etc/passwd.md"),
-        &ctx,
-    );
-    assert!(
-        matches!(decision, PermissionDecision::Ask { .. }),
-        "Path-traversal escape must not auto-allow, got: {decision:?}"
-    );
-}
-
-#[test]
-fn plan_mode_allows_noop_dot_segments_within_plans_dir() {
-    // `.` segments are benign; a legitimate plan write with a `./` in the
-    // middle should still auto-allow after lexical normalization.
-    let mut ctx = empty_context(PermissionMode::Plan);
-    ctx.session_plan_file = Some(std::path::PathBuf::from("/tmp/plans/lucid-otter.md"));
-    let decision = PermissionEvaluator::evaluate(
-        &ToolId::Builtin(ToolName::Write),
-        &file_input("/tmp/plans/./lucid-otter.md"),
-        &ctx,
-    );
-    assert!(
-        matches!(decision, PermissionDecision::Allow { .. }),
-        "Benign `./` segment must still auto-allow after normalize, got: {decision:?}"
-    );
+    assert!(matches!(decision, PermissionDecision::Ask { .. }));
 }

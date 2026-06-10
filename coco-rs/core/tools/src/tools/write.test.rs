@@ -58,6 +58,53 @@ async fn test_write_check_permissions_accept_edits_allows_cwd_path() {
 }
 
 #[tokio::test]
+async fn test_write_check_permissions_plan_mode_allows_session_plan_file() {
+    // Regression: in Plan mode, writing the session's own plan file
+    // (cocohome `~/.coco/plans/<slug>.md`) must auto-allow, not prompt. The
+    // exemption flows ctx.session_plan_file → is_editable_internal_path.
+    let plans = tempfile::tempdir().unwrap();
+    let plan_file = plans.path().join("typed-conjuring-fox.md");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.permission_context.mode = PermissionMode::Plan;
+    ctx.permission_context.bypass_available = false;
+    ctx.permission_context.session_plan_file = Some(plan_file.clone());
+
+    let result = <WriteTool as DynTool>::check_permissions(
+        &WriteTool,
+        &json!({"file_path": plan_file.to_str().unwrap(), "content": "# plan"}),
+        &ctx,
+    )
+    .await;
+
+    assert!(
+        matches!(result, ToolCheckResult::Allow { .. }),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_write_check_permissions_plan_mode_asks_for_non_plan_file() {
+    // A sibling .md in the plans dir with a different slug is NOT the
+    // session plan file and must still prompt in Plan mode.
+    let plans = tempfile::tempdir().unwrap();
+    let plan_file = plans.path().join("typed-conjuring-fox.md");
+    let other = plans.path().join("some-other-slug.md");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.permission_context.mode = PermissionMode::Plan;
+    ctx.permission_context.bypass_available = false;
+    ctx.permission_context.session_plan_file = Some(plan_file);
+
+    let result = <WriteTool as DynTool>::check_permissions(
+        &WriteTool,
+        &json!({"file_path": other.to_str().unwrap(), "content": "x"}),
+        &ctx,
+    )
+    .await;
+
+    assert!(matches!(result, ToolCheckResult::Ask { .. }), "{result:?}");
+}
+
+#[tokio::test]
 async fn test_write_check_permissions_accept_edits_asks_outside_cwd() {
     let cwd = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();

@@ -46,13 +46,13 @@ pub(crate) fn check_write_permission_for_paths(
     }
 
     let cwd_str = cwd.to_string_lossy();
+    let internal_ctx = coco_permissions::filesystem::InternalPathContext {
+        cwd: &cwd_str,
+        session_plan_file: ctx.permission_context.session_plan_file.as_deref(),
+    };
     if !paths_to_check.is_empty()
         && paths_to_check.iter().all(|path| {
-            coco_permissions::filesystem::is_editable_internal_path(
-                path,
-                &cwd_str,
-                ctx.session_id_for_history.as_deref(),
-            )
+            coco_permissions::filesystem::is_editable_internal_path(path, &internal_ctx)
         })
     {
         return ToolCheckResult::Allow {
