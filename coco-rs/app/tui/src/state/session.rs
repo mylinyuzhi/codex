@@ -229,6 +229,13 @@ pub struct SessionState {
     pub session_usage: Option<coco_types::SessionUsageSnapshot>,
     /// Session identifier.
     pub session_id: Option<String>,
+    /// OS process id, surfaced in the header so concurrent coco sessions
+    /// can be told apart and matched to their per-PID log file
+    /// (`<config_home>/logs/coco.<pid>.log.<date>`). `0` is the unset
+    /// sentinel (never a real user process) used by tests and pre-bootstrap
+    /// state; the header hides the pid badge while it is `0`. Set once in
+    /// `App::new` from `std::process::id()`.
+    pub pid: u32,
     /// Conversation identifier — rotated on rewind so cache breaks
     /// invalidate cleanly on the next request. TS: REPL holds a
     /// `conversationId` minted from `randomUUID()` and re-mints it
@@ -542,6 +549,7 @@ impl Default for SessionState {
             token_usage: TokenUsage::default(),
             session_usage: None,
             session_id: None,
+            pid: 0,
             conversation_id: None,
             working_dir: None,
             turn_count: 0,
