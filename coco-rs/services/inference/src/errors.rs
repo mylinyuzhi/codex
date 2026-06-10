@@ -235,7 +235,21 @@ impl InferenceError {
                 .build(),
             );
         }
-        if lower.contains("rate limited") || lower.contains("rate_limit") {
+        // Rate-limit vocabulary across providers: Anthropic streams
+        // `rate_limit_error`; OpenAI (and OpenAI-compatible gateways that
+        // deliver the 429 as an in-stream SSE error frame instead of an
+        // HTTP status, e.g. the Azure front-end with `x-ms-fe-error`)
+        // stream `too_many_requests` / "Too Many Requests". The HTTP-status
+        // sibling `from_http_status(429, ..)` already covers the
+        // status-code path; this mirrors it for the stream path where no
+        // status is available.
+        if lower.contains("rate limited")
+            || lower.contains("rate_limit")
+            || lower.contains("too_many_requests")
+            || lower.contains("too many requests")
+            || lower.contains("status: 429")
+            || lower.contains("(429)")
+        {
             return Some(
                 inference_error::RateLimitedSnafu {
                     retry_after_ms: None,

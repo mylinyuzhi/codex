@@ -205,6 +205,11 @@ fn build_plan_mode_attachment(
         is_sub_agent: ctx.is_sub_agent,
         plan_file_path: plan_file_path_string(ctx),
         plan_exists: ctx.plan_exists,
+        // Resolve the plan-file tool from the model's actual loaded tools this
+        // turn, so the reminder names `apply_patch` for gpt-5 and `Write`/`Edit`
+        // for Claude — never a tool the model lacks.
+        write_tool: coco_types::ToolName::write_tool_for(&ctx.tools),
+        edit_tool: coco_types::ToolName::edit_tool_for(&ctx.tools),
     }
 }
 

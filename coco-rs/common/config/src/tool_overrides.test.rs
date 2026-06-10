@@ -7,13 +7,16 @@ fn unknown_model_is_none_without_overrides() {
 }
 
 #[test]
-fn gpt5_swaps_edit_for_apply_patch_regardless_of_provider() {
+fn gpt5_routes_file_mutation_through_apply_patch_regardless_of_provider() {
     // Function takes no `provider` — gpt-5 served by OpenAI direct,
     // Azure, or any compat gateway returns the same diff. Provider is
     // a routing concern, not a capability axis.
     let overrides = resolve_tool_overrides("gpt-5", None);
     assert!(overrides.is_extra(&ToolId::Builtin(ToolName::ApplyPatch)));
+    // Both Edit and Write are excluded — apply_patch is the sole
+    // file-mutation tool (its Add File hunk creates new files).
     assert!(!overrides.permits(&ToolId::Builtin(ToolName::Edit)));
+    assert!(!overrides.permits(&ToolId::Builtin(ToolName::Write)));
 }
 
 #[test]
@@ -29,7 +32,7 @@ fn gpt5_variants_all_get_the_diff() {
 
 #[test]
 fn user_tool_overrides_layer_on_top_of_builtin() {
-    // Built-in: gpt-5 swaps Edit ↔ apply_patch.
+    // Built-in: gpt-5 excludes Edit + Write in favor of apply_patch.
     // User additionally excludes Bash.
     let info = ModelInfo {
         model_id: "gpt-5".into(),
@@ -41,6 +44,7 @@ fn user_tool_overrides_layer_on_top_of_builtin() {
     let overrides = resolve_tool_overrides("gpt-5", Some(&info));
     assert!(overrides.is_extra(&ToolId::Builtin(ToolName::ApplyPatch)));
     assert!(!overrides.permits(&ToolId::Builtin(ToolName::Edit)));
+    assert!(!overrides.permits(&ToolId::Builtin(ToolName::Write)));
     assert!(!overrides.permits(&ToolId::Builtin(ToolName::Bash)));
     // Untouched baseline tools stay.
     assert!(overrides.permits(&ToolId::Builtin(ToolName::Read)));

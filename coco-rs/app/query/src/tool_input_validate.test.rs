@@ -430,6 +430,40 @@ async fn apply_patch_freeform_string_input_is_coerced_to_patch_object() {
         tc.invalid_reason
     );
     assert_eq!(tc.input, json!({ "patch": raw }));
+
+    // Regression: the second, serde-backed validator (`tool.validate_input`,
+    // run by `tool_runner` / `tool_call_preparer`) must see the SAME coerced
+    // input. Validating the raw `Value::String` envelope instead fails with
+    // `invalid type: string` — the bug that surfaced once gpt-5 lost `Write`
+    // and was forced onto `apply_patch`.
+    let ctx = ToolUseContext::test_default();
+    assert!(
+        tool.validate_input(&tc.input, &ctx).is_valid(),
+        "coerced patch object must pass the serde validator"
+    );
+    assert!(
+        !tool.validate_input(&json!(raw), &ctx).is_valid(),
+        "raw string must fail the serde validator — callers must coerce first"
+    );
+}
+
+#[tokio::test]
+async fn apply_patch_freeform_input_is_never_json_parsed() {
+    // codex-rs parity: a freeform/custom tool's raw string is NEVER parsed as
+    // JSON (codex routes it to `ToolPayload::Custom { input }`). Coercion must
+    // run BEFORE `normalize_value_string`, so even a patch body that happens to
+    // look like a JSON object is wrapped verbatim into `{patch: <raw>}` and not
+    // mangled into the object itself.
+    let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool);
+    let json_looking = r#"{"patch": "not a real patch"}"#;
+    let mut tc = mk_tc("apply_patch", json!(json_looking));
+    validate_tool_call(&mut tc, Some(&tool));
+    assert!(!tc.invalid, "coerced patch must not be invalid");
+    assert_eq!(
+        tc.input,
+        json!({ "patch": json_looking }),
+        "raw freeform string must be wrapped verbatim, not JSON-parsed"
+    );
 }
 
 #[tokio::test]

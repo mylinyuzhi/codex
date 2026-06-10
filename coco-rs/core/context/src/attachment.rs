@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use coco_types::PermissionBehavior;
+use coco_types::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -316,6 +317,17 @@ pub struct PlanModeAttachment {
     pub is_sub_agent: bool,
     pub plan_file_path: String,
     pub plan_exists: bool,
+    /// Model-aware builtin used to create the plan file. `Write` for the
+    /// Claude family, `apply_patch` for gpt-5 (which excludes `Write`). The
+    /// builder resolves it via [`coco_types::ToolName::write_tool_for`] /
+    /// `ToolOverrides::write_tool` so the reminder never names a tool the
+    /// model lacks. Defaults to `Write` for back-compat deserialization.
+    #[serde(default = "default_write_tool")]
+    pub write_tool: ToolName,
+    /// Model-aware builtin used to edit the existing plan file (see
+    /// [`Self::write_tool`]). Defaults to `Edit`.
+    #[serde(default = "default_edit_tool")]
+    pub edit_tool: ToolName,
 }
 
 fn default_explore_count() -> i32 {
@@ -323,6 +335,12 @@ fn default_explore_count() -> i32 {
 }
 fn default_plan_count() -> i32 {
     1
+}
+fn default_write_tool() -> ToolName {
+    ToolName::Write
+}
+fn default_edit_tool() -> ToolName {
+    ToolName::Edit
 }
 
 /// Which plan-mode Full-reminder workflow to render.

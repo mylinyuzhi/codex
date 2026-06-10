@@ -143,6 +143,53 @@ impl ToolName {
             Self::StructuredOutput => "StructuredOutput",
         }
     }
+
+    /// Model-aware file-mutation tool resolution — the single rule shared by
+    /// every prompt that names a write/edit tool (plan-mode reminder, AgentTool
+    /// examples, post-compaction plan reference).
+    ///
+    /// There is no per-model table: the answer is derived from what the model
+    /// actually has. `native` is the canonical builtin for the operation
+    /// (`Write` or `Edit`). The rule:
+    ///
+    /// 1. native tool present  → `native` (Claude family keeps Write/Edit)
+    /// 2. else `apply_patch` present → [`Self::ApplyPatch`] (gpt-5 family swaps
+    ///    native edits for the freeform patch tool; its `*** Add File` /
+    ///    `*** Update File` hunks cover create + edit)
+    /// 3. else → `native` (harmless fallback for degenerate tool sets)
+    ///
+    /// Any future model family that follows the same "drop native, add
+    /// apply_patch" shape is handled automatically.
+    pub fn file_mutation_tool(
+        native: ToolName,
+        has_native: bool,
+        has_apply_patch: bool,
+    ) -> ToolName {
+        if has_native {
+            native
+        } else if has_apply_patch {
+            ToolName::ApplyPatch
+        } else {
+            native
+        }
+    }
+
+    /// [`Self::file_mutation_tool`] resolved from the model's available tool
+    /// names this turn (e.g. `GeneratorContext::tools` / `PromptOptions::tool_names`).
+    /// Guarantees the returned name is one the model can actually call.
+    pub fn write_tool_for(available: &[String]) -> ToolName {
+        Self::file_mutation_tool_from_names(Self::Write, available)
+    }
+
+    /// Edit-operation counterpart of [`Self::write_tool_for`].
+    pub fn edit_tool_for(available: &[String]) -> ToolName {
+        Self::file_mutation_tool_from_names(Self::Edit, available)
+    }
+
+    fn file_mutation_tool_from_names(native: ToolName, available: &[String]) -> ToolName {
+        let has = |t: ToolName| available.iter().any(|n| n.as_str() == t.as_str());
+        Self::file_mutation_tool(native, has(native), has(ToolName::ApplyPatch))
+    }
 }
 
 impl fmt::Display for ToolName {

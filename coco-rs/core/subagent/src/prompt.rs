@@ -85,6 +85,12 @@ pub struct PromptOptions {
     /// in 3p builds. TS: `process.env.USER_TYPE === 'ant'` in
     /// `prompt.ts:273`.
     pub ant_build: bool,
+    /// Model-aware file-write tool for the usage examples, resolved by the
+    /// caller from the model's available tools (`Write` for Claude,
+    /// `apply_patch` for gpt-5). `None` → fall back to `Write`. Keeps the
+    /// example from naming a tool the model lacks. See
+    /// [`coco_types::ToolName::write_tool_for`].
+    pub file_write_tool: Option<ToolName>,
 }
 
 pub struct AgentToolPromptRenderer<'a> {
@@ -185,7 +191,7 @@ impl<'a> AgentToolPromptRenderer<'a> {
         out.push_str(&if opts.fork_enabled {
             fork_examples()
         } else {
-            current_examples()
+            current_examples(opts)
         });
 
         out
@@ -557,9 +563,12 @@ fn fork_examples() -> String {
 }
 
 /// Examples block when fork is disabled — TS `prompt.ts:156-188`.
-fn current_examples() -> String {
+fn current_examples(opts: &PromptOptions) -> String {
     let agent = ToolName::Agent.as_str();
-    let file_write = ToolName::Write.as_str();
+    // Model-aware: name the file-write tool the model actually has
+    // (Claude → Write, gpt-5 → apply_patch), not a hardcoded `Write`.
+    let file_write = opts.file_write_tool.unwrap_or(ToolName::Write);
+    let file_write = file_write.as_str();
     format!(
         "Example usage:\n\
          \n\

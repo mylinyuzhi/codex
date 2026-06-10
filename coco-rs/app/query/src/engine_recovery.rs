@@ -163,6 +163,29 @@ fn capacity_kind_from(classified: Option<&coco_inference::InferenceError>) -> Op
     }
 }
 
+/// Max consecutive in-place retries for a mid-stream capacity error
+/// (in-stream 429 / 529 delivered as an SSE error frame after HTTP 200,
+/// with no output emitted). Matches the handshake cap
+/// (`coco_inference::RetryConfig` capacity bound) so both throttle
+/// channels surface the error after the same number of attempts.
+pub(crate) const MAX_MIDSTREAM_CAPACITY_RETRIES: i32 = 3;
+
+/// Backoff before an in-place mid-stream capacity retry. Honors the
+/// server-supplied `retry-after` when present (and positive); otherwise
+/// exponential `500ms · 2^(attempt-1)` capped at 8s. Deliberately small
+/// and bounded — the attempt count is capped at
+/// [`MAX_MIDSTREAM_CAPACITY_RETRIES`].
+fn midstream_capacity_backoff(retry_after_ms: Option<i64>, attempt: i32) -> std::time::Duration {
+    if let Some(ms) = retry_after_ms
+        && ms > 0
+    {
+        return std::time::Duration::from_millis(ms as u64);
+    }
+    let shift = (attempt - 1).clamp(0, 4) as u32;
+    let exp_ms = 500_i64.saturating_mul(1_i64 << shift).min(8_000);
+    std::time::Duration::from_millis(exp_ms as u64)
+}
+
 /// Minimum reserved output budget used by the pre-API gate when
 /// computing `context_window - reserved_output`. The recovery
 /// dispatcher and [`QueryEngineConfig::default`] (via
@@ -980,6 +1003,7 @@ impl QueryEngine {
     pub(crate) async fn handle_stream_error<F, Fut>(
         &self,
         err_msg: String,
+        had_output: bool,
         services: &mut LoopServices,
         token: &coco_inference::ModelCallHandle,
         turn_state: &mut LoopTurnState,
@@ -1054,6 +1078,37 @@ impl QueryEngine {
                 )
                 .await;
             let coco_inference::ModelRuntimeFeedbackOutcome::Retry { events } = feedback else {
+                // Fallback chain is unavailable or exhausted. If nothing
+                // was emitted to the user yet, this mid-stream capacity
+                // error is equivalent to a handshake throttle — the
+                // identical request can be re-issued in place without
+                // duplicating visible output. Bounded + backoff (honoring
+                // server retry-after) so a persistently-saturated single
+                // model still surfaces the error, mirroring the in-place
+                // retry the handshake path gets in
+                // `client.rs::query_stream_with_config`.
+                if !had_output
+                    && turn_state.stream_capacity_retries < MAX_MIDSTREAM_CAPACITY_RETRIES
+                {
+                    turn_state.stream_capacity_retries += 1;
+                    let delay = midstream_capacity_backoff(
+                        capacity.retry_after_ms,
+                        turn_state.stream_capacity_retries,
+                    );
+                    warn!(
+                        active = services.current_model_id(),
+                        attempt = turn_state.stream_capacity_retries,
+                        delay_ms = delay.as_millis() as i64,
+                        "capacity error mid-stream, no output emitted; retrying in place",
+                    );
+                    tokio::select! {
+                        biased;
+                        _ = self.cancel.cancelled() => {}
+                        _ = tokio::time::sleep(delay) => {}
+                    }
+                    turn_state.count_next_iteration_as_turn = false;
+                    return StreamErrorOutcome::Continue;
+                }
                 warn!(
                     active = services.current_model_id(),
                     "capacity error mid-stream recorded by model runtime; surfacing error",
