@@ -880,6 +880,17 @@ async fn validate_effective_input_or_complete_error(
     deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
 ) -> Option<Value> {
     let mut deferred_tool_completions = deferred_tool_completions;
+    // Freeform/custom-tool coercion (mirrors `tool_input_validate` +
+    // `tool_runner`): a hook may hand back a freeform tool's raw string
+    // (apply_patch's `*** Begin Patch …` envelope); wrap it into the typed
+    // `{patch: …}` JSON the schema + serde `validate_input` expect before
+    // either check runs, otherwise both fail with `invalid type: string`.
+    let input = match input {
+        Value::String(raw) => tool
+            .coerce_raw_string_input(&raw)
+            .unwrap_or(Value::String(raw)),
+        other => other,
+    };
     // Schema validation (plan I3 Rust-side tightening): check the
     // (possibly hook-rewritten) input against the tool's JSON
     // schema BEFORE running `tool.validate_input`. A hook that

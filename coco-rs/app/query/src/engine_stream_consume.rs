@@ -143,7 +143,13 @@ pub(crate) enum StreamOutcome {
     },
     /// `StreamEvent::Error` arrived mid-stream. Caller routes through
     /// [`crate::engine_recovery::QueryEngine::handle_stream_error`].
-    Errored { message: String },
+    /// `had_output` is `true` when any text / reasoning / tool-call was
+    /// already emitted to the user before the error. It gates whether a
+    /// retryable mid-stream error (e.g. an in-stream 429 delivered as an
+    /// SSE error frame after HTTP 200) can be safely re-issued in place:
+    /// re-issuing is only safe when nothing visible was emitted, else the
+    /// retry would duplicate output.
+    Errored { message: String, had_output: bool },
     /// Receiver closed without a Finish / Error event — either the
     /// channel ended early or the cancel-arm broke the inner loop.
     /// Caller falls through to the clean-turn success path with
@@ -527,18 +533,29 @@ impl QueryEngine {
                     break;
                 }
                 StreamEvent::Error { message, .. } => {
+                    // Nothing committed to the user yet ⇒ a retryable
+                    // mid-stream error can be re-issued in place without
+                    // duplicating visible output. `tool_order` empty also
+                    // means no streaming tool started executing.
+                    let had_output = !response_text.is_empty()
+                        || !reasoning_text.is_empty()
+                        || !tool_order.is_empty();
                     warn!(
                         turn = turn_state.turn,
                         turn_id = %turn_id,
                         error = %message,
                         text_chars = response_text.len(),
                         tool_call_count = tool_order.len(),
+                        had_output,
                         "LLM stream errored"
                     );
                     if let Some(rec) = turn_state.wire_recorder.as_ref() {
                         rec.finish(coco_wire_dump::WireOutcome::Failure);
                     }
-                    outcome = StreamOutcome::Errored { message };
+                    outcome = StreamOutcome::Errored {
+                        message,
+                        had_output,
+                    };
                     break;
                 }
             }

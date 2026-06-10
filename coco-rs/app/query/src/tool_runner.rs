@@ -128,7 +128,13 @@ pub(crate) async fn prepare_committed_tool_call(
         return None;
     }
 
-    let validation = tool.validate_input(&tool_call.input, ctx);
+    // Validate the coerced/normalized clone, not the raw `tool_call.input`.
+    // `validate_tool_call` (above) applied freeform coercion (apply_patch's
+    // raw `*** Begin Patch …` string → `{patch: …}`) and string-recovery to
+    // `validated.input`; the original `tool_call.input` is intentionally left
+    // untouched for the wire round-trip. Feeding the raw string to the
+    // serde-backed `validate_input` would fail with `invalid type: string`.
+    let validation = tool.validate_input(&validated.input, ctx);
     if !validation.is_valid() {
         let message = match validation {
             coco_tool_runtime::ValidationResult::Invalid { message, .. } => {

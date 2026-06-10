@@ -97,6 +97,8 @@ pub use stream::ToolApprovalRequestSegment;
 pub use stream::ToolCallSegment;
 pub use stream::TurnPart;
 pub use stream::default_process_stream_config;
+pub use stream::synthetic_error_stream;
+pub use stream::synthetic_error_stream_after_text;
 pub use stream::synthetic_stream_from_content;
 pub use thinking_convert::to_extra_body;
 pub use usage::UsageAccumulator;

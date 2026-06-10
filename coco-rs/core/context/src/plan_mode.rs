@@ -927,8 +927,11 @@ fn plan_file_info_sub_agent(attachment: &PlanModeAttachment) -> String {
 }
 
 fn plan_file_info_impl(attachment: &PlanModeAttachment, sub_agent: bool) -> String {
-    let file_edit = ToolName::Edit.as_str();
-    let file_write = ToolName::Write.as_str();
+    // Model-aware: the builder resolved these from the model's tool set
+    // (Claude → Write/Edit, gpt-5 → apply_patch). Don't hardcode `ToolName::`
+    // here — that's what told gpt-5 to use a `Write` tool it doesn't have.
+    let file_edit = attachment.edit_tool.as_str();
+    let file_write = attachment.write_tool.as_str();
     let softener = if sub_agent { " if you need to" } else { "" };
     if attachment.plan_exists {
         format!(

@@ -62,7 +62,8 @@ pub(super) fn providers() -> Vec<(&'static str, PartialProviderConfig)> {
 pub(super) fn models() -> Vec<(&'static str, PartialModelInfo)> {
     let gpt5_overrides = ToolOverrides::default()
         .with_extra(ToolId::Builtin(ToolName::ApplyPatch))
-        .with_excluded(ToolId::Builtin(ToolName::Edit));
+        .with_excluded(ToolId::Builtin(ToolName::Edit))
+        .with_excluded(ToolId::Builtin(ToolName::Write));
     let thinking = openai_reasoning_levels();
 
     vec![

@@ -1118,6 +1118,9 @@ impl QueryEngine {
             is_sub_agent: self.config.agent_id.is_some(),
             plan_file_path,
             plan_exists,
+            // Model-aware plan-file tool (gpt-5 → apply_patch, Claude → Write/Edit).
+            write_tool: self.config.tool_overrides.write_tool(),
+            edit_tool: self.config.tool_overrides.edit_tool(),
         })
     }
 
@@ -1323,6 +1326,9 @@ impl QueryEngine {
                     is_sub_agent: agent_id_for_attachments.is_some(),
                     plan_file_path: plan_path,
                     plan_exists: plan_exists_flag,
+                    // Model-aware plan-file tool (gpt-5 → apply_patch, Claude → Write/Edit).
+                    write_tool: self.config.tool_overrides.write_tool(),
+                    edit_tool: self.config.tool_overrides.edit_tool(),
                 })
             }
         };

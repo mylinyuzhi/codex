@@ -24,6 +24,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::ToolId;
+use crate::ToolName;
 
 /// Per-model tool overrides against the universal baseline.
 ///
@@ -108,6 +109,29 @@ impl ToolOverrides {
     pub fn permits_name(&self, name: &str) -> bool {
         let id = ToolId::from_str(name).expect("ToolId::from_str is infallible");
         self.permits(&id)
+    }
+
+    /// The builtin this model uses to create / fully write a file, derived
+    /// from the override diff (no per-model table). Claude family → `Write`;
+    /// gpt-5 family (excludes `Write`, adds `apply_patch`) → `ApplyPatch`.
+    /// Shares [`ToolName::file_mutation_tool`] with the name-list resolver so
+    /// override-holding callers (e.g. compaction) and tool-list-holding callers
+    /// (prompts) agree. See [`ToolName::write_tool_for`].
+    pub fn write_tool(&self) -> ToolName {
+        ToolName::file_mutation_tool(
+            ToolName::Write,
+            self.permits(&ToolId::Builtin(ToolName::Write)),
+            self.is_extra(&ToolId::Builtin(ToolName::ApplyPatch)),
+        )
+    }
+
+    /// Edit-operation counterpart of [`Self::write_tool`].
+    pub fn edit_tool(&self) -> ToolName {
+        ToolName::file_mutation_tool(
+            ToolName::Edit,
+            self.permits(&ToolId::Builtin(ToolName::Edit)),
+            self.is_extra(&ToolId::Builtin(ToolName::ApplyPatch)),
+        )
     }
 }
 

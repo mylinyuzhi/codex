@@ -832,10 +832,14 @@ impl QueryEngine {
             }
 
             let (snapshot, usage, parsed_stop_reason) = match outcome {
-                crate::engine_stream_consume::StreamOutcome::Errored { message } => {
+                crate::engine_stream_consume::StreamOutcome::Errored {
+                    message,
+                    had_output,
+                } => {
                     match self
                         .handle_stream_error(
                             message,
+                            had_output,
                             &mut services,
                             &stream_token,
                             &mut turn_state,
@@ -858,6 +862,12 @@ impl QueryEngine {
                 crate::engine_stream_consume::StreamOutcome::PrematureClose => match self
                     .handle_stream_error(
                         "LLM stream closed before finish event".to_string(),
+                        // Conservative: a premature close carries no
+                        // content signal and never classifies as a
+                        // capacity error, so in-place retry is moot —
+                        // pass `true` to keep this path's behavior fixed.
+                        /*had_output*/
+                        true,
                         &mut services,
                         &stream_token,
                         &mut turn_state,
@@ -877,6 +887,9 @@ impl QueryEngine {
                 &stream_token,
                 coco_inference::ModelCommunicationOutcome::Success,
             );
+            // The stream reached a non-error terminal — replenish the
+            // mid-stream capacity retry budget for the next turn.
+            turn_state.stream_capacity_retries = 0;
             if let Some(app_state) = self.app_state.as_ref() {
                 crate::engine_helpers::clear_rate_limit_observation(
                     app_state,

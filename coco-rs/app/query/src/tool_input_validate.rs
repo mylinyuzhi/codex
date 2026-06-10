@@ -73,22 +73,32 @@ pub fn validate_tool_call(tc: &mut ToolCallPart, tool: Option<&Arc<dyn DynTool>>
         return;
     };
 
-    // 2. Value::String recovery (mirrors TS recursive-parse).
-    normalize_value_string(&mut tc.input);
-
-    // 2b. Freeform/custom-tool coercion. A freeform tool (apply_patch) is
-    //     called with a bare string (the raw `*** Begin Patch …` envelope);
-    //     the tool wraps it into the typed JSON its schema expects
-    //     (`{patch: raw}`) so schema validation + `Self::Input`
-    //     deserialization succeed. This mutates the validation clone only —
-    //     the persisted assistant message keeps the raw string for the wire
-    //     round-trip (`tool_runner.rs` validates a `tool_call.clone()`).
+    // 2. Freeform/custom-tool coercion vs. JSON string-recovery — mutually
+    //    exclusive, coercion first.
+    //
+    //    A freeform tool (apply_patch) is called with a bare string (the raw
+    //    `*** Begin Patch …` envelope); the tool wraps it into the typed JSON
+    //    its schema expects (`{patch: raw}`) so schema validation +
+    //    `Self::Input` deserialization succeed.
+    //
+    //    codex-rs routes such custom tool calls to a dedicated raw-string
+    //    `ToolPayload::Custom { input }` that is NEVER parsed as JSON — only
+    //    `Function` arguments are. We mirror that: when the tool coerces a
+    //    raw string (i.e. it's freeform), DO NOT run `normalize_value_string`,
+    //    which would try to JSON-parse the patch envelope and could mangle a
+    //    body that happens to look like JSON. Only non-coercing (function)
+    //    tools get string-recovery, where nested stringified-JSON is real.
+    //
+    //    This mutates the validation clone only — the persisted assistant
+    //    message keeps the raw string for the wire round-trip
+    //    (`tool_runner.rs` validates a `tool_call.clone()`).
     let coerced = match &tc.input {
         Value::String(raw) => tool.coerce_raw_string_input(raw),
         _ => None,
     };
-    if let Some(coerced) = coerced {
-        tc.input = coerced;
+    match coerced {
+        Some(coerced) => tc.input = coerced,
+        None => normalize_value_string(&mut tc.input),
     }
 
     // 3. Schema validation — synchronous and lock-free; the validator is

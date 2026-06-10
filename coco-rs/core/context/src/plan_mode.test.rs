@@ -309,6 +309,8 @@ fn att(rt: ReminderType, is_sub: bool, path: &str, exists: bool) -> PlanModeAtta
         is_sub_agent: is_sub,
         plan_file_path: path.into(),
         plan_exists: exists,
+        write_tool: coco_types::ToolName::Write,
+        edit_tool: coco_types::ToolName::Edit,
     }
 }
 
@@ -323,6 +325,8 @@ fn reminder_full_main_agent_includes_workflow_and_plan_file() {
         is_sub_agent: false,
         plan_file_path: "/tmp/plans/foo.md".into(),
         plan_exists: true,
+        write_tool: coco_types::ToolName::Write,
+        edit_tool: coco_types::ToolName::Edit,
     };
     let out = render_plan_mode_reminder(&att);
     assert!(out.contains("Plan mode is active"));
@@ -331,6 +335,34 @@ fn reminder_full_main_agent_includes_workflow_and_plan_file() {
     assert!(out.contains("## Plan Workflow"));
     // Must not claim no plan file when one exists.
     assert!(!out.contains("No plan file exists yet"));
+}
+
+#[test]
+fn reminder_names_model_specific_file_tool() {
+    // Regression for the gpt-5 plan-file trigger: the reminder must name the
+    // model's actual file tool (`apply_patch`), never a hardcoded `Write`/
+    // `Edit` the gpt-5 family doesn't have. The builder resolves these from
+    // the model's tool set; here we simulate the gpt-5 resolution.
+    let mk = |exists: bool| PlanModeAttachment {
+        reminder_type: ReminderType::Full,
+        workflow: PlanWorkflow::default(),
+        phase4_variant: Phase4Variant::default(),
+        explore_agent_count: 3,
+        plan_agent_count: 1,
+        is_sub_agent: false,
+        plan_file_path: "/tmp/plans/foo.md".into(),
+        plan_exists: exists,
+        write_tool: coco_types::ToolName::ApplyPatch,
+        edit_tool: coco_types::ToolName::ApplyPatch,
+    };
+
+    let new_plan = render_plan_mode_reminder(&mk(false));
+    assert!(new_plan.contains("using the apply_patch tool"));
+    assert!(!new_plan.contains("using the Write tool"));
+
+    let existing_plan = render_plan_mode_reminder(&mk(true));
+    assert!(existing_plan.contains("using the apply_patch tool"));
+    assert!(!existing_plan.contains("using the Edit tool"));
 }
 
 #[test]
@@ -555,6 +587,8 @@ fn snapshot_attachment(phase4: Phase4Variant, workflow: PlanWorkflow) -> PlanMod
         is_sub_agent: false,
         plan_file_path: "/tmp/plans/SNAP.md".into(),
         plan_exists: false,
+        write_tool: coco_types::ToolName::Write,
+        edit_tool: coco_types::ToolName::Edit,
     }
 }
 

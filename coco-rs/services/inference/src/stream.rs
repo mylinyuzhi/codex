@@ -941,6 +941,53 @@ pub fn synthetic_stream_from_content(
     LanguageModelV4StreamResult::new(Box::pin(stream))
 }
 
+/// Build a stream that opens cleanly (HTTP 200) and then yields a single
+/// mid-stream `Error` part with no content before it — the shape an
+/// OpenAI-compatible gateway produces when it delivers a 429 as an
+/// in-stream SSE `error` event instead of an HTTP status. Test helper for
+/// the engine's mid-stream recovery path; `is_retryable` is left at the
+/// `StreamError::new` default (`false`) because the consume path
+/// re-classifies from the message string, not this flag.
+pub fn synthetic_error_stream(message: impl Into<String>) -> LanguageModelV4StreamResult {
+    let part: Result<LanguageModelV4StreamPart, AISdkError> =
+        Ok(LanguageModelV4StreamPart::Error {
+            error: vercel_ai_provider::StreamError::new(message),
+        });
+    LanguageModelV4StreamResult::new(Box::pin(futures::stream::iter(vec![part])))
+}
+
+/// Like [`synthetic_error_stream`] but streams one text delta before the
+/// error, so the consume path records committed output before failing.
+/// Test helper for the `had_output == true` branch of the engine's
+/// mid-stream recovery — once visible output has been emitted, in-place
+/// retry must NOT fire (it would duplicate the output).
+pub fn synthetic_error_stream_after_text(
+    text: impl Into<String>,
+    message: impl Into<String>,
+) -> LanguageModelV4StreamResult {
+    use LanguageModelV4StreamPart as Part;
+    let id = "text-0".to_string();
+    let parts: Vec<Result<Part, AISdkError>> = vec![
+        Ok(Part::TextStart {
+            id: id.clone(),
+            provider_metadata: None,
+        }),
+        Ok(Part::TextDelta {
+            id: id.clone(),
+            delta: text.into(),
+            provider_metadata: None,
+        }),
+        Ok(Part::TextEnd {
+            id,
+            provider_metadata: None,
+        }),
+        Ok(Part::Error {
+            error: vercel_ai_provider::StreamError::new(message),
+        }),
+    ];
+    LanguageModelV4StreamResult::new(Box::pin(futures::stream::iter(parts)))
+}
+
 /// Truncate accumulated tool-call JSON to a single-line debug preview.
 /// UTF-8 safe; replaces interior newlines with spaces so the preview
 /// doesn't break compact log formatters.

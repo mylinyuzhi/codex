@@ -108,6 +108,52 @@ fn test_cancelled_not_retryable() {
 }
 
 #[test]
+fn test_classify_stream_message_openai_too_many_requests_as_rate_limit() {
+    // Regression: the aidp/Azure gateway delivers a 429 as an in-stream
+    // SSE error frame (HTTP 200, then `{"type":"error",...}`) rather than
+    // an HTTP status, so it never reaches `from_http_status`. The verbatim
+    // wire blob must still classify as a retryable rate-limit so the
+    // mid-stream capacity handler engages instead of bailing.
+    let raw = r#"OpenAI responses error: {"type":"error","error":{"type":"too_many_requests","code":"too_many_requests","headers":{"x-ms-fe-error":"true"},"message":"Too Many Requests","param":null},"sequence_number":2}"#;
+    let err = InferenceError::classify_stream_message(raw)
+        .expect("too_many_requests must classify as a rate-limit");
+    assert!(matches!(err, InferenceError::RateLimited { .. }));
+    assert!(err.is_retryable());
+}
+
+#[test]
+fn test_classify_stream_message_vocabulary() {
+    // Anthropic streams `rate_limit_error`; the human-readable "rate
+    // limited" and the `(429)` / `status: 429` forms must all match.
+    for msg in [
+        "rate_limit_error: too fast",
+        "you are being rate limited",
+        "Too Many Requests",
+        "provider returned status: 429",
+        "error (429)",
+    ] {
+        assert!(
+            matches!(
+                InferenceError::classify_stream_message(msg),
+                Some(InferenceError::RateLimited { .. })
+            ),
+            "{msg:?} should classify as RateLimited"
+        );
+    }
+    // Overload + context-window vocabulary stays in its own bucket.
+    assert!(matches!(
+        InferenceError::classify_stream_message("overloaded_error"),
+        Some(InferenceError::Overloaded { .. })
+    ));
+    assert!(matches!(
+        InferenceError::classify_stream_message("context_length_exceeded"),
+        Some(InferenceError::ContextWindowExceeded { .. })
+    ));
+    // Unrelated errors don't get a recoverable classification.
+    assert!(InferenceError::classify_stream_message("invalid api key").is_none());
+}
+
+#[test]
 fn test_body_truncation() {
     let long_body = "x".repeat(1000);
     // 404 maps to the message-bearing ProviderError variant (500 now maps to

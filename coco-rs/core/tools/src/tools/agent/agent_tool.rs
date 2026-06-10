@@ -334,6 +334,7 @@ impl Tool for AgentTool {
             is_pro_subscription: options.is_pro_subscription,
             background_tasks_disabled: options.background_tasks_disabled,
             ant_build: options.ant_build,
+            file_write_tool: Some(coco_types::ToolName::write_tool_for(&options.tool_names)),
         };
         renderer.full_prompt(&render_opts)
     }

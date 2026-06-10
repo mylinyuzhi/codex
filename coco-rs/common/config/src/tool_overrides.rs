@@ -48,11 +48,14 @@ pub fn resolve_tool_overrides(model_id: &str, info: Option<&ModelInfo>) -> ToolO
 /// list more specific patterns before more general ones.
 fn builtin_tool_overrides_for(model_id: &str) -> ToolOverrides {
     if model_id.starts_with("gpt-5") {
-        // gpt-5 family rejects `Edit` and expects unified diffs via
-        // `apply_patch` instead.
+        // gpt-5 family routes ALL file mutation through `apply_patch`:
+        // `Edit` and `Write` are both rejected (the patch envelope's
+        // `*** Update File` / `*** Add File` hunks cover edits and new
+        // files alike, matching the gpt-5 base instructions).
         return ToolOverrides::default()
             .with_extra(ToolId::Builtin(ToolName::ApplyPatch))
-            .with_excluded(ToolId::Builtin(ToolName::Edit));
+            .with_excluded(ToolId::Builtin(ToolName::Edit))
+            .with_excluded(ToolId::Builtin(ToolName::Write));
     }
     ToolOverrides::none()
 }

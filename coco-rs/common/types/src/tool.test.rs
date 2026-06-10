@@ -106,3 +106,49 @@ fn test_tool_id_from_tool_name() {
     let id = ToolId::from(ToolName::Edit);
     assert_eq!(id, ToolId::Builtin(ToolName::Edit));
 }
+
+#[test]
+fn write_edit_tool_for_resolves_from_available_names() {
+    // Claude-style tool list: native Write/Edit present.
+    let claude = vec![
+        "Read".to_string(),
+        "Write".to_string(),
+        "Edit".to_string(),
+        "Bash".to_string(),
+    ];
+    assert_eq!(ToolName::write_tool_for(&claude), ToolName::Write);
+    assert_eq!(ToolName::edit_tool_for(&claude), ToolName::Edit);
+
+    // gpt-5-style tool list: no Write/Edit, apply_patch present.
+    let gpt5 = vec![
+        "Read".to_string(),
+        "Bash".to_string(),
+        "apply_patch".to_string(),
+    ];
+    assert_eq!(ToolName::write_tool_for(&gpt5), ToolName::ApplyPatch);
+    assert_eq!(ToolName::edit_tool_for(&gpt5), ToolName::ApplyPatch);
+
+    // Neither present → harmless native fallback.
+    let bare = vec!["Read".to_string(), "Bash".to_string()];
+    assert_eq!(ToolName::write_tool_for(&bare), ToolName::Write);
+    assert_eq!(ToolName::edit_tool_for(&bare), ToolName::Edit);
+}
+
+#[test]
+fn file_mutation_tool_core_rule() {
+    assert_eq!(
+        ToolName::file_mutation_tool(ToolName::Write, true, true),
+        ToolName::Write,
+        "native wins when present"
+    );
+    assert_eq!(
+        ToolName::file_mutation_tool(ToolName::Edit, false, true),
+        ToolName::ApplyPatch,
+        "apply_patch when native absent"
+    );
+    assert_eq!(
+        ToolName::file_mutation_tool(ToolName::Write, false, false),
+        ToolName::Write,
+        "native fallback when neither present"
+    );
+}

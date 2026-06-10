@@ -12,6 +12,8 @@ fn fresh_attachment() -> PlanModeAttachment {
         is_sub_agent: false,
         plan_file_path: "/tmp/plan.md".to_string(),
         plan_exists: false,
+        write_tool: coco_types::ToolName::Write,
+        edit_tool: coco_types::ToolName::Edit,
     }
 }
 

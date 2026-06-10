@@ -115,6 +115,14 @@ pub(crate) struct LoopTurnState {
     /// by `ContinueReason` because they are runtime-policy retries
     /// rather than query-control transitions.
     pub(crate) count_next_iteration_as_turn: bool,
+    /// Consecutive in-place retries fired by the mid-stream capacity
+    /// handler (in-stream 429 / 529 delivered as an SSE error frame after
+    /// HTTP 200, with no output emitted yet). Reset to 0 on any
+    /// non-error stream terminal; capped at
+    /// [`crate::engine_recovery::MAX_MIDSTREAM_CAPACITY_RETRIES`] so a
+    /// persistently-throttled model still surfaces the error instead of
+    /// spinning forever.
+    pub(crate) stream_capacity_retries: i32,
     /// Per-stream raw-wire recorder for this iteration (when wire-dump is
     /// enabled). Set by `enter_turn_and_prepare_request`; `consume_stream`
     /// calls `finish(outcome)` on it. Overwritten each iteration; the
@@ -140,6 +148,7 @@ impl LoopTurnState {
             reminder_last_user_input_uuid: None,
             budget: BudgetTracker::new(total_token_budget, max_turns, max_continuations),
             count_next_iteration_as_turn: true,
+            stream_capacity_retries: 0,
             wire_recorder: None,
         }
     }

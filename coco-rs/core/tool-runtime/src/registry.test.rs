@@ -379,9 +379,10 @@ fn pipeline_agent_filter_narrows() {
 /// End-to-end design-doc §8 trace: gpt-5 + Plan mode.
 ///
 /// Mirror TS: plan mode no longer narrows the schema, so the visible set
-/// is exactly the gpt-5 tool universe — `Edit` excluded, `apply_patch`
-/// added, writes (`Write`/`Bash`/`apply_patch`) all present. Plan-mode
-/// read-only is a call-time permission concern, not a schema filter.
+/// is exactly the gpt-5 tool universe — `Edit` and `Write` excluded,
+/// `apply_patch` added (it covers both edits and new files), `Bash`
+/// present. Plan-mode read-only is a call-time permission concern, not a
+/// schema filter.
 #[test]
 fn pipeline_design_doc_gpt5_plan_mode_trace() {
     let reg = doc_example_registry();
@@ -390,10 +391,11 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
     let features = coco_types::Features::with_defaults();
 
     // Layer 2 — gpt-5 diff: extra apply_patch (now a typed ToolName
-    // variant), excluded Edit. Both go in via `ToolId::Builtin`.
+    // variant), excluded Edit + Write. All go in via `ToolId::Builtin`.
     let overrides = coco_types::ToolOverrides::default()
         .with_extra(ToolId::Builtin(ToolName::ApplyPatch))
-        .with_excluded(ToolId::Builtin(ToolName::Edit));
+        .with_excluded(ToolId::Builtin(ToolName::Edit))
+        .with_excluded(ToolId::Builtin(ToolName::Write));
 
     // Plan mode — no schema narrowing.
     // Top-level session, no agent restriction.
@@ -407,7 +409,6 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
     let visible = names(&reg.loaded_tools(&ctx));
     let expected: std::collections::HashSet<String> = [
         ToolName::Read.as_str(),
-        ToolName::Write.as_str(),
         ToolName::Bash.as_str(),
         ToolName::ApplyPatch.as_str(),
         ToolName::WebSearch.as_str(),
@@ -418,7 +419,7 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
     .collect();
     assert_eq!(
         visible, expected,
-        "plan mode keeps the full gpt-5 schema (Edit excluded, writes present)"
+        "plan mode keeps the full gpt-5 schema (Edit + Write excluded, apply_patch present)"
     );
 }
 

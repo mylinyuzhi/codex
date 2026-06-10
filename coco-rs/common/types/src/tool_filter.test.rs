@@ -196,3 +196,31 @@ fn narrow_with_unions_disallowed() {
     assert!(!narrowed.allows(&id(ToolName::Bash)));
     assert!(narrowed.allows(&id(ToolName::Read)));
 }
+
+#[test]
+fn write_edit_tool_default_to_native_for_claude() {
+    // No override diff (Claude family): native Write/Edit.
+    let overrides = ToolOverrides::none();
+    assert_eq!(overrides.write_tool(), ToolName::Write);
+    assert_eq!(overrides.edit_tool(), ToolName::Edit);
+}
+
+#[test]
+fn write_edit_tool_resolve_to_apply_patch_for_gpt5() {
+    // gpt-5 diff: Write/Edit excluded, apply_patch added → both map to it.
+    let overrides = ToolOverrides::default()
+        .with_extra(id(ToolName::ApplyPatch))
+        .with_excluded(id(ToolName::Edit))
+        .with_excluded(id(ToolName::Write));
+    assert_eq!(overrides.write_tool(), ToolName::ApplyPatch);
+    assert_eq!(overrides.edit_tool(), ToolName::ApplyPatch);
+}
+
+#[test]
+fn write_tool_falls_back_to_native_when_excluded_without_apply_patch() {
+    // Degenerate: Write excluded but no apply_patch — harmless native fallback.
+    let overrides = ToolOverrides::default().with_excluded(id(ToolName::Write));
+    assert_eq!(overrides.write_tool(), ToolName::Write);
+    // Edit untouched → still Edit.
+    assert_eq!(overrides.edit_tool(), ToolName::Edit);
+}
