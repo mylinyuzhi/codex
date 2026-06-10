@@ -27,6 +27,7 @@ pub mod plugin_watch;
 pub mod provider_login;
 pub mod resume_hint;
 pub mod resume_resolver;
+pub mod sandbox_approval_bridge_tui;
 pub mod sandbox_reload;
 pub mod sdk_server;
 pub mod session_bootstrap;

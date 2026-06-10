@@ -78,8 +78,18 @@ pub fn wrap_send_elicitation_with_hooks(
                 // even on `?` early-exit paths, because the guard is
                 // moved into this block by value.
                 let _elicit_guard = elicitation_counter.map(ElicitationGuard::acquire);
-                let message = elicitation.message.clone();
-                let requested_schema = serde_json::to_value(&elicitation.requested_schema).ok();
+                // rmcp 1.7 made the elicitation request an enum (Form / Url).
+                // Form carries a requested_schema; Url carries only a message.
+                let (message, requested_schema) = match &elicitation {
+                    coco_mcp::Elicitation::FormElicitationParams {
+                        message,
+                        requested_schema,
+                        ..
+                    } => (message.clone(), serde_json::to_value(requested_schema).ok()),
+                    coco_mcp::Elicitation::UrlElicitationParams { message, .. } => {
+                        (message.clone(), None)
+                    }
+                };
 
                 // Pre-dialog hook (TS `runElicitationHooks`).
                 let ctx = (ctx_factory)();
@@ -110,6 +120,7 @@ pub fn wrap_send_elicitation_with_hooks(
                                     coco_mcp::ElicitationResponse {
                                         action: coco_mcp::RmcpElicitationAction::Decline,
                                         content: None,
+                                        meta: None,
                                     },
                                     /*hook_overrode*/ true,
                                 )
@@ -191,6 +202,7 @@ async fn run_result_hook_and(
                     coco_mcp::ElicitationResponse {
                         action: coco_mcp::RmcpElicitationAction::Decline,
                         content: None,
+                        meta: None,
                     }
                 } else if let Some(override_resp) = agg.elicitation_result_response {
                     build_elicitation_response(
@@ -250,5 +262,9 @@ fn build_elicitation_response(
         ElicitationAction::Decline => coco_mcp::RmcpElicitationAction::Decline,
         ElicitationAction::Cancel => coco_mcp::RmcpElicitationAction::Cancel,
     };
-    coco_mcp::ElicitationResponse { action, content }
+    coco_mcp::ElicitationResponse {
+        action,
+        content,
+        meta: None,
+    }
 }

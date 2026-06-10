@@ -155,6 +155,38 @@ async fn register_server_tools(
         .await;
 }
 
+/// Surface the per-server `mcp__<server>__authenticate` pseudo-tool for a
+/// NeedsAuth server in the shared `ToolRegistry`. Mirrors
+/// [`register_server_tools`] but registers the auth affordance instead of real
+/// tools (TS: `processServer` surfacing `[createMcpAuthTool(...)]`).
+async fn register_server_auth_tool(
+    ctx: &HandlerContext,
+    server_name: &str,
+    transport: &str,
+    url: Option<&str>,
+) {
+    let rt_guard = ctx.state.session_runtime.read().await;
+    let Some(rt) = rt_guard.as_ref() else { return };
+    coco_tools::register_mcp_auth_tool(rt.tools(), server_name, transport, url);
+}
+
+/// After a connect that returned `Err`, classify whether the server actually
+/// landed in `NeedsAuth` (a 401 for lack of credentials). Returns the
+/// transport+url descriptor for surfacing the authenticate tool, or `None` for
+/// a genuine failure. Pure read — the caller drops the manager lock before
+/// registering (avoids holding it across the session-runtime lock).
+async fn needs_auth_descriptor(
+    manager: &coco_mcp::McpConnectionManager,
+    server_name: &str,
+) -> Option<(String, Option<String>)> {
+    match manager.get_state(server_name).await {
+        Some(coco_mcp::McpConnectionState::NeedsAuth { .. }) => {
+            manager.auth_descriptor(server_name)
+        }
+        _ => None,
+    }
+}
+
 /// Deregister all tools for an MCP server from the shared `ToolRegistry`.
 async fn deregister_server_tools(ctx: &HandlerContext, server_name: &str) {
     {
@@ -313,7 +345,11 @@ async fn bridge_elicitation_to_sdk_client(
     } else {
         None
     };
-    Ok(coco_mcp::ElicitationResponse { action, content })
+    Ok(coco_mcp::ElicitationResponse {
+        action,
+        content,
+        meta: None,
+    })
 }
 
 /// Helper: borrow the wired MCP manager or return INVALID_REQUEST.
@@ -419,11 +455,25 @@ pub(super) async fn handle_mcp_reconnect(
             register_server_tools(ctx, &params.server_name, schemas).await;
             HandlerResult::ok_empty()
         }
-        Err(e) => HandlerResult::Err {
-            code: coco_types::error_codes::INTERNAL_ERROR,
-            message: format!("mcp/reconnect: {e}"),
-            data: None,
-        },
+        Err(e) => {
+            // A connect `Err` may actually be NeedsAuth (401 for lack of
+            // credentials). Surface the authenticate tool and answer ok rather
+            // than failing the control request.
+            let descriptor = needs_auth_descriptor(&manager, &params.server_name).await;
+            drop(manager);
+            if let Some((transport, url)) = descriptor {
+                register_server_auth_tool(ctx, &params.server_name, &transport, url.as_deref())
+                    .await;
+                info!(server = %params.server_name, %transport, "SdkServer: mcp/reconnect needs auth; surfaced authenticate tool");
+                HandlerResult::ok_empty()
+            } else {
+                HandlerResult::Err {
+                    code: coco_types::error_codes::INTERNAL_ERROR,
+                    message: format!("mcp/reconnect: {e}"),
+                    data: None,
+                }
+            }
+        }
     }
 }
 
@@ -455,11 +505,22 @@ pub(super) async fn handle_mcp_toggle(
                 register_server_tools(ctx, &params.server_name, schemas).await;
                 HandlerResult::ok_empty()
             }
-            Err(e) => HandlerResult::Err {
-                code: coco_types::error_codes::INTERNAL_ERROR,
-                message: format!("mcp/toggle enable: {e}"),
-                data: None,
-            },
+            Err(e) => {
+                let descriptor = needs_auth_descriptor(&manager, &params.server_name).await;
+                drop(manager);
+                if let Some((transport, url)) = descriptor {
+                    register_server_auth_tool(ctx, &params.server_name, &transport, url.as_deref())
+                        .await;
+                    info!(server = %params.server_name, %transport, "SdkServer: mcp/toggle needs auth; surfaced authenticate tool");
+                    HandlerResult::ok_empty()
+                } else {
+                    HandlerResult::Err {
+                        code: coco_types::error_codes::INTERNAL_ERROR,
+                        message: format!("mcp/toggle enable: {e}"),
+                        data: None,
+                    }
+                }
+            }
         }
     } else {
         manager.disconnect(&params.server_name).await;

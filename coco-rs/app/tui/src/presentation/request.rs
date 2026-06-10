@@ -3,6 +3,7 @@
 use ratatui::prelude::Color;
 
 use crate::i18n::t;
+use crate::state::ExplainerFetch;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
 use crate::state::QuestionFocusTarget;
@@ -74,15 +75,44 @@ pub(crate) fn permission_content(
         classic_permission_actions(p)
     };
 
-    let border = match p.risk_level {
-        Some(RiskLevel::High) => styles.error(),
-        _ => styles.warning(),
+    // Lazy Ctrl+E risk-explainer panel (TS `PermissionExplanation.tsx`): only
+    // rendered when toggled open, so the default prompt body is unchanged. Risk
+    // is shown here, not in the title — TS shows it only in this panel.
+    let explainer_panel = if p.explanation_visible {
+        match &p.explanation {
+            ExplainerFetch::Loading => format!("\n\n{}", t!("dialog.explainer_loading")),
+            ExplainerFetch::Ready(e) => {
+                let level = match e.risk_level {
+                    coco_types::RiskLevel::Low => t!("dialog.explainer_risk_low"),
+                    coco_types::RiskLevel::Medium => t!("dialog.explainer_risk_medium"),
+                    coco_types::RiskLevel::High => t!("dialog.explainer_risk_high"),
+                };
+                format!("\n\n{level} — {}\n{}", e.risk, e.explanation)
+            }
+            ExplainerFetch::Unavailable => format!("\n\n{}", t!("dialog.explainer_unavailable")),
+            ExplainerFetch::NotFetched => String::new(),
+        }
+    } else {
+        String::new()
+    };
+
+    // Border reflects the fetched risk while the panel is open; otherwise the
+    // (legacy, currently always-None) `risk_level` field drives it.
+    let border = match (p.explanation_visible, &p.explanation) {
+        (true, ExplainerFetch::Ready(e)) if e.risk_level == coco_types::RiskLevel::High => {
+            styles.error()
+        }
+        (true, ExplainerFetch::Ready(_)) => styles.warning(),
+        _ => match p.risk_level {
+            Some(RiskLevel::High) => styles.error(),
+            _ => styles.warning(),
+        },
     };
 
     (
         title,
         format!(
-            "{}{classifier_line}\n\n{detail}\n\n{actions}",
+            "{}{classifier_line}\n\n{detail}\n\n{actions}{explainer_panel}",
             p.description
         ),
         border,

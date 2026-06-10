@@ -148,6 +148,25 @@ impl TuiPermissionBridge {
         };
         settings_allow_always_allow_options(&runtime.runtime_config.settings)
     }
+
+    /// Generate an on-demand LLM risk explanation for a pending permission
+    /// prompt (TS `generatePermissionExplanation`). Delegates to
+    /// [`SessionRuntime::explain_permission_risk`] (the single home for the
+    /// explainer call) via the late-bound runtime Weak; returns `None` when the
+    /// runtime isn't bound (tests / early bootstrap). The interactive Ctrl+E
+    /// path in `tui_runner` calls the `SessionRuntime` method directly.
+    pub async fn explain_risk(
+        &self,
+        params: coco_permissions::ExplainerParams<'_>,
+    ) -> Option<coco_types::PermissionExplanation> {
+        let runtime = self
+            .notification_runtime
+            .read()
+            .await
+            .as_ref()
+            .and_then(Weak::upgrade)?;
+        runtime.explain_permission_risk(params).await
+    }
 }
 
 pub fn settings_allow_always_allow_options(settings: &coco_config::SettingsWithSource) -> bool {

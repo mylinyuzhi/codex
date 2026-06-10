@@ -31,6 +31,8 @@ fn permission_prompt_with_id(request_id: &str) -> PermissionPromptState {
         original_input: None,
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     }
 }
 

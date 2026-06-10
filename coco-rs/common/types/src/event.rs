@@ -1771,6 +1771,16 @@ pub enum TuiOnlyEvent {
         request_id: String,
         operation: String,
     },
+    /// Lazily-fetched permission risk explanation is ready for the prompt
+    /// `request_id`. `explanation` is `None` when the fetch failed or the
+    /// explainer is disabled (the panel then shows "unavailable"). Produced
+    /// after the user toggles the Ctrl+E explainer panel. TS:
+    /// `generatePermissionExplanation` (`permissionExplainer.ts`).
+    PermissionExplanationReady {
+        request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        explanation: Option<crate::PermissionExplanation>,
+    },
 
     // === Picker / data-ready events (5) ===
     /// Plugin picker data loaded.

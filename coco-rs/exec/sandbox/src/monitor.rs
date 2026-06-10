@@ -106,6 +106,24 @@ impl ViolationMonitor {
             let _ = handle.await;
         }
     }
+
+    /// Cancel the background task synchronously (no await). Cancelling the token
+    /// breaks the macOS `log stream` reader loop, and the child process is
+    /// reaped via `kill_on_drop`. Suitable for a synchronous `Drop` — the owner
+    /// (`SandboxState`) calls this implicitly when it is dropped at session end.
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
+    }
+}
+
+impl Drop for ViolationMonitor {
+    /// Wind the monitor down when its owner drops so the `log stream` child does
+    /// not outlive the session. `Drop` can't await the task handle, but
+    /// cancelling the token is enough — the reader loop exits and the child is
+    /// killed on drop.
+    fn drop(&mut self) {
+        self.cancel();
+    }
 }
 
 /// Generate a session-unique tag for filtering macOS log events.

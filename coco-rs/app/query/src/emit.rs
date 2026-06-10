@@ -175,6 +175,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::QuestionAsked { .. } => "question_asked",
         TuiOnlyEvent::ElicitationRequested { .. } => "elicitation_requested",
         TuiOnlyEvent::SandboxApprovalRequired { .. } => "sandbox_approval_required",
+        TuiOnlyEvent::PermissionExplanationReady { .. } => "permission_explanation_ready",
         TuiOnlyEvent::PluginDataReady { .. } => "plugin_data_ready",
         TuiOnlyEvent::OutputStylesReady { .. } => "output_styles_ready",
         TuiOnlyEvent::AvailableCommandsRefreshed { .. } => "available_commands_refreshed",

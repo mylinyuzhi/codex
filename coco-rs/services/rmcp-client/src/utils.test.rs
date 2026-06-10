@@ -59,12 +59,11 @@ fn create_env_includes_additional_whitelisted_variables() {
 #[test]
 fn convert_call_tool_result_defaults_missing_content() -> Result<()> {
     let structured_content = json!({ "key": "value" });
-    let rmcp_result = RmcpCallToolResult {
-        content: vec![],
-        structured_content: Some(structured_content.clone()),
-        is_error: Some(true),
-        meta: None,
-    };
+    // rmcp 1.7's CallToolResult is #[non_exhaustive], so build via a
+    // constructor then clear `content` (structured_error mirrors the value
+    // into content; this test specifically exercises the empty-content path).
+    let mut rmcp_result = RmcpCallToolResult::structured_error(structured_content.clone());
+    rmcp_result.content = vec![];
 
     let result = convert_call_tool_result(rmcp_result)?;
 

@@ -174,3 +174,61 @@ async fn install_session_late_binds_attaches_lsp_when_some() {
         "lsp_handle slot must be Some when caller passes Some"
     );
 }
+
+// ---------------------------------------------------------------------------
+// reconcile_mcp_server_registration — per-server auth surfacing + strand guard
+// ---------------------------------------------------------------------------
+
+fn http_server(name: &str) -> coco_mcp::types::ScopedMcpServerConfig {
+    coco_mcp::types::ScopedMcpServerConfig {
+        name: name.into(),
+        config: coco_mcp::types::McpServerConfig::Http(coco_mcp::types::McpHttpConfig {
+            url: "https://mcp.example.test/api".into(),
+            headers: Default::default(),
+            headers_helper: None,
+            oauth: None,
+        }),
+        scope: coco_mcp::types::ConfigScope::User,
+        plugin_source: None,
+    }
+}
+
+fn auth_tool_id(server: &str) -> coco_types::ToolId {
+    coco_types::ToolId::Mcp {
+        server: server.into(),
+        tool: "authenticate".into(),
+    }
+}
+
+#[tokio::test]
+async fn reconcile_surfaces_auth_tool_for_needs_auth_server() {
+    let mut manager = coco_mcp::McpConnectionManager::new(std::env::temp_dir());
+    manager.register_server(http_server("remote"));
+    manager.mark_needs_auth("remote").await;
+
+    let registry = coco_tool_runtime::ToolRegistry::new();
+    crate::session_bootstrap::reconcile_mcp_server_registration(&manager, &registry, "remote")
+        .await;
+
+    assert!(
+        registry.get(&auth_tool_id("remote")).is_some(),
+        "a NeedsAuth server must surface its per-server authenticate tool"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_does_not_strand_auth_tool_on_non_connected_state() {
+    // Strand-hole guard: reconcile on a non-connected state (here: unknown /
+    // Pending) must NOT deregister an already-surfaced auth tool.
+    let manager = coco_mcp::McpConnectionManager::new(std::env::temp_dir());
+    let registry = coco_tool_runtime::ToolRegistry::new();
+    coco_tools::register_mcp_auth_tool(&registry, "remote", "http", Some("https://x"));
+
+    crate::session_bootstrap::reconcile_mcp_server_registration(&manager, &registry, "remote")
+        .await;
+
+    assert!(
+        registry.get(&auth_tool_id("remote")).is_some(),
+        "reconcile on a non-connected state must not strand the auth tool"
+    );
+}

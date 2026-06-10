@@ -380,3 +380,22 @@ fn task_progress_empty_recent_activities_leaves_prior_buffer_intact() {
     assert_eq!(agent.recent_activities[0].tool_name, "Read");
     assert_eq!(agent.last_tool_name.as_deref(), Some("Bash"));
 }
+
+#[test]
+fn sandbox_violations_show_toast_not_modal() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+
+    super::handle(
+        &mut state,
+        coco_types::ServerNotification::SandboxViolationsDetected { count: 3 },
+        &tx,
+    );
+
+    // Non-blocking count surface: a toast, not a per-burst blocking modal.
+    assert_eq!(state.ui.toasts.len(), 1);
+    assert!(
+        state.ui.modal.is_none(),
+        "violations must not open a blocking modal"
+    );
+}

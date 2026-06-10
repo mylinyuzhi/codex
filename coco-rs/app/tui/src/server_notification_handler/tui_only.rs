@@ -94,6 +94,8 @@ pub(super) fn handle(
                     display_input,
                     original_input,
                     permission_suggestions,
+                    explanation_visible: false,
+                    explanation: crate::state::ExplainerFetch::NotFetched,
                 },
                 std::time::Instant::now(),
             );
@@ -153,6 +155,25 @@ pub(super) fn handle(
                 },
             ));
             true
+        }
+        TuiOnlyEvent::PermissionExplanationReady {
+            request_id,
+            explanation,
+        } => {
+            // Land the lazily-fetched explanation onto the still-active prompt.
+            // If the prompt was dismissed/replaced before the fetch returned,
+            // drop it silently.
+            if let Some(PanePromptState::Permission(p)) =
+                state.ui.interaction.active_prompt.as_mut()
+                && p.request_id == request_id
+            {
+                p.explanation = match explanation {
+                    Some(e) => crate::state::ExplainerFetch::Ready(e),
+                    None => crate::state::ExplainerFetch::Unavailable,
+                };
+                return true;
+            }
+            false
         }
 
         // === Picker data-ready ===

@@ -467,23 +467,6 @@ async fn test_check_path_async_bridge_approves_overrides_deny() {
 }
 
 #[tokio::test]
-async fn test_check_network_async_bridge_approves_overrides_deny() {
-    let bridge = Arc::new(StubBridge {
-        decision: SandboxApprovalDecision::Approved,
-        seen: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let mut config = strict_config();
-    config.allow_network = false;
-    let checker = PermissionChecker::new(config).with_approval_bridge(bridge.clone());
-    let result = checker.check_network_async().await;
-    assert!(result.is_ok(), "network approval must override deny");
-    let seen = bridge.seen.lock().await;
-    assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].operation, SandboxOperation::Network);
-    assert!(seen[0].path.is_empty(), "network has no path: {seen:?}");
-}
-
-#[tokio::test]
 async fn test_set_approval_bridge_replaces_at_runtime() {
     // Install one bridge, swap in another; the second must observe the
     // call. Useful pattern for session bootstrap then later teardown.

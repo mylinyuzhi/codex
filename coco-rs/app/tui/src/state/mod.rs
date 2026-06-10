@@ -78,6 +78,7 @@ pub use surface_payloads::CostWarningPromptState;
 pub use surface_payloads::DiffViewState;
 pub use surface_payloads::DoctorCheck;
 pub use surface_payloads::DoctorState;
+pub use surface_payloads::ExplainerFetch;
 pub use surface_payloads::ExportFormat;
 pub use surface_payloads::ExportState;
 pub use surface_payloads::FeedbackState;

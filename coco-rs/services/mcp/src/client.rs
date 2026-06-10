@@ -80,10 +80,22 @@ pub struct McpConnectionManager {
     sdk_route_next_id: Arc<AtomicI64>,
     tool_timeout_ms: u64,
     config_home: PathBuf,
+    /// Opt-in sink notified with a server name after a *background* reconnect
+    /// attempt settles (post-OAuth login, or an `authenticate()`-triggered
+    /// reconnect). The app layer listens and re-reconciles the `ToolRegistry`
+    /// for that server — the manager itself can't (it must not depend on
+    /// `coco-tools`). `OnceLock` because it is wired once at session bootstrap;
+    /// `Arc` so cloned managers (e.g. inside `spawn_reconnect`) share it.
+    reconnect_notifier: Arc<std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>>,
+    /// 15-min on-disk cache of servers that recently required auth, used to
+    /// skip doomed connect-401 probes within the window (TS
+    /// `mcp-needs-auth-cache.json`).
+    auth_cache: crate::auth_cache::McpNeedsAuthCache,
 }
 
 impl McpConnectionManager {
     pub fn new(config_home: PathBuf) -> Self {
+        let auth_cache = crate::auth_cache::McpNeedsAuthCache::new(&config_home);
         Self {
             configs: HashMap::new(),
             connections: Arc::new(RwLock::new(HashMap::new())),
@@ -92,6 +104,25 @@ impl McpConnectionManager {
             sdk_route_next_id: Arc::new(AtomicI64::new(0)),
             tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
             config_home,
+            reconnect_notifier: Arc::new(std::sync::OnceLock::new()),
+            auth_cache,
+        }
+    }
+
+    /// Wire the sink notified after each background reconnect attempt settles
+    /// (see [`Self::reconnect_notifier`]). Idempotent — a second call is a
+    /// no-op (`OnceLock`). Called once at session bootstrap by the app layer,
+    /// which owns the listener that re-registers tools into the `ToolRegistry`.
+    pub fn set_reconnect_notifier(&self, tx: tokio::sync::mpsc::UnboundedSender<String>) {
+        let _ = self.reconnect_notifier.set(tx);
+    }
+
+    /// Notify the app-layer listener that `server_name`'s connection state may
+    /// have changed via a background reconnect, so it can reconcile the tool
+    /// registry. No-op when no listener is wired (tests / SDK paths).
+    fn notify_reconnect(&self, server_name: &str) {
+        if let Some(tx) = self.reconnect_notifier.get() {
+            let _ = tx.send(server_name.to_string());
         }
     }
 
@@ -187,24 +218,130 @@ impl McpConnectionManager {
 
         match result {
             Ok(connected) => {
-                let mut conns = self.connections.write().await;
-                conns.insert(
-                    server_name.to_string(),
-                    McpConnectionState::Connected(connected),
-                );
+                {
+                    let mut conns = self.connections.write().await;
+                    conns.insert(
+                        server_name.to_string(),
+                        McpConnectionState::Connected(connected),
+                    );
+                }
+                // Success evicts any stale needs-auth marker so a later
+                // bootstrap doesn't skip this now-authenticated server.
+                self.auth_cache.clear(server_name).await;
                 Ok(())
             }
             Err(e) => {
-                let mut conns = self.connections.write().await;
-                conns.insert(
-                    server_name.to_string(),
+                // Layer A: distinguish "server needs an OAuth login" from a hard
+                // failure. Probe runs WITHOUT holding the connections lock (it
+                // does network I/O). `NotLoggedIn` → NeedsAuth so the per-server
+                // authenticate pseudo-tool is surfaced; anything else stays Failed
+                // (retryable). TS `handleRemoteAuthFailure`.
+                let needs_auth = self.probe_needs_auth(server_name, &config.config).await;
+                let state = if needs_auth {
+                    McpConnectionState::NeedsAuth { auth_url: None }
+                } else {
                     McpConnectionState::Failed {
                         error: e.to_string(),
-                    },
-                );
+                    }
+                };
+                self.connections
+                    .write()
+                    .await
+                    .insert(server_name.to_string(), state);
+                if needs_auth {
+                    // Cache the 401 so subsequent connect cycles skip the probe
+                    // within the TTL window (TS `setMcpAuthCacheEntry`).
+                    self.auth_cache.set(server_name).await;
+                }
                 Err(e)
             }
         }
+    }
+
+    /// Whether `server_name` has a recent needs-auth marker still within the
+    /// TTL window (TS `isMcpAuthCached`). Lets bootstrap skip a doomed connect.
+    pub async fn is_needs_auth_cached(&self, server_name: &str) -> bool {
+        self.auth_cache.is_cached(server_name).await
+    }
+
+    /// Probe whether a failed connect was actually "OAuth login required"
+    /// rather than a hard error. Only OAuth-capable HTTP/SSE transports are
+    /// probed; a `NotLoggedIn` verdict means the connect failed for lack of
+    /// credentials. Every other verdict (tokens present but rejected,
+    /// bearer-token, unsupported) or a probe error returns `false`, keeping the
+    /// original `Failed` classification so transient network faults stay
+    /// retryable. Mirrors TS `handleRemoteAuthFailure` gating.
+    async fn probe_needs_auth(&self, server_name: &str, config: &McpServerConfig) -> bool {
+        let Some((url, headers, headers_helper)) = oauth_login_target(config) else {
+            return false;
+        };
+        let Ok(headers) = resolve_http_headers(server_name, &url, &headers, &headers_helper).await
+        else {
+            return false;
+        };
+        matches!(
+            determine_streamable_http_auth_status(
+                server_name,
+                &url,
+                /*bearer_token_env_var*/ None,
+                Some(headers),
+                /*env_http_headers*/ None,
+                OAuthCredentialsStoreMode::Auto,
+                &self.config_home,
+            )
+            .await,
+            Ok(McpAuthStatus::NotLoggedIn)
+        )
+    }
+
+    /// TS `hasMcpDiscoveryButNoToken` (+ XAA guard): an OAuth-capable HTTP/SSE
+    /// server we hold stored OAuth discovery state for but no usable token
+    /// would 401 on connect, so skip the doomed attempt and surface the
+    /// authenticate tool directly. Returns `false` for XAA-configured servers,
+    /// which can silently re-auth from a cached IdP id_token and so must still
+    /// attempt the connect (coco-rs XAA is active whenever configured, so the
+    /// TS `isXaaEnabled()` guard reduces to "xaa present").
+    pub fn needs_auth_without_connect(&self, server_name: &str) -> bool {
+        let Some(config) = self.configs.get(server_name) else {
+            return false;
+        };
+        let (url, oauth) = match &config.config {
+            McpServerConfig::Sse(c) => (&c.url, c.oauth.as_ref()),
+            McpServerConfig::Http(c) => (&c.url, c.oauth.as_ref()),
+            _ => return false,
+        };
+        if oauth.and_then(|o| o.xaa.as_ref()).is_some() {
+            return false;
+        }
+        let store = crate::auth::OAuthTokenStore::from_config_home(&self.config_home);
+        crate::auth::has_discovery_but_no_token(&store, &crate::auth::server_key(server_name, url))
+    }
+
+    /// Force a server into `NeedsAuth` without attempting a connection — used
+    /// when [`Self::needs_auth_without_connect`] determines a connect would 401.
+    pub async fn mark_needs_auth(&self, server_name: &str) {
+        self.connections.write().await.insert(
+            server_name.to_string(),
+            McpConnectionState::NeedsAuth { auth_url: None },
+        );
+    }
+
+    /// Transport label + endpoint URL for a configured server, used to describe
+    /// the per-server `authenticate` pseudo-tool surfaced for `NeedsAuth`
+    /// servers. `None` when the server isn't registered.
+    pub fn auth_descriptor(&self, server_name: &str) -> Option<(String, Option<String>)> {
+        let config = self.configs.get(server_name)?;
+        let descriptor = match &config.config {
+            McpServerConfig::Stdio(_) => ("stdio".to_string(), None),
+            McpServerConfig::Sse(c) => ("sse".to_string(), Some(c.url.clone())),
+            McpServerConfig::Http(c) => ("http".to_string(), Some(c.url.clone())),
+            McpServerConfig::WebSocket(c) => ("websocket".to_string(), Some(c.url.clone())),
+            McpServerConfig::Sdk(_) => ("sdk".to_string(), None),
+            McpServerConfig::ClaudeAiProxy(c) => {
+                ("claudeai-proxy".to_string(), Some(c.url.clone()))
+            }
+        };
+        Some(descriptor)
     }
 
     /// Create rmcp client and initialize based on transport type.
@@ -739,9 +876,16 @@ impl McpConnectionManager {
     fn spawn_reconnect(&self, server_name: String, send_elicitation: SendElicitation) {
         let manager = self.clone();
         tokio::spawn(async move {
+            // Clear the needs-auth marker first so this reconnect isn't itself
+            // skipped by a concurrent cache check (TS clears before reconnect).
+            manager.auth_cache.clear(&server_name).await;
             if let Err(error) = manager.connect(&server_name, send_elicitation).await {
                 warn!(server = %server_name, error = %error, "MCP reconnect after auth failed");
             }
+            // Let the app layer re-reconcile the tool registry for this server
+            // (install real tools on success, re-surface the auth tool if the
+            // reconnect itself landed back in NeedsAuth).
+            manager.notify_reconnect(&server_name);
         });
     }
 
@@ -756,18 +900,28 @@ impl McpConnectionManager {
         tokio::spawn(async move {
             if let Err(error) = handle.wait().await {
                 warn!(server = %server_name, error = %error, "MCP OAuth login failed");
-                let mut conns = manager.connections.write().await;
-                conns.insert(
-                    server_name,
-                    McpConnectionState::NeedsAuth {
-                        auth_url: Some(authorization_url),
-                    },
-                );
+                {
+                    let mut conns = manager.connections.write().await;
+                    conns.insert(
+                        server_name.clone(),
+                        McpConnectionState::NeedsAuth {
+                            auth_url: Some(authorization_url),
+                        },
+                    );
+                }
+                // Re-surface the auth pseudo-tool: the login failed, so the
+                // server is back in NeedsAuth and the model should be able to
+                // retry rather than be left tool-less.
+                manager.notify_reconnect(&server_name);
                 return;
             }
+            // OAuth succeeded — clear the needs-auth marker before reconnecting
+            // so the attempt proceeds (TS `clearMcpAuthCache`).
+            manager.auth_cache.clear(&server_name).await;
             if let Err(error) = manager.connect(&server_name, send_elicitation).await {
                 warn!(server = %server_name, error = %error, "MCP reconnect after OAuth login failed");
             }
+            manager.notify_reconnect(&server_name);
         });
     }
 

@@ -328,7 +328,7 @@ uds_windows = "1"
 axum = { version = "0.8", default-features = false }
 dirs = "6"
 oauth2 = "5"
-rmcp = { version = "0.12.0", default-features = false }
+rmcp = { version = "1.7.0", default-features = false }
 serial_test = "3"
 sha2 = "0.10"
 tiny_http = "0.12"

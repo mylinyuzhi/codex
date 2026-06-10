@@ -85,6 +85,7 @@ pub use tool_search::ToolSearchTool;
 
 // MCP management (4)
 pub use mcp_tools::ListMcpResourcesTool;
+pub use mcp_tools::McpAuthServerTool;
 pub use mcp_tools::McpAuthTool;
 pub use mcp_tools::McpTool;
 pub use mcp_tools::ReadMcpResourceTool;

@@ -343,9 +343,11 @@ fn assert_token_response_match_without_expiry(
         expected_response.refresh_token().map(RefreshToken::secret),
     );
     assert_eq!(actual_response.scopes(), expected_response.scopes());
+    // rmcp 1.7's VendorExtraTokenFields(HashMap) doesn't impl PartialEq;
+    // compare the inner maps.
     assert_eq!(
-        actual_response.extra_fields(),
-        expected_response.extra_fields()
+        actual_response.extra_fields().0,
+        expected_response.extra_fields().0
     );
     assert_eq!(
         actual_response.expires_in().is_some(),
@@ -357,7 +359,7 @@ fn sample_tokens() -> StoredOAuthTokens {
     let mut response = OAuthTokenResponse::new(
         AccessToken::new("access-token".to_string()),
         BasicTokenType::Bearer,
-        EmptyExtraTokenFields {},
+        VendorExtraTokenFields::default(),
     );
     response.set_refresh_token(Some(RefreshToken::new("refresh-token".to_string())));
     response.set_scopes(Some(vec![

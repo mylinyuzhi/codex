@@ -17,7 +17,7 @@ use serde_json::Value;
 /// model. TS `services/mcp/client.ts:218 MAX_MCP_DESCRIPTION_LENGTH`.
 const MAX_MCP_DESCRIPTION_LENGTH: usize = 2048;
 
-const MCP_AUTH_PROMPT: &str = "Authenticate with an MCP server to enable its tools and resources. Call this tool with the server name to start the OAuth flow — you'll receive an authorization URL to share with the user. Once the user completes authorization in their browser, the server's real tools become available automatically.";
+const MCP_AUTH_PROMPT: &str = "Authenticate with an MCP server by name to enable its tools and resources. Prefer a server's own `mcp__<server>__authenticate` tool when one is offered — use this generic tool only as a fallback for a server that needs authentication but is not already surfacing its own authenticate tool. Call with the server name to start the OAuth flow — you'll receive an authorization URL to share with the user; once the user authorizes in their browser, the server's real tools become available automatically.";
 
 /// TS `ListMcpResourcesTool/prompt.ts` `DESCRIPTION`.
 const LIST_MCP_RESOURCES_DESCRIPTION: &str = "Lists available resources from configured MCP servers.\nEach resource object includes a 'server' field indicating which server it's from.\n\nUsage examples:\n- List all resources from all servers: `listMcpResources`\n- List resources from a specific server: `listMcpResources({ server: \"myserver\" })`";
@@ -63,7 +63,7 @@ impl Tool for McpAuthTool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
     fn description(&self, _input: &McpAuthInput, _options: &DescriptionOptions) -> String {
-        "Authenticate with an MCP server to enable tool and resource access.".into()
+        "Authenticate with an MCP server by name (fallback when a server isn't surfacing its own authenticate tool).".into()
     }
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         MCP_AUTH_PROMPT.into()
@@ -111,6 +111,134 @@ impl Tool for McpAuthTool {
             ),
         };
 
+        Ok(ToolResult {
+            data: message,
+            new_messages: vec![],
+            app_state_patch: None,
+            permission_updates: Vec::new(),
+            display_data: None,
+        })
+    }
+}
+
+/// Empty input for [`McpAuthServerTool`] — the server is baked into the tool,
+/// so the call takes no arguments (TS `inputSchema = z.object({})`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct McpAuthServerInput {}
+
+/// Per-server `mcp__<server>__authenticate` pseudo-tool, surfaced in place of
+/// a `NeedsAuth` server's real tools so the model is told *which* server needs
+/// authentication and can start the OAuth flow on the user's behalf.
+///
+/// TS: `tools/McpAuthTool/McpAuthTool.ts::createMcpAuthTool`. Unlike the global
+/// [`McpAuthTool`] (free-form `server_name` input), this pre-binds the server so
+/// the model can't guess the wrong name, and it self-removes on a successful
+/// reconnect: it reports `mcp_info().server_name == server`, so the
+/// `ToolRegistry::replace_server_tools` wipe that installs the real tools
+/// removes the pseudo-tool in the same atomic swap (mirrors the TS
+/// `mcp__<server>__*` prefix replacement). `should_defer() == false` so it is
+/// visible in the model's tool list on turn 1, unlike its real-tool siblings.
+pub struct McpAuthServerTool {
+    info: McpToolInfo,
+    description: String,
+}
+
+impl McpAuthServerTool {
+    /// `transport` is the wire transport label (e.g. `"http"` / `"sse"`); `url`
+    /// is the server endpoint when the transport has one. Both feed the
+    /// model-facing description so it knows exactly what it is authenticating.
+    pub fn new(server_name: String, transport: &str, url: Option<&str>) -> Self {
+        let location = match url {
+            Some(url) => format!("{transport} at {url}"),
+            None => transport.to_string(),
+        };
+        let description = format!(
+            "The `{server_name}` MCP server ({location}) is installed but requires \
+             authentication. Call this tool to start the OAuth flow — you'll receive an \
+             authorization URL to share with the user. Once the user completes authorization \
+             in their browser, the server's real tools become available automatically."
+        );
+        Self {
+            info: McpToolInfo {
+                server_name,
+                tool_name: "authenticate".to_string(),
+            },
+            description,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for McpAuthServerTool {
+    type Input = McpAuthServerInput;
+    coco_tool_runtime::impl_runtime_schema!(McpAuthServerInput);
+    type Output = String;
+
+    fn id(&self) -> ToolId {
+        ToolId::Mcp {
+            server: self.info.server_name.clone(),
+            tool: self.info.tool_name.clone(),
+        }
+    }
+    fn name(&self) -> &str {
+        &self.info.tool_name
+    }
+    fn mcp_info(&self) -> Option<&McpToolInfo> {
+        Some(&self.info)
+    }
+    fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
+        coco_tool_runtime::ResultSizeBound::Chars(10_000)
+    }
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::Mcp)
+    }
+
+    /// CRITICAL: the auth pseudo-tool must NOT defer (unlike [`McpTool`], which
+    /// hides behind `ToolSearch`). If it deferred, the model would never see it
+    /// on turn 1 and the whole per-server surfacing would be a silent no-op.
+    fn should_defer(&self) -> bool {
+        false
+    }
+
+    fn description(&self, _input: &McpAuthServerInput, _options: &DescriptionOptions) -> String {
+        self.description.clone()
+    }
+    async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
+        self.description.clone()
+    }
+
+    async fn check_permissions(
+        &self,
+        input: &McpAuthServerInput,
+        _ctx: &ToolUseContext,
+    ) -> coco_types::ToolCheckResult {
+        coco_types::ToolCheckResult::Allow {
+            updated_input: serde_json::to_value(input).ok(),
+            feedback: None,
+        }
+    }
+
+    fn to_auto_classifier_input(&self, _input: &McpAuthServerInput) -> Option<String> {
+        Some(self.info.server_name.clone())
+    }
+
+    fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
+        vec![ToolResultContentPart::Text {
+            text: out.clone(),
+            provider_options: None,
+        }]
+    }
+
+    async fn execute(
+        &self,
+        _input: McpAuthServerInput,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<String>, ToolError> {
+        let server = &self.info.server_name;
+        let message = match ctx.mcp.authenticate(server).await {
+            Ok(msg) => msg,
+            Err(e) => format!("Authentication failed for {server}: {e}"),
+        };
         Ok(ToolResult {
             data: message,
             new_messages: vec![],
