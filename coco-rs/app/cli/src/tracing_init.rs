@@ -22,6 +22,8 @@
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::SystemTime;
 
 use anyhow::Result;
 use coco_config::EnvKey;
@@ -57,8 +59,66 @@ pub fn install(cli: &Cli) -> Result<Option<SubscriberHandle>> {
     let handle = init_subscriber(opts).map_err(|e| anyhow::anyhow!("{e}"))?;
     if let Some(h) = &handle {
         emit_ready_anchor(mode, h, location);
+        if let Some(path) = &h.log_path {
+            // Headless has no TUI header to surface the per-PID file, and the
+            // anchor above only reaches stderr when the filter keeps `info`.
+            // Print the path unconditionally so a piped/`--print` run can
+            // always find its own log among concurrent sessions.
+            if matches!(mode, Mode::Headless) {
+                eprintln!("coco: logging to {}", path.display());
+            }
+            // Per-PID files (`coco.<pid>.log.<date>`) escape the daily
+            // appender's own rotation — each process only knows its own
+            // prefix — so sweep the dir by mtime to keep it bounded.
+            if let Some(dir) = path.parent() {
+                sweep_stale_logs(
+                    dir,
+                    Duration::from_secs(LOG_RETENTION_SECS),
+                    SystemTime::now(),
+                );
+            }
+        }
     }
     Ok(handle)
+}
+
+/// Age past which a log file is swept on startup. Per-PID log files
+/// accumulate (one prefix per process), so a plain mtime sweep keeps
+/// `<config_home>/logs/` bounded without any cross-process bookkeeping.
+const LOG_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// Delete every regular file directly under `dir` whose mtime is older
+/// than `max_age` relative to `now`. `logs/` is coco-owned (only log
+/// files live there), so no filename matching is needed — this also
+/// reaps legacy single-file `coco.log.<date>` logs. Best-effort:
+/// unreadable entries and failed unlinks are skipped. Returns the count
+/// removed (for tests). A still-running process keeps a fresh mtime on
+/// its current-day file, so liveness need not be checked separately.
+fn sweep_stale_logs(dir: &Path, max_age: Duration, now: SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        // `duration_since` errors when `modified` is in the future (clock
+        // skew); treat those as fresh and keep them.
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age > max_age && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Build [`SubscriberOpts`] from CLI flags + `COCO_LOG*` env vars.
@@ -84,7 +144,10 @@ fn subscriber_opts_from_cli_with_sources(
         location,
         thread_names: location,
         default_log_dir: global_config::config_home().join("logs"),
-        default_file_prefix: "coco".to_string(),
+        // Per-PID prefix → `coco.<pid>.log.<date>`. Isolates each process's
+        // log so concurrent coco sessions don't interleave into one file.
+        // PID stays unpadded to match the header / `coco ps` / `std::process::id()`.
+        default_file_prefix: format!("coco.{}", std::process::id()),
         timezone: resolve_timezone(cli, settings, log_env),
     }
 }

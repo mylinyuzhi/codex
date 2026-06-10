@@ -38,14 +38,24 @@ pub(crate) fn header_bar_view(
         Line::from(Span::styled(" ╰─╯ ╰─╯  ", logo_color)),
     ];
 
-    let row1 = Line::from(vec![
+    let mut row1_spans = vec![
         Span::styled("COCO", Style::default().fg(styles.text()).bold()),
         Span::raw(" "),
         Span::styled(
             format!("v{COCO_VERSION}"),
             Style::default().fg(styles.dim()),
         ),
-    ]);
+    ];
+    // `pid == 0` is the unset sentinel (tests / pre-bootstrap state); only the
+    // real app stamps a live pid in `App::new`. Surfacing it lets concurrent
+    // sessions be told apart and matched to `logs/coco.<pid>.log.<date>`.
+    if state.session.pid != 0 {
+        row1_spans.push(Span::styled(
+            format!("  ·  pid {}", state.session.pid),
+            Style::default().fg(styles.dim()),
+        ));
+    }
+    let row1 = Line::from(row1_spans);
 
     let (provider, model_id) = state
         .session
@@ -166,3 +176,7 @@ fn truncate_path_for_width(path: &str, max_width: usize) -> String {
         .collect();
     format!("…{suffix_chars}")
 }
+
+#[cfg(test)]
+#[path = "header.test.rs"]
+mod tests;

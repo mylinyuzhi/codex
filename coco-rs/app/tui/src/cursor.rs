@@ -85,7 +85,6 @@ fn compute_input_xy(state: &AppState, area: Rect) -> (u16, u16) {
     let model = InputRenderModel::build(
         &state.ui.input,
         is_streaming,
-        state.is_plan_mode(),
         state.session.prompt_suggestions.last().map(String::as_str),
         !state.session.queued_commands.is_empty(),
         None,

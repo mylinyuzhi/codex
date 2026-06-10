@@ -167,13 +167,9 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
             // re-check the capability gate before flipping. The cycle
             // path already filters Bypass when the gate is off, but a
             // stale state (e.g. opened earlier in the session, gate
-            // toggled since) shouldn't be able to escalate. Drops
-            // through to a no-op + neutral toast so the user knows the
-            // click was acknowledged without surprise.
+            // toggled since) shouldn't be able to escalate. Silently
+            // dismiss without flipping when the gate is closed.
             if !state.session.bypass_permissions_available {
-                state.ui.add_toast(crate::state::ui::Toast::warning(
-                    t!("toast.bypass_unavailable").to_string(),
-                ));
                 state.ui.dismiss_modal();
                 return;
             }
@@ -183,9 +179,6 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                     mode: PermissionMode::BypassPermissions,
                 })
                 .await;
-            state.ui.add_toast(crate::state::ui::Toast::warning(
-                t!("toast.bypass_enabled").to_string(),
-            ));
             state.ui.dismiss_modal();
         }
         Some(ModalState::AutoModeOptIn(_)) => {
@@ -195,9 +188,6 @@ pub(super) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                     mode: PermissionMode::Auto,
                 })
                 .await;
-            state.ui.add_toast(crate::state::ui::Toast::info(
-                t!("toast.auto_mode_enabled").to_string(),
-            ));
             state.ui.dismiss_modal();
         }
         Some(ModalState::PluginHint(ph)) => {
@@ -360,14 +350,8 @@ pub(super) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
 
     match state.ui.modal.as_ref() {
         Some(ModalState::BypassPermissions(_)) | Some(ModalState::AutoModeOptIn(_)) => {
-            // Declining bypass / auto opt-in keeps the current mode.
-            // A toast confirms the cancel so the user doesn't doubt
-            // whether the Shift+Tab landed silently.
-            let current = crate::update::permission_mode_label(state.session.permission_mode);
-            state.ui.add_toast(crate::state::ui::Toast::info(
-                crate::i18n::t!("toast.permission_mode_unchanged", mode = current.as_str())
-                    .to_string(),
-            ));
+            // Declining bypass / auto opt-in keeps the current mode; just
+            // close the modal — the status bar still shows the active mode.
             state.ui.dismiss_modal();
         }
         // Theme picker / settings (and any modal whose context maps Esc → Deny)

@@ -269,19 +269,7 @@ pub async fn handle_command(
             let _ = command_tx
                 .send(UserCommand::SetPermissionMode { mode })
                 .await;
-            // Transient toast so the toggle is acknowledged even when
-            // the user's eyes are on the input bar rather than the
-            // mode banner. Plan-on uses plan_mode color (info-equivalent
-            // in the Toast palette); plan-off uses info as well so the
-            // off-state doesn't read as a failure.
-            let key = if mode == coco_types::PermissionMode::Plan {
-                "toast.plan_mode_on"
-            } else {
-                "toast.plan_mode_off"
-            };
-            state
-                .ui
-                .add_toast(crate::state::ui::Toast::info(t!(key).to_string()));
+            // No toast — the status bar already reflects the active mode.
             true
         }
         TuiCommand::CyclePermissionMode => {
@@ -312,17 +300,12 @@ pub async fn handle_command(
                     ));
                 }
                 _ => {
+                    // No toast on switch — the status bar already shows the
+                    // active permission mode, so a transient hint is redundant.
                     state.session.permission_mode = next;
                     let _ = command_tx
                         .send(UserCommand::SetPermissionMode { mode: next })
                         .await;
-                    state.ui.add_toast(crate::state::ui::Toast::info(
-                        t!(
-                            "toast.permission_mode_set",
-                            mode = permission_mode_label(next).as_str()
-                        )
-                        .to_string(),
-                    ));
                 }
             }
             true

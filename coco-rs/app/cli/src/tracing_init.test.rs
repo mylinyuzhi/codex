@@ -1,3 +1,6 @@
+use std::time::Duration;
+use std::time::SystemTime;
+
 use clap::Parser;
 use pretty_assertions::assert_eq;
 
@@ -8,6 +11,7 @@ use super::parse_timezone;
 use super::resolve_location;
 use super::subscriber_opts_from_cli;
 use super::subscriber_opts_from_cli_with_sources;
+use super::sweep_stale_logs;
 use crate::Cli;
 use coco_config::PartialLogSettings;
 use coco_config::Settings;
@@ -270,4 +274,67 @@ fn subscriber_opts_log_location_flag_can_force_off() {
     let opts = subscriber_opts_from_cli(&cli);
     assert!(!opts.location);
     assert!(!opts.thread_names);
+}
+
+#[test]
+fn subscriber_opts_default_prefix_is_per_pid() {
+    // The default log file is per-process so concurrent coco sessions don't
+    // interleave into a single `coco.log.<date>`. PID stays unpadded to match
+    // the header / `coco ps`.
+    let cli = parse(&["--prompt", "hi"]);
+    let opts = subscriber_opts_from_cli(&cli);
+    assert_eq!(
+        opts.default_file_prefix,
+        format!("coco.{}", std::process::id())
+    );
+}
+
+#[test]
+fn sweep_stale_logs_removes_old_and_keeps_fresh() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let old = dir.path().join("coco.111.log.2020-01-01");
+    let fresh = dir.path().join("coco.222.log.2026-06-10");
+    std::fs::write(&old, b"old").unwrap();
+    std::fs::write(&fresh, b"fresh").unwrap();
+
+    let max_age = Duration::from_secs(7 * 24 * 60 * 60);
+    // Both files were just written, so age ≈ 0. Advancing `now` 10 days makes
+    // every file "10 days old" — only files older than the 7-day threshold get
+    // swept, so to exercise the keep-path we then sweep again with real `now`.
+    let now_future = SystemTime::now()
+        .checked_add(Duration::from_secs(10 * 24 * 60 * 60))
+        .unwrap();
+    let removed = sweep_stale_logs(dir.path(), max_age, now_future);
+    assert_eq!(removed, 2, "10-day-old view sweeps both files");
+
+    // Re-create and sweep with real `now`: nothing is older than 7 days.
+    std::fs::write(&old, b"old").unwrap();
+    std::fs::write(&fresh, b"fresh").unwrap();
+    let removed = sweep_stale_logs(dir.path(), max_age, SystemTime::now());
+    assert_eq!(removed, 0, "fresh files are kept");
+    assert!(old.exists() && fresh.exists());
+}
+
+#[test]
+fn sweep_stale_logs_ignores_subdirs_and_missing_dir() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
+    let now_future = SystemTime::now()
+        .checked_add(Duration::from_secs(365 * 24 * 60 * 60))
+        .unwrap();
+    // A subdirectory is never a log file — left untouched even when "old".
+    assert_eq!(
+        sweep_stale_logs(dir.path(), Duration::from_secs(0), now_future),
+        0
+    );
+    assert!(dir.path().join("nested").exists());
+    // A non-existent dir is a best-effort no-op, not an error.
+    assert_eq!(
+        sweep_stale_logs(
+            &dir.path().join("does-not-exist"),
+            Duration::from_secs(0),
+            now_future
+        ),
+        0
+    );
 }

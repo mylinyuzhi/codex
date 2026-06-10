@@ -543,12 +543,7 @@ pub(super) fn handle(
         }
         ServerNotification::FastModeChanged { active } => {
             state.session.fast_mode = active;
-            let msg = if active {
-                t!("toast.fast_mode_on")
-            } else {
-                t!("toast.fast_mode_off")
-            };
-            state.ui.add_toast(Toast::info(msg.to_string()));
+            // No toast — the status bar reflects fast-mode state.
             true
         }
 

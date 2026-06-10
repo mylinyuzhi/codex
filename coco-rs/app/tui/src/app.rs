@@ -128,6 +128,10 @@ impl App {
         crate::i18n::init();
         let tui = Tui::new()?;
         let mut state = AppState::new();
+        // Stamp the process id so the header can surface it and users can
+        // match this session to its per-PID log file. Set only on the real
+        // app path (`with_terminal` test ctor leaves the `0` sentinel).
+        state.session.pid = std::process::id();
         if let Ok(size) = tui.size() {
             state.ui.terminal_size = size;
         }
