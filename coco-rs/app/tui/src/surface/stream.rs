@@ -8,32 +8,27 @@ use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::estimate_reasoning_tokens;
 use crate::presentation::thinking::render_thinking_block;
 use crate::state::AppState;
-use crate::streaming::render_controller::StreamRenderController;
-use crate::streaming::render_controller::StreamRenderInput;
-use crate::streaming::render_controller::StreamRenderKey;
-use crate::streaming::render_controller::streaming_cursor_line;
-use crate::surface::line_fingerprint::RenderedLineFingerprint;
-use crate::surface::line_fingerprint::fingerprint_lines;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::viewport::build_live_tail_lines;
 use crate::terminal::STREAMING_LIVE_TAIL_CAP;
+use crate::transcript::stream::PendingStreamPrefix;
+use crate::transcript::stream::StreamHistoryWatermark;
+use crate::transcript::stream::StreamRenderController;
+use crate::transcript::stream::StreamRenderInput;
+use crate::transcript::stream::streaming_cursor_line;
 use coco_tui_ui::engine::history_insert::HistoryRows;
 use coco_tui_ui::engine::history_insert::render_history_rows;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SurfaceStreamDriver {
     controller: StreamRenderController,
-    committed: Option<EmittedStreamPrefix>,
-}
-
-/// Everything known about the stream rows already inserted into native
-/// scrollback: the watermark (how much source / how many lines) plus the
-/// per-line fingerprints of exactly those lines. Bundled in one struct so the
-/// fingerprint vector can never desync from the watermark it describes.
-#[derive(Debug, Clone)]
-struct EmittedStreamPrefix {
-    watermark: StreamHistoryWatermark,
-    line_fingerprints: Vec<RenderedLineFingerprint>,
+    /// Watermark of the stream rows already inserted into native scrollback
+    /// (`None` until the first mid-stream stable commit). The anchored finalize
+    /// (`transcript::emission::finalize_after_stream_prefix`) re-proves
+    /// agreement at the SOURCE level, so no per-row fingerprint is retained —
+    /// soundness rests on the markdown prefix-stability property pinned in
+    /// `transcript::stream` tests.
+    committed: Option<StreamHistoryWatermark>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -47,32 +42,12 @@ pub(crate) struct PreparedLiveTail {
 pub(crate) struct PreparedStreamAppend {
     pub(crate) rows: HistoryRows,
     pub(crate) prefix: PendingStreamPrefix,
-    watermark: StreamHistoryWatermark,
 }
 
 impl PreparedStreamAppend {
     pub(crate) fn expected_rows(&self) -> u16 {
         self.rows.height()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingStreamPrefix {
-    pub(crate) source_prefix: String,
-    pub(crate) source_prefix_len: usize,
-    pub(crate) line_prefix_len: usize,
-    pub(crate) render_key: StreamRenderKey,
-    /// Fingerprints of the `line_prefix_len` rendered lines already inserted
-    /// into native scrollback, in order. Finalize verifies the committed
-    /// whole-message render against these before appending only the suffix.
-    pub(crate) line_fingerprints: Vec<RenderedLineFingerprint>,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct StreamHistoryWatermark {
-    source_len: usize,
-    line_len: usize,
-    render_key: StreamRenderKey,
 }
 
 impl SurfaceStreamDriver {
@@ -107,18 +82,27 @@ impl SurfaceStreamDriver {
         };
         let projection = self.controller.render_projection(render_key_input);
         let stable_line_len = projection.stable_lines.len();
-        let emitted_valid = self.committed.as_ref().is_some_and(|emitted| {
-            emitted.watermark.render_key == projection.render_key
-                && emitted.watermark.source_len <= projection.stable_source_len
-                && emitted.watermark.line_len <= stable_line_len
-                && visible.get(..emitted.watermark.source_len).is_some()
-        });
-        let emitted_rows_invalidated =
-            self.committed.is_some() && !emitted_valid && projection.render_key_invalidated;
+        // A controller reset (`render_key_invalidated`: the source was
+        // replaced or the render key changed) means a surviving watermark
+        // describes rows of a DIFFERENT document. Event coalescing can hide a
+        // turn boundary from this driver — `MessageAppended` and the next
+        // turn's first deltas can fold into one draw, so this prepare never
+        // observes the `streaming == None` gap that normally clears the
+        // watermark. A length-only check could then falsely re-validate the
+        // previous turn's watermark against the new turn's stable region and
+        // silently skip the new turn's leading rows; identity, not size, is
+        // the gate.
+        let emitted_valid = !projection.render_key_invalidated
+            && self.committed.is_some_and(|wm| {
+                wm.render_key == projection.render_key
+                    && wm.source_len <= projection.stable_source_len
+                    && wm.line_len <= stable_line_len
+                    && visible.get(..wm.source_len).is_some()
+            });
+        let emitted_rows_invalidated = self.committed.is_some() && !emitted_valid;
         let (emitted_line_len, emitted_source_len) = if emitted_valid {
-            self.committed.as_ref().map_or((0, 0), |emitted| {
-                (emitted.watermark.line_len, emitted.watermark.source_len)
-            })
+            self.committed
+                .map_or((0, 0), |wm| (wm.line_len, wm.source_len))
         } else {
             (0, 0)
         };
@@ -132,45 +116,21 @@ impl SurfaceStreamDriver {
                 render_history_rows(projection.stable_lines[emitted_line_len..].to_vec(), width);
             let append_rows_elapsed = append_rows_started.elapsed();
             if !rows.is_empty() {
-                // Incremental prefix fingerprint: extend the fingerprints of
-                // the already-emitted lines with the delta only — O(delta)
-                // per advance instead of re-fingerprinting the full prefix.
-                let fingerprint_started = std::time::Instant::now();
-                let mut line_fingerprints = if emitted_valid {
-                    self.committed
-                        .as_ref()
-                        .map_or_else(Vec::new, |emitted| emitted.line_fingerprints.clone())
-                } else {
-                    Vec::new()
-                };
-                debug_assert_eq!(line_fingerprints.len(), emitted_line_len);
-                line_fingerprints.extend(fingerprint_lines(
-                    &projection.stable_lines[emitted_line_len..],
-                ));
                 tracing::debug!(
                     target: "tui::streaming",
                     appended_lines = stable_line_len - emitted_line_len,
                     prefix_lines = stable_line_len,
                     source_prefix_bytes = projection.stable_source_len,
                     append_rows_us = append_rows_elapsed.as_micros(),
-                    fingerprint_us = fingerprint_started.elapsed().as_micros(),
                     "stream stable append prepared",
                 );
-                let watermark = StreamHistoryWatermark {
-                    source_len: projection.stable_source_len,
-                    line_len: stable_line_len,
-                    render_key: projection.render_key,
-                };
                 stream_append = Some(PreparedStreamAppend {
                     rows,
                     prefix: PendingStreamPrefix {
                         source_prefix: visible[..projection.stable_source_len].to_string(),
-                        source_prefix_len: projection.stable_source_len,
                         line_prefix_len: stable_line_len,
                         render_key: projection.render_key,
-                        line_fingerprints,
                     },
-                    watermark,
                 });
             }
             stable_line_len
@@ -236,10 +196,7 @@ impl SurfaceStreamDriver {
     }
 
     pub(crate) fn mark_stream_append_committed(&mut self, append: &PreparedStreamAppend) {
-        self.committed = Some(EmittedStreamPrefix {
-            watermark: append.watermark,
-            line_fingerprints: append.prefix.line_fingerprints.clone(),
-        });
+        self.committed = Some(append.prefix.watermark());
     }
 
     pub(crate) fn reset(&mut self) {

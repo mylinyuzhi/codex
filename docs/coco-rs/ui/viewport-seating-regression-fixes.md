@@ -377,6 +377,16 @@ C1 is the only ship blocker. The rest are hardening and hygiene and may follow.
 
 ## 10. Invariants this work establishes
 
+> **Ownership update (tui-v2 Stage 2, 2026-06-10):** the seat/pin decision
+> moved into the paint engine as `coco_tui_ui::engine::seat`
+> (`SurfaceTerminal::seat_viewport`). I-V1 is the engine method
+> `flowing_seats_flush`; I-V2 holds **by construction** — the pin predicate
+> reads the engine-internal unclamped `history_backs_row` directly and the
+> shell can no longer thread (or mis-thread) a proxy; I-V3 remains a shell
+> ordering rule in `Tui::sync_surface_area`; I-V4's frame suite stays in
+> `app/tui/src/terminal.test.rs` with the pure seat math pinned in
+> `engine/seat.test.rs`. See `tui-v2-design.md` §6.3 / §10.3.
+
 - **I-V1** A `Flowing` viewport seats flush on finalized history
   (`viewport_top == history_bottom_y`). Verified by `debug_assert` in debug and a
   `warn` in release; self-heal is optional until redraw safety is proven.

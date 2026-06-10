@@ -57,9 +57,21 @@ thread_local! {
     /// are content-keyed a stale one can never be served — at worst a removed
     /// message's entry is dead weight until the cap clear. It deliberately does
     /// NOT mirror the `reasoning_metadata` prune lifecycle (that exists for
-    /// correctness, not memory).
+    /// correctness, not memory). Accepted residual risk: hits are served on the
+    /// truncated 64-bit key without storing the full inputs, so a hash
+    /// collision would serve wrong lines (~cap²/2⁶⁵ per cap-epoch — negligible,
+    /// and bounded to one cap window).
     static COMMITTED_MD_MEMO: RefCell<HashMap<u64, Vec<Line<'static>>>> =
         RefCell::new(HashMap::new());
+
+    /// Single-slot memo for the in-flight (streaming) render. Every delta
+    /// changes the content hash, so the shared map would gain one dead
+    /// snapshot per delta and wholesale-clear legitimately cached committed
+    /// cells at the cap. The live tail is one monotonically growing document
+    /// — remembering the last render is exactly enough to dedupe the
+    /// measure-then-paint double call within a frame.
+    static IN_FLIGHT_MD_MEMO: RefCell<Option<(u64, Vec<Line<'static>>)>> =
+        const { RefCell::new(None) };
 }
 
 /// Soft cap on memo entries; cleared wholesale on overflow (cheap, rare).
@@ -68,6 +80,7 @@ const COMMITTED_MD_MEMO_CAP: usize = 4096;
 #[cfg(any(test, feature = "testing"))]
 pub(crate) fn clear_committed_markdown_memo_for_tests() {
     COMMITTED_MD_MEMO.with(|m| m.borrow_mut().clear());
+    IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = None);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -81,11 +94,34 @@ pub(crate) fn render_committed_assistant_markdown(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
 ) -> Vec<Line<'static>> {
-    let opts = coco_tui_markdown::MarkdownOptions::new(
+    render_assistant_markdown(source, options, /*in_flight*/ false)
+}
+
+/// Same renderer for IN-FLIGHT assistant text (the live tail), backed by the
+/// single-slot [`IN_FLIGHT_MD_MEMO`]. The markdown pass is marked streaming,
+/// whose sole effect is suppressing mermaid diagram layout — re-laying a
+/// diagram on every delta is exactly the cost that flag exists to avoid; the
+/// diagram renders once when the text finalizes into a committed cell.
+pub(crate) fn render_in_flight_assistant_markdown(
+    source: &str,
+    options: CommittedAssistantMarkdownOptions<'_>,
+) -> Vec<Line<'static>> {
+    render_assistant_markdown(source, options, /*in_flight*/ true)
+}
+
+fn render_assistant_markdown(
+    source: &str,
+    options: CommittedAssistantMarkdownOptions<'_>,
+    in_flight: bool,
+) -> Vec<Line<'static>> {
+    let mut opts = coco_tui_markdown::MarkdownOptions::new(
         options.styles,
         options.width,
         options.syntax_highlighting,
     );
+    if in_flight {
+        opts = opts.streaming();
+    }
     let key = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut h);
@@ -96,18 +132,31 @@ pub(crate) fn render_committed_assistant_markdown(
         options.styles.theme_hash().hash(&mut h);
         h.finish()
     };
-    if let Some(hit) = COMMITTED_MD_MEMO.with(|m| m.borrow().get(&key).cloned()) {
+    let hit = if in_flight {
+        IN_FLIGHT_MD_MEMO.with(|m| {
+            m.borrow()
+                .as_ref()
+                .and_then(|(cached_key, lines)| (*cached_key == key).then(|| lines.clone()))
+        })
+    } else {
+        COMMITTED_MD_MEMO.with(|m| m.borrow().get(&key).cloned())
+    };
+    if let Some(hit) = hit {
         return hit;
     }
     let marker = assistant_lead_marker(options.styles.assistant_message());
     let rendered = coco_tui_markdown::render_markdown(source, opts, Some(&marker));
-    COMMITTED_MD_MEMO.with(|m| {
-        let mut m = m.borrow_mut();
-        if m.len() >= COMMITTED_MD_MEMO_CAP {
-            m.clear();
-        }
-        m.insert(key, rendered.clone());
-    });
+    if in_flight {
+        IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = Some((key, rendered.clone())));
+    } else {
+        COMMITTED_MD_MEMO.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.len() >= COMMITTED_MD_MEMO_CAP {
+                m.clear();
+            }
+            m.insert(key, rendered.clone());
+        });
+    }
     rendered
 }
 

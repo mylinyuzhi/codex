@@ -107,41 +107,39 @@ fn stable_stream_prefix_prepares_native_append_and_leaves_viewport_tail() {
 }
 
 #[test]
-fn stream_append_fingerprints_accumulate_incrementally_to_full_prefix() {
+fn watermark_does_not_survive_source_replacement() {
+    // Event coalescing can fold `MessageAppended(turn N)` and turn N+1's first
+    // deltas into one draw, so this driver never observes the `streaming ==
+    // None` gap that normally clears the watermark. Turn N+1's source replaces
+    // turn N's (no `starts_with` extension), and if its first observed stable
+    // region is already larger than turn N's watermark in both bytes and
+    // lines, a length-only validity check would re-attribute the old watermark
+    // to the new turn and silently skip its leading rows. The replacement must
+    // invalidate instead: full stable region re-emitted + replay signalled.
     let mut state = AppState::new();
     let mut streaming = StreamingState::new();
-    streaming.append_text("alpha\n\n");
+    streaming.append_text("done\n\n");
     streaming.reveal_all();
     state.ui.streaming = Some(streaming);
-
     let mut driver = SurfaceStreamDriver::default();
     let first = driver.prepare(&state, /*width*/ 40, native_plan());
-    let first_append = first.stream_append.as_ref().expect("first stable append");
-    driver.mark_stream_append_committed(first_append);
+    driver.mark_stream_append_committed(first.stream_append.as_ref().expect("turn-1 append"));
 
-    let streaming = state.ui.streaming.as_mut().expect("streaming");
-    streaming.append_text("beta\n\ngamma\n\n");
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha paragraph one\n\nbeta paragraph two\n\ngamma three\n\n");
     streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
     let second = driver.prepare(&state, /*width*/ 40, native_plan());
-    let second_append = second.stream_append.expect("second stable append");
 
-    // A fresh driver fingerprints the same full stable prefix from scratch;
-    // the incremental accumulation must agree with it exactly.
-    let from_scratch = SurfaceStreamDriver::default()
-        .prepare(&state, /*width*/ 40, native_plan())
-        .stream_append
-        .expect("from-scratch append");
-    assert_eq!(
-        second_append.prefix.line_fingerprints,
-        from_scratch.prefix.line_fingerprints
+    assert!(
+        second.render_key_invalidated,
+        "source replacement must invalidate the surviving watermark",
     );
-    assert_eq!(
-        second_append.prefix.line_prefix_len,
-        from_scratch.prefix.line_prefix_len
-    );
-    assert_eq!(
-        second_append.prefix.line_fingerprints.len(),
-        second_append.prefix.line_prefix_len
+    let append = second.stream_append.expect("turn-2 stable append");
+    let text = history_rows_text(&append.rows);
+    assert!(
+        text.contains("alpha paragraph one"),
+        "turn-2's leading rows must not be skipped: {text}",
     );
 }
 

@@ -862,7 +862,9 @@ impl StreamingState {
     /// the live region (and the viewport bottom) on every delta; gating on the
     /// newline keeps the live region's height changing only at line boundaries.
     /// Mirrors claude-code-kim clipping the streaming preview to the last
-    /// newline. [`Self::reveal_all`] (at finalize) shows the final partial line.
+    /// newline. The final partial line never needs a reveal: at finalize the
+    /// streaming overlay is dropped (`MessageAppended`) and the committed cell
+    /// render shows the full canonical text.
     pub fn advance_display(&mut self) -> bool {
         match self.content[self.display_cursor..].find('\n') {
             Some(idx) => {
@@ -873,7 +875,10 @@ impl StreamingState {
         }
     }
 
-    /// Reveal all content immediately.
+    /// Reveal all content immediately — test/bench setup helper to skip the
+    /// per-tick reveal pacing. Production never calls this; the overlay is
+    /// dropped at finalize instead.
+    #[cfg(any(test, feature = "testing"))]
     pub fn reveal_all(&mut self) {
         self.display_cursor = self.content.len();
     }

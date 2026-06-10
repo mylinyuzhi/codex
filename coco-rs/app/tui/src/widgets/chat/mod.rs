@@ -48,11 +48,9 @@ use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
 use crate::state::transcript_view::SystemCellKind;
 use crate::state::ui::StreamingState;
-use crate::streaming::render_controller::StreamRenderController;
-use crate::streaming::render_controller::StreamRenderInput;
-use crate::streaming::render_controller::streaming_cursor_line;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use crate::transcript::stream::streaming_cursor_line;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
@@ -61,11 +59,6 @@ pub(crate) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
 /// Per-cell render cost above which a `tui::perf::cell` debug line is emitted,
 /// attributing slow history builds to the specific cell (tool name / kind).
 const SLOW_CELL_RENDER_LOG_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(2);
-
-thread_local! {
-    static STREAM_RENDER_CONTROLLER: std::cell::RefCell<StreamRenderController> =
-        std::cell::RefCell::new(StreamRenderController::new());
-}
 
 /// Chat history widget.
 ///
@@ -504,7 +497,21 @@ impl<'a> ChatWidget<'a> {
 
     fn render_streaming(&self, view: StreamingTailView<'_>, lines: &mut Vec<Line<'static>>) {
         if let Some(content) = view.assistant_text {
-            self.render_streaming_text(content, lines);
+            // Render the in-flight stream through the same committed assistant
+            // renderer that finalized `AssistantText` cells use
+            // (`render_assistant`), with the streaming flag set so mermaid
+            // layout runs once at finalize instead of per delta. The
+            // non-native fallback no longer owns a streaming-only renderer
+            // (§6.7-2); the native surface keeps its watermark splitter in
+            // `transcript::stream` for mid-stream scrollback commits (§6.5).
+            lines.extend(render_assistant::render_in_flight_assistant_markdown(
+                content,
+                render_assistant::CommittedAssistantMarkdownOptions {
+                    styles: self.styles,
+                    width: self.width,
+                    syntax_highlighting: self.syntax_highlighting,
+                },
+            ));
             lines.push(streaming_cursor_line(self.styles));
         }
 
@@ -520,18 +527,6 @@ impl<'a> ChatWidget<'a> {
                 self.styles,
             ));
         }
-    }
-
-    fn render_streaming_text(&self, content: &str, lines: &mut Vec<Line<'static>>) {
-        let rendered = STREAM_RENDER_CONTROLLER.with(|controller| {
-            controller.borrow_mut().render(StreamRenderInput {
-                source: content,
-                styles: self.styles,
-                width: self.width,
-                syntax_highlighting: self.syntax_highlighting,
-            })
-        });
-        lines.extend(rendered);
     }
 }
 

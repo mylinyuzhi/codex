@@ -18,7 +18,7 @@ Enforced by `scripts/check-tui-ui-seam.sh` (wired into `just check-seam` →
 
 | Module | Purpose |
 |--------|---------|
-| `engine` | Native-scrollback paint engine: `SurfaceTerminal<B: SurfaceBackend>`, BSU/ESU synchronized-update framing, cell-diff drawing, history insert/reflow, terminal-capability detection, and the `CursorClaim` type. Consumes `Vec<Line>` + a `&mut Buffer` + a `CursorClaim` — never `AppState`. |
+| `engine` | Native-scrollback paint engine: `SurfaceTerminal<B: SurfaceBackend>`, BSU/ESU synchronized-update framing, cell-diff drawing, history insert/reflow, terminal-capability detection, and the `CursorClaim` type. Consumes `Vec<Line>` + a `&mut Buffer` + a `CursorClaim` — never `AppState`. `engine::seat` owns the viewport seat/pin decision (tui-v2 §6.3): `SurfaceTerminal::seat_viewport(SeatInputs) -> SeatDecision` anchors on the owned viewport top and reads the engine-internal unclamped history extent (I-V2 — the shell can never substitute a clamped proxy); `flowing_seats_flush` is the I-V1 invariant. The shell supplies intent (desired height, policy bounds, shrink backing) and applies the decision; overlay/alt-screen policy stays in the shell. |
 | `widgets` | Pure ratatui widgets: `textarea`, `notification`, `spinner_verbs`, `status_indicator`, `diff_display`. (Markdown rendering moved to the sibling `coco-tui-markdown` crate — pulldown-cmark + syntect; mermaid to `coco-tui-mermaid`.) |
 | `theme` | `Theme` palette struct + `ThemeName` + 9 built-ins (config-free; the shell owns the `settings.json` / `~/.coco/theme.json` loader + file-watcher). |
 | `style` | `UiStyles<'a>` — semantic style accessors over `&Theme`. |

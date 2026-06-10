@@ -434,7 +434,8 @@ fn render_replay_history_lines_uncached(
     // re-wrapped the whole remaining transcript on each step (O(messages ×
     // cells)); this is O(messages × cells × log messages) and renders the
     // chosen suffix at most a handful of times.
-    let message_starts = engine_message_starts(cells);
+    let message_starts: Vec<usize> =
+        crate::transcript::cells::engine_message_starts(cells).collect();
     let n = message_starts.len();
 
     let mut fits = |omitted: usize| -> bool {
@@ -833,21 +834,6 @@ fn estimate_system_cell_bytes(kind: &SystemCellKind, source: &Message) -> usize 
     }
 }
 
-/// Indices into `cells` where each engine message begins. Multiple
-/// cells with the same `message_uuid` (assistant turn fanout) share an
-/// entry — the index of the first cell in that group.
-fn engine_message_starts(cells: &[RenderedCell]) -> Vec<usize> {
-    let mut starts = Vec::new();
-    let mut prev = None;
-    for (i, cell) in cells.iter().enumerate() {
-        if Some(cell.message_uuid) != prev {
-            starts.push(i);
-            prev = Some(cell.message_uuid);
-        }
-    }
-    starts
-}
-
 fn replay_truncation_marker(omitted_messages: usize) -> Vec<Line<'static>> {
     vec![
         Line::from(format!(
@@ -859,5 +845,5 @@ fn replay_truncation_marker(omitted_messages: usize) -> Vec<Line<'static>> {
 }
 
 #[cfg(test)]
-#[path = "history_lines.test.rs"]
+#[path = "render.test.rs"]
 mod tests;

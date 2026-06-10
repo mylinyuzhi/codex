@@ -19,34 +19,59 @@ use crate::widgets::chat::assistant_stream_lead_marker;
 use crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions;
 use crate::widgets::chat::render_assistant::render_committed_assistant_markdown;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamRegion {
-    MutableTail,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum StreamRenderMode {
-    CommittedStable,
-    StreamingMutableTail,
-}
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StreamRenderKey(u64);
 
 impl StreamRenderKey {
-    pub(crate) fn committed(input: StreamRenderInput<'_>) -> Self {
-        Self::new(input, StreamRenderMode::CommittedStable)
-    }
-
-    fn new(input: StreamRenderInput<'_>, mode: StreamRenderMode) -> Self {
-        let opts = markdown_options(input, mode);
+    /// Key over every line-affecting input of the committed renderer that can
+    /// vary at runtime — width, syntax enablement, theme. The source text is
+    /// deliberately not part of the key (it gates *how* rows were rendered,
+    /// not *what*); body indent and the streaming flag are constants of the
+    /// committed assistant render by construction
+    /// (`render_committed_assistant_markdown`).
+    pub(crate) fn committed(
+        styles: UiStyles<'_>,
+        width: u16,
+        syntax_highlighting: SyntaxHighlighting,
+    ) -> Self {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        opts.width.hash(&mut h);
-        opts.syntax.is_enabled().hash(&mut h);
-        opts.body_indent.hash(&mut h);
-        opts.streaming.hash(&mut h);
-        input.styles.theme_hash().hash(&mut h);
+        width.hash(&mut h);
+        syntax_highlighting.is_enabled().hash(&mut h);
+        styles.theme_hash().hash(&mut h);
         Self(h.finish())
+    }
+}
+
+/// Watermark describing the stream rows already inserted into native
+/// scrollback: how much source and how many rendered lines were committed,
+/// plus the render key they were produced under. It lives with the stream
+/// renderer so the live-tail driver (`surface/stream.rs`) and the anchored
+/// finalize (`transcript/emission.rs`) share one definition.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StreamHistoryWatermark {
+    pub(crate) source_len: usize,
+    pub(crate) line_len: usize,
+    pub(crate) render_key: StreamRenderKey,
+}
+
+/// Source-anchored record of the streamed rows already inserted into native
+/// scrollback. The finalize anchors the canonical assistant text against
+/// `source_prefix` (`text.starts_with(..)` plus the render-key gate) and
+/// appends only the committed render's suffix past `line_prefix_len`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingStreamPrefix {
+    pub(crate) source_prefix: String,
+    pub(crate) line_prefix_len: usize,
+    pub(crate) render_key: StreamRenderKey,
+}
+
+impl PendingStreamPrefix {
+    pub(crate) fn watermark(&self) -> StreamHistoryWatermark {
+        StreamHistoryWatermark {
+            source_len: self.source_prefix.len(),
+            line_len: self.line_prefix_len,
+            render_key: self.render_key,
+        }
     }
 }
 
@@ -84,19 +109,6 @@ pub(crate) struct StreamRenderController {
 }
 
 impl StreamRenderController {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
-    pub(crate) fn render(&mut self, input: StreamRenderInput<'_>) -> Vec<Line<'static>> {
-        let projection = self.render_projection(input);
-        let mut lines =
-            Vec::with_capacity(projection.stable_lines.len() + projection.tail_lines.len());
-        lines.extend(projection.stable_lines.iter().cloned());
-        lines.extend(projection.tail_lines.iter().cloned());
-        lines
-    }
-
     pub(crate) fn render_projection(
         &mut self,
         input: StreamRenderInput<'_>,
@@ -112,7 +124,8 @@ impl StreamRenderController {
             };
         }
 
-        let render_key = StreamRenderKey::committed(input);
+        let render_key =
+            StreamRenderKey::committed(input.styles, input.width, input.syntax_highlighting);
         let render_reset =
             self.render_key != Some(render_key) || !input.source.starts_with(&self.source);
         if render_reset {
@@ -132,12 +145,8 @@ impl StreamRenderController {
             self.tail_source_start = self.stable_prefix_end;
             self.tail_source.clear();
             self.tail_source.push_str(tail_source);
-            self.tail_lines = render_markdown_region(
-                &self.tail_source,
-                input,
-                StreamRegion::MutableTail,
-                self.stable_lines.is_empty(),
-            );
+            self.tail_lines =
+                render_mutable_tail_region(&self.tail_source, input, self.stable_lines.is_empty());
         }
 
         StreamRenderProjection {
@@ -171,21 +180,6 @@ impl StreamRenderController {
     }
 }
 
-fn markdown_options(
-    input: StreamRenderInput<'_>,
-    mode: StreamRenderMode,
-) -> coco_tui_markdown::MarkdownOptions<'_> {
-    let opts = coco_tui_markdown::MarkdownOptions::new(
-        input.styles,
-        input.width,
-        input.syntax_highlighting,
-    );
-    match mode {
-        StreamRenderMode::CommittedStable => opts,
-        StreamRenderMode::StreamingMutableTail => opts.streaming(),
-    }
-}
-
 fn render_committed_stable_region(
     source: &str,
     input: StreamRenderInput<'_>,
@@ -215,34 +209,33 @@ fn render_committed_stable_region(
     lines
 }
 
-fn render_markdown_region(
+fn render_mutable_tail_region(
     source: &str,
     input: StreamRenderInput<'_>,
-    region: StreamRegion,
     include_marker: bool,
 ) -> Vec<Line<'static>> {
     if source.is_empty() {
         return Vec::new();
     }
-    let mode = match region {
-        StreamRegion::MutableTail => StreamRenderMode::StreamingMutableTail,
-    };
-    let opts = markdown_options(input, mode);
+    let opts = coco_tui_markdown::MarkdownOptions::new(
+        input.styles,
+        input.width,
+        input.syntax_highlighting,
+    )
+    .streaming();
     let marker = include_marker.then(|| assistant_stream_lead_marker(input.styles));
     let started = Instant::now();
     let lines = coco_tui_markdown::render_markdown(source, opts, marker.as_ref());
     let elapsed = started.elapsed();
-    match region {
-        StreamRegion::MutableTail => tracing::trace!(
-            target: "tui::streaming",
-            region = ?region,
-            source_bytes = source.len(),
-            lines = lines.len(),
-            elapsed_us = elapsed.as_micros(),
-            width = input.width,
-            "render streaming markdown region",
-        ),
-    }
+    tracing::trace!(
+        target: "tui::streaming",
+        region = "mutable_tail",
+        source_bytes = source.len(),
+        lines = lines.len(),
+        elapsed_us = elapsed.as_micros(),
+        width = input.width,
+        "render streaming markdown region",
+    );
     lines
 }
 
@@ -251,5 +244,5 @@ pub(crate) fn streaming_cursor_line(styles: UiStyles<'_>) -> Line<'static> {
 }
 
 #[cfg(test)]
-#[path = "render_controller.test.rs"]
+#[path = "stream.test.rs"]
 mod tests;

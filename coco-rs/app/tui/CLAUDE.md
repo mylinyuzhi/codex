@@ -78,6 +78,20 @@ Expansion is selected-cell UI state only:
 Do not reintroduce a user-facing transcript expansion budget, `Ctrl+E` show-all
 mode, or a full transcript `Vec<Line>`/`String` path for overlay rendering.
 
+## Transcript Pipeline (tui-v2)
+
+`src/transcript/` owns the v2 streaming→scrollback pipeline
+(`docs/coco-rs/ui/tui-v2-design.md` §6.4): `cells` (engine-message grouping +
+tool-commit boundary), `render` (committed history renderer + replay cache),
+`stream` (stable/tail splitter, render key, watermark), `emission`
+(exactly-once tracker + the anchored finalize). The finalize anchors streamed
+scrollback rows at the SOURCE level (`text.starts_with(source_prefix)` +
+render-key gate) and appends only the committed render's suffix — there is no
+rasterized per-row reconciliation; soundness is pinned by
+`transcript::stream::tests::test_stable_lines_are_row_prefix_of_full_committed_render`.
+`src/surface/` keeps the per-frame drivers and terminal I/O. Do not reintroduce
+per-row fingerprints on the stream path or a second streaming-only renderer.
+
 ## Transcript Invariants
 
 The unified transcript refactor

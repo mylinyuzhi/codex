@@ -1,8 +1,12 @@
 # coco-keybindings
 
 Keyboard shortcut resolution. TS port of `keybindings/`. Closed enums for
-contexts (20: 18 user-rebindable + 2 internal) and actions (~105 variants (86 schema + 18 internal + Command escape hatch)
-mirroring TS `KEYBINDING_ACTIONS`), chord support (`ctrl+x ctrl+k`,
+contexts (20: 18 user-rebindable + 2 internal) and actions (~111 variants:
+86 TS schema + 18 internal + 6 documented coco-rs extensions
+(`app:forceQuit`, `app:help`, `app:commandPalette`, `app:settings`,
+`chat:toggleSystemReminders`, `chat:togglePlanMode` — folded from the old
+hardcoded TUI cascade) + Command escape hatch, mirroring TS
+`KEYBINDING_ACTIONS`), chord support (`ctrl+x ctrl+k`,
 whitespace-separated), JSON config wrapper, validator with severity,
 hot-reloading user-config loader, platform-aware display formatting,
 crossterm `KeyEvent` adapter.
@@ -24,7 +28,7 @@ crossterm `KeyEvent` adapter.
 
 | Type | Purpose |
 |---|---|
-| `KeybindingAction` | Closed enum, ~105 variants (86 schema + 18 internal + Command escape hatch) in `namespace:camelCase`. `Command(String)` escape hatch for user `command:foo`. Custom serde via `try_from = "String", into = "String"`. |
+| `KeybindingAction` | Closed enum, ~111 variants (86 schema + 18 internal + 6 coco extensions + Command escape hatch) in `namespace:camelCase`. `Command(String)` escape hatch for user `command:foo`. Custom serde via `try_from = "String", into = "String"`. |
 | `KeybindingContext` | Closed enum, 20 variants. `ALL_USER` → 18 user-rebindable; the validator rejects user bindings into `Scroll` / `MessageActions`. |
 | `Keybinding` | Parsed binding: `(KeyChord, Option<KeybindingAction>, KeybindingContext)`. `action: None` is a TS-style null unbind. |
 | `KeybindingBlock` | One block from JSON: `(KeybindingContext, BTreeMap<String, Option<KeybindingAction>>)`. |
@@ -98,10 +102,14 @@ The TUI consumes `coco-keybindings` via three modules in `app/tui/src/`:
 `state.ui.kb_handle.resolve_key(...)` first; if the resolver fires an
 action with a TUI handler it wins. If the resolver consumed the
 keystroke (chord cancelled, null unbind, pending chord), the keystroke
-is swallowed — preventing the legacy cascade from doing something a
-user-customized binding wouldn't do. Otherwise the legacy hardcoded
-cascade runs for TUI-only shortcuts (F1 help, Ctrl+, settings, …) that
-aren't in the TS default schema.
+is swallowed — preventing the hardcoded fallback from doing something a
+user-customized binding wouldn't do. The former "TUI-only shortcut"
+cascade has been folded into defaults as documented coco-rs extension
+actions (tui-v2 Stage 4); what remains hardcoded is only what cannot be
+a binding: per-surface navigation maps (picker/confirmation/question/…
+Up/Down/Enter/filter chars), readline input editing (documented in
+`keymap/`), `?`-on-empty-composer help (must fall through to typing),
+PageUp/PageDown scrolling, and F6 focus cycling.
 
 The help overlay (`render_overlays/help.rs`) renders shortcuts dynamically
 via `state.ui.kb_handle.display_for(action, ctx)` so user re-bindings

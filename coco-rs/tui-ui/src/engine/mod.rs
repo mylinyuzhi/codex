@@ -1,11 +1,12 @@
 //! The native-scrollback paint engine: synchronized-update (BSU/ESU) framing,
-//! cell-diff drawing, history insertion/reflow, and terminal-capability
-//! detection. Domain-free — the shell projects `AppState` into `Line`s and a
-//! `CursorClaim` and drives this engine to paint them.
+//! cell-diff drawing, history insertion/reflow, viewport seating, and
+//! terminal-capability detection. Domain-free — the shell projects `AppState`
+//! into `Line`s and a `CursorClaim` and drives this engine to paint them.
 
 pub mod compatibility;
 pub mod history_insert;
 pub mod history_reflow;
+pub mod seat;
 pub mod terminal;
 
 use crossterm::cursor::SetCursorStyle;
