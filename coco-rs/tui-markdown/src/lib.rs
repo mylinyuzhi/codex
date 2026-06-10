@@ -33,6 +33,8 @@ use unicode_width::UnicodeWidthStr;
 
 mod highlight;
 
+pub use highlight::prewarm_highlighting;
+
 /// A turn-boundary marker placed at column 0 of the first rendered line (e.g.
 /// the assistant `⏺` dot). The glyph plus a trailing space occupy exactly
 /// `body_indent` columns so wrapped continuation lines stay aligned.
@@ -137,9 +139,19 @@ pub fn stable_prefix_end(source: &str) -> usize {
     let mut offset = 0usize;
     let mut safe_end = 0usize;
     let mut fence_open: Option<FenceMarker> = None;
+    // A trailing list that can still grow is held back entirely: a later
+    // sibling item separated by a blank line flips the WHOLE list from tight
+    // to loose (CommonMark), retroactively rewriting items that were already
+    // rendered. `list_guard` remembers the last safe boundary before the open
+    // list began; it caps the result only while the list can still continue
+    // past the end of the scanned source.
+    let mut in_list_tail = false;
+    let mut list_guard = 0usize;
+    let mut prev_blank = false;
     for line in source[..scan_end].split_inclusive('\n') {
         let trimmed = line.trim();
         let mut closed_fence = false;
+        let fence_line = fence_marker(line).is_some();
         if let Some(marker) = fence_marker(line) {
             match fence_open {
                 Some(open) if marker.closes(open) => {
@@ -148,9 +160,35 @@ pub fn stable_prefix_end(source: &str) -> usize {
                 }
                 None => {
                     fence_open = Some(marker);
+                    // A top-level fence interrupts a list.
+                    in_list_tail = false;
                 }
                 Some(_) => {}
             }
+        }
+        if fence_line || fence_open.is_some() {
+            if trimmed.is_empty() && fence_open.is_some() {
+                // Blank lines inside a fence are code, not block separators.
+            } else {
+                prev_blank = false;
+            }
+        } else if trimmed.is_empty() {
+            prev_blank = true;
+        } else {
+            if thematic_break_marker(trimmed) || atx_heading_marker(trimmed) {
+                in_list_tail = false;
+            } else if list_item_marker(line) && (in_list_tail || line_indent(line) <= 3) {
+                if !in_list_tail {
+                    in_list_tail = true;
+                    list_guard = safe_end;
+                }
+            } else if in_list_tail && prev_blank && line_indent(line) < 2 {
+                // An unindented paragraph after a blank line ends the list;
+                // anything else (lazy continuation, indented item content)
+                // keeps it open.
+                in_list_tail = false;
+            }
+            prev_blank = false;
         }
 
         offset += line.len();
@@ -162,7 +200,69 @@ pub fn stable_prefix_end(source: &str) -> usize {
         }
     }
 
+    if in_list_tail {
+        // The unterminated tail can already prove the list closed: after a
+        // blank line, an unindented line whose first character can never form
+        // a list-item marker is a paragraph that interrupts the list. The
+        // ambiguous starters (`-`, `+`, `*`, digits) could still grow into a
+        // sibling item, so they keep the hold.
+        let partial = &source[scan_end..];
+        let partial_ends_list = prev_blank
+            && line_indent(partial) < 2
+            && partial
+                .trim_start_matches(' ')
+                .chars()
+                .next()
+                .is_some_and(|ch| !matches!(ch, '-' | '+' | '*') && !ch.is_ascii_digit());
+        if !partial_ends_list {
+            return list_guard.min(safe_end);
+        }
+    }
     safe_end
+}
+
+fn line_indent(line: &str) -> usize {
+    line.len() - line.trim_start_matches(' ').len()
+}
+
+/// `---` / `***` / `___` style thematic break (3+ of one marker char, spaces
+/// allowed between). Checked before the list-item marker so `- - -` is a
+/// break, not a bullet.
+fn thematic_break_marker(trimmed: &str) -> bool {
+    let mut marker = None;
+    let mut count = 0usize;
+    for ch in trimmed.chars() {
+        match (marker, ch) {
+            (_, ' ' | '\t') => {}
+            (None, '-' | '_' | '*') => {
+                marker = Some(ch);
+                count = 1;
+            }
+            (Some(open), _) if ch == open => count += 1,
+            _ => return false,
+        }
+    }
+    count >= 3
+}
+
+/// A line that starts a bullet (`-`/`+`/`*`) or ordered (`1.` / `1)`) list
+/// item. Operates on the raw line; the caller decides how much indent is
+/// allowed in context.
+fn list_item_marker(line: &str) -> bool {
+    let content = line.trim_end_matches(['\n', '\r']).trim_start_matches(' ');
+    let mut chars = content.chars();
+    match chars.next() {
+        Some('-' | '+' | '*') => matches!(chars.next(), None | Some(' ' | '\t')),
+        Some(ch) if ch.is_ascii_digit() => {
+            let digits = content.chars().take_while(char::is_ascii_digit).count();
+            if digits > 9 {
+                return false;
+            }
+            let mut rest = content[digits..].chars();
+            matches!(rest.next(), Some('.' | ')')) && matches!(rest.next(), None | Some(' ' | '\t'))
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

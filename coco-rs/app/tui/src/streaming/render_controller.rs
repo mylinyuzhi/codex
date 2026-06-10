@@ -16,16 +16,17 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 
 use crate::widgets::chat::assistant_stream_lead_marker;
+use crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions;
+use crate::widgets::chat::render_assistant::render_committed_assistant_markdown;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamRegion {
-    Stable,
     MutableTail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum StreamRenderMode {
-    FinalizedStable,
+enum StreamRenderMode {
+    CommittedStable,
     StreamingMutableTail,
 }
 
@@ -33,7 +34,11 @@ pub(crate) enum StreamRenderMode {
 pub(crate) struct StreamRenderKey(u64);
 
 impl StreamRenderKey {
-    pub(crate) fn new(input: StreamRenderInput<'_>, mode: StreamRenderMode) -> Self {
+    pub(crate) fn committed(input: StreamRenderInput<'_>) -> Self {
+        Self::new(input, StreamRenderMode::CommittedStable)
+    }
+
+    fn new(input: StreamRenderInput<'_>, mode: StreamRenderMode) -> Self {
         let opts = markdown_options(input, mode);
         let mut h = std::collections::hash_map::DefaultHasher::new();
         opts.width.hash(&mut h);
@@ -53,27 +58,29 @@ pub(crate) struct StreamRenderInput<'a> {
     pub(crate) syntax_highlighting: SyntaxHighlighting,
 }
 
+/// One frame's view of the stream render state, borrowing the controller's
+/// cached line vectors. `stable_lines` is the authoritative committed-renderer
+/// output for the stable source prefix; `tail_lines` is the mutable-tail
+/// render. Consumers clone exactly the slices they need instead of receiving
+/// (and re-cloning) a rebuilt concatenation every frame.
+#[derive(Debug)]
+pub(crate) struct StreamRenderProjection<'a> {
+    pub(crate) stable_lines: &'a [Line<'static>],
+    pub(crate) tail_lines: &'a [Line<'static>],
+    pub(crate) stable_source_len: usize,
+    pub(crate) render_key: StreamRenderKey,
+    pub(crate) render_key_invalidated: bool,
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct StreamRenderController {
     render_key: Option<StreamRenderKey>,
     source: String,
     stable_prefix_end: usize,
     stable_lines: Vec<Line<'static>>,
-    appended_stable_prefix_end: usize,
-    appended_stable_line_count: usize,
     tail_source_start: usize,
     tail_source: String,
     tail_lines: Vec<Line<'static>>,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct StreamLiveRender {
-    pub(crate) stable_append_source: String,
-    pub(crate) stable_append_lines: Vec<Line<'static>>,
-    pub(crate) stable_line_count: usize,
-    pub(crate) full_live_tail_lines: Vec<Line<'static>>,
-    pub(crate) live_tail_lines: Vec<Line<'static>>,
-    pub(crate) render_reset: bool,
 }
 
 impl StreamRenderController {
@@ -82,25 +89,30 @@ impl StreamRenderController {
     }
 
     pub(crate) fn render(&mut self, input: StreamRenderInput<'_>) -> Vec<Line<'static>> {
-        self.render_live_frame_inner(input, true)
-            .full_live_tail_lines
+        let projection = self.render_projection(input);
+        let mut lines =
+            Vec::with_capacity(projection.stable_lines.len() + projection.tail_lines.len());
+        lines.extend(projection.stable_lines.iter().cloned());
+        lines.extend(projection.tail_lines.iter().cloned());
+        lines
     }
 
-    pub(crate) fn render_live_frame(&mut self, input: StreamRenderInput<'_>) -> StreamLiveRender {
-        self.render_live_frame_inner(input, false)
-    }
-
-    fn render_live_frame_inner(
+    pub(crate) fn render_projection(
         &mut self,
         input: StreamRenderInput<'_>,
-        include_full_live_tail: bool,
-    ) -> StreamLiveRender {
+    ) -> StreamRenderProjection<'_> {
         if input.source.is_empty() {
             self.clear();
-            return StreamLiveRender::default();
+            return StreamRenderProjection {
+                stable_lines: &[],
+                tail_lines: &[],
+                stable_source_len: 0,
+                render_key: StreamRenderKey::default(),
+                render_key_invalidated: false,
+            };
         }
 
-        let render_key = StreamRenderKey::new(input, StreamRenderMode::FinalizedStable);
+        let render_key = StreamRenderKey::committed(input);
         let render_reset =
             self.render_key != Some(render_key) || !input.source.starts_with(&self.source);
         if render_reset {
@@ -111,12 +123,7 @@ impl StreamRenderController {
 
         let stable_end = coco_tui_markdown::stable_prefix_end(&self.source);
         if stable_end > self.stable_prefix_end {
-            self.stable_lines = render_markdown_region(
-                &self.source[..stable_end],
-                input,
-                StreamRegion::Stable,
-                true,
-            );
+            self.stable_lines = render_committed_stable_region(&self.source[..stable_end], input);
             self.stable_prefix_end = stable_end;
         }
 
@@ -133,39 +140,13 @@ impl StreamRenderController {
             );
         }
 
-        let stable_append_lines = self.stable_lines[self.appended_stable_line_count..].to_vec();
-        let stable_append_source =
-            self.source[self.appended_stable_prefix_end..self.stable_prefix_end].to_string();
-        let full_live_tail_lines = if include_full_live_tail {
-            let mut lines = Vec::with_capacity(stable_append_lines.len() + self.tail_lines.len());
-            lines.extend(stable_append_lines.iter().cloned());
-            lines.extend(self.tail_lines.iter().cloned());
-            lines
-        } else {
-            Vec::new()
-        };
-        StreamLiveRender {
-            stable_append_source,
-            stable_append_lines,
-            stable_line_count: self.stable_lines.len(),
-            full_live_tail_lines,
-            live_tail_lines: self.tail_lines.clone(),
-            render_reset,
+        StreamRenderProjection {
+            stable_lines: &self.stable_lines,
+            tail_lines: &self.tail_lines,
+            stable_source_len: self.stable_prefix_end,
+            render_key,
+            render_key_invalidated: render_reset,
         }
-    }
-
-    pub(crate) fn mark_stable_appended(&mut self) {
-        self.appended_stable_prefix_end = self.stable_prefix_end;
-        self.appended_stable_line_count = self.stable_lines.len();
-    }
-
-    pub(crate) fn forget_stable_appended(&mut self) {
-        self.appended_stable_prefix_end = 0;
-        self.appended_stable_line_count = 0;
-    }
-
-    pub(crate) fn render_key(&self) -> Option<StreamRenderKey> {
-        self.render_key
     }
 
     fn reset_for_key(&mut self, render_key: StreamRenderKey, source: &str) {
@@ -174,8 +155,6 @@ impl StreamRenderController {
         self.source.push_str(source);
         self.stable_prefix_end = 0;
         self.stable_lines.clear();
-        self.appended_stable_prefix_end = 0;
-        self.appended_stable_line_count = 0;
         self.tail_source_start = 0;
         self.tail_source.clear();
         self.tail_lines.clear();
@@ -186,8 +165,6 @@ impl StreamRenderController {
         self.source.clear();
         self.stable_prefix_end = 0;
         self.stable_lines.clear();
-        self.appended_stable_prefix_end = 0;
-        self.appended_stable_line_count = 0;
         self.tail_source_start = 0;
         self.tail_source.clear();
         self.tail_lines.clear();
@@ -204,9 +181,38 @@ fn markdown_options(
         input.syntax_highlighting,
     );
     match mode {
-        StreamRenderMode::FinalizedStable => opts,
+        StreamRenderMode::CommittedStable => opts,
         StreamRenderMode::StreamingMutableTail => opts.streaming(),
     }
+}
+
+fn render_committed_stable_region(
+    source: &str,
+    input: StreamRenderInput<'_>,
+) -> Vec<Line<'static>> {
+    if source.is_empty() {
+        return Vec::new();
+    }
+    let started = Instant::now();
+    let lines = render_committed_assistant_markdown(
+        source,
+        CommittedAssistantMarkdownOptions {
+            styles: input.styles,
+            width: input.width,
+            syntax_highlighting: input.syntax_highlighting,
+        },
+    );
+    let elapsed = started.elapsed();
+    tracing::debug!(
+        target: "tui::streaming",
+        region = "stable",
+        source_bytes = source.len(),
+        lines = lines.len(),
+        elapsed_us = elapsed.as_micros(),
+        width = input.width,
+        "render streaming markdown region",
+    );
+    lines
 }
 
 fn render_markdown_region(
@@ -219,7 +225,6 @@ fn render_markdown_region(
         return Vec::new();
     }
     let mode = match region {
-        StreamRegion::Stable => StreamRenderMode::FinalizedStable,
         StreamRegion::MutableTail => StreamRenderMode::StreamingMutableTail,
     };
     let opts = markdown_options(input, mode);
@@ -228,15 +233,6 @@ fn render_markdown_region(
     let lines = coco_tui_markdown::render_markdown(source, opts, marker.as_ref());
     let elapsed = started.elapsed();
     match region {
-        StreamRegion::Stable => tracing::debug!(
-            target: "tui::streaming",
-            region = ?region,
-            source_bytes = source.len(),
-            lines = lines.len(),
-            elapsed_us = elapsed.as_micros(),
-            width = input.width,
-            "render streaming markdown region",
-        ),
         StreamRegion::MutableTail => tracing::trace!(
             target: "tui::streaming",
             region = ?region,

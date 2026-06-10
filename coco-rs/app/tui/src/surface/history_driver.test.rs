@@ -10,13 +10,13 @@ use uuid::Uuid;
 
 use super::*;
 use crate::state::AppState;
+use crate::state::derive::message_to_cells;
 use crate::state::derive::test_helpers;
 use crate::state::ui::StreamingState;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::surface::history_lines::HistoryReplayCachePolicy;
 use crate::surface::modal::HistorySurfaceMode;
 use crate::surface::modal::SurfaceFramePlan;
-use crate::surface::stream::CommittedStablePrefix;
 use crate::surface::stream::SurfaceStreamDriver;
 use crate::theme::Theme;
 use coco_tui_ui::display::SyntaxHighlighting;
@@ -84,6 +84,184 @@ fn driver_tail_cache_tracks_current_width_only() {
 }
 
 #[test]
+fn driver_finalizes_verified_stream_prefix_by_appending_suffix_only() {
+    let theme = Theme::default();
+    let width = 40;
+    let backend = TestBackend::new(width, 14);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 8, width, 6));
+    let mut driver = initialized_driver(&mut terminal, &theme, width);
+    let stream_append = prepared_stream_append("alpha\n\nbeta", width);
+
+    let stream_outcome = driver
+        .commit_stream_append(&mut terminal, &stream_append)
+        .expect("commit stream append");
+    assert!(matches!(
+        stream_outcome,
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+
+    let cells = vec![test_helpers::assistant_text_cell("alpha\n\nbeta")];
+    let final_outcome = driver
+        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .expect("finalize assistant");
+
+    assert!(
+        matches!(final_outcome, HistoryEmissionOutcome::Appended { .. }),
+        "{final_outcome:?}"
+    );
+    assert!(driver.pending_stream_prefix.is_none());
+    let text = plain_terminal_text(&terminal);
+    assert_eq!(text.matches("alpha").count(), 1, "{text}");
+    assert_eq!(text.matches("beta").count(), 1, "{text}");
+}
+
+#[test]
+fn driver_requires_replay_when_pending_stream_prefix_source_mismatches_final_cell() {
+    let theme = Theme::default();
+    let width = 40;
+    let backend = TestBackend::new(width, 14);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 8, width, 6));
+    let mut driver = initialized_driver(&mut terminal, &theme, width);
+    let stream_append = prepared_stream_append("alpha\n\nbeta", width);
+    driver
+        .commit_stream_append(&mut terminal, &stream_append)
+        .expect("commit stream append");
+
+    let cells = vec![test_helpers::assistant_text_cell("omega\n\nbeta")];
+    let outcome = driver
+        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .expect("finalize assistant");
+
+    assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
+    assert!(driver.pending_stream_prefix.is_some());
+    let text = plain_terminal_text(&terminal);
+    assert_eq!(text.matches("alpha").count(), 1, "{text}");
+    assert_eq!(text.matches("omega").count(), 0, "{text}");
+}
+
+#[test]
+fn driver_finalizes_stream_prefix_for_thinking_text_turn_without_replay() {
+    let theme = Theme::default();
+    let width = 40;
+    let backend = TestBackend::new(width, 14);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 8, width, 6));
+    let mut driver = initialized_driver(&mut terminal, &theme, width);
+    let stream_append = prepared_stream_append("alpha\n\nbeta", width);
+    driver
+        .commit_stream_append(&mut terminal, &stream_append)
+        .expect("commit stream append");
+
+    let cells = assistant_reasoning_text_cells("pondering deeply", "alpha\n\nbeta");
+    let outcome = driver
+        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .expect("finalize assistant");
+
+    assert!(
+        matches!(outcome, HistoryEmissionOutcome::Appended { .. }),
+        "thinking+text turn must append the verified suffix, not replay: {outcome:?}"
+    );
+    assert!(driver.pending_stream_prefix.is_none());
+    let text = plain_terminal_text(&terminal);
+    assert_eq!(text.matches("alpha").count(), 1, "{text}");
+    assert_eq!(text.matches("beta").count(), 1, "{text}");
+    let beta = text.find("beta").expect("beta visible");
+    let thinking = text.find("Thinking").expect("thinking visible");
+    assert!(
+        beta < thinking,
+        "leading thinking renders after the streamed text:\n{text}"
+    );
+}
+
+#[test]
+fn driver_stream_suffix_append_matches_full_replay_for_thinking_turn() {
+    let theme = Theme::default();
+    let width = 40;
+    let cells = assistant_reasoning_text_cells("pondering deeply", "alpha\n\nbeta");
+
+    // Incremental: header → mid-stream stable prefix → verified suffix append.
+    let backend = TestBackend::new(width, 14);
+    let mut incremental = SurfaceTerminal::new(backend).expect("terminal");
+    incremental.set_viewport_area(Rect::new(0, 8, width, 6));
+    let mut driver = initialized_driver(&mut incremental, &theme, width);
+    let stream_append = prepared_stream_append("alpha\n\nbeta", width);
+    driver
+        .commit_stream_append(&mut incremental, &stream_append)
+        .expect("commit stream append");
+    let outcome = driver
+        .emit_append_only(
+            &mut incremental,
+            header(),
+            &cells,
+            2,
+            options(&theme, width),
+        )
+        .expect("finalize assistant");
+    assert!(
+        matches!(outcome, HistoryEmissionOutcome::Appended { .. }),
+        "{outcome:?}"
+    );
+
+    // Replay: the same transcript rendered from source in one pass.
+    let backend = TestBackend::new(width, 14);
+    let mut replayed = SurfaceTerminal::new(backend).expect("terminal");
+    replayed.set_viewport_area(Rect::new(0, 8, width, 6));
+    let mut replay_driver = SurfaceHistoryDriver::default();
+    replay_driver
+        .replay_all_capped(
+            &mut replayed,
+            header(),
+            &cells,
+            2,
+            options(&theme, width),
+            HistoryReplayMode {
+                stream_active: false,
+                cause: "test_parity",
+            },
+        )
+        .expect("replay");
+
+    assert_eq!(
+        plain_buffer_lines(incremental.backend().buffer()),
+        plain_buffer_lines(replayed.backend().buffer()),
+        "incremental stream-suffix append must be row-identical to a full replay"
+    );
+}
+
+#[test]
+fn driver_requires_replay_when_thinking_run_lacks_same_message_text() {
+    let theme = Theme::default();
+    let width = 40;
+    let backend = TestBackend::new(width, 14);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 8, width, 6));
+    let mut driver = initialized_driver(&mut terminal, &theme, width);
+    let stream_append = prepared_stream_append("alpha\n\nbeta", width);
+    driver
+        .commit_stream_append(&mut terminal, &stream_append)
+        .expect("commit stream append");
+
+    // Thinking-only message followed by a DIFFERENT message's text: the
+    // presentation renders this shape unreordered, so the streamed text rows
+    // cannot be the group's leading rows — full replay required.
+    let mut cells = message_to_cells(Arc::new(coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::Reasoning(
+            coco_messages::ReasoningContent::new("solo thinking"),
+        )],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    )));
+    cells.push(test_helpers::assistant_text_cell("alpha\n\nbeta"));
+
+    let outcome = driver
+        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .expect("finalize");
+    assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
+}
+
+#[test]
 fn history_tail_cache_caches_wrapped_rows_and_trims_suffix() {
     let mut cache = HistoryTailCache::default();
     let initial_rows = render_history_rows(
@@ -111,142 +289,360 @@ fn history_tail_cache_caches_wrapped_rows_and_trims_suffix() {
 }
 
 #[test]
-fn driver_consolidates_provisional_stream_with_finalized_tail_by_line_count() {
+fn driver_defers_parallel_tool_batch_until_all_results_arrive() {
     let theme = Theme::default();
-    let width = 32;
-    let backend = TestBackend::new(width, 12);
+    let width = 96;
+    let backend = TestBackend::new(width, 40);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 8, width, 4));
-    let cells = vec![test_helpers::assistant_text_cell("alpha\n\nbeta")];
-    let mut driver = initialized_driver(&mut terminal, &theme, width);
-    let final_lines = render_finalized_history_lines(&cells, options(&theme, width));
-    let provisional_lines = final_lines[..1].to_vec();
+    terminal.set_viewport_area(Rect::new(0, 34, width, 6));
+    let mut driver = SurfaceHistoryDriver::default();
 
-    let provisional = driver
-        .emit_provisional_stream(
-            &mut terminal,
-            &provisional_append("alpha\n\n", provisional_lines, options(&theme, width)),
-        )
-        .expect("provisional append");
+    let user = test_helpers::user_text_cell(Uuid::new_v4(), "run tools");
+    let assistant = parallel_tool_use_cells();
+    let bash_result = tool_result_cell("bash-call", "Bash", "bash output");
+    let glob_result = tool_result_cell("glob-call", "Glob", "glob output");
+
+    let user_cells = vec![user.clone()];
     assert!(matches!(
-        provisional,
-        ProvisionalAppendOutcome::Written { .. }
+        driver
+            .emit_append_only(
+                &mut terminal,
+                header(),
+                &user_cells,
+                1,
+                options(&theme, width)
+            )
+            .expect("emit user"),
+        HistoryEmissionOutcome::Appended { .. }
     ));
 
-    let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
-        .expect("final append");
-
-    assert!(matches!(outcome, HistoryEmissionOutcome::Appended { .. }));
-    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
-    assert_eq!(text.matches("alpha").count(), 1, "{text}");
-    assert_eq!(text.matches("beta").count(), 1, "{text}");
-}
-
-#[test]
-fn driver_consolidates_multiple_provisional_appends_with_cumulative_line_count() {
-    let theme = Theme::default();
-    let width = 32;
-    let backend = TestBackend::new(width, 12);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 8, width, 4));
-    let cells = vec![test_helpers::assistant_text_cell("alpha\n\nbeta")];
-    let mut driver = initialized_driver(&mut terminal, &theme, width);
-    let final_lines = render_finalized_history_lines(&cells, options(&theme, width));
-
-    driver
-        .emit_provisional_stream(
+    let unresolved = cells_from_parts(&[std::slice::from_ref(&user), &assistant]);
+    let unresolved_outcome = driver
+        .emit_append_only(
             &mut terminal,
-            &provisional_append(
-                "alpha\n\n",
-                final_lines[..1].to_vec(),
-                options(&theme, width),
-            ),
+            header(),
+            &unresolved,
+            2,
+            options(&theme, width),
         )
-        .expect("first provisional append");
-    driver
-        .emit_provisional_stream(
+        .expect("emit unresolved tools");
+    assert_eq!(unresolved_outcome, HistoryEmissionOutcome::Noop);
+    let unresolved_text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(!unresolved_text.contains("Bash"), "{unresolved_text}");
+    assert!(!unresolved_text.contains("Glob"), "{unresolved_text}");
+
+    let bash_only = cells_from_parts(&[
+        std::slice::from_ref(&user),
+        &assistant,
+        std::slice::from_ref(&bash_result),
+    ]);
+    let bash_only_outcome = driver
+        .emit_append_only(
             &mut terminal,
-            &provisional_append_after(
-                "alpha\n\n",
-                "beta",
-                final_lines[1..].to_vec(),
-                options(&theme, width),
-            ),
+            header(),
+            &bash_only,
+            3,
+            options(&theme, width),
         )
-        .expect("second provisional append");
+        .expect("emit partially resolved tools");
+    assert_eq!(bash_only_outcome, HistoryEmissionOutcome::Noop);
+    let bash_only_text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(!bash_only_text.contains("Bash"), "{bash_only_text}");
+    assert!(!bash_only_text.contains("bash output"), "{bash_only_text}");
 
-    let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
-        .expect("final append");
-
-    assert_eq!(
-        outcome,
-        HistoryEmissionOutcome::Appended {
-            start: 0,
-            message_count: 1,
-            rows: 0,
-        }
+    let complete = cells_from_parts(&[&[user], &assistant, &[bash_result, glob_result]]);
+    let complete_outcome = driver
+        .emit_append_only(
+            &mut terminal,
+            header(),
+            &complete,
+            4,
+            options(&theme, width),
+        )
+        .expect("emit completed tools");
+    assert!(matches!(
+        complete_outcome,
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+    assert_in_text_order(
+        &plain_buffer_lines(terminal.backend().buffer()).join("\n"),
+        &["Bash", "bash output", "Glob", "glob output"],
     );
 }
 
 #[test]
-fn driver_finalizes_real_stream_driver_appends_without_replay_or_duplication() {
+fn driver_does_not_resolve_tool_use_from_prior_orphan_result() {
     let theme = Theme::default();
-    let width = 32;
-    let backend = TestBackend::new(width, 14);
+    let width = 96;
+    let backend = TestBackend::new(width, 40);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 10, width, 4));
-    let mut history = initialized_driver(&mut terminal, &theme, width);
-    let mut stream = SurfaceStreamDriver::default();
-    let mut state = AppState::new();
-    state.ui.theme = theme.clone();
-    state.ui.display_settings.syntax_highlighting = SyntaxHighlighting::Disabled;
-    let mut streaming = StreamingState::new();
-    streaming.append_text("alpha\n\n");
-    streaming.reveal_all();
-    state.ui.streaming = Some(streaming);
+    terminal.set_viewport_area(Rect::new(0, 34, width, 6));
+    let mut driver = SurfaceHistoryDriver::default();
 
-    let first = stream.prepare(&state, width, native_plan());
-    let first_append = first.stable_append.expect("first append");
+    let user = test_helpers::user_text_cell(Uuid::new_v4(), "run tool");
+    let orphan_result = tool_result_cell("shared-call", "Bash", "orphan output");
+    let assistant = single_tool_use_cells("shared-call", "Bash", "echo unresolved");
+    let real_result = tool_result_cell("shared-call", "Bash", "real output");
+
+    let user_cells = vec![user.clone()];
     assert!(matches!(
-        history
-            .emit_provisional_stream(&mut terminal, &first_append)
-            .expect("first provisional"),
-        ProvisionalAppendOutcome::Written { .. }
+        driver
+            .emit_append_only(
+                &mut terminal,
+                header(),
+                &user_cells,
+                1,
+                options(&theme, width)
+            )
+            .expect("emit user"),
+        HistoryEmissionOutcome::Appended { .. }
     ));
-    stream.mark_stable_appended();
 
-    let streaming = state.ui.streaming.as_mut().expect("streaming");
-    streaming.append_text("beta\n\n");
-    streaming.reveal_all();
-    let second = stream.prepare(&state, width, native_plan());
-    let second_append = second.stable_append.expect("second append");
-    assert_eq!(plain_rows(&second_append.rows), vec!["", "  beta"]);
+    let with_orphan = cells_from_parts(&[
+        std::slice::from_ref(&user),
+        std::slice::from_ref(&orphan_result),
+    ]);
     assert!(matches!(
-        history
-            .emit_provisional_stream(&mut terminal, &second_append)
-            .expect("second provisional"),
-        ProvisionalAppendOutcome::Written { .. }
+        driver
+            .emit_append_only(
+                &mut terminal,
+                header(),
+                &with_orphan,
+                2,
+                options(&theme, width),
+            )
+            .expect("emit orphan result"),
+        HistoryEmissionOutcome::Appended { .. }
     ));
-    stream.mark_stable_appended();
 
-    let cells = vec![test_helpers::assistant_text_cell("alpha\n\nbeta\n\n")];
-    let outcome = history
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
-        .expect("final append");
-
+    let before_unresolved = plain_buffer_lines(terminal.backend().buffer());
+    let unresolved = cells_from_parts(&[
+        std::slice::from_ref(&user),
+        std::slice::from_ref(&orphan_result),
+        &assistant,
+    ]);
+    let unresolved_outcome = driver
+        .emit_append_only(
+            &mut terminal,
+            header(),
+            &unresolved,
+            3,
+            options(&theme, width),
+        )
+        .expect("emit unresolved tool");
+    assert_eq!(unresolved_outcome, HistoryEmissionOutcome::Noop);
     assert_eq!(
-        outcome,
-        HistoryEmissionOutcome::Appended {
-            start: 0,
+        plain_buffer_lines(terminal.backend().buffer()),
+        before_unresolved,
+        "a prior orphan result must not commit the later unresolved tool use"
+    );
+
+    let complete = cells_from_parts(&[&[user, orphan_result], &assistant, &[real_result]]);
+    let complete_outcome = driver
+        .emit_append_only(
+            &mut terminal,
+            header(),
+            &complete,
+            4,
+            options(&theme, width),
+        )
+        .expect("emit completed tool");
+    assert!(matches!(
+        complete_outcome,
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+    let complete_text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(complete_text.contains("real output"), "{complete_text}");
+}
+
+#[test]
+fn driver_does_not_reuse_one_result_for_duplicate_call_ids() {
+    let theme = Theme::default();
+    let width = 96;
+    let backend = TestBackend::new(width, 40);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 34, width, 6));
+    let mut driver = SurfaceHistoryDriver::default();
+
+    let user = test_helpers::user_text_cell(Uuid::new_v4(), "run duplicate tools");
+    let assistant = duplicate_tool_use_cells();
+    let first_result = tool_result_cell("duplicate-call", "Bash", "first output");
+    let second_result = tool_result_cell("duplicate-call", "Bash", "second output");
+
+    let user_cells = vec![user.clone()];
+    assert!(matches!(
+        driver
+            .emit_append_only(
+                &mut terminal,
+                header(),
+                &user_cells,
+                1,
+                options(&theme, width)
+            )
+            .expect("emit user"),
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+
+    let one_result = cells_from_parts(&[
+        std::slice::from_ref(&user),
+        &assistant,
+        std::slice::from_ref(&first_result),
+    ]);
+    let one_result_outcome = driver
+        .emit_append_only(
+            &mut terminal,
+            header(),
+            &one_result,
+            2,
+            options(&theme, width),
+        )
+        .expect("emit duplicate tools with one result");
+    assert_eq!(one_result_outcome, HistoryEmissionOutcome::Noop);
+    let one_result_text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(
+        !one_result_text.contains("first output"),
+        "{one_result_text}"
+    );
+
+    let complete = cells_from_parts(&[&[user], &assistant, &[first_result, second_result]]);
+    let complete_outcome = driver
+        .emit_append_only(
+            &mut terminal,
+            header(),
+            &complete,
+            3,
+            options(&theme, width),
+        )
+        .expect("emit duplicate tools with both results");
+    assert!(matches!(
+        complete_outcome,
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+    assert_in_text_order(
+        &plain_buffer_lines(terminal.backend().buffer()).join("\n"),
+        &["first output", "second output"],
+    );
+}
+
+#[test]
+fn driver_replay_does_not_mark_unresolved_parallel_tool_batch_emitted() {
+    let theme = Theme::default();
+    let width = 96;
+    let backend = TestBackend::new(width, 40);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 34, width, 6));
+    let mut driver = SurfaceHistoryDriver::default();
+
+    let user = test_helpers::user_text_cell(Uuid::new_v4(), "run tools");
+    let assistant = parallel_tool_use_cells();
+    let bash_result = tool_result_cell("bash-call", "Bash", "bash output");
+    let glob_result = tool_result_cell("glob-call", "Glob", "glob output");
+    let unresolved = cells_from_parts(&[std::slice::from_ref(&user), &assistant]);
+
+    let replay = driver
+        .replay_all_capped(
+            &mut terminal,
+            header(),
+            &unresolved,
+            2,
+            options(&theme, width),
+            HistoryReplayMode {
+                stream_active: false,
+                cause: "test_unresolved_parallel_tools",
+            },
+        )
+        .expect("replay unresolved tools");
+    assert_eq!(
+        replay,
+        HistoryEmissionOutcome::Replayed {
             message_count: 1,
-            rows: 1,
+            rows: 3,
         }
     );
-    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
-    assert_eq!(text.matches("alpha").count(), 1, "{text}");
-    assert_eq!(text.matches("beta").count(), 1, "{text}");
+    let replay_text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(!replay_text.contains("Bash"), "{replay_text}");
+    assert!(!replay_text.contains("Glob"), "{replay_text}");
+
+    let complete = cells_from_parts(&[&[user], &assistant, &[bash_result, glob_result]]);
+    let complete_outcome = driver
+        .emit_append_only(
+            &mut terminal,
+            header(),
+            &complete,
+            3,
+            options(&theme, width),
+        )
+        .expect("emit completed tools after replay");
+    assert!(matches!(
+        complete_outcome,
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+    assert_in_text_order(
+        &plain_buffer_lines(terminal.backend().buffer()).join("\n"),
+        &["Bash", "bash output", "Glob", "glob output"],
+    );
+}
+
+#[test]
+fn driver_replay_does_not_mark_duplicate_call_batch_emitted_until_fully_paired() {
+    let theme = Theme::default();
+    let width = 96;
+    let backend = TestBackend::new(width, 40);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 34, width, 6));
+    let mut driver = SurfaceHistoryDriver::default();
+
+    let user = test_helpers::user_text_cell(Uuid::new_v4(), "run duplicate tools");
+    let assistant = duplicate_tool_use_cells();
+    let first_result = tool_result_cell("duplicate-call", "Bash", "first output");
+    let second_result = tool_result_cell("duplicate-call", "Bash", "second output");
+    let one_result = cells_from_parts(&[
+        std::slice::from_ref(&user),
+        &assistant,
+        std::slice::from_ref(&first_result),
+    ]);
+
+    let replay = driver
+        .replay_all_capped(
+            &mut terminal,
+            header(),
+            &one_result,
+            2,
+            options(&theme, width),
+            HistoryReplayMode {
+                stream_active: false,
+                cause: "test_duplicate_call_one_result",
+            },
+        )
+        .expect("replay duplicate tools with one result");
+    assert_eq!(
+        replay,
+        HistoryEmissionOutcome::Replayed {
+            message_count: 1,
+            rows: 3,
+        }
+    );
+    let replay_text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(!replay_text.contains("first output"), "{replay_text}");
+
+    let complete = cells_from_parts(&[&[user], &assistant, &[first_result, second_result]]);
+    let complete_outcome = driver
+        .emit_append_only(
+            &mut terminal,
+            header(),
+            &complete,
+            3,
+            options(&theme, width),
+        )
+        .expect("emit duplicate tools with both results after replay");
+    assert!(matches!(
+        complete_outcome,
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+    assert_in_text_order(
+        &plain_buffer_lines(terminal.backend().buffer()).join("\n"),
+        &["first output", "second output"],
+    );
 }
 
 #[test]
@@ -258,16 +654,6 @@ fn driver_consolidates_reasoning_text_message_without_replay() {
     terminal.set_viewport_area(Rect::new(0, 12, width, 4));
     let mut history = initialized_driver(&mut terminal, &theme, width);
     let final_cells = assistant_reasoning_text_cells("Need to inspect files.", "alpha\n\nbeta");
-    let provisional_cells = vec![test_helpers::assistant_text_cell("alpha\n\n")];
-    let provisional_lines =
-        render_finalized_history_lines(&provisional_cells, options(&theme, width));
-
-    history
-        .emit_provisional_stream(
-            &mut terminal,
-            &provisional_append("alpha\n\n", provisional_lines, options(&theme, width)),
-        )
-        .expect("provisional append");
 
     let outcome = history
         .emit_append_only(
@@ -281,7 +667,7 @@ fn driver_consolidates_reasoning_text_message_without_replay() {
 
     assert!(
         matches!(outcome, HistoryEmissionOutcome::Appended { .. }),
-        "reasoning+text finalize must append residual lines, got {outcome:?}"
+        "reasoning+text finalize must append once, got {outcome:?}"
     );
     let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
@@ -292,7 +678,7 @@ fn driver_consolidates_reasoning_text_message_without_replay() {
     let thinking = text.find("Thinking").expect("thinking rendered");
     assert!(
         alpha < thinking,
-        "native history must remain prefix-compatible with streamed text:\n{text}"
+        "native committed history keeps finalized assistant text first:\n{text}"
     );
 }
 
@@ -320,128 +706,34 @@ fn finalized_native_history_renders_text_before_leading_thinking() {
 }
 
 #[test]
-fn driver_replays_when_provisional_render_key_mismatches() {
+fn finalized_native_history_renders_text_before_thinking_when_tools_follow() {
     let theme = Theme::default();
-    let backend = TestBackend::new(32, 12);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 8, 32, 4));
-    let cells = vec![test_helpers::assistant_text_cell("alpha")];
-    let mut driver = initialized_driver(&mut terminal, &theme, 32);
-    let final_lines = render_finalized_history_lines(&cells, options(&theme, 32));
+    let message = coco_messages::create_assistant_message(
+        vec![
+            coco_messages::AssistantContent::Reasoning(coco_messages::ReasoningContent::new(
+                "Need to inspect files.",
+            )),
+            coco_messages::AssistantContent::Text(coco_messages::TextContent::new("answer")),
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "bash-call",
+                "Bash",
+                serde_json::json!({ "command": "echo hi" }),
+            )),
+        ],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    let cells = message_to_cells(Arc::new(message));
 
-    driver
-        .emit_provisional_stream(
-            &mut terminal,
-            &provisional_append("alpha", final_lines, options(&theme, 32)),
-        )
-        .expect("provisional append");
+    let lines = render_finalized_history_lines(&cells, options(&theme, 48));
+    let plain = plain_lines(&lines).join("\n");
 
-    let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, 24))
-        .expect("final append");
-
-    assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
-}
-
-#[test]
-fn driver_replays_when_provisional_source_prefix_mismatches() {
-    let theme = Theme::default();
-    let width = 32;
-    let backend = TestBackend::new(width, 12);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 8, width, 4));
-    let mut driver = initialized_driver(&mut terminal, &theme, width);
-    let provisional_cells = vec![test_helpers::assistant_text_cell("alpha")];
-    let final_cells = vec![test_helpers::assistant_text_cell("beta")];
-    let final_lines = render_finalized_history_lines(&provisional_cells, options(&theme, width));
-
-    driver
-        .emit_provisional_stream(
-            &mut terminal,
-            &provisional_append("alpha", final_lines, options(&theme, width)),
-        )
-        .expect("provisional append");
-
-    let outcome = driver
-        .emit_append_only(
-            &mut terminal,
-            header(),
-            &final_cells,
-            2,
-            options(&theme, width),
-        )
-        .expect("final append");
-
-    assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
-}
-
-#[test]
-fn driver_replays_when_provisional_line_count_exceeds_finalized_tail() {
-    let theme = Theme::default();
-    let width = 32;
-    let backend = TestBackend::new(width, 12);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 8, width, 4));
-    let cells = vec![test_helpers::assistant_text_cell("alpha")];
-    let mut driver = initialized_driver(&mut terminal, &theme, width);
-    let final_lines = render_finalized_history_lines(&cells, options(&theme, width));
-
-    driver
-        .emit_provisional_stream(
-            &mut terminal,
-            &provisional_append("alpha", final_lines, options(&theme, width)),
-        )
-        .expect("provisional append");
-    driver.provisional.as_mut().expect("ledger").line_count = usize::MAX;
-
-    let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
-        .expect("final append");
-
-    assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
-}
-
-#[test]
-fn driver_uses_logical_line_count_when_provisional_line_wraps() {
-    let theme = Theme::default();
-    let width = 12;
-    let backend = TestBackend::new(width, 16);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 12, width, 4));
-    let cells = vec![test_helpers::assistant_text_cell(
-        "abcdefghijklmnopqrstuvwxyz",
-    )];
-    let mut driver = initialized_driver(&mut terminal, &theme, width);
-    let final_lines = render_finalized_history_lines(&cells, options(&theme, width));
-    let logical_lines = final_lines.len();
-
-    let provisional = driver
-        .emit_provisional_stream(
-            &mut terminal,
-            &provisional_append(
-                "abcdefghijklmnopqrstuvwxyz",
-                final_lines,
-                options(&theme, width),
-            ),
-        )
-        .expect("provisional append");
-
-    let ProvisionalAppendOutcome::Written { rows } = provisional else {
-        panic!("expected written provisional append, got {provisional:?}");
-    };
-    assert!(usize::from(rows) > logical_lines);
-
-    let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
-        .expect("final append");
-
-    assert_eq!(
-        outcome,
-        HistoryEmissionOutcome::Appended {
-            start: 0,
-            message_count: 1,
-            rows: 0,
-        }
+    let answer = plain.find("answer").expect("answer rendered");
+    let thinking = plain.find("Thinking").expect("thinking rendered");
+    let tool = plain.find("Bash").expect("tool rendered");
+    assert!(
+        answer < thinking && thinking < tool,
+        "leading thinking renders after text even when tool calls follow:\n{plain}"
     );
 }
 
@@ -659,14 +951,6 @@ fn header() -> Vec<Line<'static>> {
     vec![Line::from("header")]
 }
 
-fn native_plan() -> SurfaceFramePlan {
-    SurfaceFramePlan {
-        modal_placement: None,
-        history_surface: HistorySurfaceMode::NativeScrollback,
-        attention_requested: false,
-    }
-}
-
 fn initialized_driver(
     terminal: &mut SurfaceTerminal<TestBackend>,
     theme: &Theme,
@@ -679,34 +963,26 @@ fn initialized_driver(
     driver
 }
 
-fn provisional_append(
+fn prepared_stream_append(
     source: &str,
-    append_lines: Vec<Line<'static>>,
-    options: HistoryLineRenderOptions<'_>,
-) -> PreparedProvisionalAppend {
-    provisional_append_after("", source, append_lines, options)
-}
-
-fn provisional_append_after(
-    prior_source: &str,
-    source: &str,
-    append_lines: Vec<Line<'static>>,
-    options: HistoryLineRenderOptions<'_>,
-) -> PreparedProvisionalAppend {
-    let mut prefix_source = prior_source.to_string();
-    prefix_source.push_str(source);
-    let prefix_cells = vec![test_helpers::assistant_text_cell(&prefix_source)];
-    let line_count = render_finalized_history_lines(&prefix_cells, options).len();
-    PreparedProvisionalAppend {
-        committed_prefix: CommittedStablePrefix {
-            source: prefix_source,
-            line_count,
-            render_key: finalized_render_key(options),
+    width: u16,
+) -> crate::surface::stream::PreparedStreamAppend {
+    let mut state = AppState::new();
+    let mut streaming = StreamingState::new();
+    streaming.append_text(source);
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    state.ui.display_settings.syntax_highlighting = SyntaxHighlighting::Disabled;
+    let prepared = SurfaceStreamDriver::default().prepare(
+        &state,
+        width,
+        SurfaceFramePlan {
+            modal_placement: None,
+            history_surface: HistorySurfaceMode::NativeScrollback,
+            attention_requested: false,
         },
-        line_count: append_lines.len(),
-        rows: render_history_rows(append_lines, options.width),
-        render_elapsed: std::time::Duration::default(),
-    }
+    );
+    prepared.stream_append.expect("stable stream append")
 }
 
 fn assistant_reasoning_text_cells(reasoning: &str, text: &str) -> Vec<RenderedCell> {
@@ -727,6 +1003,85 @@ fn assistant_reasoning_text_cells(reasoning: &str, text: &str) -> Vec<RenderedCe
         },
     );
     crate::state::derive::message_to_cells(Arc::new(message))
+}
+
+fn parallel_tool_use_cells() -> Vec<RenderedCell> {
+    let message = coco_messages::create_assistant_message(
+        vec![
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "bash-call",
+                "Bash",
+                serde_json::json!({ "command": "echo bash" }),
+            )),
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "glob-call",
+                "Glob",
+                serde_json::json!({ "pattern": "*.rs" }),
+            )),
+        ],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    message_to_cells(Arc::new(message))
+}
+
+fn single_tool_use_cells(call_id: &str, tool_name: &str, command: &str) -> Vec<RenderedCell> {
+    let message = coco_messages::create_assistant_message(
+        vec![coco_messages::AssistantContent::ToolCall(
+            coco_messages::ToolCallContent::new(
+                call_id,
+                tool_name,
+                serde_json::json!({ "command": command }),
+            ),
+        )],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    message_to_cells(Arc::new(message))
+}
+
+fn duplicate_tool_use_cells() -> Vec<RenderedCell> {
+    let message = coco_messages::create_assistant_message(
+        vec![
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "duplicate-call",
+                "Bash",
+                serde_json::json!({ "command": "echo first" }),
+            )),
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "duplicate-call",
+                "Bash",
+                serde_json::json!({ "command": "echo second" }),
+            )),
+        ],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    message_to_cells(Arc::new(message))
+}
+
+fn tool_result_cell(call_id: &str, tool_name: &str, output: &str) -> RenderedCell {
+    let tool_id = tool_name.parse().expect("known tool id");
+    let message =
+        coco_messages::create_tool_result_message(call_id, tool_name, tool_id, output, false);
+    message_to_cells(Arc::new(message))
+        .into_iter()
+        .next()
+        .expect("tool result yields a cell")
+}
+
+fn cells_from_parts(parts: &[&[RenderedCell]]) -> Vec<RenderedCell> {
+    parts.iter().flat_map(|part| part.iter().cloned()).collect()
+}
+
+fn assert_in_text_order(text: &str, needles: &[&str]) {
+    let mut cursor = 0;
+    for needle in needles {
+        let Some(offset) = text[cursor..].find(needle) else {
+            panic!("missing {needle:?} after byte {cursor}:\n{text}");
+        };
+        cursor += offset + needle.len();
+    }
 }
 
 fn options(theme: &Theme, width: u16) -> HistoryLineRenderOptions<'_> {
@@ -751,6 +1106,12 @@ fn plain_buffer_lines(buffer: &Buffer) -> Vec<String> {
         .collect()
 }
 
+fn plain_terminal_text(terminal: &SurfaceTerminal<TestBackend>) -> String {
+    let mut lines = plain_buffer_lines(terminal.backend().scrollback());
+    lines.extend(plain_buffer_lines(terminal.backend().buffer()));
+    lines.join("\n")
+}
+
 fn plain_lines(lines: &[Line<'_>]) -> Vec<String> {
     lines
         .iter()
@@ -759,19 +1120,6 @@ fn plain_lines(lines: &[Line<'_>]) -> Vec<String> {
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect()
-        })
-        .collect()
-}
-
-fn plain_rows(rows: &HistoryRows) -> Vec<String> {
-    let buffer = rows.buffer();
-    (0..buffer.area.height)
-        .map(|y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_string()
         })
         .collect()
 }

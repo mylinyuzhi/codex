@@ -7,16 +7,14 @@ use crate::FrameLayout;
 use crate::state::AppState;
 use crate::surface::history_driver::HistoryReplayMode;
 use crate::surface::history_driver::PreparedFinalizedHistory;
-use crate::surface::history_driver::ProvisionalAppendOutcome;
 use crate::surface::history_driver::SurfaceHistoryDriver;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::surface::history_lines::HistoryLineRenderOptions;
 #[cfg(any(test, feature = "testing"))]
 use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
-use crate::surface::stream::PreparedProvisionalAppend;
+use crate::surface::stream::PreparedStreamAppend;
 use crate::surface::stream::SurfaceStreamDriver;
-use crate::surface::viewport::build_live_tail_lines;
 use crate::surface::viewport::render_interactive_viewport;
 use crate::widgets::TranscriptLayoutIndex;
 #[cfg(any(test, feature = "testing"))]
@@ -59,13 +57,31 @@ pub(crate) struct NativeSurfaceDrawOutcome {
 pub(crate) struct NativeSurfaceFramePlan {
     pub(crate) live_lines: Option<Vec<Line<'static>>>,
     pub(crate) finalized_history: PreparedFinalizedHistory,
-    pub(crate) provisional_history: Option<PreparedProvisionalAppend>,
+    pub(crate) stream_append: Option<PreparedStreamAppend>,
+    pub(crate) stream_render_key_invalidated: bool,
     pub(crate) history_tail_reveal_rows: u16,
+    pub(crate) prepare_stats: NativePrepareStats,
+}
+
+/// Sub-stage timings collected by [`NativeSurfaceController::prepare_native_frame`]
+/// so the `prepare_native_frame` perf stage can attribute its cost between the
+/// live-stream prepare (markdown projection + watermark/fingerprint work) and
+/// the finalized-history prepare (cell-line build + row render).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct NativePrepareStats {
+    pub(crate) stream_prepare: Duration,
+    pub(crate) history_prepare: Duration,
 }
 
 impl NativeSurfaceFramePlan {
     pub(crate) fn guaranteed_append_rows(&self) -> u16 {
-        self.finalized_history.expected_rows()
+        let stream_rows = self
+            .stream_append
+            .as_ref()
+            .map_or(0, PreparedStreamAppend::expected_rows);
+        self.finalized_history
+            .expected_rows()
+            .saturating_add(stream_rows)
     }
 }
 
@@ -77,11 +93,18 @@ impl NativeSurfaceController {
         plan: SurfaceFramePlan,
         now: Instant,
     ) -> NativeSurfaceFramePlan {
+        let stream_prepare_started = Instant::now();
         let prepared_live = (width > 0).then(|| self.stream.prepare(state, width, plan));
-        let live_lines = prepared_live
-            .as_ref()
-            .map(|prepared| prepared.lines.clone());
-        let provisional_history = prepared_live.and_then(|prepared| prepared.stable_append);
+        let (live_lines, stream_append, stream_render_key_invalidated) = match prepared_live {
+            Some(prepared) => (
+                Some(prepared.lines),
+                prepared.stream_append,
+                prepared.render_key_invalidated,
+            ),
+            None => (None, None, false),
+        };
+        let stream_prepare = stream_prepare_started.elapsed();
+        let history_prepare_started = Instant::now();
         let options = history_options(state, width);
         let session_header = session_header_lines(state, width);
         let cells = state.session.transcript.cells();
@@ -91,7 +114,9 @@ impl NativeSurfaceController {
             .history_display
             .as_ref()
             .is_some_and(|previous| *previous != history_display);
-        let finalized_history = if plan.native_history_enabled()
+        let finalized_history = if stream_render_key_invalidated {
+            PreparedFinalizedHistory::ReplayRequired
+        } else if plan.native_history_enabled()
             && !history_display_changed
             && !self.history.replay_due(now)
         {
@@ -100,11 +125,17 @@ impl NativeSurfaceController {
         } else {
             PreparedFinalizedHistory::ReplayRequired
         };
+        let history_prepare = history_prepare_started.elapsed();
         NativeSurfaceFramePlan {
             live_lines,
             finalized_history,
-            provisional_history,
+            stream_append,
+            stream_render_key_invalidated,
             history_tail_reveal_rows: self.history.tail_reveal_rows(width),
+            prepare_stats: NativePrepareStats {
+                stream_prepare,
+                history_prepare,
+            },
         }
     }
 
@@ -237,6 +268,8 @@ impl NativeSurfaceController {
         let perf_config = state.ui.display_settings.performance;
         let mut native_frame = native_frame;
         let mut precomputed_live = native_frame.live_lines.take();
+        let mut prepared_stream_append = native_frame.stream_append.take();
+        let stream_render_key_invalidated = native_frame.stream_render_key_invalidated;
         self.history.note_viewport(width, stream_active);
 
         let options = history_options(state, width);
@@ -249,7 +282,7 @@ impl NativeSurfaceController {
         let cells = state.session.transcript.cells();
         let transcript_revision = state.session.transcript.revision();
         let history_start = perf_config.enabled.then(Instant::now);
-        let mut history = if !plan.native_history_enabled() {
+        let history = if !plan.native_history_enabled() {
             HistoryEmissionOutcome::Noop
         } else {
             let history_display_changed = self
@@ -257,9 +290,14 @@ impl NativeSurfaceController {
                 .replace(history_display)
                 .is_some_and(|previous| previous != history_display);
             let needs_reflow_replay = self.history.replay_due(now);
-            if history_display_changed || needs_reflow_replay {
+            if stream_render_key_invalidated {
+                self.history.clear_pending_stream_prefix();
+            }
+            if history_display_changed || needs_reflow_replay || stream_render_key_invalidated {
                 let cause = if history_display_changed {
                     "history_display_changed"
+                } else if stream_render_key_invalidated {
+                    "stream_render_key_changed"
                 } else {
                     "reflow_debounce_due"
                 };
@@ -285,11 +323,10 @@ impl NativeSurfaceController {
                         cause,
                     },
                 )?;
-                if stream_active {
-                    self.stream.forget_stable_appended();
+                if stream_active && !stream_render_key_invalidated {
                     let prepared = self.stream.prepare(state, width, plan);
                     precomputed_live = Some(prepared.lines);
-                    native_frame.provisional_history = prepared.stable_append;
+                    prepared_stream_append = prepared.stream_append;
                 }
                 outcome
             } else {
@@ -311,10 +348,9 @@ impl NativeSurfaceController {
                         },
                     )?;
                     if stream_active {
-                        self.stream.forget_stable_appended();
                         let prepared = self.stream.prepare(state, width, plan);
                         precomputed_live = Some(prepared.lines);
-                        native_frame.provisional_history = prepared.stable_append;
+                        prepared_stream_append = prepared.stream_append;
                     }
                     outcome
                 } else {
@@ -322,59 +358,13 @@ impl NativeSurfaceController {
                 }
             }
         };
-        let mut finalized_history_stats = history_insert_stats_for(terminal, &history);
-        let mut provisional_stats = HistoryInsertStats::default();
+        let finalized_history_stats = history_insert_stats_for(terminal, &history);
         if plan.native_history_enabled()
-            && let Some(stable_append) = native_frame.provisional_history.as_ref()
+            && let Some(stream_append) = prepared_stream_append.as_ref()
         {
-            match self
-                .history
-                .emit_provisional_stream(terminal, stable_append)?
-            {
-                ProvisionalAppendOutcome::Written { .. } => {
-                    provisional_stats = terminal.last_history_insert_stats();
-                    self.stream.mark_stable_appended();
-                }
-                ProvisionalAppendOutcome::SkippedNoRows => {
-                    precomputed_live = Some(build_live_tail_lines(
-                        state,
-                        UiStyles::new(&state.ui.theme),
-                        width,
-                        plan,
-                    ));
-                }
-                ProvisionalAppendOutcome::ReplayRequired => {
-                    history = self.history.replay_all_capped(
-                        terminal,
-                        session_header(),
-                        cells,
-                        transcript_revision,
-                        options,
-                        HistoryReplayMode {
-                            stream_active,
-                            cause: "provisional_stream_repair",
-                        },
-                    )?;
-                    finalized_history_stats = history_insert_stats_for(terminal, &history);
-                    match self
-                        .history
-                        .emit_provisional_stream(terminal, stable_append)?
-                    {
-                        ProvisionalAppendOutcome::Written { .. } => {
-                            provisional_stats = terminal.last_history_insert_stats();
-                            self.stream.mark_stable_appended();
-                        }
-                        ProvisionalAppendOutcome::SkippedNoRows => {
-                            precomputed_live = Some(build_live_tail_lines(
-                                state,
-                                UiStyles::new(&state.ui.theme),
-                                width,
-                                plan,
-                            ));
-                        }
-                        ProvisionalAppendOutcome::ReplayRequired => {}
-                    }
-                }
+            let stream_outcome = self.history.commit_stream_append(terminal, stream_append)?;
+            if matches!(stream_outcome, HistoryEmissionOutcome::Appended { .. }) {
+                self.stream.mark_stream_append_committed(stream_append);
             }
         }
         let history_elapsed = history_start.map(|start| start.elapsed());
@@ -396,20 +386,11 @@ impl NativeSurfaceController {
                 bytes_written = finalized_history_stats.bytes_written,
                 invalidated = finalized_history_stats.invalidated,
                 build_us = crate::perf::duration_us(finalized_history_stats.build_elapsed),
+                lines_build_us =
+                    crate::perf::duration_us(native_frame.finalized_history.lines_build_elapsed()),
                 render_us = crate::perf::duration_us(native_frame.finalized_history.render_elapsed()),
                 draw_us = crate::perf::duration_us(finalized_history_stats.draw_elapsed),
                 flush_us = crate::perf::duration_us(finalized_history_stats.flush_elapsed),
-                provisional_rows = provisional_stats.wrapped_rows,
-                provisional_bytes = provisional_stats.bytes_written,
-                provisional_build_us = crate::perf::duration_us(provisional_stats.build_elapsed),
-                provisional_render_us = crate::perf::duration_us(
-                    native_frame
-                        .provisional_history
-                        .as_ref()
-                        .map_or(Duration::default(), |append| append.render_elapsed),
-                ),
-                provisional_draw_us = crate::perf::duration_us(provisional_stats.draw_elapsed),
-                provisional_flush_us = crate::perf::duration_us(provisional_stats.flush_elapsed),
                 tail_cache_rows = tail_cache.rows,
                 tail_cache_width = tail_cache.width,
                 tail_cache_bytes_estimate = tail_cache.bytes_estimate,

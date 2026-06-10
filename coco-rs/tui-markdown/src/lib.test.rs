@@ -46,6 +46,8 @@ fn progressive_sources() -> &'static [&'static str] {
         "# Heading\nparagraph\n\n",
         "Title\n---\n\nbody\n\n",
         "- one\n- two\n\nnext\n\n",
+        "- alpha\n\n- beta\n\n- gamma\n\nnext\n\n",
+        "intro\n\n1. first\n\n2. second\n\n---\n\nafter\n\n",
         "- outer\n  - inner\n  continuation\n\n",
         "> quoted\n> continuation\n\noutside\n\n",
         "lazy\ncontinuation\n\nnext\n\n",
@@ -306,6 +308,57 @@ fn stable_prefix_holds_back_markdown_table_region() {
 fn stable_prefix_holds_back_open_code_fence() {
     let source = "intro\n```rust\nfn main() {}\n";
     assert_eq!(stable_prefix_end(source), 0);
+}
+
+#[test]
+fn stable_prefix_holds_back_trailing_open_list() {
+    // A later sibling item would flip the list tight→loose and rewrite the
+    // already-rendered items, so a still-growing trailing list never commits.
+    assert_eq!(stable_prefix_end("intro\n\n- alpha\n\n"), "intro\n\n".len());
+    assert_eq!(
+        stable_prefix_end("intro\n\n- alpha\n\n- beta\n\n"),
+        "intro\n\n".len()
+    );
+    assert_eq!(
+        stable_prefix_end("intro\n\n1. first\n\n"),
+        "intro\n\n".len()
+    );
+}
+
+#[test]
+fn stable_prefix_releases_list_interrupted_by_paragraph() {
+    // An unindented paragraph after a blank line ends the list — the whole
+    // region becomes committable at the next boundary.
+    let source = "- alpha\n\n- beta\n\nclosing paragraph\n\n";
+    assert_eq!(stable_prefix_end(source), source.len());
+    // The unterminated tail can prove the interruption too ('c' can never
+    // grow into a list marker)…
+    assert_eq!(stable_prefix_end("- alpha\n\nclosing"), "- alpha\n\n".len());
+    // …but an ambiguous starter could still become a sibling item.
+    assert_eq!(stable_prefix_end("- alpha\n\n- "), 0);
+    assert_eq!(stable_prefix_end("- alpha\n\n1"), 0);
+}
+
+#[test]
+fn stable_prefix_releases_list_interrupted_by_heading_or_break() {
+    assert_eq!(
+        stable_prefix_end("- alpha\n\n---\n\nbody"),
+        "- alpha\n\n---\n\n".len()
+    );
+    assert_eq!(
+        stable_prefix_end("- alpha\n# heading\nbody\n\n"),
+        "- alpha\n# heading\nbody\n\n".len()
+    );
+}
+
+#[test]
+fn stable_prefix_keeps_lazy_continuation_in_list_hold() {
+    // "lazy" continues the item's paragraph (no blank between) — the list is
+    // still open, so nothing past the intro commits.
+    assert_eq!(
+        stable_prefix_end("intro\n\n- alpha\nlazy\n\n"),
+        "intro\n\n".len()
+    );
 }
 
 #[test]

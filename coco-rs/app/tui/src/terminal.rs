@@ -35,6 +35,7 @@ use crate::surface::controller::NativeSurfaceFramePlan;
 use crate::surface::modal::ModalSurfacePlacement;
 use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
+use crate::surface::stream::PreparedStreamAppend;
 use crate::surface::viewport::interactive_viewport_desired_height;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
@@ -375,6 +376,7 @@ where
             self.clear_surface_after_resume()?;
         }
 
+        let plan_started = std::time::Instant::now();
         let size = self.terminal.size()?;
         self.terminal.sync_screen_size(size);
         let now = std::time::Instant::now();
@@ -385,26 +387,36 @@ where
             size.width,
             NATIVE_VIEWPORT_MAX_HEIGHT,
         );
+        let plan_elapsed = plan_started.elapsed();
         // Build the interactive live tail exactly once per frame. The sizing
         // pass (`sync_surface_area` → `interactive_viewport_desired_height`)
         // and the paint pass (`render_live_viewport`) both consume it, so we
         // compute it here and thread it through instead of rebuilding twice.
         // This is pure CPU work (no terminal writes) and therefore stays
         // OUTSIDE the synchronized-update window opened below.
-        let live_start = perf_config.enabled.then(std::time::Instant::now);
+        let prepare_started = std::time::Instant::now();
         let native_frame = self
             .surface
             .prepare_native_frame(state, size.width, plan, now);
-        let live_elapsed = live_start.map(|start| start.elapsed());
-        if let Some(elapsed) = live_elapsed
-            && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
-        {
+        let prepare_elapsed = prepare_started.elapsed();
+        let stage_elapsed = plan_elapsed + prepare_elapsed;
+        if crate::perf::should_log_stage(perf_config, frame_index, stage_elapsed) {
             tracing::debug!(
                 target: crate::perf::TARGET,
                 frame_index,
-                stage = "build_live_tail_lines",
-                duration_us = crate::perf::duration_us(elapsed),
+                stage = "prepare_native_frame",
+                duration_us = crate::perf::duration_us(stage_elapsed),
+                plan_us = crate::perf::duration_us(plan_elapsed),
+                stream_prepare_us =
+                    crate::perf::duration_us(native_frame.prepare_stats.stream_prepare),
+                history_prepare_us =
+                    crate::perf::duration_us(native_frame.prepare_stats.history_prepare),
                 lines = native_frame.live_lines.as_ref().map_or(0, Vec::len),
+                history_append_rows = native_frame.finalized_history.expected_rows(),
+                stream_append_rows = native_frame
+                    .stream_append
+                    .as_ref()
+                    .map_or(0, PreparedStreamAppend::expected_rows),
                 width = size.width,
                 "tui frame stage completed",
             );
@@ -417,7 +429,21 @@ where
         // and the viewport draw; the single ESU flush presents the composed
         // frame. ESU is emitted even when the inner draw errors so the terminal
         // never stays stuck in deferred-present.
+        // Timed separately: this is a small stdout write, so a slow reading
+        // here means terminal backpressure (the kernel pipe is full and the
+        // emulator hasn't drained prior frames), not CPU work.
+        let bsu_started = std::time::Instant::now();
         self.terminal.begin_synchronized_update()?;
+        let bsu_elapsed = bsu_started.elapsed();
+        if crate::perf::should_log_stage(perf_config, frame_index, bsu_elapsed) {
+            tracing::debug!(
+                target: crate::perf::TARGET,
+                frame_index,
+                stage = "begin_sync_update",
+                duration_us = crate::perf::duration_us(bsu_elapsed),
+                "tui frame stage completed",
+            );
+        }
         let drawn = self.draw_native_frame(state, plan, size, native_frame, frame_index);
         let present_start = perf_config.enabled.then(std::time::Instant::now);
         let ended = self.terminal.end_synchronized_update();

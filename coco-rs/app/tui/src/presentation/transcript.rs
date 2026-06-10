@@ -161,24 +161,6 @@ pub(crate) fn transcript_projection(
     transcript_projection_with_assistant_order(cells, options, AssistantPresentationOrder::Source)
 }
 
-/// Projection used by native scrollback append/finalize paths.
-///
-/// During streaming, assistant text is appended before the finalized reasoning
-/// cell exists in transcript order. For the simple finalized shape
-/// `thinking* + text`, native history keeps text first so finalization can
-/// append only the residual thinking tail instead of replaying already-written
-/// text. General chat/transcript presentation stays source-order.
-pub(crate) fn native_history_projection(
-    cells: &[RenderedCell],
-    options: TranscriptProjectionOptions,
-) -> TranscriptProjection {
-    transcript_projection_with_assistant_order(
-        cells,
-        options,
-        AssistantPresentationOrder::TextBeforeLeadingThinking,
-    )
-}
-
 pub(crate) fn transcript_projection_with_assistant_order(
     cells: &[RenderedCell],
     options: TranscriptProjectionOptions,
@@ -304,6 +286,16 @@ pub(crate) fn transcript_presentation_with_assistant_order<'cells, 'state>(
     TranscriptPresentation { cells }
 }
 
+/// Reorder an assistant message's leading thinking cells AFTER its first
+/// text cell: `[thinking…, text, rest…]` renders as `[text, thinking…]` and
+/// resumes the main projection loop at `rest` (tool calls etc.).
+///
+/// The rule is deliberately independent of what FOLLOWS the text cell, so a
+/// message renders identically whether it is projected mid-turn (committable
+/// slice ends at the text because its tool uses are still unresolved) or
+/// after its tool results paired — and so the Policy B streamed text rows,
+/// which always enter native scrollback first, are the leading rows of the
+/// group under both incremental append and full replay.
 fn push_text_first_assistant_group(
     cells: &[RenderedCell],
     start: usize,
@@ -314,24 +306,15 @@ fn push_text_first_assistant_group(
     }
 
     let uuid = cells[start].message_uuid;
-    let mut end = start;
-    while end < cells.len() && cells[end].message_uuid == uuid {
-        end += 1;
-    }
-
     let mut first_non_thinking = start;
-    while first_non_thinking < end && is_assistant_thinking(&cells[first_non_thinking]) {
+    while first_non_thinking < cells.len()
+        && cells[first_non_thinking].message_uuid == uuid
+        && is_assistant_thinking(&cells[first_non_thinking])
+    {
         first_non_thinking += 1;
     }
-    if first_non_thinking == end
-        || !matches!(
-            cells[first_non_thinking].kind,
-            CellKind::AssistantText { .. }
-        )
-    {
-        return None;
-    }
-    if first_non_thinking + 1 != end {
+    let text = cells.get(first_non_thinking)?;
+    if text.message_uuid != uuid || !matches!(text.kind, CellKind::AssistantText { .. }) {
         return None;
     }
 
@@ -341,7 +324,7 @@ fn push_text_first_assistant_group(
     for index in start..first_non_thinking {
         out.push(TranscriptCell::Cell { index });
     }
-    Some(end)
+    Some(first_non_thinking + 1)
 }
 
 pub(crate) fn active_transcript_cell<'a>(

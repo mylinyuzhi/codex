@@ -10,14 +10,10 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
-use crate::presentation::transcript::TranscriptCell;
-use crate::presentation::transcript::TranscriptProjectionOptions;
-use crate::presentation::transcript::native_history_projection;
 use crate::state::transcript_view::CellKind;
 use crate::state::transcript_view::RenderedCell;
 use crate::streaming::render_controller::StreamRenderInput;
 use crate::streaming::render_controller::StreamRenderKey;
-use crate::streaming::render_controller::StreamRenderMode;
 use crate::surface::history_emitter::HistoryEmissionOutcome;
 use crate::surface::history_emitter::HistoryEmissionPlan;
 use crate::surface::history_emitter::HistoryEmissionTracker;
@@ -28,8 +24,10 @@ use crate::surface::history_lines::render_finalized_history_lines;
 use crate::surface::history_lines::render_replay_history_lines_cached;
 use crate::surface::line_fingerprint::RenderedLineFingerprint;
 use crate::surface::line_fingerprint::fingerprint_lines;
-use crate::surface::stream::CommittedStablePrefix;
-use crate::surface::stream::PreparedProvisionalAppend;
+use crate::surface::stream::PendingStreamPrefix;
+use crate::surface::stream::PreparedStreamAppend;
+use crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions;
+use crate::widgets::chat::render_assistant::render_committed_assistant_markdown;
 use coco_tui_ui::engine::history_insert::HistoryRows;
 use coco_tui_ui::engine::history_insert::HistoryRowsSlice;
 use coco_tui_ui::engine::history_insert::render_history_rows;
@@ -49,7 +47,7 @@ pub(crate) struct SurfaceHistoryDriver {
     emitted_history_rows: u16,
     replay_cache: HistoryReplayCache,
     tail_cache: HistoryTailCache,
-    provisional: Option<ProvisionalStreamLedger>,
+    pending_stream_prefix: Option<PendingStreamPrefix>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -76,12 +74,18 @@ pub(crate) enum PreparedFinalizedHistory {
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedHistoryAppend {
     pub(crate) start: usize,
+    pub(crate) end: usize,
     pub(crate) message_count: usize,
     pub(crate) transcript_revision: u64,
     pub(crate) header_fingerprint: Vec<RenderedLineFingerprint>,
     pub(crate) emitted_header: bool,
     pub(crate) rows: HistoryRows,
+    /// Time spent building the candidate `Line`s (cell rendering — markdown,
+    /// diffs, syntax highlighting, stream-prefix verification).
+    pub(crate) lines_build_elapsed: Duration,
+    /// Time spent rendering those lines into terminal rows.
     pub(crate) render_elapsed: Duration,
+    clear_pending_stream_prefix: bool,
 }
 
 impl PreparedFinalizedHistory {
@@ -98,63 +102,16 @@ impl PreparedFinalizedHistory {
             Self::Noop { .. } | Self::FastNoop { .. } | Self::ReplayRequired => Duration::default(),
         }
     }
+
+    pub(crate) fn lines_build_elapsed(&self) -> Duration {
+        match self {
+            Self::Append(append) => append.lines_build_elapsed,
+            Self::Noop { .. } | Self::FastNoop { .. } | Self::ReplayRequired => Duration::default(),
+        }
+    }
 }
 
 impl SurfaceHistoryDriver {
-    pub(crate) fn emit_provisional_stream<B>(
-        &mut self,
-        terminal: &mut SurfaceTerminal<B>,
-        append: &PreparedProvisionalAppend,
-    ) -> Result<ProvisionalAppendOutcome, B::Error>
-    where
-        B: SurfaceBackend,
-    {
-        if append.rows.is_empty() {
-            return Ok(ProvisionalAppendOutcome::SkippedNoRows);
-        }
-        if let Some(existing) = self.provisional.as_ref()
-            && let Some(failure) = existing.compatibility_failure(append)
-        {
-            tracing::debug!(
-                target: "tui::surface::replay",
-                cause = "provisional_stream_render_key_or_prefix_mismatch",
-                guard = failure.as_str(),
-                existing_prefix_source_bytes = existing.source.len(),
-                append_prefix_source_bytes = append.committed_prefix.source.len(),
-                existing_line_count = existing.line_count,
-                append_line_count = append.committed_prefix.line_count,
-                ?existing.render_key,
-                ?append.committed_prefix.render_key,
-                "history full replay required",
-            );
-            return Ok(ProvisionalAppendOutcome::ReplayRequired);
-        }
-        let append_line_count = append.line_count;
-        let prefix = append.committed_prefix.clone();
-        let ledger_line_count = prefix.line_count;
-        let prefix_source_bytes = prefix.source.len();
-        let render_key = prefix.render_key;
-        let width = terminal.viewport_area().width;
-        let rows = terminal.insert_history_rows(&append.rows)?;
-        if rows == 0 {
-            return Ok(ProvisionalAppendOutcome::SkippedNoRows);
-        }
-        self.emitted_history_rows = self.emitted_history_rows.saturating_add(rows);
-        self.tail_cache.extend_from_rows(width, &append.rows);
-        self.provisional = Some(prefix);
-        tracing::debug!(
-            target: "tui::surface::append",
-            rows,
-            append_line_count,
-            ledger_line_count,
-            prefix_source_bytes,
-            render_elapsed_us = append.render_elapsed.as_micros(),
-            ?render_key,
-            "provisional stream stable append",
-        );
-        Ok(ProvisionalAppendOutcome::Written { rows })
-    }
-
     pub(crate) fn note_viewport(
         &mut self,
         width: u16,
@@ -181,6 +138,8 @@ impl SurfaceHistoryDriver {
         transcript_revision: u64,
         options: HistoryLineRenderOptions<'_>,
     ) -> PreparedFinalizedHistory {
+        let end = committable_prefix_len(cells);
+        let committable_cells = &cells[..end];
         let header_fingerprint = fingerprint_lines(&session_header);
         if self
             .header_fingerprint
@@ -190,7 +149,8 @@ impl SurfaceHistoryDriver {
             tracing::debug!(
                 target: "tui::surface::replay",
                 cause = "header_fingerprint_changed",
-                cells = cells.len(),
+                cells = committable_cells.len(),
+                cells_total = cells.len(),
                 emitted_messages = self.emitter.emitted_count(),
                 "history full replay required",
             );
@@ -204,7 +164,7 @@ impl SurfaceHistoryDriver {
             };
         }
 
-        let plan = self.emitter.plan(cells);
+        let plan = self.emitter.plan(committable_cells);
         if matches!(plan, HistoryEmissionPlan::Noop) && !should_emit_header {
             return PreparedFinalizedHistory::Noop {
                 transcript_revision,
@@ -214,7 +174,8 @@ impl SurfaceHistoryDriver {
             tracing::debug!(
                 target: "tui::surface::replay",
                 cause = "emitter_uuid_prefix_mismatch",
-                cells = cells.len(),
+                cells = committable_cells.len(),
+                cells_total = cells.len(),
                 emitted_messages = self.emitter.emitted_count(),
                 "history full replay required",
             );
@@ -223,27 +184,33 @@ impl SurfaceHistoryDriver {
 
         let start = match plan {
             HistoryEmissionPlan::Append { start } => start,
-            HistoryEmissionPlan::Noop | HistoryEmissionPlan::ReplayRequired => cells.len(),
+            HistoryEmissionPlan::Noop | HistoryEmissionPlan::ReplayRequired => end,
         };
+        let lines_build_started = Instant::now();
         let Some(lines) = self.append_candidate_lines_from_plan(
             session_header,
             cells,
             start,
+            end,
             should_emit_header,
             options,
         ) else {
             return PreparedFinalizedHistory::ReplayRequired;
         };
+        let lines_build_elapsed = lines_build_started.elapsed();
         let render_started = Instant::now();
         let rows = render_history_rows(lines, options.width);
         PreparedFinalizedHistory::Append(PreparedHistoryAppend {
             start,
-            message_count: cells.len() - start,
+            end,
+            message_count: end - start,
             transcript_revision,
             header_fingerprint,
             emitted_header: should_emit_header,
             rows,
+            lines_build_elapsed,
             render_elapsed: render_started.elapsed(),
+            clear_pending_stream_prefix: self.pending_stream_prefix.is_some(),
         })
     }
 
@@ -292,25 +259,25 @@ impl SurfaceHistoryDriver {
             }
             PreparedFinalizedHistory::ReplayRequired => Ok(HistoryEmissionOutcome::ReplayRequired),
             PreparedFinalizedHistory::Append(append) => {
-                self.provisional = None;
                 let width = terminal.viewport_area().width;
                 let rows = terminal.insert_history_rows(&append.rows)?;
                 self.emitted_history_rows = self.emitted_history_rows.saturating_add(rows);
                 self.tail_cache.extend_from_rows(width, &append.rows);
                 self.header_fingerprint = Some(append.header_fingerprint.clone());
-                if append.emitted_header {
-                    self.emitter.mark_emitted_through(cells, cells.len());
-                } else {
-                    self.emitter.mark_appended_from(cells, append.start);
+                self.emitter.mark_emitted_through(cells, append.end);
+                if append.clear_pending_stream_prefix {
+                    self.pending_stream_prefix = None;
                 }
                 self.emitted_transcript_revision = Some(append.transcript_revision);
                 tracing::trace!(
                     target: "tui::surface::append",
                     start = append.start,
+                    end = append.end,
                     cells_total = cells.len(),
                     message_count = append.message_count,
                     rows,
                     emitted_header = append.emitted_header,
+                    lines_build_elapsed_us = append.lines_build_elapsed.as_micros(),
                     render_elapsed_us = append.render_elapsed.as_micros(),
                     "history incremental append",
                 );
@@ -321,6 +288,40 @@ impl SurfaceHistoryDriver {
                 })
             }
         }
+    }
+
+    pub(crate) fn commit_stream_append<B>(
+        &mut self,
+        terminal: &mut SurfaceTerminal<B>,
+        append: &PreparedStreamAppend,
+    ) -> Result<HistoryEmissionOutcome, B::Error>
+    where
+        B: SurfaceBackend,
+    {
+        let width = terminal.viewport_area().width;
+        let rows = terminal.insert_history_rows(&append.rows)?;
+        if rows == 0 {
+            return Ok(HistoryEmissionOutcome::Noop);
+        }
+        self.emitted_history_rows = self.emitted_history_rows.saturating_add(rows);
+        self.tail_cache.extend_from_rows(width, &append.rows);
+        self.pending_stream_prefix = Some(append.prefix.clone());
+        tracing::trace!(
+            target: "tui::surface::append",
+            source_prefix_len = append.prefix.source_prefix_len,
+            line_prefix_len = append.prefix.line_prefix_len,
+            rows,
+            "history stream prefix append",
+        );
+        Ok(HistoryEmissionOutcome::Appended {
+            start: 0,
+            message_count: 0,
+            rows,
+        })
+    }
+
+    pub(crate) fn clear_pending_stream_prefix(&mut self) {
+        self.pending_stream_prefix = None;
     }
 
     #[cfg(test)]
@@ -351,9 +352,11 @@ impl SurfaceHistoryDriver {
     where
         B: SurfaceBackend,
     {
+        let end = committable_prefix_len(cells);
+        let committable_cells = &cells[..end];
         let started = Instant::now();
         let replay = render_replay_history_lines_cached(
-            cells,
+            committable_cells,
             options,
             DEFAULT_MAX_REFLOW_ROWS,
             &mut self.replay_cache,
@@ -363,7 +366,7 @@ impl SurfaceHistoryDriver {
         let outcome = self.replay_rows(
             terminal,
             session_header,
-            cells,
+            committable_cells,
             transcript_revision,
             &replay.rows,
         )?;
@@ -385,7 +388,8 @@ impl SurfaceHistoryDriver {
             target: "tui::surface::replay",
             cause = mode.cause,
             render_elapsed_ms = render_elapsed.as_millis(),
-            cells = cells.len(),
+            cells = committable_cells.len(),
+            cells_total = cells.len(),
             cells_rendered = replay.stats.cells_rendered,
             finalized_render_calls = replay.stats.finalized_render_calls,
             lines = line_count,
@@ -418,7 +422,7 @@ impl SurfaceHistoryDriver {
         self.reflow.clear();
         self.replay_cache.clear();
         self.tail_cache.clear();
-        self.provisional = None;
+        self.pending_stream_prefix = None;
     }
 
     fn replay_rows<B>(
@@ -467,7 +471,7 @@ impl SurfaceHistoryDriver {
         self.header_fingerprint = Some(header_fingerprint);
         self.emitter.mark_emitted_through(cells, cells.len());
         self.emitted_transcript_revision = Some(transcript_revision);
-        self.provisional = None;
+        self.pending_stream_prefix = None;
         tracing::debug!(
             target: "tui::surface::replay",
             message_count = cells.len(),
@@ -485,51 +489,230 @@ impl SurfaceHistoryDriver {
         session_header: Vec<Line<'static>>,
         cells: &[RenderedCell],
         start: usize,
+        end: usize,
         should_emit_header: bool,
         options: HistoryLineRenderOptions<'_>,
     ) -> Option<Vec<Line<'static>>> {
+        if let Some(pending) = self.pending_stream_prefix.as_ref() {
+            return self.append_candidate_lines_after_stream_prefix(
+                cells,
+                start,
+                end,
+                should_emit_header,
+                options,
+                pending,
+            );
+        }
         let mut lines = Vec::new();
         if should_emit_header {
             lines.extend(session_header);
         }
-        if let Some(provisional) = self.provisional.as_ref() {
-            match consolidated_final_tail_lines(cells, start, provisional, options) {
-                Ok(consolidated) => {
-                    tracing::debug!(
-                        target: "tui::surface::append",
-                        provisional_line_count = provisional.line_count,
-                        finalized_line_count = consolidated.final_line_count,
-                        residual_line_count = consolidated.lines.len(),
-                        prefix_source_bytes = provisional.source.len(),
-                        render_elapsed_us = consolidated.render_elapsed_us,
-                        ?provisional.render_key,
-                        "provisional stream finalized tail append",
-                    );
-                    lines.extend(consolidated.lines);
-                }
-                Err(failure) => {
-                    failure.log(
-                        provisional,
-                        cells.len(),
-                        start,
-                        self.emitter.emitted_count(),
-                        options,
-                    );
-                    tracing::debug!(
-                        target: "tui::surface::replay",
-                        cause = "provisional_stream_guard_mismatch",
-                        cells = cells.len(),
-                        emitted_messages = self.emitter.emitted_count(),
-                        "history full replay required",
-                    );
-                    return None;
-                }
-            }
-        } else {
-            lines.extend(render_finalized_history_lines(&cells[start..], options));
+        lines.extend(render_finalized_history_lines(&cells[start..end], options));
+        Some(lines)
+    }
+
+    fn append_candidate_lines_after_stream_prefix(
+        &self,
+        cells: &[RenderedCell],
+        start: usize,
+        end: usize,
+        should_emit_header: bool,
+        options: HistoryLineRenderOptions<'_>,
+        pending: &PendingStreamPrefix,
+    ) -> Option<Vec<Line<'static>>> {
+        if should_emit_header {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_without_header",
+                "history full replay required",
+            );
+            return None;
+        }
+        // Mirror `push_text_first_assistant_group`: a message's leading
+        // thinking cells render AFTER its text under the native presentation,
+        // so the streamed text rows already in scrollback are the leading rows
+        // of the group. Skip the same-message leading thinking run to find the
+        // text cell the pending prefix anchors to; the thinking cells join the
+        // suffix below, after the remaining text rows.
+        let first = cells.get(start)?;
+        let group_uuid = first.message_uuid;
+        let mut text_idx = start;
+        while text_idx < end
+            && cells[text_idx].message_uuid == group_uuid
+            && matches!(
+                cells[text_idx].kind,
+                CellKind::AssistantThinking { .. } | CellKind::AssistantRedactedThinking
+            )
+        {
+            text_idx += 1;
+        }
+        let Some(text_cell) = cells.get(text_idx) else {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_next_cell_not_assistant_text",
+                start,
+                text_idx,
+                "history full replay required",
+            );
+            return None;
+        };
+        let CellKind::AssistantText { text, .. } = &text_cell.kind else {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_next_cell_not_assistant_text",
+                start,
+                text_idx,
+                "history full replay required",
+            );
+            return None;
+        };
+        // A thinking run whose text belongs to a different message is a
+        // thinking-only group — the presentation renders it unreordered, so
+        // the streamed text rows cannot be the group's leading rows.
+        if text_idx > start && text_cell.message_uuid != group_uuid {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_thinking_without_same_message_text",
+                start,
+                text_idx,
+                "history full replay required",
+            );
+            return None;
+        }
+        if !text.starts_with(&pending.source_prefix)
+            || pending.source_prefix_len != pending.source_prefix.len()
+        {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_source_mismatch",
+                start,
+                pending_source_prefix_len = pending.source_prefix_len,
+                text_len = text.len(),
+                "history full replay required",
+            );
+            return None;
+        }
+        let render_key = StreamRenderKey::committed(StreamRenderInput {
+            source: "",
+            styles: options.styles,
+            width: options.width,
+            syntax_highlighting: options.syntax_highlighting,
+        });
+        if render_key != pending.render_key {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_render_key_mismatch",
+                "history full replay required",
+            );
+            return None;
+        }
+
+        let markdown_started = Instant::now();
+        let assistant_lines = render_committed_assistant_markdown(
+            text,
+            CommittedAssistantMarkdownOptions {
+                styles: options.styles,
+                width: options.width,
+                syntax_highlighting: options.syntax_highlighting,
+            },
+        );
+        let markdown_elapsed = markdown_started.elapsed();
+        if pending.line_prefix_len > assistant_lines.len() {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_line_len_exceeds_final",
+                pending_line_prefix_len = pending.line_prefix_len,
+                final_lines = assistant_lines.len(),
+                "history full replay required",
+            );
+            return None;
+        }
+        let fingerprint_started = Instant::now();
+        let fingerprint_matches = fingerprint_lines(&assistant_lines[..pending.line_prefix_len])
+            == pending.line_fingerprints;
+        tracing::debug!(
+            target: "tui::streaming",
+            text_bytes = text.len(),
+            final_lines = assistant_lines.len(),
+            prefix_lines = pending.line_prefix_len,
+            markdown_us = markdown_elapsed.as_micros(),
+            fingerprint_us = fingerprint_started.elapsed().as_micros(),
+            matched = fingerprint_matches,
+            "stream prefix finalize verification",
+        );
+        if !fingerprint_matches {
+            tracing::debug!(
+                target: "tui::surface::replay",
+                cause = "pending_stream_prefix_rows_mismatch",
+                "history full replay required",
+            );
+            return None;
+        }
+
+        let mut lines = assistant_lines[pending.line_prefix_len..].to_vec();
+        lines.push(Line::default());
+        // Presentation order: the message's leading thinking cells render
+        // after its text, then everything past the text cell (tool calls,
+        // following messages) renders normally.
+        if start < text_idx {
+            lines.extend(render_finalized_history_lines(
+                &cells[start..text_idx],
+                options,
+            ));
+        }
+        if text_idx + 1 < end {
+            lines.extend(render_finalized_history_lines(
+                &cells[text_idx + 1..end],
+                options,
+            ));
         }
         Some(lines)
     }
+}
+
+fn committable_prefix_len(cells: &[RenderedCell]) -> usize {
+    let mut consumed_results = vec![false; cells.len()];
+    for (index, cell) in cells.iter().enumerate() {
+        if let CellKind::ToolUse { call_id, .. } = &cell.kind {
+            let Some(result_index) =
+                find_forward_unconsumed_tool_result(cells, &consumed_results, index + 1, call_id)
+            else {
+                return engine_message_start(cells, index);
+            };
+            consumed_results[result_index] = true;
+        }
+    }
+    cells.len()
+}
+
+fn find_forward_unconsumed_tool_result(
+    cells: &[RenderedCell],
+    consumed_results: &[bool],
+    start: usize,
+    call_id: &str,
+) -> Option<usize> {
+    for (index, cell) in cells.iter().enumerate().skip(start) {
+        if consumed_results[index] {
+            continue;
+        }
+        if let CellKind::ToolResult {
+            call_id: result_call_id,
+        } = &cell.kind
+            && result_call_id == call_id
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn engine_message_start(cells: &[RenderedCell], index: usize) -> usize {
+    let uuid = cells[index].message_uuid;
+    let mut start = index;
+    while start > 0 && cells[start - 1].message_uuid == uuid {
+        start -= 1;
+    }
+    start
 }
 
 #[derive(Debug, Default, Clone)]
@@ -625,287 +808,6 @@ impl HistoryTailCache {
             width: self.width,
             bytes_estimate: rows.estimated_bytes(),
         }
-    }
-}
-
-type ProvisionalStreamLedger = CommittedStablePrefix;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProvisionalAppendOutcome {
-    Written { rows: u16 },
-    SkippedNoRows,
-    ReplayRequired,
-}
-
-impl ProvisionalStreamLedger {
-    fn compatibility_failure(
-        &self,
-        append: &PreparedProvisionalAppend,
-    ) -> Option<ProvisionalAppendCompatibilityFailure> {
-        if self.render_key != append.committed_prefix.render_key {
-            return Some(ProvisionalAppendCompatibilityFailure::RenderKeyMismatch);
-        }
-        if append.committed_prefix.line_count < self.line_count {
-            return Some(ProvisionalAppendCompatibilityFailure::LineCountRegression);
-        }
-        if !append.committed_prefix.source.starts_with(&self.source) {
-            return Some(ProvisionalAppendCompatibilityFailure::SourcePrefixMismatch);
-        }
-        None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProvisionalAppendCompatibilityFailure {
-    RenderKeyMismatch,
-    LineCountRegression,
-    SourcePrefixMismatch,
-}
-
-impl ProvisionalAppendCompatibilityFailure {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::RenderKeyMismatch => "render_key_mismatch",
-            Self::LineCountRegression => "line_count_regression",
-            Self::SourcePrefixMismatch => "source_prefix_mismatch",
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ConsolidatedFinalTail {
-    lines: Vec<Line<'static>>,
-    final_line_count: usize,
-    render_elapsed_us: u128,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProvisionalFinalizationGuard {
-    MissingFinalCell,
-    PresentationPrefixIncompatible,
-    RenderKeyMismatch {
-        finalized_render_key: StreamRenderKey,
-    },
-    SourcePrefixMismatch {
-        common_prefix_bytes: usize,
-        prefix_next_byte: DivergenceByteKind,
-        final_next_byte: DivergenceByteKind,
-        prefix_trailing_newline_bytes: usize,
-        final_trailing_newline_bytes: usize,
-    },
-    LineCountExceedsFinalized {
-        final_line_count: usize,
-        render_elapsed_us: u128,
-    },
-}
-
-impl ProvisionalFinalizationGuard {
-    fn log(
-        self,
-        provisional: &ProvisionalStreamLedger,
-        cells_len: usize,
-        start: usize,
-        emitted_messages: usize,
-        options: HistoryLineRenderOptions<'_>,
-    ) {
-        match self {
-            Self::MissingFinalCell => tracing::debug!(
-                target: "tui::surface::replay",
-                guard = "missing_final_cell",
-                cells = cells_len,
-                start,
-                emitted_messages,
-                provisional_line_count = provisional.line_count,
-                prefix_source_bytes = provisional.source.len(),
-                ?provisional.render_key,
-                "provisional stream finalization guard failed",
-            ),
-            Self::PresentationPrefixIncompatible => tracing::debug!(
-                target: "tui::surface::replay",
-                guard = "presentation_prefix_incompatible",
-                cells = cells_len,
-                start,
-                emitted_messages,
-                provisional_line_count = provisional.line_count,
-                prefix_source_bytes = provisional.source.len(),
-                ?provisional.render_key,
-                "provisional stream finalization guard failed",
-            ),
-            Self::RenderKeyMismatch {
-                finalized_render_key,
-            } => tracing::debug!(
-                target: "tui::surface::replay",
-                guard = "render_key_mismatch",
-                cells = cells_len,
-                start,
-                emitted_messages,
-                provisional_line_count = provisional.line_count,
-                prefix_source_bytes = provisional.source.len(),
-                width = options.width,
-                syntax_highlighting = options.syntax_highlighting.is_enabled(),
-                theme_hash = options.styles.theme_hash(),
-                ?provisional.render_key,
-                ?finalized_render_key,
-                "provisional stream finalization guard failed",
-            ),
-            Self::SourcePrefixMismatch {
-                common_prefix_bytes,
-                prefix_next_byte,
-                final_next_byte,
-                prefix_trailing_newline_bytes,
-                final_trailing_newline_bytes,
-            } => tracing::debug!(
-                target: "tui::surface::replay",
-                guard = "source_prefix_mismatch",
-                cells = cells_len,
-                start,
-                emitted_messages,
-                provisional_line_count = provisional.line_count,
-                prefix_source_bytes = provisional.source.len(),
-                common_prefix_bytes,
-                prefix_remainder_bytes = provisional
-                    .source
-                    .len()
-                    .saturating_sub(common_prefix_bytes),
-                ?prefix_next_byte,
-                ?final_next_byte,
-                prefix_trailing_newline_bytes,
-                final_trailing_newline_bytes,
-                ?provisional.render_key,
-                "provisional stream finalization guard failed",
-            ),
-            Self::LineCountExceedsFinalized {
-                final_line_count,
-                render_elapsed_us,
-            } => tracing::debug!(
-                target: "tui::surface::replay",
-                guard = "line_count_exceeds_finalized",
-                cells = cells_len,
-                start,
-                emitted_messages,
-                provisional_line_count = provisional.line_count,
-                final_line_count,
-                prefix_source_bytes = provisional.source.len(),
-                render_elapsed_us,
-                ?provisional.render_key,
-                "provisional stream finalization guard failed",
-            ),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DivergenceByteKind {
-    Eof,
-    Newline,
-    AsciiWhitespace,
-    AsciiAlphanumeric,
-    AsciiPunctuation,
-    NonAscii,
-}
-
-fn consolidated_final_tail_lines(
-    cells: &[RenderedCell],
-    start: usize,
-    provisional: &ProvisionalStreamLedger,
-    options: HistoryLineRenderOptions<'_>,
-) -> Result<ConsolidatedFinalTail, ProvisionalFinalizationGuard> {
-    let projected = native_history_projection(
-        &cells[start..],
-        TranscriptProjectionOptions {
-            show_system_reminders: options.show_system_reminders,
-            show_compact_internals: false,
-        },
-    );
-    let first_segment = projected
-        .cells
-        .first()
-        .ok_or(ProvisionalFinalizationGuard::MissingFinalCell)?;
-    let TranscriptCell::Cell { index } = first_segment else {
-        return Err(ProvisionalFinalizationGuard::PresentationPrefixIncompatible);
-    };
-    let first = cells
-        .get(start + index)
-        .ok_or(ProvisionalFinalizationGuard::MissingFinalCell)?;
-    let CellKind::AssistantText { text, .. } = &first.kind else {
-        return Err(ProvisionalFinalizationGuard::PresentationPrefixIncompatible);
-    };
-    let finalized_render_key = finalized_render_key(options);
-    if provisional.render_key != finalized_render_key {
-        return Err(ProvisionalFinalizationGuard::RenderKeyMismatch {
-            finalized_render_key,
-        });
-    }
-    if !text.starts_with(&provisional.source) {
-        let common_prefix_bytes = common_prefix_bytes(&provisional.source, text);
-        return Err(ProvisionalFinalizationGuard::SourcePrefixMismatch {
-            common_prefix_bytes,
-            prefix_next_byte: divergence_byte_kind(&provisional.source, common_prefix_bytes),
-            final_next_byte: divergence_byte_kind(text, common_prefix_bytes),
-            prefix_trailing_newline_bytes: trailing_newline_bytes(&provisional.source),
-            final_trailing_newline_bytes: trailing_newline_bytes(text),
-        });
-    }
-
-    let render_started = Instant::now();
-    let final_tail_lines = render_finalized_history_lines(&cells[start..], options);
-    let render_elapsed_us = render_started.elapsed().as_micros();
-    if final_tail_lines.len() < provisional.line_count {
-        return Err(ProvisionalFinalizationGuard::LineCountExceedsFinalized {
-            final_line_count: final_tail_lines.len(),
-            render_elapsed_us,
-        });
-    }
-    let final_line_count = final_tail_lines.len();
-    Ok(ConsolidatedFinalTail {
-        lines: final_tail_lines
-            .into_iter()
-            .skip(provisional.line_count)
-            .collect(),
-        final_line_count,
-        render_elapsed_us,
-    })
-}
-
-fn finalized_render_key(options: HistoryLineRenderOptions<'_>) -> StreamRenderKey {
-    StreamRenderKey::new(
-        StreamRenderInput {
-            source: "",
-            styles: options.styles,
-            width: options.width,
-            syntax_highlighting: options.syntax_highlighting,
-        },
-        StreamRenderMode::FinalizedStable,
-    )
-}
-
-fn common_prefix_bytes(left: &str, right: &str) -> usize {
-    left.as_bytes()
-        .iter()
-        .zip(right.as_bytes())
-        .take_while(|(left, right)| left == right)
-        .count()
-}
-
-fn trailing_newline_bytes(source: &str) -> usize {
-    source
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|&&byte| matches!(byte, b'\n' | b'\r'))
-        .count()
-}
-
-fn divergence_byte_kind(source: &str, index: usize) -> DivergenceByteKind {
-    let Some(byte) = source.as_bytes().get(index).copied() else {
-        return DivergenceByteKind::Eof;
-    };
-    match byte {
-        b'\n' | b'\r' => DivergenceByteKind::Newline,
-        b'\t' | b' ' => DivergenceByteKind::AsciiWhitespace,
-        b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' => DivergenceByteKind::AsciiAlphanumeric,
-        0x00..=0x7f => DivergenceByteKind::AsciiPunctuation,
-        0x80..=0xff => DivergenceByteKind::NonAscii,
     }
 }
 

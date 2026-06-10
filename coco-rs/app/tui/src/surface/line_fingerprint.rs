@@ -1,35 +1,31 @@
-use ratatui::layout::Alignment;
-use ratatui::style::Style;
+use std::hash::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
+
 use ratatui::text::Line;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RenderedLineFingerprint {
-    style: Style,
-    alignment: Option<Alignment>,
-    spans: Vec<RenderedSpanFingerprint>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RenderedSpanFingerprint {
-    content: String,
-    style: Style,
-}
+/// Content hash of one rendered line (line style + alignment + span
+/// content/styles).
+///
+/// Used for cheap equality between rows already inserted into native
+/// scrollback and a later re-render of the same source (session header,
+/// Policy B streamed stable prefix). Process-local only — never persisted —
+/// so `DefaultHasher`'s lack of cross-run stability is fine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RenderedLineFingerprint(u64);
 
 pub(crate) fn fingerprint_lines(lines: &[Line<'_>]) -> Vec<RenderedLineFingerprint> {
     lines.iter().map(fingerprint_line).collect()
 }
 
 fn fingerprint_line(line: &Line<'_>) -> RenderedLineFingerprint {
-    RenderedLineFingerprint {
-        style: line.style,
-        alignment: line.alignment,
-        spans: line
-            .spans
-            .iter()
-            .map(|span| RenderedSpanFingerprint {
-                content: span.content.to_string(),
-                style: span.style,
-            })
-            .collect(),
+    let mut hasher = DefaultHasher::new();
+    line.style.hash(&mut hasher);
+    line.alignment.hash(&mut hasher);
+    line.spans.len().hash(&mut hasher);
+    for span in &line.spans {
+        span.content.as_ref().hash(&mut hasher);
+        span.style.hash(&mut hasher);
     }
+    RenderedLineFingerprint(hasher.finish())
 }
