@@ -238,25 +238,26 @@ impl ToolContextFactory {
             live_mode = *mode.read().await;
         }
 
-        let plans_dir = self.config_home.as_ref().map(|ch| {
-            coco_context::resolve_plans_directory(
-                ch,
-                self.config.project_dir.as_deref(),
-                self.config.plans_directory.as_deref(),
-            )
-        });
-        let session_plan_file = self.config_home.as_ref().map(|ch| {
-            let dir = coco_context::resolve_plans_directory(
-                ch,
-                self.config.project_dir.as_deref(),
-                self.config.plans_directory.as_deref(),
-            );
-            coco_context::get_plan_file_path(
-                &self.config.session_id,
-                &dir,
-                self.config.agent_id.as_deref(),
-            )
-        });
+        // Plan-mode paths resolve unconditionally: fall back to the global
+        // config home when this engine wasn't handed one, so plan-file
+        // reads/writes are exempt in every runtime (TUI / subagent / SDK /
+        // headless). Mirrors TS `getPlansDirectory()`, which always resolves a
+        // default rather than going dark when no per-engine home is set.
+        let config_home = self
+            .config_home
+            .clone()
+            .unwrap_or_else(coco_config::global_config::config_home);
+        let plans_directory = coco_context::resolve_plans_directory(
+            &config_home,
+            self.config.project_dir.as_deref(),
+            self.config.plans_directory.as_deref(),
+        );
+        let session_plan_file = Some(coco_context::get_plan_file_path(
+            &self.config.session_id,
+            &plans_directory,
+            self.config.agent_id.as_deref(),
+        ));
+        let plans_dir = Some(plans_directory);
 
         let main_loop_model = overrides
             .current_model_id

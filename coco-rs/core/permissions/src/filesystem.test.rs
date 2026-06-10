@@ -484,15 +484,54 @@ fn test_dangerous_removal_windows_drive() {
 
 #[test]
 fn test_editable_plan_files() {
+    // Plan-file writes are keyed on the resolved session plan file (cocohome
+    // by default), NOT a `.claude/plans` substring. The session file and its
+    // `-agent-*` variant are allowed; a different slug and a non-`.md` are not.
+    let plan = std::path::PathBuf::from("/home/u/.coco/plans/typed-conjuring-fox.md");
+    let ctx = InternalPathContext {
+        cwd: "/project",
+        session_plan_file: Some(&plan),
+    };
     assert!(is_editable_internal_path(
-        "/project/.claude/plans/fix-bug.md",
-        "/project",
-        None
+        "/home/u/.coco/plans/typed-conjuring-fox.md",
+        &ctx
+    ));
+    assert!(is_editable_internal_path(
+        "/home/u/.coco/plans/typed-conjuring-fox-agent-7.md",
+        &ctx
     ));
     assert!(!is_editable_internal_path(
-        "/project/.claude/plans/fix-bug.txt",
-        "/project",
-        None
+        "/home/u/.coco/plans/some-other-slug.md",
+        &ctx
+    ));
+    assert!(!is_editable_internal_path(
+        "/home/u/.coco/plans/typed-conjuring-fox.txt",
+        &ctx
+    ));
+
+    // Without a resolved session plan file there is no plan carve-out.
+    let none_ctx = InternalPathContext {
+        cwd: "/project",
+        session_plan_file: None,
+    };
+    assert!(!is_editable_internal_path(
+        "/home/u/.coco/plans/typed-conjuring-fox.md",
+        &none_ctx
+    ));
+}
+
+#[test]
+fn test_editable_plan_file_traversal_blocked() {
+    // A `..` escape that string-prefixes the slug must NOT slip through:
+    // resolve_path collapses the traversal before the prefix check.
+    let plan = std::path::PathBuf::from("/home/u/.coco/plans/typed-conjuring-fox.md");
+    let ctx = InternalPathContext {
+        cwd: "/project",
+        session_plan_file: Some(&plan),
+    };
+    assert!(!is_editable_internal_path(
+        "/home/u/.coco/plans/typed-conjuring-fox/../../../etc/passwd.md",
+        &ctx
     ));
 }
 
@@ -500,16 +539,32 @@ fn test_editable_plan_files() {
 
 #[test]
 fn test_readable_plan_files() {
+    let plan = std::path::PathBuf::from("/home/u/.coco/plans/design-slug.md");
+    let ctx = InternalPathContext {
+        cwd: "/project",
+        session_plan_file: Some(&plan),
+    };
     assert!(is_readable_internal_path(
-        "/project/.claude/plans/design.md",
-        "/project"
+        "/home/u/.coco/plans/design-slug.md",
+        &ctx
+    ));
+    assert!(!is_readable_internal_path(
+        "/home/u/.coco/plans/unrelated.md",
+        &ctx
     ));
 }
 
+// ── DANGEROUS_DIRECTORIES (agent config homes) ──
+
 #[test]
-fn test_readable_project_temp() {
-    assert!(is_readable_internal_path(
-        "/tmp/claude-1000/project/session/data.json",
-        "/project"
+fn test_agent_config_dirs_are_dangerous() {
+    // Coco guards its own config home plus the claude/codex dirs it reads for
+    // compat. `.claude/worktrees/` is the one structural exemption.
+    assert!(is_dangerous_file_path("/project/.coco/settings.json"));
+    assert!(is_dangerous_file_path("/project/.codex/config.toml"));
+    assert!(is_dangerous_file_path("/project/.claude/settings.json"));
+    assert!(!is_dangerous_file_path(
+        "/repo/.claude/worktrees/agent-x/src/main.rs"
     ));
+    assert!(!is_dangerous_file_path("/project/src/main.rs"));
 }

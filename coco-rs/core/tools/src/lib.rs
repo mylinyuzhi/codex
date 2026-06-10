@@ -323,6 +323,28 @@ pub(crate) fn check_write_root_fence(
     if ctx.allowed_write_roots.is_empty() {
         return None;
     }
+    // Coco-managed internal paths (the session plan file, agent memory) are
+    // always writable regardless of the fork write fence — they're the files a
+    // plan-mode / memory sub-agent legitimately must write, and they live
+    // outside any worktree root. Mirror the exemption the write permission check
+    // applies (`is_editable_internal_path`) so apply_patch / Write / Edit /
+    // NotebookEdit behave identically inside a sandboxed sub-agent.
+    let fence_cwd = ctx
+        .cwd_override
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let fence_cwd = fence_cwd.to_string_lossy();
+    let internal_ctx = coco_permissions::filesystem::InternalPathContext {
+        cwd: &fence_cwd,
+        session_plan_file: ctx.permission_context.session_plan_file.as_deref(),
+    };
+    if coco_permissions::filesystem::is_editable_internal_path(
+        &path.to_string_lossy(),
+        &internal_ctx,
+    ) {
+        return None;
+    }
     // Resolve relative paths against cwd_override (worktree-isolated
     // subagents) or the process cwd. Without this step, a relative
     // path like `notes.md` would lexically-normalize to itself, never

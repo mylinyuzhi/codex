@@ -1,6 +1,7 @@
 use super::bash_advanced::ASSISTANT_BLOCKING_BUDGET_MS;
 use super::shell_render::strip_leading_blank_lines;
 use coco_messages::ToolResult;
+use coco_permissions::InternalPathContext;
 use coco_permissions::has_shell_expansion;
 use coco_permissions::is_editable_internal_path;
 use coco_permissions::is_path_within_allowed_dirs;
@@ -501,6 +502,10 @@ impl Tool for BashTool {
         // the dangerous-removal gate from the catastrophic-system-path list to
         // any out-of-tree write (e.g. `cp secret.txt /opt/x`, `mv x ~/.ssh/`).
         // Reads are intentionally not fenced here — see `extract_write_path_targets`.
+        let internal_ctx = InternalPathContext {
+            cwd: &cwd,
+            session_plan_file: ctx.permission_context.session_plan_file.as_deref(),
+        };
         for target in coco_shell::extract_write_path_targets(command) {
             if has_shell_expansion(&target) {
                 return coco_types::ToolCheckResult::Ask {
@@ -511,7 +516,7 @@ impl Tool for BashTool {
                 };
             }
             let allowed = is_path_within_allowed_dirs(&target, &cwd, &additional_dirs)
-                || is_editable_internal_path(&target, &cwd, None);
+                || is_editable_internal_path(&target, &internal_ctx);
             if !allowed {
                 return coco_types::ToolCheckResult::Ask {
                     message: format!(

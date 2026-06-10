@@ -462,7 +462,7 @@ impl PermissionEvaluator {
         }
 
         // Step 8: Mode-based fallthrough
-        let decision = mode_fallthrough(context, &tool_str, input, options);
+        let decision = mode_fallthrough(context, &tool_str, options);
         tracing::debug!(
             tool_name = %tool_str,
             permission_decision = decision_label(&decision),
@@ -579,7 +579,6 @@ const RULE_PRIORITY_ORDER: &[PermissionRuleSource] = &[
 fn mode_fallthrough(
     context: &ToolPermissionContext,
     tool_str: &str,
-    input: &Value,
     options: PermissionEvaluationOptions,
 ) -> PermissionDecision {
     match context.mode {
@@ -597,16 +596,15 @@ fn mode_fallthrough(
         },
         // TS: plan mode auto-allows if user originally had bypass mode;
         // otherwise falls through to ask (for classifier or user prompt).
-        // Read-only tools are always safe in plan mode. Writes/edits to
-        // the session's own plan file also auto-allow — otherwise the
-        // model can't build up the plan incrementally without a prompt
-        // on every edit. TS parity: `checkEditableInternalPath` /
-        // `isSessionPlanFile` in utils/permissions/filesystem.ts.
+        // Read-only tools are always safe in plan mode. Writes/edits to the
+        // session's own plan file also auto-allow, but that carve-out lives in
+        // the file-tool `check_permissions` layer (step 1b →
+        // `is_editable_internal_path` / `is_session_plan_file`), which runs
+        // before this fallthrough — so a plan-file write never reaches here.
+        // TS parity: `checkEditableInternalPath` / `isSessionPlanFile` in
+        // utils/permissions/filesystem.ts.
         PermissionMode::Plan => {
-            if context.bypass_available
-                || is_read_only_tool(tool_str)
-                || options.dynamic_read_only
-                || is_session_plan_file_write(tool_str, input, context)
+            if context.bypass_available || is_read_only_tool(tool_str) || options.dynamic_read_only
             {
                 PermissionDecision::Allow {
                     updated_input: None,
@@ -658,85 +656,6 @@ fn mode_fallthrough(
                 choices: None,
             }
         }
-    }
-}
-
-/// Auto-allow writes/edits targeted at the session's own plan file.
-///
-/// TS: `checkEditableInternalPath` in `utils/permissions/filesystem.ts:1479`
-/// + `isSessionPlanFile` at `filesystem.ts:245-255` — the plan file is
-///   carved out so the model can build up its plan in plan mode without
-///   per-write prompts.
-///
-/// TS matches with `normalize(path).startsWith("<plansDir>/<slug>") &&
-/// endsWith(".md")`. The `normalize()` step is security-load-bearing: it
-/// collapses `..` and `.` segments so a crafted target like
-/// `<plansDir>/<slug>/../../etc/passwd.md` resolves to `/etc/passwd.md`
-/// and fails the prefix check. Without it, the raw string starts with
-/// the slug prefix and the auto-allow would let the model write anywhere.
-///
-/// Returns `true` only when:
-/// - the tool is a file-modifying tool (Write / Edit / NotebookEdit), and
-/// - the context has a resolved `session_plan_file`, and
-/// - the lexically-normalized target starts with the plans-dir + slug
-///   prefix, and
-/// - the target ends with `.md`.
-fn is_session_plan_file_write(
-    tool_str: &str,
-    input: &Value,
-    context: &ToolPermissionContext,
-) -> bool {
-    let Some(plan_file) = context.session_plan_file.as_ref() else {
-        return false;
-    };
-    if !is_file_modifying_tool(tool_str) {
-        return false;
-    }
-    let Some(target) = extract_file_modifying_path(tool_str, input) else {
-        return false;
-    };
-    // Recover the `<plansDir>/<slug>` prefix by dropping the `.md` suffix
-    // off the stashed plan file. String-based on purpose: `Path::starts_with`
-    // is component-aware so `/a/foo.md` would NOT `starts_with(/a/foo)`, but
-    // TS uses raw `string.startsWith` which does. Mirror TS to keep both
-    // `<slug>.md` and `<slug>-agent-*.md` allowed from the same context.
-    let plan_file_str = plan_file.to_string_lossy();
-    let Some(prefix) = plan_file_str.strip_suffix(".md") else {
-        return false;
-    };
-    // Lexical normalization: collapse `.` and `..` segments before the
-    // prefix check. TS parity: `normalize(absolutePath)` in
-    // filesystem.ts:251. Without this the prefix check trivially accepts
-    // `<prefix>/../../etc/passwd.md`.
-    let normalized = lexical_normalize(std::path::Path::new(&target));
-    let normalized_str = normalized.to_string_lossy();
-    let has_md_ext = normalized
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("md"));
-    has_md_ext && normalized_str.starts_with(prefix)
-}
-
-/// Purely lexical path normalization — collapses `.` and `..` segments
-/// without touching the filesystem. Mirrors Node's `path.normalize`.
-/// Used to prevent path-traversal bypasses in plan-file auto-allow.
-fn lexical_normalize(path: &std::path::Path) -> std::path::PathBuf {
-    use std::path::Component;
-    let mut out = std::path::PathBuf::new();
-    for c in path.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                out.push(c.as_os_str());
-            }
-        }
-    }
-    if out.as_os_str().is_empty() {
-        std::path::PathBuf::from(".")
-    } else {
-        out
     }
 }
 
