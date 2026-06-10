@@ -1,294 +1,500 @@
 # TUI Single Render-Path Convergence
 
-Status: refactor design. Disregards backward compatibility by intent.
+Status:
 
-This document specifies how to collapse `coco-tui`'s native-history rendering
-onto a **single render path**, eliminating the provisional-commit /
-finalize-reconcile machinery introduced by `#160 perf(tui): streamline native
-history rendering` (commit `95cea8827`).
+- **Policy A landed** and remains the conceptual baseline (§2).
+- **Policy B has landed** (`8778909429 tui: stream stable assistant rows into
+  native history`) and is the default native-scrollback streaming policy:
+  stable assistant markdown rows enter native scrollback mid-stream through
+  the committed renderer plus a stable-prefix watermark.
+- **Post-landing hardening landed 2026-06-10** — see §14 Implementation
+  Status: the leading-thinking presentation/verify alignment (removes the
+  every-turn structural replay and its visible transcript duplication),
+  O(delta) incremental line-hash fingerprints, a borrowed stream projection
+  (no per-frame line-vector clone), background syntect grammar prewarm, and
+  the frame-stage perf instrumentation that diagnosed all of the above.
+- **Backward compatibility is intentionally disregarded.** This design removes
+  legacy provisional machinery instead of preserving old behavior behind a
+  toggle.
 
-It is scoped to the streaming → scrollback seam only. It does **not** redefine
-terminal mechanics (`native-scrollback-architecture.md`), the transcript-cell
-contract (`codex-rs-tui-comparison.md` §1–2, §4), or the console product shape
-(`agent-console-design.md`). Those remain the owners of their contracts; this
-doc references them by name.
+This document specifies the native scrollback streaming model for `coco-tui`.
+Policy B allows stable assistant markdown rows to be emitted while an answer
+is still streaming, while the mutable tail remains in the retained viewport.
+It must not restore the old provisional implementation from `#160 perf(tui):
+streamline native history rendering` (commit `95cea8827`).
+
+The design is scoped to the streaming -> scrollback seam. It does **not**
+redefine terminal mechanics (`native-scrollback-architecture.md`), the
+transcript-cell contract (`codex-rs-tui-comparison.md` sections 1-2 and 4), or
+the console product shape (`agent-console-design.md`). Those remain the owners
+of their contracts; this document references them by name.
 
 ## 1. Why this exists
 
 `native-scrollback-architecture.md` **Core Decision #4** is explicit:
 
 > Only finalized history enters native scrollback. Streaming text, running
-> tools, … remain in the interactive viewport. When a stream/tool/message
+> tools, ... remain in the interactive viewport. When a stream/tool/message
 > finalizes, it is emitted as history rows **exactly once**.
 
-`#160` deviated from this to optimize long-answer streaming ("preserve native
-streaming output as the viewport fills"). It now writes **streaming** assistant
-markdown into the terminal scrollback *before* finalize, then reconciles those
-provisional rows against the finalized render. That deviation is the source of
-the rendering fragility analyzed in the investigation that prompted this doc.
+Policy A restored that contract and is now the stable baseline. Policy B is a
+documented change from that baseline because long in-flight answers can produce
+more stable markdown than the bounded viewport can usefully retain. If product
+behavior requires those stable rows to move into native scrollback before the
+message finalizes, the implementation must be a single-render-path streaming
+model, not the previous provisional/finalize reconciliation path.
 
-What the deviation cost us — two coupled defects, both in
-`app/tui/src/surface/`:
+The old provisional path had two coupled defects in `app/tui/src/surface/`:
 
-1. **Two independent render paths that must produce byte-identical lines.**
-   - Streaming-stable lines: `StreamRenderController` →
-     `render_markdown_region(…, FinalizedStable)`
-     (`streaming/render_controller.rs:114`).
-   - Finalized lines: a *different* path,
-     `render_finalized_history_lines` → `ChatWidget::new(…)`
-     `.native_history_append_compatible()` (`surface/history_lines.rs:280`).
-   The `native_history_append_compatible()` flag exists **only** to force these
-   two paths to agree. Nothing at runtime verifies they still agree.
+1. **Two independent render paths had to produce byte-identical lines.**
+   Streaming-stable rows and finalized history rows were rendered by different
+   paths, with `ChatWidget::native_history_append_compatible()` acting as a
+   compatibility shim. Nothing at runtime proved the rows still matched.
+2. **Finalize reconciled by line count rather than row content.**
+   `consolidated_final_tail_lines` appended
+   `render_finalized_history_lines(whole).skip(provisional.line_count)`. The
+   guard checked render-key equality and source prefix shape, but it never
+   verified that the first `provisional.line_count` finalized rows were the
+   rows already committed.
 
-2. **Count-based reconciliation across those paths.**
-   At finalize, `consolidated_final_tail_lines` appends
-   `render_finalized_history_lines(whole).skip(provisional.line_count)`
-   (`surface/history_driver.rs:861`). The guard checks only `render_key`
-   equality and `source.starts_with` (`:834`, `:839`) — it **never** verifies
-   that the first `provisional.line_count` finalized lines are the rows actually
-   committed. The ledger stores a *count*, not the rows, so it *cannot*.
+That class of defect must remain deleted. Policy B explicitly rejects:
 
-The skip arithmetic is currently correct (the streaming-stable render is a
-sliced whole-prefix render and the markdown renderer is prefix-stable at commit
-boundaries — pinned by `tui-markdown/src/lib.test.rs:312`). But correctness
-rests on the hand-maintained equality of two render paths plus a guard that does
-not check what matters. If the two paths ever drift (a gutter, a model-label
-line, a blank-line normalization on one side only), the result is silent
-duplicated or dropped lines, caught by no guard — only by sampled tests.
+- dual committed/provisional render paths;
+- count-based repair such as `skip(line_count)`;
+- early `ToolUse` header commits before matching results exist;
+- replay, resize, or theme handling that can solidify unstable stream rows.
 
-**This is the class of defect to remove, not patch.** A "smarter skip" still
-leaves two render paths and a reconciliation step. The fix is to delete the
-second path and the reconciliation.
+## 2. Policy A Baseline
 
-## 2. Target model (codex-rs)
+Policy A remains the stable committed-history baseline:
 
-`codex-rs/tui` renders an in-flight answer from **one** rendered-line vector and
-tracks what has reached scrollback with **one watermark**, never a cross-path
-count match.
+- live streaming is viewport-only;
+- finalized assistant messages enter native scrollback after `MessageAppended`
+  commits them to the transcript;
+- finalized append and replay share
+  `render_committed_assistant_markdown(source, opts)`;
+- `HistoryEmissionTracker` tracks finalized transcript message UUIDs;
+- no native scrollback writes occur during streaming.
 
-Reference (`codex-rs/tui/src/streaming/controller.rs`):
+Policy B builds on this by adding progressive streaming commits for assistant
+markdown only. It does not weaken the Policy A committed renderer invariant:
+finalized append and replay still use the same committed assistant markdown
+renderer.
 
-- one `rendered_lines: Vec<Line>` produced from the accumulated markdown source
-  through a single render call;
-- `enqueued_stable_len` / `emitted_stable_len` counters with the invariant
-  `emitted_stable_len <= enqueued_stable_len <= rendered_lines.len()` (`:31`);
-- `current_tail_lines()` returns `rendered_lines[enqueued_stable_len..]` — the
-  mutable viewport tail, explicitly derived from the *enqueued* watermark to
-  prevent already-shown lines reappearing (`:204`);
-- finalize renders the remaining source and consolidates into a single
-  **source-backed** `AgentMarkdownCell`; the cell re-renders from raw markdown on
-  resize (`streaming/controller.rs:231`, `app/agent_message_consolidation.rs`).
+## 3. Policy B Target Architecture
 
-The committed scrollback content is **a prefix slice of the same vector**.
-Reconciliation is a watermark comparison on one vector, not a count match across
-two renders. There is no provisional ledger, no `skip(count)`, no compatibility
-flag, no finalize guard.
+Policy B uses the codex-style shape that Policy A deliberately deferred:
 
-## 3. Target model (coco)
+- **One source-backed assistant markdown render vector.** The stream controller
+  renders the accumulated assistant markdown source into one logical
+  `rendered_lines` projection for the current render key. (As built it is a
+  cached stable-region vector plus a mutable-tail vector exposed as borrowed
+  slices — see §7; `rendered_lines[..]` notation below denotes their
+  concatenation.)
+- **One stable-prefix watermark.** The controller tracks how many rendered rows
+  have already entered native scrollback. The invariant is
+  `emitted_stable_len <= stable_line_len <= rendered_lines.len()`.
+- **Native stream append emits only the stable delta.** The append is always
+  `rendered_lines[emitted_stable_len..stable_line_len]`; after a successful
+  native insert, `emitted_stable_len = stable_line_len`.
+- **The live viewport tail starts after the stable watermark.** The retained
+  viewport renders `rendered_lines[emitted_stable_len..]`, plus any
+  streaming-only adornments. Already emitted stable rows must not reappear in the
+  viewport tail.
+- **Finalized append and replay use the same committed assistant markdown
+  renderer.** Finalization either appends a verified suffix or triggers replay
+  from source. Replay always renders through
+  `render_committed_assistant_markdown`, not through a streaming-only renderer.
 
-Adopt the codex mechanism while keeping coco's TEA boundary, `SurfaceTerminal`,
-and source-of-truth rule (`SessionState.messages` is canonical;
-`native-scrollback-architecture.md` Decision #3). Concretely, restore Core
-Decision #4:
+The committed scrollback content is therefore a prefix slice of a single render
+projection, with source and render-key metadata sufficient to decide whether a
+final suffix append is valid. There is no provisional ledger and no
+cross-render `skip(count)` reconciliation.
 
-**Streaming assistant text lives in the interactive viewport. The assistant
-message enters native scrollback exactly once, at finalize, through the same
-render function used for replay.**
+### 3.1 Stream Append Lifecycle
 
-### 3.1 The one render function (the crux)
+For each assistant text delta:
 
-Extract a single function that both the live stream and the transcript cell call:
+1. `StreamingState.visible_content()` remains the source input.
+2. `StreamRenderController` renders the current source using the committed
+   assistant markdown renderer configuration for the current width, theme,
+   syntax, and render key.
+3. `coco_tui_markdown::stable_prefix_end` identifies the conservative source
+   boundary that can be considered stable.
+4. The controller maps that source boundary to `stable_line_len` in the current
+   rendered vector.
+5. `SurfaceStreamDriver` prepares the live tail and an optional
+   `PreparedStreamAppend` containing only the stable delta.
+6. `SurfaceHistoryDriver` inserts the stable delta into native scrollback and
+   records a source-backed pending prefix fingerprint: one `u64` content hash
+   per rendered line (`RenderedLineFingerprint`). The fingerprint vector is
+   accumulated incrementally — each advance hashes only the delta lines and
+   extends the fingerprints of the already-committed prefix (which advance
+   only when the insert actually commits), so per-advance cost is O(delta),
+   not O(prefix).
 
-```text
-render_assistant_markdown(source: &str, opts: AssistantMarkdownOpts, width) -> Vec<Line<'static>>
+On final assistant `MessageAppended`, `SurfaceHistoryDriver` compares the
+pending prefix fingerprints against the committed whole-message render (line
+hashes — no row rasterization of the prefix is needed). If the prefix matches
+exactly, it appends only the suffix. If the prefix does not match, it discards
+the streaming watermark and replays from source. It never repairs by skipping
+a count of rows.
+
+### 3.2 Viewport Tail
+
+The live viewport tail starts at the stable watermark. It may contain mutable
+markdown, cursor/thinking adornments, preview-only mermaid behavior, and other
+streaming-only UI. Those rows are not committed to native scrollback until they
+become stable under the committed renderer and cross the watermark.
+
+The retained viewport must account for native stream append rows when computing
+bottom-pinned geometry. If stable rows are emitted while the viewport is pinned
+to bottom, the visible position should remain coherent rather than duplicating
+rows or jumping.
+
+## 4. Prior Failure Lessons
+
+Policy B exists because the old implementation mixed incompatible ideas. The
+new implementation must preserve these lessons as requirements:
+
+- Old provisional rows used a streaming renderer while finalized history used
+  another renderer.
+- Finalize reconciled with line counts instead of row-content verification.
+- Parallel tool headers could be committed before matching results existed.
+- Replay, resize, and theme changes could solidify rows that were still
+  unstable.
+- Height-only viewport changes caused unnecessary replay and visible flicker.
+
+These are design constraints, not bugs to patch locally after the fact.
+
+## 5. Markdown Rendering Contract
+
+Policy B stable rows must use
+`render_committed_assistant_markdown(source, opts)`. The stream path may cache
+or slice results, but rows inserted into native scrollback must be rows produced
+by the committed assistant markdown renderer for the active render key.
+
+`coco_tui_markdown::stable_prefix_end` remains the conservative source boundary.
+The following content remains held back in the mutable tail until it is
+unambiguously stable:
+
+- tables;
+- open fenced code blocks;
+- partial lines;
+- setext headings whose underline may still arrive;
+- unresolved reference links.
+
+Mermaid previews or other streaming-only behavior may exist only in the live
+mutable tail. Once rows cross the native scrollback boundary, they are committed
+assistant markdown rows and must match finalized/replayed committed history.
+
+Any width, theme, syntax, or render-key change invalidates the watermark. The
+driver must reset the stream watermark and replay from source instead of trying
+to reinterpret already emitted rows. Height-only viewport changes do not change
+the render key and must not trigger replay or visible flicker.
+
+## 6. Tool Call Boundary
+
+Policy B v1 applies only to assistant text markdown. It does not stream
+`ToolUse`, `ToolResult`, running tool activity, or active tool cells into native
+scrollback.
+
+Tool boundaries remain transcript-commit boundaries:
+
+- `ToolUse` headers are never emitted mid-stream.
+- `ToolUse` and `ToolResult` history continues through
+  `committable_prefix_len`.
+- An orphan `ToolResult` does not block the prefix.
+- An unresolved `ToolUse` blocks the prefix.
+- Duplicate call IDs require one result per `ToolUse`; one result cannot satisfy
+  multiple tool uses with the same call ID.
+
+This avoids the old failure mode where parallel tool headers could enter native
+scrollback before the matching results existed.
+
+### 6.1 Leading Thinking Cells
+
+An assistant message with reasoning projects to `[AssistantThinking…,
+AssistantText, …]` transcript cells, but the streamed rows that enter native
+scrollback are always **text** rows. Two coordinated rules keep the committed
+prefix the leading rows of the group:
+
+- **Presentation** (`push_text_first_assistant_group`): a message's leading
+  thinking cells render AFTER its first text cell, **independent of what
+  follows the text** (tool calls included). The rule being suffix-independent
+  is load-bearing twice over: a message renders identically whether it is
+  projected mid-turn (the committable slice ends at the text because its tool
+  uses are still unresolved) or after its results pair, and the streamed text
+  rows are the group's leading rows under both incremental append and full
+  replay.
+- **Verification** (`append_candidate_lines_after_stream_prefix`): the
+  pending stream prefix anchors to the message's text cell. The verify skips
+  the same-message leading-thinking run, verifies the prefix against the text
+  cell, and composes the suffix as `[text remainder, separator, thinking
+  cells, rest]` — matching the presentation order row-for-row. A thinking run
+  whose text belongs to a different message (thinking-only group) does not
+  reorder and falls back to replay.
+
+Before this alignment landed, every thinking+text turn structurally failed
+verification (`pending_stream_prefix_next_cell_not_assistant_text`) and
+forced a full replay per turn. Because `clear_owned_scrollback` can only
+clear rows still inside the owned on-screen region, each replay re-inserted
+the full transcript below the unreachable scrolled-out copy — the visible
+"prompt rendered twice, then gone" duplication. With the alignment, replay is
+reserved for genuine invalidation (width / theme / syntax / display-mode
+changes, header changes, real prefix mismatches).
+
+## 7. Rust Shape (as built)
+
+Keep the data model small and purpose-specific. The landed structs
+(`app/tui/src/`):
+
+```rust
+// streaming/render_controller.rs — borrows the controller's cached vectors;
+// consumers clone exactly the slices they need (no per-frame rebuild).
+struct StreamRenderProjection<'a> {
+    stable_lines: &'a [Line<'static>], // committed-renderer output
+    tail_lines: &'a [Line<'static>],   // mutable-tail render
+    stable_source_len: usize,
+    render_key: StreamRenderKey,
+    render_key_invalidated: bool,
+}
+
+// surface/stream.rs — watermark + fingerprints bundled so they cannot
+// desync; advances ONLY when the native insert commits.
+struct EmittedStreamPrefix {
+    watermark: StreamHistoryWatermark, // source_len + line_len + render_key
+    line_fingerprints: Vec<RenderedLineFingerprint>,
+}
+
+struct PreparedStreamAppend {
+    rows: HistoryRows,                 // pre-rasterized stable delta
+    prefix: PendingStreamPrefix,
+    watermark: StreamHistoryWatermark,
+}
+
+// surface/stream.rs → consumed by surface/history_driver.rs at finalize.
+struct PendingStreamPrefix {
+    source_prefix: String,
+    source_prefix_len: usize,
+    line_prefix_len: usize,
+    render_key: StreamRenderKey,
+    line_fingerprints: Vec<RenderedLineFingerprint>,
+}
+
+// surface/line_fingerprint.rs — u64 content hash per rendered line (line
+// style + alignment + span content/styles). Process-local only. Shared with
+// the session-header fingerprint path.
+struct RenderedLineFingerprint(u64);
 ```
 
-- Live streaming: the stream controller renders `accumulated_source` through it
-  each frame; the **stable prefix** (`stable_prefix_end`) is the committable
-  region, the suffix is the mutable viewport tail.
-- Finalize / replay: the `AssistantText` transcript cell renders the *same*
-  source through the *same* function at the same width.
+The ownership boundary is binding:
 
-Because finalize and streaming are literally the same code over the same source,
-the finalized lines are identical to the streamed lines by construction. The
-"two paths must agree" coupling disappears — there is one path.
+- `StreamingState.visible_content()` remains the source input.
+- Do not store ratatui `Line`s, terminal rows, row fingerprints, or emitted
+  counters in `AppState`.
+- `StreamRenderController` owns source-backed markdown rendering and watermark
+  decisions.
+- `SurfaceStreamDriver` prepares the live tail and optional stream append.
+- `SurfaceHistoryDriver` commits native rows and tracks pending prefix
+  fingerprints.
+- `HistoryEmissionTracker` remains for finalized transcript message UUIDs only.
 
-### 3.2 Streaming watermark (replaces the ledger)
+Rust implementation rules:
 
-`SurfaceStreamDriver` owns one `rendered_lines` and one `emitted_stable_len`
-watermark (mirroring codex). Per frame:
+- no `unwrap()` in production code;
+- prefer enums and newtypes over ambiguous booleans;
+- keep modules focused, and split files that exceed local size guidance;
+- add tests before changing behavior in known regression areas.
 
-- recompute `rendered_lines = render_assistant_markdown(source, …, width)`;
-- `stable_line = line index of stable_prefix_end(source)`;
-- **viewport tail** = `rendered_lines[stable_line..]` (+ cursor / thinking);
-- **(optional) progressive commit**, see §3.3.
+## 8. Component-Level Change Set
 
-Finalize: emit `rendered_lines[emitted_stable_len..]` once, then drop stream
-state. Same vector, same render → the suffix is exact. No `skip(count)`, no
-guard, no `ProvisionalFinalizationGuard`.
-
-### 3.3 Two valid commit policies — pick one
-
-**Policy A — insert-once-at-finalize (recommended; matches Core Decision #4).**
-Streaming stays entirely in the interactive viewport (`emitted_stable_len == 0`
-until finalize). On finalize, the whole message is emitted once. Simplest;
-restores the documented contract verbatim; zero scrollback writes mid-stream.
-Cost: during a very long answer, streamed lines scroll *within* the bounded
-interactive viewport, not into native scrollback, until the message completes.
-
-**Policy B — progressive single-watermark commit (only if mid-stream
-scrollback is a hard requirement).** Keep `#160`'s UX goal (stable lines reach
-native scrollback as the viewport fills) but via one vector + one watermark:
-emit `rendered_lines[emitted_stable_len..stable_line]` to scrollback during
-streaming and advance the watermark; committed is always a prefix slice of
-`rendered_lines`. Finalize emits the suffix. Still single-path — no second
-render, no ledger, no reconciliation. Resize mid-stream is handled by §3.4.
-
-Policy A is the default. Choosing B is a documented deviation from Core Decision
-#4 and must be justified by a concrete long-stream requirement; even then it
-must remain single-path.
-
-### 3.4 Resize, `/clear`, rewind = source replay (unchanged contract)
-
-Width change, `/clear`, truncate/rewind, and session switch rebuild from message
-source via the existing replay path (`replay_all_capped` → `replay_rows` →
-`clear_owned_scrollback` + re-insert). This already satisfies Decision #3/#6 and
-is kept. With one render function, replay and finalize emit identical rows for
-the same cell — the property the dual path could only approximate.
-
-## 4. Invariants this establishes
-
-1. **One render function** for assistant markdown across live, finalize, and
-   replay. No `native_history_append_compatible` shim.
-2. **One source of truth per cell** = its markdown source (Decision #3). Scrollback
-   rows are a disposable projection.
-3. **Committed = prefix slice of the current render**, tracked by one watermark.
-   Never a count match across two renders.
-4. **Finalize emits a suffix of the same vector**, exactly once (Decision #4).
-5. **No silent divergence path**: there is nothing to drift, so no guard is
-   needed; a width/source change re-renders the one vector and (if needed)
-   triggers source replay.
-
-## 5. Component-level change set
-
-Paths under `coco-rs/app/tui/src/`. "Delete" assumes no back-compat (per request).
+All rows below have landed (see §14 for the post-landing hardening). Paths are
+under `coco-rs/app/tui/src/`.
 
 | Symbol / file | Action | Notes |
 |---|---|---|
-| `surface/stream.rs` `ProvisionalStreamLedger` / `CommittedStablePrefix` | **Delete** | Replaced by `rendered_lines` + `emitted_stable_len` watermark. |
-| `surface/stream.rs` `PreparedProvisionalAppend`, `pending_prefix`, `mark_stable_appended`/`forget_stable_appended` dance | **Delete / collapse** | Watermark advance is a single field write. |
-| `surface/history_driver.rs` `emit_provisional_stream` | **Delete** | Policy A: gone. Policy B: replaced by a watermark-slice emit. |
-| `surface/history_driver.rs` `consolidated_final_tail_lines`, `ProvisionalFinalizationGuard`, `finalized_render_key`, `skip(provisional.line_count)` | **Delete** | The entire count-based reconciliation. |
-| `surface/history_driver.rs` `HistoryTailCache` / `fill_tail_gap` / `tail_reveal_rows` | **Re-evaluate** | Viewport-reveal gap fill is independent of the bug; keep only if still needed by scrolling. Out of primary scope. |
-| `streaming/render_controller.rs` `StreamRenderMode { FinalizedStable, StreamingMutableTail }`, dual `markdown_options` branch | **Collapse** | One mode. The mutable-tail vs stable split becomes a *line-index* boundary on one render, not two render modes. |
-| `streaming/render_controller.rs` `StreamRenderKey` | **Simplify/keep** | Still useful to detect width/theme/syntax change → re-render + replay. No longer the finalize guard. |
-| `surface/history_lines.rs` `render_finalized_history_lines` assistant arm via `ChatWidget` | **Reroute** | Assistant text cell renders via the shared `render_assistant_markdown`. |
-| `widgets/chat/*` `ChatWidget::native_history_append_compatible()` | **Delete** | No second path to be compatible with. |
-| `surface/controller.rs` provisional re-emit branches (`:288`–`:377`) | **Delete / simplify** | Frame flow becomes: replay-if-needed → emit finalized suffix(es) → render viewport tail. |
-| `surface/history_driver.rs` `HistoryEmissionTracker` (cells, by message id) | **Keep** | Per-cell emit-once watermark for non-streaming cells (tools, user, system). Unchanged. |
-| `surface/history_driver.rs` `replay_all_capped` / `replay_rows` | **Keep, simplify** | Source replay for resize/`/clear`. |
-| `tui-ui/src/engine/terminal.rs` `insert_history_rows`, `clear_owned_scrollback` | **Keep** | Terminal primitives are correct. |
+| `streaming/render_controller.rs` | Extend | Own the source-backed markdown render vector, stable source boundary mapping, and `StreamHistoryWatermark`. |
+| `surface/stream.rs` / `SurfaceStreamDriver` | Extend | Prepare `MarkdownStableTail` and optional `PreparedStreamAppend`; keep live tail in the retained viewport. |
+| `surface/history_driver.rs` | Extend | Insert stream stable deltas, track `PendingStreamPrefix`, verify final prefix fingerprints, and replay on mismatch. |
+| `surface/history_lines.rs` | Keep committed path | Finalized assistant text continues through `render_committed_assistant_markdown`. |
+| `HistoryEmissionTracker` | Keep scoped | Track finalized transcript message UUIDs only; do not reuse it for streaming watermark state. |
+| `committable_prefix_len` logic | Keep for tools | Tool history remains transcript-bound and paired before commit. |
+| `tui-ui/src/engine/terminal.rs` `insert_history_rows`, `clear_owned_scrollback` | Keep | Terminal primitives remain the insertion/replay mechanism. |
 
-New / changed:
+Do not reintroduce deleted Policy A cleanup targets:
 
-| Symbol | Action |
-|---|---|
-| `render_assistant_markdown(source, opts, width)` | **Add** — the single shared render fn; used by the stream controller and the `AssistantText` cell. |
-| `SurfaceStreamDriver` | **Rewrite** around `rendered_lines` + `emitted_stable_len`; emits a suffix at finalize. |
+- `ProvisionalStreamLedger` / `CommittedStablePrefix`;
+- `PreparedProvisionalAppend`;
+- `mark_stable_appended` / `forget_stable_appended` dances;
+- `emit_provisional_stream`;
+- `consolidated_final_tail_lines`;
+- `ProvisionalFinalizationGuard`;
+- finalize-only `skip(provisional.line_count)`;
+- `ChatWidget::native_history_append_compatible()`.
 
-This aligns with the target vocabulary in `codex-rs-tui-comparison.md` Reuse
-table (`MarkdownStableTail`, `HistoryEmissionController`); name the rewritten
-types to match those targets rather than inventing new ones.
+## 9. Invariants
 
-## 6. Migration sequence (each step compiles + `just quick-check` green)
+1. Stable streaming rows inserted into native scrollback are produced by
+   `render_committed_assistant_markdown`.
+2. Native stream append inserts only
+   `rendered_lines[emitted_stable_len..stable_line_len]`.
+3. The live viewport tail starts at `emitted_stable_len`.
+4. Final assistant history appears exactly once after finalize.
+5. Final suffix append requires exact pending-prefix fingerprint match.
+6. Prefix mismatch triggers replay from source, never count-based repair.
+7. Width, theme, syntax, and render-key changes reset the watermark and replay.
+8. Height-only viewport changes do not replay or flicker.
+9. Tool headers/results remain transcript-bound and are not emitted by Policy B
+   stream markdown append.
+10. Replay never marks unresolved tools or stream prefixes as finalized.
+11. A message's leading thinking cells render after its text under the native
+    presentation, independent of what follows the text — committable-slice and
+    full-transcript renders agree (§6.1).
+12. The finalize verify anchors the pending prefix to the message's text cell,
+    skipping its same-message leading-thinking run; any other shape replays.
+13. Fingerprint accumulation is O(delta) per watermark advance and advances
+    only on a committed insert; a prepared-but-uncommitted append never
+    mutates driver state.
 
-1. **Extract `render_assistant_markdown`.** Pull the assistant-markdown render
-   out of `ChatWidget` and `render_markdown_region` into one function. Make both
-   current call sites delegate to it. No behavior change yet; existing tests stay
-   green. This is the load-bearing step — it proves the two renders were
-   unifiable.
-2. **Reroute the finalized `AssistantText` cell** through it; delete
-   `native_history_append_compatible`. Run the replay/finalize snapshot + VT100
-   suites.
-3. **Introduce the watermark** in `SurfaceStreamDriver` (`rendered_lines` +
-   `emitted_stable_len`); compute the viewport tail as a line-index slice.
-   Keep emit-at-finalize only (Policy A). Streaming still renders each frame.
-4. **Delete the provisional path**: `emit_provisional_stream`,
-   `consolidated_final_tail_lines`, `ProvisionalFinalizationGuard`,
-   `ProvisionalStreamLedger`/`CommittedStablePrefix`, the controller re-emit
-   branches, and the `StreamRenderMode` second branch. Finalize now emits
-   `rendered_lines[emitted_stable_len..]`.
-5. **Re-evaluate `HistoryTailCache`/`fill_tail_gap`.** If viewport reveal still
-   needs it, keep as an isolated cache with no role in finalize. Otherwise delete.
-6. **(Optional) Policy B.** Only if a long-stream requirement survives review:
-   add watermark-slice emit during streaming + a resize → replay reset. Land
-   behind its own tests.
-7. **Run `just pre-commit` once** at the end.
+## 10. Test Plan
 
-Steps 1–4 are the refactor proper. 5–6 are cleanup/optional.
+Update or add tests for these behaviors:
 
-## 7. Test plan
+- streaming stable markdown appends to native scrollback;
+- live tail excludes already emitted stable rows;
+- final assistant message appears exactly once;
+- finalized suffix append requires prefix fingerprint match;
+- prefix mismatch triggers replay, not skip-based repair;
+- width, theme, syntax, or render-key change during stream resets the watermark;
+- markdown tables, open fences, partial lines, setext headings, and unresolved
+  reference links stay mutable;
+- parallel tool calls do not emit headers until all results are paired;
+- orphan `ToolResult` does not block, unresolved `ToolUse` blocks, and duplicate
+  call IDs require one result per use;
+- replay does not mark unresolved tools or stream prefixes as finalized;
+- bottom-pinned viewport geometry includes stream stable append rows;
+- height-only viewport changes do not cause replay or flicker.
 
-Keep and re-point the invariant tests; add drift coverage that the old design
-lacked.
+Landed alongside the §6.1 / §7 hardening (`surface/history_driver.test.rs`,
+`surface/stream.test.rs`):
 
-- **Reuse:** `tui-markdown/src/lib.test.rs:312` (prefix stability),
-  `surface/stream.test.rs:74` (block-boundary append),
-  `surface/history_driver.test.rs:194` (real driver, no duplication).
-- **Add — single-path identity:** for a corpus of assistant messages
-  (paragraphs, bold "heading" lines, lists, fenced code, pipe tables), assert
-  `render_assistant_markdown(whole)` equals the concatenation of the streamed
-  stable slices + the finalize suffix, line-for-line. This is the property the
-  dual path could only sample.
-- **Add — finalize-after-stream, no dup/drop:** drive the rewritten
-  `SurfaceStreamDriver` through chunked deltas crossing block boundaries, then
-  finalize; assert each source line appears exactly once in scrollback (VT100
-  backend), for both Policy A and (if built) Policy B.
-- **Add — resize mid-stream:** width change during streaming → source replay →
-  assert scrollback matches a fresh whole-render at the new width.
-- **Negative:** intentionally perturb the cell render vs the stream render in a
-  test double and assert the unified function makes them identical (i.e. the
-  divergence is unrepresentable), replacing the old guard-based defense.
+- `driver_finalizes_stream_prefix_for_thinking_text_turn_without_replay` —
+  thinking+text turn appends the verified suffix; thinking renders after text;
+- `driver_stream_suffix_append_matches_full_replay_for_thinking_turn` —
+  incremental stream-suffix append is row-identical to a full replay of the
+  same cells (the strongest §9-4/5 pin);
+- `driver_requires_replay_when_thinking_run_lacks_same_message_text` —
+  thinking-only groups still replay;
+- `finalized_native_history_renders_text_before_thinking_when_tools_follow` —
+  the §6.1 presentation rule with trailing tool calls;
+- `stream_append_fingerprints_accumulate_incrementally_to_full_prefix` —
+  incremental fingerprints equal a from-scratch fingerprint of the same
+  prefix.
 
-Follow the testing split in `codex-rs-tui-comparison.md` §P0: ratatui
+Keep the useful Policy A coverage:
+
+- finalized append output equals replay output line-for-line at the same width,
+  theme, syntax, and source;
+- live streaming renderer differences do not affect committed append/replay
+  identity;
+- replay after finalize renders from source through the committed renderer.
+
+Follow the testing split in `codex-rs-tui-comparison.md` section P0: ratatui
 `TestBackend` for buffer snapshots, byte-capturing VT100 backend for
 terminal-control assertions.
 
-## 8. codex-rs reference map
+Verification commands from `coco-rs/`:
+
+```bash
+cargo test -p coco-tui streaming
+cargo test -p coco-tui history_driver
+cargo test -p coco-tui
+just quick-check
+```
+
+Before commit:
+
+```bash
+just pre-commit
+```
+
+## 11. codex-rs Reference Map
 
 | Concern | codex-rs source | coco target |
 |---|---|---|
-| Single rendered-line vector + watermark | `streaming/controller.rs:31,58,204` | `SurfaceStreamDriver` rewrite |
-| Source-backed finalized cell | `history_cell/*` `AgentMarkdownCell`; `app/agent_message_consolidation.rs` | `AssistantText` `TranscriptCell` + `render_assistant_markdown` |
+| Single rendered-line vector + watermark | `streaming/controller.rs:31,58,204` | Policy B source-backed assistant markdown vector + `StreamHistoryWatermark` |
+| Source-backed finalized cell | `history_cell/*` `AgentMarkdownCell`; `app/agent_message_consolidation.rs` | `AssistantText` `TranscriptCell` + `render_committed_assistant_markdown` |
 | Newline-gated markdown accumulation | `markdown_stream.rs` `MarkdownStreamCollector` | stream controller source accumulation + `stable_prefix_end` |
-| Emit-once history insertion | `insert_history.rs` | `insert_history_rows` (kept) |
-| Resize = re-render from source | `streaming/controller.rs:231`, `app/resize_reflow.rs` | `replay_all_capped` (kept) |
+| Emit-once history insertion | `insert_history.rs` | `insert_history_rows` + pending-prefix fingerprint verification |
+| Resize = re-render from source | `streaming/controller.rs:231`, `app/resize_reflow.rs` | watermark reset + `replay_all_capped` |
 
 Reuse policy and attribution requirements are owned by
-`codex-rs-tui-comparison.md` §Reuse Policy — port behind coco-owned types, do not
-depend on `codex-*` crates.
+`codex-rs-tui-comparison.md` section Reuse Policy. Port ideas behind coco-owned
+types; do not depend on `codex-*` crates.
 
-## 9. Risks and rollback
+## 12. Risks and Rollback
 
-- **Risk: a long in-flight answer under Policy A is bounded by the interactive
-  viewport** until finalize. This is the documented Core Decision #4 behavior; if
-  product testing shows it regresses perceived responsiveness, adopt Policy B
-  (still single-path). Decide before step 3.
-- **Risk: `render_assistant_markdown` extraction surfaces a real rendering
-  difference** between the two current paths (gutter/marker/indent). That is the
-  latent bug; resolve it in step 1 by choosing the correct single rendering and
-  updating snapshots — do not re-introduce a compatibility flag.
-- **Rollback:** steps are independent commits; reverting step 4 restores the
-  provisional path. Because we disregard back-compat, prefer fixing forward.
-- **Confirm-first:** before investing, reproduce the original duplication on HEAD
-  with `COCO_LOG=tui::surface=debug,coco=debug` and confirm whether it still
-  occurs; the `tui::surface::append/replay` debug lines are otherwise filtered by
-  the default `coco=debug,info` subscriber.
+- **Risk: native scrollback streaming changes the terminal contract.** This is
+  intentional for Policy B, but it must stay limited to assistant markdown
+  stable rows.
+- **Risk: prefix verification forces replay more often than expected.** Prefer
+  replay to silent duplication or dropped rows; optimize only after correctness
+  is pinned by tests.
+- **Risk: markdown stability is too conservative.** Keep the conservative
+  boundary first. Loosen `stable_prefix_end` only with focused markdown tests.
+- **Rollback:** revert the Policy B implementation to return to the landed
+  Policy A baseline. Do not resurrect the old provisional path.
 
-## 10. Out of scope
+## 13. Out of scope
 
-- Tool/exec/hook activity presentation (`TurnActivityView`,
-  `codex-rs-tui-comparison.md` §7).
+- Running tool activity and active tool cells.
+- Streaming `ToolUse` or `ToolResult` rows into native scrollback.
+- Non-native fallback streaming; it remains viewport-only.
 - Pager/diff overlays, picker scaffolding, bottom-pane stack.
-- Terminal primitive behavior (owned by `native-scrollback-architecture.md`).
-- `HistoryEmissionTracker` cell-keying for non-streaming cells (already correct).
+- Terminal primitive behavior outside the stream append/replay seam.
+- A backward-compatibility toggle or non-native-scrollback fallback changes.
+
+## 14. Implementation Status (2026-06-10)
+
+Policy B landed in `8778909429`. Two instrumented production runs
+(`tui.performance.enabled` + `tui=debug`) then drove a hardening pass; all of
+it is verified by the §10 tests, `just quick-check`, and the full `coco-tui` /
+`coco-tui-markdown` suites.
+
+### Diagnosed and fixed
+
+| Finding (measured) | Fix |
+|---|---|
+| Every thinking+text turn forced a full replay (`pending_stream_prefix_next_cell_not_assistant_text`, 2/2 turns in the run); each replay re-inserted the whole transcript below the unreachable scrolled-out copy — user-visible duplication | §6.1 presentation/verify alignment: suffix-independent text-before-leading-thinking reorder + thinking-aware prefix verify with row-identical-to-replay parity test |
+| 30–100ms finalize frames — syntect compiles each grammar's regexes lazily on first parse (Markdown 78.7ms for an 8-line preview; the same cells re-rendered in 11ms once warm). `SyntaxSet` deserialization itself is ~0.7ms | `coco_tui_markdown::prewarm_highlighting()` (parse-only, no theme dependency; per-grammar + total timings under `tui::perf::init`) spawned once on a named background thread from `App::run` |
+| Fingerprint cost O(full prefix) per watermark advance: full-prefix re-rasterization plus a per-CELL `String` deep copy (≈22k allocations per advance at 242 columns), then cloned again in `prepare_native_frame` | `RenderedLineFingerprint` is a `u64` content-hash newtype; fingerprints accumulate incrementally (O(delta)) and advance only on committed inserts (`EmittedStreamPrefix`); finalize verifies line hashes with no prefix rasterization; `prepare_native_frame` destructures instead of cloning |
+| `render_projection` rebuilt + cloned the full stable+tail line vector every frame (~40 fps) while the viewport uses at most `STREAMING_LIVE_TAIL_CAP` rows | `StreamRenderProjection` borrows the controller's cached vectors; the live tail clones only the post-watermark slice, pre-trimmed to the display cap |
+
+Ruled out by instrumentation: terminal backpressure (`begin_sync_update` max
+0.5ms), event-fold overhead (redraw vs draw gap ≤0.1ms).
+
+### Perf instrumentation (landed; gated on `tui.performance.enabled`)
+
+- `prepare_native_frame` stage (renamed from the misleading
+  `build_live_tail_lines`): `plan_us` / `stream_prepare_us` /
+  `history_prepare_us` / `history_append_rows` / `stream_append_rows`.
+- `history` stage gained `lines_build_us` (cell-line building, distinct from
+  row rasterization `render_us`).
+- `tui::perf::cell` — per-cell render >2ms logs `cell=tool_call:<name>` +
+  `lines_added` + `duration_us`.
+- `tui::streaming` — per-advance `append_rows_us` / `fingerprint_us` +
+  finalize-verify `markdown_us` / `fingerprint_us` / `matched`.
+- `tui::perf::init` — syntect set load + per-grammar prewarm timings.
+- `begin_sync_update` stage (backpressure probe) and `draw_ms` in the redraw
+  log (event-fold vs draw attribution).
+
+### Accepted limitation
+
+A full replay cannot clear rows that have already scrolled out of the owned
+on-screen region — terminal scrollback above the screen is immutable, for any
+implementation. Replay therefore duplicates that content. With the §6.1 fix
+this is reachable only through genuine invalidation (width / theme / syntax /
+display-mode / header changes), which are rare and user-initiated; the
+long-term posture stays codex-aligned: scrollback is append-only, and replay
+is the last resort, not a steady-state path.

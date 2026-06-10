@@ -130,7 +130,64 @@ fn native_draw_appends_finalized_history_and_keeps_live_tail_in_viewport() {
 }
 
 #[test]
-fn native_draw_provisionally_appends_stable_stream_and_consolidates_final_message() {
+fn native_draw_defers_parallel_tool_batch_until_all_results_arrive() {
+    let backend = TestBackend::new(96, 28);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 22, 96, 6));
+    let mut state = AppState::new();
+    test_helpers::push_user_text(&mut state.session, "u1", "run tools");
+    let mut controller = NativeSurfaceController::default();
+
+    controller
+        .draw(&mut terminal, &state)
+        .expect("initial draw");
+
+    push_parallel_tool_uses(&mut state);
+    let unresolved = controller
+        .draw(&mut terminal, &state)
+        .expect("unresolved draw");
+    assert_eq!(unresolved.history, HistoryEmissionOutcome::Noop);
+    let unresolved_text = plain_terminal_text(&terminal);
+    assert!(!unresolved_text.contains("Bash"), "{unresolved_text}");
+    assert!(!unresolved_text.contains("Glob"), "{unresolved_text}");
+
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "bash-call",
+        "Bash",
+        "bash output",
+        false,
+    );
+    let partial = controller
+        .draw(&mut terminal, &state)
+        .expect("partially resolved draw");
+    assert_eq!(partial.history, HistoryEmissionOutcome::Noop);
+    let partial_text = plain_terminal_text(&terminal);
+    assert!(!partial_text.contains("Bash"), "{partial_text}");
+    assert!(!partial_text.contains("bash output"), "{partial_text}");
+
+    test_helpers::push_tool_result(
+        &mut state.session,
+        "glob-call",
+        "Glob",
+        "glob output",
+        false,
+    );
+    let complete = controller
+        .draw(&mut terminal, &state)
+        .expect("completed draw");
+    assert!(matches!(
+        complete.history,
+        HistoryEmissionOutcome::Appended { .. }
+    ));
+    assert_in_text_order(
+        &plain_terminal_text(&terminal),
+        &["Bash", "bash output", "Glob", "glob output"],
+    );
+}
+
+#[test]
+fn native_draw_streams_in_viewport_then_appends_final_message_once() {
     let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
@@ -139,6 +196,7 @@ fn native_draw_provisionally_appends_stable_stream_and_consolidates_final_messag
     controller
         .draw(&mut terminal, &state)
         .expect("initial draw");
+    let history_rows_before_stream = terminal.visible_history_rows();
 
     let mut streaming = StreamingState::new();
     streaming.append_text("alpha\n\nbeta");
@@ -146,6 +204,10 @@ fn native_draw_provisionally_appends_stable_stream_and_consolidates_final_messag
     state.ui.streaming = Some(streaming);
     controller.draw(&mut terminal, &state).expect("stream draw");
 
+    assert!(
+        terminal.visible_history_rows() > history_rows_before_stream,
+        "stable stream rows should be inserted into native history"
+    );
     let streaming_text = plain_terminal_text(&terminal);
     assert_eq!(
         streaming_text.matches("alpha").count(),
@@ -170,10 +232,10 @@ fn native_draw_provisionally_appends_stable_stream_and_consolidates_final_messag
 }
 
 #[test]
-fn native_draw_keeps_stable_stream_visible_when_provisional_append_writes_no_rows() {
+fn native_draw_keeps_stream_visible_with_stable_prefix_in_native_history() {
     let backend = TestBackend::new(64, 12);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, 64, 12));
+    terminal.set_viewport_area(Rect::new(0, 2, 64, 10));
     let mut state = AppState::new();
     let mut controller = NativeSurfaceController::default();
     let plan = SurfaceFramePlan {
@@ -190,14 +252,14 @@ fn native_draw_keeps_stable_stream_visible_when_provisional_append_writes_no_row
         .draw_with_plan(&mut terminal, &state, plan, None)
         .expect("stream draw");
 
-    assert_eq!(terminal.visible_history_rows(), 0);
-    let text = plain_buffer_lines(terminal.backend().buffer()).join("\n");
+    assert!(terminal.visible_history_rows() > 0);
+    let text = plain_terminal_text(&terminal);
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
 }
 
 #[test]
-fn native_draw_repairs_provisional_append_after_mid_stream_resize() {
+fn native_draw_keeps_stream_visible_after_mid_stream_resize() {
     let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
@@ -219,14 +281,13 @@ fn native_draw_repairs_provisional_append_after_mid_stream_resize() {
         .expect("resize stream draw");
 
     let resized_text = plain_terminal_text(&terminal);
-    assert_eq!(resized_text.matches("alpha").count(), 1, "{resized_text}");
     assert_eq!(resized_text.matches("gamma").count(), 1, "{resized_text}");
 
     state.ui.streaming = None;
     test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta\ngamma");
     let outcome = controller
         .draw(&mut terminal, &state)
-        .expect("final consolidation draw");
+        .expect("final append draw");
 
     assert!(matches!(
         outcome.history,
@@ -264,16 +325,15 @@ fn native_draw_finalizes_after_turn_end_shrink_without_full_replay() {
 
     assert!(
         !matches!(outcome.history, HistoryEmissionOutcome::Replayed { .. }),
-        "ordinary turn-end shrink must finalize by appending the residual tail: {:?}",
+        "ordinary turn-end shrink must finalize by appending the assistant cell: {:?}",
         outcome.history
     );
     let text = plain_terminal_text(&terminal);
-    assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
 }
 
 #[test]
-fn native_draw_replays_when_provisional_render_key_differs_on_finalize() {
+fn native_draw_replays_finalized_history_when_theme_changes_at_finalize() {
     let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
@@ -294,7 +354,7 @@ fn native_draw_replays_when_provisional_render_key_differs_on_finalize() {
     test_helpers::push_assistant_text(&mut state.session, "alpha\n\nbeta");
     let outcome = controller
         .draw(&mut terminal, &state)
-        .expect("final consolidation draw");
+        .expect("final append draw");
 
     assert!(matches!(
         outcome.history,
@@ -371,7 +431,7 @@ fn native_draw_appends_after_transcript_revision_changes() {
 }
 
 #[test]
-fn native_draw_reappends_stable_stream_after_width_replay() {
+fn native_draw_keeps_stream_visible_after_width_replay() {
     let backend = TestBackend::new(64, 18);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 12, 64, 6));
@@ -387,14 +447,24 @@ fn native_draw_reappends_stable_stream_after_width_replay() {
     state.ui.streaming = Some(streaming);
     controller.draw(&mut terminal, &state).expect("stream draw");
 
-    // A width change (terminal resize) reflows history — immediately if the
-    // resized buffer forces it, otherwise after the debounce. Either way the
-    // stable stream content must re-emit exactly once (no duplication). A
-    // viewport *height* change must not replay at all — exercised separately.
+    // A width change (terminal resize) reflows committed history — immediately
+    // if the resized buffer forces it, otherwise after the debounce. Streaming
+    // text remains viewport-only and must stay visible exactly once.
     terminal.set_viewport_area(Rect::new(0, 12, 60, 6));
     let immediate = controller
         .draw(&mut terminal, &state)
         .expect("width change draw");
+    let immediate_text = plain_terminal_text(&terminal);
+    assert_eq!(
+        immediate_text.matches("alpha").count(),
+        1,
+        "{immediate_text}"
+    );
+    assert_eq!(
+        immediate_text.matches("beta").count(),
+        1,
+        "{immediate_text}"
+    );
     let debounced = controller
         .draw_at(
             &mut terminal,
@@ -740,6 +810,39 @@ fn line_index(lines: &[String], needle: &str) -> usize {
         .iter()
         .position(|line| line.contains(needle))
         .unwrap_or_else(|| panic!("missing {needle:?} in {lines:#?}"))
+}
+
+fn push_parallel_tool_uses(state: &mut AppState) {
+    let message = coco_messages::create_assistant_message(
+        vec![
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "bash-call",
+                "Bash",
+                serde_json::json!({ "command": "echo bash" }),
+            )),
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "glob-call",
+                "Glob",
+                serde_json::json!({ "pattern": "*.rs" }),
+            )),
+        ],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    state
+        .session
+        .transcript
+        .on_message_appended(std::sync::Arc::new(message));
+}
+
+fn assert_in_text_order(text: &str, needles: &[&str]) {
+    let mut cursor = 0;
+    for needle in needles {
+        let Some(offset) = text[cursor..].find(needle) else {
+            panic!("missing {needle:?} after byte {cursor}:\n{text}");
+        };
+        cursor += offset + needle.len();
+    }
 }
 
 fn apply_native_viewport(terminal: &mut SurfaceTerminal<TestBackend>, area: Rect) {

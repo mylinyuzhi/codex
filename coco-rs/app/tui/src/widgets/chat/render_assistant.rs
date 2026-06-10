@@ -24,6 +24,8 @@ use crate::state::transcript_view::RenderedCell;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
 use coco_tui_ui::constants;
+use coco_tui_ui::display::SyntaxHighlighting;
+use coco_tui_ui::style::UiStyles;
 
 /// Turn-boundary glyph at the start of each assistant text response.
 /// TS `BLACK_CIRCLE` from `constants/figures.ts` picks `⏺` on macOS for
@@ -48,17 +50,14 @@ thread_local! {
     /// map would make those sibling cells evict each other every frame, turning
     /// every render into a guaranteed miss.
     ///
-    /// Reached on BOTH paths that route through `ChatWidget::build_lines_owned`:
-    /// (1) native history emission — `render_finalized_history_lines` on
-    /// reflow/resize/viewport changes plus once per binary-search suffix probe
-    /// in `render_replay_history_lines`; and (2) the compatibility-fallback
-    /// live-tail rebuild via `build_live_tail_lines`. It absorbs the repeated
-    /// full-history suffix renders the replay binary search performs. Bounded so
-    /// it can't grow without limit; because entries are content-keyed a stale
-    /// one can never be served — at worst a removed message's entry is dead
-    /// weight until the cap clear. It deliberately does NOT mirror the
-    /// `reasoning_metadata` prune lifecycle (that exists for correctness, not
-    /// memory).
+    /// Reached by [`render_committed_assistant_markdown`], the committed
+    /// assistant-text renderer shared by native finalized append and replay.
+    /// It absorbs the repeated full-history suffix renders the replay binary
+    /// search performs. Bounded so it can't grow without limit; because entries
+    /// are content-keyed a stale one can never be served — at worst a removed
+    /// message's entry is dead weight until the cap clear. It deliberately does
+    /// NOT mirror the `reasoning_metadata` prune lifecycle (that exists for
+    /// correctness, not memory).
     static COMMITTED_MD_MEMO: RefCell<HashMap<u64, Vec<Line<'static>>>> =
         RefCell::new(HashMap::new());
 }
@@ -71,23 +70,37 @@ pub(crate) fn clear_committed_markdown_memo_for_tests() {
     COMMITTED_MD_MEMO.with(|m| m.borrow_mut().clear());
 }
 
-fn render_assistant_text_memoized(w: &ChatWidget<'_>, text: &str) -> Vec<Line<'static>> {
-    let opts = coco_tui_markdown::MarkdownOptions::new(w.styles, w.width, w.syntax_highlighting);
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommittedAssistantMarkdownOptions<'a> {
+    pub(crate) styles: UiStyles<'a>,
+    pub(crate) width: u16,
+    pub(crate) syntax_highlighting: SyntaxHighlighting,
+}
+
+pub(crate) fn render_committed_assistant_markdown(
+    source: &str,
+    options: CommittedAssistantMarkdownOptions<'_>,
+) -> Vec<Line<'static>> {
+    let opts = coco_tui_markdown::MarkdownOptions::new(
+        options.styles,
+        options.width,
+        options.syntax_highlighting,
+    );
     let key = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        text.hash(&mut h);
+        source.hash(&mut h);
         opts.width.hash(&mut h);
         opts.syntax.is_enabled().hash(&mut h);
         opts.body_indent.hash(&mut h);
         opts.streaming.hash(&mut h);
-        w.styles.theme_hash().hash(&mut h);
+        options.styles.theme_hash().hash(&mut h);
         h.finish()
     };
     if let Some(hit) = COMMITTED_MD_MEMO.with(|m| m.borrow().get(&key).cloned()) {
         return hit;
     }
-    let marker = assistant_lead_marker(w.styles.assistant_message());
-    let rendered = coco_tui_markdown::render_markdown(text, opts, Some(&marker));
+    let marker = assistant_lead_marker(options.styles.assistant_message());
+    let rendered = coco_tui_markdown::render_markdown(source, opts, Some(&marker));
     COMMITTED_MD_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if m.len() >= COMMITTED_MD_MEMO_CAP {
@@ -113,7 +126,14 @@ pub(super) fn try_render(
             // Empty responses still get a marker-only line. Memoized by content
             // (see COMMITTED_MD_MEMO) so repeated history replays / fallback
             // rebuilds don't re-run pulldown + syntect.
-            lines.extend(render_assistant_text_memoized(w, text));
+            lines.extend(render_committed_assistant_markdown(
+                text,
+                CommittedAssistantMarkdownOptions {
+                    styles: w.styles,
+                    width: w.width,
+                    syntax_highlighting: w.syntax_highlighting,
+                },
+            ));
             Some(())
         }
         CellKind::AssistantThinking { text } => {

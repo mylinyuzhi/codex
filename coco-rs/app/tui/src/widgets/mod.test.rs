@@ -633,8 +633,8 @@ fn test_snapshot_plan_mode() {
 
 #[test]
 fn test_snapshot_parallel_tool_batch() {
-    // Spec: crate-coco-tui.md §ChatWidget Internals — parallel tool_use
-    // messages are rendered under a `‖ N in parallel` header.
+    // Policy A: unresolved tool_use messages stay out of native scrollback
+    // until their matching tool results are present.
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     test_helpers::push_user_text(&mut state.session, "1", "Investigate");
@@ -651,6 +651,31 @@ fn test_snapshot_parallel_tool_batch() {
 
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("parallel_tool_batch", output);
+}
+
+#[test]
+fn test_snapshot_completed_parallel_tool_batch() {
+    // Spec: crate-coco-tui.md §ChatWidget Internals — completed parallel
+    // tool_use messages are rendered under a `‖ N in parallel` header and each
+    // result is paired to the matching call_id.
+    let mut state = AppState::new();
+    state.session.model = "opus-4".to_string();
+    test_helpers::push_user_text(&mut state.session, "1", "Investigate");
+    let tools = [
+        ("Bash", "ls -la", "Cargo.toml\nsrc"),
+        ("Glob", "**/*.rs", "src/main.rs\nsrc/lib.rs"),
+    ];
+    for (i, (name, input, _output)) in tools.iter().enumerate() {
+        let call_id = format!("c{i}");
+        test_helpers::push_tool_use(&mut state.session, &call_id, name, input);
+    }
+    for (i, (name, _input, output)) in tools.iter().enumerate() {
+        let call_id = format!("c{i}");
+        test_helpers::push_tool_result(&mut state.session, &call_id, name, output, false);
+    }
+
+    let output = render_to_string(&state, 80, 24);
+    insta::assert_snapshot!("completed_parallel_tool_batch", output);
 }
 
 #[test]

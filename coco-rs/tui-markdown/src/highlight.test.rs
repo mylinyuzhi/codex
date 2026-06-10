@@ -6,6 +6,7 @@ use coco_tui_ui::theme::Theme;
 use coco_tui_ui::theme::ThemeName;
 
 use super::highlight_code;
+use super::prewarm_highlighting;
 
 #[test]
 fn highlights_known_language() {
@@ -139,4 +140,15 @@ fn cache_key_includes_code() {
         !Arc::ptr_eq(&a, &b),
         "distinct code must be a distinct cache entry"
     );
+}
+
+#[test]
+fn prewarm_highlighting_compiles_grammars_without_panicking() {
+    prewarm_highlighting();
+    // Warmed grammars still highlight correctly afterwards.
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let highlighted = highlight_code("# title\n", "md", styles, SyntaxHighlighting::Enabled)
+        .expect("markdown highlights after prewarm");
+    assert!(!highlighted.is_empty());
 }

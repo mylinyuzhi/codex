@@ -5,7 +5,7 @@
 //! Arc<Message>` directly — engine `MessageHistory` is the only source
 //! of truth, with no parallel TUI-side projection.
 
-mod render_assistant;
+pub(crate) mod render_assistant;
 mod render_system;
 mod render_tool;
 mod render_user;
@@ -57,6 +57,10 @@ use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
 pub(crate) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
+
+/// Per-cell render cost above which a `tui::perf::cell` debug line is emitted,
+/// attributing slow history builds to the specific cell (tool name / kind).
+const SLOW_CELL_RENDER_LOG_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(2);
 
 thread_local! {
     static STREAM_RENDER_CONTROLLER: std::cell::RefCell<StreamRenderController> =
@@ -168,7 +172,7 @@ impl<'a> ChatWidget<'a> {
         self.syntax_highlighting = syntax_highlighting;
         self
     }
-    pub(crate) fn native_history_append_compatible(mut self) -> Self {
+    pub(crate) fn native_history_presentation(mut self) -> Self {
         self.assistant_presentation_order = AssistantPresentationOrder::TextBeforeLeadingThinking;
         self
     }
@@ -197,7 +201,19 @@ impl<'a> ChatWidget<'a> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         for cell in presentation.cells {
+            let cell_started = std::time::Instant::now();
+            let lines_before = lines.len();
             self.render_transcript_cell(self.cells, &cell, false, false, &mut lines);
+            let elapsed = cell_started.elapsed();
+            if elapsed >= SLOW_CELL_RENDER_LOG_THRESHOLD {
+                tracing::debug!(
+                    target: "tui::perf::cell",
+                    cell = %cell_perf_label(self.cells, &cell),
+                    lines_added = lines.len() - lines_before,
+                    duration_us = elapsed.as_micros(),
+                    "slow transcript cell render",
+                );
+            }
         }
 
         lines
@@ -773,6 +789,56 @@ fn truncate_chars(text: &str, max: usize) -> String {
 
 pub(super) fn transcript_safe_line(line: &str) -> String {
     truncate_chars(line, TRANSCRIPT_LINE_CHAR_CAP)
+}
+
+/// Compact attribution label for the slow-cell perf log: which cell kind (and
+/// for tool calls, which tool) a slow render belongs to.
+fn cell_perf_label(cells: &[RenderedCell], cell: &TranscriptSourceCell<'_>) -> String {
+    match cell {
+        TranscriptSourceCell::Committed(TranscriptCell::MetaPreview { .. }) => {
+            "meta_preview".to_string()
+        }
+        TranscriptSourceCell::Committed(TranscriptCell::Cell { index }) => {
+            cells.get(*index).map_or_else(
+                || "cell:missing".to_string(),
+                |c| format!("cell:{}", cell_kind_perf_name(&c.kind)),
+            )
+        }
+        TranscriptSourceCell::Committed(TranscriptCell::ToolCall { invocation, .. }) => {
+            match invocation
+                .and_then(|index| cells.get(index))
+                .map(|c| &c.kind)
+            {
+                Some(CellKind::ToolUse { tool_name, .. }) => format!("tool_call:{tool_name}"),
+                Some(_) | None => "tool_call:unknown".to_string(),
+            }
+        }
+        TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { .. }) => {
+            "tool_batch".to_string()
+        }
+        TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(_)) => {
+            "streaming_tail".to_string()
+        }
+        TranscriptSourceCell::Active(ActiveTranscriptCell::BusySpinner) => {
+            "busy_spinner".to_string()
+        }
+    }
+}
+
+fn cell_kind_perf_name(kind: &CellKind) -> &'static str {
+    match kind {
+        CellKind::UserText { .. } => "user_text",
+        CellKind::UserAttachment => "user_attachment",
+        CellKind::AssistantText { .. } => "assistant_text",
+        CellKind::AssistantThinking { .. } => "assistant_thinking",
+        CellKind::AssistantRedactedThinking => "assistant_redacted_thinking",
+        CellKind::ToolUse { .. } => "tool_use",
+        CellKind::ToolResult { .. } => "tool_result",
+        CellKind::Attachment => "attachment",
+        CellKind::Progress => "progress",
+        CellKind::Tombstone => "tombstone",
+        CellKind::System(_) => "system",
+    }
 }
 
 #[cfg(test)]

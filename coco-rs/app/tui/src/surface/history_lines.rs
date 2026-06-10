@@ -282,7 +282,7 @@ pub(crate) fn render_finalized_history_lines(
         .show_thinking(options.show_thinking)
         .width(options.width)
         .syntax_highlighting(options.syntax_highlighting)
-        .native_history_append_compatible()
+        .native_history_presentation()
         .cwd(options.cwd);
     if let Some(kb_handle) = options.kb_handle {
         chat = chat.kb_handle(kb_handle);

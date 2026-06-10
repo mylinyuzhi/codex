@@ -20,6 +20,7 @@ coco-tui-ui.workspace = true
 ratatui.workspace = true
 pulldown-cmark.workspace = true
 syntect.workspace = true
+tracing.workspace = true
 unicode-width.workspace = true
 coco-tui-mermaid = { workspace = true, optional = true }
 

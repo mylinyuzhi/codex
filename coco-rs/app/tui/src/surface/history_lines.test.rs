@@ -35,6 +35,25 @@ fn finalized_history_lines_render_committed_assistant_message() {
 }
 
 #[test]
+fn committed_assistant_markdown_helper_matches_finalized_history_cell() {
+    let theme = Theme::default();
+    let render_options = options(&theme, 40);
+    let direct = crate::widgets::chat::render_assistant::render_committed_assistant_markdown(
+        "hello",
+        crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions {
+            styles: render_options.styles,
+            width: render_options.width,
+            syntax_highlighting: render_options.syntax_highlighting,
+        },
+    );
+    let cells = vec![test_helpers::assistant_text_cell("hello")];
+    let history = render_finalized_history_lines(&cells, render_options);
+
+    assert_eq!(plain_lines(&direct), vec!["⏺ hello"]);
+    assert_eq!(plain_lines(&history[..direct.len()]), plain_lines(&direct));
+}
+
+#[test]
 fn finalized_history_lines_do_not_emit_active_busy_tail() {
     let theme = Theme::default();
     let cells = vec![test_helpers::user_text_cell(Uuid::new_v4(), "hello")];

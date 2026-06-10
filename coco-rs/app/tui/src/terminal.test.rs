@@ -1,12 +1,10 @@
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
 use coco_messages::AssistantContent;
 use coco_messages::TextContent;
 use coco_messages::create_assistant_message;
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
-use coco_tui_ui::engine::history_insert::render_history_rows;
 use coco_types::TokenUsage;
 use crossterm::Command as _;
 use pretty_assertions::assert_eq;
@@ -14,14 +12,10 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
-use ratatui::text::Line;
 
 use crate::state::ModalState;
-use crate::streaming::render_controller::StreamRenderKey;
 use crate::surface::history_driver::PreparedFinalizedHistory;
 use crate::surface::modal::HistorySurfaceMode;
-use crate::surface::stream::CommittedStablePrefix;
-use crate::surface::stream::PreparedProvisionalAppend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 use super::*;
@@ -328,7 +322,7 @@ fn overflow_backed_shrink_partially_defers_when_backing_is_insufficient() {
 }
 
 #[test]
-fn bottom_pinned_shrink_ignores_provisional_append_rows() {
+fn bottom_pinned_shrink_uses_only_finalized_append_rows() {
     let width = 80;
     let height = 24;
     let size = Size::new(width, height);
@@ -342,8 +336,10 @@ fn bottom_pinned_shrink_ignores_provisional_append_rows() {
     let native_frame = NativeSurfaceFramePlan {
         live_lines: None,
         finalized_history: PreparedFinalizedHistory::FastNoop { revision: 0 },
-        provisional_history: Some(provisional_append_rows(width, 6)),
+        stream_append: None,
+        stream_render_key_invalidated: false,
         history_tail_reveal_rows: 0,
+        prepare_stats: crate::surface::controller::NativePrepareStats::default(),
     };
     let mut pin = NativeViewportPin::BottomPinned;
 
@@ -537,20 +533,4 @@ fn buffer_row(buffer: &Buffer, y: u16) -> String {
         row.push_str(buffer[(x, y)].symbol());
     }
     row
-}
-
-fn provisional_append_rows(width: u16, rows: u16) -> PreparedProvisionalAppend {
-    let lines = (0..rows)
-        .map(|index| Line::from(format!("provisional row {index}")))
-        .collect::<Vec<_>>();
-    PreparedProvisionalAppend {
-        committed_prefix: CommittedStablePrefix {
-            source: "provisional".to_string(),
-            line_count: rows as usize,
-            render_key: StreamRenderKey::default(),
-        },
-        line_count: rows as usize,
-        rows: render_history_rows(lines, width),
-        render_elapsed: Duration::default(),
-    }
 }

@@ -109,6 +109,7 @@ impl HistoryEmissionTracker {
         self.emitted_message_uuids = uuids;
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_appended_from(&mut self, cells: &[RenderedCell], start: usize) {
         let mut prev = cells
             .get(start.wrapping_sub(1))

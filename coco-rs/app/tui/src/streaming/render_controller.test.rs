@@ -49,3 +49,32 @@ fn line_text(line: &ratatui::text::Line<'_>) -> String {
         .map(|span| span.content.as_ref())
         .collect()
 }
+
+#[test]
+fn test_stable_lines_remain_prefix_stable_across_advances() {
+    // Regression for the loose-list flip (2026-06-10 production
+    // `pending_stream_prefix_rows_mismatch` replay): items separated by blank
+    // lines arrive incrementally; every already-stable line must survive every
+    // later advance byte-identically, because emitted scrollback rows can
+    // never be rewritten.
+    let theme = Theme::default();
+    let source = "Intro paragraph.\n\n- alpha item\n\n- beta item\n\n- gamma item\n\n\
+                  Closing paragraph.\n\n### Next section\n\nmore text\n\n";
+    let mut controller = StreamRenderController::new();
+    let mut prev: Vec<String> = Vec::new();
+    let mut fed = 0;
+    while fed < source.len() {
+        fed = (fed + 7).min(source.len());
+        let projection = controller.render_projection(input(&source[..fed], &theme));
+        let cur: Vec<String> = projection
+            .stable_lines
+            .iter()
+            .map(|line| format!("{line:?}"))
+            .collect();
+        assert!(
+            cur.len() >= prev.len() && cur[..prev.len()] == prev[..],
+            "stable lines must be append-only across advances (fed={fed}):\nwas {prev:#?}\nnow {cur:#?}",
+        );
+        prev = cur;
+    }
+}

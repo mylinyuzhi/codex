@@ -40,16 +40,10 @@ fn prepare_caps_streaming_tail_to_constant_height() {
 }
 
 #[test]
-fn cap_is_display_only_and_does_not_change_committed_lines() {
-    // Safety invariant: the cap drains `lines` AFTER `stable_append` is built, so
-    // it must NOT change what commits to native scrollback. That keeps the
-    // finalize dedup/consolidation path intact → no loss, no duplication, and a
-    // streaming code fence/list is never split mid-construct.
+fn cap_is_display_only_and_uncapped_scroll_shows_full_stream() {
     let build = |user_scrolled: bool| {
         let mut state = AppState::new();
         let mut streaming = StreamingState::new();
-        // "committed\n\n" crosses a blank-line boundary → commits as stable;
-        // the long list after it stays in the mutable tail.
         let mut src = String::from("committed paragraph\n\n");
         src.push_str(&(0..15).map(|i| format!("- item {i}\n")).collect::<String>());
         streaming.append_text(&src);
@@ -61,18 +55,22 @@ fn cap_is_display_only_and_does_not_change_committed_lines() {
     let capped = build(/*user_scrolled*/ false);
     let uncapped = build(/*user_scrolled*/ true);
 
-    let committed = |p: &PreparedLiveTail| p.stable_append.as_ref().map(|s| s.line_count);
-    assert_eq!(
-        committed(&capped),
-        committed(&uncapped),
-        "the display cap must not change the committed (stable_append) lines"
-    );
     assert!(capped.lines.len() <= STREAMING_LIVE_TAIL_CAP as usize);
     assert!(uncapped.lines.len() > STREAMING_LIVE_TAIL_CAP as usize);
+    let append_text = history_rows_text(
+        &uncapped
+            .stream_append
+            .as_ref()
+            .expect("stable prefix append")
+            .rows,
+    );
+    assert!(append_text.contains("committed paragraph"));
+    let uncapped_text = plain_lines(&uncapped.lines).join("\n");
+    assert!(uncapped_text.contains("item 14"));
 }
 
 #[test]
-fn stable_append_preserves_blank_line_between_streamed_blocks() {
+fn stable_stream_prefix_prepares_native_append_and_leaves_viewport_tail() {
     let mut state = AppState::new();
     let mut streaming = StreamingState::new();
     streaming.append_text("alpha\n\n");
@@ -81,17 +79,70 @@ fn stable_append_preserves_blank_line_between_streamed_blocks() {
 
     let mut driver = SurfaceStreamDriver::default();
     let first = driver.prepare(&state, /*width*/ 40, native_plan());
-    let first_append = first.stable_append.expect("first stable append");
-    assert_eq!(plain_rows(&first_append.rows), vec!["⏺ alpha"]);
-    driver.mark_stable_appended();
+    let first_append = first.stream_append.as_ref().expect("stream append");
+    assert!(history_rows_text(&first_append.rows).contains("alpha"));
+    assert!(!plain_lines(&first.lines).join("\n").contains("alpha"));
+    driver.mark_stream_append_committed(first_append);
 
     let streaming = state.ui.streaming.as_mut().expect("streaming");
     streaming.append_text("beta\n\n");
     streaming.reveal_all();
     let second = driver.prepare(&state, /*width*/ 40, native_plan());
-    let second_append = second.stable_append.expect("second stable append");
+    let second_append = second.stream_append.as_ref().expect("stream append");
+    let second_append_text = history_rows_text(&second_append.rows);
+    let second_text = plain_lines(&second.lines).join("\n");
 
-    assert_eq!(plain_rows(&second_append.rows), vec!["", "  beta"]);
+    assert_eq!(
+        second_append_text.matches("alpha").count(),
+        0,
+        "{second_append_text}"
+    );
+    assert_eq!(
+        second_append_text.matches("beta").count(),
+        1,
+        "{second_append_text}"
+    );
+    assert_eq!(second_text.matches("alpha").count(), 0, "{second_text}");
+    assert_eq!(second_text.matches("beta").count(), 0, "{second_text}");
+}
+
+#[test]
+fn stream_append_fingerprints_accumulate_incrementally_to_full_prefix() {
+    let mut state = AppState::new();
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\n");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+
+    let mut driver = SurfaceStreamDriver::default();
+    let first = driver.prepare(&state, /*width*/ 40, native_plan());
+    let first_append = first.stream_append.as_ref().expect("first stable append");
+    driver.mark_stream_append_committed(first_append);
+
+    let streaming = state.ui.streaming.as_mut().expect("streaming");
+    streaming.append_text("beta\n\ngamma\n\n");
+    streaming.reveal_all();
+    let second = driver.prepare(&state, /*width*/ 40, native_plan());
+    let second_append = second.stream_append.expect("second stable append");
+
+    // A fresh driver fingerprints the same full stable prefix from scratch;
+    // the incremental accumulation must agree with it exactly.
+    let from_scratch = SurfaceStreamDriver::default()
+        .prepare(&state, /*width*/ 40, native_plan())
+        .stream_append
+        .expect("from-scratch append");
+    assert_eq!(
+        second_append.prefix.line_fingerprints,
+        from_scratch.prefix.line_fingerprints
+    );
+    assert_eq!(
+        second_append.prefix.line_prefix_len,
+        from_scratch.prefix.line_prefix_len
+    );
+    assert_eq!(
+        second_append.prefix.line_fingerprints.len(),
+        second_append.prefix.line_prefix_len
+    );
 }
 
 #[test]
@@ -111,15 +162,28 @@ fn prepare_does_not_cap_while_user_is_scrolling() {
     );
 }
 
-fn plain_rows(rows: &coco_tui_ui::engine::history_insert::HistoryRows) -> Vec<String> {
-    let buffer = rows.buffer();
-    (0..buffer.area.height)
-        .map(|y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
+fn plain_lines(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
                 .collect::<String>()
-                .trim_end()
-                .to_string()
         })
         .collect()
+}
+
+fn history_rows_text(rows: &coco_tui_ui::engine::history_insert::HistoryRows) -> String {
+    rows.buffer()
+        .content
+        .chunks(rows.width() as usize)
+        .map(|cells| {
+            cells
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

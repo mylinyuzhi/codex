@@ -29,9 +29,20 @@ use syntect::util::LinesWithEndings;
 
 /// Bundled syntax grammars, deserialized once on first highlight. Immutable —
 /// the only acceptable process-global here (no mutable theme state).
+/// The first-use deserialization costs tens of milliseconds and lands inside
+/// whichever frame first highlights code, so it is logged for attribution.
 fn syntax_set() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
-    SET.get_or_init(SyntaxSet::load_defaults_newlines)
+    SET.get_or_init(|| {
+        let started = std::time::Instant::now();
+        let set = SyntaxSet::load_defaults_newlines();
+        tracing::info!(
+            target: "tui::perf::init",
+            duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+            "syntect syntax set loaded",
+        );
+        set
+    })
 }
 
 /// Guardrails so a giant pasted blob cannot stall a frame on the parse.
@@ -148,6 +159,55 @@ fn find_syntax<'s>(ss: &'s SyntaxSet, lang: &str) -> Option<&'s SyntaxReference>
     };
     ss.find_syntax_by_name(alias)
         .or_else(|| ss.find_syntax_by_token(alias))
+}
+
+/// Pre-compile the lazily-built syntect machinery for the grammars most
+/// likely to appear in tool output and assistant markdown.
+///
+/// syntect deserializes the `SyntaxSet` once (~1ms, logged under
+/// `tui::perf::init`) but compiles each grammar's regexes lazily on first
+/// parse — tens of milliseconds per grammar, which otherwise lands inside the
+/// first frame that renders a code block in that language. Run this from a
+/// background thread at startup: it warms the same process-global `SyntaxSet`,
+/// so every later caller parses against compiled regexes. Skipping it only
+/// costs first-use latency, never correctness.
+pub fn prewarm_highlighting() {
+    const SNIPPET: &str = "# t *m* `c` fn x() { let y: i32 = 1; } [l](u)\n";
+    const LANGS: &[&str] = &[
+        "md", "rs", "sh", "json", "toml", "py", "ts", "js", "yaml", "diff", "go",
+    ];
+    let started = std::time::Instant::now();
+    let ss = syntax_set();
+    let mut warmed = 0usize;
+    for lang in LANGS {
+        let grammar_started = std::time::Instant::now();
+        let Some(syntax_ref) = find_syntax(ss, lang) else {
+            tracing::debug!(
+                target: "tui::perf::init",
+                lang,
+                "syntect prewarm skipped unknown grammar",
+            );
+            continue;
+        };
+        let mut state = ParseState::new(syntax_ref);
+        for line in LinesWithEndings::from(SNIPPET) {
+            let _ = state.parse_line(line, ss);
+        }
+        warmed += 1;
+        tracing::debug!(
+            target: "tui::perf::init",
+            lang,
+            grammar = syntax_ref.name.as_str(),
+            duration_ms = grammar_started.elapsed().as_secs_f64() * 1000.0,
+            "syntect grammar prewarmed",
+        );
+    }
+    tracing::info!(
+        target: "tui::perf::init",
+        duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+        grammars = warmed,
+        "syntect grammars prewarmed",
+    );
 }
 
 /// Per-code-block highlighted result: per-line styled spans, shared via `Arc`

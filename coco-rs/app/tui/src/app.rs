@@ -287,6 +287,18 @@ impl App {
         // session in cooked mode (which echoes focus reports as `^[[O`/`^[[I` and
         // turns Ctrl+C into SIGINT). Best-effort.
         let _ = crate::terminal::enter_tui_modes(&mut std::io::stdout());
+        // Compile the syntect grammars off the main loop so the first frame
+        // that renders a code block doesn't pay tens of milliseconds of lazy
+        // per-grammar regex compilation. Once per process; detached — the
+        // warm state lives in the process-global `SyntaxSet`.
+        static SYNTAX_PREWARM: std::sync::Once = std::sync::Once::new();
+        SYNTAX_PREWARM.call_once(|| {
+            drop(
+                std::thread::Builder::new()
+                    .name("syntect-prewarm".to_string())
+                    .spawn(coco_tui_markdown::prewarm_highlighting),
+            );
+        });
         self.refresh_status_line();
         // Initial render
         self.redraw()?;
@@ -456,7 +468,9 @@ impl App {
             streaming.advance_display();
         }
 
+        let draw_start = perf_config.enabled.then(Instant::now);
         let outcome = self.tui.draw_with_frame_index(&self.state, frame_index)?;
+        let draw_elapsed = draw_start.map(|start| start.elapsed());
         if outcome.retained_surface_visible && self.state.ui.terminal_focused {
             self.state.ui.confirm_surface_visibility_after_draw(now);
         }
@@ -482,6 +496,7 @@ impl App {
                     target: crate::perf::TARGET,
                     frame_index,
                     duration_ms = crate::perf::duration_ms(elapsed),
+                    draw_ms = crate::perf::duration_ms(draw_elapsed.unwrap_or_default()),
                     core_events = frame_inputs.core_events,
                     stream_text_deltas = frame_inputs.stream_text_deltas,
                     stream_thinking_deltas = frame_inputs.stream_thinking_deltas,
