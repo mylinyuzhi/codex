@@ -1342,7 +1342,7 @@ async fn cycle_into_bypass_shows_confirmation_modal() {
 }
 
 #[tokio::test]
-async fn approve_bypass_modal_flips_mode_and_toasts() {
+async fn approve_bypass_modal_flips_mode() {
     use crate::state::BypassPermissionsState;
     use coco_types::PermissionMode;
 
@@ -1362,12 +1362,6 @@ async fn approve_bypass_modal_flips_mode_and_toasts() {
         PermissionMode::BypassPermissions
     );
     assert!(!state.ui.has_active_surface());
-    let toasted = state
-        .ui
-        .toasts
-        .iter()
-        .any(|t| matches!(t.severity, ToastSeverity::Warning));
-    assert!(toasted, "approve should raise a warning toast");
     let cmd = rx.try_recv().expect("SetPermissionMode must be sent");
     assert!(
         matches!(
@@ -1439,12 +1433,8 @@ async fn cycle_into_safe_mode_applies_immediately() {
     // Default → AcceptEdits with no confirmation state.
     assert_eq!(state.session.permission_mode, PermissionMode::AcceptEdits);
     assert!(!state.ui.has_active_surface());
-    let toasted = state
-        .ui
-        .toasts
-        .iter()
-        .any(|t| matches!(t.severity, ToastSeverity::Info));
-    assert!(toasted, "safe mode change should raise an info toast");
+    // No toast — the status bar reflects the active mode.
+    assert!(state.ui.toasts.is_empty());
     let cmd = rx.try_recv().expect("SetPermissionMode must be sent");
     assert!(matches!(
         cmd,
@@ -1455,7 +1445,7 @@ async fn cycle_into_safe_mode_applies_immediately() {
 }
 
 #[tokio::test]
-async fn toggle_plan_mode_raises_toast() {
+async fn toggle_plan_mode_changes_mode() {
     use coco_types::PermissionMode;
 
     let mut state = AppState::new();
@@ -1463,12 +1453,8 @@ async fn toggle_plan_mode_raises_toast() {
 
     handle_command(&mut state, TuiCommand::TogglePlanMode, &tx).await;
     assert_eq!(state.session.permission_mode, PermissionMode::Plan);
-    let on_toast = state
-        .ui
-        .toasts
-        .iter()
-        .any(|t| t.message.to_lowercase().contains("plan mode on"));
-    assert!(on_toast, "plan-on toast should mention plan mode on");
+    // No toast — the status bar reflects the active mode.
+    assert!(state.ui.toasts.is_empty());
 
     handle_command(&mut state, TuiCommand::TogglePlanMode, &tx).await;
     assert_eq!(state.session.permission_mode, PermissionMode::Default);

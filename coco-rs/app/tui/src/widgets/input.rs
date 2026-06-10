@@ -41,11 +41,9 @@ pub(crate) struct InlineGhostRender {
 }
 
 impl InputRenderModel {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         input: &InputState,
         is_streaming: bool,
-        plan_mode: bool,
         prompt_suggestion: Option<&str>,
         has_editable_queue: bool,
         command_palette_filter: Option<&str>,
@@ -99,16 +97,8 @@ impl InputRenderModel {
 
         let title = if is_streaming {
             format!(" {} ", t!("input.title_queue"))
-        } else if prompt_mode != PromptMode::Normal && plan_mode {
-            format!(
-                " {} • {} ",
-                t!("input.title_plan_mode"),
-                t!(prompt_mode.title_i18n_key())
-            )
         } else if prompt_mode != PromptMode::Normal {
             format!(" {} ", t!(prompt_mode.title_i18n_key()))
-        } else if plan_mode {
-            format!(" {} ", t!("input.title_plan_mode"))
         } else {
             String::new()
         };
@@ -132,7 +122,6 @@ pub struct InputWidget<'a> {
     input: &'a InputState,
     styles: UiStyles<'a>,
     focused: bool,
-    plan_mode: bool,
     is_streaming: bool,
     prompt_suggestion: Option<&'a str>,
     has_editable_queue: bool,
@@ -145,7 +134,6 @@ impl<'a> InputWidget<'a> {
             input,
             styles,
             focused: true,
-            plan_mode: false,
             is_streaming: false,
             prompt_suggestion: None,
             has_editable_queue: false,
@@ -155,11 +143,6 @@ impl<'a> InputWidget<'a> {
 
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
-        self
-    }
-
-    pub fn plan_mode(mut self, plan_mode: bool) -> Self {
-        self.plan_mode = plan_mode;
         self
     }
 
@@ -187,7 +170,6 @@ impl<'a> InputWidget<'a> {
         InputRenderModel::build(
             self.input,
             self.is_streaming,
-            self.plan_mode,
             self.prompt_suggestion,
             self.has_editable_queue,
             self.command_palette_filter,

@@ -496,7 +496,6 @@ fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styl
     let is_focused = state.ui.focus == FocusTarget::Input;
     let input = crate::widgets::InputWidget::new(&state.ui.input, styles)
         .focused(is_focused)
-        .plan_mode(state.is_plan_mode())
         .streaming(state.is_streaming())
         .prompt_suggestion(state.session.prompt_suggestions.last().map(String::as_str))
         .has_editable_queue(!state.session.queued_commands.is_empty())
