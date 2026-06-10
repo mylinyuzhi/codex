@@ -273,10 +273,11 @@ fn resolve_key(
         crate::keybinding_resolver::ResolverResult::NotResolved => {}
     }
 
-    // Layer 2: legacy hardcoded cascade (TUI-only shortcuts).
+    // Layer 2: per-surface navigation maps. Bottom-pane prompt surfaces own
+    // their key maps (`crate::bottom_pane`); modal surface maps live below.
     let cmd = match ctx {
-        KeybindingContext::Confirmation => map_confirmation_key(key),
-        KeybindingContext::Question => map_question_key(key),
+        KeybindingContext::Confirmation => crate::bottom_pane::confirmation_map_key(key),
+        KeybindingContext::Question => crate::bottom_pane::question::map_key(key),
         KeybindingContext::ModelPicker => map_model_picker_key(key),
         KeybindingContext::TeamRoster => map_team_roster_key(key),
         KeybindingContext::Picker => map_picker_key(key),
@@ -355,64 +356,6 @@ fn map_settings_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Esc => Some(TuiCommand::Cancel),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
-        }
-        _ => None,
-    }
-}
-
-/// Keys for permission/question/approval prompts.
-fn map_confirmation_key(key: KeyEvent) -> Option<TuiCommand> {
-    match key.code {
-        KeyCode::Char('y' | 'Y') => Some(TuiCommand::Approve),
-        KeyCode::Char('n' | 'N') => Some(TuiCommand::Deny),
-        KeyCode::Char('a' | 'A') => Some(TuiCommand::ApproveAll),
-        // Tab cycles multi-option confirmations (PlanExit approval
-        // target: Restore / AcceptEdits / Bypass). For simple Y/N
-        // dialogs the handler is a no-op.
-        KeyCode::Tab => Some(TuiCommand::SurfaceNext),
-        KeyCode::BackTab => Some(TuiCommand::SurfacePrev),
-        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::SurfacePrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::SurfaceNext),
-        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
-        KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(TuiCommand::Cancel)
-        }
-        _ => None,
-    }
-}
-
-/// Keys for the AskUserQuestion multi-choice prompt.
-///
-/// The option handlers (`interaction::{nav, filter, filter_backspace,
-/// confirm, question_cycle_focus}`) already do the right thing; the bug this
-/// map fixes is purely at the keymap layer. Unlike [`map_confirmation_key`]
-/// it never emits `Approve`/`Deny`/`ApproveAll`: a question commits only via
-/// Enter. Printable characters (and Space/Backspace) flow to `SurfaceFilter*`,
-/// which `interaction::filter` routes to the multi-select toggle or the
-/// question free-text input — the path that was previously dead.
-fn map_question_key(key: KeyEvent) -> Option<TuiCommand> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
-        KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
-        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
-        KeyCode::Up => Some(TuiCommand::SurfacePrev),
-        KeyCode::Down => Some(TuiCommand::SurfaceNext),
-        // Left/Right switch between questions (wrapping), mirroring codex
-        // `move_question` and the TS question tabs. Footer actions stay on Tab.
-        KeyCode::Left => Some(TuiCommand::QuestionSwitchQuestion(-1)),
-        KeyCode::Right => Some(TuiCommand::QuestionSwitchQuestion(1)),
-        // Tab/Shift+Tab cycle between questions and the footer actions
-        // ("Chat about this" / "Skip interview"), via question_cycle_focus.
-        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
-        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
-        KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
-        // Every printable char (Space included) routes through the filter
-        // path: Space toggles a multi-select option, other chars type into
-        // the focused free-text input, and are silently swallowed otherwise.
-        KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
-            Some(TuiCommand::SurfaceFilter(c))
         }
         _ => None,
     }
@@ -497,83 +440,31 @@ fn map_autocomplete_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
-/// Global keyboard shortcuts (active in Chat context).
+/// Residual hardcoded keys for the Chat context — only what CANNOT be a
+/// rebindable default. Every former "TUI-only shortcut" arm has been folded
+/// into `coco-keybindings` defaults as documented coco-rs extensions
+/// (`app:forceQuit`, `app:help`, `app:commandPalette`, `app:settings`,
+/// `chat:toggleSystemReminders`, `chat:togglePlanMode`, plus second default
+/// bindings on existing actions: ctrl+f → `chat:killAgents`, ctrl+m →
+/// `chat:modelPicker`, alt/ctrl+v → `chat:imagePaste`). The arms that the
+/// resolver had already shadowed (ctrl+l → `app:redraw`, ctrl+shift+f →
+/// `app:globalSearch`, ctrl+s → `chat:stash`, ctrl+g →
+/// `chat:externalEditor`, shift+tab → `chat:cycleMode`, plus the
+/// platform-primary paste key) were dead code and are simply gone.
+///
+/// What stays, and why it cannot be a binding:
+/// - `?` opens help only on an empty composer; otherwise the key must fall
+///   through to typing. The resolver swallows matched keys outright, so a
+///   binding would eat `?` mid-sentence.
+/// - PageUp/PageDown are viewport scrolling — navigation, not a shortcut
+///   (the internal `Scroll` context is not part of the Chat stack).
+/// - F6 focus cycling — navigation, same class as the per-surface maps.
 fn map_global_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-
     match key.code {
-        // Ctrl shortcuts. `ctrl+c` / `ctrl+d` are owned exclusively
-        // by the resolver (defaults → `app:interrupt` / `app:exit`,
-        // reserved against rebinding); both go through `update::exit`
-        // for double-press confirmation, so they MUST NOT appear in
-        // this fallback cascade — a hard-coded `Interrupt`/`Quit`
-        // here would bypass the confirmation.
-        //
-        // `ctrl+q` is a coco-rs-only power-user immediate-quit
-        // shortcut with no equivalent in TS. It is not in
-        // `coco-keybindings` defaults (so the resolver leaves it
-        // unhandled) and not reserved, so the fallback below is
-        // what gives it meaning.
-        KeyCode::Char('q') if ctrl => Some(TuiCommand::Quit),
-        KeyCode::Char('l') if ctrl => Some(TuiCommand::ClearScreen),
-        // Ctrl+T / F2 are owned by the keybindings resolver
-        // (Chat: `chat:cycleThinking` → `CycleThinkingLevel`, and
-        // `chat:thinkingToggle` → `ToggleThinking`). No legacy fallback
-        // needed; users who unbind both can rebind via
-        // `~/.coco/keybindings.json`.
-        //
-        // Bare Ctrl+E is deliberately NOT mapped here: TS uses the chord
-        // `ctrl+x ctrl+e` for the external editor precisely so it doesn't
-        // shadow readline's `Ctrl+E = end-of-line` (see
-        // `defaultBindings.ts:82-83`). The `ctrl+x ctrl+e` chord plus the
-        // bare `ctrl+g` shortcut for external editor are already wired
-        // through the resolver via `keybindings/defaults.rs:113-114`.
-        // Falling through here lets `map_input_key` map bare Ctrl+E to
-        // `CursorEnd` as the user expects.
-        KeyCode::Char('r') if ctrl && shift => Some(TuiCommand::ToggleSystemReminders),
-        // Spec (crate-coco-tui.md §Keyboard Shortcuts): Ctrl+F = kill all agents,
-        // Ctrl+Shift+F = toggle fast mode. Global search is reached via
-        // /search in the command palette — no dedicated hotkey.
-        KeyCode::Char('f') if ctrl && shift => Some(TuiCommand::ToggleFastMode),
-        KeyCode::Char('f') if ctrl => Some(TuiCommand::KillAllAgents),
-        KeyCode::Char('p') if ctrl => Some(TuiCommand::ShowCommandPalette),
-        KeyCode::Char('s') if ctrl => Some(TuiCommand::ShowSessionBrowser),
-        // Ctrl+O / Ctrl+Shift+O / Ctrl+B are owned by the keybindings
-        // resolver (`app:toggleTranscript` / `app:toggleTeammatePreview`
-        // / `task:background`). Keep them out of the legacy cascade so
-        // hints and defaults cannot diverge.
-        KeyCode::Char('v') if ctrl || alt => Some(TuiCommand::PasteFromClipboard),
-        KeyCode::Char('m') if ctrl => Some(TuiCommand::CycleModel),
-        // (The teams-roster picker now opens via the rebindable
-        // `app:toggleTeamRoster` action — default `ctrl+shift+t` — resolved in
-        // Layer 1; the old hardcoded `ctrl+t` arm here was dead because the
-        // resolver claims `ctrl+t` for `app:toggleTodos` first.)
-        KeyCode::Char('g') if ctrl => Some(TuiCommand::OpenPlanEditor),
-        KeyCode::Char(',') if ctrl => Some(TuiCommand::ShowSettings),
-
-        // Tab
-        KeyCode::Tab if state.ui.input.active_inline_ghost().is_some() => {
-            Some(TuiCommand::AutocompleteAccept)
-        }
-        KeyCode::Tab if prompt_suggestion_visible(state) => {
-            Some(TuiCommand::AcceptPromptSuggestion)
-        }
-        KeyCode::Tab => Some(TuiCommand::TogglePlanMode),
-        KeyCode::BackTab => Some(TuiCommand::CyclePermissionMode),
-
-        // Help
         KeyCode::Char('?') if state.ui.input.is_empty() => Some(TuiCommand::ShowHelp),
-        KeyCode::F(1) => Some(TuiCommand::ShowHelp),
-
-        // Scrolling
         KeyCode::PageUp => Some(TuiCommand::PageUp),
         KeyCode::PageDown => Some(TuiCommand::PageDown),
-
-        // Focus
         KeyCode::F(6) => Some(TuiCommand::FocusNext),
-
         _ => None,
     }
 }
@@ -675,7 +566,7 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
-fn prompt_suggestion_visible(state: &AppState) -> bool {
+pub(crate) fn prompt_suggestion_visible(state: &AppState) -> bool {
     state.ui.input.is_empty()
         && state.session.queued_commands.is_empty()
         && state

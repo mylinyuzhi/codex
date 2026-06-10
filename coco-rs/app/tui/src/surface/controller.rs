@@ -8,14 +8,14 @@ use crate::state::AppState;
 use crate::surface::history_driver::HistoryReplayMode;
 use crate::surface::history_driver::PreparedFinalizedHistory;
 use crate::surface::history_driver::SurfaceHistoryDriver;
-use crate::surface::history_emitter::HistoryEmissionOutcome;
-use crate::surface::history_lines::HistoryLineRenderOptions;
 #[cfg(any(test, feature = "testing"))]
 use crate::surface::modal::ModalSurfaceState;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::stream::PreparedStreamAppend;
 use crate::surface::stream::SurfaceStreamDriver;
 use crate::surface::viewport::render_interactive_viewport;
+use crate::transcript::emission::HistoryEmissionOutcome;
+use crate::transcript::render::HistoryLineRenderOptions;
 use crate::widgets::TranscriptLayoutIndex;
 #[cfg(any(test, feature = "testing"))]
 use coco_tui_ui::engine::compatibility::TerminalCompatibility;
@@ -63,14 +63,13 @@ pub(crate) struct NativeSurfaceFramePlan {
     pub(crate) prepare_stats: NativePrepareStats,
 }
 
-/// Sub-stage timings collected by [`NativeSurfaceController::prepare_native_frame`]
-/// so the `prepare_native_frame` perf stage can attribute its cost between the
-/// live-stream prepare (markdown projection + watermark/fingerprint work) and
-/// the finalized-history prepare (cell-line build + row render).
+/// Prepare-stage timing collected by [`NativeSurfaceController::prepare_native_frame`]
+/// for the `prepare_native_frame` perf stage. The live-stream prepare and the
+/// finalized-history prepare run as one pass, so their cost is reported as a
+/// single span.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct NativePrepareStats {
-    pub(crate) stream_prepare: Duration,
-    pub(crate) history_prepare: Duration,
+    pub(crate) prepare: Duration,
 }
 
 impl NativeSurfaceFramePlan {
@@ -93,7 +92,7 @@ impl NativeSurfaceController {
         plan: SurfaceFramePlan,
         now: Instant,
     ) -> NativeSurfaceFramePlan {
-        let stream_prepare_started = Instant::now();
+        let prepare_started = Instant::now();
         let prepared_live = (width > 0).then(|| self.stream.prepare(state, width, plan));
         let (live_lines, stream_append, stream_render_key_invalidated) = match prepared_live {
             Some(prepared) => (
@@ -103,8 +102,6 @@ impl NativeSurfaceController {
             ),
             None => (None, None, false),
         };
-        let stream_prepare = stream_prepare_started.elapsed();
-        let history_prepare_started = Instant::now();
         let options = history_options(state, width);
         let session_header = session_header_lines(state, width);
         let cells = state.session.transcript.cells();
@@ -125,7 +122,6 @@ impl NativeSurfaceController {
         } else {
             PreparedFinalizedHistory::ReplayRequired
         };
-        let history_prepare = history_prepare_started.elapsed();
         NativeSurfaceFramePlan {
             live_lines,
             finalized_history,
@@ -133,8 +129,7 @@ impl NativeSurfaceController {
             stream_render_key_invalidated,
             history_tail_reveal_rows: self.history.tail_reveal_rows(width),
             prepare_stats: NativePrepareStats {
-                stream_prepare,
-                history_prepare,
+                prepare: prepare_started.elapsed(),
             },
         }
     }

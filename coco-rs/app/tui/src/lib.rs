@@ -14,6 +14,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod app;
 pub mod autocomplete;
+pub(crate) mod bottom_pane;
 pub mod command;
 pub mod completion;
 pub mod cursor;
@@ -34,7 +35,6 @@ mod presentation;
 pub mod server_notification_handler;
 pub mod state;
 pub(crate) mod status_bar;
-pub mod streaming;
 pub(crate) mod surface;
 mod surface_content;
 mod sync_update_probe;
@@ -42,6 +42,7 @@ mod system_theme_probe;
 pub mod terminal;
 pub mod theme;
 pub mod tool_display;
+pub(crate) mod transcript;
 pub mod update;
 mod update_rewind;
 pub mod vim;
@@ -49,9 +50,6 @@ pub(crate) mod widgets;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-
-// Legacy model kept for backward compatibility with existing tests
-pub mod model;
 
 // ── Public API ──
 pub use app::App;

@@ -66,6 +66,13 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         }
         AppGlobalSearch => TuiCommand::ShowGlobalSearch,
         AppQuickOpen => TuiCommand::ShowQuickOpen,
+        // coco-rs extensions folded from the old hardcoded cascade.
+        // `app:forceQuit` (ctrl+q) deliberately bypasses the `app:exit`
+        // double-press confirmation — it is the power-user immediate quit.
+        AppForceQuit => TuiCommand::Quit,
+        AppHelp => TuiCommand::ShowHelp,
+        AppCommandPalette => TuiCommand::ShowCommandPalette,
+        AppSettings => TuiCommand::ShowSettings,
         // KAIROS (`app:toggleBrief`) / TERMINAL_PANEL (`app:toggleTerminal`)
         // are TS feature-gated. coco-rs doesn't ship those features and
         // doesn't emit them in defaults; if a user explicitly binds the
@@ -130,6 +137,21 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // cursor (Shift+↑ in TS). Gated on TS `MESSAGE_ACTIONS` feature;
         // coco-rs doesn't ship that state so we silently no-op.
         ChatMessageActions => return None,
+        // coco-rs extension (ctrl+shift+r): toggle <system-reminder>
+        // visibility in the transcript.
+        ChatToggleSystemReminders => TuiCommand::ToggleSystemReminders,
+        // coco-rs extension (tab): state-dependent — an active inline
+        // ghost or visible prompt suggestion accepts it instead of
+        // toggling plan mode, mirroring the old cascade's Tab arms.
+        ChatTogglePlanMode => {
+            if state.ui.input.active_inline_ghost().is_some() {
+                TuiCommand::AutocompleteAccept
+            } else if crate::keybinding_bridge::prompt_suggestion_visible(state) {
+                TuiCommand::AcceptPromptSuggestion
+            } else {
+                TuiCommand::TogglePlanMode
+            }
+        }
 
         // ── Autocomplete ────────────────────────────────────────────
         AutocompleteAccept => TuiCommand::AutocompleteAccept,

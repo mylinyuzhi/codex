@@ -245,12 +245,17 @@ Scrollback immutability is terminal physics — no design removes it. What v2
 removes is one specific piece of machinery: the **per-rendered-line
 fingerprint re-verification** that coco runs at finalize to re-prove that
 the rows already emitted mid-stream match the final render. That check is
-redundant with a property the codebase **already tests**
-(`render_controller.test.rs::test_stable_lines_remain_prefix_stable_across_advances`):
-rendering a markdown *source prefix* through the committed renderer yields a
-*row-prefix* of rendering the full source, past `stable_prefix_end`
-boundaries. If that property holds, then a **source-level** anchor check is
-sufficient and the fingerprints are belt-and-suspenders.
+redundant with the markdown prefix-stability property: rendering a markdown
+*source prefix* through the committed renderer yields a *row-prefix* of
+rendering the full source, past `stable_prefix_end` boundaries. If that
+property holds, then a **source-level** anchor check is sufficient and the
+fingerprints are belt-and-suspenders. (Implementation note, post-review: the
+pre-existing advance test only pinned prefix-vs-larger-prefix at stable
+boundaries; the relation the finalize actually uses — stable-prefix render vs
+the committed render of the **full** text, unstable tail included — is pinned
+by `transcript/stream.test.rs::test_stable_lines_are_row_prefix_of_full_committed_render`,
+added with Stage 1 and covering fence / loose-list / setext / blockquote /
+table / late-reference-link / partial-line traps at two widths.)
 
 The finalize keeps the existing per-segment cell anchoring
 (`history_driver.rs:537-594`) and swaps the verification:
@@ -368,7 +373,13 @@ The engine source-contract pin (§8) stays as specified: it pins the
 *per-`AssistantContent::Text`-part* equality at the inference layer (part
 identity is erased at the `StreamEvent::TextDelta` level), and documents the
 `emit_stream` error-swallow (`engine_stream_consume.rs:260`) as the one real
-divergence the anchor check + replay already guards.
+divergence. Scope, stated precisely (review correction): the underlying
+`send(..).await` fails only once the TUI receiver is dropped — it cannot lose
+a delta transiently while the TUI lives. Divergence **within** the committed
+prefix is caught by the finalize source-anchor → replay; divergence **past**
+the committed prefix would be unguarded (a late list sibling can retroactively
+flip earlier rows via the loose/tight rule while `starts_with` still passes),
+but reaching it requires a mid-turn delta loss this channel cannot produce.
 
 ### 6.3 Core decision 2 — geometry is one pure function, engine-owned
 
@@ -529,7 +540,7 @@ ownership, UI-owned history, hardcoded styling.
 
 | Risk | Mitigation |
 |---|---|
-| Dropping the row fingerprints could let a mis-rendered prefix reach scrollback | The fingerprints re-verified a property the code already pins (`test_stable_lines_remain_prefix_stable_across_advances`): a source-prefix render is a row-prefix of the full render. Keep that test as the soundness anchor; the source `starts_with` + render-key gate stay; replay remains the fallback. If the markdown renderer ever violates prefix-stability, that test fails in CI — not a user-visible scrollback corruption. |
+| Dropping the row fingerprints could let a mis-rendered prefix reach scrollback | The fingerprints re-verified the markdown prefix-stability property: a source-prefix render is a row-prefix of the full render. The soundness anchor is `transcript/stream.test.rs::test_stable_lines_are_row_prefix_of_full_committed_render` (prefix vs **full**-document render, the exact relation the finalize uses), with `test_stable_lines_remain_prefix_stable_across_advances` as the secondary advance pin; the source `starts_with` + render-key gate stay; replay remains the fallback. A renderer prefix-stability violation in a covered construct fails CI; the pins are example-based, so an uncovered construct remains a (small) residual risk — extend the trap source when `stable_prefix_end` learns new constructs. |
 | Within-message multi-text turns (`text→tool→text` in one assistant message) still replay | This is **parity with today**, not a regression (§6.2.1): the current fingerprinted code already replays this shape in both tool-exec modes (non-streaming: merged-accumulator anchor mismatch; streaming: `pending_stream_prefix` single-slot overwrite at `history_driver.rs:308`). It is a minority shape — the dominant cross-round loop resets cleanly via `MessageAppended`. Eliminating it is Scope C, explicitly deferred. The engine source-contract pin is per-`AssistantContent::Text`-part, documenting (not papering over) the `emit_stream` error-swallow as the one real divergence. |
 | The text-first ordering rule constrains future cell designs | Only the *order* of a message's cells must be suffix-independent, not row content. It is the *presentation* half of §6.1 (kept); the *verify* half is deleted. Document the rule per new `TranscriptCellKind`. |
 | The text-first ordering rule constrains future cell designs | Far weaker than the previous draft's prefix-monotonicity: only the *order* of a message's cells must be suffix-independent, not row content. Document it per new `TranscriptCellKind`. |
@@ -541,10 +552,12 @@ ownership, UI-owned history, hardcoded styling.
 - Carry over the full §10 test list of `single-render-path-refactor.md`
   (stream append, tail exclusion, exactly-once finalize, holdback classes,
   tool pairing, pinned-geometry, height-only no-replay).
-- Keep as the soundness anchor (do NOT delete):
-  `test_stable_lines_remain_prefix_stable_across_advances` and the
-  render-key replay tests — they are what makes dropping the fingerprints
-  safe.
+- Keep as the soundness anchors (do NOT delete):
+  `test_stable_lines_are_row_prefix_of_full_committed_render` (primary —
+  prefix vs full-document render, the relation the finalize uses),
+  `test_stable_lines_remain_prefix_stable_across_advances` (secondary —
+  append-only advances), and the render-key replay tests — they are what
+  makes dropping the fingerprints safe.
 - Add: an engine-layer source-contract pin — for each
   `AssistantContent::Text` part, `part.text` equals the byte concat of that
   part's `TextDelta` run (empty dropped symmetrically), covering single-run,
@@ -589,8 +602,61 @@ ownership, UI-owned history, hardcoded styling.
 
 ## 10. Staged Implementation Plan (Scope B) — source-verified
 
-Status: ready to execute; not started. This section supersedes the recon
-workflow's U1–U6 draft after two rounds of source-level cross-validation:
+Status: **Stage 0 + Stage 1 (U1–U5) + Stage 2 IMPLEMENTED** on `feat/tui2`
+(2026-06-10, uncommitted) — full `coco-tui` + `coco-tui-ui` suites green,
+`coco-inference` pin green, `just quick-check` clean. Stage 2 (engine-owned
+`seat_viewport`, §10.3 status note) landed after a same-day adversarial
+review of Stage 1. Stage 3 + Stage 4 remainder + Scope C remain (separate
+tracks). One deviation: the U1 `project_cells` re-export was **deferred** —
+it has no Stage-1 consumer (transcript renderers take already-derived
+`&[RenderedCell]`; derivation stays in `state/derive` +
+`state/transcript_view`), and an unused `pub(crate) use` fails the
+zero-warnings gate while repointing `state` → `transcript::cells` would invert
+layering; `transcript/cells.rs` documents the re-home.
+
+A same-day adversarial review hardened Stage 1: (a) the soundness pin was
+strengthened — the pre-existing prefix-stability test only compared
+stable-prefix renders against *larger stable prefixes*, while the anchored
+finalize relies on stable-prefix vs **full-document** render (unstable tail
+included); `test_stable_lines_are_row_prefix_of_full_committed_render` now
+pins exactly that relation (passes — including setext/loose-list/partial-line
+traps); (b) the anchored finalize moved to `transcript/emission.rs` as the
+pure `finalize_after_stream_prefix` (the §6.4 target — `emission` now owns the
+suffix-vs-replay decision; per-frame state and terminal I/O stay in
+`surface/history_driver`); (c) `PendingStreamPrefix` lost its redundant
+`source_prefix_len` and moved next to the watermark in `transcript/stream.rs`
+(`PreparedStreamAppend.watermark` is now derived, not duplicated);
+(d) `StreamRenderKey::committed` takes `(styles, width, syntax)` directly — no
+more fake-empty-source key construction; (e) the U5 in-flight render goes
+through `render_in_flight_assistant_markdown` (same renderer, streaming flag
+set) so mermaid layout runs once at finalize instead of per delta;
+(f) deprecated `model.rs` (Stage 4 item) deleted early — zero non-test
+consumers.
+
+A second (independent-agent) review wave added: (g) **cross-turn watermark
+fix** — event coalescing can fold `MessageAppended(turn N)` + turn N+1's
+first deltas into one draw, so `SurfaceStreamDriver` never observes the
+`streaming == None` gap that clears its watermark; the length-only
+`emitted_valid` check could then re-attribute turn N's watermark to turn N+1
+and silently skip the new turn's leading scrollback rows (a case the deleted
+fingerprints used to self-heal via replay). A controller reset now
+invalidates the watermark outright (identity over size); pinned by
+`watermark_does_not_survive_source_replacement`. (h) the in-flight render
+uses a **single-slot memo** instead of the shared committed map — per-delta
+content hashes were flooding the map with dead snapshots and wholesale-
+clearing legitimate committed entries at the cap. (i) the soundness pin
+gained blockquote/table/late-reference-link traps and a narrow-width pass.
+Second honest deviation: U5's "fold `ActiveTranscriptCell::Streaming` into
+the transcript owner" was **not** done — the active-cell enum stays in
+`presentation/transcript.rs` and `render_streaming` on `ChatWidget`; it is
+part of the same Stage-2+ ownership story as the cell model (the in-flight
+render does go through the shared committed renderer, which is the
+load-bearing half). Known accepted trade: the fallback path renders the full
+in-flight document per delta (memo dedupes repeat frames; reveal pacing
+bounds the rate), and mermaid diagrams appear at finalize in the fallback
+while the native stable region may show them mid-stream. This section
+supersedes the recon workflow's U1–U6 draft after two rounds of source-level
+cross-validation:
 the recon's "U1 engine segmentation fix" is **void** (a no-op in both
 tool-exec modes, §6.2.1), and the deletion scope is **narrower** than the
 recon's "delete the verify half" (the finalize markdown render survives —
@@ -700,19 +766,101 @@ aspirational. The non-native `width == 0` fallback
 
 ### 10.3 Stage boundaries (explicitly not Stage 1)
 
-- **Stage 2** — geometry into the `tui-ui` engine (§6.3): everything under
-  `terminal.rs::{sync_surface_area, sync_main_surface_area,
-  commit_native_viewport_geometry, native_viewport_geometry_with_max,
-  flowing_viewport_seats_flush}`, `controller.rs::{fill_history_tail_gap,
-  guaranteed_append_rows}`, all of `surface/viewport.rs`, and the
-  `HistoryTailCache` reveal mechanism stay untouched in Stage 1; Stage 2
-  ports the I-V1..I-V4 invariants and the C1/A4 frame tests onto the
-  engine-owned `seat_viewport`.
-- **Stage 3** — `bottom_pane/` local view stack (new feature, own track).
-- **Stage 4** — cleanups: legacy keybinding cascade folded into
-  `coco-keybindings` defaults; deprecated `model.rs`; the `reveal_all`
-  doc-comment drift in `state/ui.rs:865` (no production caller — finalize
-  is taken over by the cell render).
+- **Stage 2 — DONE** (same branch, after Stage 1): the seat/pin decision
+  moved into `coco_tui_ui::engine::seat` —
+  `SurfaceTerminal::seat_viewport(SeatInputs) -> SeatDecision` anchors on the
+  owned viewport top and consumes the engine-internal unclamped history
+  extent (`history_backs_row`) so no clamped proxy can reach the pin
+  predicate (I-V2 by construction); `flowing_seats_flush` (I-V1) is an
+  engine method; the shrink/reveal arbitration (`commit_seat`) and height
+  clamp moved with it. The shell's `sync_main_surface_area` now supplies
+  typed intent (desired height, `NATIVE_VIEWPORT_MIN/MAX` policy bounds,
+  tail-reveal/append backing) and applies the returned decision;
+  `commit_native_viewport_geometry` / `native_viewport_geometry_with_max` /
+  `native_viewport_height` / `flowing_viewport_seats_flush` and the
+  `NativeViewportPin/Geometry/Commit*` types are deleted from `terminal.rs`.
+  The pure seat math tests moved to `engine/seat.test.rs` (including a
+  decision-level C1 pin, `seat_stays_pinned_when_unclamped_extent_backs_
+  pinned_row`); the frame-level C1/A4 suite stays in `terminal.test.rs`
+  driving the full `sync → commit → tail fill → emission → draw` path
+  (I-V4). Deliberately NOT moved: overlay/alt-screen policy (shell-side,
+  alt frames don't seat — N3 by construction), `interactive_viewport_*`
+  height policy (reads `AppState`), the `HistoryTailCache` and
+  `fill_history_tail_gap` (shell data + I/O execution — they feed
+  `SeatInputs.tail_reveal_rows` and execute the engine's
+  `reveal_tail_rows` verdict), and `surface/viewport.rs` (AppState-coupled
+  view code, barred from the engine by the seam).
+- **Stage 3** — `bottom_pane/` local view stack (**B1, B2, and B4's
+  prompt half IMPLEMENTED** same-day; B4's modal half + B5 remain).
+  Landed: `app/tui/src/bottom_pane/{mod,permission,question,plan}.rs` —
+  the routing layer (`route_approve/deny/confirm/nav/filter[_backspace]`,
+  one match per command instead of eight-way matches in each free
+  function) plus per-surface behavior modules;
+  `update/interaction.rs` shrank 1,713 → ~700 LoC and now owns only the
+  modal surfaces and the prompt-first/modal-fallback entry shells (the
+  pre-existing per-command ordering — confirm's modal-before-prompt
+  included — preserved exactly); the Confirmation/Question key maps
+  moved out of `keybinding_bridge` onto the pane (`confirmation_map_key`
+  on the routing layer — shared by the confirmation-class prompts — and
+  `question::map_key`). B3 is judged substantively met: the modal
+  odds-and-ends now live alone in `update/interaction.rs` under the
+  800-LoC module discipline; further per-modal splitting is deferred
+  until a modal needs it. Remaining: B4's modal half (picker/scrollable/
+  settings/model-picker/team-roster maps move when modal surfaces get
+  their own modules) and B5 (viewport prompt rendering via the
+  surface's render). Acceptance held: the full interaction behavior
+  suite passes unchanged through the shells (1013/1013), snapshots
+  byte-identical.
+
+  Original survey + target shape (kept for the remaining halves): Current state: the
+  prompt stack already exists and is sound — `state/interaction.rs` owns
+  `PanePromptState` (8 variants) with the attention-safety `priority()`
+  ordering; the sprawl is `update/interaction.rs` (1,713 LoC), where one
+  `nav()` / `confirm()` / `filter()` family matches over every prompt kind
+  AND the modal surfaces (model picker effort cycling, team-roster mode
+  cycling, settings toggles, session browser filtering). After the Stage-4
+  cascade fold, the key-routing pipeline is already three explicit layers
+  (reserved exits → resolver → per-surface nav maps → composer), so Stage 3
+  is narrower than the original sketch assumed.
+
+  **Target shape — TEA-compatible, NOT codex's `Box<dyn View>` object
+  stack** (§5 keeps TEA as a retained asset; an object stack with
+  self-owned mutable state would fork `AppState`'s single mutable source):
+  a `bottom_pane/` module where each prompt/surface is one submodule
+  implementing one trait of pure update functions
+  (`handle_nav` / `handle_confirm` / `handle_filter` over `&mut` its OWN
+  state struct + a typed effect return), with the existing priority stack
+  re-homed as the module's `PaneStack`. The shared `SurfacePrev/Next/
+  Confirm/Filter` TuiCommands stay; dispatch goes through one
+  `route_to_focused_surface` match instead of today's eight-way matches
+  inside each free function.
+
+  Commit units: **B1** trait + `PaneStack` re-home (pure move of
+  `state/interaction.rs` stack logic); **B2** one commit per prompt kind
+  (8 small moves out of `update/interaction.rs`); **B3** modal-surface
+  odds-and-ends (model picker / settings / roster / session browser) into
+  their surfaces; **B4** collapse the bridge's per-surface special cases
+  (`map_question_key` etc.) into the surfaces' own key handlers, making
+  the routing order `focused surface → resolver → composer → residual`
+  literal in one function; **B5** viewport prompt rendering reads
+  the surface's `render` instead of the central match. Acceptance: the
+  existing `update/interaction.test.rs` suite ports per-unit with zero
+  behavior change; native-surface + prompt snapshots stay byte-identical.
+- **Stage 4 — DONE**: ~~legacy keybinding cascade folded into
+  `coco-keybindings` defaults~~ — the audit found six of the cascade's
+  global arms were already dead (the resolver shadowed ctrl+l /
+  ctrl+shift+f / ctrl+s / ctrl+g / shift+tab / the platform paste key);
+  the live arms became six documented coco-extension actions
+  (`app:forceQuit|help|commandPalette|settings`,
+  `chat:toggleSystemReminders|togglePlanMode`) plus second default
+  bindings on existing actions (ctrl+f, ctrl+m, the mirror paste key),
+  all now user-rebindable. The hardcoded residue is only what cannot be
+  a binding: per-surface navigation maps, readline editing, `?`-on-empty
+  (must fall through to typing), PageUp/PageDown, F6.
+  ~~Deprecated `model.rs`~~ (deleted in the Stage-1 review round — zero
+  non-test consumers); ~~the `reveal_all` doc-comment drift~~ (fixed:
+  `advance_display` doc corrected, `reveal_all` is `#[cfg(test/testing)]`
+  with an honest doc).
 - **Scope C (deferred; value reduced by cross-validation)** — per-segment
   pending prefixes at the `history_driver.rs:308` single-slot overwrite;
   buys back replays only on the §6.2.1 minority shape.
@@ -726,6 +874,11 @@ per repository rules.
 
 ### 10.5 Readiness
 
-Stage 0 is unblocked; U1 may start immediately after the Stage-0 pin
-lands. There are no engine-side blockers — the recon's "BLOCKER" finding
-is void (§6.2.1).
+Stage 0 + Stage 1 (U1–U5) are **done** (see the §10 status note). The
+recon's "BLOCKER" finding was void (§6.2.1) as predicted, and the
+zero-churn acceptance gate held: the ~17 native-surface `.snap` files
+stayed byte-identical (the one regenerated snapshot,
+`transcript_modal_parallel_glob_results`, was a **pre-existing** stale
+modal snapshot the `tool_batch_name_summary` landing had missed — outside
+the native-surface acceptance set, unrelated to this refactor). Stage 2 is
+the next unblocked track.

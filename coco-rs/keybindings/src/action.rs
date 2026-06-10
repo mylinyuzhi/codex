@@ -36,6 +36,19 @@ pub enum KeybindingAction {
     AppRedraw,
     AppGlobalSearch,
     AppQuickOpen,
+    /// coco-rs extension (no TS counterpart): immediate quit without the
+    /// double-press confirmation `app:exit` goes through. Default `ctrl+q`.
+    AppForceQuit,
+    /// coco-rs extension (no TS counterpart): open the help overlay.
+    /// Default `f1`. (`?` on an empty composer also opens help, hardcoded
+    /// in the TUI because it must fall through to typing otherwise.)
+    AppHelp,
+    /// coco-rs extension (no TS counterpart): open the command palette.
+    /// Default `ctrl+p`; `history:search` (ctrl+r) opens the same surface.
+    AppCommandPalette,
+    /// coco-rs extension (no TS counterpart): open the settings overlay.
+    /// Default `ctrl+,` (the conventional settings shortcut).
+    AppSettings,
 
     // ── History navigation — schema.ts:77-79 ──────────────────────────
     HistorySearch,
@@ -63,6 +76,13 @@ pub enum KeybindingAction {
     ChatStash,
     ChatImagePaste,
     ChatMessageActions,
+    /// coco-rs extension (no TS counterpart): toggle `<system-reminder>`
+    /// visibility in the transcript. Default `ctrl+shift+r`.
+    ChatToggleSystemReminders,
+    /// coco-rs extension (no TS counterpart): toggle plan mode. Default
+    /// `tab` in Chat — dispatch is state-dependent (an active inline ghost
+    /// or prompt suggestion accepts instead of toggling).
+    ChatTogglePlanMode,
 
     // ── Autocomplete menu — schema.ts:95-98 ───────────────────────────
     AutocompleteAccept,
@@ -208,6 +228,10 @@ impl KeybindingAction {
             Self::AppRedraw => Cow::Borrowed("app:redraw"),
             Self::AppGlobalSearch => Cow::Borrowed("app:globalSearch"),
             Self::AppQuickOpen => Cow::Borrowed("app:quickOpen"),
+            Self::AppForceQuit => Cow::Borrowed("app:forceQuit"),
+            Self::AppHelp => Cow::Borrowed("app:help"),
+            Self::AppCommandPalette => Cow::Borrowed("app:commandPalette"),
+            Self::AppSettings => Cow::Borrowed("app:settings"),
 
             Self::HistorySearch => Cow::Borrowed("history:search"),
             Self::HistoryPrevious => Cow::Borrowed("history:previous"),
@@ -227,6 +251,8 @@ impl KeybindingAction {
             Self::ChatStash => Cow::Borrowed("chat:stash"),
             Self::ChatImagePaste => Cow::Borrowed("chat:imagePaste"),
             Self::ChatMessageActions => Cow::Borrowed("chat:messageActions"),
+            Self::ChatToggleSystemReminders => Cow::Borrowed("chat:toggleSystemReminders"),
+            Self::ChatTogglePlanMode => Cow::Borrowed("chat:togglePlanMode"),
 
             Self::AutocompleteAccept => Cow::Borrowed("autocomplete:accept"),
             Self::AutocompleteDismiss => Cow::Borrowed("autocomplete:dismiss"),
@@ -412,6 +438,10 @@ impl FromStr for KeybindingAction {
             "app:redraw" => Self::AppRedraw,
             "app:globalSearch" => Self::AppGlobalSearch,
             "app:quickOpen" => Self::AppQuickOpen,
+            "app:forceQuit" => Self::AppForceQuit,
+            "app:help" => Self::AppHelp,
+            "app:commandPalette" => Self::AppCommandPalette,
+            "app:settings" => Self::AppSettings,
 
             "history:search" => Self::HistorySearch,
             "history:previous" => Self::HistoryPrevious,
@@ -431,6 +461,8 @@ impl FromStr for KeybindingAction {
             "chat:stash" => Self::ChatStash,
             "chat:imagePaste" => Self::ChatImagePaste,
             "chat:messageActions" => Self::ChatMessageActions,
+            "chat:toggleSystemReminders" => Self::ChatToggleSystemReminders,
+            "chat:togglePlanMode" => Self::ChatTogglePlanMode,
 
             "autocomplete:accept" => Self::AutocompleteAccept,
             "autocomplete:dismiss" => Self::AutocompleteDismiss,

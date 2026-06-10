@@ -515,7 +515,7 @@ fn build_choice_payload_merges_with_original_input() {
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
     };
-    let out = build_choice_payload(&p).expect("payload built");
+    let out = crate::bottom_pane::permission::build_choice_payload(&p).expect("payload built");
     assert_eq!(out["existing"], 42);
     assert_eq!(out["other"], "v");
     assert_eq!(out["user_choice"], "pick-1");
@@ -546,7 +546,7 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
     };
-    assert!(build_choice_payload(&p).is_none());
+    assert!(crate::bottom_pane::permission::build_choice_payload(&p).is_none());
 }
 
 #[test]
@@ -820,23 +820,23 @@ fn question_switch_question_walks_questions_then_submit_with_wrap() {
         question_item(vec![question_option("C"), question_option("D")], false),
         question_item(vec![question_option("E"), question_option("F")], false),
     ]);
-    super::question_switch_question(&mut s, 1);
+    crate::bottom_pane::question::question_switch_question(&mut s, 1);
     assert_eq!(focused_page(&s), QuestionPage::Question(1));
-    super::question_switch_question(&mut s, 1);
+    crate::bottom_pane::question::question_switch_question(&mut s, 1);
     assert_eq!(focused_page(&s), QuestionPage::Question(2));
-    super::question_switch_question(&mut s, 1);
+    crate::bottom_pane::question::question_switch_question(&mut s, 1);
     assert_eq!(
         focused_page(&s),
         QuestionPage::Submit,
         "after the last question → Submit tab"
     );
-    super::question_switch_question(&mut s, 1);
+    crate::bottom_pane::question::question_switch_question(&mut s, 1);
     assert_eq!(
         focused_page(&s),
         QuestionPage::Question(0),
         "Submit wraps to the first question"
     );
-    super::question_switch_question(&mut s, -1);
+    crate::bottom_pane::question::question_switch_question(&mut s, -1);
     assert_eq!(
         focused_page(&s),
         QuestionPage::Submit,
@@ -858,7 +858,7 @@ fn question_switch_question_from_footer_keeps_footer_out_of_page_state() {
         &mut s,
         QuestionFocusTarget::QuestionFooter(QuestionFooterAction::ChatAboutThis),
     );
-    super::question_switch_question(&mut s, 1);
+    crate::bottom_pane::question::question_switch_question(&mut s, 1);
     assert_eq!(
         focused_page(&s),
         QuestionPage::Question(1),
@@ -868,7 +868,7 @@ fn question_switch_question_from_footer_keeps_footer_out_of_page_state() {
         &mut s,
         QuestionFocusTarget::QuestionFooter(QuestionFooterAction::ChatAboutThis),
     );
-    super::question_switch_question(&mut s, -1);
+    crate::bottom_pane::question::question_switch_question(&mut s, -1);
     assert_eq!(
         focused_page(&s),
         QuestionPage::Question(0),
@@ -918,7 +918,7 @@ fn question_switch_question_single_question_is_noop() {
         vec![question_option("A"), question_option("B")],
         false,
     ));
-    super::question_switch_question(&mut s, 1);
+    crate::bottom_pane::question::question_switch_question(&mut s, 1);
     assert_eq!(focused_page(&s), QuestionPage::Question(0));
 }
 
@@ -932,14 +932,14 @@ fn question_digit_shortcut_moves_focus_to_that_option() {
         ],
         false,
     ));
-    super::question_select_digit(&mut s, 3);
+    crate::bottom_pane::question::question_select_digit(&mut s, 3);
     assert_eq!(
         focused_target(&s),
         crate::state::QuestionFocusTarget::QuestionOption(2)
     );
     assert_eq!(focused_selected(&s), None, "focus alone must not commit");
     // Out-of-range digit is a no-op.
-    super::question_select_digit(&mut s, 9);
+    crate::bottom_pane::question::question_select_digit(&mut s, 9);
     assert_eq!(
         focused_target(&s),
         crate::state::QuestionFocusTarget::QuestionOption(2)
@@ -1009,7 +1009,7 @@ async fn digit_shortcut_commits_and_advances_to_next_question() {
     ]);
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
 
-    assert!(super::question_select_digit_and_confirm(&mut s, 2, &tx).await);
+    assert!(crate::bottom_pane::question::question_select_digit_and_confirm(&mut s, 2, &tx).await);
 
     assert!(rx.try_recv().is_err(), "first question should not submit");
     assert_eq!(focused_page(&s), crate::state::QuestionPage::Question(1));
@@ -1024,7 +1024,7 @@ async fn digit_shortcut_focuses_free_text_without_committing_it() {
     ));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
 
-    assert!(super::question_select_digit_and_confirm(&mut s, 3, &tx).await);
+    assert!(crate::bottom_pane::question::question_select_digit_and_confirm(&mut s, 3, &tx).await);
 
     assert!(rx.try_recv().is_err(), "free-text shortcut only focuses");
     assert_eq!(
@@ -1052,7 +1052,7 @@ fn multi_select_empty_submits_empty_answer_like_ts() {
         focus_target: crate::state::QuestionFocusTarget::QuestionOption(0),
         is_in_plan_mode: false,
     };
-    let payload = super::build_answer_payload(&q);
+    let payload = crate::bottom_pane::question::build_answer_payload(&q);
     let answer = payload["answers"]["Q?"].as_str().unwrap();
     assert_eq!(answer, "", "untouched multi-select must submit empty");
 }
@@ -1062,7 +1062,10 @@ fn question_free_text_paste_appends_into_focused_free_text_input() {
     let item = question_item(vec![question_option("A")], false);
     let mut s = question_state(item);
     set_target(&mut s, crate::state::QuestionFocusTarget::OtherInput);
-    assert!(super::question_free_text_paste(&mut s, "够清楚"));
+    assert!(crate::bottom_pane::question::question_free_text_paste(
+        &mut s,
+        "够清楚"
+    ));
     let Some(PanePromptState::Question(q)) = s.ui.interaction.active_prompt.as_ref() else {
         panic!("expected a question prompt");
     };
@@ -1076,7 +1079,9 @@ fn question_free_text_paste_appends_into_focused_free_text_input() {
 fn question_free_text_paste_ignored_when_free_text_not_focused() {
     let item = question_item(vec![question_option("A")], false);
     let mut s = question_state(item);
-    assert!(!super::question_free_text_paste(&mut s, "x"));
+    assert!(!crate::bottom_pane::question::question_free_text_paste(
+        &mut s, "x"
+    ));
 }
 
 #[tokio::test]

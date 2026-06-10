@@ -26,6 +26,14 @@ const IMAGE_PASTE_KEY: &str = "alt+v";
 #[cfg(not(target_os = "windows"))]
 const IMAGE_PASTE_KEY: &str = "ctrl+v";
 
+/// coco-rs extension: the other platform's paste key as a second default
+/// binding, mirroring the old hardcoded cascade which accepted both
+/// `ctrl+v` and `alt+v` everywhere.
+#[cfg(target_os = "windows")]
+const IMAGE_PASTE_KEY_ALT: &str = "ctrl+v";
+#[cfg(not(target_os = "windows"))]
+const IMAGE_PASTE_KEY_ALT: &str = "alt+v";
+
 /// Permission-mode cycle shortcut. TS: `defaultBindings.ts:30` — falls
 /// back to `meta+m` on Windows without VT mode (we always use
 /// `shift+tab` on non-Windows; on Windows we conservatively assume VT
@@ -85,6 +93,14 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 // unconditionally. Mirrors TS bindings.
                 ("ctrl+shift+f", KeybindingAction::AppGlobalSearch),
                 ("ctrl+shift+p", KeybindingAction::AppQuickOpen),
+                // coco-rs extensions (no TS source) — folded from the old
+                // hardcoded TUI cascade so they are user-rebindable.
+                // `app:forceQuit` skips the `app:exit` double-press
+                // confirmation; `app:help` is the F1 entry (the `?`
+                // shortcut on an empty composer stays hardcoded in the
+                // TUI because it must fall through to typing otherwise).
+                ("ctrl+q", KeybindingAction::AppForceQuit),
+                ("f1", KeybindingAction::AppHelp),
             ],
         ),
         // ── Chat — defaultBindings.ts:63-98 ───────────────────────────
@@ -122,6 +138,17 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+g", KeybindingAction::ChatExternalEditor),
                 ("ctrl+s", KeybindingAction::ChatStash),
                 (IMAGE_PASTE_KEY, KeybindingAction::ChatImagePaste),
+                // coco-rs extensions (no TS source) — folded from the old
+                // hardcoded TUI cascade so they are user-rebindable.
+                (IMAGE_PASTE_KEY_ALT, KeybindingAction::ChatImagePaste),
+                ("ctrl+f", KeybindingAction::ChatKillAgents),
+                ("ctrl+m", KeybindingAction::ChatModelPicker),
+                ("ctrl+p", KeybindingAction::AppCommandPalette),
+                ("ctrl+,", KeybindingAction::AppSettings),
+                ("ctrl+shift+r", KeybindingAction::ChatToggleSystemReminders),
+                // `tab` toggles plan mode; dispatch is state-dependent (an
+                // active inline ghost / prompt suggestion accepts instead).
+                ("tab", KeybindingAction::ChatTogglePlanMode),
             ],
         ),
         // ── Autocomplete — defaultBindings.ts:99-107 ──────────────────

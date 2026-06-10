@@ -8,8 +8,9 @@ use ratatui::text::Line;
 /// content/styles).
 ///
 /// Used for cheap equality between rows already inserted into native
-/// scrollback and a later re-render of the same source (session header,
-/// Policy B streamed stable prefix). Process-local only — never persisted —
+/// scrollback and a later re-render of the same source — today only the
+/// session header (the streamed-stable-prefix usage was removed by the
+/// tui-v2 anchored finalize, §6.2). Process-local only — never persisted —
 /// so `DefaultHasher`'s lack of cross-run stability is fine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RenderedLineFingerprint(u64);

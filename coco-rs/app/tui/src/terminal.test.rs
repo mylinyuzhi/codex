@@ -1,3 +1,9 @@
+//! Frame-level seating tests (I-V4): drive the full `sync → commit → tail
+//! fill → history emission → viewport draw` path through the backend-generic
+//! harness. The pure seat/pin/shrink math lives in
+//! `coco_tui_ui::engine::seat` and is tested there; these tests pin the
+//! shell↔engine integration where the C1 and A4 regressions lived.
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,60 +25,6 @@ use crate::surface::modal::HistorySurfaceMode;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 use super::*;
-
-#[test]
-fn native_viewport_flows_after_history_before_screen_fills() {
-    assert_eq!(
-        native_viewport_area(
-            /*anchor_y*/ 3,
-            Size::new(80, 24),
-            /*desired_height*/ 6
-        ),
-        Rect::new(0, 3, 80, 6)
-    );
-}
-
-#[test]
-fn native_viewport_bottom_pins_once_history_reaches_terminal_bottom() {
-    assert_eq!(
-        native_viewport_area(
-            /*anchor_y*/ 22,
-            Size::new(80, 24),
-            /*desired_height*/ 6
-        ),
-        Rect::new(0, 18, 80, 6)
-    );
-}
-
-#[test]
-fn native_viewport_pin_state_keeps_later_height_changes_bottom_pinned() {
-    let size = Size::new(80, 24);
-    // Tall history (anchor_y at/above the bottom-pinned row) pins the viewport,
-    // and a later height grow stays pinned because history still backs the row.
-    let first = native_viewport_geometry_with_max(
-        /*anchor_y*/ 22,
-        size,
-        /*desired_height*/ 4,
-        NATIVE_VIEWPORT_MAX_HEIGHT,
-        /*history_backs_pinned_row*/ false,
-    );
-    let grown = native_viewport_geometry_with_max(
-        /*anchor_y*/ 20,
-        size,
-        /*desired_height*/ 10,
-        NATIVE_VIEWPORT_MAX_HEIGHT,
-        /*history_backs_pinned_row*/ false,
-    );
-
-    assert_eq!(first.pin, NativeViewportPin::BottomPinned);
-    assert_eq!(first.area.bottom(), 24);
-    assert_eq!(grown.area.bottom(), 24);
-    assert_eq!(grown.pin, NativeViewportPin::BottomPinned);
-    assert!(
-        grown.area.top() < first.area.top(),
-        "after pinning, larger live surfaces grow upward from the terminal bottom"
-    );
-}
 
 #[test]
 fn interactive_viewport_max_height_grows_for_active_prompt() {
@@ -99,72 +51,6 @@ fn interactive_viewport_max_height_grows_for_active_prompt() {
 }
 
 #[test]
-fn native_viewport_clamps_to_small_terminal_height() {
-    assert_eq!(
-        native_viewport_area(
-            /*anchor_y*/ 10,
-            Size::new(80, 3),
-            /*desired_height*/ 12
-        ),
-        Rect::new(0, 0, 80, 3)
-    );
-}
-
-#[test]
-fn native_viewport_handles_zero_height() {
-    assert_eq!(
-        native_viewport_area(
-            /*anchor_y*/ 10,
-            Size::new(80, 0),
-            /*desired_height*/ 12
-        ),
-        Rect::new(0, 0, 80, 0)
-    );
-}
-
-#[test]
-fn native_viewport_uses_minimum_height_for_idle_composer() {
-    assert_eq!(
-        native_viewport_area(
-            /*anchor_y*/ 2,
-            Size::new(80, 24),
-            /*desired_height*/ 1
-        ),
-        Rect::new(0, 2, 80, 4)
-    );
-}
-
-#[test]
-fn native_viewport_reverts_to_flowing_when_history_below_pinned_row() {
-    // History shrank below the bottom-pinned row: the pin is not sticky, so the
-    // viewport reverts to flowing and seats flush against history at anchor_y
-    // instead of stranding an unbacked gap above a latched bottom position.
-    let geometry = native_viewport_geometry_with_max(
-        /*anchor_y*/ 8,
-        Size::new(80, 40),
-        /*desired_height*/ 4,
-        NATIVE_VIEWPORT_MAX_HEIGHT,
-        /*history_backs_pinned_row*/ false,
-    );
-    assert_eq!(geometry.pin, NativeViewportPin::Flowing);
-    assert_eq!(geometry.area, Rect::new(0, 8, 80, 4));
-}
-
-#[test]
-fn native_viewport_stays_bottom_pinned_when_history_backs_pinned_row() {
-    let geometry = native_viewport_geometry_with_max(
-        /*anchor_y*/ 14,
-        Size::new(80, 24),
-        /*desired_height*/ 4,
-        NATIVE_VIEWPORT_MAX_HEIGHT,
-        /*history_backs_pinned_row*/ true,
-    );
-
-    assert_eq!(geometry.pin, NativeViewportPin::BottomPinned);
-    assert_eq!(geometry.area, Rect::new(0, 20, 80, 4));
-}
-
-#[test]
 fn native_frame_overflow_backed_shrink_stays_bottom_pinned() {
     let width = 40;
     let height = 24;
@@ -187,8 +73,8 @@ fn native_frame_overflow_backed_shrink_stays_bottom_pinned() {
     assert!(terminal.history_backs_row(20));
 
     let native_frame = surface.prepare_native_frame(&state, width, plan, Instant::now());
-    let mut pin = NativeViewportPin::BottomPinned;
-    let commit = draw_native_frame_for_test(
+    let mut pin = ViewportPin::BottomPinned;
+    let decision = draw_native_frame_for_test(
         &mut terminal,
         &mut surface,
         &mut pin,
@@ -199,13 +85,13 @@ fn native_frame_overflow_backed_shrink_stays_bottom_pinned() {
     )
     .expect("shrink frame");
 
-    assert_eq!(pin, NativeViewportPin::BottomPinned);
+    assert_eq!(pin, ViewportPin::BottomPinned);
     assert_eq!(terminal.viewport_area(), Rect::new(0, 20, width, 4));
     assert_eq!(terminal.history_bottom_y(), 20);
-    assert_eq!(commit.shrink_deferred_rows, 0);
+    assert_eq!(decision.shrink_deferred_rows, 0);
     assert!(
-        commit.reveal_tail_rows >= 6,
-        "shrink should reveal the freed rows from the tail cache: {commit:?}"
+        decision.reveal_tail_rows >= 6,
+        "shrink should reveal the freed rows from the tail cache: {decision:?}"
     );
     let revealed_rows = (14..20)
         .map(|y| buffer_row(terminal.backend().buffer(), y))
@@ -230,9 +116,9 @@ fn sync_main_surface_uses_restored_inline_viewport_baseline() {
     terminal.note_history_rows_inserted(20);
     let mut surface = NativeSurfaceController::default();
     let native_frame = surface.prepare_native_frame(&state, width, plan, Instant::now());
-    let mut pin = NativeViewportPin::BottomPinned;
+    let mut pin = ViewportPin::BottomPinned;
 
-    let commit = sync_main_surface_area(
+    let decision = sync_main_surface_area(
         &mut terminal,
         &mut pin,
         &state,
@@ -246,9 +132,9 @@ fn sync_main_surface_uses_restored_inline_viewport_baseline() {
     )
     .expect("sync");
 
-    assert_eq!(commit.previous_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(commit.committed_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(commit.shrink_requested_rows, 0);
+    assert_eq!(decision.previous_viewport, Rect::new(0, 20, width, 4));
+    assert_eq!(decision.committed_viewport, Rect::new(0, 20, width, 4));
+    assert_eq!(decision.shrink_requested_rows, 0);
 }
 
 #[test]
@@ -273,13 +159,13 @@ fn tui_alt_screen_leave_uses_restored_inline_viewport_baseline() {
 
     let main_state = AppState::new();
     tui.draw(&main_state).expect("restore draw");
-    let commit = tui
+    let decision = tui
         .last_geometry_commit_for_test()
         .expect("restore frame geometry commit");
 
-    assert_eq!(commit.previous_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(commit.committed_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(commit.shrink_requested_rows, 0);
+    assert_eq!(decision.previous_viewport, Rect::new(0, 20, width, 4));
+    assert_eq!(decision.committed_viewport, Rect::new(0, 20, width, 4));
+    assert_eq!(decision.shrink_requested_rows, 0);
     assert_eq!(tui.terminal().viewport_area(), Rect::new(0, 20, width, 4));
 }
 
@@ -297,9 +183,9 @@ fn overflow_backed_shrink_partially_defers_when_backing_is_insufficient() {
     terminal.note_history_rows_inserted(30);
     let mut surface = NativeSurfaceController::default();
     let native_frame = surface.prepare_native_frame(&state, width, plan, Instant::now());
-    let mut pin = NativeViewportPin::BottomPinned;
+    let mut pin = ViewportPin::BottomPinned;
 
-    let commit = sync_main_surface_area(
+    let decision = sync_main_surface_area(
         &mut terminal,
         &mut pin,
         &state,
@@ -313,12 +199,12 @@ fn overflow_backed_shrink_partially_defers_when_backing_is_insufficient() {
     )
     .expect("sync");
 
-    assert_eq!(pin, NativeViewportPin::BottomPinned);
-    assert_eq!(commit.desired_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(commit.committed_viewport.bottom(), height);
-    assert!(commit.committed_viewport.top() < commit.desired_viewport.top());
-    assert_eq!(terminal.viewport_area(), commit.committed_viewport);
-    assert!(commit.shrink_deferred_rows > 0);
+    assert_eq!(pin, ViewportPin::BottomPinned);
+    assert_eq!(decision.desired_viewport, Rect::new(0, 20, width, 4));
+    assert_eq!(decision.committed_viewport.bottom(), height);
+    assert!(decision.committed_viewport.top() < decision.desired_viewport.top());
+    assert_eq!(terminal.viewport_area(), decision.committed_viewport);
+    assert!(decision.shrink_deferred_rows > 0);
 }
 
 #[test]
@@ -341,9 +227,9 @@ fn bottom_pinned_shrink_uses_only_finalized_append_rows() {
         history_tail_reveal_rows: 0,
         prepare_stats: crate::surface::controller::NativePrepareStats::default(),
     };
-    let mut pin = NativeViewportPin::BottomPinned;
+    let mut pin = ViewportPin::BottomPinned;
 
-    let commit = sync_main_surface_area(
+    let decision = sync_main_surface_area(
         &mut terminal,
         &mut pin,
         &state,
@@ -354,13 +240,13 @@ fn bottom_pinned_shrink_uses_only_finalized_append_rows() {
     )
     .expect("sync");
 
-    assert_eq!(pin, NativeViewportPin::BottomPinned);
+    assert_eq!(pin, ViewportPin::BottomPinned);
     assert_eq!(native_frame.guaranteed_append_rows(), 0);
-    assert_eq!(commit.desired_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(commit.shrink_requested_rows, 6);
-    assert_eq!(commit.shrink_committed_rows, 0);
-    assert_eq!(commit.shrink_deferred_rows, 6);
-    assert_eq!(commit.committed_viewport, Rect::new(0, 14, width, 10));
+    assert_eq!(decision.desired_viewport, Rect::new(0, 20, width, 4));
+    assert_eq!(decision.shrink_requested_rows, 6);
+    assert_eq!(decision.shrink_committed_rows, 0);
+    assert_eq!(decision.shrink_deferred_rows, 6);
+    assert_eq!(decision.committed_viewport, Rect::new(0, 14, width, 10));
     assert_eq!(terminal.viewport_area(), Rect::new(0, 14, width, 10));
 }
 
@@ -378,9 +264,9 @@ fn short_history_growth_stays_flowing() {
     terminal.note_history_rows_inserted(2);
     let mut surface = NativeSurfaceController::default();
     let native_frame = surface.prepare_native_frame(&state, width, plan, Instant::now());
-    let mut pin = NativeViewportPin::Flowing;
+    let mut pin = ViewportPin::Flowing;
 
-    let commit = sync_main_surface_area(
+    let decision = sync_main_surface_area(
         &mut terminal,
         &mut pin,
         &state,
@@ -391,101 +277,10 @@ fn short_history_growth_stays_flowing() {
     )
     .expect("sync");
 
-    assert_eq!(pin, NativeViewportPin::Flowing);
-    assert_eq!(commit.committed_viewport.top(), 2);
-    assert!(commit.committed_viewport.height > 4);
-    assert_eq!(terminal.viewport_area(), commit.committed_viewport);
-}
-
-#[test]
-fn flowing_viewport_seat_invariant_guards_off_bottom_pinned() {
-    // The draw_native_frame debug_assert uses this predicate. A Flowing viewport
-    // with a gap is the /clear-class regression and MUST be flagged; a Flowing
-    // viewport seated flush is fine; a BottomPinned viewport with a transient
-    // backed gap is exempt — the pin guard is load-bearing.
-    assert!(!flowing_viewport_seats_flush(
-        NativeViewportPin::Flowing,
-        18,
-        4
-    ));
-    assert!(flowing_viewport_seats_flush(
-        NativeViewportPin::Flowing,
-        4,
-        4
-    ));
-    assert!(flowing_viewport_seats_flush(
-        NativeViewportPin::BottomPinned,
-        18,
-        4
-    ));
-}
-
-#[test]
-fn native_viewport_caps_to_native_max_height() {
-    assert_eq!(
-        native_viewport_area(
-            /*anchor_y*/ 0,
-            Size::new(80, 80),
-            /*desired_height*/ 80
-        )
-        .height,
-        NATIVE_VIEWPORT_MAX_HEIGHT
-    );
-}
-
-#[test]
-fn bottom_pinned_shrink_commits_only_backed_rows() {
-    let commit = commit_native_viewport_geometry(NativeViewportCommitInputs {
-        pin: NativeViewportPin::BottomPinned,
-        previous_viewport: Rect::new(0, 8, 80, 16),
-        desired_viewport: Rect::new(0, 20, 80, 4),
-        terminal_height: 24,
-        history_tail_reveal_rows: 3,
-        guaranteed_append_rows: 4,
-    });
-
-    assert_eq!(commit.shrink_requested_rows, 12);
-    assert_eq!(commit.shrink_committed_rows, 7);
-    assert_eq!(commit.reveal_tail_rows, 3);
-    assert_eq!(commit.append_fill_rows, 4);
-    assert_eq!(commit.shrink_deferred_rows, 5);
-    assert_eq!(commit.committed_viewport, Rect::new(0, 15, 80, 9));
-}
-
-#[test]
-fn bottom_pinned_shrink_uses_append_rows_after_tail_reveal() {
-    let commit = commit_native_viewport_geometry(NativeViewportCommitInputs {
-        pin: NativeViewportPin::BottomPinned,
-        previous_viewport: Rect::new(0, 12, 80, 12),
-        desired_viewport: Rect::new(0, 20, 80, 4),
-        terminal_height: 24,
-        history_tail_reveal_rows: 2,
-        guaranteed_append_rows: 6,
-    });
-
-    assert_eq!(commit.shrink_requested_rows, 8);
-    assert_eq!(commit.shrink_committed_rows, 8);
-    assert_eq!(commit.reveal_tail_rows, 2);
-    assert_eq!(commit.append_fill_rows, 6);
-    assert_eq!(commit.shrink_deferred_rows, 0);
-    assert_eq!(commit.committed_viewport, commit.desired_viewport);
-}
-
-#[test]
-fn bottom_pinned_shrink_defers_when_history_is_insufficient() {
-    let commit = commit_native_viewport_geometry(NativeViewportCommitInputs {
-        pin: NativeViewportPin::BottomPinned,
-        previous_viewport: Rect::new(0, 10, 80, 14),
-        desired_viewport: Rect::new(0, 20, 80, 4),
-        terminal_height: 24,
-        history_tail_reveal_rows: 0,
-        guaranteed_append_rows: 0,
-    });
-
-    assert_eq!(commit.shrink_requested_rows, 10);
-    assert_eq!(commit.shrink_committed_rows, 0);
-    assert_eq!(commit.shrink_deferred_rows, 10);
-    assert_eq!(commit.committed_viewport, Rect::new(0, 10, 80, 14));
+    assert_eq!(pin, ViewportPin::Flowing);
+    assert_eq!(decision.committed_viewport.top(), 2);
+    assert!(decision.committed_viewport.height > 4);
+    assert_eq!(terminal.viewport_area(), decision.committed_viewport);
 }
 
 #[test]

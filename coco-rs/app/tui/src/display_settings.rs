@@ -8,7 +8,7 @@ use coco_config::settings::TuiPerformanceSettings;
 use coco_tui_ui::display::SyntaxHighlighting;
 use std::time::Duration;
 
-use crate::surface::history_lines::HistoryReplayCachePolicy;
+use crate::transcript::render::HistoryReplayCachePolicy;
 
 /// Whether a display preference can be edited from the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

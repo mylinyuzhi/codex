@@ -477,6 +477,185 @@ async fn snapshot_preserves_text_tool_text_interleaving() {
     assert!(matches!(&snap.parts[2], super::TurnPart::Text(t) if t.text == "after"));
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Source-contract pin (tui-v2 §8 / §10.1 Stage 0).
+//
+// The TUI v2 anchored finalize (`docs/coco-rs/ui/tui-v2-design.md` §6.2) drops
+// the rasterized row-fingerprint re-verification and instead anchors the
+// streamed scrollback rows against the canonical message at the SOURCE level
+// (`AssistantText.text.starts_with(emitted_source_prefix)`). That is sound only
+// if the canonical text the TUI anchors against is byte-identical to the source
+// the stream accumulated. These tests pin that contract at the layer where it
+// holds: each `TurnPart::Text` segment's `.text` is exactly the ordered byte
+// concatenation of that part's own `TextDelta` run
+// (`AssistantTurnSnapshotState::update`, accumulate-per-id by stream id).
+//
+// Part identity is erased one layer up — `stream_event_from_part` flattens
+// every `TextDelta` into a bare `StreamEvent::TextDelta { text }` with no part
+// id, so `app/query` cannot observe per-part boundaries and the pin cannot live
+// there. Known asymmetry (documented, not papered over): `emit_stream`
+// (`app/query/.../engine_stream_consume.rs`) discards the `#[must_use]` send
+// result. The underlying `mpsc::Sender::send(..).await` blocks on backpressure
+// and fails only once the TUI receiver is dropped (shutdown) — it cannot lose
+// a delta transiently while the TUI lives. Scope of the downstream guard,
+// stated precisely: canonical-vs-streamed divergence WITHIN the committed
+// prefix is caught by the finalize source-anchor (`starts_with`) → replay;
+// divergence past the committed prefix is unguarded by construction (tui-v2
+// §6.2 residual class — it would need a mid-turn delta loss this channel
+// cannot produce).
+
+/// Drive `parts` through `process_stream` and return the `Finish` snapshot.
+async fn finish_snapshot(
+    parts: Vec<Result<LanguageModelV4StreamPart, AISdkError>>,
+) -> std::sync::Arc<super::AssistantTurnSnapshot> {
+    let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
+    tokio::spawn(process_stream(Box::pin(futures::stream::iter(parts)), tx));
+    let mut snapshot = None;
+    while let Some(ev) = rx.recv().await {
+        if let StreamEvent::Finish { snapshot: snap, .. } = ev {
+            snapshot = Some(snap);
+        }
+    }
+    snapshot.expect("Finish snapshot")
+}
+
+fn text_part(part: &super::TurnPart) -> &str {
+    match part {
+        super::TurnPart::Text(t) => &t.text,
+        other => panic!("expected Text part, got {other:?}"),
+    }
+}
+
+fn text_start(id: &str) -> Result<LanguageModelV4StreamPart, AISdkError> {
+    Ok(LanguageModelV4StreamPart::TextStart {
+        id: id.into(),
+        provider_metadata: None,
+    })
+}
+
+fn text_delta(id: &str, delta: &str) -> Result<LanguageModelV4StreamPart, AISdkError> {
+    Ok(LanguageModelV4StreamPart::TextDelta {
+        id: id.into(),
+        delta: delta.into(),
+        provider_metadata: None,
+    })
+}
+
+fn text_end(id: &str) -> Result<LanguageModelV4StreamPart, AISdkError> {
+    Ok(LanguageModelV4StreamPart::TextEnd {
+        id: id.into(),
+        provider_metadata: None,
+    })
+}
+
+fn finish(stop: StopReason) -> Result<LanguageModelV4StreamPart, AISdkError> {
+    Ok(LanguageModelV4StreamPart::Finish {
+        usage: Usage::new(1, 1),
+        finish_reason: FinishReason::new(stop),
+        provider_metadata: None,
+    })
+}
+
+/// Single run: one `Text` part whose source is split across several
+/// `TextDelta` chunks accumulates to their exact in-order concatenation.
+#[tokio::test]
+async fn source_contract_text_part_equals_concat_of_single_delta_run() {
+    let parts = vec![
+        text_start("t1"),
+        text_delta("t1", "The "),
+        text_delta("t1", "quick "),
+        text_delta("t1", "brown "),
+        text_delta("t1", "fox"),
+        text_end("t1"),
+        finish(StopReason::EndTurn),
+    ];
+
+    let snap = finish_snapshot(parts).await;
+    assert_eq!(snap.parts.len(), 1);
+    assert_eq!(text_part(&snap.parts[0]), "The quick brown fox");
+}
+
+/// `text → tool → text` in ONE turn: each `Text` part stays isolated to its own
+/// `TextDelta` run — the tool boundary never bleeds `t1`'s deltas into `t2` or
+/// vice versa. This is the per-segment equality the TUI anchor relies on for
+/// the §6.2.1 within-message shape, where the streamed prefix of one segment
+/// must never anchor against a different segment's canonical text.
+#[tokio::test]
+async fn source_contract_text_tool_text_each_part_isolated() {
+    let parts = vec![
+        text_start("t1"),
+        text_delta("t1", "be"),
+        text_delta("t1", "fore"),
+        text_end("t1"),
+        Ok(LanguageModelV4StreamPart::ToolInputStart {
+            id: "call_1".into(),
+            tool_name: "Bash".into(),
+            provider_executed: None,
+            dynamic: None,
+            title: None,
+            provider_metadata: None,
+        }),
+        Ok(LanguageModelV4StreamPart::ToolInputDelta {
+            id: "call_1".into(),
+            delta: r#"{"command":"ls"}"#.into(),
+            provider_metadata: None,
+        }),
+        Ok(LanguageModelV4StreamPart::ToolInputEnd {
+            id: "call_1".into(),
+            provider_metadata: None,
+        }),
+        text_start("t2"),
+        text_delta("t2", "af"),
+        text_delta("t2", "ter"),
+        text_end("t2"),
+        finish(StopReason::ToolUse),
+    ];
+
+    let snap = finish_snapshot(parts).await;
+    assert_eq!(snap.parts.len(), 3);
+    assert_eq!(text_part(&snap.parts[0]), "before");
+    assert!(matches!(&snap.parts[1], super::TurnPart::ToolCall(_)));
+    assert_eq!(text_part(&snap.parts[2]), "after");
+}
+
+/// Interrupted turn: a `Text` run that never receives its `TextEnd` before the
+/// turn finishes (the cancel shape — the engine later rebuilds a single Text
+/// part from the accumulated `response_text`) still accumulates its partial
+/// deltas exactly. The snapshot keeps the in-flight segment with its
+/// byte-accurate prefix, which is what the finalize anchor compares against.
+#[tokio::test]
+async fn source_contract_interrupted_run_keeps_byte_accurate_partial() {
+    let parts = vec![
+        text_start("t1"),
+        text_delta("t1", "half "),
+        text_delta("t1", "a thought"),
+        // No TextEnd — the turn is cut short before the run closes.
+        finish(StopReason::Other),
+    ];
+
+    let snap = finish_snapshot(parts).await;
+    assert_eq!(snap.parts.len(), 1);
+    assert_eq!(text_part(&snap.parts[0]), "half a thought");
+}
+
+/// Empty `Text` part (`TextStart`+`TextEnd`, no delta) is kept at the inference
+/// snapshot as an empty-text segment; the symmetric drop of empty parts happens
+/// downstream in reconstruction (`app/query` engine) and TUI derive, NOT here.
+/// Pinned so a future "skip empty" optimization at this layer is a deliberate,
+/// visible change rather than a silent divergence.
+#[tokio::test]
+async fn source_contract_empty_text_part_kept_at_inference_layer() {
+    let parts = vec![
+        text_start("t1"),
+        text_end("t1"),
+        finish(StopReason::EndTurn),
+    ];
+
+    let snap = finish_snapshot(parts).await;
+    assert_eq!(snap.parts.len(), 1);
+    assert_eq!(text_part(&snap.parts[0]), "");
+}
+
 /// `ToolInputStart` + `ToolInputDelta` + `ToolInputEnd` WITHOUT a
 /// terminal `ToolCall(tc)` close — `is_input_complete=true` but
 /// `is_complete=false`. Some providers / mocks produce this shape;

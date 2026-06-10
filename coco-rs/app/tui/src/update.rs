@@ -45,7 +45,7 @@ mod tests;
 /// Returns `true` if consumed. Lets `app.rs` redirect clipboard / IME-committed
 /// paste away from the hidden main input while a question prompt is open.
 pub(crate) fn route_question_free_text_paste(state: &mut AppState, text: &str) -> bool {
-    interaction::question_free_text_paste(state, text)
+    crate::bottom_pane::question::question_free_text_paste(state, text)
 }
 
 /// How a picker/dialog reports being closed with Esc. Mirrors TS local-jsx
@@ -720,14 +720,15 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ApproveAll => {
-            interaction::approve_all(state, command_tx).await;
+            crate::bottom_pane::permission::approve_all(state, command_tx).await;
             true
         }
         TuiCommand::ClassifierAutoApprove {
             request_id,
             matched_rule: _,
         } => {
-            interaction::classifier_auto_approve(state, command_tx, request_id).await;
+            crate::bottom_pane::permission::classifier_auto_approve(state, command_tx, request_id)
+                .await;
             true
         }
         TuiCommand::AutocompleteAccept => {
@@ -768,7 +769,7 @@ pub async fn handle_command(
                     state.ui.interaction.active_prompt,
                     Some(PanePromptState::Question(_))
                 ) && digit > 0
-                    && interaction::question_select_digit_and_confirm(
+                    && crate::bottom_pane::question::question_select_digit_and_confirm(
                         state,
                         digit as i32,
                         command_tx,
@@ -884,7 +885,7 @@ pub async fn handle_command(
                 state.ui.interaction.active_prompt,
                 Some(PanePromptState::Question(_))
             ) {
-                interaction::question_cycle_focus(state, 1);
+                crate::bottom_pane::question::question_cycle_focus(state, 1);
             } else if matches!(state.ui.modal, Some(ModalState::ModelPicker(_))) {
                 show::cycle_model_role(state, 1);
             }
@@ -897,7 +898,7 @@ pub async fn handle_command(
                 state.ui.interaction.active_prompt,
                 Some(PanePromptState::Question(_))
             ) {
-                interaction::question_cycle_focus(state, -1);
+                crate::bottom_pane::question::question_cycle_focus(state, -1);
             } else if matches!(state.ui.modal, Some(ModalState::ModelPicker(_))) {
                 show::cycle_model_role(state, -1);
             }
@@ -908,7 +909,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::QuestionSwitchQuestion(delta) => {
-            interaction::question_switch_question(state, delta);
+            crate::bottom_pane::question::question_switch_question(state, delta);
             true
         }
         TuiCommand::TeamRosterCycleMode(delta) => {
