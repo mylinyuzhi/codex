@@ -146,7 +146,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ConfirmPreviousField => TuiCommand::SurfacePrev,
         ConfirmCycleMode => TuiCommand::CyclePermissionMode,
         ConfirmToggle => TuiCommand::SurfaceConfirm,
-        ConfirmToggleExplanation => TuiCommand::ToggleSystemReminders,
+        ConfirmToggleExplanation => TuiCommand::TogglePermissionExplanation,
         // TS dev-only debug toggle (`PermissionToggleDebug`); coco-rs
         // has no equivalent debug surface.
         PermissionToggleDebug => return None,

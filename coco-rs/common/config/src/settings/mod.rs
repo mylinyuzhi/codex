@@ -423,6 +423,21 @@ pub struct PermissionsConfig {
     #[serde(default)]
     #[serde(alias = "allowManagedPermissionRulesOnly")]
     pub allow_managed_permission_rules_only: bool,
+    /// Enable the LLM-generated risk explanation for permission prompts
+    /// (surfaced on demand via Ctrl+E). Default-on. TS: `permissionExplainerEnabled`
+    /// (`!== false`), so `None` and `Some(true)` both mean enabled.
+    #[serde(default)]
+    #[serde(alias = "permissionExplainerEnabled")]
+    pub permission_explainer_enabled: Option<bool>,
+}
+
+impl PermissionsConfig {
+    /// Whether the permission risk-explainer is enabled. Default-on, mirroring
+    /// TS `permissionExplainerEnabled !== false` — only an explicit `false`
+    /// disables it.
+    pub fn explainer_enabled(&self) -> bool {
+        self.permission_explainer_enabled != Some(false)
+    }
 }
 
 /// Optional `settings.json` logging block consumed at process startup.

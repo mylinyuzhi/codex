@@ -1,6 +1,14 @@
 # Permission & Sandbox Hardening — Refactor Status & Handoff
 
-Date started: 2026-06-09 · Branch: `feat/tui` · First commit: `1a0b37a32`
+Started: 2026-06-09 · Branches: `feat/tui` → `feat/sandbox` · Base: `1a0b37a32`
+(squashed into #165).
+
+**Status (2026-06-10): COMPLETE.** §4 baseline + §5 **T1–T6 all landed & gated**
+on `feat/sandbox` (T1+T2 `d4efb65c84`; T3+T4 `34167a9a14`; T5 `7891454245`; T6
+follow-on commit). The permission/sandbox hardening refactor is done — no §5
+items remain. Full `just pre-commit` green at each step. Residual nice-to-haves
+are noted inline (e.g. T1 per-subcommand path parity, T2 `allowManagedDomainsOnly`,
+T3 modal-vs-count UX, T6 `insta` snapshot).
 
 This is a **living handoff doc**: it carries the full context needed to resume
 the permission/sandbox hardening refactor in a fresh session. It is a
@@ -9,10 +17,9 @@ fix-status / TODO doc, not an information owner — for crate internals see
 [crate-coco-sandbox.md](crate-coco-sandbox.md); historical audit rows live in
 [audit-gaps.md](audit-gaps.md).
 
-> **Resuming?** Read §1–§3 once (background + decisions + invariants), then go
-> straight to **§5 TODO** (prioritized, internal-first, TUI last). Each TODO
-> item has exact file/function anchors and the approach. Build/verify workflow
-> is §6.
+> **Resuming?** All §5 work (T1–T6) is ✅ done — this doc is now a historical
+> record of what landed and why. §1–§3 hold the background/decisions/invariants;
+> §5 documents each fix. Build/verify workflow is §6.
 
 ---
 
@@ -171,97 +178,148 @@ The real S2/S3 fix was starting the proxy on Linux + the netns bridge.
 ## 5. TODO — remaining work (prioritized)
 
 Ordering reflects the directive: **finish internal implementation first; TUI/UI
-surfaces are lowest priority.** All anchors are current as of `1a0b37a32`
-(line numbers will drift — search by function name).
+surfaces are lowest priority.** Line numbers will drift — search by function name.
+
+**Done (2026-06-10): all of T1–T6.** P0 internal (T1, T2), P1 internal (T3, T4),
+and P2 TUI/UI (T5, T6) all landed and gated — see the ✅ sections below for what
+each one did. Nothing in §5 remains open.
+
+**Residual follow-ups — also resolved (2026-06-10).** The inline "nice-to-have"
+notes were all closed in a follow-up pass:
+- **T1 per-subcommand write-path validation** — a write command
+  (`rm`/`rmdir`/`mv`/`cp`/`touch`/`mkdir`) targeting a path outside the allowed
+  dirs now force-asks (new `coco_shell::extract_write_path_targets`, env+wrapper
+  stripped; bash.rs checks each via `is_path_within_allowed_dirs` /
+  `is_editable_internal_path`). Reads stay UNFENCED — a deliberate coco
+  divergence (gating `ls ..`/`cat ../x` is too noisy; reads are non-destructive,
+  fenced by the Read tool + kernel sandbox). Dead `coco_shell::check_redirect_paths`
+  deleted.
+- **T2 `allow_managed_domains_only`** — now gates the network ask-callback
+  (`build_network_ask_callback` returns `None` under the policy, so denied hosts
+  get a static refusal with no interactive widening). The host-blind, uncalled
+  `check_network_async` was deleted (the proxy callback is the real surface).
+- **T3 UX** — the per-burst blocking Error modal is replaced by a non-blocking
+  toast (TS shows a count surface, not a modal).
+- **T6** — `insta` snapshot of the open explainer panel added.
 
 ### P0 — Internal, completes a security/parity behavior
 
-#### T1. Bash redirect / out-of-tree path-constraint gate ([5] P3)
-The `> /etc/passwd` (write outside the working dirs) gate is the one missing
-bash path-safety check. The dangerous-removal/sed/git gates already exist in
-`core/tools/src/tools/bash.rs::check_permissions`.
-- **Where:** add a 4th gate in `bash.rs::check_permissions` (after git-escape,
-  before the acceptEdits check), and a helper in `core/tools` (NOT `coco-shell`
-  — it needs `coco_permissions::filesystem::is_path_within_allowed_dirs`).
-- **How:** extract output-redirection targets (reuse `coco-shell`'s redirect
-  parsing / `path_validation` helpers, all pure) + process-substitution
-  detection; for each non-`/dev/null` target, if `has_shell_expansion` or NOT
-  `is_path_within_allowed_dirs(target, cwd, additional_dirs)` → `Ask`. cwd via
-  `bash_gate_cwd(ctx)` (already added). Mirror TS `checkPathConstraints`
-  (`pathValidation.ts`). Spec: group `05`, change "bash.rs gate 3".
-- **Why P0:** it's the last fail-direction bash gate and is internal-only.
+#### T1. Bash redirect / out-of-tree path-constraint gate ([5] P3) — ✅ DONE (2026-06)
+Landed: a 4th force-ask gate in `bash.rs::check_permissions` (after
+`check_git_escape`, before the acceptEdits check). Process substitution
+(`<(…)` / `> >(…)`) → `Ask`; for each output-redirect target (skip
+`/dev/null`), `has_shell_expansion(target)` → `Ask`, else
+`!is_path_within_allowed_dirs(target, bash_gate_cwd(ctx), additional_dirs)`
+→ `Ask`. Two new **pure** `coco-shell` helpers do the parsing (quote-aware,
+mirroring TS `extractOutputRedirections` / `checkPathConstraints`):
+`bash_permissions::extract_output_redirect_targets` and
+`has_process_substitution`; the gate (in `core/tools`) calls them plus
+`coco_permissions::{has_shell_expansion, is_path_within_allowed_dirs}`. Tests:
+`bash.test.rs` (5 gate cases) + `bash_permissions.test.rs` (5 parser cases).
+- **Scope note:** minimal P3 = redirects + process-sub only. TS
+  `checkPathConstraints` is **broader** — it also validates per-subcommand path
+  args (`cat /etc/shadow` outside tree → Ask) via `validateSinglePathCommand`.
+  That broader per-command path-bound validation is **not** ported and is an
+  untracked follow-up if full parity is wanted.
+- **Dead code left in place:** `coco_shell::check_redirect_paths`
+  (`path_validation.rs:76`) is unused + system-path-only — not wired here (the
+  gate uses the new extractor). Delete when convenient.
 
-#### T2. Sandbox network ask-callback ([2], `check_network_async`)
-TS surfaces "Allow network connection to {host}?" on a denied CONNECT
-(`createSandboxAskCallback`). Today the proxy `DomainFilter` returns a static
-403/SOCKS-refused — `check_network_async` is still never called.
-- **Where:** `exec/sandbox/src/proxy/server.rs` (`ProxyServer::start_with_ports`
-  + `run_http_proxy`/`run_socks_proxy` + `handle_http_connect`/`handle_socks5`);
-  `exec/sandbox/src/proxy/mod.rs` (export `NetworkAskCallback`/`ViolationSink`);
-  `exec/sandbox/src/state.rs::start_network_proxy*` builds the callback from the
-  installed `approval_bridge`.
-- **How:** add `pub type NetworkAskCallback = Arc<dyn Fn(String) -> Pin<Box<dyn
-  Future<Output=bool>+Send>>+Send+Sync>` and thread an `Option<NetworkAskCallback>`
-  through the handlers; on a denied host, `await` the callback before refusing
-  (build it from `bridge.request_approval(SandboxOperation::Network, host)`).
-  Spec: group `02`, changes "proxy/server.rs" + "state.rs start_network_proxy".
-- **Why P0:** this is the actual TS-parity network-approval surface; works with
-  the already-installed SDK bridge (no TUI needed).
+#### T2. Sandbox network ask-callback ([2], `check_network_async`) — ✅ DONE (2026-06)
+Landed: `NetworkAskCallback` (host-only, `proxy/mod.rs`) threaded as
+`Option<NetworkAskCallback>` through `ProxyServer::start_with_ports` →
+`run_http_proxy`/`run_socks_proxy` → `handle_http_connect`/`handle_socks5`. On
+a denied host the handler `await`s the callback before the 403 / SOCKS5
+REFUSED; an approving decision tunnels the connection.
+`state.rs::build_network_ask_callback` constructs it from the installed
+`approval_bridge` (`SandboxOperation::Network`, `request_approval == Approved`
+→ `true`) and passes it at both `start_network_proxy` and
+`start_network_proxy_with_bridge`. Tests: `server.test.rs` (HTTP approve/reject
++ SOCKS approve).
+- **Follow-ups:** (a) `check_network_async` (checker.rs) is still host-blind +
+  uncalled — the proxy path is now the real surface; (b) `allowManagedDomainsOnly`
+  (TS hard-deny wrapper) has **no** coco config representation, so it is not
+  gated; (c) the prompt only fires under the SDK today — interactive TUI needs
+  T5 (`TuiSandboxApprovalBridge`) installed before a denied CONNECT can prompt.
 
 ### P1 — Internal, completes feedback/reporting
 
-#### T3. Violation pipeline: monitor spawn + observer → event ([2] S5)
-The Linux SIGSYS producer is wired (model sees `<sandbox_violations>`), but the
-macOS `log stream` monitor isn't spawned and the observer→TUI-flash isn't
-emitted. Note: the `SandboxViolationsDetected` TUI handler already exists
-(consumer present, producer missing).
-- **Where:** `exec/sandbox/src/state.rs::build` switch `ViolationStore::new()` →
-  `with_observer()` + store the `UnboundedReceiver<i32>`; add `take_violation_observer`;
-  spawn `ViolationMonitor::start(...)` (macOS) in `build_sandbox_state`; add a
-  drain task emitting `ServerNotification::SandboxViolationsDetected { count }`.
-  `monitor.rs` needs a sync `cancel()` for `SessionRuntime` Drop. This needs a
-  `SandboxRuntimeBundle` return + the `SessionRuntime` field/Drop changes the
-  [2] spec describes (the heavier wiring).
-- **Spec:** group `02`, changes "state.rs fields", "monitor.rs", "build_sandbox_state".
-- **Why P1:** informational (non-blocking on both sides); kernel enforcement
-  already works — this restores the after-the-fact report.
+#### T3. Violation pipeline: monitor spawn + observer → event ([2] S5) — ✅ DONE (2026-06)
+Landed, with a **lighter design than originally specced**: instead of a
+`SandboxRuntimeBundle` + `SessionRuntime` field/Drop, the monitor is owned by
+`SandboxState` itself (`monitor: Mutex<Option<ViolationMonitor>>`), so its
+lifetime ties to the `Arc<SandboxState>` — no `SessionRuntime` changes.
+- `state.rs::build` now uses `ViolationStore::with_observer()` and stores the
+  `UnboundedReceiver<i32>` in `violation_observer` (take-once via
+  `take_violation_observer`).
+- `monitor.rs` gained a sync `cancel()` + a `Drop` that cancels (winds down the
+  macOS `log stream` child via `kill_on_drop`).
+- `state.rs::start_violation_monitor()` (idempotent; no-op unless
+  `platform_active`) spawns the platform monitor and retains it.
+- `tui_runner.rs` (after the sandbox hot-reload block) calls both and spawns a
+  **cross-platform** drain task that forwards the observer count as
+  `CoreEvent::Protocol(ServerNotification::SandboxViolationsDetected { count })`.
+  The drain self-terminates when the `SandboxState` (observer sender) drops.
+  Producer is **TUI-only** — the SDK path surfaces violations to the model via
+  `<sandbox_violations>`, and the consumer lives in coco-tui. Tests:
+  `state.test.rs` (observer take-once + count delivery; inactive no-op guard).
+- **Follow-up (UX):** the TUI consumer (`protocol.rs:713`) shows a blocking
+  Error modal per violation burst — possibly noisy vs TS's count surface.
 
-#### T4. LLM permission-explainer logic ([11] P16, internal half)
-The explainer (risk-level for a prompt) is implemented but never invoked.
-- **Where (internal):** `common/config/src/settings/mod.rs` add
-  `permission_explainer_enabled: Option<bool>` (default on) + a `RuntimeConfig`
-  accessor; `app/cli/src/tui_permission_bridge.rs` add `async fn explain_risk(...)`
-  that runs the explainer via the session's SideQuery handle with a bounded
-  timeout, graceful-degrades to `None`.
-- **Caveat (highest-uncertainty):** resolve the SideQuery-handle access on
-  `SessionRuntime` first (inspect how the executor populates
-  `ToolUseContext.side_query`). Spec: group `11`, changes "settings/mod.rs" +
-  "tui_permission_bridge explain_risk".
-- **Why P1 (not P0):** its output only matters once the risk badge renders (T6),
-  but the internal infra (settings flag + `explain_risk`) should land first.
+#### T4. LLM permission-explainer logic ([11] P16, internal half) — ✅ DONE (2026-06)
+Landed the **internal half** (see the DECISION note below for the UI half):
+- `PermissionsConfig` gained `permission_explainer_enabled: Option<bool>` +
+  `explainer_enabled()` (default-on, `!= Some(false)`; TS `permissionExplainerEnabled`).
+- `TuiPermissionBridge::explain_risk(params) -> Option<PermissionExplanation>`
+  upgrades the `Weak<SessionRuntime>`, gates on the flag, runs
+  `generate_permission_explanation` via `runtime.side_query()` (the
+  already-wired handle) under an 8s timeout, graceful-degrades to `None`.
+- **No production caller yet** — `explain_risk` is `pub` (no dead-code warning),
+  awaiting the **T6 Ctrl+E lazy panel** caller. Deliberate internal/UI split.
+  Test: `tui_permission_bridge.test.rs` (no-runtime → `None`).
+> **DECISION (2026-06):** the explainer (T4 internal + T6 UI) will mirror TS's
+> **Ctrl+E lazy panel** (`confirm:toggleExplanation`, fetched on first toggle),
+> NOT the current always-on title badge — TS only shows risk in the on-demand
+> panel and fetches lazily to avoid an LLM call per prompt. So T6's render path
+> (already-built always-on badge) is to be **reworked into the panel**, and the
+> explainer is fetched lazily, not eagerly on every `ApprovalRequired`.
+> **Also corrected:** the doc's "highest uncertainty" SideQuery-handle concern
+> is already solved — `SessionRuntime::side_query()` is real + production-wired
+> (used by `session_rename.rs`, `tui_runner.rs`); source the handle there, NOT
+> from `ToolUseContext.side_query` (NoOp by default).
 
-### P2 — TUI / UI surfaces (LOWEST priority)
+### P2 — TUI / UI surfaces (landed last; both ✅ done)
 
-#### T5. Interactive TUI sandbox approval bridge ([2])
-A `TuiSandboxApprovalBridge` so denied sandbox ops surface in the interactive
-TUI (the SDK path already works). The TUI consumer already exists
-(`SandboxPermissionPromptState`, `tui_only.rs` pushes on `SandboxApprovalRequired`,
-`update/interaction.rs` sends `ApprovalResponse`).
-- **Where:** new `app/cli/src/sandbox_approval_bridge_tui.rs` (mirror
-  `tui_permission_bridge.rs`, reuse its `PendingApprovals` round-trip, emit
-  `TuiOnlyEvent::SandboxApprovalRequired`); install in `tui_runner` like the SDK
-  bridge install in `main.rs`. Spec: group `02`, "sandbox_approval_bridge_tui.rs".
-- **Why lowest:** UI-only; the producer-side (T2) + SDK surface deliver the
-  parity behavior; this is the interactive-mode convenience.
+#### T5. Interactive TUI sandbox approval bridge ([2]) — ✅ DONE (2026-06)
+Landed: `app/cli/src/sandbox_approval_bridge_tui.rs::TuiSandboxApprovalBridge`
+installed in `tui_runner` (alongside the violation monitor). It registers a
+fresh-`Uuid` entry in the SAME `PendingApprovals` map the tool-permission bridge
+uses and emits `TuiOnlyEvent::SandboxApprovalRequired`, so the existing
+`UserCommand::ApprovalResponse` arm resolves it with no tui_runner change
+(sandbox prompts carry no `permission_updates`). Translates the resolved
+`ToolPermissionDecision` → `SandboxApprovalDecision`; fail-closed (Rejected) on a
+closed notification/response channel. Unblocks T2's network ask-callback in
+interactive mode (was SDK-only). Tests: `sandbox_approval_bridge_tui.test.rs`
+(approve / deny / fail-closed).
 
-#### T6. Risk-badge rendering ([11] P16, UI half)
-- **Where:** `common/types/src/event.rs` add `risk_level: Option<RiskLevel>` to
-  `TuiOnlyEvent::ApprovalRequired` (⚠ **breaks all `ApprovalRequired`
-  constructors workspace-wide** — grep + add `risk_level: None` to each non-
-  explainer emitter); `app/tui/src/server_notification_handler/tui_only.rs` map
-  it into `PermissionPromptState`; render the badge. Spec: group `11`.
-- **Why lowest:** UI-only, and the workspace-wide constructor change should land
-  in a focused pass.
+#### T6. Risk explainer — Ctrl+E lazy panel ([11] P16, UI half) — ✅ DONE (2026-06)
+Implemented as the **TS Ctrl+E lazy panel** (per the §5-T4 DECISION), NOT the
+always-on title badge. Flow: `ConfirmToggleExplanation` (Ctrl+E, Confirmation
+context) → repointed to `TuiCommand::TogglePermissionExplanation` → toggles
+`PermissionPromptState.explanation_visible`; on first open sends
+`UserCommand::RequestPermissionExplanation { request_id, tool_name, tool_input }`
+→ `tui_runner` spawns `SessionRuntime::explain_permission_risk` (the new single
+home for the explainer call; the T4 bridge `explain_risk` now delegates here) →
+emits `TuiOnlyEvent::PermissionExplanationReady { request_id, explanation }` →
+`tui_only.rs` lands it on the active prompt's `ExplainerFetch`
+(`NotFetched`/`Loading`/`Ready`/`Unavailable`). `presentation/request.rs` renders
+the panel only when open (default body byte-unchanged → no test churn) with the
+risk reflected in both the panel text and the border; new i18n keys in
+`en.yaml`/`zh-CN.yaml`. **This is T4's first production caller** — the explainer
+is no longer dead code. The legacy always-on `risk_level` title badge stays
+inert (never populated in prod). Tests: render (3), event handler (3), toggle
+dispatch (2). UI-only `insta` snapshot of the open panel is a nice-to-have
+follow-up (current tests assert body substrings + border).
 
 ---
 
@@ -286,8 +344,8 @@ quoted sed scripts (use a quote-aware split). Both already fixed.
 
 ## 7. References
 
-- TS reference source: `/lyz/codespace/3rd/claude-code/src` (per
-  `reference_claude_code_ts_source_path` memory).
+- TS reference source: `/Users/linyuzhi/codespace/myagent/agents/claude-code-kim/src`
+  (the `/lyz/codespace/3rd/claude-code/src` path in older notes is stale).
 - Crate internals: [crate-coco-permissions.md](crate-coco-permissions.md),
   [crate-coco-sandbox.md](crate-coco-sandbox.md),
   [crate-coco-shell.md](crate-coco-shell.md),

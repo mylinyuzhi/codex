@@ -377,6 +377,8 @@ fn test_permission_prompt() {
             original_input: None,
             permission_suggestions: vec![],
             worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
         }));
 
     assert!(state.has_active_surface());

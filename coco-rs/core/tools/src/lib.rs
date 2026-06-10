@@ -203,6 +203,30 @@ pub fn deregister_mcp_server(registry: &coco_tool_runtime::ToolRegistry, server_
     registry.deregister_by_server(server_name);
 }
 
+/// Surface a per-server `mcp__<server>__authenticate` pseudo-tool for a server
+/// in the `NeedsAuth` state, telling the model exactly which server needs
+/// authentication (TS: `processServer` surfacing `[createMcpAuthTool(...)]`).
+///
+/// Goes through the same `replace_server_tools` swap as [`register_mcp_tools`],
+/// so the pseudo-tool is owned by `server_name` and is removed automatically
+/// when the real tools register after a successful reconnect — no explicit
+/// delete step (mirrors the TS `mcp__<server>__*` prefix wipe).
+pub fn register_mcp_auth_tool(
+    registry: &coco_tool_runtime::ToolRegistry,
+    server_name: &str,
+    transport: &str,
+    url: Option<&str>,
+) {
+    use std::sync::Arc;
+
+    let tool: Arc<dyn coco_tool_runtime::DynTool> = Arc::new(McpAuthServerTool::new(
+        server_name.to_string(),
+        transport,
+        url,
+    ));
+    registry.replace_server_tools(server_name, vec![tool]);
+}
+
 /// Record a Read-tool file read in FileReadState for @mention dedup,
 /// changed-file detection, and Read-tool `file_unchanged` dedup. Uses
 /// `set_from_read` so the path is flagged as Read-origin — Edit/Write

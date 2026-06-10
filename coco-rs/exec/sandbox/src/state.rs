@@ -106,9 +106,18 @@ pub struct SandboxState {
     /// Optional interactive approval bridge, installed after construction by the
     /// runner (SDK: `SdkSandboxApprovalBridge`; TUI: `TuiSandboxApprovalBridge`).
     /// `RwLock` because it is set post-build; [`Self::permission_checker`]
-    /// propagates it so the async `check_path_async` / `check_network_async`
-    /// variants consult the bridge before returning a deny.
+    /// propagates it so the async `check_path_async` variant consults the bridge
+    /// before a deny, and [`Self::build_network_ask_callback`] builds the egress
+    /// proxy's network-approval callback from it.
     approval_bridge: std::sync::RwLock<Option<crate::bridge::SandboxApprovalBridgeRef>>,
+    /// Take-once receiver of non-benign violation counts (the store is built
+    /// `with_observer`). The runner drains it into `SandboxViolationsDetected`
+    /// flash events; see [`Self::take_violation_observer`].
+    violation_observer: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<i32>>>,
+    /// Platform violation monitor (macOS `log stream`; passive on Linux/Windows),
+    /// retained so it is cancelled when this state drops. Installed once via
+    /// [`Self::start_violation_monitor`].
+    monitor: std::sync::Mutex<Option<crate::monitor::ViolationMonitor>>,
 }
 
 impl std::fmt::Debug for SandboxState {
@@ -137,7 +146,7 @@ impl SandboxState {
         config: SandboxConfig,
         platform: Box<dyn SandboxPlatform>,
     ) -> Self {
-        let mut store = ViolationStore::new();
+        let (mut store, violation_rx) = ViolationStore::with_observer();
         if !settings.ignore_violations.is_empty() {
             store.set_ignore_patterns(settings.ignore_violations.clone());
         }
@@ -160,6 +169,8 @@ impl SandboxState {
             platform,
             session_tag: generate_session_tag(),
             approval_bridge: std::sync::RwLock::new(None),
+            violation_observer: std::sync::Mutex::new(Some(violation_rx)),
+            monitor: std::sync::Mutex::new(None),
         }
     }
 
@@ -344,6 +355,39 @@ impl SandboxState {
         &self.violations
     }
 
+    /// Take the non-benign violation observer receiver (once). The runner drains
+    /// it into `SandboxViolationsDetected { count }` events for the TUI. Returns
+    /// `None` on a second call.
+    pub fn take_violation_observer(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<i32>> {
+        self.violation_observer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// Spawn the platform violation monitor (macOS `log stream`; passive on
+    /// Linux/Windows) and retain it so it is cancelled when this state drops.
+    /// Idempotent, and a no-op unless the platform sandbox is enforcing
+    /// (`platform_active`) — there are no kernel violations to observe otherwise.
+    /// Survives hot-reload (lives on the persistent `Arc<SandboxState>`).
+    pub fn start_violation_monitor(&self) {
+        if !self.platform_active {
+            return;
+        }
+        let mut guard = self
+            .monitor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if guard.is_some() {
+            return;
+        }
+        *guard = crate::monitor::ViolationMonitor::start(
+            self.violations.clone(),
+            tokio_util::sync::CancellationToken::new(),
+            self.session_tag.clone(),
+        );
+    }
+
     /// Get the current violation count (non-benign).
     pub async fn violation_count(&self) -> i32 {
         self.violations.lock().await.non_benign_count()
@@ -448,11 +492,17 @@ impl SandboxState {
         };
 
         let cancel = tokio_util::sync::CancellationToken::new();
+        let ask_cb = self.build_network_ask_callback();
         // `start_with_ports` honors the configured fixed http/socks ports
         // (auto-assigned when `None`).
-        let proxy =
-            crate::proxy::ProxyServer::start_with_ports(filter, cancel, fixed_http, fixed_socks)
-                .await?;
+        let proxy = crate::proxy::ProxyServer::start_with_ports(
+            filter,
+            cancel,
+            fixed_http,
+            fixed_socks,
+            ask_cb,
+        )
+        .await?;
         let ports = ProxyPorts {
             http_port: proxy.http_port(),
             socks_port: proxy.socks_port(),
@@ -506,11 +556,13 @@ impl SandboxState {
         };
 
         let proxy_cancel = tokio_util::sync::CancellationToken::new();
+        let ask_cb = self.build_network_ask_callback();
         let proxy = crate::proxy::ProxyServer::start_with_ports(
             filter,
             proxy_cancel,
             fixed_http,
             fixed_socks,
+            ask_cb,
         )
         .await?;
         let host_http = proxy.http_port();
@@ -548,6 +600,47 @@ impl SandboxState {
         m.bridge_bind_paths = bind_paths;
         m.network_active = true;
         Ok(())
+    }
+
+    /// Build a [`crate::proxy::NetworkAskCallback`] from the installed approval
+    /// bridge, if any. On a denied CONNECT the proxy invokes it to surface
+    /// "Allow network connection to {host}?" (TS `createSandboxAskCallback`)
+    /// before refusing; an `Approved` decision lets the connection through.
+    /// Returns `None` when no bridge is installed (fail-closed: static refuse),
+    /// OR when `allow_managed_domains_only` is set — that policy forbids
+    /// interactively widening past the managed allowlist, so denied hosts get a
+    /// static refusal with no prompt (TS `sandbox-adapter.ts` wraps the callback
+    /// to hard-deny under the same policy).
+    fn build_network_ask_callback(&self) -> Option<crate::proxy::NetworkAskCallback> {
+        if self
+            .mutable
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .settings
+            .network
+            .allow_managed_domains_only
+        {
+            return None;
+        }
+        let bridge = self
+            .approval_bridge
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        Some(Arc::new(move |host: String| {
+            let bridge = bridge.clone();
+            Box::pin(async move {
+                let request = crate::bridge::SandboxApprovalRequest {
+                    operation: crate::bridge::SandboxOperation::Network,
+                    path: host.clone(),
+                    reason: format!("network connection to {host}"),
+                };
+                matches!(
+                    bridge.request_approval(request).await,
+                    crate::bridge::SandboxApprovalDecision::Approved
+                )
+            }) as std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
+        }))
     }
 
     /// Set network isolation as active with the given proxy ports.

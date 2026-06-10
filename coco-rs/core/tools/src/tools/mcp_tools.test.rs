@@ -280,6 +280,106 @@ async fn mcp_auth_tool_forwards_to_generic_handle() {
 }
 
 // ---------------------------------------------------------------------------
+// McpAuthServerTool — per-server authenticate pseudo-tool
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mcp_auth_server_tool_bakes_server_name_into_authenticate() {
+    // The pre-bound server (not model input) must be what reaches the handle —
+    // this is the whole point of the per-server pseudo-tool.
+    let tool = McpAuthServerTool::new("github".into(), "http", Some("https://api.github.com/mcp"));
+    let mut ctx = ToolUseContext::test_default();
+    ctx.mcp = Arc::new(EchoServerAuthHandle);
+    let tool: &dyn DynTool = &tool;
+    let result = tool.execute(json!({}), &ctx).await.unwrap();
+    // The echo handle returns the server name it was called with.
+    assert_eq!(result.data, json!("authenticating github"));
+}
+
+#[test]
+fn mcp_auth_server_tool_is_not_deferred() {
+    // CRITICAL regression guard: if this defers (like McpTool), the model never
+    // sees it on turn 1 and the surfacing is a silent no-op.
+    let tool = McpAuthServerTool::new("github".into(), "http", None);
+    let tool: &dyn DynTool = &tool;
+    assert!(
+        !tool.should_defer(),
+        "the auth pseudo-tool must be visible on turn 1"
+    );
+}
+
+#[test]
+fn mcp_auth_server_tool_id_is_qualified_and_server_owned() {
+    let tool = McpAuthServerTool::new("github".into(), "http", None);
+    let tool: &dyn DynTool = &tool;
+    // ToolId::Mcp Display = mcp__<server>__<tool> — must match the wipe prefix.
+    assert_eq!(tool.id().to_string(), "mcp__github__authenticate");
+    assert_eq!(tool.name(), "authenticate");
+    assert_eq!(
+        tool.mcp_info().map(|i| i.server_name.as_str()),
+        Some("github"),
+        "server ownership drives the replace_server_tools wipe"
+    );
+}
+
+#[test]
+fn mcp_auth_server_tool_description_names_server_and_url() {
+    let tool = McpAuthServerTool::new("github".into(), "http", Some("https://api.github.com/mcp"));
+    let desc = <McpAuthServerTool as DynTool>::description(
+        &tool,
+        &json!({}),
+        &coco_tool_runtime::DescriptionOptions::default(),
+    );
+    assert!(desc.contains("github"), "got: {desc}");
+    assert!(desc.contains("https://api.github.com/mcp"), "got: {desc}");
+    assert!(desc.contains("requires"), "got: {desc}");
+}
+
+#[test]
+fn auth_pseudo_tool_is_wiped_when_real_tools_register() {
+    // The swap fabric: register the per-server auth tool, then register real
+    // tools for the same server — replace_server_tools must remove the auth
+    // tool (it shares the server ownership) and install the real tool. Mirrors
+    // the TS mcp__<server>__* prefix wipe on a successful reconnect.
+    let registry = coco_tool_runtime::ToolRegistry::new();
+    crate::register_mcp_auth_tool(&registry, "github", "http", Some("https://x"));
+    let auth_id = coco_types::ToolId::Mcp {
+        server: "github".into(),
+        tool: "authenticate".into(),
+    };
+    assert!(
+        registry.get(&auth_id).is_some(),
+        "auth pseudo-tool present after surfacing"
+    );
+
+    crate::register_mcp_tools(
+        &registry,
+        "github",
+        vec![coco_tool_runtime::McpToolSchema {
+            server_name: "github".into(),
+            tool_name: "create_issue".into(),
+            description: Some("create an issue".into()),
+            input_schema: json!({"type": "object", "properties": {}}),
+            annotations: McpToolAnnotations::default(),
+        }],
+    );
+
+    assert!(
+        registry.get(&auth_id).is_none(),
+        "auth pseudo-tool must be wiped when real tools register"
+    );
+    assert!(
+        registry
+            .get(&coco_types::ToolId::Mcp {
+                server: "github".into(),
+                tool: "create_issue".into(),
+            })
+            .is_some(),
+        "real tool installed by the same swap"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // render_for_model — pass-through MCP server-provided multimodal content
 // ---------------------------------------------------------------------------
 
@@ -501,6 +601,45 @@ struct BlobResourceHandle {
 
 struct AuthHandle {
     message: String,
+}
+
+/// Echoes back the server name passed to `authenticate`, so a test can assert
+/// the pre-bound server (not model input) is what reaches the handle.
+struct EchoServerAuthHandle;
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for EchoServerAuthHandle {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(vec![])
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        unreachable!("not used by McpAuthServerTool test")
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        unreachable!("not used by McpAuthServerTool test")
+    }
+
+    async fn authenticate(&self, server: &str) -> Result<String, coco_error::BoxedError> {
+        Ok(format!("authenticating {server}"))
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        vec![]
+    }
 }
 
 #[async_trait::async_trait]

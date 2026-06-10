@@ -37,6 +37,8 @@ fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
         original_input: None,
         permission_suggestions: vec![],
         worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
     }
 }
 
@@ -671,4 +673,86 @@ fn project_question_clamps_negative_focus_and_selection() {
             focused: true
         }
     ));
+}
+
+#[test]
+fn permission_content_explainer_panel_visible_high_risk() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "ls".to_string(),
+    });
+    state.explanation_visible = true;
+    state.explanation = crate::state::ExplainerFetch::Ready(coco_types::PermissionExplanation {
+        risk_level: coco_types::RiskLevel::High,
+        explanation: "Deletes the production database.".to_string(),
+        reasoning: "drop table".to_string(),
+        risk: "data loss".to_string(),
+    });
+
+    let (_title, body, border) = permission_content(&state, UiStyles::new(&theme));
+    assert!(body.contains("Risk: HIGH"), "body: {body}");
+    assert!(
+        body.contains("Deletes the production database."),
+        "body: {body}"
+    );
+    // The border reflects the fetched risk while the panel is open.
+    assert_eq!(border, theme.error);
+}
+
+#[test]
+fn permission_content_explainer_hidden_when_collapsed() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "ls".to_string(),
+    });
+    // Fetched but the panel is collapsed → body must not show the explanation.
+    state.explanation_visible = false;
+    state.explanation = crate::state::ExplainerFetch::Ready(coco_types::PermissionExplanation {
+        risk_level: coco_types::RiskLevel::High,
+        explanation: "secret-detail".to_string(),
+        reasoning: String::new(),
+        risk: String::new(),
+    });
+    let (_title, body, _border) = permission_content(&state, UiStyles::new(&theme));
+    assert!(!body.contains("Risk:"), "collapsed body leaked: {body}");
+    assert!(
+        !body.contains("secret-detail"),
+        "collapsed body leaked: {body}"
+    );
+}
+
+#[test]
+fn permission_content_explainer_loading_line() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "ls".to_string(),
+    });
+    state.explanation_visible = true;
+    state.explanation = crate::state::ExplainerFetch::Loading;
+    let (_title, body, _border) = permission_content(&state, UiStyles::new(&theme));
+    assert!(body.contains("Analyzing risk"), "body: {body}");
+}
+
+#[test]
+fn permission_content_explainer_panel_snapshot() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Bash {
+        command: "rm -rf /tmp/cache".to_string(),
+        risk_description: Some("Deletes cached files".to_string()),
+        working_dir: Some("/repo".to_string()),
+    });
+    state.show_always_allow = true;
+    state.explanation_visible = true;
+    state.explanation = crate::state::ExplainerFetch::Ready(coco_types::PermissionExplanation {
+        risk_level: coco_types::RiskLevel::High,
+        explanation: "This removes the build cache directory.".to_string(),
+        reasoning: "rm -rf is destructive".to_string(),
+        risk: "data loss".to_string(),
+    });
+    let (_title, body, _border) = permission_content(&state, UiStyles::new(&theme));
+    insta::assert_snapshot!(body);
 }

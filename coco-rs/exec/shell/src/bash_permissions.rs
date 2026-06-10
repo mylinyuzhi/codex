@@ -302,6 +302,134 @@ pub fn strip_output_redirections(command: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Extract the file targets of output redirections (`>`, `>>`, `>|`, `&>`,
+/// `&>>`, `N>`, `N>>`, and the deprecated `>&file` / `N>&file` forms), skipping
+/// file-descriptor *duplication* forms (`2>&1`, `>&-`) which have no file token.
+///
+/// Quote-aware: redirections inside single/double quotes are ignored, the same
+/// way [`strip_output_redirections`] guards them. `/dev/null` is NOT filtered
+/// here — the caller decides which targets are safe.
+///
+/// Mirrors the target set TS `extractOutputRedirections` (commands.ts) feeds
+/// into `validateOutputRedirections` (`tools/BashTool/pathValidation.ts`).
+/// Returned tokens are raw (may still contain shell-expansion syntax); callers
+/// in `coco-tools` apply `coco_permissions::has_shell_expansion` /
+/// `is_path_within_allowed_dirs`. Lives here (not `coco-permissions`) because
+/// `coco-shell` must not depend on `coco-permissions` (would cycle).
+pub fn extract_output_redirect_targets(command: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    if !command.contains('>') {
+        return targets;
+    }
+    let chars: Vec<char> = command.chars().collect();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            i += 1;
+            continue;
+        }
+        if c == '"' && !in_single {
+            in_double = !in_double;
+            i += 1;
+            continue;
+        }
+        if !in_single && !in_double {
+            let next_is_gt = chars.get(i + 1) == Some(&'>');
+            // `>`, `>>`, `&>`, `2>`, `2>>`, or a dup form like `2>&1`.
+            let is_redir_start =
+                c == '>' || (c == '&' && next_is_gt) || (c.is_ascii_digit() && next_is_gt);
+            if is_redir_start {
+                let mut j = i;
+                if c != '>' {
+                    j += 1; // skip leading `&` or FD digit; chars[j] is now `>`
+                }
+                j += 1; // past first `>`
+                if chars.get(j) == Some(&'>') {
+                    j += 1; // `>>`
+                }
+                if chars.get(j) == Some(&'|') {
+                    j += 1; // `>|` clobber
+                }
+                if chars.get(j) == Some(&'&') {
+                    // `>&…`: a dup (`>&1`, `>&-`) has no file token; the
+                    // deprecated `>&file` (non-digit, non-`-`) IS a file target.
+                    let after_amp = j + 1;
+                    let is_dup = chars.get(after_amp).is_some_and(char::is_ascii_digit)
+                        || chars.get(after_amp) == Some(&'-');
+                    if is_dup {
+                        j = after_amp;
+                        while chars.get(j).is_some_and(char::is_ascii_digit) {
+                            j += 1;
+                        }
+                        if chars.get(j) == Some(&'-') {
+                            j += 1;
+                        }
+                        i = j;
+                        continue;
+                    }
+                    j = after_amp; // deprecated `>&file`: read the file token below
+                } else {
+                    while matches!(chars.get(j), Some(' ' | '\t')) {
+                        j += 1;
+                    }
+                }
+                let start = j;
+                while j < chars.len()
+                    && !chars[j].is_whitespace()
+                    && !matches!(chars[j], '>' | '<' | '|' | ';' | '&' | '(' | ')')
+                {
+                    j += 1;
+                }
+                if j > start {
+                    targets.push(chars[start..j].iter().collect());
+                }
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    targets
+}
+
+/// Detect process substitution: input `<(cmd)` or a redirect to output process
+/// substitution `> >(cmd)`, allowing whitespace between operators. Quote-naive,
+/// mirroring TS `checkPathConstraints`'s process-substitution regex
+/// (`/>>\s*>\s*\(|>\s*>\s*\(|<\s*\(/`). Such commands can execute arbitrary
+/// commands whose writes never appear as redirect targets, so the caller forces
+/// an Ask.
+pub fn has_process_substitution(command: &str) -> bool {
+    let chars: Vec<char> = command.chars().collect();
+    let n = chars.len();
+    let skip_ws = |mut k: usize| {
+        while k < n && matches!(chars.get(k), Some(' ' | '\t')) {
+            k += 1;
+        }
+        k
+    };
+    let mut i = 0;
+    while i < n {
+        match chars[i] {
+            // `<\s*\(` — input process substitution.
+            '<' if chars.get(skip_ws(i + 1)) == Some(&'(') => return true,
+            // `>\s*>\s*\(` — redirect to an output process substitution.
+            '>' => {
+                let j = skip_ws(i + 1);
+                if chars.get(j) == Some(&'>') && chars.get(skip_ws(j + 1)) == Some(&'(') {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Check if a command prefix is a dangerous bare shell prefix.
 pub fn is_dangerous_bare_prefix(prefix: &str) -> bool {
     BARE_SHELL_PREFIXES.contains(prefix)

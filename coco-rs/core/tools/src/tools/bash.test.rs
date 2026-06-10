@@ -1396,3 +1396,141 @@ async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
         "acceptEdits should no longer blanket-allow `rm`; got {rm:?}"
     );
 }
+
+// ── Path-constraint gate (TS `checkPathConstraints`) ──
+//
+// The 4th bash force-ask gate: an output redirection (or process substitution)
+// that writes OUTSIDE the allowed working dirs — or via a shell-expanded /
+// unresolvable target — must force Ask and cannot be auto-allowed.
+
+#[tokio::test]
+async fn test_bash_redirect_outside_tree_asks() {
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "echo pwned > /etc/passwd"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "redirect outside the working dirs must Ask, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_redirect_shell_expansion_asks() {
+    // A shell-expanded target ($VAR) can't be validated before execution — Ask.
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "echo x > $HOME/loot"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "shell-expansion redirect target must Ask, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_redirect_within_tree_passes() {
+    // A relative target resolves inside the (process) cwd — no path-gate Ask.
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "echo hi > out.txt"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Passthrough),
+        "in-tree redirect must not Ask from the path gate, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_redirect_devnull_passes() {
+    // /dev/null is always safe — it discards output (TS parity).
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "echo hi > /dev/null"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Passthrough),
+        "redirect to /dev/null must not Ask, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_process_substitution_asks() {
+    // `> >(tee …)` writes via a process sub whose target never appears as a
+    // redirect target — TS forces Ask on process substitution.
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "echo secret > >(tee .git/config)"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "process substitution must Ask, got {result:?}"
+    );
+}
+
+// ── Per-subcommand write-path gate (TS `validateCommandPaths`) ──
+
+#[tokio::test]
+async fn test_bash_write_outside_tree_asks() {
+    // A copy whose destination is outside the working dirs (and not a
+    // catastrophic system path the dangerous-removal gate already covers).
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "cp secret.txt /opt/exfil/loot"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "write outside the working dirs must Ask, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_write_within_tree_passes() {
+    // mkdir of an in-tree dir is not fenced by the write-path gate.
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "mkdir newdir"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Passthrough),
+        "in-tree write must not Ask from the path gate, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_read_outside_tree_not_fenced() {
+    // Reads are intentionally NOT fenced (coco divergence — avoids noise on
+    // routine out-of-cwd inspection). `cat /etc/os-release` passes the gate.
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "cat /etc/os-release"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Passthrough),
+        "out-of-tree read must not Ask, got {result:?}"
+    );
+}

@@ -180,6 +180,46 @@ async fn test_violation_count() {
     assert_eq!(state.violation_count().await, 0);
 }
 
+#[tokio::test]
+async fn test_violation_observer_take_once_and_receives_count() {
+    let state = SandboxState::disabled();
+    let mut rx = state
+        .take_violation_observer()
+        .expect("observer present on first take");
+    // Take-once: a second take yields None.
+    assert!(state.take_violation_observer().is_none());
+
+    state
+        .record_violation(crate::violation::Violation {
+            timestamp: std::time::SystemTime::now(),
+            operation: "network-denied".to_string(),
+            path: Some("evil.com".to_string()),
+            command_tag: None,
+            benign: false,
+        })
+        .await;
+
+    // A non-benign push notifies the observer with the non-benign count, which
+    // the runner forwards as SandboxViolationsDetected { count }.
+    let count = rx.recv().await.expect("observer receives a count");
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_start_violation_monitor_noop_when_inactive() {
+    // platform_active=false (sandbox off) → no log-stream child is spawned.
+    let state = SandboxState::disabled();
+    state.start_violation_monitor();
+    assert!(
+        state
+            .monitor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none(),
+        "monitor must not be installed when the platform sandbox is inactive"
+    );
+}
+
 #[test]
 fn test_config_and_settings_accessors() {
     let state = make_active_state();
@@ -513,4 +553,47 @@ fn test_add_writable_root_deduplicates() {
     let count_after_first = state.config().writable_roots.len();
     state.add_writable_root(path);
     assert_eq!(state.config().writable_roots.len(), count_after_first);
+}
+
+#[test]
+fn test_network_ask_callback_suppressed_by_managed_domains_only() {
+    let mut settings = SandboxSettings::enabled();
+    settings.network.allow_managed_domains_only = true;
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        allow_network: true,
+        ..Default::default()
+    };
+    let state = SandboxState::new(
+        EnforcementLevel::WorkspaceWrite,
+        settings,
+        config,
+        crate::platform::create_platform(),
+    );
+    // A bridge is installed, but the managed-only policy still suppresses the
+    // interactive widening callback (denied hosts get a static refusal).
+    state.set_approval_bridge(std::sync::Arc::new(
+        crate::bridge::NoOpSandboxApprovalBridge,
+    ));
+    assert!(state.build_network_ask_callback().is_none());
+}
+
+#[test]
+fn test_network_ask_callback_present_with_bridge_when_not_managed_only() {
+    let settings = SandboxSettings::enabled(); // allow_managed_domains_only defaults false
+    let config = SandboxConfig {
+        enforcement: EnforcementLevel::WorkspaceWrite,
+        allow_network: true,
+        ..Default::default()
+    };
+    let state = SandboxState::new(
+        EnforcementLevel::WorkspaceWrite,
+        settings,
+        config,
+        crate::platform::create_platform(),
+    );
+    state.set_approval_bridge(std::sync::Arc::new(
+        crate::bridge::NoOpSandboxApprovalBridge,
+    ));
+    assert!(state.build_network_ask_callback().is_some());
 }

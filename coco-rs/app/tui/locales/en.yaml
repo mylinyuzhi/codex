@@ -334,6 +334,11 @@ dialog.hints_invalid_config: "Esc Dismiss"
 dialog.risk_low: " [LOW] "
 dialog.risk_medium: " [MEDIUM] "
 dialog.risk_high: " [HIGH] "
+dialog.explainer_loading: "⟳ Analyzing risk…"
+dialog.explainer_risk_low: "Risk: LOW"
+dialog.explainer_risk_medium: "Risk: MEDIUM"
+dialog.explainer_risk_high: "Risk: HIGH"
+dialog.explainer_unavailable: "Explanation unavailable"
 
 # Permission body labels
 dialog.perm_command: "Command:\n  $ %{command}"

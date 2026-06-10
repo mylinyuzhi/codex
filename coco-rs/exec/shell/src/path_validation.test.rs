@@ -68,3 +68,40 @@ fn test_has_git_escape_pattern() {
     assert!(!has_git_escape_pattern("git status"));
     assert!(!has_git_escape_pattern("cd /tmp/x && ls"));
 }
+
+#[test]
+fn test_extract_write_path_targets() {
+    // Write/create commands yield their path args.
+    assert_eq!(
+        extract_write_path_targets("cp a.txt /opt/b"),
+        vec!["a.txt".to_string(), "/opt/b".to_string()]
+    );
+    assert_eq!(
+        extract_write_path_targets("mkdir -p out/sub"),
+        vec!["out/sub".to_string()]
+    );
+    assert_eq!(
+        extract_write_path_targets("touch /tmp/x"),
+        vec!["/tmp/x".to_string()]
+    );
+    // Compound: each write subcommand contributes.
+    assert_eq!(
+        extract_write_path_targets("rm foo && touch bar"),
+        vec!["foo".to_string(), "bar".to_string()]
+    );
+    // Leading env vars / safe wrappers are stripped before classification.
+    assert_eq!(
+        extract_write_path_targets("FOO=1 timeout 5 rm out.txt"),
+        vec!["out.txt".to_string()]
+    );
+}
+
+#[test]
+fn test_extract_write_path_targets_ignores_reads() {
+    // Read / non-filesystem commands contribute no write targets.
+    assert!(extract_write_path_targets("cat /etc/os-release").is_empty());
+    assert!(extract_write_path_targets("ls -la /usr").is_empty());
+    assert!(extract_write_path_targets("grep foo /etc/hosts").is_empty());
+    assert!(extract_write_path_targets("echo hi").is_empty());
+    assert!(extract_write_path_targets("git status").is_empty());
+}

@@ -670,3 +670,122 @@ fn parse_question_items_truncates_questions_and_options_to_four() {
     assert_eq!(items[1].options[3].label, "B-opt3");
     assert!(items[1].other_input.value.is_empty());
 }
+
+fn explainer_prompt(request_id: &str) -> crate::state::PermissionPromptState {
+    crate::state::PermissionPromptState {
+        request_id: request_id.to_string(),
+        tool_name: "Bash".to_string(),
+        description: "Run?".to_string(),
+        detail: crate::state::PermissionDetail::Generic {
+            input_preview: "ls".to_string(),
+        },
+        risk_level: None,
+        show_always_allow: false,
+        classifier_checking: false,
+        classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Text("ls".to_string()),
+        original_input: None,
+        permission_suggestions: vec![],
+        worker_badge: None,
+        explanation_visible: true,
+        explanation: crate::state::ExplainerFetch::Loading,
+    }
+}
+
+#[test]
+fn permission_explanation_ready_lands_on_active_prompt() {
+    let (tx, _rx) = channel();
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(crate::state::PanePromptState::Permission(explainer_prompt(
+            "req-x",
+        )));
+
+    let handled = handle(
+        &mut state,
+        TuiOnlyEvent::PermissionExplanationReady {
+            request_id: "req-x".to_string(),
+            explanation: Some(coco_types::PermissionExplanation {
+                risk_level: coco_types::RiskLevel::High,
+                explanation: "danger".to_string(),
+                reasoning: "r".to_string(),
+                risk: "risk".to_string(),
+            }),
+        },
+        &tx,
+    );
+    assert!(handled);
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(p)) => {
+            assert!(matches!(
+                p.explanation,
+                crate::state::ExplainerFetch::Ready(_)
+            ));
+        }
+        _ => panic!("expected active permission prompt"),
+    }
+}
+
+#[test]
+fn permission_explanation_ready_none_marks_unavailable() {
+    let (tx, _rx) = channel();
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(crate::state::PanePromptState::Permission(explainer_prompt(
+            "req-y",
+        )));
+
+    handle(
+        &mut state,
+        TuiOnlyEvent::PermissionExplanationReady {
+            request_id: "req-y".to_string(),
+            explanation: None,
+        },
+        &tx,
+    );
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(p)) => {
+            assert!(matches!(
+                p.explanation,
+                crate::state::ExplainerFetch::Unavailable
+            ));
+        }
+        _ => panic!("expected active permission prompt"),
+    }
+}
+
+#[test]
+fn permission_explanation_ready_for_stale_id_is_dropped() {
+    let (tx, _rx) = channel();
+    let mut state = AppState::new();
+    state
+        .ui
+        .push_prompt(crate::state::PanePromptState::Permission(explainer_prompt(
+            "current",
+        )));
+
+    // A late reply for a prompt that's no longer active is ignored.
+    let handled = handle(
+        &mut state,
+        TuiOnlyEvent::PermissionExplanationReady {
+            request_id: "stale".to_string(),
+            explanation: None,
+        },
+        &tx,
+    );
+    assert!(!handled);
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(p)) => {
+            // Untouched — still Loading.
+            assert!(matches!(
+                p.explanation,
+                crate::state::ExplainerFetch::Loading
+            ));
+        }
+        _ => panic!("expected active permission prompt"),
+    }
+}

@@ -1010,6 +1010,34 @@ pub async fn handle_command(
             state.ui.show_system_reminders = !state.ui.show_system_reminders;
             true
         }
+        TuiCommand::TogglePermissionExplanation => {
+            // Ctrl+E on a permission prompt: toggle the risk-explainer panel.
+            // On first open, kick off the lazy LLM fetch (TS
+            // `createExplanationPromise`); the runner replies with
+            // `TuiOnlyEvent::PermissionExplanationReady`.
+            let Some(crate::state::PanePromptState::Permission(p)) =
+                state.ui.interaction.active_prompt.as_mut()
+            else {
+                return false;
+            };
+            p.explanation_visible = !p.explanation_visible;
+            if p.explanation_visible
+                && matches!(p.explanation, crate::state::ExplainerFetch::NotFetched)
+            {
+                p.explanation = crate::state::ExplainerFetch::Loading;
+                let request_id = p.request_id.clone();
+                let tool_name = p.tool_name.clone();
+                let tool_input = p.original_input.clone().unwrap_or(serde_json::Value::Null);
+                let _ = command_tx
+                    .send(UserCommand::RequestPermissionExplanation {
+                        request_id,
+                        tool_name,
+                        tool_input,
+                    })
+                    .await;
+            }
+            true
+        }
 
         // ── External editor / clipboard ──
         TuiCommand::OpenExternalEditor => {

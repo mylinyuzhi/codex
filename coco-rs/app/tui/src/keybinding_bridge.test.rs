@@ -121,6 +121,8 @@ fn install_permission_prompt(state: &mut AppState) {
             original_input: None,
             permission_suggestions: vec![],
             worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
         },
     ));
 }

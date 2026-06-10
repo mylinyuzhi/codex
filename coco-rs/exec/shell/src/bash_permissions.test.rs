@@ -124,3 +124,67 @@ fn test_strip_output_redirections() {
         "echo \"a > b\""
     );
 }
+
+#[test]
+fn test_extract_output_redirect_targets_basic() {
+    assert_eq!(
+        extract_output_redirect_targets("echo x > out.txt"),
+        vec!["out.txt".to_string()]
+    );
+    assert_eq!(
+        extract_output_redirect_targets("echo x >> log"),
+        vec!["log".to_string()]
+    );
+    assert_eq!(
+        extract_output_redirect_targets("cmd > /etc/passwd"),
+        vec!["/etc/passwd".to_string()]
+    );
+    // Clobber `>|` and combined `&>`.
+    assert_eq!(
+        extract_output_redirect_targets("cmd >| f"),
+        vec!["f".to_string()]
+    );
+    assert_eq!(
+        extract_output_redirect_targets("cmd &> all.log"),
+        vec!["all.log".to_string()]
+    );
+}
+
+#[test]
+fn test_extract_output_redirect_targets_skips_fd_dups() {
+    // `2>&1`, `>&-` are fd duplications, not file targets.
+    assert!(extract_output_redirect_targets("cmd 2>&1").is_empty());
+    assert!(extract_output_redirect_targets("cmd >&-").is_empty());
+    // `> out 2>&1`: only the file target is collected.
+    assert_eq!(
+        extract_output_redirect_targets("cmd > out 2>&1"),
+        vec!["out".to_string()]
+    );
+}
+
+#[test]
+fn test_extract_output_redirect_targets_quote_aware() {
+    // A `>` inside quotes is not a redirection.
+    assert!(extract_output_redirect_targets("echo '> not a redir'").is_empty());
+    assert!(extract_output_redirect_targets("echo \"a > b\"").is_empty());
+    assert!(extract_output_redirect_targets("git log --format='%H>%s'").is_empty());
+}
+
+#[test]
+fn test_extract_output_redirect_targets_none() {
+    assert!(extract_output_redirect_targets("ls -la").is_empty());
+    assert!(extract_output_redirect_targets("cat a.txt | grep foo").is_empty());
+}
+
+#[test]
+fn test_has_process_substitution() {
+    // Input process substitution.
+    assert!(has_process_substitution("diff <(sort a) <(sort b)"));
+    // Redirect to output process substitution.
+    assert!(has_process_substitution("echo x > >(tee out)"));
+    assert!(has_process_substitution("echo x >>(tee out)"));
+    // Plain redirects / commands are not process substitution.
+    assert!(!has_process_substitution("echo x > out.txt"));
+    assert!(!has_process_substitution("ls -la"));
+    assert!(!has_process_substitution("echo (a)"));
+}

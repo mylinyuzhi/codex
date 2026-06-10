@@ -1,6 +1,9 @@
 use super::bash_advanced::ASSISTANT_BLOCKING_BUDGET_MS;
 use super::shell_render::strip_leading_blank_lines;
 use coco_messages::ToolResult;
+use coco_permissions::has_shell_expansion;
+use coco_permissions::is_editable_internal_path;
+use coco_permissions::is_path_within_allowed_dirs;
 use coco_sandbox::SandboxBypass;
 use coco_sandbox::SandboxState;
 use coco_shell::read_only::is_read_only_command;
@@ -447,6 +450,78 @@ impl Tool for BashTool {
                 suggestions: Vec::new(),
                 choices: None,
             };
+        }
+        // Path-constraint gate (TS `checkPathConstraints`): an output redirection
+        // or process substitution that writes OUTSIDE the allowed working dirs —
+        // or via a shell-expanded / unresolvable target — forces Ask and cannot
+        // be auto-allowed. `> /etc/passwd`, `echo x > $TARGET`, `… > >(tee .git/config)`.
+        if coco_shell::has_process_substitution(command) {
+            return coco_types::ToolCheckResult::Ask {
+                message: "Process substitution (`>(...)` or `<(...)`) can execute arbitrary \
+                          commands and requires manual approval."
+                    .into(),
+                suggestions: Vec::new(),
+                choices: None,
+            };
+        }
+        let additional_dirs: Vec<String> = ctx
+            .permission_context
+            .additional_dirs
+            .keys()
+            .cloned()
+            .collect();
+        for target in coco_shell::extract_output_redirect_targets(command) {
+            // /dev/null is always safe — it discards output (TS parity).
+            if target == "/dev/null" {
+                continue;
+            }
+            if has_shell_expansion(&target) {
+                return coco_types::ToolCheckResult::Ask {
+                    message: "Shell expansion syntax in a redirection target requires \
+                              manual approval."
+                        .into(),
+                    suggestions: Vec::new(),
+                    choices: None,
+                };
+            }
+            if !is_path_within_allowed_dirs(&target, &cwd, &additional_dirs) {
+                return coco_types::ToolCheckResult::Ask {
+                    message: format!(
+                        "Output redirection to '{target}' is outside the allowed working \
+                         directories and requires manual approval."
+                    ),
+                    suggestions: Vec::new(),
+                    choices: None,
+                };
+            }
+        }
+        // Per-subcommand write-path gate (TS `validateCommandPaths` for
+        // write/create ops): a filesystem write (rm/rmdir/mv/cp/touch/mkdir)
+        // targeting a path OUTSIDE the allowed working dirs forces Ask. Extends
+        // the dangerous-removal gate from the catastrophic-system-path list to
+        // any out-of-tree write (e.g. `cp secret.txt /opt/x`, `mv x ~/.ssh/`).
+        // Reads are intentionally not fenced here — see `extract_write_path_targets`.
+        for target in coco_shell::extract_write_path_targets(command) {
+            if has_shell_expansion(&target) {
+                return coco_types::ToolCheckResult::Ask {
+                    message: "Shell expansion syntax in a write path requires manual approval."
+                        .into(),
+                    suggestions: Vec::new(),
+                    choices: None,
+                };
+            }
+            let allowed = is_path_within_allowed_dirs(&target, &cwd, &additional_dirs)
+                || is_editable_internal_path(&target, &cwd, None);
+            if !allowed {
+                return coco_types::ToolCheckResult::Ask {
+                    message: format!(
+                        "Writing to '{target}' is outside the allowed working directories \
+                         and requires manual approval."
+                    ),
+                    suggestions: Vec::new(),
+                    choices: None,
+                };
+            }
         }
 
         // acceptEdits: a filesystem subcommand auto-allows (#164).

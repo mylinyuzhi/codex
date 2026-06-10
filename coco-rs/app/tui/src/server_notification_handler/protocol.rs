@@ -711,25 +711,18 @@ pub(super) fn handle(
             true
         }
         ServerNotification::SandboxViolationsDetected { count } => {
-            // Sandbox violations indicate the workload tried to do something
-            // it shouldn't. Route through the modal so users review the
-            // count before more violations stack up silently.
-            state
-                .ui
-                .add_toast(Toast::error(format!("{count} sandbox violations")));
-            let body = crate::widgets::error_dialog::format_error_body(
-                &format!(
-                    "Sandbox blocked {count} {}.",
-                    if count == 1 {
-                        "violation"
-                    } else {
-                        "violations"
-                    }
-                ),
-                Some("sandbox"),
-                false,
-            );
-            state.ui.show_modal(ModalState::Error(body));
+            // Non-blocking count surface: TS shows violations in an expandable
+            // count view, not a blocking modal — a per-burst modal would
+            // interrupt the turn repeatedly. A toast keeps the user informed;
+            // the model also sees the details via `<sandbox_violations>`.
+            state.ui.add_toast(Toast::error(format!(
+                "Sandbox blocked {count} {}",
+                if count == 1 {
+                    "violation"
+                } else {
+                    "violations"
+                }
+            )));
             true
         }
 

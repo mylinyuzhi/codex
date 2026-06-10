@@ -128,6 +128,33 @@
       ]
     },
     {
+      "description": "Lazily-fetched permission risk explanation is ready for the prompt\n`request_id`. `explanation` is `None` when the fetch failed or the\nexplainer is disabled (the panel then shows \"unavailable\"). Produced\nafter the user toggles the Ctrl+E explainer panel. TS:\n`generatePermissionExplanation` (`permissionExplainer.ts`).",
+      "type": "object",
+      "properties": {
+        "explanation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionExplanation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "permission_explanation_ready"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ]
+    },
+    {
       "description": "Plugin picker data loaded.",
       "type": "object",
       "properties": {
@@ -1790,6 +1817,30 @@
         }
       ]
     },
+    "PermissionExplanation": {
+      "description": "Human-readable explanation of a permission decision.",
+      "type": "object",
+      "properties": {
+        "explanation": {
+          "type": "string"
+        },
+        "reasoning": {
+          "type": "string"
+        },
+        "risk": {
+          "type": "string"
+        },
+        "risk_level": {
+          "$ref": "#/$defs/RiskLevel"
+        }
+      },
+      "required": [
+        "risk_level",
+        "explanation",
+        "reasoning",
+        "risk"
+      ]
+    },
     "PermissionMode": {
       "description": "Permission mode (top-level because it's used by both message and permission modules).\n\nWire format is camelCase to match TS `PermissionModeSchema` at\n`coreSchemas.ts:337-347`: `z.enum(['default', 'acceptEdits',\n'bypassPermissions', 'plan', 'dontAsk'])`. The serde aliases on the\ndrifting variants accept legacy snake_case input so old session\ntranscripts deserialize cleanly.",
       "oneOf": [
@@ -2324,6 +2375,15 @@
       },
       "required": [
         "message_id"
+      ]
+    },
+    "RiskLevel": {
+      "description": "Risk level for permission explanations.",
+      "type": "string",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH"
       ]
     },
     "SdkSessionSummary": {
