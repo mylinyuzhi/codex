@@ -343,14 +343,17 @@ impl<'a> TranscriptCellRenderer<'a> {
                 self.render_tool_call(*invocation, *result, expanded, &mut lines);
                 lines.push(Line::default());
             }
-            TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { count, .. }) => {
+            TranscriptSourceCell::Committed(TranscriptCell::ToolBatch { start, end, count }) => {
+                let mut text = format!("  ‖ {}", t!("chat.tools_in_parallel", count = count));
+                let names = crate::presentation::transcript::tool_batch_name_summary(
+                    self.cells, *start, *end,
+                );
+                if !names.is_empty() {
+                    text.push_str(" · ");
+                    text.push_str(&names);
+                }
                 lines.push(Line::from(
-                    Span::raw(format!(
-                        "  ‖ {}",
-                        t!("chat.tools_in_parallel", count = count)
-                    ))
-                    .fg(self.styles.secondary())
-                    .dim(),
+                    Span::raw(text).fg(self.styles.secondary()).dim(),
                 ));
                 lines.push(Line::default());
             }
