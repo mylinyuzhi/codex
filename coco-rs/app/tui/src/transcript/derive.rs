@@ -102,29 +102,77 @@ fn assistant_cells(
         return Vec::new();
     };
     let mut out: Vec<RenderedCell> = Vec::new();
-    for part in content {
-        let kind = match part {
-            AssistantContent::Text(t) if !t.text.is_empty() => CellKind::AssistantText {
-                text: t.text.clone(),
-                model: model.to_string(),
-            },
-            AssistantContent::Reasoning(r) => {
-                if r.text.is_empty() {
-                    CellKind::AssistantRedactedThinking
-                } else {
+    let mut reasoning_run: Vec<String> = Vec::new();
+    let mut first_visible_reasoning_run = true;
+    let flush_reasoning_run =
+        |out: &mut Vec<RenderedCell>,
+         reasoning_run: &mut Vec<String>,
+         first_visible_reasoning_run: &mut bool| {
+            if reasoning_run.is_empty() {
+                return;
+            }
+            let visible = reasoning_run
+                .iter()
+                .filter(|text| !text.is_empty())
+                .cloned()
+                .collect::<Vec<_>>();
+            reasoning_run.clear();
+            if visible.is_empty() {
+                out.push(cell(
+                    uuid,
+                    CellKind::AssistantRedactedThinking,
+                    source.clone(),
+                ));
+            } else {
+                let metadata_anchor = *first_visible_reasoning_run;
+                *first_visible_reasoning_run = false;
+                out.push(cell(
+                    uuid,
                     CellKind::AssistantThinking {
-                        text: r.text.clone(),
-                    }
+                        text: visible.join("\n\n"),
+                        metadata_anchor,
+                    },
+                    source.clone(),
+                ));
+            }
+        };
+    for part in content {
+        if let AssistantContent::Reasoning(r) = part {
+            reasoning_run.push(r.text.clone());
+            continue;
+        }
+        let kind = match part {
+            AssistantContent::Text(t) if !t.text.is_empty() => {
+                flush_reasoning_run(
+                    &mut out,
+                    &mut reasoning_run,
+                    &mut first_visible_reasoning_run,
+                );
+                CellKind::AssistantText {
+                    text: t.text.clone(),
+                    model: model.to_string(),
                 }
             }
-            AssistantContent::ToolCall(tc) => CellKind::ToolUse {
-                call_id: tc.tool_call_id.clone(),
-                tool_name: tc.tool_name.clone(),
-            },
+            AssistantContent::ToolCall(tc) => {
+                flush_reasoning_run(
+                    &mut out,
+                    &mut reasoning_run,
+                    &mut first_visible_reasoning_run,
+                );
+                CellKind::ToolUse {
+                    call_id: tc.tool_call_id.clone(),
+                    tool_name: tc.tool_name.clone(),
+                }
+            }
             _ => continue,
         };
         out.push(cell(uuid, kind, source.clone()));
     }
+    flush_reasoning_run(
+        &mut out,
+        &mut reasoning_run,
+        &mut first_visible_reasoning_run,
+    );
     out
 }
 

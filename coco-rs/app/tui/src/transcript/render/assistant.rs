@@ -282,11 +282,19 @@ pub(super) fn try_render(
             ));
             Some(())
         }
-        CellKind::AssistantThinking { text } => {
-            let side_meta = w
-                .reasoning_metadata
-                .and_then(|cache| cache.get(&cell.message_uuid));
-            let source_reasoning_tokens = assistant_source_reasoning_tokens(cell);
+        CellKind::AssistantThinking {
+            text,
+            metadata_anchor,
+        } => {
+            let side_meta = metadata_anchor
+                .then(|| {
+                    w.reasoning_metadata
+                        .and_then(|cache| cache.get(&cell.message_uuid))
+                })
+                .flatten();
+            let source_reasoning_tokens = metadata_anchor
+                .then(|| assistant_source_reasoning_tokens(cell))
+                .flatten();
             lines.extend(render_thinking_block(
                 ThinkingRenderInput {
                     content: text,
@@ -296,10 +304,7 @@ pub(super) fn try_render(
                         .or(source_reasoning_tokens),
                     toggle_hint: Some(&w.thinking_toggle_hint()),
                     display: if w.show_thinking {
-                        ThinkingDisplay::Expanded {
-                            max_body_lines: coco_tui_ui::constants::THINKING_PREVIEW_LINES,
-                            truncated_hint: "…",
-                        }
+                        ThinkingDisplay::ExpandedFull
                     } else {
                         ThinkingDisplay::Collapsed
                     },

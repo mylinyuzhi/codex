@@ -177,13 +177,6 @@ fn finalized_history_lines_render_empty_title_info_as_markdown() {
 fn finalized_history_lines_show_collapsed_thinking_with_toggle_hint() {
     let theme = Theme::default();
     let kb_handle = crate::keybinding_resolver::KeybindingHandle::from_defaults();
-    // Phase 3d (§5): reasoning metadata now rides on
-    // `CellKind::AssistantThinking { duration_ms, reasoning_tokens }`.
-    // `TranscriptView::record_reasoning_tokens` (called from
-    // `on_turn_completed`) stamps the values onto the latest thinking
-    // cell so the header renders the full `Thinking · 1.3s · 15
-    // reasoning tokens` line. Tests bypass the engine flow and use the
-    // `_with_metadata` helper directly.
     let (cell, meta) =
         test_helpers::assistant_thinking_cell_with_metadata("Need to inspect files.", 1300, 15);
     let mut reasoning_metadata: std::collections::HashMap<
@@ -212,6 +205,103 @@ fn finalized_history_lines_show_collapsed_thinking_with_toggle_hint() {
         plain_lines(&lines),
         vec!["⏺ Thinking · 1.3s · 15 reasoning tok · F2 to expand", "",]
     );
+}
+
+#[test]
+fn finalized_history_lines_render_reasoning_metadata_once_for_adjacent_parts() {
+    let theme = Theme::default();
+    let msg = coco_messages::create_assistant_message(
+        vec![
+            coco_messages::AssistantContent::Reasoning(coco_messages::ReasoningContent::new(
+                "first",
+            )),
+            coco_messages::AssistantContent::Reasoning(coco_messages::ReasoningContent::new(
+                "second",
+            )),
+        ],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    let cells = message_to_cells(Arc::new(msg));
+    let mut reasoning_metadata = std::collections::HashMap::new();
+    reasoning_metadata.insert(
+        cells[0].message_uuid,
+        crate::state::session::ReasoningMetadata {
+            duration_ms: Some(900),
+            reasoning_tokens: 42,
+        },
+    );
+
+    let mut render_options = options(&theme, 80);
+    render_options.reasoning_metadata = Some(&reasoning_metadata);
+    let lines = render_finalized_history_lines(&cells, render_options);
+    let rendered = plain_lines(&lines).join("\n");
+
+    assert_eq!(rendered.matches("reasoning tok").count(), 1);
+}
+
+#[test]
+fn finalized_history_lines_show_thinking_expands_full_reasoning_body() {
+    let theme = Theme::default();
+    let text = (0..8)
+        .map(|i| format!("line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cells = vec![test_helpers::assistant_thinking_cell(&text)];
+
+    let mut render_options = options(&theme, 80);
+    render_options.show_thinking = true;
+    let lines = render_finalized_history_lines(&cells, render_options);
+    let rendered = plain_lines(&lines).join("\n");
+
+    for i in 0..8 {
+        assert!(rendered.contains(&format!("line-{i}")), "{rendered}");
+    }
+    assert!(!rendered.contains("\n  …"), "{rendered}");
+}
+
+#[test]
+fn finalized_history_lines_render_metadata_only_on_first_reasoning_run() {
+    let theme = Theme::default();
+    let msg = coco_messages::create_assistant_message(
+        vec![
+            coco_messages::AssistantContent::Reasoning(coco_messages::ReasoningContent::new(
+                "first",
+            )),
+            coco_messages::AssistantContent::Text(coco_messages::TextContent::new("answer")),
+            coco_messages::AssistantContent::Reasoning(coco_messages::ReasoningContent::new(
+                "second",
+            )),
+            coco_messages::AssistantContent::ToolCall(coco_messages::ToolCallContent::new(
+                "call-1",
+                "Read",
+                serde_json::json!({}),
+            )),
+        ],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    let cells = message_to_cells(Arc::new(msg));
+    let thinking_cells = cells
+        .iter()
+        .filter(|cell| matches!(cell.kind, CellKind::AssistantThinking { .. }))
+        .count();
+    let mut reasoning_metadata = std::collections::HashMap::new();
+    reasoning_metadata.insert(
+        cells[0].message_uuid,
+        crate::state::session::ReasoningMetadata {
+            duration_ms: Some(1100),
+            reasoning_tokens: 31,
+        },
+    );
+
+    let mut render_options = options(&theme, 80);
+    render_options.reasoning_metadata = Some(&reasoning_metadata);
+    let lines = render_finalized_history_lines(&cells, render_options);
+    let rendered = plain_lines(&lines).join("\n");
+
+    assert_eq!(thinking_cells, 2);
+    assert_eq!(rendered.matches("reasoning tok").count(), 1);
 }
 
 #[test]

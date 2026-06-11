@@ -17,6 +17,7 @@ pub(crate) enum ThinkingDisplay {
         max_body_lines: usize,
         truncated_hint: &'static str,
     },
+    ExpandedFull,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,36 +57,47 @@ pub(crate) fn render_thinking_block(
             .italic(),
     )];
 
-    let ThinkingDisplay::Expanded {
-        max_body_lines,
-        truncated_hint,
-    } = input.display
-    else {
-        return lines;
-    };
-
     if input.content.is_empty() {
         return lines;
     }
 
-    let mut iter = input.content.lines();
-    for line in iter.by_ref().take(max_body_lines) {
-        lines.push(Line::from(
-            Span::raw(format!("  {}", transcript_safe_line(line)))
-                .fg(styles.thinking())
-                .dim()
-                .italic(),
-        ));
+    match input.display {
+        ThinkingDisplay::Collapsed => lines,
+        ThinkingDisplay::Expanded {
+            max_body_lines,
+            truncated_hint,
+        } => {
+            let mut iter = input.content.lines();
+            for line in iter.by_ref().take(max_body_lines) {
+                lines.push(Line::from(
+                    Span::raw(format!("  {}", transcript_safe_line(line)))
+                        .fg(styles.thinking())
+                        .dim()
+                        .italic(),
+                ));
+            }
+            if iter.next().is_some() {
+                lines.push(Line::from(
+                    Span::raw(format!("  {truncated_hint}"))
+                        .fg(styles.thinking())
+                        .dim()
+                        .italic(),
+                ));
+            }
+            lines
+        }
+        ThinkingDisplay::ExpandedFull => {
+            for line in input.content.lines() {
+                lines.push(Line::from(
+                    Span::raw(format!("  {line}"))
+                        .fg(styles.thinking())
+                        .dim()
+                        .italic(),
+                ));
+            }
+            lines
+        }
     }
-    if iter.next().is_some() {
-        lines.push(Line::from(
-            Span::raw(format!("  {truncated_hint}"))
-                .fg(styles.thinking())
-                .dim()
-                .italic(),
-        ));
-    }
-    lines
 }
 
 pub(crate) fn estimate_reasoning_tokens(thinking: &str) -> i64 {
