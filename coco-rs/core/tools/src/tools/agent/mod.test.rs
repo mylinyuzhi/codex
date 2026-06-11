@@ -867,10 +867,13 @@ async fn test_send_message_target_not_found() {
 /// Records the shutdown control calls routed through the agent handle so
 /// tests can assert SendMessageTool dispatched the right method with the
 /// right arguments. All non-shutdown methods are unused.
+type RecordedPlanResponse = (String, String, bool, Option<String>);
+
 #[derive(Default)]
 struct ShutdownRecordingHandle {
     request: tokio::sync::Mutex<Option<(String, Option<String>)>>,
     response: tokio::sync::Mutex<Option<(String, bool, Option<String>)>>,
+    plan_response: tokio::sync::Mutex<Option<RecordedPlanResponse>>,
 }
 
 #[async_trait::async_trait]
@@ -910,6 +913,249 @@ impl AgentHandle for ShutdownRecordingHandle {
             Some((request_id.to_string(), approve, reason.map(String::from)));
         Ok(format!("responded {approve}"))
     }
+    async fn respond_to_plan_approval(
+        &self,
+        target: &str,
+        request_id: &str,
+        approve: bool,
+        feedback: Option<&str>,
+        _permission_mode: coco_types::PermissionMode,
+    ) -> Result<String, String> {
+        *self.plan_response.lock().await = Some((
+            target.to_string(),
+            request_id.to_string(),
+            approve,
+            feedback.map(String::from),
+        ));
+        Ok(format!("plan responded {approve}"))
+    }
+}
+
+#[tokio::test]
+async fn test_send_message_schema_rejects_non_string_non_object_message() {
+    let ctx = ToolUseContext::test_default();
+    for message in [
+        serde_json::Value::Null,
+        serde_json::json!(7),
+        serde_json::json!(true),
+        serde_json::json!(["hello"]),
+    ] {
+        let input = serde_json::json!({ "to": "researcher", "message": message });
+        assert!(
+            <SendMessageTool as DynTool>::runtime_validation_schema(&SendMessageTool)
+                .validate(&input)
+                .is_err(),
+            "schema must reject {input}"
+        );
+        let result = <SendMessageTool as DynTool>::execute(&SendMessageTool, input, &ctx).await;
+        assert!(result.is_err());
+    }
+}
+
+#[tokio::test]
+async fn test_send_message_rejects_unknown_structured_type() {
+    let ctx = ToolUseContext::test_default();
+    let input = serde_json::json!({
+        "to": "researcher",
+        "message": {"type": "unknown_response", "request_id": "p-1", "approve": true},
+    });
+    assert!(
+        <SendMessageTool as DynTool>::runtime_validation_schema(&SendMessageTool)
+            .validate(&input)
+            .is_err()
+    );
+    let result = <SendMessageTool as DynTool>::execute(&SendMessageTool, input, &ctx).await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_send_message_plan_approval_requires_request_id_and_approve() {
+    let ctx = ToolUseContext::test_default();
+    for message in [
+        serde_json::json!({"type": "plan_approval_response", "approve": true}),
+        serde_json::json!({"type": "plan_approval_response", "request_id": "p-1"}),
+    ] {
+        let input = serde_json::json!({ "to": "researcher", "message": message });
+        assert!(
+            <SendMessageTool as DynTool>::runtime_validation_schema(&SendMessageTool)
+                .validate(&input)
+                .is_err(),
+            "schema must reject {input}"
+        );
+        let result = <SendMessageTool as DynTool>::execute(&SendMessageTool, input, &ctx).await;
+        assert!(result.is_err());
+    }
+}
+
+#[tokio::test]
+async fn test_send_message_plan_approval_accepts_semantic_booleans() {
+    for (raw, expected) in [
+        (serde_json::json!(true), true),
+        (serde_json::json!(false), false),
+        (serde_json::json!("true"), true),
+        (serde_json::json!("false"), false),
+    ] {
+        let handle = Arc::new(ShutdownRecordingHandle::default());
+        let mut ctx = ToolUseContext::test_default();
+        ctx.agent = handle.clone();
+        let input = serde_json::json!({
+            "to": "researcher",
+            "message": {
+                "type": "plan_approval_response",
+                "request_id": "p-1",
+                "approve": raw,
+            },
+        });
+        assert!(
+            <SendMessageTool as DynTool>::runtime_validation_schema(&SendMessageTool)
+                .validate(&input)
+                .is_ok(),
+            "runtime schema must accept {input}"
+        );
+        <SendMessageTool as DynTool>::execute(&SendMessageTool, input, &ctx)
+            .await
+            .unwrap();
+        assert_eq!(
+            *handle.plan_response.lock().await,
+            Some((
+                "researcher".to_string(),
+                "p-1".to_string(),
+                expected,
+                (!expected).then_some("Plan needs revision".to_string()),
+            ))
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_send_message_plan_approval_rejects_non_boolean_strings() {
+    let ctx = ToolUseContext::test_default();
+    for approve in [serde_json::json!("yes"), serde_json::json!("0")] {
+        let input = serde_json::json!({
+            "to": "researcher",
+            "message": {
+                "type": "plan_approval_response",
+                "request_id": "p-1",
+                "approve": approve,
+            },
+        });
+        assert!(
+            <SendMessageTool as DynTool>::runtime_validation_schema(&SendMessageTool)
+                .validate(&input)
+                .is_err(),
+            "runtime schema must reject {input}"
+        );
+        let result = <SendMessageTool as DynTool>::execute(&SendMessageTool, input, &ctx).await;
+        assert!(result.is_err());
+    }
+}
+
+#[tokio::test]
+async fn test_send_message_plan_approval_routes_to_plan_handle_with_feedback() {
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "researcher",
+            "message": {
+                "type": "plan_approval_response",
+                "request_id": "p-7",
+                "approve": false,
+                "feedback": "add failure tests"
+            },
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.data.get("message").and_then(|m| m.as_str()),
+        Some("plan responded false")
+    );
+    assert_eq!(
+        *handle.plan_response.lock().await,
+        Some((
+            "researcher".to_string(),
+            "p-7".to_string(),
+            false,
+            Some("add failure tests".to_string()),
+        ))
+    );
+    assert!(
+        handle.request.lock().await.is_none(),
+        "plan response must not route through shutdown request"
+    );
+    assert!(
+        handle.response.lock().await.is_none(),
+        "plan response must not route through shutdown response"
+    );
+}
+
+#[tokio::test]
+async fn test_send_message_structured_message_broadcast_rejected() {
+    let handle = Arc::new(ShutdownRecordingHandle::default());
+    let mut ctx = ToolUseContext::test_default();
+    ctx.agent = handle.clone();
+    let result = <SendMessageTool as DynTool>::execute(
+        &SendMessageTool,
+        serde_json::json!({
+            "to": "*",
+            "message": {
+                "type": "plan_approval_response",
+                "request_id": "p-1",
+                "approve": true
+            },
+        }),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_err(), "structured messages cannot be broadcast");
+    assert!(handle.plan_response.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn test_send_message_model_schema_is_typed_and_approve_is_boolean_only() {
+    let coco_tool_runtime::ToolSpec::Function(spec) = <SendMessageTool as DynTool>::tool_spec(
+        &SendMessageTool,
+        &coco_tool_runtime::SchemaContext::default(),
+        &coco_tool_runtime::PromptOptions::default(),
+    )
+    .await
+    else {
+        panic!("SendMessage must be a function tool");
+    };
+
+    let message_schema = &spec.parameters["properties"]["message"];
+    assert!(message_schema.get("anyOf").is_some());
+    assert_ne!(message_schema, &serde_json::Value::Bool(true));
+
+    let variants = message_schema["anyOf"].as_array().expect("message anyOf");
+    let plan = variants
+        .iter()
+        .find(|variant| {
+            variant["properties"]["type"]["const"]
+                == serde_json::Value::String("plan_approval_response".to_string())
+        })
+        .expect("plan_approval_response schema");
+    assert_eq!(
+        plan["properties"]["approve"],
+        serde_json::json!({ "type": "boolean" })
+    );
+
+    let runtime_plan = <SendMessageTool as DynTool>::runtime_validation_schema(&SendMessageTool)
+        .as_value()["properties"]["message"]["anyOf"]
+        .as_array()
+        .expect("runtime message anyOf")
+        .iter()
+        .find(|variant| {
+            variant["properties"]["type"]["const"]
+                == serde_json::Value::String("plan_approval_response".to_string())
+        })
+        .expect("runtime plan schema")
+        .clone();
+    assert!(runtime_plan["properties"]["approve"].get("anyOf").is_some());
 }
 
 #[tokio::test]

@@ -328,6 +328,12 @@ pub enum UserCommand {
     /// Remove a queued command from the engine queue and return it to
     /// the composer for editing.
     EditQueuedCommand { id: String },
+    /// Remove all user-editable queued commands from the engine queue
+    /// and combine them with the current composer draft.
+    EditQueuedCommands {
+        current_input: String,
+        current_cursor: usize,
+    },
     /// Background all foreground tasks. Sent by the live single-press
     /// Ctrl+B path (`TuiCommand::BackgroundAllTasks` in update.rs).
     BackgroundAllTasks,

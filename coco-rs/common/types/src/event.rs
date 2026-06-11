@@ -567,7 +567,7 @@ matching `NotificationMethod` discriminant.",
     /// Command queue state changed.
     "queue/stateChanged" => QueueStateChanged { queued: i32 },
     /// Command queued.
-    "queue/commandQueued" => CommandQueued { id: String, preview: String },
+    "queue/commandQueued" => CommandQueued { id: String, preview: String, editable: bool },
     /// Command dequeued.
     "queue/commandDequeued" => CommandDequeued { id: String },
 
@@ -1802,6 +1802,15 @@ pub enum TuiOnlyEvent {
     QueuedCommandEditReady {
         id: String,
         prompt: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<QueuedCommandEditImage>,
+    },
+    /// Editable queued commands were removed from the engine queue and
+    /// combined with the current composer draft.
+    QueuedCommandsEditReady {
+        ids: Vec<String>,
+        prompt: String,
+        cursor: usize,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<QueuedCommandEditImage>,
     },

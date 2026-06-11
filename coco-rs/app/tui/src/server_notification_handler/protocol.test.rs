@@ -254,6 +254,7 @@ fn user_cancel_with_queued_command_does_not_restore() {
         .push_back(QueuedCommandDisplay {
             id: "q1".into(),
             preview: "next".into(),
+            editable: true,
         });
     let (tx, mut rx) = channel();
 

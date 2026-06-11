@@ -453,6 +453,22 @@ fn transcript_projection_renders_context_usage_as_full_cell_not_meta() {
 }
 
 #[test]
+fn transcript_projection_renders_user_interruption_as_content() {
+    let cells = crate::transcript::derive::message_to_cells(Arc::new(
+        coco_messages::create_user_interruption_system_message(false),
+    ));
+
+    assert_eq!(
+        projection_cells(&cells, /*show_system_reminders*/ false),
+        vec![TranscriptCell::Cell { index: 0 }]
+    );
+    assert_eq!(
+        projection_cells(&cells, /*show_system_reminders*/ true),
+        vec![TranscriptCell::Cell { index: 0 }]
+    );
+}
+
+#[test]
 fn transcript_projection_groups_parallel_tool_runs() {
     let cells = vec![
         tool_use_cell("tool-1", "Read", serde_json::json!({})),

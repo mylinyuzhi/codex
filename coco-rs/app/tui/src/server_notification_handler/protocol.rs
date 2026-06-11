@@ -633,11 +633,19 @@ pub(super) fn handle(
                 .truncate(queued.max(0) as usize);
             true
         }
-        ServerNotification::CommandQueued { id, preview } => {
+        ServerNotification::CommandQueued {
+            id,
+            preview,
+            editable,
+        } => {
             state
                 .session
                 .queued_commands
-                .push_back(crate::state::session::QueuedCommandDisplay { id, preview });
+                .push_back(crate::state::session::QueuedCommandDisplay {
+                    id,
+                    preview,
+                    editable,
+                });
             true
         }
         ServerNotification::CommandDequeued { id } => {

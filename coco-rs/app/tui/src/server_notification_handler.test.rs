@@ -524,6 +524,7 @@ fn test_session_reset_clears_transcript_adjacent_state() {
         .push_back(QueuedCommandDisplay {
             id: "q1".to_string(),
             preview: "queued".to_string(),
+            editable: true,
         });
     state.session.active_hooks.push(HookEntry {
         hook_id: "h1".to_string(),
@@ -657,6 +658,7 @@ fn test_history_replaced_applies_same_boundary_cleanup() {
         .push_back(QueuedCommandDisplay {
             id: "q1".to_string(),
             preview: "queued".to_string(),
+            editable: true,
         });
     state.ui.streaming = Some(crate::state::StreamingState::default());
 

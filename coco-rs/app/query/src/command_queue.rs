@@ -125,6 +125,13 @@ impl QueuedCommand {
         self.images = images;
         self
     }
+
+    /// Whether the queued command may be restored into the user's composer.
+    pub fn is_editable_by_user(&self) -> bool {
+        !self.is_slash_command
+            && self.agent_id.is_none()
+            && matches!(self.origin.as_ref(), None | Some(QueueOrigin::Human))
+    }
 }
 
 /// Thread-safe mid-turn command queue with priority ordering.
@@ -209,6 +216,13 @@ impl CommandQueue {
         let removed = queue.remove(idx);
         self.changed.notify_waiters();
         Some(removed)
+    }
+
+    /// Remove every user-editable command, leaving task/coordinator/channel
+    /// notifications queued for the engine.
+    pub async fn dequeue_all_editable(&self) -> Vec<QueuedCommand> {
+        self.dequeue_matching(QueuedCommand::is_editable_by_user)
+            .await
     }
 
     /// Check if the queue is empty.

@@ -309,6 +309,26 @@ pub async fn handle_command(
                     .await;
                 return true;
             }
+            if !state.ui.has_blocking_interaction()
+                && (state.is_streaming() || state.session.is_busy())
+            {
+                state.ui.esc_tracker.reset();
+                let _ = command_tx
+                    .send(UserCommand::Interrupt(TurnAbortReason::UserCancel))
+                    .await;
+                return true;
+            }
+            if !state.ui.has_blocking_interaction()
+                && state.session.queued_commands.iter().any(|q| q.editable)
+            {
+                let _ = command_tx
+                    .send(UserCommand::EditQueuedCommands {
+                        current_input: state.ui.input.text().to_string(),
+                        current_cursor: state.ui.input.textarea.cursor(),
+                    })
+                    .await;
+                return true;
+            }
             // No state + active suggestions + text present → ESC
             // double-press clears input + saves to history. Mirrors TS
             // `useTextInput.ts:126-153`: single Esc shows a toast; second
@@ -467,12 +487,12 @@ pub async fn handle_command(
         }
         TuiCommand::CursorUp => {
             state.ui.input.clear_inline_hint();
-            if state.ui.input.is_empty()
-                && let Some(first) = state.session.queued_commands.front()
+            if state.ui.input.is_empty() && state.session.queued_commands.iter().any(|q| q.editable)
             {
                 let _ = command_tx
-                    .send(UserCommand::EditQueuedCommand {
-                        id: first.id.clone(),
+                    .send(UserCommand::EditQueuedCommands {
+                        current_input: String::new(),
+                        current_cursor: 0,
                     })
                     .await;
                 return true;

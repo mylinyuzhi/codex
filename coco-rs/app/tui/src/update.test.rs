@@ -920,7 +920,7 @@ async fn submit_input_while_streaming_with_interruptible_tool_queues_then_interr
 }
 
 #[tokio::test]
-async fn up_on_empty_input_requests_edit_for_first_queued_command() {
+async fn up_on_empty_input_requests_edit_for_queued_commands() {
     let mut state = AppState::new();
     state
         .session
@@ -928,14 +928,21 @@ async fn up_on_empty_input_requests_edit_for_first_queued_command() {
         .push_back(crate::state::QueuedCommandDisplay {
             id: "queued-1".to_string(),
             preview: "first queued".to_string(),
+            editable: true,
         });
 
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
 
     match rx.try_recv() {
-        Ok(UserCommand::EditQueuedCommand { id }) => assert_eq!(id, "queued-1"),
-        other => panic!("expected EditQueuedCommand on the wire, got {other:?}"),
+        Ok(UserCommand::EditQueuedCommands {
+            current_input,
+            current_cursor,
+        }) => {
+            assert_eq!(current_input, "");
+            assert_eq!(current_cursor, 0);
+        }
+        other => panic!("expected EditQueuedCommands on the wire, got {other:?}"),
     }
 }
 
@@ -1002,6 +1009,75 @@ async fn busy_ctrl_c_interrupts_without_exit_hint() {
         Ok(UserCommand::Interrupt(coco_types::TurnAbortReason::UserCancel)) => {}
         other => panic!("expected Interrupt on the wire, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn busy_escape_interrupts_without_clearing_input() {
+    let mut state = AppState::new();
+    state.session.set_busy(true);
+    state.ui.input.textarea.set_text("draft");
+    state.ui.input.textarea.set_cursor(5);
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "draft");
+    match rx.try_recv() {
+        Ok(UserCommand::Interrupt(coco_types::TurnAbortReason::UserCancel)) => {}
+        other => panic!("expected UserCancel interrupt on Esc, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn escape_with_editable_queue_requests_batch_edit() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("draft");
+    state.ui.input.textarea.set_cursor(2);
+    state
+        .session
+        .queued_commands
+        .push_back(crate::state::QueuedCommandDisplay {
+            id: "queued-1".to_string(),
+            preview: "first queued".to_string(),
+            editable: true,
+        });
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+
+    match rx.try_recv() {
+        Ok(UserCommand::EditQueuedCommands {
+            current_input,
+            current_cursor,
+        }) => {
+            assert_eq!(current_input, "draft");
+            assert_eq!(current_cursor, 2);
+        }
+        other => panic!("expected EditQueuedCommands on Esc, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn up_ignores_non_editable_queue_and_uses_history() {
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("prior".to_string());
+    state
+        .session
+        .queued_commands
+        .push_back(crate::state::QueuedCommandDisplay {
+            id: "queued-1".to_string(),
+            preview: "system queued".to_string(),
+            editable: false,
+        });
+    let (tx, mut rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "prior");
+    assert!(
+        rx.try_recv().is_err(),
+        "non-editable queue should not dispatch edit"
+    );
 }
 
 #[tokio::test]

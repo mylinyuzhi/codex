@@ -370,6 +370,7 @@ fn is_meta(cell: &RenderedCell) -> bool {
         // `/context` snapshot is first-class content (TS prints it inline), not
         // a collapsible system reminder — render the full colored block.
         CellKind::System(SystemCellKind::ContextUsage) => false,
+        CellKind::System(SystemCellKind::UserInterruption { .. }) => false,
         CellKind::System(_) => true,
         _ => false,
     }
