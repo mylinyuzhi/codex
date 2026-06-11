@@ -20,7 +20,9 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
+use coco_types::ExitPlanModeResult;
 use coco_types::PermissionMode;
+use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
@@ -781,8 +783,10 @@ impl Tool for ExitPlanModeTool {
                 request_id: Some(request_id),
                 ..Default::default()
             };
+            let display_data = exit_plan_mode_display_data(&out);
             return Ok(
                 ToolResult::data(serde_json::to_value(&out).unwrap_or_default())
+                    .with_display_data(display_data)
                     .with_patch(awaiting_patch),
             );
         }
@@ -906,7 +910,12 @@ impl Tool for ExitPlanModeTool {
             plan_verification,
             ..Default::default()
         };
-        Ok(ToolResult::data(serde_json::to_value(&out).unwrap_or_default()).with_patch(patch))
+        let display_data = exit_plan_mode_display_data(&out);
+        Ok(
+            ToolResult::data(serde_json::to_value(&out).unwrap_or_default())
+                .with_display_data(display_data)
+                .with_patch(patch),
+        )
     }
 
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
@@ -922,6 +931,16 @@ impl Tool for ExitPlanModeTool {
             provider_options: None,
         }]
     }
+}
+
+fn exit_plan_mode_display_data(out: &ExitPlanModeOutput) -> ToolDisplayData {
+    ToolDisplayData::ExitPlanModeResult(ExitPlanModeResult {
+        plan: out.plan.clone().unwrap_or_default(),
+        file_path: out.file_path.clone(),
+        awaiting_leader_approval: out.awaiting_leader_approval,
+        is_agent: out.is_agent,
+        plan_was_edited: out.plan_was_edited.unwrap_or(false),
+    })
 }
 
 impl ExitPlanModeTool {
