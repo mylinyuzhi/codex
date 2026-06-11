@@ -7,7 +7,7 @@ use crate::state::PermissionPromptState;
 use crate::state::StreamingState;
 use crate::state::SuggestionKind;
 use crate::state::Toast;
-use crate::state::derive::test_helpers;
+use crate::transcript::derive::test_helpers;
 
 fn mark_retained_surface_visible(state: &mut AppState) {
     state

@@ -229,7 +229,7 @@ fn resolve_key(
         if matches!(key.code, KeyCode::BackTab) {
             return (None, "transcript_backtab");
         }
-        if let Some(cmd) = map_transcript_key(key) {
+        if let Some(cmd) = crate::modal_pane::transcript_map_key(key) {
             return (Some(cmd), "transcript");
         }
     }
@@ -288,180 +288,25 @@ fn resolve_key(
     let cmd = match ctx {
         KeybindingContext::Confirmation => crate::bottom_pane::confirmation_map_key(key),
         KeybindingContext::Question => crate::bottom_pane::question::map_key(key),
-        KeybindingContext::ModelPicker => map_model_picker_key(key),
-        KeybindingContext::TeamRoster => map_team_roster_key(key),
-        KeybindingContext::Picker => map_picker_key(key),
-        KeybindingContext::Scrollable => map_scrollable_key(key),
-        KeybindingContext::Transcript => map_transcript_key(key),
+        KeybindingContext::ModelPicker => crate::modal_pane::model_picker::map_key(key),
+        KeybindingContext::TeamRoster => crate::modal_pane::team_roster::map_key(key),
+        KeybindingContext::Picker => crate::modal_pane::picker_map_key(key),
+        KeybindingContext::Scrollable => crate::modal_pane::scrollable_map_key(key),
+        KeybindingContext::Transcript => crate::modal_pane::transcript_map_key(key),
         // Autocomplete intercepts navigation keys only; other keys fall
         // through to input editing so the user keeps typing and the
         // suggestion popup refreshes reactively.
         KeybindingContext::Autocomplete => map_autocomplete_key(key)
             .or_else(|| map_global_key(state, key))
             .or_else(|| map_input_key(state, key)),
-        KeybindingContext::Settings | KeybindingContext::ThemePicker => map_settings_key(key),
-        KeybindingContext::PermissionsEditor => map_permissions_editor_key(key),
+        KeybindingContext::Settings | KeybindingContext::ThemePicker => {
+            crate::modal_pane::settings::map_key(key)
+        }
+        KeybindingContext::PermissionsEditor => crate::modal_pane::permissions_editor::map_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
     };
     let source = if cmd.is_some() { "cascade" } else { "unmapped" };
     (cmd, source)
-}
-
-/// Keys for the model picker: Up/Down chooses a model, Left/Right chooses
-/// effort, Tab/Shift+Tab chooses role, printable chars edit the filter.
-fn map_model_picker_key(key: KeyEvent) -> Option<TuiCommand> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    match key.code {
-        KeyCode::Home => Some(TuiCommand::SurfaceJumpStart),
-        KeyCode::End => Some(TuiCommand::SurfaceJumpEnd),
-        KeyCode::Up if shift => Some(TuiCommand::SurfaceJumpStart),
-        KeyCode::Down if shift => Some(TuiCommand::SurfaceJumpEnd),
-        KeyCode::Up => Some(TuiCommand::SurfacePrev),
-        KeyCode::Down => Some(TuiCommand::SurfaceNext),
-        KeyCode::Left => Some(TuiCommand::ModelPickerCycleEffort(-1)),
-        KeyCode::Right => Some(TuiCommand::ModelPickerCycleEffort(1)),
-        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
-        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
-        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
-        KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
-        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
-        KeyCode::Char('p') if ctrl => Some(TuiCommand::SurfacePrev),
-        KeyCode::Char('n') if ctrl => Some(TuiCommand::SurfaceNext),
-        KeyCode::Char(c) => Some(TuiCommand::SurfaceFilter(c)),
-        _ => None,
-    }
-}
-
-/// Keys for the teams roster picker (gap 8): Up/Down select a teammate,
-/// Left/Right cycle the mode to apply, Enter applies, Esc closes.
-fn map_team_roster_key(key: KeyEvent) -> Option<TuiCommand> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    match key.code {
-        KeyCode::Up => Some(TuiCommand::SurfacePrev),
-        KeyCode::Down => Some(TuiCommand::SurfaceNext),
-        // Shift+Left/Right cycles ALL teammates' modes in tandem (TS list-view
-        // `cycleAllTeammateModes`); plain Left/Right cycles the focused one.
-        KeyCode::Left if shift => Some(TuiCommand::TeamRosterCycleAllModes(-1)),
-        KeyCode::Right if shift => Some(TuiCommand::TeamRosterCycleAllModes(1)),
-        KeyCode::Left => Some(TuiCommand::TeamRosterCycleMode(-1)),
-        KeyCode::Right => Some(TuiCommand::TeamRosterCycleMode(1)),
-        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
-        KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
-        _ => None,
-    }
-}
-
-/// Keys for the tabbed Settings state: Tab cycles tabs, Up/Down nav,
-/// Enter selects, Esc closes.
-fn map_settings_key(key: KeyEvent) -> Option<TuiCommand> {
-    match key.code {
-        KeyCode::Tab => Some(TuiCommand::SettingsNextTab),
-        KeyCode::BackTab => Some(TuiCommand::SettingsPrevTab),
-        KeyCode::Up => Some(TuiCommand::SurfacePrev),
-        KeyCode::Down => Some(TuiCommand::SurfaceNext),
-        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
-        KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(TuiCommand::Cancel)
-        }
-        _ => None,
-    }
-}
-
-/// Keys for the `/permissions` rule editor. Maps to input-style commands
-/// the editor's `intercept` consumes directly: ←/→ cycle tabs (or move the
-/// add-form caret), ↑/↓ select rows / destinations, Enter acts, Esc backs
-/// out, printable chars type into the add form. Mirrors `map_input_key`'s
-/// editing keys but scoped so the overlay owns every keystroke.
-fn map_permissions_editor_key(key: KeyEvent) -> Option<TuiCommand> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
-        KeyCode::Left => Some(TuiCommand::CursorLeft),
-        KeyCode::Right => Some(TuiCommand::CursorRight),
-        KeyCode::Up => Some(TuiCommand::CursorUp),
-        KeyCode::Down => Some(TuiCommand::CursorDown),
-        // Tab cycles tabs forward / backward in list mode (no-op caret
-        // nudge inside the add form — harmless).
-        KeyCode::Tab => Some(TuiCommand::CursorRight),
-        KeyCode::BackTab => Some(TuiCommand::CursorLeft),
-        KeyCode::Enter => Some(TuiCommand::SubmitInput),
-        KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Backspace => Some(TuiCommand::DeleteBackward),
-        KeyCode::Delete => Some(TuiCommand::DeleteForward),
-        KeyCode::Home => Some(TuiCommand::CursorHome),
-        KeyCode::End => Some(TuiCommand::CursorEnd),
-        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
-        // Emacs caret aliases so the add-form input feels like the composer.
-        KeyCode::Char('a') if ctrl => Some(TuiCommand::CursorHome),
-        KeyCode::Char('e') if ctrl => Some(TuiCommand::CursorEnd),
-        KeyCode::Char(c) => Some(TuiCommand::InsertChar(c)),
-        _ => None,
-    }
-}
-
-/// Keys for filterable list modals (model picker, command palette, etc.).
-fn map_picker_key(key: KeyEvent) -> Option<TuiCommand> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    match key.code {
-        // Top/bottom — TS `messageSelector:top|bottom` (defaultBindings.ts:256-263).
-        KeyCode::Home => Some(TuiCommand::SurfaceJumpStart),
-        KeyCode::End => Some(TuiCommand::SurfaceJumpEnd),
-        KeyCode::Up if shift => Some(TuiCommand::SurfaceJumpStart),
-        KeyCode::Down if shift => Some(TuiCommand::SurfaceJumpEnd),
-        KeyCode::Up => Some(TuiCommand::SurfacePrev),
-        KeyCode::Down => Some(TuiCommand::SurfaceNext),
-        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
-        KeyCode::Esc => Some(TuiCommand::Cancel),
-        KeyCode::Backspace => Some(TuiCommand::SurfaceFilterBackspace),
-        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
-        // Vim + emacs nav aliases — TS `messageSelector:up|down` accepts
-        // k / j / ctrl+p / ctrl+n. For text-input pickers (model picker,
-        // command palette) Char(c) routes into the filter; we keep that
-        // path by short-circuiting only on ctrl+p / ctrl+n which would
-        // otherwise be no-ops in those modals.
-        KeyCode::Char('p') if ctrl => Some(TuiCommand::SurfacePrev),
-        KeyCode::Char('n') if ctrl => Some(TuiCommand::SurfaceNext),
-        KeyCode::Char(c) => Some(TuiCommand::SurfaceFilter(c)),
-        _ => None,
-    }
-}
-
-/// Keys for scrollable read-only modals (help, diff, doctor, etc.).
-fn map_scrollable_key(key: KeyEvent) -> Option<TuiCommand> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => Some(TuiCommand::Cancel),
-        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::SurfacePrev),
-        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::SurfaceNext),
-        KeyCode::PageUp => Some(TuiCommand::PageUp),
-        KeyCode::PageDown => Some(TuiCommand::PageDown),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(TuiCommand::Cancel)
-        }
-        _ => None,
-    }
-}
-
-fn map_transcript_key(key: KeyEvent) -> Option<TuiCommand> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => Some(TuiCommand::Cancel),
-        KeyCode::Up | KeyCode::Char('k') => Some(TuiCommand::TranscriptScrollLines(-1)),
-        KeyCode::Down | KeyCode::Char('j') => Some(TuiCommand::TranscriptScrollLines(1)),
-        KeyCode::Home => Some(TuiCommand::TranscriptJumpStart),
-        KeyCode::End => Some(TuiCommand::TranscriptJumpEnd),
-        KeyCode::PageUp => Some(TuiCommand::TranscriptPage(-1)),
-        KeyCode::PageDown => Some(TuiCommand::TranscriptPage(1)),
-        KeyCode::Tab => Some(TuiCommand::TranscriptSelectNext),
-        KeyCode::Enter => Some(TuiCommand::TranscriptToggleCell),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Some(TuiCommand::Cancel)
-        }
-        _ => None,
-    }
 }
 
 /// Keys for autocomplete suggestions.

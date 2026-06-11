@@ -516,7 +516,7 @@ pub(super) fn handle(
         // CopyPicker modal based on `copy_full_response` + presence of
         // code blocks. TS parity: `commands/copy/copy.tsx::call`.
         TuiOnlyEvent::CopyCommandRequested { args } => {
-            if let Some(message) = crate::update::copy::handle_copy_command(state, &args) {
+            if let Some(message) = crate::copy::handle_copy_command(state, &args) {
                 enqueue_informational(state, SystemMessageLevel::Info, "", message, command_tx);
             }
             true
@@ -866,7 +866,7 @@ fn on_rewind_completed(
             // IDE-injected context tags so the restored prompt doesn't
             // leak `<ide_opened_file>` / `<ide_selection>` blocks.
             let raw = match &target_cell.kind {
-                crate::state::transcript_view::CellKind::UserText { text } => text.as_str(),
+                crate::transcript::cells::CellKind::UserText { text } => text.as_str(),
                 _ => "",
             };
             let stripped = crate::update_rewind::strip_ide_context_tags(raw);

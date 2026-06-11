@@ -460,7 +460,7 @@ impl TuiHarness {
 
     /// Number of cells in the engine-authoritative transcript.
     pub fn cell_count(&self) -> usize {
-        self.state.session.transcript.cells().len()
+        self.state.session.transcript.cells_for_test().len()
     }
 
     /// True iff the transcript has no cells.
@@ -471,22 +471,22 @@ impl TuiHarness {
     /// True iff any `UserText` cell exists. Synthetic XML wrappers
     /// (`<local-command-stdout>` etc.) still count.
     pub fn has_user_cell(&self) -> bool {
-        use coco_tui::state::CellKind;
+        use coco_tui::transcript::CellKind;
         self.state
             .session
             .transcript
-            .cells()
+            .cells_for_test()
             .iter()
             .any(|c| matches!(c.kind, CellKind::UserText { .. }))
     }
 
     /// True iff any `AssistantText` cell exists.
     pub fn has_assistant_text_cell(&self) -> bool {
-        use coco_tui::state::CellKind;
+        use coco_tui::transcript::CellKind;
         self.state
             .session
             .transcript
-            .cells()
+            .cells_for_test()
             .iter()
             .any(|c| matches!(c.kind, CellKind::AssistantText { .. }))
     }
@@ -499,8 +499,8 @@ impl TuiHarness {
         use coco_messages::ToolContent;
         use coco_messages::ToolResultContentPart;
         use coco_messages::ToolResultOutput;
-        use coco_tui::state::CellKind;
-        for cell in self.state.session.transcript.cells() {
+        use coco_tui::transcript::CellKind;
+        for cell in self.state.session.transcript.cells_for_test() {
             if !matches!(cell.kind, CellKind::ToolResult { .. }) {
                 continue;
             }
@@ -544,11 +544,11 @@ impl TuiHarness {
     pub fn tool_result_count(&self, name: &str) -> usize {
         use coco_messages::Message;
         use coco_messages::ToolContent;
-        use coco_tui::state::CellKind;
+        use coco_tui::transcript::CellKind;
         self.state
             .session
             .transcript
-            .cells()
+            .cells_for_test()
             .iter()
             .filter(|cell| {
                 if !matches!(cell.kind, CellKind::ToolResult { .. }) {
@@ -570,8 +570,8 @@ impl TuiHarness {
 
     /// True iff any `AssistantText` cell's body contains `needle`.
     pub fn assistant_text_contains(&self, needle: &str) -> bool {
-        use coco_tui::state::CellKind;
-        self.state.session.transcript.cells().iter().any(
+        use coco_tui::transcript::CellKind;
+        self.state.session.transcript.cells_for_test().iter().any(
             |c| matches!(&c.kind, CellKind::AssistantText { text, .. } if text.contains(needle)),
         )
     }
@@ -580,11 +580,11 @@ impl TuiHarness {
     /// order. `role` is `"user"` or `"assistant"`. Tool cells, system
     /// cells, and reasoning cells are skipped.
     pub fn text_cells_in_order(&self) -> Vec<(&'static str, &str)> {
-        use coco_tui::state::CellKind;
+        use coco_tui::transcript::CellKind;
         self.state
             .session
             .transcript
-            .cells()
+            .cells_for_test()
             .iter()
             .filter_map(|c| match &c.kind {
                 CellKind::UserText { text } => Some(("user", text.as_str())),

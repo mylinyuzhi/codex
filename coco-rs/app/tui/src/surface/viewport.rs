@@ -443,7 +443,7 @@ pub(crate) fn build_live_tail_lines(
     // Compatibility-fallback mode keeps finalized history inside the
     // viewport; otherwise the native scrollback owns it and this layer
     // renders an empty tail.
-    let committed_cells: &[crate::state::transcript_view::RenderedCell] =
+    let committed_cells: &[crate::transcript::cells::RenderedCell] =
         if plan.finalized_history_in_viewport() {
             state.session.transcript.cells()
         } else {

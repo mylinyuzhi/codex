@@ -4,9 +4,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::state::derive::test_helpers;
 use crate::state::ui::StreamingState;
 use crate::surface::modal::HistorySurfaceMode;
+use crate::transcript::derive::test_helpers;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 #[test]

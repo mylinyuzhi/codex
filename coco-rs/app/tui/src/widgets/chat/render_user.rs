@@ -12,9 +12,9 @@ use ratatui::text::Span;
 
 use super::ChatWidget;
 use crate::i18n::t;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
-use crate::state::transcript_view::SystemCellKind;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::cells::SystemCellKind;
 
 pub(super) fn try_render(
     w: &ChatWidget<'_>,

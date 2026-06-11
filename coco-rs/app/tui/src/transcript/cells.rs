@@ -1,22 +1,147 @@
-//! Tool-commit boundary for the native finalize — the transcript-owner half of
+//! The transcript cell model plus the tool-commit boundary for the native
+//! finalize — the transcript-owner half of
 //! `docs/coco-rs/ui/tui-v2-design.md` §6.4 / §6.5.
+//!
+//! [`RenderedCell`] / [`CellKind`] / [`SystemCellKind`] are the units every
+//! renderer consumes; the `Message` -> cells derivation is
+//! [`super::derive::message_to_cells`], and the incremental container that
+//! tracks them per session is `state::transcript_view::TranscriptView`.
 //!
 //! Rows are immutable once they enter native scrollback, so the finalize may
 //! only commit a leading cell prefix in which every `ToolUse` already pairs
 //! with its forward `ToolResult`. `committable_prefix_len` computes that bound:
 //! an unresolved `ToolUse` blocks the prefix until its result arrives; orphan
 //! results don't block; duplicate call ids each need their own result.
-//!
-//! The canonical `Message` → `RenderedCell` derivation currently lives in
-//! `state::derive` / `state::transcript_view` (the cell model is state-owned);
-//! the ordering + batch/pairing projection lives in
-//! `presentation::transcript`. Re-homing the projection here is deferred
-//! until the cell model itself moves (v2 Stage 2+), so this module never
-//! holds an unused re-export and `state` keeps no dependency back into the
-//! transcript renderer.
+use std::sync::Arc;
 
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
+use coco_messages::Message;
+use coco_messages::SystemMessage;
+use uuid::Uuid;
+
+/// One render cell derived from a (possibly partial) engine `Message`.
+/// Carries an `Arc<Message>` back-pointer so renderers can extract
+/// engine-authoritative fields (`is_meta`, `permission_mode`,
+/// `timestamp`, `is_compact_summary`, ...) without parallel storage.
+/// Layout / viewport-dependent fields are intentionally absent —
+/// layout caching lives in the renderer at draw time.
+#[derive(Debug, Clone)]
+pub struct RenderedCell {
+    pub message_uuid: Uuid,
+    pub kind: CellKind,
+    pub source: Arc<Message>,
+}
+
+/// TUI-internal classification used for render dispatch.
+///
+/// Mirrors but is not identical to `coco_messages::Message` variants —
+/// several `SystemMessage` sub-variants may render the same way, and
+/// `AssistantMessage` content blocks map to multiple `CellKind`s
+/// (text + thinking + tool_use).
+///
+/// Phase 3a keeps `CellKind` flat with enough fidelity to drive a
+/// future renderer; field-level rendering data (markdown AST cache,
+/// diff hunks, etc.) is not stored here per layer-hygiene rule from
+/// `engine-tui-unified-transcript-plan.md` §2.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub enum CellKind {
+    /// User text input.
+    UserText { text: String },
+    /// User attachment image / paste.
+    UserAttachment,
+    /// Assistant text fragment.
+    AssistantText { text: String, model: String },
+    /// Assistant reasoning / thinking content.
+    ///
+    /// Reasoning metadata (`duration_ms`, `reasoning_tokens`) lives in
+    /// `SessionState.reasoning_metadata` keyed by `message_uuid` —
+    /// the engine reports it on `TurnCompleted`, after the cell has
+    /// already been derived from `&Message`. Side-cache keeps the
+    /// cell a pure function of the source message (I-2).
+    AssistantThinking { text: String },
+    /// Assistant redacted thinking (encrypted, displayed as opaque).
+    AssistantRedactedThinking,
+    /// Assistant `tool_use` content block.
+    ToolUse { call_id: String, tool_name: String },
+    /// Tool result returned to the model.
+    ToolResult { call_id: String },
+    /// Attachment message (system-reminder-wrapped queued command,
+    /// hook payload, etc.).
+    Attachment,
+    /// Progress meta-message (transient, often filtered).
+    Progress,
+    /// Tombstoned message (filtered from rendering normally).
+    Tombstone,
+    /// System message — fine-grained kind drives render style.
+    System(SystemCellKind),
+}
+
+/// Render-side classification of `SystemMessage` sub-variants.
+///
+/// Phase 3a includes only the kinds the engine actively emits. New
+/// variants land alongside their `SystemMessage` extension.
+#[derive(Debug, Clone)]
+pub enum SystemCellKind {
+    /// User cancellation — renders dim "Interrupted · ..." row.
+    /// `for_tool_use` is read from the engine-authoritative field and
+    /// never recomputed (eliminates the prior engine <-> TUI race).
+    UserInterruption { for_tool_use: bool },
+    /// Generic informational system row (level + title + body).
+    Informational,
+    /// API error reported by the engine.
+    ApiError,
+    /// Compaction boundary marker.
+    CompactBoundary,
+    /// Micro-compaction boundary (rare; usually filtered).
+    MicrocompactBoundary,
+    /// Local /command output preserved in transcript.
+    LocalCommand,
+    /// Permission-retry banner.
+    PermissionRetry,
+    /// IDE bridge connection status.
+    BridgeStatus,
+    /// Memory file saved (extract / dream).
+    MemorySaved,
+    /// Away-summary system row.
+    AwaySummary,
+    /// Agents killed system row.
+    AgentsKilled,
+    /// API metrics tail row.
+    ApiMetrics,
+    /// Stop-hook summary row.
+    StopHookSummary,
+    /// Turn duration row.
+    TurnDuration,
+    /// Scheduled task fire row.
+    ScheduledTaskFire,
+    /// `/context` usage snapshot — colored grid + grouped detail block.
+    ContextUsage,
+}
+
+impl From<&SystemMessage> for SystemCellKind {
+    fn from(m: &SystemMessage) -> Self {
+        match m {
+            SystemMessage::UserInterruption(i) => Self::UserInterruption {
+                for_tool_use: i.for_tool_use,
+            },
+            SystemMessage::Informational(_) => Self::Informational,
+            SystemMessage::ApiError(_) => Self::ApiError,
+            SystemMessage::CompactBoundary(_) => Self::CompactBoundary,
+            SystemMessage::MicrocompactBoundary(_) => Self::MicrocompactBoundary,
+            SystemMessage::LocalCommand(_) => Self::LocalCommand,
+            SystemMessage::PermissionRetry(_) => Self::PermissionRetry,
+            SystemMessage::BridgeStatus(_) => Self::BridgeStatus,
+            SystemMessage::MemorySaved(_) => Self::MemorySaved,
+            SystemMessage::AwaySummary(_) => Self::AwaySummary,
+            SystemMessage::AgentsKilled(_) => Self::AgentsKilled,
+            SystemMessage::ApiMetrics(_) => Self::ApiMetrics,
+            SystemMessage::StopHookSummary(_) => Self::StopHookSummary,
+            SystemMessage::TurnDuration(_) => Self::TurnDuration,
+            SystemMessage::ScheduledTaskFire(_) => Self::ScheduledTaskFire,
+            SystemMessage::ContextUsage(_) => Self::ContextUsage,
+        }
+    }
+}
 
 /// Indices into `cells` where each engine message begins — one entry per
 /// `message_uuid` run (an assistant turn's fanout cells share their first

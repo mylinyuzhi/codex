@@ -9,9 +9,9 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 
 use super::ChatWidget;
-use crate::state::derive::tool_result_output;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::derive::tool_result_output;
 
 pub(super) fn try_render(
     w: &ChatWidget<'_>,

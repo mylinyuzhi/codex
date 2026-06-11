@@ -551,7 +551,7 @@ fn append_tool_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
 /// `teammate:<agent_id>` — that convention is set in
 /// `server_notification_handler::protocol::push_teammate_message`.
 fn last_preview_lines(
-    cells: &[crate::state::transcript_view::RenderedCell],
+    cells: &[crate::transcript::cells::RenderedCell],
     teammate_id: &str,
     n: usize,
 ) -> Vec<String> {

@@ -18,10 +18,10 @@ use crate::state::AppState;
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
 use crate::state::transcript::TranscriptCellId;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
-use crate::state::transcript_view::SystemCellKind;
 use crate::state::ui::StreamingState;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::cells::SystemCellKind;
 
 pub(crate) const TRANSCRIPT_COLLAPSED_PREVIEW_LINES: usize = 5;
 pub(crate) const TRANSCRIPT_EXPANDED_CELL_LINE_CAP: usize = 2_000;

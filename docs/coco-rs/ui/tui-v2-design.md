@@ -1,6 +1,7 @@
 # TUI v2 — Three-Way Comparison and Clean-Slate Architecture
 
-Status: design proposal (2026-06-10). Not yet scheduled for implementation.
+Status: implementation record (2026-06-11). Stages 0-4 are implemented on
+the current `feat/tui` line; Scope C remains a deferred optimization.
 
 This document does two things:
 
@@ -646,17 +647,15 @@ ownership, UI-owned history, hardcoded styling.
 
 ## 10. Staged Implementation Plan (Scope B) — source-verified
 
-Status: **Stage 0 + Stage 1 (U1–U5) + Stage 2 IMPLEMENTED** on `feat/tui2`
-(2026-06-10, uncommitted) — full `coco-tui` + `coco-tui-ui` suites green,
-`coco-inference` pin green, `just quick-check` clean. Stage 2 (engine-owned
-`seat_viewport`, §10.3 status note) landed after a same-day adversarial
-review of Stage 1. Stage 3 + Stage 4 remainder + Scope C remain (separate
-tracks). One deviation: the U1 `project_cells` re-export was **deferred** —
-it has no Stage-1 consumer (transcript renderers take already-derived
-`&[RenderedCell]`; derivation stays in `state/derive` +
-`state/transcript_view`), and an unused `pub(crate) use` fails the
-zero-warnings gate while repointing `state` → `transcript::cells` would invert
-layering; `transcript/cells.rs` documents the re-home.
+Status: **Stages 0-4 IMPLEMENTED** on the current `feat/tui` line after
+selective migration from `feat/tui2` with current-branch behavior preserved.
+The modal split and cell-model re-home are implemented: `modal_pane/` owns
+generic modal behavior plus `model_picker`, `team_roster`, `settings`, and the
+dedicated `permissions_editor`; `transcript/cells.rs` owns `RenderedCell` /
+`CellKind` / `SystemCellKind`; `transcript/derive.rs` owns `message_to_cells`
+and tool-cell helpers; `state::TranscriptView` remains only the per-session
+derived-cell container. Stage 4 is closed. Scope C remains deferred as a
+separate optimization track.
 
 A same-day adversarial review hardened Stage 1: (a) the soundness pin was
 strengthened — the pre-existing prefix-stability test only compared
@@ -736,7 +735,7 @@ its accumulation delete, §6.2).
 
 ### 10.2 Stage 1 — commit-sized units (each lands green except U3 mid-edit)
 
-**U1 — `transcript/` skeleton + re-home (pure move).**
+**U1 — `transcript/` skeleton + re-home (pure move; implemented on current `feat/tui`).**
 New files `transcript/{mod,cells,render,stream,emission}.rs`. Moves, logic
 verbatim: the render core of `streaming/render_controller.rs:75-251`
 (projection, render-key reset/invalidations, `streaming_cursor_line`, the
@@ -746,11 +745,12 @@ verbatim: the render core of `streaming/render_controller.rs:75-251`
 `HistoryReplayCache` + replay entries (`surface/history_lines.rs`) →
 `transcript/render.rs` (`render_committed_assistant_markdown` and its
 content-addressed memo in `widgets/chat/render_assistant.rs:80` stay the
-leaf — called, never forked); the tool-commit helpers
+leaf — called, never forked); `RenderedCell`, `CellKind`, `SystemCellKind`,
+`message_to_cells`, and the tool-cell helpers now live under
+`transcript/{cells,derive}.rs`; the tool-commit helpers
 `committable_prefix_len` / `find_forward_unconsumed_tool_result` /
 `engine_message_start` (`history_driver.rs:673-716`) → `transcript/cells.rs`,
-which also re-exports `state/derive.rs::message_to_cells` as `project_cells`
-and documents the ordering + batch/pairing projection
+which documents the ordering + batch/pairing projection
 (`presentation/transcript.rs`) as its contract. Callers to repoint:
 `surface/controller.rs`, `surface/stream.rs`, `surface/history_driver.rs`,
 and the thread-local `STREAM_RENDER_CONTROLLER` in `widgets/chat/mod.rs:66`
@@ -834,29 +834,26 @@ aspirational. The non-native `width == 0` fallback
   `SeatInputs.tail_reveal_rows` and execute the engine's
   `reveal_tail_rows` verdict), and `surface/viewport.rs` (AppState-coupled
   view code, barred from the engine by the seam).
-- **Stage 3** — `bottom_pane/` local view stack (**B1, B2, and B4's
-  prompt half IMPLEMENTED** same-day; B4's modal half + B5 remain).
+- **Stage 3 — DONE**: `bottom_pane/` local view stack and `modal_pane/`
+  behavior split (**B1-B4 implemented; B5 closed by disposition**).
   Landed: `app/tui/src/bottom_pane/{mod,permission,question,plan}.rs` —
   the routing layer (`route_approve/deny/confirm/nav/filter[_backspace]`,
   one match per command instead of eight-way matches in each free
   function) plus per-surface behavior modules;
-  `update/interaction.rs` shrank 1,713 → ~700 LoC and now owns only the
-  modal surfaces and the prompt-first/modal-fallback entry shells (the
-  pre-existing per-command ordering — confirm's modal-before-prompt
-  included — preserved exactly); the Confirmation/Question key maps
-  moved out of `keybinding_bridge` onto the pane (`confirmation_map_key`
-  on the routing layer — shared by the confirmation-class prompts — and
-  `question::map_key`). B3 is judged substantively met: the modal
-  odds-and-ends now live alone in `update/interaction.rs` under the
-  800-LoC module discipline; further per-modal splitting is deferred
-  until a modal needs it. Remaining: B4's modal half (picker/scrollable/
-  settings/model-picker/team-roster maps move when modal surfaces get
-  their own modules) and B5 (viewport prompt rendering via the
-  surface's render). Acceptance held: the full interaction behavior
-  suite passes unchanged through the shells (1013/1013), snapshots
-  byte-identical.
+  `app/tui/src/modal_pane/{mod,model_picker,team_roster,settings,
+  permissions_editor}.rs` — modal routing plus per-modal maps/behavior for the
+  model picker, team roster, settings, and the current-branch `/permissions`
+  editor. `update/interaction.rs` is now the precedence shell only:
+  prompt-first for approve/deny/filter/nav, modal-first for confirm, and
+  autocomplete before prompt/modal routing. The Confirmation/Question key maps
+  moved out of `keybinding_bridge` onto `bottom_pane`; modal key maps moved
+  onto `modal_pane`. The skills, agents, and plugin dialog interceptors remain
+  in `update/` until those surfaces are migrated. B5 is closed by
+  disposition: after the modal/prompt split there is no remaining central
+  viewport prompt-rendering match that needs to be migrated to complete
+  Stage 3.
 
-  Original survey + target shape (kept for the remaining halves): Current state: the
+  Original survey + target shape (kept for context): Current state: the
   prompt stack already exists and is sound — `state/interaction.rs` owns
   `PanePromptState` (8 variants) with the attention-safety `priority()`
   ordering; the sprawl is `update/interaction.rs` (1,713 LoC), where one
@@ -886,8 +883,7 @@ aspirational. The non-native `width == 0` fallback
   their surfaces; **B4** collapse the bridge's per-surface special cases
   (`map_question_key` etc.) into the surfaces' own key handlers, making
   the routing order `focused surface → resolver → composer → residual`
-  literal in one function; **B5** viewport prompt rendering reads
-  the surface's `render` instead of the central match. Acceptance: the
+  literal in one function; **B5** closed by disposition as above. Acceptance: the
   existing `update/interaction.test.rs` suite ports per-unit with zero
   behavior change; native-surface + prompt snapshots stay byte-identical.
 - **Stage 4 — DONE**: ~~legacy keybinding cascade folded into
@@ -918,11 +914,12 @@ per repository rules.
 
 ### 10.5 Readiness
 
-Stage 0 + Stage 1 (U1–U5) are **done** (see the §10 status note). The
-recon's "BLOCKER" finding was void (§6.2.1) as predicted, and the
-zero-churn acceptance gate held: the ~17 native-surface `.snap` files
-stayed byte-identical (the one regenerated snapshot,
-`transcript_modal_parallel_glob_results`, was a **pre-existing** stale
-modal snapshot the `tool_batch_name_summary` landing had missed — outside
-the native-surface acceptance set, unrelated to this refactor). Stage 2 is
-the next unblocked track.
+Stages 0-4 are **done** (see the §10 status note). The recon's "BLOCKER"
+finding was void (§6.2.1) as predicted, and the zero-churn acceptance gate
+held: the ~17 native-surface `.snap` files stayed byte-identical (the one
+regenerated snapshot, `transcript_modal_parallel_glob_results`, was a
+**pre-existing** stale modal snapshot the `tool_batch_name_summary` landing
+had missed — outside the native-surface acceptance set, unrelated to this
+refactor). The only remaining track in this document is Scope C, deferred
+until performance or UX evidence justifies eliminating replay for
+within-message multi-text turns.

@@ -16,7 +16,9 @@ use coco_types::TurnAbortReason;
 use super::on_turn_interrupted_outcome;
 use crate::state::AppState;
 use crate::state::ModalState;
-use crate::state::derive::test_helpers;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::SystemCellKind;
+use crate::transcript::derive::test_helpers;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -62,7 +64,7 @@ fn idle_with_meaningful_tail() -> AppState {
 /// expected dispatched `Rewind { mode: AutoRestore }` carries the
 /// same derivation, not the raw fixture id.
 fn test_id(s: &str) -> String {
-    crate::state::derive::id_to_uuid(s).to_string()
+    crate::transcript::derive::id_to_uuid(s).to_string()
 }
 
 /// Channel pair scoped to one test. Caller drives `on_turn_interrupted`
@@ -136,6 +138,35 @@ fn session_started_preserves_provider_when_wire_field_is_absent() {
     super::handle(&mut state, session_started(""), &tx);
 
     assert_eq!(state.session.provider, "existing");
+}
+
+#[test]
+fn message_appended_projects_user_interruption_for_tool_use() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+    let message = coco_messages::create_user_interruption_system_message(true);
+    let message_uuid = *message.uuid().expect("system interruption carries uuid");
+
+    super::handle(
+        &mut state,
+        ServerNotification::MessageAppended {
+            message: std::sync::Arc::new(message),
+            session_id: String::new(),
+            agent_id: None,
+        },
+        &tx,
+    );
+
+    let cells = state.session.transcript.cells();
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].message_uuid, message_uuid);
+    let CellKind::System(SystemCellKind::UserInterruption { for_tool_use }) = cells[0].kind else {
+        panic!("expected System(UserInterruption), got {:?}", cells[0].kind);
+    };
+    assert!(
+        for_tool_use,
+        "for_tool_use must remain engine-authoritative during projection"
+    );
 }
 
 #[test]

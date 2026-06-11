@@ -23,9 +23,9 @@ use sha2::Sha256;
 
 use crate::keybinding_resolver::KeybindingHandle;
 use crate::state::session::ReasoningMetadata;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
-use crate::state::transcript_view::SystemCellKind;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::cells::SystemCellKind;
 use crate::widgets::ChatWidget;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::engine::history_insert::HistoryRows;

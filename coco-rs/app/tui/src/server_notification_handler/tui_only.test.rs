@@ -16,9 +16,9 @@ use crate::command::UserCommand;
 use crate::state::AppState;
 use crate::state::ModalState;
 use crate::state::SuggestionKind;
-use crate::state::derive::test_helpers;
 use crate::state::rewind::RestoreType;
 use crate::state::ui::ToastSeverity;
+use crate::transcript::derive::test_helpers;
 
 /// Channel pair scoped to one test. Caller drives `handle` with `&tx`
 /// and observes `rx.try_recv()` for any dispatched

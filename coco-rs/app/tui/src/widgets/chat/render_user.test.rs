@@ -1,5 +1,5 @@
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageOrigin;

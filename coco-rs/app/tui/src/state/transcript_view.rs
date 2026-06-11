@@ -16,10 +16,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use coco_messages::Message;
-use coco_messages::SystemMessage;
 use uuid::Uuid;
 
-use super::derive::message_to_cells;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::derive::message_to_cells;
 
 /// Append-only-with-truncation list of derived cells.
 #[derive(Debug, Default)]
@@ -38,8 +38,13 @@ impl TranscriptView {
         Self::default()
     }
 
-    pub fn cells(&self) -> &[RenderedCell] {
+    pub(crate) fn cells(&self) -> &[RenderedCell] {
         &self.cells
+    }
+
+    #[cfg(feature = "testing")]
+    pub fn cells_for_test(&self) -> &[RenderedCell] {
+        self.cells()
     }
 
     pub fn revision(&self) -> u64 {
@@ -202,130 +207,6 @@ fn log_message_appended(msg: &Message, cell_count: usize) {
         attachment_kind = ?attachment_kind,
         "MessageAppended projected into TUI cells",
     );
-}
-
-/// One render cell derived from a (possibly partial) engine `Message`.
-/// Carries an `Arc<Message>` back-pointer so renderers can extract
-/// engine-authoritative fields (`is_meta`, `permission_mode`,
-/// `timestamp`, `is_compact_summary`, …) without parallel storage.
-/// Layout / viewport-dependent fields are intentionally absent —
-/// layout caching lives in the renderer at draw time.
-#[derive(Debug, Clone)]
-pub struct RenderedCell {
-    pub message_uuid: Uuid,
-    pub kind: CellKind,
-    pub source: Arc<Message>,
-}
-
-/// TUI-internal classification used for render dispatch.
-///
-/// Mirrors but is not identical to `coco_messages::Message` variants —
-/// several `SystemMessage` sub-variants may render the same way, and
-/// `AssistantMessage` content blocks map to multiple `CellKind`s
-/// (text + thinking + tool_use).
-///
-/// Phase 3a keeps `CellKind` flat with enough fidelity to drive a
-/// future renderer; field-level rendering data (markdown AST cache,
-/// diff hunks, etc.) is not stored here per layer-hygiene rule from
-/// `engine-tui-unified-transcript-plan.md` §2.
-#[derive(Debug, Clone)]
-pub enum CellKind {
-    /// User text input.
-    UserText { text: String },
-    /// User attachment image / paste.
-    UserAttachment,
-    /// Assistant text fragment.
-    AssistantText { text: String, model: String },
-    /// Assistant reasoning / thinking content.
-    ///
-    /// Reasoning metadata (`duration_ms`, `reasoning_tokens`) lives in
-    /// `SessionState.reasoning_metadata` keyed by `message_uuid` —
-    /// the engine reports it on `TurnCompleted`, after the cell has
-    /// already been derived from `&Message`. Side-cache keeps the
-    /// cell a pure function of the source message (I-2).
-    AssistantThinking { text: String },
-    /// Assistant redacted thinking (encrypted, displayed as opaque).
-    AssistantRedactedThinking,
-    /// Assistant `tool_use` content block.
-    ToolUse { call_id: String, tool_name: String },
-    /// Tool result returned to the model.
-    ToolResult { call_id: String },
-    /// Attachment message (system-reminder-wrapped queued command,
-    /// hook payload, etc.).
-    Attachment,
-    /// Progress meta-message (transient, often filtered).
-    Progress,
-    /// Tombstoned message (filtered from rendering normally).
-    Tombstone,
-    /// System message — fine-grained kind drives render style.
-    System(SystemCellKind),
-}
-
-/// Render-side classification of `SystemMessage` sub-variants.
-///
-/// Phase 3a includes only the kinds the engine actively emits. New
-/// variants land alongside their `SystemMessage` extension.
-#[derive(Debug, Clone)]
-pub enum SystemCellKind {
-    /// User cancellation — renders dim "Interrupted · …" row.
-    /// `for_tool_use` is read from the engine-authoritative field and
-    /// never recomputed (eliminates the prior engine ↔ TUI race).
-    UserInterruption { for_tool_use: bool },
-    /// Generic informational system row (level + title + body).
-    Informational,
-    /// API error reported by the engine.
-    ApiError,
-    /// Compaction boundary marker.
-    CompactBoundary,
-    /// Micro-compaction boundary (rare; usually filtered).
-    MicrocompactBoundary,
-    /// Local /command output preserved in transcript.
-    LocalCommand,
-    /// Permission-retry banner.
-    PermissionRetry,
-    /// IDE bridge connection status.
-    BridgeStatus,
-    /// Memory file saved (extract / dream).
-    MemorySaved,
-    /// Away-summary system row.
-    AwaySummary,
-    /// Agents killed system row.
-    AgentsKilled,
-    /// API metrics tail row.
-    ApiMetrics,
-    /// Stop-hook summary row.
-    StopHookSummary,
-    /// Turn duration row.
-    TurnDuration,
-    /// Scheduled task fire row.
-    ScheduledTaskFire,
-    /// `/context` usage snapshot — colored grid + grouped detail block.
-    ContextUsage,
-}
-
-impl From<&SystemMessage> for SystemCellKind {
-    fn from(m: &SystemMessage) -> Self {
-        match m {
-            SystemMessage::UserInterruption(i) => Self::UserInterruption {
-                for_tool_use: i.for_tool_use,
-            },
-            SystemMessage::Informational(_) => Self::Informational,
-            SystemMessage::ApiError(_) => Self::ApiError,
-            SystemMessage::CompactBoundary(_) => Self::CompactBoundary,
-            SystemMessage::MicrocompactBoundary(_) => Self::MicrocompactBoundary,
-            SystemMessage::LocalCommand(_) => Self::LocalCommand,
-            SystemMessage::PermissionRetry(_) => Self::PermissionRetry,
-            SystemMessage::BridgeStatus(_) => Self::BridgeStatus,
-            SystemMessage::MemorySaved(_) => Self::MemorySaved,
-            SystemMessage::AwaySummary(_) => Self::AwaySummary,
-            SystemMessage::AgentsKilled(_) => Self::AgentsKilled,
-            SystemMessage::ApiMetrics(_) => Self::ApiMetrics,
-            SystemMessage::StopHookSummary(_) => Self::StopHookSummary,
-            SystemMessage::TurnDuration(_) => Self::TurnDuration,
-            SystemMessage::ScheduledTaskFire(_) => Self::ScheduledTaskFire,
-            SystemMessage::ContextUsage(_) => Self::ContextUsage,
-        }
-    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use crate::state::AppState;
-use crate::state::derive::test_helpers;
 use crate::state::rewind::RestoreType;
 use crate::state::rewind::RewindPhase;
+use crate::transcript::derive::test_helpers;
 
 use super::*;
 
@@ -10,7 +10,7 @@ use super::*;
 /// so callers can pass it directly to `build_rewind_state_for_uuid` and
 /// compare against `RewindableMessage.message_id: Uuid`.
 fn test_uuid(s: &str) -> uuid::Uuid {
-    crate::state::derive::id_to_uuid(s)
+    crate::transcript::derive::id_to_uuid(s)
 }
 
 fn make_state_with_messages(count: i32) -> AppState {

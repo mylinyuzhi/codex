@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use crate::FrameLayout;
 use crate::state::AppState;
-use crate::state::transcript_view::RenderedCell;
 use crate::surface::history_driver::HistoryReplayMode;
 use crate::surface::history_driver::PreparedFinalizedHistory;
 use crate::surface::history_driver::SurfaceHistoryDriver;
@@ -15,6 +14,7 @@ use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::stream::PreparedStreamAppend;
 use crate::surface::stream::SurfaceStreamDriver;
 use crate::surface::viewport::render_interactive_viewport;
+use crate::transcript::cells::RenderedCell;
 use crate::transcript::emission::HistoryEmissionOutcome;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::widgets::TranscriptLayoutIndex;

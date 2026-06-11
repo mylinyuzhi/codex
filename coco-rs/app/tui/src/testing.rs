@@ -14,8 +14,6 @@ use ratatui::layout::Size;
 use uuid::Uuid;
 
 use crate::state::AppState;
-use crate::state::RenderedCell;
-use crate::state::derive::message_to_cells;
 use crate::state::ui::StreamingState;
 use crate::surface::controller::NativeSurfaceController;
 use crate::surface::modal::ModalSurfacePlacement;
@@ -24,6 +22,8 @@ use crate::surface::viewport::interactive_viewport_desired_height;
 use crate::terminal::NATIVE_VIEWPORT_MAX_HEIGHT;
 use crate::terminal::native_viewport_area_with_max;
 use crate::theme::Theme;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::derive::message_to_cells;
 use crate::transcript::render::DEFAULT_MAX_REFLOW_ROWS;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::HistoryReplayCache;

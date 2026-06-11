@@ -656,8 +656,8 @@ impl RealTuiHarness {
         use coco_messages::ToolContent;
         use coco_messages::ToolResultContentPart;
         use coco_messages::ToolResultOutput;
-        use coco_tui::state::CellKind;
-        for cell in self.state.session.transcript.cells() {
+        use coco_tui::transcript::CellKind;
+        for cell in self.state.session.transcript.cells_for_test() {
             if !matches!(cell.kind, CellKind::ToolResult { .. }) {
                 continue;
             }

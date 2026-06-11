@@ -2,6 +2,8 @@
 //!
 //! - `cells` — engine-message grouping and the tool-commit boundary over
 //!   derived `RenderedCell`s.
+//! - `derive` — pure `Message` -> `RenderedCell` projection plus tool-cell
+//!   accessors.
 //! - `render` — the committed history renderer and the replay cache.
 //! - `stream` — the source-backed stable/tail splitter, render key, and
 //!   scrollback watermark for the in-flight assistant stream.
@@ -9,10 +11,14 @@
 //!   (suffix-append vs replay decision).
 //!
 //! `surface/` holds the per-frame drivers and terminal I/O that consume this
-//! logic; `state/` still owns the cell model itself (`RenderedCell`,
-//! `message_to_cells`) until v2 Stage 2+ moves it here.
+//! logic; `state::TranscriptView` owns only the per-session derived-cell
+//! container.
 
 pub(crate) mod cells;
+pub(crate) mod derive;
 pub(crate) mod emission;
 pub(crate) mod render;
 pub(crate) mod stream;
+
+#[cfg(feature = "testing")]
+pub use cells::CellKind;

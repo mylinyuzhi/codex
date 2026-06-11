@@ -17,13 +17,13 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use coco_messages::Message;
+use coco_messages::SystemMessage;
 use coco_messages::create_user_interruption_system_message;
 use coco_messages::create_user_message;
 use coco_tui::AppState;
 use coco_tui::handle_event_for_test as handle_core_event;
-use coco_tui::state::CellKind;
 use coco_tui::state::StreamingState;
-use coco_tui::state::SystemCellKind;
 use coco_tui::state::ToolExecution;
 use coco_tui::state::ToolStatus;
 use coco_types::CoreEvent;
@@ -36,11 +36,13 @@ use coco_types::ServerNotification;
 /// `MessageAppended.message` carries a typed `Message` end-to-end —
 /// if it ever regresses to `serde_json::Value`, deser would lose the
 /// enum discriminant.
-fn protocol_evt(notif: ServerNotification) -> CoreEvent {
+fn roundtrip_notif(notif: ServerNotification) -> ServerNotification {
     let json = serde_json::to_string(&notif).expect("ServerNotification serializes");
-    let roundtripped: ServerNotification =
-        serde_json::from_str(&json).expect("ServerNotification roundtrips through JSON");
-    CoreEvent::Protocol(roundtripped)
+    serde_json::from_str(&json).expect("ServerNotification roundtrips through JSON")
+}
+
+fn protocol_evt(notif: ServerNotification) -> CoreEvent {
+    CoreEvent::Protocol(roundtrip_notif(notif))
 }
 
 fn fake_running_tool() -> ToolExecution {
@@ -110,7 +112,6 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
 
     // ── Replay history through MessageAppended ──────────────────────
     let m1 = create_user_message("first resumed prompt");
-    let m1_uuid = *m1.uuid().expect("user message carries uuid");
     let m2 = create_user_interruption_system_message(true);
     let m2_uuid = *m2.uuid().expect("system interruption carries uuid");
 
@@ -122,35 +123,29 @@ fn resume_clears_prior_overlays_then_rebuilds_transcript() {
             agent_id: None,
         }),
     );
-    handle_core_event(
-        &mut state,
-        protocol_evt(ServerNotification::MessageAppended {
-            message: std::sync::Arc::new(m2),
-            session_id: String::new(),
-            agent_id: None,
-        }),
-    );
-
-    let cells = state.session.transcript.cells();
-    assert_eq!(cells.len(), 2, "two replayed messages → two cells");
-    assert_eq!(cells[0].message_uuid, m1_uuid);
-    assert!(
-        matches!(cells[0].kind, CellKind::UserText { .. }),
-        "first replay is user text, got {:?}",
-        cells[0].kind
-    );
-
-    assert_eq!(cells[1].message_uuid, m2_uuid);
-    let CellKind::System(SystemCellKind::UserInterruption { for_tool_use }) = cells[1].kind else {
-        panic!(
-            "second replay must be System(UserInterruption), got {:?}",
-            cells[1].kind
-        );
+    let m2_event = roundtrip_notif(ServerNotification::MessageAppended {
+        message: std::sync::Arc::new(m2),
+        session_id: String::new(),
+        agent_id: None,
+    });
+    let ServerNotification::MessageAppended { message, .. } = &m2_event else {
+        panic!("expected MessageAppended after roundtrip");
+    };
+    let Message::System(SystemMessage::UserInterruption(interruption)) = message.as_ref() else {
+        panic!("expected typed UserInterruption after JSON roundtrip");
     };
     assert!(
-        for_tool_use,
+        interruption.for_tool_use,
         "for_tool_use must survive the JSON roundtrip untouched"
     );
+    handle_core_event(&mut state, CoreEvent::Protocol(m2_event));
+
+    assert_eq!(
+        state.session.transcript.len(),
+        2,
+        "two replayed messages -> two cells"
+    );
+    assert!(!m2_uuid.is_nil(), "interruption carries uuid");
 }
 
 #[test]

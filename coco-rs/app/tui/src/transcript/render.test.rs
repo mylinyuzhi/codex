@@ -4,10 +4,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::*;
-use crate::state::derive::message_to_cells;
-use crate::state::derive::test_helpers;
-use crate::state::transcript_view::RenderedCell;
 use crate::theme::Theme;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::derive::message_to_cells;
+use crate::transcript::derive::test_helpers;
 
 const CACHE_TEST_MAX_ROWS: usize = 10_000;
 

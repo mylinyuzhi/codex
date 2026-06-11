@@ -22,12 +22,10 @@ use exit::ExitEffect;
 
 mod agents_dialog;
 mod clipboard;
-pub(crate) mod copy;
 mod edit;
 mod exit;
 mod expanded_view;
 mod interaction;
-mod permissions_editor;
 mod plugin_dialog;
 // `pub(crate)` so the slash-command dispatcher (in
 // `server_notification_handler::tui_only`) can call into `cycle_model`
@@ -47,164 +45,6 @@ mod tests;
 /// paste away from the hidden main input while a question prompt is open.
 pub(crate) fn route_question_free_text_paste(state: &mut AppState, text: &str) -> bool {
     crate::bottom_pane::question::question_free_text_paste(state, text)
-}
-
-/// How a picker/dialog reports being closed with Esc. Mirrors TS local-jsx
-/// `onDone('… dismissed', { display: 'system' })` — every picker leaves a
-/// transcript trace of what closed.
-enum PickerDismiss {
-    /// Picker opened by a slash command → render `❯ /<name>` + `⎿ <message>`,
-    /// matching the command's own confirm feedback (e.g. theme "Theme set to").
-    Slash {
-        name: &'static str,
-        message: &'static str,
-    },
-    /// Keybinding-only overlay (no slash command) → a standalone system line,
-    /// with no misleading `/cmd` echo.
-    System { message: &'static str },
-}
-
-/// Dismiss feedback for a modal closed via Esc. `None` for prompt-style and
-/// viewer modals that own their own decline UX. Wording mirrors TS where a
-/// counterpart exists (`Theme picker dismissed`, `Skills dialog dismissed`,
-/// `Cancelled memory editing`, …).
-fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
-    use ModalState as M;
-    use PickerDismiss::Slash;
-    use PickerDismiss::System;
-    Some(match modal {
-        M::Help => Slash {
-            name: "help",
-            message: "Help dialog dismissed",
-        },
-        M::ModelPicker(_) => Slash {
-            name: "model",
-            message: "Model picker dismissed",
-        },
-        M::ThemePicker(_) => Slash {
-            name: "theme",
-            message: "Theme picker dismissed",
-        },
-        M::SkillsDialog(_) => Slash {
-            name: "skills",
-            message: "Skills dialog dismissed",
-        },
-        M::PluginDialog(_) => Slash {
-            name: "plugin",
-            message: "Plugin dialog dismissed",
-        },
-        M::AgentsDialog(_) => Slash {
-            name: "agents",
-            message: "Agents dialog dismissed",
-        },
-        M::PermissionsEditor(_) => Slash {
-            name: "permissions",
-            message: "Permissions dialog dismissed",
-        },
-        M::McpServerSelect(_) => Slash {
-            name: "mcp",
-            message: "MCP dialog dismissed",
-        },
-        M::MemoryDialog(_) => Slash {
-            name: "memory",
-            message: "Cancelled memory editing",
-        },
-        M::Settings(_) => Slash {
-            name: "status",
-            message: "Status dialog dismissed",
-        },
-        M::DiffView(_) => Slash {
-            name: "diff",
-            message: "Diff dialog dismissed",
-        },
-        M::Export(_) => Slash {
-            name: "export",
-            message: "Export dialog dismissed",
-        },
-        M::SessionBrowser(_) => Slash {
-            name: "resume",
-            message: "Session browser dismissed",
-        },
-        M::CopyPicker(_) => Slash {
-            name: "copy",
-            message: "Copy cancelled",
-        },
-        M::QuickOpen(_) => System {
-            message: "Quick open dismissed",
-        },
-        M::GlobalSearch(_) => System {
-            message: "Search dismissed",
-        },
-        // Prompt / viewer / system modals own their own decline UX; Rewind
-        // runs a dedicated multi-phase cancel (`interaction::rewind_cancel`).
-        M::Error(_)
-        | M::Transcript(_)
-        | M::Rewind(_)
-        | M::Doctor(_)
-        | M::WorktreeExit(_)
-        | M::Bridge(_)
-        | M::InvalidConfig(_)
-        | M::IdleReturn(_)
-        | M::Trust(_)
-        | M::AutoModeOptIn(_)
-        | M::BypassPermissions(_)
-        | M::TaskDetail(_)
-        | M::TeamRoster(_)
-        | M::PluginHint(_)
-        | M::Feedback(_) => return None,
-    })
-}
-
-/// Close the active modal and surface its dismiss feedback. Shared by both Esc
-/// routes: `TuiCommand::Cancel` and `TuiCommand::Deny` — the theme picker and
-/// settings reuse the Settings keybinding context, whose Esc resolves to `Deny`
-/// (`interaction::deny`), so the close logic must live in one place reachable
-/// from both. Restores the theme picker's live preview before closing.
-pub(crate) async fn close_modal_with_feedback(
-    state: &mut AppState,
-    command_tx: &mpsc::Sender<UserCommand>,
-) {
-    // Theme picker: Esc cancels the live preview by restoring the theme that was
-    // active when the picker opened. Read `original_setting` before the take.
-    if let Some(ModalState::ThemePicker(p)) = state.ui.modal.as_ref() {
-        let original = p.original_setting.clone();
-        if let Err(err) = state.ui.apply_theme_setting(original) {
-            tracing::warn!(
-                error = %err,
-                "theme picker: failed to restore original theme on cancel"
-            );
-        }
-    }
-    // Plugin-hint Esc dismissal is treated as "no" (TS auto-dismiss →
-    // onResponse('no')): record show-once so the prompt never reappears.
-    if let Some(ModalState::PluginHint(ph)) = state.ui.modal.as_ref() {
-        coco_plugins::mark_hint_plugin_shown(&ph.plugin_id);
-    }
-    // Capture the dismiss feedback before the modal is taken, emit after close.
-    let dismiss = state.ui.modal.as_ref().and_then(picker_dismiss);
-    state.ui.dismiss_modal();
-    match dismiss {
-        Some(PickerDismiss::Slash { name, message }) => {
-            let messages = coco_messages::build_slash_command_messages(
-                name, /*args*/ "", message, /*is_sensitive*/ false,
-            );
-            let _ = command_tx
-                .send(UserCommand::PushSlashResult { messages })
-                .await;
-        }
-        Some(PickerDismiss::System { message }) => {
-            let _ = command_tx
-                .send(UserCommand::PushSystemMessage {
-                    kind: crate::command::SystemPushKind::Informational {
-                        level: coco_messages::SystemMessageLevel::Info,
-                        title: String::new(),
-                        message: message.to_string(),
-                    },
-                })
-                .await;
-        }
-        None => {}
-    }
 }
 
 /// Apply a TUI command to the state.
@@ -267,8 +107,8 @@ pub async fn handle_command(
 
     // The `/permissions` editor has its own tab cycle, inline add form,
     // and delete confirmation that the generic modal dispatch can't model.
-    if let permissions_editor::Handled::Yes(changed) =
-        permissions_editor::intercept(state, &cmd, command_tx).await
+    if let crate::modal_pane::permissions_editor::Handled::Yes(changed) =
+        crate::modal_pane::permissions_editor::intercept(state, &cmd, command_tx).await
     {
         return changed;
     }
@@ -502,7 +342,7 @@ pub async fn handle_command(
                     return true;
                 }
             }
-            if !interaction::rewind_cancel(state) {
+            if !crate::modal_pane::rewind_cancel(state) {
                 return true; // phase-back; keep state
             }
             // Every picker reports its own dismissal to the transcript (TS
@@ -510,7 +350,7 @@ pub async fn handle_command(
             // theme picker / settings route Esc through `Deny` instead, so the
             // shared helper also runs there (`interaction::deny`).
             if state.ui.modal.is_some() {
-                close_modal_with_feedback(state, command_tx).await;
+                crate::modal_pane::close_modal_with_feedback(state, command_tx).await;
             } else if state.has_active_surface() {
                 state.ui.dismiss_prompt();
             }
@@ -802,22 +642,22 @@ pub async fn handle_command(
         }
         TuiCommand::SurfaceNext => {
             interaction::nav(state, 1);
-            interaction::request_diff_stats_if_rewind(state, command_tx).await;
+            crate::modal_pane::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
         TuiCommand::SurfacePrev => {
             interaction::nav(state, -1);
-            interaction::request_diff_stats_if_rewind(state, command_tx).await;
+            crate::modal_pane::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
         TuiCommand::SurfaceJumpStart => {
             interaction::nav(state, i32::MIN / 2);
-            interaction::request_diff_stats_if_rewind(state, command_tx).await;
+            crate::modal_pane::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
         TuiCommand::SurfaceJumpEnd => {
             interaction::nav(state, i32::MAX / 2);
-            interaction::request_diff_stats_if_rewind(state, command_tx).await;
+            crate::modal_pane::request_diff_stats_if_rewind(state, command_tx).await;
             true
         }
         TuiCommand::SurfaceConfirm => {
@@ -827,8 +667,8 @@ pub async fn handle_command(
         TuiCommand::CopyPickerWriteToFile => {
             match state.ui.take_modal() {
                 Some(ModalState::CopyPicker(cp)) => {
-                    if let Some(message) = copy::write_picker_selection_to_file(state, cp) {
-                        copy::enqueue_copy_output(message, command_tx);
+                    if let Some(message) = crate::copy::write_picker_selection_to_file(state, cp) {
+                        crate::copy::enqueue_copy_output(message, command_tx);
                     }
                     state.ui.finish_taken_modal();
                 }
@@ -884,7 +724,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ToggleSyntaxHighlighting => {
-            interaction::toggle_syntax_highlighting(state);
+            crate::modal_pane::settings::toggle_syntax_highlighting(state);
             true
         }
         TuiCommand::SettingsNextTab => {
@@ -918,7 +758,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ModelPickerCycleEffort(delta) => {
-            interaction::cycle_model_effort(state, delta);
+            crate::modal_pane::model_picker::cycle_effort(state, delta);
             true
         }
         TuiCommand::QuestionSwitchQuestion(delta) => {
@@ -928,7 +768,7 @@ pub async fn handle_command(
         TuiCommand::TeamRosterCycleMode(delta) => {
             // Cycle the focused teammate's mode and apply it immediately
             // (TS: cycling in the teams dialog persists at once).
-            if let Some((name, mode)) = interaction::team_roster_cycle_mode(state, delta) {
+            if let Some((name, mode)) = crate::modal_pane::team_roster::cycle_mode(state, delta) {
                 let _ = command_tx
                     .send(UserCommand::SetTeammateMode { name, mode })
                     .await;
@@ -938,7 +778,7 @@ pub async fn handle_command(
         TuiCommand::TeamRosterCycleAllModes(delta) => {
             // Cycle ALL teammates in tandem and persist in one batch
             // (TS `cycleAllTeammateModes`).
-            let updates = interaction::team_roster_cycle_all_modes(state, delta);
+            let updates = crate::modal_pane::team_roster::cycle_all_modes(state, delta);
             if !updates.is_empty() {
                 let _ = command_tx
                     .send(UserCommand::SetTeammateModes { updates })

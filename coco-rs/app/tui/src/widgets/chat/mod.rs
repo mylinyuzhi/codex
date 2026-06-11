@@ -44,12 +44,12 @@ use crate::presentation::transcript::TranscriptSourceCell;
 use crate::presentation::transcript::native_history_presentation;
 use crate::presentation::transcript::transcript_presentation;
 use crate::state::session::ToolExecution;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
-use crate::state::transcript_view::SystemCellKind;
 use crate::state::ui::StreamingState;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::cells::SystemCellKind;
 use crate::transcript::stream::streaming_cursor_line;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
@@ -316,8 +316,10 @@ impl<'a> ChatWidget<'a> {
             if let Some(rc) = result_cell {
                 // Paired path: the invocation cell carries the tool input, so
                 // input-derived views (diffs, code, web target) can render.
-                let input =
-                    crate::state::derive::extract_tool_call_input(cell.source.as_ref(), call_id);
+                let input = crate::transcript::derive::extract_tool_call_input(
+                    cell.source.as_ref(),
+                    call_id,
+                );
                 self.render_tool_result(input.as_ref(), rc, lines);
             }
             return;
@@ -364,7 +366,7 @@ impl<'a> ChatWidget<'a> {
             .iter()
             .find(|tool| tool.call_id == call_id);
         let input_preview =
-            crate::state::derive::tool_call_header_preview_model(source, call_id, tool_name);
+            crate::transcript::derive::tool_call_header_preview_model(source, call_id, tool_name);
         let preview_spans = crate::tool_display::render_tool_input_preview_spans(
             &input_preview,
             self.styles,
@@ -404,7 +406,7 @@ impl<'a> ChatWidget<'a> {
             return;
         };
         let Some(projection) =
-            crate::state::derive::tool_result_output(result_cell.source.as_ref())
+            crate::transcript::derive::tool_result_output(result_cell.source.as_ref())
         else {
             return;
         };

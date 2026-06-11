@@ -7,7 +7,7 @@ use super::ExitEffect;
 use super::on_interrupt;
 use super::on_request_exit;
 use crate::state::AppState;
-use crate::state::derive::test_helpers;
+use crate::transcript::derive::test_helpers;
 use coco_tui_ui::constants::DOUBLE_PRESS_TIMEOUT;
 
 fn idle_state_with_history() -> AppState {

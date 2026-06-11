@@ -20,8 +20,8 @@ use crate::state::rewind::RewindPhase;
 use crate::state::rewind::RewindState;
 use crate::state::rewind::RewindableMessage;
 use crate::state::rewind::build_restore_options;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
 
 /// Format an epoch-ms timestamp as a relative-time English phrase
 /// against a reference `now` (also epoch-ms). Mirrors TS

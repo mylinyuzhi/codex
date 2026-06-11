@@ -83,16 +83,15 @@ Every mutation goes through one of: `history_push_and_emit`,
 `history.clear()` / `history.messages = …` in production code is a bug.
 
 **I-2 — Derived view.** TUI `RenderedCell`s are pure derivations of
-`&Message` via `state/derive.rs::message_to_cells`. The TUI may cache
+`&Message` via `transcript/derive.rs::message_to_cells`. The TUI may cache
 viewport-dependent layout at draw time but never as an authoritative
 store. On any transcript mutation, the derived view reconciles via the
 three lifecycle handlers (`on_message_appended`, `on_message_truncated`,
 `on_session_reset`).
 
-Tolerated exception: `TurnCompleted` stamps reasoning aggregates onto
-the latest `AssistantThinking` cell in place (see §11 F3). The mutation
-is idempotent and confined to one method; the clean fix is a
-`ReasoningMetadataAttached` event.
+Reasoning aggregates are side-cache metadata keyed by message UUID, stamped by
+`ReasoningMetadataAttached`; the `RenderedCell` itself remains a pure function
+of `&Message`.
 
 **I-3 — UI-only state stays UI-only.** Streaming in-flight text
 (`ui.streaming`), running tool executions (`session.tool_executions`),
@@ -109,7 +108,7 @@ When a streaming turn or tool call finalizes, the engine pushes a
 | `coco-messages` (L3) | History operations: `MessageHistory`, creation/normalize/filter/predicate functions; `create_user_interruption_system_message`. | Wire event emission (event emit lives in `coco-query`). |
 | `coco-types::event` (L1) | `ServerNotification::MessageAppended` / `MessageTruncated` / `SessionResetForResume` / `HistoryReplaced` — typed wire payloads. | Logic; just transport shape. |
 | `coco-query` (L5) | `history_sync` module (the four canonical writers + `finalize_user_cancel`); single cancel site; turn-loop pushes. | Per-cell UI choices. |
-| `coco-tui` (L5) | `TranscriptView` (derived cell cache), `RenderedCell`, `CellKind`, `SystemCellKind`, the function `message_to_cells`. UI-only state. | Persistent representation of transcript content; recomputation of fields on `Message` (e.g. `for_tool_use`). |
+| `coco-tui` (L5) | `state::TranscriptView` (derived cell container), crate-internal `transcript::cells::{RenderedCell, CellKind, SystemCellKind}`, `transcript::derive::message_to_cells`. UI-only state. | Persistent representation of transcript content; recomputation of fields on `Message` (e.g. `for_tool_use`). |
 | `app/cli` | Resume wiring (`tui_runner` emits `SessionResetForResume` + `HistoryReplaced`); the `AutoTruncate` / `Rewind` / `Compact` engine-side handlers. | Direct TUI state mutation. |
 
 `message_to_cells` lives in `coco-tui`, **not** `coco-messages`. That's
@@ -130,7 +129,7 @@ mobile-row labels, not transcript content (I-3).
 `MessageHistory.messages` stays `Vec<Message>` (not `Vec<Arc<Message>>`).
 The wire event payload (`MessageAppended { message: Message }`) clones
 once at emit. In-process Arc sharing happens at the TUI cell layer
-(`RenderedCell.source: Arc<Message>`, `transcript_view.rs:183`), where
+(`RenderedCell.source: Arc<Message>`, `transcript/cells.rs`), where
 multiple cells derived from the same `Assistant` message share one
 allocation. Wire serialization breaks Arc, so storing Arcs in
 `MessageHistory` would save nothing across the SDK boundary; the
@@ -362,12 +361,6 @@ pub struct TranscriptView {
     by_uuid: HashMap<Uuid, usize>,  // engine message UUID → head cell index
 }
 
-pub struct RenderedCell {
-    pub message_uuid: Uuid,
-    pub kind: CellKind,
-    pub source: Arc<Message>,       // back-pointer for engine-authoritative fields
-}
-
 impl TranscriptView {
     pub fn on_message_appended(&mut self, msg: Arc<Message>);
     pub fn on_message_truncated(&mut self, keep_count: usize);
@@ -376,8 +369,18 @@ impl TranscriptView {
 }
 ```
 
+```rust
+// app/tui/src/transcript/cells.rs
+
+pub struct RenderedCell {
+    pub message_uuid: Uuid,
+    pub kind: CellKind,
+    pub source: Arc<Message>,       // back-pointer for engine-authoritative fields
+}
+```
+
 `message_to_cells(Arc<Message>) -> Vec<RenderedCell>` lives in
-`state/derive.rs`. One `Message::Assistant` may yield multiple cells
+`transcript/derive.rs`. One `Message::Assistant` may yield multiple cells
 (text + thinking + tool_use blocks); `by_uuid` indexes the **head**
 cell of the group so renderers can find it.
 
@@ -393,7 +396,7 @@ draw time, per the layer-hygiene rule.
 `for_tool_use: bool` extracted from the engine field.
 
 The `From<&SystemMessage> for SystemCellKind` impl is the single
-mapping point (transcript_view.rs:270-292).
+mapping point (`transcript/cells.rs`).
 
 ### 6.3 `SessionState` shape
 
