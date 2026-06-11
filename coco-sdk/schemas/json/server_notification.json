@@ -887,6 +887,9 @@
         "params": {
           "type": "object",
           "properties": {
+            "editable": {
+              "type": "boolean"
+            },
             "id": {
               "type": "string"
             },
@@ -896,7 +899,8 @@
           },
           "required": [
             "id",
-            "preview"
+            "preview",
+            "editable"
           ]
         }
       },

@@ -123,6 +123,50 @@ fn permission_content_renders_choices_instead_of_default_actions() {
 }
 
 #[test]
+fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
+        plan: Some("# Plan\n\n- Update code".to_string()),
+        plan_file_path: Some("/tmp/plan.md".to_string()),
+        allowed_prompts: vec![],
+    });
+    state.tool_name = coco_types::ToolName::ExitPlanMode.as_str().to_string();
+    state.description = "Exit plan mode?".to_string();
+    state.choices = Some(vec![
+        PermissionAskChoice {
+            value: "yes-accept-edits-keep-context".to_string(),
+            label: "Yes, auto-accept edits".to_string(),
+            description: None,
+        },
+        PermissionAskChoice {
+            value: "yes-default-keep-context".to_string(),
+            label: "Yes, manually approve edits".to_string(),
+            description: None,
+        },
+        PermissionAskChoice {
+            value: "no".to_string(),
+            label: "No, keep planning".to_string(),
+            description: None,
+        },
+    ]);
+
+    let (title, body, _) = permission_content(&state, UiStyles::new(&theme));
+
+    assert!(title.contains("Ready to code?"));
+    assert!(body.contains("Here is Claude's plan:"));
+    assert!(body.contains("- Update code"));
+    assert!(body.contains("Plan file: /tmp/plan.md"));
+    assert!(!body.contains("Requested permissions:"));
+    assert!(!body.contains("Bash(prompt: cargo test)"));
+    assert!(body.contains("Yes, manually approve edits"));
+    assert!(body.contains("No, keep planning"));
+    assert!(!body.contains("planFilePath"));
+    assert!(!body.contains("allowedPrompts"));
+    assert!(!body.contains("Exit plan mode?"));
+}
+
+#[test]
 fn generic_permission_content_uses_display_input_not_raw_original_input() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();

@@ -240,6 +240,42 @@
       ]
     },
     {
+      "description": "Editable queued commands were removed from the engine queue and\ncombined with the current composer draft.",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedCommandEditImage"
+          }
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "queued_commands_edit_ready"
+        }
+      },
+      "required": [
+        "type",
+        "ids",
+        "prompt",
+        "cursor"
+      ]
+    },
+    {
       "description": "The requested queued command could not be restored.",
       "type": "object",
       "properties": {
@@ -1751,7 +1787,7 @@
           "type": "string"
         },
         "value": {
-          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-keep-context\"`, `\"yes-clear-context\"`, `\"no\"`).",
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`, `\"yes-accept-edits\"`,\n`\"no\"`).",
           "type": "string"
         }
       },

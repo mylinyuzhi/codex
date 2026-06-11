@@ -80,6 +80,10 @@ async fn confirm_memory_dialog_keeps_non_file_rows_open() {
 // into `updated_input` and sent back as `ApprovalResponse`.
 
 fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
+    permission_with_choices_for_tool("ExitPlanMode", values, selected)
+}
+
+fn permission_with_choices_for_tool(tool_name: &str, values: &[&str], selected: usize) -> AppState {
     use crate::state::PermissionDetail;
     use crate::state::PermissionPromptState;
     use coco_types::PermissionAskChoice;
@@ -95,7 +99,7 @@ fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
         .collect();
     s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
         request_id: "req-1".into(),
-        tool_name: "ExitPlanMode".into(),
+        tool_name: tool_name.into(),
         description: "Exit plan mode?".into(),
         detail: PermissionDetail::Generic {
             input_preview: String::new(),
@@ -118,12 +122,12 @@ fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
 
 #[tokio::test]
 async fn confirm_with_choice_splices_user_choice_into_updated_input() {
-    // Selecting "yes-clear-context" should send approved=true with
+    // Selecting "yes-accept-edits" should send approved=true with
     // user_choice spliced into the original input — the engine reads
     // this off ExitPlanModeTool's input to flag history clear.
     let mut s = permission_with_choices(
-        &["yes-keep-context", "yes-clear-context", "no"],
-        1, // "yes-clear-context"
+        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
+        1, // "yes-accept-edits"
     );
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -140,7 +144,7 @@ async fn confirm_with_choice_splices_user_choice_into_updated_input() {
     assert!(approved, "non-'no' choice should approve");
     let payload = updated_input.expect("updated_input populated");
     assert_eq!(payload["plan"], "do the thing");
-    assert_eq!(payload["user_choice"], "yes-clear-context");
+    assert_eq!(payload["user_choice"], "yes-accept-edits");
     assert!(!s.ui.has_active_surface(), "state dismissed after commit");
 }
 
@@ -150,7 +154,7 @@ async fn confirm_with_no_choice_sends_approved_false() {
     // denial (tool doesn't execute). updated_input still carries the
     // value so logs/audits see what the user picked.
     let mut s = permission_with_choices(
-        &["yes-keep-context", "yes-clear-context", "no"],
+        &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
         2, // "no"
     );
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
@@ -160,14 +164,35 @@ async fn confirm_with_no_choice_sends_approved_false() {
     let UserCommand::ApprovalResponse {
         approved,
         updated_input,
+        feedback,
         ..
     } = cmd
     else {
         panic!("expected ApprovalResponse")
     };
     assert!(!approved, "'no' choice should deny");
+    assert_eq!(
+        feedback.as_deref(),
+        Some("User rejected the plan. Stay in plan mode and continue planning.")
+    );
     let payload = updated_input.expect("updated_input populated");
     assert_eq!(payload["user_choice"], "no");
+}
+
+#[tokio::test]
+async fn confirm_with_generic_no_choice_has_no_plan_feedback() {
+    let mut s = permission_with_choices_for_tool("SomeTool", &["yes", "no"], 1);
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        approved, feedback, ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(!approved);
+    assert_eq!(feedback, None);
 }
 
 #[tokio::test]
@@ -175,7 +200,7 @@ async fn approve_with_choice_takes_same_path_as_confirm() {
     // Pressing 'y' (Approve) when choices are present must commit the
     // currently-focused choice, not the implicit yes — otherwise the
     // tool would see updated_input=None and lose the user's pick.
-    let mut s = permission_with_choices(&["yes-keep-context", "yes-clear-context"], 1);
+    let mut s = permission_with_choices(&["yes-accept-edits-keep-context", "yes-accept-edits"], 1);
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     approve(&mut s, &tx).await;
 
@@ -189,7 +214,7 @@ async fn approve_with_choice_takes_same_path_as_confirm() {
     };
     assert!(approved);
     let payload = updated_input.expect("updated_input populated");
-    assert_eq!(payload["user_choice"], "yes-clear-context");
+    assert_eq!(payload["user_choice"], "yes-accept-edits");
 }
 
 #[tokio::test]

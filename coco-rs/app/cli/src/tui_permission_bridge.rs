@@ -255,17 +255,28 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 input: request.input.clone(),
             })
         } else {
-            let show_always_allow = self.show_always_allow_options().await;
+            let is_exit_plan_mode =
+                request.tool_name == coco_types::ToolName::ExitPlanMode.as_str();
+            let choices = if is_exit_plan_mode {
+                Some(self.exit_plan_mode_choices().await)
+            } else {
+                request.choices.clone()
+            };
+            let show_always_allow = !is_exit_plan_mode && self.show_always_allow_options().await;
             CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
                 request_id: request.id.clone(),
                 tool_name: request.tool_name.clone(),
                 description: request.description.clone(),
-                display_input: coco_tui::tool_display::permission_display_input(
-                    &request.tool_name,
-                    &request.input,
-                ),
+                display_input: if is_exit_plan_mode {
+                    coco_types::PermissionDisplayInput::Empty
+                } else {
+                    coco_tui::tool_display::permission_display_input(
+                        &request.tool_name,
+                        &request.input,
+                    )
+                },
                 show_always_allow,
-                choices: request.choices.clone(),
+                choices,
                 permission_suggestions: request.suggestions.clone(),
                 // Carry the raw input for both choice and classic dialogs:
                 // choices splice `user_choice`; classic read permissions
@@ -294,6 +305,71 @@ impl ToolPermissionBridge for TuiPermissionBridge {
             }
         }
     }
+}
+
+impl TuiPermissionBridge {
+    async fn exit_plan_mode_choices(&self) -> Vec<coco_types::PermissionAskChoice> {
+        let runtime = self
+            .notification_runtime
+            .read()
+            .await
+            .as_ref()
+            .and_then(Weak::upgrade);
+        let (show_clear_context, bypass_available) = if let Some(runtime) = runtime {
+            let cfg = runtime.current_engine_config().await;
+            (
+                cfg.plan_mode_settings.show_clear_context_on_exit,
+                cfg.bypass_permissions_available,
+            )
+        } else {
+            (false, false)
+        };
+        build_exit_plan_mode_choices(show_clear_context, bypass_available)
+    }
+}
+
+fn build_exit_plan_mode_choices(
+    show_clear_context: bool,
+    bypass_available: bool,
+) -> Vec<coco_types::PermissionAskChoice> {
+    let mut choices = Vec::new();
+    if show_clear_context {
+        if bypass_available {
+            choices.push(coco_types::PermissionAskChoice {
+                value: "yes-bypass-permissions".into(),
+                label: "Yes, clear context and bypass permissions".into(),
+                description: Some(
+                    "Start fresh and run implementation without approval prompts.".into(),
+                ),
+            });
+        } else {
+            choices.push(coco_types::PermissionAskChoice {
+                value: "yes-accept-edits".into(),
+                label: "Yes, clear context and auto-accept edits".into(),
+                description: Some("Start fresh and allow file edits during implementation.".into()),
+            });
+        }
+    }
+    choices.push(coco_types::PermissionAskChoice {
+        value: "yes-accept-edits-keep-context".into(),
+        label: if bypass_available {
+            "Yes, and bypass permissions".into()
+        } else {
+            "Yes, auto-accept edits".into()
+        },
+        description: Some("Keep this conversation and proceed with elevated edit approval.".into()),
+    });
+    choices.push(coco_types::PermissionAskChoice {
+        value: "yes-default-keep-context".into(),
+        label: "Yes, manually approve edits".into(),
+        description: Some("Keep this conversation and ask before file edits.".into()),
+    });
+    choices.push(coco_types::PermissionAskChoice {
+        value: "no".into(),
+        label: "No, keep planning".into(),
+        description: None,
+    });
+    choices
 }
 
 /// Called by tui_runner when `UserCommand::ApprovalResponse` arrives.

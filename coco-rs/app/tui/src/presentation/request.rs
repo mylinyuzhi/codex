@@ -45,7 +45,9 @@ pub(crate) fn permission_content(
         .as_ref()
         .map(|b| format!(" · @{}", b.name))
         .unwrap_or_default();
-    let title = if risk_badge.is_empty() {
+    let title = if matches!(p.detail, PermissionDetail::ExitPlanMode { .. }) {
+        format!(" Ready to code?{worker_suffix} ")
+    } else if risk_badge.is_empty() {
         format!(" {}{worker_suffix} ", p.tool_name)
     } else {
         format!(" {}{risk_badge}{worker_suffix}", p.tool_name)
@@ -109,14 +111,18 @@ pub(crate) fn permission_content(
         },
     };
 
-    (
-        title,
+    let body = if matches!(p.detail, PermissionDetail::ExitPlanMode { .. }) {
+        format!("{classifier_line}\n\n{detail}\n\n{actions}{explainer_panel}")
+            .trim_start()
+            .to_string()
+    } else {
         format!(
             "{}{classifier_line}\n\n{detail}\n\n{actions}{explainer_panel}",
             p.description
-        ),
-        border,
-    )
+        )
+    };
+
+    (title, body, border)
 }
 
 fn classic_permission_actions(p: &PermissionPromptState) -> String {
@@ -442,8 +448,37 @@ fn permission_detail(detail: &PermissionDetail) -> String {
             "{}\n\n{description}",
             t!("dialog.perm_computer_use", action = action.as_str())
         ),
+        PermissionDetail::ExitPlanMode {
+            plan,
+            plan_file_path,
+            allowed_prompts,
+        } => exit_plan_mode_detail(plan.as_deref(), plan_file_path.as_deref(), allowed_prompts),
         PermissionDetail::Generic { input_preview } => input_preview.clone(),
     }
+}
+
+fn exit_plan_mode_detail(
+    plan: Option<&str>,
+    plan_file_path: Option<&str>,
+    allowed_prompts: &[String],
+) -> String {
+    let plan = plan
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or("No plan found. Please write your plan to the plan file first.");
+    let mut out = format!("Here is Claude's plan:\n\n{plan}");
+    if let Some(path) = plan_file_path.filter(|p| !p.trim().is_empty()) {
+        out.push_str(&format!("\n\nPlan file: {path}"));
+    }
+    if !allowed_prompts.is_empty() {
+        out.push_str("\n\nRequested permissions:");
+        for prompt in allowed_prompts {
+            out.push_str(&format!("\n  - {prompt}"));
+        }
+    }
+    out.push_str(
+        "\n\nClaude has written up a plan and is ready to execute. Would you like to proceed?",
+    );
+    out
 }
 
 fn shell_detail(

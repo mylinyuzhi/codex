@@ -17,6 +17,7 @@ use coco_messages::CostTracker;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
+use coco_messages::create_user_message;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortSignal;
 use coco_types::TokenUsage;
@@ -664,37 +665,8 @@ impl QueryEngine {
             }
             let turn_id = format!("turn-{}", turn_state.attempt);
 
-            // Consume the one-shot `pending_clear_message_history` flag
-            // set by `ExitPlanModeTool` when the user picked "clear
-            // context" in the multi-choice exit dialog. We drain it
-            // here at turn entry (after `turn += 1` so the log line
-            // below reports the cleared state) so the cleared history
-            // is what every downstream subsystem (reminders, prompt
-            // build, API call) observes.
-            //
-            // TS parity: `ExitPlanModePermissionRequest.tsx:383`
-            // sets `initialMessage.clearContext = true`, and the REPL
-            // wipes context before starting the new session. Rust
-            // mirrors the intent — at the next turn the model sees a
-            // fresh transcript.
-            if let Some(state_handle) = self.app_state.as_ref() {
-                let drained = {
-                    let mut w = state_handle.write().await;
-                    std::mem::take(&mut w.pending_clear_message_history)
-                };
-                if drained {
-                    // I-1 (Authority): every transcript mutation must
-                    // emit so TUI's TranscriptView + SDK NDJSON
-                    // observers stay coherent. Plan-mode exit doesn't
-                    // rotate session_id — `MessageTruncated { 0 }` is
-                    // the right signal (vs. SessionResetForResume).
-                    crate::history_sync::history_clear_and_emit(history, &event_tx).await;
-                    info!(
-                        turn = turn_state.turn,
-                        "plan-mode exit cleared conversation history"
-                    );
-                }
-            }
+            self.consume_pending_plan_mode_clear_context(history, &event_tx, turn_state.turn)
+                .await;
 
             let prepared_turn = self
                 .enter_turn_and_prepare_request(
@@ -1115,6 +1087,16 @@ impl QueryEngine {
             }
         }
     }
+
+    async fn consume_pending_plan_mode_clear_context(
+        &self,
+        history: &mut MessageHistory,
+        event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+        turn: i32,
+    ) {
+        consume_pending_plan_mode_clear_context(self.app_state.as_ref(), history, event_tx, turn)
+            .await;
+    }
 }
 
 // Other impl blocks for `QueryEngine` live in:
@@ -1218,6 +1200,43 @@ pub(crate) fn assistant_content_from_snapshot(
     }
 
     (content_parts, tool_calls)
+}
+
+async fn consume_pending_plan_mode_clear_context(
+    app_state: Option<&Arc<RwLock<ToolAppState>>>,
+    history: &mut MessageHistory,
+    event_tx: &Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
+    turn: i32,
+) {
+    let Some(state_handle) = app_state else {
+        return;
+    };
+    let (clear_history, implementation_message) = {
+        let mut w = state_handle.write().await;
+        (
+            std::mem::take(&mut w.pending_clear_message_history),
+            w.pending_plan_implementation_message.take(),
+        )
+    };
+    if !clear_history {
+        return;
+    }
+
+    // I-1 (Authority): every transcript mutation must emit so TUI's
+    // TranscriptView + SDK NDJSON observers stay coherent. Plan-mode
+    // exit doesn't rotate session_id, so `MessageTruncated { 0 }` is
+    // the right signal; the following user message mirrors TS
+    // `initialMessage.message.content`.
+    crate::history_sync::history_clear_and_emit(history, event_tx).await;
+    if let Some(message) = implementation_message {
+        crate::history_sync::history_push_and_emit(
+            history,
+            create_user_message(&message),
+            event_tx,
+        )
+        .await;
+    }
+    info!(turn, "plan-mode exit cleared conversation history");
 }
 
 /// Per-run side-channel collectors filled at emission sites so finalize

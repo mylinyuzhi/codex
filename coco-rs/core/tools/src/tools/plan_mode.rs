@@ -449,10 +449,38 @@ pub struct ExitPlanModeInput {
     #[serde(default, rename = "planFilePath")]
     pub plan_file_path: Option<String>,
     /// (Internal) User's choice from the multi-option permission
-    /// dialog: `yes-keep-context`, `yes-clear-context`, or `no`. The
-    /// TUI splices it via `PermissionOutcome::Allow.updated_input`.
+    /// dialog. The TUI splices it via
+    /// `PermissionOutcome::Allow.updated_input`.
     #[serde(default)]
     pub user_choice: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitPlanChoice {
+    ClearBypassPermissions,
+    ClearAcceptEdits,
+    KeepAcceptEdits,
+    KeepDefault,
+}
+
+impl ExitPlanChoice {
+    fn parse(raw: Option<&str>) -> Result<Option<Self>, ToolError> {
+        match raw {
+            None => Ok(None),
+            Some("yes-bypass-permissions") => Ok(Some(Self::ClearBypassPermissions)),
+            Some("yes-accept-edits") => Ok(Some(Self::ClearAcceptEdits)),
+            Some("yes-accept-edits-keep-context") => Ok(Some(Self::KeepAcceptEdits)),
+            Some("yes-default-keep-context") => Ok(Some(Self::KeepDefault)),
+            Some(other) => Err(ToolError::InvalidInput {
+                message: format!("Unsupported ExitPlanMode approval choice: {other}"),
+                error_code: Some("1".into()),
+            }),
+        }
+    }
+
+    fn clears_context(self) -> bool {
+        matches!(self, Self::ClearBypassPermissions | Self::ClearAcceptEdits)
+    }
 }
 
 #[async_trait::async_trait]
@@ -561,42 +589,13 @@ impl Tool for ExitPlanModeTool {
                 feedback: None,
             };
         }
-        // Non-teammates: require user confirmation.
-        //
-        // When `plan_mode.show_clear_context_on_exit` is true, surface
-        // the multi-choice dialog. TS parity:
-        // `ExitPlanModePermissionRequest.tsx:137, 691-704` — gated on
-        // `settings.showClearContextOnPlanAccept` (default false).
-        //
-        // The TUI echoes the picked `value` back via
-        // `updated_input.user_choice`, which `execute()` reads to
-        // decide whether to flag `pending_clear_message_history` on the
-        // app-state patch.
-        let choices = if ctx.plan_mode_settings.show_clear_context_on_exit {
-            Some(vec![
-                coco_types::PermissionAskChoice {
-                    value: "yes-keep-context".into(),
-                    label: "Yes, keep context".into(),
-                    description: Some("Exit plan mode and retain the conversation history.".into()),
-                },
-                coco_types::PermissionAskChoice {
-                    value: "yes-clear-context".into(),
-                    label: "Yes, clear context".into(),
-                    description: Some("Exit plan mode and start a fresh conversation.".into()),
-                },
-                coco_types::PermissionAskChoice {
-                    value: "no".into(),
-                    label: "No, stay in plan mode".into(),
-                    description: None,
-                },
-            ])
-        } else {
-            None
-        };
+        // Non-teammates: require user confirmation. The interactive TUI
+        // renders ExitPlanMode with a dedicated TS-style approval prompt
+        // and option set; SDK/headless clients keep the plain Ask shape.
         coco_types::ToolCheckResult::Ask {
             message: "Exit plan mode?".into(),
             suggestions: vec![],
-            choices,
+            choices: None,
         }
     }
 
@@ -816,7 +815,23 @@ impl Tool for ExitPlanModeTool {
                 ctx.permission_context.stripped_dangerous_rules.is_some(),
             ),
         };
-        let restore_mode = pre_plan_from_state.unwrap_or(PermissionMode::Default);
+        let choice = ExitPlanChoice::parse(input.user_choice.as_deref())?;
+        let restore_mode = match choice {
+            Some(ExitPlanChoice::ClearBypassPermissions)
+                if ctx.permission_context.bypass_available =>
+            {
+                PermissionMode::BypassPermissions
+            }
+            Some(ExitPlanChoice::ClearBypassPermissions | ExitPlanChoice::ClearAcceptEdits) => {
+                PermissionMode::AcceptEdits
+            }
+            Some(ExitPlanChoice::KeepAcceptEdits) if ctx.permission_context.bypass_available => {
+                PermissionMode::BypassPermissions
+            }
+            Some(ExitPlanChoice::KeepAcceptEdits) => PermissionMode::AcceptEdits,
+            Some(ExitPlanChoice::KeepDefault) => PermissionMode::Default,
+            None => pre_plan_from_state.unwrap_or(PermissionMode::Default),
+        };
         let auto_was_active_during_plan =
             stripped_from_state || pre_plan_from_state == Some(PermissionMode::Auto);
         let restoring_to_auto = restore_mode == PermissionMode::Auto;
@@ -839,11 +854,16 @@ impl Tool for ExitPlanModeTool {
             None
         };
 
-        // TS parity: `ExitPlanModePermissionRequest.tsx:332-394`. When
-        // the multi-choice dialog is enabled, the TUI echoes the picked
-        // option as `input.user_choice`. `yes-clear-context` schedules
-        // a `MessageHistory::clear()` at the next turn boundary.
-        let clear_history_requested = input.user_choice.as_deref() == Some("yes-clear-context");
+        // TS parity: `ExitPlanModePermissionRequest.tsx:332-394`.
+        // Clear-context options schedule a history clear plus a fresh
+        // implementation user message for the next turn.
+        let clear_history_requested = choice.is_some_and(ExitPlanChoice::clears_context);
+        let post_clear_message = clear_history_requested.then(|| {
+            format!(
+                "Implement the following plan:\n\n{}",
+                plan.as_deref().unwrap_or_default()
+            )
+        });
 
         // Queue the full ExitPlanMode transition. TS parity:
         // `ExitPlanModeV2Tool.ts:357-403` is one big `setAppState`;
@@ -873,6 +893,7 @@ impl Tool for ExitPlanModeTool {
             }
             if clear_history_requested {
                 state.pending_clear_message_history = true;
+                state.pending_plan_implementation_message = post_clear_message;
             }
         });
 

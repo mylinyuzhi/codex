@@ -5023,7 +5023,7 @@
           "type": "string"
         },
         "value": {
-          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-keep-context\"`, `\"yes-clear-context\"`, `\"no\"`).",
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`, `\"yes-accept-edits\"`,\n`\"no\"`).",
           "type": "string"
         }
       },
@@ -7684,6 +7684,9 @@
             },
             "params": {
               "properties": {
+                "editable": {
+                  "type": "boolean"
+                },
                 "id": {
                   "type": "string"
                 },
@@ -7693,7 +7696,8 @@
               },
               "required": [
                 "id",
-                "preview"
+                "preview",
+                "editable"
               ],
               "type": "object"
             }
@@ -12181,6 +12185,42 @@
             "type",
             "id",
             "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Editable queued commands were removed from the engine queue and\ncombined with the current composer draft.",
+          "properties": {
+            "cursor": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "images": {
+              "items": {
+                "$ref": "#/$defs/QueuedCommandEditImage"
+              },
+              "type": "array"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "type": {
+              "const": "queued_commands_edit_ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "ids",
+            "prompt",
+            "cursor"
           ],
           "type": "object"
         },

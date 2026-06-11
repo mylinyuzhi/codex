@@ -293,7 +293,8 @@ pub enum PermissionAbortReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionAskChoice {
     /// Stable identifier echoed back in the approval response. Use
-    /// kebab-case (`"yes-keep-context"`, `"yes-clear-context"`, `"no"`).
+    /// kebab-case (`"yes-default-keep-context"`, `"yes-accept-edits"`,
+    /// `"no"`).
     pub value: String,
     /// Short row label shown to the user.
     pub label: String,
