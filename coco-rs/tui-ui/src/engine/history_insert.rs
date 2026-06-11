@@ -174,6 +174,35 @@ pub fn render_history_rows(lines: Vec<Line<'static>>, width: u16) -> HistoryRows
     if width == 0 || lines.is_empty() {
         return HistoryRows::new(Buffer::empty(Rect::new(0, 0, width, 0)));
     }
+    // DEBUG (ambiguous-width investigation, tui-v2): the wrapped row count below
+    // (`line_count`) and every column position assume the default unicode width
+    // (East-Asian Ambiguous = 1). A terminal that renders ambiguous chars wide
+    // (CJK setups) wraps such a line to MORE rows than computed here, so the
+    // caller scrolls the terminal by too few rows and native scrollback desyncs
+    // from reality. Flag any committed line whose default width disagrees with
+    // the CJK width so a `tui=debug` repro shows exactly which rows are at risk.
+    if tracing::enabled!(target: "tui::engine::width", tracing::Level::DEBUG) {
+        for (idx, line) in lines.iter().enumerate() {
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let w = unicode_width::UnicodeWidthStr::width(text.as_str());
+            let w_cjk = unicode_width::UnicodeWidthStr::width_cjk(text.as_str());
+            if w != w_cjk {
+                tracing::debug!(
+                    target: "tui::engine::width",
+                    line = idx,
+                    width_default = w,
+                    width_cjk = w_cjk,
+                    render_width = width,
+                    // The dangerous case: fits under `width` by the default
+                    // measure but overflows by the CJK measure → the terminal
+                    // wraps to an extra row the row-count math never accounts for.
+                    cjk_overflows = w <= width as usize && w_cjk > width as usize,
+                    text = %text.chars().take(100).collect::<String>(),
+                    "history row has ambiguous-width chars (default vs cjk width differ)",
+                );
+            }
+        }
+    }
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     let height = paragraph.line_count(width).min(u16::MAX as usize) as u16;
     let area = Rect::new(0, 0, width, height);

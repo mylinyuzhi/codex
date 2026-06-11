@@ -132,8 +132,8 @@ fn watermark_does_not_survive_source_replacement() {
     let second = driver.prepare(&state, /*width*/ 40, native_plan());
 
     assert!(
-        second.render_key_invalidated,
-        "source replacement must invalidate the surviving watermark",
+        second.commit_invalidated,
+        "source replacement must invalidate the surviving commit",
     );
     let append = second.stream_append.expect("turn-2 stable append");
     let text = history_rows_text(&append.rows);
@@ -141,6 +141,96 @@ fn watermark_does_not_survive_source_replacement() {
         text.contains("alpha paragraph one"),
         "turn-2's leading rows must not be skipped: {text}",
     );
+}
+
+#[test]
+fn transient_streaming_gap_does_not_re_emit_committed_rows() {
+    // The duplication root cause (tui-v2 §6.7-10): event coalescing can fold a
+    // turn's last delta and the next's first into one draw, so a `streaming ==
+    // None` frame is NOT a reliable end signal. The OLD code cleared the
+    // watermark on that gap, so the next active frame re-committed the rows
+    // ALREADY in scrollback — the leading text appeared twice. The single
+    // commit must survive the gap so only the increment is appended.
+    let mut state = AppState::new();
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\n");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+
+    let mut driver = SurfaceStreamDriver::default();
+    let first = driver.prepare(&state, /*width*/ 40, native_plan());
+    driver.mark_stream_append_committed(first.stream_append.as_ref().expect("turn-1 append"));
+
+    // Transient gap: streaming momentarily None, no finalize.
+    state.ui.streaming = None;
+    let gap = driver.prepare(&state, /*width*/ 40, native_plan());
+    assert!(gap.stream_append.is_none());
+    assert!(
+        !gap.commit_invalidated,
+        "a transient gap must not invalidate"
+    );
+
+    // Resume the SAME message with more content.
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta\n\n");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    let resumed = driver.prepare(&state, /*width*/ 40, native_plan());
+
+    assert!(
+        !resumed.commit_invalidated,
+        "resuming the same document must not invalidate the commit",
+    );
+    let append = resumed
+        .stream_append
+        .as_ref()
+        .expect("resumed stable append");
+    let text = history_rows_text(&append.rows);
+    assert_eq!(
+        text.matches("alpha").count(),
+        0,
+        "already-committed leading rows must NOT be re-emitted: {text}",
+    );
+    assert_eq!(
+        text.matches("beta").count(),
+        1,
+        "only the increment: {text}"
+    );
+}
+
+#[test]
+fn invalidated_commit_re_emits_full_stable_prefix() {
+    // The loss root cause, opposite sign: when a replay clears owned scrollback
+    // the controller calls `invalidate_commit`, after which the next prepare
+    // must re-emit the FULL stable prefix (the rows the clear just wiped), not
+    // only the increment. The OLD split watermark survived the replay and
+    // dropped the leading rows permanently.
+    let mut state = AppState::new();
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\n");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+
+    let mut driver = SurfaceStreamDriver::default();
+    let first = driver.prepare(&state, /*width*/ 40, native_plan());
+    driver.mark_stream_append_committed(first.stream_append.as_ref().expect("turn-1 append"));
+
+    // A replay cleared scrollback: the controller invalidates the commit.
+    driver.invalidate_commit();
+
+    let mut streaming = StreamingState::new();
+    streaming.append_text("alpha\n\nbeta\n\n");
+    streaming.reveal_all();
+    state.ui.streaming = Some(streaming);
+    let after = driver.prepare(&state, /*width*/ 40, native_plan());
+    let append = after.stream_append.as_ref().expect("re-emitted append");
+    let text = history_rows_text(&append.rows);
+    assert_eq!(
+        text.matches("alpha").count(),
+        1,
+        "the wiped leading rows must be re-emitted in full: {text}",
+    );
+    assert_eq!(text.matches("beta").count(), 1, "{text}");
 }
 
 #[test]

@@ -145,6 +145,8 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+m", KeybindingAction::ChatModelPicker),
                 ("ctrl+p", KeybindingAction::AppCommandPalette),
                 ("ctrl+,", KeybindingAction::AppSettings),
+                ("ctrl+s", KeybindingAction::AppSessionBrowser),
+                ("ctrl+g", KeybindingAction::AppPlanEditor),
                 ("ctrl+shift+r", KeybindingAction::ChatToggleSystemReminders),
                 // `tab` toggles plan mode; dispatch is state-dependent (an
                 // active inline ghost / prompt suggestion accepts instead).

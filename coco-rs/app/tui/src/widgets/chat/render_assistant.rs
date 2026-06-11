@@ -83,6 +83,14 @@ pub(crate) fn clear_committed_markdown_memo_for_tests() {
     IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = None);
 }
 
+/// Drop the in-flight single-slot memo when a stream ends or the surface
+/// resets, so the last response's `Vec<Line>` is not retained until the next
+/// stream overwrites the slot. Content-keying already makes a stale entry
+/// impossible to serve; this is memory hygiene, not correctness.
+pub(crate) fn clear_in_flight_markdown_memo() {
+    IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = None);
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedAssistantMarkdownOptions<'a> {
     pub(crate) styles: UiStyles<'a>,
@@ -90,11 +98,33 @@ pub(crate) struct CommittedAssistantMarkdownOptions<'a> {
     pub(crate) syntax_highlighting: SyntaxHighlighting,
 }
 
+/// Which memo (if any) backs an assistant-markdown render, and whether mermaid
+/// diagrams are laid out. The three modes produce the same rows for the same
+/// source EXCEPT for the streaming mermaid-suppression — they differ only in
+/// caching, which is why `Committed` and `StreamStable` are row-identical (the
+/// soundness anchor for the mid-stream→finalize handoff).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderMode {
+    /// Finalized cells / replay — mermaid laid out, shared content memo (absorbs
+    /// repeated replay/finalize renders of the same text).
+    Committed,
+    /// In-flight live tail — mermaid suppressed (re-laying per delta is the cost
+    /// the streaming flag avoids), single-slot memo.
+    InFlight,
+    /// Mid-stream STABLE region — mermaid laid out (these rows enter native
+    /// scrollback and must match the `Committed` finalize render), but
+    /// memo-bypassed: the `StreamRenderController` already caches these lines,
+    /// so routing them through the shared committed map would flood it with
+    /// dead per-advance prefixes and force premature cap clears that evict
+    /// legitimate committed-cell entries.
+    StreamStable,
+}
+
 pub(crate) fn render_committed_assistant_markdown(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
 ) -> Vec<Line<'static>> {
-    render_assistant_markdown(source, options, /*in_flight*/ false)
+    render_assistant_markdown(source, options, RenderMode::Committed)
 }
 
 /// Same renderer for IN-FLIGHT assistant text (the live tail), backed by the
@@ -106,22 +136,39 @@ pub(crate) fn render_in_flight_assistant_markdown(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
 ) -> Vec<Line<'static>> {
-    render_assistant_markdown(source, options, /*in_flight*/ true)
+    render_assistant_markdown(source, options, RenderMode::InFlight)
+}
+
+/// Mid-stream STABLE region render: row-identical to the committed render (so the
+/// scrollback rows match the eventual finalize) but bypassing the shared memo —
+/// the `StreamRenderController` is the cache on this path.
+pub(crate) fn render_stream_stable_assistant_markdown(
+    source: &str,
+    options: CommittedAssistantMarkdownOptions<'_>,
+) -> Vec<Line<'static>> {
+    render_assistant_markdown(source, options, RenderMode::StreamStable)
 }
 
 fn render_assistant_markdown(
     source: &str,
     options: CommittedAssistantMarkdownOptions<'_>,
-    in_flight: bool,
+    mode: RenderMode,
 ) -> Vec<Line<'static>> {
     let mut opts = coco_tui_markdown::MarkdownOptions::new(
         options.styles,
         options.width,
         options.syntax_highlighting,
     );
-    if in_flight {
+    if mode == RenderMode::InFlight {
         opts = opts.streaming();
     }
+    let marker = assistant_lead_marker(options.styles.assistant_message());
+
+    // Memo-bypass path: the stream controller owns this cache.
+    if mode == RenderMode::StreamStable {
+        return coco_tui_markdown::render_markdown(source, opts, Some(&marker));
+    }
+
     let key = {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut h);
@@ -132,7 +179,7 @@ fn render_assistant_markdown(
         options.styles.theme_hash().hash(&mut h);
         h.finish()
     };
-    let hit = if in_flight {
+    let hit = if mode == RenderMode::InFlight {
         IN_FLIGHT_MD_MEMO.with(|m| {
             m.borrow()
                 .as_ref()
@@ -144,9 +191,8 @@ fn render_assistant_markdown(
     if let Some(hit) = hit {
         return hit;
     }
-    let marker = assistant_lead_marker(options.styles.assistant_message());
     let rendered = coco_tui_markdown::render_markdown(source, opts, Some(&marker));
-    if in_flight {
+    if mode == RenderMode::InFlight {
         IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = Some((key, rendered.clone())));
     } else {
         COMMITTED_MD_MEMO.with(|m| {

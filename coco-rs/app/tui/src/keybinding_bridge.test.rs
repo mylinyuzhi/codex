@@ -699,3 +699,34 @@ fn test_alt_v_pastes() {
     let cmd = map_key(&state, key);
     assert!(matches!(cmd, Some(TuiCommand::PasteFromClipboard)));
 }
+
+#[test]
+fn ctrl_s_and_ctrl_g_resolve_to_restored_actions_not_literal_inserts() {
+    // RC-4 (H1+M6): the cascade deletion left ctrl+s / ctrl+g with no binding,
+    // so they degraded to InsertChar('s')/('g') in the composer. They are
+    // restored as the rebindable app:sessionBrowser / app:planEditor actions.
+    let state = AppState::new();
+    assert!(matches!(
+        map_key(&state, ctrl(KeyCode::Char('s'))),
+        Some(TuiCommand::ShowSessionBrowser)
+    ));
+    assert!(matches!(
+        map_key(&state, ctrl(KeyCode::Char('g'))),
+        Some(TuiCommand::OpenPlanEditor)
+    ));
+}
+
+#[test]
+fn unbound_ctrl_combo_is_swallowed_not_inserted() {
+    // RC-4 (H1): a Ctrl+<char> that reaches the input cascade with no binding
+    // must NOT type its literal letter into the composer (the regression that
+    // corrupted input in Chat and under the autocomplete popup).
+    let state = AppState::new();
+    assert!(
+        !matches!(
+            map_key(&state, ctrl(KeyCode::Char('.'))),
+            Some(TuiCommand::InsertChar(_))
+        ),
+        "an unbound Ctrl combo must not insert a literal char",
+    );
+}

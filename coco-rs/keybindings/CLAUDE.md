@@ -1,11 +1,12 @@
 # coco-keybindings
 
 Keyboard shortcut resolution. TS port of `keybindings/`. Closed enums for
-contexts (20: 18 user-rebindable + 2 internal) and actions (~111 variants:
-86 TS schema + 18 internal + 6 documented coco-rs extensions
+contexts (20: 18 user-rebindable + 2 internal) and actions (~113 variants:
+86 TS schema + 18 internal + 8 documented coco-rs extensions
 (`app:forceQuit`, `app:help`, `app:commandPalette`, `app:settings`,
-`chat:toggleSystemReminders`, `chat:togglePlanMode` — folded from the old
-hardcoded TUI cascade) + Command escape hatch, mirroring TS
+`app:sessionBrowser`, `app:planEditor`, `chat:toggleSystemReminders`,
+`chat:togglePlanMode` — folded from the old hardcoded TUI cascade) +
+Command escape hatch, mirroring TS
 `KEYBINDING_ACTIONS`), chord support (`ctrl+x ctrl+k`,
 whitespace-separated), JSON config wrapper, validator with severity,
 hot-reloading user-config loader, platform-aware display formatting,

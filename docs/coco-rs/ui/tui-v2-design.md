@@ -405,6 +405,36 @@ owns extent, pin, reveal, and clamping in one place. I-V1..I-V4 from
 and the backend-generic frame harness exists from the first commit (the C1
 class lived exactly in the untested cross-crate gap).
 
+> **Amendment (2026-06-11) — codex-aligned shrink; reveal machinery
+> deleted.** The C1 remedy (extent-forced bottom re-pin + tail-cache
+> reveal) caused the permission-prompt duplication: after a prompt's
+> destructive grow scrolled history into native scrollback, the freed rows
+> on shrink could only be "backed" by repainting cached tail rows that
+> were still visible just above the gap — duplicating them on screen
+> (geometrically unavoidable: the newest cached rows are always the rows
+> directly above the viewport whenever any history is visible). The seat
+> now follows codex (`codex-rs/tui/src/tui.rs::draw`,
+> `insert_history.rs`): shrink keeps the top anchored; appends walk the
+> viewport back down (`move_viewport_down_for_history`). Deleted:
+> `history_backs_row` / `finalized_history_extent_rows`,
+> `fill_history_gap_rows`, `HistoryTailCache` + `fill_history_tail_gap` /
+> `history_tail_reveal_rows` plumbing, and the reveal arm of the shrink
+> arbitration. I-V1 strengthens to universal flush
+> (`SurfaceTerminal::seats_flush`, no pinned-gap exemption).
+>
+> **Second iteration (same day):** a fully codex-style float bounced the
+> bottom-aligned composer — log 47647 showed unbacked 1-row shrinks
+> (status-line/tail churn, height 5↔4) lifting `viewport_bottom` 54→53
+> for runs of ~26 frames. Codex tolerates the float because its composer
+> sits at the pane TOP; coco's is bottom-aligned. So a shrink while
+> seated on the screen bottom commits only its append-backed rows
+> (`SeatInputs.guaranteed_append_rows`) and DEFERS the rest
+> (`SeatDecision.deferred_shrink_rows`): the bottom edge stays glued, the
+> surplus height renders as the viewport's top filler
+> (`Constraint::Min(0)`), and later appends collapse it. Deferral never
+> repaints history, so the duplication class stays structurally
+> impossible. The Stage-2 record below predates this amendment.
+
 ### 6.4 Crate and module layout
 
 Crates unchanged (`tui-ui`, `tui-markdown`, `tui-mermaid` survive as-is;
@@ -535,6 +565,20 @@ ownership, UI-owned history, hardcoded styling.
    overflow-aware extents (I-V2 generalized).
 8. Widgets perform no terminal side effects; one cursor claim wins per frame.
 9. `tui-ui` stays domain-free; seam scripts remain blocking checks.
+10. **The "rows already in native scrollback" fact is single-owned.** One
+    `ScrollbackStreamCommit` (owned by `SurfaceStreamDriver`) is read by BOTH
+    the live-tail increment and the anchored finalize — there is no second copy
+    on the history driver. It advances only on a committed insert and clears
+    only when the rows leave scrollback (`invalidate_commit` on replay/reset)
+    or the finalize consumes them (`consume_commit`); a transient `streaming ==
+    None` frame never clears it. This makes §6.7-5 ("rows enter scrollback
+    exactly once") hold by construction: a stale-high commit surviving a replay
+    (leading-row LOSS) and a stale-low commit re-emitting present rows (leading-
+    row DUPLICATION) are both unrepresentable. Supersedes the earlier split
+    state where the watermark lived on `SurfaceStreamDriver` and a duplicate
+    `PendingStreamPrefix` lived on `SurfaceHistoryDriver`, kept in sync by
+    matching clear conditions (the reactive `(g)` watermark-identity patch was a
+    symptom of that split).
 
 ## 7. Risks
 

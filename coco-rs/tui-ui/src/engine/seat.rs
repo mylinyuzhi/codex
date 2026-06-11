@@ -2,21 +2,43 @@
 //!
 //! The seat/pin decision is computed INSIDE the engine: [`seat_viewport`]
 //! anchors on the owned viewport top (the previous settled seat — history
-//! emission is the single seat-mover) and consumes the engine-internal,
-//! unclamped finalized-history extent for the pin predicate. The extent never
-//! leaves the engine, so a viewport-clamped proxy can never be substituted
-//! for it (I-V2, the C1 lesson). The shell supplies per-frame *intent*
-//! ([`SeatInputs`]: screen, desired height, policy bounds, shrink backing)
-//! and applies the returned [`SeatDecision`]; overlay policy (which surface
-//! wants alt-screen) stays in the shell — alt frames cover the screen and do
-//! not seat.
+//! emission is the single seat-mover). The shell supplies per-frame *intent*
+//! ([`SeatInputs`]: screen, desired height, policy bounds) and applies the
+//! returned [`SeatDecision`]; overlay policy (which surface wants alt-screen)
+//! stays in the shell — alt frames cover the screen and do not seat.
 //!
-//! Invariants owned here:
-//! - **I-V1** — a `Flowing` viewport seats flush on finalized history
-//!   (`viewport_top == history_bottom_y`); see
-//!   [`SurfaceTerminal::flowing_seats_flush`].
-//! - **I-V2** — the pin predicate consumes the overflow-aware history extent
-//!   (`history_backs_row`), never a viewport-clamped quantity.
+//! Seating follows codex's inline-viewport semantics
+//! (`codex-rs/tui/src/tui.rs::draw` + `insert_history.rs`):
+//!
+//! - **Grow** extends the viewport downward from its anchored top; only when
+//!   the bottom would pass the screen does the seat pin and the top move up
+//!   (the apply path scrolls history up by exactly that overflow).
+//! - **Shrink** keeps the top anchored — the seat never jumps the viewport
+//!   down over rows nothing can repaint: history that scrolled into native
+//!   scrollback during a grow is unreachable from below, and repainting
+//!   cached tail rows below history that is still visible duplicates it on
+//!   screen (the permission-prompt duplication class).
+//! - Subsequent history appends walk the viewport back down
+//!   (`move_viewport_down_for_history`), exactly like codex's reverse-index
+//!   scroll in `insert_history_lines`.
+//!
+//! One deliberate divergence from codex: a shrink while the viewport is
+//! seated at the screen bottom commits only the rows this frame's history
+//! emission is guaranteed to append (`SeatInputs::guaranteed_append_rows`)
+//! and DEFERS the rest — the bottom edge stays glued to the screen bottom
+//! and the surplus height renders as blank filler inside the viewport until
+//! later appends back it. Codex can float the whole shrink because its
+//! composer sits at the TOP of the pane; coco's composer is bottom-aligned,
+//! so an unbacked shrink that lifted the bottom edge would visibly bounce
+//! the input box (observed as a 1-row jiggle during streaming). Deferral
+//! never repaints history — the duplication class stays structurally
+//! impossible.
+//!
+//! Invariant owned here: **I-V1** — the viewport always seats flush on
+//! finalized history (`viewport_top == history_bottom_y`); see
+//! [`SurfaceTerminal::seats_flush`]. Anchored and deferred shrinks never
+//! open a gap: a gap above the viewport is a stale-anchor / second-writer
+//! regression regardless of pin.
 
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
@@ -43,50 +65,22 @@ pub struct SeatInputs {
     /// Shell policy bounds for the viewport height clamp.
     pub min_height: u16,
     pub max_height: u16,
-    /// Rows the shell can repaint from its history tail cache when a
-    /// bottom-pinned shrink frees rows above the new viewport top.
-    pub tail_reveal_rows: u16,
-    /// Rows this frame's history emission is guaranteed to append.
+    /// Rows this frame's history emission is guaranteed to append. A shrink
+    /// while seated at the screen bottom commits only this many rows; the
+    /// rest defers so the bottom-aligned composer never lifts off the screen
+    /// bottom.
     pub guaranteed_append_rows: u16,
 }
 
-/// The committed seat for one frame, plus the shrink/reveal arbitration that
-/// produced it. `committed_viewport` is what the shell applies; the row
-/// counters drive the tail-gap fill and feed geometry diagnostics.
+/// The committed seat for one frame. `viewport` is what the shell applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SeatDecision {
     pub pin: ViewportPin,
     pub previous_viewport: Rect,
-    pub desired_viewport: Rect,
-    pub committed_viewport: Rect,
-    pub shrink_requested_rows: u16,
-    pub shrink_committed_rows: u16,
-    pub reveal_tail_rows: u16,
-    pub append_fill_rows: u16,
-    pub shrink_deferred_rows: u16,
-}
-
-impl SeatDecision {
-    /// A decision that commits `desired_viewport` verbatim with no shrink
-    /// arbitration — full-screen overlay frames and other paths where no
-    /// seating question exists.
-    pub fn without_shrink(
-        previous_viewport: Rect,
-        desired_viewport: Rect,
-        pin: ViewportPin,
-    ) -> Self {
-        Self {
-            pin,
-            previous_viewport,
-            desired_viewport,
-            committed_viewport: desired_viewport,
-            shrink_requested_rows: 0,
-            shrink_committed_rows: 0,
-            reveal_tail_rows: 0,
-            append_fill_rows: 0,
-            shrink_deferred_rows: 0,
-        }
-    }
+    pub viewport: Rect,
+    /// Rows of a bottom-seated shrink deferred to later appends (diagnostic;
+    /// non-zero only while the viewport carries blank filler height).
+    pub deferred_shrink_rows: u16,
 }
 
 impl<B> SurfaceTerminal<B>
@@ -96,11 +90,9 @@ where
     /// Decide this frame's inline viewport seat. Pure — no terminal writes.
     ///
     /// Anchors on the OWNED viewport top, not `history_bottom_y()`:
-    /// `history_bottom_y` mutates mid-frame (clear/insert/reveal) and the
-    /// sync pass runs BEFORE the history emission, so the owned top is the
-    /// previous frame's settled seat and the emission stays the single
-    /// seat-mover. The pin predicate reads the unclamped finalized-history
-    /// extent (`history_backs_row`) directly off the engine (I-V2).
+    /// `history_bottom_y` mutates mid-frame (clear/insert) and the sync pass
+    /// runs BEFORE the history emission, so the owned top is the previous
+    /// frame's settled seat and the emission stays the single seat-mover.
     pub fn seat_viewport(&self, inputs: SeatInputs) -> SeatDecision {
         let previous_viewport = self.viewport_area();
         let height = seat_viewport_height(
@@ -109,41 +101,29 @@ where
             inputs.min_height,
             inputs.max_height,
         );
-        let bottom_pinned_y = inputs.screen.height.saturating_sub(height);
-        let (desired_viewport, pin) = seat_geometry(
-            previous_viewport.top(),
+        let (desired, pin) = seat_geometry(previous_viewport.top(), inputs.screen, height);
+        let (viewport, pin, deferred_shrink_rows) = arbitrate_bottom_seated_shrink(
+            previous_viewport,
+            desired,
+            pin,
             inputs.screen,
-            height,
-            self.history_backs_row(bottom_pinned_y),
+            inputs.guaranteed_append_rows,
         );
-        commit_seat(
+        SeatDecision {
             pin,
             previous_viewport,
-            desired_viewport,
-            inputs.screen.height,
-            inputs.tail_reveal_rows,
-            inputs.guaranteed_append_rows,
-        )
+            viewport,
+            deferred_shrink_rows,
+        }
     }
 
-    /// The I-V1 flowing-seat invariant evaluated against current terminal
-    /// state: a `Flowing` viewport must sit flush on finalized history
-    /// (`viewport_top == history_bottom_y`). `BottomPinned` viewports are
-    /// exempt — they may carry a transient backed gap pending tail-reveal.
-    pub fn flowing_seats_flush(&self, pin: ViewportPin) -> bool {
-        flowing_viewport_seats_flush(pin, self.viewport_area().top(), self.history_bottom_y())
+    /// The I-V1 invariant evaluated against current terminal state: the
+    /// viewport must sit flush on finalized history
+    /// (`viewport_top == history_bottom_y`). Anchored shrinks never open a
+    /// gap, so there is no pin exemption.
+    pub fn seats_flush(&self) -> bool {
+        self.viewport_area().top() == self.history_bottom_y()
     }
-}
-
-/// The flowing-seat invariant as a pure predicate. A Flowing gap is the
-/// `/clear`-class stale-anchor / second-writer regression; the pin guard is
-/// load-bearing — do NOT drop it.
-pub fn flowing_viewport_seats_flush(
-    pin: ViewportPin,
-    viewport_top: u16,
-    history_bottom_y: u16,
-) -> bool {
-    pin != ViewportPin::Flowing || viewport_top == history_bottom_y
 }
 
 /// Clamp the shell's desired viewport height to its policy bounds and the
@@ -163,9 +143,7 @@ pub fn seat_viewport_height(
 }
 
 /// Convenience for shells and test harnesses: the seat rect for a bare
-/// anchor with no overflow backing (the pin follows from the anchor position
-/// alone). Production seating goes through [`SurfaceTerminal::seat_viewport`],
-/// which reads the engine's unclamped history extent.
+/// anchor. Production seating goes through [`SurfaceTerminal::seat_viewport`].
 pub fn seat_viewport_area(
     anchor_y: u16,
     screen: Size,
@@ -174,32 +152,62 @@ pub fn seat_viewport_area(
     max_height: u16,
 ) -> Rect {
     let height = seat_viewport_height(screen, desired_height, min_height, max_height);
-    seat_geometry(
-        anchor_y, screen, height, /*history_backs_pinned_row*/ false,
-    )
-    .0
+    seat_geometry(anchor_y, screen, height).0
 }
 
-/// Compute the desired viewport rect and pin for a frame.
+/// Arbitrate a shrink while the viewport is seated at the screen bottom.
 ///
-/// The bottom-pin state is a pure function of whether finalized history still
-/// reaches the bottom-pinned row: either the anchor itself sits at/below it,
-/// or the unclamped history extent backs it (`history_backs_pinned_row` — the
-/// overflow case where `history_bottom_y` has been clamped to the viewport
-/// top). It is intentionally NOT sticky — a latched pin that outlived its
-/// history is exactly what strands an unbacked gap when history shrinks
-/// (`/clear`, reflow, display-toggle, rewind).
-fn seat_geometry(
-    anchor_y: u16,
+/// The bottom edge is where coco's composer lives, so it must not lift off
+/// the screen bottom over rows nothing will repaint: commit the shrink only
+/// to the extent this frame's history emission backs it (the append fills
+/// the freed rows in the same synchronized frame), and defer the rest by
+/// keeping the top anchored — the surplus height renders as blank filler
+/// inside the viewport and later appends collapse it. Never repaints
+/// history, so it cannot duplicate it.
+fn arbitrate_bottom_seated_shrink(
+    previous: Rect,
+    desired: Rect,
+    pin: ViewportPin,
     screen: Size,
-    height: u16,
-    history_backs_pinned_row: bool,
-) -> (Rect, ViewportPin) {
+    guaranteed_append_rows: u16,
+) -> (Rect, ViewportPin, u16) {
+    // A shrink with the top anchored lifts the desired bottom off the screen
+    // bottom the viewport was seated on.
+    let bottom_seated_shrink =
+        previous.bottom() == screen.height && desired.bottom() < screen.height;
+    if !bottom_seated_shrink {
+        return (desired, pin, 0);
+    }
+    // Rows the top must eventually move down for the desired height to seat
+    // back on the screen bottom.
+    let shrink_requested = screen
+        .height
+        .saturating_sub(desired.height)
+        .saturating_sub(previous.top());
+    let shrink_committed = shrink_requested.min(guaranteed_append_rows);
+    let top = previous.top().saturating_add(shrink_committed);
+    let viewport = Rect::new(0, top, screen.width, screen.height.saturating_sub(top));
+    (
+        viewport,
+        ViewportPin::BottomPinned,
+        shrink_requested - shrink_committed,
+    )
+}
+
+/// Compute the viewport rect and pin for a frame.
+///
+/// The top stays anchored unless the requested height pushes the bottom past
+/// the screen — only then does the seat pin and the top move up (the apply
+/// path scrolls history up by that overflow, mirroring codex). A height
+/// shrink therefore keeps the top anchored and frees rows BELOW the
+/// viewport; it never re-pins over freed rows whose true content is
+/// unreachable scrollback.
+fn seat_geometry(anchor_y: u16, screen: Size, height: u16) -> (Rect, ViewportPin) {
     if screen.height == 0 {
         return (Rect::new(0, 0, screen.width, 0), ViewportPin::Flowing);
     }
     let bottom_pinned_y = screen.height.saturating_sub(height);
-    let pin = if anchor_y >= bottom_pinned_y || history_backs_pinned_row {
+    let pin = if anchor_y >= bottom_pinned_y {
         ViewportPin::BottomPinned
     } else {
         ViewportPin::Flowing
@@ -209,56 +217,6 @@ fn seat_geometry(
         ViewportPin::BottomPinned => bottom_pinned_y,
     };
     (Rect::new(0, y, screen.width, height), pin)
-}
-
-/// Arbitrate a bottom-pinned shrink: the freed rows may only be committed to
-/// the extent the shell can back them (tail-cache reveal + this frame's
-/// guaranteed append); the rest of the shrink defers so the viewport never
-/// jumps off the screen bottom over rows nothing will repaint.
-fn commit_seat(
-    pin: ViewportPin,
-    previous_viewport: Rect,
-    desired_viewport: Rect,
-    terminal_height: u16,
-    tail_reveal_rows: u16,
-    guaranteed_append_rows: u16,
-) -> SeatDecision {
-    let mut committed_viewport = desired_viewport;
-    let mut shrink_requested_rows = 0;
-    let mut shrink_committed_rows = 0;
-    let mut reveal_tail_rows = 0;
-    let mut append_fill_rows = 0;
-
-    let bottom_pinned_shrink = pin == ViewportPin::BottomPinned
-        && previous_viewport.bottom() == terminal_height
-        && desired_viewport.bottom() == terminal_height
-        && desired_viewport.top() > previous_viewport.top();
-
-    if bottom_pinned_shrink {
-        shrink_requested_rows = desired_viewport.top() - previous_viewport.top();
-        let backed_rows = tail_reveal_rows.saturating_add(guaranteed_append_rows);
-        shrink_committed_rows = shrink_requested_rows.min(backed_rows);
-        if shrink_committed_rows < shrink_requested_rows {
-            committed_viewport.y = previous_viewport
-                .top()
-                .saturating_add(shrink_committed_rows);
-            committed_viewport.height = terminal_height.saturating_sub(committed_viewport.y);
-        }
-        reveal_tail_rows = tail_reveal_rows.min(shrink_committed_rows);
-        append_fill_rows = shrink_committed_rows.saturating_sub(reveal_tail_rows);
-    }
-
-    SeatDecision {
-        pin,
-        previous_viewport,
-        desired_viewport,
-        committed_viewport,
-        shrink_requested_rows,
-        shrink_committed_rows,
-        reveal_tail_rows,
-        append_fill_rows,
-        shrink_deferred_rows: shrink_requested_rows.saturating_sub(shrink_committed_rows),
-    }
 }
 
 #[cfg(test)]

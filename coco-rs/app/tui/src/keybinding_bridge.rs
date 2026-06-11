@@ -601,8 +601,14 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // poll a tracker through `&AppState`.
         KeyCode::Esc => Some(TuiCommand::Cancel),
 
-        // Character input
-        KeyCode::Char(c) => Some(TuiCommand::InsertChar(c)),
+        // Character input. A Ctrl+<char> combo that reached here has no binding
+        // (the readline arms above are the only Ctrl combos that type); letting
+        // it fall through to `InsertChar` typed the literal letter into the
+        // composer — the tui-v2 cascade-deletion regression where e.g. Ctrl+S
+        // (session browser) degraded to inserting "s", in Chat AND under the
+        // autocomplete popup. Swallow unbound Ctrl combos instead. Alt is left
+        // alone: on macOS Option-compose delivers accented chars as Alt+<char>.
+        KeyCode::Char(c) if !ctrl => Some(TuiCommand::InsertChar(c)),
 
         _ => None,
     }

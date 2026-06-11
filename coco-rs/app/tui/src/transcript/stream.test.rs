@@ -67,55 +67,69 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
     // THE soundness pin for the anchored finalize (tui-v2 §6.2): with the
     // rasterized fingerprint compare deleted, the finalize appends
     // `render_committed(full_text)[line_prefix_len..]` directly after rows
-    // produced from `render_committed(stable_prefix)`. The advance test below
-    // (`test_stable_lines_remain_prefix_stable_across_advances`) pins
-    // prefix-vs-larger-prefix at stable boundaries only; this one pins the
-    // exact relation the finalize uses — stable-prefix render vs the committed
-    // render of the FULL text, including an unstable tail. Trap constructs:
-    // closed fence, growing loose list, setext underline arriving after its
-    // paragraph, blockquote, GFM table, reference link whose definition
-    // arrives late, trailing partial line — at a wide and a narrow width. A
-    // failure here means streamed scrollback rows would disagree with the
-    // finalize suffix: silent transcript corruption.
+    // produced from `render_committed(stable_prefix)`. The committed-scrollback
+    // soundness argument is `stable(k) ⊑ stable(final) ⊑ full(final)`. This one
+    // pin now closes BOTH links across the production config matrix:
+    //
+    //   - row-prefix:   stable(k) ⊑ full(k)              (the finalize relation)
+    //   - append-only:  stable(k-1) ⊑ stable(k)          (emitted rows immutable)
+    //
+    // over the FULL trap set — closed fence, mermaid diagram, growing loose
+    // list, setext underline arriving after its paragraph, blockquote, GFM
+    // table, late reference-link definition, trailing partial line — at a wide
+    // and a narrow width, and under BOTH syntax states (production defaults to
+    // Enabled, and highlighted fences are the highest-risk construct). A
+    // failure means streamed scrollback rows would disagree with the finalize
+    // suffix: silent transcript corruption.
     let theme = Theme::default();
-    let source = "Intro paragraph.\n\n```rust\nfn main() {}\n```\n\n- alpha item\n\n\
+    let source = "Intro paragraph.\n\n```rust\nfn main() {}\n```\n\n\
+                  ```mermaid\ngraph TD\n  A-->B\n```\n\n- alpha item\n\n\
                   - beta item\n\nTitle\n=====\n\n> quoted line\n> second line\n\n\
                   | col a | col b |\n| ----- | ----- |\n| one   | two   |\n\n\
                   See [the spec][ref] for details.\n\n[ref]: https://example.com\n\n\
                   Closing paragraph.\n\ntrailing partial line";
-    for width in [80u16, 24] {
-        let mut controller = StreamRenderController::default();
-        let mut fed = 0;
-        while fed < source.len() {
-            fed = (fed + 7).min(source.len());
-            let view = &source[..fed];
-            let projection = controller.render_projection(StreamRenderInput {
-                source: view,
-                styles: UiStyles::new(&theme),
-                width,
-                syntax_highlighting: SyntaxHighlighting::Disabled,
-            });
-            let stable: Vec<String> = projection
-                .stable_lines
-                .iter()
-                .map(|line| format!("{line:?}"))
-                .collect();
-            let full: Vec<String> =
-                crate::widgets::chat::render_assistant::render_committed_assistant_markdown(
-                    view,
-                    crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions {
-                        styles: UiStyles::new(&theme),
-                        width,
-                        syntax_highlighting: SyntaxHighlighting::Disabled,
-                    },
-                )
-                .iter()
-                .map(|line| format!("{line:?}"))
-                .collect();
-            assert!(
-                stable.len() <= full.len() && full[..stable.len()] == stable[..],
-                "stable-prefix render must be a row-prefix of the committed full render (width={width}, fed={fed}):\nstable {stable:#?}\nfull {full:#?}",
-            );
+    for syntax in [SyntaxHighlighting::Enabled, SyntaxHighlighting::Disabled] {
+        for width in [80u16, 24] {
+            let mut controller = StreamRenderController::default();
+            let mut prev_stable: Vec<String> = Vec::new();
+            let mut fed = 0;
+            while fed < source.len() {
+                fed = (fed + 7).min(source.len());
+                let view = &source[..fed];
+                let projection = controller.render_projection(StreamRenderInput {
+                    source: view,
+                    styles: UiStyles::new(&theme),
+                    width,
+                    syntax_highlighting: syntax,
+                });
+                let stable: Vec<String> = projection
+                    .stable_lines
+                    .iter()
+                    .map(|line| format!("{line:?}"))
+                    .collect();
+                let full: Vec<String> =
+                    crate::widgets::chat::render_assistant::render_committed_assistant_markdown(
+                        view,
+                        crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions {
+                            styles: UiStyles::new(&theme),
+                            width,
+                            syntax_highlighting: syntax,
+                        },
+                    )
+                    .iter()
+                    .map(|line| format!("{line:?}"))
+                    .collect();
+                assert!(
+                    stable.len() <= full.len() && full[..stable.len()] == stable[..],
+                    "stable-prefix render must be a row-prefix of the committed full render (syntax={syntax:?}, width={width}, fed={fed}):\nstable {stable:#?}\nfull {full:#?}",
+                );
+                assert!(
+                    stable.len() >= prev_stable.len()
+                        && stable[..prev_stable.len()] == prev_stable[..],
+                    "stable rows must be append-only across advances on the trap source (syntax={syntax:?}, width={width}, fed={fed}):\nwas {prev_stable:#?}\nnow {stable:#?}",
+                );
+                prev_stable = stable;
+            }
         }
     }
 }

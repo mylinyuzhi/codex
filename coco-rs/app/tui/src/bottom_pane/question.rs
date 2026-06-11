@@ -52,11 +52,15 @@ pub(crate) fn map_key(key: KeyEvent) -> Option<TuiCommand> {
 /// shortcuts). Question prompts have no filter — everything else is
 /// silently swallowed.
 pub(crate) fn filter_question(state: &mut AppState, c: char) {
-    if c == ' ' {
-        question_toggle_checked(state);
+    // The focused "Other" free-text input owns every printable char INCLUDING
+    // space (multi-word answers) and digits; `question_free_text_input` returns
+    // false unless that input is focused, so only when it is not do Space toggle
+    // a multi-select option and a digit jump to an option (TS `Select`).
+    if question_free_text_input(state, c) {
         return;
     }
-    if question_free_text_input(state, c) {
+    if c == ' ' {
+        question_toggle_checked(state);
         return;
     }
     if let Some(d) = c.to_digit(10) {

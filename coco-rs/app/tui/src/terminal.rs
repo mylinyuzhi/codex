@@ -448,8 +448,13 @@ where
         // at `size.width`) and the viewport area are derived from one consistent
         // size, even if the terminal resizes mid-frame.
         let sync_start = perf_config.enabled.then(std::time::Instant::now);
-        let geometry_commit =
-            self.sync_surface_area(state, plan, size, live_height, &native_frame)?;
+        let geometry_commit = self.sync_surface_area(
+            state,
+            plan,
+            size,
+            live_height,
+            native_frame.guaranteed_append_rows(),
+        )?;
         #[cfg(test)]
         {
             self.last_geometry_commit = Some(geometry_commit);
@@ -469,37 +474,6 @@ where
                 "tui frame stage completed",
             );
         }
-        if geometry_commit.reveal_tail_rows > 0 {
-            let gap_before_fill = self
-                .terminal
-                .viewport_area()
-                .top()
-                .saturating_sub(self.terminal.history_bottom_y());
-            let filled = self
-                .surface
-                .fill_history_tail_gap(&mut self.terminal, geometry_commit.reveal_tail_rows)?;
-            let remaining_gap_rows = self
-                .terminal
-                .viewport_area()
-                .top()
-                .saturating_sub(self.terminal.history_bottom_y());
-            let fill_status = if filled > 0 {
-                "filled"
-            } else if gap_before_fill == 0 {
-                "already_aligned_after_viewport_apply"
-            } else {
-                "no_cached_tail_rows"
-            };
-            tracing::debug!(
-                target: "tui::surface::geometry",
-                requested_rows = geometry_commit.reveal_tail_rows,
-                gap_before_fill,
-                filled_rows = filled,
-                remaining_gap_rows,
-                fill_status,
-                "filled native history tail gap"
-            );
-        }
         let surface_start = perf_config.enabled.then(std::time::Instant::now);
         let outcome = self.surface.draw_with_plan_at_frame(
             &mut self.terminal,
@@ -511,56 +485,41 @@ where
         let history_bottom_y_after = self.terminal.history_bottom_y();
         let viewport_top_after = self.terminal.viewport_area().top();
         let unbacked_gap_rows = viewport_top_after.saturating_sub(history_bottom_y_after);
-        let flowing_seats_flush = self
-            .terminal
-            .flowing_seats_flush(self.main_screen_viewport_pin);
-        // Invariant (post de-stick): a Flowing viewport seats flush on history.
-        // A non-zero gap under a Flowing pin means a stale-anchor / second-writer
-        // regression (the /clear-gap class). A BottomPinned viewport may carry a
-        // transient backed gap pending tail-reveal (shrink_deferred_rows > 0), so
-        // the pin guard is load-bearing — do NOT drop it.
+        let seats_flush = self.terminal.seats_flush();
+        // Invariant (I-V1): the viewport seats flush on finalized history.
+        // Anchored shrinks never open a gap, so there is no pinned-gap
+        // exemption — any gap is a stale-anchor / second-writer regression
+        // (the /clear-gap class).
         debug_assert!(
-            flowing_seats_flush,
-            "flowing viewport must seat flush against history: pin={:?} viewport_top={} \
-             history_bottom_y={} unbacked_gap_rows={} committed={:?} reveal_tail_rows={} \
-             append_fill_rows={} shrink_deferred_rows={}",
+            seats_flush,
+            "viewport must seat flush against history: pin={:?} viewport_top={} \
+             history_bottom_y={} unbacked_gap_rows={} committed={:?}",
             self.main_screen_viewport_pin,
             viewport_top_after,
             history_bottom_y_after,
             unbacked_gap_rows,
-            geometry_commit.committed_viewport,
-            geometry_commit.reveal_tail_rows,
-            geometry_commit.append_fill_rows,
-            geometry_commit.shrink_deferred_rows,
+            geometry_commit.viewport,
         );
-        if !flowing_seats_flush {
+        if !seats_flush {
             tracing::warn!(
                 target: "tui::surface::geometry",
                 pin = ?self.main_screen_viewport_pin,
                 viewport_top = viewport_top_after,
                 history_bottom_y = history_bottom_y_after,
                 unbacked_gap_rows,
-                committed_viewport = ?geometry_commit.committed_viewport,
-                reveal_tail_rows = geometry_commit.reveal_tail_rows,
-                append_fill_rows = geometry_commit.append_fill_rows,
-                shrink_deferred_rows = geometry_commit.shrink_deferred_rows,
-                "flowing viewport is not seated flush against history"
+                committed_viewport = ?geometry_commit.viewport,
+                "viewport is not seated flush against history"
             );
         }
         tracing::debug!(
             target: "tui::surface::geometry",
             pin = ?self.main_screen_viewport_pin,
             previous_viewport = ?geometry_commit.previous_viewport,
-            desired_viewport = ?geometry_commit.desired_viewport,
-            committed_viewport = ?geometry_commit.committed_viewport,
+            committed_viewport = ?geometry_commit.viewport,
             terminal_height = size.height,
             history_bottom_y_after,
-            shrink_requested_rows = geometry_commit.shrink_requested_rows,
-            shrink_committed_rows = geometry_commit.shrink_committed_rows,
-            reveal_tail_rows = geometry_commit.reveal_tail_rows,
-            append_fill_rows = geometry_commit.append_fill_rows,
-            shrink_deferred_rows = geometry_commit.shrink_deferred_rows,
             unbacked_gap_rows,
+            deferred_shrink_rows = geometry_commit.deferred_shrink_rows,
             input_bottom = outcome.layout.input.bottom(),
             viewport_bottom = self.terminal.viewport_area().bottom(),
             "native surface geometry committed"
@@ -614,7 +573,7 @@ where
         plan: SurfaceFramePlan,
         size: ratatui::layout::Size,
         precomputed_live_height: Option<u16>,
-        native_frame: &NativeSurfaceFramePlan,
+        guaranteed_append_rows: u16,
     ) -> Result<SeatDecision, B::Error> {
         let wants_alt = matches!(plan.modal_placement, Some(ModalSurfacePlacement::AltScreen));
 
@@ -630,16 +589,16 @@ where
 
         if self.alt_screen_active {
             // Overlay policy stays in the shell (tui-v2 §6.3): an alt-screen
-            // frame covers the whole screen and does not seat — no shrink
-            // arbitration, and the main-screen pin bookkeeping is untouched.
+            // frame covers the whole screen and does not seat — the
+            // main-screen pin bookkeeping is untouched.
             let previous_viewport = self.terminal.viewport_area();
             let history_bottom_y_before = self.terminal.history_bottom_y();
-            let desired_area = Rect::new(0, 0, size.width, size.height);
-            let decision = SeatDecision::without_shrink(
+            let decision = SeatDecision {
+                pin: self.main_screen_viewport_pin,
                 previous_viewport,
-                desired_area,
-                self.main_screen_viewport_pin,
-            );
+                viewport: Rect::new(0, 0, size.width, size.height),
+                deferred_shrink_rows: 0,
+            };
             apply_native_viewport_commit(
                 &mut self.terminal,
                 decision,
@@ -657,7 +616,7 @@ where
             plan,
             size,
             precomputed_live_height,
-            native_frame,
+            guaranteed_append_rows,
         )
     }
 
@@ -681,7 +640,7 @@ fn sync_main_surface_area<B>(
     plan: SurfaceFramePlan,
     size: ratatui::layout::Size,
     precomputed_live_height: Option<u16>,
-    native_frame: &NativeSurfaceFramePlan,
+    guaranteed_append_rows: u16,
 ) -> Result<SeatDecision, B::Error>
 where
     B: SurfaceBackend,
@@ -696,17 +655,17 @@ where
         precomputed_live_height,
     );
     // The seat/pin decision is engine-owned (tui-v2 §6.3): the shell supplies
-    // intent (desired height, policy bounds, shrink backing); the engine
-    // anchors on its owned viewport top and consumes its unclamped
-    // finalized-history extent internally (I-V2 — no clamped proxy can be
-    // substituted here).
+    // intent (desired height, policy bounds, append backing); the engine
+    // anchors on its owned viewport top. Shrinks keep the top anchored (codex
+    // semantics); a shrink while seated at the screen bottom commits only its
+    // append-backed rows and defers the rest so the bottom-aligned composer
+    // never lifts off the screen bottom.
     let decision = terminal.seat_viewport(SeatInputs {
         screen: size,
         desired_height,
         min_height: NATIVE_VIEWPORT_MIN_HEIGHT,
         max_height: max_h,
-        tail_reveal_rows: native_frame.history_tail_reveal_rows,
-        guaranteed_append_rows: native_frame.guaranteed_append_rows(),
+        guaranteed_append_rows,
     });
     *main_screen_viewport_pin = decision.pin;
     apply_native_viewport_commit(
@@ -729,23 +688,22 @@ fn apply_native_viewport_commit<B>(
 where
     B: SurfaceBackend,
 {
-    if terminal.viewport_area() != decision.committed_viewport {
+    if terminal.viewport_area() != decision.viewport {
         tracing::debug!(
             target: "tui::surface",
             previous = ?terminal.viewport_area(),
-            next = ?decision.committed_viewport,
-            desired = ?decision.desired_viewport,
-            viewport_height = decision.committed_viewport.height,
-            viewport_bottom = decision.committed_viewport.bottom(),
+            next = ?decision.viewport,
+            viewport_height = decision.viewport.height,
+            viewport_bottom = decision.viewport.bottom(),
             terminal_height,
             history_bottom_y_before,
             history_bottom_y = terminal.history_bottom_y(),
             alt_screen_active,
-            bottom_pinned = decision.committed_viewport.bottom() == terminal_height,
+            bottom_pinned = decision.viewport.bottom() == terminal_height,
             pin = ?decision.pin,
             "sync surface area"
         );
-        terminal.apply_viewport_area(decision.committed_viewport, !alt_screen_active)?;
+        terminal.apply_viewport_area(decision.viewport, !alt_screen_active)?;
     }
     Ok(())
 }
@@ -774,13 +732,10 @@ where
         plan,
         size,
         live_height,
-        &native_frame,
+        native_frame.guaranteed_append_rows(),
     )?;
-    if decision.reveal_tail_rows > 0 {
-        surface.fill_history_tail_gap(terminal, decision.reveal_tail_rows)?;
-    }
     surface.draw_with_plan_at_frame(terminal, state, plan, native_frame, 0)?;
-    assert!(terminal.flowing_seats_flush(*main_screen_viewport_pin));
+    assert!(terminal.seats_flush());
     Ok(decision)
 }
 
