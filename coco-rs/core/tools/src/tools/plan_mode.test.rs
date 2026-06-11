@@ -8,6 +8,7 @@ use coco_tool_runtime::ValidationResult;
 use coco_types::AgentId;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
+use coco_types::ToolDisplayData;
 use coco_types::ToolName;
 use serde_json::Value;
 use serde_json::json;
@@ -669,6 +670,15 @@ async fn exit_plan_mode_reads_plan_from_disk() {
         file_path.ends_with(".md"),
         "filePath should be set: {file_path}"
     );
+
+    let Some(ToolDisplayData::ExitPlanModeResult(display)) = result.display_data else {
+        panic!("ExitPlanMode should attach typed display data");
+    };
+    assert!(display.plan.contains("step 1"), "{display:?}");
+    assert_eq!(display.file_path.as_deref(), Some(file_path));
+    assert!(!display.awaiting_leader_approval);
+    assert!(!display.is_agent);
+    assert!(!display.plan_was_edited);
 }
 
 #[tokio::test]
@@ -705,6 +715,11 @@ async fn exit_plan_mode_input_plan_wins_over_disk() {
         result.data.get("planWasEdited").and_then(Value::as_bool),
         Some(true)
     );
+    let Some(ToolDisplayData::ExitPlanModeResult(display)) = result.display_data else {
+        panic!("ExitPlanMode should attach typed display data");
+    };
+    assert_eq!(display.plan, "edited plan from CCR");
+    assert!(display.plan_was_edited);
 }
 
 #[tokio::test]
@@ -846,6 +861,12 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
             .and_then(Value::as_str)
             .is_some()
     );
+    let Some(ToolDisplayData::ExitPlanModeResult(display)) = result.display_data else {
+        panic!("ExitPlanMode should attach typed display data");
+    };
+    assert_eq!(display.plan, "# plan body");
+    assert!(display.awaiting_leader_approval);
+    assert!(display.is_agent);
 
     // One mailbox write to team-lead under the fallback team name.
     let captured = capture.captured.lock().await;

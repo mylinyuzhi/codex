@@ -78,6 +78,37 @@ fn tool_display_data_serializes_apply_patch_preview() {
 }
 
 #[test]
+fn tool_display_data_serializes_exit_plan_mode_result() {
+    let data = ToolDisplayData::ExitPlanModeResult(ExitPlanModeResult {
+        plan: "# Plan\n- step".to_string(),
+        file_path: Some("/tmp/session-plan.md".to_string()),
+        awaiting_leader_approval: false,
+        is_agent: false,
+        plan_was_edited: true,
+    });
+
+    let value = serde_json::to_value(&data).unwrap();
+
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "kind": "exit_plan_mode_result",
+            "data": {
+                "plan": "# Plan\n- step",
+                "filePath": "/tmp/session-plan.md",
+                "awaitingLeaderApproval": false,
+                "isAgent": false,
+                "planWasEdited": true
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ToolDisplayData>(value).unwrap(),
+        data
+    );
+}
+
+#[test]
 fn apply_patch_preview_rejects_negative_omitted_rows() {
     let err = serde_json::from_value::<ApplyPatchPreview>(serde_json::json!({
         "rows": [

@@ -14,6 +14,9 @@ pub enum ToolDisplayData {
     /// a styled transcript cell (mirrors codex `RequestUserInputResultCell`)
     /// instead of the raw model-facing prose.
     AskUserQuestionResult(AskUserQuestionResult),
+    /// Structured UI payload for ExitPlanMode result rendering. The model still
+    /// sees the prose rendered from the tool result data.
+    ExitPlanModeResult(ExitPlanModeResult),
 }
 
 /// Per-question answers for a completed AskUserQuestion call. Built by the tool
@@ -36,6 +39,20 @@ pub struct AskUserQuestionAnswered {
     /// Freeform note (the "Other" composer text / annotation), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// UI-only data needed to render an ExitPlanMode result without reading private
+/// tool input/output wire fields.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitPlanModeResult {
+    pub plan: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    pub awaiting_leader_approval: bool,
+    pub is_agent: bool,
+    pub plan_was_edited: bool,
 }
 
 /// Bounded, structured preview of an `apply_patch` body for UI rendering.

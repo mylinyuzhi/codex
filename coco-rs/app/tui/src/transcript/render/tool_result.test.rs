@@ -7,6 +7,7 @@ use coco_types::ApplyPatchPreviewRow;
 use coco_types::ApplyPatchPreviewSign;
 use coco_types::AskUserQuestionAnswered;
 use coco_types::AskUserQuestionResult;
+use coco_types::ExitPlanModeResult;
 use coco_types::ToolDisplayData;
 use serde_json::json;
 
@@ -90,6 +91,20 @@ fn render(
 
 fn apply_patch_display_data(rows: Vec<ApplyPatchPreviewRow>) -> ToolDisplayData {
     ToolDisplayData::ApplyPatchPreview(ApplyPatchPreview { rows })
+}
+
+fn exit_plan_display_data(
+    plan: &str,
+    file_path: Option<&str>,
+    awaiting_leader_approval: bool,
+) -> ToolDisplayData {
+    ToolDisplayData::ExitPlanModeResult(ExitPlanModeResult {
+        plan: plan.to_string(),
+        file_path: file_path.map(str::to_string),
+        awaiting_leader_approval,
+        is_agent: false,
+        plan_was_edited: false,
+    })
 }
 
 fn render_apply_patch(rows: Vec<ApplyPatchPreviewRow>, is_error: bool) -> Vec<Line<'static>> {
@@ -309,6 +324,92 @@ fn structured_default_pretty_prints_json() {
     assert!(
         out.lines().count() > 1,
         "pretty JSON must be multi-line: {out}"
+    );
+}
+
+#[test]
+fn exit_plan_mode_empty_plan_renders_inline_exit_notice_from_display_data() {
+    let display = exit_plan_display_data("", None, false);
+    let out = text_of(&render_ex_width_with_display(
+        "ExitPlanMode",
+        None,
+        r#"{"plan":""}"#,
+        Some(&display),
+        /*is_error*/ false,
+        /*expanded*/ false,
+        /*width*/ 96,
+    ));
+
+    assert!(out.contains("Exited plan mode"), "{out}");
+    assert!(!out.contains("\"plan\""), "must not dump raw JSON: {out}");
+}
+
+#[test]
+fn exit_plan_mode_with_plan_renders_approval_and_plan_from_display_data() {
+    let display = exit_plan_display_data(
+        "# Plan\n- Edit the renderer\n- Add tests",
+        Some("/tmp/session-plan.md"),
+        false,
+    );
+    let out = text_of(&render_ex_width_with_display(
+        "ExitPlanMode",
+        None,
+        "model-facing instructions are ignored",
+        Some(&display),
+        /*is_error*/ false,
+        /*expanded*/ false,
+        /*width*/ 96,
+    ));
+
+    assert!(out.contains("User approved the plan"), "{out}");
+    assert!(out.contains("Plan saved to: /tmp/session-plan.md"), "{out}");
+    assert!(out.contains("# Plan"), "{out}");
+    assert!(out.contains("- Add tests"), "{out}");
+    assert!(
+        !out.contains("model-facing instructions"),
+        "must not show model-only tool result prose: {out}"
+    );
+}
+
+#[test]
+fn exit_plan_mode_awaiting_leader_approval_renders_pending_notice() {
+    let display =
+        exit_plan_display_data("# Plan\n- Wait for lead", Some("/tmp/agent-plan.md"), true);
+    let out = text_of(&render_ex_width_with_display(
+        "ExitPlanMode",
+        None,
+        "model-facing instructions are ignored",
+        Some(&display),
+        /*is_error*/ false,
+        /*expanded*/ false,
+        /*width*/ 96,
+    ));
+
+    assert!(
+        out.contains("Plan submitted for team lead approval"),
+        "{out}"
+    );
+    assert!(out.contains("Plan saved to: /tmp/agent-plan.md"), "{out}");
+    assert!(out.contains("- Wait for lead"), "{out}");
+    assert!(
+        !out.contains("model-facing instructions"),
+        "must not show model-only tool result prose: {out}"
+    );
+}
+
+#[test]
+fn exit_plan_mode_without_display_data_falls_back_to_output() {
+    let out = text_of(&render(
+        "ExitPlanMode",
+        None,
+        "legacy output fallback",
+        false,
+    ));
+
+    assert!(out.contains("legacy output fallback"), "{out}");
+    assert!(
+        !out.contains("Exited plan mode"),
+        "missing display data must not fabricate an empty-plan exit: {out}"
     );
 }
 

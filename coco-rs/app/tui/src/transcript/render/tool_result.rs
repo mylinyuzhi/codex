@@ -42,11 +42,13 @@ use super::output_result_line;
 use super::result_line;
 use super::single_line_capped;
 use super::transcript_safe_line;
+use crate::i18n::t;
 use crate::presentation::transcript::TRANSCRIPT_EXPANDED_CELL_LINE_CAP;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 use coco_types::ApplyPatchPreview;
 use coco_types::ApplyPatchPreviewRow;
+use coco_types::ExitPlanModeResult;
 use coco_types::ToolDisplayData;
 use coco_types::ToolName;
 
@@ -186,13 +188,12 @@ fn render_known(
         // ── AskUserQuestion → styled answered-questions cell ───────────
         AskUserQuestion => render_ask_user_question(cx, display_data, output, lines),
         // ── Everything else → structured default (pretty JSON / text) ──
+        ExitPlanMode => render_exit_plan_mode(cx, display_data, output, lines),
         Agent | Skill | SendMessage | TeamCreate | TeamDelete | TaskCreate | TaskGet | TaskList
-        | TaskUpdate | TaskStop | TaskOutput | EnterPlanMode | ExitPlanMode
-        | VerifyPlanExecution | EnterWorktree | ExitWorktree | ToolSearch | Config
-        | SendUserMessage | Lsp | McpAuth | ListMcpResources | ReadMcpResource | CronCreate
-        | CronDelete | CronList | RemoteTrigger | Sleep | StructuredOutput => {
-            render_structured_default(cx, output, lines)
-        }
+        | TaskUpdate | TaskStop | TaskOutput | EnterPlanMode | VerifyPlanExecution
+        | EnterWorktree | ExitWorktree | ToolSearch | Config | SendUserMessage | Lsp | McpAuth
+        | ListMcpResources | ReadMcpResource | CronCreate | CronDelete | CronList
+        | RemoteTrigger | Sleep | StructuredOutput => render_structured_default(cx, output, lines),
     }
 }
 
@@ -357,6 +358,79 @@ fn render_ask_user_question(
             push_wrapped_prefixed_row(cx, label.to_string(), note, cx.styles.accent(), lines);
         }
     }
+}
+
+fn render_exit_plan_mode(
+    cx: &ToolResultRenderCtx<'_>,
+    display_data: Option<&ToolDisplayData>,
+    output: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let Some(ToolDisplayData::ExitPlanModeResult(result)) = display_data else {
+        render_structured_default(cx, output, lines);
+        return;
+    };
+
+    if result.awaiting_leader_approval {
+        lines.push(output_result_line(
+            "Plan submitted for team lead approval".to_string(),
+            cx.styles.plan(),
+            /*first*/ true,
+        ));
+        if let Some(path) = result.file_path.as_ref().filter(|p| !p.trim().is_empty()) {
+            push_exit_plan_file_path(cx, path, lines);
+        }
+        push_exit_plan_preview(cx, result, lines);
+        return;
+    }
+
+    if result.plan.trim().is_empty() {
+        lines.push(output_result_line(
+            t!("chat.plan_exited").to_string(),
+            cx.styles.plan(),
+            /*first*/ true,
+        ));
+        return;
+    }
+
+    lines.push(output_result_line(
+        t!("chat.plan_approved").to_string(),
+        cx.styles.plan(),
+        /*first*/ true,
+    ));
+    if let Some(path) = result.file_path.as_ref().filter(|p| !p.trim().is_empty()) {
+        push_exit_plan_file_path(cx, path, lines);
+    }
+    push_exit_plan_preview(cx, result, lines);
+}
+
+fn push_exit_plan_file_path(
+    cx: &ToolResultRenderCtx<'_>,
+    path: &str,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let label = t!("chat.plan_file", path = path);
+    push_wrapped_prefixed_row(
+        cx,
+        "    ".to_string(),
+        label.as_ref(),
+        cx.styles.dim(),
+        lines,
+    );
+}
+
+fn push_exit_plan_preview(
+    cx: &ToolResultRenderCtx<'_>,
+    result: &ExitPlanModeResult,
+    lines: &mut Vec<Line<'static>>,
+) {
+    push_text_preview(
+        cx,
+        &result.plan,
+        cx.rows(STRUCTURED_PREVIEW_ROWS),
+        lines,
+        cx.styles.text(),
+    );
 }
 
 fn apply_patch_preview(display_data: Option<&ToolDisplayData>) -> Option<&ApplyPatchPreview> {
