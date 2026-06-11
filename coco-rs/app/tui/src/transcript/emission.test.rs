@@ -5,9 +5,9 @@ use ratatui::text::Line;
 use uuid::Uuid;
 
 use super::*;
-use crate::state::derive::test_helpers;
-use crate::state::transcript_view::RenderedCell;
 use crate::theme::Theme;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::derive::test_helpers;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::HistoryReplayCachePolicy;
 use crate::transcript::render::render_finalized_history_lines;

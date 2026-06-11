@@ -10,10 +10,10 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
-use crate::state::transcript_view::RenderedCell;
 use crate::surface::line_fingerprint::RenderedLineFingerprint;
 use crate::surface::line_fingerprint::fingerprint_lines;
 use crate::surface::stream::PreparedStreamAppend;
+use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::committable_prefix_len;
 use crate::transcript::emission::HistoryEmissionOutcome;
 use crate::transcript::emission::HistoryEmissionPlan;

@@ -20,9 +20,9 @@ use coco_messages::Message;
 use coco_messages::UserContent;
 use uuid::Uuid;
 
-use super::transcript_view::CellKind;
-use super::transcript_view::RenderedCell;
-use super::transcript_view::SystemCellKind;
+use super::cells::CellKind;
+use super::cells::RenderedCell;
+use super::cells::SystemCellKind;
 
 /// Derive zero or more cells from a single engine `Message`.
 ///
@@ -249,8 +249,8 @@ pub(crate) mod test_helpers {
     use coco_types::TokenUsage;
     use uuid::Uuid;
 
-    use super::super::transcript_view::RenderedCell;
     use super::message_to_cells;
+    use crate::transcript::cells::RenderedCell;
 
     /// One-cell `RenderedCell` for a user text turn keyed by `uuid`.
     pub fn user_text_cell(uuid: Uuid, text: &str) -> RenderedCell {
@@ -343,9 +343,9 @@ pub(crate) mod test_helpers {
         text: &str,
         duration_ms: i64,
         reasoning_tokens: i64,
-    ) -> (RenderedCell, super::super::session::ReasoningMetadata) {
+    ) -> (RenderedCell, crate::state::session::ReasoningMetadata) {
         let cell = assistant_thinking_cell(text);
-        let meta = super::super::session::ReasoningMetadata {
+        let meta = crate::state::session::ReasoningMetadata {
             duration_ms: Some(duration_ms),
             reasoning_tokens,
         };
@@ -375,12 +375,7 @@ pub(crate) mod test_helpers {
         );
         message_to_cells(Arc::new(msg))
             .into_iter()
-            .find(|c| {
-                matches!(
-                    c.kind,
-                    super::super::transcript_view::CellKind::ToolUse { .. }
-                )
-            })
+            .find(|c| matches!(c.kind, crate::transcript::cells::CellKind::ToolUse { .. }))
             .expect("tool-use yields a cell")
     }
 
@@ -409,7 +404,7 @@ pub(crate) mod test_helpers {
     // is the only writer — these helpers reuse it so renderer tests
     // see exactly what the live session would.
 
-    use super::super::session::SessionState;
+    use crate::state::session::SessionState;
     use coco_messages::Message;
 
     #[allow(dead_code)]
@@ -477,7 +472,7 @@ pub(crate) mod test_helpers {
         push(state, msg);
         state.insert_reasoning_metadata(
             uuid,
-            super::super::session::ReasoningMetadata {
+            crate::state::session::ReasoningMetadata {
                 duration_ms: Some(duration_ms),
                 reasoning_tokens,
             },

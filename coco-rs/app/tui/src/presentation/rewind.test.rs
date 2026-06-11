@@ -13,7 +13,7 @@ fn message(id: &str, text: &str) -> RewindableMessage {
     let message_id = if id.is_empty() {
         uuid::Uuid::nil()
     } else {
-        crate::state::derive::id_to_uuid(id)
+        crate::transcript::derive::id_to_uuid(id)
     };
     RewindableMessage {
         message_id,

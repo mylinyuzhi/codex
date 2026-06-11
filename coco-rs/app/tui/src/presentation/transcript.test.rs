@@ -8,16 +8,16 @@ use uuid::Uuid;
 
 use crate::i18n::locale_test_guard;
 use crate::presentation::streaming::StreamingTailView;
-use crate::state::derive::test_helpers::{
-    assistant_text_cell, assistant_thinking_cell_with_metadata, context_usage_cell, info_cell,
-    tool_result_cell, tool_use_cell, user_text_cell,
-};
 use crate::state::session::ToolExecution;
 use crate::state::session::ToolStatus;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptState;
 use crate::state::ui::StreamingState;
 use crate::theme::Theme;
+use crate::transcript::derive::test_helpers::{
+    assistant_text_cell, assistant_thinking_cell_with_metadata, context_usage_cell, info_cell,
+    tool_result_cell, tool_use_cell, user_text_cell,
+};
 use crate::widgets::TranscriptStateWidget;
 use coco_tui_ui::style::UiStyles;
 
@@ -389,7 +389,7 @@ fn projection_cells(cells: &[RenderedCell], show_system_reminders: bool) -> Vec<
 
 #[test]
 fn transcript_projection_hides_compact_internals_unless_requested() {
-    let boundary = crate::state::derive::message_to_cells(Arc::new(
+    let boundary = crate::transcript::derive::message_to_cells(Arc::new(
         coco_messages::create_compact_boundary_message(10, 4),
     ));
     let summary = vec![compact_summary_cell("Summary:\nHidden in default chat")];

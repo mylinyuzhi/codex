@@ -45,7 +45,7 @@ async fn clear_screen_nulls_last_agent_markdown() {
     // just cleared.
     let mut state = AppState::new();
     state.session.last_agent_markdown = Some("yesterday's reply".to_string());
-    crate::state::derive::test_helpers::push_assistant_text(
+    crate::transcript::derive::test_helpers::push_assistant_text(
         &mut state.session,
         "yesterday's reply",
     );
@@ -953,7 +953,7 @@ fn toggle_syntax_highlighting_does_not_mutate_when_higher_priority_setting_wins(
         ..DisplaySettings::default()
     };
 
-    super::interaction::toggle_syntax_highlighting(&mut state);
+    crate::modal_pane::settings::toggle_syntax_highlighting(&mut state);
 
     assert_eq!(
         state.ui.display_settings.syntax_highlighting,

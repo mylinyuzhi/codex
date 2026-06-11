@@ -34,17 +34,17 @@ use crate::presentation::transcript::TranscriptSourceCell;
 use crate::presentation::transcript::tool_output_preview;
 use crate::presentation::transcript::transcript_presentation_with_cells;
 use crate::state::AppState;
-use crate::state::derive::extract_tool_call_input;
-use crate::state::derive::tool_result_output;
 use crate::state::session::ToolExecution;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptScrollPosition;
 use crate::state::transcript::TranscriptState;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
-use crate::state::transcript_view::SystemCellKind;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
+use crate::transcript::cells::SystemCellKind;
+use crate::transcript::derive::extract_tool_call_input;
+use crate::transcript::derive::tool_result_output;
 use crate::widgets::chat::tool_result_render::ToolResultRenderCtx;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
@@ -622,7 +622,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             .iter()
             .find(|tool| tool.call_id == call_id);
         let input_preview =
-            crate::state::derive::tool_call_header_preview_model(source, call_id, tool_name);
+            crate::transcript::derive::tool_call_header_preview_model(source, call_id, tool_name);
         let preview_spans = crate::tool_display::render_tool_input_preview_spans(
             &input_preview,
             self.styles,
@@ -1102,8 +1102,11 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
         } => {
             // Same header preview the renderer draws, so the invalidation hash
             // tracks exactly what's painted.
-            let preview =
-                crate::state::derive::tool_call_header_preview(&cell.source, call_id, tool_name);
+            let preview = crate::transcript::derive::tool_call_header_preview(
+                &cell.source,
+                call_id,
+                tool_name,
+            );
             tool_name.len() + call_id.len() + preview.len()
         }
         CellKind::ToolResult { call_id, .. } => {

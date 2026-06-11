@@ -10,13 +10,13 @@ use uuid::Uuid;
 
 use super::*;
 use crate::state::AppState;
-use crate::state::derive::message_to_cells;
-use crate::state::derive::test_helpers;
 use crate::state::ui::StreamingState;
 use crate::surface::modal::HistorySurfaceMode;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::stream::SurfaceStreamDriver;
 use crate::theme::Theme;
+use crate::transcript::derive::message_to_cells;
+use crate::transcript::derive::test_helpers;
 use crate::transcript::emission::HistoryEmissionOutcome;
 use crate::transcript::render::HistoryReplayCachePolicy;
 use coco_tui_ui::display::SyntaxHighlighting;
@@ -980,7 +980,7 @@ fn assistant_reasoning_text_cells(reasoning: &str, text: &str) -> Vec<RenderedCe
             ..Default::default()
         },
     );
-    crate::state::derive::message_to_cells(Arc::new(message))
+    crate::transcript::derive::message_to_cells(Arc::new(message))
 }
 
 fn parallel_tool_use_cells() -> Vec<RenderedCell> {

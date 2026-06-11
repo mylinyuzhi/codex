@@ -19,10 +19,10 @@ use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::format_duration_seconds;
 use crate::presentation::thinking::render_thinking_block;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
 use crate::tool_display::ToolNameTone;
 use crate::tool_display::tool_name_tone;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
 use coco_tui_ui::constants;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
@@ -270,7 +270,7 @@ pub(super) fn try_render(
             Some(())
         }
         CellKind::ToolUse { call_id, tool_name } => {
-            let input_preview = crate::state::derive::tool_call_header_preview_model(
+            let input_preview = crate::transcript::derive::tool_call_header_preview_model(
                 &cell.source,
                 call_id,
                 tool_name,

@@ -10,7 +10,7 @@ use coco_types::ModelRole;
 
 use crate::i18n::locale_test_guard;
 use crate::state::AppState;
-use crate::state::derive::test_helpers;
+use crate::transcript::derive::test_helpers;
 
 #[test]
 fn status_bar_view_renders_model_tokens_context_and_messages() {

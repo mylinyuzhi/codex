@@ -1,9 +1,9 @@
 use super::toggle;
 use crate::state::AppState;
 use crate::state::ModalState;
-use crate::state::derive::test_helpers;
 use crate::state::transcript::TranscriptCellId;
 use crate::state::transcript::TranscriptScrollPosition;
+use crate::transcript::derive::test_helpers;
 
 #[test]
 fn toggle_opens_transcript_when_no_surface_active() {

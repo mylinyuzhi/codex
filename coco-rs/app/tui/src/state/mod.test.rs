@@ -7,10 +7,10 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
-use crate::state::derive::test_helpers;
 use crate::state::session::TokenUsage;
-use crate::state::transcript_view::CellKind;
 use crate::state::ui::Toast;
+use crate::transcript::cells::CellKind;
+use crate::transcript::derive::test_helpers;
 
 // ── Permission-mode cycling ──
 

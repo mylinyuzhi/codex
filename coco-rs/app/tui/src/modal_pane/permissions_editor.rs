@@ -37,14 +37,42 @@ use crate::state::permissions_editor::source_destination;
 
 use coco_types::PermissionRule;
 use coco_types::PermissionUpdate;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+
+/// Keys for the `/permissions` rule editor. Maps to input-style commands
+/// consumed directly by [`intercept`].
+pub(crate) fn map_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Left => Some(TuiCommand::CursorLeft),
+        KeyCode::Right => Some(TuiCommand::CursorRight),
+        KeyCode::Up => Some(TuiCommand::CursorUp),
+        KeyCode::Down => Some(TuiCommand::CursorDown),
+        KeyCode::Tab => Some(TuiCommand::CursorRight),
+        KeyCode::BackTab => Some(TuiCommand::CursorLeft),
+        KeyCode::Enter => Some(TuiCommand::SubmitInput),
+        KeyCode::Esc => Some(TuiCommand::Cancel),
+        KeyCode::Backspace => Some(TuiCommand::DeleteBackward),
+        KeyCode::Delete => Some(TuiCommand::DeleteForward),
+        KeyCode::Home => Some(TuiCommand::CursorHome),
+        KeyCode::End => Some(TuiCommand::CursorEnd),
+        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
+        KeyCode::Char('a') if ctrl => Some(TuiCommand::CursorHome),
+        KeyCode::Char('e') if ctrl => Some(TuiCommand::CursorEnd),
+        KeyCode::Char(c) => Some(TuiCommand::InsertChar(c)),
+        _ => None,
+    }
+}
 
 /// Outcome of [`intercept`].
-pub(super) enum Handled {
+pub(crate) enum Handled {
     Yes(bool),
     No,
 }
 
-pub(super) async fn intercept(
+pub(crate) async fn intercept(
     state: &mut AppState,
     cmd: &TuiCommand,
     command_tx: &mpsc::Sender<UserCommand>,

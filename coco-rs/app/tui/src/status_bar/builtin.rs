@@ -6,10 +6,10 @@ use coco_types::PermissionMode;
 use crate::i18n::t;
 use crate::presentation::context_usage::render_context_usage;
 use crate::state::AppState;
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
 use crate::status_bar::StatusSpan;
 use crate::status_bar::StatusTone;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
 
 pub(crate) fn built_in_status_spans(state: &AppState) -> Vec<StatusSpan> {
     let mut spans = Vec::new();

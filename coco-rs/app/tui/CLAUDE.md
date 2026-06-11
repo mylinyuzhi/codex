@@ -81,13 +81,15 @@ mode, or a full transcript `Vec<Line>`/`String` path for overlay rendering.
 ## Transcript Pipeline (tui-v2)
 
 `src/transcript/` owns the v2 streaming→scrollback pipeline
-(`docs/coco-rs/ui/tui-v2-design.md` §6.4): `cells` (engine-message grouping +
-tool-commit boundary), `render` (committed history renderer + replay cache),
-`stream` (stable/tail splitter, render key, watermark), `emission`
-(exactly-once tracker + the anchored finalize). The finalize anchors streamed
-scrollback rows at the SOURCE level (`text.starts_with(source_prefix)` +
-render-key gate) and appends only the committed render's suffix — there is no
-rasterized per-row reconciliation; soundness is pinned by
+(`docs/coco-rs/ui/tui-v2-design.md` §6.4): crate-internal `cells`
+(`RenderedCell` / `CellKind` / `SystemCellKind`, engine-message grouping,
+and the tool-commit boundary), `derive` (`Message` → cells plus tool-cell accessors), `render`
+(committed history renderer + replay cache), `stream` (stable/tail splitter,
+render key, watermark), `emission` (exactly-once tracker + the anchored
+finalize). The finalize anchors streamed scrollback rows at the SOURCE level
+(`text.starts_with(source_prefix)` + render-key gate) and appends only the
+committed render's suffix — there is no rasterized per-row reconciliation;
+soundness is pinned by
 `transcript::stream::tests::test_stable_lines_are_row_prefix_of_full_committed_render`.
 `src/surface/` keeps the per-frame drivers and terminal I/O. Do not reintroduce
 per-row fingerprints on the stream path or a second streaming-only renderer.
@@ -119,10 +121,24 @@ The unified transcript refactor
   history_replace_and_emit}`. Direct `history.clear()` / `history.messages = ...`
   in production code is a bug — observers desync.
 - **I-2 Derived view** — `TranscriptView.cells` is a pure derivation
-  from `&Message` via `derive::message_to_cells`. Renderers read
+  from `&Message` via `transcript::derive::message_to_cells`. Renderers read
   cells; never mutate cells in place.
 - **I-3 UI-only state stays UI-only** — `ui.streaming`,
   `session.tool_executions`, modals, toasts. Not part of transcript.
+
+## Modal Pane Architecture
+
+Full-screen modal behavior lives in `src/modal_pane/`; bottom-pane prompt
+behavior lives in `src/bottom_pane/`. `update/interaction.rs` is only the
+precedence shell: prompt-first for approve/deny/filter/nav, modal-first for
+confirm, with autocomplete still handled before prompt/modal routing.
+
+Modal-specific key maps live with the modal behavior (`model_picker`,
+`team_roster`, `settings`, `permissions_editor`). Keep the `/permissions`
+editor as its own modal-pane module: it has list, add-form, and delete-confirm
+modes and must not be flattened into generic picker behavior. The skills,
+agents, and plugin dialog interceptors remain in `update/` until their
+surfaces are migrated.
 
 ### Reasoning metadata (side-cache pattern, no I-2 exception)
 

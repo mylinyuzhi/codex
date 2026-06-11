@@ -231,7 +231,7 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
             KbContext::Global,
         ],
         ModelPicker => vec![KbContext::ModelPicker, KbContext::Select, KbContext::Global],
-        // The roster's keys come from the legacy `map_team_roster_key`; the
+        // The roster's keys come from `modal_pane::team_roster::map_key`; the
         // Select+Global stack just keeps generic nav/cancel resolvable.
         TeamRoster => vec![KbContext::Select, KbContext::Global],
         Scrollable => vec![KbContext::Help, KbContext::Transcript, KbContext::Global],
@@ -247,8 +247,8 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
             KbContext::Global,
         ],
         Settings => vec![KbContext::Settings, KbContext::Select, KbContext::Global],
-        // Global-only: the editor's nav + text input come entirely from the
-        // legacy `map_permissions_editor_key` cascade. Deliberately NO
+        // Global-only: the editor's nav + text input come entirely from
+        // `modal_pane::permissions_editor::map_key`. Deliberately NO
         // Select/Confirmation — those would resolve arrows to `Surface*`
         // (and chars to filter / Y-N-A) before the editor's `intercept`
         // sees them as the `Cursor*` / `InsertChar` it expects.

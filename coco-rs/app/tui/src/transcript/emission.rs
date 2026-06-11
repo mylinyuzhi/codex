@@ -15,8 +15,8 @@
 use ratatui::text::Line;
 use uuid::Uuid;
 
-use crate::state::transcript_view::CellKind;
-use crate::state::transcript_view::RenderedCell;
+use crate::transcript::cells::CellKind;
+use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::engine_message_starts;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::render_finalized_history_lines;

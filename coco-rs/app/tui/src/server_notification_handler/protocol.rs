@@ -1338,7 +1338,7 @@ fn apply_auto_restore(
     };
     let target_message_id = cell.message_uuid.to_string();
     let input_text = match &cell.kind {
-        crate::state::transcript_view::CellKind::UserText { text } => text.clone(),
+        crate::transcript::cells::CellKind::UserText { text } => text.clone(),
         _ => String::new(),
     };
     let perm = match cell.source.as_ref() {
