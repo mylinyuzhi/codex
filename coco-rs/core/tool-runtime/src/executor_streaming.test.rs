@@ -92,8 +92,9 @@ fn prepared(
     PreparedToolCall {
         tool_use_id: name.into(),
         tool_id: ToolId::Custom(name.into()),
+        parsed_input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
+            .expect("test input must validate"),
         tool,
-        parsed_input: json!({}),
         model_index,
     }
 }
@@ -105,7 +106,10 @@ async fn stub_run_one(
     _runtime: crate::call_plan::RunOneRuntime,
 ) -> UnstampedToolCallOutcome {
     let ctx = crate::context::ToolUseContext::test_default();
-    let _ = prepared.tool.execute(prepared.parsed_input, &ctx).await;
+    let _ = prepared
+        .tool
+        .execute(prepared.parsed_input.into_value(), &ctx)
+        .await;
     UnstampedToolCallOutcome {
         tool_use_id: prepared.tool_use_id,
         tool_id: prepared.tool_id,
@@ -444,16 +448,18 @@ async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
 
     // Bash plan — concurrency-safe (read-only), tool_id = Bash so the shell
     // predicate matches; runs concurrently in the inflight JoinSet.
+    let bash_tool: Arc<dyn crate::traits::DynTool> = Arc::new(ConfigurableTool {
+        name: "bash".into(),
+        safe: true,
+        started_counter: Arc::new(AtomicI32::new(0)),
+        sleep_ms: 0,
+    });
     let bash = PreparedToolCall {
         tool_use_id: "bash-call".into(),
         tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
-        tool: Arc::new(ConfigurableTool {
-            name: "bash".into(),
-            safe: true,
-            started_counter: Arc::new(AtomicI32::new(0)),
-            sleep_ms: 0,
-        }),
-        parsed_input: json!({}),
+        parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
+            .expect("test input must validate"),
+        tool: bash_tool,
         model_index: 0,
     };
     handle.feed_plan(ToolCallPlan::Runnable(bash));

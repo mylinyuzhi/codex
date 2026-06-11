@@ -1080,9 +1080,29 @@ impl<T: Tool> DynTool for T {
     async fn check_permissions(&self, input: &Value, ctx: &ToolUseContext) -> ToolCheckResult {
         match serde_json::from_value::<T::Input>(input.clone()) {
             Ok(typed) => Tool::check_permissions(self, &typed, ctx).await,
-            // Parse failure ⇒ defer to rule pipeline; the executor will
-            // surface the parse error elsewhere (validate_input branch).
-            Err(_) => ToolCheckResult::Passthrough,
+            // Unreachable in the production pipeline: every caller holds a
+            // `ValidatedInput`, so the typed deserialization must succeed.
+            // Reaching this branch means an unvalidated input slipped past
+            // the seam — fail CLOSED (Ask), never silently `Passthrough`:
+            // a tool's path-based carve-outs (e.g. plan-file auto-allow) and
+            // deny opinions are security-relevant and were skipped.
+            Err(e) => {
+                tracing::error!(
+                    tool = self.name(),
+                    error = %e,
+                    "check_permissions: input failed typed deserialization after \
+                     validation — failing closed to Ask"
+                );
+                ToolCheckResult::Ask {
+                    message: format!(
+                        "{} input could not be interpreted for permission checks; \
+                         manual review required.",
+                        self.name()
+                    ),
+                    suggestions: vec![],
+                    choices: None,
+                }
+            }
         }
     }
     fn prepare_permission_matcher(&self, input: &Value) -> String {

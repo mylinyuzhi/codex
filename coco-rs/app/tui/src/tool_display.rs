@@ -240,8 +240,30 @@ pub(crate) fn single_line_tool_input(tool_name: &str, input: &Value) -> String {
         ToolName::Agent => scalar_value(input, "description")
             .or_else(|| scalar_value(input, "prompt"))
             .unwrap_or_default(),
+        ToolName::ApplyPatch => input
+            .get("patch")
+            .and_then(Value::as_str)
+            .map(|patch| apply_patch_target_paths(patch).join(", "))
+            .filter(|paths| !paths.is_empty())
+            .unwrap_or_default(),
         _ => object_summary(input),
     }
+}
+
+/// Extract target file paths from an apply_patch envelope's
+/// `*** Add File:` / `*** Update File:` / `*** Delete File:` headers.
+pub(crate) fn apply_patch_target_paths(patch: &str) -> Vec<&str> {
+    const HEADERS: &[&str] = &["*** Add File: ", "*** Update File: ", "*** Delete File: "];
+    patch
+        .lines()
+        .filter_map(|line| {
+            HEADERS
+                .iter()
+                .find_map(|header| line.strip_prefix(header))
+                .map(str::trim)
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 /// Read header preview: the path, plus a `· lines N-M` / `· from line N`
@@ -276,6 +298,13 @@ fn multi_line_tool_input(tool_name: &str, input: &Value, max_chars: usize) -> St
         && let Some(command) = input.get("command").and_then(Value::as_str)
     {
         return single_line_capped(command, max_chars);
+    }
+    // apply_patch: show the patch envelope itself (diff-like), not the
+    // `{patch: …}` JSON wrapper it travels in.
+    if matches!(tool, ToolName::ApplyPatch)
+        && let Some(patch) = input.get("patch").and_then(Value::as_str)
+    {
+        return capped_lines(patch.lines().map(str::to_string).collect(), max_chars);
     }
 
     let keys: &[&str] = match tool {

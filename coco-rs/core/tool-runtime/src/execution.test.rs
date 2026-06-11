@@ -109,10 +109,16 @@ fn test_strip_handles_non_object_bash_input() {
     assert_eq!(stripped, input);
 }
 
-struct ValidateRawExecuteStrippedBashTool;
+/// Pins the executor's strip-before-validate contract: internal `_`-prefixed
+/// Bash fields are stripped BEFORE `ValidatedInput` is constructed, so both
+/// `validate_input` and `execute` observe the same (stripped) value. This
+/// deliberately diverges from TS `toolExecution.ts:756-773` (which stripped
+/// after validation): the sealed `ValidatedInput` seam requires the validated
+/// value to be exactly the executed value.
+struct StrippedEverywhereBashTool;
 
 #[async_trait::async_trait]
-impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
+impl crate::traits::Tool for StrippedEverywhereBashTool {
     fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
         crate::schema::test_runtime_schema()
     } // Migration scaffold: assoc types pinned to `Value`.
@@ -141,9 +147,9 @@ impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
         _ctx: &ToolUseContext,
     ) -> crate::validation::ValidationResult {
         if input.get("_simulatedSedEdit").is_some() {
-            crate::validation::ValidationResult::Valid
+            crate::validation::ValidationResult::invalid("validation saw unstripped input")
         } else {
-            crate::validation::ValidationResult::invalid("validation expected raw input")
+            crate::validation::ValidationResult::Valid
         }
     }
 
@@ -171,9 +177,9 @@ impl crate::traits::Tool for ValidateRawExecuteStrippedBashTool {
 }
 
 #[tokio::test]
-async fn test_execute_tool_call_validates_raw_input_before_stripping() {
+async fn test_execute_tool_call_strips_internal_fields_before_validation() {
     let tools = ToolRegistry::new();
-    tools.register(std::sync::Arc::new(ValidateRawExecuteStrippedBashTool));
+    tools.register(std::sync::Arc::new(StrippedEverywhereBashTool));
     let ctx = ToolUseContext::test_default();
 
     let result = execute_tool_call(

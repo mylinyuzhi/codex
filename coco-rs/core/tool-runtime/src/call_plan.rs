@@ -75,10 +75,10 @@ pub struct PreparedToolCall {
     /// The resolved tool. The runner already holds an `Arc`, so this
     /// is the single cheap clone across the scheduler boundary.
     pub tool: Arc<dyn DynTool>,
-    /// Already-parsed, schema-validated model input. Hook rewrites
-    /// during `run_one` may replace this with a validated
-    /// `updated_input` before permission / execution.
-    pub parsed_input: serde_json::Value,
+    /// Coerced, schema-validated model input ([`crate::ValidatedInput`] by
+    /// construction). Hook rewrites during `run_one` may replace this with a
+    /// re-validated `updated_input` before permission / execution.
+    pub parsed_input: crate::ValidatedInput,
     /// Tool-use position within the assistant message. Used to
     /// address per-call hook/permission state and to order
     /// `app_state_patch` application within a concurrent-safe batch.

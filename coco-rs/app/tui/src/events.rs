@@ -166,6 +166,9 @@ pub enum TuiCommand {
     Deny,
     /// Approve all / always allow (A in permission dialog).
     ApproveAll,
+    /// Digit shortcut (1-based) committing the numbered row of a classic
+    /// permission dialog directly.
+    PermissionDigit(usize),
     /// Classifier auto-approved a pending permission.
     /// TS: interactiveHandler.ts onAllow from classifier path.
     ClassifierAutoApprove {

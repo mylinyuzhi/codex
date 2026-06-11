@@ -576,6 +576,10 @@ pub async fn handle_command(
             crate::bottom_pane::permission::approve_all(state, command_tx).await;
             true
         }
+        TuiCommand::PermissionDigit(digit) => {
+            crate::bottom_pane::route_permission_digit(state, digit, command_tx).await;
+            true
+        }
         TuiCommand::ClassifierAutoApprove {
             request_id,
             matched_rule: _,

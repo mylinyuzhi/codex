@@ -34,6 +34,11 @@ pub(crate) fn confirmation_map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('y' | 'Y') => Some(TuiCommand::Approve),
         KeyCode::Char('n' | 'N') => Some(TuiCommand::Deny),
         KeyCode::Char('a' | 'A') => Some(TuiCommand::ApproveAll),
+        // Digit shortcuts commit the numbered classic-permission row
+        // directly; non-permission confirmation prompts ignore them.
+        KeyCode::Char(c @ '1'..='9') => Some(TuiCommand::PermissionDigit(
+            c.to_digit(10).map(|d| d as usize).unwrap_or(0),
+        )),
         // Tab cycles multi-option confirmations (PlanExit approval
         // target: Restore / AcceptEdits / Bypass). For simple Y/N
         // dialogs the handler is a no-op.
@@ -182,6 +187,32 @@ pub(crate) async fn route_confirm(
             state.ui.restore_prompt(prompt);
         }
     }
+}
+
+/// Route a digit shortcut to the focused prompt. Only classic permission
+/// prompts treat digits as decisions (committing the numbered row); every
+/// other prompt consumes the keystroke and stays open.
+pub(crate) async fn route_permission_digit(
+    state: &mut AppState,
+    digit: usize,
+    command_tx: &mpsc::Sender<UserCommand>,
+) -> bool {
+    if state.ui.modal.is_some() {
+        return false;
+    }
+    let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
+        return false;
+    };
+    let resolved = match prompt {
+        PanePromptState::Permission(p) => {
+            permission::commit_permission_digit(p, digit, command_tx).await
+        }
+        _ => false,
+    };
+    if resolved {
+        state.ui.dismiss_prompt();
+    }
+    true
 }
 
 /// Route selection movement to the focused prompt. Returns `true` when a

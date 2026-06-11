@@ -25,8 +25,11 @@ use std::sync::Arc;
 
 use coco_llm_types::ToolCallPart;
 use coco_llm_types::ToolInputInvalidReason;
-use coco_tool_runtime::SchemaIssue;
+use coco_tool_runtime::ValidatedInput;
 use coco_tool_runtime::traits::DynTool;
+// Canonical formatter lives next to `SchemaIssue` in `coco-tool-runtime`;
+// re-exported here for the preparer + tests.
+pub use coco_tool_runtime::format_schema_error;
 use serde_json::Value;
 
 use crate::tool_input_parse::parse_tool_arguments_or_empty;
@@ -54,14 +57,24 @@ pub fn normalize_value_string(input: &mut Value) {
     }
 }
 
-/// schema validation entry point: classifies + sets `invalid` / `invalid_reason`
-/// on `tc` when the call cannot be executed as emitted.
+/// schema validation entry point. Returns the coerced, schema-validated
+/// input on success; on failure sets `invalid` / `invalid_reason` on `tc`
+/// and returns `None`.
 ///
-/// Skipped when the call is already invalid from wire parsing — the
-/// earlier provider-side classification stands.
-pub fn validate_tool_call(tc: &mut ToolCallPart, tool: Option<&Arc<dyn DynTool>>) {
+/// `tc.input` itself is never mutated: the persisted assistant message
+/// keeps the wire shape (a freeform tool call's raw string round-trips
+/// verbatim to the provider), while everything downstream — permission
+/// evaluation, hooks' `updated_input` re-validation, execution — consumes
+/// the returned [`ValidatedInput`].
+///
+/// Returns `None` without classifying when the call is already invalid
+/// from wire parsing — the earlier provider-side classification stands.
+pub fn validate_tool_call(
+    tc: &mut ToolCallPart,
+    tool: Option<&Arc<dyn DynTool>>,
+) -> Option<ValidatedInput> {
     if tc.invalid {
-        return;
+        return None;
     }
 
     // 1. NoSuchTool — short-circuit before touching the schema.
@@ -70,16 +83,16 @@ pub fn validate_tool_call(tc: &mut ToolCallPart, tool: Option<&Arc<dyn DynTool>>
         tc.invalid_reason = Some(ToolInputInvalidReason::NoSuchTool {
             tool_name: tc.tool_name.clone(),
         });
-        return;
+        return None;
     };
 
     // 2. Freeform/custom-tool coercion vs. JSON string-recovery — mutually
     //    exclusive, coercion first.
     //
     //    A freeform tool (apply_patch) is called with a bare string (the raw
-    //    `*** Begin Patch …` envelope); the tool wraps it into the typed JSON
-    //    its schema expects (`{patch: raw}`) so schema validation +
-    //    `Self::Input` deserialization succeed.
+    //    `*** Begin Patch …` envelope); `ValidatedInput::validate` wraps it
+    //    into the typed JSON its schema expects (`{patch: raw}`) so schema
+    //    validation + `Self::Input` deserialization succeed.
     //
     //    codex-rs routes such custom tool calls to a dedicated raw-string
     //    `ToolPayload::Custom { input }` that is NEVER parsed as JSON — only
@@ -88,118 +101,29 @@ pub fn validate_tool_call(tc: &mut ToolCallPart, tool: Option<&Arc<dyn DynTool>>
     //    which would try to JSON-parse the patch envelope and could mangle a
     //    body that happens to look like JSON. Only non-coercing (function)
     //    tools get string-recovery, where nested stringified-JSON is real.
-    //
-    //    This mutates the validation clone only — the persisted assistant
-    //    message keeps the raw string for the wire round-trip
-    //    (`tool_runner.rs` validates a `tool_call.clone()`).
-    let coerced = match &tc.input {
-        Value::String(raw) => tool.coerce_raw_string_input(raw),
-        _ => None,
+    let candidate = match &tc.input {
+        Value::String(raw) if tool.coerce_raw_string_input(raw).is_none() => {
+            let mut recovered = tc.input.clone();
+            normalize_value_string(&mut recovered);
+            recovered
+        }
+        other => other.clone(),
     };
-    match coerced {
-        Some(coerced) => tc.input = coerced,
-        None => normalize_value_string(&mut tc.input),
-    }
 
-    // 3. Schema validation — synchronous and lock-free; the validator is
-    //    owned by the schema (v4.2). A schema-compile failure is impossible
-    //    here: a tool is only registered if its schema compiled at
-    //    construction, so the only outcomes are clean or classified issues.
-    if let Err(issues) = tool.runtime_validation_schema().validate(&tc.input) {
-        let message = format_schema_error(&tc.tool_name, &issues);
-        tc.invalid = true;
-        tc.invalid_reason = Some(ToolInputInvalidReason::SchemaViolation { message });
-    }
-}
-
-/// Format a slice of [`SchemaIssue`]s into the TS-parity error body.
-///
-/// Mirrors `formatZodValidationError` (`utils/toolErrors.ts:66-130`):
-/// the body is `"{tool} failed due to the following {issue|issues}:\n{lines}"`,
-/// each line maps onto one of three patterns:
-///
-/// - `MissingRequired` → `"The required parameter \`{path}\` is missing"`
-/// - `UnexpectedField` → `"An unexpected parameter \`{key}\` was provided"`
-/// - `TypeMismatch` → `"The parameter \`{path}\` type is expected as \`{expected}\` but provided as \`{received}\`"`
-/// - `Other` → falls through to the raw `jsonschema` message,
-///   prefixed with the path when present.
-///
-/// Plural / singular selection follows the TS code: ≥2 lines → `"issues"`,
-/// otherwise `"issue"`.
-pub fn format_schema_error(tool_name: &str, issues: &[SchemaIssue]) -> String {
-    if issues.is_empty() {
-        return format!("{tool_name} failed schema validation");
-    }
-
-    let mut lines = Vec::with_capacity(issues.len());
-    for issue in issues {
-        match issue {
-            SchemaIssue::MissingRequired { path, field } => {
-                let full_path = join_path(path, field);
-                lines.push(format!("The required parameter `{full_path}` is missing"));
-            }
-            SchemaIssue::UnexpectedField { field, .. } => {
-                lines.push(format!("An unexpected parameter `{field}` was provided"));
-            }
-            SchemaIssue::TypeMismatch {
-                path,
-                expected,
-                received,
-            } => {
-                let p = display_path(path);
-                lines.push(format!(
-                    "The parameter `{p}` type is expected as `{expected}` but provided as `{received}`"
-                ));
-            }
-            SchemaIssue::Other { path, message } => {
-                if path.is_empty() {
-                    lines.push(message.clone());
-                } else {
-                    lines.push(format!("`{}`: {message}", display_path(path)));
-                }
-            }
+    // 3. Coercion + schema validation, fused in the [`ValidatedInput`]
+    //    constructor — synchronous and lock-free; the validator is owned by
+    //    the schema (v4.2). A schema-compile failure is impossible here: a
+    //    tool is only registered if its schema compiled at construction, so
+    //    the only outcomes are clean or classified issues.
+    match ValidatedInput::validate(tool.as_ref(), candidate) {
+        Ok(validated) => Some(validated),
+        Err(issues) => {
+            let message = format_schema_error(&tc.tool_name, &issues);
+            tc.invalid = true;
+            tc.invalid_reason = Some(ToolInputInvalidReason::SchemaViolation { message });
+            None
         }
     }
-
-    let word = if lines.len() > 1 { "issues" } else { "issue" };
-    format!(
-        "{tool_name} failed due to the following {word}:\n{}",
-        lines.join("\n")
-    )
-}
-
-/// Stitch a parent path + field name into a single user-readable
-/// path. `jsonschema` returns paths as JSON Pointers (`/foo/0/bar`);
-/// we convert to dotted+bracket form (`foo[0].bar`) to match the TS
-/// `formatValidationPath` output.
-fn join_path(parent: &str, field: &str) -> String {
-    let parent = display_path(parent);
-    if parent.is_empty() {
-        field.to_string()
-    } else {
-        format!("{parent}.{field}")
-    }
-}
-
-/// Convert a `/foo/0/bar`-style JSON Pointer into `foo[0].bar`.
-fn display_path(pointer: &str) -> String {
-    if pointer.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    for segment in pointer.split('/').skip(1) {
-        if segment.parse::<usize>().is_ok() {
-            out.push('[');
-            out.push_str(segment);
-            out.push(']');
-        } else {
-            if !out.is_empty() {
-                out.push('.');
-            }
-            out.push_str(segment);
-        }
-    }
-    out
 }
 
 #[cfg(test)]

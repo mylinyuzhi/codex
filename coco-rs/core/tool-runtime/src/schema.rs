@@ -368,6 +368,96 @@ fn json_type_name(value: &Value) -> &'static str {
     }
 }
 
+/// Format a slice of [`SchemaIssue`]s into the TS-parity error body.
+///
+/// Mirrors `formatZodValidationError` (`utils/toolErrors.ts:66-130`):
+/// the body is `"{tool} failed due to the following {issue|issues}:\n{lines}"`,
+/// each line maps onto one of three patterns:
+///
+/// - `MissingRequired` → `"The required parameter \`{path}\` is missing"`
+/// - `UnexpectedField` → `"An unexpected parameter \`{key}\` was provided"`
+/// - `TypeMismatch` → `"The parameter \`{path}\` type is expected as \`{expected}\` but provided as \`{received}\`"`
+/// - `Other` → falls through to the raw `jsonschema` message,
+///   prefixed with the path when present.
+///
+/// Plural / singular selection follows the TS code: ≥2 lines → `"issues"`,
+/// otherwise `"issue"`.
+pub fn format_schema_error(tool_name: &str, issues: &[SchemaIssue]) -> String {
+    if issues.is_empty() {
+        return format!("{tool_name} failed schema validation");
+    }
+
+    let mut lines = Vec::with_capacity(issues.len());
+    for issue in issues {
+        match issue {
+            SchemaIssue::MissingRequired { path, field } => {
+                let full_path = join_path(path, field);
+                lines.push(format!("The required parameter `{full_path}` is missing"));
+            }
+            SchemaIssue::UnexpectedField { field, .. } => {
+                lines.push(format!("An unexpected parameter `{field}` was provided"));
+            }
+            SchemaIssue::TypeMismatch {
+                path,
+                expected,
+                received,
+            } => {
+                let p = display_path(path);
+                lines.push(format!(
+                    "The parameter `{p}` type is expected as `{expected}` but provided as `{received}`"
+                ));
+            }
+            SchemaIssue::Other { path, message } => {
+                if path.is_empty() {
+                    lines.push(message.clone());
+                } else {
+                    lines.push(format!("`{}`: {message}", display_path(path)));
+                }
+            }
+        }
+    }
+
+    let word = if lines.len() > 1 { "issues" } else { "issue" };
+    format!(
+        "{tool_name} failed due to the following {word}:\n{}",
+        lines.join("\n")
+    )
+}
+
+/// Stitch a parent path + field name into a single user-readable
+/// path. `jsonschema` returns paths as JSON Pointers (`/foo/0/bar`);
+/// we convert to dotted+bracket form (`foo[0].bar`) to match the TS
+/// `formatValidationPath` output.
+fn join_path(parent: &str, field: &str) -> String {
+    let parent = display_path(parent);
+    if parent.is_empty() {
+        field.to_string()
+    } else {
+        format!("{parent}.{field}")
+    }
+}
+
+/// Convert a `/foo/0/bar`-style JSON Pointer into `foo[0].bar`.
+fn display_path(pointer: &str) -> String {
+    if pointer.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for segment in pointer.split('/').skip(1) {
+        if segment.parse::<usize>().is_ok() {
+            out.push('[');
+            out.push_str(segment);
+            out.push(']');
+        } else {
+            if !out.is_empty() {
+                out.push('.');
+            }
+            out.push_str(segment);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 #[path = "schema.test.rs"]
 mod tests;

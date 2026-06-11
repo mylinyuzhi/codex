@@ -114,14 +114,6 @@ fn format_schema_error_empty_falls_back() {
     assert_eq!(out, "Tool failed schema validation");
 }
 
-#[test]
-fn display_path_translates_json_pointer() {
-    assert_eq!(display_path(""), "");
-    assert_eq!(display_path("/foo"), "foo");
-    assert_eq!(display_path("/foo/bar"), "foo.bar");
-    assert_eq!(display_path("/edits/0/old_string"), "edits[0].old_string");
-}
-
 // ---------------------------------------------------------------------------
 // Multi-provider, multi-tool-call integration matrix.
 //
@@ -244,17 +236,17 @@ async fn run_pipeline(
     raw_arguments: &str,
     tool_name: &str,
     tool: Option<&StdArc<dyn DynTool>>,
-) -> ToolCallPart {
+) -> (ToolCallPart, Option<ValidatedInput>) {
     let input = parse_tool_arguments_or_empty(raw_arguments, tool_name);
     let mut tc = mk_tc(tool_name, input);
-    validate_tool_call(&mut tc, tool);
-    tc
+    let validated = validate_tool_call(&mut tc, tool);
+    (tc, validated)
 }
 
 #[tokio::test]
 async fn matrix_openai_clean_arguments_pass_validation() {
     let tool = read_tool();
-    let tc = run_pipeline(r#"{"file_path": "/tmp/x"}"#, "Read", Some(&tool)).await;
+    let (tc, _validated) = run_pipeline(r#"{"file_path": "/tmp/x"}"#, "Read", Some(&tool)).await;
     assert!(!tc.invalid);
     assert!(tc.invalid_reason.is_none());
     assert_eq!(tc.input, json!({"file_path": "/tmp/x"}));
@@ -263,7 +255,7 @@ async fn matrix_openai_clean_arguments_pass_validation() {
 #[tokio::test]
 async fn matrix_openai_trailing_comma_is_repaired() {
     let tool = read_tool();
-    let tc = run_pipeline(
+    let (tc, _validated) = run_pipeline(
         r#"{"file_path": "/tmp/x", "limit": 100,}"#,
         "Read",
         Some(&tool),
@@ -280,7 +272,7 @@ async fn matrix_openai_trailing_comma_is_repaired() {
 #[tokio::test]
 async fn matrix_glm_markdown_fence_is_repaired() {
     let tool = read_tool();
-    let tc = run_pipeline(
+    let (tc, _validated) = run_pipeline(
         "```json\n{\"file_path\": \"/repo/main.rs\"}\n```",
         "Read",
         Some(&tool),
@@ -293,7 +285,7 @@ async fn matrix_glm_markdown_fence_is_repaired() {
 #[tokio::test]
 async fn matrix_deepseek_single_quotes_is_repaired() {
     let tool = read_tool();
-    let tc = run_pipeline(r#"{'file_path': '/tmp/foo'}"#, "Read", Some(&tool)).await;
+    let (tc, _validated) = run_pipeline(r#"{'file_path': '/tmp/foo'}"#, "Read", Some(&tool)).await;
     assert!(!tc.invalid);
     assert_eq!(tc.input, json!({"file_path": "/tmp/foo"}));
 }
@@ -303,7 +295,7 @@ async fn matrix_anthropic_streaming_truncated_recovers_value_but_misses_field() 
     // Recovered Value loses the required field — schema validation
     // surfaces the missing field rather than "JSON broken".
     let tool = bash_tool();
-    let tc = run_pipeline(r#"{"unused_key": "/tmp"#, "Bash", Some(&tool)).await;
+    let (tc, _validated) = run_pipeline(r#"{"unused_key": "/tmp"#, "Bash", Some(&tool)).await;
     assert!(tc.invalid);
     let reason = tc.invalid_reason.expect("invalid_reason set");
     let message = match reason {
@@ -324,7 +316,7 @@ async fn matrix_pure_garbage_falls_back_to_schema_missing_fields() {
     // validator must surface a usable error pointing at the bad
     // shape; the contract is "structured error, not opaque".
     let tool = bash_tool();
-    let tc = run_pipeline("\u{0000}!!!@@@%%%", "Bash", Some(&tool)).await;
+    let (tc, _validated) = run_pipeline("\u{0000}!!!@@@%%%", "Bash", Some(&tool)).await;
     assert!(tc.invalid);
     let message = match tc.invalid_reason.unwrap() {
         ToolInputInvalidReason::SchemaViolation { message } => message,
@@ -341,7 +333,7 @@ async fn matrix_pure_garbage_falls_back_to_schema_missing_fields() {
 #[tokio::test]
 async fn matrix_empty_arguments_string_falls_back_to_schema_check() {
     let tool = bash_tool();
-    let tc = run_pipeline("", "Bash", Some(&tool)).await;
+    let (tc, _validated) = run_pipeline("", "Bash", Some(&tool)).await;
     assert!(tc.invalid);
     let message = match tc.invalid_reason.unwrap() {
         ToolInputInvalidReason::SchemaViolation { message } => message,
@@ -353,7 +345,7 @@ async fn matrix_empty_arguments_string_falls_back_to_schema_check() {
 #[tokio::test]
 async fn matrix_type_mismatch_reports_expected_and_received() {
     let tool = bash_tool();
-    let tc = run_pipeline(
+    let (tc, _validated) = run_pipeline(
         r#"{"command": "ls", "timeout": "not-a-number"}"#,
         "Bash",
         Some(&tool),
@@ -372,7 +364,7 @@ async fn matrix_type_mismatch_reports_expected_and_received() {
 #[tokio::test]
 async fn matrix_unexpected_field_is_reported() {
     let tool = bash_tool();
-    let tc = run_pipeline(
+    let (tc, _validated) = run_pipeline(
         r#"{"command": "ls", "extra_field": "ignored"}"#,
         "Bash",
         Some(&tool),
@@ -391,7 +383,7 @@ async fn matrix_unexpected_field_is_reported() {
 
 #[tokio::test]
 async fn matrix_no_such_tool_short_circuits_before_schema() {
-    let tc = run_pipeline(r#"{"command": "ls"}"#, "NonexistentTool", None).await;
+    let (tc, _validated) = run_pipeline(r#"{"command": "ls"}"#, "NonexistentTool", None).await;
     assert!(tc.invalid);
     match tc.invalid_reason.unwrap() {
         ToolInputInvalidReason::NoSuchTool { tool_name } => {
@@ -409,9 +401,15 @@ async fn matrix_anthropic_value_string_nested_is_recovered_in_layer_2() {
     // recovers it before schema validation.
     let tool = read_tool();
     let mut tc = mk_tc("Read", json!("{\"file_path\": \"/tmp/recovered\"}"));
-    validate_tool_call(&mut tc, Some(&tool));
+    let validated = validate_tool_call(&mut tc, Some(&tool)).expect("recovered input validates");
     assert!(!tc.invalid);
-    assert_eq!(tc.input, json!({"file_path": "/tmp/recovered"}));
+    assert_eq!(
+        validated.as_value(),
+        &json!({"file_path": "/tmp/recovered"})
+    );
+    // The wire-shape `tc.input` is never mutated — the nested string
+    // round-trips to the provider verbatim.
+    assert_eq!(tc.input, json!("{\"file_path\": \"/tmp/recovered\"}"));
 }
 
 #[tokio::test]
@@ -423,13 +421,13 @@ async fn apply_patch_freeform_string_input_is_coerced_to_patch_object() {
     let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool);
     let raw = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n";
     let mut tc = mk_tc("apply_patch", json!(raw));
-    validate_tool_call(&mut tc, Some(&tool));
-    assert!(
-        !tc.invalid,
-        "coerced patch must pass schema validation: {:?}",
-        tc.invalid_reason
-    );
-    assert_eq!(tc.input, json!({ "patch": raw }));
+    let validated =
+        validate_tool_call(&mut tc, Some(&tool)).expect("coerced patch must pass schema");
+    assert!(!tc.invalid);
+    assert_eq!(validated.as_value(), &json!({ "patch": raw }));
+    // The wire-shape `tc.input` keeps the raw envelope for the provider
+    // round-trip (OpenAI replays `custom_tool_call.input` as the string).
+    assert_eq!(tc.input, json!(raw));
 
     // Regression: the second, serde-backed validator (`tool.validate_input`,
     // run by `tool_runner` / `tool_call_preparer`) must see the SAME coerced
@@ -438,7 +436,7 @@ async fn apply_patch_freeform_string_input_is_coerced_to_patch_object() {
     // and was forced onto `apply_patch`.
     let ctx = ToolUseContext::test_default();
     assert!(
-        tool.validate_input(&tc.input, &ctx).is_valid(),
+        tool.validate_input(validated.as_value(), &ctx).is_valid(),
         "coerced patch object must pass the serde validator"
     );
     assert!(
@@ -457,11 +455,12 @@ async fn apply_patch_freeform_input_is_never_json_parsed() {
     let tool: StdArc<dyn DynTool> = StdArc::new(coco_tools::tools::ApplyPatchTool);
     let json_looking = r#"{"patch": "not a real patch"}"#;
     let mut tc = mk_tc("apply_patch", json!(json_looking));
-    validate_tool_call(&mut tc, Some(&tool));
-    assert!(!tc.invalid, "coerced patch must not be invalid");
+    let validated =
+        validate_tool_call(&mut tc, Some(&tool)).expect("coerced patch must not be invalid");
+    assert!(!tc.invalid);
     assert_eq!(
-        tc.input,
-        json!({ "patch": json_looking }),
+        validated.as_value(),
+        &json!({ "patch": json_looking }),
         "raw freeform string must be wrapped verbatim, not JSON-parsed"
     );
 }
@@ -584,7 +583,7 @@ async fn matrix_multi_tool_call_mixed_outcomes() {
     for case in cases {
         let input = parse_tool_arguments_or_empty(case.raw_arguments, case.tool_name);
         let mut tc = mk_tc(case.tool_name, input);
-        validate_tool_call(&mut tc, case.tool.as_ref());
+        let _ = validate_tool_call(&mut tc, case.tool.as_ref());
 
         assert_eq!(
             !tc.invalid, case.expected_valid,

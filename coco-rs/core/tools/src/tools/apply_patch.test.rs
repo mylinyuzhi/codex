@@ -250,6 +250,42 @@ async fn check_permissions_allows_session_plan_file_in_sandboxed_agent() {
     );
 }
 
+#[tokio::test]
+async fn check_permissions_plan_file_carveout_fires_for_freeform_raw_string() {
+    // calm-bouncing-biscuit regression: the custom-tool wire shape is a BARE
+    // STRING. The agent loop coerces it through `ValidatedInput` before any
+    // permission check — end-to-end here: raw string → coerce → dyn-level
+    // check_permissions → plan-file auto-allow. (Pre-fix, the raw string hit
+    // the blanket impl's deser failure, skipped this carve-out entirely, and
+    // fell through to a Plan-mode prompt.)
+    let cwd = tempfile::tempdir().unwrap();
+    let plans = tempfile::tempdir().unwrap();
+    let plan_file = plans.path().join("calm-bouncing-biscuit.md");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.cwd_override = Some(cwd.path().to_path_buf());
+    ctx.permission_context.mode = PermissionMode::Plan;
+    ctx.permission_context.bypass_available = false;
+    ctx.permission_context.session_plan_file = Some(plan_file.clone());
+    let raw = format!(
+        "*** Begin Patch\n*** Add File: {}\n+# plan\n*** End Patch\n",
+        plan_file.display()
+    );
+
+    let validated = coco_tool_runtime::ValidatedInput::validate(
+        &ApplyPatchTool,
+        serde_json::Value::String(raw),
+    )
+    .expect("freeform raw string must coerce into {patch}");
+    let result =
+        <ApplyPatchTool as DynTool>::check_permissions(&ApplyPatchTool, validated.as_value(), &ctx)
+            .await;
+
+    assert!(
+        matches!(result, ToolCheckResult::Allow { .. }),
+        "plan-file write must auto-allow in Plan mode: {result:?}"
+    );
+}
+
 #[test]
 fn apply_patch_preview_add_file_uses_header_and_added_rows() {
     let preview = build_apply_patch_preview(
