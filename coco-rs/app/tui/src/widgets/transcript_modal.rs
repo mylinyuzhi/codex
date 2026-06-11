@@ -471,8 +471,13 @@ impl<'a> TranscriptCellRenderer<'a> {
                 }
             }
             CellKind::AssistantText { text, .. } => self.render_text_block("⏺", text, lines),
-            CellKind::AssistantThinking { text } => {
-                let meta = self.reasoning_metadata.get(&cell.message_uuid);
+            CellKind::AssistantThinking {
+                text,
+                metadata_anchor,
+            } => {
+                let meta = metadata_anchor
+                    .then(|| self.reasoning_metadata.get(&cell.message_uuid))
+                    .flatten();
                 lines.extend(render_thinking_block(
                     ThinkingRenderInput {
                         content: text,

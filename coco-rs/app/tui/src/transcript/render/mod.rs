@@ -601,21 +601,32 @@ fn hash_cacheable_cell(
         // `tool_executions`, so elapsed badges are absent by construction);
         // the only extra-source input is the reasoning side-cache, hashed
         // below.
-        CellKind::AssistantThinking { text } => {
+        CellKind::AssistantThinking {
+            text,
+            metadata_anchor,
+        } => {
             hash_u8(hasher, 3);
             hash_str(hasher, text);
             // Side-cache badge (`Thinking · <duration> · <tokens>`): absence
             // (live append before `TurnCompleted`) renders differently.
-            match options
-                .reasoning_metadata
-                .and_then(|cache| cache.get(&cell.message_uuid))
-            {
-                Some(meta) => {
-                    hash_u8(hasher, 1);
-                    hash_i64(hasher, meta.duration_ms.unwrap_or(-1));
-                    hash_i64(hasher, meta.reasoning_tokens);
+            hash_bool(hasher, *metadata_anchor);
+            if !*metadata_anchor {
+                hash_u8(hasher, 0);
+            } else {
+                match options
+                    .reasoning_metadata
+                    .and_then(|cache| cache.get(&cell.message_uuid))
+                {
+                    Some(meta) => {
+                        hash_u8(hasher, 1);
+                        hash_i64(hasher, meta.duration_ms.unwrap_or(-1));
+                        hash_i64(hasher, meta.reasoning_tokens);
+                    }
+                    None => {
+                        hash_u8(hasher, 0);
+                        hash_i64(hasher, assistant_source_reasoning_tokens(cell).unwrap_or(0));
+                    }
                 }
-                None => hash_u8(hasher, 0),
             }
         }
         CellKind::AssistantRedactedThinking => hash_u8(hasher, 4),
@@ -635,6 +646,14 @@ fn hash_cacheable_cell(
         }
     }
     Some(())
+}
+
+fn assistant_source_reasoning_tokens(cell: &RenderedCell) -> Option<i64> {
+    let Message::Assistant(assistant) = cell.source.as_ref() else {
+        return None;
+    };
+    let tokens = assistant.usage.as_ref()?.output_tokens.reasoning;
+    (tokens > 0).then_some(tokens)
 }
 
 /// Hash the full serialized source message — conservative over-keying for
@@ -897,7 +916,7 @@ fn estimate_cell_bytes(cell: &RenderedCell) -> usize {
     match &cell.kind {
         CellKind::UserText { text }
         | CellKind::AssistantText { text, .. }
-        | CellKind::AssistantThinking { text } => text.len(),
+        | CellKind::AssistantThinking { text, .. } => text.len(),
         CellKind::ToolUse { call_id, tool_name } => call_id.len() + tool_name.len(),
         CellKind::ToolResult { call_id } => call_id.len(),
         CellKind::System(kind) => estimate_system_cell_bytes(kind, cell.source.as_ref()),

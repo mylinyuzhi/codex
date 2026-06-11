@@ -83,3 +83,43 @@ fn expanded_thinking_body_uses_plain_indent() {
     assert_eq!(lines[1].spans[0].content.as_ref(), "  first");
     assert_eq!(lines[2].spans[0].content.as_ref(), "  second");
 }
+
+#[test]
+fn expanded_full_thinking_body_has_no_line_cap() {
+    let theme = Theme::from_name(ThemeName::Dark);
+    let content = (0..8)
+        .map(|i| format!("line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lines = render_thinking_block(
+        ThinkingRenderInput {
+            content: &content,
+            duration_ms: None,
+            reasoning_tokens: None,
+            toggle_hint: None,
+            display: ThinkingDisplay::ExpandedFull,
+        },
+        UiStyles::new(&theme),
+    );
+
+    assert_eq!(lines.len(), 9);
+    assert_eq!(lines[8].spans[0].content.as_ref(), "  line-7");
+}
+
+#[test]
+fn expanded_full_thinking_body_does_not_truncate_long_lines() {
+    let theme = Theme::from_name(ThemeName::Dark);
+    let content = "x".repeat(crate::presentation::transcript::TRANSCRIPT_LINE_CHAR_CAP + 5);
+    let lines = render_thinking_block(
+        ThinkingRenderInput {
+            content: &content,
+            duration_ms: None,
+            reasoning_tokens: None,
+            toggle_hint: None,
+            display: ThinkingDisplay::ExpandedFull,
+        },
+        UiStyles::new(&theme),
+    );
+
+    assert_eq!(lines[1].spans[0].content.as_ref(), format!("  {content}"));
+}

@@ -55,7 +55,7 @@ pub enum CellKind {
     /// the engine reports it on `TurnCompleted`, after the cell has
     /// already been derived from `&Message`. Side-cache keeps the
     /// cell a pure function of the source message (I-2).
-    AssistantThinking { text: String },
+    AssistantThinking { text: String, metadata_anchor: bool },
     /// Assistant redacted thinking (encrypted, displayed as opaque).
     AssistantRedactedThinking,
     /// Assistant `tool_use` content block.
