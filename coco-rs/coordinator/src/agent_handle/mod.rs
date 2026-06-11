@@ -32,6 +32,8 @@ use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
 use coco_tool_runtime::AgentSpawnStatus;
+use coco_tool_runtime::PlanApprovalMessage;
+use coco_tool_runtime::PlanApprovalResponse;
 use coco_tool_runtime::TeammateTaskRegistration;
 use tokio::sync::RwLock;
 
@@ -1092,6 +1094,67 @@ impl AgentHandle for SwarmAgentHandle {
             )
         } else {
             format!("Shutdown rejected. Notified {TEAM_LEAD_NAME} and continuing work.")
+        })
+    }
+
+    async fn respond_to_plan_approval(
+        &self,
+        target: &str,
+        request_id: &str,
+        approve: bool,
+        feedback: Option<&str>,
+        permission_mode: coco_types::PermissionMode,
+    ) -> Result<String, String> {
+        if target == TEAM_LEAD_NAME {
+            return Err("plan_approval_response must target the requesting teammate".into());
+        }
+
+        let from = get_agent_name().unwrap_or_else(|| TEAM_LEAD_NAME.to_string());
+        if from != TEAM_LEAD_NAME {
+            return Err("only the team lead can approve or reject teammate plans".into());
+        }
+
+        let team_name = {
+            let tm = self.team_manager.read().await;
+            tm.as_ref()
+                .map(|m| m.team_name().to_string())
+                .or_else(get_team_name)
+                .ok_or_else(|| "No active team — cannot respond to plan approval".to_string())?
+        };
+
+        let inherited_mode = match permission_mode {
+            coco_types::PermissionMode::Plan => coco_types::PermissionMode::Default,
+            other => other,
+        };
+        let response = PlanApprovalMessage::PlanApprovalResponse(PlanApprovalResponse {
+            request_id: request_id.to_string(),
+            approved: approve,
+            feedback: feedback.map(str::to_string),
+            permission_mode: approve.then_some(inherited_mode),
+        });
+        let text = serde_json::to_string(&response)
+            .map_err(|e| format!("Failed to serialize plan approval response: {e}"))?;
+        let summary = if approve {
+            "plan approved"
+        } else {
+            "plan rejected"
+        };
+        let message = TeammateMessage {
+            from: TEAM_LEAD_NAME.to_string(),
+            text,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            read: false,
+            color: crate::pane::layout::get_teammate_color(TEAM_LEAD_NAME)
+                .map(|c| c.as_str().to_string()),
+            summary: Some(summary.to_string()),
+        };
+        write_to_mailbox(target, message, &team_name)
+            .map_err(|e| format!("Failed to send plan approval response to '{target}': {e}"))?;
+
+        Ok(if approve {
+            format!("Plan approved for '{target}' (request {request_id}).")
+        } else {
+            format!("Plan rejected for '{target}' (request {request_id}).")
         })
     }
 

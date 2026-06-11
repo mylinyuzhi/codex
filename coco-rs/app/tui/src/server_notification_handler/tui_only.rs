@@ -202,35 +202,20 @@ pub(super) fn handle(
             images,
         } => {
             state.ui.paste_manager.clear();
-            let mut text = prompt;
-            for image in images {
-                match base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    image.data_base64.as_bytes(),
-                ) {
-                    Ok(bytes) => {
-                        let pill = state
-                            .ui
-                            .paste_manager
-                            .add_image_data(bytes, image.media_type);
-                        if !text.is_empty() {
-                            text.push(' ');
-                        }
-                        text.push_str(&pill);
-                    }
-                    Err(e) => {
-                        state.ui.add_toast(Toast::warning(
-                            t!(
-                                "toast.queued_edit_image_failed",
-                                error = e.to_string().as_str()
-                            )
-                            .to_string(),
-                        ));
-                    }
-                }
-            }
+            let text = append_queued_edit_images(state, prompt, images);
             state.ui.input.set_text(&text);
             state.ui.input.textarea.set_cursor(text.len());
+            true
+        }
+        TuiOnlyEvent::QueuedCommandsEditReady {
+            ids: _,
+            prompt,
+            cursor,
+            images,
+        } => {
+            let text = append_queued_edit_images(state, prompt, images);
+            state.ui.input.set_text(&text);
+            state.ui.input.textarea.set_cursor(cursor);
             true
         }
         TuiOnlyEvent::QueuedCommandEditUnavailable { id: _, reason } => {
@@ -657,6 +642,40 @@ pub(super) fn handle(
             true
         }
     }
+}
+
+fn append_queued_edit_images(
+    state: &mut AppState,
+    mut text: String,
+    images: Vec<coco_types::QueuedCommandEditImage>,
+) -> String {
+    for image in images {
+        match base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            image.data_base64.as_bytes(),
+        ) {
+            Ok(bytes) => {
+                let pill = state
+                    .ui
+                    .paste_manager
+                    .add_image_data(bytes, image.media_type);
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&pill);
+            }
+            Err(e) => {
+                state.ui.add_toast(Toast::warning(
+                    t!(
+                        "toast.queued_edit_image_failed",
+                        error = e.to_string().as_str()
+                    )
+                    .to_string(),
+                ));
+            }
+        }
+    }
+    text
 }
 
 /// Handle `TuiOnlyEvent::OpenRewindPicker`.

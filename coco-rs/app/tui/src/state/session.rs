@@ -108,6 +108,8 @@ pub struct QueuedCommandDisplay {
     /// Short preview of the queued prompt (caller-truncated; the
     /// engine builds it via `QueuedCommand::preview`).
     pub preview: String,
+    /// Whether Esc/Up may pull this queued item back into the composer.
+    pub editable: bool,
 }
 
 /// TUI-side label for the active compaction sub-phase. Built from

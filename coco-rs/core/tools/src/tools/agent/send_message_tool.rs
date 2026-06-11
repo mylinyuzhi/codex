@@ -4,23 +4,25 @@
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
+use coco_tool_runtime::FunctionToolSpec;
+use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::SchemaContext;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolInputSchema;
 use coco_tool_runtime::ToolResultContentPart;
+use coco_tool_runtime::ToolSpec;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
+use serde::de;
 use serde_json::Value;
+use std::sync::OnceLock;
 
 /// Typed input for [`SendMessageTool`].
-///
-/// `message` stays `Value` because the wire shape is a union of
-/// `string` and structured object variants (`shutdown_request`,
-/// `shutdown_response`, `plan_approval_response`). Typing this as
-/// `#[serde(untagged)] enum` would be more precise but the runtime
-/// branches purely on `message.is_string()` anyway.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SendMessageInput {
     /// Target agent name, "*" for broadcast, or agent ID
@@ -30,10 +32,76 @@ pub struct SendMessageInput {
     /// stack); structured messages skip it.
     #[serde(default)]
     pub summary: Option<String>,
-    /// Message content (string or structured object — see TS
-    /// `SendMessageTool.ts` for the structured variants like
-    /// `shutdown_request`, `plan_approval_response`).
-    pub message: Value,
+    /// Message content: plain text or a structured control response.
+    pub message: SendMessagePayload,
+}
+
+/// Plain text or structured control payload.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SendMessagePayload {
+    Text(String),
+    Structured(SendMessageStructuredMessage),
+}
+
+/// Structured control messages accepted from the model. Field names match
+/// the TS model-input shape (`request_id`, `approve`), not mailbox wire
+/// (`requestId`, `approved`).
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SendMessageStructuredMessage {
+    ShutdownRequest {
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    ShutdownResponse {
+        request_id: String,
+        #[serde(deserialize_with = "deserialize_approve")]
+        approve: bool,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    PlanApprovalResponse {
+        request_id: String,
+        #[serde(deserialize_with = "deserialize_approve")]
+        approve: bool,
+        #[serde(default)]
+        feedback: Option<String>,
+    },
+}
+
+fn deserialize_approve<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ApproveVisitor;
+
+    impl de::Visitor<'_> for ApproveVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a boolean or the string \"true\"/\"false\"")
+        }
+
+        fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+            Ok(value)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            match value {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(E::custom(
+                    "approve must be true, false, \"true\", or \"false\"",
+                )),
+            }
+        }
+    }
+
+    deserializer.deserialize_any(ApproveVisitor)
 }
 
 /// Model-facing prompt. TS `SendMessageTool/prompt.ts` `getPrompt()`
@@ -69,13 +137,30 @@ pub struct SendMessageTool;
 #[async_trait::async_trait]
 impl Tool for SendMessageTool {
     type Input = SendMessageInput;
-    coco_tool_runtime::impl_runtime_schema!(SendMessageInput);
     /// Output is `Value` because the wire shape is a tagged union:
     /// bare confirmation string from `agent.send_message` for the
     /// running-agent path, or `{auto_resumed, original_agent_id,
     /// resumed_as, message}` envelope for the terminal-target
     /// auto-resume path.
     type Output = Value;
+
+    fn runtime_validation_schema(&self) -> &ToolInputSchema {
+        static SCHEMA: OnceLock<ToolInputSchema> = OnceLock::new();
+        SCHEMA.get_or_init(|| ToolInputSchema::from_static_value(send_message_schema(true)))
+    }
+
+    async fn tool_spec(
+        &self,
+        _schema_ctx: &SchemaContext,
+        prompt_opts: &PromptOptions,
+    ) -> ToolSpec {
+        ToolSpec::Function(FunctionToolSpec {
+            name: self.name().to_string(),
+            description: self.prompt(prompt_opts).await,
+            parameters: send_message_schema(false),
+            strict: self.strict(),
+        })
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::SendMessage)
@@ -127,62 +212,77 @@ impl Tool for SendMessageTool {
             });
         }
 
-        // TS `SendMessageTool.ts:668-674`: `summary` is required for plain
-        // string messages (used by the leader's UI message-stack); structured
-        // messages skip it because the type discriminator carries the intent.
-        let is_string_message = input.message.is_string();
-        let content = if let Some(s) = input.message.as_str() {
-            s.to_string()
-        } else {
-            serde_json::to_string(&input.message).unwrap_or_default()
+        let content = match &input.message {
+            SendMessagePayload::Text(text) => {
+                if text.is_empty() {
+                    return Err(ToolError::InvalidInput {
+                        message: "message content must be non-empty".into(),
+                        error_code: None,
+                    });
+                }
+                let summary = input.summary.as_deref().unwrap_or("");
+                if summary.is_empty() {
+                    return Err(ToolError::InvalidInput {
+                        message: "summary is required when sending a plain-text message \
+                                  (5-10 word description used by the leader UI)"
+                            .into(),
+                        error_code: None,
+                    });
+                }
+                text.clone()
+            }
+            SendMessagePayload::Structured(message) => {
+                if input.to == "*" {
+                    return Err(ToolError::InvalidInput {
+                        message: "structured SendMessage payloads cannot be broadcast".into(),
+                        error_code: None,
+                    });
+                }
+                return match message {
+                    SendMessageStructuredMessage::ShutdownRequest { reason } => {
+                        self.dispatch_shutdown_request(&input.to, reason.as_deref(), ctx)
+                            .await
+                    }
+                    SendMessageStructuredMessage::ShutdownResponse {
+                        request_id,
+                        approve,
+                        reason,
+                    } => {
+                        self.dispatch_shutdown_response(
+                            &input.to,
+                            request_id,
+                            *approve,
+                            reason.as_deref(),
+                            ctx,
+                        )
+                        .await
+                    }
+                    SendMessageStructuredMessage::PlanApprovalResponse {
+                        request_id,
+                        approve,
+                        feedback,
+                    } => {
+                        self.dispatch_plan_approval_response(
+                            &input.to,
+                            request_id,
+                            *approve,
+                            feedback.as_deref(),
+                            ctx,
+                        )
+                        .await
+                    }
+                };
+            }
         };
-
-        if content.is_empty() {
-            return Err(ToolError::InvalidInput {
-                message: "message content must be non-empty".into(),
-                error_code: None,
-            });
-        }
-
-        // Structured control messages — `shutdown_request` (leader →
-        // teammate) and `shutdown_response` (teammate → leader) — need
-        // coordinator-side handling (proper wire envelopes + the
-        // approver's own pane-coordinate enrichment), not the plain
-        // mailbox passthrough below. TS `SendMessageTool.ts:888-893`.
-        if let Some(msg_type) = input.message.get("type").and_then(Value::as_str) {
-            match msg_type {
-                "shutdown_request" => return self.dispatch_shutdown_request(&input, ctx).await,
-                "shutdown_response" => return self.dispatch_shutdown_response(&input, ctx).await,
-                // Other structured variants fall through to the mailbox
-                // passthrough (serialized verbatim).
-                _ => {}
-            }
-        }
-
-        if is_string_message {
-            let summary = input.summary.as_deref().unwrap_or("");
-            if summary.is_empty() {
-                return Err(ToolError::InvalidInput {
-                    message: "summary is required when sending a plain-text message \
-                              (5-10 word description used by the leader UI)"
-                        .into(),
-                    error_code: None,
-                });
-            }
-        }
 
         let to = input.to.as_str();
 
         // Probe the task handle for the target's current state — drives
         // both the auto-resume branch (terminal target) and the
         // pending-message-queue branch (running target).
-        let task_status = if is_string_message {
-            match ctx.task_handle.as_ref() {
-                Some(h) => h.get_task_status(to).await.ok(),
-                None => None,
-            }
-        } else {
-            None
+        let task_status = match ctx.task_handle.as_ref() {
+            Some(h) => h.get_task_status(to).await.ok(),
+            None => None,
         };
 
         // TS `SendMessageTool.ts:823-844`: when the target is a known
@@ -304,25 +404,17 @@ impl SendMessageTool {
     /// mailbox. TS `SendMessageTool.ts:888-889` `handleShutdownRequest`.
     async fn dispatch_shutdown_request(
         &self,
-        input: &SendMessageInput,
+        to: &str,
+        reason: Option<&str>,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        if input.to == "*" {
-            return Err(ToolError::InvalidInput {
-                message: "shutdown_request cannot be broadcast — name a single teammate".into(),
-                error_code: None,
-            });
-        }
-        let reason = input.message.get("reason").and_then(Value::as_str);
-        let message = ctx
-            .agent
-            .request_shutdown(&input.to, reason)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed {
+        let message = ctx.agent.request_shutdown(to, reason).await.map_err(|e| {
+            ToolError::ExecutionFailed {
                 message: e,
                 display_data: None,
                 source: None,
-            })?;
+            }
+        })?;
         Ok(shutdown_result(message))
     }
 
@@ -333,34 +425,26 @@ impl SendMessageTool {
     /// target validation at `:695-706`.
     async fn dispatch_shutdown_response(
         &self,
-        input: &SendMessageInput,
+        to: &str,
+        request_id: &str,
+        approve: bool,
+        reason: Option<&str>,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
         // "team-lead" is the canonical leader inbox (TS: TEAM_LEAD_NAME).
         // TS `SendMessageTool.ts:695-700` rejects any other target.
-        if input.to != "team-lead" {
+        if to != "team-lead" {
             return Err(ToolError::InvalidInput {
                 message: "shutdown_response must be sent to \"team-lead\"".into(),
                 error_code: None,
             });
         }
-        let request_id = input
-            .message
-            .get("request_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
         if request_id.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "shutdown_response requires a non-empty request_id".into(),
                 error_code: None,
             });
         }
-        let approve = input
-            .message
-            .get("approve")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let reason = input.message.get("reason").and_then(Value::as_str);
         // TS `SendMessageTool.ts:705-714`: a rejection MUST carry a reason so
         // the leader (and the worker's own next turn) knows why it declined.
         if !approve && reason.is_none_or(|r| r.trim().is_empty()) {
@@ -372,6 +456,43 @@ impl SendMessageTool {
         let message = ctx
             .agent
             .respond_to_shutdown(request_id, approve, reason)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: e,
+                display_data: None,
+                source: None,
+            })?;
+        Ok(shutdown_result(message))
+    }
+
+    async fn dispatch_plan_approval_response(
+        &self,
+        to: &str,
+        request_id: &str,
+        approve: bool,
+        feedback: Option<&str>,
+        ctx: &ToolUseContext,
+    ) -> Result<ToolResult<Value>, ToolError> {
+        if request_id.is_empty() {
+            return Err(ToolError::InvalidInput {
+                message: "plan_approval_response requires a non-empty request_id".into(),
+                error_code: None,
+            });
+        }
+        let feedback = if approve {
+            feedback
+        } else {
+            Some(feedback.unwrap_or("Plan needs revision"))
+        };
+        let message = ctx
+            .agent
+            .respond_to_plan_approval(
+                to,
+                request_id,
+                approve,
+                feedback,
+                ctx.permission_context.mode,
+            )
             .await
             .map_err(|e| ToolError::ExecutionFailed {
                 message: e,
@@ -392,4 +513,71 @@ fn shutdown_result(message: String) -> ToolResult<Value> {
         permission_updates: Vec::new(),
         display_data: None,
     }
+}
+
+fn send_message_schema(runtime: bool) -> Value {
+    fn approve_schema(runtime: bool) -> Value {
+        if runtime {
+            serde_json::json!({
+                "anyOf": [
+                    { "type": "boolean" },
+                    { "type": "string", "enum": ["true", "false"] }
+                ]
+            })
+        } else {
+            serde_json::json!({ "type": "boolean" })
+        }
+    }
+
+    let shutdown_approve_schema = approve_schema(runtime);
+    let plan_approve_schema = approve_schema(runtime);
+
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "to": {
+                "type": "string",
+                "description": "Target agent name, \"*\" for broadcast, or agent ID"
+            },
+            "summary": {
+                "type": "string",
+                "description": "Brief summary of the message (5-10 words). Required when message is a plain string."
+            },
+            "message": {
+                "anyOf": [
+                    { "type": "string" },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "shutdown_request" },
+                            "reason": { "type": "string" }
+                        },
+                        "required": ["type"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "shutdown_response" },
+                            "request_id": { "type": "string" },
+                            "approve": shutdown_approve_schema,
+                            "reason": { "type": "string" }
+                        },
+                        "required": ["type", "request_id", "approve"]
+                    },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "type": { "const": "plan_approval_response" },
+                            "request_id": { "type": "string" },
+                            "approve": plan_approve_schema,
+                            "feedback": { "type": "string" }
+                        },
+                        "required": ["type", "request_id", "approve"]
+                    }
+                ]
+            }
+        },
+        "required": ["to", "message"]
+    })
 }

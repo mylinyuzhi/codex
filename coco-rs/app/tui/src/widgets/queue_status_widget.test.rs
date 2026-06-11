@@ -12,6 +12,7 @@ fn should_display_gates_on_non_empty() {
     filled.push_back(QueuedCommandDisplay {
         id: "test-id".to_string(),
         preview: "next prompt".to_string(),
+        editable: true,
     });
     assert!(QueueStatusWidget::should_display(&filled));
 }

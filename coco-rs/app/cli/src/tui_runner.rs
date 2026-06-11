@@ -731,6 +731,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let runtime_publisher = _reloader
         .as_ref()
         .map(coco_config_reload::RuntimeReloader::publisher);
+    let runtime_for_resume_hint = runtime.clone();
 
     // Spawn agent driver — owns the SessionRuntime + transports.
     let flag_settings_path = cli.settings.as_deref().map(std::path::PathBuf::from);
@@ -762,7 +763,15 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
 
     // Capture the session id BEFORE dropping the App — the TUI's Drop
     // restores the terminal but moves the AppState out of reach.
-    let session_id = app.state().session.session_id.clone();
+    let state_session_id = app.state().session.session_id.clone();
+    let runtime_session_id = runtime_for_resume_hint.current_session_id().await;
+    let session_id = state_session_id.or({
+        if runtime_session_id.is_empty() {
+            None
+        } else {
+            Some(runtime_session_id)
+        }
+    });
     // Explicit drop: `Tui::drop` (inside App) is what leaves alt-screen
     // and disables raw mode. Without this the resume hint below would
     // scroll inside the alt buffer and vanish when the terminal
@@ -1509,6 +1518,7 @@ async fn run_agent_driver(
                     .with_images(image_data_to_queued(&images));
                 let id = queued.id;
                 let preview = queued.preview();
+                let editable = queued.is_editable_by_user();
                 runtime.command_queue().enqueue(queued).await;
                 // Round-trip notify: the TUI display
                 // (`SessionState::queued_commands`) is a projection of
@@ -1518,6 +1528,7 @@ async fn run_agent_driver(
                     .send(CoreEvent::Protocol(ServerNotification::CommandQueued {
                         id: id.to_string(),
                         preview,
+                        editable,
                     }))
                     .await;
             }
@@ -1559,6 +1570,75 @@ async fn run_agent_driver(
                     .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditReady {
                         id,
                         prompt: queued.prompt,
+                        images,
+                    }))
+                    .await;
+            }
+
+            UserCommand::EditQueuedCommands {
+                current_input,
+                current_cursor,
+            } => {
+                let queued = runtime.command_queue().dequeue_all_editable().await;
+                if queued.is_empty() {
+                    let _ = event_tx
+                        .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandEditUnavailable {
+                            id: String::new(),
+                            reason: "no editable queued commands".to_string(),
+                        }))
+                        .await;
+                    continue;
+                }
+
+                let ids: Vec<String> = queued.iter().map(|cmd| cmd.id.to_string()).collect();
+                let mut queued_text = String::new();
+                for cmd in &queued {
+                    if !queued_text.is_empty() {
+                        queued_text.push('\n');
+                    }
+                    queued_text.push_str(&cmd.prompt);
+                }
+                let mut prompt = queued_text.clone();
+                if !current_input.is_empty() {
+                    if !prompt.is_empty() {
+                        prompt.push('\n');
+                    }
+                    prompt.push_str(&current_input);
+                }
+                let cursor = if queued_text.is_empty() {
+                    current_cursor
+                } else {
+                    queued_text
+                        .len()
+                        .saturating_add(1)
+                        .saturating_add(current_cursor)
+                };
+                let images = queued
+                    .into_iter()
+                    .flat_map(|cmd| cmd.images)
+                    .map(|image| coco_types::QueuedCommandEditImage {
+                        media_type: image.media_type,
+                        data_base64: image.data_base64,
+                    })
+                    .collect();
+
+                for id in &ids {
+                    let _ = event_tx
+                        .send(CoreEvent::Protocol(ServerNotification::CommandDequeued {
+                            id: id.clone(),
+                        }))
+                        .await;
+                }
+                let _ = event_tx
+                    .send(CoreEvent::Protocol(ServerNotification::QueueStateChanged {
+                        queued: runtime.command_queue().len().await as i32,
+                    }))
+                    .await;
+                let _ = event_tx
+                    .send(CoreEvent::Tui(TuiOnlyEvent::QueuedCommandsEditReady {
+                        ids,
+                        prompt,
+                        cursor,
                         images,
                     }))
                     .await;

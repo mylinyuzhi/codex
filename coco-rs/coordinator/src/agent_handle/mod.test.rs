@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::types::{TeamFile, TeamMember};
 use coco_tool_runtime::AgentHandle;
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnStatus;
@@ -8,8 +9,10 @@ use coco_tool_runtime::CreateTeamResult;
 use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TeamTaskListRouter;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tokio::sync::RwLock;
+
+static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 fn build_test_runtime() -> coco_config::RuntimeConfig {
     let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -56,6 +59,183 @@ fn create_test_handle_with_registry(
         runtime_config,
         task_registry,
     )
+}
+
+fn test_team_file(team_name: &str) -> TeamFile {
+    TeamFile {
+        name: team_name.to_string(),
+        description: None,
+        created_at: 0,
+        lead_agent_id: format!("{}@{team_name}", crate::constants::TEAM_LEAD_NAME),
+        lead_session_id: None,
+        hidden_pane_ids: Vec::new(),
+        team_allowed_paths: Vec::new(),
+        members: vec![
+            TeamMember {
+                agent_id: format!("{}@{team_name}", crate::constants::TEAM_LEAD_NAME),
+                name: crate::constants::TEAM_LEAD_NAME.to_string(),
+                agent_type: None,
+                model: None,
+                prompt: None,
+                color: None,
+                plan_mode_required: false,
+                joined_at: 0,
+                tmux_pane_id: String::new(),
+                cwd: "/tmp".to_string(),
+                worktree_path: None,
+                session_id: None,
+                subscriptions: Vec::new(),
+                backend_type: None,
+                is_active: true,
+                mode: Some(coco_types::PermissionMode::Default),
+            },
+            TeamMember {
+                agent_id: format!("worker@{team_name}"),
+                name: "worker".to_string(),
+                agent_type: None,
+                model: None,
+                prompt: None,
+                color: None,
+                plan_mode_required: true,
+                joined_at: 0,
+                tmux_pane_id: String::new(),
+                cwd: "/tmp".to_string(),
+                worktree_path: None,
+                session_id: None,
+                subscriptions: Vec::new(),
+                backend_type: Some(coco_types::BackendType::InProcess),
+                is_active: true,
+                mode: Some(coco_types::PermissionMode::Plan),
+            },
+        ],
+    }
+}
+
+async fn install_test_team(handle: &SwarmAgentHandle, team_name: &str) {
+    *handle.team_manager.write().await = Some(TeamManager::new(
+        team_name.to_string(),
+        test_team_file(team_name),
+    ));
+}
+
+fn teammate_context(agent_name: &str, team_name: &str) -> crate::identity::TeammateContextData {
+    crate::identity::TeammateContextData {
+        agent_id: format!("{agent_name}@{team_name}"),
+        agent_name: agent_name.to_string(),
+        team_name: team_name.to_string(),
+        color: None,
+        plan_mode_required: false,
+        parent_session_id: "parent-session".to_string(),
+        self_stop_signal: None,
+    }
+}
+
+#[tokio::test]
+async fn respond_to_plan_approval_writes_typed_mailbox_wire() {
+    let _g = ENV_LOCK.lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let teams = tmp.path().join("teams");
+    std::fs::create_dir_all(&teams).unwrap();
+    // SAFETY: serialized via `ENV_LOCK`; nextest isolates per process.
+    unsafe { std::env::set_var("COCO_TEAMS_DIR", &teams) };
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: same as the set above.
+            unsafe { std::env::remove_var("COCO_TEAMS_DIR") };
+        }
+    }
+    let _restore = Restore;
+
+    let handle = create_test_handle();
+    install_test_team(&handle, "t").await;
+    crate::identity::run_with_teammate_context(
+        teammate_context(crate::constants::TEAM_LEAD_NAME, "t"),
+        async {
+            handle
+                .respond_to_plan_approval(
+                    "worker",
+                    "req-1",
+                    true,
+                    None,
+                    coco_types::PermissionMode::Plan,
+                )
+                .await
+        },
+    )
+    .await
+    .unwrap();
+
+    let messages = crate::mailbox::read_mailbox("worker", "t").unwrap();
+    assert_eq!(messages.len(), 1);
+    let payload: serde_json::Value = serde_json::from_str(&messages[0].text).unwrap();
+    assert_eq!(payload["type"], "plan_approval_response");
+    assert_eq!(payload["requestId"], "req-1");
+    assert_eq!(payload["approved"], true);
+    assert_eq!(payload["permissionMode"], "default");
+    assert!(payload.get("request_id").is_none());
+    assert!(payload.get("approve").is_none());
+}
+
+#[tokio::test]
+async fn respond_to_plan_approval_rejects_non_leader() {
+    let handle = create_test_handle();
+    install_test_team(&handle, "t").await;
+    let result =
+        crate::identity::run_with_teammate_context(teammate_context("worker", "t"), async {
+            handle
+                .respond_to_plan_approval(
+                    "worker",
+                    "req-1",
+                    true,
+                    None,
+                    coco_types::PermissionMode::Default,
+                )
+                .await
+        })
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn respond_to_plan_approval_preserves_non_plan_mode() {
+    let _g = ENV_LOCK.lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let teams = tmp.path().join("teams");
+    std::fs::create_dir_all(&teams).unwrap();
+    // SAFETY: serialized via `ENV_LOCK`; nextest isolates per process.
+    unsafe { std::env::set_var("COCO_TEAMS_DIR", &teams) };
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: same as the set above.
+            unsafe { std::env::remove_var("COCO_TEAMS_DIR") };
+        }
+    }
+    let _restore = Restore;
+
+    let handle = create_test_handle();
+    install_test_team(&handle, "t").await;
+    crate::identity::run_with_teammate_context(
+        teammate_context(crate::constants::TEAM_LEAD_NAME, "t"),
+        async {
+            handle
+                .respond_to_plan_approval(
+                    "worker",
+                    "req-2",
+                    true,
+                    None,
+                    coco_types::PermissionMode::AcceptEdits,
+                )
+                .await
+        },
+    )
+    .await
+    .unwrap();
+
+    let messages = crate::mailbox::read_mailbox("worker", "t").unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&messages[0].text).unwrap();
+    assert_eq!(payload["permissionMode"], "acceptEdits");
 }
 
 #[derive(Default)]

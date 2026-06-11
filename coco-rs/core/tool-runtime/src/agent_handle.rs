@@ -635,6 +635,23 @@ pub trait AgentHandle: Send + Sync {
         Err("AgentHandle::respond_to_shutdown not supported in this context".into())
     }
 
+    /// Leader → teammate: approve or reject a teammate's plan approval
+    /// request. The tool layer passes the leader's current permission
+    /// mode so the coordinator can include the mode the teammate should
+    /// inherit after approval. Default `Err` for non-swarm handles.
+    ///
+    /// TS: `SendMessageTool.ts` `plan_approval_response` branch.
+    async fn respond_to_plan_approval(
+        &self,
+        _target: &str,
+        _request_id: &str,
+        _approve: bool,
+        _feedback: Option<&str>,
+        _permission_mode: coco_types::PermissionMode,
+    ) -> Result<String, String> {
+        Err("AgentHandle::respond_to_plan_approval not supported in this context".into())
+    }
+
     /// Leader-side effect of consuming a `ShutdownApproved`: kill the
     /// teammate's pane (when `pane_id` + `backend_type` indicate a
     /// pane-based teammate), remove its team-file membership, and

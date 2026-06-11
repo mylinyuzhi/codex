@@ -59,6 +59,7 @@ fn queued_commands_route_to_interrupt_only() {
         .push_back(QueuedCommandDisplay {
             id: "q1".into(),
             preview: "queued".into(),
+            editable: true,
         });
     assert_eq!(
         on_interrupt(&mut state, Instant::now()),

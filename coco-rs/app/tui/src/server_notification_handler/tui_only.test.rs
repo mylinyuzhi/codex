@@ -110,6 +110,42 @@ fn queued_command_edit_ready_restores_prompt_and_image_pill() {
 }
 
 #[test]
+fn queued_commands_edit_ready_preserves_existing_paste_manager() {
+    let mut state = AppState::new();
+    let (tx, _rx) = channel();
+    let existing = state
+        .ui
+        .paste_manager
+        .add_image_data(b"existing".to_vec(), "image/png".to_string());
+    state.ui.input.set_text(&format!("draft {existing}"));
+
+    let consumed = handle(
+        &mut state,
+        TuiOnlyEvent::QueuedCommandsEditReady {
+            ids: vec!["queued-1".to_string(), "queued-2".to_string()],
+            prompt: format!("queued one\nqueued two\ndraft {existing}"),
+            cursor: "queued one\nqueued two\ndraft".len(),
+            images: vec![coco_types::QueuedCommandEditImage {
+                media_type: "image/png".to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"queued"),
+            }],
+        },
+        &tx,
+    );
+
+    assert!(consumed);
+    assert!(state.ui.input.text().contains("[Image #1]"));
+    assert!(state.ui.input.text().contains("[Image #2]"));
+    let resolved = state
+        .ui
+        .paste_manager
+        .resolve_structured(state.ui.input.text());
+    assert_eq!(resolved.images.len(), 2);
+    assert_eq!(resolved.images[0].bytes, b"existing");
+    assert_eq!(resolved.images[1].bytes, b"queued");
+}
+
+#[test]
 fn available_commands_refreshed_repopulates_open_popup() {
     // User had `/` popup open against the old catalogue. After reload,
     // the handler should re-run `refresh_suggestions` so the popup

@@ -161,6 +161,7 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
         E::OutputStylesReady { .. } => "OutputStylesReady",
         E::AvailableCommandsRefreshed { .. } => "AvailableCommandsRefreshed",
         E::QueuedCommandEditReady { .. } => "QueuedCommandEditReady",
+        E::QueuedCommandsEditReady { .. } => "QueuedCommandsEditReady",
         E::QueuedCommandEditUnavailable { .. } => "QueuedCommandEditUnavailable",
         E::OpenSessionBrowser { .. } => "OpenSessionBrowser",
         E::CompactionCircuitBreakerOpen { .. } => "CompactionCircuitBreakerOpen",

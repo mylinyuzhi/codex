@@ -165,6 +165,41 @@ async fn test_dequeue_matching() {
 }
 
 #[tokio::test]
+async fn test_dequeue_all_editable_keeps_non_user_queue_items() {
+    let queue = CommandQueue::new();
+    queue
+        .enqueue(
+            QueuedCommand::new("human".into(), QueuePriority::Next)
+                .with_origin(coco_system_reminder::QueueOrigin::Human),
+        )
+        .await;
+    queue
+        .enqueue(QueuedCommand::new(
+            "legacy-human".into(),
+            QueuePriority::Next,
+        ))
+        .await;
+    queue
+        .enqueue(
+            QueuedCommand::new("task".into(), QueuePriority::Later)
+                .with_origin(coco_system_reminder::QueueOrigin::TaskNotification),
+        )
+        .await;
+    queue
+        .enqueue(QueuedCommand::new("/compact".into(), QueuePriority::Next))
+        .await;
+    queue
+        .enqueue(QueuedCommand::new("agent".into(), QueuePriority::Next).with_agent("a1".into()))
+        .await;
+
+    let editable = queue.dequeue_all_editable().await;
+
+    let prompts: Vec<&str> = editable.iter().map(|cmd| cmd.prompt.as_str()).collect();
+    assert_eq!(prompts, vec!["human", "legacy-human"]);
+    assert_eq!(queue.len().await, 3);
+}
+
+#[tokio::test]
 async fn test_dequeue_first_matching_keeps_later_matches() {
     let queue = CommandQueue::new();
     queue
