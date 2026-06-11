@@ -4,20 +4,20 @@
 //! aligned with Claude Code's FileIndex system.
 
 use std::collections::HashSet;
-use std::num::NonZero;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use nucleo::Config;
+use nucleo::Matcher;
+use nucleo::Utf32String;
+use nucleo::pattern::AtomKind;
+use nucleo::pattern::CaseMatching;
+use nucleo::pattern::Normalization;
+use nucleo::pattern::Pattern;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-
-use crate::FileSearchOptions;
-use crate::FileSearchResults;
-use crate::run;
 
 /// Maximum number of suggestions to return.
 pub const MAX_SUGGESTIONS: i32 = 15;
@@ -40,33 +40,6 @@ pub struct FileSuggestion {
     pub is_directory: bool,
 }
 
-impl FileSuggestion {
-    /// Create a new file suggestion.
-    pub fn new(path: String, score: u32, indices: Vec<u32>) -> Self {
-        let display_text = path.clone();
-        let match_indices = indices.into_iter().map(|i| i as i32).collect();
-        Self {
-            path,
-            display_text,
-            score,
-            match_indices,
-            is_directory: false,
-        }
-    }
-
-    /// Create a directory suggestion.
-    pub fn directory(path: String) -> Self {
-        let display_text = format!("{path}/");
-        Self {
-            path,
-            display_text,
-            score: 0, // Directories appear when query ends with /
-            match_indices: vec![],
-            is_directory: true,
-        }
-    }
-}
-
 /// Result of file discovery operation.
 #[derive(Debug, Clone, Default)]
 pub struct DiscoveryResult {
@@ -76,16 +49,19 @@ pub struct DiscoveryResult {
     pub directories: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct IndexedPath {
+    path: String,
+    matcher_text: Utf32String,
+    is_directory: bool,
+}
+
 /// Cached file index with background refresh support.
 pub struct FileIndex {
-    /// Cached files (relative paths).
-    files: Vec<String>,
-    /// Extracted directory prefixes for navigation.
-    directories: Vec<String>,
+    /// Cached files and directory prefixes (relative paths).
+    entries: Vec<IndexedPath>,
     /// Last refresh timestamp.
     last_refresh: Option<Instant>,
-    /// Whether a refresh is in progress.
-    refresh_in_progress: Arc<AtomicBool>,
     /// Working directory.
     cwd: std::path::PathBuf,
 }
@@ -94,10 +70,8 @@ impl FileIndex {
     /// Create a new file index for the given directory.
     pub fn new(cwd: impl Into<std::path::PathBuf>) -> Self {
         Self {
-            files: Vec::new(),
-            directories: Vec::new(),
+            entries: Vec::new(),
             last_refresh: None,
-            refresh_in_progress: Arc::new(AtomicBool::new(false)),
             cwd: cwd.into(),
         }
     }
@@ -109,101 +83,147 @@ impl FileIndex {
             .unwrap_or(false)
     }
 
-    /// Get file suggestions for a query.
-    ///
-    /// Uses cache-first strategy with 60s TTL.
-    /// If query ends with `/`, shows directory suggestions.
-    pub async fn get_suggestions(&mut self, query: &str, max_results: i32) -> Vec<FileSuggestion> {
-        // Refresh cache if needed
-        if !self.is_cache_valid() && !self.refresh_in_progress.load(Ordering::Relaxed) {
-            self.refresh().await;
-        }
-
-        // Handle directory navigation (query ends with /)
-        if query.ends_with('/') {
-            return self.get_directory_suggestions(query, max_results);
-        }
-
-        // Fuzzy search files
-        self.search_files(query, max_results)
-    }
-
-    /// Get directory suggestions for prefix navigation.
-    fn get_directory_suggestions(&self, prefix: &str, max_results: i32) -> Vec<FileSuggestion> {
-        let prefix_lower = prefix.to_lowercase();
-
-        self.directories
-            .iter()
-            .filter(|d| d.to_lowercase().starts_with(&prefix_lower))
-            .take(max_results as usize)
-            .map(|d| FileSuggestion::directory(d.clone()))
-            .collect()
+    /// Get file suggestions for a query from the cached entries.
+    pub fn get_suggestions(&self, query: &str, max_results: i32) -> Vec<FileSuggestion> {
+        self.search_cached_entries(query, max_results)
     }
 
     /// Search files using fuzzy matching.
-    fn search_files(&self, query: &str, max_results: i32) -> Vec<FileSuggestion> {
-        if query.is_empty() || self.files.is_empty() {
+    fn search_cached_entries(&self, query: &str, max_results: i32) -> Vec<FileSuggestion> {
+        if query.is_empty() || self.entries.is_empty() || max_results <= 0 {
             return Vec::new();
         }
 
-        let limit = NonZero::new(max_results as usize).unwrap_or(NonZero::new(15).expect("15 > 0"));
-
-        match run(
+        let pattern = Pattern::new(
             query,
-            vec![self.cwd.clone()],
-            FileSearchOptions {
-                limit,
-                exclude: vec![],
-                threads: NonZero::new(2).expect("2 > 0"),
-                compute_indices: true,
-                respect_gitignore: true,
-            },
-            None,
-        ) {
-            Ok(FileSearchResults { matches, .. }) => matches
-                .into_iter()
-                .map(|m| {
-                    FileSuggestion::new(
-                        m.path.to_string_lossy().into_owned(),
-                        m.score,
-                        m.indices.unwrap_or_default(),
-                    )
-                })
-                .collect(),
-            Err(_) => Vec::new(),
+            CaseMatching::Smart,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        );
+        let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+        let mut scored = Vec::new();
+
+        for entry in &self.entries {
+            let haystack = entry.matcher_text.slice(..);
+            let Some(score) = pattern.score(haystack, &mut matcher) else {
+                continue;
+            };
+            let mut indices = Vec::<u32>::new();
+            let _ = pattern.indices(haystack, &mut matcher, &mut indices);
+            indices.sort_unstable();
+            indices.dedup();
+            scored.push(FileSuggestion {
+                path: entry.path.clone(),
+                display_text: entry.path.clone(),
+                score,
+                match_indices: indices.into_iter().map(|i| i as i32).collect(),
+                is_directory: entry.is_directory,
+            });
+        }
+
+        scored.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.path.cmp(&b.path))
+                .then_with(|| b.is_directory.cmp(&a.is_directory))
+        });
+        scored.truncate(max_results as usize);
+        scored
+    }
+
+    /// Refresh the shared cache when the TTL has expired.
+    ///
+    /// Discovery runs outside the write lock so cached reads are not blocked
+    /// while git or ripgrep scans the filesystem.
+    pub async fn refresh_if_stale(index: &SharedFileIndex) {
+        let cwd = {
+            let guard = index.read().await;
+            if guard.is_cache_valid() {
+                return;
+            }
+            guard.cwd.clone()
+        };
+        let result = discover_files(&cwd).await;
+        let mut guard = index.write().await;
+        if guard.cwd == cwd && !guard.is_cache_valid() {
+            guard.apply_discovery(result);
         }
     }
 
-    /// Refresh the file index.
-    pub async fn refresh(&mut self) {
-        if self.refresh_in_progress.swap(true, Ordering::SeqCst) {
-            // Another refresh is in progress
-            return;
+    /// Force-refresh the shared file index.
+    pub async fn refresh(index: &SharedFileIndex) {
+        let cwd = {
+            let guard = index.read().await;
+            guard.cwd.clone()
+        };
+        let result = discover_files(&cwd).await;
+        let mut guard = index.write().await;
+        if guard.cwd == cwd {
+            guard.apply_discovery(result);
         }
+    }
 
-        let result = discover_files(&self.cwd).await;
-        self.files = result.files;
-        self.directories = result.directories;
+    fn apply_discovery(&mut self, result: DiscoveryResult) {
+        self.entries = entries_from_discovery(result);
         self.last_refresh = Some(Instant::now());
-        self.refresh_in_progress.store(false, Ordering::SeqCst);
     }
 
     /// Force a background refresh.
-    pub fn refresh_background(index: Arc<RwLock<Self>>) {
+    pub fn refresh_background(index: SharedFileIndex) {
         tokio::spawn(async move {
-            let mut guard = index.write().await;
-            guard.refresh().await;
+            Self::refresh(&index).await;
         });
     }
 
     /// Get the current file count.
     pub fn file_count(&self) -> usize {
-        self.files.len()
+        self.entries
+            .iter()
+            .filter(|entry| !entry.is_directory)
+            .count()
     }
 
     /// Get the current directory count.
     pub fn directory_count(&self) -> usize {
-        self.directories.len()
+        self.entries
+            .iter()
+            .filter(|entry| entry.is_directory)
+            .count()
+    }
+}
+
+fn entries_from_discovery(result: DiscoveryResult) -> Vec<IndexedPath> {
+    let mut entries = Vec::with_capacity(result.files.len() + result.directories.len());
+    entries.extend(
+        result
+            .directories
+            .into_iter()
+            .map(|path| indexed_path(ensure_trailing_slash(&path), true)),
+    );
+    entries.extend(
+        result
+            .files
+            .into_iter()
+            .map(|path| indexed_path(path, false)),
+    );
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    entries.dedup_by(|a, b| a.path == b.path && a.is_directory == b.is_directory);
+    entries
+}
+
+fn indexed_path(path: String, is_directory: bool) -> IndexedPath {
+    IndexedPath {
+        matcher_text: Utf32String::from(path.as_str()),
+        path,
+        is_directory,
+    }
+}
+
+fn ensure_trailing_slash(path: &str) -> String {
+    if path.ends_with('/') {
+        path.to_string()
+    } else {
+        format!("{path}/")
     }
 }
 
@@ -285,26 +305,12 @@ pub fn extract_directories(files: &[String]) -> Vec<String> {
     let mut dirs: HashSet<String> = HashSet::new();
 
     for path in files {
-        let mut prefix = String::new();
-        for component in path.split('/') {
-            if prefix.is_empty() {
-                // First component
-                if !component.contains('.') {
-                    // Likely a directory, not a file
-                    dirs.insert(format!("{component}/"));
-                    prefix = format!("{component}/");
-                }
-            } else {
-                // Check if this is a directory (not the file name)
-                let next_prefix = format!("{prefix}{component}/");
-                // Only add if there are more components after this
-                if path.starts_with(&next_prefix) {
-                    dirs.insert(next_prefix.clone());
-                    prefix = next_prefix;
-                } else {
-                    break;
-                }
-            }
+        let components = path
+            .split('/')
+            .filter(|component| !component.is_empty())
+            .collect::<Vec<_>>();
+        for end in 1..components.len() {
+            dirs.insert(format!("{}/", components[..end].join("/")));
         }
     }
 

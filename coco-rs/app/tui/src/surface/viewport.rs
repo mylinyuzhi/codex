@@ -195,10 +195,7 @@ fn interaction_pane_bottom_reservation(
         + stash_rows;
     let avail_below_input = max_height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
-        (popup_items as u16)
-            .min(SuggestionPopup::DEFAULT_MAX_VISIBLE)
-            .min(avail_below_input)
-            .max(status_height)
+        popup_row_budget(avail_below_input)
     } else {
         status_height.min(avail_below_input)
     };
@@ -269,10 +266,7 @@ fn render_live_viewport(
         + stash_rows;
     let avail_below_input = area.height.saturating_sub(other_fixed_rows);
     let bottom_height: u16 = if popup_active {
-        (popup_items as u16)
-            .min(SuggestionPopup::DEFAULT_MAX_VISIBLE)
-            .min(avail_below_input)
-            .max(status_height)
+        popup_row_budget(avail_below_input)
     } else {
         status_height.min(avail_below_input)
     };
@@ -418,12 +412,11 @@ fn render_live_viewport(
     }
 
     if popup_active {
-        let anchor = Rect::new(bottom.x, bottom.y + bottom.height, bottom.width, 0);
         if let Some(popup_view) = inline_popup {
             let popup = crate::widgets::SuggestionPopup::new(popup_view.items, styles)
                 .selected(popup_view.selected)
                 .max_visible(bottom_height as usize);
-            frame.render_widget(popup, anchor);
+            frame.render_widget(popup, bottom);
         }
     } else if bottom_height > 0 {
         frame.render_widget(
@@ -431,6 +424,10 @@ fn render_live_viewport(
             bottom,
         );
     }
+}
+
+fn popup_row_budget(avail_below_input: u16) -> u16 {
+    SuggestionPopup::DEFAULT_MAX_VISIBLE.min(avail_below_input)
 }
 
 pub(crate) fn build_live_tail_lines(

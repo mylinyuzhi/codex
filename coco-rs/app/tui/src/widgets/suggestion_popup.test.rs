@@ -24,17 +24,17 @@ fn item(label: &str, description: Option<&str>) -> SuggestionItem {
     }
 }
 
-/// Render the popup as if its "anchor" (the input row) is at the bottom
-/// of a `w × h` buffer. The widget computes its own Y by walking up
-/// from the anchor, so the popup ends up filling the rows just above.
+/// Render the popup into a fixed `w × h` slot, matching the viewport layout.
 fn render_popup(items: &[SuggestionItem], selected: usize, w: u16, h: u16) -> String {
     let theme = Theme::default();
-    let popup = SuggestionPopup::new(items, UiStyles::new(&theme)).selected(selected);
+    let popup = SuggestionPopup::new(items, UiStyles::new(&theme))
+        .selected(selected)
+        .max_visible(h as usize);
 
     let backend = TestBackend::new(w, h);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
-        .draw(|frame| frame.render_widget(popup, Rect::new(0, h, w, 1)))
+        .draw(|frame| frame.render_widget(popup, Rect::new(0, 0, w, h)))
         .unwrap();
     let buf = terminal.backend().buffer().clone();
     let mut out = String::new();
@@ -45,6 +45,18 @@ fn render_popup(items: &[SuggestionItem], selected: usize, w: u16, h: u16) -> St
         out.push('\n');
     }
     out
+}
+
+#[test]
+fn fixed_slot_keeps_reserved_rows_clear() {
+    let items = vec![item("/clear", Some("Clear chat"))];
+    let out = render_popup(&items, 0, 30, 4);
+    let lines = out.lines().collect::<Vec<_>>();
+
+    assert!(lines[0].contains("/clear"));
+    assert_eq!(lines[1], " ".repeat(30));
+    assert_eq!(lines[2], " ".repeat(30));
+    assert_eq!(lines[3], " ".repeat(30));
 }
 
 #[test]

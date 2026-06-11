@@ -312,6 +312,50 @@ fn test_apply_async_result_merges_files_after_agents() {
 }
 
 #[test]
+fn test_apply_async_result_merges_directory_rows_after_agents() {
+    let mut state = AppState::new();
+    state.session.available_agents = vec![crate::autocomplete::AgentInfo {
+        name: "src".into(),
+        agent_type: "src".into(),
+        description: Some("Source explorer".into()),
+        color: None,
+    }];
+    state.ui.input.textarea.set_text("@src");
+    state.ui.input.textarea.set_cursor(4);
+    refresh_suggestions(&mut state);
+
+    let file_results = vec![
+        SuggestionItem {
+            label: "src/".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        },
+        SuggestionItem {
+            label: "src/main.rs".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        },
+    ];
+    let adopted = apply_async_result(&mut state, SuggestionKind::At, "src", file_results);
+    assert!(adopted);
+
+    let sug = state.ui.completion.active.as_ref().unwrap();
+    assert_eq!(
+        sug.items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["src (agent)", "src/", "src/main.rs"]
+    );
+    assert!(matches!(
+        sug.items[1].metadata,
+        Some(SuggestionMeta::Path { is_directory: true })
+    ));
+}
+
+#[test]
 fn test_apply_async_result_drops_stale_query() {
     // User moved on to a new query before the search returned. Slow
     // result must not clobber the current trigger state.
