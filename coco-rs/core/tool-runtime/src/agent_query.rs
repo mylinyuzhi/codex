@@ -273,6 +273,17 @@ pub struct AgentQueryConfig {
     /// `runForkedAgent({forkLabel})`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_label: Option<coco_types::ForkLabel>,
+
+    /// Live message-history sink for the periodic AgentSummary timer.
+    /// When `Some`, the child engine publishes its full message history
+    /// into this handle after every turn finalize so the timer summarizes
+    /// the real transcript (TS `agentSummary.ts` `getAgentTranscript`)
+    /// instead of the raw output buffer. `None` ⇒ the engine skips the
+    /// per-turn snapshot entirely (zero cost on the non-summarized path).
+    /// In-process only — the shared buffer is meaningless across IPC, so it
+    /// is skipped at the JSON boundary like [`Self::event_tx`].
+    #[serde(skip)]
+    pub live_transcript: Option<crate::LiveTranscript>,
 }
 
 /// Result of a multi-turn agent query.

@@ -144,6 +144,7 @@ impl QueryEngine {
             session_usage_write_lock: None,
             transcript_session_id: None,
             transcript_dedup: None,
+            live_transcript: None,
             pending_nested_memory: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             loaded_nested_memory_paths: Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashSet::new(),
@@ -978,6 +979,16 @@ impl QueryEngine {
     /// `queued_command` attachments with `origin: 'coordinator'`.
     pub fn with_command_queue(mut self, queue: CommandQueue) -> Self {
         self.command_queue = queue;
+        self
+    }
+
+    /// Attach the live message-history sink read by the periodic
+    /// AgentSummary timer. Installed on (background) sub-agent engines by
+    /// `coco_query::agent_adapter` when the spawn enabled summarization;
+    /// the engine then publishes a full post-turn snapshot from
+    /// `record_transcript_tail`. The main loop never sets this.
+    pub fn with_live_transcript(mut self, sink: coco_tool_runtime::LiveTranscript) -> Self {
+        self.live_transcript = Some(sink);
         self
     }
 

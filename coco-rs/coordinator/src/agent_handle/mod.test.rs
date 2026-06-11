@@ -550,6 +550,37 @@ async fn test_classifier_skips_on_empty_transcript() {
 }
 
 #[tokio::test]
+async fn test_classifier_skips_in_non_auto_mode() {
+    // TS `agentToolUtils.ts:404-405`: classification runs only in `auto`
+    // permission mode. In `default` / `acceptEdits` the classifier must
+    // NOT fire — no LLM side-query, no `SECURITY` rewrite — even with a
+    // non-empty transcript. The StubSideQuery has no canned responses, so
+    // if the gate were missing the query call would error; instead the
+    // sub-agent's output passes through unchanged.
+    let mut handle = create_test_handle();
+    handle.set_side_query(Arc::new(StubSideQuery {
+        responses: tokio::sync::Mutex::new(Vec::new()), // would error if queried
+    }));
+    let qr = coco_tool_runtime::AgentQueryResult {
+        response_text: Some("did the work".into()),
+        messages: messages_with_transcript(),
+        turns: 1,
+        input_tokens: 50,
+        output_tokens: 25,
+        tool_use_count: 3,
+        cancelled: false,
+    };
+    let out = super::handoff::classify_handoff_inline(
+        "general-purpose",
+        &qr,
+        handle.side_query(),
+        Some(coco_types::PermissionMode::Default),
+    )
+    .await;
+    assert_eq!(out.as_deref(), Some("did the work"));
+}
+
+#[tokio::test]
 async fn test_classifier_runs_for_read_only_agent_with_transcript() {
     // #113: TS does not exempt read-only agents. With a non-empty
     // transcript, `Explore` is classified like any other agent — a
@@ -775,6 +806,63 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
     assert_eq!(response.result.as_deref(), Some("child result"));
     assert_eq!(response.total_tool_use_count, 3);
     assert_eq!(response.total_tokens, 150);
+}
+
+#[tokio::test]
+async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
+    // Production-path coverage for the handoff-classifier gate: the sync
+    // spawn flow must thread `request.mode` (parsed to PermissionMode)
+    // into the classifier so a non-`auto` mode skips classification.
+    // The StubSideQuery has no canned responses, so if the gate were
+    // bypassed (mode dropped or forced to auto) the classifier query
+    // would error and prepend UNAVAILABLE_WARNING; instead the child's
+    // output passes through unchanged.
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    struct TranscriptEngine;
+    #[async_trait]
+    impl AgentQueryEngine for TranscriptEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            _config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            Ok(AgentQueryResult {
+                response_text: Some("child result".into()),
+                // Non-empty transcript → `should_classify` would pass, so
+                // only the permission-mode gate prevents classification.
+                messages: messages_with_transcript(),
+                turns: 1,
+                input_tokens: 10,
+                output_tokens: 5,
+                tool_use_count: 2,
+                cancelled: false,
+            })
+        }
+    }
+
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(Arc::new(TranscriptEngine));
+    handle.set_side_query(Arc::new(StubSideQuery {
+        responses: tokio::sync::Mutex::new(Vec::new()), // would error if queried
+    }));
+
+    let request = AgentSpawnRequest {
+        prompt: "do work".into(),
+        subagent_type: Some("general-purpose".into()),
+        mode: Some("default".into()),
+        ..Default::default()
+    };
+    let response = handle.spawn_agent(request).await.unwrap();
+    assert_eq!(response.status, AgentSpawnStatus::Completed);
+    assert_eq!(
+        response.result.as_deref(),
+        Some("child result"),
+        "non-auto mode must skip the handoff classifier; output passes through unchanged"
+    );
 }
 
 #[tokio::test]
@@ -1344,6 +1432,171 @@ async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
     assert!(
         observed.contains("EXPLORE ROLE INSTRUCTIONS"),
         "Fresh spawn must seed system_prompt from definition; got: {observed:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_spawn_subagent_threads_definition_allowed_tools() {
+    // Regression: outside coordinator mode the spawn path set
+    // `AgentQueryConfig.allowed_tools` to `Vec::new()` (permissive),
+    // silently dropping a custom agent's `tools:` allow-list so a
+    // read-restricted agent ran with the parent's full tool surface.
+    // The `Explicit` list must now be threaded into the child filter.
+    // TS parity: `agentToolUtils.ts::resolveAgentTools`.
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    struct CapturingEngine {
+        captured: Arc<tokio::sync::Mutex<Option<Vec<String>>>>,
+    }
+
+    #[async_trait]
+    impl AgentQueryEngine for CapturingEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            *self.captured.lock().await = Some(config.allowed_tools);
+            Ok(AgentQueryResult {
+                response_text: Some("ok".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let captured = Arc::new(tokio::sync::Mutex::new(None));
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(Arc::new(CapturingEngine {
+        captured: captured.clone(),
+    }));
+
+    let definition = std::sync::Arc::new(coco_types::AgentDefinition {
+        name: "restricted".into(),
+        agent_type: coco_types::AgentTypeId::Custom("restricted".into()),
+        // `Bash(*)` exercises paren-stripping — a ToolFilter matches by
+        // ToolId, so the parenthesised form must normalise to bare `Bash`.
+        allowed_tools: coco_types::ToolAllowList::Explicit(vec![
+            "Read".into(),
+            "Grep".into(),
+            "Bash(*)".into(),
+        ]),
+        ..Default::default()
+    });
+
+    let request = AgentSpawnRequest {
+        prompt: "do work".into(),
+        subagent_type: Some("restricted".into()),
+        definition: Some(definition),
+        ..Default::default()
+    };
+    let response = handle.spawn_agent(request).await.unwrap();
+    assert_eq!(response.status, AgentSpawnStatus::Completed);
+    let observed = captured.lock().await.clone().expect("engine ran");
+    assert_eq!(
+        observed,
+        vec!["Read".to_string(), "Grep".to_string(), "Bash".to_string()],
+        "custom agent `tools:` allow-list must be threaded into the child AgentQueryConfig with parens stripped"
+    );
+}
+
+#[tokio::test]
+async fn test_spawn_subagent_applies_universal_tool_block() {
+    // TS `filterToolsForAgent` denies ALL_AGENT_DISALLOWED_TOOLS for every
+    // spawned subagent BEFORE the allow-list, so a wildcard (default) agent
+    // cannot spawn nested agents, prompt the user, or stop tasks. coco
+    // enforces this via the child ToolFilter's disallowed set. ExitPlanMode
+    // is re-admitted in plan mode (TS bypass).
+    use async_trait::async_trait;
+    use coco_tool_runtime::AgentQueryConfig;
+    use coco_tool_runtime::AgentQueryEngine;
+    use coco_tool_runtime::AgentQueryResult;
+
+    struct CapturingEngine {
+        denied: Arc<tokio::sync::Mutex<Option<Vec<String>>>>,
+    }
+    #[async_trait]
+    impl AgentQueryEngine for CapturingEngine {
+        async fn execute_query(
+            &self,
+            _prompt: &str,
+            config: AgentQueryConfig,
+        ) -> Result<AgentQueryResult, coco_error::BoxedError> {
+            *self.denied.lock().await = Some(config.disallowed_tools);
+            Ok(AgentQueryResult {
+                response_text: Some("ok".into()),
+                messages: Vec::new(),
+                turns: 1,
+                input_tokens: 0,
+                output_tokens: 0,
+                tool_use_count: 0,
+                cancelled: false,
+            })
+        }
+    }
+
+    let denied = Arc::new(tokio::sync::Mutex::new(None));
+    let mut handle = create_test_handle();
+    handle.set_execution_engine(Arc::new(CapturingEngine {
+        denied: denied.clone(),
+    }));
+    let wildcard_def = std::sync::Arc::new(coco_types::AgentDefinition {
+        name: "general-purpose".into(),
+        agent_type: coco_types::AgentTypeId::Custom("general-purpose".into()),
+        ..Default::default() // ToolAllowList::Wildcard
+    });
+
+    // Default mode: the full universal block is denied.
+    handle
+        .spawn_agent(AgentSpawnRequest {
+            prompt: "do work".into(),
+            subagent_type: Some("general-purpose".into()),
+            definition: Some(wildcard_def.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let default_denied = denied.lock().await.clone().expect("engine ran");
+    for blocked in [
+        "Agent",
+        "AskUserQuestion",
+        "TaskOutput",
+        "TaskStop",
+        "EnterPlanMode",
+        "ExitPlanMode",
+    ] {
+        assert!(
+            default_denied.iter().any(|d| d == blocked),
+            "universal block must deny {blocked}; got {default_denied:?}"
+        );
+    }
+
+    // Plan mode: ExitPlanMode is re-admitted; the rest stay blocked.
+    handle
+        .spawn_agent(AgentSpawnRequest {
+            prompt: "do work".into(),
+            subagent_type: Some("general-purpose".into()),
+            definition: Some(wildcard_def),
+            mode: Some("plan".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let plan_denied = denied.lock().await.clone().expect("engine ran");
+    assert!(
+        !plan_denied.iter().any(|d| d == "ExitPlanMode"),
+        "plan mode must re-admit ExitPlanMode; got {plan_denied:?}"
+    );
+    assert!(
+        plan_denied.iter().any(|d| d == "Agent"),
+        "plan mode still blocks Agent; got {plan_denied:?}"
     );
 }
 

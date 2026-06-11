@@ -340,6 +340,8 @@ impl SkillHandle for QuerySkillRuntime {
                     require_can_use_tool: false,
                     fork_label: None,
                     cancel: None,
+                    // Skill forks don't run the AgentSummary timer.
+                    live_transcript: None,
                 };
 
                 tracing::info!(

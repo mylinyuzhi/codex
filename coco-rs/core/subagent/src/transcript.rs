@@ -80,15 +80,22 @@ pub fn filter_transcript(messages: &[Arc<Message>]) -> Vec<Arc<Message>> {
     filtered
 }
 
-/// Assistant content is "whitespace-only" when every part is either a
-/// Reasoning block or a Text block whose `.trim()` is empty. ToolCall /
-/// File / Source / etc. count as substantive content.
+/// Assistant content is "whitespace-only" when it is non-empty and every
+/// part is a Text block whose `.trim()` is empty. ANY non-text block
+/// (Reasoning / ReasoningFile / ToolCall / File / Source / …) makes the
+/// message substantive and keeps it — mirroring TS
+/// `hasOnlyWhitespaceTextContent` (`utils/messages.ts:4835`), which
+/// returns `false` for any non-text block AND for empty content
+/// (`length === 0`). A message like `[Text("  "), Reasoning(..)]` (model
+/// emitted leading whitespace before a thinking block, then the turn was
+/// cancelled) therefore survives here, matching TS; pure-reasoning turns
+/// (no Text) are dropped by [`is_thinking_only_assistant`] instead.
 fn is_whitespace_only_assistant(content: &[AssistantContentPart]) -> bool {
-    content.iter().all(|part| match part {
-        AssistantContentPart::Text(t) => t.text.trim().is_empty(),
-        AssistantContentPart::Reasoning(_) | AssistantContentPart::ReasoningFile(_) => true,
-        _ => false,
-    })
+    !content.is_empty()
+        && content.iter().all(|part| match part {
+            AssistantContentPart::Text(t) => t.text.trim().is_empty(),
+            _ => false,
+        })
 }
 
 /// Assistant content is "thinking-only" when it contains zero Text and

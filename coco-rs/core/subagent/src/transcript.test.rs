@@ -108,6 +108,26 @@ fn test_filter_keeps_substantive_assistant() {
 }
 
 #[test]
+fn test_filter_keeps_whitespace_text_plus_reasoning() {
+    // TS parity (`hasOnlyWhitespaceTextContent`): a turn cancelled after
+    // emitting leading whitespace before a thinking block has a non-text
+    // block, so it is NOT whitespace-only and must survive. (Regression:
+    // the old predicate treated Reasoning as "passing" and dropped it.)
+    let messages = vec![
+        user("hello"),
+        assistant(vec![
+            AssistantContentPart::Text(TextPart::new("  \n")),
+            AssistantContentPart::Reasoning(ReasoningPart::new("partial thought")),
+        ]),
+        user("world"),
+    ];
+
+    let filtered = filter_transcript(&messages);
+    assert_eq!(filtered.len(), 3);
+    assert!(matches!(filtered[1].as_ref(), Message::Assistant(_)));
+}
+
+#[test]
 fn test_strip_unresolved_tool_uses() {
     let messages = vec![
         user("hello"),

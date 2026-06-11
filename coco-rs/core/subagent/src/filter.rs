@@ -77,6 +77,29 @@ pub const IN_PROCESS_TEAMMATE_ALLOWED_TOOLS: &[&str] = &[
     ToolName::CronList.as_str(),
 ];
 
+/// The universal subagent tool block as deny-list names — the tools every
+/// spawned subagent is denied regardless of its allow-list. Mirrors the
+/// TS `filterToolsForAgent` universal block (`ALL_AGENT_DISALLOWED_TOOLS`,
+/// applied *before* the allow-list intersection at
+/// `agentToolUtils.ts:94`). `ExitPlanMode` is re-admitted when
+/// `plan_mode` so a plan-mode subagent can still exit the plan (TS bypass
+/// at `agentToolUtils.ts:88-93`).
+///
+/// coco-rs enforces tool visibility per-id via
+/// [`coco_types::ToolFilter::allows`] (`tool-runtime/registry.rs`), so a
+/// deny entry simply drops that tool from the model's list — no
+/// `available_tools` snapshot is required (unlike the concrete-list
+/// [`AgentToolFilter::plan`], which mirrors the TS resolver shape). The
+/// caller merges these into the child `ToolFilter`'s disallowed set.
+pub fn subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
+    let exit_plan_mode = ToolName::ExitPlanMode.as_str();
+    ALL_AGENT_DISALLOWED_TOOLS
+        .iter()
+        .copied()
+        .filter(|name| !(plan_mode && *name == exit_plan_mode))
+        .collect()
+}
+
 /// Inputs that drive `AgentToolFilter::plan`.
 #[derive(Debug, Clone)]
 pub struct ToolFilterContext<'a> {
@@ -231,7 +254,13 @@ impl AgentToolFilter {
 }
 
 /// Strip parenthesized arguments from allow-list entries: `Bash(*)` ↦ `Bash`.
-fn parse_tool_allow_list(items: &[String]) -> Vec<&str> {
+///
+/// Public so the subagent spawn path can normalise an
+/// `AgentDefinition.allowed_tools` `Explicit` list into bare tool names
+/// before handing them to a `ToolFilter` (which matches by `ToolId`, so a
+/// raw `Bash(*)` would parse to `Custom("Bash(*)")` and never match).
+/// TS parity: `agentToolUtils.ts::resolveAgentTools` strips parens too.
+pub fn parse_tool_allow_list(items: &[String]) -> Vec<&str> {
     items
         .iter()
         .map(|s| match s.find('(') {

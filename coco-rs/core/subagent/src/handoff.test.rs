@@ -1,15 +1,6 @@
 use super::*;
 
 #[test]
-fn read_only_agents_recognised() {
-    assert!(is_read_only_agent("Explore"));
-    assert!(is_read_only_agent("Plan"));
-    assert!(is_read_only_agent("coco-guide"));
-    assert!(!is_read_only_agent("general-purpose"));
-    assert!(!is_read_only_agent("statusline-setup"));
-}
-
-#[test]
 fn should_classify_gates_only_on_nonempty_transcript() {
     // TS parity: read-only agents and zero-tool turns are NOT exempt —
     // classification runs whenever the transcript is non-empty.
@@ -43,9 +34,16 @@ fn stage2_prompts_carry_stage1_verdict_and_review_framing() {
 
 #[test]
 fn handoff_classifier_active_requires_auto_mode_and_feature() {
-    assert!(handoff_classifier_active(Some("auto"), true));
-    assert!(!handoff_classifier_active(Some("auto"), false));
-    assert!(!handoff_classifier_active(Some("acceptEdits"), true));
+    use coco_types::PermissionMode;
+    assert!(handoff_classifier_active(Some(PermissionMode::Auto), true));
+    assert!(!handoff_classifier_active(
+        Some(PermissionMode::Auto),
+        false
+    ));
+    assert!(!handoff_classifier_active(
+        Some(PermissionMode::AcceptEdits),
+        true
+    ));
     assert!(!handoff_classifier_active(None, true));
 }
 

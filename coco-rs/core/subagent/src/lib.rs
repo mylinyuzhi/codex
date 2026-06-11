@@ -41,7 +41,10 @@ pub use definition_store::{
     AgentDefinitionStore, AgentLoadReport, AgentSearchPaths, LoadedAgentDefinition,
     SnapshotInspectorFn,
 };
-pub use filter::{AgentToolFilter, AllowedAgentTypes, ToolFilterPlan, parse_allowed_agent_types};
+pub use filter::{
+    AgentToolFilter, AllowedAgentTypes, ToolFilterPlan, parse_allowed_agent_types,
+    parse_tool_allow_list, subagent_disallowed_tools,
+};
 pub use fork::{
     FORK_BOILERPLATE_TAG, FORK_DIRECTIVE_PREFIX, FORK_PLACEHOLDER, ForkContext,
     build_fork_child_message, build_fork_child_rules, build_fork_context, build_worktree_notice,
@@ -54,7 +57,7 @@ pub use frontmatter::{
 pub use handoff::{
     HANDOFF_REVIEW_USER_PROMPT, HandoffClassification, UNAVAILABLE_WARNING,
     build_transcript_summary as build_handoff_transcript_summary, handoff_classifier_active,
-    is_read_only_agent, parse_classifier_response, render_block_message, should_classify,
+    parse_classifier_response, render_block_message, should_classify,
     stage1_prompts as handoff_stage1_prompts, stage2_prompts as handoff_stage2_prompts,
 };
 pub use json::{parse_agent_json, parse_agents_json};
@@ -64,7 +67,9 @@ pub use snapshot::filter_agents_by_mcp_requirements;
 pub use snapshot::has_required_mcp_servers;
 pub use spawn_resolution::{SubagentSelection, resolve_subagent_selection};
 pub use subagent_role::{resolve_subagent_role, role_for_builtin};
-pub use summary::{build_summary_prompts, sanitize_summary, should_summarize};
+pub use summary::{
+    build_summary_prompts, render_transcript_tail, sanitize_summary, should_summarize,
+};
 pub use transcript::{AgentResumeState, filter_transcript};
 pub use validation::{AgentDefinitionValidator, ValidationDiagnostic, ValidationError};
 pub use writable::{next_unused_color, resolve_writable_agent_dir};

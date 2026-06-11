@@ -4,24 +4,19 @@
 //!
 //! TS runs this *periodically* (every 30 s) during execution to populate
 //! a live `AgentProgress.summary` field shown in the coordinator UI.
-//! coco-rs runs it once at subagent completion, populating
-//! `SubAgentState.last_message` so the `CoordinatorPanel` and the
-//! `presentation::activity` agent surface can show "what did this agent
-//! end up doing" at a glance. The cost is one cheap LLM call per spawn,
-//! gated on `should_summarize` so trivial transcripts skip.
+//! coco-rs mirrors that cadence and input: `coco_coordinator::agent_handle::spawn`
+//! drives a 30 s timer that, each tick, reads the child engine's live
+//! message history (via [`coco_tool_runtime::LiveTranscript`]), skips when
+//! the transcript is too short ([`should_summarize`], TS
+//! `transcript.messages.length < 3`), cleans it with
+//! [`crate::filter_transcript`] (TS `filterIncompleteToolCalls`), renders a
+//! bounded transcript with [`render_transcript_tail`], and forks the
+//! summary call. It does NOT exempt read-only agent types — matching TS.
 //!
 //! Bodies build the prompts; the LLM call is driven by
 //! [`coco_tool_runtime::SideQuery`] in the runtime layer
 //! (`coco_coordinator::agent_handle`), which already wires the same
 //! primitive for [`crate::handoff`].
-
-/// Whether summarisation should run for this turn. Skips trivial
-/// transcripts (zero or one tool use) and read-only agent types — the
-/// summary would just restate the agent type. Mirrors TS minimum-
-/// transcript guard (`agentSummary.ts:69-75`).
-pub fn should_summarize(agent_type: &str, total_tool_use_count: i64) -> bool {
-    !crate::handoff::is_read_only_agent(agent_type) && total_tool_use_count >= 2
-}
 
 /// Build the system + user prompts for a one-shot summary call.
 ///
@@ -68,6 +63,84 @@ Bad (branch name): \"Analyzed adam/background-summary branch diff\""
     );
 
     (String::new(), user)
+}
+
+/// Minimum cleaned-transcript length for the periodic summary to run.
+/// TS `agentSummary.ts` skips a tick when `transcript.messages.length < 3`:
+/// fewer than three messages means only the bootstrap prompt (and maybe one
+/// reply) exists, which isn't worth a summarizer fork yet.
+pub const MIN_SUMMARY_MESSAGES: usize = 3;
+
+/// Whether the periodic summary should run for a transcript of this size.
+/// See [`MIN_SUMMARY_MESSAGES`].
+pub fn should_summarize(message_count: usize) -> bool {
+    message_count >= MIN_SUMMARY_MESSAGES
+}
+
+/// Render a (cleaned) message slice into the bounded transcript text fed to
+/// the periodic summarizer fork.
+///
+/// Emits one `[role] …` line per part — assistant text, `tool_use: <name>`
+/// markers, user text, and bare `tool_result` markers (bodies omitted: the
+/// summarizer needs to know *which* actions ran, not their payloads). Only
+/// the trailing `max_chars` are kept, snapped to a UTF-8 boundary, so a long
+/// run can't blow the fork's input budget. The tail (not the head) is kept
+/// because the summary describes the agent's *most recent* action.
+pub fn render_transcript_tail(
+    messages: &[std::sync::Arc<coco_types::messages::Message>],
+    max_chars: usize,
+) -> String {
+    use coco_llm_types::AssistantContentPart;
+    use coco_llm_types::LlmMessage;
+    use coco_llm_types::UserContentPart;
+    use coco_types::messages::Message;
+
+    let mut out = String::new();
+    for arc in messages {
+        match arc.as_ref() {
+            Message::User(u) => {
+                if let LlmMessage::User { content, .. } = &u.message {
+                    for part in content {
+                        if let UserContentPart::Text(t) = part {
+                            out.push_str(&format!("[user] {}\n", t.text));
+                        }
+                    }
+                }
+            }
+            Message::Assistant(a) => {
+                if let LlmMessage::Assistant { content, .. } = &a.message {
+                    for part in content {
+                        match part {
+                            AssistantContentPart::Text(t) => {
+                                out.push_str(&format!("[assistant] {}\n", t.text));
+                            }
+                            AssistantContentPart::ToolCall(tc) => {
+                                out.push_str(&format!("[assistant] tool_use: {}\n", tc.tool_name));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Message::ToolResult(_) => out.push_str("[user] tool_result\n"),
+            _ => {}
+        }
+    }
+
+    if out.len() > max_chars {
+        // Snap to the char boundary at or *before* `len - max_chars` so the
+        // suffix stays valid UTF-8 while keeping at least `max_chars` bytes.
+        // Scanning backward (rather than forward) never drops a straddling
+        // multibyte char and can't collapse to an empty string when the cap
+        // is smaller than the trailing char's width; `0` is always a
+        // boundary, so the loop terminates.
+        let mut start = out.len() - max_chars;
+        while !out.is_char_boundary(start) {
+            start -= 1;
+        }
+        out = out[start..].to_string();
+    }
+    out
 }
 
 /// Filter the model's reply down to a clean summary string. Trims

@@ -410,6 +410,13 @@ pub struct QueryEngine {
     /// dedups by uuid in `utils/sessionStorage.ts:1408`.
     pub(crate) transcript_dedup:
         Option<Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>>,
+    /// Live message-history sink read by the periodic AgentSummary timer.
+    /// Set on (background) sub-agent engines via `with_live_transcript`
+    /// when the spawn enabled summarization; the engine publishes a
+    /// full post-turn snapshot into it from `record_transcript_tail`.
+    /// `None` for the main loop and non-summarized spawns ⇒ no snapshot
+    /// is ever taken.
+    pub(crate) live_transcript: Option<coco_tool_runtime::LiveTranscript>,
     /// Engine-side delivery channel for nested-memory entries surfaced
     /// by [`crate::engine_attachments::QueryEngine::drain_nested_memory_triggers`]
     /// at end-of-batch. Consumed by `engine_turn_reminders` right before
