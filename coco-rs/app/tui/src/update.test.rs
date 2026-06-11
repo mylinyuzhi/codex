@@ -1617,6 +1617,36 @@ async fn esc_double_press_clears_input_and_records_history() {
 }
 
 #[tokio::test]
+async fn history_recall_rehydrates_paste_pills() {
+    // A draft containing a paste pill, cleared via double-Esc, must restore
+    // its paste payload on Up-arrow recall — otherwise the recalled pill is
+    // a dangling token that resolves to literal text at submit.
+    let mut state = AppState::new();
+    let pill = state
+        .ui
+        .paste_manager
+        .add_text("the huge payload".to_string());
+    state.ui.input.textarea.set_text(&format!("see {pill}"));
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+    handle_command(&mut state, TuiCommand::Cancel, &tx).await;
+    assert!(state.ui.input.is_empty(), "double-Esc clears input");
+    assert!(
+        state.ui.paste_manager.entries().is_empty(),
+        "cleared draft must not leave stale paste entries on the manager",
+    );
+
+    handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
+    assert_eq!(state.ui.input.text(), format!("see {pill}"));
+    let resolved = state
+        .ui
+        .paste_manager
+        .resolve_structured(state.ui.input.text());
+    assert_eq!(resolved.text, "see the huge payload");
+}
+
+#[tokio::test]
 async fn esc_on_memory_dialog_records_transcript_result() {
     let mut state = AppState::new();
     state

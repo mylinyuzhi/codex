@@ -22,6 +22,7 @@ use exit::ExitEffect;
 
 mod agents_dialog;
 mod clipboard;
+pub(crate) use clipboard::sniff_image_path_paste;
 mod edit;
 mod exit;
 mod expanded_view;
@@ -340,7 +341,20 @@ pub async fn handle_command(
                 use coco_tui_ui::double_press::Outcome;
                 if state.ui.esc_tracker.poll((), std::time::Instant::now()) == Outcome::Double {
                     let taken = state.ui.input.take_input();
-                    state.ui.input.add_to_history(taken);
+                    // Move the draft's paste payloads into the history entry
+                    // (and out of the live manager): the cleared draft no
+                    // longer references them, and stale image entries would
+                    // otherwise still attach to the next unrelated submit.
+                    let pastes: Vec<_> = state
+                        .ui
+                        .paste_manager
+                        .entries()
+                        .iter()
+                        .filter(|e| taken.contains(&e.pill))
+                        .cloned()
+                        .collect();
+                    state.ui.paste_manager.clear();
+                    state.ui.input.add_to_history_with_pastes(taken, pastes);
                     state.ui.input.history_index = None;
                 } else {
                     state.ui.add_toast(crate::state::ui::Toast::info(
@@ -712,7 +726,19 @@ pub async fn handle_command(
             true
         }
         TuiCommand::ShowSessionBrowser => {
-            show::session_browser(state);
+            // Same flow as `/resume` with no args: the engine lists sessions
+            // and replies with `TuiOnlyEvent::OpenSessionBrowser`, which opens
+            // the modal with fresh data. Reading `state.session.saved_sessions`
+            // here showed an empty browser on a fresh start (its only writer is
+            // that event).
+            if let Ok(name) = crate::state::SlashCommandName::new("resume") {
+                let _ = command_tx
+                    .send(UserCommand::ExecuteSlashCommand {
+                        name,
+                        args: String::new(),
+                    })
+                    .await;
+            }
             true
         }
         TuiCommand::OpenTeamRoster => {

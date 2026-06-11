@@ -543,6 +543,12 @@ pub struct HistoryEntry {
     pub frequency: i32,
     /// Unix-epoch seconds of the most recent submission.
     pub last_used_secs: i64,
+    /// Paste-pill payloads referenced by `text`, snapshotted at submit so
+    /// recalling the entry rehydrates the paste manager — without this a
+    /// recalled `[Pasted text #N]` is a dangling token (the manager was
+    /// cleared at submit) and resolves to literal text. Mirrors codex
+    /// `HistoryEntry.pending_pastes`.
+    pub pastes: Vec<coco_tui_ui::paste::PasteEntry>,
 }
 
 impl HistoryEntry {
@@ -755,6 +761,18 @@ impl InputState {
     /// walks the most relevant entries first. Capped at
     /// `constants::MAX_HISTORY_ENTRIES` by dropping the lowest-scoring tail.
     pub fn add_to_history(&mut self, text: String) {
+        self.add_to_history_with_pastes(text, Vec::new());
+    }
+
+    /// [`Self::add_to_history`] carrying the paste-pill payloads referenced
+    /// by `text`. A same-text resubmit replaces the stored pastes (pill
+    /// numbering restarts after each clear, so equal display text can
+    /// reference different payloads).
+    pub fn add_to_history_with_pastes(
+        &mut self,
+        text: String,
+        pastes: Vec<coco_tui_ui::paste::PasteEntry>,
+    ) {
         if text.is_empty() {
             return;
         }
@@ -762,11 +780,13 @@ impl InputState {
         if let Some(entry) = self.history.iter_mut().find(|h| h.text == text) {
             entry.frequency = entry.frequency.saturating_add(1);
             entry.last_used_secs = now;
+            entry.pastes = pastes;
         } else {
             self.history.push(HistoryEntry {
                 text,
                 frequency: 1,
                 last_used_secs: now,
+                pastes,
             });
         }
         // Sort by frecency desc; ties keep recent-first (stable sort on
@@ -814,6 +834,19 @@ pub struct StreamingState {
     pub mode: StreamMode,
     /// Display cursor position for adaptive pacing.
     pub display_cursor: usize,
+    /// Identity of the *visible* document (`visible_content`), drawn from a
+    /// process-global counter: a fresh value on construction and after every
+    /// cursor move. Equal generations therefore guarantee byte-identical
+    /// visible content — even across instances (a coalesced turn boundary
+    /// swaps the whole state) — letting the stream renderer skip its O(doc)
+    /// prefix scan on no-reveal frames (spinner ticks).
+    pub visible_generation: u64,
+}
+
+/// Next process-globally-unique visible-document generation.
+fn next_stream_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Current streaming content type.
@@ -833,6 +866,7 @@ impl StreamingState {
             segment_started_at: Instant::now(),
             mode: StreamMode::Text,
             display_cursor: 0,
+            visible_generation: next_stream_generation(),
         }
     }
 
@@ -869,6 +903,7 @@ impl StreamingState {
         match self.content[self.display_cursor..].find('\n') {
             Some(idx) => {
                 self.display_cursor += idx + 1;
+                self.visible_generation = next_stream_generation();
                 true
             }
             None => false,
@@ -881,6 +916,7 @@ impl StreamingState {
     #[cfg(any(test, feature = "testing"))]
     pub fn reveal_all(&mut self) {
         self.display_cursor = self.content.len();
+        self.visible_generation = next_stream_generation();
     }
 }
 

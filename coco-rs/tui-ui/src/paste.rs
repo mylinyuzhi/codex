@@ -4,6 +4,11 @@
 //! and stored in a cache. The pill is displayed inline in the input while the
 //! full content is attached when the message is submitted.
 
+/// Pasted text longer than this (in chars) is stored as a pill instead of
+/// flooding the composer; it expands back to the full content at submit.
+/// Mirrors codex-rs `LARGE_PASTE_CHAR_THRESHOLD`.
+pub const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+
 /// Check if text matches a paste pill pattern.
 ///
 /// Valid patterns: `[Pasted text #N]`, `[Image #N]`
@@ -74,21 +79,11 @@ impl PasteManager {
         pill
     }
 
-    /// Add an image paste by file path. Returns the pill label.
-    pub fn add_image(&mut self, path: String) -> String {
-        let n = self.entries.len() + 1;
-        let pill = format!("[Image #{n}]");
-        self.entries.push(PasteEntry {
-            pill: pill.clone(),
-            content: path,
-            is_image: true,
-            image_bytes: None,
-            image_mime: None,
-        });
-        pill
-    }
-
     /// Add an image paste with raw bytes. Returns the pill label.
+    ///
+    /// There is deliberately no path-only variant: an image entry without
+    /// bytes is silently dropped by [`Self::resolve_structured`] at submit,
+    /// so callers must load the bytes first.
     pub fn add_image_data(&mut self, bytes: Vec<u8>, mime: String) -> String {
         let n = self.entries.len() + 1;
         let pill = format!("[Image #{n}]");

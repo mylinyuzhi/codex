@@ -10,13 +10,13 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::state::SuggestionKind;
+use crate::state::question_prompt::QuestionPromptState;
 use crate::state::surface_payloads::CostWarningPromptState;
 use crate::state::surface_payloads::McpServerApprovalPromptState;
 use crate::state::surface_payloads::PermissionPromptState;
 use crate::state::surface_payloads::PlanApprovalPromptState;
 use crate::state::surface_payloads::PlanEntryPromptState;
 use crate::state::surface_payloads::PlanExitPromptState;
-use crate::state::surface_payloads::QuestionPromptState;
 use crate::state::surface_payloads::SandboxPermissionPromptState;
 
 const PERMISSION_PROMPT_DELAY: Duration = Duration::from_secs(1);

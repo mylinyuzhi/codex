@@ -38,9 +38,9 @@ fn finalized_history_lines_render_committed_assistant_message() {
 fn committed_assistant_markdown_helper_matches_finalized_history_cell() {
     let theme = Theme::default();
     let render_options = options(&theme, 40);
-    let direct = crate::widgets::chat::render_assistant::render_committed_assistant_markdown(
+    let direct = crate::transcript::render::assistant::render_committed_assistant_markdown(
         "hello",
-        crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions {
+        crate::transcript::render::assistant::CommittedAssistantMarkdownOptions {
             styles: render_options.styles,
             width: render_options.width,
             syntax_highlighting: render_options.syntax_highlighting,
@@ -542,11 +542,20 @@ fn replay_cache_byte_limit_evicts_oldest_deterministically() {
 }
 
 #[test]
-fn replay_cache_excludes_dynamic_cells() {
+fn replay_cache_excludes_kind_source_mismatched_cells() {
+    // Thinking/tool cells are cacheable now — their side inputs are hashed
+    // into the key (see `test_replay_cache_key_covers_tool_thinking_and_
+    // attachment_cells`). The only cells left on the uncached path are
+    // defensive kind/source MISMATCHES, which `message_to_cells` never
+    // produces but must not poison the cache if they ever appear.
     let theme = Theme::default();
-    let cells: Vec<_> = (0..32)
+    let mut cells: Vec<_> = (0..32)
         .map(|i| test_helpers::assistant_thinking_cell(&format!("dynamic {i}")))
         .collect();
+    cells.push(RenderedCell {
+        kind: CellKind::System(SystemCellKind::Informational),
+        ..test_helpers::user_text_cell(Uuid::new_v4(), "not a system message")
+    });
     let mut cache = HistoryReplayCache::default();
 
     let first = render_replay_history_lines_cached(
@@ -902,4 +911,92 @@ fn mermaid_cells() -> Vec<RenderedCell> {
         "```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```",
     ));
     cells
+}
+
+#[test]
+fn test_replay_cache_key_covers_tool_thinking_and_attachment_cells() {
+    // Structural guard for the replay cache's coverage: tool / thinking /
+    // attachment cells used to bail the whole transcript out of the cache
+    // (`replay_cache_key -> None`), making it dead for virtually every real
+    // session. The key must exist for the dominant agent-session shape...
+    let theme = Theme::default();
+    let mut cells = Vec::new();
+    cells.push(test_helpers::user_text_cell(
+        Uuid::new_v4(),
+        "grep the repo",
+    ));
+    cells.push(test_helpers::assistant_thinking_cell("planning the grep"));
+    cells.push(test_helpers::assistant_text_cell("Running the search."));
+    cells.push(test_helpers::tool_use_cell(
+        "call-1",
+        "Grep",
+        serde_json::json!({"pattern": "fn main"}),
+    ));
+    cells.push(test_helpers::tool_result_cell(
+        "call-1",
+        "Grep",
+        "src/main.rs:1:fn main() {",
+    ));
+    let key = replay_cache_key(&cells, options(&Theme::default(), 80), 9_000);
+    assert!(
+        key.is_some(),
+        "tool/thinking-bearing transcripts must stay replay-cacheable"
+    );
+
+    // ...and must change when a render-affecting side input changes: the
+    // reasoning badge is read from the side-cache, not the cell content.
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(
+        cells[1].message_uuid,
+        crate::state::session::ReasoningMetadata {
+            duration_ms: Some(1_300),
+            reasoning_tokens: 15,
+        },
+    );
+    let with_badge = replay_cache_key(
+        &cells,
+        HistoryLineRenderOptions {
+            reasoning_metadata: Some(&metadata),
+            ..options(&theme, 80)
+        },
+        9_000,
+    );
+    assert_ne!(
+        key, with_badge,
+        "reasoning side-cache state must be part of the key"
+    );
+}
+
+#[test]
+fn test_replay_cached_render_hits_for_tool_heavy_transcript() {
+    // End-to-end guard: a tool-heavy transcript rendered twice through the
+    // cached replay path must hit on the second pass (this was the
+    // every-real-session cache miss).
+    let theme = Theme::default();
+    let mut cells = Vec::new();
+    for i in 0..40 {
+        cells.push(test_helpers::user_text_cell(
+            Uuid::new_v4(),
+            &format!("inspect case {i}"),
+        ));
+        cells.push(test_helpers::assistant_text_cell("Inspecting."));
+        cells.push(test_helpers::tool_use_cell(
+            &format!("call-{i}"),
+            "Grep",
+            serde_json::json!({"pattern": format!("case_{i}")}),
+        ));
+        cells.push(test_helpers::tool_result_cell(
+            &format!("call-{i}"),
+            "Grep",
+            &format!("src/lib.rs:{i}: fn case_{i}() {{}}"),
+        ));
+    }
+    let mut cache = HistoryReplayCache::default();
+    let first = render_replay_history_lines_cached(&cells, options(&theme, 80), 9_000, &mut cache);
+    assert!(!first.stats.cache_hit);
+    assert!(first.stats.cacheable, "tool-heavy replay must be cacheable");
+    let second = render_replay_history_lines_cached(&cells, options(&theme, 80), 9_000, &mut cache);
+    assert!(second.stats.cache_hit, "second replay must hit the cache");
+    assert_eq!(second.stats.finalized_render_calls, 0);
+    assert_eq!(first.lines, second.lines);
 }

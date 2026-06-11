@@ -420,7 +420,7 @@ fn render_live_viewport(
     if popup_active {
         let anchor = Rect::new(bottom.x, bottom.y + bottom.height, bottom.width, 0);
         if let Some(popup_view) = inline_popup {
-            let popup = crate::widgets::SuggestionPopup::new(&popup_view.items, styles)
+            let popup = crate::widgets::SuggestionPopup::new(popup_view.items, styles)
                 .selected(popup_view.selected)
                 .max_visible(bottom_height as usize);
             frame.render_widget(popup, anchor);
@@ -449,8 +449,7 @@ pub(crate) fn build_live_tail_lines(
         } else {
             &[]
         };
-    let mut chat = crate::widgets::ChatWidget::new(committed_cells, styles)
-        .scroll(state.ui.scroll_offset)
+    let mut chat = crate::transcript::render::CellsRenderer::new(committed_cells, styles)
         .streaming(state.ui.streaming.as_ref())
         .show_thinking(state.ui.show_thinking)
         .show_system_reminders(state.ui.show_system_reminders)
@@ -543,15 +542,18 @@ fn question_prompt_max_height(
 ) -> u16 {
     use crate::state::QuestionPage;
 
+    // One clone reused across pages (this runs several times per frame while
+    // a question prompt is open): `set_question_page` overwrites the page and
+    // focus deterministically from the untouched `questions` data, so
+    // re-pointing one projection copy is equivalent to cloning per page.
+    let mut projected = q.clone();
     let mut max_height = 0;
     for idx in 0..q.questions.len() {
-        let mut projected = q.clone();
         projected.set_question_page(idx);
         let view = crate::presentation::request::project_question(&projected);
         max_height = max_height.max(view.desired_height(box_width, styles));
     }
     if q.questions.len() > 1 {
-        let mut projected = q.clone();
         projected.current_question = QuestionPage::Submit;
         projected.focus_target = crate::state::QuestionFocusTarget::SubmitAction(
             crate::state::SubmitAction::SubmitAnswers,

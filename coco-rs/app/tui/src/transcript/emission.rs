@@ -19,11 +19,11 @@ use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::engine_message_starts;
 use crate::transcript::render::HistoryLineRenderOptions;
+use crate::transcript::render::assistant::CommittedAssistantMarkdownOptions;
+use crate::transcript::render::assistant::render_committed_assistant_markdown;
 use crate::transcript::render::render_finalized_history_lines;
 use crate::transcript::stream::ScrollbackStreamCommit;
 use crate::transcript::stream::StreamRenderKey;
-use crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions;
-use crate::widgets::chat::render_assistant::render_committed_assistant_markdown;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HistoryEmissionPlan {

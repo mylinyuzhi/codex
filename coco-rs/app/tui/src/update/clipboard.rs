@@ -111,6 +111,81 @@ where
     }
 }
 
+/// Detect a bracketed paste that is a path to an image file (drag-and-drop
+/// onto the terminal) and load its bytes for an image-pill attach. Returns
+/// `None` — falling through to the text-paste path — unless the paste is a
+/// single path token with an image extension whose file reads successfully.
+/// Mirrors codex-rs `handle_paste_image_path` / `is_image_path`.
+pub(crate) fn sniff_image_path_paste(text: &str) -> Option<(Vec<u8>, String)> {
+    let path = normalize_pasted_path(text)?;
+    let mime = image_mime_for_path(&path)?;
+    let bytes = std::fs::read(&path).ok()?;
+    Some((bytes, mime.to_string()))
+}
+
+/// Normalize a pasted path token: surrounding quotes (Finder / file
+/// managers), `file://` URLs with percent-encoding (GTK drag-drop), shell
+/// backslash-escaped spaces (terminal drag-drop), and `~/` expansion.
+fn normalize_pasted_path(text: &str) -> Option<std::path::PathBuf> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains('\n') {
+        return None;
+    }
+    let unquoted = trimmed
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+        .or_else(|| trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
+        .unwrap_or(trimmed);
+    if let Some(rest) = unquoted.strip_prefix("file://") {
+        let path = rest.strip_prefix("localhost").unwrap_or(rest);
+        return Some(std::path::PathBuf::from(percent_decode(path)));
+    }
+    let unescaped = unquoted.replace("\\ ", " ");
+    if let Some(rest) = unescaped.strip_prefix("~/") {
+        let home = std::env::var_os("HOME")?;
+        return Some(std::path::PathBuf::from(home).join(rest));
+    }
+    Some(std::path::PathBuf::from(unescaped))
+}
+
+/// Minimal percent-decoder for `file://` URL paths (UTF-8 lossy on the
+/// decoded bytes — pasted paths are display strings, not security inputs).
+fn percent_decode(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Image MIME by file extension — the same allowlist codex's
+/// `is_image_path` uses.
+fn image_mime_for_path(path: &std::path::Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 #[path = "clipboard.test.rs"]
 mod tests;

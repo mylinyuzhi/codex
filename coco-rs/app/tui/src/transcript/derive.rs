@@ -6,7 +6,7 @@
 //! that lives in the renderer at draw time.
 //!
 //! The renderer pipeline consumes `&[RenderedCell]` end-to-end
-//! (ChatWidget, history_lines, surface controller/viewport). Engine
+//! (transcript::render, surface controller/viewport). Engine
 //! `MessageHistory` is the only source of truth.
 //!
 //! See `engine-tui-unified-transcript-plan.md` §2 (Layer Ownership) and

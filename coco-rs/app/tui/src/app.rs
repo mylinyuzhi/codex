@@ -282,6 +282,9 @@ impl App {
         tracing::info!(
             target: "coco_tui::app",
             terminal_size = ?self.state.ui.terminal_size,
+            // Perf-report attribution: debug-build timings are not comparable
+            // to release (the 5ms-empty-frame class of misread).
+            debug_build = cfg!(debug_assertions),
             "TUI run loop start",
         );
         // Defensive: guarantee the TUI terminal modes (raw mode, bracketed
@@ -485,12 +488,17 @@ impl App {
         // Self-schedule the next frame while a turn is running or a
         // stream is in flight. This replaces the unconditional
         // `spinner_interval.tick()` arm of the main loop.
-        if self.state.ui.ephemeral.turn_active()
-            || self.state.ui.streaming.is_some()
-            || self.state.session.is_compacting
-        {
+        //
+        // Streaming keeps the fast tick (reveal pacing is one line per
+        // painted frame — slowing the cadence slows the text). Spinner-only
+        // phases (tool wait, compacting) tick at the glyph period instead:
+        // nothing else changes, so faster frames are pure waste.
+        if self.state.ui.streaming.is_some() {
             self.frame_requester
                 .schedule_frame_in(constants::SPINNER_TICK_INTERVAL);
+        } else if self.state.ui.ephemeral.turn_active() || self.state.session.is_compacting {
+            self.frame_requester
+                .schedule_frame_in(constants::SPINNER_ONLY_TICK_INTERVAL);
         }
 
         if let Some(start) = frame_start {
@@ -806,6 +814,25 @@ impl App {
                 // background composer instead of the question input.
                 if crate::update::route_question_free_text_paste(&mut self.state, &text) {
                     // consumed by the question free-text input
+                } else if let Some((bytes, mime)) = crate::update::sniff_image_path_paste(&text) {
+                    // Drag-and-drop of an image file onto the terminal pastes
+                    // its path — attach the image (with bytes; a bytes-less
+                    // pill is dropped at submit) instead of inserting the
+                    // path text.
+                    let size_kb = bytes.len().div_ceil(1024);
+                    let pill = self.state.ui.paste_manager.add_image_data(bytes, mime);
+                    self.state.ui.input.textarea.insert_str(&pill);
+                    self.state.ui.add_toast(crate::state::ui::Toast::success(
+                        crate::i18n::t!("toast.image_attached", size_kb = size_kb).to_string(),
+                    ));
+                    crate::autocomplete::refresh_suggestions(&mut self.state);
+                } else if text.chars().count() > coco_tui_ui::paste::LARGE_PASTE_CHAR_THRESHOLD {
+                    // Large text paste: store as a pill instead of flooding
+                    // the composer; expands back to the full content at
+                    // submit (`PasteManager::resolve_structured`).
+                    let pill = self.state.ui.paste_manager.add_text(text);
+                    self.state.ui.input.textarea.insert_str(&pill);
+                    crate::autocomplete::refresh_suggestions(&mut self.state);
                 } else {
                     // Batch insertion via TextArea is O(text.len()) and only
                     // recomputes the wrap cache once, vs N times for per-char insert.

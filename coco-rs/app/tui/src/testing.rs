@@ -3,10 +3,14 @@
 use std::sync::Arc;
 
 use coco_messages::AssistantContent;
+use coco_messages::ReasoningContent;
 use coco_messages::TextContent;
+use coco_messages::ToolCallContent;
 use coco_messages::create_assistant_message;
+use coco_messages::create_tool_result_message;
 use coco_messages::create_user_message_with_uuid;
 use coco_types::TokenUsage;
+use coco_types::ToolId;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -56,6 +60,11 @@ pub enum NativeReplayBenchContent {
     Markdown,
     SyntaxCode,
     Mermaid,
+    /// Realistic agent-session shape: thinking + text + tool call + tool
+    /// result per turn. This is the dominant production transcript and the
+    /// shape that historically bailed out of the replay cache entirely —
+    /// the cached bench cases assert it HITS, guarding that regression.
+    ToolHeavy,
 }
 
 impl NativeReplayBench {
@@ -80,12 +89,41 @@ impl NativeReplayBench {
                 NativeReplayBenchContent::Mermaid => {
                     format!("{BENCH_MERMAID_BLOCK}\n\nturn: {i}")
                 }
+                NativeReplayBenchContent::ToolHeavy => {
+                    format!("Inspecting replay case {i} with a tool pass.")
+                }
+            };
+            let assistant_content = match content {
+                NativeReplayBenchContent::ToolHeavy => vec![
+                    AssistantContent::Reasoning(ReasoningContent::new(format!(
+                        "Considering how to inspect case {i} before running the tool."
+                    ))),
+                    AssistantContent::Text(TextContent::new(assistant_text)),
+                    AssistantContent::ToolCall(ToolCallContent::new(
+                        format!("bench-call-{i}"),
+                        "Grep",
+                        serde_json::json!({"pattern": format!("case_{i}"), "path": "src/"}),
+                    )),
+                ],
+                _ => vec![AssistantContent::Text(TextContent::new(assistant_text))],
             };
             cells.extend(message_to_cells(Arc::new(create_assistant_message(
-                vec![AssistantContent::Text(TextContent::new(assistant_text))],
+                assistant_content,
                 "bench-model",
                 TokenUsage::default(),
             ))));
+            if content == NativeReplayBenchContent::ToolHeavy {
+                cells.extend(message_to_cells(Arc::new(create_tool_result_message(
+                    &format!("bench-call-{i}"),
+                    "Grep",
+                    ToolId::Custom("bench".into()),
+                    &format!(
+                        "src/lib.rs:{i}:fn case_{i}() {{}}\nsrc/lib.rs:{}:fn other() {{}}",
+                        i + 1
+                    ),
+                    /*is_error*/ false,
+                ))));
+            }
         }
         Self {
             cells,
@@ -361,7 +399,7 @@ fn streaming_text(content: NativeSurfaceNormalBenchContent) -> &'static str {
 }
 
 pub fn clear_native_replay_markdown_memo() {
-    crate::widgets::chat::clear_committed_markdown_memo_for_tests();
+    crate::transcript::render::clear_committed_markdown_memo_for_tests();
 }
 
 fn replay_options(
@@ -370,7 +408,9 @@ fn replay_options(
     content: NativeReplayBenchContent,
 ) -> HistoryLineRenderOptions<'_> {
     let syntax_highlighting = match content {
-        NativeReplayBenchContent::Markdown => SyntaxHighlighting::Disabled,
+        NativeReplayBenchContent::Markdown | NativeReplayBenchContent::ToolHeavy => {
+            SyntaxHighlighting::Disabled
+        }
         NativeReplayBenchContent::SyntaxCode | NativeReplayBenchContent::Mermaid => {
             SyntaxHighlighting::Enabled
         }

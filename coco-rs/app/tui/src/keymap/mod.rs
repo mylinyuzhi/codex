@@ -112,6 +112,7 @@ impl KeymapEntry {
 
     /// All combos for this entry (primary + alternates), useful when
     /// rendering "Ctrl+A / Home" together.
+    #[cfg(test)]
     pub fn combos(&self) -> impl Iterator<Item = &'static str> {
         std::iter::once(self.combo).chain(self.alternates.iter().copied())
     }
@@ -139,6 +140,7 @@ pub const GROUP_ORDER: &[KeymapGroup] = &[
 /// Used by the JSON / markdown export below; subagents and external
 /// tools should consume the localized form so they can answer in the
 /// user's language.
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct ResolvedEntry<'a> {
     id: &'a str,
@@ -149,6 +151,7 @@ struct ResolvedEntry<'a> {
     description: String,
 }
 
+#[cfg(test)]
 impl<'a> From<&'a KeymapEntry> for ResolvedEntry<'a> {
     fn from(e: &'a KeymapEntry) -> Self {
         Self {
@@ -165,14 +168,22 @@ impl<'a> From<&'a KeymapEntry> for ResolvedEntry<'a> {
 /// Export the keymap as JSON for subagent retrieval. Descriptions are
 /// resolved through the active locale; callers that need every locale
 /// should iterate by setting `rust_i18n::set_locale` before each call.
+///
+/// No production consumer yet (the planned `/help`-export wiring never
+/// landed); test-gated until one exists so it is not dead code in release
+/// builds.
+#[cfg(test)]
 #[must_use]
 pub fn export_json() -> String {
     let resolved: Vec<ResolvedEntry<'_>> = KEYMAP.iter().map(ResolvedEntry::from).collect();
     serde_json::to_string_pretty(&resolved).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Export the keymap as markdown, grouped by [`GROUP_ORDER`]. Used by
-/// `/help` and by subagents that prefer pre-rendered output.
+/// Export the keymap as markdown, grouped by [`GROUP_ORDER`], for
+/// subagents that prefer pre-rendered output.
+///
+/// No production consumer yet — see [`export_json`].
+#[cfg(test)]
 #[must_use]
 pub fn export_markdown() -> String {
     let mut out = String::new();

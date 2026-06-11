@@ -7,6 +7,7 @@ use crate::FrameLayout;
 use crate::state::AppState;
 use crate::surface::history_driver::HistoryReplayMode;
 use crate::surface::history_driver::PreparedFinalizedHistory;
+use crate::surface::history_driver::SessionHeader;
 use crate::surface::history_driver::SurfaceHistoryDriver;
 #[cfg(any(test, feature = "testing"))]
 use crate::surface::modal::ModalSurfaceState;
@@ -26,12 +27,19 @@ use coco_tui_ui::engine::terminal::SurfaceTerminal;
 use coco_tui_ui::style::UiStyles;
 use ratatui::text::Line;
 
-#[derive(Debug, Default, Clone)]
+// Deliberately NOT Clone: `stream` holds the single `ScrollbackStreamCommit`
+// owner (tui-v2 §6.7-10) — an accidental clone would create the second copy
+// that invariant forbids.
+#[derive(Debug, Default)]
 pub(crate) struct NativeSurfaceController {
     history: SurfaceHistoryDriver,
     stream: SurfaceStreamDriver,
     transcript_layout: TranscriptLayoutIndex,
     history_display: Option<HistoryDisplayState>,
+    /// Session header (+ fingerprint) cached by its input key — rebuilt only
+    /// when a header input (model/effort/cwd/branch/theme/width/…) changes,
+    /// not per frame.
+    session_header: Option<(u64, SessionHeader)>,
 }
 
 /// Display-mode inputs whose change requires a full history re-render (the
@@ -54,7 +62,7 @@ pub(crate) struct NativeSurfaceDrawOutcome {
     pub(crate) layout: FrameLayout,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct NativeSurfaceFramePlan {
     pub(crate) live_lines: Option<Vec<Line<'static>>>,
     pub(crate) finalized_history: PreparedFinalizedHistory,
@@ -70,6 +78,9 @@ pub(crate) struct NativeSurfaceFramePlan {
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct NativePrepareStats {
     pub(crate) prepare: Duration,
+    /// `Some(hit)` when the stream projection ran (`None` for view-mode /
+    /// no-stream frames) — verifies the generation cache in production traces.
+    pub(crate) stream_cache_hit: Option<bool>,
 }
 
 impl NativeSurfaceFramePlan {
@@ -96,16 +107,32 @@ impl NativeSurfaceController {
     ) -> NativeSurfaceFramePlan {
         let prepare_started = Instant::now();
         let prepared_live = (width > 0).then(|| self.stream.prepare(state, width, plan));
-        let (live_lines, stream_append, stream_commit_invalidated) = match prepared_live {
-            Some(prepared) => (
-                Some(prepared.lines),
-                prepared.stream_append,
-                prepared.commit_invalidated,
-            ),
-            None => (None, None, false),
-        };
+        let (live_lines, stream_append, stream_commit_invalidated, stream_cache_hit) =
+            match prepared_live {
+                Some(prepared) => (
+                    Some(prepared.lines),
+                    prepared.stream_append,
+                    prepared.commit_invalidated,
+                    prepared.stream_cache_hit,
+                ),
+                None => (None, None, false, None),
+            };
         let options = history_options(state, width);
-        let session_header = session_header_lines(state, width);
+        let header_key = crate::presentation::header::header_input_key(
+            state,
+            UiStyles::new(&state.ui.theme).theme_hash(),
+            width,
+        );
+        if self
+            .session_header
+            .as_ref()
+            .is_none_or(|(key, _)| *key != header_key)
+        {
+            self.session_header = Some((
+                header_key,
+                SessionHeader::new(session_header_lines(state, width)),
+            ));
+        }
         let cells = state.session.transcript.cells();
         let transcript_revision = state.session.transcript.revision();
         let history_display = HistoryDisplayState::from(state);
@@ -121,6 +148,7 @@ impl NativeSurfaceController {
         } else if plan.native_history_enabled()
             && !history_display_changed
             && !self.history.replay_due(now)
+            && let Some((_, session_header)) = self.session_header.as_ref()
         {
             self.history.prepare_append(
                 session_header,
@@ -139,6 +167,7 @@ impl NativeSurfaceController {
             stream_commit_invalidated,
             prepare_stats: NativePrepareStats {
                 prepare: prepare_started.elapsed(),
+                stream_cache_hit,
             },
         }
     }
@@ -418,6 +447,7 @@ impl NativeSurfaceController {
                 invalidated = stats.invalidated,
                 input_bottom = layout.input.bottom(),
                 viewport_bottom = terminal.viewport_area().bottom(),
+                render_us = crate::perf::duration_us(stats.render_elapsed),
                 diff_us = crate::perf::duration_us(stats.diff_elapsed),
                 draw_us = crate::perf::duration_us(stats.draw_elapsed),
                 flush_us = crate::perf::duration_us(stats.flush_elapsed),

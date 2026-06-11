@@ -1,4 +1,13 @@
-//! Finalized transcript rendering for native history emission.
+//! Finalized transcript rendering for native history emission — and the
+//! single home of every per-cell renderer (tui-v2 §6.4 "render.rs —
+//! the only renderer"; §6.7-2 "no streaming-only renderer exists").
+//!
+//! Submodules: [`cells_renderer`] (the `&[RenderedCell]` → `Vec<Line>`
+//! projection, ex-`widgets::chat::ChatWidget`), the per-category cell
+//! renderers ([`assistant`] / [`user`] / [`system`] / [`tool`] /
+//! [`tool_result`]), and this module's history/replay renderer +
+//! [`HistoryReplayCache`]. `widgets/` composes frames; it depends on
+//! `transcript::render`, never the other way around.
 //!
 //! Phase 3d (§4): consumes the engine-authoritative `&[RenderedCell]`
 //! slice from `session.transcript.cells()`. The "messages omitted"
@@ -6,6 +15,28 @@
 //! truncation occurs at engine-message (not cell) boundaries — a
 //! single `Message::Assistant` with text + thinking + tool_use blocks
 //! contributes one increment, never three.
+pub(crate) mod assistant;
+mod cells_renderer;
+mod system;
+mod tool;
+pub(crate) mod tool_result;
+mod user;
+
+#[cfg(any(test, feature = "testing"))]
+pub(crate) use assistant::clear_committed_markdown_memo_for_tests;
+pub(crate) use cells_renderer::CellsRenderer;
+pub(crate) use cells_renderer::assistant_stream_lead_marker;
+pub(crate) use cells_renderer::attachment_summary_text;
+pub(crate) use cells_renderer::compact_file_reference_chip_path;
+pub(crate) use cells_renderer::nested_memory_chip_path;
+// Shared helpers the per-category renderers reach via `super::…` (they were
+// items of the old `widgets::chat` parent module).
+use cells_renderer::TOOL_OUTPUT_PREVIEW_ROWS;
+use cells_renderer::output_result_line;
+use cells_renderer::result_line;
+use cells_renderer::single_line_capped;
+use cells_renderer::transcript_safe_line;
+
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -26,7 +57,6 @@ use crate::state::session::ReasoningMetadata;
 use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::SystemCellKind;
-use crate::widgets::ChatWidget;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::engine::history_insert::HistoryRows;
 use coco_tui_ui::engine::history_insert::render_history_rows;
@@ -277,7 +307,7 @@ pub(crate) fn render_finalized_history_lines(
     cells: &[RenderedCell],
     options: HistoryLineRenderOptions<'_>,
 ) -> Vec<Line<'static>> {
-    let mut chat = ChatWidget::new(cells, options.styles)
+    let mut chat = CellsRenderer::new(cells, options.styles)
         .show_system_reminders(options.show_system_reminders)
         .show_thinking(options.show_thinking)
         .width(options.width)
@@ -486,7 +516,16 @@ fn render_counted(
 }
 
 fn rendered_line_row_count(lines: &[Line<'static>], width: u16) -> usize {
-    render_history_rows(lines.to_vec(), width).height() as usize
+    // The same `Paragraph::line_count` + `Wrap { trim: false }` math
+    // `render_history_rows` uses for its height — identical by construction
+    // (including the `u16::MAX` clamp) — without rasterizing a throwaway
+    // `Buffer`. This runs on full-transcript input once per binary-search
+    // step of the capped-replay fit, where the Buffer pass was multi-ms of
+    // pure allocation + style writes.
+    ratatui::widgets::Paragraph::new(lines.to_vec())
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .line_count(width)
+        .min(u16::MAX as usize)
 }
 
 fn replay_cache_key(
@@ -500,8 +539,20 @@ fn replay_cache_key(
         .then(|| replay_compact_boundary_shortcut(options.kb_handle));
     let compact_boundary_shortcut = compact_boundary_shortcut.as_deref();
     let mut hasher = Sha256::new();
+    // kb-resolved strings render into cell BODIES (the tool-result
+    // `(<chord> to expand)` hint and the thinking toggle hint) — fold the
+    // resolved chords in so a rebind invalidates instead of serving stale
+    // hint text.
+    hash_str(
+        &mut hasher,
+        &replay_compact_boundary_shortcut(options.kb_handle),
+    );
+    hash_str(
+        &mut hasher,
+        &replay_thinking_toggle_shortcut(options.kb_handle),
+    );
     for cell in cells {
-        hash_cacheable_cell(cell, compact_boundary_shortcut, &mut hasher)?;
+        hash_cacheable_cell(cell, options, compact_boundary_shortcut, &mut hasher)?;
     }
     let content_digest: [u8; 32] = hasher.finalize().into();
     Some(HistoryReplayCacheKey {
@@ -518,6 +569,7 @@ fn replay_cache_key(
 
 fn hash_cacheable_cell(
     cell: &RenderedCell,
+    options: HistoryLineRenderOptions<'_>,
     compact_boundary_shortcut: Option<&str>,
     hasher: &mut Sha256,
 ) -> Option<()> {
@@ -541,9 +593,70 @@ fn hash_cacheable_cell(
                 hasher,
             )?;
         }
-        _ => return None,
+        // Tool / thinking / attachment cells used to bail to the uncached
+        // path, which made the replay cache dead for virtually every real
+        // session (any transcript with a tool call missed on every
+        // resize/theme replay). The replay render reads no live execution
+        // state (`render_finalized_history_lines` never sets
+        // `tool_executions`, so elapsed badges are absent by construction);
+        // the only extra-source input is the reasoning side-cache, hashed
+        // below.
+        CellKind::AssistantThinking { text } => {
+            hash_u8(hasher, 3);
+            hash_str(hasher, text);
+            // Side-cache badge (`Thinking · <duration> · <tokens>`): absence
+            // (live append before `TurnCompleted`) renders differently.
+            match options
+                .reasoning_metadata
+                .and_then(|cache| cache.get(&cell.message_uuid))
+            {
+                Some(meta) => {
+                    hash_u8(hasher, 1);
+                    hash_i64(hasher, meta.duration_ms.unwrap_or(-1));
+                    hash_i64(hasher, meta.reasoning_tokens);
+                }
+                None => hash_u8(hasher, 0),
+            }
+        }
+        CellKind::AssistantRedactedThinking => hash_u8(hasher, 4),
+        CellKind::ToolUse { tool_name, call_id } => {
+            hash_u8(hasher, 5);
+            hash_str(hasher, tool_name);
+            hash_str(hasher, call_id);
+            hash_message_source(hasher, cell.source.as_ref())?;
+        }
+        CellKind::ToolResult { .. } => {
+            hash_u8(hasher, 6);
+            hash_message_source(hasher, cell.source.as_ref())?;
+        }
+        CellKind::Attachment => {
+            hash_u8(hasher, 8);
+            hash_message_source(hasher, cell.source.as_ref())?;
+        }
     }
     Some(())
+}
+
+/// Hash the full serialized source message — conservative over-keying for
+/// cells whose render derives many fields from the source (tool input
+/// previews, result bodies, display data, attachment chips). Over-keying can
+/// only cause a miss, never a wrong hit.
+fn hash_message_source(hasher: &mut Sha256, source: &Message) -> Option<()> {
+    let json = serde_json::to_vec(source).ok()?;
+    hasher.update((json.len() as u64).to_le_bytes());
+    hasher.update(&json);
+    Some(())
+}
+
+fn replay_thinking_toggle_shortcut(kb_handle: Option<&KeybindingHandle>) -> String {
+    kb_handle
+        .and_then(|handle| {
+            handle.display_for(
+                &coco_keybindings::KeybindingAction::ChatThinkingToggle,
+                crate::keybinding_bridge::KeybindingContext::Chat,
+            )
+        })
+        .unwrap_or_else(|| "F2".to_string())
 }
 
 fn hash_system_cell(
@@ -635,9 +748,15 @@ fn hash_system_cell(
             }
             hash_str(hasher, compact_boundary_shortcut?);
         }
-        // LocalCommand can contain large command output and is intentionally
-        // left on the uncached path for this pass.
-        (SystemCellKind::LocalCommand, SystemMessage::LocalCommand(_)) => return None,
+        (SystemCellKind::LocalCommand, SystemMessage::LocalCommand(_))
+        | (SystemCellKind::ContextUsage, SystemMessage::ContextUsage(_)) => {
+            // Body-heavy variants (command output / usage table): hash the
+            // full serialized source instead of enumerating fields — a missed
+            // field would serve stale rows, over-keying only misses.
+            hash_u8(hasher, 14);
+            hash_message_source(hasher, source)?;
+        }
+        // Kind/source mismatch: defensive — leave it on the uncached path.
         _ => return None,
     }
     Some(())
@@ -757,7 +876,7 @@ fn estimate_replay_entry_bytes(lines: &[Line<'_>], rows: &HistoryRows) -> usize 
     estimate_lines_bytes(lines).saturating_add(rows.estimated_bytes())
 }
 
-fn estimate_lines_bytes(lines: &[Line<'_>]) -> usize {
+pub(super) fn estimate_lines_bytes(lines: &[Line<'_>]) -> usize {
     lines
         .iter()
         .map(|line| {
@@ -782,11 +901,7 @@ fn estimate_cell_bytes(cell: &RenderedCell) -> usize {
         CellKind::ToolUse { call_id, tool_name } => call_id.len() + tool_name.len(),
         CellKind::ToolResult { call_id } => call_id.len(),
         CellKind::System(kind) => estimate_system_cell_bytes(kind, cell.source.as_ref()),
-        CellKind::UserAttachment
-        | CellKind::AssistantRedactedThinking
-        | CellKind::Attachment
-        | CellKind::Progress
-        | CellKind::Tombstone => 0,
+        CellKind::AssistantRedactedThinking | CellKind::Attachment => 0,
     }
 }
 
@@ -845,5 +960,5 @@ fn replay_truncation_marker(omitted_messages: usize) -> Vec<Line<'static>> {
 }
 
 #[cfg(test)]
-#[path = "render.test.rs"]
+#[path = "mod.test.rs"]
 mod tests;

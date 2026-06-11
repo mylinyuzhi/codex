@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 
 use crate::state::agents_dialog::AgentsDialogState;
 use crate::state::permissions_editor::PermissionsEditorState;
+use crate::state::plugin_dialog::PluginDialogState;
+use crate::state::skills_dialog::SkillsDialogState;
 use crate::state::surface_payloads::CopyPickerState;
 use crate::state::surface_payloads::DiffViewState;
 use crate::state::surface_payloads::DoctorState;
@@ -11,10 +13,8 @@ use crate::state::surface_payloads::ExportState;
 use crate::state::surface_payloads::GlobalSearchState;
 use crate::state::surface_payloads::MemoryDialogState;
 use crate::state::surface_payloads::ModelPickerState;
-use crate::state::surface_payloads::PluginDialogState;
 use crate::state::surface_payloads::QuickOpenState;
 use crate::state::surface_payloads::SessionBrowserState;
-use crate::state::surface_payloads::SkillsDialogState;
 use crate::state::surface_payloads::TaskDetailState;
 use crate::state::surface_payloads::TeamRosterState;
 use crate::state::surface_payloads::ThemePickerState;
@@ -52,7 +52,7 @@ pub enum ModalState {
     McpServerSelect(surface_payloads::McpServerSelectState),
     CopyPicker(CopyPickerState),
     TeamRoster(TeamRosterState),
-    PluginHint(surface_payloads::PluginHintState),
+    PluginHint(crate::state::plugin_dialog::PluginHintState),
 }
 
 impl ModalState {

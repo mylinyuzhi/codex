@@ -27,13 +27,9 @@ pub fn init() {
     tracing::debug!(locale, "i18n initialized");
 }
 
-/// Return the currently active locale.
-pub fn current_locale() -> String {
-    rust_i18n::locale().to_string()
-}
-
 /// Set the active locale explicitly.
-pub fn set_locale(locale: &str) {
+#[cfg(test)]
+pub(crate) fn set_locale(locale: &str) {
     rust_i18n::set_locale(locale);
 }
 

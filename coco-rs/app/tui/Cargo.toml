@@ -55,6 +55,12 @@ libc.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+# Self dev-dependency: enables this crate's own `testing` feature for every
+# dev target (tests/, the `required-features` benches) via feature
+# unification, so `testing`-gated helpers (`handle_event_for_test`, the
+# `testing` module) stay visible to `app/tui/tests/` without shipping in
+# release builds.
+coco-tui = { workspace = true, features = ["testing"] }
 coco-tui-ui = { workspace = true, features = ["testing"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 insta.workspace = true

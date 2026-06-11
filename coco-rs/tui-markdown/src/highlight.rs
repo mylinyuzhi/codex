@@ -31,14 +31,19 @@ use syntect::util::LinesWithEndings;
 /// the only acceptable process-global here (no mutable theme state).
 /// The first-use deserialization costs tens of milliseconds and lands inside
 /// whichever frame first highlights code, so it is logged for attribution.
+///
+/// `two-face` extends the stock syntect set (which lacks TypeScript/TSX,
+/// TOML, Dockerfile, Terraform, …) to ~250 grammars, with dumps built for
+/// the same pure-Rust `regex-fancy` engine this crate links.
 fn syntax_set() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
     SET.get_or_init(|| {
         let started = std::time::Instant::now();
-        let set = SyntaxSet::load_defaults_newlines();
+        let set = two_face::syntax::extra_newlines();
         tracing::info!(
             target: "tui::perf::init",
             duration_ms = started.elapsed().as_secs_f64() * 1000.0,
+            grammars = set.syntaxes().len(),
             "syntect syntax set loaded",
         );
         set
@@ -257,17 +262,33 @@ fn highlight_cache() -> &'static Mutex<HighlightCache> {
     CACHE.get_or_init(|| Mutex::new(HighlightCache::default()))
 }
 
+/// How the highlighted block is being rendered. Chosen by the caller because
+/// it decides the caching strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HighlightMode {
+    /// Finalized content: results memoize in the shared LRU.
+    Committed,
+    /// In-flight streaming tail: the open fence grows every revealed line, so
+    /// per-snapshot LRU entries would be dead on arrival (each one evicting a
+    /// useful committed block) and a fresh tokenize per frame is O(block²)
+    /// over the block's life. Streaming renders extend a single prefix
+    /// checkpoint instead and never touch the LRU.
+    Streaming,
+}
+
 /// Highlight a code block into per-line styled spans.
 ///
 /// Returns `None` to request the plain fallback (highlighting disabled,
 /// unknown language, oversized input, or a parser error) — the caller then
-/// renders the code verbatim. Never panics on bad input. Successful results are
-/// memoized width-independently (see [`HighlightCache`]).
+/// renders the code verbatim. Never panics on bad input. Successful committed
+/// results are memoized width-independently (see [`HighlightCache`]);
+/// streaming results extend the [`StreamingFenceSlot`] checkpoint.
 pub(crate) fn highlight_code(
     code: &str,
     lang: &str,
     styles: UiStyles<'_>,
     syntax: SyntaxHighlighting,
+    mode: HighlightMode,
 ) -> Option<Highlighted> {
     if syntax.is_disabled() {
         return None;
@@ -276,6 +297,9 @@ pub(crate) fn highlight_code(
         || code.bytes().filter(|&b| b == b'\n').count() > MAX_HIGHLIGHT_LINES
     {
         return None;
+    }
+    if mode == HighlightMode::Streaming {
+        return highlight_streaming(code, lang, styles);
     }
     // Key on the inputs that change the highlighted spans — content, language,
     // and the active theme's palette — but NOT width. A lock-poison or a fresh
@@ -309,22 +333,143 @@ fn highlight_uncached(
     let mut stack = ScopeStack::new();
     let mut out: Vec<Vec<Span<'static>>> = Vec::new();
     for line in LinesWithEndings::from(code) {
-        let ops = state.parse_line(line, ss).ok()?;
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        let mut idx = 0usize;
-        for (offset, op) in &ops {
-            if *offset > idx {
-                push_piece(&mut spans, &line[idx..*offset], &stack, styles);
-                idx = *offset;
-            }
-            stack.apply(op).ok()?;
-        }
-        if idx < line.len() {
-            push_piece(&mut spans, &line[idx..], &stack, styles);
-        }
-        out.push(spans);
+        out.push(tokenize_line(line, ss, &mut state, &mut stack, styles)?);
     }
     Some(out)
+}
+
+/// Tokenize one newline-terminated (or final partial) line, advancing the
+/// parse state + scope stack. `None` on a parser error.
+fn tokenize_line(
+    line: &str,
+    ss: &SyntaxSet,
+    state: &mut ParseState,
+    stack: &mut ScopeStack,
+    styles: UiStyles<'_>,
+) -> Option<Vec<Span<'static>>> {
+    let ops = state.parse_line(line, ss).ok()?;
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut idx = 0usize;
+    for (offset, op) in &ops {
+        if *offset > idx {
+            push_piece(&mut spans, &line[idx..*offset], stack, styles);
+            idx = *offset;
+        }
+        stack.apply(op).ok()?;
+    }
+    if idx < line.len() {
+        push_piece(&mut spans, &line[idx..], stack, styles);
+    }
+    Some(spans)
+}
+
+/// Prefix checkpoint for the in-flight streaming fence: the syntect state and
+/// the spans of every COMPLETE line tokenized so far. syntect is strictly
+/// line-sequential, so when the next frame's content starts with the already
+/// tokenized prefix, only the new lines are fed through the parser — O(delta)
+/// per frame instead of O(block).
+///
+/// One slot (there is at most one open fence in the mutable tail); a
+/// non-prefix update (new fence, edited content, theme/lang change) rebuilds
+/// it from scratch. The slot pins at most one block (≤ `MAX_HIGHLIGHT_BYTES`)
+/// until the next streaming fence replaces it.
+struct StreamingFenceSlot {
+    lang: String,
+    theme_hash: u64,
+    /// Source already tokenized into `lines` — always ends at a line boundary.
+    content: String,
+    state: ParseState,
+    stack: ScopeStack,
+    lines: Vec<Vec<Span<'static>>>,
+}
+
+fn streaming_fence_slot() -> &'static Mutex<Option<StreamingFenceSlot>> {
+    static SLOT: OnceLock<Mutex<Option<StreamingFenceSlot>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+fn highlight_streaming(code: &str, lang: &str, styles: UiStyles<'_>) -> Option<Highlighted> {
+    let ss = syntax_set();
+    let theme_hash = styles.theme_hash();
+    let mut guard = streaming_fence_slot().lock().ok()?;
+    // A rebuild is expected ONCE per fence (`empty_slot` / `non_prefix_content`
+    // when a new fence replaces the previous one). The same cause repeating
+    // every frame means the checkpoint never extends — the O(block²) regression
+    // this slot exists to prevent — so each rebuild logs its cause.
+    let rebuild_cause = match guard.as_ref() {
+        None => Some("empty_slot"),
+        Some(slot) => {
+            if slot.lang != lang {
+                Some("lang_changed")
+            } else if slot.theme_hash != theme_hash {
+                Some("theme_changed")
+            } else if !code.starts_with(&slot.content) {
+                Some("non_prefix_content")
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(cause) = rebuild_cause {
+        tracing::debug!(
+            target: "tui::perf::highlight",
+            cause,
+            lang,
+            code_bytes = code.len(),
+            "streaming highlight slot rebuilt",
+        );
+        let syntax_ref = find_syntax(ss, lang)?;
+        *guard = Some(StreamingFenceSlot {
+            lang: lang.to_string(),
+            theme_hash,
+            content: String::new(),
+            state: ParseState::new(syntax_ref),
+            stack: ScopeStack::new(),
+            lines: Vec::new(),
+        });
+    }
+    let slot = guard.as_mut()?;
+    let result = extend_streaming_slot(slot, code, ss, styles);
+    if result.is_none() {
+        // A parser error mid-extension leaves the slot half-updated; drop it
+        // so the next frame rebuilds from scratch instead of trusting a
+        // checkpoint that no longer matches its content.
+        tracing::debug!(
+            target: "tui::perf::highlight",
+            lang,
+            code_bytes = code.len(),
+            "streaming highlight slot dropped after parser error",
+        );
+        *guard = None;
+    }
+    result
+}
+
+fn extend_streaming_slot(
+    slot: &mut StreamingFenceSlot,
+    code: &str,
+    ss: &SyntaxSet,
+    styles: UiStyles<'_>,
+) -> Option<Highlighted> {
+    // Advance the checkpoint over newly arrived COMPLETE lines only.
+    let new_part = &code[slot.content.len()..];
+    let complete_end = new_part.rfind('\n').map_or(0, |i| i + 1);
+    let (complete, partial) = new_part.split_at(complete_end);
+    for line in LinesWithEndings::from(complete) {
+        let spans = tokenize_line(line, ss, &mut slot.state, &mut slot.stack, styles)?;
+        slot.lines.push(spans);
+    }
+    slot.content.push_str(complete);
+    // The trailing partial line is tokenized off a CLONED state so the
+    // checkpoint stays at a line boundary — re-feeding a since-grown partial
+    // line through the committed state would double-tokenize it.
+    let mut out = slot.lines.clone();
+    if !partial.is_empty() {
+        let mut state = slot.state.clone();
+        let mut stack = slot.stack.clone();
+        out.push(tokenize_line(partial, ss, &mut state, &mut stack, styles)?);
+    }
+    Some(Arc::new(out))
 }
 
 fn push_piece(

@@ -195,16 +195,13 @@ fn transcript_counts(cells: &[RenderedCell]) -> TranscriptCounts {
             continue;
         }
         match &cell.kind {
-            CellKind::UserText { .. } | CellKind::UserAttachment => counts.users += 1,
+            CellKind::UserText { .. } => counts.users += 1,
             CellKind::AssistantText { .. }
             | CellKind::AssistantThinking { .. }
             | CellKind::AssistantRedactedThinking
             | CellKind::ToolUse { .. } => counts.assistants += 1,
             CellKind::ToolResult { .. } => counts.tools += 1,
-            CellKind::Attachment
-            | CellKind::Progress
-            | CellKind::Tombstone
-            | CellKind::System(_) => {}
+            CellKind::Attachment | CellKind::System(_) => {}
         }
     }
     counts

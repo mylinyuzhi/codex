@@ -45,7 +45,7 @@ use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::SystemCellKind;
 use crate::transcript::derive::extract_tool_call_input;
 use crate::transcript::derive::tool_result_output;
-use crate::widgets::chat::tool_result_render::ToolResultRenderCtx;
+use crate::transcript::render::tool_result::ToolResultRenderCtx;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
@@ -510,11 +510,11 @@ impl<'a> TranscriptCellRenderer<'a> {
                     self.render_tool_result_summary(cell, lines);
                 }
             }
-            CellKind::UserAttachment | CellKind::Attachment => {
+            CellKind::Attachment => {
                 // Memory injections collapse to `◆ memory · <path>` (path relative
                 // to cwd); other attachments show their first body line behind a
                 // width-1 hollow `◇`. Silent / structured payloads render nothing.
-                if let Some(path) = crate::widgets::chat::compact_file_reference_chip_path(
+                if let Some(path) = crate::transcript::render::compact_file_reference_chip_path(
                     cell.source.as_ref(),
                     self.cwd,
                 ) {
@@ -523,16 +523,17 @@ impl<'a> TranscriptCellRenderer<'a> {
                         Span::raw("Referenced file ").fg(self.styles.dim()),
                         Span::raw(path).fg(self.styles.dim()).bold(),
                     ]));
-                } else if let Some(path) =
-                    crate::widgets::chat::nested_memory_chip_path(cell.source.as_ref(), self.cwd)
-                {
+                } else if let Some(path) = crate::transcript::render::nested_memory_chip_path(
+                    cell.source.as_ref(),
+                    self.cwd,
+                ) {
                     lines.push(Line::from(vec![
                         Span::raw("◆ ").fg(self.styles.accent()).dim(),
                         Span::raw("memory · ").fg(self.styles.dim()),
                         Span::raw(path).fg(self.styles.dim()),
                     ]));
                 } else if let Some(summary) =
-                    crate::widgets::chat::attachment_summary_text(cell.source.as_ref())
+                    crate::transcript::render::attachment_summary_text(cell.source.as_ref())
                 {
                     lines.push(Line::from(vec![
                         Span::raw("◇ ").fg(self.styles.accent()).dim(),
@@ -540,7 +541,6 @@ impl<'a> TranscriptCellRenderer<'a> {
                     ]));
                 }
             }
-            CellKind::Progress | CellKind::Tombstone => {}
             CellKind::System(kind) => self.render_system_cell(kind, &cell.source, lines),
         }
     }
@@ -702,7 +702,7 @@ impl<'a> TranscriptCellRenderer<'a> {
         let Some(projection) = tool_result_output(cell.source.as_ref()) else {
             return;
         };
-        crate::widgets::chat::tool_result_render::render_tool_result_body(
+        crate::transcript::render::tool_result::render_tool_result_body(
             &self.tool_result_ctx(/*expanded*/ true),
             &projection.tool_name,
             input,
@@ -1116,11 +1116,7 @@ fn cell_content_len(cell: &RenderedCell) -> usize {
             call_id.len() + len
         }
         CellKind::System(_) => meta_preview_text(cell).len(),
-        CellKind::UserAttachment
-        | CellKind::Attachment
-        | CellKind::AssistantRedactedThinking
-        | CellKind::Progress
-        | CellKind::Tombstone => 0,
+        CellKind::Attachment | CellKind::AssistantRedactedThinking => 0,
     }
 }
 
@@ -1289,3 +1285,7 @@ fn wrapped_height(lines: &[Line<'static>], width: u16) -> usize {
         .sum::<usize>()
         .max(1)
 }
+
+#[cfg(test)]
+#[path = "transcript_modal.test.rs"]
+mod tests;

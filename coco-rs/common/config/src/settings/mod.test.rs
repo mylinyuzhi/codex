@@ -70,7 +70,7 @@ fn test_parse_settings_accepts_tui_performance_policy() {
             "tui": {
                 "performance": {
                     "enabled": true,
-                    "sample_every_n_frames": 10,
+                    "sample_every_n_frames": 7,
                     "slow_frame_ms": 33,
                     "slow_stage_us": 750
                 }
@@ -81,7 +81,7 @@ fn test_parse_settings_accepts_tui_performance_policy() {
 
     let performance = settings.tui.performance;
     assert!(performance.enabled);
-    assert_eq!(performance.sample_every_n_frames, 10);
+    assert_eq!(performance.sample_every_n_frames, 7);
     assert_eq!(performance.slow_frame_ms, 33);
     assert_eq!(performance.slow_stage_us, 750);
 }

@@ -154,9 +154,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
 ///    [`crate::keybinding_dispatch`], use it.
 /// 2. If the resolver explicitly consumed the keystroke (chord
 ///    cancelled, null unbind), return `None` so it doesn't fall through.
-/// 3. Otherwise, dispatch through the legacy hardcoded cascade for
-///    TUI-only shortcuts (Ctrl+S session browser, F1 help, Ctrl+,
-///    settings, …) that aren't in the TS schema yet.
+/// 3. Otherwise, dispatch through the residual hardcoded arms — only keys
+///    that CANNOT be rebindable defaults (`?`-on-empty-composer, per-surface
+///    navigation maps, readline editing, PageUp/PageDown, F6); every former
+///    "TUI-only shortcut" arm is folded into `coco-keybindings` defaults.
 pub fn map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     let ctx = active_context(state);
     let (cmd, source) = resolve_key(state, key, ctx);

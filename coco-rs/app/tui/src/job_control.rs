@@ -14,17 +14,16 @@
 //!    state alt-screen, and disable bracketed paste / focus change reporting.
 //! 2. Show the cursor on a fresh normal-buffer row so the shell sees its
 //!    prompt.
-//! 3. Record a pending [`ResumeAction`] for the next draw.
+//! 3. Record the pending resume flag for the next draw.
 //! 4. `libc::kill(0, SIGTSTP)` — kernel stops the process group. The
 //!    call returns synchronously, but the next user-mode instruction
 //!    doesn't execute until SIGCONT arrives (default `fg` behaviour,
 //!    or external `kill -CONT $pid`).
 //! 5. [`crate::terminal::enter_tui_modes`] — re-arm raw mode etc.
-//! 6. [`SuspendContext::prepare_resume_action`] is consumed inside
-//!    [`crate::terminal::Tui::draw`] on the next frame, where
-//!    [`PreparedResumeAction::apply`] clears the native surface and forces a
-//!    full repaint. If a large state is still active, `Tui` re-enters
-//!    alt-screen through normal state placement.
+//! 6. [`SuspendContext::take_resume_pending`] is consumed inside
+//!    [`crate::terminal::Tui::draw`] on the next frame, which clears the
+//!    native surface and forces a full repaint. If a large state is still
+//!    active, `Tui` re-enters alt-screen through normal state placement.
 //!
 //! Windows: no `SIGTSTP`; all entry points become no-ops.
 //!
@@ -46,46 +45,14 @@ use crossterm::execute;
 
 // ───────────────────────── Unix implementation ─────────────────────────
 
-/// Records that a `Ctrl+Z → fg` cycle just happened so the next draw
-/// can clear the now-dirty terminal state and force a full repaint.
-#[cfg(unix)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ResumeAction {
-    Restore,
-}
-
-/// Opaque handle returned from
-/// [`SuspendContext::prepare_resume_action`]. `Tui::draw` consumes it by
-/// calling [`PreparedResumeAction::apply`].
-#[cfg(unix)]
-#[derive(Debug)]
-pub struct PreparedResumeAction(ResumeAction);
-
-#[cfg(unix)]
-impl PreparedResumeAction {
-    /// Force a full repaint after SIGCONT. The caller owns the concrete
-    /// terminal surface and provides the clear/invalidate operation.
-    pub fn apply<F>(self, mut clear_surface: F) -> io::Result<()>
-    where
-        F: FnMut() -> io::Result<()>,
-    {
-        match self.0 {
-            ResumeAction::Restore => {
-                clear_surface()?;
-                Ok(())
-            }
-        }
-    }
-}
-
 /// State machine for suspend / resume. Cheap to construct; the only
-/// inner mutable bit is an `Option<ResumeAction>` guarded by a Mutex
-/// (Mutex chosen over RefCell because `Tui` is `Send`-able and we want
-/// to keep that property without re-checking).
+/// inner mutable bit is the "a `Ctrl+Z → fg` cycle just happened" flag
+/// guarded by a Mutex (Mutex chosen over RefCell because `Tui` is
+/// `Send`-able and we want to keep that property without re-checking).
 #[cfg(unix)]
 #[derive(Default)]
 pub struct SuspendContext {
-    resume_pending: Arc<Mutex<Option<ResumeAction>>>,
+    resume_pending: Arc<Mutex<bool>>,
 }
 
 #[cfg(unix)]
@@ -116,7 +83,7 @@ impl SuspendContext {
 
         // 3. Record what the next draw needs to do.
         if let Ok(mut guard) = self.resume_pending.lock() {
-            *guard = Some(ResumeAction::Restore);
+            *guard = true;
         }
 
         // 4. Deliver SIGTSTP to our process group. `kill(0, sig)` hits
@@ -129,17 +96,19 @@ impl SuspendContext {
         }
 
         // 5. We're back. Re-arm TUI modes; surface clear happens on the next
-        //    `Tui::draw` via `PreparedResumeAction::apply`.
+        //    `Tui::draw` via `take_resume_pending`.
         crate::terminal::enter_tui_modes(&mut stdout)?;
         Ok(())
     }
 
-    /// Consume any pending resume action. Called from
+    /// Consume the pending resume flag. Called from
     /// [`crate::terminal::Tui::draw`] at the top of each frame so the
     /// surface repaint happens before render reads from the terminal.
-    pub fn prepare_resume_action(&self) -> Option<PreparedResumeAction> {
-        let action = self.resume_pending.lock().ok()?.take()?;
-        Some(PreparedResumeAction(action))
+    pub fn take_resume_pending(&self) -> bool {
+        self.resume_pending
+            .lock()
+            .map(|mut guard| std::mem::take(&mut *guard))
+            .unwrap_or(false)
     }
 }
 
@@ -163,10 +132,6 @@ fn restore_after_suspend_error(stdout: &mut io::Stdout, err: io::Error) -> io::R
 pub struct SuspendContext;
 
 #[cfg(not(unix))]
-#[derive(Debug)]
-pub struct PreparedResumeAction;
-
-#[cfg(not(unix))]
 impl SuspendContext {
     pub fn new() -> Self {
         Self
@@ -176,19 +141,8 @@ impl SuspendContext {
         Ok(())
     }
 
-    pub fn prepare_resume_action(&self) -> Option<PreparedResumeAction> {
-        None
-    }
-}
-
-#[cfg(not(unix))]
-impl PreparedResumeAction {
-    pub fn apply<F>(self, mut clear_surface: F) -> std::io::Result<()>
-    where
-        F: FnMut() -> std::io::Result<()>,
-    {
-        clear_surface()?;
-        Ok(())
+    pub fn take_resume_pending(&self) -> bool {
+        false
     }
 }
 

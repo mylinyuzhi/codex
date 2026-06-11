@@ -32,12 +32,18 @@ use coco_tui_ui::engine::history_reflow::HistoryViewportChange;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
-/// DEBUG (duplication investigation, tui-v2): first and last visible row text of
-/// a `HistoryRows` block, for the `tui::surface::insert` logs. Lets a repro show
-/// exactly WHAT content each scrollback write carries — so a user line that gets
-/// inserted by two different writes (logical double-emit) is distinguishable
-/// from one inserted once but painted twice (terminal/width desync).
+/// First and last visible row text of a `HistoryRows` block, for the
+/// `tui::surface::insert` logs. Lets a repro show exactly WHAT content each
+/// scrollback write carries — so a user line that gets inserted by two
+/// different writes (logical double-emit) is distinguishable from one inserted
+/// once but painted twice (terminal/width desync).
+///
+/// Returns empty strings when that debug log is disabled — the buffer scan is
+/// not worth paying on every scrollback insert otherwise.
 fn history_rows_first_last(rows: &HistoryRows) -> (String, String) {
+    if !tracing::enabled!(target: "tui::surface::insert", tracing::Level::DEBUG) {
+        return (String::new(), String::new());
+    }
     let width = rows.width() as usize;
     if width == 0 || rows.is_empty() {
         return (String::new(), String::new());
@@ -63,7 +69,24 @@ fn history_rows_first_last(rows: &HistoryRows) -> (String, String) {
     (row_text(0), row_text(rows.height().saturating_sub(1)))
 }
 
-#[derive(Debug, Default, Clone)]
+/// Session header lines + their fingerprint, built by the controller only
+/// when [`crate::presentation::header::header_input_key`] changes — the
+/// per-frame fast path compares the precomputed fingerprint instead of
+/// rebuilding and re-hashing the header every draw.
+#[derive(Debug, Clone)]
+pub(crate) struct SessionHeader {
+    pub(crate) lines: Vec<Line<'static>>,
+    pub(crate) fingerprint: Vec<RenderedLineFingerprint>,
+}
+
+impl SessionHeader {
+    pub(crate) fn new(lines: Vec<Line<'static>>) -> Self {
+        let fingerprint = fingerprint_lines(&lines);
+        Self { lines, fingerprint }
+    }
+}
+
+#[derive(Debug, Default)]
 pub(crate) struct SurfaceHistoryDriver {
     emitter: HistoryEmissionTracker,
     reflow: HistoryReflowState,
@@ -79,7 +102,7 @@ pub(crate) struct HistoryReplayMode {
     pub(crate) cause: &'static str,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum PreparedFinalizedHistory {
     Noop { transcript_revision: u64 },
     FastNoop { revision: u64 },
@@ -87,7 +110,7 @@ pub(crate) enum PreparedFinalizedHistory {
     ReplayRequired,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct PreparedHistoryAppend {
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -150,24 +173,24 @@ impl SurfaceHistoryDriver {
 
     pub(crate) fn prepare_append(
         &self,
-        session_header: Vec<Line<'static>>,
+        session_header: &SessionHeader,
         cells: &[RenderedCell],
         transcript_revision: u64,
         options: HistoryLineRenderOptions<'_>,
         stream_commit: Option<&ScrollbackStreamCommit>,
     ) -> PreparedFinalizedHistory {
-        let end = committable_prefix_len(cells);
-        let committable_cells = &cells[..end];
-        let header_fingerprint = fingerprint_lines(&session_header);
+        // Cheap early-outs first: the header compare and the revision
+        // fast-path read precomputed values, so an unchanged-transcript frame
+        // (the common streaming/spinner case) pays neither the O(cells)
+        // `committable_prefix_len` walk nor any line build.
         if self
             .header_fingerprint
             .as_ref()
-            .is_some_and(|emitted| emitted != &header_fingerprint)
+            .is_some_and(|emitted| emitted != &session_header.fingerprint)
         {
             tracing::debug!(
                 target: "tui::surface::replay",
                 cause = "header_fingerprint_changed",
-                cells = committable_cells.len(),
                 cells_total = cells.len(),
                 emitted_messages = self.emitter.emitted_count(),
                 "history full replay required",
@@ -182,6 +205,8 @@ impl SurfaceHistoryDriver {
             };
         }
 
+        let end = committable_prefix_len(cells);
+        let committable_cells = &cells[..end];
         let plan = self.emitter.plan(committable_cells);
         if matches!(plan, HistoryEmissionPlan::Noop) && !should_emit_header {
             return PreparedFinalizedHistory::Noop {
@@ -205,7 +230,7 @@ impl SurfaceHistoryDriver {
             HistoryEmissionPlan::Noop | HistoryEmissionPlan::ReplayRequired => end,
         };
         let lines_build_started = Instant::now();
-        let header = should_emit_header.then_some(session_header);
+        let header = should_emit_header.then(|| session_header.lines.clone());
         let Some(lines) = self.append_candidate_lines_from_plan(
             header,
             cells,
@@ -224,7 +249,7 @@ impl SurfaceHistoryDriver {
             end,
             message_count: end - start,
             transcript_revision,
-            header_fingerprint,
+            header_fingerprint: session_header.fingerprint.clone(),
             emitted_header: should_emit_header,
             rows,
             lines_build_elapsed,
@@ -390,7 +415,7 @@ impl SurfaceHistoryDriver {
         B: SurfaceBackend,
     {
         let prepared = self.prepare_append(
-            session_header,
+            &SessionHeader::new(session_header),
             cells,
             transcript_revision,
             options,

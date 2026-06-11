@@ -42,13 +42,10 @@ pub struct RenderedCell {
 /// future renderer; field-level rendering data (markdown AST cache,
 /// diff hunks, etc.) is not stored here per layer-hygiene rule from
 /// `engine-tui-unified-transcript-plan.md` §2.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum CellKind {
     /// User text input.
     UserText { text: String },
-    /// User attachment image / paste.
-    UserAttachment,
     /// Assistant text fragment.
     AssistantText { text: String, model: String },
     /// Assistant reasoning / thinking content.
@@ -68,10 +65,6 @@ pub enum CellKind {
     /// Attachment message (system-reminder-wrapped queued command,
     /// hook payload, etc.).
     Attachment,
-    /// Progress meta-message (transient, often filtered).
-    Progress,
-    /// Tombstoned message (filtered from rendering normally).
-    Tombstone,
     /// System message — fine-grained kind drives render style.
     System(SystemCellKind),
 }

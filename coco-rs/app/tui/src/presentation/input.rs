@@ -3,19 +3,21 @@
 use crate::state::AppState;
 use crate::widgets::suggestion_popup::SuggestionItem;
 
-#[derive(Debug, Clone)]
-pub(crate) struct InlinePopupView {
-    pub(crate) items: Vec<SuggestionItem>,
+/// Borrowed view of the active suggestion popup — built twice per frame
+/// (sizing + paint pass), so it must not deep-clone the item list.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InlinePopupView<'a> {
+    pub(crate) items: &'a [SuggestionItem],
     pub(crate) selected: usize,
 }
 
-impl InlinePopupView {
+impl InlinePopupView<'_> {
     pub(crate) fn item_count(&self) -> usize {
         self.items.len()
     }
 }
 
-pub(crate) fn inline_popup_view(state: &AppState) -> Option<InlinePopupView> {
+pub(crate) fn inline_popup_view(state: &AppState) -> Option<InlinePopupView<'_>> {
     if state.ui.interaction.active_prompt.is_some() {
         return None;
     }
@@ -25,7 +27,7 @@ pub(crate) fn inline_popup_view(state: &AppState) -> Option<InlinePopupView> {
         return None;
     }
     Some(InlinePopupView {
-        items: suggestions.items.clone(),
+        items: &suggestions.items,
         selected: suggestions.selected,
     })
 }

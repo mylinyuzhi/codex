@@ -8,13 +8,13 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-use super::ChatWidget;
+use super::CellsRenderer;
 use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 use crate::transcript::derive::tool_result_output;
 
 pub(super) fn try_render(
-    w: &ChatWidget<'_>,
+    w: &CellsRenderer<'_>,
     cell: &RenderedCell,
     lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
@@ -44,7 +44,7 @@ pub(super) fn try_render(
     lines.push(Line::from(header));
     // Standalone cell path — no invocation cell here, so the tool input is
     // unavailable and input-derived views (diffs) degrade to output-only.
-    super::tool_result_render::render_tool_result_body(
+    super::tool_result::render_tool_result_body(
         &w.tool_result_ctx(),
         &projection.tool_name,
         None,
