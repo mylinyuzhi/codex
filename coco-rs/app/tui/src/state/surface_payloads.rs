@@ -179,6 +179,12 @@ pub enum PermissionDetail {
     },
     /// Computer use (screen/mouse/keyboard) approval.
     ComputerUse { action: String, description: String },
+    /// ExitPlanMode approval — show the plan and TS-style response choices.
+    ExitPlanMode {
+        plan: Option<String>,
+        plan_file_path: Option<String>,
+        allowed_prompts: Vec<String>,
+    },
     /// Generic fallback — plain text description.
     Generic { input_preview: String },
 }

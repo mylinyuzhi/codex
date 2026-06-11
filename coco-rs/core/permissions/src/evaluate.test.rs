@@ -176,6 +176,70 @@ fn test_content_specific_allow_rule() {
     assert!(matches!(result, PermissionDecision::Ask { .. }));
 }
 
+#[test]
+fn test_exit_plan_mode_tool_check_ask_is_not_bypassed_by_modes_or_allow_rules() {
+    let tool_check =
+        |tool_id: &ToolId, _input: &serde_json::Value, _context: &ToolPermissionContext| {
+            if tool_id == &ToolId::Builtin(ToolName::ExitPlanMode) {
+                ToolCheckResult::Ask {
+                    message: "Exit plan mode?".to_string(),
+                    suggestions: vec![],
+                    choices: None,
+                }
+            } else {
+                ToolCheckResult::Passthrough
+            }
+        };
+    for mode in [
+        PermissionMode::Default,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Auto,
+        PermissionMode::BypassPermissions,
+    ] {
+        let mut ctx = empty_context(mode);
+        ctx.allow_rules.insert(
+            PermissionRuleSource::Session,
+            vec![make_rule(
+                "*",
+                None,
+                PermissionBehavior::Allow,
+                PermissionRuleSource::Session,
+            )],
+        );
+        let result = PermissionEvaluator::evaluate_with_tool_check(
+            &ToolId::Builtin(ToolName::ExitPlanMode),
+            &serde_json::json!({}),
+            &ctx,
+            Some(&tool_check),
+        );
+        assert!(
+            matches!(result, PermissionDecision::Ask { .. }),
+            "ExitPlanMode tool-check Ask must win in {mode:?}, got {result:?}"
+        );
+    }
+}
+
+#[test]
+fn test_exit_plan_mode_tool_check_ask_is_denied_in_dont_ask() {
+    let tool_check =
+        |_tool_id: &ToolId, _input: &serde_json::Value, _context: &ToolPermissionContext| {
+            ToolCheckResult::Ask {
+                message: "Exit plan mode?".to_string(),
+                suggestions: vec![],
+                choices: None,
+            }
+        };
+    let ctx = empty_context(PermissionMode::DontAsk);
+    let result = PermissionEvaluator::evaluate_with_tool_check(
+        &ToolId::Builtin(ToolName::ExitPlanMode),
+        &serde_json::json!({}),
+        &ctx,
+        Some(&tool_check),
+    );
+
+    assert!(matches!(result, PermissionDecision::Deny { .. }));
+}
+
 // ── Step 4: Ask rules (NEW) ──
 
 #[test]

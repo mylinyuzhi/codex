@@ -105,7 +105,7 @@ pub(crate) async fn approve_permission(
             request_id: p.request_id.clone(),
             approved,
             always_allow: false,
-            feedback: None,
+            feedback: rejection_feedback(p, chosen_is_no),
             updated_input: build_choice_payload(p),
             permission_updates: vec![],
             content_blocks: None,
@@ -118,6 +118,14 @@ pub(crate) async fn approve_permission(
             "failed to dispatch ApprovalResponse (channel closed)",
         );
     }
+}
+
+fn rejection_feedback(
+    p: &crate::state::PermissionPromptState,
+    chosen_is_no: bool,
+) -> Option<String> {
+    (chosen_is_no && p.tool_name == coco_types::ToolName::ExitPlanMode.as_str())
+        .then(|| "User rejected the plan. Stay in plan mode and continue planning.".to_string())
 }
 
 /// Approve/deny a sandbox-permission prompt.

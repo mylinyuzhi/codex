@@ -39,6 +39,24 @@ fn ask_user_question_request(id: &str) -> ToolPermissionRequest {
     }
 }
 
+fn exit_plan_mode_request(id: &str) -> ToolPermissionRequest {
+    ToolPermissionRequest {
+        id: id.into(),
+        tool_use_id: format!("use-{id}"),
+        agent_id: "leader".into(),
+        tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+        description: "Exit plan mode?".into(),
+        input: serde_json::json!({
+            "plan": "# Plan\n\n- Change the thing",
+            "planFilePath": "/tmp/plan.md",
+            "allowedPrompts": [{"tool": "Bash", "prompt": "cargo test"}]
+        }),
+        suggestions: vec![],
+        choices: None,
+        worker_badge: None,
+    }
+}
+
 #[tokio::test]
 async fn approve_flow_sends_approved_decision() {
     let pending = new_pending_map();
@@ -144,6 +162,81 @@ async fn ask_user_question_emits_question_asked_event() {
     let resolution = handle.await.unwrap().unwrap();
     assert_eq!(resolution.decision, ToolPermissionDecision::Approved);
     assert_eq!(resolution.updated_input, Some(updated_input));
+}
+
+#[tokio::test]
+async fn exit_plan_mode_emits_dedicated_choices_without_always_allow() {
+    let pending = new_pending_map();
+    let (tx, mut rx) = mpsc::channel::<CoreEvent>(8);
+    let bridge = TuiPermissionBridge::new(tx, pending.clone());
+
+    let handle = tokio::spawn(async move {
+        bridge
+            .request_permission(exit_plan_mode_request("plan1"))
+            .await
+    });
+
+    let event = rx.recv().await.expect("bridge emits an event");
+    match event {
+        CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
+            request_id,
+            tool_name,
+            display_input,
+            show_always_allow,
+            choices,
+            original_input,
+            ..
+        }) => {
+            assert_eq!(request_id, "plan1");
+            assert_eq!(tool_name, coco_types::ToolName::ExitPlanMode.as_str());
+            assert_eq!(display_input, coco_types::PermissionDisplayInput::Empty);
+            assert!(!show_always_allow);
+            let values: Vec<&str> = choices
+                .as_ref()
+                .expect("ExitPlanMode choices")
+                .iter()
+                .map(|c| c.value.as_str())
+                .collect();
+            assert_eq!(
+                values,
+                vec![
+                    "yes-accept-edits-keep-context",
+                    "yes-default-keep-context",
+                    "no"
+                ]
+            );
+            assert_eq!(
+                original_input
+                    .as_ref()
+                    .and_then(|i| i.get("plan"))
+                    .and_then(serde_json::Value::as_str),
+                Some("# Plan\n\n- Change the thing")
+            );
+        }
+        other => panic!("expected Tui(ApprovalRequired); got {other:?}"),
+    }
+
+    let resolved = resolve_pending(&pending, "plan1", false, None, Vec::new(), None, None).await;
+    assert!(resolved);
+    let resolution = handle.await.unwrap().unwrap();
+    assert_eq!(resolution.decision, ToolPermissionDecision::Rejected);
+}
+
+#[test]
+fn exit_plan_mode_choices_include_clear_context_and_bypass_when_available() {
+    let choices = build_exit_plan_mode_choices(true, true);
+    let values: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
+    assert_eq!(
+        values,
+        vec![
+            "yes-bypass-permissions",
+            "yes-accept-edits-keep-context",
+            "yes-default-keep-context",
+            "no"
+        ]
+    );
+    assert!(choices[0].label.contains("clear context"));
+    assert!(choices[0].label.contains("bypass permissions"));
 }
 
 #[tokio::test]

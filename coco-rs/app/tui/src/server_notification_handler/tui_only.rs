@@ -72,14 +72,14 @@ pub(super) fn handle(
             original_input,
             worker_badge,
         } => {
+            let detail =
+                permission_detail_for_approval(&tool_name, &display_input, original_input.as_ref());
             state.ui.push_delayed_permission(
                 crate::state::PermissionPromptState {
                     request_id,
                     tool_name,
                     description,
-                    detail: crate::state::PermissionDetail::Generic {
-                        input_preview: display_input.as_display_str().to_string(),
-                    },
+                    detail,
                     risk_level: None,
                     worker_badge,
                     // When the dialog is in choice mode, suppress the
@@ -641,6 +641,34 @@ pub(super) fn handle(
             enqueue_informational(state, level, "", text, command_tx);
             true
         }
+    }
+}
+
+fn permission_detail_for_approval(
+    tool_name: &str,
+    display_input: &coco_types::PermissionDisplayInput,
+    original_input: Option<&serde_json::Value>,
+) -> crate::state::PermissionDetail {
+    if tool_name == coco_types::ToolName::ExitPlanMode.as_str() {
+        let plan = original_input
+            .and_then(|input| input.get("plan"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let plan_file_path = original_input
+            .and_then(|input| input.get("planFilePath"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        return crate::state::PermissionDetail::ExitPlanMode {
+            plan,
+            plan_file_path,
+            // TS only renders/applies allowedPrompts when classifier
+            // permissions are enabled. coco-rs does not currently ship
+            // that prompt-rule classifier surface, so keep them hidden.
+            allowed_prompts: Vec::new(),
+        };
+    }
+    crate::state::PermissionDetail::Generic {
+        input_preview: display_input.as_display_str().to_string(),
     }
 }
 

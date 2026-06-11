@@ -301,6 +301,50 @@ fn test_permission_request_hides_always_allow_when_disabled() {
 }
 
 #[test]
+fn test_exit_plan_mode_permission_uses_dedicated_detail() {
+    let mut state = AppState::new();
+    let ready_at = Instant::now() + Duration::from_secs(2);
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ApprovalRequired {
+            request_id: "req-plan".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            show_always_allow: true,
+            choices: Some(vec![coco_types::PermissionAskChoice {
+                value: "yes-default-keep-context".into(),
+                label: "Yes, manually approve edits".into(),
+                description: None,
+            }]),
+            permission_suggestions: vec![],
+            original_input: Some(serde_json::json!({
+                "plan": "# Plan",
+                "planFilePath": "/tmp/plan.md",
+                "allowedPrompts": [{"tool": "Bash", "prompt": "cargo test"}]
+            })),
+            worker_badge: None,
+        }),
+    );
+    assert!(state.ui.flush_delayed_permissions(ready_at));
+
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(crate::state::PanePromptState::Permission(state)) => {
+            assert!(!state.show_always_allow);
+            let crate::state::PermissionDetail::ExitPlanMode {
+                allowed_prompts, ..
+            } = &state.detail
+            else {
+                panic!("expected ExitPlanMode detail")
+            };
+            assert!(allowed_prompts.is_empty());
+        }
+        other => panic!("expected permission state, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_error_shows_toast() {
     let mut state = AppState::new();
 

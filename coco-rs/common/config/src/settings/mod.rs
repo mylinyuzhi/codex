@@ -579,10 +579,11 @@ pub struct PlanModeSettings {
     /// Whether the `ExitPlanMode` permission dialog offers a "clear
     /// context" option in addition to the default yes/no choice.
     ///
-    /// TS parity: `settings.showClearContextOnPlanAccept`
-    /// (utils/settings/types.ts:735-740), default false. When true the
-    /// TUI surfaces keep/clear/cancel choices; selecting clear schedules
-    /// `MessageHistory::clear()` at the next turn boundary.
+    /// TS setting: `settings.showClearContextOnPlanAccept`
+    /// (utils/settings/types.ts:735-740). TS defaults false; coco-rs
+    /// defaults true so implementation can start from a fresh plan by
+    /// default. Selecting clear schedules a history clear at the next
+    /// turn boundary.
     #[serde(default)]
     pub show_clear_context_on_exit: bool,
 }
@@ -606,7 +607,7 @@ impl Default for PlanModeSettings {
             plan_agent_count: default_plan_agent_count(),
             verify_execution: false,
             plan_model_fallback_threshold_tokens: default_plan_model_fallback_threshold(),
-            show_clear_context_on_exit: false,
+            show_clear_context_on_exit: true,
         }
     }
 }

@@ -175,17 +175,14 @@ async fn exit_plan_mode_non_teammate_asks_for_confirmation() {
             message, choices, ..
         } => {
             assert!(message.contains("Exit plan mode"));
-            // Default `show_clear_context_on_exit = false` → no choices.
-            assert!(choices.is_none(), "no choices when setting is off");
+            assert!(choices.is_none(), "TUI owns ExitPlanMode choices");
         }
         other => panic!("expected Ask, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn exit_plan_mode_offers_clear_context_choice_when_setting_enabled() {
-    // TS parity: `ExitPlanModePermissionRequest.tsx:137` gates the
-    // multi-choice dialog on `settings.showClearContextOnPlanAccept`.
+async fn exit_plan_mode_tool_does_not_embed_tui_choices() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.plan_mode_settings.show_clear_context_on_exit = true;
 
@@ -193,13 +190,7 @@ async fn exit_plan_mode_offers_clear_context_choice_when_setting_enabled() {
         <ExitPlanModeTool as DynTool>::check_permissions(&ExitPlanModeTool, &json!({}), &ctx).await;
     match decision {
         coco_types::ToolCheckResult::Ask { choices, .. } => {
-            let choices = choices.expect("expected choices when setting is on");
-            let values: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
-            assert_eq!(
-                values,
-                vec!["yes-keep-context", "yes-clear-context", "no"],
-                "choices must surface the keep/clear/cancel triad"
-            );
+            assert!(choices.is_none(), "TUI owns ExitPlanMode choices");
         }
         other => panic!("expected Ask, got {other:?}"),
     }
@@ -220,14 +211,18 @@ async fn exit_plan_mode_clear_context_choice_sets_pending_flag() {
     ctx.app_state = Some(app_state.clone().into());
 
     // Simulate the TUI rewriting input with the picked choice value.
-    let input = json!({"user_choice": "yes-clear-context"});
+    let input = json!({"user_choice": "yes-accept-edits"});
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
     let guard = app_state.read().await;
     assert!(
         guard.pending_clear_message_history,
-        "yes-clear-context must schedule MessageHistory::clear()"
+        "clear-context approval must schedule MessageHistory::clear()"
+    );
+    assert_eq!(
+        guard.pending_plan_implementation_message.as_deref(),
+        Some("Implement the following plan:\n\n# plan")
     );
 }
 
@@ -245,15 +240,141 @@ async fn exit_plan_mode_keep_context_choice_does_not_set_pending_flag() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let input = json!({"user_choice": "yes-keep-context"});
+    let input = json!({"user_choice": "yes-default-keep-context"});
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
     let guard = app_state.read().await;
     assert!(
         !guard.pending_clear_message_history,
-        "yes-keep-context must NOT schedule a clear"
+        "keep-context approval must NOT schedule a clear"
     );
+    assert!(guard.pending_plan_implementation_message.is_none());
+}
+
+#[tokio::test]
+async fn exit_plan_mode_rejects_legacy_choice_values() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-legacy-choice";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let err = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        json!({"user_choice": "yes-clear-context"}),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .expect_err("legacy choice must fail");
+    assert!(
+        err.to_string()
+            .contains("Unsupported ExitPlanMode approval choice")
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_ts_manual_choice_sets_default_mode() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-manual-default";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::AcceptEdits), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let input = json!({"user_choice": "yes-default-keep-context"});
+    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
+        .await
+        .unwrap();
+    let guard = app_state.read().await;
+    assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
+    assert!(!guard.pending_clear_message_history);
+}
+
+#[tokio::test]
+async fn exit_plan_mode_ts_elevated_choice_accepts_edits_without_bypass_gate() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-elevated-accept";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.permission_context.bypass_available = false;
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let input = json!({"user_choice": "yes-accept-edits-keep-context"});
+    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
+        .await
+        .unwrap();
+    let guard = app_state.read().await;
+    assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
+    assert!(!guard.pending_clear_message_history);
+}
+
+#[tokio::test]
+async fn exit_plan_mode_ts_elevated_choice_uses_bypass_when_available() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-elevated-bypass";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.permission_context.bypass_available = true;
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let input = json!({"user_choice": "yes-accept-edits-keep-context"});
+    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
+        .await
+        .unwrap();
+    let guard = app_state.read().await;
+    assert_eq!(
+        guard.permission_mode,
+        Some(PermissionMode::BypassPermissions)
+    );
+    assert!(!guard.pending_clear_message_history);
+}
+
+#[tokio::test]
+async fn exit_plan_mode_ts_clear_context_choice_sets_mode_and_pending_flag() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-clear-ts";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let input = json!({"user_choice": "yes-accept-edits"});
+    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
+        .await
+        .unwrap();
+    let guard = app_state.read().await;
+    assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
+    assert!(guard.pending_clear_message_history);
 }
 
 /// Seed app_state for an ExitPlanMode test. TS parity: appState is

@@ -39,6 +39,48 @@ use crate::engine_helpers::drain_one_progress;
 use crate::engine_helpers::emit_model_fallback_notice;
 use crate::engine_helpers::is_capacity_error_message;
 
+#[tokio::test]
+async fn plan_exit_clear_context_replaces_history_with_implementation_message() {
+    let app_state = Arc::new(tokio::sync::RwLock::new(ToolAppState {
+        pending_clear_message_history: true,
+        pending_plan_implementation_message: Some(
+            "Implement the following plan:\n\n# Plan\n\n- Edit code".to_string(),
+        ),
+        ..Default::default()
+    }));
+    let mut history = coco_messages::MessageHistory::new();
+    history.push(coco_messages::create_user_message("old planning context"));
+
+    super::consume_pending_plan_mode_clear_context(
+        Some(&app_state),
+        &mut history,
+        &None,
+        /*turn*/ 2,
+    )
+    .await;
+
+    assert_eq!(history.len(), 1);
+    let msg = history.to_vec().pop().expect("implementation message");
+    let coco_messages::Message::User(user) = msg.as_ref() else {
+        panic!("expected user implementation message")
+    };
+    let coco_messages::LlmMessage::User { content, .. } = &user.message else {
+        panic!("expected user llm message")
+    };
+    assert!(content.iter().any(|part| {
+        matches!(
+            part,
+            coco_messages::UserContent::Text(text)
+                if text.text.contains("Implement the following plan")
+                    && text.text.contains("- Edit code")
+        )
+    }));
+
+    let guard = app_state.read().await;
+    assert!(!guard.pending_clear_message_history);
+    assert!(guard.pending_plan_implementation_message.is_none());
+}
+
 // ─── Simple text-only mock ───
 
 struct TextMock {

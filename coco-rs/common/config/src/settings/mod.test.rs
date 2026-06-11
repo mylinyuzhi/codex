@@ -35,6 +35,26 @@ fn test_parse_settings_accepts_ts_permission_policy_key() {
 }
 
 #[test]
+fn test_plan_mode_clear_context_default_is_enabled() {
+    let settings = parse_settings("{}").expect("parse empty settings");
+    assert!(settings.plan_mode.show_clear_context_on_exit);
+}
+
+#[test]
+fn test_plan_mode_clear_context_can_be_disabled() {
+    let settings = parse_settings(
+        r#"{
+            "plan_mode": {
+                "show_clear_context_on_exit": false
+            }
+        }"#,
+    )
+    .expect("parse settings");
+
+    assert!(!settings.plan_mode.show_clear_context_on_exit);
+}
+
+#[test]
 fn test_parse_settings_accepts_tui_native_replay_cache_policy() {
     let settings = parse_settings(
         r#"{
