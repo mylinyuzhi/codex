@@ -563,6 +563,27 @@ pub enum PermissionMode {
     Bubble,
 }
 
+impl std::str::FromStr for PermissionMode {
+    type Err = ();
+
+    /// Parse the wire string into a mode. Mirrors the `#[serde(rename_all
+    /// = "camelCase")]` representation plus the legacy snake_case aliases
+    /// accepted on deserialize, so a `mode` field carried as a raw string
+    /// (e.g. `AgentSpawnRequest.mode`) round-trips identically to serde.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "default" => Self::Default,
+            "plan" => Self::Plan,
+            "bypassPermissions" | "bypass_permissions" => Self::BypassPermissions,
+            "dontAsk" | "dont_ask" => Self::DontAsk,
+            "acceptEdits" | "accept_edits" => Self::AcceptEdits,
+            "auto" => Self::Auto,
+            "bubble" => Self::Bubble,
+            _ => return Err(()),
+        })
+    }
+}
+
 impl PermissionMode {
     /// Next mode when the user presses Shift+Tab.
     ///

@@ -624,7 +624,11 @@ fn spawn_task_event_drain(
     });
 }
 
-fn spawn_agent_summary_timer(
+/// Inputs for the periodic [`spawn_agent_summary_timer`]. Bundled into a
+/// struct so the two spawn sites read as one unit (and to stay under the
+/// argument-count lint). All fields are pre-cloned by the caller because the
+/// detached timer task can't borrow `&self`.
+struct AgentSummaryTimer {
     registry: coco_tool_runtime::AgentTaskRegistryRef,
     task_id: String,
     cancel: tokio_util::sync::CancellationToken,
@@ -632,8 +636,25 @@ fn spawn_agent_summary_timer(
     engine: coco_tool_runtime::AgentQueryEngineRef,
     definition: Option<std::sync::Arc<coco_types::AgentDefinition>>,
     model_role: Option<coco_types::ModelRole>,
-) {
+    /// Reader half of the child engine's per-turn message snapshot.
+    live_transcript: coco_tool_runtime::LiveTranscript,
+}
+
+fn spawn_agent_summary_timer(timer: AgentSummaryTimer) {
+    let AgentSummaryTimer {
+        registry,
+        task_id,
+        cancel,
+        agent_type,
+        engine,
+        definition,
+        model_role,
+        live_transcript,
+    } = timer;
     const AGENT_SUMMARY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+    // Cap the transcript text fed to the summarizer fork so a long sub-agent
+    // run can't blow its input budget (matches the prior 4 KB output tail).
+    const MAX_TRANSCRIPT_CHARS: usize = 4_000;
     tokio::spawn(async move {
         let mut previous: Option<String> = None;
         loop {
@@ -644,18 +665,24 @@ fn spawn_agent_summary_timer(
             if registry.is_terminal(&task_id).await {
                 break;
             }
-            let buf = registry.read_output(&task_id).await;
-            if buf.trim().is_empty() {
+            // Read the engine's live message history (TS `agentSummary.ts`
+            // `getAgentTranscript`). Skip the tick when the transcript is too
+            // short to be worth a fork — TS gates on
+            // `transcript.messages.length < 3`.
+            let messages = live_transcript.snapshot();
+            if !coco_subagent::should_summarize(messages.len()) {
+                continue;
+            }
+            // Drop orphaned `tool_use` blocks / whitespace- and thinking-only
+            // turns before rendering (TS `filterIncompleteToolCalls`).
+            let cleaned = coco_subagent::filter_transcript(&messages);
+            let transcript = coco_subagent::render_transcript_tail(&cleaned, MAX_TRANSCRIPT_CHARS);
+            if transcript.trim().is_empty() {
                 continue;
             }
             let (sys, user) =
                 coco_subagent::build_summary_prompts(&agent_type, previous.as_deref());
-            let tail = if buf.len() > 4_000 {
-                &buf[buf.len() - 4_000..]
-            } else {
-                buf.as_str()
-            };
-            let user_with_buf = format!("{user}\n\n--- recent output ---\n{tail}");
+            let user_with_buf = format!("{user}\n\n--- recent transcript ---\n{transcript}");
             let summary_cfg = coco_tool_runtime::AgentQueryConfig {
                 system_prompt: sys,
                 model: String::new(),
@@ -1085,6 +1112,16 @@ impl SwarmAgentHandle {
                     ));
                 }
             };
+        // Live transcript: when this spawn drives a periodic AgentSummary
+        // timer, hand the child engine a shared, per-turn snapshot of its
+        // message history so the timer summarizes the real transcript
+        // (TS `agentSummary.ts` `getAgentTranscript`) rather than the raw
+        // output buffer. `None` when summaries are off → the engine skips the
+        // snapshot push entirely (zero cost on the non-summarized hot path).
+        // The same handle flows into `spawn_background` via `query_config`.
+        let live_transcript = request
+            .enable_summarization
+            .then(coco_tool_runtime::LiveTranscript::new);
         let mut query_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt,
             // **Fork**: pin to `parent_snapshot.api_model_name`
@@ -1135,8 +1172,16 @@ impl SwarmAgentHandle {
             // Coordinator-mode tool pool: when the leader is in coordinator
             // mode, AgentTool spawns are workers and must see only the
             // worker tool pool. Outside coordinator mode the child's own
-            // `AgentDefinition.allowed_tools` (later resolved by the
-            // engine) controls — leave empty here.
+            // `AgentDefinition.allowed_tools` (frontmatter `tools:`) is
+            // threaded through as the child engine's `ToolFilter`
+            // allow-list — resolved against the real registry in
+            // `agent_adapter` and narrowed by the parent filter.
+            // `Wildcard` (TS `tools: undefined` / `['*']`) stays empty =
+            // permissive; an `Explicit` list restricts. Threading it here
+            // is load-bearing: leaving it empty silently dropped the
+            // allow-list so a restricted custom agent ran with the
+            // parent's full tool surface. TS parity:
+            // `agentToolUtils.ts::resolveAgentTools`.
             allowed_tools: if request
                 .features
                 .as_deref()
@@ -1148,15 +1193,47 @@ impl SwarmAgentHandle {
                     .map(str::to_string)
                     .collect()
             } else {
-                Vec::new()
+                match request.definition.as_ref().map(|d| &d.allowed_tools) {
+                    // Normalise `Bash(*)` → `Bash`: a `ToolFilter` matches
+                    // by `ToolId`, so a parenthesised entry would parse to
+                    // `Custom("Bash(*)")` and never match the real tool.
+                    Some(coco_types::ToolAllowList::Explicit(list)) => {
+                        coco_subagent::parse_tool_allow_list(list)
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                }
             },
-            // `disallowed_tools` flows from `AgentDefinition.disallowed_tools`
-            // (frontmatter). Top-level request slot was dead and removed.
-            disallowed_tools: request
-                .definition
-                .as_ref()
-                .map(|d| d.disallowed_tools.clone())
-                .unwrap_or_default(),
+            // `disallowed_tools` = the agent's own deny-list (frontmatter)
+            // PLUS the universal subagent block (TS `filterToolsForAgent`
+            // `ALL_AGENT_DISALLOWED_TOOLS`, applied before the allow-list):
+            // Agent / AskUserQuestion / TaskOutput / TaskStop /
+            // Enter+ExitPlanMode are denied for every spawned subagent
+            // regardless of its `tools:` — otherwise a wildcard (default) or
+            // self-listing subagent could spawn nested agents, prompt the
+            // user, etc. `ExitPlanMode` is re-admitted in plan mode. coco
+            // enforces per-id via `ToolFilter::allows`, so these names drop
+            // from the child's tool list.
+            disallowed_tools: {
+                let mut denied = request
+                    .definition
+                    .as_ref()
+                    .map(|d| d.disallowed_tools.clone())
+                    .unwrap_or_default();
+                let plan_mode = request
+                    .mode
+                    .as_deref()
+                    .and_then(|m| m.parse::<coco_types::PermissionMode>().ok())
+                    == Some(coco_types::PermissionMode::Plan);
+                for name in coco_subagent::subagent_disallowed_tools(plan_mode) {
+                    if !denied.iter().any(|d| d == name) {
+                        denied.push(name.to_string());
+                    }
+                }
+                denied
+            },
             // Coordinator / AgentTool spawns don't carry skill-style
             // auto-allow rules — those flow only through
             // `SkillRuntime` Fork path. Leave empty.
@@ -1255,6 +1332,7 @@ impl SwarmAgentHandle {
             require_can_use_tool: request.require_can_use_tool,
             fork_label: request.fork_label,
             cancel: None,
+            live_transcript: live_transcript.clone(),
         };
 
         if request.run_in_background {
@@ -1419,6 +1497,10 @@ impl SwarmAgentHandle {
         let task_registry_for_engine = task_registry.clone();
         let agent_id_for_engine = agent_id.clone();
         let agent_type_for_engine = agent_type.to_string();
+        // Permission mode gates the post-spawn handoff classifier (auto
+        // only). Pre-cloned so the detached engine task can read it
+        // without borrowing `request` across the `await`.
+        let mode_for_engine = request.mode.clone();
         let task_id_for_engine = sync_task.as_ref().map(|(id, _)| id.clone());
         let task_cancel_for_engine = sync_task.as_ref().map(|(_, c)| c.clone());
         let worktree_session_for_engine = worktree_session.clone();
@@ -1436,16 +1518,20 @@ impl SwarmAgentHandle {
             let (event_tx, event_rx) = tokio::sync::mpsc::channel::<coco_types::CoreEvent>(64);
             query_config.event_tx = Some(event_tx);
             spawn_task_event_drain(task_registry.clone(), tid.clone(), event_rx);
-            if request.enable_summarization {
-                spawn_agent_summary_timer(
-                    task_registry.clone(),
-                    tid.clone(),
-                    task_cancel.clone(),
-                    agent_type.to_string(),
-                    engine.clone(),
-                    request.definition.clone(),
-                    query_config.model_role,
-                );
+            // `live_transcript` is `Some` iff `request.enable_summarization`,
+            // so this gates the timer on the same condition while handing it
+            // the reader half of the engine's snapshot sink.
+            if let Some(live) = live_transcript.clone() {
+                spawn_agent_summary_timer(AgentSummaryTimer {
+                    registry: task_registry.clone(),
+                    task_id: tid.clone(),
+                    cancel: task_cancel.clone(),
+                    agent_type: agent_type.to_string(),
+                    engine: engine.clone(),
+                    definition: request.definition.clone(),
+                    model_role: query_config.model_role,
+                    live_transcript: live,
+                });
             }
         }
 
@@ -1548,6 +1634,9 @@ impl SwarmAgentHandle {
                         &agent_type_for_engine,
                         &qr,
                         side_query_for_engine.as_ref(),
+                        mode_for_engine
+                            .as_deref()
+                            .and_then(|m| m.parse::<coco_types::PermissionMode>().ok()),
                     )
                     .await;
                     AgentSpawnResponse {
@@ -1815,22 +1904,24 @@ impl SwarmAgentHandle {
         // AgentTool resolves the flag at the boundary as
         // `is_coordinator || is_fork_subagent || sdk_opt_in`. Default-off
         // keeps a saturated coordinator (16 spawns × 30 s = 32 LLM calls/min)
-        // off the user's hot path unless they explicitly opted in.
-        if !request.enable_summarization {
-            tracing::debug!(
+        // off the user's hot path unless they explicitly opted in. The reader
+        // half of the engine's snapshot sink rides on `query_config`
+        // (`Some` iff `enable_summarization`).
+        match query_config.live_transcript.clone() {
+            Some(live) => spawn_agent_summary_timer(AgentSummaryTimer {
+                registry: task_registry.clone(),
+                task_id: task_id.clone(),
+                cancel: cancel.clone(),
+                agent_type: agent_type.to_string(),
+                engine: engine.clone(),
+                definition: request.definition.clone(),
+                model_role: query_config.model_role,
+                live_transcript: live,
+            }),
+            None => tracing::debug!(
                 %agent_id,
                 "periodic AgentSummary disabled (request.enable_summarization = false)"
-            );
-        } else {
-            spawn_agent_summary_timer(
-                task_registry.clone(),
-                task_id.clone(),
-                cancel.clone(),
-                agent_type.to_string(),
-                engine.clone(),
-                request.definition.clone(),
-                query_config.model_role,
-            );
+            ),
         }
 
         let registry_for_task = task_registry.clone();
@@ -1841,6 +1932,15 @@ impl SwarmAgentHandle {
         let hook_registry_for_task = self.hook_registry().cloned();
         let cwd_for_task = self.cwd.clone();
         let agent_type_for_task = agent_type.to_string();
+        // Bg-path handoff classifier: TS `AgentTool.tsx:961-973` runs the
+        // classifier for background spawns too (auto mode only). Clone the
+        // side-query handle + permission mode so the detached task can gate
+        // and run it after completion.
+        let side_query_for_task = self.side_query().cloned();
+        let mode_for_task = request
+            .mode
+            .as_deref()
+            .and_then(|m| m.parse::<coco_types::PermissionMode>().ok());
         // Preload frontmatter skills synchronously here — bg task can't
         // borrow `&self`, so resolve bodies upfront and prepend
         // before handing the prompt to the detached task.
@@ -1988,7 +2088,19 @@ impl SwarmAgentHandle {
                     // sees a rich `<result>` / `<usage>` / `<worktree>`
                     // envelope on the next turn.
                     let duration_ms = bg_start.elapsed().as_millis() as i64;
-                    let result = last_assistant_text(&qr.messages);
+                    // TS `AgentTool.tsx:961-973` — run the handoff classifier
+                    // on the background result too (auto mode only). It
+                    // returns the (possibly safety-prefixed) response text;
+                    // fall back to the last assistant message when the
+                    // classifier passes through with no `response_text`.
+                    let result = super::handoff::classify_handoff_inline(
+                        &agent_type_for_task,
+                        &qr,
+                        side_query_for_task.as_ref(),
+                        mode_for_task,
+                    )
+                    .await
+                    .or_else(|| last_assistant_text(&qr.messages));
                     let usage = Some(coco_tool_runtime::AgentUsage {
                         total_tokens: qr.input_tokens + qr.output_tokens,
                         tool_uses: qr.tool_use_count as i32,

@@ -306,6 +306,14 @@ impl AgentQueryEngine for QueryEngineAdapter {
             engine = engine.with_permission_bridge(bridge);
         }
 
+        // Live transcript: when the coordinator attached a summary timer to
+        // this spawn, install the shared snapshot sink so each turn-finalize
+        // publishes the child's message history to the timer. `None` keeps
+        // the engine snapshot-free (main loop, non-summarized spawns).
+        if let Some(live) = config.live_transcript.clone() {
+            engine = engine.with_live_transcript(live);
+        }
+
         // Fork mode: if the parent surfaced context messages, use
         // `run_with_messages` so the child's first turn sees the
         // parent's history prepended. TS parity:

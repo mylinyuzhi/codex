@@ -27,10 +27,23 @@ pub(crate) async fn classify_handoff_inline(
     agent_type: &str,
     qr: &coco_tool_runtime::AgentQueryResult,
     side_query: Option<&coco_tool_runtime::SideQueryHandle>,
+    permission_mode: Option<coco_types::PermissionMode>,
 ) -> Option<String> {
     let Some(side_query) = side_query else {
         return qr.response_text.clone();
     };
+
+    // TS `agentToolUtils.ts:404-405`: classification only runs in `auto`
+    // permission mode (`default` / `acceptEdits` already require user
+    // confirmation upstream; `bypassPermissions` opts out). coco-rs ships
+    // no `TRANSCRIPT_CLASSIFIER` kill-switch feature, so `feature_enabled`
+    // is always `true` and the gate reduces to the mode check. Without
+    // this the two-stage classifier LLM side-query fired after *every*
+    // subagent completion regardless of mode — extra cost plus spurious
+    // `SECURITY WARNING:` rewrites in non-auto modes.
+    if !coco_subagent::handoff_classifier_active(permission_mode, /*feature_enabled=*/ true) {
+        return qr.response_text.clone();
+    }
 
     // TS `agentToolUtils.ts:411-412`: build the transcript first, then
     // skip when it is empty (no read-only / tool-count exemption).
@@ -94,6 +107,15 @@ impl SwarmAgentHandle {
         agent_type: &str,
         qr: &coco_tool_runtime::AgentQueryResult,
     ) -> Option<String> {
-        classify_handoff_inline(agent_type, qr, self.side_query()).await
+        // Tests exercise the classifier under `auto` mode (the only mode
+        // that triggers it); production calls the free fn directly with
+        // the spawn request's resolved permission mode.
+        classify_handoff_inline(
+            agent_type,
+            qr,
+            self.side_query(),
+            Some(coco_types::PermissionMode::Auto),
+        )
+        .await
     }
 }

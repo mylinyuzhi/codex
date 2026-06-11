@@ -1001,12 +1001,32 @@ impl QueryEngine {
         .await;
     }
 
-    /// Append every history message whose uuid isn't already in the
-    /// dedup set to the JSONL transcript, with parent_uuid linking to
-    /// the previous message in the chain. No-op when transcript
-    /// persistence isn't wired (`with_transcript_store` +
-    /// `with_transcript_dedup` not both called).
+    /// Publish the post-turn message history to two independent sinks:
+    ///
+    /// 1. The live in-memory snapshot read by the AgentSummary timer —
+    ///    refreshed unconditionally whenever a [`LiveTranscript`] sink is
+    ///    wired (`with_live_transcript`), regardless of disk persistence.
+    /// 2. The durable JSONL transcript — appends every history message whose
+    ///    uuid isn't already in the dedup set, with parent_uuid linking to
+    ///    the previous message. No-op unless `with_transcript_store` AND
+    ///    `with_transcript_dedup` are both wired.
+    ///
+    /// The two are deliberately decoupled: a sub-agent may have a live reader
+    /// without a disk store, while the main loop has the store but no live
+    /// reader. Called per turn (via `flush_successful_turn_state`) and on each
+    /// compaction boundary, so both sinks track the latest history.
+    ///
+    /// [`LiveTranscript`]: coco_tool_runtime::LiveTranscript
     pub(crate) async fn record_transcript_tail(&self, history: &MessageHistory) {
+        // Publish the post-turn message history to the live sink read by
+        // the AgentSummary timer (TS `agentSummary.ts` `getAgentTranscript`).
+        // Independent of the durable transcript store below — a sub-agent
+        // may have a live reader without a `transcript_store` wired, and the
+        // main loop has the store but no live reader.
+        if let Some(live) = self.live_transcript.as_ref() {
+            live.set(history.iter().cloned().collect());
+        }
+
         let (Some(store), Some(sid), Some(seen)) = (
             self.transcript_store.as_ref(),
             self.transcript_session_id.as_deref(),

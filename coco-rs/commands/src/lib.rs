@@ -868,6 +868,7 @@ mod seam_tests {
         );
         assert!(reg.get("memory").is_some());
         assert!(reg.get("init").is_some());
+        assert!(reg.get("agents").is_some());
         assert!(reg.get("security-review").is_some());
         assert!(reg.get("commit-push-pr").is_some());
         // Bundled skills (unconditional) are present.
