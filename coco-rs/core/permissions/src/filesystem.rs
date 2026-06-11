@@ -77,8 +77,8 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
 
     // Check if any path component is a dangerous directory. Mirror TS
     // filesystem.ts:460-468, which inspects `pathSegments[i + 1]` — so the
-    // `.claude/worktrees/` exemption is anchored at a component boundary, not a
-    // position-agnostic substring. A nested `.claude` deeper in the path (e.g. a
+    // `.coco/worktrees/` exemption is anchored at a component boundary, not a
+    // position-agnostic substring. A nested `.coco` deeper in the path (e.g. a
     // settings.json inside a worktree) is still evaluated and blocked.
     let segments: Vec<&str> = lower.split(['/', '\\']).collect();
     for i in 0..segments.len() {
@@ -90,9 +90,9 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
             if component != dangerous_dir {
                 continue;
             }
-            // Structural git-worktree path: skip ONLY this `.claude` segment
+            // Structural git-worktree path: skip ONLY this `.coco` segment
             // when the immediately-following component is `worktrees`.
-            if dangerous_dir == ".claude" && segments.get(i + 1).copied() == Some("worktrees") {
+            if dangerous_dir == ".coco" && segments.get(i + 1).copied() == Some("worktrees") {
                 break;
             }
             return true;
@@ -107,22 +107,22 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
     false
 }
 
-/// Check if a path is a Claude settings or config file.
+/// Check if a path is a coco settings or config file.
 ///
-/// TS: `isClaudeConfigFilePath()` (filesystem.ts:225-242) — treats
-/// `commands/`, `agents/`, `skills/` and `settings(.local).json` under
-/// `{originalCwd}/.claude` as config. TS anchors these to the cwd via
-/// `pathInWorkingPath`; coco has no cwd param threaded through
-/// `check_path_safety_for_auto_edit`, so it uses a path-substring
-/// over-approximation, which is safe for an approval gate (it can only
-/// over-prompt). `.coco/skills/` is coco's intentional divergence from
-/// TS `.claude/skills`.
-pub fn is_claude_config_path(path: &str) -> bool {
+/// coco serves its config from `.coco/`: project `settings.json` /
+/// `settings.local.json`, `commands/`, `agents/`, and `skills/` all live
+/// under `<cwd>/.coco/`. Editing any of these is treated as a config edit
+/// requiring approval (TS analogue: `isClaudeConfigFilePath()`,
+/// filesystem.ts:225-242, which guarded the same set under `.claude`). The
+/// match is a path-substring over-approximation — coco threads no cwd
+/// through `check_path_safety_for_auto_edit`, and over-matching only
+/// over-prompts, which is safe for an approval gate.
+pub fn is_coco_config_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/").to_lowercase();
-    normalized.contains("/.claude/settings.json")
-        || normalized.contains("/.claude/settings.local.json")
-        || normalized.contains("/.claude/commands/")
-        || normalized.contains("/.claude/agents/")
+    normalized.contains("/.coco/settings.json")
+        || normalized.contains("/.coco/settings.local.json")
+        || normalized.contains("/.coco/commands/")
+        || normalized.contains("/.coco/agents/")
         || normalized.contains("/.coco/skills/")
 }
 
@@ -249,10 +249,10 @@ pub fn check_path_safety_for_auto_edit(path: &str) -> PathSafetyResult {
         };
     }
 
-    // 5. Claude config files
-    if is_claude_config_path(path) {
+    // 5. coco config files
+    if is_coco_config_path(path) {
         return PathSafetyResult::Blocked {
-            message: format!("editing Claude config files requires approval: {path}"),
+            message: format!("editing coco config files requires approval: {path}"),
             classifier_approvable: true,
         };
     }

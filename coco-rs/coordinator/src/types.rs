@@ -266,7 +266,7 @@ pub struct TeamAllowedPath {
     pub added_at: i64,
 }
 
-/// On-disk team file (persisted as JSON at ~/.claude/teams/{name}/config.json).
+/// On-disk team file (persisted as JSON at ~/.coco/teams/{name}/config.json).
 ///
 /// TS: TeamFile in utils/swarm/teamHelpers.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]

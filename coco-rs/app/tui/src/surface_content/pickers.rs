@@ -3,10 +3,12 @@
 use ratatui::prelude::*;
 
 use crate::presentation::model_picker;
+use crate::presentation::permissions_editor;
 use crate::presentation::picker;
 use crate::state::AgentsDialogState;
 use crate::state::McpServerSelectState;
 use crate::state::ModelPickerState;
+use crate::state::PermissionsEditorState;
 use crate::state::PluginDialogState;
 use crate::state::SkillsDialogState;
 use crate::state::SubagentInstance;
@@ -39,6 +41,13 @@ pub(super) fn agents_dialog_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     picker::agents_dialog_content(a, subagents, styles)
+}
+
+pub(super) fn permissions_editor_content(
+    p: &PermissionsEditorState,
+    styles: UiStyles<'_>,
+) -> (String, String, Color) {
+    permissions_editor::permissions_editor_content(p, styles)
 }
 
 pub(super) fn mcp_server_select_content(

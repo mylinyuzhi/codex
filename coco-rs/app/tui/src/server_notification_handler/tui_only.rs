@@ -481,6 +481,20 @@ pub(super) fn handle(
             }
             true
         }
+        // `/permissions` — tabbed rule editor. The CLI re-emits this after
+        // every persisted edit, so an already-open editor refreshes its
+        // rule / directory data in place (preserving the focused tab +
+        // cursors) rather than queueing a stale duplicate modal.
+        TuiOnlyEvent::OpenPermissionsEditor { payload } => {
+            if let Some(ModalState::PermissionsEditor(existing)) = state.ui.modal.as_mut() {
+                existing.refresh_from_payload(payload);
+            } else {
+                state.ui.show_modal(ModalState::PermissionsEditor(
+                    crate::state::PermissionsEditorState::from_payload(payload),
+                ));
+            }
+            true
+        }
         // `/skills` dialog Enter result — CLI bridge has finished
         // (or failed) the SettingsWriter round-trip + RuntimeConfig
         // republish + CommandRegistry rebuild. Toast generation

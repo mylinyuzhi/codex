@@ -1,8 +1,9 @@
 //! Permission-family prompt behavior: tool permission, sandbox permission,
 //! and MCP-server approval (the three `ApprovalResponse`-carrying prompts).
 //!
-//! Owns the always-allow rule construction (session-scoped allow rules,
-//! read-path directory widening) and the multi-choice payload splice.
+//! Owns the always-allow rule construction (disk-persisted `LocalSettings`
+//! allow rules, read-path directory widening) and the multi-choice payload
+//! splice.
 
 use std::str::FromStr;
 
@@ -144,17 +145,19 @@ pub(crate) async fn deny_permission(
 
 /// Handle `ApproveAll` (always-allow) for permission prompts.
 ///
-/// Phase A: builds a Session-scoped allow rule for the tool. `tui_runner`
-/// consumes the update via `coco_permissions::apply_permission_updates`
-/// (live engine_config mutation) so subsequent same-tool calls in the
-/// session don't re-prompt. Matches the rule shape produced by the
-/// `/permissions allow <tool>` slash command in
-/// `tui_runner::dispatch_permissions_mutation`, so both UX paths land in
-/// the same place.
+/// Builds a `LocalSettings`-scoped allow rule for the tool (mirrors TS
+/// `FallbackPermissionRequest` `destination:'localSettings'`). `tui_runner`
+/// both applies the update to the live `engine_config` via
+/// `coco_permissions::apply_permission_updates` (so subsequent same-tool
+/// calls in the session don't re-prompt) and persists it to
+/// `.coco/settings.local.json` via `SettingsPermissionStore::persist_update`
+/// (so the grant survives restart). `LocalSettings` is the gitignored,
+/// per-developer file — a reflexive "don't ask again" must never silently
+/// edit team-shared (`ProjectSettings`) or global (`UserSettings`) config.
 ///
-/// Phase B (out of scope): a destination sub-picker on the dialog will
-/// let the user pick User / Project / Local; the runner already calls
-/// `SettingsPermissionStore::persist_update` for those destinations.
+/// Picking `Project` / `User` destinations lives in the dedicated
+/// `/permissions` rule-editor overlay (TS `AddPermissionRules`), not this
+/// inline popup.
 pub(crate) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
         && p.show_always_allow
@@ -291,14 +294,14 @@ fn always_allow_updates(
     }
     vec![coco_types::PermissionUpdate::AddRules {
         rules: vec![coco_types::PermissionRule {
-            source: coco_types::PermissionRuleSource::Session,
+            source: coco_types::PermissionRuleSource::LocalSettings,
             behavior: coco_types::PermissionBehavior::Allow,
             value: coco_types::PermissionRuleValue {
                 tool_pattern: tool_name.to_string(),
                 rule_content: None,
             },
         }],
-        destination: coco_types::PermissionUpdateDestination::Session,
+        destination: coco_types::PermissionUpdateDestination::LocalSettings,
     }]
 }
 
@@ -325,14 +328,14 @@ fn read_path_allow_update(
     let rule_content = format!("{}/**", path_for_permission_rule(&dir));
     Some(coco_types::PermissionUpdate::AddRules {
         rules: vec![coco_types::PermissionRule {
-            source: coco_types::PermissionRuleSource::Session,
+            source: coco_types::PermissionRuleSource::LocalSettings,
             behavior: coco_types::PermissionBehavior::Allow,
             value: coco_types::PermissionRuleValue {
                 tool_pattern: coco_types::ToolName::Read.as_str().to_string(),
                 rule_content: Some(rule_content),
             },
         }],
-        destination: coco_types::PermissionUpdateDestination::Session,
+        destination: coco_types::PermissionUpdateDestination::LocalSettings,
     })
 }
 

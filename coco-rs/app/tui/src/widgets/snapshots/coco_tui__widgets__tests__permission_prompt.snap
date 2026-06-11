@@ -10,7 +10,7 @@ expression: output
 │...                                                                           │
 │Actions:                                                                      │
 │▸ Yes, approve once                                                           │
-│  Yes, always allow Bash for this session                                     │
+│  Yes, and don't ask again for Bash                                           │
 │  No, deny                                                                    │
 │↑/↓ Navigate  Enter Select  Y/N/A shortcuts                                   │
 └──────────────────────────────────────────────────────────────────────────────┘

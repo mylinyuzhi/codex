@@ -266,7 +266,7 @@ impl AgentDefinitionStore {
         }
 
         // Inode dedup: a symlinked agent file under one source (e.g.
-        // `~/.coco/agents/foo.md` -> `<project>/.claude/agents/foo.md`)
+        // `~/.coco/agents/foo.md` -> `<project>/.coco/agents/foo.md`)
         // would otherwise parse twice and double-count in the source-
         // precedence map. TS `loadAgentsDir.ts:159-172` keys the dedup
         // on `(dev, ino)`. Same here on Unix; Windows skips because

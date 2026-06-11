@@ -520,7 +520,7 @@ async fn test_write_new_file_is_utf8() {
 // ── R7-T14: team-memory secret guard tests ──
 //
 // TS `FileWriteTool.ts:156-160` calls `checkTeamMemSecrets(filePath,
-// content)` before writing — if the path is in `.claude/memory/team/`
+// content)` before writing — if the path is in `.coco/memory/team/`
 // AND the content has secret-shaped tokens, the write is rejected.
 // coco-rs implements the same guard via `crate::check_team_mem_secret`.
 // These tests cover the path predicate and the secret detector.
@@ -528,8 +528,8 @@ async fn test_write_new_file_is_utf8() {
 #[tokio::test]
 async fn test_write_rejects_secret_in_team_memory_path() {
     let dir = tempfile::tempdir().unwrap();
-    // Reconstruct a `.claude/memory/team/` ancestry under the temp dir.
-    let team_dir = dir.path().join(".claude").join("memory").join("team");
+    // Reconstruct a `.coco/memory/team/` ancestry under the temp dir.
+    let team_dir = dir.path().join(".coco").join("memory").join("team");
     std::fs::create_dir_all(&team_dir).unwrap();
     let file = team_dir.join("personal.md");
 
@@ -585,7 +585,7 @@ async fn test_write_allows_secret_outside_team_memory_path() {
 #[tokio::test]
 async fn test_write_allows_clean_content_in_team_memory_path() {
     let dir = tempfile::tempdir().unwrap();
-    let team_dir = dir.path().join(".claude").join("memory").join("team");
+    let team_dir = dir.path().join(".coco").join("memory").join("team");
     std::fs::create_dir_all(&team_dir).unwrap();
     let file = team_dir.join("safe.md");
 

@@ -36,7 +36,8 @@ use crate::snapshot::AgentCatalogSnapshot;
 /// resolution from `components/agents/agentFileUtils.ts:20-55`.
 /// coco-rs serves user agents from `~/.coco/agents/` (not `.claude/`)
 /// because the `~/.coco/` config home is the multi-provider canonical
-/// root; the `<cwd>/.claude/agents/` project path matches TS.
+/// root; the `<cwd>/.coco/agents/` project path keeps project-level
+/// config uniformly under `.coco/`.
 pub fn resolve_writable_agent_dir(
     source: AgentSource,
     config_home: &Path,
@@ -44,7 +45,7 @@ pub fn resolve_writable_agent_dir(
 ) -> Option<PathBuf> {
     match source {
         AgentSource::UserSettings => Some(config_home.join("agents")),
-        AgentSource::ProjectSettings => Some(cwd.join(".claude").join("agents")),
+        AgentSource::ProjectSettings => Some(cwd.join(".coco").join("agents")),
         AgentSource::BuiltIn
         | AgentSource::Plugin
         | AgentSource::FlagSettings

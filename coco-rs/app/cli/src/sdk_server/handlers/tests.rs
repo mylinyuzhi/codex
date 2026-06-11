@@ -2904,7 +2904,7 @@ async fn session_archive_deletes_persisted_session() {
 // ----- Phase 2.C.12: config/read + config/value/write ----------------
 
 /// Scoped temp directory used as a fake project cwd. Creates
-/// `.claude/` on construction; cleans up on drop.
+/// `.coco/` on construction; cleans up on drop.
 struct TempProjectDir {
     path: std::path::PathBuf,
 }
@@ -2913,7 +2913,7 @@ impl TempProjectDir {
     fn new() -> Self {
         let path =
             std::env::temp_dir().join(format!("coco-sdk-test-project-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(path.join(".claude")).unwrap();
+        std::fs::create_dir_all(path.join(".coco")).unwrap();
         Self { path }
     }
 }
@@ -2943,7 +2943,7 @@ async fn start_session_with_cwd(client: &InMemoryTransport, cwd: &std::path::Pat
 async fn config_read_returns_merged_settings_from_project_scope() {
     let tmp = TempProjectDir::new();
     // Pre-populate a project settings file.
-    let project_settings = tmp.path.join(".claude/settings.json");
+    let project_settings = tmp.path.join(".coco/settings.json");
     std::fs::write(&project_settings, r#"{"auto_updater_status":"enabled"}"#).unwrap();
 
     let (server_task, client) = spawn_server().await;
@@ -3002,7 +3002,7 @@ async fn config_write_project_scope_persists_to_disk() {
     }
 
     // Verify the file on disk.
-    let settings_path = tmp.path.join(".claude/settings.json");
+    let settings_path = tmp.path.join(".coco/settings.json");
     let contents = std::fs::read_to_string(&settings_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
     assert_eq!(parsed["auto_updater_status"], "disabled");
@@ -3031,9 +3031,9 @@ async fn config_write_local_scope_persists_to_separate_file() {
         .unwrap();
     let _ = client.recv().await.unwrap().unwrap();
 
-    // Local scope goes to .claude/settings.local.json, NOT settings.json.
-    let local_path = tmp.path.join(".claude/settings.local.json");
-    let project_path = tmp.path.join(".claude/settings.json");
+    // Local scope goes to .coco/settings.local.json, NOT settings.json.
+    let local_path = tmp.path.join(".coco/settings.local.json");
+    let project_path = tmp.path.join(".coco/settings.json");
     assert!(
         local_path.exists(),
         "local scope should create settings.local.json"
@@ -3105,7 +3105,7 @@ async fn config_write_nested_key_creates_intermediate_objects() {
     assert!(matches!(reply, JsonRpcMessage::Response(_)));
 
     // Verify the nested structure was created.
-    let contents = std::fs::read_to_string(tmp.path.join(".claude/settings.json")).unwrap();
+    let contents = std::fs::read_to_string(tmp.path.join(".coco/settings.json")).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
     assert_eq!(
         parsed["permissions"]["default_mode"], "plan",

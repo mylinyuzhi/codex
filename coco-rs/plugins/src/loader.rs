@@ -78,7 +78,7 @@ pub struct PluginLoadResult {
 
 /// Loads and validates plugins from directories and marketplace entries.
 pub struct PluginLoader {
-    /// Base directory for plugin cache (e.g. `~/.cocode/plugins/cache/`).
+    /// Base directory for plugin cache (e.g. `~/.coco/plugins/cache/`).
     plugins_dir: PathBuf,
 }
 

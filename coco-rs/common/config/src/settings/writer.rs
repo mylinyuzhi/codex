@@ -6,7 +6,7 @@
 //! happened via a manual `vi ~/.coco/settings.json`. The TUI had no
 //! direct path to persist a user choice — `/model` and `/permissions`
 //! mutated session state only. The 2.1.142 `/skills` dialog needs a
-//! synchronous write to `<cwd>/.claude/settings.local.json` plus an
+//! synchronous write to `<cwd>/.coco/settings.local.json` plus an
 //! immediate `RuntimeConfig` rebuild so the next agent turn sees the
 //! new state.
 //!
@@ -65,7 +65,7 @@ pub enum SettingsWriteError {
     },
 }
 
-/// Deep-merge `patch` into `<cwd>/.claude/settings.local.json`,
+/// Deep-merge `patch` into `<cwd>/.coco/settings.local.json`,
 /// then rebuild + publish `RuntimeConfig` so the next agent turn
 /// reads the new value without waiting for the file watcher.
 ///

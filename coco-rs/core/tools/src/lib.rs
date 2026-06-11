@@ -428,7 +428,7 @@ pub(crate) fn check_team_mem_secret(
 ///     `coco_memory::team_paths::is_team_mem_path`. This is the
 ///     authoritative TS-aligned path that handles custom memory dirs
 ///     set via `COCO_REMOTE_MEMORY_DIR` or `COCO_MEMORY_PATH_OVERRIDE`.
-///  2. **Substring fallback** — match `**/.claude/memory/team/**` as
+///  2. **Substring fallback** — match `**/.coco/memory/team/**` as
 ///     a heuristic for paths whose resolved memory dir doesn't match
 ///     the on-disk path (custom mount points, symlinks, mid-session
 ///     cwd changes, test fixtures under tempdir). False positives on
@@ -464,8 +464,8 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
     // Stage 2: substring fallback. Catches paths where the resolved
     // memory dir doesn't match the file's on-disk location (custom
     // mount points, symlinks, mid-session cwd changes, test fixtures).
-    // Both `.claude/memory/team/` (legacy / TS layout) and `.coco/.../memory/team/`
-    // are accepted — the secret-detector second stage gates false positives.
+    // Any `.coco/.../memory/team/` path is accepted — the secret-detector
+    // second stage gates false positives.
     let path_str = path.to_string_lossy();
     path_str.contains("/memory/team/") || path_str.contains("\\memory\\team\\")
 }

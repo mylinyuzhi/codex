@@ -34,14 +34,11 @@ fn memory_candidates(home: Option<PathBuf>) -> Vec<(PathBuf, &'static str)> {
         (PathBuf::from("CLAUDE.local.md"), "CLAUDE.local.md"),
     ];
 
-    // .claude/rules/*.md — scanned separately; placeholder entry omitted here.
+    // .coco/rules/*.md — scanned separately; placeholder entry omitted here.
     // We handle the glob inline in list_memory_files.
 
     if let Some(home) = home {
-        candidates.push((
-            home.join(".claude").join("CLAUDE.md"),
-            "~/.claude/CLAUDE.md",
-        ));
+        candidates.push((home.join(".coco").join("CLAUDE.md"), "~/.coco/CLAUDE.md"));
     }
 
     candidates
@@ -66,8 +63,8 @@ async fn list_memory_files() -> crate::Result<String> {
         }
     }
 
-    // .claude/rules/*.md — scan directory
-    scan_rules_dir(Path::new(".claude/rules"), &mut files).await;
+    // .coco/rules/*.md — scan directory
+    scan_rules_dir(Path::new(".coco/rules"), &mut files).await;
 
     let mut out = String::from("## Memory Files\n\n");
 
@@ -76,8 +73,8 @@ async fn list_memory_files() -> crate::Result<String> {
         out.push_str("Checked locations:\n");
         out.push_str("  CLAUDE.md              (project root)\n");
         out.push_str("  CLAUDE.local.md        (personal, gitignored)\n");
-        out.push_str("  .claude/rules/*.md     (project rules)\n");
-        out.push_str("  ~/.claude/CLAUDE.md    (user global)\n");
+        out.push_str("  .coco/rules/*.md       (project rules)\n");
+        out.push_str("  ~/.coco/CLAUDE.md      (user global)\n");
     } else {
         out.push_str(&format!(
             "{} memory file{} found:\n\n",
@@ -124,7 +121,7 @@ async fn probe_file(path: &Path, display_path: &str) -> Option<MemoryFile> {
     })
 }
 
-/// Scan `.claude/rules/` for `*.md` files and append any found.
+/// Scan `.coco/rules/` for `*.md` files and append any found.
 async fn scan_rules_dir(dir: &Path, files: &mut Vec<MemoryFile>) {
     let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
         return;
@@ -139,7 +136,7 @@ async fn scan_rules_dir(dir: &Path, files: &mut Vec<MemoryFile>) {
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let label = format!(".claude/rules/{name}");
+            let label = format!(".coco/rules/{name}");
             found.push((label, path));
         }
     }

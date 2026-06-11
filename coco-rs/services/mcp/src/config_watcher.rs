@@ -25,7 +25,7 @@ pub struct McpConfigChanged {
 ///
 /// Monitors:
 /// - `<config_home>/mcp.json` (user-level)
-/// - `.claude/mcp.json` (project-level)
+/// - `.coco/mcp.json` (project-level)
 /// - `.mcp.json` (project-level, legacy)
 ///
 /// Returns a broadcast receiver that emits `McpConfigChanged` on changes.
@@ -67,10 +67,10 @@ pub fn watch_mcp_configs(
 
     // Watch project-level configs
     if let Some(root) = project_root {
-        let claude_dir = root.join(".claude");
-        if claude_dir.exists() {
-            watcher.watch(claude_dir.clone(), RecursiveMode::NonRecursive);
-            info!("watching MCP project config: {}", claude_dir.display());
+        let coco_dir = root.join(".coco");
+        if coco_dir.exists() {
+            watcher.watch(coco_dir.clone(), RecursiveMode::NonRecursive);
+            info!("watching MCP project config: {}", coco_dir.display());
         }
         // Legacy .mcp.json at project root
         watcher.watch(root.to_path_buf(), RecursiveMode::NonRecursive);

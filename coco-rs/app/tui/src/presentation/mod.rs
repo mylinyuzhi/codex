@@ -16,6 +16,7 @@ pub(crate) mod input;
 pub(crate) mod layout;
 pub(crate) mod model_picker;
 pub(crate) mod pager;
+pub(crate) mod permissions_editor;
 pub(crate) mod picker;
 pub(crate) mod picker_styled;
 pub(crate) mod request;

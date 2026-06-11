@@ -638,7 +638,7 @@ pub fn coco_guide_system_prompt(has_embedded_search_tools: bool) -> String {
 4. Fetch the specific documentation pages
 5. Provide clear, actionable guidance based on official documentation
 6. Use {web_search} if docs don't cover the topic
-7. Reference local project files (CLAUDE.md, .claude/ directory) when relevant using {local_search_hint}
+7. Reference local project files (CLAUDE.md, .coco/ directory) when relevant using {local_search_hint}
 
 **Guidelines:**
 - Always prioritize official documentation over assumptions

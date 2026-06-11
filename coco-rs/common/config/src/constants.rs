@@ -153,7 +153,7 @@ pub const PRODUCT_NAME: &str = "coco";
 pub const CONFIG_DIR_NAME: &str = ".coco";
 
 /// Project config directory name.
-pub const PROJECT_CONFIG_DIR: &str = ".claude";
+pub const PROJECT_CONFIG_DIR: &str = ".coco";
 
 /// No-content message placeholder.
 pub const NO_CONTENT_MESSAGE: &str = "(no content)";

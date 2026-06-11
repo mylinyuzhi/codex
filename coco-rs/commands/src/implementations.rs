@@ -669,11 +669,11 @@ fn plan_handler(args: &str) -> String {
                • `/plan <description>` — ask the model to enter plan mode \
                and plan for the given task\n\n\
                In plan mode, the assistant proposes a plan before executing. \
-               Plans are saved under `~/.cocode/plans/`."
+               Plans are saved under `~/.coco/plans/`."
             .to_string(),
         "open" => "Opening plan in $EDITOR — TUI runner handles this; from \
                    non-TUI contexts, edit the file directly under \
-                   `~/.cocode/plans/`."
+                   `~/.coco/plans/`."
             .to_string(),
         description => {
             format!("Creating plan: {description}\nUse the EnterPlanMode tool to enter plan mode.")
@@ -1134,9 +1134,7 @@ fn resume_handler_async(
 
         if session_id.is_empty() {
             // Find the most recent session
-            let sessions_dir = dirs::home_dir()
-                .map(|h| h.join(".cocode").join("sessions"))
-                .unwrap_or_default();
+            let sessions_dir = coco_config::global_config::config_home().join("sessions");
 
             if !sessions_dir.exists() {
                 return Ok("No sessions to resume. Start a conversation first.".to_string());
@@ -1181,7 +1179,7 @@ fn init_handler_async(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let claude_md_exists = tokio::fs::metadata("CLAUDE.md").await.is_ok();
-        let claude_dir_exists = tokio::fs::metadata(".claude").await.is_ok();
+        let coco_dir_exists = tokio::fs::metadata(".coco").await.is_ok();
 
         let mut out = String::from("Initializing project...\n\n");
 
@@ -1196,18 +1194,18 @@ fn init_handler_async(
             out.push_str("No CLAUDE.md found. Will analyze the codebase to create one.\n");
         }
 
-        if claude_dir_exists {
-            out.push_str(".claude/ directory exists.\n");
+        if coco_dir_exists {
+            out.push_str(".coco/ directory exists.\n");
 
             // Check for existing settings
-            if tokio::fs::metadata(".claude/settings.json").await.is_ok() {
+            if tokio::fs::metadata(".coco/settings.json").await.is_ok() {
                 out.push_str("  settings.json found.\n");
             }
-            if tokio::fs::metadata(".claude/rules").await.is_ok() {
+            if tokio::fs::metadata(".coco/rules").await.is_ok() {
                 out.push_str("  rules/ directory found.\n");
             }
         } else {
-            out.push_str(".claude/ directory will be created.\n");
+            out.push_str(".coco/ directory will be created.\n");
         }
         if tokio::fs::metadata(".coco/skills").await.is_ok() {
             out.push_str(".coco/skills directory found.\n");
@@ -1295,7 +1293,7 @@ fn doctor_handler_async(
         match dirs::home_dir() {
             Some(home) => {
                 out.push_str(&format!("[ok]   home: {}\n", home.display()));
-                let config_dir = home.join(".cocode");
+                let config_dir = coco_config::global_config::config_home();
                 if config_dir.exists() {
                     out.push_str(&format!("[ok]   config dir: {}\n", config_dir.display()));
                 } else {
@@ -1343,11 +1341,11 @@ fn doctor_handler_async(
             out.push_str("[info] CLAUDE.md: not found (run /init to create)\n");
         }
 
-        // Check .claude directory
-        if tokio::fs::metadata(".claude").await.is_ok() {
-            out.push_str("[ok]   .claude/: found\n");
+        // Check .coco directory
+        if tokio::fs::metadata(".coco").await.is_ok() {
+            out.push_str("[ok]   .coco/: found\n");
         } else {
-            out.push_str("[info] .claude/: not found\n");
+            out.push_str("[info] .coco/: not found\n");
         }
 
         // Disk space

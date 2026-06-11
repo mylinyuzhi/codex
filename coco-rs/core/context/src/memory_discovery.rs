@@ -40,7 +40,7 @@ pub enum MemoryFileSource {
     Managed,
     /// `~/.coco/CLAUDE.md` (or AGENTS.md) — user-global.
     UserGlobal,
-    /// `<dir>/.claude/CLAUDE.md` — project config dir.
+    /// `<dir>/.coco/CLAUDE.md` — project config dir.
     ProjectConfig,
     /// `<dir>/CLAUDE.md` or `<dir>/AGENTS.md` — root-level project file.
     Project,
@@ -54,9 +54,9 @@ pub enum MemoryFileSource {
 /// 0. Managed `/etc/coco/{CLAUDE,AGENTS}.md` + unconditional `/etc/coco/rules`.
 /// 1. User-global `~/.coco/{CLAUDE,AGENTS}.md` + unconditional `~/.coco/rules`.
 /// 2. From filesystem root walking down to `cwd` inclusive, in each dir:
-///    - `<dir>/.claude/CLAUDE.md` (project config dir — claude-code-specific path; AGENTS.md not added here)
+///    - `<dir>/.coco/CLAUDE.md` (project config dir; AGENTS.md not added here)
 ///    - `<dir>/{CLAUDE,AGENTS}.md` (case-insensitive)
-///    - `<dir>/.claude/rules/*.md` **unconditional** rules (no `paths:`);
+///    - `<dir>/.coco/rules/*.md` **unconditional** rules (no `paths:`);
 ///      conditional rules stay in the lazy [`crate::nested_memory`] pass.
 ///    - `<dir>/{CLAUDE,AGENTS}.local.md` (case-insensitive)
 ///
@@ -69,14 +69,14 @@ pub enum MemoryFileSource {
 /// when CWD == filesystem root or when symlinks loop back).
 ///
 /// Per-file lazy traversal — adding `<between-cwd-and-file>/CLAUDE.md`
-/// and conditional `.claude/rules/*.md` matches — happens in
+/// and conditional `.coco/rules/*.md` matches — happens in
 /// [`crate::nested_memory`] driven by [`coco_tool_runtime`] file-read
 /// triggers, not this function.
 pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
     let mut files: Vec<MemoryFile> = Vec::new();
     // Shared `processed` set for the whole eager pass so:
     //   1. canonical-path dedup across positions (managed, user-global,
-    //      project, .claude/, rules, local) without rescanning `files`.
+    //      project, .coco/, rules, local) without rescanning `files`.
     //   2. an `@import` chain that resolves into another would-be-loaded
     //      file is not double-loaded.
     let mut processed: HashSet<PathBuf> = HashSet::new();
@@ -138,9 +138,9 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
     dirs.reverse();
 
     // When `cwd` is a git worktree nested inside its main repo (coco's agent
-    // worktrees live at `<main>/.claude/worktrees/<slug>`), the root→cwd walk
+    // worktrees live at `<main>/.coco/worktrees/<slug>`), the root→cwd walk
     // passes through BOTH the main repo root and the worktree root. git checks
-    // the branch's tracked memory (CLAUDE.md, `.claude/rules/*`, …) out into
+    // the branch's tracked memory (CLAUDE.md, `.coco/rules/*`, …) out into
     // the worktree, so the same content sits at two distinct paths and would
     // load twice. `nested` lets us skip the main repo's checked-in copy in the
     // dirs above the worktree. `None` for regular repos / non-repos → no skip.
@@ -158,12 +158,12 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
             .is_some_and(|roots| dir_in_skip_zone(dir, roots));
 
         if !skip_project {
-            // .claude/CLAUDE.md (project config dir — claude-code-specific
-            // path; we don't extend with AGENTS.md here since `.claude/`
-            // is the config dir convention, not a memory dir).
-            let dot_claude = dir.join(".claude").join("CLAUDE.md");
+            // .coco/CLAUDE.md (project config dir; we don't extend with
+            // AGENTS.md here since `.coco/` is the config dir convention,
+            // not a memory dir).
+            let dot_coco = dir.join(".coco").join("CLAUDE.md");
             try_push(
-                &dot_claude,
+                &dot_coco,
                 MemoryFileSource::ProjectConfig,
                 &mut files,
                 &mut processed,
@@ -181,12 +181,12 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
                 );
             }
 
-            // <dir>/.claude/rules/*.md unconditional rules (no `paths:`
+            // <dir>/.coco/rules/*.md unconditional rules (no `paths:`
             // frontmatter) — always-on project guidance. TS processMdRules
             // ({conditionalRule:false}) at claudemd.ts:909-919. Conditional
             // (`paths:`) rules stay in the lazy per-file traversal.
             push_unconditional_rules(
-                &dir.join(".claude").join("rules"),
+                &dir.join(".coco").join("rules"),
                 MemoryFileSource::Project,
                 &mut files,
                 &mut processed,
@@ -305,7 +305,7 @@ fn try_push(
     }
 }
 
-/// Eager-load unconditional `.claude/rules/*.md` (no `paths:` frontmatter)
+/// Eager-load unconditional `.coco/rules/*.md` (no `paths:` frontmatter)
 /// from `rules_dir` as `source`-tagged memory, sharing the `processed` dedup
 /// set so a rule that's also `@import`ed is not loaded twice.
 fn push_unconditional_rules(

@@ -144,7 +144,7 @@ async fn check_permissions_mixed_internal_and_unsafe_paths_requires_approval() {
     ctx.cwd_override = Some(dir.path().to_path_buf());
     ctx.permission_context.mode = PermissionMode::AcceptEdits;
     let input = serde_json::json!({
-        "patch": "*** Begin Patch\n*** Add File: .claude/plans/plan.md\n+ok\n*** Add File: GIT~1/config\n+bad\n*** End Patch\n"
+        "patch": "*** Begin Patch\n*** Add File: .coco/plans/plan.md\n+ok\n*** Add File: GIT~1/config\n+bad\n*** End Patch\n"
     });
 
     let result =
@@ -476,13 +476,13 @@ async fn execute_denies_move_destination_outside_allowed_write_roots() {
 #[tokio::test]
 async fn execute_rejects_secret_add_to_team_memory_path() {
     let dir = tempfile::tempdir().unwrap();
-    let team_dir = dir.path().join(".claude").join("memory").join("team");
+    let team_dir = dir.path().join(".coco").join("memory").join("team");
     std::fs::create_dir_all(&team_dir).unwrap();
     let target = team_dir.join("token.md");
     let mut ctx = ToolUseContext::test_default();
     ctx.cwd_override = Some(dir.path().to_path_buf());
     let input = ApplyPatchInput {
-        patch: "*** Begin Patch\n*** Add File: .claude/memory/team/token.md\n+API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n*** End Patch\n".to_string(),
+        patch: "*** Begin Patch\n*** Add File: .coco/memory/team/token.md\n+API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n*** End Patch\n".to_string(),
     };
 
     let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool, input, &ctx)
@@ -504,14 +504,14 @@ async fn execute_rejects_secret_add_to_team_memory_path() {
 #[tokio::test]
 async fn execute_rejects_secret_update_to_team_memory_path() {
     let dir = tempfile::tempdir().unwrap();
-    let team_dir = dir.path().join(".claude").join("memory").join("team");
+    let team_dir = dir.path().join(".coco").join("memory").join("team");
     std::fs::create_dir_all(&team_dir).unwrap();
     let target = team_dir.join("token.md");
     std::fs::write(&target, "API_KEY=placeholder\n").unwrap();
     let mut ctx = ToolUseContext::test_default();
     ctx.cwd_override = Some(dir.path().to_path_buf());
     let input = ApplyPatchInput {
-        patch: "*** Begin Patch\n*** Update File: .claude/memory/team/token.md\n@@\n-API_KEY=placeholder\n+API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n*** End Patch\n".to_string(),
+        patch: "*** Begin Patch\n*** Update File: .coco/memory/team/token.md\n@@\n-API_KEY=placeholder\n+API_KEY=sk-ant-AAAAAAAAAAAAAAAAAAAAAA\n*** End Patch\n".to_string(),
     };
 
     let err = <ApplyPatchTool as Tool>::execute(&ApplyPatchTool, input, &ctx)

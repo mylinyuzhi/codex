@@ -140,7 +140,7 @@ pub async fn build_agent_team_wiring(
 
     // Install the agent worktree manager so `AgentTool` spawns with
     // `isolation: "worktree"` get a real git worktree under the main repo's
-    // `.claude/worktrees/agent-<slug>` (cwd_override + cleanup-on-success).
+    // `.coco/worktrees/agent-<slug>` (cwd_override + cleanup-on-success).
     // Without this install, `worktree_manager()` stays `None` and every such
     // spawn fails fast with "no AgentWorktreeManager is configured".
     //

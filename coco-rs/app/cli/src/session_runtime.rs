@@ -3566,7 +3566,7 @@ pub(crate) async fn build_sandbox_state(
 
     // Deny writes to every settings source so a sandboxed command can't edit
     // its own permission rules (or disable the sandbox) — the self-permission
-    // escape TS blocks unconditionally — plus the `.claude/` command/agent
+    // escape TS blocks unconditionally — plus the `.coco/` command/agent
     // definitions.
     let settings_files = sandbox_settings_deny_paths(&settings_root);
 
@@ -3660,7 +3660,7 @@ pub(crate) fn sandbox_settings_deny_paths(settings_root: &std::path::Path) -> Ve
         global_config::local_settings_path(settings_root),
         managed.clone(),
         global_config::global_config_path(),
-        settings_root.join(".claude").join("agents"),
+        settings_root.join(".coco").join("agents"),
     ];
     // Managed drop-in directory (`managed-settings.d`) next to the managed
     // settings file — TS denies the whole drop-in dir, not just the .json.

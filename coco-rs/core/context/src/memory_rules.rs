@@ -1,4 +1,4 @@
-//! `.claude/rules/*.md` discovery + frontmatter `paths` glob matching.
+//! `.coco/rules/*.md` discovery + frontmatter `paths` glob matching.
 //!
 //! TS source: `claudemd.ts:697-1397` — `processMdRules`,
 //! `processConditionedMdRules`, plus `splitPathInFrontmatter`
@@ -23,7 +23,7 @@
 //! defined — so the AGENTS.md / case-insensitive divergence in
 //! [`crate::memory_filenames`] does NOT apply here. We accept any
 //! `.md` file (case-insensitively for the extension only) under
-//! `<dir>/.claude/rules/**/*` recursively.
+//! `<dir>/.coco/rules/**/*` recursively.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -229,7 +229,7 @@ fn read_rule_file(path: &Path) -> Option<RuleFile> {
 /// resolved relative to `base_dir`.
 ///
 /// `base_dir` for Project rules is `dirname(dirname(rules_dir))` — i.e.
-/// the dir hosting the `.claude/rules/` subtree (TS
+/// the dir hosting the `.coco/rules/` subtree (TS
 /// `processConditionedMdRules:1372`). For Managed/User it's the original
 /// CWD.
 ///

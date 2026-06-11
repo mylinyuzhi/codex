@@ -9,11 +9,11 @@
 //!
 //! Exercises the full project-tree scenario described in
 //! `core/context/CLAUDE.md` § "Memory-File Pipeline":
-//! - Eager pass picks up root-level `CLAUDE.md`, `.claude/CLAUDE.md`,
+//! - Eager pass picks up root-level `CLAUDE.md`, `.coco/CLAUDE.md`,
 //!   `AGENTS.md`, plus any `@import`-included files.
 //! - Lazy pass adds intermediate `CLAUDE.md`/`AGENTS.md`,
-//!   `.claude/CLAUDE.md`, local files, and Phase 4 conditional rules
-//!   for the `.claude/rules/*.md` whose `paths:` glob matches the
+//!   `.coco/CLAUDE.md`, local files, and Phase 4 conditional rules
+//!   for the `.coco/rules/*.md` whose `paths:` glob matches the
 //!   trigger file.
 //! - Shared `processed`/`loaded` set guarantees a file loaded eagerly
 //!   never re-loads on a subsequent trigger.
@@ -36,7 +36,7 @@ use tempfile::tempdir;
 ///   CLAUDE.md                       (eager root, @imports ./shared.md)
 ///   AGENTS.md                       (eager root, alt convention)
 ///   shared.md                       (transitive @import target)
-///   .claude/
+///   .coco/
 ///     CLAUDE.md                     (eager project-config)
 ///     rules/
 ///       style.md                    (eager unconditional)
@@ -46,17 +46,17 @@ use tempfile::tempdir;
 ///     sub2/
 ///       CLAUDE.md                   (lazy, with @import ./local.md)
 ///       local.md
-///       .claude/
+///       .coco/
 ///         CLAUDE.md                 (lazy ProjectConfig)
 ///       src/
 ///         foo.rs                    (TRIGGER FILE)
 /// ```
 fn build_tree(root: &std::path::Path) -> std::path::PathBuf {
-    let project_config = root.join(".claude");
+    let project_config = root.join(".coco");
     let rules = project_config.join("rules");
     let sub1 = root.join("sub1");
     let sub2 = sub1.join("sub2");
-    let sub2_cfg = sub2.join(".claude");
+    let sub2_cfg = sub2.join(".coco");
     let sub2_src = sub2.join("src");
     fs::create_dir_all(&rules).unwrap();
     fs::create_dir_all(&sub2_cfg).unwrap();
@@ -65,7 +65,7 @@ fn build_tree(root: &std::path::Path) -> std::path::PathBuf {
     fs::write(root.join("CLAUDE.md"), "# root\n@./shared.md\n").unwrap();
     fs::write(root.join("AGENTS.md"), "# root agents\n").unwrap();
     fs::write(root.join("shared.md"), "shared content\n").unwrap();
-    fs::write(project_config.join("CLAUDE.md"), "# .claude config\n").unwrap();
+    fs::write(project_config.join("CLAUDE.md"), "# .coco config\n").unwrap();
     fs::write(rules.join("style.md"), "always be tidy\n").unwrap();
     fs::write(
         rules.join("rust.md"),
@@ -120,8 +120,8 @@ fn eager_loads_root_with_imports_and_dedups_against_lazy() {
         "root AGENTS.md missing from eager pass"
     );
     assert!(
-        contains(&eager_paths, &root.join(".claude").join("CLAUDE.md")),
-        ".claude/CLAUDE.md missing from eager pass"
+        contains(&eager_paths, &root.join(".coco").join("CLAUDE.md")),
+        ".coco/CLAUDE.md missing from eager pass"
     );
     assert!(
         contains(&eager_paths, &root.join("shared.md")),
@@ -172,17 +172,17 @@ fn eager_loads_root_with_imports_and_dedups_against_lazy() {
             &root
                 .join("sub1")
                 .join("sub2")
-                .join(".claude")
+                .join(".coco")
                 .join("CLAUDE.md")
         ),
-        "sub1/sub2/.claude/CLAUDE.md missing from lazy pass"
+        "sub1/sub2/.coco/CLAUDE.md missing from lazy pass"
     );
 
     // Phase 4: root-level conditional rule whose `paths: src/**/*.rs`
     // matches the trigger file relative to root (sub1/sub2/src/foo.rs).
     // The trigger lives under `src/...` of the deepest base where the
-    // rule was discovered (root/.claude/rules), so matching uses
-    // root as the base. NOTE: the rule is at root/.claude/rules/rust.md
+    // rule was discovered (root/.coco/rules), so matching uses
+    // root as the base. NOTE: the rule is at root/.coco/rules/rust.md
     // and the target `sub1/sub2/src/foo.rs` does NOT match `src/**/*.rs`
     // when the base is root (no `src` segment at depth 1). It SHOULD
     // match a glob like `**/src/**/*.rs` instead — verify the matching
@@ -193,7 +193,7 @@ fn eager_loads_root_with_imports_and_dedups_against_lazy() {
     let combined = canonical_set(&eager, &lazy);
     assert!(
         combined.len() >= eager_paths.len() + 4,
-        "expected lazy pass to add at least 4 entries (sub1 AGENTS, sub2 CLAUDE, local.md, sub2 .claude); got combined = {} entries",
+        "expected lazy pass to add at least 4 entries (sub1 AGENTS, sub2 CLAUDE, local.md, sub2 .coco); got combined = {} entries",
         combined.len()
     );
 
@@ -232,7 +232,7 @@ fn eager_loads_root_with_imports_and_dedups_against_lazy() {
     assert_eq!(sub2_local.content, "sub2 local body\n");
 
     // Source classification: per-file lazy emits Project for non-config
-    // entries, ProjectConfig for `.claude/CLAUDE.md`.
+    // entries, ProjectConfig for `.coco/CLAUDE.md`.
     let sub2_cfg_entry = lazy
         .iter()
         .find(|e| {
@@ -240,25 +240,25 @@ fn eager_loads_root_with_imports_and_dedups_against_lazy() {
                 == Some(
                     root.join("sub1")
                         .join("sub2")
-                        .join(".claude")
+                        .join(".coco")
                         .join("CLAUDE.md")
                         .canonicalize()
                         .unwrap(),
                 )
         })
-        .expect(".claude/CLAUDE.md not found in lazy entries");
+        .expect(".coco/CLAUDE.md not found in lazy entries");
     assert_eq!(sub2_cfg_entry.source, MemoryFileSource::ProjectConfig);
 }
 
 #[test]
 fn lazy_phase4_loads_matching_conditional_rule() {
     // Build a smaller tree where the `paths:` glob actually matches the
-    // trigger file. CWD is /root; rule lives at .claude/rules/foo.md
+    // trigger file. CWD is /root; rule lives at .coco/rules/foo.md
     // with `paths: "**/*.rs"`; trigger is sub/file.rs. Since we resolve
     // relative to base_dir = CWD, "**/*.rs" should match "sub/file.rs".
     let dir = tempdir().unwrap();
     let root = dir.path();
-    let rules = root.join(".claude").join("rules");
+    let rules = root.join(".coco").join("rules");
     let sub = root.join("sub");
     fs::create_dir_all(&rules).unwrap();
     fs::create_dir_all(&sub).unwrap();
@@ -292,7 +292,7 @@ fn lazy_phase4_loads_matching_conditional_rule() {
 fn lazy_skips_rule_whose_glob_does_not_match() {
     let dir = tempdir().unwrap();
     let root = dir.path();
-    let rules = root.join(".claude").join("rules");
+    let rules = root.join(".coco").join("rules");
     let sub = root.join("sub");
     fs::create_dir_all(&rules).unwrap();
     fs::create_dir_all(&sub).unwrap();

@@ -227,14 +227,14 @@ pub fn get_prefer_tmux_over_iterm2() -> bool {
 fn it2_setup_state_path() -> std::path::PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".claude")
+        .join(".coco")
         .join("it2-setup-complete")
 }
 
 fn tmux_preference_path() -> std::path::PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".claude")
+        .join(".coco")
         .join("prefer-tmux-over-iterm2")
 }
 

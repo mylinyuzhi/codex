@@ -4,7 +4,7 @@
 //!
 //! File layout:
 //! ```text
-//! ~/.claude/teams/
+//! ~/.coco/teams/
 //!   {team-name}/
 //!     config.json       # TeamFile
 //!     inboxes/
@@ -21,7 +21,7 @@ use crate::types::TeamFile;
 /// Base directory for all teams.
 ///
 /// `COCO_TEAMS_DIR` overrides it (tests isolate the teams/mailbox tree; a
-/// future swarm-leader can relocate it). Otherwise `~/.claude/teams/`.
+/// future swarm-leader can relocate it). Otherwise `~/.coco/teams/`.
 ///
 /// TS: `~/.claude/teams/`
 pub fn teams_base_dir() -> PathBuf {
@@ -30,7 +30,7 @@ pub fn teams_base_dir() -> PathBuf {
     }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
+        .join(".coco")
         .join("teams")
 }
 

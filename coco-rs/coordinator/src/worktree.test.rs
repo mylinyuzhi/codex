@@ -88,7 +88,7 @@ fn test_create_for_builds_worktree_under_canonical_root() {
     assert!(
         session
             .path
-            .ends_with(Path::new(".claude/worktrees/agent-abc12345"))
+            .ends_with(Path::new(".coco/worktrees/agent-abc12345"))
     );
     assert!(!session.head_commit.is_empty());
     assert_eq!(session.branch, "claude/agent-abc12345");
@@ -235,8 +235,8 @@ fn test_post_creation_setup_copies_settings_local() {
     }
     let tmp = TempDir::new().unwrap();
     init_repo(tmp.path());
-    // Create .claude/settings.local.json in the main repo.
-    let settings_dir = tmp.path().join(".claude");
+    // Create .coco/settings.local.json in the main repo.
+    let settings_dir = tmp.path().join(".coco");
     std::fs::create_dir_all(&settings_dir).unwrap();
     std::fs::write(
         settings_dir.join("settings.local.json"),
@@ -247,7 +247,7 @@ fn test_post_creation_setup_copies_settings_local() {
     let manager = AgentWorktreeManager::discover_from_cwd(tmp.path()).unwrap();
     let session = manager.create_for("agent-settings").unwrap();
 
-    let copied = session.path.join(".claude").join("settings.local.json");
+    let copied = session.path.join(".coco").join("settings.local.json");
     assert!(
         copied.exists(),
         "post-creation setup should have copied settings.local.json"
@@ -387,7 +387,7 @@ fn test_cleanup_stale_skips_user_named_worktrees() {
     // Create a user-named worktree manually (not agent slug pattern).
     let user_wt = tmp
         .path()
-        .join(".claude")
+        .join(".coco")
         .join("worktrees")
         .join("wt-myfeature");
     std::fs::create_dir_all(user_wt.parent().unwrap()).unwrap();

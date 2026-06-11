@@ -146,7 +146,7 @@ fn test_parse_settings_rejects_unknown_status_line_type() {
 fn test_load_settings_with_accepts_jsonc_layers() {
     let tmp = TempDir::new().expect("tempdir");
     let cwd = tmp.path().join("project");
-    std::fs::create_dir_all(cwd.join(".claude")).expect("project settings dir");
+    std::fs::create_dir_all(cwd.join(".coco")).expect("project settings dir");
 
     let user_path = tmp.path().join("settings.json");
     let managed_path = tmp.path().join("managed-settings.json");
@@ -163,7 +163,7 @@ fn test_load_settings_with_accepts_jsonc_layers() {
     )
     .expect("write user settings");
     std::fs::write(
-        cwd.join(".claude/settings.json"),
+        cwd.join(".coco/settings.json"),
         r#"{
             // Project settings can also use comments.
             "output_style": "project",
@@ -269,14 +269,14 @@ fn test_strict_plugin_only_customization_serde() {
 fn test_load_settings_with_skips_disabled_sources() {
     let tmp = TempDir::new().expect("tempdir");
     let cwd = tmp.path().join("project");
-    std::fs::create_dir_all(cwd.join(".claude")).expect("project settings dir");
+    std::fs::create_dir_all(cwd.join(".coco")).expect("project settings dir");
 
     let user_path = tmp.path().join("settings.json");
     let managed_path = tmp.path().join("managed-settings.json");
 
     std::fs::write(&user_path, r#"{"output_style": "user"}"#).expect("write user settings");
     std::fs::write(
-        cwd.join(".claude/settings.json"),
+        cwd.join(".coco/settings.json"),
         r#"{"output_style": "project"}"#,
     )
     .expect("write project settings");

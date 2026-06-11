@@ -149,13 +149,13 @@ async fn main() -> Result<()> {
             }
             Commands::Init => {
                 let cwd = std::env::current_dir()?;
-                let claude_dir = cwd.join(".claude");
-                std::fs::create_dir_all(&claude_dir)?;
-                let settings = claude_dir.join("settings.json");
+                let coco_dir = cwd.join(".coco");
+                std::fs::create_dir_all(&coco_dir)?;
+                let settings = coco_dir.join("settings.json");
                 if !settings.exists() {
                     std::fs::write(&settings, "{}\n")?;
                 }
-                println!("Initialized .claude/ directory at {}", cwd.display());
+                println!("Initialized .coco/ directory at {}", cwd.display());
                 return Ok(());
             }
             Commands::Review { target } => {

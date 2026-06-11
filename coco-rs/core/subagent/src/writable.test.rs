@@ -37,13 +37,13 @@ fn user_source_resolves_under_config_home() {
 }
 
 #[test]
-fn project_source_resolves_under_cwd_claude() {
+fn project_source_resolves_under_cwd_coco() {
     let dir = resolve_writable_agent_dir(
         AgentSource::ProjectSettings,
         &PathBuf::from("/home/u/.coco"),
         &PathBuf::from("/tmp/proj"),
     );
-    assert_eq!(dir, Some(PathBuf::from("/tmp/proj/.claude/agents")));
+    assert_eq!(dir, Some(PathBuf::from("/tmp/proj/.coco/agents")));
 }
 
 #[test]

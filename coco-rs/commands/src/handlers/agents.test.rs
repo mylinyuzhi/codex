@@ -61,14 +61,14 @@ fn paths_lists_built_in_first() {
 fn paths_includes_configured_dirs() {
     let paths = AgentSearchPaths {
         user_dir: Some(PathBuf::from("/home/u/.coco/agents")),
-        project_dirs: vec![PathBuf::from("/proj/.claude/agents")],
+        project_dirs: vec![PathBuf::from("/proj/.coco/agents")],
         flag_dirs: Vec::<PathBuf>::new(),
         policy_dirs: Vec::<PathBuf>::new(),
         plugin_dirs: Vec::new(),
     };
     let out = render("paths", paths).unwrap();
     assert!(out.contains("/home/u/.coco/agents"));
-    assert!(out.contains("/proj/.claude/agents"));
+    assert!(out.contains("/proj/.coco/agents"));
 }
 
 #[test]

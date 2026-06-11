@@ -1249,12 +1249,12 @@ fn scalar_to_string(v: &coco_frontmatter::FrontmatterValue) -> Option<String> {
 fn managed_base_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        PathBuf::from("/Library/Application Support/ClaudeCode/.claude")
+        PathBuf::from("/Library/Application Support/ClaudeCode/.coco")
     }
     #[cfg(not(target_os = "macos"))]
     {
         // Linux and other Unix platforms
-        PathBuf::from("/etc/claude-code/.claude")
+        PathBuf::from("/etc/claude-code/.coco")
     }
 }
 
@@ -1284,7 +1284,7 @@ pub fn get_managed_commands_path() -> PathBuf {
 /// policy locks customization surfaces to plugin-only sources).
 #[derive(Debug, Clone)]
 pub struct SkillLoadGates {
-    /// Load managed/policy `.claude/skills`. Gated by `COCO_DISABLE_POLICY_SKILLS`.
+    /// Load managed/policy `.coco/skills`. Gated by `COCO_DISABLE_POLICY_SKILLS`.
     pub managed_enabled: bool,
     /// Load user `~/.coco/skills`. Requires `userSettings` enabled and not locked.
     pub user_enabled: bool,

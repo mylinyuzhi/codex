@@ -247,6 +247,12 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
             KbContext::Global,
         ],
         Settings => vec![KbContext::Settings, KbContext::Select, KbContext::Global],
+        // Global-only: the editor's nav + text input come entirely from the
+        // legacy `map_permissions_editor_key` cascade. Deliberately NO
+        // Select/Confirmation — those would resolve arrows to `Surface*`
+        // (and chars to filter / Y-N-A) before the editor's `intercept`
+        // sees them as the `Cursor*` / `InsertChar` it expects.
+        PermissionsEditor => vec![KbContext::Global],
         // Task sits between Chat and Global so `ctrl+b` (defaults.rs:200)
         // resolves while typing in the composer. TS `defaultBindings.ts:181-188`
         // makes the Task context active whenever a backgroundable task exists;
