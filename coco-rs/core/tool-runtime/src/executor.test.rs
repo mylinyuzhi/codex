@@ -95,17 +95,28 @@ impl crate::traits::Tool for UnsafeTool {
     }
 }
 
+/// Test helper: validate `input` against `tool`'s (open) test schema and
+/// build the `PendingToolCall`.
+fn pending(
+    tool: Arc<dyn crate::traits::DynTool>,
+    tool_use_id: &str,
+    input: Value,
+) -> PendingToolCall {
+    PendingToolCall {
+        tool_use_id: tool_use_id.into(),
+        input: crate::ValidatedInput::validate(tool.as_ref(), input)
+            .expect("test input must validate"),
+        tool,
+    }
+}
+
 fn make_call(name: &str, safe: bool) -> PendingToolCall {
     let tool: Arc<dyn crate::traits::DynTool> = if safe {
         Arc::new(SafeTool { name: name.into() })
     } else {
         Arc::new(UnsafeTool { name: name.into() })
     };
-    PendingToolCall {
-        tool_use_id: name.into(),
-        tool,
-        input: json!({}),
-    }
+    pending(tool, name, json!({}))
 }
 
 #[test]
@@ -299,16 +310,16 @@ async fn test_execute_concurrent_tools_returns_completion_order() {
     let max_concurrent = Arc::new(AtomicI32::new(0));
 
     let make_slow = |name: &str, sleep_ms| -> PendingToolCall {
-        PendingToolCall {
-            tool_use_id: name.into(),
-            tool: Arc::new(SlowSafeTool {
+        pending(
+            Arc::new(SlowSafeTool {
                 name: name.into(),
                 concurrent_count: concurrent_count.clone(),
                 max_concurrent: max_concurrent.clone(),
                 sleep_ms,
             }),
-            input: json!({}),
-        }
+            name,
+            json!({}),
+        )
     };
 
     let executor = StreamingToolExecutor::with_max_concurrency(2);
@@ -332,14 +343,16 @@ async fn test_execute_concurrent_patches_apply_in_model_order() {
     let executor = StreamingToolExecutor::with_max_concurrency(2).with_app_state(app_state.clone());
     let ctx = crate::context::ToolUseContext::test_default();
 
-    let make_patch = |name: &str, sleep_ms, digit| PendingToolCall {
-        tool_use_id: name.into(),
-        tool: Arc::new(PatchSafeTool {
-            name: name.into(),
-            sleep_ms,
-            digit,
-        }),
-        input: json!({}),
+    let make_patch = |name: &str, sleep_ms, digit| {
+        pending(
+            Arc::new(PatchSafeTool {
+                name: name.into(),
+                sleep_ms,
+                digit,
+            }),
+            name,
+            json!({}),
+        )
     };
 
     let results = executor
@@ -363,16 +376,16 @@ async fn test_concurrent_tools_run_in_parallel() {
     let max_concurrent = Arc::new(AtomicI32::new(0));
 
     let make_slow = |name: &str| -> PendingToolCall {
-        PendingToolCall {
-            tool_use_id: name.into(),
-            tool: Arc::new(SlowSafeTool {
+        pending(
+            Arc::new(SlowSafeTool {
                 name: name.into(),
                 concurrent_count: concurrent_count.clone(),
                 max_concurrent: max_concurrent.clone(),
                 sleep_ms: 50,
             }),
-            input: json!({}),
-        }
+            name,
+            json!({}),
+        )
     };
 
     let executor = StreamingToolExecutor::with_max_concurrency(5);
@@ -423,16 +436,16 @@ async fn test_semaphore_limits_concurrency() {
     let max_concurrent = Arc::new(AtomicI32::new(0));
 
     let make_slow = |name: &str| -> PendingToolCall {
-        PendingToolCall {
-            tool_use_id: name.into(),
-            tool: Arc::new(SlowSafeTool {
+        pending(
+            Arc::new(SlowSafeTool {
                 name: name.into(),
                 concurrent_count: concurrent_count.clone(),
                 max_concurrent: max_concurrent.clone(),
                 sleep_ms: 50,
             }),
-            input: json!({}),
-        }
+            name,
+            json!({}),
+        )
     };
 
     // Only allow 2 concurrent
@@ -549,31 +562,31 @@ async fn test_executor_does_not_run_hooks() {
     }));
 
     let exec = StreamingToolExecutor::new();
-    let single = PendingToolCall {
-        tool_use_id: "single".into(),
-        tool: Arc::new(UnsafeTool { name: "u".into() }),
-        input: json!({"x": 42}),
-    };
+    let single = pending(
+        Arc::new(UnsafeTool { name: "u".into() }),
+        "single",
+        json!({"x": 42}),
+    );
     let single_result = exec.execute_single(single, &ctx).await;
 
     assert_eq!(single_result.result.unwrap().data, json!({"x": 42}));
 
     let calls = vec![
-        PendingToolCall {
-            tool_use_id: "a".into(),
-            tool: Arc::new(SafeTool { name: "s".into() }),
-            input: json!({"i": 1}),
-        },
-        PendingToolCall {
-            tool_use_id: "b".into(),
-            tool: Arc::new(SafeTool { name: "s".into() }),
-            input: json!({"i": 2}),
-        },
-        PendingToolCall {
-            tool_use_id: "c".into(),
-            tool: Arc::new(SafeTool { name: "s".into() }),
-            input: json!({"i": 3}),
-        },
+        pending(
+            Arc::new(SafeTool { name: "s".into() }),
+            "a",
+            json!({"i": 1}),
+        ),
+        pending(
+            Arc::new(SafeTool { name: "s".into() }),
+            "b",
+            json!({"i": 2}),
+        ),
+        pending(
+            Arc::new(SafeTool { name: "s".into() }),
+            "c",
+            json!({"i": 3}),
+        ),
     ];
     let results = exec.execute_concurrent(calls, &ctx).await;
 
@@ -609,8 +622,9 @@ fn prepared_from(
     PreparedToolCall {
         tool_use_id: tool_use_id.into(),
         tool_id: tool.id(),
+        parsed_input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
+            .expect("test input must validate"),
         tool,
-        parsed_input: json!({}),
         model_index,
     }
 }
@@ -699,7 +713,10 @@ async fn test_execute_with_concurrent_batch_surfaces_in_completion_order() {
         let model_index = prepared.model_index;
         // Simulate actual tool work via the SlowSafeTool's own sleep.
         let ctx = crate::context::ToolUseContext::test_default();
-        let _ = prepared.tool.execute(prepared.parsed_input, &ctx).await;
+        let _ = prepared
+            .tool
+            .execute(prepared.parsed_input.into_value(), &ctx)
+            .await;
         empty_unstamped(&tool_use_id, model_index)
     })
     .await;
@@ -734,8 +751,9 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
         ToolCallPlan::Runnable(PreparedToolCall {
             tool_use_id: "bash-call".into(),
             tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
+            parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
+                .expect("test input must validate"),
             tool: bash_tool,
-            parsed_input: json!({}),
             model_index: 0,
         }),
         ToolCallPlan::Runnable(prepared_from(read_tool, "read-call", 1)),

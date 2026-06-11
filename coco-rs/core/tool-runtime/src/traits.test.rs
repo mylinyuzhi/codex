@@ -237,3 +237,57 @@ fn render_text_or_json_falls_back_to_json_for_structured_data() {
         }]
     );
 }
+
+/// The blanket `DynTool::check_permissions` must FAIL CLOSED (Ask) when the
+/// input cannot deserialize into the tool's typed input. The old silent
+/// `Passthrough` skipped security-relevant tool opinions (path carve-outs,
+/// deny rules) — exactly how an uncoerced freeform raw string bypassed the
+/// plan-file auto-allow and fell through to a mode-based prompt.
+#[tokio::test]
+async fn test_check_permissions_fails_closed_on_undeserializable_input() {
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    struct TypedInput {
+        #[allow(dead_code)]
+        path: String,
+    }
+
+    struct TypedTool;
+
+    #[async_trait::async_trait]
+    impl Tool for TypedTool {
+        type Input = TypedInput;
+        type Output = serde_json::Value;
+
+        crate::impl_runtime_schema!(TypedInput);
+
+        fn id(&self) -> ToolId {
+            ToolId::Custom("typed_test".into())
+        }
+        fn name(&self) -> &str {
+            "typed_test"
+        }
+        fn description(&self, _input: &TypedInput, _options: &DescriptionOptions) -> String {
+            String::new()
+        }
+        async fn prompt(&self, _options: &PromptOptions) -> String {
+            String::new()
+        }
+        async fn execute(
+            &self,
+            _input: TypedInput,
+            _ctx: &ToolUseContext,
+        ) -> Result<ToolResult<Value>, ToolError> {
+            unreachable!("not executed in this test")
+        }
+    }
+
+    let tool: &dyn DynTool = &TypedTool;
+    let ctx = crate::context::ToolUseContext::test_default();
+    let result = tool
+        .check_permissions(&json!("raw freeform string"), &ctx)
+        .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "deser failure must fail closed to Ask, got {result:?}"
+    );
+}

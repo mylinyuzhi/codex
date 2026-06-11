@@ -39,6 +39,7 @@ use crate::error::ToolError;
 use crate::traits::DynTool;
 use crate::traits::InterruptBehavior;
 use crate::traits::ToolProgress;
+use crate::validated_input::ValidatedInput;
 
 /// Default maximum concurrent tool executions.
 const DEFAULT_MAX_CONCURRENCY: usize = 10;
@@ -76,10 +77,15 @@ pub enum ToolBatch {
 }
 
 /// A pending tool call waiting for execution.
+///
+/// `input` is a [`ValidatedInput`] by construction: whoever builds a pending
+/// call has already run freeform coercion + schema validation, so a raw
+/// freeform string (apply_patch's `*** Begin Patch …` envelope) can never
+/// reach `serde_json::from_value::<T::Input>` at execute time.
 pub struct PendingToolCall {
     pub tool_use_id: String,
     pub tool: Arc<dyn DynTool>,
-    pub input: Value,
+    pub input: ValidatedInput,
 }
 
 impl std::fmt::Debug for PendingToolCall {
@@ -366,7 +372,7 @@ impl StreamingToolExecutor {
 
         for call in tool_calls {
             let is_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                call.tool.is_concurrency_safe(&call.input)
+                call.tool.is_concurrency_safe(call.input.as_value())
             }))
             .unwrap_or(false);
 
@@ -436,7 +442,7 @@ impl StreamingToolExecutor {
         let tool_use_id = call.tool_use_id.clone();
         let tool_name = call.tool.name().to_string();
         let start = std::time::Instant::now();
-        let input = call.input;
+        let input = call.input.into_value();
 
         tracing::info!(
             tool_use_id = %tool_use_id,
@@ -574,7 +580,7 @@ impl StreamingToolExecutor {
             let sem = semaphore.clone();
             let ctx_clone = shared_ctx.clone();
             let tool = call.tool;
-            let input = call.input;
+            let input = call.input.into_value();
             let tool_use_id = call.tool_use_id;
             let tool_id = tool.id();
             let tool_name = tool.name().to_string();
@@ -1068,7 +1074,9 @@ fn partition_plans(plans: Vec<ToolCallPlan>) -> Vec<PlanBlock> {
         match plan {
             ToolCallPlan::Runnable(prepared) => {
                 let is_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    prepared.tool.is_concurrency_safe(&prepared.parsed_input)
+                    prepared
+                        .tool
+                        .is_concurrency_safe(prepared.parsed_input.as_value())
                 }))
                 .unwrap_or(false);
                 if is_safe {

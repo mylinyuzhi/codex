@@ -35,6 +35,7 @@ pub mod task_handle;
 pub mod task_list_handle;
 pub mod tool_result_storage;
 pub mod traits;
+pub mod validated_input;
 pub mod validation;
 
 pub use agent_handle::AgentHandle;
@@ -140,6 +141,7 @@ pub use schedule_store::TriggerEntry;
 pub use schema::SchemaError;
 pub use schema::SchemaIssue;
 pub use schema::ToolInputSchema;
+pub use schema::format_schema_error;
 pub use schema::schema_omit_properties;
 pub use side_query::NoOpSideQuery;
 pub use side_query::SideQuery;
@@ -214,4 +216,5 @@ pub use traits::render_text_or_json;
 // directly. See `docs/coco-rs/tool-result-rendering.md`.
 pub use coco_messages::ToolResultContentPart;
 pub use coco_messages::tool_reference_content_part;
+pub use validated_input::ValidatedInput;
 pub use validation::ValidationResult;

@@ -20,6 +20,7 @@ use coco_tool_runtime::PendingToolCall;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
+use coco_tool_runtime::ValidatedInput;
 use coco_types::CoreEvent;
 use coco_types::ModelRole;
 use coco_types::PermissionDecision;
@@ -49,7 +50,7 @@ use crate::tool_runner::prepare_committed_tool_call;
 #[derive(Debug, Clone)]
 pub(crate) struct ToolResultContext {
     pub tool_name: String,
-    pub effective_input: Value,
+    pub effective_input: ValidatedInput,
 }
 
 pub(crate) struct PendingToolPreparation<'a> {
@@ -142,6 +143,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
 
     let tool_id = prepared.tool_id;
     let tool = prepared.tool;
+    let validated_input = prepared.input;
 
     // schema validation already ran inside
     // `prepare_committed_tool_call` (tool_runner.rs:82-123) — it
@@ -187,9 +189,6 @@ pub(crate) async fn prepare_one_pending_tool_call(
         .await;
         return None;
     }
-    // `tc.input` is already the observable input — both engine paths run
-    // `normalize_observable_tool_input` when building this `ToolCallPart`.
-
     let hook_controller =
         HookController::new(args.hooks, args.orchestration_ctx.clone(), args.hook_tx_opt);
     let pre_tool_outcome = hook_controller
@@ -211,6 +210,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
             tc,
             &tool_id,
             &tool,
+            validated_input,
             pre_tool_outcome,
             args.completion_event_mode,
             args.deferred_tool_completions.as_deref_mut(),
@@ -220,7 +220,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
     let decision = resolve_permission_decision(
         tc,
         &tool,
-        &effective_input,
+        effective_input.as_value(),
         args.ctx,
         args.history.as_slice(),
         (hook_permission_behavior, hook_permission_reason),
@@ -237,8 +237,13 @@ pub(crate) async fn prepare_one_pending_tool_call(
     // `retry: true`, the model is hinted that it may retry. We extend
     // the deny message in-place so the existing controller path stays
     // unchanged.
-    let decision =
-        maybe_fire_permission_denied_hook(&hook_controller, tc, &effective_input, decision).await;
+    let decision = maybe_fire_permission_denied_hook(
+        &hook_controller,
+        tc,
+        effective_input.as_value(),
+        decision,
+    )
+    .await;
 
     let permission_outcome = PermissionController::new(
         args.event_tx,
@@ -254,7 +259,7 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.ctx.avoid_permission_prompts,
         args.deferred_tool_completions.as_deref_mut(),
     )
-    .resolve(decision, tc, &effective_input, &tool_id)
+    .resolve(decision, tc, effective_input.as_value(), &tool_id)
     .await;
     if matches!(permission_outcome, PermissionOutcome::Aborted) {
         *permission_aborted = true;
@@ -296,11 +301,12 @@ async fn resolve_effective_input_from_pre_hook(
     tool_call: &ToolCallPart,
     tool_id: &ToolId,
     tool: &Arc<dyn DynTool>,
+    validated_input: ValidatedInput,
     pre_tool_outcome: PreToolUseOutcome,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
 ) -> Option<(
-    Value,
+    ValidatedInput,
     Option<coco_types::PermissionBehavior>,
     Option<String>,
 )> {
@@ -326,7 +332,13 @@ async fn resolve_effective_input_from_pre_hook(
                 .await
                 .map(|input| (input, permission_behavior, reason));
             }
-            Some((tool_call.input.clone(), permission_behavior, reason))
+            // No hook rewrite: the prepared call's coerced, schema-validated
+            // input flows through unchanged. (Previously this fell back to
+            // the RAW `tool_call.input`, which silently discarded freeform
+            // coercion — apply_patch's `{patch: …}` wrap — and broke both
+            // path-based permission carve-outs and execute-time
+            // deserialization.)
+            Some((validated_input, permission_behavior, reason))
         }
     }
 }
@@ -797,10 +809,10 @@ async fn resolve_effective_input_from_permission(
     tool_id: &ToolId,
     tool: &Arc<dyn DynTool>,
     permission_outcome: PermissionOutcome,
-    effective_input: Value,
+    effective_input: ValidatedInput,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
-) -> Option<Value> {
+) -> Option<ValidatedInput> {
     match permission_outcome {
         PermissionOutcome::Denied => None,
         PermissionOutcome::Aborted => None,
@@ -878,51 +890,44 @@ async fn validate_effective_input_or_complete_error(
     input: Value,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
-) -> Option<Value> {
+) -> Option<ValidatedInput> {
     let mut deferred_tool_completions = deferred_tool_completions;
-    // Freeform/custom-tool coercion (mirrors `tool_input_validate` +
-    // `tool_runner`): a hook may hand back a freeform tool's raw string
-    // (apply_patch's `*** Begin Patch …` envelope); wrap it into the typed
-    // `{patch: …}` JSON the schema + serde `validate_input` expect before
-    // either check runs, otherwise both fail with `invalid type: string`.
-    let input = match input {
-        Value::String(raw) => tool
-            .coerce_raw_string_input(&raw)
-            .unwrap_or(Value::String(raw)),
-        other => other,
-    };
-    // Schema validation (plan I3 Rust-side tightening): check the
-    // (possibly hook-rewritten) input against the tool's JSON
-    // schema BEFORE running `tool.validate_input`. A hook that
-    // returns malformed input produces a synthetic validation
-    // error here, not silently downstream.
+    // Coercion + schema validation, fused in the `ValidatedInput`
+    // constructor (plan I3 Rust-side tightening): a hook may hand back a
+    // freeform tool's raw string (apply_patch's `*** Begin Patch …`
+    // envelope) or malformed JSON — both are caught HERE, before
+    // `tool.validate_input`, producing a synthetic validation error
+    // instead of failing silently downstream.
     //
     // v4.2: the validator is owned by the tool's schema (synchronous,
     // lock-free). A schema-compile failure is impossible here — a tool is
     // only registered if its schema compiled at construction.
-    if let Err(issues) = tool.runtime_validation_schema().validate(&input) {
-        let message = format!(
-            "Invalid input: {}",
-            crate::tool_input_validate::format_schema_error(&tool_call.tool_name, &issues)
-        );
-        complete_tool_call_with_error_mode(
-            event_tx,
-            history,
-            &tool_call.tool_call_id,
-            &tool_call.tool_name,
-            tool_id,
-            &message,
-            coco_tool_runtime::ToolCallErrorKind::SchemaFailed,
-            completion_event_mode,
-            deferred_tool_completions.take(),
-        )
-        .await;
-        return None;
-    }
+    let validated = match ValidatedInput::validate(tool.as_ref(), input) {
+        Ok(validated) => validated,
+        Err(issues) => {
+            let message = format!(
+                "Invalid input: {}",
+                crate::tool_input_validate::format_schema_error(&tool_call.tool_name, &issues)
+            );
+            complete_tool_call_with_error_mode(
+                event_tx,
+                history,
+                &tool_call.tool_call_id,
+                &tool_call.tool_name,
+                tool_id,
+                &message,
+                coco_tool_runtime::ToolCallErrorKind::SchemaFailed,
+                completion_event_mode,
+                deferred_tool_completions.take(),
+            )
+            .await;
+            return None;
+        }
+    };
 
-    let validation = tool.validate_input(&input, ctx);
+    let validation = tool.validate_input(validated.as_value(), ctx);
     if validation.is_valid() {
-        return Some(input);
+        return Some(validated);
     }
 
     let message = match validation {

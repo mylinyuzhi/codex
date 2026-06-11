@@ -16,9 +16,17 @@ use crate::helpers::ToolCompletionEventMode;
 use crate::helpers::complete_tool_call_with_error_mode;
 
 /// Resolved and validated tool call ready for permission/hook/execution.
+///
+/// `input` is the coerced, schema-validated form of the wire input
+/// (freeform raw strings wrapped via `coerce_raw_string_input`,
+/// double-encoded JSON recovered). The original `ToolCallPart.input` keeps
+/// the wire shape for history/provider round-trips; everything downstream
+/// of preparation — permission evaluation, hooks, execution — must consume
+/// this value instead.
 pub(crate) struct PreparedToolCall {
     pub tool_id: ToolId,
     pub tool: Arc<dyn DynTool>,
+    pub input: coco_tool_runtime::ValidatedInput,
 }
 
 /// Prepare one committed assistant tool call.
@@ -91,13 +99,18 @@ pub(crate) async fn prepare_committed_tool_call(
     // wire parsing's reason. Both paths converge on the same `<tool_use_error>`
     // wrap selection so the model sees one format whether the failure
     // originated on the wire or in the schema validator.
+    //
+    // `validate_tool_call` mutates only this clone's invalid flags; the
+    // committed `tool_call` keeps its wire-shape input for the provider
+    // round-trip. The coerced, schema-validated input it returns is the
+    // value every downstream consumer (permission evaluation, hooks,
+    // execution) sees — threading it through `PreparedToolCall` is what
+    // keeps the serde-backed validators and `T::Input` deserialization
+    // from ever meeting a raw freeform string.
     let mut validated = tool_call.clone();
-    if !validated.invalid {
-        // v4.2: synchronous, lock-free — the validator is owned by the
-        // tool's `runtime_validation_schema()`.
+    let validated_input =
         crate::tool_input_validate::validate_tool_call(&mut validated, Some(&tool));
-    }
-    if validated.invalid {
+    let Some(validated_input) = validated_input else {
         let message = match validated.invalid_reason {
             Some(coco_llm_types::ToolInputInvalidReason::SchemaViolation { message }) => {
                 format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
@@ -126,15 +139,12 @@ pub(crate) async fn prepare_committed_tool_call(
         )
         .await;
         return None;
-    }
+    };
 
-    // Validate the coerced/normalized clone, not the raw `tool_call.input`.
-    // `validate_tool_call` (above) applied freeform coercion (apply_patch's
-    // raw `*** Begin Patch …` string → `{patch: …}`) and string-recovery to
-    // `validated.input`; the original `tool_call.input` is intentionally left
-    // untouched for the wire round-trip. Feeding the raw string to the
-    // serde-backed `validate_input` would fail with `invalid type: string`.
-    let validation = tool.validate_input(&validated.input, ctx);
+    // Validate the coerced input, not the raw `tool_call.input` — feeding
+    // a freeform tool's raw string to the serde-backed `validate_input`
+    // would fail with `invalid type: string`.
+    let validation = tool.validate_input(validated_input.as_value(), ctx);
     if !validation.is_valid() {
         let message = match validation {
             coco_tool_runtime::ValidationResult::Invalid { message, .. } => {
@@ -163,5 +173,13 @@ pub(crate) async fn prepare_committed_tool_call(
         return None;
     }
 
-    Some(PreparedToolCall { tool_id, tool })
+    Some(PreparedToolCall {
+        tool_id,
+        tool,
+        input: validated_input,
+    })
 }
+
+#[cfg(test)]
+#[path = "tool_runner.test.rs"]
+mod tests;

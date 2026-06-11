@@ -249,7 +249,7 @@ impl QueryEngine {
                     call_ctx.abort = runtime.abort.clone();
                     call_ctx.progress_tx = runtime.progress_tx.clone();
                     let execute_result = tokio::select! {
-                        r = prepared.tool.execute(effective_input.clone(), &call_ctx) => r,
+                        r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
                         () = call_ctx.abort.cancelled() => Err(coco_tool_runtime::ToolError::Cancelled),
                     };
                     crate::tool_outcome_builder::build_outcome_from_execution(
@@ -259,7 +259,7 @@ impl QueryEngine {
                             tool_name: prepared.tool.name().to_string(),
                             model_index: prepared.model_index,
                             tool: prepared.tool,
-                            effective_input,
+                            effective_input: effective_input.into_value(),
                             execute_result,
                             hooks: hooks.as_ref(),
                             orchestration_ctx,

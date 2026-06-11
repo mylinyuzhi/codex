@@ -1,5 +1,6 @@
 ---
 source: app/tui/src/widgets/mod.test.rs
+assertion_line: 470
 expression: output
 ---
  ╭─╮ ╭─╮  COCO v0.0.0                                                           
@@ -9,10 +10,10 @@ expression: output
 ┌ Bash [HIGH] ─────────────────────────────────────────────────────────────────┐
 │...                                                                           │
 │Actions:                                                                      │
-│▸ Yes, approve once                                                           │
-│  Yes, and don't ask again for Bash                                           │
-│  No, deny                                                                    │
-│↑/↓ Navigate  Enter Select  Y/N/A shortcuts                                   │
+│▸ 1/y · Yes, approve once                                                     │
+│  2/a · Yes, and don't ask again for Bash                                     │
+│  3/n · No, deny                                                              │
+│↑/↓ Navigate  Enter Select  1-3 or Y/A/N shortcuts                            │
 └──────────────────────────────────────────────────────────────────────────────┘
 ────────────────────────────────────────────────────────────────────────────────
 ❯                                                                               

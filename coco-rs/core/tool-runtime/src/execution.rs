@@ -117,20 +117,44 @@ pub async fn execute_tool_call(
         }
     };
 
-    // Step 1b: Freeform/custom-tool input coercion. The agent loop coerces in
-    // `tool_input_validate::validate_tool_call`; this mirror covers direct
+    // Step 1b: Defense-in-depth strip of internal-only Bash fields —
+    // BEFORE validation so model-injected `_`-prefixed fields are gone
+    // by the time the schema sees the input.
+    let input = strip_internal_bash_fields(tool_name, input);
+
+    // Step 1c: Freeform coercion + schema validation, fused in the
+    // [`ValidatedInput`] constructor (the agent loop runs the same
+    // constructor in `tool_input_validate::validate_tool_call`). Direct
     // executors (subagents, tests) that pass a bare-string freeform input
-    // (apply_patch's raw patch) straight here. Wrap it into the typed JSON the
-    // schema + `Self::Input` expect; non-coercing tools / non-string inputs
-    // pass through unchanged.
-    let input = match input {
-        Value::String(raw) => tool
-            .coerce_raw_string_input(&raw)
-            .unwrap_or(Value::String(raw)),
-        other => other,
+    // (apply_patch's raw patch) get it wrapped into the typed JSON the
+    // schema + `Self::Input` expect; schema violations short-circuit as
+    // `InvalidInput` here instead of failing deep inside `execute`.
+    let mut validated = match crate::ValidatedInput::validate(tool.as_ref(), input) {
+        Ok(validated) => validated,
+        Err(issues) => {
+            let message = crate::schema::format_schema_error(tool_name, &issues);
+            tracing::warn!(
+                tool_use_id = %tool_use_id,
+                tool_name = %tool_name,
+                %message,
+                "tool input failed schema validation"
+            );
+            return ToolExecutionResult {
+                tool_use_id: tool_use_id.to_string(),
+                tool_id,
+                tool_name: tool_name.to_string(),
+                result: Err(ToolError::InvalidInput {
+                    message,
+                    error_code: None,
+                }),
+                duration_ms: start.elapsed().as_millis() as i64,
+                permission_denied: false,
+                error_class: Some("invalid_input".to_string()),
+            };
+        }
     };
 
-    // Step 2: Validate raw model input
+    // Step 2: Validate model input (semantic validation)
     //
     // R7-T24: validation runs BEFORE permission check to match TS
     // `services/tools/toolExecution.ts:614-686` ordering. TS calls
@@ -140,7 +164,7 @@ pub async fn execute_tool_call(
     // confusing "permission denied" message. It also guarantees
     // that permission decisions are computed against validated
     // input, never against raw model output.
-    let validation = tool.validate_input(&input, ctx);
+    let validation = tool.validate_input(validated.as_value(), ctx);
     if !validation.is_valid() {
         tracing::warn!(
             tool_use_id = %tool_use_id,
@@ -161,17 +185,6 @@ pub async fn execute_tool_call(
             error_class: Some("invalid_input".to_string()),
         };
     }
-
-    // Step 3: Defense-in-depth strip of internal-only Bash fields.
-    //
-    // TS `services/tools/toolExecution.ts:756-773` strips
-    // `_simulatedSedEdit` after validation and before permission /
-    // execution. The field is internal and must only be injected by
-    // trusted UI flows, never by model-controlled traffic.
-    //
-    // Underscore-prefixed convention: any input field on Bash whose
-    // key starts with `_` is treated as internal and stripped here.
-    let mut input = strip_internal_bash_fields(tool_name, input);
 
     // Step 3.5: Per-fork canUseTool callback gate.
     //
@@ -204,7 +217,7 @@ pub async fn execute_tool_call(
             require_can_use_tool: ctx.require_can_use_tool,
             messages: ctx.messages.clone(),
         };
-        match handle.check(tool_name, &input, &cb_ctx).await {
+        match handle.check(tool_name, validated.as_value(), &cb_ctx).await {
             crate::can_use_tool::CanUseToolDecision::Deny {
                 message,
                 decision_reason,
@@ -237,7 +250,33 @@ pub async fn execute_tool_call(
                     decision_reason = ?decision_reason,
                     "fork canUseTool allowed with input rewrite"
                 );
-                input = rewritten;
+                // A rewrite must clear the same gate as the original input —
+                // a callback handing back malformed input fails here instead
+                // of deep inside `execute`.
+                validated = match crate::ValidatedInput::validate(tool.as_ref(), rewritten) {
+                    Ok(revalidated) => revalidated,
+                    Err(issues) => {
+                        let message = crate::schema::format_schema_error(tool_name, &issues);
+                        tracing::warn!(
+                            tool_use_id = %tool_use_id,
+                            tool_name = %tool_name,
+                            %message,
+                            "canUseTool rewrite failed schema validation"
+                        );
+                        return ToolExecutionResult {
+                            tool_use_id: tool_use_id.to_string(),
+                            tool_id,
+                            tool_name: tool_name.to_string(),
+                            result: Err(ToolError::InvalidInput {
+                                message,
+                                error_code: None,
+                            }),
+                            duration_ms: start.elapsed().as_millis() as i64,
+                            permission_denied: false,
+                            error_class: Some("invalid_input".to_string()),
+                        };
+                    }
+                };
                 skip_builtin_perms = true;
             }
             crate::can_use_tool::CanUseToolDecision::Allow {
@@ -280,7 +319,7 @@ pub async fn execute_tool_call(
     // `Allow` — the callback's opinion is authoritative for the Allow
     // path (TS parity: toolExecution.ts:737-748).
     if !skip_builtin_perms {
-        let decision = tool.check_permissions(&input, ctx).await;
+        let decision = tool.check_permissions(validated.as_value(), ctx).await;
         match decision {
             coco_types::ToolCheckResult::Deny { message } => {
                 tracing::info!(
@@ -327,7 +366,7 @@ pub async fn execute_tool_call(
         "tool execute begin"
     );
     let result = tokio::select! {
-        r = tool.execute(input, ctx) => r,
+        r = tool.execute(validated.into_value(), ctx) => r,
         () = ctx.abort.cancelled() => Err(ToolError::Cancelled),
     };
 

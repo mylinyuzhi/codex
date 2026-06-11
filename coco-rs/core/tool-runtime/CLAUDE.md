@@ -16,7 +16,7 @@ Tool trait, streaming executor, tool registry, callback handles. Defines the int
 - **Executor**: `StreamingToolExecutor`, `ToolBatch`, `BatchResult`, `PendingToolCall`, `ToolCallResult`, `ToolStatus`, `StreamingToolUpdate`
 - **Registry**: `ToolRegistry`
 - **Errors**: `ToolError`, `SyntheticToolError`, `ToolUseEvent`, `classify_tool_error`, `format_tool_error`
-- **Validation**: `ValidationResult`
+- **Validation**: `ValidationResult`, `ValidatedInput` — proof-carrying input newtype; the only constructor (`ValidatedInput::validate`) fuses freeform coercion (`coerce_raw_string_input`) + runtime schema validation. `PendingToolCall.input` and `call_plan::PreparedToolCall.parsed_input` require it, so a freeform tool's raw-string wire input (apply_patch) can never reach permission checks or `serde_json::from_value::<T::Input>` uncoerced. History/wire carriers (`ToolCallPart.input`) intentionally keep the raw shape for provider round-trips.
 - **Callback handles** (decouple tool → subsystem circular deps; every handle has a `NoOp*` impl for tests):
   - `AgentHandle`/`AgentHandleRef` + `AgentSpawnRequest`/`AgentSpawnResponse`/`AgentSpawnStatus` — subagent spawning
   - `AgentQueryEngine`/`AgentQueryEngineRef` + `AgentQueryConfig`/`AgentQueryResult` — side-agent queries

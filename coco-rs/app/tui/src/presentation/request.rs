@@ -126,14 +126,18 @@ fn classic_permission_actions(p: &PermissionPromptState) -> String {
     let mut lines = format!("{}:\n", t!("dialog.actions_heading"));
     for idx in 0..p.classic_action_count() {
         let marker = if idx == selected { "▸ " } else { "  " };
-        let label = match p.classic_action_at(idx) {
-            PermissionAction::ApproveOnce => t!("dialog.action_approve_once").to_string(),
-            PermissionAction::AlwaysAllow => {
-                t!("dialog.action_always_allow", tool = p.tool_name.as_str()).to_string()
-            }
-            PermissionAction::Deny => t!("dialog.action_deny").to_string(),
+        // Every row shows its direct-commit hotkeys (digit + letter) so the
+        // mapping is visible: `y`/`a`/`n` commit their OWN row, not the
+        // highlighted one (Enter commits the highlight).
+        let (letter, label) = match p.classic_action_at(idx) {
+            PermissionAction::ApproveOnce => ("y", t!("dialog.action_approve_once").to_string()),
+            PermissionAction::AlwaysAllow => (
+                "a",
+                t!("dialog.action_always_allow", tool = p.tool_name.as_str()).to_string(),
+            ),
+            PermissionAction::Deny => ("n", t!("dialog.action_deny").to_string()),
         };
-        lines.push_str(&format!("{marker}{label}\n"));
+        lines.push_str(&format!("{marker}{}/{letter} · {label}\n", idx + 1));
     }
     lines.push_str(t!("dialog.hints_nav_select").as_ref());
     lines.push_str("  ");

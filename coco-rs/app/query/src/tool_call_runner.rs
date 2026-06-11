@@ -252,7 +252,7 @@ impl<'a> ToolCallRunner<'a> {
 
                         // Execute the tool under cancellation.
                         let execute_result = tokio::select! {
-                            r = prepared.tool.execute(effective_input.clone(), &call_ctx) => r,
+                            r = prepared.tool.execute(effective_input.as_value().clone(), &call_ctx) => r,
                             () = call_ctx.abort.cancelled() => Err(tool_error_from_abort(&call_ctx.abort)),
                         };
 
@@ -262,7 +262,7 @@ impl<'a> ToolCallRunner<'a> {
                             tool_name,
                             model_index: prepared.model_index,
                             tool: prepared.tool,
-                            effective_input,
+                            effective_input: effective_input.into_value(),
                             execute_result,
                             hooks,
                             orchestration_ctx,

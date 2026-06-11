@@ -42,24 +42,52 @@ pub async fn run_tools(
     let start = std::time::Instant::now();
     let mut denied_tools = Vec::new();
     let mut pending = Vec::new();
+    let mut invalid_results = Vec::new();
 
     tracing::info!(
         tool_count = tool_calls.len(),
         "orchestration: running tool batch"
     );
 
-    // Phase 1: Permission checks
+    // Phase 1: Validation + permission checks
     for (tool_use_id, tool_name, input) in &tool_calls {
         let tool_id: ToolId = tool_name
             .parse()
             .unwrap_or_else(|_| ToolId::Custom(tool_name.clone()));
 
         if let Some(tool) = tools.get(&tool_id) {
+            // Coercion + schema validation gate — `PendingToolCall`
+            // requires a `ValidatedInput`, so a raw freeform string or
+            // schema-violating input surfaces as a typed error here
+            // instead of failing inside `execute`.
+            let validated = match crate::ValidatedInput::validate(tool.as_ref(), input.clone()) {
+                Ok(validated) => validated,
+                Err(issues) => {
+                    let message = crate::schema::format_schema_error(tool_name, &issues);
+                    tracing::warn!(
+                        tool_use_id = %tool_use_id,
+                        tool_name = %tool_name,
+                        %message,
+                        "orchestration: tool input failed schema validation"
+                    );
+                    invalid_results.push(ToolCallResult {
+                        tool_use_id: tool_use_id.clone(),
+                        tool_id,
+                        result: Err(crate::error::ToolError::InvalidInput {
+                            message,
+                            error_code: None,
+                        }),
+                        duration_ms: 0,
+                    });
+                    continue;
+                }
+            };
+
             // Tool-level opinion only. Production permission flow goes
             // through `app/query::tool_call_preparer::resolve_permission_decision`
             // which composes this opinion with the rule pipeline; this
             // batch path consumes the opinion directly.
-            let decision = tool.check_permissions(input, ctx).await;
+            let decision = tool.check_permissions(validated.as_value(), ctx).await;
             match decision {
                 coco_types::ToolCheckResult::Deny { .. } => {
                     tracing::info!(
@@ -79,7 +107,7 @@ pub async fn run_tools(
             pending.push(PendingToolCall {
                 tool_use_id: tool_use_id.clone(),
                 tool: tool.clone(),
-                input: input.clone(),
+                input: validated,
             });
         } else {
             tracing::warn!(
@@ -92,7 +120,8 @@ pub async fn run_tools(
 
     // Phase 2: Execute via batch executor
     let executor = StreamingToolExecutor::new();
-    let tool_results = executor.execute_all(pending, ctx).await;
+    let mut tool_results = executor.execute_all(pending, ctx).await;
+    tool_results.extend(invalid_results);
 
     // Phase 3: Collect new messages from tool results
     let mut new_messages = Vec::new();

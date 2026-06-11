@@ -7,42 +7,97 @@
 
 use std::str::FromStr;
 
+use rust_i18n::t;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
 use crate::state::AppState;
 use crate::state::PanePromptState;
+use crate::state::Toast;
 use crate::state::surface_payloads::PermissionAction;
 
-/// Approve ('y' / approve choice) on a tool-permission prompt.
-///
-/// Multi-choice mode: commits the currently-focused choice (Enter takes the
-/// same path via `confirm`). The chosen `value` is spliced into
-/// `updated_input` so the tool's `execute()` can branch on it; a choice whose
-/// value is "no" denies. Classic yes/no mode keeps the unconditional
-/// `approved: true` path.
-pub(crate) async fn approve_permission(
+/// Single resolution chokepoint for classic (non-choice) tool-permission
+/// prompts. Every classic decision — `y` / `n` / `a` hotkeys, Enter on the
+/// focused row, digit shortcuts — funnels through here so the
+/// `ApprovalResponse` construction and the structured decision log exist
+/// exactly once.
+pub(crate) async fn resolve_classic_permission(
     p: &crate::state::PermissionPromptState,
+    action: PermissionAction,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
-    let (approved, updated_input) = if p.choices.is_some() {
-        let chosen_is_no = p
-            .choices
-            .as_ref()
-            .and_then(|cs| cs.get(p.selected_choice))
-            .map(|c| c.value.as_str())
-            == Some("no");
-        (!chosen_is_no, build_choice_payload(p))
-    } else {
-        (true, None)
+    let (approved, always_allow, permission_updates) = match action {
+        PermissionAction::ApproveOnce => (true, false, vec![]),
+        PermissionAction::AlwaysAllow => (
+            true,
+            true,
+            always_allow_updates(
+                &p.tool_name,
+                p.original_input.as_ref(),
+                &p.permission_suggestions,
+            ),
+        ),
+        PermissionAction::Deny => (false, false, vec![]),
     };
     tracing::info!(
         target: "coco_tui::permission",
         request_id = %p.request_id,
         tool_name = %p.tool_name,
         permission_decision = if approved { "approve" } else { "deny" },
+        always_allow,
+        rules = permission_updates.len(),
+        multi_choice = false,
+        "user permission decision",
+    );
+    if let Err(e) = command_tx
+        .send(UserCommand::ApprovalResponse {
+            request_id: p.request_id.clone(),
+            approved,
+            always_allow,
+            feedback: None,
+            updated_input: None,
+            permission_updates,
+            content_blocks: None,
+        })
+        .await
+    {
+        tracing::warn!(
+            target: "coco_tui::permission",
+            error = %e,
+            "failed to dispatch ApprovalResponse (channel closed)",
+        );
+    }
+}
+
+/// Approve ('y' / approve choice) on a tool-permission prompt.
+///
+/// Multi-choice mode: commits the currently-focused choice (Enter takes the
+/// same path via `confirm`). The chosen `value` is spliced into
+/// `updated_input` so the tool's `execute()` can branch on it; a choice whose
+/// value is "no" denies. Classic mode commits a one-shot approve regardless
+/// of the focused row — `y` is the ApproveOnce hotkey, not "confirm
+/// selection" (that's Enter); the rendered rows carry their hotkeys so the
+/// mapping is visible.
+pub(crate) async fn approve_permission(
+    p: &crate::state::PermissionPromptState,
+    command_tx: &mpsc::Sender<UserCommand>,
+) {
+    let Some(choices) = &p.choices else {
+        resolve_classic_permission(p, PermissionAction::ApproveOnce, command_tx).await;
+        return;
+    };
+    let chosen_is_no = choices
+        .get(p.selected_choice)
+        .map(|c| c.value.as_str() == "no")
+        .unwrap_or(false);
+    let approved = !chosen_is_no;
+    tracing::info!(
+        target: "coco_tui::permission",
+        request_id = %p.request_id,
+        tool_name = %p.tool_name,
+        permission_decision = if approved { "approve" } else { "deny" },
         always_allow = false,
-        multi_choice = p.choices.is_some(),
+        multi_choice = true,
         "user permission decision",
     );
     if let Err(e) = command_tx
@@ -51,7 +106,7 @@ pub(crate) async fn approve_permission(
             approved,
             always_allow: false,
             feedback: None,
-            updated_input,
+            updated_input: build_choice_payload(p),
             permission_updates: vec![],
             content_blocks: None,
         })
@@ -122,25 +177,7 @@ pub(crate) async fn deny_permission(
     p: &crate::state::PermissionPromptState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
-    tracing::info!(
-        target: "coco_tui::permission",
-        request_id = %p.request_id,
-        tool_name = %p.tool_name,
-        permission_decision = "deny",
-        always_allow = false,
-        "user permission decision",
-    );
-    let _ = command_tx
-        .send(UserCommand::ApprovalResponse {
-            request_id: p.request_id.clone(),
-            approved: false,
-            always_allow: false,
-            feedback: None,
-            updated_input: None,
-            permission_updates: vec![],
-            content_blocks: None,
-        })
-        .await;
+    resolve_classic_permission(p, PermissionAction::Deny, command_tx).await;
 }
 
 /// Handle `ApproveAll` (always-allow) for permission prompts.
@@ -159,36 +196,31 @@ pub(crate) async fn deny_permission(
 /// `/permissions` rule-editor overlay (TS `AddPermissionRules`), not this
 /// inline popup.
 pub(crate) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
-    if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
-        && p.show_always_allow
-    {
-        let updates = always_allow_updates(
-            &p.tool_name,
-            p.original_input.as_ref(),
-            &p.permission_suggestions,
-        );
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        return;
+    };
+    // Choice dialogs have no always-allow affordance ('a' is not a decision
+    // key there); ignore silently like any other unmapped key.
+    if p.choices.is_some() {
+        return;
+    }
+    if !p.show_always_allow {
+        // Gated off (managed settings allow only managed permission rules).
+        // Never no-op silently: tell the user why their keypress did
+        // nothing and leave the prompt open for an explicit y/n.
         tracing::info!(
             target: "coco_tui::permission",
             request_id = %p.request_id,
             tool_name = %p.tool_name,
-            permission_decision = "approve",
-            always_allow = true,
-            rules = updates.len(),
-            "user always-allow decision",
+            "always-allow requested but disabled by managed settings",
         );
-        let _ = command_tx
-            .send(UserCommand::ApprovalResponse {
-                request_id: p.request_id.clone(),
-                approved: true,
-                always_allow: true,
-                feedback: None,
-                updated_input: None,
-                permission_updates: updates,
-                content_blocks: None,
-            })
-            .await;
-        state.ui.dismiss_prompt();
+        state
+            .ui
+            .add_toast(Toast::warning(t!("toast.always_allow_disabled")));
+        return;
     }
+    resolve_classic_permission(p, PermissionAction::AlwaysAllow, command_tx).await;
+    state.ui.dismiss_prompt();
 }
 
 /// Handle `ClassifierAutoApprove` — background classifier approved the pending
@@ -230,41 +262,34 @@ pub(crate) async fn confirm_permission(
     p: &crate::state::PermissionPromptState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
-    let (approved, always_allow, updated_input, permission_updates) = if p.choices.is_some() {
-        let chosen_is_no = p
-            .choices
-            .as_ref()
-            .and_then(|cs| cs.get(p.selected_choice))
-            .map(|c| c.value.as_str())
-            == Some("no");
-        (!chosen_is_no, false, build_choice_payload(p), vec![])
-    } else {
-        match p.selected_classic_action() {
-            PermissionAction::ApproveOnce => (true, false, None, vec![]),
-            PermissionAction::AlwaysAllow => (
-                true,
-                true,
-                None,
-                always_allow_updates(
-                    &p.tool_name,
-                    p.original_input.as_ref(),
-                    &p.permission_suggestions,
-                ),
-            ),
-            PermissionAction::Deny => (false, false, None, vec![]),
-        }
+    if p.choices.is_some() {
+        // Multi-choice commit shares `approve_permission`'s splice + log.
+        approve_permission(p, command_tx).await;
+        return;
+    }
+    resolve_classic_permission(p, p.selected_classic_action(), command_tx).await;
+}
+
+/// Digit shortcut (`1`-`3`) on a classic tool-permission prompt: commit the
+/// numbered row directly. Returns `false` when the digit doesn't address a
+/// row (multi-choice mode or out of range) — the caller keeps the prompt
+/// open.
+pub(crate) async fn commit_permission_digit(
+    p: &crate::state::PermissionPromptState,
+    digit: usize,
+    command_tx: &mpsc::Sender<UserCommand>,
+) -> bool {
+    if p.choices.is_some() {
+        return false;
+    }
+    let Some(index) = digit.checked_sub(1) else {
+        return false;
     };
-    let _ = command_tx
-        .send(UserCommand::ApprovalResponse {
-            request_id: p.request_id.clone(),
-            approved,
-            always_allow,
-            feedback: None,
-            updated_input,
-            permission_updates,
-            content_blocks: None,
-        })
-        .await;
+    if index >= p.classic_action_count() {
+        return false;
+    }
+    resolve_classic_permission(p, p.classic_action_at(index), command_tx).await;
+    true
 }
 
 /// Move the choice cursor on a permission prompt (wrapping).
@@ -292,6 +317,9 @@ fn always_allow_updates(
     if let Some(update) = read_path_allow_update(tool_name, original_input) {
         return vec![update];
     }
+    if let Some(update) = edit_path_allow_update(tool_name, original_input) {
+        return vec![update];
+    }
     vec![coco_types::PermissionUpdate::AddRules {
         rules: vec![coco_types::PermissionRule {
             source: coco_types::PermissionRuleSource::LocalSettings,
@@ -303,6 +331,64 @@ fn always_allow_updates(
         }],
         destination: coco_types::PermissionUpdateDestination::LocalSettings,
     }]
+}
+
+/// Directory-scoped `Edit(dir/**)` allow rule for write-capable tools.
+///
+/// "Don't ask again" on a file-modifying tool must never grant a TOOL-WIDE
+/// allow (which would silently approve writes anywhere on disk). When the
+/// engine attached no scoped suggestions, derive the target directory from
+/// the tool input instead: `file_path`/`notebook_path` fields for
+/// Edit/Write/NotebookEdit, the `*** Add/Update/Delete File:` headers for
+/// apply_patch. Returns `None` for non-write tools and for write tools whose
+/// target paths can't be derived — apply_patch then falls back to tool-wide
+/// like before, which is still gated behind an explicit user action.
+fn edit_path_allow_update(
+    tool_name: &str,
+    original_input: Option<&serde_json::Value>,
+) -> Option<coco_types::PermissionUpdate> {
+    let tool = coco_types::ToolName::from_str(tool_name).ok()?;
+    let input = original_input?;
+    let paths: Vec<&str> = match tool {
+        coco_types::ToolName::Edit | coco_types::ToolName::Write => input
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .into_iter()
+            .collect(),
+        coco_types::ToolName::NotebookEdit => input
+            .get("notebook_path")
+            .and_then(|v| v.as_str())
+            .into_iter()
+            .collect(),
+        coco_types::ToolName::ApplyPatch => {
+            let patch = input.get("patch").and_then(|v| v.as_str())?;
+            crate::tool_display::apply_patch_target_paths(patch)
+        }
+        _ => return None,
+    };
+    if paths.is_empty() {
+        return None;
+    }
+    let mut rule_contents = std::collections::BTreeSet::new();
+    for path in paths {
+        let dir = directory_for_permission_rule(path)?;
+        rule_contents.insert(format!("{}/**", path_for_permission_rule(&dir)));
+    }
+    let rules = rule_contents
+        .into_iter()
+        .map(|rule_content| coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::LocalSettings,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: coco_types::ToolName::Edit.as_str().to_string(),
+                rule_content: Some(rule_content),
+            },
+        })
+        .collect();
+    Some(coco_types::PermissionUpdate::AddRules {
+        rules,
+        destination: coco_types::PermissionUpdateDestination::LocalSettings,
+    })
 }
 
 fn read_path_allow_update(
@@ -400,3 +486,7 @@ pub(crate) fn build_choice_payload(
     );
     Some(serde_json::Value::Object(payload))
 }
+
+#[cfg(test)]
+#[path = "permission.test.rs"]
+mod tests;

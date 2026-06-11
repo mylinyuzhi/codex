@@ -226,7 +226,8 @@ fn test_runnable_plan_carries_prepared_call() {
         tool_use_id: "tu-1".into(),
         tool_id: ToolId::Custom("dummy".into()),
         tool: std::sync::Arc::new(DummyTool),
-        parsed_input: json!({"x": 1}),
+        parsed_input: crate::ValidatedInput::validate(&DummyTool, json!({"x": 1}))
+            .expect("test input must validate"),
         model_index: 5,
     };
     let plan = ToolCallPlan::Runnable(prepared);
@@ -234,7 +235,7 @@ fn test_runnable_plan_carries_prepared_call() {
         ToolCallPlan::Runnable(p) => {
             assert_eq!(p.tool_use_id, "tu-1");
             assert_eq!(p.model_index, 5);
-            assert_eq!(p.parsed_input, json!({"x": 1}));
+            assert_eq!(p.parsed_input.as_value(), &json!({"x": 1}));
         }
         ToolCallPlan::EarlyOutcome(_) => panic!("expected Runnable"),
     }
