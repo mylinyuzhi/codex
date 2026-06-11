@@ -87,6 +87,10 @@ impl SuggestionMeta {
 }
 
 /// Suggestion popup widget.
+///
+/// Callers pass the fixed slot reserved by their layout. The widget clears the
+/// whole slot and renders up to `max_visible` rows inside it so changing result
+/// counts do not move the input composer.
 pub struct SuggestionPopup<'a> {
     items: &'a [SuggestionItem],
     selected: usize,
@@ -142,18 +146,19 @@ impl Widget for SuggestionPopup<'_> {
             return;
         }
         let popup_width = area.width;
-        if popup_width == 0 {
+        if popup_width == 0 || area.height == 0 {
             return;
         }
 
-        let visible_count = self.items.len().min(self.max_visible).max(1);
-        let popup_height = visible_count as u16;
-
-        // Walk up from the anchor (input area top) by `popup_height` so
-        // the popup floats directly above the input. `Clear` blanks the
-        // chat tail underneath so it can't bleed through.
-        let y = area.y.saturating_sub(popup_height);
-        let popup_area = Rect::new(area.x, y, popup_width, popup_height);
+        let visible_count = self
+            .items
+            .len()
+            .min(self.max_visible)
+            .min(area.height as usize);
+        if visible_count == 0 {
+            return;
+        }
+        let popup_area = area;
 
         Clear.render(popup_area, buf);
 

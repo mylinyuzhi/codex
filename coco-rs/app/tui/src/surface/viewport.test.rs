@@ -50,6 +50,31 @@ fn interactive_viewport_desired_height_never_exceeds_cap() {
 }
 
 #[test]
+fn interactive_viewport_popup_height_is_stable_for_short_and_long_lists() {
+    let short = state_with_popup_items(2);
+    let medium = state_with_popup_items(5);
+    let full = state_with_popup_items(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize);
+
+    let short_height = interactive_viewport_desired_height(&short, 48, 24, native_plan(), None);
+    let medium_height = interactive_viewport_desired_height(&medium, 48, 24, native_plan(), None);
+    let full_height = interactive_viewport_desired_height(&full, 48, 24, native_plan(), None);
+
+    assert_eq!(short_height, 13);
+    assert_eq!(medium_height, short_height);
+    assert_eq!(full_height, short_height);
+}
+
+#[test]
+fn interactive_viewport_popup_height_is_capped_by_terminal_height() {
+    let state = state_with_popup_items(SuggestionPopup::DEFAULT_MAX_VISIBLE as usize);
+
+    assert_eq!(
+        interactive_viewport_desired_height(&state, 48, 8, native_plan(), None),
+        8
+    );
+}
+
+#[test]
 fn interactive_viewport_does_not_render_finalized_messages() {
     let backend = TestBackend::new(48, 8);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
@@ -286,6 +311,32 @@ fn question_item(header: &str, question: &str, option_count: usize) -> crate::st
         checked: Vec::new(),
         other_input: crate::state::OtherInputState::default(),
     }
+}
+
+fn state_with_popup_items(count: usize) -> AppState {
+    let mut state = AppState::new();
+    let items = (0..count)
+        .map(|idx| crate::widgets::suggestion_popup::SuggestionItem {
+            label: format!("src/{idx}.rs"),
+            description: None,
+            metadata: Some(crate::widgets::suggestion_popup::SuggestionMeta::Path {
+                is_directory: false,
+            }),
+        })
+        .collect::<Vec<_>>();
+    state.ui.completion.set_active(
+        crate::state::ActiveSuggestions {
+            kind: crate::state::SuggestionKind::At,
+            items,
+            selected: 0,
+            query: "s".into(),
+            trigger_pos: 0,
+        },
+        0..2,
+        "@s".into(),
+    );
+    state.ui.sync_popup_from_active_suggestions();
+    state
 }
 
 fn plain_buffer_lines(buffer: &Buffer) -> Vec<String> {

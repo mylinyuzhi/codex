@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use coco_file_search::FileIndex;
 use coco_file_search::SharedFileIndex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -17,7 +18,7 @@ use crate::widgets::suggestion_popup::SuggestionItem;
 use crate::widgets::suggestion_popup::SuggestionMeta;
 
 /// Debounce delay for file search.
-const DEBOUNCE: Duration = Duration::from_millis(100);
+const DEBOUNCE: Duration = Duration::from_millis(50);
 
 /// Maximum suggestions returned.
 const MAX_SUGGESTIONS: i32 = 15;
@@ -62,11 +63,12 @@ impl FileSearchManager {
             tokio::time::sleep(DEBOUNCE).await;
             let query = key.query.clone();
 
+            FileIndex::refresh_if_stale(&index).await;
+
             let suggestions = {
-                let mut guard = index.write().await;
+                let guard = index.read().await;
                 guard
                     .get_suggestions(&query, MAX_SUGGESTIONS)
-                    .await
                     .into_iter()
                     .map(|s| SuggestionItem {
                         label: s.path,

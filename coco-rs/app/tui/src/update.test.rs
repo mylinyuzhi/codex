@@ -570,6 +570,31 @@ async fn autocomplete_enter_accepts_selected_path_not_common_prefix() {
 }
 
 #[tokio::test]
+async fn autocomplete_accepts_at_directory_and_keeps_completion_active() {
+    let mut state = AppState::new();
+    state.ui.input.textarea.set_text("@s");
+    state.ui.input.textarea.set_cursor(2);
+    state.ui.completion.active = Some(ActiveSuggestions {
+        kind: SuggestionKind::At,
+        items: vec![SuggestionItem {
+            label: "src/".into(),
+            description: None,
+            metadata: Some(SuggestionMeta::Path { is_directory: true }),
+        }],
+        selected: 0,
+        query: "s".into(),
+        trigger_pos: 0,
+    });
+
+    let (tx, _rx) = drained_channel();
+    handle_command(&mut state, TuiCommand::AutocompleteAccept, &tx).await;
+
+    assert_eq!(state.ui.input.text(), "@src/");
+    assert_eq!(state.ui.input.textarea.cursor(), "@src/".len());
+    assert!(state.ui.completion.active.is_some());
+}
+
+#[tokio::test]
 async fn final_quoted_file_accept_closes_quote_and_appends_space() {
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("@\"/tmp/my pro");
