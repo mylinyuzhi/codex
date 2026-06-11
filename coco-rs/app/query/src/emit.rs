@@ -220,6 +220,7 @@ fn tui_kind(evt: &TuiOnlyEvent) -> &'static str {
         TuiOnlyEvent::OpenSkillsDialog { .. } => "open_skills_dialog",
         TuiOnlyEvent::OpenPluginDialog { .. } => "open_plugin_dialog",
         TuiOnlyEvent::OpenAgentsDialog { .. } => "open_agents_dialog",
+        TuiOnlyEvent::OpenPermissionsEditor { .. } => "open_permissions_editor",
         TuiOnlyEvent::SkillOverridesSaved { .. } => "skill_overrides_saved",
     }
 }

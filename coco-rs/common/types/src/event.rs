@@ -2063,6 +2063,13 @@ pub enum TuiOnlyEvent {
     /// Library entries pre-grouped. The Running tab is sourced
     /// directly from `SessionState.subagents` on the TUI side.
     OpenAgentsDialog { payload: AgentsDialogPayload },
+    /// `/permissions` overlay — opens the tabbed rule editor
+    /// (Allow / Ask / Deny / Workspace). The payload is a CLI-built
+    /// snapshot of every file-backed rule + additional directory, since
+    /// the TUI cannot reach the settings stores directly. Re-emitted
+    /// after each edit so the open overlay refreshes in place. TS parity:
+    /// `commands/permissions/permissions.tsx` → `<PermissionRuleList>`.
+    OpenPermissionsEditor { payload: PermissionsEditorPayload },
     /// Notify the TUI that a `/skills` dialog Enter has finished
     /// persisting (or failed). TUI renders the localized
     /// `Updated N / No changes / Failed: …` toast — keeping all
@@ -2183,7 +2190,7 @@ pub enum MemoryDialogScope {
     Project,
     /// Project-local (`./CLAUDE.local.md`, gitignored).
     ProjectLocal,
-    /// `<dir>/.claude/CLAUDE.md` — project-config-dir convention.
+    /// `<dir>/.coco/CLAUDE.md` — project-config-dir convention.
     ProjectConfig,
     /// Subdirectory CLAUDE.md (auto-loaded under cwd).
     Subdir,
@@ -2422,7 +2429,7 @@ pub struct SkillsDialogEntry {
     /// The dialog computes `frontmatter_bytes / bytes_per_token` per
     /// row. Source: `coco_skills::estimate_skill_frontmatter_bytes`.
     pub frontmatter_bytes: i64,
-    /// What is stored in `<cwd>/.claude/settings.local.json`'s
+    /// What is stored in `<cwd>/.coco/settings.local.json`'s
     /// `skill_overrides[name]` _right now_. `None` ⇒ key absent.
     /// Drives the dialog's diff-against-baseline save algorithm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2509,6 +2516,62 @@ pub struct AgentsDialogEntry {
     /// the Library tab's `Enter` (edit) and `d` (delete) actions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<std::path::PathBuf>,
+}
+
+/// Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the
+/// `/permissions` slash handler (CLI side) with everything the tabbed
+/// rule editor needs: every file-backed rule keyed by behavior + source,
+/// every additional working directory, and the current working directory.
+///
+/// The TUI cannot read the settings stores itself, so the CLI snapshots
+/// them here and re-emits this payload after each persisted edit (the
+/// open overlay refreshes in place, mirroring `OpenAgentsDialog`).
+///
+/// TS parity: data backing `<PermissionRuleList>` —
+/// `getPermissionRules()` + `getAdditionalWorkingDirectories()`.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionsEditorPayload {
+    /// Every file-backed rule (allow / ask / deny) across the user,
+    /// project, local, and policy settings layers. The TUI partitions
+    /// them by behavior into the Allow / Ask / Deny tabs.
+    pub rules: Vec<PermissionsEditorRule>,
+    /// Additional working directories configured in settings, each
+    /// tagged with the source layer that contributed it.
+    pub directories: Vec<PermissionsEditorDir>,
+    /// Current working directory — rendered read-only at the top of the
+    /// Workspace tab (TS "Original working directory").
+    pub cwd: String,
+    /// `true` when managed policy sets `allowManagedPermissionRulesOnly`.
+    /// The editor renders every rule read-only and blocks add / delete.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub managed_only: bool,
+}
+
+/// One rule row in the `/permissions` editor. Carries the structured
+/// `(tool_pattern, rule_content)` so the TUI can both render the rule
+/// string and reconstruct a `PermissionRuleValue` for removal — display
+/// shaping (and i18n) stays TUI-side.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionsEditorRule {
+    pub behavior: crate::PermissionBehavior,
+    pub source: crate::PermissionRuleSource,
+    /// Tool the rule targets — e.g. `"Bash"`, `"Read"`, `"mcp__slack__*"`.
+    pub tool_pattern: String,
+    /// Optional in-tool content pattern — e.g. `"git *"` for `Bash(git *)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_content: Option<String>,
+}
+
+/// One additional-working-directory row in the Workspace tab.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionsEditorDir {
+    pub path: String,
+    /// Source layer that contributed the directory (drives the inline
+    /// source label and the read-only gate for policy entries).
+    pub source: crate::PermissionRuleSource,
 }
 
 /// Categorization of a `SlashCommandStatus` payload. Each variant maps to

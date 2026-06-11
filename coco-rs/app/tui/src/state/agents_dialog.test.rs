@@ -258,7 +258,7 @@ fn resolve_target_user_source_paths_under_config_home() {
 }
 
 #[test]
-fn resolve_target_project_source_paths_under_cwd_claude() {
+fn resolve_target_project_source_paths_under_cwd_coco() {
     let tmp_cwd = tempfile::tempdir().unwrap();
     let tmp_cfg = tempfile::tempdir().unwrap();
     let target = resolve_create_target(
@@ -270,11 +270,7 @@ fn resolve_target_project_source_paths_under_cwd_claude() {
     .expect("clean target");
     assert_eq!(
         target,
-        tmp_cwd
-            .path()
-            .join(".claude")
-            .join("agents")
-            .join("demo.md")
+        tmp_cwd.path().join(".coco").join("agents").join("demo.md")
     );
 }
 

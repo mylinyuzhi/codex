@@ -52,20 +52,20 @@ impl McpConfigLoader {
             &mut configs_by_name,
         );
 
-        // 5. Project scope: .claude/mcp.json
+        // 5. Project scope: .coco/mcp.json
         load_mcp_json(
-            &cwd.join(".claude/mcp.json"),
+            &cwd.join(".coco/mcp.json"),
             ConfigScope::Project,
             &mut configs_by_name,
         );
 
-        // 6. User scope: ~/.claude/mcp.json (config_home)
+        // 6. User scope: ~/.coco/mcp.json (config_home)
         let user_mcp = config_home.join("mcp.json");
         load_mcp_json(&user_mcp, ConfigScope::User, &mut configs_by_name);
 
-        // 7. Local scope: .claude.local/mcp.json (gitignored per-project)
+        // 7. Local scope: .coco.local/mcp.json (gitignored per-project)
         load_mcp_json(
-            &cwd.join(".claude.local/mcp.json"),
+            &cwd.join(".coco.local/mcp.json"),
             ConfigScope::Local,
             &mut configs_by_name,
         );

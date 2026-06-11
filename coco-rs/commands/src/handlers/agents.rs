@@ -9,7 +9,7 @@
 //!
 //! Backed by the `coco-subagent` catalog: built-ins from
 //! [`coco_subagent::BuiltinAgentCatalog::interactive`] plus markdown agents
-//! discovered under `~/.coco/agents` (user) and `<cwd>/.claude/agents`
+//! discovered under `~/.coco/agents` (user) and `<cwd>/.coco/agents`
 //! (project). Source precedence is applied by the store; we only render
 //! the snapshot here.
 //!
@@ -138,7 +138,7 @@ fn render_list(snapshot: &coco_subagent::AgentCatalogSnapshot) -> String {
     if snapshot.active_count() == 0 {
         return "No agents found.\n\
                 Place markdown agent definitions in ~/.coco/agents (user) \
-                or .claude/agents (project)."
+                or .coco/agents (project)."
             .to_string();
     }
 
@@ -305,7 +305,7 @@ fn render_validate(report: &coco_subagent::AgentLoadReport) -> String {
 }
 
 /// Standard slash-command agent search paths: `~/.coco/agents` (user) plus
-/// `<cwd>/.claude/agents` (project). Mirrors the CLI helper of the same
+/// `<cwd>/.coco/agents` (project). Mirrors the CLI helper of the same
 /// shape — kept here so the handler stays self-contained.
 fn standard_search_paths(config_home: &Path, cwd: &Path) -> AgentSearchPaths {
     let plugins = coco_plugins::load_enabled_plugins(config_home, cwd);
@@ -320,7 +320,7 @@ fn standard_search_paths(config_home: &Path, cwd: &Path) -> AgentSearchPaths {
         .collect();
     AgentSearchPaths {
         user_dir: Some(config_home.join("agents")),
-        project_dirs: vec![cwd.join(".claude").join("agents")],
+        project_dirs: vec![cwd.join(".coco").join("agents")],
         flag_dirs: Vec::new(),
         policy_dirs: Vec::new(),
         plugin_dirs,

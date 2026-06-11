@@ -30,7 +30,7 @@ fn default_layout_outside_git_uses_project_path() {
 #[test]
 fn default_layout_matches_observed_ts_slug_for_known_cwd() {
     // The literal directory observed on this dev machine at
-    // `~/.claude/projects/-Users-linyuzhi-codespace-myagent-codex/`.
+    // `~/.coco/projects/-Users-linyuzhi-codespace-myagent-codex/`.
     // Our slug for the same cwd MUST match — pre-fix, the local
     // `sanitize_project_path` stripped the leading `/` and produced
     // `Users-…` instead of `-Users-…`, silently disagreeing with

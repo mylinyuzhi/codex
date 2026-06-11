@@ -1,6 +1,6 @@
 //! `/session` — list, resume, and delete sessions with real file I/O.
 //!
-//! Reads session files from `~/.cocode/sessions/`, parses their metadata
+//! Reads session files from `~/.coco/sessions/`, parses their metadata
 //! (timestamps, model, working directory), and formats a listing.
 
 use std::path::Path;
@@ -23,9 +23,7 @@ pub fn handler(
 ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
         let subcommand = args.trim().to_string();
-        let sessions_dir = dirs::home_dir()
-            .map(|h| h.join(".cocode").join("sessions"))
-            .unwrap_or_default();
+        let sessions_dir = coco_config::global_config::config_home().join("sessions");
 
         match subcommand.as_str() {
             "" | "list" => list_sessions(&sessions_dir).await,
@@ -52,7 +50,7 @@ pub fn handler(
 async fn list_sessions(sessions_dir: &Path) -> crate::Result<String> {
     if !sessions_dir.exists() {
         return Ok(
-            "No sessions found.\n\nSessions are stored in ~/.cocode/sessions/\n\
+            "No sessions found.\n\nSessions are stored in ~/.coco/sessions/\n\
              Start a conversation to create your first session."
                 .to_string(),
         );
@@ -61,7 +59,7 @@ async fn list_sessions(sessions_dir: &Path) -> crate::Result<String> {
     let sessions = scan_sessions(sessions_dir).await;
 
     if sessions.is_empty() {
-        return Ok("No session files found in ~/.cocode/sessions/".to_string());
+        return Ok("No session files found in ~/.coco/sessions/".to_string());
     }
 
     let mut out = format!("## Sessions ({} found)\n\n", sessions.len());

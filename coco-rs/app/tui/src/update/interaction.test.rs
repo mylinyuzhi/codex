@@ -413,7 +413,7 @@ async fn confirm_classic_always_allow_sends_session_update() {
 }
 
 #[tokio::test]
-async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
+async fn confirm_classic_read_always_allow_sends_path_scoped_local_update() {
     use crate::state::PermissionDetail;
     use crate::state::PermissionPromptState;
     let dir = std::env::temp_dir().join("coco-tui-read-permission-test");
@@ -455,7 +455,7 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_session_update() {
     };
     assert_eq!(
         *destination,
-        coco_types::PermissionUpdateDestination::Session
+        coco_types::PermissionUpdateDestination::LocalSettings
     );
     assert_eq!(rules[0].value.tool_pattern, "Read");
     let expected = format!("/{}/**", dir.to_string_lossy());

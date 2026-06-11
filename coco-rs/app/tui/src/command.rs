@@ -199,7 +199,7 @@ pub enum UserCommand {
     /// Finalize the `/agents` Library inline create wizard. The CLI
     /// bridge:
     ///   1. resolves the target directory (`~/.coco/agents` or
-    ///      `<cwd>/.claude/agents`),
+    ///      `<cwd>/.coco/agents`),
     ///   2. writes a TS-aligned markdown template with the wizard
     ///      inputs in the frontmatter,
     ///   3. dispatches the existing `$EDITOR` flow on the new file so
@@ -222,6 +222,14 @@ pub enum UserCommand {
     /// Set permission mode. Replaces the legacy `SetPlanMode { bool }`
     /// — plan-mode activation is just `SetPermissionMode { mode: Plan }`.
     SetPermissionMode { mode: PermissionMode },
+    /// Apply one permission update from the `/permissions` rule editor —
+    /// add / remove a rule or working directory at a chosen destination.
+    /// The CLI applies it to the live engine config, persists it to the
+    /// destination settings file (User / Project / Local), then re-emits
+    /// `OpenPermissionsEditor` so the open overlay refreshes in place.
+    /// Mirrors the `ApprovalResponse` "Always Allow" persist path, but
+    /// the editor lets the user pick any of the three writable scopes.
+    ApplyPermissionUpdate { update: PermissionUpdate },
     /// Leader → teammate: set a teammate's permission mode from the teams
     /// roster picker (gap 8). Routed to `AgentHandle::set_teammate_mode`,
     /// which persists it + notifies the live teammate via `ModeSetRequest`.
@@ -279,7 +287,7 @@ pub enum UserCommand {
     /// Execute a skill by name.
     ExecuteSkill { name: String, args: Option<String> },
     /// Persist a `skill_overrides` patch to
-    /// `<cwd>/.claude/settings.local.json` and republish
+    /// `<cwd>/.coco/settings.local.json` and republish
     /// `RuntimeConfig`. Emitted by the `/skills` dialog's Enter
     /// handler when the diff actually changes disk state.
     ///

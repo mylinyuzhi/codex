@@ -43,6 +43,12 @@ pub enum KeybindingContext {
     Settings,
     /// Theme tab inside Settings — includes theme-picker-specific actions.
     ThemePicker,
+    /// `/permissions` rule-editor overlay. Dedicated context (like
+    /// [`Self::Question`]) so the add-form text input is reachable and
+    /// list-mode characters aren't hijacked as y/n/a confirmation actions —
+    /// the keys map to input-style commands the editor's `intercept`
+    /// consumes (Cursor* / InsertChar / SubmitInput).
+    PermissionsEditor,
     /// Default chat input context.
     Chat,
 }
@@ -87,6 +93,10 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
                 KeybindingContext::ThemePicker
             }
             ModalState::Settings(_) => KeybindingContext::Settings,
+
+            // `/permissions` editor — dedicated context for text input +
+            // distinct nav (see the enum-variant doc).
+            ModalState::PermissionsEditor(_) => KeybindingContext::PermissionsEditor,
 
             // All others are confirmation/approval surfaces
             _ => KeybindingContext::Confirmation,
@@ -290,6 +300,7 @@ fn resolve_key(
             .or_else(|| map_global_key(state, key))
             .or_else(|| map_input_key(state, key)),
         KeybindingContext::Settings | KeybindingContext::ThemePicker => map_settings_key(key),
+        KeybindingContext::PermissionsEditor => map_permissions_editor_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
     };
     let source = if cmd.is_some() { "cascade" } else { "unmapped" };
@@ -357,6 +368,37 @@ fn map_settings_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(TuiCommand::Cancel)
         }
+        _ => None,
+    }
+}
+
+/// Keys for the `/permissions` rule editor. Maps to input-style commands
+/// the editor's `intercept` consumes directly: ←/→ cycle tabs (or move the
+/// add-form caret), ↑/↓ select rows / destinations, Enter acts, Esc backs
+/// out, printable chars type into the add form. Mirrors `map_input_key`'s
+/// editing keys but scoped so the overlay owns every keystroke.
+fn map_permissions_editor_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Left => Some(TuiCommand::CursorLeft),
+        KeyCode::Right => Some(TuiCommand::CursorRight),
+        KeyCode::Up => Some(TuiCommand::CursorUp),
+        KeyCode::Down => Some(TuiCommand::CursorDown),
+        // Tab cycles tabs forward / backward in list mode (no-op caret
+        // nudge inside the add form — harmless).
+        KeyCode::Tab => Some(TuiCommand::CursorRight),
+        KeyCode::BackTab => Some(TuiCommand::CursorLeft),
+        KeyCode::Enter => Some(TuiCommand::SubmitInput),
+        KeyCode::Esc => Some(TuiCommand::Cancel),
+        KeyCode::Backspace => Some(TuiCommand::DeleteBackward),
+        KeyCode::Delete => Some(TuiCommand::DeleteForward),
+        KeyCode::Home => Some(TuiCommand::CursorHome),
+        KeyCode::End => Some(TuiCommand::CursorEnd),
+        KeyCode::Char('c') if ctrl => Some(TuiCommand::Cancel),
+        // Emacs caret aliases so the add-form input feels like the composer.
+        KeyCode::Char('a') if ctrl => Some(TuiCommand::CursorHome),
+        KeyCode::Char('e') if ctrl => Some(TuiCommand::CursorEnd),
+        KeyCode::Char(c) => Some(TuiCommand::InsertChar(c)),
         _ => None,
     }
 }

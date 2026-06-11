@@ -1,6 +1,6 @@
 //! `/stats` — show session statistics: count, duration, git changes, cwd.
 //!
-//! Reads session files from `~/.cocode/sessions/`, inspects the most recent
+//! Reads session files from `~/.coco/sessions/`, inspects the most recent
 //! file's creation time, counts all sessions, runs `git status --porcelain`
 //! to count file changes, and reports the current working directory.
 
@@ -11,9 +11,7 @@ pub fn handler(
     _args: String,
 ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
-        let sessions_dir = dirs::home_dir()
-            .map(|h| h.join(".cocode").join("sessions"))
-            .unwrap_or_default();
+        let sessions_dir = coco_config::global_config::config_home().join("sessions");
 
         let (session_count, session_start_secs) = scan_sessions(&sessions_dir).await;
         let duration_str = format_duration(session_start_secs);

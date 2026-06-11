@@ -64,8 +64,8 @@ pub fn get_plugin_dirs(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
         }
     }
 
-    // Project-level plugins: .claude/plugins/
-    let project_plugins = project_dir.join(".claude").join("plugins");
+    // Project-level plugins: .coco/plugins/
+    let project_plugins = project_dir.join(".coco").join("plugins");
     if project_plugins.is_dir()
         && let Ok(entries) = std::fs::read_dir(&project_plugins)
     {

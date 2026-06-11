@@ -128,11 +128,9 @@ fn classic_permission_actions(p: &PermissionPromptState) -> String {
         let marker = if idx == selected { "▸ " } else { "  " };
         let label = match p.classic_action_at(idx) {
             PermissionAction::ApproveOnce => t!("dialog.action_approve_once").to_string(),
-            PermissionAction::AlwaysAllow => t!(
-                "dialog.action_always_allow_session",
-                tool = p.tool_name.as_str()
-            )
-            .to_string(),
+            PermissionAction::AlwaysAllow => {
+                t!("dialog.action_always_allow", tool = p.tool_name.as_str()).to_string()
+            }
             PermissionAction::Deny => t!("dialog.action_deny").to_string(),
         };
         lines.push_str(&format!("{marker}{label}\n"));

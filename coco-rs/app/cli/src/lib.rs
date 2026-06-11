@@ -408,7 +408,7 @@ pub enum Commands {
     /// List discovered agent definitions.
     ///
     /// TS: `src/cli/handlers/agents.ts` — walks `~/.coco/agents/` and
-    /// `.claude/agents/` for markdown frontmatter agent specs.
+    /// `.coco/agents/` for markdown frontmatter agent specs.
     Agents,
     /// Show auto-mode defaults.
     #[command(name = "auto-mode")]

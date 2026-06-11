@@ -765,6 +765,7 @@ impl Analyzer for SensitiveRedirectAnalyzer {
             // Tool config
             ".ripgreprc",
             ".mcp.json",
+            ".coco.json",
             ".claude.json",
         ];
 
@@ -1601,7 +1602,8 @@ impl DangerousPathAnalyzer {
 
     /// Dangerous config directories.
     const DANGEROUS_DIRS: &[&str] = &[
-        ".git/", ".git", ".vscode/", ".vscode", ".idea/", ".idea", ".claude/", ".claude",
+        ".git/", ".git", ".vscode/", ".vscode", ".idea/", ".idea", ".coco/", ".coco", ".claude/",
+        ".claude",
     ];
 }
 

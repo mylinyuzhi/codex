@@ -22,7 +22,7 @@ Layered config resolution: settings files, model/provider selection, effort/thin
 
 ## Scope
 
-**Owned here**: `~/.coco.json`, `~/.coco/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, managed/enterprise settings, model capabilities cache, effort/fast-mode state.
+**Owned here**: `~/.coco.json`, `~/.coco/settings.json`, `.coco/settings.json`, `.coco/settings.local.json`, managed/enterprise settings, model capabilities cache, effort/fast-mode state.
 
 **NOT owned**: CLAUDE.md (coco-context), .mcp.json (coco-mcp), skills/commands/hooks files (their respective crates). See `docs/coco-rs/config-file-map.md`.
 

@@ -714,8 +714,8 @@ fn all_setting_sources() -> HashSet<SettingSource> {
 /// Merge order (later overrides earlier):
 ///   1. Plugin base
 ///   2. User global (`user_path`)
-///   3. Project shared (`{cwd}/.claude/settings.json`)
-///   4. Project local (`{cwd}/.claude/settings.local.json`)
+///   3. Project shared (`{cwd}/.coco/settings.json`)
+///   4. Project local (`{cwd}/.coco/settings.local.json`)
 ///   5. Flag (`--settings file`)
 ///   6. Policy (`managed_path`)
 pub fn load_settings_with(

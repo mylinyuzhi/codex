@@ -7,15 +7,13 @@ use std::pin::Pin;
 
 /// Async handler for `/clear`.
 ///
-/// Checks `~/.cocode/sessions/` to provide context on preserved history,
+/// Checks `~/.coco/sessions/` to provide context on preserved history,
 /// then returns a message describing the clear operation.
 pub fn handler(
     _args: String,
 ) -> Pin<Box<dyn std::future::Future<Output = crate::Result<String>> + Send>> {
     Box::pin(async move {
-        let sessions_dir = dirs::home_dir()
-            .map(|h| h.join(".cocode").join("sessions"))
-            .unwrap_or_default();
+        let sessions_dir = coco_config::global_config::config_home().join("sessions");
 
         let session_count = count_session_files(&sessions_dir).await;
 

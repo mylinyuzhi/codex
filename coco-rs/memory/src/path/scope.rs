@@ -78,7 +78,7 @@ pub enum WriteClassification {
     /// Distinct from auto-mem because session-memory is a fundamentally
     /// different artifact with its own lifecycle.
     SessionMem,
-    /// Path is one of the curated `CLAUDE.md` / `AGENTS.md` / `.claude/rules/`
+    /// Path is one of the curated `CLAUDE.md` / `AGENTS.md` / `.coco/rules/`
     /// files in user, project, or local scope. Captured as a single
     /// variant — the dialog handles the finer scope distinction.
     Claudemd,
@@ -112,7 +112,7 @@ pub fn classify_written_path(
     if is_within_memory_dir(path, memory_dir) {
         return WriteClassification::AutoMem;
     }
-    // Curated CLAUDE.md / AGENTS.md / .claude/rules/*.md by basename.
+    // Curated CLAUDE.md / AGENTS.md / .coco/rules/*.md by basename.
     // Cheaper than a recursive containment check — these files have a
     // stable naming convention.
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -122,10 +122,10 @@ pub fn classify_written_path(
             }
             _ => {}
         }
-        // `.claude/rules/<anything>.md`
+        // `.coco/rules/<anything>.md`
         if path
             .components()
-            .any(|c| c.as_os_str().to_string_lossy() == ".claude")
+            .any(|c| c.as_os_str().to_string_lossy() == ".coco")
             && path
                 .components()
                 .any(|c| c.as_os_str().to_string_lossy() == "rules")

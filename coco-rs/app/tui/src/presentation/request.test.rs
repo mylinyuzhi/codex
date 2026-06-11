@@ -89,7 +89,7 @@ fn permission_content_uses_high_risk_border() {
     assert!(body.contains("rm -rf target/tmp"));
     assert!(body.contains("/repo"));
     assert!(body.contains("Deletes files"));
-    assert!(body.contains("always allow Edit for this session"));
+    assert!(body.contains("don't ask again for Edit"));
 }
 
 #[test]

@@ -27,6 +27,7 @@ mod edit;
 mod exit;
 mod expanded_view;
 mod interaction;
+mod permissions_editor;
 mod plugin_dialog;
 // `pub(crate)` so the slash-command dispatcher (in
 // `server_notification_handler::tui_only`) can call into `cycle_model`
@@ -95,6 +96,10 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         M::AgentsDialog(_) => Slash {
             name: "agents",
             message: "Agents dialog dismissed",
+        },
+        M::PermissionsEditor(_) => Slash {
+            name: "permissions",
+            message: "Permissions dialog dismissed",
         },
         M::McpServerSelect(_) => Slash {
             name: "mcp",
@@ -256,6 +261,14 @@ pub async fn handle_command(
 
     if let plugin_dialog::Handled::Yes(changed) =
         plugin_dialog::intercept(state, &cmd, command_tx).await
+    {
+        return changed;
+    }
+
+    // The `/permissions` editor has its own tab cycle, inline add form,
+    // and delete confirmation that the generic modal dispatch can't model.
+    if let permissions_editor::Handled::Yes(changed) =
+        permissions_editor::intercept(state, &cmd, command_tx).await
     {
         return changed;
     }

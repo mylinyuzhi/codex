@@ -26,8 +26,8 @@ use crate::rule_compiler;
 ///
 /// Reads rules from:
 /// - `~/.coco/settings.json` (userSettings)
-/// - `.claude/settings.json` (projectSettings)
-/// - `.claude/settings.local.json` (localSettings)
+/// - `.coco/settings.json` (projectSettings)
+/// - `.coco/settings.local.json` (localSettings)
 /// - Managed settings path (policySettings)
 ///
 /// Writes rules back to the corresponding file when persisting updates.
@@ -167,6 +167,29 @@ impl SettingsPermissionStore {
             serde_json::to_string_pretty(value).map_err(|e| boxed(e, StatusCode::Internal))?;
         std::fs::write(path, contents).map_err(|e| boxed(e, StatusCode::IoError))?;
         Ok(())
+    }
+
+    /// Load every file-backed additional working directory, tagged with
+    /// the source layer that contributed it. Drives the `/permissions`
+    /// editor's Workspace tab. Sources are read in the same priority order
+    /// as [`Self::source_paths`]; duplicates across layers are preserved so
+    /// the editor can show (and remove from) each layer independently.
+    ///
+    /// TS: `getAdditionalWorkingDirectories()` reading
+    /// `permissions.additionalDirectories` per settings source.
+    pub fn load_additional_directories(&self) -> Vec<(PermissionRuleSource, String)> {
+        let mut dirs = Vec::new();
+        if self.is_managed_only() {
+            return dirs;
+        }
+        for (source, path) in self.source_paths() {
+            if let Some(config) = Self::load_permissions_from_file(&path) {
+                for dir in config.additional_directories {
+                    dirs.push((source, dir));
+                }
+            }
+        }
+        dirs
     }
 
     /// Check if managed policy restricts to only managed rules.

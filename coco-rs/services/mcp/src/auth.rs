@@ -111,7 +111,7 @@ impl StoredTokenEntry {
 /// hash of its config, preventing credential reuse across different server
 /// configurations that happen to share the same name.
 pub struct OAuthTokenStore {
-    /// Path to the JSON storage file (e.g. `~/.cocode/oauth_tokens.json`).
+    /// Path to the JSON storage file (e.g. `~/.coco/oauth_tokens.json`).
     storage_path: PathBuf,
 }
 

@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 
 use crate::state::agents_dialog::AgentsDialogState;
+use crate::state::permissions_editor::PermissionsEditorState;
 use crate::state::surface_payloads::CopyPickerState;
 use crate::state::surface_payloads::DiffViewState;
 use crate::state::surface_payloads::DoctorState;
@@ -36,6 +37,7 @@ pub enum ModalState {
     SkillsDialog(SkillsDialogState),
     PluginDialog(PluginDialogState),
     AgentsDialog(AgentsDialogState),
+    PermissionsEditor(PermissionsEditorState),
     Transcript(crate::state::transcript::TranscriptState),
     Doctor(DoctorState),
     WorktreeExit(surface_payloads::WorktreeExitState),
@@ -78,6 +80,7 @@ impl ModalState {
             | Self::SkillsDialog(_)
             | Self::PluginDialog(_)
             | Self::AgentsDialog(_)
+            | Self::PermissionsEditor(_)
             | Self::CopyPicker(_)
             | Self::TeamRoster(_)
             | Self::PluginHint(_)

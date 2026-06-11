@@ -14,10 +14,10 @@ const RULE_SOURCES: &[(&str, &str)] = &[
     ("Command", "(from --allow-tool / --deny-tool flags)"),
     ("CLI", "(from command-line arguments)"),
     ("Flag", "(from feature flags)"),
-    ("Local", ".claude/settings.local.json"),
-    ("Project", ".claude/settings.json"),
+    ("Local", ".coco/settings.local.json"),
+    ("Project", ".coco/settings.json"),
     ("Policy", "(organization policy)"),
-    ("User", "~/.claude/settings.json"),
+    ("User", "~/.coco/settings.json"),
 ];
 
 /// Async handler for `/permissions [allow|deny|reset|list]`.
@@ -48,7 +48,7 @@ pub fn handler(
             return Ok(
                 "Session permission rules: reset is only effective inside the TUI \
                  (it mutates the live engine config). File-based rules \
-                 (.claude/settings.json, ~/.cocode/settings.json) are unchanged — \
+                 (.coco/settings.json, ~/.coco/settings.json) are unchanged — \
                  edit those files directly to modify persistent rules."
                     .to_string(),
             );
@@ -76,15 +76,10 @@ async fn list_permissions() -> crate::Result<String> {
     out.push('\n');
 
     // Read project settings
-    let project_rules = read_permission_rules(".claude/settings.json").await;
-    let local_rules = read_permission_rules(".claude/settings.local.json").await;
-    let user_rules = match dirs::home_dir() {
-        Some(home) => {
-            let path = home.join(".cocode").join("settings.json");
-            read_permission_rules_from_path(&path).await
-        }
-        None => Vec::new(),
-    };
+    let project_rules = read_permission_rules(".coco/settings.json").await;
+    let local_rules = read_permission_rules(".coco/settings.local.json").await;
+    let user_rules =
+        read_permission_rules_from_path(&coco_config::global_config::user_settings_path()).await;
 
     let has_any = !project_rules.is_empty() || !local_rules.is_empty() || !user_rules.is_empty();
 
@@ -92,7 +87,7 @@ async fn list_permissions() -> crate::Result<String> {
         out.push_str("### Active Rules\n\n");
 
         if !project_rules.is_empty() {
-            out.push_str("**Project** (.claude/settings.json):\n");
+            out.push_str("**Project** (.coco/settings.json):\n");
             for rule in &project_rules {
                 out.push_str(&format!("  {rule}\n"));
             }
@@ -100,7 +95,7 @@ async fn list_permissions() -> crate::Result<String> {
         }
 
         if !local_rules.is_empty() {
-            out.push_str("**Local** (.claude/settings.local.json):\n");
+            out.push_str("**Local** (.coco/settings.local.json):\n");
             for rule in &local_rules {
                 out.push_str(&format!("  {rule}\n"));
             }
@@ -108,7 +103,7 @@ async fn list_permissions() -> crate::Result<String> {
         }
 
         if !user_rules.is_empty() {
-            out.push_str("**User** (~/.cocode/settings.json):\n");
+            out.push_str("**User** (~/.coco/settings.json):\n");
             for rule in &user_rules {
                 out.push_str(&format!("  {rule}\n"));
             }

@@ -1915,13 +1915,18 @@ class TuiOnlyEventOpenAgentsDialog(BaseModel):
     type_: Literal['open_agents_dialog'] = Field(default='open_agents_dialog', alias='type')
     payload: AgentsDialogPayload
 
+class TuiOnlyEventOpenPermissionsEditor(BaseModel):
+    model_config = {"populate_by_name": True}
+    type_: Literal['open_permissions_editor'] = Field(default='open_permissions_editor', alias='type')
+    payload: PermissionsEditorPayload
+
 class TuiOnlyEventSkillOverridesSaved(BaseModel):
     model_config = {"populate_by_name": True}
     type_: Literal['skill_overrides_saved'] = Field(default='skill_overrides_saved', alias='type')
     result: SkillOverridesSaveResult
 
 TuiOnlyEvent = Annotated[
-    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPermissionExplanationReady, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolInterruptibilityChanged, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSettings, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenPluginDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventSkillOverridesSaved],
+    Union[TuiOnlyEventApprovalRequired, TuiOnlyEventQuestionAsked, TuiOnlyEventElicitationRequested, TuiOnlyEventSandboxApprovalRequired, TuiOnlyEventPermissionExplanationReady, TuiOnlyEventPluginDataReady, TuiOnlyEventOutputStylesReady, TuiOnlyEventAvailableCommandsRefreshed, TuiOnlyEventQueuedCommandEditReady, TuiOnlyEventQueuedCommandEditUnavailable, TuiOnlyEventOpenSessionBrowser, TuiOnlyEventRewindRowMetadataReady, TuiOnlyEventRewindRestorePreviewReady, TuiOnlyEventCompactionCircuitBreakerOpen, TuiOnlyEventMicroCompactionApplied, TuiOnlyEventSessionMemoryCompactApplied, TuiOnlyEventSpeculativeRolledBack, TuiOnlyEventSessionMemoryExtractionStarted, TuiOnlyEventSessionMemoryExtractionCompleted, TuiOnlyEventSessionMemoryExtractionFailed, TuiOnlyEventCronJobDisabled, TuiOnlyEventCronJobsMissed, TuiOnlyEventToolCallDelta, TuiOnlyEventToolProgress, TuiOnlyEventToolInterruptibilityChanged, TuiOnlyEventToolExecutionAborted, TuiOnlyEventRewindCompleted, TuiOnlyEventSlashCommandResult, TuiOnlyEventOpenContextUsage, TuiOnlyEventSlashCommandStatus, TuiOnlyEventOpenRewindPicker, TuiOnlyEventOpenMemoryDialog, TuiOnlyEventCopyCommandRequested, TuiOnlyEventMemoryFileOpened, TuiOnlyEventMemoryFileOpenFailed, TuiOnlyEventPlanFileOpened, TuiOnlyEventPlanFileOpenFailed, TuiOnlyEventExternalEditorPrepare, TuiOnlyEventPromptEditorCompleted, TuiOnlyEventPromptEditorFailed, TuiOnlyEventBashCommandCompleted, TuiOnlyEventOpenModelPicker, TuiOnlyEventOpenSettings, TuiOnlyEventOpenThemePicker, TuiOnlyEventOpenSkillsDialog, TuiOnlyEventOpenPluginDialog, TuiOnlyEventOpenAgentsDialog, TuiOnlyEventOpenPermissionsEditor, TuiOnlyEventSkillOverridesSaved],
     Field(discriminator='type_'),
 ]
 
@@ -3416,6 +3421,22 @@ class PermissionRule(BaseModel):
     value: PermissionRuleValue
 
 class PermissionRuleValue(BaseModel):
+    tool_pattern: str
+    rule_content: str | None = None
+
+class PermissionsEditorDir(BaseModel):
+    path: str
+    source: PermissionRuleSource
+
+class PermissionsEditorPayload(BaseModel):
+    cwd: str
+    directories: list[PermissionsEditorDir]
+    rules: list[PermissionsEditorRule]
+    managed_only: bool = False
+
+class PermissionsEditorRule(BaseModel):
+    behavior: PermissionBehavior
+    source: PermissionRuleSource
     tool_pattern: str
     rule_content: str | None = None
 

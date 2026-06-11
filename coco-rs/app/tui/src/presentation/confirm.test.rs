@@ -107,7 +107,7 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
     let mut state = PlanApprovalPromptState::new(
         "req-1".to_string(),
         "planner".to_string(),
-        Some(".claude/plans/demo.md".to_string()),
+        Some(".coco/plans/demo.md".to_string()),
         (0..20)
             .map(|i| format!("step {i}"))
             .collect::<Vec<_>>()
@@ -119,7 +119,7 @@ fn plan_approval_content_truncates_long_preview_and_marks_focus() {
 
     assert_eq!(title, " Plan approval — from planner ");
     assert_eq!(border, theme.plan_mode);
-    assert!(body.contains("Plan file: .claude/plans/demo.md"));
+    assert!(body.contains("Plan file: .coco/plans/demo.md"));
     assert!(body.contains("step 17"));
     assert!(!body.contains("step 18"));
     assert!(body.contains("plan truncated"));

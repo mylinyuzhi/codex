@@ -100,15 +100,15 @@ pub fn output_style_dirs(cwd: &Path) -> Vec<PathBuf> {
 }
 
 /// Standard CLI agent search paths: `~/.coco/agents` (user) plus
-/// `<cwd>/.claude/agents` (project). Mirrors TS `agentDirs` from
+/// `<cwd>/.coco/agents` (project). Mirrors TS `agentDirs` from
 /// `tools/AgentTool/loadAgentsDir.ts` discovery roots and the legacy
 /// `agent_spawn::get_agent_dirs` shape we replaced.
 ///
 /// **Worktree fallback** (TS parity:
 /// `utils/markdownConfigLoader.ts:307-330`): when `cwd` resolves into
-/// a linked git worktree whose `.claude/agents/` is empty (or not
+/// a linked git worktree whose `.coco/agents/` is empty (or not
 /// checked out), we additionally search the canonical (main) repo's
-/// `.claude/agents/`. The fallback only fires when the canonical root
+/// `.coco/agents/`. The fallback only fires when the canonical root
 /// differs from the worktree's git root **and** the worktree dir is
 /// missing — a `git worktree add` checks out the full tree, so the
 /// shared case (worktree already has the same agent files) skips the
@@ -117,21 +117,21 @@ pub fn standard_agent_search_paths(
     config_home: &Path,
     cwd: &Path,
 ) -> coco_subagent::definition_store::AgentSearchPaths {
-    let mut project_dirs = vec![cwd.join(".claude").join("agents")];
+    let mut project_dirs = vec![cwd.join(".coco").join("agents")];
 
     // Push the canonical-repo fallback when applicable. Errors / no-git
     // states are treated as "no fallback needed" — the loader degrades
     // gracefully on missing dirs.
     if let Some(canonical_root) = coco_git::find_canonical_git_root(cwd) {
-        let worktree_agents_dir = cwd.join(".claude").join("agents");
+        let worktree_agents_dir = cwd.join(".coco").join("agents");
         let worktree_root = git_root_for(cwd);
         let worktree_has_agents = std::fs::metadata(&worktree_agents_dir)
             .map(|m| m.is_dir())
             .unwrap_or(false);
-        let canonical_agents_dir = canonical_root.join(".claude").join("agents");
+        let canonical_agents_dir = canonical_root.join(".coco").join("agents");
         // Only add the canonical-root copy when:
         // 1. cwd is inside a worktree distinct from the canonical root, AND
-        // 2. the worktree's own .claude/agents/ is missing or empty.
+        // 2. the worktree's own .coco/agents/ is missing or empty.
         // Same-root cases (cwd == canonical_root, or worktree already
         // has agent files) keep the original single-entry shape.
         if worktree_root.as_deref() != Some(canonical_root.as_path())

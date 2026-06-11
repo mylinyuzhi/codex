@@ -79,14 +79,10 @@ async fn test_scan_plugin_dir_skips_non_plugin_dirs() {
 #[tokio::test]
 async fn test_install_plugin() {
     let tmp = tempfile::tempdir().unwrap();
-    let plugin_dir = tmp
-        .path()
-        .join(".claude")
-        .join("plugins")
-        .join("test-plugin");
+    let plugin_dir = tmp.path().join(".coco").join("plugins").join("test-plugin");
 
     // Install into the temp dir
-    tokio::fs::create_dir_all(tmp.path().join(".claude").join("plugins"))
+    tokio::fs::create_dir_all(tmp.path().join(".coco").join("plugins"))
         .await
         .unwrap();
 

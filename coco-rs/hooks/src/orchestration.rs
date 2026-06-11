@@ -466,9 +466,9 @@ pub fn build_hook_env_with_plugin(
             env.insert("CLAUDE_PLUGIN_ROOT".to_string(), root.clone());
         }
         if let Some(id) = &ctx.plugin_id {
-            // Plugin data dir convention: ~/.claude/plugins/<plugin_id>/data
+            // Plugin data dir convention: ~/.coco/plugins/<plugin_id>/data
             if let Ok(home) = std::env::var("HOME") {
-                let data_dir = format!("{home}/.claude/plugins/{id}/data");
+                let data_dir = format!("{home}/.coco/plugins/{id}/data");
                 env.insert("CLAUDE_PLUGIN_DATA".to_string(), data_dir);
             }
         }

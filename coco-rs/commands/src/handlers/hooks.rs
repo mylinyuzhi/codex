@@ -1,7 +1,7 @@
 //! `/hooks` — show or reload configured hook event handlers.
 //!
-//! `/hooks` (no args) reads hook configuration from `.claude/settings.json`
-//! and `~/.cocode/settings.json` and displays all hooks grouped by event type.
+//! `/hooks` (no args) reads hook configuration from `.coco/settings.json`
+//! and `~/.coco/settings.json` and displays all hooks grouped by event type.
 //!
 //! `/hooks reload` emits a sentinel that runners parse and dispatch to
 //! [`SessionRuntime::reload_hooks`], which rebuilds the live registry from
@@ -63,22 +63,20 @@ async fn list_hooks() -> crate::Result<String> {
     let mut hooks = Vec::new();
 
     load_hooks_from_file(
-        Path::new(".claude/settings.json"),
-        ".claude/settings.json",
+        Path::new(".coco/settings.json"),
+        ".coco/settings.json",
         &mut hooks,
     )
     .await;
 
-    if let Some(home) = dirs::home_dir() {
-        let user_settings = home.join(".cocode").join("settings.json");
-        load_hooks_from_file(&user_settings, "~/.cocode/settings.json", &mut hooks).await;
-    }
+    let user_settings = coco_config::global_config::user_settings_path();
+    load_hooks_from_file(&user_settings, "~/.coco/settings.json", &mut hooks).await;
 
     let mut out = String::from("## Configured Hooks\n\n");
 
     if hooks.is_empty() {
         out.push_str("No hooks configured.\n\n");
-        out.push_str("Add hooks to .claude/settings.json or ~/.cocode/settings.json:\n\n");
+        out.push_str("Add hooks to .coco/settings.json or ~/.coco/settings.json:\n\n");
         out.push_str("  {\n");
         out.push_str("    \"hooks\": {\n");
         out.push_str("      \"PreToolUse\": [\n");

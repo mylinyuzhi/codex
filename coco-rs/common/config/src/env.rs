@@ -173,7 +173,7 @@ pub enum EnvKey {
     CocoTeamName,
     CocoTeammateCommand,
     /// Override the base directory for agent-team files + mailboxes
-    /// (default `~/.claude/teams`). Read by
+    /// (default `~/.coco/teams`). Read by
     /// `coco_coordinator::team_file::teams_base_dir`; lets tests isolate the
     /// teams/mailbox tree (and a future swarm-leader relocate it, like
     /// [`Self::CocoRemoteMemoryDir`] does for the memory base).

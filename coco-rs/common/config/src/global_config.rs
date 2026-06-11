@@ -162,14 +162,14 @@ pub fn models_catalog_path() -> PathBuf {
     config_home().join("models.json")
 }
 
-/// Get the project settings path.
+/// Get the project settings path (`<cwd>/.coco/settings.json`, checked in).
 pub fn project_settings_path(cwd: &Path) -> PathBuf {
-    cwd.join(".claude/settings.json")
+    cwd.join(".coco/settings.json")
 }
 
-/// Get the local (gitignored) settings path.
+/// Get the local (gitignored) settings path (`<cwd>/.coco/settings.local.json`).
 pub fn local_settings_path(cwd: &Path) -> PathBuf {
-    cwd.join(".claude/settings.local.json")
+    cwd.join(".coco/settings.local.json")
 }
 
 /// Set `key` to `value` in `~/.coco/settings.json` (creating the file

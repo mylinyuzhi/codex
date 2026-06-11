@@ -264,7 +264,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             permission_bridge: Some(session_permission_bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
-            // TS parity: load `~/.coco/agents` + `<cwd>/.claude/agents`
+            // TS parity: load `~/.coco/agents` + `<cwd>/.coco/agents`
             // and surface them in AgentTool's per-turn dynamic prompt
             // listing. Worktree fallback is applied inside
             // `standard_agent_search_paths`.
@@ -1790,14 +1790,14 @@ async fn run_agent_driver(
                     // `persistPermissionUpdates` which no-ops on
                     // non-persistable destinations.
                     //
-                    // Phase A: TUI dialog only emits Session-scoped
-                    // updates today, so the persist branch is
-                    // exercised once Phase B adds the destination
-                    // sub-picker. The store is constructed cheaply
-                    // per-call (just holds cwd + optional flag-
-                    // settings path) so we don't need to thread an
-                    // `Arc<PermissionStore>` through SessionRuntime
-                    // until Phase B.
+                    // The inline dialog's "don't ask again" now emits a
+                    // `LocalSettings` update, so this persists the rule to
+                    // `.coco/settings.local.json` (cross-session). The
+                    // future `/permissions` rule-editor overlay reuses this
+                    // same loop for `Project` / `User` destinations. The
+                    // store is constructed cheaply per-call (just holds cwd
+                    // + optional flag-settings path) so we don't need to
+                    // thread an `Arc<PermissionStore>` through SessionRuntime.
                     let cwd =
                         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                     let store = coco_permissions::SettingsPermissionStore::new(cwd);
@@ -1891,6 +1891,15 @@ async fn run_agent_driver(
                         "ApprovalResponse for unknown request_id (already resolved or stale)"
                     );
                 }
+            }
+
+            UserCommand::ApplyPermissionUpdate { update } => {
+                // `/permissions` editor add / delete. Apply to the live
+                // engine config + persist to the chosen settings file
+                // (User / Project / Local), then re-emit the editor payload
+                // so the open overlay refreshes from disk.
+                apply_and_persist_permission_update(&runtime, &update).await;
+                refresh_permissions_editor(&runtime, &event_tx).await;
             }
 
             UserCommand::Shutdown { reason } => {
@@ -3028,11 +3037,22 @@ async fn dispatch_slash_command(
     if matches!(name, "plan" | "planning") {
         return dispatch_plan(args, runtime, event_tx).await;
     }
+    // `/permissions` (no arg) / `/permissions list` — open the tabbed
+    // rule-editor overlay (TS `<PermissionRuleList>`). The subcommand
+    // forms (`allow` / `deny` / `reset`) keep their session-mutation
+    // behavior below for power users + SDK parity.
+    if name == "permissions" && matches!(args.trim(), "" | "list") {
+        let payload = build_permissions_editor_payload(runtime).await;
+        let _ = event_tx
+            .send(CoreEvent::Tui(TuiOnlyEvent::OpenPermissionsEditor {
+                payload,
+            }))
+            .await;
+        return SlashOutcome::Handled;
+    }
     // `/permissions allow|deny|reset` — the registry handler can't
     // mutate `engine_config.allow_rules / deny_rules`. Intercept the
-    // mutating subcommands so they actually take effect; the `list`
-    // / no-arg / `list` path keeps falling through to the registry
-    // handler that reads settings.json.
+    // mutating subcommands so they actually take effect.
     if name == "permissions"
         && let Some(outcome) = dispatch_permissions_mutation(args, runtime, event_tx).await
     {
@@ -4140,7 +4160,7 @@ async fn dispatch_permissions_mutation(
                 .await;
             "Session permission rules reset. Custom session allow/deny entries were cleared; \
              built-in read-only tools remain allowed by the active permission mode. File-based rules \
-             (.claude/settings.json, ~/.cocode/settings.json) are unchanged — \
+             (.coco/settings.json, ~/.coco/settings.json) are unchanged — \
              edit those files directly to modify persistent rules."
                 .to_string()
         }
@@ -4914,7 +4934,7 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 }
 
 /// Persist a `skill_overrides` JSON patch to
-/// `<cwd>/.claude/settings.local.json`, refresh the in-process
+/// `<cwd>/.coco/settings.local.json`, refresh the in-process
 /// registry, and notify the TUI so the dialog's toast + `/`
 /// autocomplete pick up the change.
 ///
@@ -4926,7 +4946,7 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 ///
 /// Steps (mirror TS `cli_inner_pretty.js:476991-477016` save flow):
 ///
-/// - Atomic write to `.claude/settings.local.json` via
+/// - Atomic write to `.coco/settings.local.json` via
 ///   [`coco_config::LocalSettingsWriter::write_local`] — the writer
 ///   also republishes `RuntimeConfig` synchronously so the next
 ///   agent turn reads the new tiers.
@@ -5582,6 +5602,122 @@ async fn refresh_agents_dialog(
     let _ = event_tx
         .send(CoreEvent::Tui(TuiOnlyEvent::OpenAgentsDialog { payload }))
         .await;
+}
+
+/// Build a `PermissionsEditorPayload` snapshot from the on-disk settings
+/// stores for the `/permissions` overlay. Reads every file-backed rule
+/// (user / project / local / flag / policy) plus additional directories,
+/// projecting them into the wire payload the TUI partitions into tabs.
+async fn build_permissions_editor_payload(
+    _runtime: &Arc<crate::session_runtime::SessionRuntime>,
+) -> coco_types::PermissionsEditorPayload {
+    use coco_permissions::permissions_store::PermissionStore;
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let store = coco_permissions::SettingsPermissionStore::new(cwd.clone());
+
+    // Reading several small JSON files — push onto the blocking pool so a
+    // slow filesystem can't stall the runner's command loop.
+    let (rules, directories, managed_only) = tokio::task::spawn_blocking(move || {
+        let by_behavior = store.load_all_rules();
+        let rules: Vec<coco_types::PermissionsEditorRule> = by_behavior
+            .allow
+            .into_iter()
+            .chain(by_behavior.ask)
+            .chain(by_behavior.deny)
+            .map(|r| coco_types::PermissionsEditorRule {
+                behavior: r.behavior,
+                source: r.source,
+                tool_pattern: r.value.tool_pattern,
+                rule_content: r.value.rule_content,
+            })
+            .collect();
+        let directories: Vec<coco_types::PermissionsEditorDir> = store
+            .load_additional_directories()
+            .into_iter()
+            .map(|(source, path)| coco_types::PermissionsEditorDir { path, source })
+            .collect();
+        // `show_always_allow_options()` is the inverse of managed-only.
+        let managed_only = !store.show_always_allow_options();
+        (rules, directories, managed_only)
+    })
+    .await
+    .unwrap_or_else(|_| (Vec::new(), Vec::new(), false));
+
+    coco_types::PermissionsEditorPayload {
+        rules,
+        directories,
+        cwd: cwd.to_string_lossy().into_owned(),
+        managed_only,
+    }
+}
+
+/// Re-emit `OpenPermissionsEditor` with a fresh snapshot so the open
+/// overlay refreshes in place after a persisted edit.
+async fn refresh_permissions_editor(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    event_tx: &mpsc::Sender<CoreEvent>,
+) {
+    let payload = build_permissions_editor_payload(runtime).await;
+    let _ = event_tx
+        .send(CoreEvent::Tui(TuiOnlyEvent::OpenPermissionsEditor {
+            payload,
+        }))
+        .await;
+}
+
+/// Apply one `/permissions`-editor update to the live engine config and
+/// persist it to its destination settings file. Mirrors the
+/// `ApprovalResponse` "Always Allow" apply+persist path, but the editor
+/// targets any of the three writable scopes (User / Project / Local).
+async fn apply_and_persist_permission_update(
+    runtime: &Arc<crate::session_runtime::SessionRuntime>,
+    update: &coco_types::PermissionUpdate,
+) {
+    use coco_permissions::permissions_store::PermissionStore;
+
+    let updates = vec![update.clone()];
+    runtime
+        .update_engine_config(move |cfg| {
+            let ctx = coco_types::ToolPermissionContext {
+                mode: cfg.permission_mode,
+                additional_dirs: cfg.session_additional_dirs.clone(),
+                allow_rules: cfg.allow_rules.clone(),
+                deny_rules: cfg.deny_rules.clone(),
+                ask_rules: cfg.ask_rules.clone(),
+                bypass_available: cfg.bypass_permissions_available,
+                pre_plan_mode: None,
+                stripped_dangerous_rules: None,
+                session_plan_file: None,
+                permission_rule_source_roots: cfg.permission_rule_source_roots.clone(),
+            };
+            let updated = coco_permissions::apply_permission_updates(ctx, &updates);
+            cfg.allow_rules = updated.allow_rules;
+            cfg.deny_rules = updated.deny_rules;
+            cfg.ask_rules = updated.ask_rules;
+            cfg.session_additional_dirs = updated.additional_dirs;
+            cfg.permission_mode = updated.mode;
+        })
+        .await;
+
+    let Some(dest) = update.destination() else {
+        return;
+    };
+    if !coco_permissions::permission_updates::supports_persistence(dest) {
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let update_for_persist = update.clone();
+    let persist = tokio::task::spawn_blocking(move || {
+        let store = coco_permissions::SettingsPermissionStore::new(cwd);
+        store.persist_update(&update_for_persist)
+    })
+    .await;
+    match persist {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!(error = %e, "failed to persist permission update from editor"),
+        Err(e) => warn!(error = %e, "permission persist task panicked"),
+    }
 }
 
 fn open_memory_file_blocking(path: &std::path::Path) -> Result<(), String> {

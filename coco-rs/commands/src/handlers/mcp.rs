@@ -1,6 +1,6 @@
 //! `/mcp` — MCP server management (list, add, remove, enable, disable).
 //!
-//! Reads MCP server configuration from `.claude/settings.json` and
+//! Reads MCP server configuration from `.coco/settings.json` and
 //! `.mcp.json`, displays status for each server, and supports
 //! enable/disable/add/remove subcommands.
 
@@ -54,10 +54,10 @@ pub fn handler(
 async fn list_mcp_servers() -> crate::Result<String> {
     let mut servers = Vec::new();
 
-    // Load from .claude/settings.json
+    // Load from .coco/settings.json
     load_servers_from_file(
-        Path::new(".claude/settings.json"),
-        ".claude/settings.json",
+        Path::new(".coco/settings.json"),
+        ".coco/settings.json",
         &mut servers,
     )
     .await;
@@ -66,20 +66,18 @@ async fn list_mcp_servers() -> crate::Result<String> {
     load_servers_from_file(Path::new(".mcp.json"), ".mcp.json", &mut servers).await;
 
     // Load from user-level config
-    if let Some(home) = dirs::home_dir() {
-        let user_settings = home.join(".cocode").join("settings.json");
-        load_servers_from_file(&user_settings, "~/.cocode/settings.json", &mut servers).await;
-    }
+    let user_settings = coco_config::global_config::user_settings_path();
+    load_servers_from_file(&user_settings, "~/.coco/settings.json", &mut servers).await;
 
     let mut out = String::from("## MCP Servers\n\n");
 
     if servers.is_empty() {
         out.push_str("No MCP servers configured.\n\n");
         out.push_str("Configure servers in:\n");
-        out.push_str("  .claude/settings.json  (project-level)\n");
+        out.push_str("  .coco/settings.json  (project-level)\n");
         out.push_str("  .mcp.json              (project-level, shared)\n");
-        out.push_str("  ~/.cocode/settings.json (user-level)\n\n");
-        out.push_str("Example config in .claude/settings.json:\n");
+        out.push_str("  ~/.coco/settings.json (user-level)\n\n");
+        out.push_str("Example config in .coco/settings.json:\n");
         out.push_str("  {\n");
         out.push_str("    \"mcpServers\": {\n");
         out.push_str("      \"my-server\": {\n");
@@ -169,26 +167,26 @@ async fn load_servers_from_file(path: &Path, source_label: &str, servers: &mut V
     }
 }
 
-/// Enable or disable a server by updating .claude/settings.json.
+/// Enable or disable a server by updating .coco/settings.json.
 async fn toggle_server(name: &str, enable: bool) -> crate::Result<String> {
-    let path = Path::new(".claude/settings.json");
+    let path = Path::new(".coco/settings.json");
     let action = if enable { "Enabling" } else { "Disabling" };
 
     let Ok(content) = tokio::fs::read_to_string(path).await else {
         return Ok(format!(
-            "Cannot {action} '{name}': .claude/settings.json not found.\n\
+            "Cannot {action} '{name}': .coco/settings.json not found.\n\
              Create the file with MCP server configuration first."
         ));
     };
 
     let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Ok("Cannot parse .claude/settings.json".to_string());
+        return Ok("Cannot parse .coco/settings.json".to_string());
     };
 
     let servers = parsed.get_mut("mcpServers").and_then(|v| v.as_object_mut());
 
     let Some(servers) = servers else {
-        return Ok("No MCP servers in .claude/settings.json".to_string());
+        return Ok("No MCP servers in .coco/settings.json".to_string());
     };
 
     if let Some(server_config) = servers.get_mut(name) {
@@ -206,12 +204,12 @@ async fn toggle_server(name: &str, enable: bool) -> crate::Result<String> {
         Ok(format!("{action} MCP server: {name}"))
     } else {
         Ok(format!(
-            "MCP server '{name}' not found in .claude/settings.json"
+            "MCP server '{name}' not found in .coco/settings.json"
         ))
     }
 }
 
-/// Add a new MCP server to .claude/settings.json.
+/// Add a new MCP server to .coco/settings.json.
 async fn add_server(input: &str) -> crate::Result<String> {
     let parts: Vec<&str> = input.splitn(2, ' ').collect();
     if parts.len() < 2 {
@@ -225,13 +223,13 @@ async fn add_server(input: &str) -> crate::Result<String> {
     let command = cmd_parts[0];
     let args: Vec<&str> = cmd_parts[1..].to_vec();
 
-    let path = Path::new(".claude/settings.json");
+    let path = Path::new(".coco/settings.json");
     let mut parsed = if let Ok(content) = tokio::fs::read_to_string(path).await {
         serde_json::from_str::<serde_json::Value>(&content)
             .unwrap_or_else(|_| serde_json::json!({}))
     } else {
         // Ensure .claude directory exists
-        tokio::fs::create_dir_all(".claude").await?;
+        tokio::fs::create_dir_all(".coco").await?;
         serde_json::json!({})
     };
 
@@ -255,23 +253,23 @@ async fn add_server(input: &str) -> crate::Result<String> {
     tokio::fs::write(path, new_content).await?;
 
     Ok(format!(
-        "Added MCP server '{name}' to .claude/settings.json\n\
+        "Added MCP server '{name}' to .coco/settings.json\n\
          Command: {command} {}\n\
          Restart the session to connect.",
         args.join(" "),
     ))
 }
 
-/// Remove an MCP server from .claude/settings.json.
+/// Remove an MCP server from .coco/settings.json.
 async fn remove_server(name: &str) -> crate::Result<String> {
-    let path = Path::new(".claude/settings.json");
+    let path = Path::new(".coco/settings.json");
 
     let Ok(content) = tokio::fs::read_to_string(path).await else {
-        return Ok("Cannot remove: .claude/settings.json not found.".to_string());
+        return Ok("Cannot remove: .coco/settings.json not found.".to_string());
     };
 
     let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return Ok("Cannot parse .claude/settings.json".to_string());
+        return Ok("Cannot parse .coco/settings.json".to_string());
     };
 
     let removed = parsed
@@ -286,7 +284,7 @@ async fn remove_server(name: &str) -> crate::Result<String> {
             Ok(format!("Removed MCP server: {name}"))
         }
         None => Ok(format!(
-            "MCP server '{name}' not found in .claude/settings.json"
+            "MCP server '{name}' not found in .coco/settings.json"
         )),
     }
 }

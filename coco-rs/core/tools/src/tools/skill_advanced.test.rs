@@ -58,7 +58,7 @@ fn test_expand_skill_prompt_claude_skill_dir() {
         &ExpandOptions {
             args: "",
             argument_names: &[],
-            skill_dir: Some("/home/user/.claude/skills/my-skill"),
+            skill_dir: Some("/home/user/.coco/skills/my-skill"),
             session_id: None,
             base_dir: None,
             plugin_root: None,
@@ -66,7 +66,7 @@ fn test_expand_skill_prompt_claude_skill_dir() {
             user_config: None,
         },
     );
-    assert_eq!(result, "Run /home/user/.claude/skills/my-skill/helper.sh");
+    assert_eq!(result, "Run /home/user/.coco/skills/my-skill/helper.sh");
 }
 
 #[test]
@@ -166,14 +166,14 @@ fn test_expand_skill_prompt_base_dir() {
             argument_names: &[],
             skill_dir: None,
             session_id: None,
-            base_dir: Some("/home/user/.claude/skills/my-skill"),
+            base_dir: Some("/home/user/.coco/skills/my-skill"),
             plugin_root: None,
             plugin_data_dir: None,
             user_config: None,
         },
     );
     assert!(
-        result.starts_with("Base directory for this skill: /home/user/.claude/skills/my-skill\n\n")
+        result.starts_with("Base directory for this skill: /home/user/.coco/skills/my-skill\n\n")
     );
     assert!(result.ends_with("Do stuff"));
 }
@@ -318,14 +318,14 @@ fn test_expand_skill_prompt_plugin_root() {
             skill_dir: None,
             session_id: None,
             base_dir: None,
-            plugin_root: Some("/home/user/.claude/plugins/cache/mkt/my-plugin"),
+            plugin_root: Some("/home/user/.coco/plugins/cache/mkt/my-plugin"),
             plugin_data_dir: None,
             user_config: None,
         },
     );
     assert_eq!(
         result,
-        "Run /home/user/.claude/plugins/cache/mkt/my-plugin/scripts/setup.sh"
+        "Run /home/user/.coco/plugins/cache/mkt/my-plugin/scripts/setup.sh"
     );
 }
 
@@ -340,13 +340,13 @@ fn test_expand_skill_prompt_plugin_data() {
             session_id: None,
             base_dir: None,
             plugin_root: None,
-            plugin_data_dir: Some("/home/user/.claude/plugins/data/my-plugin"),
+            plugin_data_dir: Some("/home/user/.coco/plugins/data/my-plugin"),
             user_config: None,
         },
     );
     assert_eq!(
         result,
-        "Save to /home/user/.claude/plugins/data/my-plugin/output.json"
+        "Save to /home/user/.coco/plugins/data/my-plugin/output.json"
     );
 }
 

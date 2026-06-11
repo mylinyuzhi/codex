@@ -1014,7 +1014,7 @@ pub struct PlanApprovalPromptState {
     pub request_id: String,
     /// Teammate agent name (who sent the request).
     pub from: String,
-    /// Optional plan-file path on disk (.claude/plans/...). `None` when
+    /// Optional plan-file path on disk (.coco/plans/...). `None` when
     /// the request embeds the content inline instead.
     pub plan_file_path: Option<String>,
     /// The plan text itself (rendered markdown) — always present so the
@@ -1364,7 +1364,7 @@ pub struct SkillRow {
     /// — pre-computed so the filter matcher is one `contains` call
     /// per row.
     pub search_haystack: String,
-    /// Value in `<cwd>/.claude/settings.local.json` right now.
+    /// Value in `<cwd>/.coco/settings.local.json` right now.
     /// `None` ⇒ key absent.
     pub current_local: Option<SkillOverrideState>,
     /// Project-or-user resolution (without local / policy / flag).

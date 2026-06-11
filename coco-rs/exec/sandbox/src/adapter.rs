@@ -70,7 +70,7 @@ pub struct AdapterInputs<'a> {
     pub additional_directories: &'a [PathBuf],
     /// Claude's per-session temp dir (used by Shell.ts CWD tracking).
     pub coco_temp_dir: &'a Path,
-    /// Path to the project's `~/.claude/settings.json` analogue (used to deny
+    /// Path to the project's `~/.coco/settings.json` analogue (used to deny
     /// writes that would let the agent edit its own permissions).
     pub settings_files: &'a [PathBuf],
     /// Worktree main-repo `.git` path when `current_cwd` is a git worktree.
@@ -275,13 +275,8 @@ fn collect_deny_write_paths(
 
     // Settings file in current cwd if different from original.
     if inputs.current_cwd != inputs.original_cwd {
-        paths.push(inputs.current_cwd.join(".claude").join("settings.json"));
-        paths.push(
-            inputs
-                .current_cwd
-                .join(".claude")
-                .join("settings.local.json"),
-        );
+        paths.push(inputs.current_cwd.join(".coco").join("settings.json"));
+        paths.push(inputs.current_cwd.join(".coco").join("settings.local.json"));
     }
 
     // Project skills in original + current cwd.

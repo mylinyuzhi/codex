@@ -10,9 +10,9 @@ pub enum SettingSource {
     Plugin,
     /// ~/.coco/settings.json (global per machine).
     User,
-    /// .claude/settings.json (shared, checked in).
+    /// .coco/settings.json (shared, checked in).
     Project,
-    /// .claude/settings.local.json (gitignored).
+    /// .coco/settings.local.json (gitignored).
     Local,
     /// --settings CLI file or SDK inline.
     Flag,

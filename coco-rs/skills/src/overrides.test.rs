@@ -1,7 +1,7 @@
 //! Table-driven tests for the three `skill_overrides` resolvers.
 //!
 //! Fixture matrix is documented in the V2 plan
-//! (`/root/.claude/plans/v2-velvet-engelbart.md` §1.4). Each case
+//! (`/root/.coco/plans/v2-velvet-engelbart.md` §1.4). Each case
 //! pins TS-parity behavior for one combination of lock-source ×
 //! baseline-source × local-override × skill source.
 

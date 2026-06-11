@@ -34,9 +34,9 @@ pub enum SkillExecutionMode {
 pub enum SkillSource {
     /// Bundled with the application (first-party).
     Bundled,
-    /// From a project-local .claude/ directory.
+    /// From a project-local .coco/ directory.
     Project,
-    /// From user's global ~/.claude/ directory.
+    /// From user's global ~/.coco/ directory.
     User,
     /// From an installed plugin.
     Plugin,

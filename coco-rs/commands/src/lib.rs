@@ -233,7 +233,7 @@ pub enum MemoryScope {
     Project,
     /// Project-local (`./CLAUDE.local.md`).
     ProjectLocal,
-    /// `<dir>/.claude/CLAUDE.md` — project-config-dir convention.
+    /// `<dir>/.coco/CLAUDE.md` — project-config-dir convention.
     ProjectConfig,
     /// Subdirectory CLAUDE.md (auto-loaded under cwd).
     Subdir,
@@ -1338,7 +1338,7 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         ("doctor", "Run diagnostic checks", &[], doctor_handler),
         (
             "init",
-            "Initialize project with .claude/ directory",
+            "Initialize project with .coco/ directory",
             &[],
             init_handler,
         ),
@@ -1503,7 +1503,7 @@ fn plugin_handler(args: &str) -> String {
 
 fn agents_handler(_args: &str) -> String {
     "Available agents:\n  (none defined)\n\
-     Place agent definitions in .claude/agents/"
+     Place agent definitions in .coco/agents/"
         .to_string()
 }
 
@@ -1523,8 +1523,8 @@ fn doctor_handler(_args: &str) -> String {
 
 fn init_handler(_args: &str) -> String {
     "Initializing project...\n\
-     Created .claude/ directory\n\
-     Created .claude/settings.json"
+     Created .coco/ directory\n\
+     Created .coco/settings.json"
         .to_string()
 }
 

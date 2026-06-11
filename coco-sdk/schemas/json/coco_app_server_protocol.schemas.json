@@ -4570,7 +4570,7 @@
         },
         {
           "const": "project_config",
-          "description": "`<dir>/.claude/CLAUDE.md` \u2014 project-config-dir convention.",
+          "description": "`<dir>/.coco/CLAUDE.md` \u2014 project-config-dir convention.",
           "type": "string"
         },
         {
@@ -5440,6 +5440,84 @@
           "type": "string"
         }
       ]
+    },
+    "PermissionsEditorDir": {
+      "description": "One additional-working-directory row in the Workspace tab.",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/PermissionRuleSource",
+          "description": "Source layer that contributed the directory (drives the inline\nsource label and the read-only gate for policy entries)."
+        }
+      },
+      "required": [
+        "path",
+        "source"
+      ],
+      "type": "object"
+    },
+    "PermissionsEditorPayload": {
+      "description": "Payload for [`TuiOnlyEvent::OpenPermissionsEditor`]. Built by the\n`/permissions` slash handler (CLI side) with everything the tabbed\nrule editor needs: every file-backed rule keyed by behavior + source,\nevery additional working directory, and the current working directory.\n\nThe TUI cannot read the settings stores itself, so the CLI snapshots\nthem here and re-emits this payload after each persisted edit (the\nopen overlay refreshes in place, mirroring `OpenAgentsDialog`).\n\nTS parity: data backing `<PermissionRuleList>` \u2014\n`getPermissionRules()` + `getAdditionalWorkingDirectories()`.",
+      "properties": {
+        "cwd": {
+          "description": "Current working directory \u2014 rendered read-only at the top of the\nWorkspace tab (TS \"Original working directory\").",
+          "type": "string"
+        },
+        "directories": {
+          "description": "Additional working directories configured in settings, each\ntagged with the source layer that contributed it.",
+          "items": {
+            "$ref": "#/$defs/PermissionsEditorDir"
+          },
+          "type": "array"
+        },
+        "managed_only": {
+          "description": "`true` when managed policy sets `allowManagedPermissionRulesOnly`.\nThe editor renders every rule read-only and blocks add / delete.",
+          "type": "boolean"
+        },
+        "rules": {
+          "description": "Every file-backed rule (allow / ask / deny) across the user,\nproject, local, and policy settings layers. The TUI partitions\nthem by behavior into the Allow / Ask / Deny tabs.",
+          "items": {
+            "$ref": "#/$defs/PermissionsEditorRule"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "rules",
+        "directories",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "PermissionsEditorRule": {
+      "description": "One rule row in the `/permissions` editor. Carries the structured\n`(tool_pattern, rule_content)` so the TUI can both render the rule\nstring and reconstruct a `PermissionRuleValue` for removal \u2014 display\nshaping (and i18n) stays TUI-side.",
+      "properties": {
+        "behavior": {
+          "$ref": "#/$defs/PermissionBehavior"
+        },
+        "rule_content": {
+          "description": "Optional in-tool content pattern \u2014 e.g. `\"git *\"` for `Bash(git *)`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/PermissionRuleSource"
+        },
+        "tool_pattern": {
+          "description": "Tool the rule targets \u2014 e.g. `\"Bash\"`, `\"Read\"`, `\"mcp__slack__*\"`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "behavior",
+        "source",
+        "tool_pattern"
+      ],
+      "type": "object"
     },
     "PersistedFileError": {
       "properties": {
@@ -9387,7 +9465,7 @@
               "type": "null"
             }
           ],
-          "description": "What is stored in `<cwd>/.claude/settings.local.json`'s\n`skill_overrides[name]` _right now_. `None` \u21d2 key absent.\nDrives the dialog's diff-against-baseline save algorithm."
+          "description": "What is stored in `<cwd>/.coco/settings.local.json`'s\n`skill_overrides[name]` _right now_. `None` \u21d2 key absent.\nDrives the dialog's diff-against-baseline save algorithm."
         },
         "description": {
           "description": "One-line description from the skill frontmatter. The 2.1.142\nfilter (`/` search) matches name + description + source\nlabel, so the dialog needs the description on the wire even\nthough it isn't shown on every row.",
@@ -12820,6 +12898,23 @@
             },
             "type": {
               "const": "open_agents_dialog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`/permissions` overlay \u2014 opens the tabbed rule editor\n(Allow / Ask / Deny / Workspace). The payload is a CLI-built\nsnapshot of every file-backed rule + additional directory, since\nthe TUI cannot reach the settings stores directly. Re-emitted\nafter each edit so the open overlay refreshes in place. TS parity:\n`commands/permissions/permissions.tsx` \u2192 `<PermissionRuleList>`.",
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/PermissionsEditorPayload"
+            },
+            "type": {
+              "const": "open_permissions_editor",
               "type": "string"
             }
           },

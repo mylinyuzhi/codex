@@ -119,7 +119,7 @@ fn test_build_runtime_config_includes_cwd_as_writable_root() {
 #[test]
 fn test_build_runtime_config_blocks_settings_files() {
     let settings = SandboxSettings::default();
-    let settings_file = PathBuf::from("/proj/.claude/settings.json");
+    let settings_file = PathBuf::from("/proj/.coco/settings.json");
     let inputs = empty_inputs(
         &settings,
         Path::new("/proj"),
