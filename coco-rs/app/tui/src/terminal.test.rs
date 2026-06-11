@@ -20,7 +20,6 @@ use ratatui::layout::Rect;
 use ratatui::layout::Size;
 
 use crate::state::ModalState;
-use crate::surface::history_driver::PreparedFinalizedHistory;
 use crate::surface::modal::HistorySurfaceMode;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
@@ -51,7 +50,15 @@ fn interactive_viewport_max_height_grows_for_active_prompt() {
 }
 
 #[test]
-fn native_frame_overflow_backed_shrink_stays_bottom_pinned() {
+fn native_frame_overflow_shrink_defers_without_duplication() {
+    // The permission-prompt regression at frame level: history overflows the
+    // screen, a tall prompt closes and the desired height shrinks with
+    // nothing to append. The old seat jumped to the screen bottom and
+    // back-filled the freed rows from the history tail cache — duplicating
+    // rows still visible above the gap. The seat now DEFERS the unbacked
+    // shrink: the viewport keeps its seat (bottom stays on the screen
+    // bottom, so the composer never bounces), the surplus height renders as
+    // blank filler, and nothing ever repaints history.
     let width = 40;
     let height = 24;
     let size = Size::new(width, height);
@@ -70,7 +77,6 @@ fn native_frame_overflow_backed_shrink_stays_bottom_pinned() {
         .draw_with_plan_at_frame(&mut terminal, &state, plan, initial_frame, 0)
         .expect("initial draw");
     assert_eq!(terminal.history_bottom_y(), 14);
-    assert!(terminal.history_backs_row(20));
 
     let native_frame = surface.prepare_native_frame(&state, width, plan, Instant::now());
     let mut pin = ViewportPin::BottomPinned;
@@ -86,19 +92,23 @@ fn native_frame_overflow_backed_shrink_stays_bottom_pinned() {
     .expect("shrink frame");
 
     assert_eq!(pin, ViewportPin::BottomPinned);
-    assert_eq!(terminal.viewport_area(), Rect::new(0, 20, width, 4));
-    assert_eq!(terminal.history_bottom_y(), 20);
-    assert_eq!(decision.shrink_deferred_rows, 0);
-    assert!(
-        decision.reveal_tail_rows >= 6,
-        "shrink should reveal the freed rows from the tail cache: {decision:?}"
-    );
-    let revealed_rows = (14..20)
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 14, width, 10));
+    assert_eq!(terminal.history_bottom_y(), 14);
+    assert_eq!(decision.viewport, Rect::new(0, 14, width, 10));
+    assert_eq!(decision.deferred_shrink_rows, 6);
+    // No history row appears twice on screen (the duplication signature).
+    let history_rows = (0..14)
         .map(|y| buffer_row(terminal.backend().buffer(), y))
+        .map(|row| row.trim_end().to_string())
+        .filter(|row| !row.is_empty())
         .collect::<Vec<_>>();
-    assert!(
-        revealed_rows.iter().any(|row| !row.trim().is_empty()),
-        "history reveal area should not be an all-blank band: {revealed_rows:?}"
+    let mut deduped = history_rows.clone();
+    deduped.sort();
+    deduped.dedup();
+    assert_eq!(
+        deduped.len(),
+        history_rows.len(),
+        "history rows duplicated on screen: {history_rows:?}"
     );
 }
 
@@ -128,13 +138,12 @@ fn sync_main_surface_uses_restored_inline_viewport_baseline() {
             .live_lines
             .as_ref()
             .map(|lines| lines.len() as u16),
-        &native_frame,
+        native_frame.guaranteed_append_rows(),
     )
     .expect("sync");
 
     assert_eq!(decision.previous_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.committed_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.shrink_requested_rows, 0);
+    assert_eq!(decision.viewport, Rect::new(0, 20, width, 4));
 }
 
 #[test]
@@ -164,13 +173,15 @@ fn tui_alt_screen_leave_uses_restored_inline_viewport_baseline() {
         .expect("restore frame geometry commit");
 
     assert_eq!(decision.previous_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.committed_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.shrink_requested_rows, 0);
+    assert_eq!(decision.viewport, Rect::new(0, 20, width, 4));
     assert_eq!(tui.terminal().viewport_area(), Rect::new(0, 20, width, 4));
 }
 
 #[test]
-fn overflow_backed_shrink_partially_defers_when_backing_is_insufficient() {
+fn overflow_shrink_defers_when_unbacked() {
+    // Sync-pass half of the prompt-close behavior: an unbacked shrink while
+    // seated on the screen bottom defers wholesale — the viewport keeps its
+    // seat (no reveal, no bottom lift), and only append-backed rows commit.
     let width = 80;
     let height = 24;
     let size = Size::new(width, height);
@@ -195,59 +206,14 @@ fn overflow_backed_shrink_partially_defers_when_backing_is_insufficient() {
             .live_lines
             .as_ref()
             .map(|lines| lines.len() as u16),
-        &native_frame,
+        /*guaranteed_append_rows*/ 0,
     )
     .expect("sync");
 
     assert_eq!(pin, ViewportPin::BottomPinned);
-    assert_eq!(decision.desired_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.committed_viewport.bottom(), height);
-    assert!(decision.committed_viewport.top() < decision.desired_viewport.top());
-    assert_eq!(terminal.viewport_area(), decision.committed_viewport);
-    assert!(decision.shrink_deferred_rows > 0);
-}
-
-#[test]
-fn bottom_pinned_shrink_uses_only_finalized_append_rows() {
-    let width = 80;
-    let height = 24;
-    let size = Size::new(width, height);
-    let plan = native_history_plan();
-    let state = AppState::new();
-    let backend = TestBackend::new(width, height);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.sync_screen_size(size);
-    terminal.set_viewport_area(Rect::new(0, 14, width, 10));
-    terminal.note_history_rows_inserted(20);
-    let native_frame = NativeSurfaceFramePlan {
-        live_lines: None,
-        finalized_history: PreparedFinalizedHistory::FastNoop { revision: 0 },
-        stream_append: None,
-        stream_render_key_invalidated: false,
-        history_tail_reveal_rows: 0,
-        prepare_stats: crate::surface::controller::NativePrepareStats::default(),
-    };
-    let mut pin = ViewportPin::BottomPinned;
-
-    let decision = sync_main_surface_area(
-        &mut terminal,
-        &mut pin,
-        &state,
-        plan,
-        size,
-        None,
-        &native_frame,
-    )
-    .expect("sync");
-
-    assert_eq!(pin, ViewportPin::BottomPinned);
-    assert_eq!(native_frame.guaranteed_append_rows(), 0);
-    assert_eq!(decision.desired_viewport, Rect::new(0, 20, width, 4));
-    assert_eq!(decision.shrink_requested_rows, 6);
-    assert_eq!(decision.shrink_committed_rows, 0);
-    assert_eq!(decision.shrink_deferred_rows, 6);
-    assert_eq!(decision.committed_viewport, Rect::new(0, 14, width, 10));
-    assert_eq!(terminal.viewport_area(), Rect::new(0, 14, width, 10));
+    assert_eq!(decision.viewport, Rect::new(0, 14, width, 10));
+    assert_eq!(decision.deferred_shrink_rows, 6);
+    assert_eq!(terminal.viewport_area(), decision.viewport);
 }
 
 #[test]
@@ -262,8 +228,6 @@ fn short_history_growth_stays_flowing() {
     terminal.sync_screen_size(size);
     terminal.set_viewport_area(Rect::new(0, 2, width, 4));
     terminal.note_history_rows_inserted(2);
-    let mut surface = NativeSurfaceController::default();
-    let native_frame = surface.prepare_native_frame(&state, width, plan, Instant::now());
     let mut pin = ViewportPin::Flowing;
 
     let decision = sync_main_surface_area(
@@ -273,14 +237,14 @@ fn short_history_growth_stays_flowing() {
         plan,
         size,
         Some(10),
-        &native_frame,
+        /*guaranteed_append_rows*/ 0,
     )
     .expect("sync");
 
     assert_eq!(pin, ViewportPin::Flowing);
-    assert_eq!(decision.committed_viewport.top(), 2);
-    assert!(decision.committed_viewport.height > 4);
-    assert_eq!(terminal.viewport_area(), decision.committed_viewport);
+    assert_eq!(decision.viewport.top(), 2);
+    assert!(decision.viewport.height > 4);
+    assert_eq!(terminal.viewport_area(), decision.viewport);
 }
 
 #[test]

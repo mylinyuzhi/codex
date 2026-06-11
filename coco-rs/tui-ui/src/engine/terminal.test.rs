@@ -17,6 +17,8 @@ use std::rc::Rc;
 
 use crate::engine::history_insert::HistoryRows;
 use crate::engine::history_insert::render_history_rows;
+use crate::engine::seat::SeatInputs;
+use crate::engine::seat::ViewportPin;
 
 use super::*;
 
@@ -26,6 +28,124 @@ fn history_rows(lines: impl IntoIterator<Item = Line<'static>>) -> HistoryRows {
 
 fn history_rows_width(lines: impl IntoIterator<Item = Line<'static>>, width: u16) -> HistoryRows {
     render_history_rows(lines.into_iter().collect(), width)
+}
+
+/// Assert no non-blank visible row appears more than once in the screen
+/// buffer — the duplication signature of the old tail-cache reveal.
+fn assert_no_duplicate_rows(terminal: &SurfaceTerminal<TestBackend>, context: &str) {
+    let buffer = terminal.backend().buffer();
+    let dupes = duplicate_nonblank_rows(buffer);
+    assert!(
+        dupes.is_empty(),
+        "duplicated visible history rows {context}: {dupes:?}\nbuffer:\n{}",
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+}
+
+/// Non-blank visible rows that appear more than once in the screen buffer —
+/// the duplication signature.
+fn duplicate_nonblank_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+    let width = buffer.area.width as usize;
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut dupes = Vec::new();
+    for chunk in buffer.content.chunks(width.max(1)) {
+        let text = chunk
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let count = seen.entry(text.clone()).or_insert(0);
+        *count += 1;
+        if *count == 2 {
+            dupes.push(text);
+        }
+    }
+    dupes
+}
+
+#[test]
+fn prompt_shrink_defers_then_append_backed_commit_does_not_duplicate() {
+    // Regression pin for the permission-prompt duplication (tui-v2). The old
+    // shrink path jumped the viewport down to the screen bottom and
+    // back-filled the freed rows from the history tail cache — but the
+    // cache's most-recent rows were ALREADY visible just above the gap, so
+    // the fill painted them a second time (`h2 h3 h2 h3` on screen). Now the
+    // confirm frame (no append yet) DEFERS the shrink — the viewport keeps
+    // its seat, so the bottom-aligned composer never lifts off the screen
+    // bottom (the input-box bounce class) — and the next frames commit
+    // exactly the rows the history appends back, never repainting history.
+    let screen = Size::new(8, 10);
+    let backend = TestBackend::new(8, 10);
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.sync_screen_size(screen);
+    terminal.set_viewport_area(Rect::new(0, 8, 8, 2));
+    terminal
+        .insert_history_rows(&history_rows([
+            Line::from("h0"),
+            Line::from("h1"),
+            Line::from("h2"),
+            Line::from("h3"),
+        ]))
+        .expect("insert history");
+    // Permission prompt: the grow scrolls history up (codex grows the same
+    // way — `tui.rs::draw` scrolls the region above by the overflow).
+    terminal
+        .apply_viewport_area(Rect::new(0, 2, 8, 8), true)
+        .expect("grow for prompt");
+
+    // Confirm frame, nothing to append yet: the shrink defers wholesale.
+    let confirm = terminal.seat_viewport(SeatInputs {
+        screen,
+        desired_height: 2,
+        min_height: 2,
+        max_height: 8,
+        guaranteed_append_rows: 0,
+    });
+    assert_eq!(confirm.pin, ViewportPin::BottomPinned);
+    assert_eq!(confirm.viewport, Rect::new(0, 2, 8, 8));
+    assert_eq!(confirm.deferred_shrink_rows, 6);
+    terminal
+        .apply_viewport_area(confirm.viewport, true)
+        .expect("confirm frame seat");
+    assert!(terminal.seats_flush());
+    assert_no_duplicate_rows(&terminal, "after the deferred prompt shrink");
+
+    // Tool result arrives: the seat commits exactly the appended rows and
+    // the same-frame insert fills them — no history is ever repainted.
+    let result_frame = terminal.seat_viewport(SeatInputs {
+        screen,
+        desired_height: 2,
+        min_height: 2,
+        max_height: 8,
+        guaranteed_append_rows: 2,
+    });
+    assert_eq!(result_frame.pin, ViewportPin::BottomPinned);
+    assert_eq!(result_frame.viewport, Rect::new(0, 4, 8, 6));
+    assert_eq!(result_frame.deferred_shrink_rows, 4);
+    terminal
+        .apply_viewport_area(result_frame.viewport, true)
+        .expect("result frame seat");
+    terminal
+        .insert_history_rows(&history_rows([Line::from("h4"), Line::from("h5")]))
+        .expect("insert tool result");
+    assert_eq!(terminal.viewport_area(), Rect::new(0, 4, 8, 6));
+    assert!(terminal.seats_flush());
+    assert_no_duplicate_rows(&terminal, "after the append-backed commit");
+    terminal.backend().assert_buffer_lines([
+        "h2      ", "h3      ", "h4      ", "h5      ", "        ", "        ", "        ",
+        "        ", "        ", "        ",
+    ]);
 }
 
 #[test]
@@ -122,39 +242,10 @@ fn set_viewport_area_reclamps_visible_history_rows() {
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
     terminal.set_viewport_area(Rect::new(0, 5, 10, 3));
     terminal.note_history_rows_inserted(5);
-    assert!(terminal.history_backs_row(5));
 
     terminal.set_viewport_area(Rect::new(0, 2, 10, 3));
 
     assert_eq!(terminal.visible_history_rows(), 2);
-    assert!(terminal.history_backs_row(5));
-}
-
-#[test]
-fn history_backing_extent_survives_viewport_clamp_until_clear() {
-    let backend = TestBackend::new(10, 8);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 4, 10, 4));
-
-    terminal.note_history_rows_inserted(10);
-    assert_eq!(terminal.history_bottom_y(), 4);
-    assert!(terminal.history_backs_row(10));
-
-    terminal.set_viewport_area(Rect::new(0, 2, 10, 4));
-    assert_eq!(terminal.history_bottom_y(), 2);
-    assert!(terminal.history_backs_row(10));
-
-    terminal.clear_owned_scrollback().expect("clear");
-    assert!(!terminal.history_backs_row(1));
-}
-
-#[test]
-fn history_backing_row_zero_is_vacuously_backed() {
-    let backend = TestBackend::new(10, 8);
-    let terminal = SurfaceTerminal::new(backend).expect("terminal");
-
-    assert!(terminal.history_backs_row(0));
-    assert!(!terminal.history_backs_row(1));
 }
 
 #[test]
@@ -264,62 +355,6 @@ fn apply_viewport_area_closes_gap_without_scrolling_history() {
     terminal
         .backend()
         .assert_buffer_lines(["hist 1", "hist 2", "      ", "      ", "      ", "      "]);
-}
-
-#[test]
-fn fill_history_gap_rows_draws_cached_tail_without_moving_viewport() {
-    let backend = TestBackend::new(8, 8);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 2, 8, 2));
-    terminal.note_history_rows_inserted(2);
-    terminal.set_viewport_area(Rect::new(0, 6, 8, 2));
-
-    let filled = terminal
-        .fill_history_gap_rows(
-            history_rows([
-                Line::from("tail 1"),
-                Line::from("tail 2"),
-                Line::from("tail 3"),
-                Line::from("tail 4"),
-            ])
-            .tail_slice(4),
-        )
-        .expect("fill gap");
-
-    assert_eq!(filled, 4);
-    assert_eq!(terminal.viewport_area(), Rect::new(0, 6, 8, 2));
-    assert_eq!(terminal.history_bottom_y(), 6);
-    terminal.backend().assert_buffer_lines([
-        "        ", "        ", "tail 1  ", "tail 2  ", "tail 3  ", "tail 4  ", "        ",
-        "        ",
-    ]);
-}
-
-#[test]
-fn insert_history_rows_fills_gap_remaining_after_tail_reveal() {
-    let backend = TestBackend::new(8, 8);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 2, 8, 2));
-    terminal.note_history_rows_inserted(2);
-    terminal.set_viewport_area(Rect::new(0, 6, 8, 2));
-
-    terminal
-        .fill_history_gap_rows(
-            history_rows([Line::from("tail 1"), Line::from("tail 2")]).tail_slice(2),
-        )
-        .expect("fill reveal rows");
-    terminal
-        .insert_history_rows(&history_rows([
-            Line::from("append1"),
-            Line::from("append2"),
-        ]))
-        .expect("append remaining rows");
-
-    assert_eq!(terminal.history_bottom_y(), 6);
-    terminal.backend().assert_buffer_lines([
-        "        ", "        ", "tail 1  ", "tail 2  ", "append1 ", "append2 ", "        ",
-        "        ",
-    ]);
 }
 
 #[test]

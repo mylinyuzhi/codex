@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::FrameLayout;
 use crate::state::AppState;
+use crate::state::transcript_view::RenderedCell;
 use crate::surface::history_driver::HistoryReplayMode;
 use crate::surface::history_driver::PreparedFinalizedHistory;
 use crate::surface::history_driver::SurfaceHistoryDriver;
@@ -58,8 +59,7 @@ pub(crate) struct NativeSurfaceFramePlan {
     pub(crate) live_lines: Option<Vec<Line<'static>>>,
     pub(crate) finalized_history: PreparedFinalizedHistory,
     pub(crate) stream_append: Option<PreparedStreamAppend>,
-    pub(crate) stream_render_key_invalidated: bool,
-    pub(crate) history_tail_reveal_rows: u16,
+    pub(crate) stream_commit_invalidated: bool,
     pub(crate) prepare_stats: NativePrepareStats,
 }
 
@@ -73,6 +73,8 @@ pub(crate) struct NativePrepareStats {
 }
 
 impl NativeSurfaceFramePlan {
+    /// Rows this frame's history emission is guaranteed to append — the
+    /// backing for a bottom-seated shrink commit (`SeatInputs`).
     pub(crate) fn guaranteed_append_rows(&self) -> u16 {
         let stream_rows = self
             .stream_append
@@ -94,11 +96,11 @@ impl NativeSurfaceController {
     ) -> NativeSurfaceFramePlan {
         let prepare_started = Instant::now();
         let prepared_live = (width > 0).then(|| self.stream.prepare(state, width, plan));
-        let (live_lines, stream_append, stream_render_key_invalidated) = match prepared_live {
+        let (live_lines, stream_append, stream_commit_invalidated) = match prepared_live {
             Some(prepared) => (
                 Some(prepared.lines),
                 prepared.stream_append,
-                prepared.render_key_invalidated,
+                prepared.commit_invalidated,
             ),
             None => (None, None, false),
         };
@@ -111,14 +113,22 @@ impl NativeSurfaceController {
             .history_display
             .as_ref()
             .is_some_and(|previous| *previous != history_display);
-        let finalized_history = if stream_render_key_invalidated {
+        // The anchored finalize reads the SINGLE scrollback commit owned by the
+        // stream driver (tui-v2 §6.7-10) — there is no second copy on the
+        // history driver to keep in sync.
+        let finalized_history = if stream_commit_invalidated {
             PreparedFinalizedHistory::ReplayRequired
         } else if plan.native_history_enabled()
             && !history_display_changed
             && !self.history.replay_due(now)
         {
-            self.history
-                .prepare_append(session_header, cells, transcript_revision, options)
+            self.history.prepare_append(
+                session_header,
+                cells,
+                transcript_revision,
+                options,
+                self.stream.commit(),
+            )
         } else {
             PreparedFinalizedHistory::ReplayRequired
         };
@@ -126,23 +136,11 @@ impl NativeSurfaceController {
             live_lines,
             finalized_history,
             stream_append,
-            stream_render_key_invalidated,
-            history_tail_reveal_rows: self.history.tail_reveal_rows(width),
+            stream_commit_invalidated,
             prepare_stats: NativePrepareStats {
                 prepare: prepare_started.elapsed(),
             },
         }
-    }
-
-    pub(crate) fn fill_history_tail_gap<B>(
-        &self,
-        terminal: &mut SurfaceTerminal<B>,
-        rows: u16,
-    ) -> Result<u16, B::Error>
-    where
-        B: SurfaceBackend,
-    {
-        self.history.fill_tail_gap(terminal, rows)
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -264,7 +262,7 @@ impl NativeSurfaceController {
         let mut native_frame = native_frame;
         let mut precomputed_live = native_frame.live_lines.take();
         let mut prepared_stream_append = native_frame.stream_append.take();
-        let stream_render_key_invalidated = native_frame.stream_render_key_invalidated;
+        let stream_commit_invalidated = native_frame.stream_commit_invalidated;
         self.history.note_viewport(width, stream_active);
 
         let options = history_options(state, width);
@@ -285,17 +283,29 @@ impl NativeSurfaceController {
                 .replace(history_display)
                 .is_some_and(|previous| previous != history_display);
             let needs_reflow_replay = self.history.replay_due(now);
-            if stream_render_key_invalidated {
-                self.history.clear_pending_stream_prefix();
-            }
-            if history_display_changed || needs_reflow_replay || stream_render_key_invalidated {
+            if history_display_changed || needs_reflow_replay || stream_commit_invalidated {
                 let cause = if history_display_changed {
                     "history_display_changed"
-                } else if stream_render_key_invalidated {
-                    "stream_render_key_changed"
+                } else if stream_commit_invalidated {
+                    "stream_commit_invalidated"
                 } else {
                     "reflow_debounce_due"
                 };
+                let outcome = self.replay_history(
+                    terminal,
+                    state,
+                    plan,
+                    cells,
+                    transcript_revision,
+                    options,
+                    session_header(),
+                    HistoryReplayMode {
+                        stream_active,
+                        cause,
+                    },
+                    &mut precomputed_live,
+                    &mut prepared_stream_append,
+                )?;
                 tracing::debug!(
                     target: "tui::surface::replay",
                     cause,
@@ -307,22 +317,6 @@ impl NativeSurfaceController {
                     stream_active,
                     "history full replay",
                 );
-                let outcome = self.history.replay_all_capped(
-                    terminal,
-                    session_header(),
-                    cells,
-                    transcript_revision,
-                    options,
-                    HistoryReplayMode {
-                        stream_active,
-                        cause,
-                    },
-                )?;
-                if stream_active && !stream_render_key_invalidated {
-                    let prepared = self.stream.prepare(state, width, plan);
-                    precomputed_live = Some(prepared.lines);
-                    prepared_stream_append = prepared.stream_append;
-                }
                 outcome
             } else {
                 let outcome = self.history.commit_prepared_append(
@@ -331,24 +325,32 @@ impl NativeSurfaceController {
                     cells,
                 )?;
                 if matches!(outcome, HistoryEmissionOutcome::ReplayRequired) {
-                    let outcome = self.history.replay_all_capped(
+                    self.replay_history(
                         terminal,
-                        session_header(),
+                        state,
+                        plan,
                         cells,
                         transcript_revision,
                         options,
+                        session_header(),
                         HistoryReplayMode {
                             stream_active,
                             cause: "emitter_replay_required",
                         },
-                    )?;
-                    if stream_active {
-                        let prepared = self.stream.prepare(state, width, plan);
-                        precomputed_live = Some(prepared.lines);
-                        prepared_stream_append = prepared.stream_append;
-                    }
-                    outcome
+                        &mut precomputed_live,
+                        &mut prepared_stream_append,
+                    )?
                 } else {
+                    // The anchored finalize folded the single in-flight commit
+                    // into this append; consume it so the next frame does not
+                    // re-anchor against rows now part of the finalized message.
+                    if let PreparedFinalizedHistory::Append(append) =
+                        &native_frame.finalized_history
+                        && append.consumed_stream_commit
+                        && matches!(outcome, HistoryEmissionOutcome::Appended { .. })
+                    {
+                        self.stream.consume_commit();
+                    }
                     outcome
                 }
             }
@@ -366,7 +368,6 @@ impl NativeSurfaceController {
         if let Some(elapsed) = history_elapsed
             && crate::perf::should_log_stage(perf_config, frame_index, elapsed)
         {
-            let tail_cache = self.history.tail_cache_stats();
             tracing::debug!(
                 target: crate::perf::TARGET,
                 stage = "history",
@@ -386,9 +387,6 @@ impl NativeSurfaceController {
                 render_us = crate::perf::duration_us(native_frame.finalized_history.render_elapsed()),
                 draw_us = crate::perf::duration_us(finalized_history_stats.draw_elapsed),
                 flush_us = crate::perf::duration_us(finalized_history_stats.flush_elapsed),
-                tail_cache_rows = tail_cache.rows,
-                tail_cache_width = tail_cache.width,
-                tail_cache_bytes_estimate = tail_cache.bytes_estimate,
                 "tui frame history stage completed",
             );
         }
@@ -432,6 +430,46 @@ impl NativeSurfaceController {
             history,
             layout,
         })
+    }
+
+    /// Clear owned scrollback and re-render the finalized history, then rebuild
+    /// the live tail. The single stream commit is invalidated FIRST so the
+    /// post-replay live-tail prepare re-emits the full stable prefix — the
+    /// leading streamed rows the clear just wiped — instead of only the
+    /// increment (the loss half of the former split-watermark bug).
+    #[allow(clippy::too_many_arguments)]
+    fn replay_history<B>(
+        &mut self,
+        terminal: &mut SurfaceTerminal<B>,
+        state: &AppState,
+        plan: SurfaceFramePlan,
+        cells: &[RenderedCell],
+        transcript_revision: u64,
+        options: HistoryLineRenderOptions<'_>,
+        session_header: Vec<Line<'static>>,
+        mode: HistoryReplayMode,
+        precomputed_live: &mut Option<Vec<Line<'static>>>,
+        prepared_stream_append: &mut Option<PreparedStreamAppend>,
+    ) -> Result<HistoryEmissionOutcome, B::Error>
+    where
+        B: SurfaceBackend,
+    {
+        self.stream.invalidate_commit();
+        let width = terminal.viewport_area().width;
+        let outcome = self.history.replay_all_capped(
+            terminal,
+            session_header,
+            cells,
+            transcript_revision,
+            options,
+            mode,
+        )?;
+        if state.is_streaming() {
+            let prepared = self.stream.prepare(state, width, plan);
+            *precomputed_live = Some(prepared.lines);
+            *prepared_stream_append = prepared.stream_append;
+        }
+        Ok(outcome)
     }
 
     pub(crate) fn reset(&mut self) {

@@ -1,5 +1,18 @@
 # Viewport Seating Regression Fixes
 
+> **SUPERSEDED (2026-06-11) — C1's chosen remedy was itself the bug.** The
+> extent-forced re-pin + tail-cache reveal duplicated visible history on
+> every prompt close (`h2 h3 h2 h3`): the rows that scroll into native
+> scrollback during a prompt's grow are unreachable from below, so the only
+> rows the tail cache can paint into the freed band are the newest ones —
+> which are still visible directly above it whenever `visible_history_rows
+> > 0`. §3.1's complaint that the pre-C1 float "hides history" was
+> geometrically wrong: the viewport stayed flush on history; only the rows
+> *below* it were blank. The seat now follows codex's anchored-shrink +
+> walk-down semantics and the reveal machinery is deleted — see the
+> 2026-06-11 amendment in `tui-v2-design.md` §6.3. The de-stick principle
+> (A-class fixes) and the owned-top anchoring survive.
+
 Status: technical-decision record and fix plan for the owned-top viewport-seating
 refactor (`fix(tui): seat viewport flush after shrinking replays via owned top`,
 commit `4be8942ca9`). Scopes a confirmed HIGH regression plus supporting

@@ -50,69 +50,97 @@ pub(crate) fn confirmation_map_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
-/// Route `Approve` to the focused prompt. Returns `true` when a prompt was
-/// focused (and therefore handled + dismissed); `false` means no prompt is
-/// active and the caller should try the modal surfaces.
+/// Route `Approve` to the focused prompt. Returns `true` when the keystroke was
+/// consumed by a focused prompt; `false` means the caller should try the modal
+/// surfaces. A modal renders on top of any prompt and owns the keys, so an
+/// active modal yields `false` (the prompt is hidden beneath it). A prompt
+/// that doesn't treat Approve as a decision keeps itself open — the pending
+/// request must never be silently dropped.
 pub(crate) async fn route_approve(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) -> bool {
+    if state.ui.modal.is_some() {
+        return false;
+    }
     let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
         return false;
     };
-    match prompt {
+    let resolved = match prompt {
         PanePromptState::Permission(p) => {
             permission::approve_permission(p, command_tx).await;
+            true
         }
         PanePromptState::SandboxPermission(s) => {
             permission::respond_sandbox(s, /*approved*/ true, command_tx).await;
+            true
         }
         PanePromptState::McpServerApproval(m) => {
             permission::respond_mcp_server(m, /*approved*/ true, command_tx).await;
+            true
         }
         PanePromptState::PlanEntry(_) => {
             plan::approve_plan_entry(state, command_tx).await;
+            true
         }
         PanePromptState::PlanExit(p) => {
             let next_mode = p.next_mode;
             plan::approve_plan_exit(state, next_mode, command_tx).await;
+            true
         }
-        PanePromptState::Question(_) | PanePromptState::CostWarning(_) => {}
-        PanePromptState::PlanApproval(_) => {}
+        // Approve is not a decision key for these — consume it but keep the
+        // prompt open (Question/PlanApproval answer via Enter; CostWarning via
+        // its own keys). Dismissing here orphaned the pending request.
+        PanePromptState::Question(_)
+        | PanePromptState::CostWarning(_)
+        | PanePromptState::PlanApproval(_) => false,
+    };
+    if resolved {
+        state.ui.dismiss_prompt();
     }
-    state.ui.dismiss_prompt();
     true
 }
 
-/// Route `Deny` to the focused prompt. Returns `true` when a prompt was
-/// focused (handled + dismissed).
+/// Route `Deny` to the focused prompt. Returns `true` when the keystroke was
+/// consumed by a focused prompt; `false` falls through to modal surfaces. Like
+/// [`route_approve`], a prompt that doesn't treat Deny as a decision keeps
+/// itself open rather than dropping the request.
 pub(crate) async fn route_deny(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
 ) -> bool {
+    if state.ui.modal.is_some() {
+        return false;
+    }
     let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
         return false;
     };
-    match prompt {
+    let resolved = match prompt {
         PanePromptState::Permission(p) => {
             permission::deny_permission(p, command_tx).await;
+            true
         }
         PanePromptState::SandboxPermission(s) => {
             permission::respond_sandbox(s, /*approved*/ false, command_tx).await;
+            true
         }
         PanePromptState::McpServerApproval(m) => {
             permission::respond_mcp_server(m, /*approved*/ false, command_tx).await;
+            true
         }
         PanePromptState::PlanExit(p) => {
             let plan_content = p.plan_content.clone();
             plan::deny_plan_exit(plan_content, command_tx).await;
+            true
         }
         PanePromptState::Question(_)
         | PanePromptState::CostWarning(_)
         | PanePromptState::PlanEntry(_)
-        | PanePromptState::PlanApproval(_) => {}
+        | PanePromptState::PlanApproval(_) => false,
+    };
+    if resolved {
+        state.ui.dismiss_prompt();
     }
-    state.ui.dismiss_prompt();
     true
 }
 
@@ -129,28 +157,40 @@ pub(crate) async fn route_confirm(
             if question::confirm_question_prompt(state, q, command_tx).await {
                 return;
             }
+            state.ui.finish_taken_prompt();
         }
         PanePromptState::PlanApproval(p) => {
             plan::confirm_plan_approval(&p, command_tx).await;
+            state.ui.finish_taken_prompt();
         }
         PanePromptState::PlanExit(p) => {
             plan::confirm_plan_exit(state, p.next_mode, command_tx).await;
+            state.ui.finish_taken_prompt();
         }
         PanePromptState::Permission(ref p) => {
             permission::confirm_permission(p, command_tx).await;
+            state.ui.finish_taken_prompt();
         }
+        // Enter is not a decision key for these binary approvals — restore the
+        // prompt so the pending engine/teammate request is answered by an
+        // explicit y/n rather than silently dropped (which hung the request),
+        // and without auto-approving a sandbox/MCP escalation on Enter.
         PanePromptState::SandboxPermission(_)
         | PanePromptState::CostWarning(_)
         | PanePromptState::PlanEntry(_)
-        | PanePromptState::McpServerApproval(_) => {}
+        | PanePromptState::McpServerApproval(_) => {
+            state.ui.restore_prompt(prompt);
+        }
     }
-    state.ui.finish_taken_prompt();
 }
 
 /// Route selection movement to the focused prompt. Returns `true` when a
 /// prompt was focused (the keystroke is consumed even if the prompt has no
 /// cursor).
 pub(crate) fn route_nav(state: &mut AppState, delta: i32) -> bool {
+    if state.ui.modal.is_some() {
+        return false;
+    }
     let bypass_available = state.session.bypass_permissions_available;
     let Some(prompt) = state.ui.interaction.active_prompt.as_mut() else {
         return false;
@@ -175,6 +215,9 @@ pub(crate) fn route_nav(state: &mut AppState, delta: i32) -> bool {
 /// Route a filter keystroke to the focused prompt. Returns `true` when a
 /// prompt consumed it (only Question prompts route filter keys today).
 pub(crate) fn route_filter(state: &mut AppState, c: char) -> bool {
+    if state.ui.modal.is_some() {
+        return false;
+    }
     if !matches!(
         state.ui.interaction.active_prompt,
         Some(PanePromptState::Question(_))
@@ -188,6 +231,9 @@ pub(crate) fn route_filter(state: &mut AppState, c: char) -> bool {
 /// Route a filter backspace to the focused prompt. Returns `true` when a
 /// prompt consumed it.
 pub(crate) fn route_filter_backspace(state: &mut AppState) -> bool {
+    if state.ui.modal.is_some() {
+        return false;
+    }
     if !matches!(
         state.ui.interaction.active_prompt,
         Some(PanePromptState::Question(_))

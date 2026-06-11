@@ -49,6 +49,12 @@ pub enum KeybindingAction {
     /// coco-rs extension (no TS counterpart): open the settings overlay.
     /// Default `ctrl+,` (the conventional settings shortcut).
     AppSettings,
+    /// coco-rs extension (no TS counterpart): open the session browser /
+    /// resume picker. Default `ctrl+s` (folded from the old TUI cascade).
+    AppSessionBrowser,
+    /// coco-rs extension (no TS counterpart): open the plan editor for the
+    /// current plan. Default `ctrl+g` (folded from the old TUI cascade).
+    AppPlanEditor,
 
     // ── History navigation — schema.ts:77-79 ──────────────────────────
     HistorySearch,
@@ -232,6 +238,8 @@ impl KeybindingAction {
             Self::AppHelp => Cow::Borrowed("app:help"),
             Self::AppCommandPalette => Cow::Borrowed("app:commandPalette"),
             Self::AppSettings => Cow::Borrowed("app:settings"),
+            Self::AppSessionBrowser => Cow::Borrowed("app:sessionBrowser"),
+            Self::AppPlanEditor => Cow::Borrowed("app:planEditor"),
 
             Self::HistorySearch => Cow::Borrowed("history:search"),
             Self::HistoryPrevious => Cow::Borrowed("history:previous"),
@@ -442,6 +450,8 @@ impl FromStr for KeybindingAction {
             "app:help" => Self::AppHelp,
             "app:commandPalette" => Self::AppCommandPalette,
             "app:settings" => Self::AppSettings,
+            "app:sessionBrowser" => Self::AppSessionBrowser,
+            "app:planEditor" => Self::AppPlanEditor,
 
             "history:search" => Self::HistorySearch,
             "history:previous" => Self::HistoryPrevious,

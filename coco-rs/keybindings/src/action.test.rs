@@ -33,6 +33,16 @@ fn parse_known_actions_round_trip() {
         // coco-rs-only team-roster open action (A7a) — must round-trip so it
         // loads from `~/.coco/keybindings.json`.
         "app:toggleTeamRoster",
+        // coco-rs extensions folded from the old TUI cascade (tui-v2) — each
+        // must round-trip so a `~/.coco/keybindings.json` override loads.
+        "app:forceQuit",
+        "app:help",
+        "app:commandPalette",
+        "app:settings",
+        "app:sessionBrowser",
+        "app:planEditor",
+        "chat:toggleSystemReminders",
+        "chat:togglePlanMode",
     ];
     for name in names {
         let action: KeybindingAction = name.parse().expect(name);

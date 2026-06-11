@@ -92,6 +92,20 @@ rasterized per-row reconciliation; soundness is pinned by
 `src/surface/` keeps the per-frame drivers and terminal I/O. Do not reintroduce
 per-row fingerprints on the stream path or a second streaming-only renderer.
 
+**Single scrollback-commit owner (§6.7-10).** The fact "these stream rows are
+already in native scrollback" lives in exactly ONE place —
+`ScrollbackStreamCommit`, owned by `SurfaceStreamDriver` (`surface/stream.rs`).
+The live-tail increment and the anchored finalize both read it
+(`SurfaceStreamDriver::commit`); the finalize never keeps its own copy. It is
+advanced only by a committed insert (`mark_stream_append_committed`) and cleared
+only when those rows actually leave scrollback — `invalidate_commit` (replay /
+reset clears scrollback) or `consume_commit` (the finalize folded them into the
+message). A transient `streaming == None` frame must NOT clear it (that benign
+clear re-committed already-present rows → duplication), and a replay must
+invalidate it BEFORE re-preparing the live tail (else the wiped leading rows are
+never re-emitted → loss). Do NOT reintroduce a second copy of this state on the
+history driver.
+
 ## Transcript Invariants
 
 The unified transcript refactor

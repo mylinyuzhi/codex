@@ -1124,3 +1124,91 @@ async fn confirm_on_free_text_with_value_submits() {
         "free-text answer should not include the prior option"
     );
 }
+
+#[tokio::test]
+async fn enter_on_sandbox_prompt_restores_it_without_dropping_the_request() {
+    // RC-3: Enter is not a decision key for a binary sandbox approval. The old
+    // code dismissed the prompt on Enter, orphaning the engine request (it hung
+    // until interrupt). Enter must keep the prompt answerable and must NOT
+    // auto-approve the escalation.
+    use crate::state::SandboxPermissionPromptState;
+    let mut s = AppState::new();
+    s.ui.push_prompt(PanePromptState::SandboxPermission(
+        SandboxPermissionPromptState {
+            request_id: "sandbox-1".into(),
+            description: "Sandbox access requested".into(),
+        },
+    ));
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    super::confirm(&mut s, &tx).await;
+    assert!(
+        matches!(
+            s.ui.interaction.active_prompt,
+            Some(PanePromptState::SandboxPermission(_))
+        ),
+        "Enter keeps the sandbox prompt open (answerable), not dropped",
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "Enter must not auto-approve sandbox"
+    );
+}
+
+#[tokio::test]
+async fn approve_falls_through_to_modal_when_a_modal_is_open() {
+    // RC-3 (M4): a modal renders on top of any bottom-pane prompt and owns the
+    // keys. With a prompt hidden beneath an open modal, Approve must NOT resolve
+    // the hidden prompt — it falls through so the modal handles the key.
+    use crate::state::PermissionDetail;
+    use crate::state::PermissionPromptState;
+    let mut s = AppState::new();
+    s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
+        request_id: "req-1".into(),
+        tool_name: "Bash".into(),
+        description: "Run".into(),
+        detail: PermissionDetail::Generic {
+            input_preview: "ls".into(),
+        },
+        risk_level: None,
+        show_always_allow: true,
+        classifier_checking: false,
+        classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
+        original_input: None,
+        permission_suggestions: vec![],
+        worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
+    }));
+    s.ui.show_modal(ModalState::Help);
+    let (tx, _rx) = mpsc::channel::<UserCommand>(8);
+    let routed = crate::bottom_pane::route_approve(&mut s, &tx).await;
+    assert!(
+        !routed,
+        "an open modal must take precedence over the hidden prompt",
+    );
+    assert!(
+        s.ui.interaction.active_prompt.is_some(),
+        "the hidden prompt is left untouched for the modal to coexist with",
+    );
+}
+
+#[test]
+fn space_types_into_focused_other_input() {
+    // RC-3 (M5): Space must be typeable into the focused "Other" free-text field
+    // (multi-word answers). The old order checked Space → toggle BEFORE the
+    // free-text path, so a space never reached the focused input.
+    let item = question_item(vec![question_option("A")], false);
+    let mut s = question_state(item);
+    set_target(&mut s, crate::state::QuestionFocusTarget::OtherInput);
+    super::filter(&mut s, ' ');
+    let Some(PanePromptState::Question(q)) = s.ui.interaction.active_prompt.as_ref() else {
+        panic!("expected a question prompt");
+    };
+    assert_eq!(
+        q.questions[0].other_input.value, " ",
+        "space lands in the focused Other input",
+    );
+}

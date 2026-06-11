@@ -17,7 +17,7 @@ use ratatui::text::Span;
 
 use crate::widgets::chat::assistant_stream_lead_marker;
 use crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions;
-use crate::widgets::chat::render_assistant::render_committed_assistant_markdown;
+use crate::widgets::chat::render_assistant::render_stream_stable_assistant_markdown;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StreamRenderKey(u64);
@@ -42,37 +42,31 @@ impl StreamRenderKey {
     }
 }
 
-/// Watermark describing the stream rows already inserted into native
-/// scrollback: how much source and how many rendered lines were committed,
-/// plus the render key they were produced under. It lives with the stream
-/// renderer so the live-tail driver (`surface/stream.rs`) and the anchored
-/// finalize (`transcript/emission.rs`) share one definition.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StreamHistoryWatermark {
-    pub(crate) source_len: usize,
-    pub(crate) line_len: usize,
-    pub(crate) render_key: StreamRenderKey,
-}
-
-/// Source-anchored record of the streamed rows already inserted into native
-/// scrollback. The finalize anchors the canonical assistant text against
-/// `source_prefix` (`text.starts_with(..)` plus the render-key gate) and
-/// appends only the committed render's suffix past `line_prefix_len`.
+/// The single record of in-flight assistant rows already inserted into native
+/// scrollback (tui-v2 §6.7-10). Both the live-tail increment (`surface::stream`)
+/// and the anchored finalize (`transcript::emission`) compute against THIS one
+/// value — there is no second copy — so §6.7-5 ("rows enter scrollback exactly
+/// once") holds by construction rather than by agreement between two structs.
+///
+/// Owned by `SurfaceStreamDriver`; the finalize reads it through
+/// `SurfaceStreamDriver::commit`. It is advanced only by a successful stream
+/// insert and cleared only when those rows actually leave scrollback (replay /
+/// reset) or the finalize consumes them — never by a transient `streaming ==
+/// None` frame (that benign clear is what re-committed already-present rows and
+/// duplicated them).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PendingStreamPrefix {
+pub(crate) struct ScrollbackStreamCommit {
+    /// Source bytes whose rendered rows are already in scrollback. The finalize
+    /// anchors the canonical assistant text with `text.starts_with(source_prefix)`;
+    /// the live tail re-validates the same way — content identity, not length,
+    /// so a coalesced turn boundary cannot re-attribute the prefix to a new turn.
     pub(crate) source_prefix: String,
-    pub(crate) line_prefix_len: usize,
+    /// Number of rendered rows already in scrollback — the suffix start the
+    /// finalize appends from and the increment start the live tail emits from.
+    pub(crate) line_len: usize,
+    /// Render key those rows were produced under; a mismatch means the rows are
+    /// stale (theme / width / syntax changed) and the surface must replay.
     pub(crate) render_key: StreamRenderKey,
-}
-
-impl PendingStreamPrefix {
-    pub(crate) fn watermark(&self) -> StreamHistoryWatermark {
-        StreamHistoryWatermark {
-            source_len: self.source_prefix.len(),
-            line_len: self.line_prefix_len,
-            render_key: self.render_key,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -94,7 +88,6 @@ pub(crate) struct StreamRenderProjection<'a> {
     pub(crate) tail_lines: &'a [Line<'static>],
     pub(crate) stable_source_len: usize,
     pub(crate) render_key: StreamRenderKey,
-    pub(crate) render_key_invalidated: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -120,7 +113,6 @@ impl StreamRenderController {
                 tail_lines: &[],
                 stable_source_len: 0,
                 render_key: StreamRenderKey::default(),
-                render_key_invalidated: false,
             };
         }
 
@@ -154,7 +146,6 @@ impl StreamRenderController {
             tail_lines: &self.tail_lines,
             stable_source_len: self.stable_prefix_end,
             render_key,
-            render_key_invalidated: render_reset,
         }
     }
 
@@ -188,7 +179,10 @@ fn render_committed_stable_region(
         return Vec::new();
     }
     let started = Instant::now();
-    let lines = render_committed_assistant_markdown(
+    // Memo-bypassed (the controller caches `stable_lines`); row-identical to the
+    // committed finalize render, which is what makes the mid-stream→finalize
+    // handoff sound (tui-v2 §6.2).
+    let lines = render_stream_stable_assistant_markdown(
         source,
         CommittedAssistantMarkdownOptions {
             styles: input.styles,

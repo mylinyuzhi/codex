@@ -11,8 +11,7 @@ use crate::state::AppState;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::viewport::build_live_tail_lines;
 use crate::terminal::STREAMING_LIVE_TAIL_CAP;
-use crate::transcript::stream::PendingStreamPrefix;
-use crate::transcript::stream::StreamHistoryWatermark;
+use crate::transcript::stream::ScrollbackStreamCommit;
 use crate::transcript::stream::StreamRenderController;
 use crate::transcript::stream::StreamRenderInput;
 use crate::transcript::stream::streaming_cursor_line;
@@ -22,26 +21,29 @@ use coco_tui_ui::engine::history_insert::render_history_rows;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SurfaceStreamDriver {
     controller: StreamRenderController,
-    /// Watermark of the stream rows already inserted into native scrollback
-    /// (`None` until the first mid-stream stable commit). The anchored finalize
-    /// (`transcript::emission::finalize_after_stream_prefix`) re-proves
-    /// agreement at the SOURCE level, so no per-row fingerprint is retained —
-    /// soundness rests on the markdown prefix-stability property pinned in
-    /// `transcript::stream` tests.
-    committed: Option<StreamHistoryWatermark>,
+    /// The single record of stream rows already inserted into native scrollback
+    /// (`None` until the first mid-stream stable commit). This is the SOLE owner
+    /// of that fact — the finalize reads it through [`Self::commit`]. The
+    /// anchored finalize re-proves agreement at the SOURCE level, so no per-row
+    /// fingerprint is retained — soundness rests on the markdown
+    /// prefix-stability property pinned in `transcript::stream` tests.
+    committed: Option<ScrollbackStreamCommit>,
 }
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PreparedLiveTail {
     pub(crate) lines: Vec<Line<'static>>,
     pub(crate) stream_append: Option<PreparedStreamAppend>,
-    pub(crate) render_key_invalidated: bool,
+    /// The rows already in scrollback are stale (render key changed) or belong
+    /// to a different document (source replaced) — the surface must replay the
+    /// finalized history before this frame's stream rows make sense.
+    pub(crate) commit_invalidated: bool,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedStreamAppend {
     pub(crate) rows: HistoryRows,
-    pub(crate) prefix: PendingStreamPrefix,
+    pub(crate) commit: ScrollbackStreamCommit,
 }
 
 impl PreparedStreamAppend {
@@ -59,17 +61,24 @@ impl SurfaceStreamDriver {
     ) -> PreparedLiveTail {
         let styles = UiStyles::new(&state.ui.theme);
         if width == 0 || plan.finalized_history_in_viewport() {
-            self.committed = None;
+            // View-mode / zero-width frame: no rows enter native scrollback, so
+            // the commit is untouched (clearing it here is what let a later
+            // frame re-emit the rows already in scrollback — duplication).
             return PreparedLiveTail {
                 lines: build_live_tail_lines(state, styles, width, plan),
                 stream_append: None,
-                render_key_invalidated: false,
+                commit_invalidated: false,
             };
         }
 
         let Some(streaming) = state.ui.streaming.as_ref() else {
+            // Transient gap: event coalescing can fold a turn's last delta and
+            // the next turn's first into one draw, so a `streaming == None`
+            // frame is NOT a reliable end-of-stream signal. Reset only the
+            // render cache; the scrollback commit persists until the finalize
+            // consumes it or a genuine identity change replays it. Clearing it
+            // here re-committed already-present rows (duplication).
             self.controller.clear();
-            self.committed = None;
             return PreparedLiveTail::default();
         };
 
@@ -82,29 +91,23 @@ impl SurfaceStreamDriver {
         };
         let projection = self.controller.render_projection(render_key_input);
         let stable_line_len = projection.stable_lines.len();
-        // A controller reset (`render_key_invalidated`: the source was
-        // replaced or the render key changed) means a surviving watermark
-        // describes rows of a DIFFERENT document. Event coalescing can hide a
-        // turn boundary from this driver — `MessageAppended` and the next
-        // turn's first deltas can fold into one draw, so this prepare never
-        // observes the `streaming == None` gap that normally clears the
-        // watermark. A length-only check could then falsely re-validate the
-        // previous turn's watermark against the new turn's stable region and
-        // silently skip the new turn's leading rows; identity, not size, is
-        // the gate.
-        let emitted_valid = !projection.render_key_invalidated
-            && self.committed.is_some_and(|wm| {
-                wm.render_key == projection.render_key
-                    && wm.source_len <= projection.stable_source_len
-                    && wm.line_len <= stable_line_len
-                    && visible.get(..wm.source_len).is_some()
-            });
-        let emitted_rows_invalidated = self.committed.is_some() && !emitted_valid;
-        let (emitted_line_len, emitted_source_len) = if emitted_valid {
-            self.committed
-                .map_or((0, 0), |wm| (wm.line_len, wm.source_len))
-        } else {
-            (0, 0)
+        // CONTENT identity, not size, is the gate — and it does NOT depend on
+        // the controller reset flag. A surviving commit is still valid iff its
+        // exact source prefix is a prefix of the current stream AND its rows
+        // fit within the current stable region under the same render key. This
+        // self-heals a coalesced turn boundary (the new turn's source does not
+        // start with the old commit's prefix → invalid) without falsely
+        // invalidating a same-document resume after a transient `None` gap.
+        let emitted_valid = self.committed.as_ref().is_some_and(|c| {
+            c.render_key == projection.render_key
+                && c.source_prefix.len() <= projection.stable_source_len
+                && c.line_len <= stable_line_len
+                && visible.starts_with(&c.source_prefix)
+        });
+        let commit_invalidated = self.committed.is_some() && !emitted_valid;
+        let (emitted_line_len, emitted_source_len) = match self.committed.as_ref() {
+            Some(c) if emitted_valid => (c.line_len, c.source_prefix.len()),
+            _ => (0, 0),
         };
 
         let mut stream_append = None;
@@ -126,9 +129,9 @@ impl SurfaceStreamDriver {
                 );
                 stream_append = Some(PreparedStreamAppend {
                     rows,
-                    prefix: PendingStreamPrefix {
+                    commit: ScrollbackStreamCommit {
                         source_prefix: visible[..projection.stable_source_len].to_string(),
-                        line_prefix_len: stable_line_len,
+                        line_len: stable_line_len,
                         render_key: projection.render_key,
                     },
                 });
@@ -185,23 +188,47 @@ impl SurfaceStreamDriver {
             lines.drain(0..lines.len() - cap);
         }
 
-        if emitted_rows_invalidated {
+        // The stale commit describes rows in scrollback that no longer match
+        // this frame; drop it so the surface replays and the live tail rebuilds
+        // from a clean slate. (Replay also clears scrollback via the controller,
+        // keeping the single commit and the actual scrollback in agreement.)
+        if commit_invalidated {
             self.committed = None;
         }
         PreparedLiveTail {
             lines,
             stream_append,
-            render_key_invalidated: emitted_rows_invalidated,
+            commit_invalidated,
         }
     }
 
+    /// The single record of stream rows already in native scrollback, read by
+    /// the anchored finalize (`transcript::emission`).
+    pub(crate) fn commit(&self) -> Option<&ScrollbackStreamCommit> {
+        self.committed.as_ref()
+    }
+
+    /// Advance the commit after this frame's stream rows were inserted.
     pub(crate) fn mark_stream_append_committed(&mut self, append: &PreparedStreamAppend) {
-        self.committed = Some(append.prefix.watermark());
+        self.committed = Some(append.commit.clone());
+    }
+
+    /// The finalize consumed the in-flight rows into the committed message —
+    /// the commit no longer describes pending in-flight scrollback.
+    pub(crate) fn consume_commit(&mut self) {
+        self.committed = None;
+    }
+
+    /// Scrollback was cleared (replay/reset) — the commit no longer describes
+    /// anything in scrollback.
+    pub(crate) fn invalidate_commit(&mut self) {
+        self.committed = None;
     }
 
     pub(crate) fn reset(&mut self) {
         self.controller.clear();
         self.committed = None;
+        crate::widgets::chat::render_assistant::clear_in_flight_markdown_memo();
     }
 }
 

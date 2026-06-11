@@ -25,7 +25,6 @@ use unicode_width::UnicodeWidthStr;
 
 use super::CursorClaim;
 use super::history_insert::HistoryRows;
-use super::history_insert::HistoryRowsSlice;
 
 pub trait SurfaceBackend: Backend {
     fn clear_scrollback_and_screen(&mut self) -> Result<(), Self::Error> {
@@ -175,7 +174,6 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     last_known_screen_size: Size,
     visible_history_rows: u16,
     history_bottom_y: u16,
-    finalized_history_extent_rows: u16,
     invalidated: bool,
     perf_stats_enabled: bool,
     history_row_scratch: String,
@@ -250,7 +248,6 @@ where
             last_known_screen_size: screen_size,
             visible_history_rows: 0,
             history_bottom_y: viewport_area.top(),
-            finalized_history_extent_rows: 0,
             invalidated: true,
             perf_stats_enabled: false,
             history_row_scratch: String::new(),
@@ -277,15 +274,6 @@ where
     /// Row immediately after the finalized history owned by this surface.
     pub fn history_bottom_y(&self) -> u16 {
         self.history_bottom_y
-    }
-
-    /// Whether projected finalized history reaches `row`, including rows that
-    /// have overflowed into native scrollback.
-    ///
-    /// Row 0 is vacuously backed: the history extent starts at the top of the
-    /// screen, so asking whether it reaches the first row is always true.
-    pub fn history_backs_row(&self, row: u16) -> bool {
-        self.finalized_history_extent_rows >= row
     }
 
     /// Last backend screen size observed by the surface terminal.
@@ -411,60 +399,6 @@ where
         Ok(())
     }
 
-    pub fn fill_history_gap_rows(
-        &mut self,
-        rows_slice: HistoryRowsSlice<'_>,
-    ) -> Result<u16, B::Error> {
-        let gap = self
-            .viewport_area
-            .top()
-            .saturating_sub(self.history_bottom_y);
-        let row_count = rows_slice.height().min(gap);
-        if row_count == 0 || rows_slice.is_empty() || self.viewport_area.width == 0 {
-            return Ok(0);
-        }
-        if rows_slice.width() != self.viewport_area.width {
-            return Ok(0);
-        }
-        let rows = row_count;
-        if rows == 0 {
-            return Ok(0);
-        }
-
-        let source_start = rows_slice
-            .source_start_row()
-            .saturating_add(rows_slice.height().saturating_sub(rows));
-        let target_top = self.history_bottom_y;
-        let was_invalidated = self.invalidated;
-        let draw = self.draw_history_rows(rows_slice.buffer(), source_start, rows, target_top)?;
-        let flush_start = self.perf_stats_enabled.then(Instant::now);
-        self.backend.flush()?;
-        let flush_elapsed = flush_start.map(|start| start.elapsed()).unwrap_or_default();
-        self.history_bottom_y = self.history_bottom_y.saturating_add(rows);
-        self.visible_history_rows = self
-            .visible_history_rows
-            .saturating_add(rows)
-            .min(self.history_bottom_y);
-        self.invalidate_viewport();
-        self.last_history_insert_stats = HistoryInsertStats {
-            wrapped_rows: rows,
-            buffer_updates: draw.buffer_updates,
-            bytes_written: draw.bytes_written,
-            invalidated: was_invalidated,
-            build_elapsed: Duration::default(),
-            draw_elapsed: draw.elapsed,
-            flush_elapsed,
-        };
-        tracing::debug!(
-            target: "tui::surface",
-            rows,
-            history_bottom_y = self.history_bottom_y,
-            viewport_top = self.viewport_area.top(),
-            "fill history gap rows"
-        );
-        Ok(rows)
-    }
-
     /// Mark the next draw as a full repaint.
     pub fn invalidate_viewport(&mut self) {
         self.invalidated = true;
@@ -473,8 +407,6 @@ where
 
     /// Record history rows inserted above the retained viewport.
     pub fn note_history_rows_inserted(&mut self, rows: u16) {
-        self.finalized_history_extent_rows =
-            self.finalized_history_extent_rows.saturating_add(rows);
         self.history_bottom_y = self
             .history_bottom_y
             .saturating_add(rows)
@@ -492,7 +424,6 @@ where
         self.backend.clear_scrollback_and_screen()?;
         self.visible_history_rows = 0;
         self.history_bottom_y = 0;
-        self.finalized_history_extent_rows = 0;
         self.viewport_area.y = 0;
         self.buffers[0].resize(self.viewport_area);
         self.buffers[1].resize(self.viewport_area);

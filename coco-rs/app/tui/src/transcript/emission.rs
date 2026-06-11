@@ -20,7 +20,7 @@ use crate::state::transcript_view::RenderedCell;
 use crate::transcript::cells::engine_message_starts;
 use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::render_finalized_history_lines;
-use crate::transcript::stream::PendingStreamPrefix;
+use crate::transcript::stream::ScrollbackStreamCommit;
 use crate::transcript::stream::StreamRenderKey;
 use crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions;
 use crate::widgets::chat::render_assistant::render_committed_assistant_markdown;
@@ -220,7 +220,7 @@ pub(crate) fn finalize_after_stream_prefix(
     start: usize,
     end: usize,
     options: HistoryLineRenderOptions<'_>,
-    pending: &PendingStreamPrefix,
+    commit: &ScrollbackStreamCommit,
 ) -> Option<Vec<Line<'static>>> {
     // Mirror `push_text_first_assistant_group`: a message's leading
     // thinking cells render AFTER its text under the native presentation,
@@ -243,7 +243,7 @@ pub(crate) fn finalize_after_stream_prefix(
     let Some(text_cell) = cells.get(text_idx) else {
         tracing::debug!(
             target: "tui::surface::replay",
-            cause = "pending_stream_prefix_next_cell_not_assistant_text",
+            cause = "stream_commit_next_cell_not_assistant_text",
             start,
             text_idx,
             "history full replay required",
@@ -253,7 +253,7 @@ pub(crate) fn finalize_after_stream_prefix(
     let CellKind::AssistantText { text, .. } = &text_cell.kind else {
         tracing::debug!(
             target: "tui::surface::replay",
-            cause = "pending_stream_prefix_next_cell_not_assistant_text",
+            cause = "stream_commit_next_cell_not_assistant_text",
             start,
             text_idx,
             "history full replay required",
@@ -266,19 +266,19 @@ pub(crate) fn finalize_after_stream_prefix(
     if text_idx > start && text_cell.message_uuid != group_uuid {
         tracing::debug!(
             target: "tui::surface::replay",
-            cause = "pending_stream_prefix_thinking_without_same_message_text",
+            cause = "stream_commit_thinking_without_same_message_text",
             start,
             text_idx,
             "history full replay required",
         );
         return None;
     }
-    if !text.starts_with(&pending.source_prefix) {
+    if !text.starts_with(&commit.source_prefix) {
         tracing::debug!(
             target: "tui::surface::replay",
-            cause = "pending_stream_prefix_source_mismatch",
+            cause = "stream_commit_source_mismatch",
             start,
-            pending_source_prefix_len = pending.source_prefix.len(),
+            commit_source_prefix_len = commit.source_prefix.len(),
             text_len = text.len(),
             "history full replay required",
         );
@@ -286,10 +286,10 @@ pub(crate) fn finalize_after_stream_prefix(
     }
     let render_key =
         StreamRenderKey::committed(options.styles, options.width, options.syntax_highlighting);
-    if render_key != pending.render_key {
+    if render_key != commit.render_key {
         tracing::debug!(
             target: "tui::surface::replay",
-            cause = "pending_stream_prefix_render_key_mismatch",
+            cause = "stream_commit_render_key_mismatch",
             "history full replay required",
         );
         return None;
@@ -307,18 +307,18 @@ pub(crate) fn finalize_after_stream_prefix(
             syntax_highlighting: options.syntax_highlighting,
         },
     );
-    if pending.line_prefix_len > assistant_lines.len() {
+    if commit.line_len > assistant_lines.len() {
         tracing::debug!(
             target: "tui::surface::replay",
-            cause = "pending_stream_prefix_line_len_exceeds_final",
-            pending_line_prefix_len = pending.line_prefix_len,
+            cause = "stream_commit_line_len_exceeds_final",
+            commit_line_len = commit.line_len,
             final_lines = assistant_lines.len(),
             "history full replay required",
         );
         return None;
     }
 
-    let mut lines = assistant_lines[pending.line_prefix_len..].to_vec();
+    let mut lines = assistant_lines[commit.line_len..].to_vec();
     lines.push(Line::default());
     // Presentation order: the message's leading thinking cells render
     // after its text, then everything past the text cell (tool calls,

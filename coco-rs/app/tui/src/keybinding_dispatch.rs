@@ -73,6 +73,8 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         AppHelp => TuiCommand::ShowHelp,
         AppCommandPalette => TuiCommand::ShowCommandPalette,
         AppSettings => TuiCommand::ShowSettings,
+        AppSessionBrowser => TuiCommand::ShowSessionBrowser,
+        AppPlanEditor => TuiCommand::OpenPlanEditor,
         // KAIROS (`app:toggleBrief`) / TERMINAL_PANEL (`app:toggleTerminal`)
         // are TS feature-gated. coco-rs doesn't ship those features and
         // doesn't emit them in defaults; if a user explicitly binds the

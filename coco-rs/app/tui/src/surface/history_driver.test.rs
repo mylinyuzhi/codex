@@ -61,29 +61,6 @@ fn driver_emit_append_only_uses_finalized_transcript_renderer() {
 }
 
 #[test]
-fn driver_tail_cache_tracks_current_width_only() {
-    let theme = Theme::default();
-    let backend = TestBackend::new(16, 8);
-    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
-    terminal.set_viewport_area(Rect::new(0, 6, 16, 2));
-    let cells = vec![test_helpers::assistant_text_cell("hello")];
-    let mut driver = SurfaceHistoryDriver::default();
-
-    let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 1, options(&theme, 16))
-        .expect("emit");
-
-    let HistoryEmissionOutcome::Appended { rows, .. } = outcome else {
-        panic!("expected append outcome: {outcome:?}");
-    };
-    assert_eq!(rows, driver.tail_reveal_rows(16));
-    assert_eq!(driver.tail_reveal_rows(12), 0);
-    driver.note_viewport(/*width*/ 12, /*stream_active*/ false);
-    assert_eq!(driver.tail_reveal_rows(16), 0);
-    assert_eq!(driver.tail_reveal_rows(12), 0);
-}
-
-#[test]
 fn driver_finalizes_verified_stream_prefix_by_appending_suffix_only() {
     let theme = Theme::default();
     let width = 40;
@@ -103,21 +80,29 @@ fn driver_finalizes_verified_stream_prefix_by_appending_suffix_only() {
 
     let cells = vec![test_helpers::assistant_text_cell("alpha\n\nbeta")];
     let final_outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .emit_after_stream_commit(
+            &mut terminal,
+            header(),
+            &cells,
+            2,
+            options(&theme, width),
+            Some(&stream_append.commit),
+        )
         .expect("finalize assistant");
 
     assert!(
         matches!(final_outcome, HistoryEmissionOutcome::Appended { .. }),
         "{final_outcome:?}"
     );
-    assert!(driver.pending_stream_prefix.is_none());
+    // The single commit lives on the stream driver; the row-level invariant is
+    // that neither leading nor trailing rows duplicate after the suffix append.
     let text = plain_terminal_text(&terminal);
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
 }
 
 #[test]
-fn driver_requires_replay_when_pending_stream_prefix_source_mismatches_final_cell() {
+fn driver_requires_replay_when_stream_commit_source_mismatches_final_cell() {
     let theme = Theme::default();
     let width = 40;
     let backend = TestBackend::new(width, 14);
@@ -131,11 +116,17 @@ fn driver_requires_replay_when_pending_stream_prefix_source_mismatches_final_cel
 
     let cells = vec![test_helpers::assistant_text_cell("omega\n\nbeta")];
     let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .emit_after_stream_commit(
+            &mut terminal,
+            header(),
+            &cells,
+            2,
+            options(&theme, width),
+            Some(&stream_append.commit),
+        )
         .expect("finalize assistant");
 
     assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
-    assert!(driver.pending_stream_prefix.is_some());
     let text = plain_terminal_text(&terminal);
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("omega").count(), 0, "{text}");
@@ -156,14 +147,20 @@ fn driver_finalizes_stream_prefix_for_thinking_text_turn_without_replay() {
 
     let cells = assistant_reasoning_text_cells("pondering deeply", "alpha\n\nbeta");
     let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .emit_after_stream_commit(
+            &mut terminal,
+            header(),
+            &cells,
+            2,
+            options(&theme, width),
+            Some(&stream_append.commit),
+        )
         .expect("finalize assistant");
 
     assert!(
         matches!(outcome, HistoryEmissionOutcome::Appended { .. }),
         "thinking+text turn must append the verified suffix, not replay: {outcome:?}"
     );
-    assert!(driver.pending_stream_prefix.is_none());
     let text = plain_terminal_text(&terminal);
     assert_eq!(text.matches("alpha").count(), 1, "{text}");
     assert_eq!(text.matches("beta").count(), 1, "{text}");
@@ -191,12 +188,13 @@ fn driver_stream_suffix_append_matches_full_replay_for_thinking_turn() {
         .commit_stream_append(&mut incremental, &stream_append)
         .expect("commit stream append");
     let outcome = driver
-        .emit_append_only(
+        .emit_after_stream_commit(
             &mut incremental,
             header(),
             &cells,
             2,
             options(&theme, width),
+            Some(&stream_append.commit),
         )
         .expect("finalize assistant");
     assert!(
@@ -256,36 +254,16 @@ fn driver_requires_replay_when_thinking_run_lacks_same_message_text() {
     cells.push(test_helpers::assistant_text_cell("alpha\n\nbeta"));
 
     let outcome = driver
-        .emit_append_only(&mut terminal, header(), &cells, 2, options(&theme, width))
+        .emit_after_stream_commit(
+            &mut terminal,
+            header(),
+            &cells,
+            2,
+            options(&theme, width),
+            Some(&stream_append.commit),
+        )
         .expect("finalize");
     assert_eq!(outcome, HistoryEmissionOutcome::ReplayRequired);
-}
-
-#[test]
-fn history_tail_cache_caches_wrapped_rows_and_trims_suffix() {
-    let mut cache = HistoryTailCache::default();
-    let initial_rows = render_history_rows(
-        (0..140)
-            .map(|index| Line::from(format!("line {index:03}")))
-            .collect(),
-        /*width*/ 16,
-    );
-    cache.replace_from_rows(/*width*/ 16, &initial_rows);
-
-    assert_eq!(cache.available_rows(/*width*/ 16), 128);
-    assert_eq!(cache.rows.as_ref().expect("cached rows").height(), 128);
-    assert_eq!(cache.available_rows(/*width*/ 12), 0);
-
-    let appended_rows = render_history_rows(
-        (140..150)
-            .map(|index| Line::from(format!("line {index:03}")))
-            .collect(),
-        /*width*/ 16,
-    );
-    cache.extend_from_rows(/*width*/ 16, &appended_rows);
-
-    assert_eq!(cache.available_rows(/*width*/ 16), 128);
-    assert_eq!(cache.rows.as_ref().expect("cached rows").height(), 128);
 }
 
 #[test]

@@ -24,16 +24,44 @@ use crate::transcript::render::HistoryLineRenderOptions;
 use crate::transcript::render::HistoryReplayCache;
 use crate::transcript::render::render_finalized_history_lines;
 use crate::transcript::render::render_replay_history_lines_cached;
-use crate::transcript::stream::PendingStreamPrefix;
+use crate::transcript::stream::ScrollbackStreamCommit;
 use coco_tui_ui::engine::history_insert::HistoryRows;
-use coco_tui_ui::engine::history_insert::HistoryRowsSlice;
 use coco_tui_ui::engine::history_insert::render_history_rows;
 use coco_tui_ui::engine::history_reflow::HistoryReflowState;
 use coco_tui_ui::engine::history_reflow::HistoryViewportChange;
 use coco_tui_ui::engine::terminal::SurfaceBackend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
-const HISTORY_TAIL_CACHE_MAX_ROWS: u16 = 128;
+/// DEBUG (duplication investigation, tui-v2): first and last visible row text of
+/// a `HistoryRows` block, for the `tui::surface::insert` logs. Lets a repro show
+/// exactly WHAT content each scrollback write carries — so a user line that gets
+/// inserted by two different writes (logical double-emit) is distinguishable
+/// from one inserted once but painted twice (terminal/width desync).
+fn history_rows_first_last(rows: &HistoryRows) -> (String, String) {
+    let width = rows.width() as usize;
+    if width == 0 || rows.is_empty() {
+        return (String::new(), String::new());
+    }
+    let buffer = rows.buffer();
+    let row_text = |row: u16| -> String {
+        let start = row as usize * width;
+        buffer
+            .content
+            .get(start..start + width)
+            .map(|cells| {
+                cells
+                    .iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+                    .trim_end()
+                    .chars()
+                    .take(100)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    (row_text(0), row_text(rows.height().saturating_sub(1)))
+}
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SurfaceHistoryDriver {
@@ -43,21 +71,12 @@ pub(crate) struct SurfaceHistoryDriver {
     emitted_transcript_revision: Option<u64>,
     emitted_history_rows: u16,
     replay_cache: HistoryReplayCache,
-    tail_cache: HistoryTailCache,
-    pending_stream_prefix: Option<PendingStreamPrefix>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HistoryReplayMode {
     pub(crate) stream_active: bool,
     pub(crate) cause: &'static str,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct HistoryTailCacheStats {
-    pub(crate) rows: u16,
-    pub(crate) width: Option<u16>,
-    pub(crate) bytes_estimate: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +101,11 @@ pub(crate) struct PreparedHistoryAppend {
     pub(crate) lines_build_elapsed: Duration,
     /// Time spent rendering those lines into terminal rows.
     pub(crate) render_elapsed: Duration,
-    clear_pending_stream_prefix: bool,
+    /// The anchored finalize ran: the in-flight scrollback commit was folded
+    /// into this append, so the controller must `consume_commit` after it
+    /// lands. The commit is owned by `SurfaceStreamDriver` (single owner), so
+    /// the history driver only signals the consumption.
+    pub(crate) consumed_stream_commit: bool,
 }
 
 impl PreparedFinalizedHistory {
@@ -115,9 +138,6 @@ impl SurfaceHistoryDriver {
         stream_active: bool,
     ) -> HistoryViewportChange {
         let change = self.reflow.note_viewport(width);
-        if self.tail_cache.width != Some(width) {
-            self.tail_cache.clear();
-        }
         if change.changed && self.reflow.replay_needed_for_viewport(width) {
             self.reflow.schedule_viewport_replay(width, stream_active);
         }
@@ -134,6 +154,7 @@ impl SurfaceHistoryDriver {
         cells: &[RenderedCell],
         transcript_revision: u64,
         options: HistoryLineRenderOptions<'_>,
+        stream_commit: Option<&ScrollbackStreamCommit>,
     ) -> PreparedFinalizedHistory {
         let end = committable_prefix_len(cells);
         let committable_cells = &cells[..end];
@@ -184,13 +205,14 @@ impl SurfaceHistoryDriver {
             HistoryEmissionPlan::Noop | HistoryEmissionPlan::ReplayRequired => end,
         };
         let lines_build_started = Instant::now();
+        let header = should_emit_header.then_some(session_header);
         let Some(lines) = self.append_candidate_lines_from_plan(
-            session_header,
+            header,
             cells,
             start,
             end,
-            should_emit_header,
             options,
+            stream_commit,
         ) else {
             return PreparedFinalizedHistory::ReplayRequired;
         };
@@ -207,30 +229,8 @@ impl SurfaceHistoryDriver {
             rows,
             lines_build_elapsed,
             render_elapsed: render_started.elapsed(),
-            clear_pending_stream_prefix: self.pending_stream_prefix.is_some(),
+            consumed_stream_commit: stream_commit.is_some(),
         })
-    }
-
-    pub(crate) fn tail_reveal_rows(&self, width: u16) -> u16 {
-        self.tail_cache.available_rows(width)
-    }
-
-    pub(crate) fn tail_cache_stats(&self) -> HistoryTailCacheStats {
-        self.tail_cache.stats()
-    }
-
-    pub(crate) fn fill_tail_gap<B>(
-        &self,
-        terminal: &mut SurfaceTerminal<B>,
-        rows: u16,
-    ) -> Result<u16, B::Error>
-    where
-        B: SurfaceBackend,
-    {
-        let Some(slice) = self.tail_cache.tail_slice(rows) else {
-            return Ok(0);
-        };
-        terminal.fill_history_gap_rows(slice)
     }
 
     pub(crate) fn commit_prepared_append<B>(
@@ -257,14 +257,29 @@ impl SurfaceHistoryDriver {
             PreparedFinalizedHistory::ReplayRequired => Ok(HistoryEmissionOutcome::ReplayRequired),
             PreparedFinalizedHistory::Append(append) => {
                 let width = terminal.viewport_area().width;
+                let viewport_top_before = terminal.viewport_area().top();
+                let history_bottom_before = terminal.history_bottom_y();
+                let (first_row, last_row) = history_rows_first_last(&append.rows);
                 let rows = terminal.insert_history_rows(&append.rows)?;
+                tracing::debug!(
+                    target: "tui::surface::insert",
+                    kind = "finalized_append",
+                    start = append.start,
+                    end = append.end,
+                    expected_rows = append.rows.height(),
+                    inserted_rows = rows,
+                    viewport_top_before,
+                    viewport_top_after = terminal.viewport_area().top(),
+                    history_bottom_before,
+                    history_bottom_after = terminal.history_bottom_y(),
+                    width,
+                    first_row = %first_row,
+                    last_row = %last_row,
+                    "scrollback insert: finalized history append",
+                );
                 self.emitted_history_rows = self.emitted_history_rows.saturating_add(rows);
-                self.tail_cache.extend_from_rows(width, &append.rows);
                 self.header_fingerprint = Some(append.header_fingerprint.clone());
                 self.emitter.mark_emitted_through(cells, append.end);
-                if append.clear_pending_stream_prefix {
-                    self.pending_stream_prefix = None;
-                }
                 self.emitted_transcript_revision = Some(append.transcript_revision);
                 tracing::trace!(
                     target: "tui::surface::append",
@@ -296,17 +311,37 @@ impl SurfaceHistoryDriver {
         B: SurfaceBackend,
     {
         let width = terminal.viewport_area().width;
+        let viewport_top_before = terminal.viewport_area().top();
+        let history_bottom_before = terminal.history_bottom_y();
+        let (first_row, last_row) = history_rows_first_last(&append.rows);
         let rows = terminal.insert_history_rows(&append.rows)?;
         if rows == 0 {
             return Ok(HistoryEmissionOutcome::Noop);
         }
+        tracing::debug!(
+            target: "tui::surface::insert",
+            kind = "stream_append",
+            source_prefix_len = append.commit.source_prefix.len(),
+            line_prefix_len = append.commit.line_len,
+            expected_rows = append.rows.height(),
+            inserted_rows = rows,
+            viewport_top_before,
+            viewport_top_after = terminal.viewport_area().top(),
+            history_bottom_before,
+            history_bottom_after = terminal.history_bottom_y(),
+            width,
+            first_row = %first_row,
+            last_row = %last_row,
+            "scrollback insert: stream stable append",
+        );
         self.emitted_history_rows = self.emitted_history_rows.saturating_add(rows);
-        self.tail_cache.extend_from_rows(width, &append.rows);
-        self.pending_stream_prefix = Some(append.prefix.clone());
+        // The scrollback commit (`SurfaceStreamDriver`, single owner) is advanced
+        // by the controller via `mark_stream_append_committed` right after this
+        // returns `Appended` — the rows and the commit move together.
         tracing::trace!(
             target: "tui::surface::append",
-            source_prefix_len = append.prefix.source_prefix.len(),
-            line_prefix_len = append.prefix.line_prefix_len,
+            source_prefix_len = append.commit.source_prefix.len(),
+            line_prefix_len = append.commit.line_len,
             rows,
             "history stream prefix append",
         );
@@ -315,10 +350,6 @@ impl SurfaceHistoryDriver {
             message_count: 0,
             rows,
         })
-    }
-
-    pub(crate) fn clear_pending_stream_prefix(&mut self) {
-        self.pending_stream_prefix = None;
     }
 
     #[cfg(test)]
@@ -333,7 +364,38 @@ impl SurfaceHistoryDriver {
     where
         B: SurfaceBackend,
     {
-        let prepared = self.prepare_append(session_header, cells, transcript_revision, options);
+        self.emit_after_stream_commit(
+            terminal,
+            session_header,
+            cells,
+            transcript_revision,
+            options,
+            None,
+        )
+    }
+
+    /// Finalize with a pending in-flight scrollback commit (the anchored-suffix
+    /// path). Exercises `finalize_after_stream_prefix` end to end.
+    #[cfg(test)]
+    pub(crate) fn emit_after_stream_commit<B>(
+        &mut self,
+        terminal: &mut SurfaceTerminal<B>,
+        session_header: Vec<Line<'static>>,
+        cells: &[RenderedCell],
+        transcript_revision: u64,
+        options: HistoryLineRenderOptions<'_>,
+        stream_commit: Option<&ScrollbackStreamCommit>,
+    ) -> Result<HistoryEmissionOutcome, B::Error>
+    where
+        B: SurfaceBackend,
+    {
+        let prepared = self.prepare_append(
+            session_header,
+            cells,
+            transcript_revision,
+            options,
+            stream_commit,
+        );
         self.commit_prepared_append(terminal, &prepared, cells)
     }
 
@@ -418,8 +480,6 @@ impl SurfaceHistoryDriver {
         self.emitted_history_rows = 0;
         self.reflow.clear();
         self.replay_cache.clear();
-        self.tail_cache.clear();
-        self.pending_stream_prefix = None;
     }
 
     fn replay_rows<B>(
@@ -462,13 +522,23 @@ impl SurfaceHistoryDriver {
         // overflow). That seat is already correct — the old clamp/restore only
         // existed to undo `sync_surface_area`'s stale-anchor reposition, which
         // no longer happens (it anchors on the owned viewport top).
+        let (first_row, last_row) = history_rows_first_last(&rendered);
         let rows = terminal.insert_history_rows(&rendered)?;
+        tracing::debug!(
+            target: "tui::surface::insert",
+            kind = "replay_all",
+            cells = cells.len(),
+            expected_rows = rendered.height(),
+            inserted_rows = rows,
+            width,
+            first_row = %first_row,
+            last_row = %last_row,
+            "scrollback insert: full replay (cleared scrollback then re-inserted)",
+        );
         self.emitted_history_rows = rows;
-        self.tail_cache.replace_from_rows(width, &rendered);
         self.header_fingerprint = Some(header_fingerprint);
         self.emitter.mark_emitted_through(cells, cells.len());
         self.emitted_transcript_revision = Some(transcript_revision);
-        self.pending_stream_prefix = None;
         tracing::debug!(
             target: "tui::surface::replay",
             message_count = cells.len(),
@@ -483,126 +553,32 @@ impl SurfaceHistoryDriver {
 
     fn append_candidate_lines_from_plan(
         &self,
-        session_header: Vec<Line<'static>>,
+        // `Some(header_lines)` emits the session header before the cells; `None`
+        // means it was already emitted (an incremental append).
+        header: Option<Vec<Line<'static>>>,
         cells: &[RenderedCell],
         start: usize,
         end: usize,
-        should_emit_header: bool,
         options: HistoryLineRenderOptions<'_>,
+        stream_commit: Option<&ScrollbackStreamCommit>,
     ) -> Option<Vec<Line<'static>>> {
-        if let Some(pending) = self.pending_stream_prefix.as_ref() {
-            if should_emit_header {
+        if let Some(commit) = stream_commit {
+            if header.is_some() {
                 tracing::debug!(
                     target: "tui::surface::replay",
-                    cause = "pending_stream_prefix_without_header",
+                    cause = "stream_commit_without_header",
                     "history full replay required",
                 );
                 return None;
             }
-            return finalize_after_stream_prefix(cells, start, end, options, pending);
+            return finalize_after_stream_prefix(cells, start, end, options, commit);
         }
         let mut lines = Vec::new();
-        if should_emit_header {
-            lines.extend(session_header);
+        if let Some(header) = header {
+            lines.extend(header);
         }
         lines.extend(render_finalized_history_lines(&cells[start..end], options));
         Some(lines)
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-struct HistoryTailCache {
-    width: Option<u16>,
-    rows: Option<HistoryRows>,
-}
-
-impl HistoryTailCache {
-    fn clear(&mut self) {
-        self.width = None;
-        self.rows = None;
-    }
-
-    fn replace_from_rows(&mut self, width: u16, rows: &HistoryRows) {
-        self.width = Some(width);
-        let source_rows = rows.height();
-        let cached = rows.tail_rows_copy(HISTORY_TAIL_CACHE_MAX_ROWS);
-        if source_rows > cached.height() {
-            tracing::info!(
-                target: "tui::surface::history_cache",
-                width,
-                source_rows,
-                cached_rows = cached.height(),
-                max_rows = HISTORY_TAIL_CACHE_MAX_ROWS,
-                "history tail cache truncated to row cap",
-            );
-        }
-        self.rows = Some(cached);
-    }
-
-    fn extend_from_rows(&mut self, width: u16, rows: &HistoryRows) {
-        if rows.is_empty() {
-            return;
-        }
-        if self.width != Some(width) {
-            self.width = Some(width);
-            self.rows = None;
-        }
-        let existing_rows = self.rows.as_ref().map_or(0, HistoryRows::height);
-        let append_rows = rows.height();
-        let source_rows = existing_rows.saturating_add(append_rows);
-        let cached = match self.rows.as_ref() {
-            Some(existing) => HistoryRows::copy_tail_from_slices(
-                width,
-                &[
-                    existing.tail_slice(HISTORY_TAIL_CACHE_MAX_ROWS),
-                    rows.tail_slice(HISTORY_TAIL_CACHE_MAX_ROWS),
-                ],
-                HISTORY_TAIL_CACHE_MAX_ROWS,
-            ),
-            None => rows.tail_rows_copy(HISTORY_TAIL_CACHE_MAX_ROWS),
-        };
-        if source_rows > cached.height() {
-            tracing::info!(
-                target: "tui::surface::history_cache",
-                width,
-                existing_rows,
-                append_rows,
-                source_rows,
-                cached_rows = cached.height(),
-                max_rows = HISTORY_TAIL_CACHE_MAX_ROWS,
-                "history tail cache truncated to row cap",
-            );
-        }
-        self.rows = Some(cached);
-    }
-
-    fn available_rows(&self, width: u16) -> u16 {
-        if self.width != Some(width) {
-            return 0;
-        }
-        self.rows.as_ref().map_or(0, HistoryRows::height)
-    }
-
-    fn tail_slice(&self, rows: u16) -> Option<HistoryRowsSlice<'_>> {
-        let cached = self.rows.as_ref()?;
-        if self.width != Some(cached.width()) {
-            return None;
-        }
-        Some(cached.tail_slice(rows))
-    }
-
-    fn stats(&self) -> HistoryTailCacheStats {
-        let Some(rows) = self.rows.as_ref() else {
-            return HistoryTailCacheStats {
-                width: self.width,
-                ..HistoryTailCacheStats::default()
-            };
-        };
-        HistoryTailCacheStats {
-            rows: rows.height(),
-            width: self.width,
-            bytes_estimate: rows.estimated_bytes(),
-        }
     }
 }
 
