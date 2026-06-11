@@ -18,10 +18,10 @@ Depends UP on `coco-tui-ui` for the shared `Theme` / `UiStyles` /
 
 ## Invariants
 
-- **Output contract**: logical lines with a `body_indent`-column left margin;
-  **no internal width wrapping** — the shell wraps at paint time
-  (`Paragraph::wrap`). Matches the prior renderer so downstream callers (the
-  `⏺` gutter rewrite is gone) are unaffected.
+- **Output contract**: logical prose lines with a `body_indent`-column left
+  margin; prose wraps downstream at paint time (`Paragraph::wrap`). Code fences
+  wrap internally because their gutter frame must stay within
+  `MarkdownOptions.width`.
 - **Colors come only from `UiStyles`.** syntect token *scopes* are classified
   (`highlight.rs`) and mapped onto `code_*` theme tokens — syntect's `.tmTheme`
   palette is dropped at the dependency level so highlighting follows live theme

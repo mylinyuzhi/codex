@@ -25,6 +25,20 @@ fn render_text(text: &str) -> Vec<String> {
     render(text).iter().map(line_text).collect()
 }
 
+fn render_with_width(text: &str, width: u16) -> Vec<Line<'static>> {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    render_markdown(
+        text,
+        MarkdownOptions::new(styles, width, SyntaxHighlighting::Enabled),
+        None,
+    )
+}
+
+fn strip_code_gutter(line: &str) -> Option<&str> {
+    line.trim_start().strip_prefix("│ ")
+}
+
 fn stable_boundaries(source: &str) -> Vec<usize> {
     let mut boundaries = Vec::new();
     for end in source
@@ -158,6 +172,103 @@ fn fenced_code_block_has_border_and_body() {
             .last()
             .is_some_and(|l| l.trim_start().starts_with('└'))
     );
+}
+
+#[test]
+fn long_plain_fenced_code_wraps_within_narrow_width() {
+    let width = 24;
+    let lines: Vec<String> = render_with_width(
+        "```\nabcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz\n```",
+        width,
+    )
+    .iter()
+    .map(line_text)
+    .collect();
+    for line in lines.iter().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            coco_tui_ui::truncate::display_width(line) <= width as usize,
+            "line overflows width {width}: {} ({line:?})",
+            coco_tui_ui::truncate::display_width(line)
+        );
+    }
+    let body_lines: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.trim_start().starts_with("│ "))
+        .collect();
+    assert!(
+        body_lines.len() > 1,
+        "expected wrapped body lines: {lines:?}"
+    );
+    assert!(
+        body_lines.iter().all(|l| strip_code_gutter(l).is_some()),
+        "body continuation line missing gutter: {lines:?}"
+    );
+}
+
+#[test]
+fn long_code_fence_inside_list_item_wraps_within_width() {
+    let width = 24;
+    let lines: Vec<String> = render_with_width(
+        "- intro\n  ```\n  abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz\n  ```",
+        width,
+    )
+    .iter()
+    .map(line_text)
+    .collect();
+    for line in lines.iter().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            coco_tui_ui::truncate::display_width(line) <= width as usize,
+            "list code-fence line overflows width {width}: {} ({line:?})",
+            coco_tui_ui::truncate::display_width(line)
+        );
+    }
+}
+
+#[test]
+fn wide_code_glyph_at_one_column_body_budget_stays_within_width() {
+    let width = 5;
+    let lines: Vec<String> = render_with_width("```\n中文\n```", width)
+        .iter()
+        .map(line_text)
+        .collect();
+    for line in lines.iter().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            coco_tui_ui::truncate::display_width(line) <= width as usize,
+            "wide code glyph line overflows width {width}: {} ({line:?})",
+            coco_tui_ui::truncate::display_width(line)
+        );
+    }
+}
+
+#[test]
+fn long_highlighted_rust_code_wraps_without_dropping_styles() {
+    let theme = Theme::default();
+    let styles = UiStyles::new(&theme);
+    let code = "fn main() { let value: i32 = 12345; println!(\"abcdefghijklmnopqrstuvwxyz\"); }";
+    let lines = render_markdown(
+        &format!("```rust\n{code}\n```"),
+        MarkdownOptions::new(styles, 32, SyntaxHighlighting::Enabled),
+        None,
+    );
+    let body_lines: Vec<&Line<'_>> = lines
+        .iter()
+        .filter(|line| line_text(line).trim_start().starts_with("│ "))
+        .collect();
+    assert!(body_lines.len() > 1, "expected wrapped rust line");
+
+    let rendered_code: String = body_lines
+        .iter()
+        .filter_map(|line| strip_code_gutter(&line_text(line)).map(ToString::to_string))
+        .collect();
+    assert_eq!(rendered_code, code);
+
+    let kept_highlight_style = body_lines.iter().any(|line| {
+        line.spans
+            .iter()
+            .filter(|span| span.content.as_ref() != "│ " && !span.content.trim().is_empty())
+            .any(|span| span.style.fg.is_some_and(|fg| fg != theme.text))
+    });
+    assert!(kept_highlight_style, "highlight styles were dropped");
 }
 
 #[test]
@@ -501,6 +612,42 @@ fn code_fence_in_blockquote_fits_width() {
             coco_tui_ui::truncate::display_width(l)
         );
     }
+}
+
+#[test]
+fn long_code_fence_in_blockquote_wraps_within_configured_width() {
+    let width = 28;
+    let lines: Vec<String> = render_with_width(
+        "> ```\n> abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz\n> ```\n",
+        width,
+    )
+    .iter()
+    .map(line_text)
+    .collect();
+    for line in lines.iter().filter(|l| !l.trim().is_empty()) {
+        assert!(
+            coco_tui_ui::truncate::display_width(line) <= width as usize,
+            "blockquote code-fence line overflows width {width}: {} ({line:?})",
+            coco_tui_ui::truncate::display_width(line)
+        );
+    }
+}
+
+#[test]
+fn long_code_fence_language_label_is_truncated_to_width() {
+    let width = 18;
+    let lines: Vec<String> =
+        render_with_width("```averyveryverylonglanguagelabel\ncode\n```", width)
+            .iter()
+            .map(line_text)
+            .collect();
+    let header = lines.first().expect("code fence header");
+    assert!(header.trim_start().starts_with("┌─"));
+    assert!(
+        coco_tui_ui::truncate::display_width(header) <= width as usize,
+        "header overflows width {width}: {} ({header:?})",
+        coco_tui_ui::truncate::display_width(header)
+    );
 }
 
 #[cfg(feature = "mermaid")]

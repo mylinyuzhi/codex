@@ -231,9 +231,7 @@ impl<'a> CellsRenderer<'a> {
                     text.push_str(" · ");
                     text.push_str(&names);
                 }
-                lines.push(Line::from(
-                    Span::raw(text).fg(self.styles.secondary()).dim(),
-                ));
+                lines.push(Line::from(Span::raw(text).fg(self.styles.secondary())));
                 lines.push(Line::default());
             }
             TranscriptSourceCell::Active(ActiveTranscriptCell::Streaming(view)) => {
