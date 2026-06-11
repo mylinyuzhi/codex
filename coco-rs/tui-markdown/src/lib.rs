@@ -7,9 +7,10 @@
 //! marker is a first-class input (see [`LeadMarker`]) rather than a string the
 //! caller post-patches.
 //!
-//! Output contract matches the prior renderer: logical lines are emitted with a
-//! `body_indent`-column left margin and are wrapped downstream at paint time
-//! (`Paragraph::wrap`). This crate performs no internal width wrapping.
+//! Output contract matches the prior renderer for prose: logical lines are
+//! emitted with a `body_indent`-column left margin and are wrapped downstream at
+//! paint time (`Paragraph::wrap`). Code fences are the exception: their guttered
+//! body rows wrap internally so the frame stays within the configured width.
 
 use std::collections::HashSet;
 
@@ -29,6 +30,7 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 mod highlight;
@@ -562,12 +564,35 @@ impl<'a> Writer<'a> {
         self.body_indent + self.list_depth().saturating_sub(1) * 2
     }
 
-    /// Columns the line's leading margin consumes (base indent + blockquote
-    /// gutters) — the budget that full-width raw lines (rules, code-fence
-    /// borders, table grids) must subtract so they don't overflow `width` in
-    /// list/quote contexts or at narrow widths.
+    /// Columns the block-level margin consumes before list hang indentation or
+    /// pending markers. Rules and table grids use this simpler budget; code
+    /// fences use `available_raw_cols` because they can appear after list text.
     fn left_margin_cols(&self) -> usize {
         self.base_indent_cols() + self.quote_gutters.len() * 2
+    }
+
+    fn leading_cols(&self) -> usize {
+        let base = self.base_indent_cols();
+        let hang = match self.item_hang.last() {
+            Some(&(w, true)) => w,
+            _ => 0,
+        };
+        let indent = base + hang;
+        let first_prefix = if !self.first_line_emitted && self.lead_marker.is_some() {
+            indent.max(self.lead_marker_width)
+        } else {
+            indent
+        };
+        let quote_cols = self.quote_gutters.len() * 2;
+        let marker_cols = self
+            .pending_marker
+            .as_ref()
+            .map_or(0, |marker| UnicodeWidthStr::width(marker.content.as_ref()));
+        first_prefix + quote_cols + marker_cols
+    }
+
+    fn available_raw_cols(&self) -> usize {
+        (self.width as usize).saturating_sub(self.leading_cols())
     }
 
     /// Leading spans for a freshly-finished line: lead marker (first line only)
@@ -956,11 +981,21 @@ impl<'a> Writer<'a> {
             return;
         }
 
-        let border_color = Style::default().fg(self.styles.border());
+        let border_style = Style::default().fg(self.styles.border());
+        let header_available = self.available_raw_cols();
+        let header = if lang.is_empty() {
+            "┌─".to_string()
+        } else {
+            format!("┌─ {lang}")
+        };
+        self.emit_raw_line(vec![Span::styled(
+            coco_tui_ui::truncate::truncate_to_width(&header, header_available),
+            border_style,
+        )]);
+
         // Optional themeable background fill behind the fence body. Folded into
-        // the gutter, the body text, the highlighted spans, and a right-pad so
-        // the block reads as a contiguous rectangle. `None` (the default) is a
-        // no-op.
+        // the gutter, body text, and highlighted spans. `None` (the default) is
+        // a no-op.
         let bg = self.styles.code_bg();
         let mut gutter = Style::default().fg(self.styles.border());
         let mut body_style = Style::default().fg(self.styles.text());
@@ -968,25 +1003,6 @@ impl<'a> Writer<'a> {
             gutter = gutter.bg(c);
             body_style = body_style.bg(c);
         }
-
-        // Budget = width − left margin − 2 box corners, so the border (and the
-        // bg-padded body, which fills to the same width) never overflows in
-        // list/quote contexts or at narrow widths.
-        let border_len = (self.width as usize)
-            .saturating_sub(self.left_margin_cols() + 2)
-            .clamp(1, 60);
-        // Top border with an optional, width-clamped language label so the top
-        // dash count always equals the bottom border width.
-        let top = if lang.is_empty() {
-            format!("┌{}┐", "─".repeat(border_len))
-        } else {
-            let label_lang =
-                coco_tui_ui::truncate::truncate_to_width(&lang, border_len.saturating_sub(3));
-            let label = format!("─ {label_lang} ");
-            let fill = border_len.saturating_sub(label.width());
-            format!("┌{label}{}┐", "─".repeat(fill))
-        };
-        self.emit_raw_line(vec![Span::styled(top, border_color)]);
 
         let mode = if self.streaming {
             // The in-flight tail re-renders the growing open fence every
@@ -1005,32 +1021,24 @@ impl<'a> Writer<'a> {
             code_lines.len()
         };
         for (i, code_line) in code_lines.iter().take(line_count).enumerate() {
-            let mut spans = vec![Span::styled("│ ".to_string(), gutter)];
-            match highlighted.as_ref().and_then(|h| h.get(i)) {
+            let code_spans = match highlighted.as_ref().and_then(|h| h.get(i)) {
                 Some(hspans) if !hspans.is_empty() => match bg {
-                    Some(c) => spans.extend(
-                        hspans
-                            .iter()
-                            .map(|s| Span::styled(s.content.clone(), s.style.bg(c))),
-                    ),
-                    None => spans.extend(hspans.iter().cloned()),
+                    Some(c) => hspans
+                        .iter()
+                        .map(|s| Span::styled(s.content.clone(), s.style.bg(c)))
+                        .collect(),
+                    None => hspans.to_vec(),
                 },
-                _ => spans.push(Span::styled((*code_line).to_string(), body_style)),
+                _ => vec![Span::styled((*code_line).to_string(), body_style)],
+            };
+            for row in wrap_code_spans(&code_spans, self.available_raw_cols(), gutter) {
+                self.emit_raw_line(row);
             }
-            if let Some(c) = bg {
-                let used = coco_tui_ui::truncate::display_width(code_line);
-                if used < border_len {
-                    spans.push(Span::styled(
-                        " ".repeat(border_len - used),
-                        Style::default().bg(c),
-                    ));
-                }
-            }
-            self.emit_raw_line(spans);
         }
+        let footer_available = self.available_raw_cols();
         self.emit_raw_line(vec![Span::styled(
-            format!("└{}┘", "─".repeat(border_len)),
-            border_color,
+            coco_tui_ui::truncate::truncate_to_width("└─", footer_available),
+            border_style,
         )]);
         self.needs_gap = true;
     }
@@ -1122,6 +1130,82 @@ fn alert_label(kind: BlockQuoteKind, styles: UiStyles<'_>) -> (&'static str, Col
         BlockQuoteKind::Important => ("▲ IMPORTANT", styles.accent()),
         BlockQuoteKind::Warning => ("▲ WARNING", styles.warning()),
         BlockQuoteKind::Caution => ("▲ CAUTION", styles.error()),
+    }
+}
+
+fn wrap_code_spans(
+    spans: &[Span<'static>],
+    row_width: usize,
+    gutter_style: Style,
+) -> Vec<Vec<Span<'static>>> {
+    let gutter = code_gutter(row_width, gutter_style);
+    let content_width = row_width.saturating_sub(gutter.width);
+    let mut rows = vec![vec![gutter.span.clone()]];
+    if content_width == 0 {
+        return rows;
+    }
+
+    let mut current_width = 0usize;
+    for span in spans {
+        let mut piece = String::new();
+        for ch in span.content.chars() {
+            if matches!(ch, '\n' | '\r') {
+                continue;
+            }
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_width > 0 && current_width + char_width > content_width {
+                push_code_piece(rows.last_mut(), &mut piece, span.style);
+                rows.push(vec![gutter.span.clone()]);
+                current_width = 0;
+            }
+            if current_width == 0 && char_width > content_width {
+                push_code_piece(rows.last_mut(), &mut piece, span.style);
+                if let Some(row) = rows.last_mut() {
+                    row.push(Span::styled(
+                        coco_tui_ui::truncate::truncate_to_width(&ch.to_string(), content_width),
+                        span.style,
+                    ));
+                }
+                rows.push(vec![gutter.span.clone()]);
+                current_width = 0;
+                continue;
+            }
+            piece.push(ch);
+            current_width += char_width;
+        }
+        push_code_piece(rows.last_mut(), &mut piece, span.style);
+    }
+    if rows.last().is_some_and(|row| row.len() == 1) && rows.len() > 1 {
+        rows.pop();
+    }
+    rows
+}
+
+#[derive(Clone)]
+struct CodeGutter {
+    span: Span<'static>,
+    width: usize,
+}
+
+fn code_gutter(row_width: usize, gutter_style: Style) -> CodeGutter {
+    let content = match row_width {
+        0 => String::new(),
+        1 => "│".to_string(),
+        _ => "│ ".to_string(),
+    };
+    let width = UnicodeWidthStr::width(content.as_str());
+    CodeGutter {
+        span: Span::styled(content, gutter_style),
+        width,
+    }
+}
+
+fn push_code_piece(row: Option<&mut Vec<Span<'static>>>, piece: &mut String, style: Style) {
+    if piece.is_empty() {
+        return;
+    }
+    if let Some(row) = row {
+        row.push(Span::styled(std::mem::take(piece), style));
     }
 }
 

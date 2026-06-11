@@ -352,9 +352,7 @@ impl<'a> TranscriptCellRenderer<'a> {
                     text.push_str(" · ");
                     text.push_str(&names);
                 }
-                lines.push(Line::from(
-                    Span::raw(text).fg(self.styles.secondary()).dim(),
-                ));
+                lines.push(Line::from(Span::raw(text).fg(self.styles.secondary())));
                 lines.push(Line::default());
             }
             TranscriptSourceCell::Active(active) => match active {
