@@ -18,7 +18,7 @@ use crate::state::SkillOverrideState;
 use crate::state::SkillRow;
 use crate::state::SkillsDialogSource;
 use crate::state::SkillsDialogState;
-use crate::state::surface_payloads::skill_override_glyph_and_label;
+use crate::state::skills_dialog::skill_override_glyph_and_label;
 use coco_tui_ui::style::UiStyles;
 
 #[derive(Debug)]

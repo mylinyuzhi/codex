@@ -6,7 +6,7 @@
 //! the engine actually emits have renderer arms.
 
 #[cfg(test)]
-#[path = "render_system.test.rs"]
+#[path = "system.test.rs"]
 mod tests;
 
 use coco_messages::Message;
@@ -15,7 +15,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-use super::ChatWidget;
+use super::CellsRenderer;
 use crate::i18n::t;
 use crate::keybinding_bridge::KeybindingContext;
 use crate::transcript::cells::CellKind;
@@ -23,7 +23,7 @@ use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::SystemCellKind;
 
 pub(super) fn try_render(
-    w: &ChatWidget<'_>,
+    w: &CellsRenderer<'_>,
     cell: &RenderedCell,
     lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
@@ -108,7 +108,7 @@ pub(super) fn try_render(
     }
 }
 
-fn compact_boundary_shortcut(w: &ChatWidget<'_>) -> String {
+fn compact_boundary_shortcut(w: &CellsRenderer<'_>) -> String {
     w.kb_handle
         .and_then(|handle| {
             handle.display_for(

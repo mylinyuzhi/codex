@@ -21,8 +21,6 @@ use crate::state::ModelEntry;
 use crate::state::ModelPickerState;
 use crate::state::ProviderUnavailableReason;
 use crate::state::QuickOpenState;
-use crate::state::SessionBrowserState;
-use crate::state::SessionOption;
 use crate::state::SlashPopupState;
 use crate::state::SubagentKind;
 use crate::state::SubagentStatus;
@@ -299,28 +297,6 @@ pub(super) fn command_palette(state: &mut AppState) {
         .completion
         .set_active(suggestions, 0..0, String::new());
     state.ui.interaction.popup = Some(ComposerPopupState::Slash(SlashPopupState));
-}
-
-/// Open the session browser populated from `saved_sessions`.
-pub(super) fn session_browser(state: &mut AppState) {
-    let sessions: Vec<SessionOption> = state
-        .session
-        .saved_sessions
-        .iter()
-        .map(|s| SessionOption {
-            id: s.id.clone(),
-            label: s.label.clone(),
-            message_count: s.message_count,
-            created_at: s.created_at.clone(),
-        })
-        .collect();
-    state
-        .ui
-        .show_modal(ModalState::SessionBrowser(SessionBrowserState {
-            sessions,
-            filter: String::new(),
-            selected: 0,
-        }));
 }
 
 /// Open the global search state with an empty query.

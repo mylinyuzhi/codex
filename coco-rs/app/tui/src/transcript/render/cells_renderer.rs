@@ -1,30 +1,18 @@
-//! Chat history widget — renders the engine-authoritative
-//! `&[RenderedCell]` slice via per-category renderer submodules.
+//! The cells renderer — projects the engine-authoritative
+//! `&[RenderedCell]` slice into owned `Line`s via the per-category
+//! renderer siblings (`super::{assistant, user, system, tool, tool_result}`).
 //!
-//! The widget and its renderers dispatch on `cell.kind` + `cell.source:
-//! Arc<Message>` directly — engine `MessageHistory` is the only source
-//! of truth, with no parallel TUI-side projection.
-
-pub(crate) mod render_assistant;
-mod render_system;
-mod render_tool;
-mod render_user;
-pub(crate) mod tool_result_render;
-
-#[cfg(any(test, feature = "testing"))]
-pub(crate) use render_assistant::clear_committed_markdown_memo_for_tests;
+//! Dispatches on `cell.kind` + `cell.source: Arc<Message>` directly —
+//! engine `MessageHistory` is the only source of truth, with no parallel
+//! TUI-side projection. Formerly `widgets::chat::ChatWidget`; it is not a
+//! ratatui `Widget` (callers consume [`CellsRenderer::build_lines_owned`]).
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
-use ratatui::widgets::Wrap;
 
 use coco_types::AttachmentKind;
 
@@ -54,7 +42,7 @@ use crate::transcript::stream::streaming_cursor_line;
 use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
-pub(crate) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
+pub(super) const TOOL_OUTPUT_PREVIEW_ROWS: usize = 5;
 
 /// Per-cell render cost above which a `tui::perf::cell` debug line is emitted,
 /// attributing slow history builds to the specific cell (tool name / kind).
@@ -64,13 +52,12 @@ const SLOW_CELL_RENDER_LOG_THRESHOLD: std::time::Duration = std::time::Duration:
 ///
 /// Phase 3d (§6): consumes the engine-authoritative `&[RenderedCell]`
 /// slice from `session.transcript.cells()` end-to-end. The per-category
-/// renderers (`render_user/_assistant/_tool/_system`) dispatch on
+/// renderers (`super::{user, assistant, tool, system}`) dispatch on
 /// `cell.kind` + `cell.source` directly.
-pub struct ChatWidget<'a> {
+pub struct CellsRenderer<'a> {
     cells: &'a [RenderedCell],
-    scroll_offset: i32,
     streaming: Option<&'a StreamingState>,
-    show_thinking: bool,
+    pub(super) show_thinking: bool,
     show_system_reminders: bool,
     pub(crate) tool_executions: &'a [ToolExecution],
     collapsed_tools: Option<&'a HashSet<String>>,
@@ -87,17 +74,16 @@ pub struct ChatWidget<'a> {
     pub(crate) cwd: Option<&'a str>,
     /// Keybinding handle for rendering live shortcuts (e.g. the
     /// `…(<chord> to see full summary)` hint). `None` falls back to
-    /// the default literal — used in tests that build a ChatWidget
+    /// the default literal — used in tests that build a CellsRenderer
     /// without an `AppState`.
     pub(crate) kb_handle: Option<&'a crate::keybinding_resolver::KeybindingHandle>,
     pub(crate) show_thinking_internal: bool,
 }
 
-impl<'a> ChatWidget<'a> {
+impl<'a> CellsRenderer<'a> {
     pub fn new(cells: &'a [RenderedCell], styles: UiStyles<'a>) -> Self {
         Self {
             cells,
-            scroll_offset: 0,
             streaming: None,
             show_thinking: false,
             show_system_reminders: false,
@@ -132,10 +118,6 @@ impl<'a> ChatWidget<'a> {
         self
     }
 
-    pub fn scroll(mut self, offset: i32) -> Self {
-        self.scroll_offset = offset;
-        self
-    }
     pub fn streaming(mut self, state: Option<&'a StreamingState>) -> Self {
         self.streaming = state;
         self
@@ -410,7 +392,7 @@ impl<'a> ChatWidget<'a> {
         else {
             return;
         };
-        tool_result_render::render_tool_result_body(
+        super::tool_result::render_tool_result_body(
             &self.tool_result_ctx(),
             &projection.tool_name,
             input,
@@ -424,8 +406,8 @@ impl<'a> ChatWidget<'a> {
     /// Build the surface context the per-tool renderers paint into. Inline chat
     /// is never the full-detail surface, so caps stay tight and the truncation
     /// hint points at the Ctrl+O reader (which renders the same body expanded).
-    pub(crate) fn tool_result_ctx(&self) -> tool_result_render::ToolResultRenderCtx<'_> {
-        tool_result_render::ToolResultRenderCtx {
+    pub(crate) fn tool_result_ctx(&self) -> super::tool_result::ToolResultRenderCtx<'_> {
+        super::tool_result::ToolResultRenderCtx {
             styles: self.styles,
             width: self.width,
             syntax_highlighting: self.syntax_highlighting,
@@ -491,10 +473,10 @@ impl<'a> ChatWidget<'a> {
         // Dispatch to the first category whose renderer handles the variant.
         // Each submodule returns None when the variant is outside its scope,
         // keeping the individual match statements exhaustive-by-category.
-        render_user::try_render(self, cell, lines)
-            .or_else(|| render_assistant::try_render(self, cell, lines))
-            .or_else(|| render_tool::try_render(self, cell, lines))
-            .or_else(|| render_system::try_render(self, cell, lines));
+        super::user::try_render(self, cell, lines)
+            .or_else(|| super::assistant::try_render(self, cell, lines))
+            .or_else(|| super::tool::try_render(self, cell, lines))
+            .or_else(|| super::system::try_render(self, cell, lines));
     }
 
     fn render_streaming(&self, view: StreamingTailView<'_>, lines: &mut Vec<Line<'static>>) {
@@ -506,9 +488,9 @@ impl<'a> ChatWidget<'a> {
             // non-native fallback no longer owns a streaming-only renderer
             // (§6.7-2); the native surface keeps its watermark splitter in
             // `transcript::stream` for mid-stream scrollback commits (§6.5).
-            lines.extend(render_assistant::render_in_flight_assistant_markdown(
+            lines.extend(super::assistant::render_in_flight_assistant_markdown(
                 content,
-                render_assistant::CommittedAssistantMarkdownOptions {
+                super::assistant::CommittedAssistantMarkdownOptions {
                     styles: self.styles,
                     width: self.width,
                     syntax_highlighting: self.syntax_highlighting,
@@ -533,17 +515,7 @@ impl<'a> ChatWidget<'a> {
 }
 
 pub(crate) fn assistant_stream_lead_marker(styles: UiStyles<'_>) -> coco_tui_markdown::LeadMarker {
-    render_assistant::assistant_lead_marker(styles.assistant_message())
-}
-
-impl Widget for ChatWidget<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let lines = self.build_lines();
-        let paragraph = Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((self.scroll_offset.max(0) as u16, 0));
-        paragraph.render(area, buf);
-    }
+    super::assistant::assistant_lead_marker(styles.assistant_message())
 }
 
 // ── Shared helpers ──
@@ -719,7 +691,7 @@ fn meta_preview_text(cell: &RenderedCell) -> String {
     }
 }
 
-fn result_line(text: String, color: ratatui::style::Color) -> Line<'static> {
+pub(super) fn result_line(text: String, color: ratatui::style::Color) -> Line<'static> {
     Line::from(vec![Span::raw("  └ ").fg(color), Span::raw(text).fg(color)])
 }
 
@@ -737,12 +709,16 @@ fn tool_tone_color(
     }
 }
 
-fn output_result_line(text: String, color: ratatui::style::Color, first: bool) -> Line<'static> {
+pub(super) fn output_result_line(
+    text: String,
+    color: ratatui::style::Color,
+    first: bool,
+) -> Line<'static> {
     let prefix = if first { "  └ " } else { "    " };
     Line::from(vec![Span::raw(prefix).fg(color), Span::raw(text).fg(color)])
 }
 
-fn single_line_capped(text: &str, max_chars: usize) -> String {
+pub(super) fn single_line_capped(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();
     }
@@ -827,19 +803,18 @@ fn cell_perf_label(cells: &[RenderedCell], cell: &TranscriptSourceCell<'_>) -> S
 fn cell_kind_perf_name(kind: &CellKind) -> &'static str {
     match kind {
         CellKind::UserText { .. } => "user_text",
-        CellKind::UserAttachment => "user_attachment",
+
         CellKind::AssistantText { .. } => "assistant_text",
         CellKind::AssistantThinking { .. } => "assistant_thinking",
         CellKind::AssistantRedactedThinking => "assistant_redacted_thinking",
         CellKind::ToolUse { .. } => "tool_use",
         CellKind::ToolResult { .. } => "tool_result",
         CellKind::Attachment => "attachment",
-        CellKind::Progress => "progress",
-        CellKind::Tombstone => "tombstone",
+
         CellKind::System(_) => "system",
     }
 }
 
 #[cfg(test)]
-#[path = "mod.test.rs"]
+#[path = "cells_renderer.test.rs"]
 mod tests;

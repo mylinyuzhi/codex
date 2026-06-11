@@ -869,7 +869,7 @@ fn on_rewind_completed(
     let mut restored_permission_mode = None;
     let mut restored_input_text = None;
 
-    let mut restored_image_path: Option<String> = None;
+    let mut restored_image: Option<(Vec<u8>, String)> = None;
     if !target_message_id.is_empty() {
         // Search the engine-authoritative cell list for the rewound
         // message. UI restoration reads `cell.source` directly.
@@ -892,18 +892,22 @@ fn on_rewind_completed(
             restored_input_text = Some(stripped).filter(|s| !s.is_empty());
             // TS `restoreMessageSync` (`screens/REPL.tsx:3721-3737`)
             // restores pasted images by reading them off the rewound
-            // message. The image path lives on
-            // `UserContentPart::File` with an `image/*` media type;
-            // we surface only the first one (matches TS shape).
+            // message. Pasted images live on `UserContentPart::File`
+            // (`image/*` media type) as bytes/base64 — `to_bytes()`
+            // covers both; a remote URL cannot be re-attached as a
+            // paste pill (pills without bytes are dropped at submit),
+            // so it is skipped. Only the first image is surfaced
+            // (matches the TS shape).
             if let coco_messages::Message::User(u) = target_cell.source.as_ref()
                 && let coco_messages::LlmMessage::User { content, .. } = &u.message
             {
                 for part in content {
                     if let coco_messages::UserContent::File(f) = part
                         && f.media_type.starts_with("image/")
-                        && let Some(url) = f.data.as_url()
+                        && let Some(data) = f.data.as_data()
+                        && let Some(bytes) = data.to_bytes()
                     {
-                        restored_image_path = Some(url.to_string());
+                        restored_image = Some((bytes, f.media_type.clone()));
                         break;
                     }
                 }
@@ -941,11 +945,13 @@ fn on_rewind_completed(
     // Paste buffer handling — TS `restoreMessageSync` rebuilds
     // `pastedContents` from the rewound message's image blocks
     // (`screens/REPL.tsx:3721-3737`). Each user message carries at most
-    // one image; if present, re-attach it; otherwise clear any leftover
-    // paste-buffer state so it doesn't leak into the new turn.
+    // one image; if present, re-attach it WITH its bytes (a path-only
+    // pill stores `image_bytes: None` and `resolve_structured` silently
+    // drops it at submit); otherwise clear any leftover paste-buffer
+    // state so it doesn't leak into the new turn.
     state.ui.paste_manager.clear();
-    if let Some(path) = restored_image_path {
-        state.ui.paste_manager.add_image(path);
+    if let Some((bytes, mime)) = restored_image {
+        state.ui.paste_manager.add_image_data(bytes, mime);
     }
 
     state.ui.scroll_offset = 0;

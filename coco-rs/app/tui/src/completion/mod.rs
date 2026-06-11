@@ -14,7 +14,6 @@ pub mod path_provider;
 
 pub use path_provider::PathCompletionEvent;
 pub use path_provider::PathCompletionManager;
-pub use path_provider::PathMode;
 pub use path_provider::create_path_completion_channel;
 
 /// How a keypress should consume the active completion.

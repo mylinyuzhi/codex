@@ -10,14 +10,14 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-use super::ChatWidget;
+use super::CellsRenderer;
 use crate::i18n::t;
 use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 use crate::transcript::cells::SystemCellKind;
 
 pub(super) fn try_render(
-    w: &ChatWidget<'_>,
+    w: &CellsRenderer<'_>,
     cell: &RenderedCell,
     lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {
@@ -53,7 +53,7 @@ pub(super) fn try_render(
             }
             Some(())
         }
-        CellKind::UserAttachment | CellKind::Attachment => {
+        CellKind::Attachment => {
             // Renderable attachments (`renders_in_transcript() == true`) are
             // CONTENT, not collapsed `# [meta]` reminders — the TUI defers
             // meta-ness to the engine's `is_meta_message` (see
@@ -142,5 +142,5 @@ pub(super) fn try_render(
 }
 
 #[cfg(test)]
-#[path = "render_user.test.rs"]
+#[path = "user.test.rs"]
 mod tests;

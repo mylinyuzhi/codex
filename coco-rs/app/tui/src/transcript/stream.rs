@@ -15,9 +15,9 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-use crate::widgets::chat::assistant_stream_lead_marker;
-use crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions;
-use crate::widgets::chat::render_assistant::render_stream_stable_assistant_markdown;
+use crate::transcript::render::assistant::CommittedAssistantMarkdownOptions;
+use crate::transcript::render::assistant::render_stream_stable_assistant_markdown;
+use crate::transcript::render::assistant_stream_lead_marker;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct StreamRenderKey(u64);
@@ -72,6 +72,12 @@ pub(crate) struct ScrollbackStreamCommit {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StreamRenderInput<'a> {
     pub(crate) source: &'a str,
+    /// Identity of `source` (`StreamingState::visible_generation`):
+    /// process-globally unique per visible-document state, so an equal value
+    /// guarantees `source` is byte-identical to the previously processed one
+    /// and the controller can skip its O(doc) prefix scan (the common
+    /// no-reveal spinner frame).
+    pub(crate) generation: u64,
     pub(crate) styles: UiStyles<'a>,
     pub(crate) width: u16,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
@@ -88,11 +94,20 @@ pub(crate) struct StreamRenderProjection<'a> {
     pub(crate) tail_lines: &'a [Line<'static>],
     pub(crate) stable_source_len: usize,
     pub(crate) render_key: StreamRenderKey,
+    /// Whether this frame was served from the generation cache (no O(doc)
+    /// scan, no re-render). Surfaced into the `prepare_native_frame` perf
+    /// stage log so production traces can verify the no-reveal fast path.
+    pub(crate) cache_hit: bool,
 }
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct StreamRenderController {
     render_key: Option<StreamRenderKey>,
+    /// Generation of the last processed `StreamRenderInput.source` — equal
+    /// generation + equal render key means the cached projection is exact
+    /// (the input identity is process-globally unique), so a no-reveal frame
+    /// skips the `starts_with` memcmp and the `stable_prefix_end` scan.
+    last_generation: Option<u64>,
     source: String,
     stable_prefix_end: usize,
     stable_lines: Vec<Line<'static>>,
@@ -113,32 +128,42 @@ impl StreamRenderController {
                 tail_lines: &[],
                 stable_source_len: 0,
                 render_key: StreamRenderKey::default(),
+                cache_hit: false,
             };
         }
 
         let render_key =
             StreamRenderKey::committed(input.styles, input.width, input.syntax_highlighting);
-        let render_reset =
-            self.render_key != Some(render_key) || !input.source.starts_with(&self.source);
-        if render_reset {
-            self.reset_for_key(render_key, input.source);
-        } else {
-            self.source.push_str(&input.source[self.source.len()..]);
-        }
+        let cache_hit =
+            self.last_generation == Some(input.generation) && self.render_key == Some(render_key);
+        if !cache_hit {
+            let render_reset =
+                self.render_key != Some(render_key) || !input.source.starts_with(&self.source);
+            if render_reset {
+                self.reset_for_key(render_key, input.source);
+            } else {
+                self.source.push_str(&input.source[self.source.len()..]);
+            }
 
-        let stable_end = coco_tui_markdown::stable_prefix_end(&self.source);
-        if stable_end > self.stable_prefix_end {
-            self.stable_lines = render_committed_stable_region(&self.source[..stable_end], input);
-            self.stable_prefix_end = stable_end;
-        }
+            let stable_end = coco_tui_markdown::stable_prefix_end(&self.source);
+            if stable_end > self.stable_prefix_end {
+                self.stable_lines =
+                    render_committed_stable_region(&self.source[..stable_end], input);
+                self.stable_prefix_end = stable_end;
+            }
 
-        let tail_source = &self.source[self.stable_prefix_end..];
-        if self.tail_source_start != self.stable_prefix_end || self.tail_source != tail_source {
-            self.tail_source_start = self.stable_prefix_end;
-            self.tail_source.clear();
-            self.tail_source.push_str(tail_source);
-            self.tail_lines =
-                render_mutable_tail_region(&self.tail_source, input, self.stable_lines.is_empty());
+            let tail_source = &self.source[self.stable_prefix_end..];
+            if self.tail_source_start != self.stable_prefix_end || self.tail_source != tail_source {
+                self.tail_source_start = self.stable_prefix_end;
+                self.tail_source.clear();
+                self.tail_source.push_str(tail_source);
+                self.tail_lines = render_mutable_tail_region(
+                    &self.tail_source,
+                    input,
+                    self.stable_lines.is_empty(),
+                );
+            }
+            self.last_generation = Some(input.generation);
         }
 
         StreamRenderProjection {
@@ -146,6 +171,7 @@ impl StreamRenderController {
             tail_lines: &self.tail_lines,
             stable_source_len: self.stable_prefix_end,
             render_key,
+            cache_hit,
         }
     }
 
@@ -162,6 +188,7 @@ impl StreamRenderController {
 
     pub(crate) fn clear(&mut self) {
         self.render_key = None;
+        self.last_generation = None;
         self.source.clear();
         self.stable_prefix_end = 0;
         self.stable_lines.clear();

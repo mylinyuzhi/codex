@@ -175,3 +175,76 @@ async fn paste_shows_error_toast_when_backend_fails() {
         state.ui.toasts[0].message
     );
 }
+
+#[test]
+fn test_normalize_pasted_path_handles_quotes_escapes_and_file_urls() {
+    use super::normalize_pasted_path;
+
+    assert_eq!(
+        normalize_pasted_path("/home/u/img.png"),
+        Some(std::path::PathBuf::from("/home/u/img.png"))
+    );
+    assert_eq!(
+        normalize_pasted_path("'/home/u/my img.png'"),
+        Some(std::path::PathBuf::from("/home/u/my img.png"))
+    );
+    assert_eq!(
+        normalize_pasted_path("\"/home/u/my img.png\""),
+        Some(std::path::PathBuf::from("/home/u/my img.png"))
+    );
+    assert_eq!(
+        normalize_pasted_path("/home/u/my\\ img.png"),
+        Some(std::path::PathBuf::from("/home/u/my img.png"))
+    );
+    assert_eq!(
+        normalize_pasted_path("file:///home/u/my%20img.png"),
+        Some(std::path::PathBuf::from("/home/u/my img.png"))
+    );
+    assert_eq!(
+        normalize_pasted_path("file://localhost/home/u/img.png"),
+        Some(std::path::PathBuf::from("/home/u/img.png"))
+    );
+    // Multi-line pastes are never a single path token.
+    assert_eq!(normalize_pasted_path("/a.png\n/b.png"), None);
+    assert_eq!(normalize_pasted_path("   "), None);
+}
+
+#[test]
+fn test_image_mime_for_path_uses_extension_allowlist() {
+    use super::image_mime_for_path;
+
+    let mime = |p: &str| image_mime_for_path(std::path::Path::new(p));
+    assert_eq!(mime("/a/b.png"), Some("image/png"));
+    assert_eq!(mime("/a/b.JPG"), Some("image/jpeg"));
+    assert_eq!(mime("/a/b.jpeg"), Some("image/jpeg"));
+    assert_eq!(mime("/a/b.gif"), Some("image/gif"));
+    assert_eq!(mime("/a/b.webp"), Some("image/webp"));
+    assert_eq!(mime("/a/b.bmp"), Some("image/bmp"));
+    assert_eq!(mime("/a/b.txt"), None);
+    assert_eq!(mime("/a/b"), None);
+}
+
+#[test]
+fn test_sniff_image_path_paste_reads_real_file_and_rejects_others() {
+    use super::sniff_image_path_paste;
+
+    let dir = std::env::temp_dir().join(format!("coco-paste-sniff-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let img = dir.join("shot.png");
+    std::fs::write(&img, [0x89, 0x50, 0x4e, 0x47]).expect("write temp image");
+
+    let sniffed = sniff_image_path_paste(img.to_str().expect("utf8 path"));
+    assert_eq!(
+        sniffed,
+        Some((vec![0x89, 0x50, 0x4e, 0x47], "image/png".to_string()))
+    );
+
+    // Nonexistent file and plain prose both fall through to text paste.
+    assert_eq!(
+        sniff_image_path_paste(dir.join("missing.png").to_str().expect("utf8")),
+        None
+    );
+    assert_eq!(sniff_image_path_paste("just some pasted prose"), None);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

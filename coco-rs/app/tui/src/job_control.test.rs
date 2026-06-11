@@ -7,27 +7,22 @@
 use super::*;
 
 #[test]
-fn prepare_resume_returns_none_on_a_fresh_context() {
+fn take_resume_pending_is_false_on_a_fresh_context() {
     let ctx = SuspendContext::new();
-    assert!(ctx.prepare_resume_action().is_none());
+    assert!(!ctx.take_resume_pending());
 }
 
 #[test]
-fn prepare_resume_consumes_a_pending_action() {
+fn take_resume_pending_consumes_the_pending_flag() {
     let ctx = SuspendContext::new();
-    *ctx.resume_pending.lock().unwrap() = Some(ResumeAction::Restore);
-
-    let prepared = ctx
-        .prepare_resume_action()
-        .expect("first take should yield the pending action");
-    // Round-tripped through PreparedResumeAction(ResumeAction::Restore).
-    assert!(matches!(
-        prepared,
-        PreparedResumeAction(ResumeAction::Restore)
-    ));
+    *ctx.resume_pending.lock().unwrap() = true;
 
     assert!(
-        ctx.prepare_resume_action().is_none(),
-        "the pending slot must be drained after one take"
+        ctx.take_resume_pending(),
+        "first take should yield the pending flag"
+    );
+    assert!(
+        !ctx.take_resume_pending(),
+        "the pending flag must be drained after one take"
     );
 }

@@ -14,7 +14,7 @@
 //!
 //! The renderer is **surface-agnostic**: it takes a [`ToolResultRenderCtx`]
 //! (styles + width + the syntax toggle + a truncation hint) rather than a
-//! `ChatWidget`, so the inline chat AND the Ctrl+O transcript reader render tool
+//! `CellsRenderer`, so the inline chat AND the Ctrl+O transcript reader render tool
 //! results identically. The reader sets `expanded: true`, relaxing the inline
 //! row caps so a diff truncated inline ("… +N lines (ctrl+o to expand)") is shown
 //! in full once expanded — the promise the inline hint makes.
@@ -76,7 +76,7 @@ const HEADER_CAP: usize = 96;
 const TAB_WIDTH: usize = 4;
 
 /// Everything the per-tool renderers need from their host surface. Decouples the
-/// renderer from `ChatWidget` so the inline chat and the transcript reader share
+/// renderer from `CellsRenderer` so the inline chat and the transcript reader share
 /// one implementation.
 pub(crate) struct ToolResultRenderCtx<'a> {
     pub(crate) styles: UiStyles<'a>,
@@ -1074,5 +1074,5 @@ fn char_width(ch: char) -> usize {
 }
 
 #[cfg(test)]
-#[path = "tool_result_render.test.rs"]
+#[path = "tool_result.test.rs"]
 mod tests;

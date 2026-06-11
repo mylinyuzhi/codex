@@ -118,7 +118,20 @@ pub(super) async fn submit(state: &mut AppState, command_tx: &mpsc::Sender<UserC
         return true;
     }
 
-    state.ui.input.add_to_history(text.clone());
+    // Snapshot the paste payloads this text references BEFORE the manager
+    // is cleared below, so recalling the entry rehydrates its pills.
+    let pastes: Vec<_> = state
+        .ui
+        .paste_manager
+        .entries()
+        .iter()
+        .filter(|e| text.contains(&e.pill))
+        .cloned()
+        .collect();
+    state
+        .ui
+        .input
+        .add_to_history_with_pastes(text.clone(), pastes);
     let resolved = state.ui.paste_manager.resolve_structured(&text);
 
     // Mint the user-message UUID once at submit time so the agent
@@ -209,7 +222,11 @@ pub(super) fn history_prev(state: &mut AppState) {
         Some(i) => i, // already at least-relevant tail; stay put
     };
     state.ui.input.history_index = Some(new_idx);
-    let text = state.ui.input.history[new_idx].text.clone();
+    let entry = &state.ui.input.history[new_idx];
+    let text = entry.text.clone();
+    // Rehydrate the paste manager so any pills in the recalled text
+    // resolve to their original payloads at submit.
+    state.ui.paste_manager.replace_entries(entry.pastes.clone());
     state.ui.input.textarea.set_text(&text);
     state
         .ui
@@ -227,7 +244,9 @@ pub(super) fn history_next(state: &mut AppState) {
     if idx > 0 {
         let new_idx = idx - 1;
         state.ui.input.history_index = Some(new_idx);
-        let text = state.ui.input.history[new_idx].text.clone();
+        let entry = &state.ui.input.history[new_idx];
+        let text = entry.text.clone();
+        state.ui.paste_manager.replace_entries(entry.pastes.clone());
         state.ui.input.textarea.set_text(&text);
         state
             .ui
@@ -237,6 +256,7 @@ pub(super) fn history_next(state: &mut AppState) {
     } else {
         state.ui.input.history_index = None;
         state.ui.input.textarea.set_text("");
+        state.ui.paste_manager.clear();
     }
 }
 

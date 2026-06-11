@@ -37,7 +37,18 @@ fn test_paste_manager_resolve() {
 fn test_paste_manager_numbering() {
     let mut mgr = PasteManager::new();
     let p1 = mgr.add_text("a".to_string());
-    let p2 = mgr.add_image("/tmp/img.png".to_string());
+    let p2 = mgr.add_image_data(vec![0x89, 0x50], "image/png".to_string());
     assert_eq!(p1, "[Pasted text #1]");
     assert_eq!(p2, "[Image #2]");
+}
+
+#[test]
+fn test_resolve_structured_image_carries_bytes() {
+    let mut mgr = PasteManager::new();
+    let pill = mgr.add_image_data(vec![1, 2, 3], "image/png".to_string());
+    let resolved = mgr.resolve_structured(&format!("look {pill}"));
+    assert_eq!(resolved.text, "look");
+    assert_eq!(resolved.images.len(), 1);
+    assert_eq!(resolved.images[0].bytes, vec![1, 2, 3]);
+    assert_eq!(resolved.images[0].mime, "image/png");
 }

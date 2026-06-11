@@ -9,7 +9,6 @@
 mod activity_panel;
 pub(crate) mod activity_summary;
 mod background_pills;
-pub(crate) mod chat;
 pub mod error_dialog;
 mod input;
 mod queue_status_widget;
@@ -27,7 +26,6 @@ mod tests;
 pub(crate) use activity_panel::ActivityPanel;
 pub(crate) use background_pills::BackgroundPills;
 pub(crate) use background_pills::build_view as build_background_pills_view;
-pub(crate) use chat::ChatWidget;
 pub(crate) use input::InputRenderModel;
 pub(crate) use input::InputWidget;
 pub(crate) use queue_status_widget::QueueStatusWidget;

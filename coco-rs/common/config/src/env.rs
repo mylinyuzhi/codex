@@ -178,6 +178,11 @@ pub enum EnvKey {
     /// teams/mailbox tree (and a future swarm-leader relocate it, like
     /// [`Self::CocoRemoteMemoryDir`] does for the memory base).
     CocoTeamsDir,
+    /// Tri-state override for the TUI's kitty keyboard-enhancement push
+    /// (truthy ⇒ never push, falsy ⇒ push even where auto-detection would
+    /// skip it, unset ⇒ auto: disabled only for VS Code terminals under
+    /// WSL). Read by `coco_tui::keyboard_modes`.
+    CocoTuiKeyboardEnhancementDisable,
     CocoVerifyPlan,
     /// Opt non-interactive (SDK / headless) sessions INTO file-history
     /// checkpointing. TS `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING` — those
@@ -397,6 +402,7 @@ impl EnvKey {
             Self::CocoTeamName => "COCO_TEAM_NAME",
             Self::CocoTeammateCommand => "COCO_TEAMMATE_COMMAND",
             Self::CocoTeamsDir => "COCO_TEAMS_DIR",
+            Self::CocoTuiKeyboardEnhancementDisable => "COCO_TUI_KEYBOARD_ENHANCEMENT_DISABLE",
             Self::CocoVerifyPlan => "COCO_VERIFY_PLAN",
             Self::CocoFileCheckpointingSdkEnable => "COCO_FILE_CHECKPOINTING_SDK_ENABLE",
             Self::CocoFileCheckpointingDisable => "COCO_FILE_CHECKPOINTING_DISABLE",

@@ -18,7 +18,9 @@ use crate::transcript::stream::streaming_cursor_line;
 use coco_tui_ui::engine::history_insert::HistoryRows;
 use coco_tui_ui::engine::history_insert::render_history_rows;
 
-#[derive(Debug, Default, Clone)]
+// Deliberately NOT Clone: `committed` is the single scrollback-commit owner
+// (tui-v2 §6.7-10); a clone would be the forbidden second copy.
+#[derive(Debug, Default)]
 pub(crate) struct SurfaceStreamDriver {
     controller: StreamRenderController,
     /// The single record of stream rows already inserted into native scrollback
@@ -30,7 +32,7 @@ pub(crate) struct SurfaceStreamDriver {
     committed: Option<ScrollbackStreamCommit>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub(crate) struct PreparedLiveTail {
     pub(crate) lines: Vec<Line<'static>>,
     pub(crate) stream_append: Option<PreparedStreamAppend>,
@@ -38,9 +40,12 @@ pub(crate) struct PreparedLiveTail {
     /// to a different document (source replaced) — the surface must replay the
     /// finalized history before this frame's stream rows make sense.
     pub(crate) commit_invalidated: bool,
+    /// `Some(hit)` when the stream projection ran this frame (`None` for
+    /// view-mode / no-stream frames) — perf-log attribution only.
+    pub(crate) stream_cache_hit: Option<bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct PreparedStreamAppend {
     pub(crate) rows: HistoryRows,
     pub(crate) commit: ScrollbackStreamCommit,
@@ -68,6 +73,7 @@ impl SurfaceStreamDriver {
                 lines: build_live_tail_lines(state, styles, width, plan),
                 stream_append: None,
                 commit_invalidated: false,
+                stream_cache_hit: None,
             };
         }
 
@@ -75,21 +81,26 @@ impl SurfaceStreamDriver {
             // Transient gap: event coalescing can fold a turn's last delta and
             // the next turn's first into one draw, so a `streaming == None`
             // frame is NOT a reliable end-of-stream signal. Reset only the
-            // render cache; the scrollback commit persists until the finalize
-            // consumes it or a genuine identity change replays it. Clearing it
-            // here re-committed already-present rows (duplication).
+            // render caches (the single-slot in-flight memo would otherwise
+            // pin the last response's render until the next stream); the
+            // scrollback commit persists until the finalize consumes it or a
+            // genuine identity change replays it. Clearing it here
+            // re-committed already-present rows (duplication).
             self.controller.clear();
+            crate::transcript::render::assistant::clear_in_flight_markdown_memo();
             return PreparedLiveTail::default();
         };
 
         let visible = streaming.visible_content();
         let render_key_input = StreamRenderInput {
             source: visible,
+            generation: streaming.visible_generation,
             styles,
             width,
             syntax_highlighting: state.ui.display_settings.syntax_highlighting,
         };
         let projection = self.controller.render_projection(render_key_input);
+        let projection_cache_hit = projection.cache_hit;
         let stable_line_len = projection.stable_lines.len();
         // CONTENT identity, not size, is the gate — and it does NOT depend on
         // the controller reset flag. A surviving commit is still valid iff its
@@ -199,6 +210,7 @@ impl SurfaceStreamDriver {
             lines,
             stream_append,
             commit_invalidated,
+            stream_cache_hit: Some(projection_cache_hit),
         }
     }
 
@@ -228,7 +240,7 @@ impl SurfaceStreamDriver {
     pub(crate) fn reset(&mut self) {
         self.controller.clear();
         self.committed = None;
-        crate::widgets::chat::render_assistant::clear_in_flight_markdown_memo();
+        crate::transcript::render::assistant::clear_in_flight_markdown_memo();
     }
 }
 

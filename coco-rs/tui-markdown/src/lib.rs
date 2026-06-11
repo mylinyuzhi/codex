@@ -122,7 +122,13 @@ pub fn highlight_code_lines(
     styles: UiStyles<'_>,
     syntax: SyntaxHighlighting,
 ) -> Option<std::sync::Arc<Vec<Vec<Span<'static>>>>> {
-    highlight::highlight_code(code, lang, styles, syntax)
+    highlight::highlight_code(
+        code,
+        lang,
+        styles,
+        syntax,
+        highlight::HighlightMode::Committed,
+    )
 }
 
 /// Return the byte index of the longest conservative Markdown source prefix
@@ -982,7 +988,15 @@ impl<'a> Writer<'a> {
         };
         self.emit_raw_line(vec![Span::styled(top, border_color)]);
 
-        let highlighted = highlight::highlight_code(&code, &lang, self.styles, self.syntax);
+        let mode = if self.streaming {
+            // The in-flight tail re-renders the growing open fence every
+            // revealed line: extend the prefix checkpoint, keep per-delta
+            // snapshots out of the shared LRU.
+            highlight::HighlightMode::Streaming
+        } else {
+            highlight::HighlightMode::Committed
+        };
+        let highlighted = highlight::highlight_code(&code, &lang, self.styles, self.syntax, mode);
         let code_lines: Vec<&str> = code.split('\n').collect();
         // Drop a trailing empty element from the final newline.
         let line_count = if code.ends_with('\n') {

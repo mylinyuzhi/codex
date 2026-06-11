@@ -61,6 +61,13 @@ fn bench_native_replay(c: &mut Criterion) {
         for (label, content) in [
             ("syntax", NativeReplayBenchContent::SyntaxCode),
             ("mermaid", NativeReplayBenchContent::Mermaid),
+            // The dominant production shape (thinking + text + tool call +
+            // result per turn). Its cached cases double as a structural
+            // guard: `bench_cached_render_case` asserts `cache_hit`, so a
+            // change that makes tool-bearing transcripts uncacheable again
+            // fails the bench instead of silently regressing every
+            // resize/theme replay.
+            ("tool_heavy", NativeReplayBenchContent::ToolHeavy),
         ] {
             bench_render_case(&mut group, label, content, width, MemoMode::Warm);
             bench_cached_render_case(&mut group, label, content, width);
@@ -185,6 +192,9 @@ fn turns_for(content: NativeReplayBenchContent) -> usize {
     match content {
         NativeReplayBenchContent::Markdown | NativeReplayBenchContent::SyntaxCode => 200,
         NativeReplayBenchContent::Mermaid => 80,
+        // Four cells per turn (user/thinking+text+tool/result), so fewer
+        // turns keep the replay within the row cap.
+        NativeReplayBenchContent::ToolHeavy => 120,
     }
 }
 

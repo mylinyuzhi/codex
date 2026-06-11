@@ -83,16 +83,22 @@ mode, or a full transcript `Vec<Line>`/`String` path for overlay rendering.
 `src/transcript/` owns the v2 streaming→scrollback pipeline
 (`docs/coco-rs/ui/tui-v2-design.md` §6.4): crate-internal `cells`
 (`RenderedCell` / `CellKind` / `SystemCellKind`, engine-message grouping,
-and the tool-commit boundary), `derive` (`Message` → cells plus tool-cell accessors), `render`
-(committed history renderer + replay cache), `stream` (stable/tail splitter,
-render key, watermark), `emission` (exactly-once tracker + the anchored
-finalize). The finalize anchors streamed scrollback rows at the SOURCE level
+and the tool-commit boundary), `derive` (`Message` → cells plus tool-cell
+accessors), `render/` (the ONLY renderer home: `cells_renderer.rs` —
+`CellsRenderer`, the `&[RenderedCell]` → `Vec<Line>` projection, ex
+`widgets::chat::ChatWidget` — plus the per-category cell renderers
+`assistant`/`user`/`system`/`tool`/`tool_result`, the committed history
+renderer, and the replay cache), `stream` (stable/tail splitter, render key,
+watermark), `emission` (exactly-once tracker + the anchored finalize). The
+finalize anchors streamed scrollback rows at the SOURCE level
 (`text.starts_with(source_prefix)` + render-key gate) and appends only the
 committed render's suffix — there is no rasterized per-row reconciliation;
 soundness is pinned by
 `transcript::stream::tests::test_stable_lines_are_row_prefix_of_full_committed_render`.
-`src/surface/` keeps the per-frame drivers and terminal I/O. Do not reintroduce
-per-row fingerprints on the stream path or a second streaming-only renderer.
+`src/surface/` keeps the per-frame drivers and terminal I/O; `src/widgets/`
+is frame composition only and depends on `transcript::render`, never the
+reverse. Do not reintroduce per-row fingerprints on the stream path, a
+second streaming-only renderer, or a renderer under `widgets/`.
 
 **Single scrollback-commit owner (§6.7-10).** The fact "these stream rows are
 already in native scrollback" lives in exactly ONE place —

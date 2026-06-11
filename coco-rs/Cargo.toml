@@ -367,6 +367,13 @@ syntect = { version = "5", default-features = false, features = [
     "default-syntaxes",
     "regex-fancy",
 ] }
+# Extra syntect grammars (TypeScript/TSX, TOML, Dockerfile, Terraform, …) —
+# the stock default set lacks them. `syntect-fancy` matches our pure-Rust
+# regex-fancy syntect above (NOT `syntect-default-onig`: engine-specific
+# dumps must match the linked regex engine or grammars fail to load).
+two-face = { version = "0.5", default-features = false, features = [
+    "syntect-fancy",
+] }
 # Mermaid layout engine (coco-tui-mermaid). `default-features = false` drops the
 # `cli` (clap) and `png` (resvg/usvg/tiny-skia) features — we consume only the
 # pure-Rust parse + geometric-layout core and project it to Unicode box-drawing

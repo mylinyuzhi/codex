@@ -124,6 +124,36 @@ pub(crate) fn header_bar_view(
     }
 }
 
+/// Cheap content key over every input [`header_history_lines`] reads — the
+/// native surface rebuilds (and re-fingerprints) the session header only when
+/// this key changes, instead of building ~6 `Line`s + hashing them per frame.
+/// MUST cover every state field the header renderer consumes, or a header
+/// change silently stops triggering the history replay.
+pub(crate) fn header_input_key(state: &AppState, theme_hash: u64, width: u16) -> u64 {
+    use std::hash::Hash;
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    width.hash(&mut h);
+    theme_hash.hash(&mut h);
+    state.session.pid.hash(&mut h);
+    match state.session.model_by_role.get(&ModelRole::Main) {
+        Some(binding) => {
+            binding.provider.hash(&mut h);
+            binding.model_id.hash(&mut h);
+        }
+        None => {
+            state.session.provider.hash(&mut h);
+            state.session.model.hash(&mut h);
+        }
+    }
+    state.session.thinking_effort.hash(&mut h);
+    state.session.fast_mode.hash(&mut h);
+    state.session.working_dir.hash(&mut h);
+    state.session.git_branch.hash(&mut h);
+    state.session.worktree_path.hash(&mut h);
+    h.finish()
+}
+
 pub(crate) fn header_history_lines(
     state: &AppState,
     styles: UiStyles<'_>,

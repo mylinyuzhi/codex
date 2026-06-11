@@ -18,17 +18,16 @@
 //! # Per-layer submodules
 //!
 //! Each `CoreEvent` layer owns its own file under
-//! `server_notification_handler/`. This split was driven by the root file
-//! exceeding 990 LoC — past CLAUDE.md's 800-line threshold. Per-layer files
-//! keep each handler under 500 lines and make the exhaustive-match arms
-//! scannable.
+//! `server_notification_handler/`; the exhaustive-match arms stay scannable
+//! because per-variant logic is extracted into named private functions (and,
+//! for the turn-lifecycle family, into `protocol/turn.rs`).
 //!
-//! - `protocol.rs` — 65 `ServerNotification` arms + `on_turn_completed`
-//! - `stream.rs` — 7 `AgentStreamEvent` arms
-//! - `tui_only.rs` — 21 `TuiOnlyEvent` arms + diff-stats, rewind, elicitation helpers
-//!
-//! Complex per-variant logic is extracted into named private functions
-//! within each layer's file (e.g. `on_turn_completed`, `on_rewind_completed`).
+//! - `protocol.rs` — the flat `ServerNotification` match (~62 arms); its
+//!   `protocol/turn.rs` child owns the `TurnEnded` outcome family,
+//!   auto-restore, and the session-boundary cleanup
+//! - `stream.rs` — `AgentStreamEvent` arms
+//! - `tui_only.rs` — `TuiOnlyEvent` arms + diff-stats, rewind, elicitation
+//!   helpers
 
 use coco_types::CoreEvent;
 use tokio::sync::mpsc::Sender;
@@ -213,8 +212,10 @@ fn tui_event_variant(t: &coco_types::TuiOnlyEvent) -> &'static str {
 /// dropped when the receiver goes out of scope — equivalent to
 /// /dev/null for dispatched follow-up commands.
 ///
-/// Marked `pub` (not `pub(crate)`) so integration tests under
-/// `app/tui/tests/` can use it without spelling out the channel.
+/// Gated behind the `testing` feature (the crate's own `tests/` get it via
+/// the self dev-dependency that enables `testing`); it must not ship in
+/// release builds.
+#[cfg(any(test, feature = "testing"))]
 pub fn handle_event_for_test(state: &mut AppState, event: CoreEvent) -> bool {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     handle_core_event(state, event, &tx)

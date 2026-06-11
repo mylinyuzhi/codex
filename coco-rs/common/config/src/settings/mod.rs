@@ -325,8 +325,11 @@ pub struct TuiSettings {
 
 /// TUI frame performance logging knobs.
 ///
-/// Disabled by default; when enabled, callers can sample every Nth frame and
-/// always log frames/stages that exceed the configured slow thresholds.
+/// Disabled by default; when enabled, every Nth frame is sampled (an unbiased
+/// healthy-frame baseline — slow-only logs can't answer "what does a normal
+/// frame cost" or give cache hit rates) and frames/stages exceeding the slow
+/// thresholds are always logged. `sample_every_n_frames = 0` opts out of
+/// sampling (slow-only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TuiPerformanceSettings {
@@ -340,7 +343,7 @@ impl Default for TuiPerformanceSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            sample_every_n_frames: 0,
+            sample_every_n_frames: 10,
             slow_frame_ms: 16,
             slow_stage_us: 500,
         }

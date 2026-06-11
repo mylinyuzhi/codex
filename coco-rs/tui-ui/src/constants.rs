@@ -36,8 +36,19 @@ pub const SCROLL_PAGE_STEP: i32 = 20;
 /// Interval for status-bar updates, toast expiry, idle detection.
 pub const TICK_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Interval for spinner animation frames.
+/// Interval for spinner animation frames while a stream is in flight.
+/// Streaming reveal pacing is one line per PAINTED frame
+/// (`StreamingState::advance_display`), so this cadence also bounds
+/// streamed-text throughput — do not slow it while streaming.
 pub const SPINNER_TICK_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Frame cadence for spinner-only phases (tool running / compacting, no
+/// stream in flight): nothing on screen changes faster than the spinner
+/// glyph, whose period this matches
+/// (`widgets::status_indicator::SPINNER_INTERVAL_MS`). Sampling at the glyph
+/// period keeps every transition visible while cutting the idle paint load
+/// vs the 50ms streaming tick.
+pub const SPINNER_ONLY_TICK_INTERVAL: Duration = Duration::from_millis(80);
 
 /// Duration before an state transition gate drops.
 pub const OVERLAY_TRANSITION_DURATION: Duration = Duration::from_millis(150);

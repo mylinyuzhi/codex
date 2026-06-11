@@ -13,7 +13,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
-use super::ChatWidget;
+use super::CellsRenderer;
 use crate::i18n::t;
 use crate::presentation::thinking::ThinkingDisplay;
 use crate::presentation::thinking::ThinkingRenderInput;
@@ -53,29 +53,86 @@ thread_local! {
     /// Reached by [`render_committed_assistant_markdown`], the committed
     /// assistant-text renderer shared by native finalized append and replay.
     /// It absorbs the repeated full-history suffix renders the replay binary
-    /// search performs. Bounded so it can't grow without limit; because entries
-    /// are content-keyed a stale one can never be served — at worst a removed
-    /// message's entry is dead weight until the cap clear. It deliberately does
-    /// NOT mirror the `reasoning_metadata` prune lifecycle (that exists for
-    /// correctness, not memory). Accepted residual risk: hits are served on the
-    /// truncated 64-bit key without storing the full inputs, so a hash
-    /// collision would serve wrong lines (~cap²/2⁶⁵ per cap-epoch — negligible,
-    /// and bounded to one cap window).
-    static COMMITTED_MD_MEMO: RefCell<HashMap<u64, Vec<Line<'static>>>> =
-        RefCell::new(HashMap::new());
+    /// search performs. Bounded by entry count AND estimated bytes with LRU
+    /// eviction (width+theme live in the key, so resize drags / theme cycling
+    /// multiply entries — a count-only cap let that pin tens of MB and its
+    /// wholesale clear evicted every legitimate entry at once). Because
+    /// entries are content-keyed a stale one can never be served — at worst a
+    /// removed message's entry is dead weight until evicted. It deliberately
+    /// does NOT mirror the `reasoning_metadata` prune lifecycle (that exists
+    /// for correctness, not memory). Accepted residual risk: hits are served
+    /// on the truncated 64-bit key without storing the full inputs, so a hash
+    /// collision would serve wrong lines (~cap²/2⁶⁵ — negligible).
+    static COMMITTED_MD_MEMO: RefCell<MdMemo> = RefCell::new(MdMemo::default());
 
     /// Single-slot memo for the in-flight (streaming) render. Every delta
     /// changes the content hash, so the shared map would gain one dead
-    /// snapshot per delta and wholesale-clear legitimately cached committed
-    /// cells at the cap. The live tail is one monotonically growing document
-    /// — remembering the last render is exactly enough to dedupe the
-    /// measure-then-paint double call within a frame.
+    /// snapshot per delta and evict legitimately cached committed cells. The
+    /// live tail is one monotonically growing document — remembering the last
+    /// render is exactly enough to dedupe the measure-then-paint double call
+    /// within a frame.
     static IN_FLIGHT_MD_MEMO: RefCell<Option<(u64, Vec<Line<'static>>)>> =
         const { RefCell::new(None) };
 }
 
-/// Soft cap on memo entries; cleared wholesale on overflow (cheap, rare).
+/// Memo caps: entry count and estimated payload bytes (mirrors
+/// `HistoryReplayCache`'s byte-capped policy at a smaller scale).
 const COMMITTED_MD_MEMO_CAP: usize = 4096;
+const COMMITTED_MD_MEMO_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// LRU + byte-capped markdown memo (same shape as `HistoryReplayCache`,
+/// without the admission policy — committed-cell renders are always worth
+/// keeping).
+#[derive(Default)]
+struct MdMemo {
+    map: HashMap<u64, Vec<Line<'static>>>,
+    lru: std::collections::VecDeque<u64>,
+    bytes: usize,
+}
+
+impl MdMemo {
+    fn touch(&mut self, key: u64) {
+        if let Some(pos) = self.lru.iter().position(|&k| k == key) {
+            self.lru.remove(pos);
+        }
+        self.lru.push_back(key);
+    }
+
+    fn get(&mut self, key: u64) -> Option<Vec<Line<'static>>> {
+        let hit = self.map.get(&key).cloned()?;
+        self.touch(key);
+        Some(hit)
+    }
+
+    fn put(&mut self, key: u64, value: Vec<Line<'static>>) {
+        let value_bytes = super::estimate_lines_bytes(&value);
+        if let Some(previous) = self.map.insert(key, value) {
+            self.bytes = self
+                .bytes
+                .saturating_sub(super::estimate_lines_bytes(&previous));
+        }
+        self.bytes = self.bytes.saturating_add(value_bytes);
+        self.touch(key);
+        while self.lru.len() > COMMITTED_MD_MEMO_CAP || self.bytes > COMMITTED_MD_MEMO_MAX_BYTES {
+            let Some(evicted) = self.lru.pop_front() else {
+                break;
+            };
+            if let Some(entry) = self.map.remove(&evicted) {
+                self.bytes = self
+                    .bytes
+                    .saturating_sub(super::estimate_lines_bytes(&entry));
+            }
+        }
+    }
+
+    /// Only the test/bench memo reset uses this; gate it with its caller.
+    #[cfg(any(test, feature = "testing"))]
+    fn clear(&mut self) {
+        self.map.clear();
+        self.lru.clear();
+        self.bytes = 0;
+    }
+}
 
 #[cfg(any(test, feature = "testing"))]
 pub(crate) fn clear_committed_markdown_memo_for_tests() {
@@ -186,7 +243,7 @@ fn render_assistant_markdown(
                 .and_then(|(cached_key, lines)| (*cached_key == key).then(|| lines.clone()))
         })
     } else {
-        COMMITTED_MD_MEMO.with(|m| m.borrow().get(&key).cloned())
+        COMMITTED_MD_MEMO.with(|m| m.borrow_mut().get(key))
     };
     if let Some(hit) = hit {
         return hit;
@@ -195,19 +252,13 @@ fn render_assistant_markdown(
     if mode == RenderMode::InFlight {
         IN_FLIGHT_MD_MEMO.with(|m| *m.borrow_mut() = Some((key, rendered.clone())));
     } else {
-        COMMITTED_MD_MEMO.with(|m| {
-            let mut m = m.borrow_mut();
-            if m.len() >= COMMITTED_MD_MEMO_CAP {
-                m.clear();
-            }
-            m.insert(key, rendered.clone());
-        });
+        COMMITTED_MD_MEMO.with(|m| m.borrow_mut().put(key, rendered.clone()));
     }
     rendered
 }
 
 pub(super) fn try_render(
-    w: &ChatWidget<'_>,
+    w: &CellsRenderer<'_>,
     cell: &RenderedCell,
     lines: &mut Vec<Line<'static>>,
 ) -> Option<()> {

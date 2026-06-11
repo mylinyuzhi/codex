@@ -191,6 +191,10 @@ pub enum ViewportResizePolicy {
 pub struct ViewportDrawStats {
     pub buffer_updates: usize,
     pub invalidated: bool,
+    /// Time spent in the caller's render closure (widget paint into the back
+    /// buffer) — separates "building the frame" from the diff/draw/flush
+    /// pipeline below it.
+    pub render_elapsed: Duration,
     pub diff_elapsed: Duration,
     pub draw_elapsed: Duration,
     pub flush_elapsed: Duration,
@@ -662,6 +666,7 @@ where
     {
         self.autoresize()?;
         let viewport_area = self.viewport_area;
+        let render_start = self.perf_stats_enabled.then(Instant::now);
         let current = self.current_buffer_mut();
         current.reset();
         let mut frame = SurfaceFrame {
@@ -670,6 +675,9 @@ where
             cursor_claim: None,
         };
         render(&mut frame);
+        let render_elapsed = render_start
+            .map(|start| start.elapsed())
+            .unwrap_or_default();
         let cursor_claim = frame.cursor_claim;
 
         let was_invalidated = self.invalidated;
@@ -687,6 +695,7 @@ where
         self.last_viewport_draw_stats = ViewportDrawStats {
             buffer_updates: updates.len(),
             invalidated: was_invalidated,
+            render_elapsed,
             diff_elapsed,
             draw_elapsed,
             flush_elapsed,

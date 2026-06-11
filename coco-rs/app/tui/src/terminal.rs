@@ -113,16 +113,19 @@ pub struct TuiDrawOutcome {
     pub attention_requested: bool,
 }
 
-/// Enable the TUI-private terminal modes (raw mode, bracketed paste, and
-/// focus-change reporting).
+/// Enable the TUI-private terminal modes (raw mode, bracketed paste,
+/// focus-change reporting, and the kitty keyboard-enhancement push).
 ///
 /// Shared by [`setup_terminal`] (initial install) and
 /// [`crate::job_control::SuspendContext::suspend`] (re-arm after SIGCONT).
 /// Idempotent at the terminal level: re-issuing the same escape sequences
-/// while already in raw mode is a no-op.
+/// while already in raw mode is a no-op. (The enhancement push/pop is a
+/// stack, but every `enter` is paired with a `leave` pop on the suspend and
+/// exit paths, so the stack depth stays at one.)
 pub(crate) fn enter_tui_modes(stdout: &mut Stdout) -> io::Result<()> {
     enable_raw_mode()?;
     execute!(stdout, EnableBracketedPaste, EnableFocusChange)?;
+    crate::keyboard_modes::enable_keyboard_enhancement();
     Ok(())
 }
 
@@ -130,6 +133,7 @@ pub(crate) fn enter_tui_modes(stdout: &mut Stdout) -> io::Result<()> {
 /// entered it. `LeaveAlternateScreen` is intentionally idempotent here so panic
 /// cleanup and suspend/external-process paths share one terminal reset.
 pub(crate) fn leave_tui_modes() -> io::Result<()> {
+    crate::keyboard_modes::restore_keyboard_enhancement_stack();
     disable_raw_mode()?;
     execute!(
         io::stdout(),
@@ -169,8 +173,13 @@ pub(crate) fn setup_terminal() -> io::Result<NativeTerminal> {
 
 /// Restore the terminal to its original state — leaves alt-screen and
 /// disables the modes [`enter_tui_modes`] installed.
+///
+/// Process-exit/panic path, so it adds the hard keyboard-reporting reset
+/// (`CSI < u`) on top of the stack pop: the parent shell must never inherit
+/// enhanced key reporting even if a terminal missed the pop.
 pub fn restore_terminal() -> io::Result<()> {
     leave_tui_modes()?;
+    crate::keyboard_modes::reset_keyboard_reporting_after_exit();
     Ok(())
 }
 
@@ -231,7 +240,7 @@ impl Tui<TerminalBackend> {
 
     /// Initiate the Ctrl+Z suspend dance. Blocks until SIGCONT delivered
     /// (typically by `fg` in the parent shell), at which point we
-    /// re-arm TUI modes and a [`PreparedResumeAction`] is queued for the
+    /// re-arm TUI modes and the resume-pending flag is set for the
     /// next [`draw`].
     ///
     /// No-op on non-Unix platforms.
@@ -327,7 +336,7 @@ where
     ) -> Result<TuiDrawOutcome, B::Error> {
         let perf_config = state.ui.display_settings.performance;
         self.terminal.set_perf_stats_enabled(perf_config.enabled);
-        if self.suspend_context.prepare_resume_action().is_some() {
+        if self.suspend_context.take_resume_pending() {
             self.clear_surface_after_resume()?;
         }
 
@@ -363,6 +372,7 @@ where
                 duration_us = crate::perf::duration_us(stage_elapsed),
                 plan_us = crate::perf::duration_us(plan_elapsed),
                 prepare_us = crate::perf::duration_us(native_frame.prepare_stats.prepare),
+                stream_cache_hit = ?native_frame.prepare_stats.stream_cache_hit,
                 lines = native_frame.live_lines.as_ref().map_or(0, Vec::len),
                 history_append_rows = native_frame.finalized_history.expected_rows(),
                 stream_append_rows = native_frame
@@ -511,7 +521,9 @@ where
                 "viewport is not seated flush against history"
             );
         }
-        tracing::debug!(
+        // Trace, not debug: this fires unconditionally on EVERY frame (no perf
+        // sampling gate), so at debug it dominates any debug-filtered capture.
+        tracing::trace!(
             target: "tui::surface::geometry",
             pin = ?self.main_screen_viewport_pin,
             previous_viewport = ?geometry_commit.previous_viewport,

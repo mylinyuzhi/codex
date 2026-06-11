@@ -47,8 +47,12 @@ fn render_all(
 }
 
 fn input<'a>(source: &'a str, theme: &'a Theme) -> StreamRenderInput<'a> {
+    // Every test input gets a fresh generation: the production contract is
+    // "equal generation ⇒ identical source", and tests feed evolving sources.
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     StreamRenderInput {
         source,
+        generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         styles: UiStyles::new(theme),
         width: 80,
         syntax_highlighting: SyntaxHighlighting::Disabled,
@@ -98,6 +102,7 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
                 let view = &source[..fed];
                 let projection = controller.render_projection(StreamRenderInput {
                     source: view,
+                    generation: fed as u64,
                     styles: UiStyles::new(&theme),
                     width,
                     syntax_highlighting: syntax,
@@ -108,9 +113,9 @@ fn test_stable_lines_are_row_prefix_of_full_committed_render() {
                     .map(|line| format!("{line:?}"))
                     .collect();
                 let full: Vec<String> =
-                    crate::widgets::chat::render_assistant::render_committed_assistant_markdown(
+                    crate::transcript::render::assistant::render_committed_assistant_markdown(
                         view,
-                        crate::widgets::chat::render_assistant::CommittedAssistantMarkdownOptions {
+                        crate::transcript::render::assistant::CommittedAssistantMarkdownOptions {
                             styles: UiStyles::new(&theme),
                             width,
                             syntax_highlighting: syntax,
