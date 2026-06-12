@@ -90,7 +90,7 @@ fn from_settings_converts_tui_performance_defaults_and_overrides() {
     assert!(!display.performance.enabled);
     assert_eq!(display.performance.sample_every_n_frames, 10);
     assert_eq!(display.performance.slow_frame_ms, 16);
-    assert_eq!(display.performance.slow_stage_us, 500);
+    assert_eq!(display.performance.slow_stage_us, 1000);
 
     let mut settings = Settings::default();
     settings.tui.performance.enabled = true;

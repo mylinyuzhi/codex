@@ -187,6 +187,29 @@ pub enum RunningState {
     Done,
 }
 
+/// The frame-paced animation the surface needs next, derived purely from
+/// [`AppState`]. `App::redraw` maps each variant to a single self-armed
+/// frame; [`UiAnimation::Idle`] arms nothing, letting the frame scheduler
+/// sleep until a real event arrives.
+///
+/// This is the *one* place that answers "should the TUI keep painting?".
+/// Collapsing it into a single derivation — instead of flag checks
+/// scattered across the run loop — is what closes the gap where a turn
+/// blocked on a user prompt re-painted identical spinner frames forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UiAnimation {
+    /// Streaming text reveal: one row per painted frame, so the reveal
+    /// pacing *is* the frame cadence. Re-armed even behind a prompt — the
+    /// stream keeps producing visible rows.
+    StreamReveal,
+    /// Running-turn / compaction spinner. Its glyph is a pure function of
+    /// the paused-aware status clock, so it only advances while the turn
+    /// is genuinely progressing.
+    SpinnerOnly,
+    /// Nothing animates; the scheduler may sleep until the next event.
+    Idle,
+}
+
 impl AppState {
     /// Create a new default state with a [`SystemClock`].
     pub fn new() -> Self {
@@ -227,6 +250,38 @@ impl AppState {
     /// Whether a spinner should be shown.
     pub fn should_show_spinner(&self) -> bool {
         self.is_streaming() || self.session.is_busy()
+    }
+
+    /// What the surface needs to animate next, if anything. Pure read of
+    /// the model — it never schedules; `App::redraw` translates the result
+    /// into a self-armed frame.
+    ///
+    /// The spinner only needs a fresh frame while it is both *visible* and
+    /// *advancing*. The glyph is a pure function of the paused-aware
+    /// `elapsed_ms` (`status_indicator::spinner_frame`), so it is static —
+    /// and re-arming pure waste — when either:
+    /// - a full-screen modal covers the interactive viewport
+    ///   (`render_interactive_viewport` early-returns to the modal), or
+    /// - the turn is paused on a blocking tool-permission prompt (frozen
+    ///   `elapsed_ms`).
+    ///
+    /// A bottom-pane prompt that does *not* pause (PlanExit, Question,
+    /// McpServerApproval, …) leaves the indicator visible and the clock
+    /// running, so it must keep animating — mirroring the TS REPL, which
+    /// keeps the elapsed clock live through those dialogs. Streaming is
+    /// always armed: it produces a new visible row per painted frame.
+    pub(crate) fn ui_animation(&self) -> UiAnimation {
+        if self.is_streaming() {
+            return UiAnimation::StreamReveal;
+        }
+        let spinner_animating = (self.ui.ephemeral.turn_active() || self.session.is_compacting)
+            && self.ui.modal.is_none()
+            && !self.ui.ephemeral.turn_paused();
+        if spinner_animating {
+            UiAnimation::SpinnerOnly
+        } else {
+            UiAnimation::Idle
+        }
     }
 
     /// Whether Ctrl+C has work to interrupt (streaming, busy session,

@@ -36,6 +36,7 @@ use crate::keybinding_bridge;
 use crate::state::AppState;
 use crate::state::SuggestionKind;
 use crate::state::Toast;
+use crate::state::UiAnimation;
 use crate::terminal::Tui;
 use crate::update::handle_command;
 use coco_tui_ui::constants;
@@ -445,10 +446,11 @@ impl App {
     ///
     /// Folds in the per-frame book-keeping that used to live in the
     /// `TuiEvent::SpinnerTick` handler: pause-clock tick + streaming
-    /// dot advance. At the end, if a turn or stream is still active,
-    /// re-arm the next frame via [`FrameRequester::schedule_frame_in`]
-    /// so the spinner self-perpetuates at `SPINNER_TICK_INTERVAL`
-    /// without an unconditional 50 ms timer in the main loop.
+    /// dot advance. At the end it consults [`AppState::ui_animation`]
+    /// and, only if something is actually animating, re-arms the next
+    /// frame via [`FrameRequester::schedule_frame_in`] — so the spinner
+    /// self-perpetuates without an unconditional timer, and a blocked or
+    /// idle TUI re-arms nothing.
     fn redraw(&mut self) -> io::Result<()> {
         self.frame_index = self.frame_index.saturating_add(1);
         let frame_index = self.frame_index;
@@ -485,20 +487,23 @@ impl App {
             self.handle_surface_attention_requested();
         }
 
-        // Self-schedule the next frame while a turn is running or a
-        // stream is in flight. This replaces the unconditional
-        // `spinner_interval.tick()` arm of the main loop.
+        // Self-schedule the next animation frame. The decision of
+        // *whether* to animate lives in `AppState::ui_animation` (a pure
+        // read of the model); this arm only maps that to a cadence.
         //
         // Streaming keeps the fast tick (reveal pacing is one line per
-        // painted frame — slowing the cadence slows the text). Spinner-only
-        // phases (tool wait, compacting) tick at the glyph period instead:
-        // nothing else changes, so faster frames are pure waste.
-        if self.state.ui.streaming.is_some() {
-            self.frame_requester
-                .schedule_frame_in(constants::SPINNER_TICK_INTERVAL);
-        } else if self.state.ui.ephemeral.turn_active() || self.state.session.is_compacting {
-            self.frame_requester
-                .schedule_frame_in(constants::SPINNER_ONLY_TICK_INTERVAL);
+        // painted frame — slowing the cadence slows the text). The
+        // spinner ticks at its glyph period. `Idle` arms nothing, so a
+        // turn blocked on a user prompt — or a genuinely idle session —
+        // lets the frame scheduler sleep until the next real event.
+        match self.state.ui_animation() {
+            UiAnimation::StreamReveal => self
+                .frame_requester
+                .schedule_frame_in(constants::SPINNER_TICK_INTERVAL),
+            UiAnimation::SpinnerOnly => self
+                .frame_requester
+                .schedule_frame_in(constants::SPINNER_ONLY_TICK_INTERVAL),
+            UiAnimation::Idle => {}
         }
 
         if let Some(start) = frame_start {

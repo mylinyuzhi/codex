@@ -199,6 +199,18 @@ impl UiEphemeralState {
     pub(crate) fn turn_active(&self) -> bool {
         self.turn.is_some()
     }
+
+    /// `true` while the running turn's status clock is paused on a
+    /// blocking tool-permission prompt. The spinner glyph is a pure
+    /// function of the paused-aware `elapsed_ms`
+    /// ([`coco_tui_ui::widgets::status_indicator`]), so a paused turn
+    /// renders an identical frame every tick — animating it is wasted
+    /// work. Pairs with [`Self::turn_active`].
+    pub(crate) fn turn_paused(&self) -> bool {
+        self.turn
+            .as_ref()
+            .is_some_and(|turn| turn.pause_started_at.is_some())
+    }
 }
 
 #[cfg(test)]

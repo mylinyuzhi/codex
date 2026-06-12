@@ -1,5 +1,7 @@
 //! Tests for TUI AppState.
 
+use std::time::Instant;
+
 use coco_types::PermissionMode;
 
 use crate::state::AppState;
@@ -7,6 +9,9 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
+use crate::state::PlanExitPromptState;
+use crate::state::StreamingState;
+use crate::state::UiAnimation;
 use crate::state::session::TokenUsage;
 use crate::state::ui::Toast;
 use crate::transcript::cells::CellKind;
@@ -424,4 +429,84 @@ fn test_token_usage_update() {
 
     assert_eq!(state.session.token_usage.input_tokens, 100);
     assert_eq!(state.session.token_usage.output_tokens, 50);
+}
+
+// ── Frame-animation gating (`AppState::ui_animation`) ──
+
+#[test]
+fn test_ui_animation_idle_when_session_quiescent() {
+    let state = AppState::new();
+    assert_eq!(state.ui_animation(), UiAnimation::Idle);
+}
+
+#[test]
+fn test_ui_animation_stream_reveal_while_streaming() {
+    let mut state = AppState::new();
+    state.ui.streaming = Some(StreamingState::default());
+    assert_eq!(state.ui_animation(), UiAnimation::StreamReveal);
+}
+
+#[test]
+fn test_ui_animation_spinner_while_turn_running() {
+    let mut state = AppState::new();
+    state.ui.ephemeral.start_turn("Thinking", Instant::now());
+    assert_eq!(state.ui_animation(), UiAnimation::SpinnerOnly);
+}
+
+#[test]
+fn test_ui_animation_spinner_while_compacting() {
+    let mut state = AppState::new();
+    state.session.is_compacting = true;
+    assert_eq!(state.ui_animation(), UiAnimation::SpinnerOnly);
+}
+
+/// Regression for the 12 fps idle-redraw bug: a turn paused on a
+/// blocking tool-permission prompt must NOT keep animating. The clock
+/// freezes, the glyph (a pure function of `elapsed_ms`) freezes with it,
+/// so the old self-arm re-painted an identical frame ~12×/s for the whole
+/// wait. The two observed multi-minute gaps were both pausing prompts.
+#[test]
+fn test_ui_animation_idle_while_turn_paused_on_blocking_prompt() {
+    let mut state = AppState::new();
+    let now = Instant::now();
+    state.ui.ephemeral.start_turn("Thinking", now);
+    // What a `Permission` / `SandboxPermission` prompt does to the turn.
+    state.ui.ephemeral.tick_pause_clock(/*blocked*/ true, now);
+    assert_eq!(state.ui_animation(), UiAnimation::Idle);
+}
+
+/// TS-parity guard: a *non-pausing* prompt (PlanExit/Question/…) leaves
+/// the status indicator visible with a running clock, so the spinner must
+/// stay armed — the TS REPL keeps the elapsed clock live through these
+/// dialogs. Over-suppressing here would freeze a visibly-ticking spinner.
+#[test]
+fn test_ui_animation_spinner_during_non_pausing_prompt() {
+    let mut state = AppState::new();
+    state.ui.ephemeral.start_turn("Thinking", Instant::now());
+    state
+        .ui
+        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState::default()));
+    assert_eq!(state.ui_animation(), UiAnimation::SpinnerOnly);
+}
+
+/// A full-screen modal covers the interactive viewport, so the spinner is
+/// not painted and must not be armed even while a turn runs underneath.
+#[test]
+fn test_ui_animation_idle_while_modal_covers_running_turn() {
+    let mut state = AppState::new();
+    state.ui.ephemeral.start_turn("Thinking", Instant::now());
+    state.ui.show_modal(ModalState::Help);
+    assert_eq!(state.ui_animation(), UiAnimation::Idle);
+}
+
+/// Streaming takes precedence over a pending prompt: the reveal keeps
+/// producing visible rows, so it must stay armed.
+#[test]
+fn test_ui_animation_stream_reveal_overrides_prompt() {
+    let mut state = AppState::new();
+    state.ui.streaming = Some(StreamingState::default());
+    state
+        .ui
+        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState::default()));
+    assert_eq!(state.ui_animation(), UiAnimation::StreamReveal);
 }
