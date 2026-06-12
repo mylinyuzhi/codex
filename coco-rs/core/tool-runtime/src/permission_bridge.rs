@@ -39,6 +39,10 @@ pub struct ToolPermissionRequest {
     pub description: String,
     /// Tool input as JSON.
     pub input: serde_json::Value,
+    /// Tool execution cwd. Relative paths in `input` are resolved against
+    /// this cwd by clients when deriving scoped approval updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     /// Permission updates suggested by the evaluator for "always allow".
     /// TS: `PermissionDecision.suggestions`, e.g. `Read(<dir>/**)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

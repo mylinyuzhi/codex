@@ -43,6 +43,7 @@ pub(crate) struct PermissionController<'a> {
     /// hooks can override the user prompt with allow/deny.
     hooks: Option<&'a Arc<HookRegistry>>,
     orchestration_ctx: Option<&'a OrchestrationContext>,
+    cwd: Option<String>,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
     /// True when the session cannot show an interactive permission prompt
@@ -64,6 +65,7 @@ impl<'a> PermissionController<'a> {
         cancel: &'a CancellationToken,
         hooks: Option<&'a Arc<HookRegistry>>,
         orchestration_ctx: Option<&'a OrchestrationContext>,
+        cwd: Option<String>,
         completion_event_mode: ToolCompletionEventMode,
         avoid_permission_prompts: bool,
         deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
@@ -78,6 +80,7 @@ impl<'a> PermissionController<'a> {
             cancel,
             hooks,
             orchestration_ctx,
+            cwd,
             completion_event_mode,
             deferred_tool_completions,
             avoid_permission_prompts,
@@ -284,6 +287,7 @@ impl<'a> PermissionController<'a> {
             tool_name: tool_call.tool_name.clone(),
             description: message,
             input: tool_input.clone(),
+            cwd: self.cwd.clone(),
             suggestions,
             choices,
             // The generic controller can't resolve the coordinator's

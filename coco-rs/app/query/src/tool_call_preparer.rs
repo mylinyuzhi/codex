@@ -255,6 +255,12 @@ pub(crate) async fn prepare_one_pending_tool_call(
         args.cancel,
         args.hooks,
         Some(&args.orchestration_ctx),
+        args.ctx
+            .cwd_override
+            .as_deref()
+            .or(args.ctx.original_cwd.as_deref())
+            .and_then(|p| p.to_str())
+            .map(str::to_owned),
         args.completion_event_mode,
         args.ctx.avoid_permission_prompts,
         args.deferred_tool_completions.as_deref_mut(),

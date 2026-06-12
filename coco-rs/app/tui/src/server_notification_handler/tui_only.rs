@@ -70,6 +70,7 @@ pub(super) fn handle(
             choices,
             permission_suggestions,
             original_input,
+            cwd,
             worker_badge,
         } => {
             let detail =
@@ -93,6 +94,7 @@ pub(super) fn handle(
                     selected_choice: 0,
                     display_input,
                     original_input,
+                    cwd,
                     permission_suggestions,
                     explanation_visible: false,
                     explanation: crate::state::ExplainerFetch::NotFetched,

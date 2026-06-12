@@ -112,6 +112,7 @@ fn permission_with_choices_for_tool(tool_name: &str, values: &[&str], selected: 
         selected_choice: selected,
         display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: Some(serde_json::json!({"plan": "do the thing"})),
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,
@@ -239,6 +240,7 @@ async fn confirm_classic_yes_no_approves_selected_action() {
         selected_choice: 0,
         display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
         original_input: None,
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,
@@ -282,7 +284,18 @@ async fn confirm_classic_always_allow_sends_session_update() {
         selected_choice: 1,
         display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
         original_input: None,
-        permission_suggestions: vec![],
+        cwd: None,
+        permission_suggestions: vec![coco_types::PermissionUpdate::AddRules {
+            rules: vec![coco_types::PermissionRule {
+                source: coco_types::PermissionRuleSource::LocalSettings,
+                behavior: coco_types::PermissionBehavior::Allow,
+                value: coco_types::PermissionRuleValue {
+                    tool_pattern: "Bash".to_string(),
+                    rule_content: Some("ls".to_string()),
+                },
+            }],
+            destination: coco_types::PermissionUpdateDestination::LocalSettings,
+        }],
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
@@ -324,9 +337,10 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_local_update() {
         classifier_checking: false,
         classifier_auto_approved: None,
         choices: None,
-        selected_choice: 1,
+        selected_choice: 2,
         display_input: coco_types::PermissionDisplayInput::Text(file.display().to_string()),
         original_input: Some(serde_json::json!({"file_path": file.to_string_lossy()})),
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,
@@ -378,6 +392,61 @@ fn nav_advances_selected_choice_with_wraparound() {
     assert_eq!(p.selected_choice, 2);
 }
 
+#[tokio::test]
+async fn down_then_enter_commits_always_allow() {
+    use crate::state::PermissionDetail;
+    use crate::state::PermissionPromptState;
+    let mut s = AppState::new();
+    s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
+        request_id: "req-1".into(),
+        tool_name: "Bash".into(),
+        description: "Run".into(),
+        detail: PermissionDetail::Generic {
+            input_preview: "ls".into(),
+        },
+        risk_level: None,
+        show_always_allow: true,
+        classifier_checking: false,
+        classifier_auto_approved: None,
+        choices: None,
+        selected_choice: 0,
+        display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
+        original_input: None,
+        cwd: None,
+        permission_suggestions: vec![coco_types::PermissionUpdate::AddRules {
+            rules: vec![coco_types::PermissionRule {
+                source: coco_types::PermissionRuleSource::LocalSettings,
+                behavior: coco_types::PermissionBehavior::Allow,
+                value: coco_types::PermissionRuleValue {
+                    tool_pattern: "Bash".to_string(),
+                    rule_content: Some("ls".to_string()),
+                },
+            }],
+            destination: coco_types::PermissionUpdateDestination::LocalSettings,
+        }],
+        worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
+    }));
+    nav(&mut s, 1);
+
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        approved,
+        always_allow,
+        permission_updates,
+        ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(approved);
+    assert!(always_allow);
+    assert_eq!(permission_updates.len(), 1);
+}
+
 #[test]
 fn build_choice_payload_merges_with_original_input() {
     use crate::state::PermissionDetail;
@@ -403,6 +472,7 @@ fn build_choice_payload_merges_with_original_input() {
         selected_choice: 0,
         display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: Some(serde_json::json!({"existing": 42, "other": "v"})),
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,
@@ -434,6 +504,7 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         selected_choice: 5,
         display_input: coco_types::PermissionDisplayInput::Empty,
         original_input: None,
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,
@@ -885,6 +956,37 @@ async fn enter_on_sandbox_prompt_restores_it_without_dropping_the_request() {
 }
 
 #[tokio::test]
+async fn enter_on_plan_entry_prompt_confirms_it() {
+    // Plan entry is a benign confirmation (not a privilege escalation): Enter
+    // commits it exactly like `y`, toggling plan mode and dismissing the
+    // prompt. It must not be a silent no-op like the escalation prompts.
+    use crate::state::PlanEntryPromptState;
+    let mut s = AppState::new();
+    assert_eq!(
+        s.session.permission_mode,
+        coco_types::PermissionMode::Default
+    );
+    s.ui.push_prompt(PanePromptState::PlanEntry(PlanEntryPromptState {
+        description: "Enter plan mode?".into(),
+    }));
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    super::confirm(&mut s, &tx).await;
+    assert_eq!(
+        s.session.permission_mode,
+        coco_types::PermissionMode::Plan,
+        "Enter confirms plan entry, toggling into Plan mode",
+    );
+    assert!(
+        s.ui.interaction.active_prompt.is_none(),
+        "the plan-entry prompt is dismissed after Enter",
+    );
+    assert!(
+        matches!(rx.try_recv(), Ok(UserCommand::SetPermissionMode { .. })),
+        "confirming plan entry forwards the mode change to core",
+    );
+}
+
+#[tokio::test]
 async fn approve_falls_through_to_modal_when_a_modal_is_open() {
     // RC-3 (M4): a modal renders on top of any bottom-pane prompt and owns the
     // keys. With a prompt hidden beneath an open modal, Approve must NOT resolve
@@ -907,6 +1009,7 @@ async fn approve_falls_through_to_modal_when_a_modal_is_open() {
         selected_choice: 0,
         display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
         original_input: None,
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,

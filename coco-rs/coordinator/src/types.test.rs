@@ -52,6 +52,7 @@ async fn test_permission_sync_bridge_request_resolve() {
         tool_use_id: "tu-1".into(),
         description: "run tests".into(),
         input: serde_json::json!({"command": "cargo test"}),
+        cwd: None,
         status: PermissionRequestStatus::Pending,
         resolved_by: None,
         resolved_at: None,

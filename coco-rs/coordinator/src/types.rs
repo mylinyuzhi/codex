@@ -130,6 +130,10 @@ pub struct SwarmPermissionRequest {
     pub tool_use_id: String,
     pub description: String,
     pub input: serde_json::Value,
+    /// Worker's tool execution cwd, forwarded to the leader so relative paths
+    /// in `input` resolve against the worker's directory when deriving grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     pub status: PermissionRequestStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by: Option<PermissionResolver>,

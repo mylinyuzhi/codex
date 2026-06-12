@@ -9,6 +9,7 @@ fn dummy_request(id: &str) -> ToolPermissionRequest {
         tool_name: "Bash".into(),
         description: "ls".into(),
         input: serde_json::json!({"command": "ls"}),
+        cwd: None,
         suggestions: vec![],
         choices: None,
         worker_badge: None,
@@ -33,6 +34,7 @@ fn ask_user_question_request(id: &str) -> ToolPermissionRequest {
                 "multiSelect": false
             }]
         }),
+        cwd: None,
         suggestions: vec![],
         choices: None,
         worker_badge: None,
@@ -51,6 +53,7 @@ fn exit_plan_mode_request(id: &str) -> ToolPermissionRequest {
             "planFilePath": "/tmp/plan.md",
             "allowedPrompts": [{"tool": "Bash", "prompt": "cargo test"}]
         }),
+        cwd: None,
         suggestions: vec![],
         choices: None,
         worker_badge: None,

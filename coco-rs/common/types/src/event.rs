@@ -1744,6 +1744,10 @@ pub enum TuiOnlyEvent {
         permission_suggestions: Vec<crate::PermissionUpdate>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         original_input: Option<serde_json::Value>,
+        /// Tool execution cwd used to resolve relative paths in
+        /// `original_input` for scoped permission grants.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
         /// Identity badge of the requesting cross-process teammate, if
         /// any — rendered in the prompt so the leader sees who is asking.
         /// TS: `workerBadge` on `PermissionRequest.tsx:89`.

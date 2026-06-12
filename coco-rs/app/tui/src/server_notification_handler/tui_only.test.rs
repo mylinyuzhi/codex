@@ -723,6 +723,7 @@ fn explainer_prompt(request_id: &str) -> crate::state::PermissionPromptState {
         selected_choice: 0,
         display_input: coco_types::PermissionDisplayInput::Text("ls".to_string()),
         original_input: None,
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: true,

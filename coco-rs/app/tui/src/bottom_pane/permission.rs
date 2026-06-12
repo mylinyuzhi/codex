@@ -5,16 +5,14 @@
 //! allow rules, read-path directory widening) and the multi-choice payload
 //! splice.
 
-use std::str::FromStr;
-
 use rust_i18n::t;
 use tokio::sync::mpsc;
 
 use crate::command::UserCommand;
+use crate::permission_options::PermissionAction;
 use crate::state::AppState;
 use crate::state::PanePromptState;
 use crate::state::Toast;
-use crate::state::surface_payloads::PermissionAction;
 
 /// Single resolution chokepoint for classic (non-choice) tool-permission
 /// prompts. Every classic decision — `y` / `n` / `a` hotkeys, Enter on the
@@ -24,18 +22,20 @@ use crate::state::surface_payloads::PermissionAction;
 pub(crate) async fn resolve_classic_permission(
     p: &crate::state::PermissionPromptState,
     action: PermissionAction,
+    current_mode: coco_types::PermissionMode,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
     let (approved, always_allow, permission_updates) = match action {
         PermissionAction::ApproveOnce => (true, false, vec![]),
-        PermissionAction::AlwaysAllow => (
+        PermissionAction::AllowSession => (
             true,
             true,
-            always_allow_updates(
-                &p.tool_name,
-                p.original_input.as_ref(),
-                &p.permission_suggestions,
-            ),
+            crate::permission_options::session_allow_updates(p, current_mode),
+        ),
+        PermissionAction::AllowLocal => (
+            true,
+            true,
+            crate::permission_options::local_allow_updates(p),
         ),
         PermissionAction::Deny => (false, false, vec![]),
     };
@@ -80,10 +80,12 @@ pub(crate) async fn resolve_classic_permission(
 /// mapping is visible.
 pub(crate) async fn approve_permission(
     p: &crate::state::PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
     let Some(choices) = &p.choices else {
-        resolve_classic_permission(p, PermissionAction::ApproveOnce, command_tx).await;
+        resolve_classic_permission(p, PermissionAction::ApproveOnce, current_mode, command_tx)
+            .await;
         return;
     };
     let chosen_is_no = choices
@@ -183,9 +185,10 @@ pub(crate) async fn respond_mcp_server(
 /// Deny ('n') a tool-permission prompt.
 pub(crate) async fn deny_permission(
     p: &crate::state::PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
-    resolve_classic_permission(p, PermissionAction::Deny, command_tx).await;
+    resolve_classic_permission(p, PermissionAction::Deny, current_mode, command_tx).await;
 }
 
 /// Handle `ApproveAll` (always-allow) for permission prompts.
@@ -227,7 +230,40 @@ pub(crate) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<
             .add_toast(Toast::warning(t!("toast.always_allow_disabled")));
         return;
     }
-    resolve_classic_permission(p, PermissionAction::AlwaysAllow, command_tx).await;
+    let actions = crate::permission_options::classic_actions(p, state.session.permission_mode);
+    let action = if actions.contains(&PermissionAction::AllowLocal) {
+        PermissionAction::AllowLocal
+    } else if actions.contains(&PermissionAction::AllowSession) {
+        PermissionAction::AllowSession
+    } else {
+        state
+            .ui
+            .add_toast(Toast::warning(t!("toast.always_allow_disabled")));
+        return;
+    };
+    resolve_classic_permission(p, action, state.session.permission_mode, command_tx).await;
+    state.ui.dismiss_prompt();
+}
+
+/// Handle the explicit session-scoped allow hotkey.
+pub(crate) async fn approve_session(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        return;
+    };
+    if p.choices.is_some() {
+        return;
+    }
+    let actions = crate::permission_options::classic_actions(p, state.session.permission_mode);
+    if !actions.contains(&PermissionAction::AllowSession) {
+        return;
+    }
+    resolve_classic_permission(
+        p,
+        PermissionAction::AllowSession,
+        state.session.permission_mode,
+        command_tx,
+    )
+    .await;
     state.ui.dismiss_prompt();
 }
 
@@ -268,14 +304,21 @@ pub(crate) async fn classifier_auto_approve(
 /// (multi-choice) or the focused classic action.
 pub(crate) async fn confirm_permission(
     p: &crate::state::PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
     command_tx: &mpsc::Sender<UserCommand>,
 ) {
     if p.choices.is_some() {
         // Multi-choice commit shares `approve_permission`'s splice + log.
-        approve_permission(p, command_tx).await;
+        approve_permission(p, current_mode, command_tx).await;
         return;
     }
-    resolve_classic_permission(p, p.selected_classic_action(), command_tx).await;
+    resolve_classic_permission(
+        p,
+        crate::permission_options::selected_classic_action(p, current_mode),
+        current_mode,
+        command_tx,
+    )
+    .await;
 }
 
 /// Digit shortcut (`1`-`3`) on a classic tool-permission prompt: commit the
@@ -285,6 +328,7 @@ pub(crate) async fn confirm_permission(
 pub(crate) async fn commit_permission_digit(
     p: &crate::state::PermissionPromptState,
     digit: usize,
+    current_mode: coco_types::PermissionMode,
     command_tx: &mpsc::Sender<UserCommand>,
 ) -> bool {
     if p.choices.is_some() {
@@ -293,179 +337,36 @@ pub(crate) async fn commit_permission_digit(
     let Some(index) = digit.checked_sub(1) else {
         return false;
     };
-    if index >= p.classic_action_count() {
+    let actions = crate::permission_options::classic_actions(p, current_mode);
+    if index >= actions.len() {
         return false;
     }
-    resolve_classic_permission(p, p.classic_action_at(index), command_tx).await;
+    resolve_classic_permission(
+        p,
+        crate::permission_options::classic_action_at(p, current_mode, index),
+        current_mode,
+        command_tx,
+    )
+    .await;
     true
 }
 
 /// Move the choice cursor on a permission prompt (wrapping).
-pub(crate) fn nav_permission(p: &mut crate::state::PermissionPromptState, delta: i32) {
+pub(crate) fn nav_permission(
+    p: &mut crate::state::PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
+    delta: i32,
+) {
     let count = p
         .choices
         .as_ref()
         .map(Vec::len)
-        .unwrap_or_else(|| p.classic_action_count()) as i32;
+        .unwrap_or_else(|| crate::permission_options::classic_actions(p, current_mode).len())
+        as i32;
     if count > 0 {
         let current = p.selected_choice as i32;
         let next = (current + delta).rem_euclid(count);
         p.selected_choice = next as usize;
-    }
-}
-
-fn always_allow_updates(
-    tool_name: &str,
-    original_input: Option<&serde_json::Value>,
-    permission_suggestions: &[coco_types::PermissionUpdate],
-) -> Vec<coco_types::PermissionUpdate> {
-    if !permission_suggestions.is_empty() {
-        return permission_suggestions.to_vec();
-    }
-    if let Some(update) = read_path_allow_update(tool_name, original_input) {
-        return vec![update];
-    }
-    if let Some(update) = edit_path_allow_update(tool_name, original_input) {
-        return vec![update];
-    }
-    vec![coco_types::PermissionUpdate::AddRules {
-        rules: vec![coco_types::PermissionRule {
-            source: coco_types::PermissionRuleSource::LocalSettings,
-            behavior: coco_types::PermissionBehavior::Allow,
-            value: coco_types::PermissionRuleValue {
-                tool_pattern: tool_name.to_string(),
-                rule_content: None,
-            },
-        }],
-        destination: coco_types::PermissionUpdateDestination::LocalSettings,
-    }]
-}
-
-/// Directory-scoped `Edit(dir/**)` allow rule for write-capable tools.
-///
-/// "Don't ask again" on a file-modifying tool must never grant a TOOL-WIDE
-/// allow (which would silently approve writes anywhere on disk). When the
-/// engine attached no scoped suggestions, derive the target directory from
-/// the tool input instead: `file_path`/`notebook_path` fields for
-/// Edit/Write/NotebookEdit, the `*** Add/Update/Delete File:` headers for
-/// apply_patch. Returns `None` for non-write tools and for write tools whose
-/// target paths can't be derived — apply_patch then falls back to tool-wide
-/// like before, which is still gated behind an explicit user action.
-fn edit_path_allow_update(
-    tool_name: &str,
-    original_input: Option<&serde_json::Value>,
-) -> Option<coco_types::PermissionUpdate> {
-    let tool = coco_types::ToolName::from_str(tool_name).ok()?;
-    let input = original_input?;
-    let paths: Vec<&str> = match tool {
-        coco_types::ToolName::Edit | coco_types::ToolName::Write => input
-            .get("file_path")
-            .and_then(|v| v.as_str())
-            .into_iter()
-            .collect(),
-        coco_types::ToolName::NotebookEdit => input
-            .get("notebook_path")
-            .and_then(|v| v.as_str())
-            .into_iter()
-            .collect(),
-        coco_types::ToolName::ApplyPatch => {
-            let patch = input.get("patch").and_then(|v| v.as_str())?;
-            crate::tool_display::apply_patch_target_paths(patch)
-        }
-        _ => return None,
-    };
-    if paths.is_empty() {
-        return None;
-    }
-    let mut rule_contents = std::collections::BTreeSet::new();
-    for path in paths {
-        let dir = directory_for_permission_rule(path)?;
-        rule_contents.insert(format!("{}/**", path_for_permission_rule(&dir)));
-    }
-    let rules = rule_contents
-        .into_iter()
-        .map(|rule_content| coco_types::PermissionRule {
-            source: coco_types::PermissionRuleSource::LocalSettings,
-            behavior: coco_types::PermissionBehavior::Allow,
-            value: coco_types::PermissionRuleValue {
-                tool_pattern: coco_types::ToolName::Edit.as_str().to_string(),
-                rule_content: Some(rule_content),
-            },
-        })
-        .collect();
-    Some(coco_types::PermissionUpdate::AddRules {
-        rules,
-        destination: coco_types::PermissionUpdateDestination::LocalSettings,
-    })
-}
-
-fn read_path_allow_update(
-    tool_name: &str,
-    original_input: Option<&serde_json::Value>,
-) -> Option<coco_types::PermissionUpdate> {
-    let tool = coco_types::ToolName::from_str(tool_name).ok()?;
-    if !matches!(
-        tool,
-        coco_types::ToolName::Read | coco_types::ToolName::Grep | coco_types::ToolName::Glob
-    ) {
-        return None;
-    }
-    let input = original_input?;
-    let raw_path = match tool {
-        coco_types::ToolName::Read => input.get("file_path").and_then(|v| v.as_str())?,
-        coco_types::ToolName::Grep | coco_types::ToolName::Glob => {
-            input.get("path").and_then(|v| v.as_str())?
-        }
-        _ => return None,
-    };
-    let dir = directory_for_permission_rule(raw_path)?;
-    let rule_content = format!("{}/**", path_for_permission_rule(&dir));
-    Some(coco_types::PermissionUpdate::AddRules {
-        rules: vec![coco_types::PermissionRule {
-            source: coco_types::PermissionRuleSource::LocalSettings,
-            behavior: coco_types::PermissionBehavior::Allow,
-            value: coco_types::PermissionRuleValue {
-                tool_pattern: coco_types::ToolName::Read.as_str().to_string(),
-                rule_content: Some(rule_content),
-            },
-        }],
-        destination: coco_types::PermissionUpdateDestination::LocalSettings,
-    })
-}
-
-fn directory_for_permission_rule(raw_path: &str) -> Option<std::path::PathBuf> {
-    let path = shellexpand_read_path(raw_path);
-    let absolute = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir().ok()?.join(path)
-    };
-    let dir = if absolute.is_dir() {
-        absolute
-    } else {
-        absolute.parent()?.to_path_buf()
-    };
-    (dir.parent().is_some()).then_some(dir)
-}
-
-fn shellexpand_read_path(raw_path: &str) -> std::path::PathBuf {
-    if raw_path == "~" {
-        return dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(raw_path));
-    }
-    if let Some(rest) = raw_path.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.join(rest);
-    }
-    std::path::PathBuf::from(raw_path)
-}
-
-fn path_for_permission_rule(path: &std::path::Path) -> String {
-    let path = path.to_string_lossy().replace('\\', "/");
-    if path.starts_with('/') {
-        format!("/{path}")
-    } else {
-        path
     }
 }
 
@@ -494,7 +395,3 @@ pub(crate) fn build_choice_payload(
     );
     Some(serde_json::Value::Object(payload))
 }
-
-#[cfg(test)]
-#[path = "permission.test.rs"]
-mod tests;

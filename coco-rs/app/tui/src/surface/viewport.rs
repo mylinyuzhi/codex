@@ -588,6 +588,26 @@ fn render_interaction_prompt(
     }
 
     let box_area = center_horizontally(area, interaction_prompt_box_width(area.width));
+    if let PanePromptState::Permission(p) = prompt {
+        let (title, lines, border_color) = crate::presentation::request::permission_styled_content(
+            p,
+            state.session.permission_mode,
+            styles,
+        );
+        let lines = compact_prompt_lines(lines, area.height.saturating_sub(2) as usize);
+        frame.render_widget(Clear, box_area);
+        frame.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(Style::default().fg(border_color)),
+            ),
+            box_area,
+        );
+        return;
+    }
+
     let Some(text_surface) = crate::surface_content::prompt_text_surface(prompt) else {
         return;
     };
@@ -606,44 +626,79 @@ fn render_interaction_prompt(
     );
 }
 
-fn compact_prompt_body(body: &str, max_lines: usize) -> String {
-    let lines = body.lines().collect::<Vec<_>>();
-    if max_lines == 0 || lines.len() <= max_lines {
-        return body.to_string();
+fn compact_prompt_lines(lines: Vec<Line<'static>>, max_lines: usize) -> Vec<Line<'static>> {
+    compact_sequence(
+        lines,
+        max_lines,
+        |line| line.spans.iter().all(|span| span.content.trim().is_empty()),
+        || Line::from("..."),
+    )
+}
+
+/// Shrink `items` to fit `max_lines`, shared by the styled (`Line`) and plain
+/// (`&str`) prompt-compaction paths. Prefers keeping the whole trailing block
+/// after the last blank separator (so a prompt's action rows always survive)
+/// and otherwise keeps a head slice + an `ellipsis()` marker + a tail slice.
+fn compact_sequence<T: Clone>(
+    items: Vec<T>,
+    max_lines: usize,
+    is_blank: impl Fn(&T) -> bool,
+    ellipsis: impl Fn() -> T,
+) -> Vec<T> {
+    if max_lines == 0 || items.len() <= max_lines {
+        return items;
     }
     if max_lines == 1 {
-        return lines.last().copied().unwrap_or_default().to_string();
+        return items.into_iter().last().into_iter().collect();
     }
     if max_lines == 2 {
-        return format!(
-            "{}\n{}",
-            lines.first().copied().unwrap_or_default(),
-            lines.last().copied().unwrap_or_default()
-        );
+        let mut iter = items.into_iter();
+        let first = iter.next();
+        let last = iter.last().or_else(|| first.clone());
+        return first.into_iter().chain(last).collect();
     }
-    if let Some(blank_idx) = lines.iter().rposition(|line| line.trim().is_empty()) {
-        let tail = &lines[blank_idx.saturating_add(1)..];
-        if !tail.is_empty() {
-            if tail.len() < max_lines {
-                let head_count = max_lines.saturating_sub(tail.len() + 1);
+    if let Some(blank_idx) = items.iter().rposition(&is_blank) {
+        let tail_len = items.len().saturating_sub(blank_idx + 1);
+        if tail_len > 0 {
+            if tail_len < max_lines {
+                let head_count = max_lines.saturating_sub(tail_len + 1);
                 let mut compact = Vec::new();
-                compact.extend(lines.iter().take(head_count).copied());
-                compact.push("...");
-                compact.extend(tail.iter().copied());
-                return compact.join("\n");
+                compact.extend(items.iter().take(head_count).cloned());
+                compact.push(ellipsis());
+                compact.extend(items.iter().skip(blank_idx + 1).cloned());
+                return compact;
             }
-            if tail.len() == max_lines {
-                return tail.join("\n");
+            if tail_len == max_lines {
+                return items.into_iter().skip(blank_idx + 1).collect();
             }
         }
     }
     let tail_count = (max_lines / 2).max(1);
-    let head_count = max_lines.saturating_sub(tail_count + 1).max(1);
+    let head_count = max_lines.saturating_sub(tail_count + 1);
     let mut compact = Vec::new();
-    compact.extend(lines.iter().take(head_count).copied());
-    compact.push("...");
-    compact.extend(lines.iter().rev().take(tail_count).rev().copied());
-    compact.join("\n")
+    compact.extend(items.iter().take(head_count).cloned());
+    compact.push(ellipsis());
+    compact.extend(
+        items
+            .iter()
+            .skip(items.len().saturating_sub(tail_count))
+            .cloned(),
+    );
+    compact
+}
+
+fn compact_prompt_body(body: &str, max_lines: usize) -> String {
+    if max_lines == 0 || body.lines().count() <= max_lines {
+        return body.to_string();
+    }
+    let lines = body.lines().map(str::to_owned).collect::<Vec<_>>();
+    compact_sequence(
+        lines,
+        max_lines,
+        |line| line.trim().is_empty(),
+        || "...".to_string(),
+    )
+    .join("\n")
 }
 
 fn render_toasts(

@@ -69,6 +69,7 @@ async fn handle_request(bridge: ToolPermissionBridgeRef, value: serde_json::Valu
         tool_use_id,
         description,
         input,
+        cwd,
         ..
     }) = serde_json::from_value::<mailbox::ProtocolMessage>(value)
     else {
@@ -87,6 +88,9 @@ async fn handle_request(bridge: ToolPermissionBridgeRef, value: serde_json::Valu
         tool_name,
         description,
         input,
+        // The worker's own tool cwd (its directory, not the leader's), so the
+        // leader's prompt resolves the worker's relative paths correctly.
+        cwd,
         suggestions: Vec::new(),
         choices: None,
         // Badge the worker so the leader sees who is asking. Color is the

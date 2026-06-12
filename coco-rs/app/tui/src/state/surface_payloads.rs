@@ -48,6 +48,9 @@ pub struct PermissionPromptState {
     /// `user_choice` into it; classic read dialogs use it to build
     /// path-scoped "always allow" updates.
     pub original_input: Option<serde_json::Value>,
+    /// Tool execution working directory. Relative paths in `original_input`
+    /// are resolved against this cwd when deriving scoped allow updates.
+    pub cwd: Option<String>,
     /// Permission updates suggested by core for "always allow".
     /// Prefer these over UI-side inference.
     pub permission_suggestions: Vec<coco_types::PermissionUpdate>,
@@ -77,34 +80,6 @@ pub enum ExplainerFetch {
     Ready(coco_types::PermissionExplanation),
     /// Fetch failed or the explainer is disabled — "explanation unavailable".
     Unavailable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PermissionAction {
-    ApproveOnce,
-    AlwaysAllow,
-    Deny,
-}
-
-impl PermissionPromptState {
-    pub(crate) fn classic_action_count(&self) -> usize {
-        if self.show_always_allow { 3 } else { 2 }
-    }
-
-    pub(crate) fn classic_action_at(&self, index: usize) -> PermissionAction {
-        match (self.show_always_allow, index) {
-            (_, 0) => PermissionAction::ApproveOnce,
-            (true, 1) => PermissionAction::AlwaysAllow,
-            _ => PermissionAction::Deny,
-        }
-    }
-
-    pub(crate) fn selected_classic_action(&self) -> PermissionAction {
-        let index = self
-            .selected_choice
-            .min(self.classic_action_count().saturating_sub(1));
-        self.classic_action_at(index)
-    }
 }
 
 /// Risk level for permission explainer badge.

@@ -252,6 +252,7 @@ fn test_permission_request_shows_prompt() {
             choices: None,
             permission_suggestions: vec![],
             original_input: None,
+            cwd: None,
             worker_badge: None,
         }),
     );
@@ -287,6 +288,7 @@ fn test_permission_request_hides_always_allow_when_disabled() {
             choices: None,
             permission_suggestions: vec![],
             original_input: None,
+            cwd: None,
             worker_badge: None,
         }),
     );
@@ -324,6 +326,7 @@ fn test_exit_plan_mode_permission_uses_dedicated_detail() {
                 "planFilePath": "/tmp/plan.md",
                 "allowedPrompts": [{"tool": "Bash", "prompt": "cargo test"}]
             })),
+            cwd: None,
             worker_badge: None,
         }),
     );

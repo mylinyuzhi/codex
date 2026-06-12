@@ -20,6 +20,7 @@ fn permission_prompt() -> PermissionPromptState {
         selected_choice: 0,
         display_input: coco_types::PermissionDisplayInput::Command("echo hi".into()),
         original_input: None,
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,
