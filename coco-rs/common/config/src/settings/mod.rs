@@ -345,7 +345,7 @@ impl Default for TuiPerformanceSettings {
             enabled: false,
             sample_every_n_frames: 10,
             slow_frame_ms: 16,
-            slow_stage_us: 500,
+            slow_stage_us: 1000,
         }
     }
 }
