@@ -564,9 +564,9 @@ fn crossterm_surface_backend_emits_scroll_region_bytes() {
 fn crossterm_surface_backend_leave_modes_omits_alt_screen_leave() {
     // Regression: the main session never enters the alternate screen, so the
     // exit mode-restore must NOT emit `LeaveAlternateScreen` (`CSI ?1049l`).
-    // An unpaired `?1049l` does a DECRC onto the stale `\x1b7` save the last
-    // history insert left in finalized history, yanking the cursor into the
-    // transcript so the resume hint overprints it. The modal-alt leave is a
+    // An unpaired `?1049l` does a DECRC onto whatever the shared save
+    // register holds, yanking the cursor to a stale position so the resume
+    // hint overprints the transcript. The modal-alt leave is a
     // separate, conditional step (`leave_modal_alt_screen`). codex's
     // `restore_common` omits the alt-screen leave for the same reason.
     let capture = CapturedWriter::default();
@@ -716,11 +716,46 @@ fn crossterm_surface_backend_direct_inserts_extended_modifiers() {
 
     let bytes = capture.ansi_bytes();
     parse_with_vt100(&bytes);
-    assert!(bytes.contains("\x1b7"), "{bytes:?}");
+    assert!(!bytes.contains("\x1b7"), "no DECSC: {bytes:?}");
     assert!(bytes.contains("\x1b[2;1H\x1b[0;9mgone"), "{bytes:?}");
     assert!(bytes.contains("\x1b[0;5;8m blink"), "{bytes:?}");
     assert!(bytes.contains("\x1b[0;91;1;6m loud"), "{bytes:?}");
-    assert!(bytes.ends_with("\x1b[0m\x1b8"), "{bytes:?}");
+    assert!(!bytes.contains("\x1b8"), "no DECRC: {bytes:?}");
+    // SGR reset, then the absolute re-park at the tracked cursor (origin —
+    // nothing has claimed the cursor yet).
+    assert!(bytes.ends_with("\x1b[0m\x1b[1;1H"), "{bytes:?}");
+}
+
+#[test]
+fn crossterm_surface_backend_insert_reparks_cursor_at_tracked_claim() {
+    // The insert must end with an absolute move back to the position the
+    // last frame's cursor claim parked — app-owned bookkeeping, not the
+    // terminal's DECSC/DECRC save register.
+    let capture = CapturedWriter::default();
+    let backend = CrosstermBackend::new(capture.clone());
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.set_viewport_area(Rect::new(0, 1, 20, 1));
+    terminal
+        .draw_viewport(|frame| {
+            frame.set_cursor_claim(CursorClaim {
+                position: Position { x: 3, y: 1 },
+                style: SetCursorStyle::SteadyBar,
+            });
+        })
+        .expect("draw viewport");
+
+    terminal
+        .insert_history_rows(&history_rows_width([Line::from("hello")], 20))
+        .expect("insert history");
+
+    let bytes = capture.ansi_bytes();
+    parse_with_vt100(&bytes);
+    assert!(!bytes.contains("\x1b7"), "no DECSC: {bytes:?}");
+    assert!(!bytes.contains("\x1b8"), "no DECRC: {bytes:?}");
+    assert!(
+        bytes.ends_with("\x1b[2;4H"),
+        "expected absolute re-park at the claimed cursor: {bytes:?}"
+    );
 }
 
 #[test]
