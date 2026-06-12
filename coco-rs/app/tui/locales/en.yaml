@@ -352,6 +352,7 @@ dialog.hints_copy_picker: "↑/↓ Navigate  Enter Copy  w Write to file  Esc Ca
 dialog.hints_nav_resume_cancel: "↑/↓ Navigate  Enter Resume  Esc Cancel"
 dialog.hints_nav_select: "↑/↓ Navigate  Enter Select"
 dialog.hints_permission_shortcuts: "1-%{count} or %{shortcuts} shortcuts"
+dialog.hints_prefix_edit: "type to edit prefix  Enter Save  Esc No"
 toast.always_allow_disabled: "Always-allow rules are disabled by managed settings"
 dialog.hints_nav_export_cancel: "↑/↓ Navigate  Enter Export  Esc Cancel"
 dialog.hints_nav_confirm_back: "↑/↓ Navigate  Enter Confirm  Esc Back"

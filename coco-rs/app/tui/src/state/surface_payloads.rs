@@ -64,6 +64,89 @@ pub struct PermissionPromptState {
     /// Lazily-fetched LLM risk explanation. Fetched on first Ctrl+E toggle and
     /// cached so re-toggling doesn't re-query (TS `createExplanationPromise`).
     pub explanation: ExplainerFetch,
+    /// Editable "always allow" prefix for shell tools (`Bash` / `PowerShell`).
+    /// `Some` only when `show_always_allow` and the tool is a shell command —
+    /// seeded with the default `command subcommand:*` / `command:*` / exact rule
+    /// (TS `BashPermissionRequest` editable field). When an allow row is focused
+    /// the field becomes editable; committing that row writes `Bash(<value>)`
+    /// instead of the engine-suggested rule.
+    pub prefix_input: Option<PrefixInputState>,
+}
+
+/// A single-line editable text field for the permission dialog's "always
+/// allow" rule prefix. Mirrors the question prompt's free-text `OtherInputState`
+/// pattern, with a cursor for inline readline-style editing.
+#[derive(Debug, Clone)]
+pub struct PrefixInputState {
+    /// Current rule text (e.g. `git status:*`). Empty → commit allows once.
+    pub value: String,
+    /// Cursor byte offset into `value`; always on a char boundary.
+    pub cursor: usize,
+}
+
+impl PrefixInputState {
+    /// Seed the field with `value`, cursor at the end.
+    pub fn new(value: String) -> Self {
+        let cursor = value.len();
+        Self { value, cursor }
+    }
+
+    /// Insert `c` at the cursor.
+    pub fn insert(&mut self, c: char) {
+        self.value.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+    }
+
+    /// Delete the char before the cursor (Backspace).
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let prev = self.value[..self.cursor]
+            .chars()
+            .next_back()
+            .map(char::len_utf8)
+            .unwrap_or(0);
+        self.cursor -= prev;
+        self.value
+            .replace_range(self.cursor..self.cursor + prev, "");
+    }
+
+    /// Delete the whitespace-delimited word before the cursor (Ctrl+W).
+    pub fn delete_word_backward(&mut self) {
+        let head = &self.value[..self.cursor];
+        let trimmed = head.trim_end_matches(|c: char| c.is_whitespace());
+        let start = trimmed
+            .rfind(char::is_whitespace)
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        self.value.replace_range(start..self.cursor, "");
+        self.cursor = start;
+    }
+
+    /// Move the cursor one char left.
+    pub fn left(&mut self) {
+        if let Some(c) = self.value[..self.cursor].chars().next_back() {
+            self.cursor -= c.len_utf8();
+        }
+    }
+
+    /// Move the cursor one char right.
+    pub fn right(&mut self) {
+        if let Some(c) = self.value[self.cursor..].chars().next() {
+            self.cursor += c.len_utf8();
+        }
+    }
+
+    /// Move the cursor to the start.
+    pub fn home(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Move the cursor to the end.
+    pub fn end(&mut self) {
+        self.cursor = self.value.len();
+    }
 }
 
 /// Lifecycle of the lazily-fetched permission risk explanation. Mirrors TS,

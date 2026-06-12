@@ -26,6 +26,7 @@ fn prompt(
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }
 }
 
@@ -636,4 +637,117 @@ fn shell_tool_without_command_rule_has_no_tool_wide_fallback() {
             .is_empty()
     );
     assert!(crate::permission_options::local_allow_updates(&p).is_empty());
+}
+
+// ── Editable always-allow prefix (shell tools) ──
+
+/// A Bash prompt with the editable prefix seeded from `command`, with the
+/// classic action row at `selected` focused (1 = AllowSession, 2 = AllowLocal).
+fn shell_prompt(command: &str, selected: usize) -> crate::state::PermissionPromptState {
+    let mut p = prompt("Bash", Some(json!({ "command": command })), vec![]);
+    p.prefix_input = Some(crate::state::PrefixInputState::new(
+        coco_permissions::shell_rules::editable_prefix_default(command),
+    ));
+    p.selected_choice = selected;
+    p
+}
+
+#[test]
+fn prefix_seed_two_word_then_first_word_then_exact() {
+    assert_eq!(
+        shell_prompt("git status -s", 0).prefix_input.unwrap().value,
+        "git status:*"
+    );
+    // No subcommand-shaped token → single-word fallback.
+    assert_eq!(
+        shell_prompt("ls -la", 0).prefix_input.unwrap().value,
+        "ls:*"
+    );
+    // Bare shell blocked in both extractors → exact command.
+    assert_eq!(
+        shell_prompt("bash -c 'x'", 0).prefix_input.unwrap().value,
+        "bash -c 'x'"
+    );
+}
+
+#[test]
+fn prefix_editing_only_on_allow_rows() {
+    let mode = coco_types::PermissionMode::Default;
+    // actions: [ApproveOnce, AllowSession, AllowLocal, Deny]
+    assert!(!crate::permission_options::prefix_editing(
+        &shell_prompt("git status -s", 0),
+        mode
+    ));
+    assert!(crate::permission_options::prefix_editing(
+        &shell_prompt("git status -s", 1),
+        mode
+    ));
+    assert!(crate::permission_options::prefix_editing(
+        &shell_prompt("git status -s", 2),
+        mode
+    ));
+    assert!(!crate::permission_options::prefix_editing(
+        &shell_prompt("git status -s", 3),
+        mode
+    ));
+}
+
+#[test]
+fn shell_prompt_offers_both_allow_rows() {
+    use crate::permission_options::PermissionAction::*;
+    let actions = crate::permission_options::classic_actions(
+        &shell_prompt("git status -s", 0),
+        coco_types::PermissionMode::Default,
+    );
+    assert_eq!(actions, vec![ApproveOnce, AllowSession, AllowLocal, Deny]);
+}
+
+#[test]
+fn edited_prefix_drives_both_destinations() {
+    let mut p = shell_prompt("git status -s", 2);
+    // User narrows the seeded "git status:*" down to "git:*".
+    p.prefix_input = Some(crate::state::PrefixInputState::new("git:*".to_string()));
+
+    let local = crate::permission_options::local_allow_updates(&p);
+    assert_eq!(
+        rule_summaries(&local[0]),
+        vec![("Bash".to_string(), Some("git:*".to_string()))]
+    );
+    let session =
+        crate::permission_options::session_allow_updates(&p, coco_types::PermissionMode::Default);
+    assert_eq!(
+        rule_summaries(&session[0]),
+        vec![("Bash".to_string(), Some("git:*".to_string()))]
+    );
+}
+
+#[test]
+fn empty_or_unsafe_edited_prefix_yields_no_rule() {
+    // Empty → allow once (no rule).
+    let mut p = shell_prompt("git status -s", 2);
+    p.prefix_input = Some(crate::state::PrefixInputState::new(String::new()));
+    assert!(crate::permission_options::local_allow_updates(&p).is_empty());
+
+    // Wildcard isn't a safe scoped allow (only Exact/Prefix accepted).
+    p.prefix_input = Some(crate::state::PrefixInputState::new("git *".to_string()));
+    assert!(crate::permission_options::local_allow_updates(&p).is_empty());
+}
+
+#[test]
+fn prefix_input_edit_ops() {
+    let mut input = crate::state::PrefixInputState::new("git status:*".to_string());
+    assert_eq!(input.cursor, "git status:*".len());
+    input.home();
+    assert_eq!(input.cursor, 0);
+    input.end();
+    input.backspace();
+    input.backspace();
+    assert_eq!(input.value, "git status");
+    input.delete_word_backward();
+    assert_eq!(input.value, "git ");
+    input.insert('x');
+    assert_eq!(input.value, "git x");
+    input.left();
+    input.insert('_');
+    assert_eq!(input.value, "git _x");
 }

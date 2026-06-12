@@ -352,6 +352,7 @@ dialog.hints_copy_picker: "↑/↓ 导航  Enter 复制  w 写入文件  Esc 取
 dialog.hints_nav_resume_cancel: "↑/↓ 导航  Enter 恢复  Esc 取消"
 dialog.hints_nav_select: "↑/↓ 导航  Enter 选择"
 dialog.hints_permission_shortcuts: "1-%{count} 或 %{shortcuts} 快捷键"
+dialog.hints_prefix_edit: "输入以编辑前缀  Enter 保存  Esc 拒绝"
 toast.always_allow_disabled: "托管设置已禁用「不再询问」规则"
 dialog.hints_nav_export_cancel: "↑/↓ 导航  Enter 导出  Esc 取消"
 dialog.hints_nav_confirm_back: "↑/↓ 导航  Enter 确认  Esc 返回"

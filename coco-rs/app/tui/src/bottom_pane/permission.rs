@@ -14,6 +14,49 @@ use crate::state::AppState;
 use crate::state::PanePromptState;
 use crate::state::Toast;
 
+/// Route an inline-editing command to the editable always-allow prefix field
+/// when an allow row is focused on a shell-tool prompt (the
+/// `PermissionPrefixEdit` keybinding context emits `InsertChar` / `Cursor*` /
+/// `Delete*` there instead of y/n/a hotkeys). Returns `true` when the command
+/// was consumed. Runs before the main dispatch so the keystroke edits the rule
+/// field rather than leaking into the chat composer.
+pub(crate) fn intercept_prefix_edit(state: &mut AppState, cmd: &crate::events::TuiCommand) -> bool {
+    use crate::events::TuiCommand as C;
+    if !matches!(
+        cmd,
+        C::InsertChar(_)
+            | C::DeleteBackward
+            | C::DeleteWordBackward
+            | C::CursorLeft
+            | C::CursorRight
+            | C::CursorHome
+            | C::CursorEnd
+    ) {
+        return false;
+    }
+    let mode = state.session.permission_mode;
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_mut() else {
+        return false;
+    };
+    if !crate::permission_options::prefix_editing(p, mode) {
+        return false;
+    }
+    let Some(input) = p.prefix_input.as_mut() else {
+        return false;
+    };
+    match cmd {
+        C::InsertChar(c) => input.insert(*c),
+        C::DeleteBackward => input.backspace(),
+        C::DeleteWordBackward => input.delete_word_backward(),
+        C::CursorLeft => input.left(),
+        C::CursorRight => input.right(),
+        C::CursorHome => input.home(),
+        C::CursorEnd => input.end(),
+        _ => return false,
+    }
+    true
+}
+
 /// Single resolution chokepoint for classic (non-choice) tool-permission
 /// prompts. Every classic decision — `y` / `n` / `a` hotkeys, Enter on the
 /// focused row, digit shortcuts — funnels through here so the

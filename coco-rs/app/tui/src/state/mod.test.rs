@@ -380,6 +380,7 @@ fn test_permission_prompt() {
             worker_badge: None,
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
         }));
 
     assert!(state.has_active_surface());

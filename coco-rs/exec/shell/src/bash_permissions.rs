@@ -134,30 +134,151 @@ pub fn strip_all_env_vars(command: &str, check_hijack: bool) -> String {
     rest.to_string()
 }
 
-/// Extract a 2-word command prefix (e.g., "git commit" from "git commit -m msg").
+/// Extract a stable `command subcommand` prefix for a permission suggestion
+/// (e.g., `git commit` from `git commit -m msg`).
 ///
-/// TS: getSimpleCommandPrefix() — returns null if unsafe env vars found.
+/// TS: `getSimpleCommandPrefix()` (bashPermissions.ts:161) — split on
+/// whitespace, skip leading SAFE env-var assignments (bail on the first unsafe
+/// one), then require the second token to be shaped like a subcommand.
+///
+/// Returns `None` (caller falls back to an exact rule) when the command is a
+/// single bare word, when the second token is a flag / path / filename / number
+/// rather than a subcommand, or when an unsafe leading env assignment is present
+/// (a prefix keyed on a specific env value is a poor rule — TS returns null for
+/// the same reason).
+///
+/// Unlike the allow-rule matcher, this does NOT strip safe *wrappers*
+/// (`timeout`/`nice`/`nohup`/…) — TS skips only env assignments here. A wrapper
+/// command therefore becomes the first token: `nohup npm start` → `nohup npm`,
+/// `timeout 60 cargo test` → `None` (the duration `60` is not a subcommand). The
+/// bare-shell guard lives in [`get_first_word_prefix`] (TS `getFirstWordPrefix`),
+/// not here.
 pub fn get_command_prefix(command: &str) -> Option<String> {
-    let stripped = strip_safe_wrappers(command);
-    let mut words = stripped.split_whitespace();
+    let tokens: Vec<&str> = command.split_whitespace().collect();
 
-    let first = words.next()?;
-    let base = first.rsplit('/').next().unwrap_or(first);
+    // Skip leading SAFE env-var assignments; bail on the first unsafe one.
+    let mut i = 0;
+    while let Some(name) = tokens.get(i).copied().and_then(env_assignment_name) {
+        if !SAFE_ENV_VARS.contains(name) {
+            return None;
+        }
+        i += 1;
+    }
 
-    // Don't allow bare shell prefixes as command prefix
-    if BARE_SHELL_PREFIXES.contains(base) {
+    let cmd = *tokens.get(i)?;
+    // Second token must be shaped like a subcommand (`commit`, `run`,
+    // `force-push`), not a flag (`-rf`), path (`/tmp`), filename (`a.txt`), or
+    // number (`755`).
+    let subcmd = *tokens.get(i + 1)?;
+    if !looks_like_subcommand(subcmd) {
         return None;
     }
+    Some(format!("{cmd} {subcmd}"))
+}
 
-    if let Some(second) = words.next() {
-        // Skip if second word looks like a flag
-        if second.starts_with('-') {
-            return Some(base.to_string());
+/// Extract a single-word command prefix (e.g., `python3` from
+/// `python3 script.py`) for the editable-prefix field's default value.
+///
+/// TS: `getFirstWordPrefix()` (bashPermissions.ts:243) — the UI-only fallback
+/// used to seed the dialog's editable prefix input when
+/// [`get_command_prefix`] declines (the second token isn't a subcommand). It
+/// skips leading SAFE env assignments (bail on unsafe), requires the command
+/// word to be a clean lowercase name (rejects paths, flags, numbers), and —
+/// unlike `get_command_prefix` — rejects [`BARE_SHELL_PREFIXES`]: a bare
+/// `bash:*` / `sudo:*` / `env:*` rule would allow arbitrary code via `-c` or by
+/// wrapping, so the dialog falls back to suggesting the exact command instead.
+pub fn get_first_word_prefix(command: &str) -> Option<String> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+
+    let mut i = 0;
+    while let Some(name) = tokens.get(i).copied().and_then(env_assignment_name) {
+        if !SAFE_ENV_VARS.contains(name) {
+            return None;
         }
-        Some(format!("{base} {second}"))
-    } else {
-        Some(base.to_string())
+        i += 1;
     }
+
+    let cmd = *tokens.get(i)?;
+    // Same shape check as the subcommand test: rejects paths (`./x`,
+    // `/usr/bin/python`), flags, numbers, filenames.
+    if !looks_like_subcommand(cmd) {
+        return None;
+    }
+    if BARE_SHELL_PREFIXES.contains(cmd) {
+        return None;
+    }
+    Some(cmd.to_string())
+}
+
+/// Extract a stable prefix from the words before a `<<` heredoc operator, or
+/// `None` when the command has no heredoc / nothing usable precedes it. A
+/// heredoc body changes every call, so an exact rule would never re-match — the
+/// caller suggests this prefix instead.
+///
+/// TS: `extractPrefixBeforeHeredoc()` (bashPermissions.ts:307).
+pub fn heredoc_command_prefix(command: &str) -> Option<String> {
+    let idx = command.find("<<")?;
+    if idx == 0 {
+        return None;
+    }
+    let before = command[..idx].trim();
+    if before.is_empty() {
+        return None;
+    }
+    if let Some(prefix) = get_command_prefix(before) {
+        return Some(prefix);
+    }
+    // Fallback: skip safe env assignments, then take up to 2 tokens (preserves a
+    // flag like `python3 -c`). An unsafe leading env var yields no prefix.
+    let tokens: Vec<&str> = before.split_whitespace().collect();
+    let mut i = 0;
+    while let Some(name) = tokens.get(i).copied().and_then(env_assignment_name) {
+        if !SAFE_ENV_VARS.contains(name) {
+            return None;
+        }
+        i += 1;
+    }
+    let rest = tokens.get(i..)?;
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest.iter().take(2).copied().collect::<Vec<_>>().join(" "))
+}
+
+/// If `token` is a `NAME=value` env assignment (TS `ENV_VAR_ASSIGN_RE`,
+/// `^[A-Za-z_]\w*=`), return `NAME`.
+fn env_assignment_name(token: &str) -> Option<&str> {
+    let eq = token.find('=')?;
+    let name = &token[..eq];
+    (!name.is_empty()
+        && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then_some(name)
+}
+
+/// Whether `token` has the subcommand shape `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` —
+/// a lowercase word with optional `-segments` (`commit`, `run`, `force-push`).
+///
+/// TS: the second-token regex in `getSimpleCommandPrefix()`.
+fn looks_like_subcommand(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    let mut prev_dash = false;
+    for &b in &bytes[1..] {
+        match b {
+            b'-' => {
+                if prev_dash {
+                    return false; // no `--`
+                }
+                prev_dash = true;
+            }
+            b'a'..=b'z' | b'0'..=b'9' => prev_dash = false,
+            _ => return false,
+        }
+    }
+    !prev_dash // no trailing dash
 }
 
 /// Split a compound command into subcommands.

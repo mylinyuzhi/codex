@@ -114,6 +114,12 @@ pub async fn handle_command(
         return changed;
     }
 
+    // Inline edits to a shell prompt's editable "always allow" prefix are
+    // consumed here so the keystrokes don't leak into the chat composer.
+    if crate::bottom_pane::permission::intercept_prefix_edit(state, &cmd) {
+        return true;
+    }
+
     let changed = match cmd {
         TuiCommand::Noop => false,
         // ── Mode toggles ──

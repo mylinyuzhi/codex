@@ -117,6 +117,7 @@ fn permission_with_choices_for_tool(tool_name: &str, values: &[&str], selected: 
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }));
     s
 }
@@ -245,6 +246,7 @@ async fn confirm_classic_yes_no_approves_selected_action() {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -299,6 +301,7 @@ async fn confirm_classic_always_allow_sends_session_update() {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -345,6 +348,7 @@ async fn confirm_classic_read_always_allow_sends_path_scoped_local_update() {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }));
     let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
     confirm(&mut s, &tx).await;
@@ -427,6 +431,7 @@ async fn down_then_enter_commits_always_allow() {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }));
     nav(&mut s, 1);
 
@@ -477,6 +482,7 @@ fn build_choice_payload_merges_with_original_input() {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     };
     let out = crate::bottom_pane::permission::build_choice_payload(&p).expect("payload built");
     assert_eq!(out["existing"], 42);
@@ -509,6 +515,7 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     };
     assert!(crate::bottom_pane::permission::build_choice_payload(&p).is_none());
 }
@@ -1014,6 +1021,7 @@ async fn approve_falls_through_to_modal_when_a_modal_is_open() {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }));
     s.ui.show_modal(ModalState::Help);
     let (tx, _rx) = mpsc::channel::<UserCommand>(8);

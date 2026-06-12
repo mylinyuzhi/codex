@@ -177,7 +177,7 @@ fn classic_permission_actions(
         // Every row shows its direct-commit hotkeys (digit + letter) so the
         // mapping is visible: `y`/`a`/`n` commit their OWN row, not the
         // highlighted one (Enter commits the highlight).
-        let (letter, label) = match action {
+        let (letter, mut label) = match action {
             PermissionAction::ApproveOnce => ("y", t!("dialog.action_approve_once").to_string()),
             PermissionAction::AllowSession => (
                 if has_local { "s" } else { "a" },
@@ -189,20 +189,53 @@ fn classic_permission_actions(
             ),
             PermissionAction::Deny => ("n", t!("dialog.action_deny").to_string()),
         };
+        // Shell tools: append the editable rule prefix to the allow rows. The
+        // focused row shows a cursor and accepts typed edits.
+        if matches!(
+            action,
+            PermissionAction::AllowSession | PermissionAction::AllowLocal
+        ) && let Some(input) = p.prefix_input.as_ref()
+        {
+            let shown = render_prefix_with_cursor(&input.value, input.cursor, idx == selected);
+            label = format!("{label}: {shown}");
+        }
         shortcut_letters.push(letter.to_ascii_uppercase());
         lines.push_str(&format!("{marker}{}/{letter} · {label}{suffix}\n", idx + 1));
     }
     lines.push_str(t!("dialog.hints_nav_select").as_ref());
     lines.push_str("  ");
-    lines.push_str(
-        t!(
-            "dialog.hints_permission_shortcuts",
-            count = actions.len().to_string(),
-            shortcuts = shortcut_letters.join("/")
+    // An editable allow row is focused → the shortcut letters become text, so
+    // show the edit hint instead of the y/a/s/n shortcut list.
+    if p.prefix_input.is_some()
+        && matches!(
+            crate::permission_options::classic_action_at(p, current_mode, selected),
+            PermissionAction::AllowSession | PermissionAction::AllowLocal
         )
-        .as_ref(),
-    );
+    {
+        lines.push_str(t!("dialog.hints_prefix_edit").as_ref());
+    } else {
+        lines.push_str(
+            t!(
+                "dialog.hints_permission_shortcuts",
+                count = actions.len().to_string(),
+                shortcuts = shortcut_letters.join("/")
+            )
+            .as_ref(),
+        );
+    }
     lines
+}
+
+/// Render the editable prefix value, inserting a thin cursor glyph at the
+/// cursor byte offset when the row is focused (so the user sees where typing
+/// lands). Unfocused rows show the value as-is.
+fn render_prefix_with_cursor(value: &str, cursor: usize, focused: bool) -> String {
+    if !focused {
+        return value.to_string();
+    }
+    let at = cursor.min(value.len());
+    let (before, after) = value.split_at(at);
+    format!("{before}▏{after}")
 }
 
 /// Project the domain [`QuestionPromptState`] into the pure, area-based

@@ -462,7 +462,7 @@ impl PermissionEvaluator {
         }
 
         // Step 8: Mode-based fallthrough
-        let decision = mode_fallthrough(context, &tool_str, options);
+        let decision = mode_fallthrough(context, &tool_str, input, options);
         tracing::debug!(
             tool_name = %tool_str,
             permission_decision = decision_label(&decision),
@@ -579,6 +579,7 @@ const RULE_PRIORITY_ORDER: &[PermissionRuleSource] = &[
 fn mode_fallthrough(
     context: &ToolPermissionContext,
     tool_str: &str,
+    input: &Value,
     options: PermissionEvaluationOptions,
 ) -> PermissionDecision {
     match context.mode {
@@ -613,7 +614,7 @@ fn mode_fallthrough(
             } else {
                 PermissionDecision::Ask {
                     message: format!("plan mode: approve {tool_str}?"),
-                    suggestions: vec![],
+                    suggestions: shell_ask_suggestions(tool_str, input),
                     choices: None,
                 }
             }
@@ -633,7 +634,7 @@ fn mode_fallthrough(
             } else {
                 PermissionDecision::Ask {
                     message: format!("approve {tool_str}?"),
-                    suggestions: vec![],
+                    suggestions: shell_ask_suggestions(tool_str, input),
                     choices: None,
                 }
             }
@@ -652,10 +653,31 @@ fn mode_fallthrough(
         PermissionMode::Default | PermissionMode::Auto | PermissionMode::Bubble => {
             PermissionDecision::Ask {
                 message: format!("approve {tool_str}?"),
-                suggestions: vec![],
+                suggestions: shell_ask_suggestions(tool_str, input),
                 choices: None,
             }
         }
+    }
+}
+
+/// "Always allow `<prefix>:*`" suggestions for a shell command that fell
+/// through to a mode-based approval prompt with no matching allow rule.
+///
+/// TS: `checkCommandAndSuggestRules` step 5 (bashPermissions.ts:1246) attaches
+/// `suggestionForExactCommand(command)` to the fall-through ask. Non-shell
+/// tools and inputs without a `command` string yield no suggestion.
+///
+/// The dangerous-gate asks raised by Bash's own `check_permissions` (rm,
+/// git-escape, process substitution, out-of-tree writes, …) keep their empty
+/// suggestions — TS likewise declines to suggest saving a potentially dangerous
+/// command (bashPermissions.ts:1236).
+fn shell_ask_suggestions(tool_str: &str, input: &Value) -> Vec<coco_types::PermissionUpdate> {
+    if !is_shell_tool(tool_str) {
+        return Vec::new();
+    }
+    match extract_shell_command(input) {
+        Some(command) => shell_rules::bash_permission_suggestions(tool_str, &command),
+        None => Vec::new(),
     }
 }
 

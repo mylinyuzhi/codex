@@ -482,6 +482,70 @@ pub fn suggestion_for_prefix(tool_name: &str, prefix: &str) -> coco_types::Permi
     }
 }
 
+/// Build the "always allow" suggestions offered alongside a shell approval
+/// prompt — the `Bash(git status:*)` row a user can accept to stop being asked
+/// for that command family.
+///
+/// TS: `suggestionForExactCommand()` (bashPermissions.ts:266). A heredoc or
+/// other multiline command keys on a stable prefix — an exact rule would never
+/// re-match (the body changes every call) and a multiline body can embed `:*`
+/// mid-pattern, corrupting the settings file. A single-line command keys on its
+/// `command subcommand` prefix when one is extractable
+/// ([`coco_shell::get_command_prefix`]), otherwise on the exact command.
+///
+/// `tool_name` is the shell tool the rule targets (`Bash` / `PowerShell`).
+/// Returns an empty vec for an empty command.
+pub fn bash_permission_suggestions(
+    tool_name: &str,
+    command: &str,
+) -> Vec<coco_types::PermissionUpdate> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    // Heredoc: suggest a prefix taken from the words before `<<`.
+    if let Some(prefix) = coco_shell::heredoc_command_prefix(trimmed) {
+        return vec![suggestion_for_prefix(tool_name, &prefix)];
+    }
+
+    // Other multiline commands make poor exact rules — key on the first line.
+    if let Some((first_line, _)) = trimmed.split_once('\n') {
+        let first_line = first_line.trim();
+        if !first_line.is_empty() {
+            return vec![suggestion_for_prefix(tool_name, first_line)];
+        }
+    }
+
+    // Single line: a `command subcommand` prefix gives a reusable rule.
+    if let Some(prefix) = coco_shell::get_command_prefix(trimmed) {
+        return vec![suggestion_for_prefix(tool_name, &prefix)];
+    }
+
+    vec![suggestion_for_exact_command(tool_name, trimmed)]
+}
+
+/// Default text for the permission dialog's editable "always allow" prefix
+/// field, given the raw bash command.
+///
+/// TS: `BashPermissionRequest.tsx:227-231` — try a `command subcommand` prefix
+/// (`git status:*`), else a single-word prefix (`ls:*`, bare shells excluded),
+/// else fall back to the exact command. Unlike [`bash_permission_suggestions`]
+/// (which keys the saved rule and prefers an exact rule when no clean two-word
+/// prefix exists), this seeds an *editable* field, so it offers the broader
+/// single-word `:*` form via [`coco_shell::get_first_word_prefix`] as a starting
+/// point the user can refine.
+pub fn editable_prefix_default(command: &str) -> String {
+    let trimmed = command.trim();
+    if let Some(prefix) = coco_shell::get_command_prefix(trimmed) {
+        return format!("{prefix}:*");
+    }
+    if let Some(word) = coco_shell::get_first_word_prefix(trimmed) {
+        return format!("{word}:*");
+    }
+    trimmed.to_string()
+}
+
 #[cfg(test)]
 #[path = "shell_rules.test.rs"]
 mod tests;
