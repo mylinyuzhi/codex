@@ -133,7 +133,7 @@ pub(crate) async fn approve_permission(
     };
     let chosen_is_no = choices
         .get(p.selected_choice)
-        .map(|c| c.value.as_str() == "no")
+        .map(|c| c.value == coco_types::ExitPlanChoice::No.as_str())
         .unwrap_or(false);
     let approved = !chosen_is_no;
     tracing::info!(

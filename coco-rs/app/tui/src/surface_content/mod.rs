@@ -24,7 +24,6 @@ pub(crate) enum TextSurfaceContent<'a> {
     Permission(&'a crate::state::PermissionPromptState),
     Help,
     Error(&'a str),
-    PlanExit(&'a crate::state::PlanExitPromptState),
     PlanEntry(&'a crate::state::PlanEntryPromptState),
     CostWarning(&'a crate::state::CostWarningPromptState),
     ModelPicker(&'a crate::state::ModelPickerState),
@@ -61,7 +60,6 @@ pub(crate) fn prompt_text_surface(prompt: &PanePromptState) -> Option<TextSurfac
         PanePromptState::SandboxPermission(s) => TextSurfaceContent::SandboxPermission(s),
         PanePromptState::CostWarning(c) => TextSurfaceContent::CostWarning(c),
         PanePromptState::PlanEntry(p) => TextSurfaceContent::PlanEntry(p),
-        PanePromptState::PlanExit(p) => TextSurfaceContent::PlanExit(p),
         PanePromptState::PlanApproval(p) => TextSurfaceContent::PlanApproval(p),
         PanePromptState::McpServerApproval(m) => TextSurfaceContent::McpServerApproval(m),
     })
@@ -144,9 +142,6 @@ pub(crate) fn surface_content(
             msg.to_string(),
             styles.error(),
         ),
-        TextSurfaceContent::PlanExit(p) => {
-            confirm::plan_exit_content(p, state.session.bypass_permissions_available, styles)
-        }
         TextSurfaceContent::PlanEntry(p) => confirm::plan_entry_content(p, styles),
         TextSurfaceContent::CostWarning(c) => confirm::cost_warning_content(c, styles),
         TextSurfaceContent::ModelPicker(m) => pickers::model_picker_content(m, styles),

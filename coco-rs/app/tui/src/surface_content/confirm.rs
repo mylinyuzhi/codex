@@ -14,7 +14,6 @@ use crate::state::InvalidConfigState;
 use crate::state::McpServerApprovalPromptState;
 use crate::state::PlanApprovalPromptState;
 use crate::state::PlanEntryPromptState;
-use crate::state::PlanExitPromptState;
 use crate::state::PluginHintState;
 use crate::state::SandboxPermissionPromptState;
 use crate::state::TaskDetailState;
@@ -27,14 +26,6 @@ pub(super) fn cost_warning_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     confirm::cost_warning_content(c, styles)
-}
-
-pub(super) fn plan_exit_content(
-    p: &PlanExitPromptState,
-    bypass_permissions_available: bool,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    confirm::plan_exit_content(p, bypass_permissions_available, styles)
 }
 
 pub(super) fn plan_entry_content(

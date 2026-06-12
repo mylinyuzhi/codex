@@ -374,6 +374,7 @@ pub use permission::AdditionalWorkingDir;
 pub use permission::ClassifierBehavior;
 pub use permission::ClassifierMode;
 pub use permission::ClassifierUsage;
+pub use permission::ExitPlanChoice;
 pub use permission::PendingClassifierCheck;
 pub use permission::PermissionAbortReason;
 pub use permission::PermissionAskChoice;

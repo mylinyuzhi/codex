@@ -247,64 +247,6 @@ pub enum PermissionDetail {
     Generic { input_preview: String },
 }
 
-/// Plan mode exit state.
-#[derive(Debug, Clone, Default)]
-pub struct PlanExitPromptState {
-    pub plan_content: Option<String>,
-    /// The mode to switch INTO after ExitPlanMode is approved. Set by
-    /// the user via the approval options (TS parity: "Yes, Accept Edits"
-    /// / "Yes, Bypass" / "Yes, keep default"). On `RestorePrePlan`,
-    /// plan-mode restoration falls back to `ctx.pre_plan_mode`.
-    pub next_mode: PlanExitTarget,
-}
-
-/// Mode to switch into after the user approves ExitPlanMode.
-///
-/// TS: `buildPlanApprovalOptions()` — the approval dropdown lets the
-/// user pick how much elevation they want on exit. We keep a compact
-/// three-way choice; the full TS matrix (clear-context, Ultraplan, etc.)
-/// is Anthropic-specific or feature-gated.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanExitTarget {
-    /// Restore whichever mode the session had before entering plan mode
-    /// (via `ToolPermissionContext.pre_plan_mode`). TS: `'yes-default-keep-context'`.
-    #[default]
-    RestorePrePlan,
-    /// Switch to `AcceptEdits` so file writes don't re-prompt.
-    /// TS: `'yes-accept-edits'`.
-    AcceptEdits,
-    /// Switch to `BypassPermissions`. Requires the session to have the
-    /// bypass gate enabled. TS: `'yes-bypass-permissions'`.
-    BypassPermissions,
-}
-
-impl PlanExitTarget {
-    /// The permission mode this target resolves to. `RestorePrePlan`
-    /// returns `None` to signal the engine should use `pre_plan_mode`.
-    pub fn resolve(self) -> Option<coco_types::PermissionMode> {
-        match self {
-            Self::RestorePrePlan => None,
-            Self::AcceptEdits => Some(coco_types::PermissionMode::AcceptEdits),
-            Self::BypassPermissions => Some(coco_types::PermissionMode::BypassPermissions),
-        }
-    }
-
-    /// Ordered list of exit targets offered to the user for a given
-    /// capability gate. `BypassPermissions` is only included when the
-    /// session was authorized to reach it at startup — matching TS
-    /// `buildPlanApprovalOptions()` which conditionally renders the
-    /// "Yes, and bypass permissions" entry on
-    /// `isBypassPermissionsModeAvailable`.
-    pub fn available(bypass_permissions_available: bool) -> Vec<Self> {
-        let mut out = vec![Self::RestorePrePlan, Self::AcceptEdits];
-        if bypass_permissions_available {
-            out.push(Self::BypassPermissions);
-        }
-        out
-    }
-}
-
 /// Cost warning state.
 #[derive(Debug, Clone)]
 pub struct CostWarningPromptState {

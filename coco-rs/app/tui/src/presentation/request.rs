@@ -162,6 +162,123 @@ pub(crate) fn permission_styled_content(
     (title, lines, border)
 }
 
+/// Rich, styled rendering of the `ExitPlanMode` approval prompt — the
+/// interactive "Ready to code?" panel. The plan is rendered as **markdown**
+/// (via `coco_tui_markdown`) inside a dashed frame, then the structured choice
+/// list, mirroring claude-code's `ExitPlanModePermissionRequest.tsx`.
+///
+/// Returns `(title, styled lines, border_color)` for the bordered prompt box.
+/// The trailing block (prompt + choices + hints) is laid out *after* the last
+/// blank line so the viewport's `compact_sequence` keeps the actionable rows
+/// visible when the plan is long; the full plan persists in the transcript
+/// (`render_exit_plan_mode`) once approved.
+///
+/// Only valid for an `ExitPlanMode` detail; the viewport guards the call.
+pub(crate) fn exit_plan_approval_styled_content(
+    p: &PermissionPromptState,
+    width: u16,
+    syntax: coco_tui_ui::display::SyntaxHighlighting,
+    styles: UiStyles<'_>,
+) -> (String, Vec<Line<'static>>, Color) {
+    let PermissionDetail::ExitPlanMode {
+        plan,
+        plan_file_path,
+        allowed_prompts,
+    } = &p.detail
+    else {
+        return (String::new(), Vec::new(), styles.warning());
+    };
+
+    let worker_suffix = p
+        .worker_badge
+        .as_ref()
+        .map(|b| format!(" · @{}", b.name))
+        .unwrap_or_default();
+    let title = format!(" {}{worker_suffix} ", t!("dialog.ready_to_code"));
+
+    let text = Style::default().fg(styles.text());
+    let dim = Style::default().fg(styles.dim());
+    let accent = Style::default().fg(styles.accent());
+    let dash_width = width.saturating_sub(2).max(1) as usize;
+    let dashed = || Line::from(Span::styled("┄".repeat(dash_width), dim));
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        t!("dialog.plan_heading").to_string(),
+        text,
+    )));
+    lines.push(dashed());
+
+    // Plan body as markdown, indented two columns under the heading.
+    let plan_body = plan.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    match plan_body {
+        Some(body) => {
+            let md_width = width.saturating_sub(4).max(1);
+            let opts = coco_tui_markdown::MarkdownOptions::new(styles, md_width, syntax);
+            for mut line in coco_tui_markdown::render_markdown(body, opts, None) {
+                line.spans.insert(0, Span::raw("  "));
+                lines.push(line);
+            }
+        }
+        None => lines.push(Line::from(Span::styled(
+            format!("  {}", t!("dialog.plan_missing")),
+            dim,
+        ))),
+    }
+    lines.push(dashed());
+
+    if let Some(path) = plan_file_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        lines.push(Line::from(Span::styled(
+            t!("dialog.plan_file", path = path).to_string(),
+            dim,
+        )));
+    }
+    if !allowed_prompts.is_empty() {
+        lines.push(Line::from(Span::styled(
+            t!("dialog.plan_requested_permissions").to_string(),
+            dim,
+        )));
+        for prompt in allowed_prompts {
+            lines.push(Line::from(Span::styled(format!("  - {prompt}"), dim)));
+        }
+    }
+
+    // Blank separator: everything below is the actionable tail the viewport's
+    // compaction must preserve, so it carries NO further blank lines.
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        t!("dialog.plan_ready_prompt").to_string(),
+        text,
+    )));
+
+    if let Some(choices) = &p.choices {
+        let selected = p.selected_choice.min(choices.len().saturating_sub(1));
+        for (idx, choice) in choices.iter().enumerate() {
+            if idx == selected {
+                lines.push(Line::from(vec![
+                    Span::styled("❯ ", accent),
+                    Span::styled("✓ ", Style::default().fg(styles.success())),
+                    Span::styled(choice.label.clone(), accent.add_modifier(Modifier::BOLD)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(choice.label.clone(), text),
+                ]));
+            }
+            if let Some(desc) = &choice.description {
+                lines.push(Line::from(Span::styled(format!("    {desc}"), dim)));
+            }
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        t!("dialog.hints_nav_select").to_string(),
+        dim,
+    )));
+
+    (title, lines, styles.plan())
+}
+
 fn classic_permission_actions(
     p: &PermissionPromptState,
     current_mode: coco_types::PermissionMode,

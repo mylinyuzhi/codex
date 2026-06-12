@@ -94,28 +94,6 @@ fn test_toggle_plan_mode_from_accept_edits_goes_to_plan() {
     assert_eq!(state.session.permission_mode, PermissionMode::Default);
 }
 
-// ── PlanExit target resolution ──
-
-#[test]
-fn test_plan_exit_target_resolves_to_permission_mode() {
-    use crate::state::PlanExitTarget;
-    assert_eq!(PlanExitTarget::RestorePrePlan.resolve(), None);
-    assert_eq!(
-        PlanExitTarget::AcceptEdits.resolve(),
-        Some(PermissionMode::AcceptEdits)
-    );
-    assert_eq!(
-        PlanExitTarget::BypassPermissions.resolve(),
-        Some(PermissionMode::BypassPermissions)
-    );
-}
-
-#[test]
-fn test_plan_exit_target_default_is_restore_pre_plan() {
-    use crate::state::PlanExitTarget;
-    assert_eq!(PlanExitTarget::default(), PlanExitTarget::RestorePrePlan);
-}
-
 #[test]
 fn test_new_state_defaults() {
     let state = AppState::new();
@@ -236,12 +214,14 @@ fn test_prompt_queue_priority_ordered() {
             is_in_plan_mode: false,
         },
     )); // priority 2
-    state
-        .ui
-        .push_prompt(PanePromptState::PlanExit(Default::default())); // priority 1
     state.ui.push_prompt(PanePromptState::PlanEntry(
         crate::state::PlanEntryPromptState {
-            description: "plan".into(),
+            description: "plan-a".into(),
+        },
+    )); // priority 1
+    state.ui.push_prompt(PanePromptState::PlanEntry(
+        crate::state::PlanEntryPromptState {
+            description: "plan-b".into(),
         },
     )); // priority 1
 

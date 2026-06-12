@@ -130,7 +130,6 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
                 | PanePromptState::SandboxPermission(_)
                 | PanePromptState::CostWarning(_)
                 | PanePromptState::PlanEntry(_)
-                | PanePromptState::PlanExit(_)
                 | PanePromptState::PlanApproval(_)
                 | PanePromptState::McpServerApproval(_)
         )

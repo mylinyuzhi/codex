@@ -16,7 +16,6 @@ use crate::state::surface_payloads::McpServerApprovalPromptState;
 use crate::state::surface_payloads::PermissionPromptState;
 use crate::state::surface_payloads::PlanApprovalPromptState;
 use crate::state::surface_payloads::PlanEntryPromptState;
-use crate::state::surface_payloads::PlanExitPromptState;
 use crate::state::surface_payloads::SandboxPermissionPromptState;
 
 const PERMISSION_PROMPT_DELAY: Duration = Duration::from_secs(1);
@@ -116,7 +115,6 @@ pub enum PanePromptState {
     SandboxPermission(SandboxPermissionPromptState),
     CostWarning(CostWarningPromptState),
     PlanEntry(PlanEntryPromptState),
-    PlanExit(PlanExitPromptState),
     PlanApproval(PlanApprovalPromptState),
     McpServerApproval(McpServerApprovalPromptState),
 }
@@ -125,7 +123,7 @@ impl PanePromptState {
     pub fn priority(&self) -> i32 {
         match self {
             Self::SandboxPermission(_) => 0,
-            Self::Permission(_) | Self::PlanEntry(_) | Self::PlanExit(_) => 1,
+            Self::Permission(_) | Self::PlanEntry(_) => 1,
             Self::Question(_) | Self::McpServerApproval(_) | Self::PlanApproval(_) => 2,
             Self::CostWarning(_) => 3,
         }
@@ -138,7 +136,6 @@ impl PanePromptState {
             Self::SandboxPermission(s) => Some(s.request_id.as_str()),
             Self::CostWarning(_)
             | Self::PlanEntry(_)
-            | Self::PlanExit(_)
             | Self::PlanApproval(_)
             | Self::McpServerApproval(_) => None,
         }
@@ -154,8 +151,8 @@ impl PanePromptState {
     /// though TS has no analog variant. The semantic is identical
     /// ("tool blocked waiting on user approval"), so widening the
     /// pause to cover sandbox approvals avoids a user-visible clock
-    /// drift while we wait. Other prompts (Question, PlanEntry/Exit/
-    /// Approval, McpServerApproval, CostWarning) do not pause — TS
+    /// drift while we wait. Other prompts (Question, PlanEntry,
+    /// PlanApproval, McpServerApproval, CostWarning) do not pause — TS
     /// keeps the clock running through them.
     pub fn pauses_status_clock(&self) -> bool {
         matches!(self, Self::Permission(_) | Self::SandboxPermission(_))
