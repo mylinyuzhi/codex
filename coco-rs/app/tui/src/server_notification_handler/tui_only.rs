@@ -51,6 +51,24 @@ fn enqueue_informational(
     }
 }
 
+/// Seed the editable "always allow" prefix for a shell-tool approval. Returns
+/// `None` for non-shell tools or when no `command` string is present. Mirrors
+/// the TS `BashPermissionRequest` editable field's default
+/// (`coco_permissions::shell_rules::editable_prefix_default`).
+fn seed_prefix_input(
+    tool_name: &str,
+    original_input: Option<&serde_json::Value>,
+) -> Option<crate::state::PrefixInputState> {
+    if tool_name != coco_types::ToolName::Bash.as_str()
+        && tool_name != coco_types::ToolName::PowerShell.as_str()
+    {
+        return None;
+    }
+    let command = original_input?.get("command")?.as_str()?;
+    let value = coco_permissions::shell_rules::editable_prefix_default(command);
+    Some(crate::state::PrefixInputState::new(value))
+}
+
 #[cfg(test)]
 #[path = "tui_only.test.rs"]
 mod tests;
@@ -75,6 +93,9 @@ pub(super) fn handle(
         } => {
             let detail =
                 permission_detail_for_approval(&tool_name, &display_input, original_input.as_ref());
+            let prefix_input = (choices.is_none() && show_always_allow)
+                .then(|| seed_prefix_input(&tool_name, original_input.as_ref()))
+                .flatten();
             state.ui.push_delayed_permission(
                 crate::state::PermissionPromptState {
                     request_id,
@@ -98,6 +119,7 @@ pub(super) fn handle(
                     permission_suggestions,
                     explanation_visible: false,
                     explanation: crate::state::ExplainerFetch::NotFetched,
+                    prefix_input,
                 },
                 std::time::Instant::now(),
             );

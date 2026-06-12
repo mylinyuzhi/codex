@@ -1872,6 +1872,7 @@ fn toggle_test_prompt(request_id: &str) -> crate::state::PermissionPromptState {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }
 }
 

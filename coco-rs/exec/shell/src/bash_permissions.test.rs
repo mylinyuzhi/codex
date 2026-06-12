@@ -46,14 +46,115 @@ fn test_get_command_prefix() {
         get_command_prefix("cargo test --release"),
         Some("cargo test".into())
     );
-    assert_eq!(get_command_prefix("ls -la"), Some("ls".into()));
+    // Safe leading env var is stripped before extraction.
+    assert_eq!(
+        get_command_prefix("RUST_LOG=debug cargo test"),
+        Some("cargo test".into())
+    );
+    // Hyphenated subcommands are valid.
+    assert_eq!(
+        get_command_prefix("gh pr-list --state open"),
+        Some("gh pr-list".into())
+    );
 }
 
 #[test]
-fn test_get_command_prefix_rejects_shell() {
+fn test_get_command_prefix_requires_subcommand_shape() {
+    // Second token is a flag, not a subcommand → exact rule (None).
+    assert_eq!(get_command_prefix("ls -la"), None);
+    assert_eq!(get_command_prefix("docker -v"), None);
     assert_eq!(get_command_prefix("bash -c 'evil'"), None);
-    assert_eq!(get_command_prefix("sudo rm -rf /"), None);
-    assert_eq!(get_command_prefix("env malicious"), None);
+    // Filename / path / number are not subcommands.
+    assert_eq!(get_command_prefix("git a.txt"), None);
+    assert_eq!(get_command_prefix("chmod 755 file"), None);
+    assert_eq!(get_command_prefix("python /tmp/x.py"), None);
+    // Single bare word → exact rule (None).
+    assert_eq!(get_command_prefix("make"), None);
+}
+
+/// Strict TS parity: `getSimpleCommandPrefix` has NO bare-shell guard — a
+/// wrapper/privilege command with a subcommand-shaped second token yields a
+/// two-word prefix. The bare-shell guard lives in `get_first_word_prefix`.
+#[test]
+fn test_get_command_prefix_no_bare_guard() {
+    assert_eq!(get_command_prefix("sudo rm -rf /"), Some("sudo rm".into()));
+    assert_eq!(
+        get_command_prefix("env malicious"),
+        Some("env malicious".into())
+    );
+    assert_eq!(
+        get_command_prefix("/usr/bin/sudo apt install"),
+        Some("/usr/bin/sudo apt".into())
+    );
+    assert_eq!(
+        get_command_prefix("nohup npm start"),
+        Some("nohup npm".into())
+    );
+}
+
+#[test]
+fn test_get_command_prefix_rejects_unsafe_env() {
+    // An unsafe leading env var survives stripping → no prefix (would embed the
+    // env value in the rule and could never match a different value).
+    assert_eq!(
+        get_command_prefix("LD_PRELOAD=/evil.so cat /etc/passwd"),
+        None
+    );
+    assert_eq!(get_command_prefix("MY_VAR=val npm run build"), None);
+}
+
+#[test]
+fn test_get_first_word_prefix() {
+    // Falls back to the single command word when no subcommand prefix exists.
+    assert_eq!(get_first_word_prefix("ls -la"), Some("ls".into()));
+    assert_eq!(
+        get_first_word_prefix("python3 script.py"),
+        Some("python3".into())
+    );
+    assert_eq!(get_first_word_prefix("docker -v"), Some("docker".into()));
+    // Safe leading env var is skipped first.
+    assert_eq!(
+        get_first_word_prefix("RUST_LOG=debug cargo"),
+        Some("cargo".into())
+    );
+}
+
+#[test]
+fn test_get_first_word_prefix_rejects_bare_shell_and_bad_shapes() {
+    // Bare shells / wrappers / privilege escalators are blocked here (TS).
+    assert_eq!(get_first_word_prefix("bash -c 'evil'"), None);
+    assert_eq!(get_first_word_prefix("sudo rm -rf /"), None);
+    assert_eq!(get_first_word_prefix("env malicious"), None);
+    assert_eq!(get_first_word_prefix("xargs rm"), None);
+    // Paths / flags / numbers are not clean command words.
+    assert_eq!(get_first_word_prefix("/usr/bin/python x"), None);
+    assert_eq!(get_first_word_prefix("./script.sh"), None);
+    assert_eq!(get_first_word_prefix("-x foo"), None);
+    // Unsafe leading env var → None.
+    assert_eq!(get_first_word_prefix("LD_PRELOAD=x cat"), None);
+}
+
+#[test]
+fn test_heredoc_command_prefix() {
+    // Two-word prefix extracted from the words before `<<`.
+    assert_eq!(
+        heredoc_command_prefix("git commit -m \"$(cat <<'EOF'\nbody\nEOF\n)\""),
+        Some("git commit".into())
+    );
+    // Single bare command before the heredoc → that word (2-token fallback).
+    assert_eq!(
+        heredoc_command_prefix("cat <<EOF\nhi\nEOF"),
+        Some("cat".into())
+    );
+    // Fallback preserves a flag (up to 2 tokens), mirroring TS.
+    assert_eq!(
+        heredoc_command_prefix("python3 -c <<EOF"),
+        Some("python3 -c".into())
+    );
+    // No heredoc → None.
+    assert_eq!(heredoc_command_prefix("echo hi"), None);
+    // Unsafe leading env var before the heredoc → None.
+    assert_eq!(heredoc_command_prefix("LD_PRELOAD=x cat <<EOF"), None);
 }
 
 #[test]

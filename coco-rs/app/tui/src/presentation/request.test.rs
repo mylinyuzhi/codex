@@ -46,6 +46,7 @@ fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }
 }
 
@@ -77,6 +78,48 @@ fn permission_styled_content_highlights_selected_action() {
     assert!(style.add_modifier.contains(Modifier::BOLD));
     assert!(line_text(selected).starts_with("▸ "));
     assert!(line_text(selected).ends_with(" ◂"));
+}
+
+#[test]
+fn shell_prompt_renders_editable_prefix_with_cursor() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Bash {
+        command: "git status -s".to_string(),
+        risk_description: None,
+        working_dir: None,
+    });
+    state.tool_name = "Bash".to_string();
+    state.show_always_allow = true;
+    state.original_input = Some(json!({"command": "git status -s"}));
+    state.prefix_input = Some(crate::state::PrefixInputState::new(
+        "git status:*".to_string(),
+    ));
+    // Focus the local allow row (actions: Yes, session, local, No → idx 2).
+    state.selected_choice = 2;
+
+    let (_, lines, _) = permission_styled_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+    // The focused allow row shows the editable rule prefix with a cursor glyph.
+    let focused = lines
+        .iter()
+        .map(line_text)
+        .find(|t| t.contains('▏'))
+        .expect("focused row with cursor");
+    assert!(focused.contains("git status:*"), "got: {focused}");
+    // The unfocused session row shows the same prefix without a cursor.
+    let session = lines
+        .iter()
+        .map(line_text)
+        .find(|t| t.contains("git status:*") && !t.contains('▏'))
+        .expect("unfocused session prefix row");
+    assert!(session.contains("git status:*"));
+    // The hint switches to the edit affordance while an allow row is focused.
+    let hints = lines.iter().any(|l| line_text(l).contains("type to edit"));
+    assert!(hints, "edit hint missing");
 }
 
 #[test]

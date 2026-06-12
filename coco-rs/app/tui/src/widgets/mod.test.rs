@@ -463,6 +463,7 @@ fn test_snapshot_with_permission_prompt() {
                 worker_badge: None,
                 explanation_visible: false,
                 explanation: crate::state::ExplainerFetch::NotFetched,
+                prefix_input: None,
             },
         ));
     mark_retained_surface_visible(&mut state);

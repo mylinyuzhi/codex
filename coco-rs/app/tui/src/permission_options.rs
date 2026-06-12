@@ -21,11 +21,20 @@ pub(crate) fn classic_actions(
 ) -> Vec<PermissionAction> {
     let mut actions = vec![PermissionAction::ApproveOnce];
     if p.show_always_allow {
-        if !session_allow_updates(p, current_mode).is_empty() {
+        if p.prefix_input.is_some() {
+            // Shell tools with an editable prefix always offer both allow rows
+            // so the row set stays stable while the user edits the field (an
+            // emptied field commits as allow-once). Gating on non-empty updates
+            // would make a row vanish mid-edit and desync `selected_choice`.
             actions.push(PermissionAction::AllowSession);
-        }
-        if !local_allow_updates(p).is_empty() {
             actions.push(PermissionAction::AllowLocal);
+        } else {
+            if !session_allow_updates(p, current_mode).is_empty() {
+                actions.push(PermissionAction::AllowSession);
+            }
+            if !local_allow_updates(p).is_empty() {
+                actions.push(PermissionAction::AllowLocal);
+            }
         }
     }
     actions.push(PermissionAction::Deny);
@@ -55,10 +64,62 @@ pub(crate) fn selected_classic_action(
         .unwrap_or(PermissionAction::Deny)
 }
 
+/// Whether the editable "always allow" prefix field is active for input: the
+/// prompt carries a `prefix_input` (shell tool) and the focused classic row is
+/// an always-allow row. When true, typed characters edit the prefix rather than
+/// triggering y/n/a hotkeys (the `PermissionPrefixEdit` keybinding context).
+pub(crate) fn prefix_editing(
+    p: &PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
+) -> bool {
+    p.prefix_input.is_some()
+        && matches!(
+            selected_classic_action(p, current_mode),
+            PermissionAction::AllowSession | PermissionAction::AllowLocal
+        )
+}
+
+/// The shell allow rule built from the edited prefix, if the prompt has a
+/// non-empty editable prefix that parses to a safe (Exact/Prefix) shell rule.
+/// `None` → no edited prefix in play; the caller falls back to the engine
+/// suggestion. An empty edited prefix also yields `None` (TS: empty → allow
+/// once, no rule).
+fn edited_prefix_rule(
+    p: &PermissionPromptState,
+    source: coco_types::PermissionRuleSource,
+) -> Option<coco_types::PermissionRule> {
+    let value = p.prefix_input.as_ref()?.value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let rule = coco_types::PermissionRule {
+        source,
+        behavior: coco_types::PermissionBehavior::Allow,
+        value: coco_types::PermissionRuleValue {
+            tool_pattern: p.tool_name.clone(),
+            rule_content: Some(value.to_string()),
+        },
+    };
+    scoped_allow_rule_is_safe(&rule).then_some(rule)
+}
+
 pub(crate) fn session_allow_updates(
     p: &PermissionPromptState,
     current_mode: coco_types::PermissionMode,
 ) -> Vec<coco_types::PermissionUpdate> {
+    // Shell tools with an editable prefix: the edited value is authoritative
+    // (replaces the engine suggestion, mirroring TS's editable field). An empty
+    // / unsafe value yields no rule → commit allows once.
+    if p.prefix_input.is_some() {
+        return edited_prefix_rule(p, coco_types::PermissionRuleSource::Session)
+            .map(|rule| {
+                vec![coco_types::PermissionUpdate::AddRules {
+                    rules: vec![rule],
+                    destination: coco_types::PermissionUpdateDestination::Session,
+                }]
+            })
+            .unwrap_or_default();
+    }
     let mut updates = Vec::new();
     let mut rules = Vec::new();
     for suggestion in &p.permission_suggestions {
@@ -128,6 +189,17 @@ pub(crate) fn session_allow_updates(
 }
 
 pub(crate) fn local_allow_updates(p: &PermissionPromptState) -> Vec<coco_types::PermissionUpdate> {
+    // Shell editable prefix is authoritative (see `session_allow_updates`).
+    if p.prefix_input.is_some() {
+        return edited_prefix_rule(p, coco_types::PermissionRuleSource::LocalSettings)
+            .map(|rule| {
+                vec![coco_types::PermissionUpdate::AddRules {
+                    rules: vec![rule],
+                    destination: coco_types::PermissionUpdateDestination::LocalSettings,
+                }]
+            })
+            .unwrap_or_default();
+    }
     if let Some(update) = read_path_allow_update(
         &p.tool_name,
         p.original_input.as_ref(),

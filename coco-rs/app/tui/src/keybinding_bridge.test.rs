@@ -124,6 +124,7 @@ fn install_permission_prompt(state: &mut AppState) {
             worker_badge: None,
             explanation_visible: false,
             explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
         },
     ));
 }
@@ -265,6 +266,38 @@ fn test_permission_prompt_context() {
     let mut state = AppState::new();
     install_permission_prompt(&mut state);
     assert_eq!(active_context(&state), KeybindingContext::Confirmation);
+}
+
+#[test]
+fn test_shell_prefix_edit_context_and_keys() {
+    let mut state = AppState::new();
+    install_permission_prompt(&mut state);
+    if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_mut() {
+        p.prefix_input = Some(crate::state::PrefixInputState::new("git status:*".into()));
+    }
+
+    // Yes row focused (idx 0) → still the y/n/a confirmation context.
+    assert_eq!(active_context(&state), KeybindingContext::Confirmation);
+
+    // Focus an allow row (idx 1 = session) → the prefix edit context takes over.
+    if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_mut() {
+        p.selected_choice = 1;
+    }
+    assert_eq!(
+        active_context(&state),
+        KeybindingContext::PermissionPrefixEdit
+    );
+
+    // A letter that would be a y/n/a hotkey inserts text instead.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('y'))),
+        Some(TuiCommand::InsertChar('y'))
+    ));
+    // Enter commits the focused allow row.
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Enter)),
+        Some(TuiCommand::SurfaceConfirm)
+    ));
 }
 
 #[test]

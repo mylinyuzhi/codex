@@ -728,6 +728,7 @@ fn explainer_prompt(request_id: &str) -> crate::state::PermissionPromptState {
         worker_badge: None,
         explanation_visible: true,
         explanation: crate::state::ExplainerFetch::Loading,
+        prefix_input: None,
     }
 }
 

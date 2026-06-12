@@ -133,6 +133,7 @@ pub use surface_payloads::PlanApprovalPromptState;
 pub use surface_payloads::PlanEntryPromptState;
 pub use surface_payloads::PlanExitPromptState;
 pub use surface_payloads::PlanExitTarget;
+pub use surface_payloads::PrefixInputState;
 pub use surface_payloads::QuickOpenState;
 pub use surface_payloads::RiskLevel;
 pub use surface_payloads::SandboxPermissionPromptState;

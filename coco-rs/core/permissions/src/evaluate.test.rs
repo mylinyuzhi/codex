@@ -514,6 +514,54 @@ fn test_default_mode_asks() {
     assert!(matches!(result, PermissionDecision::Ask { .. }));
 }
 
+/// A fall-through Bash ask carries an "always allow `<prefix>:*`" suggestion so
+/// the prompt can offer a reusable grant (TS `checkCommandAndSuggestRules`).
+#[test]
+fn test_default_mode_bash_ask_carries_prefix_suggestion() {
+    let ctx = empty_context(PermissionMode::Default);
+    let result = PermissionEvaluator::evaluate(
+        &ToolId::Builtin(ToolName::Bash),
+        &bash_input("git status -s"),
+        &ctx,
+    );
+    let PermissionDecision::Ask { suggestions, .. } = result else {
+        panic!("expected ask, got {result:?}");
+    };
+    assert_eq!(
+        suggestion_rule(&suggestions),
+        Some(("Bash", "git status:*"))
+    );
+}
+
+/// Non-shell tool asks stay suggestion-free — the prefix producer is shell-only.
+#[test]
+fn test_default_mode_non_shell_ask_has_no_suggestion() {
+    let ctx = empty_context(PermissionMode::Default);
+    let result = PermissionEvaluator::evaluate(
+        &ToolId::Builtin(ToolName::WebFetch),
+        &serde_json::json!({"url": "https://example.com"}),
+        &ctx,
+    );
+    if let PermissionDecision::Ask { suggestions, .. } = result {
+        assert!(suggestions.is_empty());
+    }
+}
+
+/// Extract the single `(tool_pattern, rule_content)` from a one-rule `AddRules`
+/// suggestion list (`PermissionUpdate` has no `PartialEq`).
+fn suggestion_rule(updates: &[PermissionUpdate]) -> Option<(&str, &str)> {
+    match updates {
+        [PermissionUpdate::AddRules { rules, .. }] => match rules.as_slice() {
+            [rule] => Some((
+                rule.value.tool_pattern.as_str(),
+                rule.value.rule_content.as_deref().unwrap_or(""),
+            )),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// TS: dontAsk converts all 'ask' decisions to 'deny'.
 #[test]
 fn test_dont_ask_mode_denies_all() {

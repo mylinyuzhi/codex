@@ -251,3 +251,103 @@ fn test_has_wildcards() {
     assert!(!has_wildcards(r"echo \*")); // escaped star
     assert!(has_wildcards(r"echo \\*")); // escaped backslash then real star
 }
+
+// ── suggestion production ──
+
+/// Pull the single `(tool_pattern, rule_content)` out of a one-rule `AddRules`
+/// suggestion for terse assertions.
+fn one_rule(updates: &[coco_types::PermissionUpdate]) -> (&str, &str) {
+    match updates {
+        [coco_types::PermissionUpdate::AddRules { rules, .. }] => match rules.as_slice() {
+            [rule] => (
+                rule.value.tool_pattern.as_str(),
+                rule.value.rule_content.as_deref().unwrap_or(""),
+            ),
+            _ => panic!("expected exactly one rule, got {rules:?}"),
+        },
+        _ => panic!("expected one AddRules update, got {updates:?}"),
+    }
+}
+
+#[test]
+fn test_bash_suggestion_prefix() {
+    let s = bash_permission_suggestions("Bash", "git status -s");
+    assert_eq!(one_rule(&s), ("Bash", "git status:*"));
+}
+
+#[test]
+fn test_bash_suggestion_exact_when_no_prefix() {
+    // No subcommand-shaped second token → exact rule (no `:*`).
+    let s = bash_permission_suggestions("Bash", "ls -la");
+    assert_eq!(one_rule(&s), ("Bash", "ls -la"));
+}
+
+#[test]
+fn test_bash_suggestion_bare_shell_falls_back_to_exact() {
+    // `bash` is a bare-shell prefix → never suggested as a prefix rule.
+    let s = bash_permission_suggestions("Bash", "bash -c 'evil'");
+    assert_eq!(one_rule(&s), ("Bash", "bash -c 'evil'"));
+}
+
+#[test]
+fn test_bash_suggestion_multiline_uses_first_line() {
+    let s = bash_permission_suggestions("Bash", "echo one\necho two");
+    assert_eq!(one_rule(&s), ("Bash", "echo one:*"));
+}
+
+#[test]
+fn test_bash_suggestion_heredoc_uses_prefix_before_operator() {
+    let s = bash_permission_suggestions("Bash", "git commit -m \"$(cat <<'EOF'\nbody\nEOF\n)\"");
+    assert_eq!(one_rule(&s), ("Bash", "git commit:*"));
+}
+
+#[test]
+fn test_bash_suggestion_heredoc_bare_command() {
+    let s = bash_permission_suggestions("Bash", "cat <<EOF\nhi\nEOF");
+    assert_eq!(one_rule(&s), ("Bash", "cat:*"));
+}
+
+#[test]
+fn test_bash_suggestion_empty_command() {
+    assert!(bash_permission_suggestions("Bash", "   ").is_empty());
+}
+
+#[test]
+fn test_bash_suggestion_targets_tool_name() {
+    let s = bash_permission_suggestions("PowerShell", "git status");
+    assert_eq!(one_rule(&s), ("PowerShell", "git status:*"));
+}
+
+#[test]
+fn test_editable_prefix_default() {
+    // Two-word prefix.
+    assert_eq!(editable_prefix_default("git status -s"), "git status:*");
+    // Single-word fallback when the second token isn't a subcommand.
+    assert_eq!(editable_prefix_default("ls -la"), "ls:*");
+    assert_eq!(editable_prefix_default("python3 script.py"), "python3:*");
+    // Single bare word that's a clean command → first-word `:*`.
+    assert_eq!(editable_prefix_default("make"), "make:*");
+    // Bare shell blocked in both extractors → exact command.
+    assert_eq!(editable_prefix_default("bash -c 'x'"), "bash -c 'x'");
+    // Path-led command (not a clean word) → exact.
+    assert_eq!(editable_prefix_default("./script.sh"), "./script.sh");
+}
+
+/// A produced prefix suggestion must survive the TUI's scoped-allow filter
+/// (`ShellPermissionRule::parse` → Exact/Prefix only): the `:*` form parses
+/// back to a `Prefix`, the exact form to an `Exact`.
+#[test]
+fn test_bash_suggestion_parses_back_to_scopable_rule() {
+    let prefix_update = bash_permission_suggestions("Bash", "git status -s");
+    let (_, prefix) = one_rule(&prefix_update);
+    assert!(matches!(
+        ShellPermissionRule::parse(prefix),
+        ShellPermissionRule::Prefix { .. }
+    ));
+    let exact_update = bash_permission_suggestions("Bash", "ls -la");
+    let (_, exact) = one_rule(&exact_update);
+    assert!(matches!(
+        ShellPermissionRule::parse(exact),
+        ShellPermissionRule::Exact { .. }
+    ));
+}

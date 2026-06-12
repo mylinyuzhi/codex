@@ -49,6 +49,11 @@ pub enum KeybindingContext {
     /// the keys map to input-style commands the editor's `intercept`
     /// consumes (Cursor* / InsertChar / SubmitInput).
     PermissionsEditor,
+    /// Editable "always allow" prefix on a shell permission prompt. Active only
+    /// while an allow row is focused (mirrors [`Self::PermissionsEditor`]): plain
+    /// chars become `InsertChar` and arrows `Cursor*` so the rule field is
+    /// editable, rather than being hijacked as y/n/a confirmation actions.
+    PermissionPrefixEdit,
     /// Default chat input context.
     Chat,
 }
@@ -108,6 +113,14 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
         Some(PanePromptState::Question(_))
     ) {
         return KeybindingContext::Question;
+    }
+
+    // A shell permission prompt with an allow row focused: editing the rule
+    // prefix takes over the keys (chars → InsertChar, not y/n/a).
+    if let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref()
+        && crate::permission_options::prefix_editing(p, state.session.permission_mode)
+    {
+        return KeybindingContext::PermissionPrefixEdit;
     }
 
     if matches!(
@@ -304,10 +317,36 @@ fn resolve_key(
             crate::modal_pane::settings::map_key(key)
         }
         KeybindingContext::PermissionsEditor => crate::modal_pane::permissions_editor::map_key(key),
+        KeybindingContext::PermissionPrefixEdit => permission_prefix_edit_map_key(key),
         KeybindingContext::Chat => map_global_key(state, key).or_else(|| map_input_key(state, key)),
     };
     let source = if cmd.is_some() { "cascade" } else { "unmapped" };
     (cmd, source)
+}
+
+/// Keys for the editable always-allow prefix field on a shell permission
+/// prompt. Mirrors the `/permissions` editor: chars insert, arrows move the
+/// cursor, Enter commits the focused allow row, Esc denies, ↑/↓ leave the row.
+fn permission_prefix_edit_map_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
+        KeyCode::Esc => Some(TuiCommand::Deny),
+        KeyCode::Up => Some(TuiCommand::SurfacePrev),
+        KeyCode::Down => Some(TuiCommand::SurfaceNext),
+        KeyCode::Backspace if ctrl || alt => Some(TuiCommand::DeleteWordBackward),
+        KeyCode::Backspace => Some(TuiCommand::DeleteBackward),
+        KeyCode::Left => Some(TuiCommand::CursorLeft),
+        KeyCode::Right => Some(TuiCommand::CursorRight),
+        KeyCode::Home => Some(TuiCommand::CursorHome),
+        KeyCode::End => Some(TuiCommand::CursorEnd),
+        KeyCode::Char('a') if ctrl => Some(TuiCommand::CursorHome),
+        KeyCode::Char('e') if ctrl => Some(TuiCommand::CursorEnd),
+        KeyCode::Char('w') if ctrl => Some(TuiCommand::DeleteWordBackward),
+        KeyCode::Char(c) if !ctrl && !alt => Some(TuiCommand::InsertChar(c)),
+        _ => None,
+    }
 }
 
 /// Keys for autocomplete suggestions.

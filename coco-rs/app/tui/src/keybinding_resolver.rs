@@ -253,6 +253,11 @@ pub fn context_stack(ctx: TuiContext) -> Vec<KbContext> {
         // (and chars to filter / Y-N-A) before the editor's `intercept`
         // sees them as the `Cursor*` / `InsertChar` it expects.
         PermissionsEditor => vec![KbContext::Global],
+        // Global-only, same rationale as `PermissionsEditor`: the prefix field's
+        // nav + text input come entirely from `permission_prefix_edit_map_key`.
+        // No Select/Confirmation so chars/arrows aren't resolved to filter /
+        // Surface* / Y-N-A before reaching the input map.
+        PermissionPrefixEdit => vec![KbContext::Global],
         // Task sits between Chat and Global so `ctrl+b` (defaults.rs:200)
         // resolves while typing in the composer. TS `defaultBindings.ts:181-188`
         // makes the Task context active whenever a backgroundable task exists;

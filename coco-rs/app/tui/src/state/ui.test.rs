@@ -116,6 +116,7 @@ fn permission_prompt() -> PermissionPromptState {
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
     }
 }
 
