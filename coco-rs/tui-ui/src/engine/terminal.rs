@@ -59,10 +59,11 @@ pub trait SurfaceBackend: Backend {
     /// Does NOT leave the alternate screen. coco keeps the main session in
     /// the primary buffer (native scrollback) and never enters the alt
     /// screen for it, so a `CSI ?1049l` here would be unpaired: on a real
-    /// terminal it performs a DECRC onto the stale `\x1b7` save the last
-    /// history insert left up in finalized history, yanking the cursor into
-    /// the transcript so whatever prints next (the resume hint) overprints
-    /// it. codex's `restore_common` omits the alt-screen leave for exactly
+    /// terminal it performs a DECRC onto whatever the shared save register
+    /// happens to hold (coco never writes `\x1b7`; prompt frameworks and
+    /// prior programs do), yanking the cursor to a stale position so
+    /// whatever prints next (the resume hint) overprints the transcript.
+    /// codex's `restore_common` omits the alt-screen leave for exactly
     /// this reason. Leaving a modal alt-screen is the caller's job
     /// (`leave_modal_alt_screen`), emitted only when actually in it.
     ///
@@ -133,8 +134,8 @@ where
         // Disable alternate scroll + bracketed paste + focus reporting. The
         // alternate screen is intentionally NOT left here (see the trait
         // doc): the main session never enters it, so an unpaired `?1049l`
-        // would DECRC the cursor into finalized history and the resume hint
-        // would overprint the transcript.
+        // would DECRC the cursor to a stale saved position and the resume
+        // hint would overprint the transcript.
         write!(self, "\x1b[?1007l")?;
         queue!(self, DisableBracketedPaste, DisableFocusChange)?;
         Write::flush(self)
@@ -153,9 +154,13 @@ where
         target_top: u16,
         scratch: &mut String,
     ) -> Result<Option<usize>, Self::Error> {
+        // No DECSC/DECRC bracket: every row is absolutely addressed and the
+        // engine re-parks the cursor from app-tracked state after the insert
+        // (`SurfaceTerminal::insert_history_rows`), so the terminal's shared
+        // save register stays untouched — a stale save there is what an
+        // unpaired DECRC (e.g. a `?1049l`) dereferences.
         scratch.clear();
         scratch.reserve((row_count as usize) * (rendered.area.width as usize + 16));
-        scratch.push_str("\x1b7");
         for source_y in source_start_row..source_start_row.saturating_add(row_count) {
             let target_y = target_top + (source_y - source_start_row);
             scratch.push_str("\x1b[");
@@ -181,7 +186,7 @@ where
                 to_skip = display_width(cell.symbol()).saturating_sub(1);
             }
         }
-        scratch.push_str("\x1b[0m\x1b8");
+        scratch.push_str("\x1b[0m");
         let bytes = scratch.len();
         self.write_all(scratch.as_bytes())?;
         Ok(Some(bytes))
@@ -211,6 +216,12 @@ pub struct SurfaceTerminal<B: SurfaceBackend> {
     last_known_screen_size: Size,
     visible_history_rows: u16,
     history_bottom_y: u16,
+    /// Where the engine last deliberately placed the cursor (claim, hidden
+    /// park, clear, or shell prompt). History inserts re-park from this
+    /// app-owned value with an absolute move — never via the terminal's
+    /// DECSC/DECRC save register, which is shared, hidden state with
+    /// per-terminal semantics.
+    last_parked_cursor: Position,
     invalidated: bool,
     perf_stats_enabled: bool,
     history_row_scratch: String,
@@ -289,6 +300,7 @@ where
             last_known_screen_size: screen_size,
             visible_history_rows: 0,
             history_bottom_y: viewport_area.top(),
+            last_parked_cursor: Position { x: 0, y: 0 },
             invalidated: true,
             perf_stats_enabled: false,
             history_row_scratch: String::new(),
@@ -463,6 +475,8 @@ where
     pub fn clear_owned_scrollback(&mut self) -> Result<(), B::Error> {
         let previous = self.viewport_area;
         self.backend.clear_scrollback_and_screen()?;
+        // The clear escape ends with the cursor homed.
+        self.last_parked_cursor = Position { x: 0, y: 0 };
         self.visible_history_rows = 0;
         self.history_bottom_y = 0;
         self.viewport_area.y = 0;
@@ -510,6 +524,7 @@ where
         self.clear_after_position(prompt)?;
         self.backend.show_cursor()?;
         self.backend.set_cursor_position(prompt)?;
+        self.last_parked_cursor = prompt;
         self.backend.flush()
     }
 
@@ -529,6 +544,7 @@ where
         self.backend.set_cursor_position(position)?;
         self.backend.clear_region(ClearType::CurrentLine)?;
         self.backend.clear_region(ClearType::AfterCursor)?;
+        self.last_parked_cursor = position;
         self.invalidate_viewport();
         Ok(())
     }
@@ -593,6 +609,12 @@ where
             draw_elapsed += draw.elapsed;
             start_row += chunk_rows;
         }
+        // Re-park the cursor from app-tracked state with an absolute move.
+        // The row writes (and the DECSTBM-based scrolls, which home the
+        // cursor) left it inside finalized history; restoring from memory
+        // instead of a DECSC/DECRC bracket keeps the terminal's shared save
+        // register untouched and the restore deterministic across terminals.
+        self.backend.set_cursor_position(self.last_parked_cursor)?;
         let flush_start = self.perf_stats_enabled.then(Instant::now);
         self.backend.flush()?;
         let flush_elapsed = flush_start.map(|start| start.elapsed()).unwrap_or_default();
@@ -760,9 +782,12 @@ where
             self.backend.set_cursor_style(claim.style)?;
             self.backend.show_cursor()?;
             self.backend.set_cursor_position(claim.position)?;
+            self.last_parked_cursor = claim.position;
         } else {
             self.backend.hide_cursor()?;
-            self.backend.set_cursor_position(Position { x: 0, y: 0 })?;
+            let park = Position { x: 0, y: 0 };
+            self.backend.set_cursor_position(park)?;
+            self.last_parked_cursor = park;
         }
         Ok(())
     }

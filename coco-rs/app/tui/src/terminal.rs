@@ -755,9 +755,10 @@ where
         // main session never enters the alt screen (native scrollback lives
         // in the primary buffer), so `leave_terminal_modes` deliberately does
         // NOT emit `LeaveAlternateScreen` (`CSI ?1049l`): an unpaired one
-        // performs a DECRC onto the stale `\x1b7` save the last history
-        // insert left up in finalized history, yanking the cursor into the
-        // transcript so the resume hint printed next overprints it. codex's
+        // performs a DECRC onto whatever the shared save register holds
+        // (coco never writes `\x1b7`; prior programs may have), yanking the
+        // cursor to a stale position so the resume hint printed next
+        // overprints the transcript. codex's
         // `restore_common` omits the alt-screen leave for the same reason;
         // the modal case is handled by `leave_modal_alt_screen` below, which
         // only fires when a modal alt-screen is actually active.
