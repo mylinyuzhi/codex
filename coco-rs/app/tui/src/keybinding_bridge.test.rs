@@ -481,8 +481,7 @@ fn test_ctrl_shift_t_opens_team_roster_when_teammate_present() {
 }
 
 /// Inside the roster picker, plain Left/Right cycle the FOCUSED teammate's
-/// mode; Shift+Left/Right cycle ALL teammates in tandem (R8 cycle-all, TS
-/// `cycleAllTeammateModes`).
+/// mode; Shift+Left/Right cycle ALL teammates in tandem (R8 cycle-all).
 #[test]
 fn test_roster_shift_arrows_cycle_all_modes() {
     let state = team_roster_state();
@@ -627,10 +626,9 @@ fn test_prompt_n_denies() {
 
 #[test]
 fn test_ctrl_t_cycles_view_in_chat_context() {
-    // Ctrl+T now binds globally to `app:toggleTodos` (view cycle:
+    // Ctrl+T binds globally to `app:toggleTodos` (view cycle:
     // Chat → Tasks → Subagents). The previous Chat-context shadow that
-    // routed Ctrl+T to `ChatCycleThinking` has moved to Ctrl+Y so the
-    // view cycle wins from every context including the input bar.
+    // routed Ctrl+T to `ChatCycleThinking` has moved to Ctrl+Y.
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('t')));
     assert!(matches!(cmd, Some(TuiCommand::ToggleExpandedTasksView)));
@@ -638,11 +636,10 @@ fn test_ctrl_t_cycles_view_in_chat_context() {
 
 #[test]
 fn test_ctrl_y_cycles_thinking_level_in_chat_context() {
-    // coco-rs extension: in Chat context Ctrl+Y cycles the Main role's
-    // thinking effort through the active model's
-    // `supported_thinking_levels` (`ChatCycleThinking → CycleThinkingLevel`).
-    // Displaces the readline `yank` default; the legacy `input:yank`
-    // cascade only applies in non-Chat contexts.
+    // In Chat context Ctrl+Y cycles the Main role's thinking effort through
+    // the active model's `supported_thinking_levels`. Displaces the readline
+    // `yank` default; the legacy `input:yank` cascade only applies in
+    // non-Chat contexts.
     let state = AppState::new();
     let cmd = map_key(&state, ctrl(KeyCode::Char('y')));
     assert!(matches!(cmd, Some(TuiCommand::CycleThinkingLevel)));
@@ -673,10 +670,7 @@ fn test_ctrl_f_kills_all_agents() {
 
 #[test]
 fn test_ctrl_shift_f_opens_global_search() {
-    // TS `app:globalSearch` is bound to `ctrl+shift+f`
-    // (`defaultBindings.ts:53-58`, gated on QUICK_SEARCH which coco-rs
-    // doesn't gate). Fast mode moved off this key — TS binds it to
-    // `meta+o` (`alt+o`) only.
+    // `app:globalSearch` is bound to `ctrl+shift+f`.
     let state = AppState::new();
     let key = KeyEvent {
         code: KeyCode::Char('f'),

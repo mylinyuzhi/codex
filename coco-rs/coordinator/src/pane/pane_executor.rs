@@ -1,7 +1,5 @@
 //! Pane backend executor — wraps a PaneBackend with CLI command building
 //! and mailbox integration to implement TeammateExecutor.
-//!
-//! TS: utils/swarm/backends/PaneBackendExecutor.ts
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,8 +26,6 @@ struct SpawnedTeammate {
 }
 
 /// Pane backend executor — wraps PaneBackend with command building.
-///
-/// TS: `class PaneBackendExecutor implements TeammateExecutor`
 pub struct PaneBackendExecutor {
     backend: Arc<dyn PaneBackend>,
     spawned: RwLock<HashMap<String, SpawnedTeammate>>,

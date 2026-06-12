@@ -1,5 +1,5 @@
-//! Glob tool — fast file-pattern search, modeled on the TS Claude Code
-//! `GlobTool` which shells out to `rg --files --glob <pattern> --sort=modified`.
+//! Glob tool — fast file-pattern search that shells out to
+//! `rg --files --glob <pattern> --sort=modified`.
 //!
 //! # Safety & concurrency model
 //!
@@ -7,24 +7,23 @@
 //! - `is_concurrency_safe(_) = true` — no shared mutable state; two calls
 //!   may execute in parallel via the `StreamingToolExecutor`.
 //! - `is_destructive` / `interrupt_behavior` / `requires_user_interaction`
-//!   all use the trait defaults, matching the TS tool which also does not
+//!   all use the trait defaults, which also does not
 //!   override these.
 //!
 //! # Execution pipeline
 //!
 //! The walker is constructed from [`IgnoreService`] with `.gitignore`
-//! disabled (to match TS `--no-ignore`) and hidden files enabled (to match
-//! TS `--hidden`). File discovery, compiled-glob matching, and mtime
+//! disabled (matching `--no-ignore` behavior) and hidden files enabled
+//! (matching `--hidden` behavior). File discovery, compiled-glob matching, and mtime
 //! collection all run inside [`tokio::task::spawn_blocking`], wrapped in
 //! [`tokio::time::timeout`] for a bounded 20-second budget (overridable via
 //! the `COCO_GLOB_TIMEOUT_SECONDS` env var).
 //!
 //! # Sort order
 //!
-//! TS passes `--sort=modified` to ripgrep, which sorts **ascending** by
-//! modification time (oldest first). This is verified by
-//! `rg --files --sort=modified`. We match that ordering deliberately so output
-//! is byte-compatible with Claude Code — see [`run_glob_search`].
+//! Files are sorted **ascending** by modification time (oldest first),
+//! matching `--sort=modified` ordering. This is verified by
+//! `rg --files --sort=modified` — see [`run_glob_search`].
 //!
 //! # Cancellation & worktree isolation
 //!
@@ -51,11 +50,10 @@ use std::time::Duration;
 use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
 
-/// Default max results when glob_limits.max_results is None (TS: 100).
+/// Default max results when glob_limits.max_results is None.
 const DEFAULT_MAX_RESULTS: usize = 100;
 
-/// Tool description shown to the model. Byte-for-byte copy of TS Claude Code
-/// `tools/GlobTool/prompt.ts::DESCRIPTION`.
+/// Tool description shown to the model.
 const GLOB_DESCRIPTION: &str = "\
 - Fast file pattern matching tool that works with any codebase size
 - Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\"
@@ -65,9 +63,7 @@ const GLOB_DESCRIPTION: &str = "\
 
 /// Typed input for [`GlobTool`].
 ///
-/// TS parity: `GlobTool.ts` `inputSchema` (`pattern` required,
-/// `path` optional). Doc comments propagate to the model-visible
-/// schema as field `description`s.
+/// Doc comments propagate to the model-visible schema as field `description`s.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct GlobInput {
     /// The glob pattern to match files against
@@ -91,7 +87,7 @@ impl Tool for GlobTool {
     type Input = GlobInput;
     coco_tool_runtime::impl_runtime_schema!(GlobInput);
     /// Output is the pre-joined model-visible text (filenames + optional
-    /// truncation hint, or `"No files found"`). TS-parity `GlobOutput
+    /// truncation hint, or `"No files found"`). A typed `GlobOutput
     /// { filenames, num_files, truncated }` is a follow-up — see the
     /// `tool-result-rendering` design note. For now the renderer is a
     /// pass-through, matching the pre-typed behaviour.
@@ -113,14 +109,13 @@ impl Tool for GlobTool {
         GLOB_DESCRIPTION.into()
     }
 
-    /// Model-facing tool description (schema-listing time). TS
-    /// `GlobTool.ts:143-144` `async prompt()` returns the SAME
+    /// Model-facing tool description (schema-listing time). Returns the SAME
     /// `DESCRIPTION` as `async description()`.
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         GLOB_DESCRIPTION.into()
     }
 
-    /// Glob never modifies state (TS: `isReadOnly() = true`).
+    /// Glob never modifies state.
     fn is_read_only(&self, _input: &GlobInput) -> bool {
         true
     }
@@ -130,18 +125,16 @@ impl Tool for GlobTool {
 
     /// Safe to run in parallel with other concurrency-safe tools. Batches
     /// with Grep/Read/etc. via the `StreamingToolExecutor`.
-    /// TS: `isConcurrencySafe() = true`.
     fn is_concurrency_safe(&self, _input: &GlobInput) -> bool {
         true
     }
 
-    /// Result persistence threshold — matches TS `maxResultSizeChars: 100_000`.
+    /// Result persistence threshold — 100_000 chars.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
         coco_tool_runtime::ResultSizeBound::Chars(100_000)
     }
 
     /// `Self::Output = String` — render emits the prebuilt text directly.
-    /// TS parity: `GlobTool.ts::mapToolResultToToolResultBlockParam`.
     fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
             text: out.clone(),
@@ -183,8 +176,8 @@ impl Tool for GlobTool {
 
     fn validate_input(&self, input: &GlobInput, _ctx: &ToolUseContext) -> ValidationResult {
         // Schema-level validation already enforced `pattern` is a
-        // present String; reject empty strings here as a TS-parity
-        // semantic gate (TS treats `""` as no pattern).
+        // present String; reject empty strings here as a semantic
+        // gate (empty string means no pattern).
         if input.pattern.is_empty() {
             return ValidationResult::invalid("missing required field: pattern");
         }
@@ -225,7 +218,7 @@ impl Tool for GlobTool {
             });
         }
 
-        // Read limit from ctx.glob_limits (TS: globLimits?.maxResults ?? 100)
+        // Read limit from ctx.glob_limits
         let max_results = ctx
             .glob_limits
             .max_results
@@ -310,7 +303,6 @@ fn run_glob_search(
         .map_err(|e| format!("invalid glob pattern: {e}"))?
         .compile_matcher();
 
-    // TS: --no-ignore (don't respect .gitignore) + --hidden (show hidden files)
     let ignore_config = IgnoreConfig::default()
         .with_hidden(true)
         .with_gitignore(false);
@@ -330,8 +322,8 @@ fn run_glob_search(
         }
 
         // R6-T20: hide files that match the file-read ignore patterns
-        // from the result list. Matches TS `GlobTool` which pipes its
-        // result through `checkReadPermissionForTool` before emitting.
+        // from the result list (pipes through `checkReadPermissionForTool`
+        // before emitting).
         if crate::tools::read_permissions::is_read_ignored_with_matcher(path, read_ignore_matcher) {
             continue;
         }
@@ -347,11 +339,8 @@ fn run_glob_search(
         }
     }
 
-    // TS-parity: Claude Code passes `--sort=modified` to ripgrep, which sorts
-    // ascending by modification time (oldest first). Verified via
-    // `rg --files --sort=modified`. We match that ordering deliberately so
-    // output matches Claude Code byte-for-byte — do not flip to newest-first
-    // without a matching change in the TS tool.
+    // Sort ascending by modification time (oldest first), matching
+    // `rg --files --sort=modified`. Do not flip to newest-first.
     matches.sort_by(|a, b| a.1.cmp(&b.1));
 
     // Check truncation before limiting

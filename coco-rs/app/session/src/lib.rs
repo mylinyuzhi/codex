@@ -1,6 +1,4 @@
 //! Session persistence, history, and state aggregation.
-//!
-//! TS: bootstrap/state.ts + session management + history.ts
 
 pub mod concurrent_sessions;
 pub mod error;
@@ -47,10 +45,9 @@ pub type Result<T, E = SessionError> = std::result::Result<T, E>;
 /// **Derived value** in the JSONL-canonical model: this struct is
 /// reconstructed from the on-disk transcript (first/last lines + tag
 /// / custom-title metadata entries), not persisted as its own file.
-/// Mirrors TS, which has no `{session_id}.json` sidecar — every
-/// session-level fact (title, tags, model, created/updated_at,
-/// message counts) is derivable from the transcript's first entry +
-/// trailing metadata block.
+/// There is no `{session_id}.json` sidecar — every session-level fact
+/// (title, tags, model, created/updated_at, message counts) is
+/// derivable from the transcript's first entry + trailing metadata block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -68,7 +65,7 @@ pub struct Session {
     #[serde(default)]
     pub total_tokens: i64,
     /// Searchable tags applied via `/tag`. Persisted alongside title for
-    /// session browsing/filtering. TS: session metadata `tags?: string[]`.
+    /// session browsing/filtering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 }
@@ -96,12 +93,12 @@ impl Session {
     }
 }
 
-/// Session manager — TS-aligned: every operation reads/writes the
+/// Session manager — every operation reads/writes the
 /// JSONL transcript and its metadata entries. There is no
-/// `{session_id}.json` sidecar (pre-fix coco-rs had one; TS has
-/// none, and the duplication produced silent state drift between
-/// the sidecar and the source-of-truth transcript on every
-/// `/rename`, `/tag`, or interrupted save).
+/// `{session_id}.json` sidecar (pre-fix coco-rs had one, and the
+/// duplication produced silent state drift between the sidecar and
+/// the source-of-truth transcript on every `/rename`, `/tag`, or
+/// interrupted save).
 ///
 /// `memory_base` is `coco_config::global_config::config_home()`
 /// unless overridden by `COCO_REMOTE_MEMORY_DIR`. The manager spans
@@ -128,8 +125,7 @@ impl SessionManager {
 
     /// Create a new in-memory session. **Does not write to disk** —
     /// the transcript JSONL is created lazily by the first
-    /// `append_message` call from the runtime, matching TS's
-    /// no-eager-create behaviour.
+    /// `append_message` call from the runtime.
     pub fn create(&self, model: &str, cwd: &Path) -> crate::Result<Session> {
         Ok(Session {
             id: uuid::Uuid::new_v4().to_string(),
@@ -147,9 +143,7 @@ impl SessionManager {
     /// Set the session title (`/rename <name>`). Appends **two**
     /// metadata entries — `CustomTitle` (the picker's preferred
     /// field) and `AgentName` (the prompt-bar agent banner +
-    /// `coco ps`-visible name) — in that order. Mirrors TS
-    /// `rename.ts`, which calls `saveCustomTitle` and `saveAgentName`
-    /// on every rename.
+    /// `coco ps`-visible name) — in that order.
     ///
     /// Errors when no transcript exists for `id` under any project.
     pub fn set_title(&self, id: &str, title: &str) -> crate::Result<Session> {
@@ -162,11 +156,9 @@ impl SessionManager {
                 custom_title: title.to_string(),
             },
         )?;
-        // TS parity: `saveAgentName(sessionId, newName, fullPath)` is
-        // called immediately after `saveCustomTitle`. The reader side
-        // (storage::read_transcript_metadata) already had the
-        // AgentName arm wired but no production writer existed before
-        // this pair-write.
+        // `AgentName` is appended immediately after `CustomTitle`. The
+        // reader side (storage::read_transcript_metadata) has the
+        // AgentName arm wired; both are always written together.
         store.append_metadata(
             id,
             &storage::MetadataEntry::AgentName {
@@ -183,8 +175,7 @@ impl SessionManager {
     /// entry. Reader precedence in
     /// [`storage::read_transcript_metadata`] is `CustomTitle >
     /// AiTitle`, so a subsequent user [`set_title`] always wins on
-    /// the next read regardless of write order. TS parity:
-    /// `saveAiGeneratedTitle` writing `type: 'ai-title'`.
+    /// the next read regardless of write order.
     ///
     /// Unlike [`set_title`], this method does NOT touch the
     /// `AgentName` slot — AI-suggested titles are advisory and
@@ -209,10 +200,9 @@ impl SessionManager {
 
     /// Toggle a tag on/off (`/tag <name>`). Tag presence is decided
     /// from the current Session derive; the new state is appended
-    /// as a `Tag` metadata entry. Mirrors TS toggle semantics where
-    /// re-running `/tag X` adds and then removes X — we just append
-    /// the new desired state and let the picker's tail-window scan
-    /// pick up the latest.
+    /// as a `Tag` metadata entry. Re-running `/tag X` adds and then
+    /// removes X — the new desired state is appended and the picker's
+    /// tail-window scan picks up the latest.
     pub fn toggle_tag(&self, id: &str, tag: &str) -> crate::Result<(Session, bool)> {
         let mut session = self.load(id)?;
         let store = self.store_for(&session.working_dir);
@@ -282,8 +272,7 @@ impl SessionManager {
     /// (`"coordinator"` / `"normal"`) so a later `--resume` can re-derive
     /// it. The reader keeps the last-wins `Mode` entry
     /// ([`storage::read_transcript_metadata`]), which drives
-    /// `coco_cli::coordinator_mode_resume::reconcile_on_resume`. TS parity:
-    /// `utils/sessionStorage.ts saveMode`.
+    /// `coco_cli::coordinator_mode_resume::reconcile_on_resume`.
     ///
     /// Errors when no transcript exists for `id` (a zero-turn session has
     /// nothing to record); callers treat the write as best-effort.
@@ -301,8 +290,7 @@ impl SessionManager {
 
     /// Re-append session metadata to EOF so the lite-metadata tail scan in
     /// [`storage::read_transcript_metadata`] keeps finding it after
-    /// large post-compaction content. TS parity:
-    /// `Project.reAppendSessionMetadata` in `utils/sessionStorage.ts:721`.
+    /// large post-compaction content.
     ///
     /// **Algorithm**:
     /// 1. Read the current lite metadata (head+tail scan).
@@ -311,8 +299,7 @@ impl SessionManager {
     /// Re-append is **unconditional** even when the value is already
     /// near EOF: a title 40KB from EOF sits inside the current tail
     /// window but the next compaction round will push it out. Skipping
-    /// would defeat the purpose. TS comment at `sessionStorage.ts:714-717`
-    /// makes the same argument.
+    /// would defeat the purpose.
     ///
     /// Silent no-op when no transcript exists (e.g. session created
     /// in-memory but no message appended yet) — the empty case has
@@ -320,8 +307,8 @@ impl SessionManager {
     ///
     /// **Discipline**: write `CustomTitle` separately from `AgentName`
     /// (paired, like [`set_title`]). `AiTitle` is deliberately not
-    /// re-appended; TS keeps AI titles lower-priority and does not refresh
-    /// them to EOF.
+    /// re-appended — AI titles are lower-priority and are not refreshed
+    /// to EOF.
     pub fn re_append_session_metadata(&self, id: &str) -> crate::Result<()> {
         let Some(resolved) = storage::resolve_session_file_path(&self.memory_base, id, None)?
         else {
@@ -437,15 +424,12 @@ impl SessionManager {
     ///
     /// Match semantics: case-insensitive substring (`exact = false`)
     /// or case-insensitive equality (`exact = true`). Empty / `None`
-    /// titles never match. TS parity:
-    /// `searchSessionsByCustomTitle(query, { exact })` in
-    /// `utils/sessionStorage.ts:3065`.
+    /// titles never match.
     ///
     /// Caller is responsible for any project-scope filtering
     /// (`tui_runner`'s resume path rejects cross-project matches);
-    /// here we walk every project to mirror TS's worktree-aware
-    /// search. Newest-first sort comes from [`list`] which is mtime
-    /// sorted.
+    /// here we walk every project for worktree-aware search. Newest-first
+    /// sort comes from [`list`] which is mtime sorted.
     pub fn find_by_title(&self, query: &str, exact: bool) -> crate::Result<Vec<Session>> {
         let needle = query.to_lowercase();
         let needle = needle.trim();
@@ -502,9 +486,8 @@ impl SessionManager {
         Ok(removed)
     }
 
-    /// TS-aligned mtime-based retention: delete every transcript
-    /// `.jsonl` whose on-disk mtime is older than `older_than`.
-    /// Mirrors TS `utils/cleanup.ts` behaviour
+    /// Mtime-based retention: delete every transcript
+    /// `.jsonl` whose on-disk mtime is older than `older_than`
     /// (`DEFAULT_CLEANUP_PERIOD_DAYS = 30`).
     ///
     /// Walks `<memory_base>/projects/*/*.jsonl` stat-only — a
@@ -549,8 +532,7 @@ impl SessionManager {
     }
 }
 
-/// Default cleanup retention period — matches TS
-/// `utils/cleanup.ts:DEFAULT_CLEANUP_PERIOD_DAYS = 30`.
+/// Default cleanup retention period (30 days).
 pub const DEFAULT_CLEANUP_PERIOD_DAYS: u64 = 30;
 
 /// [`DEFAULT_CLEANUP_PERIOD_DAYS`] as a `Duration` (convenience).

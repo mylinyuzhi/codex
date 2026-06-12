@@ -1,7 +1,5 @@
 //! Bash / zsh / sh provider.
 //!
-//! TS source: `utils/shell/bashProvider.ts:58-255` (`createBashShellProvider`).
-//!
 //! What this assembles, in order, for every command:
 //!
 //! 1. (optional) `source <snapshot> 2>/dev/null || true` — restore the
@@ -100,10 +98,9 @@ impl BashProvider {
         &self.shell
     }
 
-    /// Resolve the currently-published snapshot, if any. Mirrors the
-    /// TS `access()` TOCTOU check: snapshot must both be `Some` AND its
-    /// file still exist on disk; otherwise we treat it as missing and
-    /// fall through to the login-shell path.
+    /// Resolve the currently-published snapshot, if any. Snapshot must both
+    /// be `Some` AND its file still exist on disk (TOCTOU guard); otherwise
+    /// we treat it as missing and fall through to the login-shell path.
     fn resolved_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
         let snap = self.shell.shell_snapshot()?;
         if snap.path().exists() {
@@ -116,8 +113,6 @@ impl BashProvider {
     /// `shopt -u extglob` (bash) / `setopt NO_EXTENDED_GLOB` (zsh) /
     /// dual-form fallback (unknown shell, also used when a shell prefix
     /// may swap the actual executing shell behind our back).
-    ///
-    /// TS: `getDisableExtglobCommand()` in `bashProvider.ts:39-56`.
     fn extglob_disable_snippet(&self) -> &'static str {
         if self.shell_prefix.is_some() {
             // The wrapper may run a different shell than `shellPath` —

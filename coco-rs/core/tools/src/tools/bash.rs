@@ -27,8 +27,8 @@ use serde_json::Value;
 /// Typed input for [`BashTool`].
 ///
 /// The model-facing schema is built by the manual [`BashTool::input_schema`]
-/// override — TS-mirror with the four user-visible fields and intentionally
-/// omitting `_simulatedSedEdit` (internal; populated by the
+/// override — four user-visible fields, intentionally omitting
+/// `_simulatedSedEdit` (internal; populated by the
 /// `SedEditPermissionRequest` TUI dialog).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct BashInput {
@@ -37,11 +37,11 @@ pub struct BashInput {
     /// rejected before deserialize.
     pub command: String,
     /// Optional timeout (ms). Defaults to `ToolConfig::bash.default_timeout_ms`
-    /// when absent or zero; the model's value is otherwise honored (TS parity).
+    /// when absent or zero; the model's value is otherwise honored.
     #[serde(default)]
     pub timeout: Option<u64>,
     /// Short description of what the command does. Falls back to the
-    /// command string when omitted (TS `BashTool.tsx:879`).
+    /// command string when omitted.
     #[serde(default)]
     pub description: Option<String>,
     /// Run in the background. Returns a `task_id` immediately and emits
@@ -76,29 +76,24 @@ fn default_timeout_ms(config: &coco_config::ToolConfig) -> u64 {
 
 /// Long-form tool description shown to the model.
 ///
-/// TS: `tools/BashTool/prompt.ts:275-369` `getSimplePrompt()`. This is
-/// the **core instructional text** — the universal Bash usage guidance
-/// that applies to all builds. The conditional sections that TS adds
-/// based on runtime config (sandbox config dump, undercover guidance,
-/// per-user git skill references, embedded-search-tool variants) are
-/// intentionally omitted because:
+/// Conditional sections based on runtime config (sandbox config dump,
+/// undercover guidance, per-user git skill references,
+/// embedded-search-tool variants) are intentionally omitted because:
 ///
-///   1. They depend on runtime feature flags that coco-rs doesn't
-///      currently model (USER_TYPE='ant', isUndercover, hasEmbeddedSearchTools).
+///   1. They depend on runtime feature flags coco-rs doesn't currently
+///      model (isUndercover, hasEmbeddedSearchTools).
 ///   2. The sandbox config dump leaks /private/tmp paths into the
-///      prompt cache key — TS works around this by normalizing to
-///      $TMPDIR but coco-rs doesn't have a sandbox manager that
+///      prompt cache key — coco-rs doesn't have a sandbox manager that
 ///      emits config to the prompt.
 ///   3. The git commit/PR section is ~80 lines of skill-specific
 ///      guidance that's only relevant when /commit, /commit-push-pr
 ///      skills are loaded — coco-rs has its own skill discovery
 ///      pipeline.
 ///
-/// What IS ported: the avoid-native-commands list, tool-preference
-/// items, multi-command parallelism guidance, git safety bullets,
+/// Included: the avoid-native-commands list, tool-preference items,
+/// multi-command parallelism guidance, git safety bullets,
 /// timeout/run_in_background notes, sleep-avoidance guidance, and the
-/// commit safety/PR creation instructions (full text from TS lines
-/// 81-160 — the external-user branch, since coco-rs is the OSS distro).
+/// commit safety/PR creation instructions.
 const BASH_TOOL_DESCRIPTION: &str = "Executes a given bash command and returns its output.
 
 The working directory persists between commands, but shell state does not. The shell environment is initialized from the user's profile (bash or zsh).
@@ -204,9 +199,8 @@ Important:
 /// Returns the state when (a) the `Sandbox` feature is enabled and
 /// (b) the bootstrap layer installed an `Arc<SandboxState>` on the
 /// context. Otherwise returns `None`, leaving the executor to spawn
-/// commands without sandbox wrapping. Mirrors TS `shouldUseSandbox.ts`
-/// gate: enable check → bypass + exclusion are evaluated downstream by
-/// `SandboxState::command_snapshot`.
+/// commands without sandbox wrapping. Enable check → bypass + exclusion
+/// are evaluated downstream by `SandboxState::command_snapshot`.
 fn active_sandbox_state(ctx: &ToolUseContext) -> Option<std::sync::Arc<SandboxState>> {
     if !ctx.features.enabled(coco_types::Feature::Sandbox) {
         return None;
@@ -260,7 +254,7 @@ impl Tool for BashTool {
     }
 
     // Static schema from a literal `json!`; a parse failure means the literal
-    // is malformed (a programmer error), so panicking on first build is correct.
+    // is malformed (programmer error), so panicking on first build is correct.
     #[allow(clippy::expect_used)]
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
         static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
@@ -310,10 +304,8 @@ impl Tool for BashTool {
     }
 
     /// Model-facing spec. Always strips the internal `_simulatedSedEdit`
-    /// field (TS omits it unconditionally). When background tasks are
-    /// disabled (`COCO_BACKGROUND_TASKS_DISABLE`), also drops
-    /// `run_in_background` — TS `BashTool` does the same via
-    /// `fullInputSchema().omit({ run_in_background: true })`.
+    /// field. When background tasks are disabled
+    /// (`COCO_BACKGROUND_TASKS_DISABLE`), also drops `run_in_background`.
     async fn tool_spec(
         &self,
         ctx: &coco_tool_runtime::SchemaContext,
@@ -343,8 +335,7 @@ impl Tool for BashTool {
         ToolName::Bash.as_str()
     }
 
-    /// Short per-call UI label. TS `BashTool.tsx:426-430`:
-    /// `description || 'Run shell command'`.
+    /// Short per-call UI label: `description || 'Run shell command'`.
     fn description(&self, input: &BashInput, _options: &DescriptionOptions) -> String {
         input
             .description
@@ -354,15 +345,13 @@ impl Tool for BashTool {
             .unwrap_or_else(|| "Run shell command".to_string())
     }
 
-    /// Model-facing tool description (schema-listing time). TS
-    /// `BashTool.tsx:431-433` returns `getSimplePrompt()`; we hold that
-    /// ported text in [`BASH_TOOL_DESCRIPTION`].
+    /// Model-facing tool description (schema-listing time). Text held in
+    /// [`BASH_TOOL_DESCRIPTION`].
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         BASH_TOOL_DESCRIPTION.into()
     }
 
-    /// Read-only fast path. Mirrors TS `BashTool.isReadOnly` → `checkReadOnlyConstraints`
-    /// (`readOnlyValidation.ts:1876`). Commands on the allowlist (`cat`, `ls`, `grep`,
+    /// Read-only fast path. Commands on the allowlist (`cat`, `ls`, `grep`,
     /// `git log`, `docker ps`, etc.) get auto-approved upstream and batched as
     /// concurrency-safe, avoiding the permission UI for routine inspection.
     ///
@@ -373,17 +362,15 @@ impl Tool for BashTool {
             return false;
         }
         // Git sandbox-escape commands (cd+git, git-internal writes) are NOT
-        // read-only — TS `checkReadOnlyConstraints` returns passthrough for them
-        // so they reach the permission prompt instead of auto-allowing.
+        // read-only — they reach the permission prompt instead of auto-allowing.
         if coco_shell::has_git_escape_pattern(&input.command) {
             return false;
         }
         is_read_only_command(&input.command)
     }
 
-    /// Concurrency-safe iff read-only. TS `isConcurrencySafe` is driven by the
-    /// same allowlist — read-only commands have no shared mutable state with
-    /// sibling tools, so the executor can batch them with Read/Grep/Glob.
+    /// Concurrency-safe iff read-only. Read-only commands have no shared mutable
+    /// state with sibling tools, so the executor can batch them with Read/Grep/Glob.
     fn is_concurrency_safe(&self, input: &BashInput) -> bool {
         Tool::is_read_only(self, input)
     }
@@ -406,10 +393,9 @@ impl Tool for BashTool {
     /// only acting on `Deny` at execute time. `SecuritySeverity::Ask` results
     /// (eval / IFS / jq-danger / dangerous-vars / …, demoted to Ask in
     /// shell#163) now reach the user as a prompt; `Deny` blocks pre-execution.
-    /// In acceptEdits mode any filesystem subcommand (mkdir/rm/mv/…) auto-allows
-    /// (TS modeValidation). Read-only commands defer to the rule pipeline (no
-    /// false positives on quoted metacharacters). TS `bashSecurity` returns
-    /// ask / deny / passthrough.
+    /// In acceptEdits mode any filesystem subcommand (mkdir/rm/mv/…) auto-allows.
+    /// Read-only commands defer to the rule pipeline (no false positives on
+    /// quoted metacharacters).
     async fn check_permissions(
         &self,
         input: &BashInput,
@@ -420,12 +406,11 @@ impl Tool for BashTool {
             return coco_types::ToolCheckResult::Passthrough;
         }
 
-        // Force-ask gates (TS `bashToolCheckPermissions`): run BEFORE the
-        // acceptEdits auto-allow and the allow-rule pipeline so a dangerous
-        // removal, a code-executing/file-writing `sed`, or a git sandbox-escape
-        // cannot be auto-allowed. A returned `Ask` short-circuits at the
-        // evaluator's step-1b — no allow rule or mode overrides it (only
-        // `DontAsk` converts it to deny).
+        // Force-ask gates: run BEFORE the acceptEdits auto-allow and the
+        // allow-rule pipeline so a dangerous removal, a code-executing/file-writing
+        // `sed`, or a git sandbox-escape cannot be auto-allowed. A returned `Ask`
+        // short-circuits at the evaluator's step-1b — no allow rule or mode
+        // overrides it (only `DontAsk` converts it to deny).
         let cwd = bash_gate_cwd(ctx);
         if let Some(reason) = coco_shell::check_dangerous_removal(command, &cwd) {
             return coco_types::ToolCheckResult::Ask {
@@ -452,10 +437,10 @@ impl Tool for BashTool {
                 choices: None,
             };
         }
-        // Path-constraint gate (TS `checkPathConstraints`): an output redirection
-        // or process substitution that writes OUTSIDE the allowed working dirs —
-        // or via a shell-expanded / unresolvable target — forces Ask and cannot
-        // be auto-allowed. `> /etc/passwd`, `echo x > $TARGET`, `… > >(tee .git/config)`.
+        // Path-constraint gate: an output redirection or process substitution that
+        // writes OUTSIDE the allowed working dirs — or via a shell-expanded /
+        // unresolvable target — forces Ask and cannot be auto-allowed.
+        // `> /etc/passwd`, `echo x > $TARGET`, `… > >(tee .git/config)`.
         if coco_shell::has_process_substitution(command) {
             return coco_types::ToolCheckResult::Ask {
                 message: "Process substitution (`>(...)` or `<(...)`) can execute arbitrary \
@@ -472,7 +457,7 @@ impl Tool for BashTool {
             .cloned()
             .collect();
         for target in coco_shell::extract_output_redirect_targets(command) {
-            // /dev/null is always safe — it discards output (TS parity).
+            // /dev/null is always safe — it discards output.
             if target == "/dev/null" {
                 continue;
             }
@@ -496,8 +481,7 @@ impl Tool for BashTool {
                 };
             }
         }
-        // Per-subcommand write-path gate (TS `validateCommandPaths` for
-        // write/create ops): a filesystem write (rm/rmdir/mv/cp/touch/mkdir)
+        // Per-subcommand write-path gate: a filesystem write (rm/rmdir/mv/cp/touch/mkdir)
         // targeting a path OUTSIDE the allowed working dirs forces Ask. Extends
         // the dangerous-removal gate from the catastrophic-system-path list to
         // any out-of-tree write (e.g. `cp secret.txt /opt/x`, `mv x ~/.ssh/`).
@@ -556,10 +540,10 @@ impl Tool for BashTool {
             };
         }
         // Only a CURATED set of narrow, high-confidence risks routes to a prompt
-        // — the ones that map 1:1 to TS's specific `behavior:'ask'` validators.
+        // — the ones that map 1:1 to the specific `behavior:'ask'` validators.
         // The broader analyzer suite (command substitution, metacharacters,
         // code-exec, …) stays computed-but-informational: coco-rs's analyzers
-        // lack TS's safe-substitution carve-outs, so routing them all would
+        // lack the safe-substitution carve-outs, so routing them all would
         // prompt on common commands like `for f in $(ls)` or `tar …$(date)…`.
         const ASK_SECURITY_CHECK_IDS: &[coco_shell::SecurityCheckId] = &[
             coco_shell::SecurityCheckId::JQ_SYSTEM_FUNCTION, // jq system()/file flags (#162)
@@ -583,25 +567,20 @@ impl Tool for BashTool {
     }
 
     /// Destructive iff NOT read-only. The upstream permission evaluator uses this
-    /// flag to decide whether the command needs user approval — the old hardcoded
-    /// `true` forced approval for every `ls`/`cat`/`git log`, which was a major UX
-    /// regression vs. TS. Matches TS multi-stage pipeline where the read-only fast
-    /// path (`bashPermissions.ts:1663+`) auto-allows before reaching the Ask phase.
+    /// flag to decide whether the command needs user approval. The read-only fast
+    /// path auto-allows before reaching the Ask phase.
     fn is_destructive(&self, input: &BashInput) -> bool {
         !Tool::is_read_only(self, input)
     }
 
-    /// Tool-result persistence threshold. TS: `BashTool.tsx:424`
-    /// `maxResultSizeChars: 30_000`. When Bash output exceeds this budget,
-    /// the executor persists the full output to a tool-results file and
-    /// only keeps a truncated snippet inline. We match TS exactly so
-    /// cross-runtime sessions handle large outputs identically.
+    /// Tool-result persistence threshold: `maxResultSizeChars: 30_000`.
+    /// When Bash output exceeds this budget, the executor persists the full
+    /// output to a tool-results file and only keeps a truncated snippet inline.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
         coco_tool_runtime::ResultSizeBound::Chars(30_000)
     }
 
-    /// Render the structured `data` envelope into model-visible content
-    /// parts. TS parity: `BashTool.tsx::mapToolResultToToolResultBlockParam`.
+    /// Render the structured `data` envelope into model-visible content parts.
     ///
     /// Branches:
     /// 1. **User-backgrounded** (`task_id` + `status: "background"`): emit
@@ -687,20 +666,15 @@ impl Tool for BashTool {
             error_message.push_str("<error>Command was aborted before completion</error>");
         }
 
-        // Background-info text mirrors TS `BashTool.tsx:606-616`. Three
-        // branches:
+        // Background-info text. Three branches:
         //   1. `assistantAutoBackgrounded` — fg→bg auto-promotion fired
         //      because the command exceeded the assistant blocking
         //      budget. Verbose message names the budget so the model
         //      knows to delegate next time.
-        //   2. `backgroundedByUser` — present in TS via Ctrl+B but not
-        //      yet wired in coco-rs (no TUI keystroke path); kept for
-        //      future-proofing so adding the keybinding is a one-line
-        //      data-side change.
+        //   2. `backgroundedByUser` — Ctrl+B path, not yet wired in
+        //      coco-rs (no TUI keystroke path); kept for future-proofing
+        //      so adding the keybinding is a one-line data-side change.
         //   3. Default `run_in_background: true` — short message.
-        // coco-rs has no on-disk task output path (TS exposes
-        // `getTaskOutputPath`), so all three messages name "the task
-        // output" rather than a real path.
         let background_info = data
             .get("backgroundTaskId")
             .and_then(Value::as_str)
@@ -730,14 +704,14 @@ impl Tool for BashTool {
             })
             .unwrap_or_default();
 
-        // Surface non-zero exit codes (TS BashTool.tsx:696-700). A command that
-        // fails only via its exit code with no stdout/stderr (`false`, a script
-        // that `exit 1`s silently) would otherwise render as empty — the model
-        // could not tell it failed. Mirror TS exactly: append the bare
-        // `Exit code N` ONLY when the command-aware interpreter classifies it as
-        // a genuine error. Expected non-zero codes (grep no-match, diff differs,
-        // test false, find inaccessible) are `is_error: false` → nothing is
-        // appended to the model output; their friendly explanation is TUI-only.
+        // Surface non-zero exit codes. A command that fails only via its exit
+        // code with no stdout/stderr (`false`, a script that `exit 1`s silently)
+        // would otherwise render as empty — the model could not tell it failed.
+        // Append the bare `Exit code N` ONLY when the command-aware interpreter
+        // classifies it as a genuine error. Expected non-zero codes (grep
+        // no-match, diff differs, test false, find inaccessible) are
+        // `is_error: false` → nothing is appended; their friendly explanation
+        // is TUI-only.
         let exit_tail = {
             let exit_code = data.get("exitCode").and_then(Value::as_i64).unwrap_or(0);
             let command = data.get("command").and_then(Value::as_str).unwrap_or("");
@@ -773,9 +747,8 @@ impl Tool for BashTool {
         if input.command.is_empty() {
             return ValidationResult::invalid("missing required field: command");
         }
-        // TS `BashTool` does not enforce a max timeout — the configured max is
-        // only an advisory hint in the schema description. The model's raw
-        // timeout is honored.
+        // No max timeout is enforced — the configured max is only an advisory
+        // hint in the schema description. The model's raw timeout is honored.
         ValidationResult::Valid
     }
 
@@ -786,23 +759,20 @@ impl Tool for BashTool {
     ) -> Result<ToolResult<Value>, ToolError> {
         // ── R7-T11: _simulatedSedEdit short-circuit ──
         //
-        // TS `BashTool.tsx:243-258, 627-628`: the BashTool input schema
-        // accepts an internal `_simulatedSedEdit: { filePath, newContent }`
-        // field that the SedEditPermissionRequest TUI dialog populates
-        // when the user reviews a `sed -i ...` command and chooses to
-        // convert it to a previewed Edit-style write. The dialog does
-        // the actual sed-against-original computation and hands BashTool
-        // the precomputed `newContent` so what the user previewed is
-        // exactly what gets written.
+        // The BashTool input schema accepts an internal `_simulatedSedEdit:
+        // { filePath, newContent }` field that the SedEditPermissionRequest
+        // TUI dialog populates when the user reviews a `sed -i ...` command
+        // and chooses to convert it to a previewed Edit-style write. The
+        // dialog does the actual sed-against-original computation and hands
+        // BashTool the precomputed `newContent` so what the user previewed
+        // is exactly what gets written.
         //
-        // The field is **deliberately omitted** from coco-rs's
-        // `input_schema()` so the model can never see it as a valid
-        // input. The upstream executor SHOULD also strip incoming
-        // `_simulatedSedEdit` payloads before invoking this method as a
-        // defense-in-depth measure (TS does this in
-        // `services/tools/toolExecution.ts:756-770`). We emit a debug
-        // log when the field is present so anomalous traffic is visible
-        // even if the executor strip is missing.
+        // The field is **deliberately omitted** from `input_schema()` so
+        // the model can never see it as a valid input. The upstream executor
+        // SHOULD also strip incoming `_simulatedSedEdit` payloads before
+        // invoking this method as a defense-in-depth measure. We emit a
+        // debug log when the field is present so anomalous traffic is
+        // visible even if the executor strip is missing.
         if let Some(sed_input) = input.simulated_sed_edit.as_ref() {
             tracing::debug!(
                 "BashTool received _simulatedSedEdit input — applying as Edit-style write"
@@ -812,8 +782,8 @@ impl Tool for BashTool {
 
         let command = input.command.as_str();
 
-        // TS `timeout || getDefaultTimeoutMs()`: a falsy (0) or absent value
-        // falls back to the default; no max clamp (the raw value is honored).
+        // A falsy (0) or absent timeout falls back to the default;
+        // no max clamp (the raw value is honored).
         let timeout_ms = input
             .timeout
             .filter(|&t| t > 0)
@@ -821,8 +791,7 @@ impl Tool for BashTool {
 
         let run_in_background = input.run_in_background;
 
-        // R6-T18: sandbox decision. Matches TS `shouldUseSandbox(input)`
-        // at `shouldUseSandbox.ts:130-153`:
+        // R6-T18: sandbox decision:
         //   1. If sandbox not globally enabled → unsandboxed
         //   2. If `dangerouslyDisableSandbox` and bypass allowed → unsandboxed
         //   3. If command matches an excluded pattern → unsandboxed
@@ -845,22 +814,18 @@ impl Tool for BashTool {
             }
         }
 
-        // Permission pipeline (TS: `tools/BashTool/bashPermissions.ts:1663+`,
-        // with a coco-rs security extension noted below).
+        // Permission pipeline.
         //
         // Stage 1 — read-only fast path. Already handled by `is_read_only()`
         // at the trait level; the upstream permission evaluator auto-allows
-        // read-only commands and batches them with other concurrency-safe
-        // tools. Same behavior as TS `checkReadOnlyConstraints` returning
-        // `{ behavior: 'allow' }`.
+        // read-only commands and batches them with other concurrency-safe tools.
         //
         // Stage 2 — security analysis. `check_security` runs the full
         // `coco_shell_parser` analyzer suite (29 quote/heredoc-aware
-        // validators mirroring TS `bashSecurity.ts`). Per TS parity, ALL
-        // analyzer-caught risks (eval, IFS=, backtick substitution, brace
-        // expansion, comment/quote desync, …) map to `SecuritySeverity::Ask`
-        // and pass through to the normal permission prompt below — TS uses
-        // `behavior: 'ask'` (never `deny`) for every one of these.
+        // validators). ALL analyzer-caught risks (eval, IFS=, backtick
+        // substitution, brace expansion, comment/quote desync, …) map to
+        // `SecuritySeverity::Ask` and pass through to the normal permission
+        // prompt below.
         //
         // `check_security` retains only TWO coco-rs-specific `Deny` checks for
         // genuinely-catastrophic constructs with no legitimate use here: raw
@@ -868,8 +833,7 @@ impl Tool for BashTool {
         // hard-fail without prompting (a DELIBERATE divergence we keep because
         // they are near-always obfuscation/secret-exfiltration attempts).
         //
-        // TS's `behavior: 'deny'` paths (`bashPermissions.ts:1000, 2254, etc.`)
-        // cover user-configured deny rules and path validation — a DIFFERENT
+        // User-configured deny rules and path validation are a different
         // concern from the pattern checks here.
         //
         // Read-only commands skip the security check to avoid false positives
@@ -877,11 +841,10 @@ impl Tool for BashTool {
         // quoted strings.
         //
         // NOTE: destructive-command detection is intentionally NOT a block.
-        // TS (`destructiveCommandWarning.ts`) treats it as a purely
-        // informational advisory behind a default-off feature flag — it never
-        // affects permission logic. coco-rs matches that: the
-        // `coco_shell::destructive::get_destructive_warning` advisory is
-        // available for the permission-request UI but does not deny here.
+        // It is a purely informational advisory — it never affects permission
+        // logic. The `coco_shell::destructive::get_destructive_warning`
+        // advisory is available for the permission-request UI but does not
+        // deny here.
         if !is_read_only_command(command) {
             for check in check_security(command) {
                 if check.severity == SecuritySeverity::Deny {
@@ -897,9 +860,8 @@ impl Tool for BashTool {
             }
         }
 
-        // TS parity (`BashTool.tsx:879`): `description: description ||
-        // command` — the model's input.description takes precedence,
-        // falling back to the command string when omitted.
+        // `description: description || command` — the model's input.description
+        // takes precedence, falling back to the command string when omitted.
         let resolved_description = input
             .description
             .as_deref()
@@ -961,18 +923,16 @@ impl Tool for BashTool {
 ///   3. `detach.notified()` → external `signal_detach` (TUI Ctrl+B or
 ///      another co-routine) → return bg-shape result; task keeps
 ///      running.
-///   4. Auto-detach timer (when `auto_background_on_timeout` config
-///      is set; mirrors TS `ASSISTANT_BLOCKING_BUDGET_MS = 15_000`) →
-///      same as (3) but the timer itself fires `signal_detach`. The
+///   4. Auto-detach timer (when `auto_background_on_timeout` config is set;
+///      see `ASSISTANT_BLOCKING_BUDGET_MS = 15_000`) → same as (3) but the
+///      timer itself fires `signal_detach`. The
 ///      detach arm in (3) observes the notification.
 ///
 /// This replaces both the old `execute_background` and the D5 re-run
 /// path on foreground timeout — the previous code re-spawned the
 /// command after timeout, duplicating side effects of `npm publish` /
 /// `git push` / etc. The unified path **never** re-spawns: the same
-/// child keeps running, the fg awaiter just stops blocking. Matches
-/// TS `shellCommand.background(taskId)` flag-flip semantics
-/// (`utils/ShellCommand.ts:349-366`).
+/// child keeps running, the fg awaiter just stops blocking.
 #[allow(clippy::too_many_arguments)]
 async fn execute_via_task_runtime(
     command: &str,
@@ -996,14 +956,12 @@ async fn execute_via_task_runtime(
     let tool_use_id = ctx.tool_use_id.clone();
     let agent_id = ctx.agent_id.as_ref().map(|a| a.as_str().to_string());
 
-    // Auto-background-on-timeout (TS `shouldAutoBackground`): for a
-    // foreground, main-thread command that's eligible (anything but `sleep`),
-    // the command's own `timeout_ms` becomes the auto-detach budget — when it
-    // elapses the fg awaiter is released with a bg-shape result and the child
-    // KEEPS RUNNING (the driver does not kill it). This replaces the old
-    // kill-on-timeout behaviour, matching TS where a long fg command is moved
-    // to the background on timeout rather than terminated. Subagents and
-    // bg-spawned commands don't auto-detach (no fg awaiter to release).
+    // Auto-background-on-timeout: for a foreground, main-thread command that's
+    // eligible (anything but `sleep`), the command's own `timeout_ms` becomes
+    // the auto-detach budget — when it elapses the fg awaiter is released with
+    // a bg-shape result and the child KEEPS RUNNING (the driver does not kill
+    // it). Subagents and bg-spawned commands don't auto-detach (no fg awaiter
+    // to release).
     let auto_background = !run_in_background
         && ctx.agent_id.is_none()
         && ctx.tool_config.bash.auto_background_on_timeout
@@ -1019,9 +977,8 @@ async fn execute_via_task_runtime(
     let kill_on_timeout = !auto_background;
 
     // Progress emission: fg mode only. Bg-spawned commands return
-    // immediately so the model has no live receiver — TS doesn't
-    // emit bg progress to the parent either (bg progress flows
-    // through `<task-notification>` envelopes later).
+    // immediately so the model has no live receiver. Bg progress flows
+    // through `<task-notification>` envelopes later.
     let progress_tx = if run_in_background {
         None
     } else {
@@ -1133,8 +1090,7 @@ async fn execute_via_task_runtime(
             let max_bytes = max_output_bytes(&ctx.tool_config);
             let stdout = truncate_output(outputs.stdout.as_bytes(), max_bytes);
             let stderr = truncate_output(outputs.stderr.as_bytes(), max_bytes);
-            // Strip + record Claude Code hints on the terminal task path too,
-            // so the model never sees the tag (TS strips unconditionally).
+            // Strip + record Claude Code hints so the model never sees the tag.
             let stdout = maybe_strip_and_record_hints(stdout, command);
             let mut result_obj = serde_json::json!({
                 "stdout": stdout,
@@ -1173,7 +1129,7 @@ async fn execute_via_task_runtime(
             // auto-detach timer is the originator, the task's own
             // `BgAgentExtras.is_backgrounded()` flip is observable —
             // but for now we just stamp the differentiator in the
-            // result shape so the model sees TS-aligned signals
+            // result shape so the model sees the right signals
             // (`backgroundedByUser` vs `assistantAutoBackgrounded`).
             //
             // `by_user` is `true` whenever the detach arm wins; we
@@ -1210,10 +1166,6 @@ enum BashOutcome {
 }
 
 /// Execute a command in the foreground with continuous progress reporting.
-///
-/// TS: BashTool polls TaskOutput at ~1s intervals, sending progress updates
-/// with elapsed time, total bytes, and output chunks. The TUI renders
-/// these as a streaming spinner with timing info.
 async fn execute_foreground(
     command: &str,
     timeout_ms: u64,
@@ -1222,10 +1174,8 @@ async fn execute_foreground(
     sandbox_bypass: SandboxBypass,
 ) -> Result<ToolResult<Value>, ToolError> {
     // 4-tier cwd resolution. Spawn at the live session cwd; the
-    // out-of-project guard runs AFTER exec (TS parity:
-    // `BashTool.tsx:702-707` resets only after the command completes,
-    // so the offending command runs in /tmp / the drifted dir and the
-    // annotation lands on its stderr).
+    // out-of-project guard runs AFTER exec so the offending command runs
+    // in /tmp / the drifted dir and the annotation lands on its stderr.
     let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
 
     // Prefer the session-scoped provider (snapshot + session-env + `/env`
@@ -1242,8 +1192,7 @@ async fn execute_foreground(
     // `SandboxPlatform::wrap_command` before spawning the child.
     //
     // Snapshot the violation count *before* spawning so we can splice
-    // anything that landed during this command into stderr (TS parity:
-    // `annotateStderrWithSandboxFailures`).
+    // anything that landed during this command into stderr.
     let violations_baseline = if let Some(state) = &sandbox_state {
         Some(state.violations_total_snapshot().await)
     } else {
@@ -1300,15 +1249,13 @@ async fn execute_foreground(
     })?;
 
     // setCwd(new_cwd) → resetCwdIfOutsideProject. If reset fires, the
-    // annotation lands on THIS command's stderr — matching TS
-    // (`BashTool.tsx:702-707`). No-op for worktree subagents.
+    // annotation lands on THIS command's stderr. No-op for worktree subagents.
     let reset_message =
         crate::tools::shell_cwd::finalize_cwd_post_exec(ctx, cmd_result.new_cwd.clone()).await;
     crate::tools::shell_cwd::annotate_stderr_with_reset(&mut cmd_result.stderr, reset_message);
 
     // Annotate stderr with any sandbox violations recorded during this
-    // command. Mirrors TS `annotateStderrWithSandboxFailures` —
-    // violations are informational, not blocking.
+    // command — violations are informational, not blocking.
     if let (Some(state), Some(prev)) = (&sandbox_state, violations_baseline)
         && let Some(annotation) = state.format_violations_since(prev).await
     {
@@ -1322,11 +1269,10 @@ async fn execute_foreground(
 
     // ── B4.2: auto-background-on-timeout ──
     //
-    // TS `BashTool.tsx:610, 965-969` handles foreground timeout by
-    // converting the running process into a background task (i.e. the
-    // process keeps running, just detached from the fg await). This
-    // requires the shell executor to support process handle transfer,
-    // which coco-rs's current `ShellExecutor` does not.
+    // On foreground timeout, the intended behavior is to convert the running
+    // process into a background task (process keeps running, detached from
+    // the fg await). This requires the shell executor to support process
+    // handle transfer, which coco-rs's current `ShellExecutor` does not.
     //
     // Until that architectural change lands, we fall back to a
     // safer-but-weaker behavior: on timeout, return an error that
@@ -1370,7 +1316,7 @@ async fn execute_foreground(
     // pending-hint dialog to surface, then strip so the model never sees
     // the tag — a zero-token side channel. Stripping runs unconditionally
     // (subagent output must stay clean too); recording is best-effort and
-    // never affects the tool result. TS: `BashTool.tsx:780-784`.
+    // never affects the tool result.
     let stdout = maybe_strip_and_record_hints(stdout, command);
     let stderr = truncate_output(cmd_result.stderr.as_bytes(), max_bytes);
     let exit_code = cmd_result.exit_code;
@@ -1386,20 +1332,17 @@ async fn execute_foreground(
         .as_deref()
         .unwrap_or(cmd_result.stdout.as_bytes());
 
-    // R5-T14 + R6-T17 + R7-T12: structured output matching TS
-    // `BashTool.tsx:279-294` `outputSchema`:
+    // R5-T14 + R6-T17 + R7-T12: structured output envelope:
     //
     //   { stdout, stderr, exitCode, interrupted, isImage?,
     //     backgroundTaskId?, structuredContent?, persistedOutputPath?,
     //     persistedOutputSize? }
     //
-    // `interrupted` is now sourced from the shell executor's own
-    // `interrupted` flag, which is set when the ctx cancel token fires
-    // and the child process is killed. That's distinct from a timeout
-    // (the executor sets `timed_out` for the watchdog path). Either
-    // condition surfaces as `interrupted=true` to the model, matching
-    // TS semantics where both AbortController and the timeout watchdog
-    // set `interrupted=true`.
+    // `interrupted` is sourced from the shell executor's own `interrupted`
+    // flag, which is set when the ctx cancel token fires and the child
+    // process is killed. That's distinct from a timeout (the executor sets
+    // `timed_out` for the watchdog path). Either condition surfaces as
+    // `interrupted=true` to the model.
     let interrupted = cmd_result.interrupted || cmd_result.timed_out;
     if cmd_result.interrupted && ctx.abort.is_aborted() {
         return Err(ToolError::Cancelled);
@@ -1407,9 +1350,8 @@ async fn execute_foreground(
 
     // R7-T12 fields:
     //
-    // 1. `isImage`: detect from stdout magic bytes. TS sets this when
-    //    e.g. `cat image.png` returns binary image data, so the UI can
-    //    render it as an inline image block.
+    // 1. `isImage`: detect from stdout magic bytes when e.g. `cat image.png`
+    //    returns binary image data, so the UI can render it inline.
     // 2. `structuredContent`: when stdout IS an image, attach a base64
     //    multimodal block so the model receives the actual pixels.
     //    For text output, structuredContent is omitted (the plain
@@ -1452,9 +1394,6 @@ async fn execute_foreground(
 /// record any plugin hints for the TUI's pending-hint dialog. Returns the
 /// stripped stdout (what the model sees). Recording failures (disk I/O,
 /// policy lookups) are swallowed — they must never affect the tool result.
-///
-/// TS: `BashTool.tsx:780-784` — `extractClaudeCodeHints` + the
-/// `maybeRecordPluginHint` loop, gated on the main thread.
 pub(crate) fn maybe_strip_and_record_hints(stdout: String, command: &str) -> String {
     let (hints, stripped) = coco_plugins::extract_claude_code_hints(&stdout, command);
     for hint in &hints {
@@ -1466,9 +1405,7 @@ pub(crate) fn maybe_strip_and_record_hints(stdout: String, command: &str) -> Str
 }
 
 /// Detect whether a byte buffer is a known image format from its magic
-/// bytes. Matches TS `BashTool.tsx`-side detection which sets `isImage`
-/// when `cat image.png` style commands return binary image data on
-/// stdout. Used by the UI to render the result as an inline image
+/// bytes. Used by the UI to render the result as an inline image
 /// rather than attempting to display raw bytes as text.
 ///
 /// Recognized formats (order = check priority):
@@ -1542,10 +1479,9 @@ fn build_image_block(bytes: &[u8]) -> Value {
 /// `BashTool::execute` so that what the user previewed in the
 /// SedEditPermissionRequest dialog is exactly what hits disk.
 ///
-/// TS: `tools/BashTool/BashTool.tsx:355-419` `applySedEdit`. Behavior
-/// matches TS:
-///   1. Resolve the absolute path (`expandPath` in TS, `canonicalize`
-///      with a fallback to the input path here).
+/// Behavior:
+///   1. Resolve the absolute path (`canonicalize` with a fallback to
+///      the input path).
 ///   2. Read the original file metadata to detect encoding + line
 ///      endings — sed preserves both.
 ///   3. ENOENT → return a sed-formatted error message via stderr,
@@ -1559,8 +1495,7 @@ fn build_image_block(bytes: &[u8]) -> Value {
 ///   6. Update `FileReadState` so subsequent edits/writes don't trip
 ///      the read-before-write check, and so the file_unchanged dedup
 ///      cache is still consistent.
-///   7. Return TS-shaped `{ stdout: "", stderr: "", exitCode: 0,
-///      interrupted: false }`.
+///   7. Return `{ stdout: "", stderr: "", exitCode: 0, interrupted: false }`.
 ///
 /// `sed_input` must be a JSON object with string `filePath` and string
 /// `newContent` fields. Missing/wrong-type fields surface as
@@ -1574,9 +1509,8 @@ async fn apply_sed_edit(
 
     let path = std::path::Path::new(file_path);
 
-    // ENOENT → sed-shaped error envelope, NOT a tool error. TS does the
-    // same so the model can pattern-match `sed: ... No such file ...`
-    // and recover.
+    // ENOENT → sed-shaped error envelope, NOT a tool error, so the model
+    // can pattern-match `sed: ... No such file ...` and recover.
     if !path.exists() {
         return Ok(ToolResult {
             data: serde_json::json!({
@@ -1632,8 +1566,8 @@ async fn apply_sed_edit(
     // Refresh the cache so the next Edit/Write doesn't fail its mtime
     // check against a stale entry left by the earlier Read.
     crate::record_file_edit(ctx, path, new_content.to_string()).await;
-    // Fire skill auto-discovery + conditional-skill activation — TS
-    // `BashTool.ts` does this too when a sed pipeline touches a path.
+    // Fire skill auto-discovery + conditional-skill activation when a sed
+    // pipeline touches a path.
     crate::track_skill_triggers(ctx, path).await;
 
     Ok(ToolResult {
@@ -1650,12 +1584,9 @@ async fn apply_sed_edit(
     })
 }
 
-/// Truncate output head-only, mirroring TS
-/// `BashTool/utils.ts::formatOutput`: keep the first `max_bytes` chars
-/// and append `\n\n... [N lines truncated] ...` where N counts the lines
-/// dropped from the tail (newlines after the cut, +1). #34: coco-rs
-/// previously kept a head+tail window with a *chars*-truncated marker;
-/// TS is head-only with a *lines* marker.
+/// Truncate output head-only: keep the first `max_bytes` chars and append
+/// `\n\n... [N lines truncated] ...` where N counts the lines dropped from
+/// the tail (newlines after the cut, +1).
 ///
 /// Char boundaries are respected so truncation never yields invalid UTF-8.
 fn truncate_output(bytes: &[u8], max_bytes: usize) -> String {
@@ -1670,7 +1601,7 @@ fn truncate_output(bytes: &[u8], max_bytes: usize) -> String {
         cut -= 1;
     }
     let head = &s[..cut];
-    // TS `countCharInString(content, '\n', maxOutputLength) + 1`.
+    // Count newlines after cut, +1 for the final (possibly unterminated) line.
     let remaining_lines = s[cut..].matches('\n').count() + 1;
     format!("{head}\n\n... [{remaining_lines} lines truncated] ...")
 }

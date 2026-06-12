@@ -1,15 +1,13 @@
 //! Plan-mode reminder generators.
 //!
-//! Three generators, each producing one TS attachment type:
+//! Three generators, one per attachment type:
 //!
 //! - [`PlanModeEnterGenerator`] → `plan_mode` (Full / Sparse cadence)
 //! - [`PlanModeExitGenerator`] → `plan_mode_exit` (one-shot after exit)
 //! - [`PlanModeReentryGenerator`] → `plan_mode_reentry` (one-shot on first
 //!   plan turn after a prior exit)
 //!
-//! Text templates come from TS (`src/utils/messages.ts` cases `plan_mode`,
-//! `plan_mode_exit`, `plan_mode_reentry`) via `coco_context::render_plan_*`,
-//! which already tracks TS line-for-line.
+//! Text templates are rendered by `coco_context::render_plan_*`.
 //!
 //! These generators are thin adapters: they read flags from
 //! [`GeneratorContext`], build a [`coco_context::PlanModeAttachment`] /
@@ -95,8 +93,8 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
 ///
 /// No throttle (one-shot per flag set). If the flag somehow stays set across
 /// multiple turns, the generator will keep emitting — the engine is
-/// responsible for clearing it. A stale flag is suppressed while the engine is
-/// still in plan mode, matching TS `getPlanModeExitAttachment`.
+/// responsible for clearing it. A stale flag is suppressed while the engine
+/// is still in plan mode.
 #[derive(Debug, Default)]
 pub struct PlanModeExitGenerator;
 
@@ -148,7 +146,7 @@ impl AttachmentGenerator for PlanModeExitGenerator {
 /// - `is_plan_mode` (we're in plan mode this turn)
 /// - `is_plan_reentry` (engine detected a prior exit)
 /// - `plan_exists` (there's an existing plan file to reference)
-/// - `!is_sub_agent` (TS `attachments.ts:1216` — sub-agents don't re-enter)
+/// - `!is_sub_agent` — sub-agents don't re-enter
 ///
 /// Produced via the same [`coco_context::render_plan_mode_reminder`] as the
 /// steady-state reminder but with [`ReminderType::Reentry`], which emits

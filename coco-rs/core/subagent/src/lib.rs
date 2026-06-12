@@ -1,7 +1,7 @@
 //! Pure-logic subagent rules: definition loading, source precedence, built-in
 //! catalog, AgentTool prompt rendering, tool filter planning, validation.
 //!
-//! TS: `tools/AgentTool/loadAgentsDir.ts`, `builtInAgents.ts`,
+//! `tools/AgentTool/loadAgentsDir.ts`, `builtInAgents.ts`,
 //! `prompt.ts`, `agentToolUtils.ts`, `built-in/*.ts`.
 //!
 //! This crate has no tokio, no app state, no QueryEngine. All side effects
@@ -74,14 +74,14 @@ pub use transcript::{AgentResumeState, filter_transcript};
 pub use validation::{AgentDefinitionValidator, ValidationDiagnostic, ValidationError};
 pub use writable::{next_unused_color, resolve_writable_agent_dir};
 
-/// One-shot built-in agent types — TS `ONE_SHOT_BUILTIN_AGENT_TYPES`
+/// One-shot built-in agent types — `ONE_SHOT_BUILTIN_AGENT_TYPES`
 /// (`constants.ts:9-12`). **Case-sensitive** — `"explore"`/`"plan"` do not
 /// hit. The set short-circuits the SendMessage continuation trailer in
 /// AgentTool result rendering.
 pub const ONE_SHOT_BUILTIN_AGENT_TYPES: &[&str] = &["Explore", "Plan"];
 
 /// Empty-content marker injected by AgentTool when the subagent returned
-/// no text. **Exact** TS literal (`AgentTool.tsx:1347-1350`).
+/// no text. **Exact** literal (`AgentTool.tsx:1347-1350`).
 pub const EMPTY_AGENT_OUTPUT_MARKER: &str = "(Subagent completed but returned no output.)";
 
 #[cfg(test)]

@@ -1,14 +1,12 @@
-//! TS hook-event generators (5 variants, one per `Attachment.type`).
+//! Hook-event generators (5 variants, one per `Attachment.type`).
 //!
-//! Mirrors `normalizeAttachmentForAPI` cases at `messages.ts`:
-//! - `hook_success` (line 4099) — only SessionStart / UserPromptSubmit
-//!   emit a message; empty content skips.
-//! - `hook_blocking_error` (line 4090).
-//! - `hook_additional_context` (line 4117) — empty content skips; lines
-//!   joined by `\n` in the final text.
-//! - `hook_stopped_continuation` (line 4130).
-//! - `async_hook_response` (line 4026) — multi-message: systemMessage
-//!   and/or additionalContext.
+//! - `hook_success` — only SessionStart / UserPromptSubmit emit a message;
+//!   empty content skips.
+//! - `hook_blocking_error`.
+//! - `hook_additional_context` — empty content skips; lines joined by `\n`.
+//! - `hook_stopped_continuation`.
+//! - `async_hook_response` — multi-message: systemMessage and/or
+//!   additionalContext.
 //!
 //! Each generator reads `ctx.hook_events` and emits for matching
 //! variants. Engine populates the vec by draining its async hook
@@ -51,9 +49,9 @@ impl AttachmentGenerator for HookSuccessGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // TS emits one message per qualifying event; coco-rs joins them
-        // with `\n\n` into a single reminder to avoid proliferating
-        // attachments when several hooks fire in one turn.
+        // One message per qualifying event, joined with `\n\n` into a
+        // single reminder to avoid proliferating attachments when several
+        // hooks fire in one turn.
         let parts: Vec<String> = ctx
             .hook_events
             .iter()
@@ -219,9 +217,8 @@ impl AttachmentGenerator for HookStoppedContinuationGenerator {
 // AsyncHookResponseGenerator
 // ---------------------------------------------------------------------------
 
-/// Unlike the other hook generators, TS `async_hook_response`
-/// (`messages.ts:4026`) produces up to two separate user messages
-/// inside one `<system-reminder>` wrapper. We use
+/// `async_hook_response` produces up to two separate user messages
+/// inside one `<system-reminder>` wrapper. Uses
 /// [`ReminderOutput::Messages`] to preserve the multi-message shape.
 #[derive(Debug, Default)]
 pub struct AsyncHookResponseGenerator;

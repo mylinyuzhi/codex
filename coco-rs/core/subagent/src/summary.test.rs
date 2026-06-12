@@ -17,7 +17,7 @@ fn prompt_omits_previous_when_none() {
 
 #[test]
 fn prompt_body_has_no_leading_indent() {
-    // TS `agentSummary.ts::buildSummaryPrompt` is a flat template
+    // `agentSummary.ts::buildSummaryPrompt` is a flat template
     // literal — every line starts at column 0. Byte parity matters
     // because the user prompt feeds into the parent's prompt cache
     // identity; a stray indent on each line shifts every byte and
@@ -35,9 +35,9 @@ fn prompt_body_has_no_leading_indent() {
 
 #[test]
 fn prompt_uses_tsfaithful_em_dash_in_previous_marker() {
-    // TS source uses U+2014 EM DASH between `…"` and `say something
-    // NEW.`. Verify the exact codepoint round-trips so cache keys
-    // match across the JS and Rust runtimes.
+    // U+2014 EM DASH between `…"` and `say something NEW.`. Verify
+    // the exact codepoint round-trips so cache keys match across
+    // runtimes.
     let (_, user) = build_summary_prompts("general-purpose", Some("Reading foo.ts"));
     assert!(user.contains("Previous: \"Reading foo.ts\" \u{2014} say something NEW."));
 }

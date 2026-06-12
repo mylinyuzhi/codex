@@ -193,7 +193,7 @@ impl QueryEngine {
             stop_sequences: None,
             response_format: None,
             // Interruptible backoff: a user interrupt cancels a long capacity
-            // retry instead of waiting it out (TS `options.signal`).
+            // retry instead of waiting it out.
             cancel: Some(self.cancel.clone()),
             // Set below once the active model snapshot is known.
             wire_tap: None,

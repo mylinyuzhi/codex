@@ -1,8 +1,5 @@
 //! Rule compilation — parse rule strings into structured `PermissionRule`
 //! objects, match tools against compiled rule sets.
-//!
-//! TS: utils/permissions/permissionRuleParser.ts (escaping, parsing)
-//!     utils/permissions/permissions.ts (toolMatchesRule, getAllowRules, etc.)
 
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::PermissionBehavior;

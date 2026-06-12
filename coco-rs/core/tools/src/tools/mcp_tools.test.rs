@@ -33,7 +33,7 @@ fn make_mcp_tool() -> McpTool {
 }
 
 // ---------------------------------------------------------------------------
-// alwaysLoad — TS `prompt.ts:64 isDeferredTool` opt-out
+// alwaysLoad — isDeferredTool opt-out
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -49,9 +49,6 @@ fn always_load_defaults_to_false_so_mcp_tools_are_deferred() {
 
 #[test]
 fn always_load_propagates_from_meta_opt_out() {
-    // TS parity: `_meta["anthropic/alwaysLoad"] == true` on the
-    // server-side tool schema → `tool.alwaysLoad === true` →
-    // `isDeferredTool()` returns `false` first thing.
     let schema = json!({
         "_meta": {"anthropic/alwaysLoad": true},
         "properties": {}
@@ -199,7 +196,7 @@ fn always_load_meta_extractor_ignores_non_bool_values() {
 }
 
 // ---------------------------------------------------------------------------
-// ListMcpResources / ReadMcpResource render — TS `jsonStringify` parity
+// ListMcpResources / ReadMcpResource render — `jsonStringify` output shape
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -220,7 +217,7 @@ fn list_mcp_resources_render_empty_string_path() {
 
 #[test]
 fn list_mcp_resources_render_array_uses_json_stringify() {
-    // TS non-empty branch: `jsonStringify(content)`.
+    // Non-empty branch: `jsonStringify(content)`.
     let data = json!([
         {"uri": "u1", "name": "n1", "description": "d1", "mime_type": "text/plain"},
     ]);
@@ -340,7 +337,7 @@ fn auth_pseudo_tool_is_wiped_when_real_tools_register() {
     // The swap fabric: register the per-server auth tool, then register real
     // tools for the same server — replace_server_tools must remove the auth
     // tool (it shares the server ownership) and install the real tool. Mirrors
-    // the TS mcp__<server>__* prefix wipe on a successful reconnect.
+    // the mcp__<server>__* prefix wipe on a successful reconnect.
     let registry = coco_tool_runtime::ToolRegistry::new();
     crate::register_mcp_auth_tool(&registry, "github", "http", Some("https://x"));
     let auth_id = coco_types::ToolId::Mcp {

@@ -22,8 +22,7 @@ use super::SdkServerState;
 use super::SessionHandle;
 use crate::sdk_server::outbound::OutboundMessage;
 
-/// `initialize` — capability negotiation. Returns a TS-conformant
-/// `InitializeResult`.
+/// `initialize` — capability negotiation. Returns an `InitializeResult`.
 ///
 /// Data sourcing:
 /// - `models`: static list of the two Anthropic models coco-rs ships with
@@ -32,27 +31,22 @@ use crate::sdk_server::outbound::OutboundMessage;
 ///   `available_output_styles`, `fast_mode_state`: populated from an
 ///   optional [`super::InitializeBootstrap`] trait object installed via
 ///   `SdkServer::with_initialize_bootstrap()`. When no bootstrap is
-///   wired the handler returns TS-valid defaults (empty lists / default
-///   account / `"default"` output style).
+///   wired the handler returns defaults (empty lists / default account /
+///   `"default"` output style).
 /// - Internal `_cocoRs*` extension fields carry the coco-rs binary and
 ///   protocol version for debugging.
-///
-/// TS reference: `SDKControlInitializeRequestSchema` +
-/// `SDKControlInitializeResponseSchema` in `controlSchemas.ts:57-95`.
 pub(super) async fn handle_initialize(
     params: coco_types::InitializeParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
     info!("SdkServer: initialize");
 
-    // TS parity: `cli/print.ts:2904-2908` flips
-    // `STATE.sdkAgentProgressSummariesEnabled = true` when the
-    // initialize request opts in. coco-rs stores the same flag on
-    // `SdkServerState` so subsequent `session/start` calls can copy
-    // it onto the new session's `ToolAppState`. Default-off is
-    // intentional: a fully saturated coordinator burns up to 32
-    // side-query LLM calls per minute on summarization, so opt-in
-    // semantics keep that off the user's hot path.
+    // Stores the agentProgressSummaries flag on `SdkServerState` so
+    // subsequent `session/start` calls can copy it onto the new
+    // session's `ToolAppState`. Default-off is intentional: a fully
+    // saturated coordinator burns up to 32 side-query LLM calls per
+    // minute on summarization, so opt-in semantics keep that off the
+    // user's hot path.
     if params.agent_progress_summaries.unwrap_or(false) {
         ctx.state
             .agent_progress_summaries_enabled
@@ -85,17 +79,15 @@ pub(super) async fn handle_initialize(
         });
     }
 
-    // TS parity (`cli/print.ts:4382`): when the SDK client pushes
-    // `initialize.agents`, parse the JSON map into `AgentDefinition`
-    // entries (tagged `AgentSource::FlagSettings`) and stash them on
-    // `SdkServerState` so:
+    // When the SDK client pushes `initialize.agents`, parse the JSON map
+    // into `AgentDefinition` entries (tagged `AgentSource::FlagSettings`)
+    // and stash them on `SdkServerState` so:
     //   - the `agents()` listing below merges them into the response;
     //   - `session/start` drains the stash into the new session's
-    //     `AgentDefinitionStore` (Phase 2 wiring).
+    //     `AgentDefinitionStore`.
     //
-    // Parse failures don't fail the initialize handshake — TS logs
-    // and continues with the accepted subset (`logForDebugging` +
-    // `logError`). Match here.
+    // Parse failures don't fail the initialize handshake — log and
+    // continue with the accepted subset.
     if let Some(agents_map) = params.agents.as_ref() {
         let (accepted, errors) =
             crate::sdk_server::cli_bootstrap::parse_sdk_agent_definitions(agents_map);
@@ -117,11 +109,7 @@ pub(super) async fn handle_initialize(
                 *stash = accepted.clone();
             }
             // Inject into the live SessionRuntime so subsequent
-            // `turn/start` spawns can actually use the SDK-supplied
-            // agents (Phase 2 wiring: TS parity with
-            // `cli/print.ts:4382` calling `parseAgentsFromJson` +
-            // immediate reload).
-            //
+            // `turn/start` spawns can actually use the SDK-supplied agents.
             // The SessionRuntime is None in tests; the stash-only
             // branch above still gives the wire response correct
             // contents.
@@ -172,10 +160,8 @@ pub(super) async fn handle_initialize(
         };
 
     // Merge SDK-supplied agents into the response listing so the client
-    // immediately sees what it pushed (TS parity: `cli/print.ts:4382`
-    // injects parsed agents into the catalog before the initialize
-    // response is built). Stashed entries always win — they're the
-    // freshest user intent.
+    // immediately sees what it pushed. Stashed entries always win —
+    // they're the freshest user intent.
     {
         let stash = ctx.state.pending_sdk_agents.read().await;
         if !stash.is_empty() {
@@ -232,10 +218,6 @@ pub(super) async fn handle_initialize(
 /// Records the session in `SdkServerState.session` and returns a generated
 /// `session_id`. The QueryEngine is not spawned here — `turn/start` does
 /// that per-turn.
-///
-/// TS reference: `print.ts runHeadless()` creates a session at the top of
-/// headless mode; coco-rs lets the SDK client explicitly trigger this via
-/// `session/start` instead.
 pub(super) async fn handle_session_start(
     params: coco_types::SessionStartParams,
     ctx: &HandlerContext,
@@ -341,11 +323,10 @@ pub(super) async fn handle_session_start(
             &coco_types::PermissionRulesBySource::new(),
         );
     }
-    // TS parity: copy the SDK-level agentProgressSummaries flag onto
-    // the new session's ToolAppState so the bg AgentTool path can
-    // gate periodic-summary timers without reaching into
-    // SdkServerState. Coordinator mode auto-enables independently
-    // (matches `AgentTool.tsx:750`).
+    // Copy the SDK-level agentProgressSummaries flag onto the new
+    // session's ToolAppState so the bg AgentTool path can gate
+    // periodic-summary timers without reaching into SdkServerState.
+    // Coordinator mode auto-enables independently.
     if ctx
         .state
         .agent_progress_summaries_enabled
@@ -364,8 +345,7 @@ pub(super) async fn handle_session_start(
     // sequential `session/archive` → `session/start` cycles don't leak
     // the prior session's `FileReadState` LRU, `SessionMemoryService`
     // disk path, file-history sink session id, or cache-break detector
-    // baseline into the new session. TS parity: `clearSessionCaches`
-    // semantics applied at SDK session boundary.
+    // baseline into the new session.
     //
     // `runtime.start_new_session` also retargets the runtime-owned
     // `TranscriptFileHistorySink` (when file-checkpointing is enabled)
@@ -505,8 +485,7 @@ async fn accumulate_session_result(
 /// `session/archive` is called, the aggregate is built from whatever
 /// stats have been accumulated so far (the in-flight turn's stats are
 /// NOT included — it's cancelled after the aggregate is built). This
-/// matches TS headless semantics where archive discards in-progress
-/// work.
+/// Archive discards in-progress work.
 ///
 /// Errors:
 /// - `INVALID_REQUEST` if no session is active
@@ -816,8 +795,6 @@ pub(super) async fn handle_session_read(
 /// session id is repointed and `runtime.history` is seeded with the
 /// loaded messages; the transcript dedup set is pre-populated so the
 /// per-turn JSONL append doesn't re-write entries already on disk.
-/// TS parity: `processResumedConversation()` in
-/// `bootstrap/sessionRestore.ts`.
 ///
 /// Errors:
 /// - `INVALID_REQUEST` if no session manager is wired
@@ -862,16 +839,14 @@ pub(super) async fn handle_session_resume(
 
     // Load the JSONL transcript so the resumed run sees its own
     // history. Best-effort: a missing transcript leaves the runtime
-    // with an empty history (TS-aligned — `loadMessagesFromJsonlPath`
-    // returns null when the file isn't readable, and the resumed
-    // session starts cold rather than failing the resume call).
+    // with an empty history — the resumed session starts cold rather
+    // than failing the resume call.
     //
-    // The transcript lives in the resumed session's own project
-    // tree (`<memory_base>/projects/<slug>/<sid>.jsonl`). Route
-    // through `resolve_session_file_path` so a linked worktree (whose
-    // long cwd path produces a different djb2 slug suffix than its
-    // sibling repo) still resolves to the right file — matches TS
-    // `sessionStoragePortable.ts:403-466`.
+    // The transcript lives in the resumed session's own project tree
+    // (`<memory_base>/projects/<slug>/<sid>.jsonl`). Route through
+    // `resolve_session_file_path` so a linked worktree (whose long cwd
+    // path produces a different djb2 slug suffix than its sibling repo)
+    // still resolves to the right file.
     let memory_base = coco_config::global_config::config_home();
     let transcript_path = coco_session::storage::resolve_session_file_path(
         &memory_base,

@@ -15,8 +15,8 @@ fn cmd(name: &str, aliases: &[&str], desc: Option<&str>, hint: Option<&str>) -> 
 }
 
 fn builtin(name: &str, desc: Option<&str>) -> SlashCommandInfo {
-    // TS-parity: type=local commands always sit in the Builtin
-    // bucket of the empty-query layout regardless of `source`.
+    // type=local commands always sit in the Builtin bucket of the
+    // empty-query layout regardless of `source`.
     SlashCommandInfo {
         name: name.to_string(),
         description: desc.map(ToString::to_string),
@@ -42,9 +42,8 @@ fn labels(items: &[crate::widgets::suggestion_popup::SuggestionItem]) -> Vec<&st
 
 #[test]
 fn empty_query_alpha_sorts_within_builtin_bucket() {
-    // The new empty-query layout drops registry order in favor of
-    // source bucketing (TS-parity). When every command shares one
-    // bucket the result is alphabetical.
+    // The new empty-query layout drops registry order in favor of source
+    // bucketing. When every command shares one bucket the result is alphabetical.
     let cmds = vec![cmd("help", &[], None, None), cmd("clear", &[], None, None)];
     let items = rank("", &cmds);
     assert_eq!(labels(&items), vec!["/clear", "/help"]);
@@ -52,10 +51,9 @@ fn empty_query_alpha_sorts_within_builtin_bucket() {
 
 #[test]
 fn empty_query_groups_by_source_bucket_order() {
-    // TS concatenation order in `commandSuggestions.ts`:
-    // builtin → user → project → policy → other. Mixed source
-    // commands should land in this exact sequence regardless of input
-    // order.
+    // Concatenation order: builtin → user → project → policy → other.
+    // Mixed source commands should land in this exact sequence regardless
+    // of input order.
     let cmds = vec![
         prompt("z-other", CommandSource::Plugin { name: "foo".into() }),
         prompt("a-project", CommandSource::Project),
@@ -130,8 +128,7 @@ fn no_match_returns_empty() {
 #[test]
 fn subsequence_fallback_finds_typo() {
     // `clr` is a subsequence of `clear` (c→l→r). Prefix + contains both
-    // miss, but the subsequence bucket catches it. Mirrors the Fuse.js
-    // fuzzy fallback in TS commandSuggestions.ts.
+    // miss, but the subsequence bucket catches it.
     let cmds = vec![cmd("clear", &[], None, None), cmd("help", &[], None, None)];
     let items = rank("clr", &cmds);
     assert_eq!(labels(&items), vec!["/clear"]);
@@ -217,7 +214,7 @@ fn tied_results_are_alphabetical_within_bucket() {
 
 #[test]
 fn description_appends_user_source_suffix() {
-    // TS-parity: user-installed skills get `text (user)`.
+    // User-installed skills get `text (user)`.
     let cmds = vec![prompt("my-skill", CommandSource::User)];
     let items = rank("my-skill", &cmds);
     assert_eq!(
@@ -238,7 +235,7 @@ fn description_appends_project_source_suffix() {
 
 #[test]
 fn description_appends_policy_for_managed_source() {
-    // TS calls this group "policy"; coco-rs internal name is Managed.
+    // The "policy" group; coco-rs internal name is Managed.
     let cmds = vec![prompt("enterprise", CommandSource::Managed)];
     let items = rank("enterprise", &cmds);
     assert_eq!(
@@ -259,8 +256,7 @@ fn description_appends_bundled_suffix() {
 
 #[test]
 fn description_prefixes_plugin_name_when_known() {
-    // TS: `formatDescriptionWithSource` puts the plugin name in
-    // parentheses BEFORE the description when known. We mirror that.
+    // The plugin name is shown in parentheses BEFORE the description when known.
     let cmd = SlashCommandInfo {
         name: "from-plugin".into(),
         description: Some("Plugin-backed prompt".into()),
@@ -302,7 +298,7 @@ fn description_falls_back_to_plugin_suffix_when_name_empty() {
 
 #[test]
 fn description_unchanged_for_builtin_and_mcp() {
-    // TS treats builtin and MCP as "no annotation needed".
+    // Builtin and MCP commands carry no annotation suffix.
     let builtin = SlashCommandInfo {
         name: "help".into(),
         description: Some("Show help".into()),

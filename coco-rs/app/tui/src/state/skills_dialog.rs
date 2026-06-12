@@ -6,8 +6,7 @@
 
 /// `/skills` editable overlay state — flat list of [`SkillRow`]s
 /// with filter + sort + selection state plus in-memory `pending`
-/// override on each row. TS parity: 2.1.142 `uJ4` (`cli_inner_pretty
-/// .js:476909`) — the read-only 2.1.88 grouped variant is retired.
+/// override on each row.
 #[derive(Debug, Clone)]
 pub struct SkillsDialogState {
     /// All rows, stable insertion order (the renderer applies the
@@ -96,9 +95,8 @@ impl SkillsDialogSource {
     }
 
     /// Lowercased label used by the inline source column and the
-    /// filter haystack. TS `xJ4` (`cli_inner_pretty.js:476897-
-    /// 476907`) collapses `bundled`/`builtin` → display label
-    /// `"built-in"`; the others use the snake-cased source name.
+    /// filter haystack. Collapses `bundled`/`builtin` → `"built-in"`;
+    /// the others use the snake-cased source name.
     pub fn label_lower(&self) -> &'static str {
         match self {
             Self::BuiltIn => "built-in",
@@ -119,7 +117,7 @@ pub use coco_types::SkillOverrideState;
 
 impl SkillsDialogState {
     /// Build from the wire payload. The renderer applies the
-    /// 2.1.142 sort (source-string lex + name; or token desc when
+    /// sort (source-string lex + name; or token desc when
     /// `sort_by_tokens` is on) each frame, so we don't pre-sort.
     pub fn from_wire(payload: coco_types::SkillsDialogPayload) -> Self {
         let rows = payload
@@ -229,9 +227,8 @@ impl SkillsDialogState {
     }
 
     /// Cycle the focused row's `pending` state through the 4-state
-    /// ladder. **No-op on locked rows** (TS `oT5`-locked rows
-    /// silently swallow Space at `cli_inner_pretty.js:476984` —
-    /// the cycle handler returns early before mutating state).
+    /// ladder. **No-op on locked rows** — the cycle handler returns
+    /// early before mutating state.
     pub fn cycle_focused(&mut self) {
         let Some(idx) = self.focused_row() else {
             return;
@@ -243,7 +240,6 @@ impl SkillsDialogState {
     }
 
     /// Compute the diff to write to `localSettings.skill_overrides`.
-    /// Mirrors TS `C` (`cli_inner_pretty.js:476991-477016`):
     ///
     /// - For each row, compare `pending` to `baseline`. If equal,
     ///   write `null` (delete the local key); else write `pending`.
@@ -275,10 +271,9 @@ impl SkillsDialogState {
     }
 
     /// Apply a single printable character to the filter query.
-    /// Mirrors TS `cli_inner_pretty.js:477038-477045`: if the char
-    /// is `/`, the literal slash is stripped (so typing `/` to
-    /// enter filter mode doesn't push a literal `/` into the
-    /// query). All other characters append.
+    /// If the char is `/`, the literal slash is stripped (so typing `/`
+    /// to enter filter mode doesn't push a literal `/` into the query).
+    /// All other characters append.
     ///
     /// The caller should set `filter_focused = true` before calling
     /// this — the function itself only mutates the query string.
@@ -294,7 +289,7 @@ impl SkillsDialogState {
     }
 
     /// Pop one character off the filter query. Returns whether
-    /// the query was non-empty (TS swallows the keystroke when the
+    /// the query was non-empty (keystroke is swallowed when the
     /// query is empty so the dialog stays in select mode).
     pub fn backspace_filter(&mut self) -> bool {
         if self.filter_query.is_empty() {
@@ -312,17 +307,15 @@ impl SkillsDialogState {
         self.clamp_selection();
     }
 
-    /// Toggle source-vs-token-cost sort. Mirrors TS `t` key
-    /// (`cli_inner_pretty.js:477018-477023`). Resets the
-    /// selection index because the view order changed under it.
+    /// Toggle source-vs-token-cost sort (bound to `t` key). Resets
+    /// the selection index because the view order changed under it.
     pub fn toggle_sort(&mut self) {
         self.sort_by_tokens = !self.sort_by_tokens;
         self.selected_filtered_idx = 0;
     }
 
     /// Move selection up by one within the filtered view. No-op
-    /// when at the top (TS lets the list controller wrap, but
-    /// the dialog itself doesn't — see `o6` dispatch).
+    /// when at the top (the dialog does not wrap).
     pub fn move_up(&mut self) {
         if self.selected_filtered_idx > 0 {
             self.selected_filtered_idx -= 1;
@@ -356,8 +349,7 @@ impl SkillsDialogState {
     }
 }
 
-/// Glyph + label table for the dialog's per-row state column. TS
-/// mirror: `rT5` (`cli_inner_pretty.js:477209-477214`).
+/// Glyph + label table for the dialog's per-row state column.
 ///
 /// Lives at the TUI state layer (not on `coco_types::SkillOverrideState`)
 /// because the glyphs are a display concern — SDK consumers should
@@ -377,8 +369,8 @@ pub fn skill_override_glyph_and_label(state: SkillOverrideState) -> (char, &'sta
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SaveDiff {
     /// Keys to update in `localSettings.skill_overrides`. `Some` ⇒
-    /// write the new state. `None` ⇒ delete the key (TS B6
-    /// deletion sentinel). Empty map ⇒ no-op save.
+    /// write the new state. `None` ⇒ delete the key (deletion
+    /// sentinel). Empty map ⇒ no-op save.
     pub diff: std::collections::BTreeMap<String, Option<SkillOverrideState>>,
     /// Number of rows whose effective state changed (different from
     /// what was effective at dialog-open time). Drives the toast:

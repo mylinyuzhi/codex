@@ -49,7 +49,6 @@ fn returns_full_reminder_when_in_plan_mode() {
 
 #[test]
 fn forces_reminder_type_full_regardless_of_input() {
-    // TS hard-codes reminderType: 'full' at compact.ts:1555.
     let mut attachment = fresh_attachment();
     attachment.reminder_type = ReminderType::Sparse;
     let result =

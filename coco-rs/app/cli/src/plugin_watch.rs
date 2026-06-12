@@ -2,9 +2,9 @@
 //! `notification_tx`.
 //!
 //! Single source of truth for the wire-up that both interactive (TUI)
-//! and SDK paths need. TS parity:
-//! `useManagePlugins.ts:285-303` — "Plugins changed. Run /reload-plugins
-//! to activate." — surfaced as a notification, never an auto-reload.
+//! and SDK paths need. Plugin changes surface as a notification
+//! ("Plugins changed. Run /reload-plugins to activate."), never an
+//! auto-reload.
 
 use std::path::Path;
 use std::path::PathBuf;

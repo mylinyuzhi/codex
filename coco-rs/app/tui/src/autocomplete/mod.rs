@@ -6,11 +6,8 @@
 //!   resources (planned). See [`unified`] for the merge order.
 //! - `@#` (LSP symbol) — debounced async (100 ms), cancel-on-change.
 //!
-//! Removed in this refactor: the legacy `@agent-<name>` sub-prefix. TS
-//! never had one — agents fall out of the unified `@` pool.
-//!
-//! TS: `src/hooks/useTypeahead.ts`, `src/hooks/unifiedSuggestions.ts`,
-//! `src/hooks/fileSuggestions.ts`.
+//! Removed in this refactor: the legacy `@agent-<name>` sub-prefix. Agents
+//! fall out of the unified `@` pool.
 
 pub mod agent_search;
 pub mod file_search;

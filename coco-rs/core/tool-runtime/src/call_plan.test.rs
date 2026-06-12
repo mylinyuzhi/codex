@@ -8,8 +8,7 @@
 //!   returned by the runner lands in [`ToolSideEffects`], not the
 //!   history-facing outcome.
 //! - `ToolCallErrorKind` correctly classifies which errors run
-//!   PostToolUseFailure (TS parity) and which `ToolMessagePath` they
-//!   belong to.
+//!   PostToolUseFailure and which `ToolMessagePath` they belong to.
 
 use coco_types::ToolId;
 use coco_types::ToolName;

@@ -5,8 +5,7 @@ use crate::tools::edit::EditTool;
 async fn test_edit_prompt_includes_uniqueness_warning() {
     use coco_tool_runtime::PromptOptions;
 
-    // The full guidance lives in the model-facing prompt() (TS
-    // `getEditToolDescription()`); description() is the short label.
+    // The full guidance lives in the model-facing prompt(); description() is the short label.
     let desc = <EditTool as DynTool>::prompt(&EditTool, &PromptOptions::default()).await;
     assert!(
         desc.contains("must use your `Read` tool"),
@@ -53,7 +52,7 @@ async fn test_edit_single_replacement() {
     .await
     .unwrap();
 
-    // TS shape: `{filePath, replaceAll, userModified, replacementCount}`.
+    // Output shape: `{filePath, replaceAll, userModified, replacementCount}`.
     assert_eq!(result.data["filePath"], file.to_str().unwrap());
     assert_eq!(result.data["replaceAll"], false);
     assert_eq!(result.data["replacementCount"], 1);
@@ -176,7 +175,6 @@ async fn test_edit_file_not_found() {
 
 /// When the file has curly quotes ("smart" quotes) but the model emitted
 /// straight quotes, the match must succeed via quote normalization.
-/// TS: `FileEditTool/utils.ts:73-93` `findActualString`.
 #[tokio::test]
 async fn test_edit_matches_curly_quotes() {
     let dir = tempfile::tempdir().unwrap();
@@ -255,10 +253,10 @@ use tokio::sync::RwLock;
 // T2: normalize_file_edit_input integration (trailing whitespace + desanitize)
 // ---------------------------------------------------------------------------
 
-/// Model emits `new_string` with trailing spaces on each line. TS
-/// `normalizeFileEditInput` strips them before applying the edit
-/// (except for .md files). Regression guard: the strip must happen
-/// automatically so the model doesn't have to be careful.
+/// Model emits `new_string` with trailing spaces on each line. The edit
+/// tool strips them before applying (except for .md files). Regression
+/// guard: the strip must happen automatically so the model doesn't have
+/// to be careful.
 #[tokio::test]
 async fn test_edit_strips_trailing_whitespace_from_new_string() {
     let dir = tempfile::tempdir().unwrap();
@@ -298,8 +296,8 @@ async fn test_edit_strips_trailing_whitespace_from_new_string() {
 }
 
 /// Markdown files MUST preserve trailing whitespace — two trailing
-/// spaces in markdown is a hard line break. TS: `/\.(md|mdx)$/i`
-/// skips the whitespace strip for these extensions.
+/// spaces in markdown is a hard line break. The `.md` / `.mdx`
+/// extensions skip the whitespace strip.
 #[tokio::test]
 async fn test_edit_preserves_trailing_whitespace_in_markdown() {
     let dir = tempfile::tempdir().unwrap();
@@ -367,9 +365,9 @@ async fn test_edit_markdown_extension_case_insensitive() {
 }
 
 /// Desanitization: model emits `<n>` / `</n>` instead of `<name>` /
-/// `</name>`. TS has both in the desanitization map (both open and
-/// close tag forms), so `normalizeFileEditInput` rewrites the
-/// old_string to match the real file content.
+/// `</name>`. Both open and close tag forms are in the desanitization
+/// map, so `normalizeFileEditInput` rewrites old_string to match the
+/// real file content.
 #[tokio::test]
 async fn test_edit_desanitizes_sanitized_tags_in_old_string() {
     let dir = tempfile::tempdir().unwrap();
@@ -415,7 +413,6 @@ async fn test_edit_desanitizes_sanitized_tags_in_old_string() {
 /// When file_read_state is primed with STALE content but the mtime
 /// matches current disk (e.g. two edits within 1-second mtime precision
 /// window), the content-fallback check must catch the drift and reject.
-/// TS: `FileEditTool.ts:459-466`.
 #[tokio::test]
 async fn test_edit_detects_content_drift_in_race() {
     let dir = tempfile::tempdir().unwrap();
@@ -460,9 +457,9 @@ async fn test_edit_detects_content_drift_in_race() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "current on disk");
 }
 
-/// Read-before-edit guard (TS `FileEditTool.ts:275`, errorCode 6): when the
-/// file exists on disk but has NO FileReadState entry, the edit must be
-/// rejected — editing an unseen file is the data-loss class this guards.
+/// Read-before-edit guard (errorCode 6): when the file exists on disk but
+/// has NO FileReadState entry, the edit must be rejected — editing an
+/// unseen file is the data-loss class this guards.
 #[tokio::test]
 async fn test_edit_rejects_unread_existing_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -495,9 +492,9 @@ async fn test_edit_rejects_unread_existing_file() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello world");
 }
 
-/// TS also rejects PARTIAL-view reads (`isPartialView`): a Read with
-/// offset/limit only cached a slice, so the full file can't be validated
-/// against the edit. An entry with `offset`/`limit` set must be rejected.
+/// Partial-view reads are also rejected: a Read with offset/limit only
+/// cached a slice, so the full file can't be validated against the edit.
+/// An entry with `offset`/`limit` set must be rejected.
 #[tokio::test]
 async fn test_edit_rejects_partial_view_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -547,7 +544,7 @@ async fn test_edit_rejects_partial_view_read() {
 }
 
 // ---------------------------------------------------------------------------
-// render_for_model — TS parity for Edit branches
+// render_for_model — Edit branches
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -558,7 +555,6 @@ fn edit_render_single_replacement_branch() {
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    // TS parity: `The file PATH has been updated successfully.`
     assert_eq!(text, "The file /abs/file.rs has been updated successfully.");
 }
 
@@ -570,7 +566,6 @@ fn edit_render_replace_all_branch() {
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    // TS parity: `The file PATH has been updated. All occurrences were successfully replaced.`
     assert_eq!(
         text,
         "The file /abs/multi.rs has been updated. All occurrences were successfully replaced."

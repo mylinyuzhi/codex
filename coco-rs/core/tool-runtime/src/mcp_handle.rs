@@ -54,7 +54,6 @@ pub enum McpContentBlock {
 
 /// MCP tool annotations — safety hints from the MCP server.
 ///
-/// TS: `tool.annotations` (readOnlyHint, destructiveHint, openWorldHint).
 /// These are server-declared hints, not guarantees. Used for concurrency
 /// batching and permission decisions.
 #[derive(Debug, Clone, Default)]
@@ -71,10 +70,7 @@ pub struct McpToolAnnotations {
     /// [`crate::ToolRegistry::loaded_tools`], so the tool's full
     /// schema appears in turn-1 tool definitions.
     ///
-    /// TS parity: `prompt.ts:isDeferredTool` checks
-    /// `tool.alwaysLoad === true` first (line 64) before any other
-    /// rule. Default: false (every MCP tool is deferred unless the
-    /// server opts out).
+    /// Default: false (every MCP tool is deferred unless the server opts out).
     pub always_load: bool,
 }
 
@@ -85,9 +81,6 @@ impl McpToolAnnotations {
     /// [`Default::default()`] — they are wired by the discovery layer
     /// from the rmcp `annotations` object, not from `_meta`.
     ///
-    /// TS source: `prompt.ts:62-108 isDeferredTool` consumes the
-    /// `tool.alwaysLoad` boolean that the MCP discovery code lifts
-    /// from `_meta["anthropic/alwaysLoad"]`.
     pub fn from_input_schema_meta(input_schema: &Value) -> Self {
         let always_load = input_schema
             .get("_meta")
@@ -145,8 +138,7 @@ pub trait McpHandle: Send + Sync {
     /// Get names of all connected servers.
     async fn connected_servers(&self) -> Vec<String>;
 
-    /// Names of servers still in the connecting / handshake phase. TS:
-    /// `getPendingServerNames()` (`mcpClient.ts`). Surfaced by
+    /// Names of servers still in the connecting / handshake phase. Surfaced by
     /// `ToolSearchTool` in its empty-match branch so the model knows
     /// to retry once handshakes complete. Default impl returns empty —
     /// handles without server-state tracking just say "no pending".
@@ -157,15 +149,13 @@ pub trait McpHandle: Send + Sync {
     /// List all tools from all connected MCP servers.
     ///
     /// Used by MCPTool to discover and expose MCP server tools to the LLM.
-    /// TS: `MCPTool` dynamically generates tool definitions from this.
     async fn list_tools(&self) -> Vec<McpToolSchema> {
         vec![]
     }
 
-    /// Register and connect a dynamically-defined MCP server (TS
-    /// `connectToServer(name, {…inlineConfig, scope: 'dynamic'})`).
-    /// Used by per-agent MCP initialization (`runAgent.ts:135-191`)
-    /// to stand up agent-private servers from inline frontmatter
+    /// Register and connect a dynamically-defined MCP server.
+    /// Used by per-agent MCP initialization to stand up agent-private
+    /// servers from inline frontmatter
     /// configs. Returns the server name on success so the caller can
     /// pair it with the matching `remove_dynamic_server` at agent
     /// teardown.

@@ -3,8 +3,7 @@
 //! This module provides telemetry configuration, integration traits,
 //! global registry, and dispatch utilities for monitoring AI SDK function calls.
 //!
-//! Telemetry integrations receive the same event types as user callbacks,
-//! matching the TS SDK design.
+//! Telemetry integrations receive the same event types as user callbacks.
 
 pub mod attributes;
 pub mod dispatch;
@@ -26,5 +25,5 @@ pub use registry::get_global_integrations;
 pub use registry::register_telemetry_integration;
 pub use telemetry_integration::TelemetryIntegration;
 pub use telemetry_settings::TelemetrySettings;
-/// Preferred alias for [`TelemetrySettings`] (matches TS SDK `TelemetryOptions`).
+/// Preferred alias for [`TelemetrySettings`].
 pub type TelemetryOptions = TelemetrySettings;

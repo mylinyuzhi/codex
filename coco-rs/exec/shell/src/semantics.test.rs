@@ -92,7 +92,6 @@ fn test_test_false_is_not_error() {
 }
 
 // ── DEFAULT semantic: anything else, any non-zero is an error ──
-// (TS has no special case for git/curl/timeout/egrep — they hit DEFAULT.)
 
 #[test]
 fn test_default_nonzero_is_error() {
@@ -100,14 +99,14 @@ fn test_default_nonzero_is_error() {
         interpret_command_result("mycommand --flag", 1),
         err("Command failed with exit code 1"),
     );
-    // `git diff --exit-code` exit 1: base is `git`, NOT special → error (TS parity).
+    // `git diff --exit-code` exit 1: base is `git`, NOT special → error.
     assert!(interpret_command_result("git diff --exit-code", 1).is_error);
     // curl/timeout are not special in TS either.
     assert!(interpret_command_result("curl -f http://example.com/404", 22).is_error);
     assert!(interpret_command_result("timeout 5 sleep 10", 124).is_error);
 }
 
-// ── base command = LAST pipeline segment (heuristicallyExtractBaseCommand) ──
+// ── base command = LAST pipeline segment ──
 
 #[test]
 fn test_base_command_is_last_pipeline_segment() {

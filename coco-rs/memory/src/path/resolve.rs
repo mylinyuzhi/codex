@@ -1,6 +1,6 @@
 //! Resolve the memory directory for a project.
 //!
-//! TS: `memdir/paths.ts:getAutoMemPath`. The resolution chain is:
+//! Resolution chain:
 //!   1. `COCO_MEMORY_PATH_OVERRIDE` env override (operator)
 //!   2. `COCO_REMOTE_MEMORY_DIR` env (CCR / swarm leader)
 //!   3. `settings.json` `autoMemoryDirectory`
@@ -15,9 +15,8 @@
 //!
 //! The slug computation lives in [`coco_paths::ProjectSlug`] /
 //! [`coco_paths::ProjectPaths`] — see that crate for the
-//! TS-equivalent `[^a-zA-Z0-9]` + NFC + 200-byte djb2-hash algorithm
-//! we mirror. Prior to that consolidation this file held its own
-//! buggy variant.
+//! `[^a-zA-Z0-9]` + NFC + 200-byte djb2-hash algorithm.
+//! Prior to that consolidation this file held its own buggy variant.
 
 use std::path::Path;
 use std::path::PathBuf;

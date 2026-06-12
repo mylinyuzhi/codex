@@ -1,15 +1,13 @@
-//! TS `task_status` generator.
+//! `task_status` generator.
 //!
-//! Mirrors `normalizeAttachmentForAPI` `case 'task_status':`
-//! (`messages.ts:3954`). Rendering varies by status:
+//! Rendering varies by status:
 //!
 //! - `Killed`: brief "stopped by the user" note.
 //! - `Running`: anti-duplicate warning; optional delta summary and
 //!   output-file pointer.
 //! - `Completed` / `Failed`: outcome summary with optional delta.
 //!
-//! TS emits one reminder per `task_status` attachment; coco-rs joins
-//! multiple statuses emitted this turn with `\n\n`.
+//! Multiple statuses emitted this turn are joined with `\n\n`.
 
 use async_trait::async_trait;
 use coco_types::ToolName;
@@ -62,10 +60,9 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             id = t.task_id
         ),
         TaskRunStatus::Running => {
-            // TS `messages.ts:3973-3995`: parts joined by space, with
-            // tool-name refs threaded through the anti-duplicate line so
-            // the model knows the affordances (`SendMessage` /
-            // `TaskOutput`) for steering / inspecting the running agent.
+            // Parts joined by space, with tool-name refs threaded through
+            // the anti-duplicate line so the model knows the affordances
+            // (`SendMessage` / `TaskOutput`) for steering / inspecting.
             let mut parts = vec![format!(
                 "Background agent \"{desc}\" ({id}) is still running.",
                 desc = t.description,
@@ -86,8 +83,8 @@ fn render_one(t: &TaskStatusSnapshot) -> String {
             parts.join(" ")
         }
         TaskRunStatus::Completed | TaskRunStatus::Failed => {
-            // TS `messages.ts:3997-4017`: `Task {id} (type: ...) (status: ...)
-            // (description: ...) [Delta: ...] [Read the output file...
+            // Format: `Task {id} (type: ...) (status: ...) (description: ...)
+            // [Delta: ...] [Read the output file...
             //  | You can check its output using the {TASK_OUTPUT_TOOL_NAME} tool.]`
             // joined by single space.
             let display_status = match t.status {

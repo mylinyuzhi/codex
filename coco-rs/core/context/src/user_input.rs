@@ -1,6 +1,5 @@
 //! User input processing.
 //!
-//! TS: utils/processUserInput/ (1.8K LOC)
 //! Pre-processes user input before sending to the model.
 
 /// Process raw user input text before sending to the model.
@@ -84,7 +83,6 @@ pub enum MentionType {
     Symbol,
     Agent,
     /// MCP resource reference of the form `@server:uri` (no `://`).
-    /// TS: `extractMcpResourceMentions` (`utils/attachments.ts`).
     McpResource {
         server: String,
         uri: String,
@@ -140,7 +138,7 @@ fn extract_mentions(text: &str) -> Vec<Mention> {
 
             // Parse line range from fragment: file#L10 or file#L10-20.
             // Also strips trailing non-`#L` fragments (`file.rs#heading` →
-            // `file.rs`) to match TS `parseAtMentionedFileLines` regex.
+            // `file.rs`) to match the `parseAtMentionedFileLines` regex.
             let (path_text, line_start, line_end) = parse_line_range(mention_text);
 
             // Classify mention type. Order matters:
@@ -195,21 +193,19 @@ fn extract_mentions(text: &str) -> Vec<Mention> {
 
 /// Parse `#L10` or `#L10-20` suffix from a mention token.
 ///
-/// Mirrors the TS regex
-/// `^([^#]+)(?:#L(\d+)(?:-(\d+))?)?(?:#[^#]*)?$`
+/// Regex: `^([^#]+)(?:#L(\d+)(?:-(\d+))?)?(?:#[^#]*)?$`
 /// — strips trailing non-`#L` fragments such as `#heading`.
 ///
 /// Returns `(path_without_fragment, line_start, line_end)`. When only
 /// `#L10` is present, `line_end` is set to `Some(line_start)` so a
-/// single-line mention reads exactly that line, matching TS
-/// `parseAtMentionedFileLines` (`lineEnd ?? lineStart`).
+/// single-line mention reads exactly that line (`lineEnd ?? lineStart`).
 fn parse_line_range(mention: &str) -> (&str, Option<i32>, Option<i32>) {
     let Some(hash_pos) = mention.find('#') else {
         return (mention, None, None);
     };
-    // TS regex requires `[^#]+` before the fragment — at least one
-    // non-`#` char. `#sym` (leading `#`) is not a fragment, it's a
-    // symbol mention; preserve the whole token.
+    // Requires at least one non-`#` char before the fragment.
+    // `#sym` (leading `#`) is not a fragment, it's a symbol mention;
+    // preserve the whole token.
     if hash_pos == 0 {
         return (mention, None, None);
     }
@@ -225,7 +221,7 @@ fn parse_line_range(mention: &str) -> (&str, Option<i32>, Option<i32>) {
         if let Ok(start) = start_str.parse::<i32>() {
             let end = match end_str {
                 Some(s) => s.parse::<i32>().ok().or(Some(start)),
-                // TS: lineEnd defaults to lineStart for single-line.
+                // `lineEnd` defaults to `lineStart` for single-line.
                 None => Some(start),
             };
             return (path, Some(start), end);
@@ -237,7 +233,7 @@ fn parse_line_range(mention: &str) -> (&str, Option<i32>, Option<i32>) {
 }
 
 /// Strip a trailing ` (agent)` suffix from an agent mention's text.
-/// TS `extractAgentMentions` returns the bare type without the suffix.
+/// Returns the bare type without the suffix.
 fn strip_agent_suffix(text: &str) -> String {
     text.strip_suffix(" (agent)").unwrap_or(text).to_string()
 }
@@ -246,8 +242,6 @@ fn strip_agent_suffix(text: &str) -> String {
 /// Returns `Some((server, uri))` when:
 ///   - `mention` contains exactly one `:` (no `://`)
 ///   - both sides are non-empty
-///
-/// TS: `extractMcpResourceMentions` regex `(^|\s)@([^\s]+:[^\s]+)\b`.
 fn parse_mcp_resource(mention: &str) -> Option<(&str, &str)> {
     if mention.contains("://") {
         return None;

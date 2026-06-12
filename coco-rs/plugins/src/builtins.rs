@@ -1,7 +1,5 @@
 //! Builtin plugin registry.
 //!
-//! TS source: `plugins/builtinPlugins.ts:1-159`.
-//!
 //! Builtin plugins are compiled-in, identified by the marketplace sentinel
 //! `{name}@builtin`. They differ from bundled skills in that:
 //! - They appear in the `/plugin` UI under a "Built-in" section.
@@ -32,8 +30,6 @@ fn lock_registry() -> MutexGuard<'static, HashMap<String, BuiltinPluginDefinitio
 }
 
 /// Definition for a builtin plugin shipped in the binary.
-///
-/// TS: `BuiltinPluginDefinition` from `types/plugin.ts`.
 #[derive(Clone)]
 pub struct BuiltinPluginDefinition {
     pub name: String,
@@ -42,7 +38,6 @@ pub struct BuiltinPluginDefinition {
     /// Default state when the user has not toggled this builtin.
     pub default_enabled: bool,
     /// Optional gate — return `false` to hide entirely (not even as disabled).
-    /// TS: `isAvailable?: () => boolean`.
     pub is_available: Option<fn() -> bool>,
     /// Skills contributed.
     pub skills: Vec<SkillDefinition>,
@@ -53,8 +48,6 @@ pub struct BuiltinPluginDefinition {
 }
 
 /// Loaded builtin plugin record (after settings resolution).
-///
-/// TS: `LoadedPlugin` shape with `isBuiltin: true`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedBuiltinPlugin {
     pub name: String,
@@ -70,27 +63,22 @@ fn registry() -> &'static Mutex<HashMap<String, BuiltinPluginDefinition>> {
 }
 
 /// Register a builtin plugin. Call from `init_builtin_plugins()` at startup.
-///
-/// TS: `registerBuiltinPlugin(definition)`.
 pub fn register_builtin_plugin(def: BuiltinPluginDefinition) {
     lock_registry().insert(def.name.clone(), def);
 }
 
 /// Seed the builtin-plugin registry once at startup. This is the single
-/// registration point for compiled-in plugins — mirrors TS
-/// `plugins/bundled/index.ts initBuiltinPlugins()`, which is itself an empty
-/// scaffold (coco-rs ships no builtins yet). Idempotent: safe to call from
-/// every entry point (TUI / SDK / headless). Add `register_builtin_plugin(...)`
-/// calls here when a real builtin lands.
+/// registration point for compiled-in plugins (coco-rs ships no builtins yet).
+/// Idempotent: safe to call from every entry point (TUI / SDK / headless). Add
+/// `register_builtin_plugin(...)` calls here when a real builtin lands.
 pub fn init_builtin_plugins() {
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
-        // No builtins registered yet — parity with TS's empty scaffold.
+        // No builtins registered yet.
     });
 }
 
 /// Whether a plugin id has the `@builtin` marketplace suffix.
-/// TS: `isBuiltinPluginId`.
 pub fn is_builtin_plugin_id(id: &str) -> bool {
     id.ends_with(&format!("@{BUILTIN_MARKETPLACE}"))
 }
@@ -102,8 +90,6 @@ pub fn get_builtin_plugin_definition(name: &str) -> Option<BuiltinPluginDefiniti
 
 /// Get all registered builtin plugins as `LoadedBuiltinPlugin` records,
 /// split into enabled/disabled lists.
-///
-/// TS: `getBuiltinPlugins()` from `plugins/builtinPlugins.ts:57-102`.
 ///
 /// `enabled_overrides` is the user's `settings.enabledPlugins` map. State
 /// resolution: user override > definition default > true.
@@ -141,8 +127,6 @@ pub fn get_builtin_plugins(
 }
 
 /// Get skills contributed by enabled builtin plugins.
-///
-/// TS: `getBuiltinPluginSkillCommands()`.
 pub fn get_builtin_plugin_skills(
     enabled_overrides: &HashMap<String, bool>,
 ) -> Vec<SkillDefinition> {

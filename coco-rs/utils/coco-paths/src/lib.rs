@@ -1,24 +1,17 @@
-//! Single source of truth for TS-equivalent project, session, and
-//! memory path layout.
+//! Single source of truth for project, session, and memory path layout.
 //!
 //! Why this crate exists: the pre-fix coco-rs codebase duplicated the
 //! `sanitizePath` algorithm across `memory`, `core/context`, `tasks`,
 //! and `plugins`, with at least one variant producing slugs that did
-//! NOT match TS Claude Code's. The result was silent cross-tool data
-//! isolation breakage — a session run under TS and one under coco-rs
-//! against the same cwd would land in different `projects/<slug>/`
+//! NOT match Claude Code's. The result was silent cross-tool data
+//! isolation breakage — a session run under one runtime and one under
+//! coco-rs against the same cwd would land in different `projects/<slug>/`
 //! directories, with no error surfaced.
 //!
-//! TS source files this crate mirrors (consolidated here so callers
-//! don't need to track them individually):
-//!
-//! - `utils/sessionStoragePortable.ts:311-319` `sanitizePath`
-//! - `utils/sessionStoragePortable.ts:295-297` `simpleHash` (djb2)
-//! - `utils/sessionStoragePortable.ts:325-360` `getProjectsDir` / `getProjectDir`
-//! - `utils/sessionStoragePortable.ts:354-380` `findProjectDir` (prefix fallback)
-//! - `utils/sessionStoragePortable.ts:403-466` `resolveSessionFilePath`
-//! - `memdir/paths.ts:85-90,203-235,246-251` memory base / project / daily-log
-//! - `tools/AgentTool/agentMemory.ts` `sanitizeAgentTypeForPath`
+//! Implements: `sanitizePath`, `simpleHash` (djb2), `getProjectsDir` /
+//! `getProjectDir`, `findProjectDir` (prefix fallback),
+//! `resolveSessionFilePath`, memory base / project / daily-log paths,
+//! and `sanitizeAgentTypeForPath`.
 //!
 //! The crate is dependency-light on purpose: only `unicode-normalization`
 //! at runtime — no env var reads, no subprocesses, no filesystem walks

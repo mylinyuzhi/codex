@@ -1,15 +1,8 @@
-//! Todo/Plan panel projection — V2 plan_tasks or V1 todos_by_agent,
-//! sorted by TS-aligned priority and rendered with TS-style glyphs.
-//!
-//! TS source:
-//! - `components/TaskListV2.tsx` (V2 rendering — TaskV2 enabled)
-//! - `components/Todo.tsx` (V1 — TodoWrite tool when V2 is off)
+//! Todo/Plan panel projection — V2 plan_tasks or V1 todos_by_agent.
 //!
 //! ## V1/V2 mutual exclusion
 //!
-//! TS gates which tool the model gets (TaskCreate/Update vs TodoWrite)
-//! via `feature('task_v2')`. coco-rs reads what's in state: V2 wins
-//! when `plan_tasks` is non-empty; otherwise V1 wins when
+//! V2 wins when `plan_tasks` is non-empty; otherwise V1 wins when
 //! `todos_by_agent` is non-empty. Both empty → no rows.
 //!
 //! ## Priority sort
@@ -19,18 +12,16 @@
 //!   2. **pending**
 //!   3. **completed** (lowest — context, not action)
 //!
-//! TS additionally pulls "recently completed (< 30 s)" above pending
-//! via `RECENT_COMPLETED_TTL_MS = 30_000`. That promotion needs a
-//! completion-timestamp side-cache in `SessionState`; deferred until
-//! the cache lands (see P3 follow-up). Without it, completed rows
-//! always trail pending — closest stable behaviour.
+//! "Recently completed (< 30 s)" rows promote above pending. That
+//! promotion needs a completion-timestamp side-cache in `SessionState`;
+//! deferred until the cache lands (see P3 follow-up). Without it,
+//! completed rows always trail pending — closest stable behaviour.
 //!
 //! ## Glyphs
 //!
-//! Aligned with TS `figures` package:
-//! - `figures.tick` → `✔` (completed, success-tone)
-//! - `figures.squareSmallFilled` → `◼` (in_progress, accent-tone)
-//! - `figures.squareSmall` → `☐` (pending, dim)
+//! - `✔` (completed, success-tone)
+//! - `◼` (in_progress, accent-tone)
+//! - `☐` (pending, dim)
 
 use crate::i18n::t;
 use crate::presentation::activity::ActivityLine;
@@ -43,12 +34,10 @@ const ICON_COMPLETED: &str = "✔";
 const ICON_IN_PROGRESS: &str = "◼";
 const ICON_PENDING: &str = "☐";
 
-/// Promote tasks completed within this window above pending. Mirrors
-/// TS `TaskListV2.tsx:RECENT_COMPLETED_TTL_MS`.
+/// Promote tasks completed within this window above pending.
 const RECENT_COMPLETED_TTL_MS: i64 = 30_000;
 
-/// Hide the entire panel this long after every plan task became
-/// `Completed`. Mirrors TS `useTasksV2.ts:HIDE_DELAY_MS`.
+/// Hide the entire panel this long after every plan task became `Completed`.
 const HIDE_DELAY_MS: i64 = 5_000;
 
 /// Render the todo/plan panel section into `out` if state has content.
@@ -56,17 +45,12 @@ const HIDE_DELAY_MS: i64 = 5_000;
 /// `out` is appended to in-place so callers can compose the panel with
 /// preceding/trailing sections (running tasks, etc.).
 ///
-/// TS-DIVERGE: TS picks V1 vs V2 from `isTodoV2Enabled()`
-/// (`utils/tasks.ts:133-139`: env `CLAUDE_CODE_ENABLE_TASKS` OR
-/// `!isNonInteractiveSession()`), and the inactive variant returns
-/// `null` regardless of whether content exists. coco-rs auto-detects
-/// instead: V2 wins when its content is populated, else V1. The
-/// auto-detect is a deliberate divergence because (a) coco-rs has no
-/// `CLAUDE_CODE_ENABLE_TASKS` analog (would need a new
-/// `COCO_TASKS_V2_ENABLED` env + settings field) and (b) the engine
-/// only emits one shape at a time, so "whichever has content" is the
-/// only state that matters in practice. Add a settings flag here when
-/// users need to suppress V2 even when populated.
+/// DIVERGE: coco-rs auto-detects V1 vs V2: V2 wins when its content is
+/// populated, else V1. The auto-detect is deliberate because (a) coco-rs
+/// has no `COCO_TASKS_V2_ENABLED` env + settings field and (b) the engine
+/// only emits one shape at a time, so "whichever has content" is the only
+/// state that matters in practice. Add a settings flag here when users
+/// need to suppress V2 even when populated.
 pub(crate) fn append_lines(state: &AppState, out: &mut Vec<ActivityLine>) {
     if !state.session.plan_tasks.is_empty() {
         append_v2(state, out);
@@ -161,7 +145,7 @@ fn append_v1(state: &AppState, out: &mut Vec<ActivityLine>) {
 }
 
 /// Composite rank: recently-completed (<30s) → in_progress → pending →
-/// older-completed. Matches TS `TaskListV2.tsx:140` priority sequence.
+/// older-completed.
 fn rank_v2(
     task: &coco_types::TaskRecord,
     completion_ts: &std::collections::HashMap<String, i64>,

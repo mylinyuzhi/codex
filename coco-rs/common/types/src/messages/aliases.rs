@@ -42,8 +42,7 @@ pub use coco_llm_types::UserContentPart as UserContent;
 /// block; callers must gate on the model's
 /// `Capability::ServerSideToolReference` before using this builder.
 ///
-/// TS source: `ToolSearchTool.ts:444-470` returns these content
-/// blocks directly. Skipping multi-provider concerns is intentional —
+/// Skipping multi-provider concerns is intentional —
 /// only the Anthropic adapter knows how to unwrap them, and the
 /// engine arranges to call this helper only when capable.
 #[must_use]

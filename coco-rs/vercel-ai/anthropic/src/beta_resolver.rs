@@ -1,9 +1,8 @@
 //! Resolved-beta computation: capability gates → wire header set.
 //!
 //! Single source of truth for "which betas should this request emit".
-//! Mirrors TS `getModelDependentBetas` (`betas.ts:106-180`) +
-//! `getBetas` baseline (`betas.ts:181-263`) into one function so the
-//! gate logic is auditable in one place rather than scattered across
+//! Consolidates all capability/topology/knob gate logic into one function
+//! so it is auditable in one place rather than scattered across
 //! `get_args`, `prepare_tools`, and per-feature insert sites.
 //!
 //! Inputs are all already-resolved at the adapter boundary:
@@ -19,7 +18,7 @@
 //!   `AnthropicProviderOptions`.
 //!
 //! Output is a `BTreeSet<String>` so the wire-side join is
-//! deterministic (TS-parity Finding 7).
+//! deterministic.
 //!
 //! Design §10.4.
 

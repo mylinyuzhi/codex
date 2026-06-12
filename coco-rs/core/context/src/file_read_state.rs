@@ -1,7 +1,7 @@
 //! Session-level file-read state cache.
 //!
-//! TS: `readFileState` / `FileStateCache` — LRU cache (100 entries, 25MB) tracking
-//! all files read by tools or @mentions with `{content, mtime, offset, limit}`.
+//! LRU cache (100 entries, 25MB) tracking all files read by tools or @mentions
+//! with `{content, mtime, offset, limit}`.
 //!
 //! Enables:
 //! - @mention deduplication (already-read check via mtime comparison)
@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// Maximum cached entries (matches TS `FileStateCache` max size).
+/// Maximum cached entries.
 const MAX_ENTRIES: usize = 100;
 
 /// A file entry in the read state cache.
@@ -189,9 +189,8 @@ impl FileReadState {
 
     /// Snapshot all entries ordered by access recency (most recent last).
     ///
-    /// TS: `cacheToObject(context.readFileState)` — captures pre-compact state.
-    /// Used by compact to snapshot before clearing, so post-compact file
-    /// restoration can re-inject the most recently accessed files.
+    /// Captures pre-compact state. Used by compact to snapshot before clearing,
+    /// so post-compact file restoration can re-inject the most recently accessed files.
     pub fn snapshot_by_recency(&self) -> Vec<(PathBuf, FileReadEntry)> {
         self.access_order
             .iter()

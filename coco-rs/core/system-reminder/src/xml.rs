@@ -1,7 +1,6 @@
 //! XML wrapping for reminder content.
 //!
-//! Format is **TS-first**: matches `wrapInSystemReminder` exactly
-//! (`messages.ts:3097`):
+//! Format: `<system-reminder>\n{content}\n</system-reminder>`.
 //!
 //! ```text
 //! <system-reminder>
@@ -10,9 +9,8 @@
 //! ```
 //!
 //! Callers of this module should treat the wrapping as idempotent at the API
-//! layer: TS has `ensureSystemReminderWrap` (`messages.ts:1797`) that checks
-//! for an existing prefix and skips re-wrapping. The Rust equivalent lives
-//! alongside as [`ensure_wrapped`].
+//! layer: [`ensure_wrapped`] checks for an existing prefix and skips
+//! re-wrapping.
 
 use regex_lite::Regex;
 
@@ -21,8 +19,7 @@ use crate::types::XmlTag;
 /// Wrap `content` with the given XML tag.
 ///
 /// For [`XmlTag::None`] the content is returned unchanged. For any other tag
-/// the returned string is `<tag>\n{content}\n</tag>` — newline placement
-/// matches TS `wrapInSystemReminder` exactly.
+/// the returned string is `<tag>\n{content}\n</tag>`.
 pub fn wrap_with_tag(content: &str, tag: XmlTag) -> String {
     match tag.tag_name() {
         Some(name) => format!("<{name}>\n{content}\n</{name}>"),
@@ -32,20 +29,18 @@ pub fn wrap_with_tag(content: &str, tag: XmlTag) -> String {
 
 /// Shorthand for `wrap_with_tag(content, XmlTag::SystemReminder)`.
 ///
-/// TS parity: `wrapInSystemReminder` (`messages.ts:3097`). Delegates to
-/// [`coco_messages::wrapping::wrap_in_system_reminder`] so the canonical
-/// format string lives in one place — TS-parity fixes propagate without
-/// drift between the system-reminder pipeline and post-compact / plan-mode /
-/// CLI paths that wrap text directly.
+/// Delegates to [`coco_messages::wrapping::wrap_in_system_reminder`] so the
+/// canonical format string lives in one place — fixes propagate without drift
+/// between the system-reminder pipeline and post-compact / plan-mode / CLI
+/// paths that wrap text directly.
 pub fn wrap_system_reminder(content: &str) -> String {
     coco_messages::wrapping::wrap_in_system_reminder(content)
 }
 
 /// Wrap content only if it isn't already wrapped in a `<system-reminder>` tag.
 ///
-/// TS parity: `ensureSystemReminderWrap` (`messages.ts:1797`). Used by the
-/// normalizer to avoid double-wrapping reminders that passed through more than
-/// one mutation.
+/// Used by the normalizer to avoid double-wrapping reminders that passed
+/// through more than one mutation.
 pub fn ensure_wrapped(content: &str) -> String {
     if content.starts_with("<system-reminder>") {
         content.to_string()

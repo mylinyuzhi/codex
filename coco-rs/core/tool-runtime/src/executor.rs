@@ -1,6 +1,5 @@
 //! Streaming tool executor — real-time concurrent tool execution.
 //!
-//! TS: `services/tools/StreamingToolExecutor.ts`
 //!
 //! Tools execute DURING API streaming, not after. As the API streams
 //! tool_use blocks, `add_tool()` queues them immediately. Safe tools
@@ -132,7 +131,7 @@ struct TrackedTool {
     is_concurrency_safe: bool,
 }
 
-/// Streaming tool executor — matches TS StreamingToolExecutor.
+/// Streaming tool executor.
 ///
 /// Tools are added via `add_tool()` as the API streams tool_use blocks.
 /// Safe tools start executing immediately while the API is still streaming.
@@ -163,9 +162,7 @@ pub struct StreamingToolExecutor {
     /// Tools see `ctx.app_state` as an `AppStateReadHandle` (no
     /// write method); they return mutations via
     /// `ToolResult::app_state_patch` which we apply here, under a
-    /// single write lock per batch. TS parity:
-    /// `orchestration.ts:queuedContextModifiers` applied after the
-    /// concurrent batch finishes.
+    /// single write lock per batch.
     app_state: Option<Arc<RwLock<coco_types::ToolAppState>>>,
     /// Optional permission-rule mutation handle. Applied at the same
     /// point as `app_state_patch` so rules emitted by a tool
@@ -180,10 +177,9 @@ pub struct StreamingToolExecutor {
 }
 
 /// Resolve the tool concurrency cap from the raw `COCO_MAX_TOOL_USE_CONCURRENCY`
-/// value. TS `getMaxToolUseConcurrency()` uses `parseInt(...) || 10`, so any
-/// falsy result — including `0` — falls back to the default. A `0` here would
-/// build `Semaphore::new(0)` and deadlock every concurrent-safe tool, so we
-/// filter non-positive values out.
+/// value. Any falsy result — including `0` — falls back to the default.
+/// A `0` here would build `Semaphore::new(0)` and deadlock every
+/// concurrent-safe tool, so we filter non-positive values out.
 fn resolve_max_concurrency(raw: Option<String>) -> usize {
     raw.and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -221,8 +217,7 @@ impl StreamingToolExecutor {
     /// Attach a permission-rule mutation handle. Tools that return
     /// `ToolResult::permission_updates` (today: `SkillTool` forwarding
     /// a skill's `allowed-tools` frontmatter) push deltas through this
-    /// handle, mirroring TS `SkillTool.ts`'s `contextModifier` on
-    /// `alwaysAllowRules`. Without this, updates are silently dropped
+    /// handle, for `alwaysAllowRules` updates. Without this, updates are silently dropped
     /// with a `tracing::debug!` (standalone executor / test paths).
     pub fn with_permission_rule_handle(mut self, handle: crate::PermissionRuleHandleRef) -> Self {
         self.permission_rule_handle = Some(handle);
@@ -260,9 +255,7 @@ impl StreamingToolExecutor {
     }
 
     /// Queue a tool for execution. Called as API streams tool_use blocks.
-    ///
-    /// TS: `addTool(block, assistantMessage)` — safe tools start immediately
-    /// if only safe tools are currently running.
+    /// Safe tools start immediately if only safe tools are currently running.
     pub fn add_tool(&mut self, tool_use_id: String, tool: Arc<dyn DynTool>, input: Value) {
         let is_concurrency_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             tool.is_concurrency_safe(&input)
@@ -280,7 +273,6 @@ impl StreamingToolExecutor {
 
     /// Whether a tool with the given safety level can start now.
     ///
-    /// TS: `canExecuteTool(isConcurrencySafe)`:
     /// - Concurrent-safe: can run if no non-safe tools are executing
     /// - Non-safe: can run only if nothing is executing
     #[allow(dead_code)]
@@ -330,9 +322,8 @@ impl StreamingToolExecutor {
     }
 
     /// Abandon all pending tools, generating synthetic errors.
-    ///
-    /// TS: `discard()` — called on streaming fallback when stream fails
-    /// and the engine retries without streaming.
+    /// Called on streaming fallback when stream fails and the engine
+    /// retries without streaming.
     pub fn discard(&mut self) {
         self.discarded = true;
         self.sibling_abort.abort(ToolAbortReasonPayload::SelfAbort {
@@ -470,8 +461,8 @@ impl StreamingToolExecutor {
         }
 
         // Apply queued app_state patch (if any) under a write lock
-        // before returning. This is the serial-tool equivalent of
-        // TS's "`currentContext = update.newContext(currentContext)`"
+        // before returning. This is the serial-tool equivalent of the
+        // "`currentContext = update.newContext(currentContext)`"
         // reassign-between-tools pattern — because serial unsafe
         // tools run one-per-batch, we can apply immediately and the
         // next batch's `create_tool_context` sees the update.
@@ -553,8 +544,7 @@ impl StreamingToolExecutor {
     /// during `execute` — see the `Tool::is_concurrency_safe`
     /// contract. `shared_ctx` is an `Arc<ToolUseContext>` holding the
     /// SAME `Arc<RwLock<ToolAppState>>` as every sibling, so any write
-    /// would be visible mid-batch to the others (vs. TS which queues
-    /// writes until batch-end). Rust relies on convention: concurrent
+    /// would be visible mid-batch to the others. Rust relies on convention: concurrent
     /// tools are read-only (Read/Glob/Grep/LSP). Serial unsafe tools
     /// — the only writers — never hit this path.
     async fn execute_concurrent(
@@ -642,10 +632,9 @@ impl StreamingToolExecutor {
                 }
 
                 // If a shell tool failed, cancel siblings.
-                // TS: only Bash errors trigger sibling abort (StreamingToolExecutor.ts:354-363).
-                // Shell tools (Bash, PowerShell) can leave the system in an inconsistent
-                // state, so we abort siblings. Non-shell tool failures (Read, WebFetch)
-                // are isolated and don't affect siblings.
+                // Only Bash/PowerShell errors trigger sibling abort — these tools
+                // can leave the system in an inconsistent state. Non-shell tool
+                // failures (Read, WebFetch) are isolated and don't affect siblings.
                 if result.is_err()
                     && (tool_name.as_str() == ToolName::Bash.as_str()
                         || tool_name.as_str() == ToolName::PowerShell.as_str())
@@ -714,9 +703,8 @@ impl StreamingToolExecutor {
         // under a single write lock. Concurrent tools by convention
         // don't return patches (they're read-only), but the plumbing
         // exists uniformly so Tool authors don't have to special-case
-        // which path their tool is on. TS parity:
-        // `orchestration.ts:queuedContextModifiers` applied after the
-        // concurrent batch finishes — exact same timing + ordering.
+        // which path their tool is on. Applied after the concurrent batch
+        // finishes — same timing + ordering as `orchestration.ts`.
         //
         // Patches also get stripped here so the returned
         // `ToolCallResult` values don't carry a `FnOnce` across
@@ -768,8 +756,8 @@ impl StreamingToolExecutor {
 
     // -- Phase 4d Scheduler API (plans + callback-driven surfacing) --
     //
-    // `execute_with` is the TS-parity scheduler that the refactor plan
-    // calls for: the runner hands in pre-validated `ToolCallPlan`
+    // `execute_with` is the scheduler the refactor plan calls for:
+    // the runner hands in pre-validated `ToolCallPlan`
     // values and a `run_one` callback, and the executor surfaces each
     // outcome through `on_outcome` the moment it is ready. No
     // pre-allocated result-slot vector — history grows in completion
@@ -787,8 +775,7 @@ impl StreamingToolExecutor {
     ///
     /// - `ToolCallPlan::EarlyOutcome` acts as a single-tool barrier.
     ///   It splits the surrounding `Runnable` plans into separate
-    ///   concurrent-safe batches (TS parity:
-    ///   `toolOrchestration.ts:91-115` where schema-invalid calls have
+    ///   concurrent-safe batches (schema-invalid calls have
     ///   `isConcurrencySafe = false`).
     /// - Within a concurrent-safe batch, runnable plans dispatch
     ///   through a `FuturesUnordered` so a slow earlier tool does not
@@ -797,9 +784,9 @@ impl StreamingToolExecutor {
     ///   immediately with the patch-free `ToolCallOutcome`.
     /// - Within a concurrent-safe batch, queued `app_state_patch`es
     ///   apply post-batch in **model_index** order under one write
-    ///   lock (TS `toolOrchestration.ts:54-62`).
+    ///   lock.
     /// - Serial unsafe plans apply their patch before building the
-    ///   next tool's context (TS `toolOrchestration.ts:130-141`).
+    ///   next tool's context.
     /// - `EarlyOutcome` plans stamp when the partitioner reaches that
     ///   plan's block — not globally before all Runnables — so the
     ///   resulting completion sequence interleaves correctly with
@@ -844,9 +831,9 @@ impl StreamingToolExecutor {
                     let unstamped = run_one(prepared, runtime).await;
                     let (outcome, effects) = unstamped.stamp_and_extract_effects(completion_seq);
                     completion_seq += 1;
-                    // Apply patch BEFORE the next tool's context build
-                    // (TS `toolOrchestration.ts:130-141`). This is the
-                    // serial-tool equivalent of "update.newContext()".
+                    // Apply patch BEFORE the next tool's context build.
+                    // This is the serial-tool equivalent of
+                    // "update.newContext()".
                     self.apply_side_effects(effects).await;
                     on_outcome(outcome);
                     self.emit_interruptibility(false).await;
@@ -886,7 +873,6 @@ impl StreamingToolExecutor {
     /// the same controller via [`make_runtime`](Self::make_runtime)). Shared by
     /// the non-streaming `run_concurrent_batch` and the streaming
     /// `start_safe_now` completion path so both surfaces behave identically.
-    /// TS parity: `StreamingToolExecutor.ts` `siblingAbortController.abort('sibling_error')`.
     /// tool-runtime#8.
     pub(crate) fn abort_siblings_if_shell_error(
         &self,
@@ -947,9 +933,8 @@ impl StreamingToolExecutor {
         }
 
         // Apply queued patches in model_index order under one write
-        // lock — TS `toolOrchestration.ts:54-62`. This mirrors the
-        // legacy `execute_concurrent` post-batch apply but keys on
-        // `model_index` rather than tool_use_id.
+        // lock. This mirrors the legacy `execute_concurrent` post-batch
+        // apply but keys on `model_index` rather than tool_use_id.
         queued_effects.sort_by_key(|(idx, _)| *idx);
         let (patches, update_lists): (Vec<_>, Vec<_>) = queued_effects
             .into_iter()
@@ -987,9 +972,8 @@ impl StreamingToolExecutor {
             return;
         };
         let Some(state) = self.app_state.as_ref() else {
-            // No shared state → drop the patch. TS parity: the
-            // context modifier is never invoked when there's no
-            // context to modify.
+            // No shared state → drop the patch; the context modifier
+            // is never invoked when there's no context to modify.
             return;
         };
         let snapshot = {
@@ -1042,8 +1026,7 @@ pub(crate) fn is_shell_tool_id(tool_id: &ToolId) -> bool {
 /// `ConcurrentSafe` holds one-or-more `Runnable` plans that can run
 /// in parallel; `SerialUnsafe` holds a single non-concurrency-safe
 /// `Runnable`; `EarlyOutcome` passes a pre-built outcome straight to
-/// the stamp path. TS parity: `toolOrchestration.ts:91-115`
-/// `partitionToolCalls` returns the same shape.
+/// the stamp path.
 enum PlanBlock {
     ConcurrentSafe(Vec<PreparedToolCall>),
     SerialUnsafe(PreparedToolCall),
@@ -1052,7 +1035,7 @@ enum PlanBlock {
 
 /// Partition a flat plan list into batches.
 ///
-/// Rules (TS parity):
+/// Rules:
 ///
 /// - `EarlyOutcome` is never concurrency-safe — it ends the preceding
 ///   safe batch and forms its own block.

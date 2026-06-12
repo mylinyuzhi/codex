@@ -33,7 +33,7 @@ async fn emits_with_ts_format() {
         .expect("emits");
     assert_eq!(r.attachment_type, AttachmentType::BudgetUsd);
     let text = r.content().unwrap();
-    // TS template: `USD budget: $3.5/$10; $6.5 remaining`
+    // Expected format: `USD budget: $3.5/$10; $6.5 remaining`
     assert!(text.starts_with("USD budget:"));
     assert!(text.contains("$3.5/$10"));
     assert!(text.contains("$6.5 remaining"));

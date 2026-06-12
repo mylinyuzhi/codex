@@ -1,8 +1,5 @@
 //! MCP client lifecycle management.
 //!
-//! TS: services/mcp/client.ts (117KB) — connection management, tool discovery,
-//! resource listing, transport selection.
-//!
 //! Wraps `coco-rmcp-client::RmcpClient` which provides actual MCP protocol
 //! communication via the `rmcp` SDK (stdio + HTTP/SSE transports, OAuth,
 //! session recovery).
@@ -49,7 +46,7 @@ use crate::types::McpServerConfig;
 use crate::types::McpToolDefinition;
 use crate::types::ScopedMcpServerConfig;
 
-/// Default MCP tool call timeout (ms) — ~27.8 hours like TS.
+/// Default MCP tool call timeout (ms) — ~27.8 hours.
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 100_000_000;
 
 /// Default MCP initialization timeout.
@@ -88,8 +85,7 @@ pub struct McpConnectionManager {
     /// `Arc` so cloned managers (e.g. inside `spawn_reconnect`) share it.
     reconnect_notifier: Arc<std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>>,
     /// 15-min on-disk cache of servers that recently required auth, used to
-    /// skip doomed connect-401 probes within the window (TS
-    /// `mcp-needs-auth-cache.json`).
+    /// skip doomed connect-401 probes within the window.
     auth_cache: crate::auth_cache::McpNeedsAuthCache,
 }
 
@@ -141,7 +137,7 @@ impl McpConnectionManager {
     ///
     /// Also seeds `connections[name] = Pending` so a concurrent
     /// `mcp/status` query before `connect()` runs reports the server
-    /// as `pending` (TS-canonical) rather than `disconnected`.
+    /// as `pending` rather than `disconnected`.
     /// `connect()` overwrites the entry on success / failure.
     ///
     /// Uses `try_write` because:
@@ -235,7 +231,7 @@ impl McpConnectionManager {
                 // failure. Probe runs WITHOUT holding the connections lock (it
                 // does network I/O). `NotLoggedIn` → NeedsAuth so the per-server
                 // authenticate pseudo-tool is surfaced; anything else stays Failed
-                // (retryable). TS `handleRemoteAuthFailure`.
+                // (retryable).
                 let needs_auth = self.probe_needs_auth(server_name, &config.config).await;
                 let state = if needs_auth {
                     McpConnectionState::NeedsAuth { auth_url: None }
@@ -250,7 +246,7 @@ impl McpConnectionManager {
                     .insert(server_name.to_string(), state);
                 if needs_auth {
                     // Cache the 401 so subsequent connect cycles skip the probe
-                    // within the TTL window (TS `setMcpAuthCacheEntry`).
+                    // within the TTL window.
                     self.auth_cache.set(server_name).await;
                 }
                 Err(e)
@@ -259,7 +255,7 @@ impl McpConnectionManager {
     }
 
     /// Whether `server_name` has a recent needs-auth marker still within the
-    /// TTL window (TS `isMcpAuthCached`). Lets bootstrap skip a doomed connect.
+    /// TTL window. Lets bootstrap skip a doomed connect.
     pub async fn is_needs_auth_cached(&self, server_name: &str) -> bool {
         self.auth_cache.is_cached(server_name).await
     }
@@ -270,7 +266,7 @@ impl McpConnectionManager {
     /// credentials. Every other verdict (tokens present but rejected,
     /// bearer-token, unsupported) or a probe error returns `false`, keeping the
     /// original `Failed` classification so transient network faults stay
-    /// retryable. Mirrors TS `handleRemoteAuthFailure` gating.
+    /// retryable.
     async fn probe_needs_auth(&self, server_name: &str, config: &McpServerConfig) -> bool {
         let Some((url, headers, headers_helper)) = oauth_login_target(config) else {
             return false;
@@ -294,13 +290,11 @@ impl McpConnectionManager {
         )
     }
 
-    /// TS `hasMcpDiscoveryButNoToken` (+ XAA guard): an OAuth-capable HTTP/SSE
-    /// server we hold stored OAuth discovery state for but no usable token
-    /// would 401 on connect, so skip the doomed attempt and surface the
-    /// authenticate tool directly. Returns `false` for XAA-configured servers,
-    /// which can silently re-auth from a cached IdP id_token and so must still
-    /// attempt the connect (coco-rs XAA is active whenever configured, so the
-    /// TS `isXaaEnabled()` guard reduces to "xaa present").
+    /// Whether an OAuth-capable HTTP/SSE server has stored discovery state but no
+    /// usable token, meaning a connect attempt would 401. When true, the
+    /// authenticate pseudo-tool is surfaced directly. Returns `false` for
+    /// XAA-configured servers, which can silently re-auth from a cached IdP
+    /// id_token and must still attempt the connect.
     pub fn needs_auth_without_connect(&self, server_name: &str) -> bool {
         let Some(config) = self.configs.get(server_name) else {
             return false;
@@ -486,10 +480,9 @@ impl McpConnectionManager {
             channel_permission: false,
         };
 
-        // Discover resources and prompts when the server advertises them —
-        // mirrors the TS connect fan-out (tools/list + resources/list +
-        // prompts/list). Prompts surface as MCP slash-commands; resources back
-        // the List/Read MCP resource tools.
+        // Discover resources and prompts when the server advertises them
+        // (tools/list + resources/list + prompts/list fan-out). Prompts surface
+        // as MCP slash-commands; resources back the List/Read MCP resource tools.
         let resources = if capabilities.resources {
             fetch_resources(&client, server_name).await
         } else {
@@ -512,9 +505,8 @@ impl McpConnectionManager {
         Ok(ConnectedMcpServer {
             name: server_name.to_string(),
             capabilities,
-            // TS `client.ts:1160-1171` caps server instructions at the same
-            // 2048 limit as tool descriptions (they reach the model via a
-            // <system-reminder>); reuse the single wired truncator.
+            // Server instructions are capped at 2048 chars (same limit as tool
+            // descriptions) because they reach the model via a <system-reminder>.
             instructions: init_result
                 .instructions
                 .map(|s| crate::tool_call::truncate_description(&s)),
@@ -620,8 +612,8 @@ impl McpConnectionManager {
             channel_permission: false,
         };
 
-        // Mirror the rmcp connect fan-out: fetch resources + prompts when the
-        // server advertises them, routing through the SDK control channel.
+        // Fetch resources + prompts when the server advertises them,
+        // routing through the SDK control channel.
         let resources = if capabilities.resources {
             self.fetch_resources_for_sdk(&route, server_name).await
         } else {
@@ -645,9 +637,8 @@ impl McpConnectionManager {
         Ok(ConnectedMcpServer {
             name: server_name.to_string(),
             capabilities,
-            // TS `client.ts:1160-1171` caps server instructions at the same
-            // 2048 limit as tool descriptions (they reach the model via a
-            // <system-reminder>); reuse the single wired truncator.
+            // Server instructions are capped at 2048 chars (same limit as tool
+            // descriptions) because they reach the model via a <system-reminder>.
             instructions: init_result
                 .instructions
                 .map(|s| crate::tool_call::truncate_description(&s)),
@@ -658,7 +649,7 @@ impl McpConnectionManager {
     }
 
     /// List an SDK-hosted server's resources via the control channel,
-    /// mapping into [`McpResource`]. Mirrors [`fetch_resources`] (rmcp path):
+    /// mapping into [`McpResource`]. Parallels [`fetch_resources`] (rmcp path):
     /// a failure is logged and treated as "no resources" — it must not abort
     /// connect.
     async fn fetch_resources_for_sdk(
@@ -700,7 +691,7 @@ impl McpConnectionManager {
     }
 
     /// List an SDK-hosted server's prompts via the control channel, mapping
-    /// into [`McpPrompt`] (surfaced as MCP slash-commands). Mirrors
+    /// into [`McpPrompt`] (surfaced as MCP slash-commands). Parallels
     /// [`fetch_prompts`] (rmcp path); failures are logged and treated as
     /// "no prompts".
     async fn fetch_prompts_for_sdk(
@@ -877,7 +868,7 @@ impl McpConnectionManager {
         let manager = self.clone();
         tokio::spawn(async move {
             // Clear the needs-auth marker first so this reconnect isn't itself
-            // skipped by a concurrent cache check (TS clears before reconnect).
+            // skipped by a concurrent cache check.
             manager.auth_cache.clear(&server_name).await;
             if let Err(error) = manager.connect(&server_name, send_elicitation).await {
                 warn!(server = %server_name, error = %error, "MCP reconnect after auth failed");
@@ -916,7 +907,7 @@ impl McpConnectionManager {
                 return;
             }
             // OAuth succeeded — clear the needs-auth marker before reconnecting
-            // so the attempt proceeds (TS `clearMcpAuthCache`).
+            // so the attempt proceeds.
             manager.auth_cache.clear(&server_name).await;
             if let Err(error) = manager.connect(&server_name, send_elicitation).await {
                 warn!(server = %server_name, error = %error, "MCP reconnect after OAuth login failed");
@@ -1032,8 +1023,7 @@ impl McpConnectionManager {
 }
 
 /// List a connected server's resources, mapping into [`McpResource`].
-/// A failure is logged and treated as "no resources" — it must not abort
-/// connect (TS does the same via `Promise.all` with per-fetch catch).
+/// A failure is logged and treated as "no resources" — it must not abort connect.
 async fn fetch_resources(client: &RmcpClient, server_name: &str) -> Vec<McpResource> {
     match client
         .list_resources(None, Some(DEFAULT_INIT_TIMEOUT))

@@ -2,7 +2,6 @@
 //!
 //! Walks `Message` content parts via [`crate::content_kind`] classifiers
 //! to charge each part at its idiomatic density (Text / Json / Image).
-//! TS: `services/tokenEstimation.ts`.
 //!
 //! ## Entry points
 //!
@@ -50,10 +49,9 @@ pub fn estimate_tokens_for_messages<M: Borrow<Message>>(messages: &[M]) -> i64 {
 
 /// Conservative token estimate: base × 4/3 (~33% padding).
 ///
-/// Matches TS `estimateMessageTokens` padding policy — used by
-/// compaction to ensure the post-compact budget has headroom for the
-/// padded estimate even when the real API charge runs slightly over
-/// the chars/4 baseline.
+/// Used by compaction to ensure the post-compact budget has headroom
+/// for the padded estimate even when the real API charge runs slightly
+/// over the chars/4 baseline.
 pub fn estimate_tokens_for_messages_conservative<M: Borrow<Message>>(messages: &[M]) -> i64 {
     estimate_tokens_for_messages(messages) * 4 / 3
 }

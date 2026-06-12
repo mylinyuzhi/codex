@@ -5,9 +5,6 @@
 //! throttle). The handler emits a sentinel that runners parse and
 //! dispatch to [`coco_memory::MemoryRuntime`].
 //!
-//! TS: `commands/dream` slash command (KAIROS / consolidation force
-//! path).
-//!
 //! Sentinel format (one line):
 //!   `__COCO_DREAM_NOW__\n<status text>`
 //!

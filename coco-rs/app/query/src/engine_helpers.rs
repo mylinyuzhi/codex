@@ -12,9 +12,6 @@
 //! `super::name` (e.g. `ProgressThrottle`, `is_capacity_error_message`,
 //! `classify_progress_payload`). Other modules (`engine_turn_reminders`,
 //! `engine_finalize_turn`) import directly from this module.
-//!
-//! TS parity references stay attached to each item so callers can locate the
-//! mirrored TS source quickly.
 
 use coco_llm_types::ToolResultContent;
 use coco_llm_types::UserContentPart;
@@ -51,8 +48,6 @@ pub(crate) struct StreamingToolCallBuffer {
 /// rest of the error classification already does. Multi-provider boundary
 /// rule (`CLAUDE.md`) forbids the engine from owning Anthropic-specific
 /// keyword matches; this re-export satisfies the rule.
-///
-/// TS parity: `is529Error` + 429 clauses in `services/api/withRetry.ts`.
 pub(crate) fn is_capacity_error_message(msg: &str) -> bool {
     matches!(
         coco_inference::InferenceError::classify_stream_message(msg),
@@ -122,9 +117,8 @@ pub(crate) async fn clear_rate_limit_observation(
 }
 
 /// Announce a model fallback / recovery transition as an inline
-/// stream notice. TS parity: `query.ts:946` writes a system-tagged
-/// line into the transcript so SDK consumers + the TUI see it
-/// alongside the agent's response.
+/// stream notice. Writes a system-tagged line into the transcript so
+/// SDK consumers + the TUI see it alongside the agent's response.
 ///
 /// Templates are direction-aware:
 /// - `CapacityDegrade` → "Switched to {new} due to high demand for {original}."
@@ -189,10 +183,9 @@ pub(crate) fn extract_streaming_result_text(ordered: &[Message]) -> String {
     String::new()
 }
 
-/// Compute the TS-parity `deferred_tools_delta`.
+/// Compute the `deferred_tools_delta`.
 ///
-/// **Three inputs**, mirroring TS `getDeferredToolsDelta`
-/// (`utils/toolSearch.ts:646-706`):
+/// **Three inputs**:
 ///
 ///   - `current_deferred` — names the model can find via `ToolSearch`
 ///     this turn but cannot yet invoke directly.
@@ -253,11 +246,8 @@ pub(crate) fn compute_tools_delta(
 /// Whether the most recent assistant message's total context exceeds
 /// `threshold` tokens.
 ///
-/// TS parity: `utils/tokens.ts:159 doesMostRecentAssistantMessageExceed200k`.
-/// TS hardcodes a 200_000 threshold to bypass the `opusplan → Opus` swap
-/// in plan mode when Opus's smaller context window would truncate.
-/// coco-rs accepts the threshold as a parameter so users can tune it
-/// for their configured plan-role model (set via
+/// Accepts the threshold as a parameter so users can tune it for their
+/// configured plan-role model (set via
 /// `PlanModeSettings.plan_model_fallback_threshold_tokens`).
 ///
 /// The "total context" is the sum of normalized `input_tokens` (all input
@@ -282,10 +272,8 @@ pub(crate) fn most_recent_assistant_exceeds<M: std::borrow::Borrow<Message>>(
 }
 
 /// Extract the raw user-input text from the most-recent non-meta user
-/// message in history. Mirrors TS `getAttachments(input, ...)` where
-/// `input` is the user's prompt string (not a structured message).
-/// Returns `None` when there's no plain-text user message (e.g. the
-/// session opened with a compacted summary).
+/// message in history. Returns `None` when there's no plain-text user
+/// message (e.g. the session opened with a compacted summary).
 pub(crate) fn latest_user_input_text(history: &MessageHistory) -> Option<String> {
     for msg in history.iter().rev() {
         let Message::User(u) = msg.as_ref() else {
@@ -302,13 +290,12 @@ pub(crate) fn latest_user_input_text(history: &MessageHistory) -> Option<String>
     None
 }
 
-/// Compute the TS-parity `mcp_instructions_delta` between the current
-/// server-instruction set and the last-announced set on `ToolAppState`.
+/// Compute the `mcp_instructions_delta` between the current server-instruction
+/// set and the last-announced set on `ToolAppState`.
 ///
-/// TS: `getMcpInstructionsDeltaAttachment` reconstructs the announced
-/// set by scanning prior delta attachments in history; coco-rs
-/// persists the announced map on `app_state.last_announced_mcp_instructions`
-/// so the diff is O(|current ∪ announced|).
+/// The announced map is persisted on
+/// `app_state.last_announced_mcp_instructions` so the diff is
+/// O(|current ∪ announced|).
 pub(crate) fn compute_mcp_instructions_delta(
     current: &HashMap<String, String>,
     last_announced: &HashMap<String, String>,
@@ -339,19 +326,17 @@ pub(crate) fn compute_mcp_instructions_delta(
     })
 }
 
-/// Compute the TS-parity `agent_listing_delta` between the current agent
-/// types and the last-announced set on `ToolAppState`. `is_initial` is
-/// true when no agents have been announced yet (first emission of the
-/// session); that flips the TS "Available agent types" header (vs
-/// "New agent types are now available").
+/// Compute the `agent_listing_delta` between the current agent types and
+/// the last-announced set on `ToolAppState`. `is_initial` is true when no
+/// agents have been announced yet (first emission of the session); that
+/// flips the "Available agent types" header (vs "New agent types are now
+/// available").
 ///
-/// `show_concurrency_note` is unconditionally `true` here. TS gates the
-/// flag on `getSubscriptionType() !== 'pro'` (`attachments.ts:1553`),
-/// an Anthropic-OAuth specific check that has no analog in coco-rs's
-/// multi-provider model. The concurrency hint is informational and
-/// always relevant — the renderer (`agent_listing_delta.rs`) emits it
-/// on every delta, not just the initial one, so the model is reminded
-/// to parallelize when new agents become available.
+/// `show_concurrency_note` is unconditionally `true` here. The concurrency
+/// hint is informational and always relevant — the renderer
+/// (`agent_listing_delta.rs`) emits it on every delta, not just the initial
+/// one, so the model is reminded to parallelize when new agents become
+/// available.
 pub(crate) fn compute_agents_delta(
     current_agents: &[String],
     last_announced: &HashSet<String>,
@@ -385,15 +370,15 @@ pub(crate) fn compute_agents_delta(
 
 /// LRU + time-window throttle for protocol-level tool-progress events.
 ///
-/// TS parity: `utils/queryHelpers.ts:99-188` — one throttle per
-/// `parent_tool_use_id`, ≤1 emission / 30 s, LRU-bound to 100 keys.
+/// One throttle per `parent_tool_use_id`, ≤1 emission / 30 s,
+/// LRU-bound to 100 keys.
 pub(crate) struct ProgressThrottle {
     last_sent: lru::LruCache<String, std::time::Instant>,
     throttle: std::time::Duration,
 }
 
 impl ProgressThrottle {
-    /// Matches TS defaults (30 s window, 100-key LRU).
+    /// Default: 30 s window, 100-key LRU.
     pub(crate) fn new() -> Self {
         let cap = std::num::NonZeroUsize::new(100).unwrap_or(std::num::NonZeroUsize::MIN);
         Self::with_params(std::time::Duration::from_secs(30), cap)
@@ -428,11 +413,10 @@ impl ProgressThrottle {
 }
 
 /// Extract `(tool_name, elapsed_seconds, task_id)` from a
-/// `ToolProgress.data` payload IF it matches a TS-parity
-/// bash/powershell shape. Returns `None` for unrelated payload
-/// types (e.g. agent/skill progress) — those follow different
-/// propagation rules and are not currently surfaced as
-/// `ServerNotification::ToolProgress`.
+/// `ToolProgress.data` payload IF it matches a bash/powershell shape.
+/// Returns `None` for unrelated payload types (e.g. agent/skill
+/// progress) — those follow different propagation rules and are not
+/// currently surfaced as `ServerNotification::ToolProgress`.
 pub(crate) fn classify_progress_payload(
     data: &serde_json::Value,
 ) -> Option<(&'static str, f64, Option<String>)> {
@@ -475,7 +459,7 @@ pub(crate) async fn drain_one_progress(
     .await;
 
     // Fan-out #2: protocol ToolProgress. Only bash/powershell
-    // progress qualifies (TS `queryHelpers.ts:158-199`).
+    // progress qualifies.
     let Some((tool_name, elapsed, task_id)) = classify_progress_payload(&progress.data) else {
         return;
     };

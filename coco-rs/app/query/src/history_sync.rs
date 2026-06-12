@@ -253,7 +253,7 @@ pub async fn history_replace_and_emit(
 ///
 /// Dedup: returns early if the last history entry is already a
 /// `UserInterruption` (or legacy text-form marker from a resumed
-/// transcript). Mirrors the TS idempotent contract in `query.ts:1015-1052`.
+/// transcript). Idempotent: double-cancel does not produce a duplicate marker.
 pub async fn finalize_user_cancel(
     history: &mut MessageHistory,
     in_flight_tool_calls: bool,

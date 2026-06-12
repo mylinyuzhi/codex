@@ -39,7 +39,7 @@ fn empty_activities_returns_none() {
 fn single_search_activity_uses_tool_name_fallback() {
     let activities = vec![act("Grep")];
     // One trailing search isn't enough for the collapse threshold (>=2);
-    // TS falls back to the activity's description, we fall back to name.
+    // falls back to the activity's tool name.
     assert_eq!(summarize_trailing(&activities), Some("Grep".to_string()));
 }
 
@@ -63,9 +63,8 @@ fn search_then_read_emits_both_segments() {
 
 #[test]
 fn fallback_prefers_summary_over_tool_name() {
-    // TS `collapseReadSearch.ts:1101-1107` walks backward for the
-    // first activity with `activityDescription`. Our `summary` is
-    // the analog; when present it must beat the raw tool name.
+    // Walks backward for the first activity with a `summary`; when
+    // present it must beat the raw tool name.
     let activities = vec![act_with_summary("Bash", "git log -5")];
     assert_eq!(
         summarize_trailing(&activities),
@@ -75,9 +74,8 @@ fn fallback_prefers_summary_over_tool_name() {
 
 #[test]
 fn fallback_walks_backward_for_summary() {
-    // Two activities, only the older one has a summary. TS walks
-    // from the tail; first match wins. Our impl mirrors that, so
-    // the result is the older summary (no other candidates).
+    // Two activities, only the older one has a summary. Walks from the
+    // tail; first match wins, so the result is the older summary.
     let activities = vec![act_with_summary("Bash", "cargo test"), act("Edit")];
     assert_eq!(
         summarize_trailing(&activities),

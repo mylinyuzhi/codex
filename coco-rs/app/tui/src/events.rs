@@ -54,7 +54,6 @@ pub enum TuiEvent {
     // ── Permission events ──
     /// Background classifier approved a pending permission request.
     ///
-    /// TS: interactiveHandler.ts races classifier with user input.
     /// When the classifier approves before the user responds, auto-dismiss
     /// the state with this event.
     ClassifierApproved {
@@ -172,7 +171,6 @@ pub enum TuiCommand {
     /// permission dialog directly.
     PermissionDigit(usize),
     /// Classifier auto-approved a pending permission.
-    /// TS: interactiveHandler.ts onAllow from classifier path.
     ClassifierAutoApprove {
         request_id: String,
         matched_rule: Option<String>,
@@ -212,13 +210,12 @@ pub enum TuiCommand {
     ShowQuickOpen,
     /// Show export dialog.
     ShowExport,
-    /// Show rewind state (message selector).
-    /// TS: triggered by double-Esc or /rewind command.
+    /// Show rewind state (message selector). Triggered by double-Esc
+    /// or `/rewind` command.
     ShowRewind,
-    /// Open the rewind state pre-anchored to a specific message,
-    /// jumping straight to the RestoreOptions confirm screen. TS:
-    /// `preselectedMessage` flow (`MessageSelector.tsx:42-44`). Used
-    /// by message-actions `edit` and by the non-lossless branch of
+    /// Open the rewind state pre-anchored to a specific message, jumping
+    /// straight to the RestoreOptions confirm screen. Used by
+    /// message-actions `edit` and by the non-lossless branch of
     /// auto-restore-on-interrupt.
     ///
     /// `target_uuid` is the parsed user-message UUID. The slash route
@@ -233,8 +230,7 @@ pub enum TuiCommand {
     ToggleSyntaxHighlighting,
     /// Tab: cycle Settings tab forward (Settings state) OR cycle
     /// question/footer focus (Question state). Handler in update.rs
-    /// dispatches per-state. TS Question parity:
-    /// `handleTabNext` in `AskUserQuestionPermissionRequest.tsx`.
+    /// dispatches per-state.
     SettingsNextTab,
     /// Shift+Tab variant of [`SettingsNextTab`].
     SettingsPrevTab,
@@ -248,40 +244,37 @@ pub enum TuiCommand {
     SurfaceNext,
     /// Select previous item in state list.
     SurfacePrev,
-    /// Jump selection to the first item in the state list. TS:
-    /// `messageSelector:top` (`Home` / `Shift+Up` / `Meta+Up` / `Shift+K`).
+    /// Jump selection to the first item in the state list
+    /// (`Home` / `Shift+Up` / `Meta+Up` / `Shift+K`).
     SurfaceJumpStart,
-    /// Jump selection to the last item in the state list. TS:
-    /// `messageSelector:bottom` (`End` / `Shift+Down` / `Meta+Down` / `Shift+J`).
+    /// Jump selection to the last item in the state list
+    /// (`End` / `Shift+Down` / `Meta+Down` / `Shift+J`).
     SurfaceJumpEnd,
     /// Confirm selection in state.
     SurfaceConfirm,
     /// CopyPicker-only shortcut: write the focused selection to the
-    /// fallback temp file without touching the clipboard. TS:
-    /// `CopyPicker.handleWrite` bound to `w`.
+    /// fallback temp file without touching the clipboard. Bound to `w`.
     CopyPickerWriteToFile,
     /// Cycle thinking effort in the ModelPicker state by `delta`.
     /// Bound to Left/Right via `modelPicker:decreaseEffort` /
     /// `modelPicker:increaseEffort`. Distinct from `SurfacePrev/Next`
     /// (Up/Down) because the picker has two orthogonal cursors —
-    /// model row and effort level — TS solves this with the same
-    /// `←/→` axis (`useEffortNavigation`).
+    /// model row and effort level.
     ModelPickerCycleEffort(i32),
     /// Cycle the configured role in the ModelPicker state by `delta`.
-    /// Tab → +1, Shift+Tab → -1. coco-rs-only extension to the TS
-    /// picker (TS only ever drives the `main` model).
+    /// Tab → +1, Shift+Tab → -1.
     ModelPickerCycleRole(i32),
     /// Switch the focused question in the AskUserQuestion prompt by `delta`
     /// (Left → -1, Right → +1), wrapping among questions only (NOT the footer
-    /// actions, which stay on Tab). Mirrors codex `move_question` (←/→/h/l).
+    /// actions, which stay on Tab).
     QuestionSwitchQuestion(i32),
     /// Cycle the FOCUSED teammate's mode in the TeamRoster picker by `delta`
-    /// (Left/Right) and apply it immediately (TS: cycling persists). gap 8.
+    /// (Left/Right) and apply it immediately (cycling persists). gap 8.
     TeamRosterCycleMode(i32),
     /// Cycle ALL teammates' modes in tandem by `delta` (Shift+Left/Right) and
-    /// apply immediately. Mirrors TS `cycleAllTeammateModes`: if the members'
-    /// modes diverge, normalise all to `Default`; otherwise advance all by
-    /// `delta`. One atomic `team.json` write + per-teammate mailbox notify.
+    /// apply immediately. If the members' modes diverge, normalise all to
+    /// `Default`; otherwise advance all by `delta`. One atomic `team.json`
+    /// write + per-teammate mailbox notify.
     TeamRosterCycleAllModes(i32),
 
     // ── Task management ──
@@ -305,14 +298,13 @@ pub enum TuiCommand {
     ToggleSystemReminders,
     /// Toggle the permission-prompt risk-explainer panel (Ctrl+E). Lazily
     /// fetches the LLM explanation on first open. No-op unless a permission
-    /// prompt is active. TS: `confirm:toggleExplanation`.
+    /// prompt is active.
     TogglePermissionExplanation,
 
     // ── Clipboard ──
     /// Paste from clipboard (image first, text fallback).
     PasteFromClipboard,
     /// Copy the last agent response to the system clipboard (Ctrl+O / /copy).
-    /// Mirrors codex-rs's `ChatWidget::copy_last_agent_markdown`.
     CopyLastMessage,
 
     // ── Application ──
@@ -332,24 +324,17 @@ pub enum TuiCommand {
     RequestExit,
 
     // ── Stash ──
-    /// Push to / pop from the input-draft stash slot. TS
-    /// `chat:stash` semantics from
-    /// `PromptInput.tsx::handleStash`: empty input + stash present
-    /// → pop; non-empty input → push (overwrites).
+    /// Push to / pop from the input-draft stash slot. Empty input + stash
+    /// present → pop; non-empty input → push (overwrites).
     StashInputDraft,
 
     // ── Expanded view ──
     /// Cycle the right-rail `expanded_view` between `None`, `Tasks`,
-    /// and (when teammates are running) `Teammates`. TS
-    /// `app:toggleTodos` (`useGlobalKeybindings.tsx::handleToggleTodos`).
+    /// and (when teammates are running) `Teammates`.
     ToggleExpandedTasksView,
-    /// Toggle whether teammate spinner lines show recent message
-    /// preview text. TS `app:toggleTeammatePreview`
-    /// (`AppStateStore.ts::showTeammateMessagePreview`).
+    /// Toggle whether teammate spinner lines show recent message preview text.
     ToggleTeammateMessagePreview,
-    /// Open / close the transcript state. TS `app:toggleTranscript`
-    /// (`useGlobalKeybindings.tsx::handleToggleTranscript`) — verbose,
-    /// scrollable, all-messages view.
+    /// Open / close the transcript state — verbose, scrollable, all-messages view.
     ToggleTranscript,
     /// Select next expandable transcript cell.
     TranscriptSelectNext,

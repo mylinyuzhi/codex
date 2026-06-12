@@ -65,7 +65,7 @@ fn coverage_distribution_matches_readme_snapshot() {
             Coverage::RuntimeBookkeeping { .. } => runtime += 1,
         }
     }
-    // Snapshot after TS-parity reminder split (May 2026): skill_discovery
+    // Snapshot after reminder split (May 2026): skill_discovery
     // is the only audit-add kind owned by the model-visible reminder path;
     // API-hidden audit-add kinds are typed silent events or inactive runtime
     // bookkeeping.

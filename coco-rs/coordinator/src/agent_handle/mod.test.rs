@@ -670,7 +670,7 @@ impl coco_tool_runtime::SideQuery for StubSideQuery {
 #[tokio::test]
 async fn test_classifier_passes_through_when_side_query_unconfigured() {
     // Without a SideQuery installed the classifier degrades to a
-    // pass-through (fail-open). TS parity: an unconfigured classifier
+    // pass-through (fail-open): an unconfigured classifier
     // is a no-op rather than a hard fail.
     let handle = create_test_handle();
     let qr = coco_tool_runtime::AgentQueryResult {
@@ -690,8 +690,8 @@ async fn test_classifier_passes_through_when_side_query_unconfigured() {
 
 /// A minimal `messages` vec that yields a non-empty handoff transcript
 /// so the transcript-gate in `classify_handoff_inline` runs the
-/// classifier. TS parity (`agentToolUtils.ts:411-412`): classification
-/// gates on a non-empty transcript, not on agent type or tool count.
+/// classifier. Classification gates on a non-empty transcript, not on
+/// agent type or tool count.
 fn messages_with_transcript() -> Vec<Arc<coco_types::messages::Message>> {
     use coco_types::messages::{Message, UserMessage};
     vec![Arc::new(Message::User(UserMessage {
@@ -709,9 +709,9 @@ fn messages_with_transcript() -> Vec<Arc<coco_types::messages::Message>> {
 
 #[tokio::test]
 async fn test_classifier_skips_on_empty_transcript() {
-    // An empty transcript skips classification (TS `if (!agentTranscript)
-    // return null`). #113: this is NOT a read-only exemption — read-only
-    // agents WITH a transcript are now classified (see test below).
+    // An empty transcript skips classification (#113: this is NOT a
+    // read-only exemption — read-only agents WITH a transcript are now
+    // classified (see test below)).
     let mut handle = create_test_handle();
     handle.set_side_query(Arc::new(StubSideQuery {
         responses: tokio::sync::Mutex::new(Vec::new()), // would error if called
@@ -731,12 +731,12 @@ async fn test_classifier_skips_on_empty_transcript() {
 
 #[tokio::test]
 async fn test_classifier_skips_in_non_auto_mode() {
-    // TS `agentToolUtils.ts:404-405`: classification runs only in `auto`
-    // permission mode. In `default` / `acceptEdits` the classifier must
-    // NOT fire — no LLM side-query, no `SECURITY` rewrite — even with a
-    // non-empty transcript. The StubSideQuery has no canned responses, so
-    // if the gate were missing the query call would error; instead the
-    // sub-agent's output passes through unchanged.
+    // Classification runs only in `auto` permission mode. In `default` /
+    // `acceptEdits` the classifier must NOT fire — no LLM side-query, no
+    // `SECURITY` rewrite — even with a non-empty transcript. The
+    // StubSideQuery has no canned responses, so if the gate were missing
+    // the query call would error; instead the sub-agent's output passes
+    // through unchanged.
     let mut handle = create_test_handle();
     handle.set_side_query(Arc::new(StubSideQuery {
         responses: tokio::sync::Mutex::new(Vec::new()), // would error if queried
@@ -762,9 +762,9 @@ async fn test_classifier_skips_in_non_auto_mode() {
 
 #[tokio::test]
 async fn test_classifier_runs_for_read_only_agent_with_transcript() {
-    // #113: TS does not exempt read-only agents. With a non-empty
-    // transcript, `Explore` is classified like any other agent — a
-    // BLOCKED verdict surfaces the SECURITY payload.
+    // #113: read-only agents are not exempt. With a non-empty transcript,
+    // `Explore` is classified like any other agent — a BLOCKED verdict
+    // surfaces the SECURITY payload.
     let mut handle = create_test_handle();
     handle.set_side_query(Arc::new(StubSideQuery {
         responses: tokio::sync::Mutex::new(vec![
@@ -792,7 +792,7 @@ async fn test_classifier_runs_for_read_only_agent_with_transcript() {
 async fn test_classifier_unavailable_prepends_warning() {
     // #120: when the classifier errors (unavailable), fail open but
     // prepend the UNAVAILABLE_WARNING to the sub-agent's output so the
-    // parent verifies the work (TS agentToolUtils.ts:464-469).
+    // parent verifies the work.
     let mut handle = create_test_handle();
     handle.set_side_query(Arc::new(StubSideQuery {
         responses: tokio::sync::Mutex::new(Vec::new()), // empty → query errors
@@ -994,9 +994,9 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
     // spawn flow must thread `request.mode` (parsed to PermissionMode)
     // into the classifier so a non-`auto` mode skips classification.
     // The StubSideQuery has no canned responses, so if the gate were
-    // bypassed (mode dropped or forced to auto) the classifier query
-    // would error and prepend UNAVAILABLE_WARNING; instead the child's
-    // output passes through unchanged.
+    // bypassed the classifier query would error and prepend
+    // UNAVAILABLE_WARNING; instead the child's output passes through
+    // unchanged.
     use async_trait::async_trait;
     use coco_tool_runtime::AgentQueryConfig;
     use coco_tool_runtime::AgentQueryEngine;
@@ -1150,9 +1150,9 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
 /// engine is still running, the spawn caller must return
 /// `AsyncLaunched` immediately while the engine task keeps running
 /// in the background and eventually pushes a `<task-notification>`
-/// envelope via `mark_completed`. This is the TS-parity "detach but
-/// keep running" behavior — superior to the W6.2-half behavior
-/// (which used to terminate the engine on detach).
+/// envelope via `mark_completed`. This is the "detach but keep
+/// running" behavior — superior to the W6.2-half behavior (which
+/// used to terminate the engine on detach).
 ///
 /// Uses an inline mock `AgentTaskRegistry` instead of the real
 /// `coco_cli::TaskRuntime` because coordinator can't depend on
@@ -1553,11 +1553,10 @@ async fn test_query_team_agent_without_local_task_reports_not_controllable() {
 async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
     // Regression: the Fresh branch of spawn_subagent used to seed
     // `AgentQueryConfig.system_prompt` with `String::new()`, dropping
-    // the agent's role instructions. TS `runAgent.ts` calls
-    // `agentDefinition.getSystemPrompt(...)` to build the prompt; the
-    // Rust analogue is `AgentDefinition.system_prompt`. This test
-    // installs a stub engine that captures the AgentQueryConfig and
-    // asserts the definition's system_prompt body is present.
+    // the agent's role instructions. The Rust analogue of the role
+    // prompt is `AgentDefinition.system_prompt`. This test installs a
+    // stub engine that captures the AgentQueryConfig and asserts the
+    // definition's system_prompt body is present.
     use async_trait::async_trait;
     use coco_tool_runtime::AgentQueryConfig;
     use coco_tool_runtime::AgentQueryEngine;
@@ -1622,7 +1621,6 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
     // silently dropping a custom agent's `tools:` allow-list so a
     // read-restricted agent ran with the parent's full tool surface.
     // The `Explicit` list must now be threaded into the child filter.
-    // TS parity: `agentToolUtils.ts::resolveAgentTools`.
     use async_trait::async_trait;
     use coco_tool_runtime::AgentQueryConfig;
     use coco_tool_runtime::AgentQueryEngine;
@@ -1689,11 +1687,11 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
 
 #[tokio::test]
 async fn test_spawn_subagent_applies_universal_tool_block() {
-    // TS `filterToolsForAgent` denies ALL_AGENT_DISALLOWED_TOOLS for every
+    // Universal subagent block denies ALL_AGENT_DISALLOWED_TOOLS for every
     // spawned subagent BEFORE the allow-list, so a wildcard (default) agent
-    // cannot spawn nested agents, prompt the user, or stop tasks. coco
+    // cannot spawn nested agents, prompt the user, or stop tasks. Coco
     // enforces this via the child ToolFilter's disallowed set. ExitPlanMode
-    // is re-admitted in plan mode (TS bypass).
+    // is re-admitted in plan mode.
     use async_trait::async_trait;
     use coco_tool_runtime::AgentQueryConfig;
     use coco_tool_runtime::AgentQueryEngine;
@@ -2230,8 +2228,7 @@ async fn test_spawn_subagent_validation_failure_does_not_leak_state() {
 async fn test_subagent_start_hook_injects_additional_context() {
     // SubagentStart hook fires before engine.execute_query and
     // additional_contexts are prepended to the prompt as
-    // <hook-additional-context> blocks. TS parity:
-    // runAgent.ts:530-555.
+    // <hook-additional-context> blocks.
     use async_trait::async_trait;
     use coco_tool_runtime::AgentQueryConfig;
     use coco_tool_runtime::AgentQueryEngine;
@@ -2448,8 +2445,6 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
 /// Pre-fix, spawn.rs called `build_fork_context` but threw away
 /// `ctx.directive` and sent `request.prompt` verbatim — recursion
 /// guard could never trigger.
-///
-/// TS parity: `forkSubagent.ts::buildChildMessage`.
 #[tokio::test]
 async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
     use async_trait::async_trait;
@@ -2592,10 +2587,8 @@ fn team_tasks_dir(team_name: &str) -> std::path::PathBuf {
 
 #[tokio::test]
 async fn test_delete_team_notifies_task_list_subscriber_on_success() {
-    // TS parity: `cleanupTeamDirectories` fires `notifyTasksUpdated()`
-    // inside the `rm(tasksDir)` `try`. After deleting the team (and its
-    // task-list dir), a subscriber on the wired task-list store must
-    // observe the change notification.
+    // After deleting the team (and its task-list dir), a subscriber on
+    // the wired task-list store must observe the change notification.
     let mut handle = create_test_handle();
     let team_name = format!("agentteam-notify-{}", uuid::Uuid::new_v4().simple());
     let _ = crate::team_file::cleanup_team_directories(&team_name);
@@ -2650,9 +2643,8 @@ fn unix_dir_perms_enforced() -> bool {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_delete_team_does_not_notify_when_tasks_dir_removal_fails() {
-    // TS parity: the `catch` path of `rm(tasksDir)` does NOT notify. Force
-    // the removal to fail (non-empty dir with no write permission → its
-    // child can't be unlinked) and assert no notification fires.
+    // Force the removal to fail (non-empty dir with no write permission →
+    // its child can't be unlinked) and assert no notification fires.
     use std::os::unix::fs::PermissionsExt;
 
     // Privileged environments (root / CAP_DAC_OVERRIDE) bypass the 0o500

@@ -2,22 +2,9 @@
 
 Plugin system: PLUGIN.toml manifests, bundled/user/project/repository sources, contribution discovery (skills / hooks / MCP servers / agents / commands), enable/disable, marketplace, hot-reload, MCPB (MCP Bundle) loading.
 
-## TS Source
-- `plugins/builtinPlugins.ts`, `plugins/bundled/` — compiled-in builtins
-- `services/plugins/PluginInstallationManager.ts`, `pluginCliCommands.ts`, `pluginOperations.ts` — lifecycle
-- `utils/plugins/pluginLoader.ts`, `installedPluginsManager.ts`, `refresh.ts`, `reconciler.ts` — load/reconcile
-- `utils/plugins/marketplaceManager.ts`, `marketplaceHelpers.ts`, `officialMarketplace.ts`, `officialMarketplaceStartupCheck.ts`, `officialMarketplaceGcs.ts`, `parseMarketplaceInput.ts` — marketplace
-- `utils/plugins/dependencyResolver.ts` — DFS transitive closure + scope demotion
-- `utils/plugins/pluginPolicy.ts`, `pluginBlocklist.ts`, `pluginFlagging.ts`, `validatePlugin.ts` — security/policy
-- `utils/plugins/mcpbHandler.ts`, `zipCache.ts`, `zipCacheAdapters.ts` — MCPB + cache
-- `utils/plugins/loadPluginAgents.ts`, `loadPluginCommands.ts`, `loadPluginHooks.ts`, `loadPluginOutputStyles.ts`, `mcpPluginIntegration.ts`, `lspPluginIntegration.ts` — contribution loaders
-- `utils/plugins/headlessPluginInstall.ts`, `pluginAutoupdate.ts`, `pluginStartupCheck.ts`, `performStartupChecks.tsx` — headless/CCR + startup
-- `utils/plugins/schemas.ts`, `pluginVersioning.ts`, `pluginIdentifier.ts`, `pluginDirectories.ts`, `walkPluginMarkdown.ts` — support
-
-
 ## Key Types
 
-The loader is **single-tier V2** — TS `loadAllPlugins`. There is no legacy
+The loader is **single-tier V2** — no legacy
 name-keyed `PluginManager`; the active set is computed fresh each load and the
 contribution bridges register from it.
 

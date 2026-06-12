@@ -14,18 +14,18 @@ use coco_paths::ProjectPaths;
 
 /// `~/.coco/sessions` — legacy flat session directory.
 ///
-/// **DEPRECATED** for new code. The TS-aligned layout puts session
-/// files under `~/.coco/projects/{sanitized_cwd}/{session_id}.jsonl`
-/// — use [`project_paths`] to construct paths in the new layout.
+/// **DEPRECATED** for new code. The current layout puts session files
+/// under `~/.coco/projects/{sanitized_cwd}/{session_id}.jsonl` — use
+/// [`project_paths`] to construct paths in the new layout.
 ///
 /// This function is retained until every consumer migrates to
-/// `ProjectPaths`. TODO(parity): remove once the migration in
+/// `ProjectPaths`. TODO: remove once the migration in
 /// `docs/coco-rs/session-projects-migration.md` is complete.
 pub fn sessions_dir() -> PathBuf {
     global_config::config_home().join("sessions")
 }
 
-/// Build the TS-aligned [`ProjectPaths`] for `cwd`.
+/// Build [`ProjectPaths`] for `cwd`.
 ///
 /// Returns an `Arc<ProjectPaths>` so callers can cheaply share one
 /// instance across subsystems (transcript store, memory store,
@@ -43,10 +43,8 @@ pub fn project_paths(cwd: &Path) -> Arc<ProjectPaths> {
 
 /// `~/.coco/output-styles` — user-scope output style markdown dir.
 ///
-/// TS-parity: TS reads `~/.claude/output-styles`; coco-rs uses
-/// `~/.coco/output-styles` to match the rest of the namespace
-/// (`~/.coco/skills`, `~/.coco/agents`). [`OutputStyleManagerBuilder`]
-/// also honors managed and project sources — see [`output_style_dirs`].
+/// [`OutputStyleManagerBuilder`] also honors managed and project sources
+/// — see [`output_style_dirs`].
 ///
 /// [`OutputStyleManagerBuilder`]: coco_output_styles::manager::OutputStyleManagerBuilder
 /// [`output_style_dirs`]: self::output_style_dirs
@@ -59,8 +57,7 @@ pub fn project_output_style_dir(cwd: &Path) -> PathBuf {
     cwd.join(".coco").join("output-styles")
 }
 
-/// Project output-style dirs from most-specific to least-specific,
-/// matching TS `getProjectDirsUpToHome('output-styles', cwd)`.
+/// Project output-style dirs from most-specific to least-specific.
 ///
 /// The walk starts at `cwd`, checks each `.coco/output-styles`
 /// directory, and stops after the git root when inside a repository; if
@@ -73,10 +70,6 @@ pub fn project_output_style_dirs(cwd: &Path) -> Vec<PathBuf> {
 
 /// Cross-platform managed/policy directory for output styles. Mirrors
 /// [`coco_skills::get_managed_skills_path`] but for `output-styles`.
-///
-/// TS reads from `getManagedFilePath()/.claude/output-styles`; coco-rs
-/// uses the platform CoCo managed-settings root with `output-styles/`
-/// beside `managed-settings.json`.
 pub fn managed_output_style_dir() -> PathBuf {
     global_config::managed_settings_path()
         .parent()
@@ -84,7 +77,7 @@ pub fn managed_output_style_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/etc/coco/output-styles"))
 }
 
-/// Directory list for output styles in TS-parity priority order
+/// Directory list for output styles in priority order
 /// (lowest to highest): user → project → managed.
 ///
 /// Returned for the SDK `available_output_styles` `discover_*` legacy
@@ -100,19 +93,15 @@ pub fn output_style_dirs(cwd: &Path) -> Vec<PathBuf> {
 }
 
 /// Standard CLI agent search paths: `~/.coco/agents` (user) plus
-/// `<cwd>/.coco/agents` (project). Mirrors TS `agentDirs` from
-/// `tools/AgentTool/loadAgentsDir.ts` discovery roots and the legacy
-/// `agent_spawn::get_agent_dirs` shape we replaced.
+/// `<cwd>/.coco/agents` (project).
 ///
-/// **Worktree fallback** (TS parity:
-/// `utils/markdownConfigLoader.ts:307-330`): when `cwd` resolves into
-/// a linked git worktree whose `.coco/agents/` is empty (or not
-/// checked out), we additionally search the canonical (main) repo's
-/// `.coco/agents/`. The fallback only fires when the canonical root
-/// differs from the worktree's git root **and** the worktree dir is
-/// missing — a `git worktree add` checks out the full tree, so the
-/// shared case (worktree already has the same agent files) skips the
-/// fallback to keep precedence stable.
+/// **Worktree fallback**: when `cwd` resolves into a linked git worktree
+/// whose `.coco/agents/` is empty (or not checked out), we additionally
+/// search the canonical (main) repo's `.coco/agents/`. The fallback only
+/// fires when the canonical root differs from the worktree's git root
+/// **and** the worktree dir is missing — a `git worktree add` checks out
+/// the full tree, so the shared case (worktree already has the same agent
+/// files) skips the fallback to keep precedence stable.
 pub fn standard_agent_search_paths(
     config_home: &Path,
     cwd: &Path,

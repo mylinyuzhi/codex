@@ -131,7 +131,7 @@ pub struct AnthropicConfig {
     /// as `account_kind`. When the user's overage status flips
     /// mid-session, the session reload path rebuilds `RuntimeConfig`
     /// and the next provider construction picks up the new value; the
-    /// in-flight `OnceLock` keeps the pre-flip latch (TS parity).
+    /// in-flight `OnceLock` keeps the pre-flip latch.
     pub in_overage: bool,
 }
 

@@ -143,8 +143,8 @@ pub struct QueryParams {
 }
 
 /// Sleep for `delay`, returning `Err(())` immediately if `cancel` fires so a
-/// user interrupt doesn't wait out a long capacity backoff (TS `sleep(ms,
-/// signal)`). With no token it is a plain sleep.
+/// user interrupt doesn't wait out a long capacity backoff.
+/// With no token it is a plain sleep.
 async fn sleep_or_cancel(
     delay: std::time::Duration,
     cancel: Option<&tokio_util::sync::CancellationToken>,
@@ -414,8 +414,8 @@ impl ApiClient {
     /// Whether this provider/model pair supports Anthropic-style prompt
     /// cache markers.
     ///
-    /// Mirrors TS's two-axis gate: provider family must support the wire
-    /// shape, and the resolved model must declare prompt-cache capability.
+    /// Two-axis gate: provider family must support the wire shape, and the
+    /// resolved model must declare prompt-cache capability.
     /// `None` model info is reserved for tests/mocks, where we stay
     /// permissive so call-shape tests can exercise the path.
     #[must_use]
@@ -494,10 +494,9 @@ impl ApiClient {
         }
 
         loop {
-            // TS `withRetry.ts:190` checks `signal?.aborted` at the top of every
-            // attempt: a token tripped before the first request — or while a slow
-            // request is in flight — is honored immediately, not only at the next
-            // backoff sleep (`sleep_or_cancel`).
+            // Check cancellation at the top of every attempt: a token tripped before
+            // the first request — or while a slow request is in flight — is honored
+            // immediately, not only at the next backoff sleep (`sleep_or_cancel`).
             if let Some(token) = params.cancel.as_ref()
                 && token.is_cancelled()
             {
@@ -725,8 +724,7 @@ impl ApiClient {
         let mut attempt = 0;
         let mut auth_refreshed = false;
         let result = loop {
-            // Top-of-attempt cancel check (TS `withRetry.ts:190`), mirroring the
-            // blocking `query()` loop.
+            // Top-of-attempt cancel check, mirroring the blocking `query()` loop.
             if let Some(token) = params.cancel.as_ref()
                 && token.is_cancelled()
             {
@@ -797,7 +795,6 @@ impl ApiClient {
     /// The variant is chosen by HTTP status so `is_retryable()` is correct —
     /// transient 429 / 5xx / timeout / connection errors become retryable
     /// variants that the blocking + streaming backoff loops actually retry.
-    /// Mirrors `vercel_ai::wrap_gateway_error` plus TS `withRetry::shouldRetry`.
     fn wrap_provider_error(&self, e: vercel_ai_provider::AISdkError) -> InferenceError {
         // Recover the HTTP status + retryability hint from the boxed
         // `APICallError` cause (the adapter preserves them there).

@@ -6,8 +6,7 @@
 //! turn, stores the results on `GeneratorContext`, and generators read them
 //! synchronously.
 //!
-//! **TS-first semantics** (`getTodoReminderTurnCounts` at
-//! `attachments.ts:3212-3264`):
+//! Counting semantics:
 //!
 //! - Iterate messages backwards (newest first).
 //! - "Assistant turns" exclude thinking-only messages (all-reasoning blocks).
@@ -27,10 +26,9 @@ use coco_types::ToolName;
 
 /// Task tools whose **invocation resets the task-reminder silence counter**.
 ///
-/// Matches TS `getTaskReminderTurnCounts` (`attachments.ts:3345-3348`), which
-/// treats only `TASK_CREATE_TOOL_NAME` / `TASK_UPDATE_TOOL_NAME` as "task
-/// management activity". Read-only tools (`TaskGet`/`List`/`Stop`/`Output`)
-/// don't count — using them does not acknowledge new or updated work.
+/// Only `TaskCreate` / `TaskUpdate` are treated as "task management activity".
+/// Read-only tools (`TaskGet`/`List`/`Stop`/`Output`) don't count — using
+/// them does not acknowledge new or updated work.
 ///
 /// Callers use this constant instead of a hand-rolled array so adding a new
 /// mutation tool in [`ToolName`] flows through automatically.
@@ -42,7 +40,7 @@ pub const TASK_MANAGEMENT_TOOLS: &[ToolName] = &[ToolName::TaskCreate, ToolName:
 /// Returns the count of assistant turns *before* the matching tool use
 /// (i.e. if the very last assistant turn invoked the tool, returns 0).
 ///
-/// Skips thinking-only messages — matches TS `isThinkingMessage` skip.
+/// Skips thinking-only messages (all-reasoning content blocks).
 ///
 /// If the tool is never found, returns the total number of assistant turns
 /// in `messages` (capped at `i32::MAX`). Callers treat this as "infinitely
@@ -90,8 +88,8 @@ pub fn total_assistant_turns<M: Borrow<Message>>(messages: &[M]) -> i32 {
 ///
 /// This is the canonical `turn_number` to feed
 /// [`crate::SystemReminderOrchestrator::generate_all`] so plan-mode /
-/// auto-mode throttle cadence matches TS exactly (TS counts human turns,
-/// not LLM iterations — `attachments.ts:getPlanModeAttachmentTurnCount`).
+/// auto-mode throttle cadence is correct: human turns are counted, not LLM
+/// iterations.
 ///
 /// Tool-result rounds within one human turn do NOT advance the counter
 /// because they aren't new `User` messages — each tool-call iteration
@@ -110,16 +108,13 @@ pub fn count_human_turns<M: Borrow<Message>>(messages: &[M]) -> i32 {
 
 /// Count human turns since the most recent attachment of `kind`.
 ///
-/// TS parity for `getVerifyPlanReminderTurnCount`: scan backwards, count
-/// human turns, stop at the marker attachment. If the marker is absent,
-/// return 0 so reminder logic stays disarmed.
+/// Scans backwards, counts human turns, stops at the marker attachment. If
+/// the marker is absent, returns 0 so reminder logic stays disarmed.
 ///
-/// Like [`count_human_turns`], this counts every `Message::User` and
-/// relies on the post-Phase-2 invariant that reminder-injected content is
-/// `Message::Attachment` and tool results are `Message::ToolResult` — so
-/// each `Message::User` is a genuine human turn with no meta filtering
-/// needed (TS has to filter `toolUseResult` because its tool results are
-/// `type:'user'`).
+/// Like [`count_human_turns`], this counts every `Message::User` and relies
+/// on the invariant that reminder-injected content is `Message::Attachment`
+/// and tool results are `Message::ToolResult` — so each `Message::User` is
+/// a genuine human turn with no meta filtering needed.
 pub fn count_human_turns_since_attachment<M: Borrow<Message>>(
     messages: &[M],
     kind: AttachmentKind,
@@ -140,10 +135,9 @@ pub fn count_human_turns_since_attachment<M: Borrow<Message>>(
 
 /// Count assistant turns since the most recent attachment of `kind`.
 ///
-/// TS parity for todo/task reminder-to-reminder cadence: scan backwards,
-/// skip thinking-only assistant messages, and stop at the matching reminder
-/// attachment. If the marker is absent, return `i32::MAX` so the absence of a
-/// prior reminder does not suppress the first reminder.
+/// Scans backwards, skips thinking-only assistant messages, stops at the
+/// matching reminder attachment. If the marker is absent, returns `i32::MAX`
+/// so the absence of a prior reminder does not suppress the first reminder.
 pub fn count_assistant_turns_since_attachment<M: Borrow<Message>>(
     messages: &[M],
     kind: AttachmentKind,
@@ -164,8 +158,8 @@ pub fn count_assistant_turns_since_attachment<M: Borrow<Message>>(
 }
 
 /// Returns true when this assistant message has content and every content
-/// part is a reasoning block. An empty-content message is treated as non-
-/// thinking so the count matches TS (TS doesn't skip empty messages).
+/// part is a reasoning block. An empty-content message is treated as
+/// non-thinking (empty messages are not skipped).
 fn is_thinking_only(msg: &LlmMessage) -> bool {
     let LlmMessage::Assistant { content, .. } = msg else {
         return false;

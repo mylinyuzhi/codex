@@ -37,8 +37,7 @@ pub struct CompactRequest {
 /// the sentinel — the runner should then treat the output as ordinary
 /// command text.
 ///
-/// TS parity note: TS dispatches `/compact` as a structured command
-/// directly; Rust uses a sentinel because the slash-command registry
+/// Rust uses a sentinel because the slash-command registry
 /// returns plain strings. This helper centralizes the parse so both
 /// `tui_runner` and `sdk_runner` consume it identically.
 #[must_use]

@@ -1,7 +1,6 @@
 //! Warning logging implementation.
 //!
-//! This module provides a warning logging system that matches the TypeScript
-//! `@ai-sdk/ai` logger pattern. It uses `tracing` internally for actual logging.
+//! This module provides a warning logging system using `tracing` internally for actual logging.
 
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;

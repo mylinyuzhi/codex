@@ -1,8 +1,5 @@
 //! MCPB (`.mcpb` / `.dxt`) bundle loader.
 //!
-//! TS source: `utils/plugins/mcpbHandler.ts:968` + `zipCache.ts:406` +
-//! `zipCacheAdapters.ts:164`.
-//!
 //! MCPB = ZIP container holding an MCP server bundled with its manifest and
 //! optional `configSchema`. Pipeline:
 //! 1. Download / read the archive.
@@ -25,10 +22,8 @@ use sha2::Sha256;
 
 /// Bundle manifest read from `manifest.json` inside the archive.
 ///
-/// TS field naming (`mcpbHandler.ts`):
-/// - `user_config` — JSONSchema-style required-field map (NOT `config_schema`).
-///   The serde alias keeps backward compatibility for in-tree fixtures using
-///   the old name.
+/// `user_config` is a JSONSchema-style required-field map. The serde alias
+/// keeps backward compatibility for in-tree fixtures using the old name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpbManifest {
     pub name: String,
@@ -36,7 +31,6 @@ pub struct McpbManifest {
     pub description: Option<String>,
     pub server: McpbServerSpec,
     /// JSONSchema-style config requirements.
-    /// TS: `manifest.user_config`.
     #[serde(default, alias = "config_schema", rename = "user_config")]
     pub user_config: HashMap<String, serde_json::Value>,
 }
@@ -86,8 +80,6 @@ pub struct McpbLoadResult {
 /// `archive_bytes` are the raw ZIP bytes. `cache_root` is where the bundle
 /// will be extracted (e.g. `~/.coco/plugins/mcpb-cache/`). `user_config` is
 /// the values the user has already provided for `config_schema` keys.
-///
-/// TS: `mcpbHandler.ts loadMcpbPlugin(...)`.
 pub fn load_mcpb(
     source_url: &str,
     archive_bytes: &[u8],
@@ -122,7 +114,7 @@ pub fn load_mcpb(
     }
 
     // Build the MCP server config, expanding `${__dirname}` / `${user_config.X}`
-    // placeholders in the command, args, and env (TS `getMcpConfigForManifest`).
+    // placeholders in the command, args, and env.
     let extracted_dir = target_dir.to_string_lossy().into_owned();
     let command = substitute_template(
         &target_dir.join(&manifest.server.command).to_string_lossy(),
@@ -214,11 +206,10 @@ fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> crate::Result<Mcp
 }
 
 /// Validate user-provided values against the manifest's JSONSchema-style
-/// `user_config` map. Mirrors TS `validateUserConfig`
-/// (`utils/plugins/mcpbHandler.ts:346-408`): required-field presence + per-field
-/// type (`string`, `string[]` when `multiple`, `number`, `boolean`,
-/// `file`/`directory` path) + numeric `min`/`max`. Error labels prefer the
-/// schema's `title`, falling back to the key. Empty result = valid.
+/// `user_config` map: required-field presence + per-field type (`string`,
+/// `string[]` when `multiple`, `number`, `boolean`, `file`/`directory` path)
+/// + numeric `min`/`max`. Error labels prefer the schema's `title`, falling
+/// back to the key. Empty result = valid.
 fn validate_config(
     schema: &HashMap<String, serde_json::Value>,
     user_config: &HashMap<String, serde_json::Value>,
@@ -234,8 +225,7 @@ fn validate_config(
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
-        // A value is "not provided" when absent or an empty string, matching
-        // TS `value === undefined || value === ''`.
+        // A value is "not provided" when absent or an empty string.
         let value = match user_config.get(key) {
             None => {
                 if required {
@@ -305,8 +295,7 @@ fn validate_config(
 /// Expand MCPB template placeholders in a command / arg / env value:
 /// `${__dirname}` → the extracted bundle dir, `${user_config.KEY}` → the
 /// user-provided value (string values verbatim, others JSON-stringified).
-/// Unknown placeholders are left intact. Mirrors the substitution TS delegates
-/// to `@anthropic-ai/mcpb getMcpConfigForManifest`.
+/// Unknown placeholders are left intact.
 fn substitute_template(
     raw: &str,
     extracted_dir: &str,
@@ -332,11 +321,10 @@ fn merge_env(
     user_config: &HashMap<String, serde_json::Value>,
 ) -> serde_json::Value {
     // Only manifest-declared env values are emitted, with `${user_config.X}`
-    // template substitution (TS `getMcpConfigForManifest`). plugins#234: the
-    // previous coco-only loop that exposed EVERY string user_config value under
-    // its own env key was removed — it diverged from TS and risked leaking
-    // sensitive user_config values into the child process environment. Sensitive
-    // values belong in the keyring split (Slice B), never in env.
+    // template substitution. plugins#234: the previous loop that exposed EVERY
+    // string user_config value under its own env key was removed — it risked
+    // leaking sensitive user_config values into the child process environment.
+    // Sensitive values belong in the keyring split (Slice B), never in env.
     let merged: HashMap<String, String> = base
         .iter()
         .map(|(k, v)| {

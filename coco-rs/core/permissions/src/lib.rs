@@ -1,6 +1,4 @@
 //! Permission evaluation pipeline, shell rule parsing, denial tracking, auto-mode classification.
-//!
-//! TS: utils/permissions/ (rule evaluation, auto-mode classifier, denial tracking)
 
 pub mod auto_mode;
 pub mod auto_mode_decision;

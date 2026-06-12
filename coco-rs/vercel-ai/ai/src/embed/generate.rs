@@ -120,7 +120,7 @@ pub struct EmbedManyOptions {
     /// Provider-specific options.
     pub provider_options: Option<ProviderOptions>,
     /// Maximum number of concurrent requests.
-    /// Default is no limit (Infinity in TypeScript).
+    /// Default is no limit (unbounded).
     pub max_parallel_calls: Option<usize>,
     /// Optional telemetry configuration (experimental).
     pub telemetry: Option<TelemetrySettings>,

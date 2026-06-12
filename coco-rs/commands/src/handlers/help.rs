@@ -107,8 +107,8 @@ const CATEGORIES: &[Category] = &[
                 usage: "/vim [on|off|toggle]",
             },
             CommandEntry {
-                // TS marks this command `isHidden: true`; registry-side
-                // visibility filters drop it from typeahead/picker.
+                // This command is hidden; registry-side visibility filters
+                // drop it from typeahead/picker.
                 // `/help` is hardcoded in coco-rs (see `commands/CLAUDE.md`)
                 // so the entry stays here for `/help output-style` lookups,
                 // matching the registry description verbatim.

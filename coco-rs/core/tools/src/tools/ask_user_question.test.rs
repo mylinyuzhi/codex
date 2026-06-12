@@ -26,13 +26,12 @@ fn name_matches_tool_name_enum() {
 }
 
 #[test]
-fn description_is_ts_aligned() {
+fn description_has_expected_phrase() {
     let t: &dyn DynTool = &AskUserQuestionTool;
     let d = t.description(&minimal_input(), &DescriptionOptions::default());
-    // Must mention the TS DESCRIPTION's distinctive phrase.
     assert!(
         d.contains("multiple choice questions"),
-        "description should match TS DESCRIPTION: {d}"
+        "description should mention multiple choice questions: {d}"
     );
 }
 
@@ -45,14 +44,13 @@ async fn prompt_includes_plan_mode_and_preview_guidance() {
     // loudly if the enum variant is renamed without updating callers.
     let exit = coco_types::ToolName::ExitPlanMode.as_str();
     assert!(p.contains(exit), "prompt missing {exit} reference: {p}");
-    // The IMPORTANT block must stay intact — TS calls this out
-    // explicitly because the model otherwise asks meta-questions about
-    // an invisible plan.
+    // The IMPORTANT block must stay intact — the model otherwise asks
+    // meta-questions about an invisible plan.
     assert!(
         p.contains("Do not reference \"the plan\""),
         "prompt missing IMPORTANT block on plan-reference avoidance"
     );
-    // Preview-feature section must be present with the TS markdown wording.
+    // Preview-feature section must be present.
     assert!(
         p.contains("Preview feature:"),
         "prompt missing preview feature section"
@@ -61,9 +59,9 @@ async fn prompt_includes_plan_mode_and_preview_guidance() {
         p.contains("multiSelect"),
         "prompt missing multiSelect guidance"
     );
-    // "Other" option note from TS usage notes.
+    // "Other" option note.
     assert!(p.contains("\"Other\""), "prompt missing Other option note");
-    // Recommendation rule from TS usage notes.
+    // Recommendation rule.
     assert!(
         p.contains("(Recommended)"),
         "prompt missing recommendation guidance"
@@ -176,11 +174,11 @@ fn input_schema_rejects_more_than_four_questions_or_options() {
     );
 }
 
-/// Field descriptions must carry the TS guidance verbatim. Weak models (e.g.
+/// Field descriptions must carry expected guidance. Weak models (e.g.
 /// deepseek-v4-flash) rely on these to know `question` is required — stripped
 /// descriptions caused real `questions[0].question is missing` failures.
 #[test]
-fn field_descriptions_are_ts_aligned() {
+fn field_descriptions_are_aligned() {
     let t: &dyn DynTool = &AskUserQuestionTool;
     let schema = t.runtime_validation_schema().as_value();
     let props = &schema["properties"]["questions"]["items"]["properties"];
@@ -188,9 +186,9 @@ fn field_descriptions_are_ts_aligned() {
 
     assert!(
         desc(&props["question"]).contains("end with a question mark"),
-        "question description lost its TS guidance"
+        "question description lost expected guidance"
     );
-    // Chip width must read 12 (TS `ASK_USER_QUESTION_TOOL_CHIP_WIDTH`), not 20.
+    // Chip width must read 12, not 20.
     let header = desc(&props["header"]);
     assert!(
         header.contains("max 12 chars"),
@@ -198,7 +196,7 @@ fn field_descriptions_are_ts_aligned() {
     );
     assert!(
         header.contains("Auth method"),
-        "header lost TS examples: {header}"
+        "header lost expected examples: {header}"
     );
     assert!(
         desc(&props["options"]).contains("There should be no 'Other' option"),
@@ -206,7 +204,7 @@ fn field_descriptions_are_ts_aligned() {
     );
     assert!(
         desc(&props["multiSelect"]).contains("mutually exclusive"),
-        "multiSelect description lost its TS guidance"
+        "multiSelect description lost expected guidance"
     );
 }
 
@@ -337,7 +335,7 @@ async fn execute_without_answers_has_no_display_data() {
     );
 }
 
-// ── render_for_model — TS parity for answer envelopes ────────────────
+// ── render_for_model — answer envelope rendering ─────────────────────
 
 mod render_tests {
     use super::AskUserQuestionTool;
@@ -355,9 +353,6 @@ mod render_tests {
 
     #[test]
     fn formats_single_answer_with_trailing_continuation_clause() {
-        // TS `AskUserQuestionTool.tsx:241-244`:
-        // `User has answered your questions: "Q"="A". You can now
-        // continue with the user's answers in mind.`
         let data = json!({
             "answers": {"What's your name?": "Alice"},
         });
@@ -385,8 +380,7 @@ mod render_tests {
 
     #[test]
     fn appends_preview_and_notes_when_annotation_present() {
-        // TS `AskUserQuestionTool.tsx:230-234`: `selected preview:\n...`
-        // and `user notes: ...` join with single space.
+        // `selected preview:\n...` and `user notes: ...` join with single space.
         let data = json!({
             "answers": {"Pick a layout": "two-column"},
             "annotations": {
@@ -446,8 +440,7 @@ mod render_tests {
 async fn check_permissions_always_asks_to_drive_question_overlay() {
     // AskUserQuestion is read-only, so without an Ask override the evaluator
     // auto-allows it and execute() echoes raw JSON. Returning Ask is what routes
-    // the call through the permission bridge into the interactive Question
-    // overlay (mirrors TS checkPermissions -> { behavior: 'ask' }).
+    // the call through the permission bridge into the interactive Question overlay.
     let t: &dyn DynTool = &AskUserQuestionTool;
     let ctx = ToolUseContext::test_default();
     let result = t.check_permissions(&json!({ "questions": [] }), &ctx).await;

@@ -49,11 +49,9 @@ async fn initial_emits_header_plus_concurrency_note() {
 
 #[tokio::test]
 async fn non_initial_uses_new_header_and_still_includes_concurrency_note() {
-    // coco-rs divergence from TS: the concurrency hint fires on every
-    // delta, not just the initial one. TS gates `isInitial && showNote`
-    // because the flag itself encodes a subscription tier — we have no
-    // such tier, so we surface the reminder whenever new agent types
-    // arrive (which is the only time the renderer runs).
+    // The concurrency hint fires on every delta, not just the initial one.
+    // We have no subscription-tier flag, so we surface the reminder whenever
+    // new agent types arrive (which is the only time the renderer runs).
     let c = SystemReminderConfig::default();
     let info = AgentListingDeltaInfo {
         added_lines: vec!["- foo: New agent".to_string()],

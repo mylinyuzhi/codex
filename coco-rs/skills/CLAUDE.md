@@ -2,13 +2,6 @@
 
 Markdown workflow loading: bundled / user / project / plugin / managed / MCP sources, YAML frontmatter parsing, SKILL.md-directory discovery, dynamic per-path scanning.
 
-## TS Source
-- `skills/bundledSkills.ts` — registry of in-binary skills
-- `skills/bundled/` — packaged SKILL.md directories
-- `skills/loadSkillsDir.ts` — discovery, frontmatter, `discoverSkillDirsForPaths`, budget formatting
-- `skills/mcpSkillBuilders.ts` — MCP-sourced skill construction
-- `utils/skills/skillChangeDetector.ts` — debounced file watcher
-
 ## Key Types
 - `SkillDefinition` — name, description, prompt, source, aliases, allowed_tools, model, when_to_use, argument_names, paths (globs), effort, `context` (Inline/Fork), agent, version, disabled, hooks, argument_hint, user_invocable, disable_model_invocation, shell, content_length, is_hidden
 - `SkillContext` — `Inline` (expand into conversation) or `Fork` (sub-agent)

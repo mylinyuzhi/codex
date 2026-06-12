@@ -127,7 +127,7 @@ pub fn detect_shell_type(shell_path: &Path) -> Option<ShellType> {
 
 /// Returns the user's default shell.
 ///
-/// Priority (TS alignment — `Shell.ts:findSuitableShell`):
+/// Priority:
 /// 1. `$SHELL` environment variable
 /// 2. Platform-specific discovery (which + fallback paths)
 ///

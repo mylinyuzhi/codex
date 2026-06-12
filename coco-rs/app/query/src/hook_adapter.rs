@@ -6,7 +6,7 @@
 //! [`HookHandle`] get this implementation, which calls into the actual hook
 //! registry without `coco-tool-runtime` having to depend on `coco-hooks`.
 //!
-//! # TS parity (hook outcome mapping)
+//! # Hook outcome mapping
 //!
 //! | `AggregatedHookResult` field  | `HookHandle` outcome field               |
 //! |------------------------------ |------------------------------------------|
@@ -24,9 +24,9 @@
 //! # Error handling
 //!
 //! Orchestration failures (hook timeout, hook process spawn failure, …) are
-//! logged and **downgraded to a default (non-blocking) outcome**. Same TS
-//! policy: hook infrastructure errors must not stop a tool call unless a hook
-//! itself explicitly blocks.
+//! logged and **downgraded to a default (non-blocking) outcome**. Hook
+//! infrastructure errors must not stop a tool call unless a hook itself
+//! explicitly blocks.
 
 use std::sync::Arc;
 
@@ -143,8 +143,8 @@ impl HookHandle for QueryHookHandle {
         error_message: &str,
     ) -> PostToolUseOutcome {
         // `coco_hooks::orchestration::execute_post_tool_use_failure` is the
-        // only structured wrapper — TS treats this as a distinct hook event,
-        // so we must not reuse the PostToolUse path.
+        // only structured wrapper — this is a distinct hook event and must
+        // not reuse the PostToolUse path.
         match orchestration::execute_post_tool_use_failure(
             &self.registry,
             &self.ctx,
@@ -256,12 +256,11 @@ fn aggregate_to_pre_outcome(agg: &AggregatedHookResult) -> PreToolUseOutcome {
 }
 
 fn aggregate_to_post_outcome(agg: &AggregatedHookResult) -> PostToolUseOutcome {
-    // `updated_output` is ONLY valid for MCP tools per TS `toolHooks.ts:145`
-    // (`if (result.updatedMCPToolOutput && isMcpTool(tool))`). The runner
-    // consuming this outcome must gate substitution on `tool.is_mcp()` —
-    // carrying the value through unconditionally still lets non-MCP runners
-    // observe that a hook tried to rewrite output (for telemetry) while the
-    // runner enforces the actual apply-or-ignore decision.
+    // `updated_output` is ONLY valid for MCP tools. The runner consuming
+    // this outcome must gate substitution on `tool.is_mcp()` — carrying
+    // the value through unconditionally still lets non-MCP runners observe
+    // that a hook tried to rewrite output (for telemetry) while the runner
+    // enforces the actual apply-or-ignore decision.
     PostToolUseOutcome {
         updated_output: agg.updated_mcp_tool_output.clone(),
         prevent_continuation: agg.prevent_continuation,

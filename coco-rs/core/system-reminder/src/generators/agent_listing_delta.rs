@@ -1,9 +1,6 @@
-//! TS `agent_listing_delta` generator.
+//! `agent_listing_delta` generator.
 //!
-//! Mirrors `getAgentListingDeltaAttachment` (`attachments.ts:1490`) +
-//! `normalizeAttachmentForAPI` `case 'agent_listing_delta':`
-//! (`messages.ts:4194`). Announces agent-type additions / removals for
-//! the Agent tool.
+//! Announces agent-type additions / removals for the Agent tool.
 //!
 //! Gate chain:
 //!
@@ -12,12 +9,10 @@
 //!    engine pre-computes by diffing active agents against prior
 //!    announcements in history.
 //!
-//! Text template from TS `messages.ts:4194-4214`: three optional
-//! sections joined by `"\n\n"`:
+//! Output: three optional sections joined by `"\n\n"`:
 //! - Added (header depends on `is_initial`).
 //! - Removed agent types.
-//! - Concurrency note (whenever `show_concurrency_note` is set; coco-rs
-//!   diverges from TS here — TS additionally gates on `is_initial`).
+//! - Concurrency note (whenever `show_concurrency_note` is set).
 
 use async_trait::async_trait;
 
@@ -81,13 +76,10 @@ fn render(info: &AgentListingDeltaInfo) -> String {
             list.join("\n")
         ));
     }
-    // Divergence from TS (`utils/messages.ts:4207` gates on
-    // `attachment.isInitial && attachment.showConcurrencyNote`):
-    // coco-rs has no subscription/OAuth concept, so we drop the
-    // initial-only gate and emit the parallelism hint on every delta
-    // — every time new agent types become available, the model gets
-    // reminded that multi-agent dispatch should fan out in one
-    // assistant message.
+    // coco-rs has no subscription/OAuth concept, so the parallelism hint
+    // fires on every delta (not just the initial announcement) — every
+    // time new agent types become available, the model gets reminded that
+    // multi-agent dispatch should fan out in one assistant message.
     if info.show_concurrency_note {
         parts.push(
             "Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses."

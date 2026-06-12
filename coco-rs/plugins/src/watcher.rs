@@ -1,10 +1,9 @@
 //! Plugin change detection.
 //!
-//! TS parity: `useManagePlugins.ts:285-303` watches plugin settings on
-//! disk and shows a "Plugins changed. Run /reload-plugins to activate."
-//! notification — never auto-reloads. Coco-rs mirrors the user-facing
-//! behaviour with a debounced file watcher across the plugin scopes
-//! (user / project / managed) plus the `installed_plugins.json` ledger.
+//! Watches plugin settings on disk and shows a "Plugins changed. Run
+//! /reload-plugins to activate." notification — never auto-reloads. Uses a
+//! debounced file watcher across the plugin scopes (user / project / managed)
+//! plus the `installed_plugins.json` ledger.
 //!
 //! The watcher is intentionally *not* hooked into the plugin refresh path
 //! ([`crate::load_enabled_plugins`]) — that's the explicit `/reload-plugins`
@@ -27,7 +26,7 @@ use coco_file_watch::FileWatcherBuilder;
 use coco_file_watch::RecursiveMode;
 use tokio::sync::broadcast;
 
-/// Debounce interval for plugin file changes (matches TS 300ms).
+/// Debounce interval for plugin file changes.
 const PLUGIN_DEBOUNCE_MS: u64 = 300;
 
 /// One plugin-scope file mutation, coalesced over [`PLUGIN_DEBOUNCE_MS`].
@@ -71,9 +70,7 @@ impl PluginChangeDetector {
     /// Build a watcher and register every path in `paths`. Directory
     /// paths are watched recursively; file paths non-recursively.
     /// Missing paths are silently skipped (deferred to a future create
-    /// event under the parent directory) — TS parity:
-    /// `useManagePlugins.ts` registers the same scopes whether or not
-    /// they exist yet.
+    /// event under the parent directory).
     pub fn new(paths: Vec<PathBuf>) -> crate::Result<Arc<Self>> {
         let inner = FileWatcherBuilder::new()
             .throttle_interval(Duration::from_millis(PLUGIN_DEBOUNCE_MS))
@@ -162,10 +159,8 @@ fn is_interesting_plugin_path(path: &std::path::Path) -> bool {
 }
 
 fn derive_reason(paths: &[PathBuf]) -> String {
-    // Pick the most informative file we can name. TS parity is the
-    // single string "Plugins changed. Run /reload-plugins to
-    // activate." — we pre-compose the reason so the UI doesn't need
-    // to peek into the path list.
+    // Pick the most informative file we can name. Pre-compose the reason
+    // so the UI doesn't need to peek into the path list.
     let first = paths
         .iter()
         .find_map(|p| p.file_name().and_then(|n| n.to_str()))

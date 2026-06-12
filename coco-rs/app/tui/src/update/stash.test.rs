@@ -16,7 +16,7 @@ fn empty_input_with_no_stash_is_silent_noop() {
     swap_input_draft(&mut state);
     assert!(state.ui.input.text().is_empty());
     assert!(state.ui.stashed_input.is_none());
-    // TS-mirror: no toast on the silent no-op.
+    // No toast on the silent no-op.
     assert!(state.ui.toasts.is_empty());
 }
 
@@ -79,7 +79,7 @@ fn stash_round_trips_paste_entries() {
 
 #[test]
 fn non_empty_input_overwrites_existing_stash() {
-    // TS-mirror behavior: pushing with a prior stash does NOT swap —
+    // Pushing with a prior stash does NOT swap —
     // the prior stash is overwritten. There is no stash list.
     let mut state = AppState::new();
     state.ui.stashed_input = Some(StashedInput {
@@ -93,10 +93,7 @@ fn non_empty_input_overwrites_existing_stash() {
     swap_input_draft(&mut state);
 
     let stash = state.ui.stashed_input.as_ref().expect("stash present");
-    assert_eq!(
-        stash.text, "new",
-        "push overwrites the prior stash (TS-faithful)",
-    );
+    assert_eq!(stash.text, "new", "push overwrites the prior stash",);
     assert!(state.ui.input.text().is_empty());
 }
 

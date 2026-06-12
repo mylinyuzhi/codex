@@ -1,7 +1,5 @@
 //! Memory path validation — traversal, null bytes, UNC, drive root,
 //! tilde, fullwidth Unicode, URL-encoded traversal.
-//!
-//! TS: `memdir/paths.ts:validateMemoryPath` + `sanitizePathKey`.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -58,15 +56,14 @@ impl coco_error::ErrorExt for PathValidationError {
 /// Rejects, in order:
 ///
 /// - empty / `len < 3` (a one- or two-byte string is never a
-///   legitimate memory file — TS `validateMemoryPath` rejects
-///   `.length < 3` after sep-strip).
+///   legitimate memory file — rejects `.length < 3` after sep-strip).
 /// - null bytes
 /// - UNC (`\\server\share` AND POSIX-style `//server/share`)
 /// - absolute paths (`/foo`)
 /// - Windows drive roots (`C:\foo` / `C:foo`)
 /// - bare or non-home tilde, including `~/..`, `~/.` after lexical
-///   collapse (TS rejects any tilde-prefixed path that resolves
-///   outside `$HOME`)
+///   collapse (rejects any tilde-prefixed path that resolves outside
+///   `$HOME`)
 /// - fullwidth traversal characters AND any other character that
 ///   normalizes (NFKC) into `..` / `/` / `\` / null
 /// - URL-encoded traversal (`%2e%2e`, `%2f`, mixed case)
@@ -92,7 +89,7 @@ pub fn validate_memory_path(path: &str) -> Result<(), PathValidationError> {
     if bytes.len() >= 2 && bytes[1] == b':' && (bytes[0] as char).is_ascii_alphabetic() {
         return Err(PathValidationError::DriveRoot);
     }
-    // Tilde: TS only accepts `~/` and `~\\` followed by something
+    // Tilde: only accepts `~/` and `~\\` followed by something
     // that doesn't lexically escape `$HOME`. Bare `~`, `~/..`,
     // `~/.`, `~/../foo` are all out.
     if path.starts_with('~') {
@@ -116,8 +113,8 @@ pub fn validate_memory_path(path: &str) -> Result<(), PathValidationError> {
     // NFKC-normalise first so `U+FF0E` (fullwidth full stop),
     // `U+2024` (one dot leader), `U+2025` (two dot leader),
     // `U+FE52` (small full stop), etc. all collapse into `..` and
-    // get caught by the same substring check. TS uses
-    // `String.prototype.normalize('NFKC')` for this attack class.
+    // get caught by the same substring check. NFKC normalization
+    // is used for this attack class.
     // We compare the *normalised* form to the original: any new `..`
     // / `/` / `\` / null introduced by normalisation indicates the
     // input was crafted to bypass a pre-normalisation check.
@@ -187,8 +184,8 @@ pub fn sanitize_path_key(key: &str) -> String {
 }
 
 /// Lexically normalize a path: collapse `..`/`.` components without
-/// touching the filesystem. Equivalent to TS `path.normalize` on a
-/// path that's already been joined.
+/// touching the filesystem. Equivalent to `path.normalize` on a path
+/// that's already been joined.
 pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {

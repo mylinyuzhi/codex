@@ -13,22 +13,17 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-/// Max chars of an MCP server-supplied tool description surfaced to the
-/// model. TS `services/mcp/client.ts:218 MAX_MCP_DESCRIPTION_LENGTH`.
+/// Max chars of an MCP server-supplied tool description surfaced to the model.
 const MAX_MCP_DESCRIPTION_LENGTH: usize = 2048;
 
 const MCP_AUTH_PROMPT: &str = "Authenticate with an MCP server by name to enable its tools and resources. Prefer a server's own `mcp__<server>__authenticate` tool when one is offered — use this generic tool only as a fallback for a server that needs authentication but is not already surfacing its own authenticate tool. Call with the server name to start the OAuth flow — you'll receive an authorization URL to share with the user; once the user authorizes in their browser, the server's real tools become available automatically.";
 
-/// TS `ListMcpResourcesTool/prompt.ts` `DESCRIPTION`.
 const LIST_MCP_RESOURCES_DESCRIPTION: &str = "Lists available resources from configured MCP servers.\nEach resource object includes a 'server' field indicating which server it's from.\n\nUsage examples:\n- List all resources from all servers: `listMcpResources`\n- List resources from a specific server: `listMcpResources({ server: \"myserver\" })`";
 
-/// TS `ListMcpResourcesTool/prompt.ts` `PROMPT`.
 const LIST_MCP_RESOURCES_PROMPT: &str = "List available resources from configured MCP servers.\nEach returned resource will include all standard MCP resource fields plus a 'server' field\nindicating which server the resource belongs to.\n\nParameters:\n- server (optional): The name of a specific MCP server to get resources from. If not provided,\n  resources from all servers will be returned.";
 
-/// TS `ReadMcpResourceTool/prompt.ts` `DESCRIPTION`.
 const READ_MCP_RESOURCE_DESCRIPTION: &str = "Reads a specific resource from an MCP server.\n- server: The name of the MCP server to read from\n- uri: The URI of the resource to read\n\nUsage examples:\n- Read a resource from a server: `readMcpResource({ server: \"myserver\", uri: \"my-resource-uri\" })`";
 
-/// TS `ReadMcpResourceTool/prompt.ts` `PROMPT`.
 const READ_MCP_RESOURCE_PROMPT: &str = "Reads a specific resource from an MCP server, identified by server name and resource URI.\n\nParameters:\n- server (required): The name of the MCP server from which to read the resource\n- uri (required): The URI of the resource to read";
 
 /// Typed input for [`McpAuthTool`].
@@ -122,7 +117,7 @@ impl Tool for McpAuthTool {
 }
 
 /// Empty input for [`McpAuthServerTool`] — the server is baked into the tool,
-/// so the call takes no arguments (TS `inputSchema = z.object({})`).
+/// so the call takes no arguments.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct McpAuthServerInput {}
 
@@ -130,12 +125,12 @@ pub struct McpAuthServerInput {}
 /// a `NeedsAuth` server's real tools so the model is told *which* server needs
 /// authentication and can start the OAuth flow on the user's behalf.
 ///
-/// TS: `tools/McpAuthTool/McpAuthTool.ts::createMcpAuthTool`. Unlike the global
+/// Unlike the global
 /// [`McpAuthTool`] (free-form `server_name` input), this pre-binds the server so
 /// the model can't guess the wrong name, and it self-removes on a successful
 /// reconnect: it reports `mcp_info().server_name == server`, so the
 /// `ToolRegistry::replace_server_tools` wipe that installs the real tools
-/// removes the pseudo-tool in the same atomic swap (mirrors the TS
+/// removes the pseudo-tool in the same atomic swap as the
 /// `mcp__<server>__*` prefix replacement). `should_defer() == false` so it is
 /// visible in the model's tool list on turn 1, unlike its real-tool siblings.
 pub struct McpAuthServerTool {
@@ -264,9 +259,7 @@ impl Tool for ListMcpResourcesTool {
     type Input = ListMcpResourcesInput;
     coco_tool_runtime::impl_runtime_schema!(ListMcpResourcesInput);
     /// Output is `Value` because the wire shape is a union (bare
-    /// status string for empty/error, JSON array for results). TS
-    /// `ListMcpResourcesTool.ts:108-122` treats both shapes the same
-    /// way via `jsonStringify(content)` on the model-visible side.
+    /// status string for empty/error, JSON array for results).
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -290,7 +283,6 @@ impl Tool for ListMcpResourcesTool {
     fn is_always_read_only(&self) -> bool {
         true
     }
-    /// TS `ListMcpResourcesTool.ts`: `isConcurrencySafe() { return true }`.
     /// Listing resources from one or more MCP servers is read-only and
     /// independent across servers — the executor can fan out concurrent
     /// listing calls.
@@ -304,12 +296,8 @@ impl Tool for ListMcpResourcesTool {
         Some("list resources available on connected MCP servers")
     }
 
-    /// TS `ListMcpResourcesTool.ts:108-122`: empty branch emits a
-    /// specific message; non-empty branch emits `jsonStringify(content)`.
-    /// coco-rs execute() emits a bare string for the empty/error
-    /// branches and a JSON array for non-empty; this render unwraps
-    /// the bare string and JSON-stringifies the array — byte-identical
-    /// to TS in both cases.
+    /// Unwraps the bare string for empty/error branches and JSON-stringifies
+    /// the array for non-empty results.
     fn render_for_model(&self, out: &Value) -> Vec<ToolResultContentPart> {
         coco_tool_runtime::render_text_or_json(out)
     }
@@ -324,7 +312,6 @@ impl Tool for ListMcpResourcesTool {
         match ctx.mcp.list_resources(server_name).await {
             Ok(resources) => {
                 if resources.is_empty() {
-                    // TS `ListMcpResourcesTool.ts:113-115` empty-case message.
                     return Ok(ToolResult {
                         data: serde_json::json!(
                             "No resources found. MCP servers may still provide tools even if they have no resources."
@@ -409,7 +396,6 @@ impl Tool for ReadMcpResourceTool {
     fn is_always_read_only(&self) -> bool {
         true
     }
-    /// TS `ReadMcpResourceTool.ts`: `isConcurrencySafe() { return true }`.
     /// Resource reads are side-effect-free; multiple reads to the same or
     /// different resources can run in parallel.
     fn is_concurrency_safe(&self, _input: &ReadMcpResourceInput) -> bool {
@@ -422,11 +408,8 @@ impl Tool for ReadMcpResourceTool {
         Some("read a specific resource from an MCP server by URI")
     }
 
-    /// TS `ReadMcpResourceTool.ts:151-157` emits `jsonStringify(content)`
-    /// for both success and error paths — equivalent to the trait's
-    /// default impl. The override exists only to unwrap the error-path
-    /// bare string (which would otherwise be JSON-quoted) so the wire
-    /// matches TS's plain string error format.
+    /// Unwraps the error-path bare string (which would otherwise be
+    /// JSON-quoted) so errors render as plain text.
     fn render_for_model(&self, out: &Value) -> Vec<ToolResultContentPart> {
         if let Some(text) = out.get("persisted_output").and_then(Value::as_str) {
             return vec![ToolResultContentPart::Text {
@@ -497,9 +480,6 @@ impl Tool for ReadMcpResourceTool {
 
 /// Dynamic MCP tool wrapper — exposes MCP server tools to the LLM.
 ///
-/// TS: `MCPTool` in `tools/MCPTool/` — generates tool definitions dynamically
-/// from MCP server tool schemas. Input is passed through to the MCP server.
-///
 /// Each MCPTool instance wraps one specific MCP server tool. The registry
 /// creates one MCPTool per discovered MCP server tool at startup and when
 /// MCP servers connect/disconnect.
@@ -523,11 +503,10 @@ impl McpTool {
         schema: Value,
         annotations: coco_tool_runtime::McpToolAnnotations,
     ) -> Result<Self, coco_tool_runtime::SchemaError> {
-        // Non-object / absent payload → canonical empty-params envelope
-        // (TS parity). `from_value` folds in `"type":"object"` when the
-        // server omits it and compiles the validator (= meta-validation);
-        // an uncompilable wire schema surfaces as `Err` and the tool is
-        // skipped at registration.
+        // Non-object / absent payload → canonical empty-params envelope.
+        // `from_value` folds in `"type":"object"` when the server omits it
+        // and compiles the validator (= meta-validation); an uncompilable
+        // wire schema surfaces as `Err` and the tool is skipped at registration.
         let raw = match schema {
             Value::Object(_) => schema,
             _ => serde_json::json!({ "properties": {} }),
@@ -578,8 +557,7 @@ impl Tool for McpTool {
     }
 
     /// Model-facing description = the server-supplied tool description,
-    /// truncated to [`MAX_MCP_DESCRIPTION_LENGTH`]. TS
-    /// `services/mcp/client.ts:1789-1793` `async prompt()`.
+    /// truncated to [`MAX_MCP_DESCRIPTION_LENGTH`].
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         if self.tool_description.chars().count() > MAX_MCP_DESCRIPTION_LENGTH {
             let truncated: String = self
@@ -597,39 +575,33 @@ impl Tool for McpTool {
         Some(&self.info)
     }
 
-    /// TS `Tool.ts:441 isMcp: true` defers every MCP tool by default.
-    /// The model must call `ToolSearch` to bring an MCP tool's full
-    /// schema into the request — unless the server advertised
-    /// `_meta["anthropic/alwaysLoad"] == true`, which routes through
-    /// [`Self::always_load`] and short-circuits the deferred-pool
-    /// filter in `ToolRegistry::loaded_tools`.
+    /// Defers every MCP tool by default. The model must call `ToolSearch` to
+    /// bring an MCP tool's full schema into the request — unless the server
+    /// advertised `_meta["anthropic/alwaysLoad"] == true`, which routes through
+    /// [`Self::always_load`] and short-circuits the deferred-pool filter in
+    /// `ToolRegistry::loaded_tools`.
     fn should_defer(&self) -> bool {
         true
     }
 
-    /// TS `prompt.ts:64-66 isDeferredTool`: `if (tool.alwaysLoad ===
-    /// true) return false`. Read from
-    /// `McpToolAnnotations.always_load`, sourced from the server's
+    /// Read from `McpToolAnnotations.always_load`, sourced from the server's
     /// `_meta["anthropic/alwaysLoad"]` flag on the tool. When true,
-    /// `ToolRegistry::loaded_tools` ignores the `should_defer()`
-    /// signal and surfaces the tool's full schema on turn 1.
+    /// `ToolRegistry::loaded_tools` ignores the `should_defer()` signal and
+    /// surfaces the tool's full schema on turn 1.
     fn always_load(&self) -> bool {
         self.annotations.always_load
     }
 
     fn is_concurrency_safe(&self, _: &Value) -> bool {
-        // TS: tool.annotations?.readOnlyHint ?? false
         // Only concurrent-safe if the server declares read-only.
         self.annotations.read_only_hint
     }
 
     fn is_read_only(&self, _: &Value) -> bool {
-        // TS: tool.annotations?.readOnlyHint ?? false
         self.annotations.read_only_hint
     }
 
     fn is_destructive(&self, _: &Value) -> bool {
-        // TS: tool.annotations?.destructiveHint ?? false
         self.annotations.destructive_hint
     }
 
@@ -640,8 +612,6 @@ impl Tool for McpTool {
     /// `render_for_model` reverses that step so multimodal-capable
     /// providers see the original Text + FileData (image) parts the
     /// server emitted, instead of an opaque JSON-stringified envelope.
-    /// TS parity: MCPTool wraps server content unchanged in
-    /// `ToolResultBlockParam.content`.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let arr = data
             .as_array()

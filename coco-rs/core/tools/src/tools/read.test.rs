@@ -55,10 +55,9 @@ async fn test_read_basic_file() {
     assert!(text.contains("3\tline three"));
 }
 
-/// TS `FileReadTool.ts:1020` treats `offset` as 1-based — the input
-/// corresponds directly to the line number visible in editors. `offset: 10`
-/// must start at line 10 (not line 11, which was the pre-fix 0-based
-/// behavior). The rendered line numbers are 1-based too.
+/// `offset` is 1-based — it corresponds directly to the line number visible
+/// in editors. `offset: 10` must start at line 10 (not line 11, which was
+/// the pre-fix 0-based behavior). The rendered line numbers are 1-based too.
 #[tokio::test]
 async fn test_read_with_offset_limit() {
     let dir = tempfile::tempdir().unwrap();
@@ -82,8 +81,8 @@ async fn test_read_with_offset_limit() {
     assert!(text.contains("more lines not shown"));
 }
 
-/// TS special-cases `offset: 0` and `offset: 1` to both mean "start from
-/// the first line" (`FileReadTool.ts:1020`). Regression guard.
+/// `offset: 0` and `offset: 1` both mean "start from the first line".
+/// Regression guard.
 #[tokio::test]
 async fn test_read_offset_zero_and_one_equivalent() {
     let dir = tempfile::tempdir().unwrap();
@@ -137,7 +136,7 @@ async fn test_read_empty_file() {
     .await
     .unwrap();
 
-    // Content is empty; TS routes an empty file through the offset warning
+    // Content is empty; an empty file routes through the offset warning
     // (readFileInRangeFast yields one empty line → totalLines == 1).
     assert_eq!(result.data["file"]["content"].as_str().unwrap(), "");
     assert_eq!(result.data["file"]["totalLines"].as_i64().unwrap(), 1);
@@ -255,8 +254,7 @@ async fn test_read_binary_file() {
 
 /// PNG/JPG/GIF/WEBP files get returned as a structured multimodal image
 /// block: `{type: image, source: {type: base64, media_type, data}}`.
-/// TS: `FileReadTool.ts:250-254, 396-397`. Images are processed through
-/// the D1 resize+re-encode pipeline, so the returned media_type may
+/// Images are processed through the D1 resize+re-encode pipeline, so the returned media_type may
 /// differ from the filename hint (e.g. WebP with alpha might be
 /// downgraded to PNG).
 #[tokio::test]
@@ -275,9 +273,9 @@ async fn test_read_png_returns_base64_block() {
     .unwrap();
 
     let data = &result.data;
-    // TS-shaped image envelope: `{ type: 'image', file: { base64,
+    // Image envelope: `{ type: 'image', file: { base64,
     // type, originalSize } }`. The old `source.type=base64` discriminator
-    // was removed when the output schema migrated to TS-aligned shapes
+    // was removed when the output schema migrated to aligned shapes
     // — `file.type` now holds the MIME directly.
     assert_eq!(data["type"], "image");
     assert_eq!(data["file"]["type"], "image/png");
@@ -442,7 +440,7 @@ async fn test_read_large_image_gets_resized() {
 /// R7-T20: every successful Read must push the file path into
 /// `ctx.nested_memory_attachment_triggers` so the next-turn message
 /// builder can attach any nested CLAUDE.md memories from the file's
-/// ancestry. TS `FileReadTool.ts:848,870,1038` does the same.
+/// ancestry.
 #[tokio::test]
 async fn test_read_populates_nested_memory_triggers() {
     let dir = tempfile::tempdir().unwrap();
@@ -495,8 +493,7 @@ async fn test_read_small_image_dimensions_unchanged() {
 
 /// SVG is an intentionally-unsupported format (raster-only image crate
 /// + Anthropic API doesn't accept it). SVGs get the placeholder response
-/// like BMP/TIFF/ICO. Verified alignment: TS `FileReadTool.ts:188`
-/// `IMAGE_EXTENSIONS` does NOT include SVG either.
+/// like BMP/TIFF/ICO. `IMAGE_EXTENSIONS` does NOT include SVG.
 #[tokio::test]
 async fn test_read_svg_returns_placeholder_not_base64() {
     let dir = tempfile::tempdir().unwrap();
@@ -583,9 +580,8 @@ async fn test_read_dev_null_is_not_blocked() {
 // B2.2: encoding detection
 // ---------------------------------------------------------------------------
 
-/// UTF-8 BOM files should be read correctly. TS: `readFileSyncWithMetadata`
-/// strips the BOM. coco-file-encoding detects `Utf8WithBom` and decodes
-/// the same content.
+/// UTF-8 BOM files should be read correctly. coco-file-encoding detects
+/// `Utf8WithBom` and strips the BOM on decode.
 #[tokio::test]
 async fn test_read_utf8_with_bom() {
     let dir = tempfile::tempdir().unwrap();
@@ -643,7 +639,7 @@ async fn test_read_utf16le_bom() {
 // R6-T20: file-read permission gate on check_permissions
 // ---------------------------------------------------------------------------
 
-/// `Read` performs its TS-style path permission check directly, so cwd paths
+/// `Read` performs its path permission check directly, so cwd paths
 /// are allowed without falling through to the generic rule pipeline.
 #[tokio::test]
 async fn test_read_check_permissions_allows_cwd_path() {
@@ -722,9 +718,9 @@ async fn test_read_malformed_pdf_errors_cleanly() {
     );
 }
 
-/// #25 / TS `readFileInRange`: a FULL read of a file larger than
-/// MAX_READ_OUTPUT_BYTES throws `FileTooLargeError` instead of
-/// truncating — the model must narrow with offset/limit.
+/// #25: a FULL read of a file larger than MAX_READ_OUTPUT_BYTES throws
+/// `FileTooLargeError` instead of truncating — the model must narrow
+/// with offset/limit.
 #[tokio::test]
 async fn test_read_full_read_too_large_errors() {
     let dir = tempfile::tempdir().unwrap();
@@ -770,8 +766,8 @@ async fn test_read_partial_read_skips_size_cap() {
     assert!(text.contains("more lines not shown"));
 }
 
-/// #17 / TS `validateContentTokens`: a slice whose token estimate
-/// exceeds the budget throws `MaxFileReadTokenExceededError`.
+/// #17: a slice whose token estimate exceeds the budget throws
+/// `MaxFileReadTokenExceededError`.
 #[tokio::test]
 async fn test_read_token_cap_errors() {
     let dir = tempfile::tempdir().unwrap();
@@ -796,7 +792,6 @@ async fn test_read_token_cap_errors() {
 }
 
 /// Offset > total_lines returns a helpful warning instead of empty output.
-/// TS: `FileReadTool.ts:707`.
 #[tokio::test]
 async fn test_read_offset_beyond_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -812,7 +807,7 @@ async fn test_read_offset_beyond_file() {
     .await
     .unwrap();
 
-    // Content is empty; the warning is produced at render time (TS map layer).
+    // Content is empty; the warning is produced at render time (map layer).
     assert_eq!(result.data["file"]["content"].as_str().unwrap(), "");
     assert_eq!(result.data["file"]["startLine"].as_i64().unwrap(), 100);
     assert_eq!(result.data["file"]["totalLines"].as_i64().unwrap(), 3);
@@ -828,7 +823,7 @@ async fn test_read_offset_beyond_file() {
 
 // ── R7-T16: notebook structured cells tests ──
 //
-// TS `utils/notebook.ts:163-183` projects each cell into
+// Projects each cell into
 // `{ cellType, source, cell_id, language?, execution_count?, outputs? }`.
 // The tests below verify the projection: a basic two-cell notebook
 // (markdown + code) plus output handling.
@@ -886,7 +881,6 @@ async fn test_read_notebook_returns_structured_cells() {
     .await
     .unwrap();
 
-    // TS-shaped envelope.
     assert_eq!(result.data["type"], "notebook");
     let cells = result.data["file"]["cells"]
         .as_array()
@@ -894,7 +888,7 @@ async fn test_read_notebook_returns_structured_cells() {
     assert_eq!(cells.len(), 2);
 
     // Markdown cell: cellType, source joined, cell_id from `id`,
-    // NO language/execution_count/outputs (TS omits for non-code).
+    // NO language/execution_count/outputs (omits for non-code).
     assert_eq!(cells[0]["cellType"], "markdown");
     assert_eq!(cells[0]["source"], "# Heading\nSome text");
     assert_eq!(cells[0]["cell_id"], "intro");
@@ -919,7 +913,7 @@ async fn test_read_notebook_synthesizes_cell_id_when_missing() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("legacy.ipynb");
     // Old-style notebooks (nbformat < 4.5) don't have `id` on cells.
-    // TS synthesizes `cell-N` (0-based index). Match that.
+    // Synthesize `cell-N` (0-based index).
     write_notebook_fixture(
         &file,
         serde_json::json!([
@@ -1097,22 +1091,22 @@ async fn test_read_notebook_image_output() {
     assert_eq!(output["text"], "<Figure>");
     let image = &output["image"];
     assert_eq!(image["media_type"], "image/png");
-    // Whitespace-stripped, matching TS `data['image/png'].replace(/\s/g,'')`.
+    // Whitespace-stripped: `data['image/png'].replace(/\s/g,'')`.
     assert_eq!(image["image_data"], "iVBORw0KGgo=whitespacetest");
 }
 
 // ── R7-T9: file_unchanged dedup tests ──
 //
-// TS `FileReadTool.ts:523-573` returns a `{ type: 'file_unchanged' }` stub
-// instead of resending the full content when:
+// Returns a `{ type: 'file_unchanged' }` stub instead of resending the full
+// content when:
 //   1. the same path was previously read via the Read tool (not Edit/Write)
 //   2. the same input offset/limit are requested
 //   3. the disk mtime hasn't changed
 // The tests below exercise each gate.
 
 /// Two consecutive default Read calls on the same file: the second should
-/// return a stub. This is the core dedup path — TS comment cites BQ
-/// telemetry showing ~18% of Read calls are repeats of this shape.
+/// return a stub. This is the core dedup path — BQ telemetry shows ~18%
+/// of Read calls are repeats of this shape.
 #[tokio::test]
 async fn test_read_dedup_same_call_twice() {
     use coco_context::FileReadState;
@@ -1126,7 +1120,7 @@ async fn test_read_dedup_same_call_twice() {
     let mut ctx = ToolUseContext::test_default();
     ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
 
-    // First call — full content returned in the TS-shaped text envelope.
+    // First call — full content returned in the text envelope.
     let first = <ReadTool as DynTool>::execute(
         &ReadTool,
         json!({"file_path": file.to_str().unwrap()}),
@@ -1219,7 +1213,7 @@ async fn test_read_dedup_skipped_for_different_range() {
     )
     .await
     .unwrap();
-    // Should be the TS-shaped text envelope, not a file_unchanged stub.
+    // Should be the text envelope, not a file_unchanged stub.
     assert_eq!(
         second.data["type"], "text",
         "expected text envelope, got: {:?}",
@@ -1288,8 +1282,7 @@ async fn test_read_dedup_invalidated_by_mtime_change() {
 
 /// Edit then Read should NOT dedup against the post-edit entry, because
 /// the post-edit content was never returned to the model as a Read result.
-/// TS gates this via `existingState.offset !== undefined`; coco-rs gates
-/// via `is_from_read_tool`.
+/// Gated via `is_from_read_tool`.
 #[tokio::test]
 async fn test_read_dedup_skipped_after_edit() {
     use coco_context::FileReadEntry;
@@ -1331,8 +1324,7 @@ async fn test_read_dedup_skipped_after_edit() {
     .await
     .unwrap();
     // Should NOT be a stub — the entry came from `set`, not
-    // `set_from_read`, so dedup is skipped. The result is the TS-shaped
-    // text envelope.
+    // `set_from_read`, so dedup is skipped. The result is the text envelope.
     assert_eq!(result.data["type"], "text");
     let text = result.data["file"]["content"]
         .as_str()
@@ -1415,7 +1407,7 @@ fn render_for_model_pdf_emits_extracted_content() {
 
 #[test]
 fn render_for_model_file_unchanged_uses_ts_stub_phrasing() {
-    // TS `FILE_UNCHANGED_STUB` is a bare string — no `<system-reminder>`
+    // `FILE_UNCHANGED_STUB` is a bare string — no `<system-reminder>`
     // wrapper, no per-path interpolation. The model recognizes the
     // literal phrase as "skip the re-read".
     let data = json!({
@@ -1434,12 +1426,12 @@ fn render_for_model_file_unchanged_uses_ts_stub_phrasing() {
 
 #[test]
 fn render_for_model_notebook_merges_adjacent_text_into_one_part() {
-    // TS `notebook.ts::cellContentToToolResult` shape:
+    // `cellContentToToolResult` shape:
     // `<cell id="X">[<cell_type>Y</cell_type>][<language>Z</language>]source</cell id="X">`.
     // Markdown cells get a `<cell_type>` tag; non-python code cells get
     // a `<language>` tag; python code cells get neither. Adjacent text
-    // blocks fold into a single Text part joined with `'\n'` — TS
-    // `notebook.ts:198-213` `allResults.reduce(...)`.
+    // blocks fold into a single Text part joined with `'\n'` via
+    // `allResults.reduce(...)`.
     let data = json!({
         "type": "notebook",
         "file": {

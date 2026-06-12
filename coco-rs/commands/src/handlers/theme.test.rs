@@ -23,7 +23,7 @@ async fn whitespace_args_open_picker() {
 
 #[tokio::test]
 async fn named_arg_is_ignored_and_still_opens_picker() {
-    // TS `/theme` ignores any argument and always renders the picker, so a
+    // `/theme` ignores any argument and always renders the picker, so a
     // stray `/theme dark` must still open the overlay (never report inline).
     let result = ThemeHandler.execute_command("dark").await.unwrap();
     assert!(matches!(

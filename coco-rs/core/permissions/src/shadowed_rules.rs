@@ -1,7 +1,5 @@
 //! Shadowed (unreachable) rule detection.
 //!
-//! TS: utils/permissions/shadowedRuleDetection.ts
-//!
 //! Detects allow rules that are shadowed by tool-wide ask or deny rules,
 //! making them unreachable. Provides fix suggestions.
 

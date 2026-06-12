@@ -143,17 +143,15 @@ impl PanePromptState {
 
     /// True for prompts that pause the status-indicator elapsed clock.
     ///
-    /// TS parity: `REPL.tsx:2076-2088` pauses iff
-    /// `focusedInputDialog === 'tool-permission'`. coco-rs maps
-    /// [`Self::Permission`] to that path.
+    /// Pauses when a tool-permission dialog is active ([`Self::Permission`]).
     ///
-    /// TS-DIVERGE: [`Self::SandboxPermission`] also pauses even
-    /// though TS has no analog variant. The semantic is identical
-    /// ("tool blocked waiting on user approval"), so widening the
-    /// pause to cover sandbox approvals avoids a user-visible clock
-    /// drift while we wait. Other prompts (Question, PlanEntry,
-    /// PlanApproval, McpServerApproval, CostWarning) do not pause — TS
-    /// keeps the clock running through them.
+    /// DIVERGE: [`Self::SandboxPermission`] also pauses even though
+    /// there is no analog variant upstream. The semantic is identical
+    /// ("tool blocked waiting on user approval"), so widening the pause
+    /// to cover sandbox approvals avoids a user-visible clock drift while
+    /// we wait. Other prompts (Question, PlanEntry, PlanApproval,
+    /// McpServerApproval, CostWarning) do not pause — the clock keeps
+    /// running through them.
     pub fn pauses_status_clock(&self) -> bool {
         matches!(self, Self::Permission(_) | Self::SandboxPermission(_))
     }

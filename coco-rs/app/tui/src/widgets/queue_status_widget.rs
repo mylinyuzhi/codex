@@ -4,9 +4,6 @@
 //! user typed while the agent was busy that will process once the current
 //! turn ends. Displays as a compact single-row footer showing the count
 //! and a preview of the first queued command.
-//!
-//! TS reference: src/components/QueueIndicator.tsx /
-//! PromptInputQueuedCommands.tsx.
 
 use std::collections::VecDeque;
 

@@ -21,10 +21,8 @@
 //!   `plan_mode_turns_since_last_attachment` when a new human-turn UUID
 //!   is observed so the orchestrator's seeded throttle stays accurate.
 //!
-//! TS sources for the reconcile/mailbox behaviors:
-//! `permissionSetup.ts:597-646` (plan/auto mode-transition side effects),
-//! `attachments.ts:1380-1399` (auto-mode exit flag), and the swarm
-//! mailbox protocol (`plan_approval_request` / `_response` messages).
+//! See the swarm mailbox protocol for `plan_approval_request` /
+//! `_response` message formats.
 
 use coco_messages::AttachmentMessage;
 use coco_messages::LlmMessage;
@@ -101,9 +99,8 @@ impl PlanModeReminder {
     }
 
     /// Resolve the current live permission mode. Reads from
-    /// `app_state.permission_mode` (TS parity:
-    /// `appState.toolPermissionContext.mode`); falls back to the
-    /// constructor-time value when `app_state` is `None` or unset.
+    /// `app_state.permission_mode`; falls back to the constructor-time
+    /// value when `app_state` is `None` or unset.
     async fn current_permission_mode(&self) -> PermissionMode {
         match self.app_state.as_ref() {
             Some(state) => state
@@ -184,11 +181,9 @@ impl PlanModeReminder {
     /// Diff `latest_uuid` against the stashed `last_human_turn_uuid_seen`.
     /// On a new human turn, bump `plan_mode_turns_since_last_attachment`
     /// and stash the new UUID. Returns the counter value after the
-    /// (possibly skipped) bump.
-    ///
-    /// Matches TS `getPlanModeAttachmentTurnCount` semantics — counts
-    /// only non-meta, non-tool-result user messages. Tool-result rounds
-    /// are a separate `Message::ToolResult` variant in Rust.
+    /// (possibly skipped) bump. Counts only non-meta, non-tool-result
+    /// user messages. Tool-result rounds are a separate
+    /// `Message::ToolResult` variant.
     async fn observe_turn_and_count(&self, latest_uuid: Option<uuid::Uuid>) -> i64 {
         let Some(state) = self.app_state.as_ref() else {
             return 0;
@@ -211,9 +206,7 @@ impl PlanModeReminder {
     /// Plan ↔ non-Plan cycles set `has_exited_plan_mode` +
     /// `needs_plan_mode_exit_attachment`; re-entering Plan clears a stale
     /// pending exit attachment. Auto→non-Auto sets
-    /// `needs_auto_mode_exit_attachment`; re-entering Auto clears a stale
-    /// one. TS parity: `transitionPermissionMode` in
-    /// `permissionSetup.ts:597-646`.
+    /// `needs_auto_mode_exit_attachment`; re-entering Auto clears a stale one.
     async fn reconcile_mode_transition(&self, current_mode: PermissionMode) {
         let Some(app_state) = self.app_state.as_ref() else {
             return;
@@ -345,7 +338,7 @@ impl PlanModeReminder {
         let Some(team) = &self.team_name else {
             return;
         };
-        // Canonical leader name. TS: `TEAM_LEAD_NAME = 'team-lead'`.
+        // Canonical leader name.
         if agent != "team-lead" {
             return;
         }

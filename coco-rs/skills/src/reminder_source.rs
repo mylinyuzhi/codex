@@ -2,11 +2,11 @@
 //!
 //! `listing()` renders the full skill catalog as a bullet list of
 //! `- name: description` entries with each description capped at
-//! [`MAX_LISTING_DESCRIPTION_CHARS`] (TS `formatCommandsWithinBudget`
-//! per-entry bound) and no skill ever dropped. The full 1%-context-budget
-//! shrink-to-names-only path needs the model context window threaded through
-//! `SkillsSource::listing` and stays in `skills::generate_skill_tool_prompt`
-//! for the static system-prompt injection.
+//! [`MAX_LISTING_DESCRIPTION_CHARS`] (per-entry bound) and no skill ever
+//! dropped. The full 1%-context-budget shrink-to-names-only path needs the
+//! model context window threaded through `SkillsSource::listing` and stays
+//! in `skills::generate_skill_tool_prompt` for the static system-prompt
+//! injection.
 //!
 //! `invoked()` returns empty by default — tracking which skills were
 //! invoked this session requires per-CLI / per-QueryEngine state that
@@ -27,12 +27,11 @@ use crate::overrides::effective_skill_state;
 
 const MAX_SKILL_DISCOVERY_DESCRIPTION_CHARS: usize = 500;
 
-/// Per-entry description cap for the per-turn skill listing. Mirrors TS
-/// `formatCommandsWithinBudget`'s per-command bound (`MAX_LISTING_DESC_CHARS`)
-/// so one verbose skill cannot bloat the reminder. Bundled-vs-budget shrink to
-/// names-only (1% context budget) needs the model context window threaded
-/// through `SkillsSource::listing` and remains a follow-up; capping each entry
-/// here bounds the size without dropping any skill.
+/// Per-entry description cap for the per-turn skill listing so one verbose
+/// skill cannot bloat the reminder. Bundled-vs-budget shrink to names-only
+/// (1% context budget) needs the model context window threaded through
+/// `SkillsSource::listing` and remains a follow-up; capping each entry here
+/// bounds the size without dropping any skill.
 const MAX_LISTING_DESCRIPTION_CHARS: usize = 250;
 
 fn truncate_chars(s: &str, max: usize) -> String {
@@ -55,8 +54,7 @@ impl SkillsSource for SkillManager {
         // so we keep the `Arc`s alive for the borrow.
         let owned_skills = self.all();
 
-        // Apply the 4-state override gates per TS `XG$` +
-        // `cli_inner_pretty.js:513858-513869`:
+        // Apply the 4-state override gates:
         // - Off → skip entirely
         // - NameOnly → emit `- name` (no description)
         // - DMI && effective != On → skip (XG$)
@@ -84,9 +82,9 @@ impl SkillsSource for SkillManager {
         }
         let names: Vec<&str> = entries.iter().map(|(n, _)| *n).collect();
 
-        // TS `attachments.ts:2718-2730`: only announce skills the agent
-        // has not seen yet. Returns `None` once everything is announced
-        // so subsequent turns skip the redundant injection.
+        // Only announce skills the agent has not seen yet. Returns `None`
+        // once everything is announced so subsequent turns skip the
+        // redundant injection.
         let (delta, _is_initial) = self.take_unannounced_skills(agent_id, &names);
         if delta.is_empty() {
             return None;
@@ -117,15 +115,15 @@ impl SkillsSource for SkillManager {
         Vec::new()
     }
 
-    /// **TS-divergent**: this is a local keyword-match heuristic, not the
-    /// Haiku-class LLM call TS uses in `services/skillSearch/prefetch.ts`.
+    /// **Local-heuristic**: this is a local keyword-match heuristic, not an
+    /// LLM-backed search call.
     /// Returns matches keyed by case-insensitive substring on name (split
     /// on `- _`) plus 5+-char word overlap with description and
     /// `when_to_use`. Sorted alphabetically and capped at 5.
     ///
-    /// Signal is stamped `"local_keyword_match"` (not a `DiscoverySignal`
-    /// enum value from TS) so downstream telemetry can tell the heuristic
-    /// from a future LLM-backed producer. When the LLM-backed path lands,
+    /// Signal is stamped `"local_keyword_match"` so downstream telemetry
+    /// can tell the heuristic from a future LLM-backed producer. When the
+    /// LLM-backed path lands,
     /// swap this implementation and update the signal value.
     async fn skill_discovery(
         &self,

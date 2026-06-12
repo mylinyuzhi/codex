@@ -1,16 +1,13 @@
 //! Per-file lazy memory traversal — fired by [`coco_tool_runtime`] file-read
 //! triggers, not by static prompt-build.
 //!
-//! TS source: `utils/attachments.ts:1656-1862` (`getDirectoriesToProcess`,
-//! `getNestedMemoryAttachmentsForFile`, `getMemoryFilesForNestedDirectory`).
-//!
 //! The eager `discover_memory_files` (in `claudemd.rs`) loads the
 //! `root → CWD` slice once at session start. This module fills in the
 //! slice **strictly between CWD (exclusive) and the read file's parent
 //! (inclusive)** — files Claude needs after the user reads them, not
 //! eagerly speculatively.
 //!
-//! ## Phases (TS parity)
+//! ## Phases
 //!
 //! For trigger file `X`:
 //! 1. **Phase 1** — managed/user **conditional** rules matching `X`'s path
@@ -25,8 +22,8 @@
 //!
 //! ## Filename-matching divergence
 //!
-//! TS only matches `CLAUDE.md` and `CLAUDE.local.md` literally. coco-rs
-//! also accepts `AGENTS.md` / `AGENTS.local.md` and is case-insensitive
+//! The original only matches `CLAUDE.md` and `CLAUDE.local.md` literally.
+//! coco-rs also accepts `AGENTS.md` / `AGENTS.local.md` and is case-insensitive
 //! at every position — see [`crate::memory_filenames`].
 
 use std::collections::HashSet;
@@ -54,8 +51,7 @@ pub struct LoadedMemoryEntry {
     pub source: MemoryFileSource,
 }
 
-/// Split the filesystem into the two zones the per-file traversal
-/// walks (TS `getDirectoriesToProcess` `attachments.ts:1656-1689`):
+/// Split the filesystem into the two zones the per-file traversal walks:
 ///
 /// - `nested_dirs`: directories strictly between `cwd` (exclusive) and
 ///   the file's parent (inclusive), filtered to `startsWith(cwd)`.
@@ -196,7 +192,7 @@ fn load_nested_dir(
 
     // <dir>/.coco/rules/**/*.md — both unconditional (descendants of CWD
     // weren't covered by the eager phase) and conditional matching the
-    // trigger file. TS `getMemoryFilesForNestedDirectory:1286-1310`.
+    // trigger file.
     let rules_dir = dir.join(".coco").join("rules");
     if !rules_dir.exists() {
         return;
@@ -287,8 +283,7 @@ fn push_loaded(
 /// (`~/.coco/rules/**/*.md`) conditional rules whose `paths:` glob
 /// matches `file`.
 ///
-/// TS: `getManagedAndUserConditionalRules` (`claudemd.ts:1205-1238`).
-/// Glob base for managed/user rules is the original CWD (TS `getOriginalCwd()`).
+/// Glob base for managed/user rules is the original CWD.
 fn phase1_managed_user_conditional_rules(file: &Path) -> Vec<LoadedMemoryEntry> {
     let mut out: Vec<LoadedMemoryEntry> = Vec::new();
     let cwd = std::env::current_dir().unwrap_or_default();

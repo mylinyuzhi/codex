@@ -13,28 +13,26 @@ pub enum CommandAvailability {
 
 /// How a command was loaded.
 ///
-/// TS: `Command.source` field union (`SettingSource | 'plugin' | 'mcp'`).
-/// Rust port tags the payload-carrying variants (`Plugin { name }`,
-/// `Mcp { server_name }`) so the source and its attribution can never
-/// disagree. This replaces the older `loaded_from + plugin_name` dual-
-/// field layout, which allowed nonsensical states (e.g. `loaded_from =
-/// Builtin` paired with `plugin_name = Some(...)`).
+/// Payload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)
+/// ensure source and attribution can never disagree. This replaces the
+/// older `loaded_from + plugin_name` dual-field layout, which allowed
+/// nonsensical states (e.g. `loaded_from = Builtin` paired with
+/// `plugin_name = Some(...)`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandSource {
     /// Hardcoded built-in slash command (e.g. `/help`, `/clear`).
-    /// TS: `source: 'builtin'`.
     Builtin,
     /// Compiled-in bundled skill.
     Bundled,
-    /// User-scope on-disk skill (`~/.coco/skills/`). TS: `userSettings`.
+    /// User-scope on-disk skill (`~/.coco/skills/`).
     User,
     /// Project-scope on-disk skill (`.coco/skills/`).
     Project,
-    /// Enterprise/policy-managed skill. TS: `policySettings`.
+    /// Enterprise/policy-managed skill.
     Managed,
-    /// On-disk skill directory (general SKILL.md catch-all). TS: `skills`.
+    /// On-disk skill directory (general SKILL.md catch-all).
     Skills,
     /// Deprecated legacy flat-`.md` path. Not used by project skill discovery.
     CommandsDeprecated,
@@ -109,8 +107,6 @@ pub struct CommandBase {
 }
 
 /// Safety classification for remote/bridge filtering.
-///
-/// TS: `REMOTE_SAFE_COMMANDS` and `BRIDGE_SAFE_COMMANDS` sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandSafety {
@@ -137,16 +133,14 @@ impl CommandSafety {
 }
 
 /// Command execution type.
-///
-/// TS: `type: 'prompt' | 'local' | 'local-jsx'`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandType {
-    /// Expands to a model prompt (skills). TS: `type: 'prompt'`.
+    /// Expands to a model prompt (skills).
     Prompt(PromptCommandData),
-    /// Executes locally, returns text. TS: `type: 'local'`.
+    /// Executes locally, returns text.
     Local(LocalCommandData),
-    /// Opens a TUI overlay/modal. TS: `type: 'local-jsx'`.
+    /// Opens a TUI overlay/modal.
     LocalOverlay(LocalCommandData),
 }
 
@@ -168,17 +162,17 @@ impl CommandType {
 
 /// Tag-only projection of [`CommandType`]. Implements [`Copy`] so the
 /// UI snapshot ([`SlashCommandInfo`]) and the autocomplete ranker can
-/// pass it around without cloning. Mirrors TS `Command.type`.
+/// pass it around without cloning.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandTypeTag {
-    /// Expands into a model prompt. TS `type: 'prompt'`.
+    /// Expands into a model prompt.
     Prompt,
-    /// Executes locally and returns text. TS `type: 'local'`.
+    /// Executes locally and returns text.
     #[default]
     Local,
-    /// Opens a TUI overlay. TS `type: 'local-jsx'`.
+    /// Opens a TUI overlay.
     LocalOverlay,
 }
 
@@ -277,17 +271,15 @@ pub struct SlashCommandInfo {
     pub argument_kind: CommandArgumentKind,
     /// Where this command came from. Drives empty-query source grouping
     /// in the `/` popup and the `(user)` / `(project)` / `(plugin)`
-    /// suffix on descriptions. Mirrors TS `Command.source` consumed by
-    /// `formatDescriptionWithSource` and the empty-input grouping in
-    /// `generateCommandSuggestions`. Plugin / MCP attribution rides on
-    /// the `Plugin { name }` / `Mcp { server_name }` variants.
+    /// suffix on descriptions (`formatDescriptionWithSource`, empty-input
+    /// grouping in `generateCommandSuggestions`). Plugin / MCP attribution
+    /// rides on the `Plugin { name }` / `Mcp { server_name }` variants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<CommandSource>,
     /// Execution kind. The empty-query ranker treats only
     /// [`CommandTypeTag::Prompt`] entries as skills eligible for the
     /// "recently used" section — builtin local commands always sit in
-    /// the builtin bucket. Mirrors TS `cmd.type === 'prompt'` filtering
-    /// in `commandSuggestions.ts`.
+    /// the builtin bucket (`cmd.type === 'prompt'` filtering).
     ///
     /// Derived from the source [`CommandType`] via
     /// [`CommandType::tag`] at snapshot time; the projection is

@@ -486,8 +486,7 @@ impl AnthropicMessagesLanguageModel {
         betas.extend(betas_from_messages);
 
         // Resolve all capability/topology/knob-driven betas in one
-        // place. Mirrors TS `getBetas` + `getModelDependentBetas`
-        // (`betas.ts:106-263`). Output is a sorted set so the wire
+        // place. Output is a sorted set so the wire
         // join is deterministic (Finding 7). Memory tool /
         // context-management body insert below gate on the same
         // predicate (`should_emit_context_management`) — Finding R3-F2.

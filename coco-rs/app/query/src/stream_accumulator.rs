@@ -2,8 +2,7 @@
 //! `ServerNotification::ItemStarted/Updated/Completed` events with ThreadItem
 //! tool mapping.
 //!
-//! This is the Rust equivalent of TS's implicit `normalizeMessage()` in
-//! `queryHelpers.ts`, implemented as an explicit state machine per
+//! Implemented as an explicit state machine per
 //! `event-system-design.md` Section 6.
 //!
 //! ## State Machine

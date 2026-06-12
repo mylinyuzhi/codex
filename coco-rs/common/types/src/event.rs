@@ -271,9 +271,6 @@ pub enum ItemStatus {
 }
 
 /// Per-row metadata for a single rewind picker row.
-///
-/// TS: one entry of the `fileHistoryMetadata: Record<number,
-/// DiffStats>` map in `MessageSelector.tsx:285-312`.
 /// `metadata == None` corresponds to `canRestore = false` (no
 /// snapshot — picker shows "⚠ No code restore").
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -287,10 +284,8 @@ pub struct RewindRowMetadata {
 /// restore preview event. `file_paths.is_empty()` means "snapshot
 /// exists but nothing changed".
 ///
-/// TS: `DiffStats` from `utils/fileHistory.ts:55-61`. `file_paths`
-/// matches `DiffStats.filesChanged: string[]` and is used by the
-/// confirm screen to assemble single / two / many-file labels at
-/// `MessageSelector.tsx:481-523`.
+/// `file_paths` matches `DiffStats.filesChanged: string[]` and is used by the
+/// confirm screen to assemble single / two / many-file labels.
 ///
 /// # Two semantics, one wire type
 ///
@@ -1750,7 +1745,6 @@ pub enum TuiOnlyEvent {
         cwd: Option<String>,
         /// Identity badge of the requesting cross-process teammate, if
         /// any — rendered in the prompt so the leader sees who is asking.
-        /// TS: `workerBadge` on `PermissionRequest.tsx:89`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worker_badge: Option<crate::WorkerBadge>,
     },
@@ -1837,19 +1831,14 @@ pub enum TuiOnlyEvent {
     /// `metadata == Some { file_paths: [], .. }` means the snapshot
     /// exists but nothing changed — picker renders "No code changes".
     ///
-    /// TS: the per-row `Promise.all(messageOptions.map(...))` walk in
-    /// `MessageSelector.tsx:285-312`. Bundled here so the bounded
-    /// TUI command channel does not drop individual row events on
-    /// transcripts with many user messages.
+    /// Bundled here so the bounded TUI command channel does not drop individual
+    /// row events on transcripts with many user messages.
     RewindRowMetadataReady { rows: Vec<RewindRowMetadata> },
     /// Rewind restore-preview diff stats for the selected message,
     /// emitted after the user confirms a checkpoint pick. `stats ==
     /// None` means `fileHistoryCanRestore(...)` was false — the
     /// option screen suppresses code-restore choices and shows the
     /// conversation-only path.
-    ///
-    /// TS: the single `await fileHistoryGetDiffStats(...)` call at
-    /// `MessageSelector.tsx:173`.
     RewindRestorePreviewReady {
         message_id: String,
         stats: Option<RewindDiffStatsPayload>,
@@ -2218,14 +2207,11 @@ pub enum MemoryDialogScope {
 }
 
 /// Per-skill override state stored under `skill_overrides` in any
-/// settings tier. Mirrors TS `skillOverrides` values
-/// (`cli_inner_pretty.js:477208-477214` `kB6 = ["on","name-only",
-/// "user-invocable-only","off"]`). Drives the `/skills` 4-state
-/// editor ladder.
+/// settings tier. Drives the `/skills` 4-state editor ladder.
 ///
 /// Wire format is kebab-case (`"on"`, `"name-only"`,
-/// `"user-invocable-only"`, `"off"`) — exact match to TS so JSON
-/// settings files round-trip without translation.
+/// `"user-invocable-only"`, `"off"`) — JSON settings files round-trip
+/// without translation.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -2408,22 +2394,16 @@ pub struct SkillsDialogPayload {
     /// divides [`SkillsDialogEntry::frontmatter_bytes`] by this to
     /// render the `~N tok` column. Set to 4 when the host cannot
     /// resolve a more accurate value — `bytes/token ≈ 4` is the
-    /// English-text rule-of-thumb the TS dialog falls back to.
-    ///
-    /// TS: `bytesPerToken = sG(ctx.options.mainLoopModel)` passed
-    /// to the dialog and re-used by `ZP$(skill, bytesPerToken)`.
+    /// English-text rule-of-thumb fallback.
     pub bytes_per_token: i64,
 }
 
-/// One row in the `/skills` dialog. Mirrors the per-row payload
-/// shape consumed by TS `uJ4` (the 2.1.142 `<SkillsDialog>` editor)
-/// — every field is required so the dialog never has to fabricate
-/// defaults for `baseline` / `lock` / etc.
+/// One row in the `/skills` dialog. Every field is required so the dialog
+/// never has to fabricate defaults for `baseline` / `lock` / etc.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillsDialogEntry {
-    /// Canonical skill name — what `/<name>` invokes. TS
-    /// `getCommandName(skill)`.
+    /// Canonical skill name — what `/<name>` invokes.
     pub name: String,
     /// Source group this entry belongs to. Drives the source label
     /// rendered inline + the implicit alphabetical group when the
@@ -2461,12 +2441,10 @@ pub struct SkillsDialogEntry {
     pub lock: Option<SkillLock>,
 }
 
-/// Source group for a skill dialog entry. Mirrors TS `SkillSource`
-/// union (`SettingSource | 'plugin' | 'mcp'`) collapsed to a closed
-/// enum so the wire shape is statically typed.
+/// Source group for a skill dialog entry. Collapsed from
+/// `SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.
 ///
-/// **2.1.142 parity**: TS `xJ4` (`cli_inner_pretty.js:476897-476907`)
-/// normalises `bundled`/`builtin` → display label `"built-in"`; the
+/// The dialog normalises `bundled`/`builtin` → display label `"built-in"`; the
 /// dialog filter matches against that lowercased label.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

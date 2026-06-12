@@ -1,15 +1,14 @@
 //! `MEMORY.md` index — line-and-byte truncation, parse pointer entries.
 //!
-//! TS: `memdir/memdir.ts` — `truncateEntrypointContent`,
-//! `MAX_ENTRYPOINT_LINES`, `MAX_ENTRYPOINT_BYTES`. The model owns this
-//! file; the runtime never auto-regenerates it. We only read + truncate.
+//! The model owns this file; the runtime never auto-regenerates it.
+//! We only read + truncate.
 
 /// Hard line cap on `MEMORY.md`. Entries beyond this are dropped with a
 /// trailing warning.
 pub const MAX_ENTRYPOINT_LINES: usize = 200;
 
 /// Hard byte cap on `MEMORY.md`. Catches long-line indexes that slip
-/// past the line cap (TS p100 was 197KB under 200 lines).
+/// past the line cap (p100 was 197KB under 200 lines).
 pub const MAX_ENTRYPOINT_BYTES: usize = 25_000;
 
 /// Parsed `MEMORY.md` index — model-curated pointers to memory files.
@@ -44,8 +43,6 @@ pub struct EntrypointTruncation {
 /// at the last `\n` before the cap so we don't cut mid-line. The byte
 /// check examines the *original* length so we report accurate stats —
 /// otherwise long lines that survived line-truncation would understate.
-///
-/// TS: `truncateEntrypointContent` in `memdir/memdir.ts`.
 pub fn truncate_entrypoint_content(raw: &str) -> EntrypointTruncation {
     let trimmed = raw.trim();
     let lines: Vec<&str> = trimmed.split('\n').collect();

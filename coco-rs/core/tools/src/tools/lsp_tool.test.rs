@@ -47,7 +47,7 @@ fn lsp_action_lsp_method_round_trip() {
 }
 
 #[test]
-fn requires_position_matches_ts_schema() {
+fn requires_position_matches_schema() {
     // File / workspace scoped operations don't need a position.
     assert!(!LspAction::DocumentSymbol.requires_position());
     assert!(!LspAction::WorkspaceSymbol.requires_position());
@@ -148,8 +148,8 @@ async fn is_enabled_requires_both_feature_and_connected_handle() {
 
 #[tokio::test]
 async fn execute_rejects_missing_position() {
-    // `line` / `character` are schema-required for every operation (TS
-    // parity: tool-facing `inputSchema` makes both mandatory). Omitting
+    // `line` / `character` are schema-required for every operation —
+    // the tool-facing `inputSchema` makes both mandatory. Omitting
     // them is rejected at input deserialization, before dispatch.
     let ctx = ToolUseContext::test_default();
     let input = json!({

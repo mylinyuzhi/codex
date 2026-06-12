@@ -454,8 +454,7 @@ async fn unknown_task_id_errors() {
 // ── W2: detach signal contract tests ────────────────────────────────
 
 /// First `signal_detach` returns `Detached` (and notifies); subsequent
-/// calls return `AlreadyDetached` (CAS-guarded). Mirrors TS
-/// `backgroundAgentTask`'s `if (task.isBackgrounded) return false`.
+/// calls return `AlreadyDetached` (CAS-guarded).
 #[tokio::test]
 async fn signal_detach_is_idempotent() {
     let rt = rt();
@@ -479,8 +478,7 @@ async fn signal_detach_is_idempotent() {
     );
 }
 
-/// `signal_detach` wakes an awaiter on the per-task `Notify`. Mirrors
-/// the TS `Promise.race([nextMessage, backgroundSignal])` arm:
+/// `signal_detach` wakes an awaiter on the per-task `Notify`:
 /// resolving the signal wakes the awaiter exactly once.
 #[tokio::test]
 async fn signal_detach_wakes_notify_awaiter() {
@@ -759,8 +757,7 @@ async fn no_sink_means_no_panic_on_terminal() {
 
 /// W6: `register_dream_task` creates a task with `TaskType::Dream`
 /// so the TUI panel + `TaskList` tool can differentiate auto-memory
-/// consolidation from user-spawned subagents. TS parity:
-/// `tasks/DreamTask/DreamTask.ts:72`.
+/// consolidation from user-spawned subagents.
 #[tokio::test]
 async fn register_dream_task_creates_dream_typed_task() {
     let rt = rt();
@@ -791,9 +788,8 @@ async fn register_dream_task_supports_kill_via_cancel_token() {
 
 /// W4: `complete_silent` flips an undetached foreground task to a
 /// terminal status without pushing a `<task-notification>`. The row
-/// stays in the manager so the panel-grace sweep
-/// (TS `framework.ts:evictTerminalTask`) can evict it later; eager
-/// removal would drop the row before the 30s grace window.
+/// stays in the manager so the panel-grace sweep can evict it later;
+/// eager removal would drop the row before the 30s grace window.
 #[tokio::test]
 async fn complete_silent_marks_foreground_terminal_without_notification() {
     let sink = CapturingSink::default();
@@ -988,7 +984,7 @@ async fn shell_spawn_emits_progress_events_through_progress_tx() {
     assert_eq!(
         progress.data["type"].as_str(),
         Some("bash_progress"),
-        "payload must carry TS-aligned `type` field"
+        "payload must carry `type` field"
     );
     assert_eq!(progress.data["status"].as_str(), Some("running"));
 }

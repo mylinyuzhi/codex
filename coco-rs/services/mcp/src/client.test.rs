@@ -245,7 +245,7 @@ fn needs_auth_without_connect_false_for_stdio() {
 fn needs_auth_without_connect_false_for_xaa_server() {
     // XAA guard: an xaa-configured server can silently re-auth from a cached
     // IdP id_token, so it must NOT be skip-surfaced (else the silent re-auth
-    // branch is unreachable). Mirrors TS hasMcpDiscoveryButNoToken XAA guard.
+    // branch is unreachable).
     let mut manager = McpConnectionManager::new(std::env::temp_dir());
     register_http(
         &mut manager,

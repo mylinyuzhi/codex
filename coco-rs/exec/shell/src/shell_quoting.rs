@@ -1,10 +1,6 @@
 //! Shell-safe quoting utilities.
 //!
-//! TS source: `utils/bash/shellQuote.ts` (quote) +
-//! `utils/bash/shellQuoting.ts` (quoteShellCommand, rewriteWindowsNullRedirect,
-//! shouldAddStdinRedirect, hasStdinRedirect).
-//!
-//! Coco-rs simplification: we do not depend on Node's `shell-quote` package.
+//! Does not depend on Node's `shell-quote` package.
 //! For our use case (wrapping a user command for `eval`), single-quoting the
 //! entire command is both simpler and avoids every edge case that the TS
 //! `shell-quote` library introduces (the `!` → `\!` corruption, the `\'` bug
@@ -16,8 +12,6 @@
 ///
 /// Escapes embedded single quotes via the canonical `'"'"'` trick so the
 /// output is safe to pass through bash's word-splitting and quote-parsing.
-///
-/// TS: `singleQuoteForEval()` in `bashPipeCommand.ts:273-275`.
 pub fn single_quote_for_eval(s: &str) -> String {
     let escaped = s.replace('\'', r#"'"'"'"#);
     format!("'{escaped}'")
@@ -25,9 +19,7 @@ pub fn single_quote_for_eval(s: &str) -> String {
 
 /// Quote a sequence of arguments into a single shell-safe string.
 ///
-/// Each argument is single-quoted and joined with spaces. Mirrors the TS
-/// `quote([a, b, c])` helper from `shellQuote.ts:267-304` for the common case
-/// of building `cmd arg1 arg2 …`.
+/// Each argument is single-quoted and joined with spaces.
 pub fn quote<S: AsRef<str>>(args: &[S]) -> String {
     args.iter()
         .map(|s| single_quote_for_eval(s.as_ref()))
@@ -39,8 +31,6 @@ pub fn quote<S: AsRef<str>>(args: &[S]) -> String {
 ///
 /// Matches `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`, `<<-'EOF'`, `<<\EOF`.
 /// Excludes bit-shift operators (`1 << 2`, `[[ 1 << 2 ]]`, `$(( 1 << 2 ))`).
-///
-/// TS: `containsHeredoc()` in `shellQuoting.ts:7-22`.
 pub fn contains_heredoc(command: &str) -> bool {
     // Bit-shift exclusions (Rust regex doesn't backtrack, so we keep these as
     // simple substring/digit walks — cheaper than re-compiling regexes).
@@ -119,8 +109,6 @@ fn has_bit_shift(command: &str) -> bool {
 }
 
 /// Detect multiline strings inside single or double quotes.
-///
-/// TS: `containsMultilineString()` in `shellQuoting.ts:27-38`.
 pub fn contains_multiline_string(command: &str) -> bool {
     contains_multiline_in_quotes(command, '\'') || contains_multiline_in_quotes(command, '"')
 }
@@ -162,8 +150,6 @@ fn contains_multiline_in_quotes(s: &str, q: char) -> bool {
 /// Matches `< file`, `< /path`, `< /dev/null`. Excludes `<<` (heredoc) and
 /// `<(` (process substitution). Must be preceded by whitespace or a command
 /// separator (or start of string).
-///
-/// TS: `hasStdinRedirect()` in `shellQuoting.ts:81-86`.
 pub fn has_stdin_redirect(command: &str) -> bool {
     let bytes = command.as_bytes();
     let mut i = 0;
@@ -199,8 +185,6 @@ pub fn has_stdin_redirect(command: &str) -> bool {
 /// - Commands with an existing redirect → skip.
 /// - Otherwise add (default safe behavior — prevents the child from blocking
 ///   on the inherited pipe stdin).
-///
-/// TS: `shouldAddStdinRedirect()` in `shellQuoting.ts:93-106`.
 pub fn should_add_stdin_redirect(command: &str) -> bool {
     !contains_heredoc(command) && !has_stdin_redirect(command)
 }
@@ -211,8 +195,6 @@ pub fn should_add_stdin_redirect(command: &str) -> bool {
 /// When `add_stdin_redirect` is true and the command has no heredoc, appends
 /// `< /dev/null` *outside* the quote so the redirect applies to `eval` itself
 /// — this is critical for piped commands (see [`crate::pipe_rearrange`]).
-///
-/// TS: `quoteShellCommand()` in `shellQuoting.ts:46-74`.
 pub fn quote_shell_command(command: &str, add_stdin_redirect: bool) -> String {
     let quoted = single_quote_for_eval(command);
     if contains_heredoc(command) {
@@ -235,9 +217,6 @@ pub fn quote_shell_command(command: &str, add_stdin_redirect: bool) -> String {
 ///
 /// Matches: `>nul`, `> NUL`, `2>nul`, `&>nul`, `>>nul` (case-insensitive).
 /// Does NOT match: `>null`, `>nullable`, `>nul.txt`, `cat nul.txt`.
-///
-/// TS: `rewriteWindowsNullRedirect()` in `shellQuoting.ts:124-128`.
-/// Reference: anthropics/claude-code#4928.
 pub fn rewrite_windows_null_redirect(command: &str) -> String {
     let mut out = String::with_capacity(command.len());
     let bytes = command.as_bytes();

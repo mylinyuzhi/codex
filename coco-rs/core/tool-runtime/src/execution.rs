@@ -1,7 +1,5 @@
 //! Tool execution pipeline — single tool call lifecycle.
 //!
-//! TS: services/tools/toolExecution.ts (1745 LOC)
-//!
 //! Implements the full lifecycle of a single tool call:
 //! 1. Permission check (canUseTool)
 //! 2. Tool resolution (find by name)
@@ -44,8 +42,6 @@ pub struct ToolExecutionResult {
 }
 
 /// Classify a tool execution error for telemetry.
-///
-/// TS: classifyToolError() — maps errors to analytics categories.
 pub fn classify_tool_error(error: &ToolError) -> String {
     match error {
         ToolError::NotFound { .. } => "not_found".to_string(),
@@ -156,14 +152,11 @@ pub async fn execute_tool_call(
 
     // Step 2: Validate model input (semantic validation)
     //
-    // R7-T24: validation runs BEFORE permission check to match TS
-    // `services/tools/toolExecution.ts:614-686` ordering. TS calls
-    // `tool.inputSchema.safeParse(input)` and `tool.validateInput`
-    // before any permission resolution; this ensures malformed
-    // input is reported as an `InvalidInput` error rather than a
-    // confusing "permission denied" message. It also guarantees
-    // that permission decisions are computed against validated
-    // input, never against raw model output.
+    // R7-T24: validation runs BEFORE permission check — schema + validate_input
+    // run before any permission resolution. This ensures malformed input
+    // is reported as an `InvalidInput` error rather than a confusing
+    // "permission denied" message, and guarantees permission decisions are
+    // computed against validated input, never raw model output.
     let validation = tool.validate_input(validated.as_value(), ctx);
     if !validation.is_valid() {
         tracing::warn!(
@@ -188,11 +181,10 @@ pub async fn execute_tool_call(
 
     // Step 3.5: Per-fork canUseTool callback gate.
     //
-    // TS: services/tools/toolExecution.ts:706-748 — the callback runs
-    // BEFORE `tool.check_permissions` so forks (promptSuggestion,
-    // speculation, side_question, compact, extract / dream / session
-    // memory, agent_summary, auto_dream) can deny / rewrite per-call
-    // input without modifying the static rule pipeline.
+    // The callback runs BEFORE `tool.check_permissions` so forks
+    // (promptSuggestion, speculation, side_question, compact, extract /
+    // dream / session memory, agent_summary, auto_dream) can deny / rewrite
+    // per-call input without modifying the static rule pipeline.
     //
     // Decisions:
     // - Deny → short-circuit, surface the message as the synthesized
@@ -316,8 +308,7 @@ pub async fn execute_tool_call(
     // `Passthrough` and `Allow` as proceed-to-execute.
     //
     // Skipped when step 3.5's canUseTool callback explicitly returned
-    // `Allow` — the callback's opinion is authoritative for the Allow
-    // path (TS parity: toolExecution.ts:737-748).
+    // `Allow` — the callback's opinion is authoritative for the Allow path.
     if !skip_builtin_perms {
         let decision = tool.check_permissions(validated.as_value(), ctx).await;
         match decision {
@@ -403,8 +394,7 @@ pub async fn execute_tool_call(
 
 /// Strip internal-only fields from model-provided Bash input.
 ///
-/// TS: `services/tools/toolExecution.ts:756-773` strips
-/// `_simulatedSedEdit` from the parsed Bash input as a defense-in-depth
+/// Strips `_simulatedSedEdit` from the parsed Bash input as a defense-in-depth
 /// safeguard. The convention is that any Bash input field whose key
 /// starts with `_` is treated as internal and must only be set by the
 /// permission UI dialog (e.g. SedEditPermissionRequest), never by the
@@ -420,8 +410,8 @@ fn strip_internal_bash_fields(tool_name: &str, mut input: Value) -> Value {
     }
     if let Some(obj) = input.as_object_mut() {
         // Two-pass: collect internal keys first to avoid borrow-conflict
-        // with the mutating remove. Silent strip — TS doesn't log
-        // either, the field shouldn't be in model traffic in normal
+        // with the mutating remove. Silent strip — the field shouldn't
+        // be in model traffic in normal
         // operation.
         let internal_keys: Vec<String> =
             obj.keys().filter(|k| k.starts_with('_')).cloned().collect();

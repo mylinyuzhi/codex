@@ -91,8 +91,7 @@ const RULES: &[(&str, &LazyLock<Regex>)] = &[
 /// [`SecretMatch`] per detection so callers can BLOCK writes (rather
 /// than silently redact) — used by the team-memory write guard.
 ///
-/// Mirrors TS `services/teamMemorySync/secretScanner.ts` intent: secrets
-/// must never leave the user's machine, so detected hits cause the
+/// Secrets must never leave the user's machine, so detected hits cause the
 /// write to be rejected outright with a labeled reason.
 ///
 /// Empty result is the no-op "safe to write" signal. For redaction

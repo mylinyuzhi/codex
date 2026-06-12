@@ -1,9 +1,7 @@
-//! TS `date_change` generator.
+//! `date_change` generator.
 //!
 //! Fires when the local ISO date has rolled over relative to the last
 //! previously-seen date in the session — e.g. the user coded past midnight.
-//! TS source: `getDateChangeAttachments` (`attachments.ts:1415`) +
-//! `normalizeAttachmentForAPI` `case 'date_change':` (`messages.ts:4162`).
 //!
 //! Detection state lives on the engine (per-session "last emitted date"
 //! latch). The engine pre-computes by comparing today's `get_local_iso_date`
@@ -54,7 +52,7 @@ impl AttachmentGenerator for DateChangeGenerator {
         if date.is_empty() {
             return Ok(None);
         }
-        // TS verbatim: `messages.ts:4162`.
+        // Content is verbatim for model compatibility.
         let content = format!(
             "The date has changed. Today's date is now {date}. DO NOT mention this to the user explicitly because they are already aware."
         );

@@ -1,8 +1,7 @@
 //! Plugin output-style loader.
 //!
-//! TS source: `utils/plugins/loadPluginOutputStyles.ts`. Reads `.md`
-//! files from each enabled plugin's `output-styles/` directory plus any
-//! manifest-declared extras. Style names are namespaced as
+//! Reads `.md` files from each enabled plugin's `output-styles/` directory
+//! plus any manifest-declared extras. Style names are namespaced as
 //! `pluginName:baseName`, mirroring how plugin commands and agents are
 //! exposed.
 //!
@@ -44,8 +43,8 @@ impl PluginOutputStyleSource {
     /// - Every extra path from `manifest.output_styles` (single string
     ///   or array), resolved relative to the plugin root.
     ///
-    /// TS source: `pluginLoader.ts:1585-1609` (default dir + manifest
-    /// `outputStyles` extras).
+    /// Builds the source description from the loaded plugin
+    /// (default dir + manifest `outputStyles` extras).
     pub fn from_loaded_plugin(plugin: &coco_plugins::loader::LoadedPluginV2) -> Self {
         use coco_plugins::schemas::ManifestPaths;
         let default_candidate = plugin.path.join("output-styles");
@@ -74,7 +73,7 @@ impl PluginOutputStyleSource {
 ///
 /// Names are namespaced as `<plugin_name>:<base_name>`. Duplicate
 /// physical file paths within the same plugin are skipped after
-/// resolving symlinks, matching TS `isDuplicatePath`.
+/// resolving symlinks.
 pub fn load_plugin_output_styles(plugins: &[PluginOutputStyleSource]) -> Vec<OutputStyleConfig> {
     let mut all = Vec::new();
     for plugin in plugins {
@@ -176,8 +175,8 @@ fn load_single_plugin_file(
     let parsed = coco_frontmatter::parse(&raw);
     let mut style = build_config_from_parsed(path, &parsed, OutputStyleSource::Plugin);
 
-    // Plugin namespace prefix on the name. TS always prefixes the
-    // frontmatter/file base name; it does not strip an existing prefix.
+    // Plugin namespace prefix on the name. Always prefixes the
+    // frontmatter/file base name; does not strip an existing prefix.
     style.name = format!("{plugin_name}:{}", style.name);
     style.description = parsed
         .data
@@ -196,8 +195,7 @@ fn load_single_plugin_file(
         .get("force-for-plugin")
         .and_then(parse_ts_boolean_frontmatter);
 
-    // `keep-coding-instructions` is dir-style-only per TS — clear if
-    // accidentally set.
+    // `keep-coding-instructions` is dir-style-only — clear if accidentally set.
     style.keep_coding_instructions = None;
 
     Ok(style)

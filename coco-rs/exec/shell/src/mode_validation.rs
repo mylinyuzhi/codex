@@ -1,7 +1,7 @@
 //! Mode-based command validation.
 //!
-//! TS: modeValidation.ts — in acceptEdits mode, auto-allow certain pure-create
-//! file-manipulation commands without requiring user approval.
+//! In acceptEdits mode, auto-allow certain pure-create file-manipulation
+//! commands without requiring user approval.
 
 /// Commands that are auto-allowed in acceptEdits mode.
 ///
@@ -15,8 +15,8 @@ const ACCEPT_EDITS_COMMANDS: &[&str] = &["mkdir", "touch"];
 /// Check if a command should be auto-allowed in acceptEdits mode.
 ///
 /// Returns true if ANY subcommand's base executable is in the auto-allow list.
-/// TS `modeValidation.checkPermissionMode` splits the command and allows if any
-/// part is a filesystem command, so `cd src && rm old.txt` finds `rm` → allow.
+/// Splits the command and allows if any part is a pure-create command, so
+/// `cd src && mkdir out` finds `mkdir` → allow.
 pub fn is_auto_allowed_in_accept_edits(command: &str) -> bool {
     let trimmed = command.trim();
     if trimmed.is_empty() {

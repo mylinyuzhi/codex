@@ -1,4 +1,4 @@
-//! Shared TS-style write permission checks for file-editing tools.
+//! Shared write permission checks for file-editing tools.
 
 use std::collections::BTreeSet;
 use std::path::Path;

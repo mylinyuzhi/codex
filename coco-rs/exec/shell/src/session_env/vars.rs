@@ -1,11 +1,9 @@
 //! In-memory store for env vars set via `/env`.
 //!
-//! TS source: `utils/sessionEnvVars.ts` — a module-level `Map<string,string>`
-//! whose entries are applied as the env-overrides of every child shell
-//! spawn (but NOT to the coco process itself).
-//!
-//! Rust: an `Arc<RwLock<HashMap<...>>>`-backed `SessionEnvVars` that callers
-//! clone and pass into the shell provider. One instance per session.
+//! Entries are applied as env-overrides of every child shell spawn (but NOT
+//! to the coco process itself). An `Arc<RwLock<HashMap<...>>>`-backed
+//! `SessionEnvVars` that callers clone and pass into the shell provider.
+//! One instance per session.
 
 use std::collections::HashMap;
 use std::sync::Arc;

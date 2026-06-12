@@ -14,8 +14,8 @@
 //! - Bridging would add ~30 `ServerNotification` variants for retrieval
 //!   internals that SDK consumers outside the retrieval subcommand would
 //!   never use.
-//! - TS reference does not have this split (retrieval is a thin MCP shim
-//!   there), so the coco-rs architectural decomposition is intentional.
+//! - coco-rs retrieval is a full subsystem (not a thin MCP shim),
+//!   so the architectural decomposition into an isolated event stream is intentional.
 //!
 //! **Future hook**: if a slash command ever needs retrieval progress in the
 //! main agent stream, expose a **single** aggregate

@@ -1,7 +1,5 @@
 //! Plugin dependency resolution — pure functions, no I/O.
 //!
-//! TS source: `utils/plugins/dependencyResolver.ts:1-305` (full port).
-//!
 //! Semantics are `apt`-style: a dependency is a *presence guarantee*, not a
 //! module graph. Plugin A depending on Plugin B means "B's namespaced
 //! components (MCP servers, commands, agents) must be available when A runs."
@@ -44,8 +42,6 @@ pub enum ResolutionResult {
 
 /// Normalize a dependency reference to fully-qualified `name@marketplace` form.
 ///
-/// TS: `qualifyDependency(dep, declaringId)` from `dependencyResolver.ts:38-46`.
-///
 /// - Bare names inherit the declarer's marketplace.
 /// - **Exception**: `@inline` (--plugin-dir) plugins return bare deps unchanged
 ///   because the synthetic `inline` marketplace sentinel cannot meaningfully
@@ -63,9 +59,7 @@ pub fn qualify_dependency(dep: &str, declaring: &PluginId) -> PluginId {
 
 /// Walk the transitive dependency closure of `root` via DFS.
 ///
-/// TS: `resolveDependencyClosure(rootId, lookup, alreadyEnabled, allowedCrossMarketplaces)`.
-///
-/// **Behavior** (verified against TS):
+/// **Behavior**:
 /// - The returned `closure` always contains `root`, plus every transitive
 ///   dependency NOT in `already_enabled`.
 /// - Already-enabled deps are skipped (avoids surprise settings writes), but
@@ -126,10 +120,9 @@ where
     F: Fn(PluginId) -> Fut + Clone,
     Fut: std::future::Future<Output = Option<DependencyLookupResult>>,
 {
-    // Root is never skipped — even when already-enabled. TS comment
-    // (`dependencyResolver.ts:111-117`): re-installing a plugin that's in
-    // settings but missing from disk would otherwise return an empty closure
-    // and the caller would skip cache+register. We compare against the
+    // Root is never skipped — even when already-enabled. Re-installing a plugin
+    // that's in settings but missing from disk would otherwise return an empty
+    // closure and the caller would skip cache+register. We compare against the
     // captured root id explicitly (not via `stack.is_empty()`, which becomes
     // false on every recursive call but still represents a "root" that
     // happens to also be its own dep — a self-cycle, not the install root).
@@ -234,8 +227,6 @@ pub struct DemotePluginRecord {
 /// Load-time safety net: for each enabled plugin, verify all manifest
 /// dependencies are also enabled. Demote any that fail.
 ///
-/// TS: `verifyAndDemote(plugins)` from `dependencyResolver.ts:177-234`.
-///
 /// **Fixed-point loop**: demoting plugin A may break plugin B that depends on
 /// A, so iterate until nothing changes. Bare deps from `@inline` plugins
 /// match by name only against an `enabled_by_name` multiset (so demoting one
@@ -312,8 +303,6 @@ pub fn verify_and_demote(plugins: &[DemotePluginRecord]) -> DemotionReport {
 
 /// Find all enabled plugins that declare `target` as a dependency.
 ///
-/// TS: `findReverseDependents(pluginId, plugins)` from `dependencyResolver.ts:244-263`.
-///
 /// Bare deps from `@inline` plugins match by name only.
 pub fn find_reverse_dependents(target: &PluginId, plugins: &[DemotePluginRecord]) -> Vec<PluginId> {
     plugins
@@ -336,7 +325,6 @@ pub fn find_reverse_dependents(target: &PluginId, plugins: &[DemotePluginRecord]
 }
 
 /// Format `(+ N dependencies)` install-success suffix.
-/// TS: `formatDependencyCountSuffix`.
 pub fn format_dependency_count_suffix(installed_deps: &[PluginId]) -> String {
     let n = installed_deps.len();
     if n == 0 {
@@ -349,7 +337,6 @@ pub fn format_dependency_count_suffix(installed_deps: &[PluginId]) -> String {
 }
 
 /// Format `— warning: required by X, Y` uninstall suffix.
-/// TS: `formatReverseDependentsSuffix`.
 pub fn format_reverse_dependents_suffix(rdeps: &[PluginId]) -> String {
     if rdeps.is_empty() {
         String::new()

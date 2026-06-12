@@ -1,16 +1,14 @@
 //! Thread-safe FIFO buffer of completed sync hook events for the
 //! per-turn reminder pipeline.
 //!
-//! TS parity: `processSessionStartHooks` (`utils/sessionStart.ts:130-175`)
-//! and `executeUserPromptSubmitHooks` (`utils/processUserInput/processUserInput.ts:182-263`)
-//! emit `Attachment` messages directly into the conversation. coco-rs
-//! holds the analogous events in this buffer; the reminder pipeline drains
-//! it via the `HookEventsSource::drain` trait so the same generators
-//! (`hook_success` / `hook_blocking_error` / `hook_additional_context` /
-//! `hook_stopped_continuation`) render them.
+//! Hook events from `SessionStart` / `UserPromptSubmit` are held here
+//! instead of being emitted directly into the conversation. The reminder
+//! pipeline drains the buffer via `HookEventsSource::drain` so the
+//! standard generators (`hook_success` / `hook_blocking_error` /
+//! `hook_additional_context` / `hook_stopped_continuation`) render them.
 //!
-//! Drain-on-read semantics match TS: events are consumed on the first
-//! drain call and never re-emitted.
+//! Drain-on-read semantics: events are consumed on the first drain call
+//! and never re-emitted.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -45,8 +43,7 @@ impl SyncHookEventBuffer {
     }
 
     /// Drain every buffered event, returning them in FIFO order.
-    /// Subsequent calls return an empty `Vec` until new events are
-    /// pushed — matching TS' deliver-once semantics.
+    /// Subsequent calls return an empty `Vec` until new events are pushed.
     pub async fn drain(&self) -> Vec<HookEvent> {
         let mut g = self.inner.lock().await;
         g.drain(..).collect()

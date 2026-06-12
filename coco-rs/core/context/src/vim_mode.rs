@@ -1,6 +1,4 @@
 //! Vim mode key handling.
-//!
-//! TS: vim/ (1.5K LOC) — vim emulation for text input.
 
 /// Vim mode state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -1,16 +1,12 @@
 //! Auto-trigger logic for compaction.
 //!
-//! TS: autoCompact.ts — triggers compaction when context usage exceeds threshold.
-//!
-//! Threshold formula (must match TS exactly):
+//! Threshold formula:
 //!   effectiveWindow = contextWindow - min(maxOutputTokens, 20K)
 //!   autoCompactThreshold = effectiveWindow - 13K
 //!
-//! Env vars (`DISABLE_COMPACT`, `DISABLE_AUTO_COMPACT`,
-//! `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`,
-//! `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE`) are read once at startup by
-//! `coco_config::CompactConfig::resolve` and threaded through here as
-//! plain fields — this module does not touch the environment.
+//! Env vars are read once at startup by `coco_config::CompactConfig::resolve`
+//! and threaded through here as plain fields — this module does not touch
+//! the environment.
 
 use coco_config::AutoCompactConfig;
 pub use coco_config::TimeBasedMcConfig;
@@ -24,9 +20,8 @@ use crate::types::WARNING_THRESHOLD_BUFFER_TOKENS;
 
 /// Compaction recursion guard tag identifying the caller's query source.
 ///
-/// TS uses a `QuerySource` string ("session_memory", "compact",
-/// "marble_origami"). We use a typed enum so callers cannot misspell —
-/// `Other` is the catch-all for any source not requiring guarding.
+/// Typed enum — `Other` is the catch-all for any source not requiring
+/// guarding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompactQuerySource {
     /// Forked agent extracting session memory; must not auto-compact
@@ -65,8 +60,7 @@ pub fn apply_context_window_override(context_window: i64, override_window: Optio
 }
 
 /// Compute the effective context window size after reserving space for
-/// summary output. TS: `getEffectiveContextWindowSize(model)` in
-/// autoCompact.ts.
+/// summary output.
 #[must_use]
 pub fn effective_context_window(
     context_window: i64,
@@ -80,8 +74,7 @@ pub fn effective_context_window(
 
 /// Compute the auto-compact trigger threshold.
 ///
-/// TS: `getAutoCompactThreshold(model)` in autoCompact.ts. Honors
-/// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (1-100) when set on the config.
+/// Honors the percentage override (1-100) when set on the config.
 #[must_use]
 pub fn auto_compact_threshold(
     context_window: i64,
@@ -101,7 +94,7 @@ pub fn auto_compact_threshold(
 
 /// Check if auto-compaction should be triggered.
 ///
-/// Uses the TS formula: `tokens >= effectiveWindow - 13K`.
+/// Returns true when `tokens >= effectiveWindow - 13K`.
 #[must_use]
 pub fn should_auto_compact(
     current_tokens: i64,
@@ -117,10 +110,9 @@ pub fn should_auto_compact(
 
 /// Recursion-guarded variant of [`should_auto_compact`].
 ///
-/// TS guards `session_memory`, `compact`, and `marble_origami` query
-/// sources to prevent forked agents from re-entering the compaction
-/// loop. Returns `false` when auto-compact is disabled (env vars or
-/// user setting).
+/// Guards `session_memory`, `compact`, and `marble_origami` query sources
+/// to prevent forked agents from re-entering the compaction loop. Returns
+/// `false` when auto-compact is disabled (env vars or user setting).
 #[must_use]
 pub fn should_auto_compact_guarded(
     current_tokens: i64,
@@ -146,7 +138,7 @@ pub fn should_auto_compact_guarded(
 /// Variant of [`should_auto_compact_guarded`] that additionally honors
 /// the staged-compact mutual exclusion: when `is_collapse_active` is
 /// true, autocompact is suppressed so it doesn't race the staged
-/// commit/spawn ladder. TS: autoCompact.ts:215-223.
+/// commit/spawn ladder.
 #[must_use]
 pub fn should_auto_compact_guarded_with_collapse(
     current_tokens: i64,
@@ -168,7 +160,7 @@ pub fn should_auto_compact_guarded_with_collapse(
     )
 }
 
-/// Calculate full token warning state (matches TS `calculateTokenWarningState`).
+/// Calculate full token warning state.
 ///
 /// `cfg.enabled` (the user toggle) picks the warning denominator: when
 /// auto-compact is OFF, the user-visible "context left" is until the
@@ -221,14 +213,13 @@ pub struct TimeBasedTrigger {
 
 /// Whether the time-based trigger should fire.
 ///
-/// TS: `evaluateTimeBasedTrigger` in microCompact.ts. Returns the measured
-/// gap (minutes since last assistant) if the trigger fires, otherwise
-/// `None`. Caller threads `now_ms` and `last_assistant_ms` to keep the
-/// function pure.
+/// Returns the measured gap (minutes since last assistant) if the trigger
+/// fires, otherwise `None`. Caller threads `now_ms` and `last_assistant_ms`
+/// to keep the function pure.
 ///
-/// `is_main_thread` mirrors TS's `isMainThreadSource` predicate — TS
-/// requires an explicit main-thread query source so analysis-only paths
-/// (`/context`, `/compact`, `analyzeContext`) don't trigger.
+/// `is_main_thread` requires an explicit main-thread query source so
+/// analysis-only paths (`/context`, `/compact`, `analyzeContext`) don't
+/// trigger.
 #[must_use]
 pub fn evaluate_time_based_trigger(
     config: &TimeBasedMcConfig,

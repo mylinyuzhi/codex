@@ -1,7 +1,4 @@
 //! PowerShell discovery and argv construction.
-//!
-//! TS: `utils/shell/powershellDetection.ts:65-90` (`getCachedPowerShellPath`)
-//! and `utils/shell/powershellProvider.ts:11` (`buildPowerShellArgs`).
 
 use std::path::PathBuf;
 use tokio::sync::OnceCell;
@@ -32,8 +29,7 @@ pub async fn cached_powershell_path() -> Option<PathBuf> {
 
 /// Build the argv tail for invoking PowerShell.
 ///
-/// Mirrors TS `buildPowerShellArgs` (`powershellProvider.ts:11`):
-/// `-NoProfile -NonInteractive -Command <cmd>` so user profile scripts
+/// Produces `-NoProfile -NonInteractive -Command <cmd>` so user profile scripts
 /// don't run, the shell never blocks for input, and the command body
 /// is interpreted (not treated as a script path).
 #[must_use]

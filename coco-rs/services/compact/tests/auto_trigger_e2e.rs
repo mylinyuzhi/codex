@@ -22,7 +22,7 @@ fn auto_off() -> AutoCompactConfig {
 
 #[test]
 fn test_200k_window_threshold() {
-    // TS formula: effective = 200K - min(16K, 20K) = 184K
+    // Threshold formula: effective = 200K - min(16K, 20K) = 184K
     //             threshold = 184K - 13K = 171K
     let ctx = 200_000;
     let max_out = 16_384;

@@ -1,11 +1,10 @@
 //! Bridge: `AgentQueryEngine` (tool-runtime) → `AgentExecutionEngine`
 //! (coordinator's runner-loop trait).
 //!
-//! TS: `inProcessRunner.ts` calls `query()` directly — no abstraction
-//! needed because TS doesn't have the layer-strict trait split. Rust
-//! has both an `AgentQueryEngine` (subagent path, owned by `coco-query`)
-//! and an `AgentExecutionEngine` (teammate runner-loop path, owned by
-//! `coco-coordinator`). This bridge lets the same engine drive both.
+//! Rust has both an `AgentQueryEngine` (subagent path, owned by
+//! `coco-query`) and an `AgentExecutionEngine` (teammate runner-loop
+//! path, owned by `coco-coordinator`). This bridge lets the same engine
+//! drive both.
 //!
 //! Lives inside `coco-coordinator` so SwarmAgentHandle can install the
 //! same `Arc<dyn AgentQueryEngine>` it already holds for subagent
@@ -86,11 +85,9 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
 
     /// Full LLM compact for teammate history.
     ///
-    /// Pipeline (TS parity: `inProcessRunner.ts:1090`
-    /// `compactConversation`):
+    /// Pipeline:
     /// 1. Apply micro-compact first to drop resolved tool-result
-    ///    content (mirrors `compact.ts:98` running microcompact
-    ///    pre-summarization).
+    ///    content before summarization.
     /// 2. Run `coco_compact::compact_conversation` with our own
     ///    summarize callback that issues a no-tools query through
     ///    the wrapped `AgentQueryEngine` and returns the response

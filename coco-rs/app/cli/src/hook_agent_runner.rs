@@ -14,12 +14,10 @@ use crate::session_runtime::SessionRuntime;
 
 const MAX_AGENT_HOOK_TURNS: i32 = 50;
 
-/// System prompt for the Stop-hook (LLM-judge) agent. Adapted from TS
-/// `execAgentHook.ts:107-116` `asSystemPrompt`. Replaces the main
-/// session prompt for the scoped child engine (matching TS, which hands
-/// the hook agent a dedicated verifier prompt). The conversation
-/// transcript path travels in the Stop hook input JSON that becomes the
-/// agent's user prompt, so the agent can `Read` it to inspect history.
+/// System prompt for the Stop-hook (LLM-judge) agent. Replaces the main
+/// session prompt for the scoped child engine. The conversation transcript
+/// path travels in the Stop hook input JSON that becomes the agent's user
+/// prompt, so the agent can `Read` it to inspect history.
 const HOOK_AGENT_SYSTEM_PROMPT: &str = "You are verifying a stop condition in Claude Code. \
 Your task is to verify that the agent completed the given condition. The conversation \
 transcript path is provided in the hook input — you can Read that file to analyze the \
@@ -90,7 +88,7 @@ fn scoped_tool_registry(runtime: &SessionRuntime) -> Result<Arc<ToolRegistry>, S
         // Withhold tools a Stop-hook judge must not use — spawning
         // subagents, entering/exiting plan mode, asking the user, or
         // stopping tasks — to keep the verifier from steering the main
-        // session. TS: `ALL_AGENT_DISALLOWED_TOOLS` (`constants/tools.ts:36-46`).
+        // session.
         if is_agent_hook_disallowed_tool(&tool.id()) {
             continue;
         }
@@ -100,12 +98,8 @@ fn scoped_tool_registry(runtime: &SessionRuntime) -> Result<Arc<ToolRegistry>, S
     Ok(registry)
 }
 
-/// Builtin tools withheld from a Stop-hook agent. Mirrors TS
-/// `ALL_AGENT_DISALLOWED_TOOLS` (`constants/tools.ts:36-46`). The
-/// `USER_TYPE === 'ant'` Agent-tool exception is intentionally dropped —
-/// coco-rs does not port ant gates — so the Agent tool is always
-/// withheld. coco-rs has no Workflow tool, so the `WORKFLOW_SCRIPTS`
-/// entry has no analog.
+/// Builtin tools withheld from a Stop-hook agent. The Agent tool is
+/// always withheld. coco-rs has no Workflow tool.
 fn is_agent_hook_disallowed_tool(id: &ToolId) -> bool {
     matches!(
         id,
@@ -146,11 +140,9 @@ fn configure_hook_agent(config: &mut QueryEngineConfig, request: &HookAgentRunRe
     config.streaming_tool_execution = false;
     config.is_non_interactive = true;
     config.avoid_permission_prompts = true;
-    // Verifier framing replaces the inherited main-session prompt — TS
-    // hands the hook agent a dedicated `asSystemPrompt` (execAgentHook.ts:107).
+    // Verifier framing replaces the inherited main-session prompt.
     config.system_prompt = Some(HOOK_AGENT_SYSTEM_PROMPT.to_string());
-    // Disable thinking for the verifier — TS `thinkingConfig: { type:
-    // 'disabled' }` (execAgentHook.ts:134). Otherwise the child inherits
+    // Disable thinking for the verifier; otherwise the child inherits
     // the user's extended-thinking budget from the cloned session config.
     config.thinking_level = None;
     config.query_source_override = Some(coco_types::ForkLabel::HookAgent.as_str().to_string());
@@ -182,9 +174,8 @@ fn parse_structured_output(
     if ok {
         return Ok(HookEvaluationResult::Ok);
     }
-    // TS feeds the model `Agent hook condition was not met: ${reason}`
-    // (execAgentHook.ts:279). Keep the prefix so the blocking feedback
-    // reads the same; drop the trailing `: ` when no reason was given.
+    // Keep the `Agent hook condition was not met: ${reason}` prefix for
+    // blocking feedback; drop the trailing `: ` when no reason was given.
     let reason = match value
         .get("reason")
         .and_then(serde_json::Value::as_str)

@@ -60,7 +60,7 @@ fn explore_built_in_omits_claude_md_and_blocks_writes() {
     assert!(def.omit_claude_md);
     assert_eq!(def.model, None);
     assert_eq!(def.model_role, None);
-    // TS exploreAgent.ts:67-73 uses FILE_EDIT_TOOL_NAME = "Edit" and
+    // `exploreAgent.ts:67-73` uses FILE_EDIT_TOOL_NAME = "Edit" and
     // FILE_WRITE_TOOL_NAME = "Write" — NOT "FileEdit"/"FileWrite".
     // Tool names go through `ToolName::*::as_str()` so renames stay
     // consistent.
@@ -81,7 +81,7 @@ fn explore_built_in_omits_claude_md_and_blocks_writes() {
 
 #[test]
 fn coco_guide_uses_dont_ask_permission_mode() {
-    // TS claudeCodeGuideAgent.ts:120 sets permissionMode: 'dontAsk' so the
+    // `claudeCodeGuideAgent.ts:120` sets permissionMode: 'dontAsk' so the
     // guide can run its allow-listed tools without prompting.
     let def = builtins::builtin_definition("coco-guide").unwrap();
     assert_eq!(def.permission_mode.as_deref(), Some("dontAsk"));
@@ -148,7 +148,7 @@ fn every_builtin_definition_carries_a_system_prompt() {
 
 #[test]
 fn verification_carries_critical_system_reminder() {
-    // TS verificationAgent.ts:150-151 pins this reminder on the
+    // `verificationAgent.ts:150-151` pins this reminder on the
     // agent definition so the per-turn `<system-reminder>` injector
     // can re-emit it.
     let def = builtins::builtin_definition("verification").unwrap();
@@ -234,7 +234,7 @@ fn tools_description_all_branches() {
         format_tools_description(&explicit(&["Bash"]), &["Bash".into()]),
         "None"
     );
-    // Empty Explicit list renders as "All tools" — TS parity with
+    // Empty Explicit list renders as "All tools" — matches
     // `getToolsDescription`'s `allowedTools && allowedTools.length > 0`
     // gate (`prompt.ts:15-37`). The runtime filter (`filter.rs`) still
     // retains zero candidates for this state; rendering is purely
@@ -265,7 +265,7 @@ fn parse_allowed_agent_types_ignores_unrelated_rules() {
 
 #[test]
 fn parse_allowed_agent_types_bare_agent_means_no_restriction() {
-    // TS regex captures group 2 as undefined for bare `Agent`; the runtime
+    // The regex captures group 2 as undefined for bare `Agent`; the runtime
     // treats undefined / empty as "no restriction". Returning None lets
     // callers skip the matching step entirely.
     assert!(parse_allowed_agent_types("Agent").is_none());
@@ -335,7 +335,7 @@ fn filter_plan_default_keeps_safe_tools_and_blocks_universal() {
 
 #[test]
 fn filter_plan_async_safe_set_excludes_repl() {
-    // TS SHELL_TOOL_NAMES = [Bash, PowerShell] only — REPL is NOT
+    // SHELL_TOOL_NAMES = [Bash, PowerShell] only — REPL is NOT
     // async-safe (`utils/shell/shellToolUtils.ts:6`).
     let tools: Vec<String> = vec!["Bash".into(), "PowerShell".into(), "REPL".into()];
     let def = agent("custom", &[], &[]);
@@ -347,7 +347,7 @@ fn filter_plan_async_safe_set_excludes_repl() {
 
 #[test]
 fn filter_plan_allow_list_does_not_pass_mcp_through() {
-    // TS `resolveAgentTools` (`agentToolUtils.ts:175-216`) builds the
+    // `resolveAgentTools` (`agentToolUtils.ts:175-216`) builds the
     // available-tool map from `allowedAvailableTools` and only includes a
     // tool if `agentTools` lists it BY NAME. MCP tools must NOT survive
     // an explicit allow-list unless the allow-list lists them.
@@ -370,7 +370,7 @@ fn filter_plan_extra_allow_list_does_not_pass_mcp_through() {
 
 #[test]
 fn filter_plan_deny_then_allow_marks_double_listed_tool_as_unknown() {
-    // TS deny applies to `filteredAvailableTools` BEFORE the allow-list
+    // Deny applies to `filteredAvailableTools` BEFORE the allow-list
     // intersection. A tool listed in BOTH allow and deny is `invalidTool`
     // (= unknown_tools in coco-rs).
     let tools: Vec<String> = vec!["Read".into(), "Bash".into()];
@@ -382,7 +382,7 @@ fn filter_plan_deny_then_allow_marks_double_listed_tool_as_unknown() {
 
 #[test]
 fn frontmatter_wildcard_tools_collapses_to_default_allow_list() {
-    // TS `parseAgentToolsFromFrontmatter` (`utils/markdownConfigLoader.ts:122-124`)
+    // `parseAgentToolsFromFrontmatter` (`utils/markdownConfigLoader.ts:122-124`)
     // turns `tools: ['*']` into `undefined` (= use default allow set).
     // Coco-rs represents that with an empty allow-list.
     let project = TempDir::new().unwrap();
@@ -409,7 +409,7 @@ fn frontmatter_wildcard_tools_collapses_to_default_allow_list() {
 
 #[test]
 fn frontmatter_description_unescapes_backslash_n() {
-    // TS `loadAgentsDir.ts:565` does `.replace(/\\n/g, '\n')`.
+    // `loadAgentsDir.ts:565` does `.replace(/\\n/g, '\n')`.
     let project = TempDir::new().unwrap();
     write_md(
         project.path(),
@@ -571,7 +571,7 @@ fn load_report_distinguishes_failures_from_warnings() {
 
 #[test]
 fn filter_plan_sync_plan_mode_keeps_exit_plan_mode() {
-    // TS agentToolUtils.ts:88-93 bypasses ExitPlanMode for plan_mode BEFORE
+    // `agentToolUtils.ts:88-93` bypasses ExitPlanMode for plan_mode BEFORE
     // the universal block — applies to sync agents too, not just async.
     let tools: Vec<String> = vec!["Read".into(), "ExitPlanMode".into()];
     let def = agent("planner", &[], &[]);
@@ -651,7 +651,7 @@ fn filter_plan_extra_allow_list_intersects() {
 
 #[test]
 fn filter_plan_in_process_teammate_async_admits_agent_and_task_tools() {
-    // TS `agentToolUtils.ts:101-110` — when the spawn target is an
+    // `agentToolUtils.ts:101-110` — when the spawn target is an
     // async, in-process teammate, the filter re-admits `Agent` plus
     // IN_PROCESS_TEAMMATE_ALLOWED_TOOLS even though they're outside
     // ASYNC_AGENT_ALLOWED_TOOLS / ALL_AGENT_DISALLOWED_TOOLS.
@@ -690,7 +690,7 @@ fn filter_plan_in_process_teammate_async_admits_agent_and_task_tools() {
 #[test]
 fn filter_plan_non_async_in_process_teammate_keeps_universal_block() {
     // The teammate exception applies only to async spawns. A sync
-    // teammate still hits the universal block-list (TS only re-admits
+    // teammate still hits the universal block-list (re-admitted only
     // when both is_async + is_in_process_teammate are true).
     let tools: Vec<String> = vec!["Agent".into(), "TaskCreate".into()];
     let def = agent("teammate", &[], &[]);
@@ -844,7 +844,7 @@ fn store_priority_chain_policy_overrides_everything() {
 fn store_plugin_agent_is_namespaced_and_security_gated() {
     // A plugin agent is registered as `<plugin>:<name>` and has the fields a
     // plugin is not trusted to declare (permissionMode / hooks / mcpServers)
-    // stripped. TS loadPluginAgents.
+    // stripped.
     let plugin = TempDir::new().unwrap();
     write_md(
         plugin.path(),
@@ -926,7 +926,7 @@ fn frontmatter_tools_csv_string_is_split_on_commas() {
 
 #[test]
 fn auto_memory_injection_adds_read_edit_write_when_enabled() {
-    // TS `loadAgentsDir.ts:455-467` adds Read/Edit/Write to non-wildcard
+    // `loadAgentsDir.ts:455-467` adds Read/Edit/Write to non-wildcard
     // tool lists when AutoMemory is on AND the agent declares a `memory`
     // scope. Coco-rs runs the same transform once the store's
     // `auto_memory_enabled` flag is set.
@@ -974,7 +974,7 @@ fn auto_memory_injection_adds_read_edit_write_when_enabled() {
 
 #[test]
 fn auto_memory_injection_skipped_for_wildcard_agents() {
-    // TS guards on `tools !== undefined`; coco-rs collapses `['*']` to
+    // Guards on `tools !== undefined`; coco-rs collapses `['*']` to
     // `ToolAllowList::Wildcard`. Either way the injection is a no-op
     // because the agent already sees every tool.
     let project = TempDir::new().unwrap();
@@ -1007,11 +1007,11 @@ fn auto_memory_injection_skipped_for_wildcard_agents() {
     );
 }
 
-/// G10 TS-parity regression: `tools: []` is **NOT** Wildcard. It means
-/// "zero tools" (explicit empty list), and when paired with `memory:`,
-/// the auto-memory injector promotes it to `[Read, Edit, Write]`.
+/// Regression: `tools: []` is **NOT** Wildcard. It means "zero tools"
+/// (explicit empty list), and when paired with `memory:`, the auto-memory
+/// injector promotes it to `[Read, Edit, Write]`.
 ///
-/// TS: `markdownConfigLoader.ts:113-126 parseAgentToolsFromFrontmatter`
+/// `markdownConfigLoader.ts:113-126 parseAgentToolsFromFrontmatter`
 /// returns `[]` for `tools: []`, then `loadAgentsDir.ts:455-456` gates
 /// memory injection on `tools !== undefined` (true for `[]`).
 ///
@@ -1145,7 +1145,7 @@ fn store_includes_builtins_alongside_custom() {
 
 #[test]
 fn prompt_lists_active_agents_in_source_load_order() {
-    // #117 / TS `getActiveAgentsFromList`: built-in agents render first
+    // #117 / `getActiveAgentsFromList`: built-in agents render first
     // (in load order), then project agents — NOT alphabetical.
     let project = TempDir::new().unwrap();
     write_md(

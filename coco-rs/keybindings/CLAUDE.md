@@ -1,29 +1,15 @@
 # coco-keybindings
 
-Keyboard shortcut resolution. TS port of `keybindings/`. Closed enums for
-contexts (20: 18 user-rebindable + 2 internal) and actions (~113 variants:
-86 TS schema + 18 internal + 8 documented coco-rs extensions
-(`app:forceQuit`, `app:help`, `app:commandPalette`, `app:settings`,
-`app:sessionBrowser`, `app:planEditor`, `chat:toggleSystemReminders`,
-`chat:togglePlanMode` — folded from the old hardcoded TUI cascade) +
-Command escape hatch, mirroring TS
-`KEYBINDING_ACTIONS`), chord support (`ctrl+x ctrl+k`,
+Keyboard shortcut resolution. Closed enums for contexts (20: 18
+user-rebindable + 2 internal) and actions (~113 variants: 86 schema + 18
+internal + 8 documented coco-rs extensions (`app:forceQuit`, `app:help`,
+`app:commandPalette`, `app:settings`, `app:sessionBrowser`,
+`app:planEditor`, `chat:toggleSystemReminders`, `chat:togglePlanMode` —
+folded from the old hardcoded TUI cascade) + Command escape hatch), chord
+support (`ctrl+x ctrl+k`,
 whitespace-separated), JSON config wrapper, validator with severity,
 hot-reloading user-config loader, platform-aware display formatting,
 crossterm `KeyEvent` adapter.
-
-## TS Source
-- `keybindings/schema.ts` — context + action enums (authoritative names)
-- `keybindings/defaultBindings.ts` — platform-conditional defaults → [`defaults`]
-- `keybindings/loadUserBindings.ts` — `~/.claude/keybindings.json` merge → [`loader`] (feature-gated)
-- `keybindings/parser.ts`, `shortcutFormat.ts`, `template.ts` — chord parsing → [`parser`]; display → [`display`]; template → [`template`]
-- `keybindings/match.ts`, `resolver.ts` — runtime resolution → [`resolver`] (chord state machine + 1s timeout); crossterm bridge → [`adapter`] (feature-gated)
-- `keybindings/reservedShortcuts.ts` — Ctrl+C/Ctrl+D + macOS-reserved → [`reserved`]
-- `keybindings/validate.ts` — user-override validation → [`validator`] (5 issue kinds × 2 severities)
-- `keybindings/KeybindingContext.tsx`, `KeybindingProviderSetup.tsx`,
-  `useKeybinding.ts`, `useShortcutDisplay.ts` — React glue (intentionally
-  not ported; replaced by the TUI's TEA dispatch + `keybinding_bridge.rs`)
-
 
 ## Key Types
 
@@ -31,15 +17,15 @@ crossterm `KeyEvent` adapter.
 |---|---|
 | `KeybindingAction` | Closed enum, ~111 variants (86 schema + 18 internal + 6 coco extensions + Command escape hatch) in `namespace:camelCase`. `Command(String)` escape hatch for user `command:foo`. Custom serde via `try_from = "String", into = "String"`. |
 | `KeybindingContext` | Closed enum, 20 variants. `ALL_USER` → 18 user-rebindable; the validator rejects user bindings into `Scroll` / `MessageActions`. |
-| `Keybinding` | Parsed binding: `(KeyChord, Option<KeybindingAction>, KeybindingContext)`. `action: None` is a TS-style null unbind. |
+| `Keybinding` | Parsed binding: `(KeyChord, Option<KeybindingAction>, KeybindingContext)`. `action: None` is a null unbind. |
 | `KeybindingBlock` | One block from JSON: `(KeybindingContext, BTreeMap<String, Option<KeybindingAction>>)`. |
 | `KeybindingsConfig` | Top-level JSON shape: `{ $schema, $docs, bindings: Vec<KeybindingBlock> }`. `from_json`, `to_json_pretty`, `parse_bindings`. |
 | `KeyChord`, `KeyCombo`, `parse_chord`, `parse_combo`, `ParseError` | Chord parser. Whitespace separates combo steps; `" "` is the space key. |
 | `ChordResolver`, `ResolveOutcome` | Chord state machine. Outcomes: `NoMatch`, `Fire(action)`, `Pending`, `Unbound` (null-bound), `ChordCancelled`. 1s timeout via `tick(now)`. Esc cancels pending. |
-| `ValidationIssue`, `Severity`, `ValidationKind`, `validate`, `format_issue` | Typed warnings mirroring TS `KeybindingWarning`. Five kinds × two severities. |
+| `ValidationIssue`, `Severity`, `ValidationKind`, `validate`, `format_issue` | Typed warnings for keybinding validation. Five kinds × two severities. |
 | `ReservedShortcut`, `NON_REBINDABLE`, `TERMINAL_RESERVED`, `MACOS_RESERVED`, `get_reserved_shortcuts`, `lookup_reserved`, `normalize_key_for_comparison` | Reserved-shortcut detection. |
 | `DisplayPlatform`, `keystroke_to_string`, `keystroke_to_display_string`, `chord_to_string`, `chord_to_display_string` | Canonical + platform-aware display rendering for status bar / help. |
-| `default_blocks`, `default_config` | Full TS-mirrored default bindings table. |
+| `default_blocks`, `default_config` | Default bindings table. |
 | `generate_template` | User-config template derived from defaults, NON_REBINDABLE filtered. |
 | **(feature: `crossterm`)** `from_crossterm` | `KeyEvent → KeyCombo` adapter, including the escape+meta quirk fix. |
 | **(feature: `loader`)** `load_keybindings`, `KeybindingsLoadResult`, `KeybindingsWatcher`, `default_keybindings_path` | Async loader with hot-reload via `coco-file-watch`. |
@@ -53,7 +39,7 @@ crossterm `KeyEvent` adapter.
 - `validator` — config validation: parse errors, duplicates, internal-context-in-user-config, command-outside-chat, voice-on-bare-letter, reserved shortcuts
 - `reserved` — non-rebindable + terminal + macOS reserved shortcut tables; canonical-form normalization
 - `display` — canonical/platform-aware keystroke + chord rendering
-- `defaults` — TS-mirrored default bindings table with platform conditionals
+- `defaults` — default bindings table with platform conditionals
 - `template` — user-config template generator (filters NON_REBINDABLE)
 - `adapter` (feature: `crossterm`) — crossterm `KeyEvent` → `KeyCombo`
 - `loader` (feature: `loader`) — async user-config loader + file watcher
@@ -65,14 +51,13 @@ crossterm `KeyEvent` adapter.
 
 Default features: none. Library callers without a TUI/runtime stay lean.
 
-## Deliberately Not Ported
+## Deliberately Not Implemented
 
-| TS file | Why |
+| Item | Why |
 |---|---|
-| `useKeybinding.ts`, `useShortcutDisplay.ts` | React hooks; TEA architecture replaces with direct dispatch in TUI. |
-| `KeybindingContext.tsx`, `KeybindingProviderSetup.tsx` | React context provider + chord interceptor; equivalent state lives in `app/tui/src/keybinding_resolver.rs` (chord state) + `keybinding_dispatch.rs` (action → TuiCommand). |
-| `loadUserBindings.ts:isKeybindingCustomizationEnabled` (USER_TYPE === 'ant' / GrowthBook gate) | Per project rule: no ant-only gates in coco-rs (`feedback_no_ant_gates` memory). User customization is always available. |
-| Feature-gated TS default-bindings blocks (`KAIROS`, `QUICK_SEARCH`, `TERMINAL_PANEL`, `MESSAGE_ACTIONS`, `VOICE_MODE`) | Skipped pending the underlying capability. Re-add behind a Cargo feature when relevant. |
+| React keybinding hooks (`useKeybinding`, `useShortcutDisplay`, `KeybindingContext`, `KeybindingProviderSetup`) | TEA architecture replaces them with direct dispatch. Equivalent state lives in `app/tui/src/keybinding_resolver.rs` (chord state) + `keybinding_dispatch.rs` (action → TuiCommand). |
+| Ant-only customization gate | User customization is always available in coco-rs. No provider-gating here. |
+| Feature-gated default-binding blocks (`KAIROS`, `QUICK_SEARCH`, `TERMINAL_PANEL`, `MESSAGE_ACTIONS`, `VOICE_MODE`) | Skipped pending the underlying capability. Re-add behind a Cargo feature when relevant. |
 
 ## TUI integration
 
@@ -89,10 +74,9 @@ The TUI consumes `coco-keybindings` via three modules in `app/tui/src/`:
   (including `app:toggleTodos` → cycle expanded view, `app:toggleTranscript`
   → transcript overlay, `app:toggleTeammatePreview` → toggle preview).
   `Command(name)` → `ExecuteSlashCommand(name)` is the user-binding
-  escape hatch. Feature-gated TS actions whose surface coco-rs hasn't
-  built (Plugin*, Voice*, MessageActions:*, etc.) silently return None
-  — matches TS behaviour where `useKeybinding` is never registered for
-  unported features.
+  escape hatch. Feature-gated actions whose surface coco-rs hasn't built
+  (Plugin*, Voice*, MessageActions:*, etc.) silently return None —
+  unimplemented features have no registered handler so the key falls through.
 - `keybinding_setup.rs` — `install_keybindings()` returns a
   `KeybindingSetup { watcher, warnings_rx, initial, handle }`. Caller
   installs `handle` into `app.state.ui.kb_handle`, plumbs `warnings_rx`
@@ -122,21 +106,20 @@ The chat widget (`widgets/chat/render_system.rs`) takes
 
 ## Conventions
 
-- **Wire format** for actions and contexts is exactly TS — `app:exit`,
-  `Global`, etc. Round-trip through serde is lossless.
+- **Wire format** for actions and contexts: `app:exit`, `Global`, etc.
+  Round-trip through serde is lossless.
 - **Chord syntax**: combos joined by `+`, chord steps separated by
   whitespace. `" "` (a single space) is the space-key binding.
-- **Canonical key names** match TS: `escape`, `enter`, `delete`,
-  `backspace`, `pageup`, `pagedown`, `space`. Aliases (`esc`, `return`,
-  `del`, `bs`, `pgup`, `pgdn`) normalize to the canonical form at parse
-  time.
+- **Canonical key names**: `escape`, `enter`, `delete`, `backspace`,
+  `pageup`, `pagedown`, `space`. Aliases (`esc`, `return`, `del`, `bs`,
+  `pgup`, `pgdn`) normalize to the canonical form at parse time.
 - **Last-wins** within a context: registering the same chord twice with
-  different actions, the later registration wins (mirrors TS `findLast`).
+  different actions, the later registration wins.
 - **Context priority**: callers pass an ordered context stack to
   `ChordResolver::feed`; the most-specific context's bindings are
   searched first.
 - **Chord timeout**: 1 second between combos in a multi-combo chord
-  (mirrors TS `CHORD_TIMEOUT_MS = 1000`). Drive via `ChordResolver::tick(now)`.
+  (`CHORD_TIMEOUT_MS = 1000`). Drive via `ChordResolver::tick(now)`.
 
 ## Tests
 
@@ -148,9 +131,9 @@ Per-module `*.test.rs` companion files. `cargo test -p coco-keybindings
 (none — all G3 / A2 / N4 follow-ups landed; see the ResolverResult test
 suite + `keybinding_dispatch.test.rs` for coverage)
 
-## Future TS porting
+## Deferred feature-gated bindings
 
-TS feature-gated blocks deferred until a Cargo feature wires them up:
+These blocks are deferred until a Cargo feature wires the underlying capability:
 
 - `KAIROS` / `KAIROS_BRIEF` → `app:toggleBrief` (Anthropic-internal feature)
 - `QUICK_SEARCH` → `app:globalSearch`, `app:quickOpen`

@@ -1,8 +1,8 @@
-//! In-process function hooks — TS parity for `addFunctionHook`.
+//! In-process function hooks.
 //!
-//! Function hooks are TypeScript-style in-memory callbacks that
-//! evaluate a predicate over the current message history when their
-//! event fires. Unlike the four settings-loaded handler types
+//! Function hooks are in-memory callbacks that evaluate a predicate over
+//! the current message history when their event fires. Unlike the four
+//! settings-loaded handler types
 //! ([`HookHandler::Command`](super::HookHandler::Command) /
 //! [`Prompt`](super::HookHandler::Prompt) /
 //! [`Http`](super::HookHandler::Http) /
@@ -10,30 +10,24 @@
 //! `settings.json`, function hooks are **registered in code** during
 //! session bootstrap and live only for the lifetime of the session.
 //!
-//! TS source: `utils/hooks/sessionHooks.ts` (`addFunctionHook` /
-//! `removeFunctionHook`) — function hooks land in
-//! `AppState.sessionHooks` (a per-session map), separate from settings
-//! hooks. Coco-rs mirrors that split by storing them in a separate
-//! field on [`crate::HookRegistry`] rather than as a new variant on
-//! [`HookHandler`] — the latter would break `Serialize` / `Deserialize`
-//! round-tripping of settings-derived hooks.
+//! They are stored in a separate field on [`crate::HookRegistry`] rather
+//! than as a new variant on [`HookHandler`] — the latter would break
+//! `Serialize` / `Deserialize` round-tripping of settings-derived hooks.
 //!
 //! ## Use cases
 //!
-//! 1. **`StructuredOutput` Stop enforcement** — `hookHelpers.ts:70-83`.
-//!    Prevent Stop until the model successfully calls the
-//!    `StructuredOutput` tool. Wired in
+//! 1. **`StructuredOutput` Stop enforcement** — prevent Stop until the
+//!    model successfully calls the `StructuredOutput` tool. Wired in
 //!    [`coco_tools::register_structured_output_tool`] and friends.
-//! 2. **Swarm teammate init** — `utils/swarm/teammateInit.ts:98`.
-//!    Block Stop until team config is acknowledged. (Pending port.)
+//! 2. **Swarm teammate init** — block Stop until team config is
+//!    acknowledged. (Pending port.)
 //!
 //! ## Concurrency
 //!
-//! Predicates are synchronous (TS callback is sync) but
-//! [`crate::orchestration`] drives them via
-//! [`tokio::task::spawn_blocking`] so a CPU-heavy predicate can't
-//! starve the tokio runtime, and bounded by
-//! [`tokio::time::timeout`] with the hook's configured timeout.
+//! Predicates are synchronous but [`crate::orchestration`] drives them
+//! via [`tokio::task::spawn_blocking`] so a CPU-heavy predicate can't
+//! starve the tokio runtime, bounded by [`tokio::time::timeout`] with
+//! the hook's configured timeout.
 
 use std::fmt;
 use std::sync::Arc;
@@ -53,7 +47,7 @@ use coco_types::HookEventType;
 /// Implementations are conventionally **pure**: no I/O, no mutation of
 /// shared state. If state is required, the predicate type can hold an
 /// `Arc<Mutex<…>>` field and use interior mutability — but doing so is
-/// an antipattern for the common case (TS predicates are pure scans
+/// an antipattern for the common case (predicates are pure scans
 /// over `messages`).
 pub trait FunctionHookPredicate: Send + Sync + fmt::Debug {
     /// Return `true` when the condition is satisfied (the event is
@@ -128,19 +122,17 @@ pub enum RegisterFunctionHookError {
 #[derive(Clone)]
 pub struct FunctionHook {
     /// Unique id, used by [`crate::HookRegistry::remove_function_hook`]
-    /// to remove a single registration. TS parity:
-    /// `FunctionHook.id`.
+    /// to remove a single registration.
     pub id: String,
     pub event: HookEventType,
-    /// TS-parity matcher string; `None` means "fire on any matcher"
-    /// (TS treats `''` as wildcard).
+    /// Matcher string; `None` means "fire on any matcher".
     pub matcher: Option<String>,
     pub timeout: Duration,
     /// Predicate to evaluate. Cloned `Arc` on every fire — no fn-pointer
     /// indirection cost beyond the dyn dispatch.
     pub predicate: Arc<dyn FunctionHookPredicate>,
     /// Text to inject into the conversation when `predicate.evaluate()`
-    /// returns `false`. TS: `FunctionHook.errorMessage`.
+    /// returns `false`.
     pub error_message: String,
 }
 

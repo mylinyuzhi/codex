@@ -282,7 +282,7 @@ fn open_rewind_picker_no_preselect_opens_message_select_modal() {
     assert_eq!(
         r.phase,
         crate::state::rewind::RewindPhase::MessageSelect,
-        "bare /rewind opens MessageSelect (TS parity)"
+        "bare /rewind opens MessageSelect"
     );
     assert!(!r.preselected);
     assert!(state.ui.toasts.is_empty());

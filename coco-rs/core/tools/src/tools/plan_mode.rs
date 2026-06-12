@@ -1,9 +1,5 @@
 //! EnterPlanMode + ExitPlanMode tools.
 //!
-//! TS:
-//! - `src/tools/EnterPlanModeTool/EnterPlanModeTool.ts`
-//! - `src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts`
-//!
 //! Plan mode is a permission mode in which the model researches and
 //! designs an implementation approach but MUST NOT modify the system.
 //! Entry + exit are mediated by these two tools; the per-turn reminder
@@ -74,15 +70,10 @@ struct ExitPlanModeOutput {
 /// Build the cross-turn `AppStatePatch` that flips state into plan
 /// mode. Captures the current mode (so `ExitPlanMode` knows where to
 /// restore) and stamps the entry timestamp so `ExitPlanMode` can
-/// optionally compare against the plan-file mtime.
-///
-/// TS parity: the inline closure inside `EnterPlanModeTool.ts::call`
-/// at lines 88-94 — `setAppState(prev => ({ ...prev, prePlanMode:
-/// currentMode, planModeEntryMs: Date.now() }))`. The same shape is
+/// optionally compare against the plan-file mtime. The same shape is
 /// applied at two entry sites in coco-rs: the tool's own `execute`
-/// and the `/plan <description>` slash command, which (per TS
-/// `commands/plan/plan.tsx:73-91`) flips state directly without
-/// re-prompting the user.
+/// and the `/plan <description>` slash command, which flips state
+/// directly without re-prompting the user.
 pub fn build_enter_plan_mode_patch(current_mode: PermissionMode) -> coco_types::AppStatePatch {
     Box::new(move |state| {
         // Plan entry only — the Auto-entry stash branch is inert here, so an
@@ -102,20 +93,15 @@ pub struct EnterPlanModeTool;
 
 /// Full prompt text for the model.
 ///
-/// TS: `tools/EnterPlanModeTool/prompt.ts` — `getEnterPlanModeToolPromptExternal()`.
-/// The Ant arm (`getEnterPlanModeToolPromptAnt`) and the
-/// `USER_TYPE === 'ant'` dispatcher are intentionally NOT ported
-/// (root `CLAUDE.md` "no Ant gates"). Interpolates
+/// The Ant arm and the `USER_TYPE === 'ant'` dispatcher are intentionally NOT
+/// ported (root `CLAUDE.md` "no Ant gates"). Interpolates
 /// `ToolName::AskUserQuestion.as_str()` so a future tool rename
-/// propagates without a doc edit, mirroring TS's
-/// `${ASK_USER_QUESTION_TOOL_NAME}` substitution. Names like
-/// `EnterPlanMode` / `ExitPlanMode` stay as literals — TS does the
-/// same.
+/// propagates without a doc edit. Names like `EnterPlanMode` /
+/// `ExitPlanMode` stay as literals — the wire names are stable.
 fn enter_plan_mode_prompt(is_plan_interview_phase: bool) -> String {
     let aq = coco_types::ToolName::AskUserQuestion.as_str();
-    // Mirrors TS `WHAT_HAPPENS_SECTION` interpolation: empty string
-    // when the iterative interview workflow is active (the model
-    // gets the detailed loop via the plan-mode attachment instead).
+    // Empty string when the iterative interview workflow is active
+    // (the model gets the detailed loop via the plan-mode attachment instead).
     let what_happens = if is_plan_interview_phase {
         String::new()
     } else {
@@ -213,8 +199,7 @@ User: \"What files handle routing?\"
     )
 }
 
-/// Typed input for [`EnterPlanModeTool`] — no parameters. TS
-/// `EnterPlanModeTool.ts` declares an empty input schema.
+/// Typed input for [`EnterPlanModeTool`] — no parameters (empty input schema).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct EnterPlanModeInput {}
 
@@ -266,7 +251,6 @@ impl Tool for EnterPlanModeTool {
         _input: EnterPlanModeInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        // TS: agents cannot enter plan mode (EnterPlanModeTool.ts:78)
         if ctx.agent_id.is_some() {
             return Err(ToolError::InvalidInput {
                 message: "EnterPlanMode tool cannot be used in agent contexts".into(),
@@ -275,10 +259,8 @@ impl Tool for EnterPlanModeTool {
         }
 
         // Read live state (short-lived read lock) to decide what
-        // the patch will do. TS parity:
-        // `setAppState(prev => ({ ...prev, toolPermissionContext:
-        // { mode: 'plan', prePlanMode: currentMode, ... } }))` —
-        // `prev` in the TS closure is our `current` snapshot.
+        // the patch will do. `prev` in the conceptual closure is
+        // our `current` snapshot.
         let current_mode = match ctx.app_state.as_ref() {
             Some(h) => h
                 .read()
@@ -288,23 +270,13 @@ impl Tool for EnterPlanModeTool {
             None => ctx.permission_context.mode,
         };
 
-        // Queue the mutation. Executor applies post-execute under a
-        // write lock. Tools can no longer `.write()` on app_state
-        // directly — the type system blocks it (`AppStateReadHandle`
-        // has no write surface). TS parity:
-        // `orchestration.ts:queuedContextModifiers`. The patch
-        // builder is shared with `dispatch_plan` so a typed `/plan
+        // Queue the mutation. Executor applies it post-execute under a
+        // write lock (`AppStateReadHandle` has no write surface). The
+        // patch builder is shared with `dispatch_plan` so a typed `/plan
         // <description>` and a tool-driven entry land identical
         // app-state shape.
         let patch = build_enter_plan_mode_patch(current_mode);
 
-        // TS parity: `EnterPlanModeTool.ts::call` returns only the
-        // short confirmation in `data.message`. The post-processing
-        // splice (6-step list vs interview-phase short form) lives in
-        // `mapToolResultToToolResultBlockParam` — i.e.
-        // [`Tool::render_for_model`] below. We carry
-        // `is_plan_interview_phase` on `data` so the renderer (which
-        // doesn't see `ToolUseContext`) can pick the right variant.
         Ok(
             ToolResult::data(serde_json::json!({
                 "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",
@@ -315,13 +287,6 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        // TS parity: `mapToolResultToToolResultBlockParam` in
-        // `EnterPlanModeTool.ts:103-118`. Reads `data.message` (short
-        // confirmation written by `execute`) and `data.isInterviewPhase`
-        // (workflow-mode flag also written by `execute`) and emits the
-        // splice. The renderer is a pure projection over `data` —
-        // doesn't have access to `ToolUseContext`, which is why
-        // `execute` stashes the flag.
         let message = data
             .get("message")
             .and_then(Value::as_str)
@@ -339,14 +304,10 @@ impl Tool for EnterPlanModeTool {
 
 impl EnterPlanModeTool {
     /// Build the instructions text returned to the model as tool_result content.
-    ///
-    /// TS: `mapToolResultToToolResultBlockParam` in
-    /// `tools/EnterPlanModeTool/EnterPlanModeTool.ts:103-118`. Two
-    /// byte-precise variants gated on the interview-phase flag — the
-    /// terse "DO NOT write" version when the iterative interview
-    /// workflow will deliver detailed steps via the plan-mode
-    /// attachment, otherwise the 6-step fallback that doubles as the
-    /// workflow primer.
+    /// Two variants gated on the interview-phase flag — the terse "DO NOT write"
+    /// version when the iterative interview workflow will deliver detailed steps
+    /// via the plan-mode attachment, otherwise the 6-step fallback that doubles
+    /// as the workflow primer.
     pub fn build_instructions(confirmation: &str, is_plan_interview_phase: bool) -> String {
         if is_plan_interview_phase {
             format!(
@@ -378,10 +339,8 @@ pub struct ExitPlanModeTool;
 
 /// Full prompt text for the model.
 ///
-/// TS: tools/ExitPlanModeTool/prompt.ts — `EXIT_PLAN_MODE_V2_TOOL_PROMPT`.
 /// Interpolates `ToolName::AskUserQuestion.as_str()` so a future rename of
-/// the AskUserQuestion tool propagates without a doc edit, mirroring TS's
-/// `${ASK_USER_QUESTION_TOOL_NAME}` substitution.
+/// the AskUserQuestion tool propagates without a doc edit.
 fn exit_plan_mode_prompt() -> String {
     let aq = coco_types::ToolName::AskUserQuestion.as_str();
     format!(
@@ -406,7 +365,7 @@ fn exit_plan_mode_prompt() -> String {
     )
 }
 
-/// The tool an `allowedPrompts` entry pre-approves. TS `z.enum(['Bash'])`.
+/// The tool an `allowedPrompts` entry pre-approves (only `Bash` supported).
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
 pub enum AllowedPromptTool {
     #[default]
@@ -415,9 +374,8 @@ pub enum AllowedPromptTool {
 
 /// Single entry in the `allowedPrompts` array — pre-approved tool / prompt
 /// pair that the model is signaling it intends to use when plan is approved.
-/// Both fields are required (TS `z.object({ tool, prompt })`), so the
-/// derived schema carries `required: [tool, prompt]` and the `tool` enum —
-/// no hand-patching of the model schema needed.
+/// Both fields are required, so the derived schema carries
+/// `required: [tool, prompt]` and the `tool` enum — no hand-patching needed.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ExitPlanAllowedPrompt {
     /// The tool this prompt applies to (only `Bash` is supported).
@@ -428,11 +386,10 @@ pub struct ExitPlanAllowedPrompt {
 
 /// Typed input for [`ExitPlanModeTool`].
 ///
-/// The schema-visible field is `allowedPrompts` (TS-mirror). Three
-/// additional fields ride along internally: `plan` and `planFilePath`
-/// are spliced by the query layer (TS `normalizeToolInput` parity —
-/// inject the on-disk plan content + its path into the tool's input for
-/// hooks/SDK/transcript), and `user_choice` is spliced by the TUI
+/// The schema-visible field is `allowedPrompts`. Three additional fields
+/// ride along internally: `plan` and `planFilePath` are spliced by the
+/// query layer (inject the on-disk plan content + its path into the tool's
+/// input for hooks/SDK/transcript), and `user_choice` is spliced by the TUI
 /// permission-multichoice dialog. All three are declared so the closed
 /// runtime schema accepts them on re-validation; the model is taught to
 /// emit only `allowedPrompts`.
@@ -442,8 +399,7 @@ pub struct ExitPlanModeInput {
     #[serde(default, rename = "allowedPrompts")]
     pub allowed_prompts: Option<Vec<ExitPlanAllowedPrompt>>,
     /// (Internal) Plan content spliced by the query layer before
-    /// invocation so hooks see the full plan body — TS parity with
-    /// `normalizeToolInput`. Model never populates this.
+    /// invocation so hooks see the full plan body. Model never populates this.
     #[serde(default)]
     pub plan: Option<String>,
     /// (Internal) Absolute path to the on-disk plan file, spliced by the
@@ -492,13 +448,12 @@ impl Tool for ExitPlanModeTool {
         ToolName::ExitPlanMode.as_str()
     }
 
-    /// Model-facing spec exposes ONLY `allowedPrompts` (TS
-    /// `ExitPlanModeV2Tool` inputSchema). `plan` / `planFilePath` /
-    /// `user_choice` stay in the runtime schema (CCR UI / hooks / SDK /
-    /// TUI splice them) but are hidden from the model. The `allowedPrompts`
-    /// item shape (`{ tool: enum["Bash"], prompt }`, both required) is
-    /// derived from [`ExitPlanAllowedPrompt`] — so the model-facing and
-    /// runtime schemas agree, and there is nothing to hand-patch here.
+    /// Model-facing spec exposes ONLY `allowedPrompts`. `plan` /
+    /// `planFilePath` / `user_choice` stay in the runtime schema (CCR UI /
+    /// hooks / SDK / TUI splice them) but are hidden from the model. The
+    /// `allowedPrompts` item shape (`{ tool: enum["Bash"], prompt }`, both
+    /// required) is derived from [`ExitPlanAllowedPrompt`] — model-facing
+    /// and runtime schemas agree, nothing to hand-patch.
     async fn tool_spec(
         &self,
         _ctx: &coco_tool_runtime::SchemaContext,
@@ -539,11 +494,10 @@ impl Tool for ExitPlanModeTool {
 
     /// Reject if not currently in plan mode.
     ///
-    /// TS: ExitPlanModeV2Tool.ts:195-219
     /// Teammates bypass validation — their AppState may show the leader's mode,
     /// so `isPlanModeRequired()` is the real source of truth for teammates.
     fn validate_input(&self, _input: &ExitPlanModeInput, ctx: &ToolUseContext) -> ValidationResult {
-        // Teammates always pass validation (TS: isTeammate() check).
+        // Teammates always pass validation.
         // Note: agent_id.is_some() is NOT the same as isTeammate().
         // Regular subagents have agent_id but are NOT teammates.
         if ctx.is_teammate {
@@ -563,7 +517,6 @@ impl Tool for ExitPlanModeTool {
 
     /// Non-teammate contexts require user confirmation to exit plan mode.
     ///
-    /// TS: ExitPlanModeV2Tool.ts:221-239
     /// Teammates bypass the permission UI entirely. The call() method handles
     /// their behavior: isPlanModeRequired() sends plan_approval_request to
     /// leader, otherwise exits locally.
@@ -572,7 +525,7 @@ impl Tool for ExitPlanModeTool {
         _input: &ExitPlanModeInput,
         ctx: &ToolUseContext,
     ) -> coco_types::ToolCheckResult {
-        // Teammates bypass the permission UI (TS: isTeammate() check).
+        // Teammates bypass the permission UI entirely.
         // Use explicit Allow rather than Passthrough — we want the
         // evaluator to short-circuit on this positive opinion before
         // rule / mode-fallthrough lookups.
@@ -583,8 +536,8 @@ impl Tool for ExitPlanModeTool {
             };
         }
         // Non-teammates: require user confirmation. The interactive TUI
-        // renders ExitPlanMode with a dedicated TS-style approval prompt
-        // and option set; SDK/headless clients keep the plain Ask shape.
+        // renders ExitPlanMode with a dedicated approval prompt and option
+        // set; SDK/headless clients keep the plain Ask shape.
         coco_types::ToolCheckResult::Ask {
             message: "Exit plan mode?".into(),
             suggestions: vec![],
@@ -601,8 +554,7 @@ impl Tool for ExitPlanModeTool {
         let agent_id_str = ctx.agent_id.as_ref().map(|a| a.as_str().to_string());
 
         // Read the plan. Input (CCR/hook override) wins; otherwise read from
-        // the on-disk plan file. TS ExitPlanModeV2Tool.ts:251-253 —
-        // `inputPlan ?? getPlan(context.agentId)`.
+        // the on-disk plan file.
         //
         // The plans directory is pre-resolved by the engine (respecting the
         // `plansDirectory` setting + project root); fall back to the legacy
@@ -639,9 +591,9 @@ impl Tool for ExitPlanModeTool {
         // next reader (VerifyPlanExecution, Read tool) sees the edit.
         //
         // The query layer also injects the current on-disk plan into
-        // ExitPlanMode input for hooks/SDK/transcript parity with TS
-        // `normalizeToolInput`. Do not treat that byte-identical snapshot
-        // as a user edit or rewrite the file unnecessarily.
+        // ExitPlanMode input for hooks/SDK/transcript. Do not treat that
+        // byte-identical snapshot as a user edit or rewrite the file
+        // unnecessarily.
         if input_plan_is_edit
             && let (Some(plan_content), Some(path)) = (&input_plan, &file_path)
             && let Err(e) = tokio::fs::write(path, plan_content.as_bytes()).await
@@ -677,16 +629,15 @@ impl Tool for ExitPlanModeTool {
 
         // ── Teammate branch — write plan_approval_request to leader inbox ──
         //
-        // TS: ExitPlanModeV2Tool.ts:264-313. If the caller is a teammate
-        // whose role requires plan approval, we don't let them exit
-        // locally — the plan is serialized and handed off to the team lead
-        // via mailbox. The leader sees it, decides, and writes a
-        // plan_approval_response back to this teammate's inbox.
+        // If the caller is a teammate whose role requires plan approval, we
+        // don't let them exit locally — the plan is serialized and handed off
+        // to the team lead via mailbox. The leader sees it, decides, and writes
+        // a plan_approval_response back to this teammate's inbox.
         //
-        // TS parity: gate on `isTeammate() && isPlanModeRequired()`.
-        // Voluntary teammates (is_teammate=true but plan_mode_required=false)
-        // fall through to the normal exit path — they restore their mode
-        // locally just like a non-swarm session.
+        // Gate on `is_teammate && plan_mode_required`. Voluntary teammates
+        // (is_teammate=true but plan_mode_required=false) fall through to the
+        // normal exit path — they restore their mode locally just like a
+        // non-swarm session.
         if ctx.is_teammate && ctx.plan_mode_required {
             let Some(plan_text) = plan.as_deref() else {
                 return Err(ToolError::InvalidInput {
@@ -708,8 +659,7 @@ impl Tool for ExitPlanModeTool {
             // Swarm identity is pre-resolved by the engine into
             // `ctx.agent_name` + `ctx.team_name` (3-tier fallback done
             // once at ctx build time). Tools read from the typed field,
-            // never from process env directly. TS: `getAgentName()` /
-            // `getTeamName()`.
+            // never from process env directly.
             let agent_name = ctx
                 .agent_name
                 .clone()
@@ -726,7 +676,7 @@ impl Tool for ExitPlanModeTool {
                 .collect();
             let request_id = format!("plan_approval-{agent_name}-{team_name}-{short_uuid}");
 
-            // Typed protocol message (TS shape preserved via serde
+            // Typed protocol message (wire shape preserved via serde
             // renames). Shared schema in `coco_tool_runtime::plan_approval`.
             let approval_msg = PlanApprovalMessage::PlanApprovalRequest(PlanApprovalRequest {
                 from: agent_name.clone(),
@@ -746,7 +696,7 @@ impl Tool for ExitPlanModeTool {
                 from: agent_name.clone(),
                 timestamp: timestamp.clone(),
             };
-            // "team-lead" is the canonical inbox name (TS: TEAM_LEAD_NAME).
+            // "team-lead" is the canonical inbox name.
             ctx.mailbox
                 .write_to_mailbox("team-lead", &team_name, envelope)
                 .await
@@ -782,10 +732,9 @@ impl Tool for ExitPlanModeTool {
             );
         }
 
-        // All mode-related writes happen here. TS parity:
-        // `ExitPlanModeV2Tool.ts:357-403` is one big `setAppState` that
-        // flips mode → restoreMode, clears prePlanMode, toggles
-        // strippedDangerousRules, and sets the exit banner latches.
+        // All mode-related writes happen here: flips mode → restoreMode,
+        // clears prePlanMode, toggles strippedDangerousRules, and sets the
+        // exit banner latches.
         //
         // Source of truth: `app_state.pre_plan_mode` (set by
         // EnterPlanMode.execute). Fall back to `ctx.permission_context`
@@ -794,9 +743,7 @@ impl Tool for ExitPlanModeTool {
         // Auto-mode-exit banner: fires when auto was effectively active
         // during the plan but we're not restoring to Auto. In Rust
         // "auto was active" = `stripped_dangerous_rules.is_some()` OR
-        // `pre_plan_mode == Some(Auto)`. TS parity:
-        // `autoWasUsedDuringPlan && !finalRestoringAuto`
-        // (ExitPlanModeV2Tool.ts:370-378).
+        // `pre_plan_mode == Some(Auto)`.
         let (pre_plan_from_state, stripped_from_state) = match ctx.app_state.as_ref() {
             Some(state) => {
                 let guard = state.read().await;
@@ -853,7 +800,6 @@ impl Tool for ExitPlanModeTool {
             None
         };
 
-        // TS parity: `ExitPlanModePermissionRequest.tsx:332-394`.
         // Clear-context options schedule a history clear plus a fresh
         // implementation user message for the next turn.
         let clear_history_requested = choice.is_some_and(ExitPlanChoice::clears_context);
@@ -864,9 +810,7 @@ impl Tool for ExitPlanModeTool {
             )
         });
 
-        // Queue the full ExitPlanMode transition. TS parity:
-        // `ExitPlanModeV2Tool.ts:357-403` is one big `setAppState`;
-        // our closure is the Rust equivalent of that updater.
+        // Queue the full ExitPlanMode transition.
         let patch: coco_types::AppStatePatch = Box::new(move |state| {
             state.permission_mode = Some(restore_mode);
             state.pre_plan_mode = None;
@@ -884,7 +828,7 @@ impl Tool for ExitPlanModeTool {
             }
             // Dangerous-rules stash management on Auto boundary.
             // (The strip happens on Plan→Auto, restore on
-            // Auto→non-Auto; see TS ExitPlanModeV2Tool.ts:380-394.)
+            // Auto→non-Auto exit path.)
             if restoring_to_auto && state.stripped_dangerous_rules.is_none() {
                 state.stripped_dangerous_rules = snapshotted_stripped_rules;
             } else if !restoring_to_auto && state.stripped_dangerous_rules.is_some() {
@@ -914,13 +858,9 @@ impl Tool for ExitPlanModeTool {
     }
 
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        // TS parity: `mapToolResultToToolResultBlockParam` in
-        // `ExitPlanModeV2Tool.ts:419-492`. The four-variant
-        // formatting (teammate-awaiting / sub-agent / empty / approved)
-        // already lives in [`ExitPlanModeTool::build_instructions`];
-        // this is the trait hook that finally wires it up to the
-        // executor's render path. Pre-refactor this method was dead
-        // code — `tool_outcome_builder.rs` JSON-stringified `data`.
+        // The four-variant formatting (teammate-awaiting / sub-agent / empty /
+        // approved) lives in [`ExitPlanModeTool::build_instructions`]; this is
+        // the trait hook that wires it up to the executor's render path.
         vec![ToolResultContentPart::Text {
             text: Self::build_instructions(data),
             provider_options: None,
@@ -940,13 +880,11 @@ fn exit_plan_mode_display_data(out: &ExitPlanModeOutput) -> ToolDisplayData {
 
 impl ExitPlanModeTool {
     /// Build the instructions text returned to the model as tool_result content.
-    ///
-    /// TS: `mapToolResultToToolResultBlockParam` in ExitPlanModeV2Tool.ts
     pub fn build_instructions(result_data: &Value) -> String {
         let out: ExitPlanModeOutput =
             serde_json::from_value(result_data.clone()).unwrap_or_default();
 
-        // Teammate "awaiting approval" branch — TS ExitPlanModeV2Tool.ts:431-450.
+        // Teammate "awaiting approval" branch.
         if out.awaiting_leader_approval {
             let request_id = out.request_id.as_deref().unwrap_or("(unknown)");
             let file_path_str = out.file_path.as_deref().unwrap_or("(unknown)");

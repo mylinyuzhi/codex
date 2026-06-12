@@ -1,6 +1,4 @@
 //! Slash command registry + built-in implementations.
-//!
-//! TS: commands.ts + commands/ (slash commands like /help, /compact, /model, /effort)
 
 mod error;
 pub mod handlers;
@@ -73,10 +71,10 @@ pub(crate) fn snapshot_bash_handle(cell: &SharedBashToolHandle) -> Option<Arc<dy
 pub trait CommandHandler: Send + Sync {
     /// Execute the command with the given arguments string.
     ///
-    /// Returns a [`CommandResult`] capturing the four execution shapes TS
-    /// supports — Text, InjectPrompt, Compact, Skip — plus OpenDialog for
-    /// `local-jsx` modal commands and Prompt for prompt-type commands that
-    /// expand to model input.
+    /// Returns a [`CommandResult`] capturing the four execution shapes:
+    /// Text, InjectPrompt, Compact, Skip — plus OpenDialog for modal
+    /// commands and Prompt for prompt-type commands that expand to model
+    /// input.
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         let text = self.execute(args).await?;
         Ok(CommandResult::Text(text))
@@ -96,32 +94,26 @@ pub trait CommandHandler: Send + Sync {
 }
 
 /// Result of executing a slash command.
-///
-/// TS source: `commands.ts processSlashCommand` — the four `type` shapes
-/// returned by `LocalCommandCall` / `LocalJSXCommandCall` / `PromptCommand`,
-/// plus `Skip` for "no output".
 #[derive(Debug, Clone)]
 pub enum CommandResult {
-    /// Display message in the chat (system-line). TS: `{type:'text'}`.
+    /// Display message in the chat (system-line).
     Text(String),
     /// Inject as user input (re-enter the agent loop with this string).
-    /// TS: `{type:'inject', prompt}`.
     InjectPrompt(String),
     /// Compaction completed; embed the summary into the next turn.
-    /// TS: `{type:'compact', compactionResult, displayText}`.
     Compact {
         display_text: String,
         summary: String,
     },
     /// Prompt command — expand to ContentBlockParam[] and feed back to the
-    /// model. TS: `{type:'prompt'}` with `getPromptForCommand`.
+    /// model.
     Prompt {
         progress_message: String,
         parts: Vec<PromptPart>,
     },
-    /// Open a TUI dialog/overlay. TS: `{type:'local-jsx'}`.
+    /// Open a TUI dialog/overlay.
     OpenDialog(DialogSpec),
-    /// No output (TS: `{type:'skip'}`).
+    /// No output.
     Skip,
 }
 
@@ -137,20 +129,16 @@ pub enum PromptPart {
 
 /// Description of a TUI dialog the command requests.
 ///
-/// TS: `local-jsx` returned `ReactNode` directly. Rust models the TUI dialog
-/// as data; the actual ratatui rendering lives in `coco-tui::overlays`.
+/// Rust models the TUI dialog as data; the actual ratatui rendering lives in
+/// `coco-tui::overlays`.
 #[derive(Debug, Clone)]
 pub enum DialogSpec {
     /// `/memory` — file selector + editor open.
-    /// TS: `commands/memory/memory.tsx Dialog<MemoryFileSelector>`.
     MemoryFileSelector { entries: Vec<MemoryFileEntry> },
     /// `/rewind` — message-selector overlay.
     ///
-    /// TS: `Tool.openMessageSelector` callback in
-    /// `commands/rewind/rewind.ts`. TS ignores `_args` entirely
-    /// (`argumentHint: ''`), so the slash command always opens the
-    /// bare picker. Internal UI paths that preselect a message use
-    /// `TuiCommand::ShowRewindFor`.
+    /// The slash command always opens the bare picker. Internal UI paths that
+    /// preselect a message use `TuiCommand::ShowRewindFor`.
     MessageSelector,
     /// `/plugin` — plugin picker (built-in + marketplace).
     PluginPicker,
@@ -163,31 +151,24 @@ pub enum DialogSpec {
     /// Generic confirm dialog.
     Confirm { title: String, message: String },
     /// `/model` — provider-grouped model picker with role pill and
-    /// inline thinking-effort selector. TS parity:
-    /// `components/ModelPicker.tsx`; coco-rs extends the TS shape with
-    /// a role pill so multi-provider users can address any
-    /// [`coco_types::ModelRole`] from the same surface.
+    /// inline thinking-effort selector. Extends the base shape with a role
+    /// pill so multi-provider users can address any [`coco_types::ModelRole`]
+    /// from the same surface.
     ModelPicker,
     /// `/theme` (no args) — standalone theme picker with live preview + a
-    /// sample diff. TS parity: `components/ThemePicker.tsx`.
+    /// sample diff.
     ThemePicker,
     /// `/skills` — read-only skill catalog overlay. Payload carries the
     /// fully-grouped entry list plus per-group subtitle text so the
     /// TUI doesn't recompute paths or token estimates.
     ///
-    /// TS parity: `commands/skills/skills.tsx` → `<SkillsMenu>`. Dialog
-    /// has no toggle / search / sort — only Esc to close.
+    /// Dialog has no toggle / search / sort — only Esc to close.
     SkillsList {
         payload: coco_types::SkillsDialogPayload,
     },
     /// `/agents` — 2-tab overlay (Running + Library). Payload only
     /// carries the Library entries; the Running tab reads
     /// `SessionState.subagents` at render time.
-    ///
-    /// TS parity: 2.1.142 bundled `E24.js` (tab shell) → `bW4.js`
-    /// (Library) + `V24.js` (Running). The open-source `<AgentsMenu>`
-    /// is a single-pane state machine; the 2-tab bundle variant is
-    /// what coco-rs mirrors.
     AgentsList {
         payload: coco_types::AgentsDialogPayload,
     },
@@ -195,11 +176,9 @@ pub enum DialogSpec {
 
 /// One row in the memory-file selector.
 ///
-/// TS parity: `MemoryFileSelector.tsx::memoryOptions` — each row is a
-/// `(label, path, description)` triple. The Rust port keeps the same
-/// shape plus a `scope` discriminator (so TUI rendering can color by
-/// category) and explicit `is_new` / `is_folder` flags that TS
-/// inferred from the `exists` / `OPEN_FOLDER_PREFIX` runtime values.
+/// Each row is a `(label, path, description)` triple, plus a `scope`
+/// discriminator (so TUI rendering can color by category) and explicit
+/// `is_new` / `is_folder` flags.
 #[derive(Debug, Clone)]
 pub struct MemoryFileEntry {
     pub path: std::path::PathBuf,
@@ -207,22 +186,18 @@ pub struct MemoryFileEntry {
     pub scope: MemoryScope,
     /// Secondary text rendered next to the label.
     ///
-    /// Empty string ⇒ render label-only. TS sets this via the inline
-    /// `description` branches in `MemoryFileSelector.tsx:87-105`
-    /// (`"@-imported"`, `"dynamically loaded"`,
-    /// `"Checked in at ./CLAUDE.md"`, etc.).
+    /// Empty string ⇒ render label-only. Examples: `"@-imported"`,
+    /// `"dynamically loaded"`, `"Checked in at ./CLAUDE.md"`.
     pub description: String,
     /// True when the path doesn't yet exist on disk — selecting the
-    /// row creates it. TS: `exists: false` fallback inserted for the
-    /// canonical user / project paths when discovery doesn't find them.
+    /// row creates it.
     pub is_new: bool,
     /// True when the row points at a directory to open in the file
-    /// browser / editor instead of editing a single file. TS: the
-    /// `__open_folder__` prefix on the option value.
+    /// browser / editor instead of editing a single file.
     pub is_folder: bool,
 }
 
-/// Scope of a memory file (matches TS `MemoryFileSelector` ordering).
+/// Scope of a memory file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryScope {
     /// Enterprise / managed.
@@ -248,8 +223,6 @@ pub enum MemoryScope {
 }
 
 /// Feature-flag gate for conditionally enabled commands.
-///
-/// TS: `isEnabled()` function on each command.
 pub type IsEnabledFn = fn() -> bool;
 
 /// A registered command with metadata and an executable handler.
@@ -423,7 +396,7 @@ impl CommandRegistry {
     /// command is unknown. Used by `register_extended_builtins` to
     /// mark Rust-only debug commands (`/env`, `/debug-tool-call`)
     /// as hidden — they are enabled but should not surface in
-    /// `/-typeahead` (matches TS where the corresponding sources are
+    /// `/-typeahead` (the corresponding upstream sources are
     /// literal `isEnabled:false, isHidden:true` stubs).
     pub fn set_hidden(&mut self, name: &str, hidden: bool) {
         if let Some(cmd) = self.commands.get_mut(name) {
@@ -487,12 +460,10 @@ impl CommandRegistry {
                             result_kind = command_result_kind(cr),
                             "slash command ok"
                         );
-                        // TS parity: `processSlashCommand.tsx:530` calls
-                        // `recordSkillUsage(commandName)` after a successful
-                        // dispatch so the `/` autocomplete can surface
-                        // frequently-used skills in the "recently used"
-                        // section. We track only prompt-kind commands
-                        // (skills) — builtin local commands are always
+                        // After a successful dispatch, record skill usage so the
+                        // `/` autocomplete can surface frequently-used skills in
+                        // the "recently used" section. We track only prompt-kind
+                        // commands (skills) — builtin local commands are always
                         // in the builtin bucket and never ranked by use.
                         //
                         // `record` does blocking `std::fs` I/O. Fire-and-
@@ -544,13 +515,11 @@ fn command_result_kind(r: &CommandResult) -> &'static str {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Top-level seam — TS-mirroring resolution order
+// Top-level seam — resolution order
 // (§0 of parity-skills-commands-plugins.md)
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Build a fully-populated CommandRegistry mirroring the TS load order.
-///
-/// TS source: `commands.ts` registry construction.
+/// Build a fully-populated CommandRegistry with the correct load order.
 ///
 /// **Order** (last wins on name collision):
 /// 1. Hardcoded slash commands (`register_builtins` + `register_extended_builtins`).
@@ -558,7 +527,7 @@ fn command_result_kind(r: &CommandResult) -> &'static str {
 /// 3. Builtin-plugin skill commands.
 /// 4. Marketplace plugin commands.
 /// 5. On-disk skill dirs (managed → user → project → legacy `commands/`).
-/// 6. TS-parity P1 handlers (rewind / memory / init / prompt-type commands).
+/// 6. P1 handlers (rewind / memory / init / prompt-type commands).
 ///
 /// This function is a thin wrapper that performs the in-order registration —
 /// callers pass the constructed `SkillManager` and the resolved enabled plugin
@@ -589,9 +558,9 @@ pub fn build_command_registry(
     register_skills_as_commands(&mut registry, skill_manager, &features, skill_overrides);
     register_plugin_contributions(&mut registry, plugins);
 
-    // 6. TS-parity P1 handlers — last so they win over any name collisions
-    //    from skills/plugins (matches TS where `/init`, `/rewind`, `/memory`
-    //    are baseline commands not overridable by user skills).
+    // 6. P1 handlers — last so they win over any name collisions
+    //    from skills/plugins (`/init`, `/rewind`, `/memory` are baseline
+    //    commands not overridable by user skills).
     implementations::register_ts_parity_handlers(
         &mut registry,
         user_type,
@@ -622,10 +591,8 @@ fn register_skills_as_commands(
             continue;
         }
         // `off`-overridden skills are hidden from `/` autocomplete
-        // entirely. TS parity: `iP8(skill)` filter
-        // (`cli_inner_pretty.js:513855-513857`). `name-only` and
-        // `user-invocable-only` keep their slash-command entries —
-        // they only restrict model invocation.
+        // entirely. `name-only` and `user-invocable-only` keep their
+        // slash-command entries — they only restrict model invocation.
         if coco_skills::effective_skill_state(&skill, tiers) == SkillOverrideState::Off {
             continue;
         }
@@ -677,14 +644,14 @@ fn register_skills_as_commands(
                 name: skill.name.clone(),
                 body: prompt,
                 progress_message,
-                // TS `loadedFrom !== 'mcp'` gate: MCP skills are remote
-                // and untrusted — never run their in-prompt shell.
+                // MCP-source gate: MCP skills are remote and untrusted —
+                // never run their in-prompt shell.
                 is_mcp: matches!(skill.source, coco_skills::SkillSource::Mcp { .. }),
                 // Skill frontmatter `allowed-tools` → `alwaysAllowRules.command`.
                 allowed_tools: skill.allowed_tools.clone().unwrap_or_default(),
                 bash_tool_handle: Arc::clone(&bash_cell),
                 // `${CLAUDE_SKILL_DIR}` is known now; `${CLAUDE_SESSION_ID}` is
-                // late-bound via the shared cell (TS `getPromptForCommand`).
+                // late-bound via the shared cell.
                 skill_dir: skill
                     .skill_root
                     .as_ref()
@@ -704,7 +671,7 @@ fn register_plugin_contributions(
     // Each plugin's commands are loaded via the V2 bridge, which carries the
     // REAL prompt body (parsed from the command markdown / manifest), the
     // `plugin:command` namespace, and `loaded_from = Plugin` — replacing the
-    // old name-only `PluginCommandStub`. TS `loadPluginCommands`.
+    // old name-only `PluginCommandStub`.
     for plugin in plugins {
         for pc in coco_plugins::command_bridge::load_plugin_commands_v2(plugin) {
             let name = pc.base.name.clone();
@@ -761,7 +728,7 @@ struct SkillPromptHandler {
     body: String,
     progress_message: String,
     /// Whether the skill was loaded from an MCP server. MCP skills skip
-    /// in-prompt shell execution entirely (TS `loadedFrom !== 'mcp'`).
+    /// in-prompt shell execution entirely.
     is_mcp: bool,
     /// Frontmatter `allowed-tools`, surfaced to the permission evaluator
     /// as `alwaysAllowRules.command`.
@@ -780,7 +747,7 @@ struct SkillPromptHandler {
 #[async_trait]
 impl CommandHandler for SkillPromptHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
-        // TS-mirroring argument substitution via the canonical implementation
+        // Argument substitution via the canonical implementation
         // in `coco_skills::prompt_render`.
         let args_opt = (!args.is_empty()).then_some(args);
         let mut text = coco_skills::prompt_render::substitute_arguments(
@@ -789,17 +756,16 @@ impl CommandHandler for SkillPromptHandler {
             &[],
             /* append_if_no_placeholder */ true,
         );
-        // TS `getPromptForCommand` also replaces `${CLAUDE_SKILL_DIR}` /
-        // `${CLAUDE_SESSION_ID}` on every invocation. Snapshot the session-id
-        // cell, dropping the read guard before any later `.await`.
+        // Replace `${CLAUDE_SKILL_DIR}` / `${CLAUDE_SESSION_ID}` on every
+        // invocation. Snapshot the session-id cell, dropping the read guard
+        // before any later `.await`.
         let session_id = self.session_id.read().ok().and_then(|s| s.clone());
         text = coco_skills::prompt_render::substitute_skill_env(
             &text,
             self.skill_dir.as_deref(),
             session_id.as_deref(),
         );
-        // TS `loadedFrom !== 'mcp'` gate around `executeShellCommandsInPrompt`.
-        // Skip entirely for MCP skills; otherwise route the in-prompt shell
+        // MCP-source gate: skip in-prompt shell for MCP skills; otherwise route
         // through the real Bash tool (per-command permission check) when a
         // handle is wired. Without a handle (tests / pre-bootstrap) the prompt
         // is left verbatim — no unguarded `sh -c` from a slash command.
@@ -847,7 +813,7 @@ mod seam_tests {
             None,
             &coco_config::SkillOverrideTiers::default(),
         );
-        // TS-parity handlers are present. Canonical names only — no
+        // P1 handlers are present. Canonical names only — no
         // aliases for /rewind or /resume.
         assert!(reg.get("rewind").is_some());
         assert!(
@@ -1237,7 +1203,7 @@ type BuiltinSpec = (
 
 /// Register the standard set of built-in commands into a registry.
 ///
-/// TS: commands.ts registers ~65+ commands. We start with the most important ~25.
+/// Registers ~65+ commands. We start with the most important ~25.
 pub fn register_builtins(registry: &mut CommandRegistry) {
     let builtins: Vec<BuiltinSpec> = vec![
         // ── Core ──
@@ -1254,7 +1220,6 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         (
             "config",
             "Show or modify configuration",
-            // TS parity: `commands/config/index.ts:4` aliases `['settings']`.
             &["settings"],
             config_handler,
         ),
@@ -1310,11 +1275,10 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
             diff_handler,
         ),
         // /commit registered as a Prompt in
-        // implementations.rs::register_ts_parity_handlers (mirrors TS:
-        // commands/commit.ts which builds git context + commit prompt).
-        // /pr removed: TS uses /commit-push-pr instead.
-        // /review is registered as a Prompt in implementations.rs
-        // (TS: commands/review.ts is `type: 'prompt'`); no entry here.
+        // implementations.rs::register_ts_parity_handlers — builds git
+        // context + commit prompt.
+        // /pr removed: use /commit-push-pr instead.
+        // /review is registered as a Prompt in implementations.rs; no entry here.
         // ── Tools & Plugins ──
         // /lsp is registered as an async handler in
         // `register_extended_builtins` (handlers::lsp::handler). The

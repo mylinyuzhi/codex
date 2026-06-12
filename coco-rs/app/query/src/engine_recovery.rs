@@ -7,37 +7,28 @@
 //! resume-nudge) or surface the synthetic `api_error` message and
 //! fall through to the no-tool-calls terminal.
 //!
-//! ## TS source
+//! ## Multi-provider adaptation
 //!
-//! Mirrors the `!needsFollowUp` block at `query.ts:1062-1255`, adapted
-//! to multi-provider semantics:
+//! Every provider's signal is pre-mapped into the typed
+//! [`coco_messages::StopReason`] at the `vercel-ai-*` adapter seam,
+//! then collapses to a [`WithheldReason`] in
+//! `engine_stream_consume::withhold_reason_for_stop`. The dispatcher
+//! matches the typed enum — never the raw provider string.
 //!
-//! - TS distinguishes "withheld 413" (prompt-too-long) from "withheld
-//!   max_output_tokens" via Anthropic-specific predicates
-//!   (`isPromptTooLongMessage`, `isWithheldMaxOutputTokens`). coco-rs
-//!   pre-maps every provider's signal into the typed
-//!   [`coco_messages::StopReason`] at the `vercel-ai-*` adapter seam,
-//!   then collapses it to a [`WithheldReason`] in
-//!   `engine_stream_consume::withhold_reason_for_stop`. The
-//!   dispatcher matches the typed enum — never the raw provider
-//!   string.
-//! - TS's `ESCALATED_MAX_TOKENS = 65536` magic number is Anthropic-Opus-
-//!   specific. coco-rs reads
-//!   [`coco_config::ModelInfo::max_output_tokens_escalate`] — a per-model
-//!   opt-in ceiling. When unset, Phase-1 escalate is **disabled** for
-//!   that model and recovery jumps straight to the multi-turn resume
-//!   nudge (Phase-2). The TS `ESCALATED_MAX_TOKENS` constant and the
-//!   per-turn `max_tokens_override` state field both went away with this
-//!   refactor — escalate is now a derived property of `ModelInfo`
-//!   + the per-turn `transition` field, not a stateful slot.
-//! - TS's `recoverFromOverflow` (collapse drain) is intentionally
-//!   excluded — `coco-rs/CLAUDE.md` rejects `CONTEXT_COLLAPSE` /
-//!   `HISTORY_SNIP` as out-of-scope per the multi-provider audit.
+//! Reads [`coco_config::ModelInfo::max_output_tokens_escalate`] — a
+//! per-model opt-in ceiling. When unset, Phase-1 escalate is
+//! **disabled** for that model and recovery jumps straight to the
+//! multi-turn resume nudge (Phase-2). Escalate is a derived property
+//! of `ModelInfo` + the per-turn `transition` field, not a stateful
+//! slot.
+//!
+//! `CONTEXT_COLLAPSE` / `HISTORY_SNIP` are intentionally out of scope
+//! per the multi-provider architecture.
 //!
 //! ## Withhold semantics (Finding C4 / C22)
 //!
-//! TS withholds the synthetic api_error message **during** the stream
-//! and only yields it on recovery exhaustion. Rust's current behavior
+//! The synthetic api_error message is withheld **during** the stream
+//! and only yielded on recovery exhaustion. The previous behavior
 //! (pre-commit-3) pushed the synthetic immediately at every stop
 //! reason, producing phantom error messages on the happy compact-retry
 //! path. The dispatcher fixes this by:
@@ -56,8 +47,7 @@
 //!   "resume" nudge; still no synthetic until exhaustion.
 //! - **`MaxOutputTokens` exhausted**: pushes `assistant_msg` + the
 //!   synthetic, then falls through. This is the only path that emits
-//!   the synthetic — TS parity at `query.ts:1255` (`yield lastMessage`
-//!   after exhausting the recovery loop).
+//!   the synthetic.
 //!
 //! ## ContentFilter
 //!
@@ -114,12 +104,10 @@ pub(crate) struct OpenedTurnStream {
 /// whether reactive compaction made progress (caller retries) or
 /// exhausted (caller pushes synthetic api_error + terminates).
 ///
-/// Finding **R1**. TS `query.ts:1166-1175` surfaces `lastMessage` +
-/// fires `executeStopFailureHooks` + returns `'prompt_too_long'` when
-/// `reactiveCompact.tryReactiveCompact(...)` returns null. Without this
-/// typed signal, the Rust loop spun until budget exhaustion because
-/// `do_reactive_compact`'s internal circuit-breaker no-op'd silently
-/// and the dispatcher always returned `Continue(ReactiveCompactRetry)`.
+/// Finding **R1**. Without this typed signal, the Rust loop spun until
+/// budget exhaustion because `do_reactive_compact`'s internal
+/// circuit-breaker no-op'd silently and the dispatcher always returned
+/// `Continue(ReactiveCompactRetry)`.
 #[derive(Debug)]
 pub(crate) enum ContextOverflowOutcome {
     /// Compaction freed at least one token; caller continues with this
@@ -212,7 +200,7 @@ pub(crate) enum BlockingLimitDecision {
     Proceed,
     /// Hard over-limit — pushing more history at the API would 4xx.
     /// Caller pushes the synthetic api_error and returns early with
-    /// `stop_reason = "blocking_limit"`. TS parity: `query.ts:641-647`.
+    /// `stop_reason = "blocking_limit"`.
     Block {
         estimated_tokens: i64,
         context_window: i64,
@@ -224,12 +212,10 @@ pub(crate) enum BlockingLimitDecision {
 /// oversized history. C15 must skip the pre-API gate for these so the
 /// fork actually reaches the provider (Finding **R5**).
 ///
-/// Mirrors TS `query.ts:630-631 querySource !== 'compact' &&
-/// querySource !== 'session_memory'` plus the additional coco-rs fork
-/// labels (`session_memory_auto`, `session_memory_manual`,
-/// `extract_memories`) that also operate on the parent's oversized
-/// state. `prompt_suggestion` / `agent_summary` / `side_question` are
-/// NOT in this set — those forks are post-turn, run on already-fitting
+/// Labels `session_memory_auto`, `session_memory_manual`, and
+/// `extract_memories` also operate on the parent's oversized state.
+/// `prompt_suggestion` / `agent_summary` / `side_question` are NOT
+/// in this set — those forks are post-turn, run on already-fitting
 /// history, and benefit from the gate.
 fn is_forked_compact_or_session_memory_source(qs: &str) -> bool {
     matches!(
@@ -280,9 +266,9 @@ pub(crate) enum RecoveryDisposition {
 /// This replaces the legacy 3-source resolution
 /// (`turn_state.max_tokens_override.or(self.config.max_tokens)` — both
 /// fields removed in this refactor): per-model `ModelInfo` is the only
-/// knob; the global `QueryEngineConfig.max_tokens` was a
-/// TS-Anthropic-only-port residue that couldn't survive the
-/// `ModelRole` × multi-LLM swap surface.
+/// knob; the global `QueryEngineConfig.max_tokens` was an Anthropic-only
+/// residue that couldn't survive the `ModelRole` × multi-LLM swap
+/// surface.
 pub(crate) fn effective_max_tokens(
     active_snapshot: &ModelRuntimeSnapshot,
     turn_state: &LoopTurnState,
@@ -343,10 +329,8 @@ impl QueryEngine {
     ///
     /// Each adapter namespaces `provider_metadata` reads by provider
     /// key, so foreign-key signatures never reach a wire body that
-    /// would reject them. TS's `stripSignatureBlocks` (`query.ts:927`)
-    /// is gated on `USER_TYPE === 'ant'` and addresses the
-    /// **intra-Anthropic** cross-model case (capybara → opus, same
-    /// provider, signatures bound to a specific model) — explicitly
+    /// would reject them. The intra-Anthropic cross-model case (same
+    /// provider, signatures bound to a specific model) is explicitly
     /// out of scope per the workspace `feedback_no_ant_gates`.
     pub(crate) async fn post_advance_side_effects(
         &self,
@@ -400,8 +384,7 @@ impl QueryEngine {
     ///   compact → …).
     /// * Query source is a forked compact/session-memory agent — those
     ///   forks exist to shrink the oversized history and must reach
-    ///   the provider with their original input (TS `query.ts:630-631`,
-    ///   Finding **R5**).
+    ///   the provider with their original input (Finding **R5**).
     pub(crate) fn check_blocking_limit(
         &self,
         history: &MessageHistory,
@@ -423,12 +406,10 @@ impl QueryEngine {
 
         // Finding **R5** — forked agents whose entire purpose is to
         // shrink oversized history must reach the provider with their
-        // input intact. TS `query.ts:630-631`:
-        // `querySource !== 'compact' && querySource !== 'session_memory'`.
-        // `forked_agent::ForkLabel::as_str()` and the user's
-        // [`QueryEngineConfig::query_source_override`] supply matching
-        // labels; the engine's own `query_source_label()` collapses to
-        // these for fork-built engines.
+        // input intact. `forked_agent::ForkLabel::as_str()` and the
+        // user's [`QueryEngineConfig::query_source_override`] supply
+        // matching labels; the engine's own `query_source_label()`
+        // collapses to these for fork-built engines.
         let qs = self.query_source_label();
         if is_forked_compact_or_session_memory_source(qs) {
             tracing::debug!(
@@ -509,14 +490,11 @@ impl QueryEngine {
             }
         };
 
-        // **Finding R2** — TS resets `stopHookActive: undefined` on every
-        // `continue` site EXCEPT the StopHookBlocking one (TS
-        // `query.ts:1107/1160/1215/1243/1336`). Without this reset, a
+        // **Finding R2** — reset `stop_hook_active` on every `continue`
+        // site EXCEPT the StopHookBlocking one. Without this reset, a
         // prior Stop-hook block followed by a recovery continue would
         // re-fire stop hooks with `stop_hook_active: true` even though
-        // the intervening recovery cleared that incident. Reset here so
-        // every recovery `Continue` propagates the same "fresh" state TS
-        // models with `stopHookActive: undefined`. `TerminateExhausted`
+        // the intervening recovery cleared that incident. `TerminateExhausted`
         // is unaffected — the caller falls through to the no-tool-calls
         // terminal where the C3 guard reads the flag once more, then the
         // loop exits.
@@ -539,9 +517,7 @@ impl QueryEngine {
     /// to the no-tool-calls terminal where the C3 guard detects the
     /// api_error trailer, fires StopFailure hooks, and the engine emits
     /// `stop_reason = "prompt_too_long"` (derived from
-    /// `ApiError.error_type`). TS parity:
-    /// `query.ts:1166-1175 yield lastMessage + executeStopFailureHooks +
-    /// return { reason: 'prompt_too_long' }`.
+    /// `ApiError.error_type`).
     async fn recover_prompt_too_long(
         &self,
         assistant_msg: Message,
@@ -590,8 +566,7 @@ impl QueryEngine {
     ///    `max_output_tokens_escalate` unset in `~/.coco/models.json`;
     ///    to cap output to a fixed value, edit `max_output_tokens` for
     ///    that model — this is the multi-LLM-friendly single source
-    ///    of truth, **not** a global env override (TS
-    ///    `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is intentionally not ported).
+    ///    of truth, **not** a global env override.
     /// 2. **Resume**: inject a "pick up mid-thought" meta message,
     ///    push the partial response so the resume turn sees it. Runs
     ///    at most [`MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`] times.
@@ -600,11 +575,8 @@ impl QueryEngine {
     ///    marker; caller falls through to the no-tool-calls terminal.
     ///
     /// Phase-1 is **opt-in per model** to fit the multi-LLM
-    /// architecture. TS's `ESCALATED_MAX_TOKENS = 65536` constant was
-    /// a single global magic number that worked on Anthropic Opus but
-    /// would have been guaranteed-rejected on GPT-4 (4096 cap) and
-    /// Haiku (1024 cap). Putting the ceiling in `ModelInfo` makes
-    /// each model self-describe what it supports — and unset means
+    /// architecture. Putting the ceiling in `ModelInfo` makes each
+    /// model self-describe what it supports — and unset means
     /// "skip the escalate phase" rather than "guess a value that
     /// might break this provider."
     ///
@@ -637,9 +609,7 @@ impl QueryEngine {
         // would be a single-Anthropic-defaults regression in a
         // multi-LLM SDK. The per-model `ModelInfo.max_output_tokens` /
         // `max_output_tokens_escalate` pair IS the cap surface — to
-        // pin output, edit `~/.coco/models.json`. TS's
-        // `CLAUDE_CODE_MAX_OUTPUT_TOKENS` gate (`query.ts:1202`) is
-        // intentionally not ported.
+        // pin output, edit `~/.coco/models.json`.
         let already_escalated = matches!(
             turn_state.transition,
             Some(ContinueReason::MaxOutputTokensEscalate)

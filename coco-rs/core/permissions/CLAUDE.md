@@ -2,20 +2,6 @@
 
 Permission evaluation pipeline: auto-mode / yolo classifier (2-stage XML via LLM), denial tracking, rule compilation, shell rule matching, dangerous-pattern detection.
 
-## TS Source
-- `utils/permissions/permissions.ts`, `utils/permissions/permissionsLoader.ts` — eval pipeline
-- `utils/permissions/PermissionMode.ts`, `utils/permissions/PermissionResult.ts`, `utils/permissions/PermissionRule.ts`, `utils/permissions/PermissionUpdate.ts`, `utils/permissions/PermissionUpdateSchema.ts`, `utils/permissions/PermissionPromptToolResultSchema.ts` — types
-- `utils/permissions/yoloClassifier.ts`, `utils/permissions/bashClassifier.ts`, `utils/permissions/classifierShared.ts`, `utils/permissions/classifierDecision.ts` — 2-stage XML classifier
-- `utils/permissions/autoModeState.ts` — auto-mode state machine
-- `utils/permissions/denialTracking.ts` — denial ring buffer
-- `utils/permissions/permissionRuleParser.ts`, `utils/permissions/shellRuleMatching.ts`, `utils/permissions/shadowedRuleDetection.ts` — rule compiler
-- `utils/permissions/filesystem.ts`, `utils/permissions/pathValidation.ts`, `utils/permissions/dangerousPatterns.ts` — filesystem safety
-- `utils/permissions/getNextPermissionMode.ts` — mode transitions
-- `utils/permissions/permissionExplainer.ts` — LLM-generated explanations
-- `utils/permissions/permissionSetup.ts` — initial setup / validation
-- `utils/permissions/bypassPermissionsKillswitch.ts` — bypass capability + killswitch
-- `utils/classifierApprovals.ts`, `utils/classifierApprovalsHook.ts`, `utils/autoModeDenials.ts` — auto-mode denial cache
-
 ## Key Types
 
 - **Auto mode**: `AutoModeInput`, `AutoModeDecision`, `AutoModeState`, `AutoModeRules`, `ClassifyRequest`, `YoloClassifierResult`, `classify_for_auto_mode`, `classify_auto_mode_extended`, `classify_yolo_action`, `is_safe_tool`, `can_use_tool_in_auto_mode`
@@ -46,14 +32,12 @@ Two non-recoverable / transient classifier outcomes are mapped to a
 human-review-or-deny decision in `auto_mode_decision.rs`:
 
 - **`transcript_too_long`** (deterministic context overrun — retry can't
-  help) → manual prompt when interactive, deny when headless. TS skips the
-  iron-gate for this case (`permissions.ts:818-842`); coco matches.
+  help) → manual prompt when interactive, deny when headless. The iron-gate
+  is skipped for this case; coco-rs matches.
 - **`unavailable`** (transient transport/capacity outage) → **fail closed
-  (deny) by default**, even in interactive mode. TS gates this on the
-  `tengu_iron_gate_closed` GrowthBook flag whose shipped default is `true`
-  (deny). Coco does not port GrowthBook gates, so it replaces the flag with
-  the `auto_mode.classifier_unavailable_fail_open` setting
-  (`AutoModeConfig` → `AutoModeRules`, default `false` = fail closed).
+  (deny) by default**, even in interactive mode. Rather than a GrowthBook
+  feature flag, coco-rs uses the `auto_mode.classifier_unavailable_fail_open`
+  setting (`AutoModeConfig` → `AutoModeRules`, default `false` = fail closed).
   Opting in (`true`) restores a manual interactive prompt; headless always
   denies regardless (no prompt is reachable).
 
@@ -63,14 +47,13 @@ off the **permission-specific** `avoid_permission_prompts` (not session-level
 
 ## Default `Tool::check_permissions` returns `Passthrough` (not `Allow`)
 
-TS `TOOL_DEFAULTS.checkPermissions` (`Tool.ts:762-766`) returns
-`{ behavior: 'allow', updatedInput: input }` — tools without override
-auto-allow without rule evaluation. coco-rs deliberately diverges:
-the default is `ToolCheckResult::Passthrough`, which defers to the
-rule pipeline and mode fallthrough.
+The upstream design auto-allows tools without an override
+(`{ behavior: 'allow', updatedInput: input }` by default). coco-rs
+deliberately diverges: the default is `ToolCheckResult::Passthrough`,
+which defers to the rule pipeline and mode fallthrough.
 
 Tradeoff:
-- TS-strict (`Allow` default) auto-allows safe tools (ToolSearch,
+- `Allow` default (the upstream design) auto-allows safe tools (ToolSearch,
   Brief, Sleep) in `Default` mode without prompting, but requires
   every gating tool (Bash, Write, Edit, NotebookEdit, …) to
   explicitly override and return `Passthrough` to opt back into
@@ -101,8 +84,7 @@ PreToolUse hook returned a permission opinion.
 `Tool::check_permissions` returns a [`coco_types::ToolCheckResult`]
 that this fn captures as the step-1c slot for
 `PermissionEvaluator::evaluate_with_tool_check`. This puts the central
-rule pipeline in front of every tool call exactly as TS
-`hasPermissionsToUseToolInner` does.
+rule pipeline in front of every tool call.
 
 Settings rules reach the evaluator via three layers:
 1. `coco_config::SettingsWithSource::sourced_permission_rules()` →

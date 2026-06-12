@@ -1,9 +1,6 @@
 //! Teammate mailbox handle — write structured protocol messages into
 //! a recipient's inbox without depending on `app/state` from core.
 //!
-//! TS: `writeToMailbox` + protocol-message helpers in
-//! `src/utils/teammateMailbox.ts`.
-//!
 //! **Layering**: definition here; implementation in `coco-state` (which
 //! owns the real file I/O in `swarm_mailbox.rs`); consumers in
 //! `coco-tools` (ExitPlanModeTool teammate branch, SendMessageTool).

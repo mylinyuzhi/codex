@@ -1,14 +1,13 @@
 //! Post-compact plan-mode attachment.
 //!
-//! TS: `createPlanModeAttachmentIfNeeded()` in `compact.ts:1542-1560`. When
-//! the session is in plan mode at compact time, re-emit a `plan_mode`
+//! When the session is in plan mode at compact time, re-emits a `plan_mode`
 //! attachment with `reminderType='full'` so the model continues operating
 //! in plan mode on the FIRST post-compact turn — without this, plan
 //! instructions only land later via the system-reminder cadence.
 //!
-//! coco-rs renders the same text template the system-reminder cadence
-//! uses (`coco_context::render_plan_mode_reminder`) so model-visible
-//! output stays consistent across cadence and post-compact paths.
+//! Renders the same text template the system-reminder cadence uses
+//! (`coco_context::render_plan_mode_reminder`) so model-visible output stays
+//! consistent across cadence and post-compact paths.
 
 use coco_context::PlanModeAttachment;
 use coco_context::ReminderType;
@@ -21,8 +20,8 @@ use coco_messages::LlmMessage;
 /// (workflow, phase4_variant, agent counts, plan file path, plan_exists,
 /// is_sub_agent) — this crate stays free of plan-mode resolution knobs.
 ///
-/// Mirrors TS: `reminderType='full'` (always) so the post-compact context
-/// gets the complete instructions, not the sparse cadence variant.
+/// Always uses `reminderType='full'` so the post-compact context gets the
+/// complete instructions, not the sparse cadence variant.
 pub fn create_plan_mode_attachment_if_needed(
     is_plan_mode: bool,
     mut attachment: PlanModeAttachment,
@@ -30,7 +29,6 @@ pub fn create_plan_mode_attachment_if_needed(
     if !is_plan_mode {
         return None;
     }
-    // TS hard-codes `reminderType: 'full'` at compact.ts:1555.
     attachment.reminder_type = ReminderType::Full;
     let text = render_plan_mode_reminder(&attachment);
     Some(AttachmentMessage::api(

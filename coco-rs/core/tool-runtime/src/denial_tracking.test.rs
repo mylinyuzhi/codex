@@ -84,7 +84,7 @@ fn test_suggestion_message() {
 #[test]
 fn test_subagent_fork_isolation_no_parent_pollution() {
     // Regression: parent's denial count must not bleed into a fork.
-    // TS parity: createSubagentContext always builds a fresh DenialTracker.
+    // Subagent context always builds a fresh DenialTracker.
     let mut parent = DenialTracker::new();
     let mut fork = DenialTracker::new();
 

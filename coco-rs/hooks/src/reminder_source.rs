@@ -2,9 +2,7 @@
 //!
 //! Two impls live here:
 //!
-//! - `AsyncHookRegistry` — bridges completed async-hook responses
-//!   (TS `getAsyncHookResponseAttachments()` at
-//!   `utils/attachments.ts:3464`).
+//! - `AsyncHookRegistry` — bridges completed async-hook responses.
 //!   Each call to [`HookEventsSource::drain`] delegates to
 //!   `AsyncHookRegistry::collect_responses()` — which marks responses
 //!   delivered — and maps each response to a `HookEvent::AsyncResponse`.
@@ -30,7 +28,7 @@ use coco_system_reminder::HookEventsSource;
 impl HookEventsSource for AsyncHookRegistry {
     async fn drain(&self, _agent_id: Option<&str>) -> Vec<HookEvent> {
         // `collect_responses` drains (marks delivered), so repeat
-        // calls don't re-emit. Matches TS drain-on-read semantics.
+        // calls don't re-emit.
         self.collect_responses()
             .await
             .into_iter()
@@ -83,7 +81,7 @@ fn to_hook_event(r: AsyncHookResponse) -> HookEvent {
         None
     } else {
         // Prefix with hook name so the model knows which hook surfaced
-        // the stderr — TS bundles this inside `hookSpecificOutput`.
+        // the stderr.
         Some(format!("[{}] {}", r.hook_name, r.stderr))
     };
     HookEvent::AsyncResponse {

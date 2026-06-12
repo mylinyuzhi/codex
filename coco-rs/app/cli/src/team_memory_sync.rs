@@ -1,24 +1,21 @@
 //! Wire team-memory server sync into the interactive session.
 //!
-//! TS parity: `services/teamMemorySync/watcher.ts startTeamMemoryWatcher`,
-//! invoked from `entrypoints/setup.ts:365-368` (gated on the TEAMMEM
-//! feature). On session start it pulls the server's team memory into the
-//! local team dir, then runs a debounced watcher that pushes local edits.
+//! On session start it pulls the server's team memory into the local team
+//! dir, then runs a debounced watcher that pushes local edits.
 //!
-//! Activation is gated on three runtime conditions, all mirroring TS, and
-//! the bootstrap **no-ops cleanly** when any is absent:
+//! Activation is gated on three runtime conditions and the bootstrap
+//! **no-ops cleanly** when any is absent:
 //! - `MemoryConfig.team_memory_enabled` (the sub-toggle),
-//! - a resolvable `owner/repo` slug from the git `origin` remote
-//!   (TS `getGithubRepo()`), and
-//! - claude.ai OAuth tokens (TS `getClaudeAIOAuthTokens()`); without a
-//!   token the initial pull is skipped and the watcher suppresses, so a
-//!   non-Anthropic / logged-out session does zero sync network work.
+//! - a resolvable `owner/repo` slug from the git `origin` remote, and
+//! - claude.ai OAuth tokens; without a token the initial pull is skipped
+//!   and the watcher suppresses, so a logged-out session does zero sync
+//!   network work.
 //!
 //! The sync endpoint is Anthropic-first-party only (`/api/claude_code/
-//! team_memory`), consistent with the Multi-Provider Boundaries: the base
-//! URL defaults to the Anthropic API base, overridable via
-//! `COCO_TEAM_MEMORY_SYNC_URL`. It is wired on the interactive (TUI) path
-//! only — scripted `-p` / SDK runs do no background sync.
+//! team_memory`): the base URL defaults to the Anthropic API base,
+//! overridable via `COCO_TEAM_MEMORY_SYNC_URL`. It is wired on the
+//! interactive (TUI) path only — scripted `-p` / SDK runs do no
+//! background sync.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -28,8 +25,7 @@ use coco_config::RuntimeConfig;
 use coco_memory::team_sync;
 use tokio::sync::Mutex;
 
-/// Default Anthropic API base for the sync endpoint. TS:
-/// `getOauthConfig().BASE_API_URL`.
+/// Default Anthropic API base for the sync endpoint.
 const DEFAULT_SYNC_BASE_URL: &str = "https://api.anthropic.com";
 
 /// `COCO_TEAM_MEMORY_SYNC_URL` override, else the Anthropic API base.
@@ -43,7 +39,7 @@ fn resolve_base_url() -> String {
 /// Bearer-token provider: the claude.ai OAuth access token, or `None`
 /// when no OAuth login is present (API-key-only or logged-out). Called
 /// once per push so the watcher observes refreshed tokens without a
-/// restart (TS `checkAndRefreshOAuthTokenIfNeeded`).
+/// restart.
 fn make_bearer_provider(config_home: PathBuf) -> Arc<dyn Fn() -> Option<String> + Send + Sync> {
     Arc::new(move || {
         let opts = coco_inference::auth::AuthResolveOptions {
@@ -115,9 +111,8 @@ pub fn bootstrap(runtime_config: &RuntimeConfig, cwd: PathBuf, config_home: Path
         };
         let state = Arc::new(Mutex::new(team_sync::SyncState::default()));
 
-        // Initial pull → apply (TS pullTeamMemory at session start), BEFORE
-        // the watcher starts so its own disk writes don't trigger a
-        // spurious push.
+        // Initial pull → apply BEFORE the watcher starts so its own disk
+        // writes don't trigger a spurious push.
         if let Some(token) = (bearer)() {
             let etag = state.lock().await.last_known_checksum.clone();
             let result = {

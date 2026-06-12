@@ -77,8 +77,8 @@ pub struct PerCallOverrides {
     /// baseline beta in the Anthropic adapter. Helper calls (compaction,
     /// title generation) pass `false`; main agent loop passes `true`.
     pub agentic_query: bool,
-    /// Per-call query source — used for 1h-TTL allowlist match (TS
-    /// parity). Forwarded to the adapter only when a non-disabled
+    /// Per-call query source — used for 1h-TTL allowlist match.
+    /// Forwarded to the adapter only when a non-disabled
     /// `cache_strategy` is also present (design §9.2 Finding 4).
     pub query_source: Option<String>,
     /// Generation stop sequences forwarded to the provider. Used by the

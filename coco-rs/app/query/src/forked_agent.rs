@@ -1,10 +1,6 @@
 //! Generic post-turn / side-channel forked-agent helper.
 //!
-//! TS source: `utils/forkedAgent.ts::runForkedAgent` + the 8 callers
-//! that consume it (`utils/sideQuestion.ts`, `services/{compact,
-//! PromptSuggestion/{promptSuggestion,speculation}, extractMemories,
-//! SessionMemory, AgentSummary, autoDream}`). All callers funnel
-//! through the same `query()` engine via `runForkedAgent`; coco-rs
+//! All callers funnel through the same `query()` engine; coco-rs
 //! routes them through this trait + dispatcher.
 //!
 //! ## The 9 fork variants (per [`coco_types::ForkLabel`])
@@ -31,10 +27,10 @@
 //!   transcript
 //! - `skip_cache_write: true` — fire-and-forget; don't pollute the
 //!   shared cache with this branch
-//! - `effort: None` — leaves thinking config untouched (TS PR #18143
-//!   incident: setting `effort: 'low'` on prompt-suggestion forks
-//!   collapsed cache hit rate from 92.7% → 61% by changing
-//!   `budget_tokens` and busting the cache key)
+//! - `effort: None` — leaves thinking config untouched (setting
+//!   `effort: 'low'` on prompt-suggestion forks collapsed cache hit
+//!   rate from 92.7% → 61% by changing `budget_tokens` and busting
+//!   the cache key)
 //!
 //! Override these only when cache parity isn't a goal. The per-call
 //! `max_output_tokens` lives on `ModelInfo` — to give a fork a
@@ -75,12 +71,9 @@ pub enum ForkTranscriptMode {
 /// its agent loop. Used by speculation + auto-dream to update the
 /// progress UI / append to a per-task ledger live (instead of waiting
 /// for the fork to finish).
-///
-/// TS: `utils/forkedAgent.ts::runForkedAgent({onMessage})`.
 pub type OnMessageCallback = Arc<dyn Fn(&Message) + Send + Sync>;
 
-/// Caller-supplied isolation overrides — see TS
-/// `utils/forkedAgent.ts::createSubagentContext::overrides`.
+/// Caller-supplied isolation overrides.
 ///
 /// All fields are optional; `None` means "use the engine's default".
 #[derive(Default, Clone)]
@@ -116,8 +109,8 @@ pub struct ForkedAgentOptions {
     /// Hard cap on turns. `Some(1)` is the standard "one-shot" shape.
     pub max_turns: Option<i32>,
     /// Where the fork transcript should be persisted. Fork engines never
-    /// write to the parent's main transcript; sidechain mode mirrors TS
-    /// `recordSidechainTranscript` for compact-like forks.
+    /// write to the parent's main transcript; sidechain mode records
+    /// a separate transcript for compact-like forks.
     pub transcript_mode: ForkTranscriptMode,
     /// `true` ⇒ the fork's API request asks the provider not to
     /// write a fresh prompt-cache entry on the last message.
@@ -138,11 +131,11 @@ pub struct ForkedAgentOptions {
     /// built-in `check_permissions`. The six policies (deny-all /
     /// auto-mem / session-mem / speculation 3-boundary) live in their
     /// respective subsystems; this module just threads the handle
-    /// through. TS: `runForkedAgent({canUseTool})`.
+    /// through.
     pub can_use_tool: Option<CanUseToolHandleRef>,
     /// When `true`, hook auto-approve cannot bypass [`Self::can_use_tool`].
     /// Speculation needs this so overlay path-rewrites always run
-    /// regardless of hook config. TS: `requireCanUseTool`.
+    /// regardless of hook config.
     pub require_can_use_tool: bool,
     /// Streaming message callback. Fires once per message the fork
     /// emits — live progress for speculation + auto-dream UIs.
@@ -234,14 +227,11 @@ pub fn build_query_config(
 
 /// Result of a [`ForkDispatcher::dispatch`] call.
 ///
-/// Carries the full message list (TS parity: TS callers walk
-/// `result.messages` to find the first non-empty assistant text
-/// block — model may go "tool→denied→text" across two turns when
-/// canUseTool denies). Numeric usage fields are surfaced for
-/// telemetry callers; callers that only want the answer can ignore
-/// them.
-///
-/// TS: `utils/forkedAgent.ts::ForkedAgentResult`.
+/// Carries the full message list. Callers walk `messages` to find
+/// the first non-empty assistant text block — model may go
+/// "tool→denied→text" across two turns when canUseTool denies.
+/// Numeric usage fields are surfaced for telemetry callers; callers
+/// that only want the answer can ignore them.
 #[derive(Debug, Clone, Default)]
 pub struct ForkedAgentResult {
     /// Every assistant + user message produced during the fork (in
@@ -264,10 +254,6 @@ pub struct ForkedAgentResult {
 /// [`coco_query::QueryEngine`] (typically `Arc<SessionRuntime>` in
 /// the CLI) and drive a single turn against it. The parent engine's
 /// history is *not* mutated — that's the whole point of forking.
-///
-/// TS reference: `utils/forkedAgent.ts::runForkedAgent`. 8 callers
-/// route through the same TS function; the trait gives Rust callers
-/// the same single seam.
 #[async_trait::async_trait]
 pub trait ForkDispatcher: Send + Sync {
     /// Run a forked query.

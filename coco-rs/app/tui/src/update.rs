@@ -136,9 +136,8 @@ pub async fn handle_command(
             // Compute the next mode without committing — the cycle helper
             // applies eagerly, so we'd lose the chance to intercept
             // high-stakes targets (BypassPermissions / Auto) and force
-            // a confirmation dialog. Mirrors TS: Shift+Tab landing on
-            // bypass surfaces `BypassPermissionsModeDialog` before the
-            // mode actually flips.
+            // a confirmation dialog. Shift+Tab landing on bypass surfaces
+            // `BypassPermissionsModeDialog` before the mode actually flips.
             let next = state.session.permission_mode.next_in_cycle(
                 state.session.bypass_permissions_available,
                 state.session.auto_mode_available,
@@ -238,10 +237,9 @@ pub async fn handle_command(
                 }
                 return handled;
             }
-            // TS `useTextInput.ts:250-255`: a trailing backslash + Enter
-            // inserts a newline instead of submitting (poor-man's
-            // line-continuation). Match here so the heredoc-style escape
-            // works in both ordinary and vim-Insert mode.
+            // A trailing backslash + Enter inserts a newline instead of
+            // submitting (poor-man's line-continuation). Match here so the
+            // heredoc-style escape works in both ordinary and vim-Insert mode.
             if state.ui.input.textarea.text().ends_with('\\') {
                 let len = state.ui.input.textarea.text().len();
                 state.ui.input.textarea.replace_range(len - 1..len, "\n");
@@ -296,10 +294,9 @@ pub async fn handle_command(
                 state.ui.sync_popup_from_active_suggestions();
                 return true;
             }
-            // Escape while viewing the teammate activity pane mirrors TS
-            // `useBackgroundTaskNavigation`: interrupt the focused
-            // teammate's current turn only. Ctrl+C / KillAllAgents remains
-            // the lifecycle stop path.
+            // Escape while viewing the teammate activity pane interrupts the
+            // focused teammate's current turn only. Ctrl+C / KillAllAgents
+            // remains the lifecycle stop path.
             if !state.ui.has_blocking_interaction()
                 && matches!(
                     state.session.expanded_view,
@@ -337,9 +334,8 @@ pub async fn handle_command(
                 return true;
             }
             // No state + active suggestions + text present → ESC
-            // double-press clears input + saves to history. Mirrors TS
-            // `useTextInput.ts:126-153`: single Esc shows a toast; second
-            // Esc within `DOUBLE_PRESS_TIMEOUT` clears.
+            // double-press clears input + saves to history. Single Esc
+            // shows a toast; second Esc within `DOUBLE_PRESS_TIMEOUT` clears.
             if !state.ui.has_blocking_interaction()
                 && state.ui.completion.active.is_none()
                 && !state.ui.input.is_empty()
@@ -371,9 +367,8 @@ pub async fn handle_command(
             }
             // No state + no suggestions + idle conditions met → run
             // the double-Esc tracker so a second Esc opens the rewind
-            // picker. TS: `useDoublePress` in `PromptInput.tsx`. The
-            // poll lives here (not in `keybinding_dispatch`) because
-            // dispatch only has `&AppState`; the tracker needs a
+            // picker. The poll lives here (not in `keybinding_dispatch`)
+            // because dispatch only has `&AppState`; the tracker needs a
             // mutable borrow.
             if state.rewind_available_from_input() {
                 use coco_tui_ui::double_press::Outcome;
@@ -385,10 +380,10 @@ pub async fn handle_command(
             if !crate::modal_pane::rewind_cancel(state) {
                 return true; // phase-back; keep state
             }
-            // Every picker reports its own dismissal to the transcript (TS
-            // local-jsx `onDone('… dismissed', { display: 'system' })`). The
-            // theme picker / settings route Esc through `Deny` instead, so the
-            // shared helper also runs there (`interaction::deny`).
+            // Every picker reports its own dismissal to the transcript on
+            // close. The theme picker / settings route Esc through `Deny`
+            // instead, so the shared helper also runs there
+            // (`interaction::deny`).
             if state.ui.modal.is_some() {
                 crate::modal_pane::close_modal_with_feedback(state, command_tx).await;
             } else if state.has_active_surface() {
@@ -826,8 +821,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::TeamRosterCycleMode(delta) => {
-            // Cycle the focused teammate's mode and apply it immediately
-            // (TS: cycling in the teams dialog persists at once).
+            // Cycle the focused teammate's mode and apply it immediately.
             if let Some((name, mode)) = crate::modal_pane::team_roster::cycle_mode(state, delta) {
                 let _ = command_tx
                     .send(UserCommand::SetTeammateMode { name, mode })
@@ -836,8 +830,7 @@ pub async fn handle_command(
             true
         }
         TuiCommand::TeamRosterCycleAllModes(delta) => {
-            // Cycle ALL teammates in tandem and persist in one batch
-            // (TS `cycleAllTeammateModes`).
+            // Cycle ALL teammates in tandem and persist in one batch.
             let updates = crate::modal_pane::team_roster::cycle_all_modes(state, delta);
             if !updates.is_empty() {
                 let _ = command_tx
@@ -868,13 +861,12 @@ pub async fn handle_command(
 
         // ── Task management ──
         TuiCommand::BackgroundAllTasks => {
-            // TS-parity single-press Ctrl+B (`SessionBackgroundHint.tsx`):
-            // background every foreground BgAgent. There is no wire
-            // event for the foreground→background transition, so the
-            // TUI mirror flips its own rows optimistically before
-            // dispatching the engine command. `is_backgrounded` is a
-            // sticky UI flag; the eventual `TaskCompleted` carries the
-            // real terminal status into `agent.status`.
+            // Background every foreground BgAgent on single-press Ctrl+B.
+            // There is no wire event for the foreground→background
+            // transition, so the TUI flips its own rows optimistically
+            // before dispatching the engine command. `is_backgrounded` is a
+            // sticky UI flag; the eventual `TaskCompleted` carries the real
+            // terminal status into `agent.status`.
             if has_foreground_tasks(state) {
                 for agent in state.session.subagents.iter_mut() {
                     if matches!(agent.kind, crate::state::SubagentKind::Subagent)
@@ -909,9 +901,8 @@ pub async fn handle_command(
         }
         TuiCommand::TogglePermissionExplanation => {
             // Ctrl+E on a permission prompt: toggle the risk-explainer panel.
-            // On first open, kick off the lazy LLM fetch (TS
-            // `createExplanationPromise`); the runner replies with
-            // `TuiOnlyEvent::PermissionExplanationReady`.
+            // On first open, kick off the lazy LLM fetch; the runner
+            // replies with `TuiOnlyEvent::PermissionExplanationReady`.
             let Some(crate::state::PanePromptState::Permission(p)) =
                 state.ui.interaction.active_prompt.as_mut()
             else {
@@ -1095,8 +1086,7 @@ impl ExitTiming {
 /// `state.quit()`. **Does not** decide auto-restore — that's the
 /// `TurnInterrupted` event handler's job in
 /// `server_notification_handler::protocol::on_turn_interrupted`,
-/// mirroring TS where `restoreMessageSync` runs inside `.finally`
-/// after the abort completes (`REPL.tsx:3010-3022`).
+/// where `restoreMessageSync` runs after the abort completes.
 async fn apply_exit_effect(
     state: &mut AppState,
     command_tx: &mpsc::Sender<UserCommand>,
@@ -1183,9 +1173,9 @@ async fn queue_current_input(state: &mut AppState, command_tx: &mpsc::Sender<Use
 }
 
 /// Whether any foreground tools / subagents are still running. Drives
-/// the live Ctrl+B path in `TuiCommand::BackgroundAllTasks`. A
-/// subagent flipped to `is_backgrounded` no longer counts; `Queued`
-/// tool executions are excluded for parity with TS `hasForegroundTasks`.
+/// the live Ctrl+B path in `TuiCommand::BackgroundAllTasks`. A subagent
+/// flipped to `is_backgrounded` no longer counts; `Queued` tool
+/// executions are excluded.
 fn has_foreground_tasks(state: &AppState) -> bool {
     let any_running_subagent =
         state.session.subagents.iter().any(|s| {

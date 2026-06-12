@@ -2,23 +2,11 @@
 //!
 //! This module owns:
 //!
-//! - The canonical [`TaskNotification`] payload (all fields TS emits).
+//! - The canonical [`TaskNotification`] payload.
 //! - The XML envelope renderer ([`render`]).
 //! - The [`NotificationSink`] trait that lets app-layer crates plug
 //!   in a real producer (e.g. `coco_query::CommandQueue`) without
 //!   creating a dependency cycle.
-//!
-//! ## TS Source
-//!
-//! - `tasks/LocalShellTask/LocalShellTask.tsx:105-172` —
-//!   `enqueueShellNotification` (terminal shell envelope).
-//! - `tasks/LocalShellTask/LocalShellTask.tsx:46-104` —
-//!   `startStallWatchdog` (stall envelope, no `<status>` tag).
-//! - `tasks/LocalAgentTask/LocalAgentTask.tsx:197-262` —
-//!   `enqueueAgentNotification` (terminal agent envelope, with
-//!   `<result>` / `<usage>` / `<worktree>` sections).
-//! - `utils/messageQueueManager.ts:142-149` —
-//!   `enqueuePendingNotification` defaults priority to `'later'`.
 //!
 //! ## Why a dedicated module
 //!
@@ -39,7 +27,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 /// One push-notification produced by a background task lifecycle
-/// transition. Carries all fields TS emits across shell + agent
+/// transition. Carries all fields emitted across shell + agent
 /// variants — the [`render`] function picks the right shape.
 #[derive(Debug, Clone)]
 pub struct TaskNotification {
@@ -47,13 +35,11 @@ pub struct TaskNotification {
     pub task_id: String,
     /// `tool_use_id` of the tool invocation that spawned the task.
     /// Threaded into `<tool-use-id>` so model can route the
-    /// completion back to the original tool call. TS:
-    /// `LocalShellTask.tsx:159` / `LocalAgentTask.tsx:248`.
+    /// completion back to the original tool call.
     pub tool_use_id: Option<String>,
     /// Agent id of the subagent that spawned the task. Routes the
     /// queued envelope back to that agent's command-queue filter so
-    /// teammates only see their own tasks' completions. TS:
-    /// `BashTool.tsx:910` passes `agentId: toolUseContext.agentId`.
+    /// teammates only see their own tasks' completions.
     pub agent_id: Option<String>,
     /// On-disk output file path (`<output-file>` tag).
     pub output_file: String,
@@ -65,48 +51,40 @@ pub struct TaskNotification {
     pub kind: NotificationKind,
 }
 
-/// Notification variants. Each maps to one TS producer.
+/// Notification variants.
 #[derive(Debug, Clone)]
 pub enum NotificationKind {
-    /// Shell task reached a terminal state. TS:
-    /// `LocalShellTask.tsx:105-172`. Summary line includes the
+    /// Shell task reached a terminal state. Summary line includes the
     /// `Background command "..."` prefix + exit code.
     ShellTerminal {
         status: TerminalStatus,
         exit_code: Option<i32>,
     },
-    /// LocalAgent task reached a terminal state. TS:
-    /// `LocalAgentTask.tsx:197-262`. Envelope carries up to three
-    /// optional sections — `<result>`, `<usage>`, `<worktree>` —
-    /// matching the TS template at lines 249-251.
+    /// Agent task reached a terminal state. Envelope carries up to three
+    /// optional sections — `<result>`, `<usage>`, `<worktree>`.
     AgentTerminal {
         status: TerminalStatus,
-        /// Final response text from the subagent (TS `finalMessage`).
-        /// `LocalAgentTask.tsx:249`: `<result>${finalMessage}</result>`.
+        /// Final response text from the subagent.
+        /// Rendered as `<result>${finalMessage}</result>`.
         result: Option<String>,
-        /// Token / tool-use / duration block.
-        /// `LocalAgentTask.tsx:250`: `<usage>...</usage>`.
+        /// Token / tool-use / duration block rendered as `<usage>...</usage>`.
         usage: Option<TaskUsage>,
-        /// Isolation worktree info.
-        /// `LocalAgentTask.tsx:251`: `<worktree>...</worktree>`.
+        /// Isolation worktree info rendered as `<worktree>...</worktree>`.
         worktree: Option<Worktree>,
-        /// `LocalAgentTask.tsx:246` summary: differs per status
-        /// (`Agent "..." completed` / `failed: ...` / `was stopped`).
-        /// `None` triggers the default per-status text in [`render`].
+        /// Summary differs per status (`Agent "..." completed` / `failed: ...`
+        /// / `was stopped`). `None` triggers the default per-status text in
+        /// [`render`].
         error: Option<String>,
     },
-    /// Shell output appears frozen on an interactive prompt.
-    /// `LocalShellTask.tsx:46-104`. TS comment at lines 76-79
-    /// explicitly forbids `<status>` here: "print.ts treats
-    /// `<status>` as a terminal signal and an unknown value falls
-    /// through to 'completed', falsely closing the task for SDK
-    /// consumers."
+    /// Shell output appears frozen on an interactive prompt. Explicitly
+    /// forbids `<status>` because print.ts treats `<status>` as a terminal
+    /// signal and an unknown value falls through to 'completed', falsely
+    /// closing the task for SDK consumers.
     Stall { output_tail: String },
 }
 
-/// Three terminal status values matching TS `TaskStatus.ts` (minus
-/// the non-terminal `pending` / `running`). Renders as the
-/// `<status>` tag content.
+/// Three terminal status values (minus the non-terminal `pending` /
+/// `running`). Renders as the `<status>` tag content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalStatus {
     Completed,
@@ -125,8 +103,7 @@ impl TerminalStatus {
 }
 
 /// Usage block embedded in agent-task completion notifications.
-/// Field shape mirrors TS `enqueueAgentNotification.usage`
-/// (`LocalAgentTask.tsx:215-219`).
+/// Field shape for agent notification usage.
 #[derive(Debug, Clone)]
 pub struct TaskUsage {
     pub total_tokens: i64,
@@ -135,20 +112,15 @@ pub struct TaskUsage {
 }
 
 /// Worktree info for agent tasks spawned with `isolation: "worktree"`.
-/// TS: `LocalAgentTask.tsx:221-222` `worktreePath` / `worktreeBranch`.
 #[derive(Debug, Clone)]
 pub struct Worktree {
     pub path: String,
-    /// Optional — TS only emits the branch tag when set
-    /// (`LocalAgentTask.tsx:251` ternary).
+    /// Optional — only emitted when set.
     pub branch: Option<String>,
 }
 
-/// Render the XML envelope. Output exactly matches the TS string at
-/// `LocalShellTask.tsx:160-165` (shell terminal),
-/// `LocalShellTask.tsx:80-88` + raw tail (stall), and
-/// `LocalAgentTask.tsx:252-257` (agent terminal with optional
-/// sections).
+/// Render the XML envelope for shell terminal, stall, and agent terminal
+/// (with optional sections) variants.
 pub fn render(n: &TaskNotification) -> String {
     match &n.kind {
         NotificationKind::ShellTerminal { status, exit_code } => {
@@ -269,8 +241,7 @@ fn render_stall(n: &TaskNotification, tail: &str) -> String {
     xml
 }
 
-/// Minimal XML escape for the summary / result / worktree text. TS:
-/// `utils/xml.ts::escapeXml` — same 5-char set.
+/// Minimal XML escape for the summary / result / worktree text (5-char set).
 fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -294,9 +265,6 @@ fn escape_xml(s: &str) -> String {
 /// the dependency so the producer (TaskManager) can fire
 /// notifications without dragging `coco-query` into the tasks
 /// crate's dep set.
-///
-/// TS parity: `enqueuePendingNotification({mode: 'task-notification',
-/// ...})` (`utils/messageQueueManager.ts:142`).
 #[async_trait]
 pub trait NotificationSink: Send + Sync {
     async fn push(&self, notification: TaskNotification);

@@ -1,7 +1,5 @@
 //! Per-agent persistent memory — `.../agent-memory/<agentType>/MEMORY.md`.
 //!
-//! TS: `tools/AgentTool/agentMemory.ts` + `agentMemorySnapshot.ts`.
-//!
 //! Each agent definition can declare `memory: user|project|local` in its
 //! frontmatter (via [`coco_types::MemoryScope`]). When set, the agent's
 //! per-type MEMORY.md gets appended to its system prompt at spawn time
@@ -11,7 +9,7 @@
 //! - `User`     → `<config_home>/agent-memory/<sanitized_type>/`
 //!   (User-scope follows `COCO_CONFIG_HOME` so multi-tenant /
 //!   containerised setups where `~/.coco` is unwritable or wrong work
-//!   correctly. **Divergence from TS**: TS hardcodes `~/.claude` here.)
+//!   correctly. **coco-rs uses the configured path rather than hardcoding `~/.claude`.**)
 //! - `Project`  → `<cwd>/.coco/agent-memory/<sanitized_type>/`
 //!   (Per-project state — version-controllable. `.coco` literal is
 //!   intentional: project state shouldn't follow user's config_home
@@ -19,9 +17,8 @@
 //! - `Local`    → `<cwd>/.coco/agent-memory-local/<sanitized_type>/`
 //!   (Per-project + per-machine — gitignored.)
 //!
-//! Sanitization: TS `sanitizeAgentTypeForPath` replaces `:` (used by
-//! plugin-namespaced types like `my-plugin:my-agent`) with `-` because
-//! `:` is invalid in Windows paths. Mirror that.
+//! Sanitization: replaces `:` (used by plugin-namespaced types like
+//! `my-plugin:my-agent`) with `-` because `:` is invalid in Windows paths.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -61,7 +58,6 @@ pub fn agent_memory_entrypoint(
 }
 
 /// Per-scope guidance line appended to the agent-memory prompt block.
-/// TS: `loadAgentMemoryPrompt:scope` switch.
 fn scope_note(scope: MemoryScope) -> &'static str {
     match scope {
         MemoryScope::User => {
@@ -83,8 +79,6 @@ fn scope_note(scope: MemoryScope) -> &'static str {
 /// `MEMORY.md` is empty AND there are no other `.md` files — meaning
 /// the agent has nothing to inject yet. The directory itself is NOT
 /// created here; that's the agent's job once it starts writing.
-///
-/// TS: `loadAgentMemoryPrompt(agentType, scope)`.
 pub fn load_agent_memory_prompt(
     agent_type: &str,
     scope: MemoryScope,

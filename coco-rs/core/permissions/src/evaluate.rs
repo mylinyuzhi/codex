@@ -1,11 +1,7 @@
 //! Core permission evaluation pipeline.
 //!
-//! TS: utils/permissions/permissions.ts (~1486 LOC)
-//!     hasPermissionsToUseToolInner() — 9-step evaluation
-//!
-//! The Rust pipeline is a faithful port of the TS logic, organized as
-//! 7 sequential steps. Steps that require external integration (classifier,
-//! hooks, sandbox) are deferred to the caller via the returned decision.
+//! Organized as 7 sequential steps. Steps that require external integration
+//! (classifier, hooks, sandbox) are deferred to the caller via the returned decision.
 
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::MCP_TOOL_SEPARATOR;
@@ -31,7 +27,6 @@ pub use coco_types::ToolCheckResult;
 
 /// Callback for tool-level permission checks.
 ///
-/// TS: `tool.checkPermissions(parsedInput, context)` in permissions.ts step 1c.
 /// Each tool (Bash, Write, PowerShell) implements content-specific checks
 /// that the rule pipeline can't express (subcommand parsing, path safety, etc.).
 ///
@@ -49,12 +44,11 @@ pub struct PermissionEvaluationOptions {
     /// The concrete tool/input pair is read-only even though the tool name
     /// itself may not be statically read-only, e.g. `Bash(ls | head)`.
     pub dynamic_read_only: bool,
-    /// TS `canSandboxAutoAllow` (permissions.ts:1189-1193): the caller has
-    /// determined this is a Bash command that WILL be sandboxed AND
-    /// `autoAllowBashIfSandboxed` is enabled. When true, a tool-wide Bash ASK
-    /// rule is skipped and (absent a deny/content-ask/allow match) the command
-    /// auto-allows. Computed in `app/query` (which holds `ctx.sandbox_state`) so
-    /// `coco-permissions` keeps no `exec/sandbox` dependency.
+    /// The caller has determined this is a Bash command that WILL be sandboxed
+    /// AND `autoAllowBashIfSandboxed` is enabled. When true, a tool-wide Bash
+    /// ASK rule is skipped and (absent a deny/content-ask/allow match) the
+    /// command auto-allows. Computed in `app/query` (which holds
+    /// `ctx.sandbox_state`) so `coco-permissions` keeps no `exec/sandbox` dependency.
     pub sandbox_auto_allow_bash: bool,
 }
 
@@ -64,7 +58,7 @@ pub struct PermissionEvaluator;
 impl PermissionEvaluator {
     /// Evaluate permissions for a tool call.
     ///
-    /// Pipeline (matches TS `hasPermissionsToUseToolInner`):
+    /// Pipeline:
     /// 1. Deny rules — deny always wins, regardless of priority
     ///    1b. Tool-level permission check (via callback)
     /// 2. Allow rules — priority-sorted by source
@@ -84,8 +78,7 @@ impl PermissionEvaluator {
 
     /// Evaluate with an optional tool-level permission callback.
     ///
-    /// TS: step 1c calls `tool.checkPermissions()` which Bash uses for
-    /// subcommand analysis, Write uses for path checks, etc.
+    /// Bash uses this for subcommand analysis, Write uses for path checks, etc.
     pub fn evaluate_with_tool_check(
         tool_id: &ToolId,
         input: &Value,
@@ -111,10 +104,9 @@ impl PermissionEvaluator {
         options: PermissionEvaluationOptions,
     ) -> PermissionDecision {
         let decision = Self::evaluate_inner(tool_id, input, context, tool_check, options);
-        // TS `hasPermissionsToUseTool`: dontAsk converts ANY remaining 'ask'
-        // into 'deny' as the final step, so early-return asks (tool-wide ask,
-        // content ask, path-safety ask, MCP server ask) are denied too — not
-        // only the mode-fallthrough ask.
+        // dontAsk converts ANY remaining 'ask' into 'deny' as the final step,
+        // so early-return asks (tool-wide ask, content ask, path-safety ask,
+        // MCP server ask) are denied too — not only the mode-fallthrough ask.
         if context.mode == PermissionMode::DontAsk
             && matches!(decision, PermissionDecision::Ask { .. })
         {
@@ -177,7 +169,7 @@ impl PermissionEvaluator {
             }
         }
 
-        // Step 1b: Tool-level permission check (TS step 1c)
+        // Step 1b: Tool-level permission check
         // Bash checks subcommands, PowerShell checks cmdlets, Write checks paths.
         if let Some(check_fn) = tool_check {
             match check_fn(tool_id, input, context) {
@@ -238,8 +230,8 @@ impl PermissionEvaluator {
         // and CONTENT-MATCHED shell/file allows fire here; content-bearing
         // allows for Agent/WebFetch/Read defer to the tool's step-1b check.
         // NOTE: a content-bearing shell allow with no `command` field no longer
-        // broadly allows (central_rule_applies returns false) — TS keys allow
-        // rules on content, and a missing command never matches.
+        // broadly allows (central_rule_applies returns false) — allow rules key
+        // on content, and a missing command never matches.
         for source in RULE_PRIORITY_ORDER {
             if let Some(rules) = context.allow_rules.get(source) {
                 for rule in rules {
@@ -269,16 +261,16 @@ impl PermissionEvaluator {
         }
 
         // When a tool-wide Bash ask rule is skipped because the command will be
-        // sandboxed (TS `canSandboxAutoAllow`), the evaluator must auto-allow on
+        // sandboxed (sandbox auto-allow), the evaluator must auto-allow on
         // fall-through rather than re-prompt via mode_fallthrough.
         let mut sandbox_skip_allow = false;
 
         // Step 4: Ask rules — tool-wide ask
         if let Some(ask_rule) = get_tool_wide_rule(context, &tool_str, PermissionBehavior::Ask) {
-            // TS canSandboxAutoAllow (permissions.ts:1189-1206): skip a tool-wide
-            // Bash ask rule when the command will be sandboxed and
-            // autoAllowBashIfSandboxed is on. Content-specific Bash ask rules are
-            // STILL honored below (TS checkSandboxAutoAllow keeps per-command asks).
+            // Sandbox auto-allow: skip a tool-wide Bash ask rule when the command
+            // will be sandboxed and autoAllowBashIfSandboxed is on.
+            // Content-specific Bash ask rules are STILL honored below
+            // (per-command asks are preserved).
             let skip_tool_wide_ask =
                 options.sandbox_auto_allow_bash && is_shell_tool(&ask_rule.value.tool_pattern);
 
@@ -445,10 +437,10 @@ impl PermissionEvaluator {
             }
         }
 
-        // Sandbox auto-allow (TS `checkSandboxAutoAllow`, bashPermissions.ts:1351):
-        // a tool-wide Bash ask rule was skipped and no deny / content-ask / allow
-        // / MCP rule matched, so the sandboxed command auto-allows here instead of
-        // falling to mode_fallthrough (which would re-prompt a non-read-only Bash).
+        // Sandbox auto-allow: a tool-wide Bash ask rule was skipped and no deny /
+        // content-ask / allow / MCP rule matched, so the sandboxed command
+        // auto-allows here instead of falling to mode_fallthrough (which would
+        // re-prompt a non-read-only Bash).
         if sandbox_skip_allow {
             tracing::debug!(
                 tool_name = %tool_str,
@@ -486,7 +478,6 @@ fn decision_label(decision: &PermissionDecision) -> &'static str {
 }
 
 // ── Rule helpers ──
-// TS: getAllowRules, getDenyRules, getAskRules, getDenyRuleForTool, etc.
 
 /// Collect all rules of a given behavior from all sources (flattened).
 pub fn get_all_rules(
@@ -502,8 +493,6 @@ pub fn get_all_rules(
 }
 
 /// Find a tool-wide rule (no content constraint) for a specific tool.
-///
-/// TS: getAskRuleForTool(), toolAlwaysAllowedRule(), getDenyRuleForTool()
 pub fn get_tool_wide_rule(
     context: &ToolPermissionContext,
     tool_str: &str,
@@ -528,8 +517,6 @@ pub fn get_tool_wide_rule(
 }
 
 /// Get all content-specific rules for a tool (e.g. all Bash(pattern) rules).
-///
-/// TS: getRuleByContentsForTool()
 pub fn get_content_rules_for_tool<'a>(
     context: &'a ToolPermissionContext,
     tool_str: &str,
@@ -567,12 +554,10 @@ const RULE_PRIORITY_ORDER: &[PermissionRuleSource] = &[
 
 /// Mode-based fallthrough when no rules matched.
 ///
-/// TS: `hasPermissionsToUseToolInner` steps 2a + wrapper mode transformations.
-///
 /// - `bypassPermissions` → auto-allow everything
-/// - `dontAsk` → deny (TS converts ask→deny in wrapper, line 508)
-/// - `plan` with bypass_available → auto-allow (TS line 1268-1271)
-/// - `plan` without bypass_available → ask (TS falls through to prompt/classifier)
+/// - `dontAsk` → deny
+/// - `plan` with bypass_available → auto-allow
+/// - `plan` without bypass_available → ask
 /// - `acceptEdits` → auto-allow read-only + file edits; ask for rest
 /// - `default`, `auto` → auto-allow read-only; ask for rest
 /// - `bubble` → ask and delegate to the parent context
@@ -587,7 +572,7 @@ fn mode_fallthrough(
             updated_input: None,
             feedback: None,
         },
-        // TS: dontAsk converts every remaining 'ask' into 'deny'.
+        // dontAsk converts every remaining 'ask' into 'deny'.
         // "Don't ask me — just deny anything that would prompt."
         PermissionMode::DontAsk => PermissionDecision::Deny {
             message: format!("{tool_str} denied: permission mode does not allow prompting"),
@@ -595,15 +580,13 @@ fn mode_fallthrough(
                 mode: PermissionMode::DontAsk,
             },
         },
-        // TS: plan mode auto-allows if user originally had bypass mode;
+        // Plan mode auto-allows if user originally had bypass mode;
         // otherwise falls through to ask (for classifier or user prompt).
         // Read-only tools are always safe in plan mode. Writes/edits to the
         // session's own plan file also auto-allow, but that carve-out lives in
         // the file-tool `check_permissions` layer (step 1b →
         // `is_editable_internal_path` / `is_session_plan_file`), which runs
         // before this fallthrough — so a plan-file write never reaches here.
-        // TS parity: `checkEditableInternalPath` / `isSessionPlanFile` in
-        // utils/permissions/filesystem.ts.
         PermissionMode::Plan => {
             if context.bypass_available || is_read_only_tool(tool_str) || options.dynamic_read_only
             {
@@ -619,7 +602,7 @@ fn mode_fallthrough(
                 }
             }
         }
-        // TS: acceptEdits auto-allows read-only tools AND file-modifying
+        // acceptEdits auto-allows read-only tools AND file-modifying
         // tools (Write, Edit, NotebookEdit). Dangerous paths are already
         // caught by step 6 (path safety), so only safe edits reach here.
         PermissionMode::AcceptEdits => {
@@ -639,9 +622,9 @@ fn mode_fallthrough(
                 }
             }
         }
-        // TS parity: safe read-only tools never need an approval prompt in
-        // ordinary interactive modes. Keep Bubble out of this fast path so
-        // the parent permission context remains authoritative.
+        // Safe read-only tools never need an approval prompt in ordinary
+        // interactive modes. Keep Bubble out of this fast path so the parent
+        // permission context remains authoritative.
         PermissionMode::Default | PermissionMode::Auto
             if is_read_only_tool(tool_str) || options.dynamic_read_only =>
         {
@@ -663,14 +646,11 @@ fn mode_fallthrough(
 /// "Always allow `<prefix>:*`" suggestions for a shell command that fell
 /// through to a mode-based approval prompt with no matching allow rule.
 ///
-/// TS: `checkCommandAndSuggestRules` step 5 (bashPermissions.ts:1246) attaches
-/// `suggestionForExactCommand(command)` to the fall-through ask. Non-shell
-/// tools and inputs without a `command` string yield no suggestion.
+/// Non-shell tools and inputs without a `command` string yield no suggestion.
 ///
 /// The dangerous-gate asks raised by Bash's own `check_permissions` (rm,
 /// git-escape, process substitution, out-of-tree writes, …) keep their empty
-/// suggestions — TS likewise declines to suggest saving a potentially dangerous
-/// command (bashPermissions.ts:1236).
+/// suggestions — declining to suggest saving a potentially dangerous command.
 fn shell_ask_suggestions(tool_str: &str, input: &Value) -> Vec<coco_types::PermissionUpdate> {
     if !is_shell_tool(tool_str) {
         return Vec::new();
@@ -697,7 +677,6 @@ pub(crate) fn extract_file_modifying_path(tool_str: &str, input: &Value) -> Opti
 
 /// Tools that are always safe to auto-allow (no side effects).
 ///
-/// TS: `SAFE_YOLO_ALLOWLISTED_TOOLS` in classifierDecision.ts
 /// These tools skip the classifier in auto mode and are auto-allowed
 /// in acceptEdits/plan modes.
 fn is_read_only_tool(tool_name: &str) -> bool {
@@ -743,8 +722,7 @@ fn is_shell_tool(tool_pattern: &str) -> bool {
 }
 
 /// Case sensitivity for a shell tool's content matching. PowerShell is
-/// case-insensitive (TS `powershellPermissions` lowercasing); Bash is
-/// case-sensitive.
+/// case-insensitive; Bash is case-sensitive.
 fn shell_case_for(tool_pattern: &str) -> shell_rules::ShellCase {
     if tool_pattern == ToolName::PowerShell.as_str() {
         shell_rules::ShellCase::Insensitive
@@ -836,9 +814,8 @@ fn matches_tool_pattern(pattern: &str, tool: &str) -> bool {
 }
 
 /// Whether `rule` applies to this tool call at the CENTRAL evaluation step
-/// (deny step-1 / allow step-2/3 / MCP step-7). Mirrors TS `toolMatchesRule`
-/// (permissions.ts:238-269) for the tool-WIDE case, plus coco-rs's inline
-/// content-scoping for shell + file-modifying tools.
+/// (deny step-1 / allow step-2/3 / MCP step-7). Handles the tool-WIDE case
+/// plus content-scoping for shell + file-modifying tools.
 ///
 /// Returns `false` (defer to the tool's step-1b `check_permissions`) when the
 /// rule carries content AND the tool is neither a shell tool nor a

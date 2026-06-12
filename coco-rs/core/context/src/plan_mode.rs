@@ -1,7 +1,5 @@
 //! Plan mode file management: slug generation, CRUD, recovery.
 //!
-//! TS: utils/plans.ts, utils/words.ts, utils/messages.ts
-//!
 //! Plans are stored as markdown files at `~/.coco/plans/{slug}.md` where
 //! the slug is a random `{adjective}-{verb}-{noun}` word combination.
 //! Each session gets a unique slug cached for its lifetime.
@@ -25,7 +23,7 @@ use crate::attachment::ReminderType;
 /// Maximum retries when a generated slug collides with an existing file.
 const MAX_SLUG_RETRIES: i32 = 10;
 
-// ── Word lists (TS: utils/words.ts) ──
+// ── Word lists ──
 
 const ADJECTIVES: &[&str] = &[
     "abundant",
@@ -574,8 +572,7 @@ pub fn resolve_plans_directory(
         let plans = resolved
             .canonicalize()
             .unwrap_or_else(|_| normalize_path_lexically(&resolved));
-        // TS `resolve(cwd, setting)` + `startsWith(cwd + sep) || === cwd`:
-        // absolute settings and `..` segments are allowed only when their
+        // Absolute settings and `..` segments are allowed only when their
         // normalized target remains inside the project root.
         if plans == project || plans.starts_with(&project) {
             return plans;
@@ -662,8 +659,6 @@ pub fn plan_exists(session_id: &str, plans_dir: &Path, agent_id: Option<&str>) -
 /// 2. ExitPlanMode tool_use input
 /// 3. planContent field on user messages
 /// 4. plan_file_reference attachment
-///
-/// TS: copyPlanForResume() in utils/plans.ts
 pub fn recover_plan_for_resume(
     session_id: &str,
     plans_dir: &Path,
@@ -787,7 +782,6 @@ pub fn copy_plan_for_fork(
 /// plan mode. Used by the optional `ExitPlanMode` stale-plan advisory —
 /// feature-gated on `settings.plan_mode.verify_execution`.
 ///
-/// TS parity: `pendingPlanVerification` + `registerPlanVerificationHook`.
 /// "Skipped" is a caller-side concept (no entry timestamp, verification
 /// disabled) and is modeled as `Option<PlanVerificationOutcome>::None`
 /// at call sites rather than as a variant here.
@@ -877,20 +871,19 @@ pub fn delete_all_session_plan_files(session_id: &str, plans_dir: &Path) -> usiz
     removed
 }
 
-// ── System-reminder rendering (TS: utils/messages.ts) ──
+// ── System-reminder rendering ──
 
 /// Render the plan-mode system-reminder text (unwrapped).
 ///
-/// TS sources (each `(reminder_type, workflow, is_sub_agent)` maps to one):
-/// - Any + sub-agent              → `getPlanModeV2SubAgentInstructions` (messages.ts:3399)
-///   Sub-agents always get the sub-agent variant regardless of cadence —
-///   TS dispatch at `messages.ts:3142` checks `isSubAgent` before `reminderType`.
-/// - Full + FivePhase + main-agent → `getPlanModeV2MainAgentInstructions` (messages.ts:3207)
-///   - Phase-4 block is chosen by `attachment.phase4_variant`
-///     (TS: `getPlanPhase4Section` for `null`/`trim`/`cut`/`cap` arms)
-/// - Full + Interview + main-agent → `getPlanModeInterviewInstructions` (messages.ts:3323)
-/// - Sparse + main-agent          → `getPlanModeSparseInstructions` (messages.ts:3385)
-/// - Reentry + main-agent         → `plan_mode_reentry` attachment (messages.ts:3829)
+/// Each `(reminder_type, workflow, is_sub_agent)` combination maps to one
+/// output variant:
+/// - Any + sub-agent              → sub-agent instructions
+///   (sub-agents always get the sub-agent variant regardless of cadence)
+/// - Full + FivePhase + main-agent → main-agent 5-phase instructions;
+///   Phase-4 block chosen by `attachment.phase4_variant`
+/// - Full + Interview + main-agent → interview instructions
+/// - Sparse + main-agent          → sparse instructions
+/// - Reentry + main-agent         → re-entry reminder
 ///
 /// Callers wrap the return value in a `<system-reminder>` XML tag.
 pub fn render_plan_mode_reminder(attachment: &PlanModeAttachment) -> String {
@@ -919,9 +912,8 @@ fn plan_file_info(attachment: &PlanModeAttachment) -> String {
 }
 
 /// Sub-agent plan-file info carries an extra "if you need to" softener on
-/// both branches — TS `getPlanModeV2SubAgentInstructions` (`messages.ts:3404-3405`)
-/// differentiates sub-agent prose from the 5-phase / interview versions
-/// (`messages.ts:3224-3225` / `:3328-3329`) this way.
+/// both branches, differentiating sub-agent prose from the 5-phase / interview
+/// versions.
 fn plan_file_info_sub_agent(attachment: &PlanModeAttachment) -> String {
     plan_file_info_impl(attachment, /*sub_agent*/ true)
 }
@@ -951,9 +943,7 @@ fn render_sparse(
     ask_user_question: &str,
     exit_plan_mode: &str,
 ) -> String {
-    // TS: `getPlanModeV2SparseInstructions` (messages.ts:3385-3392) adapts
-    // per `isPlanModeInterviewPhaseEnabled()`. We carry workflow on the
-    // attachment and emit the matching hint.
+    // Adapts per workflow: emit the matching hint based on `attachment.workflow`.
     let workflow_hint = match attachment.workflow {
         PlanWorkflow::Interview => {
             "Follow iterative workflow: explore codebase, interview user, write to plan incrementally."
@@ -970,9 +960,9 @@ fn render_sparse(
 }
 
 fn render_reentry(attachment: &PlanModeAttachment, exit_plan_mode: &str) -> String {
-    // TS gates Reentry on `existingPlan !== null` (attachments.ts:1216), so
-    // the caller only reaches this function when a plan file exists. Assume
-    // the invariant rather than rendering a no-plan branch.
+    // The caller only reaches this function when a plan file exists (Reentry
+    // is only emitted when an existing plan is present). Assume the invariant
+    // rather than rendering a no-plan branch.
     let plan_file_path = &attachment.plan_file_path;
     format!(
         "## Re-entering Plan Mode\n\n\
@@ -1013,8 +1003,7 @@ fn render_full_sub_agent(attachment: &PlanModeAttachment, ask_user_question: &st
     )
 }
 
-/// TS: `getPlanModeV2MainAgentInstructions` (messages.ts:3207-3292) —
-/// full 5-phase workflow. The Phase-4 block is chosen by `phase4_variant`.
+/// Full 5-phase workflow. The Phase-4 block is chosen by `phase4_variant`.
 fn render_full_five_phase(
     attachment: &PlanModeAttachment,
     ask_user_question: &str,
@@ -1121,8 +1110,8 @@ fn render_full_five_phase(
     )
 }
 
-/// TS: `getPlanPhase4Section` (messages.ts) — four arms of the
-/// pewter-ledger experiment, exposed as a user-controllable setting.
+/// Four arms of the pewter-ledger experiment, exposed as a user-controllable
+/// setting.
 fn render_phase4_block(variant: Phase4Variant) -> String {
     match variant {
         Phase4Variant::Standard => "### Phase 4: Final Plan\n\
@@ -1176,8 +1165,7 @@ fn render_phase4_block(variant: Phase4Variant) -> String {
     }
 }
 
-/// TS: `getPlanModeInterviewInstructions` (messages.ts:3323-3383) —
-/// iterative ask-as-you-go workflow.
+/// Iterative ask-as-you-go workflow.
 fn render_full_interview(
     attachment: &PlanModeAttachment,
     ask_user_question: &str,
@@ -1249,8 +1237,8 @@ fn render_full_interview(
 
 /// Render the plan-mode-exit system-reminder text (unwrapped).
 ///
-/// TS: `case 'plan_mode_exit'` in `normalizeAttachmentForAPI()`. Emitted
-/// exactly once on the turn immediately after `ExitPlanMode` is approved.
+/// Emitted exactly once on the turn immediately after `ExitPlanMode` is
+/// approved.
 pub fn render_plan_mode_exit_reminder(attachment: &PlanModeExitAttachment) -> String {
     let plan_reference = if attachment.plan_exists {
         format!(
@@ -1270,12 +1258,10 @@ pub fn render_plan_mode_exit_reminder(attachment: &PlanModeExitAttachment) -> St
 
 /// Render the auto-mode-exit system-reminder text (unwrapped).
 ///
-/// TS: `case 'auto_mode_exit'` in `normalizeAttachmentForAPI()`
-/// (`messages.ts:3863-3870`). Emitted exactly once on the turn after
-/// Auto mode is left — either by `ExitPlanMode` from a plan entered via
-/// Auto (when the restore mode isn't Auto) or by an unannounced
-/// Auto→non-Auto mode cycle detected by the reminder. The one-shot flag
-/// on app_state is cleared after emission.
+/// Emitted exactly once on the turn after Auto mode is left — either by
+/// `ExitPlanMode` from a plan entered via Auto (when the restore mode isn't
+/// Auto) or by an unannounced Auto→non-Auto mode cycle detected by the
+/// reminder. The one-shot flag on app_state is cleared after emission.
 pub fn render_auto_mode_exit_reminder() -> String {
     "## Exited Auto Mode\n\n\
      You have exited auto mode. The user may now want to interact more \

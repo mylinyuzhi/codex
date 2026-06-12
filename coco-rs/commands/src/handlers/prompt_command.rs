@@ -1,9 +1,5 @@
 //! Prompt-type slash commands.
 //!
-//! TS source: `types/command.ts PromptCommand` + commands like
-//! `commands/security-review.ts`, `commands/insights.ts`, `commands/brief.ts`,
-//! `commands/commit-push-pr.ts` that all return
-//! `[{type:'text', text: PROMPT_BODY}]` from `getPromptForCommand`.
 //!
 //! These commands don't run code locally — they push a prompt back into the
 //! agent loop, which then drives subsequent tool calls.
@@ -28,11 +24,10 @@ pub enum ArgsHandling {
     /// (`/statusline`).
     Static,
     /// Append `\n\n## Task\n\n<args>` when args are non-empty.
-    /// Matches TS pattern in `/security-review`, `/insights`,
-    /// `/pr-comments`.
+    /// Used by `/security-review`, `/insights`, `/pr-comments`.
     AppendUnderTask,
     /// Always emit `\n<prefix><args>` at the body's end. `args` may be
-    /// empty — TS pattern in `/review`: ``PR number: ${args}`` is
+    /// empty — as in `/review`: ``PR number: ${args}`` is
     /// included even when no PR number was given, so the model sees
     /// an explicit empty value rather than the line being absent.
     AppendInline { prefix: &'static str },
@@ -103,9 +98,9 @@ impl CommandHandler for StaticPromptHandler {
                 }
             }
             ArgsHandling::AppendInline { prefix } => {
-                // TS emits the prefix line unconditionally — even when
-                // args is empty — so the model gets an explicit blank
-                // value rather than an absent line.
+                // Emit the prefix line unconditionally — even when args is
+                // empty — so the model gets an explicit blank value rather
+                // than an absent line.
                 text.push('\n');
                 text.push_str(prefix);
                 text.push_str(args);
@@ -123,21 +118,20 @@ impl CommandHandler for StaticPromptHandler {
 }
 
 /// Handler that pre-resolves `` !`<shell-cmd>` `` (and block `` ```! ``)
-/// markers in the prompt body before sending to the model. Mirrors TS
-/// `utils/promptShellExecution.ts::executeShellCommandsInPrompt`.
+/// markers in the prompt body before sending to the model.
 ///
 /// Each command is routed through the injected [`BashToolHandle`], which
 /// performs the real per-command permission check + Bash execution. A
-/// denied or failing command ABORTS the whole expansion (mirroring TS
-/// `MalformedCommandError`). `allowed_tools` is empty for slash commands
+/// denied or failing command ABORTS the whole expansion. `allowed_tools`
+/// is empty for slash commands
 /// — only configured permission rules apply (unlike skills, which inject
 /// their frontmatter `allowed-tools`).
 ///
 /// When no handle is wired (tests / pre-bootstrap) the body is emitted
 /// verbatim — no unguarded `bash -c` runs from a slash command.
 ///
-/// Used by `/security-review` and any other Prompt command whose TS
-/// source originally went through `executeShellCommandsInPrompt`.
+/// Used by `/security-review` and any other Prompt command that expands
+/// shell substitutions before pushing to the agent.
 pub struct ShellExpandingPromptHandler {
     pub name: String,
     pub progress_message: String,

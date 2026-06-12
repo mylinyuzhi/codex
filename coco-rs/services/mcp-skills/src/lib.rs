@@ -1,8 +1,7 @@
 //! MCP → Skills bridge.
 //!
-//! TS parity: `services/mcp/client.ts:2342-2356` runs
-//! `fetchMcpSkillsForClient` for every MCP connection (initial + dynamic)
-//! when `feature('MCP_SKILLS') && supportsResources` are both set.
+//! Discovers MCP skills for every MCP connection (initial + dynamic)
+//! when `Feature::McpSkills` and the `resources` capability are both active.
 //!
 //! ## Layer rule
 //!
@@ -13,11 +12,7 @@
 //! ## Skill resource convention
 //!
 //! A discovered MCP resource is treated as a skill when its URI starts
-//! with `skill://`. Confirmed against TS `services/mcp/client.ts:2347`
-//! ("Discover skills from skill:// resources"). The actual
-//! `fetchMcpSkillsForClient` implementation lives in
-//! `src/skills/mcpSkills.ts` (not in this checkout, lazy-imported via
-//! `mcpSkillBuilders.ts`).
+//! with `skill://`.
 //!
 //! ## Idempotency
 //!
@@ -91,19 +86,14 @@ pub struct SyncOutcome {
     pub registered: usize,
     /// Skipped because the feature flag was off.
     pub feature_off: bool,
-    /// Skipped because the server doesn't advertise the `resources`
-    /// capability. TS parity: `services/mcp/client.ts:2342` —
-    /// `supportsResources = !!client.capabilities?.resources`.
+    /// Skipped because the server doesn't advertise the `resources` capability.
     pub resources_unsupported: bool,
 }
 
 /// Discover MCP skills from a single connected server and reconcile
 /// them with the [`SkillManager`].
 ///
-/// Steps (TS parity: `fetchMcpSkillsForClient` + the
-/// `feature('MCP_SKILLS') && supportsResources` gate in
-/// `services/mcp/client.ts:2348`):
-///
+/// Steps:
 /// 1. Bail when `Feature::McpSkills` is off (sets
 ///    [`SyncOutcome::feature_off`]).
 /// 2. Look up the server's `capabilities`. Bail when `resources` is
@@ -128,7 +118,6 @@ pub async fn sync_one(
         });
     }
 
-    // TS gate: `supportsResources = !!client.capabilities?.resources`.
     let caps = server_capabilities(mcp, server_name).await;
     if caps.map(|c| !c.resources).unwrap_or(true) {
         return Ok(SyncOutcome {
@@ -254,7 +243,7 @@ pub async fn sync_all(
 pub struct SyncSummary {
     /// Number of servers processed.
     pub servers: usize,
-    /// Servers that don't advertise resources (skipped per TS gate).
+    /// Servers that don't advertise resources (skipped).
     pub servers_resources_unsupported: usize,
     /// Total skills cleared across all servers.
     pub total_dropped: usize,
@@ -281,8 +270,7 @@ async fn server_capabilities(
 
 /// True when a resource is intended for skill consumption.
 ///
-/// Current heuristic: URI starts with `skill://`. Confirmed against TS
-/// `services/mcp/client.ts:2347`.
+/// Current heuristic: URI starts with `skill://`.
 fn is_skill_resource(r: &DiscoveredResource) -> bool {
     r.uri.starts_with("skill://")
 }

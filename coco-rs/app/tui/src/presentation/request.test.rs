@@ -200,8 +200,7 @@ fn permission_content_title_includes_worker_badge() {
         coco_types::PermissionMode::Default,
         UiStyles::new(&theme),
     );
-    // The worker name is surfaced in the title so the leader sees who is
-    // asking (gap 12). TS `PermissionRequestTitle.tsx:32`.
+    // The worker name is surfaced in the title so the leader sees who is asking.
     assert!(title.contains("· @researcher"), "got title: {title}");
 }
 
@@ -661,7 +660,7 @@ fn project_question_truncates_long_header_chip_to_12() {
     });
 
     let view = project_question(&state);
-    // TS `ASK_USER_QUESTION_TOOL_CHIP_WIDTH` = 12: 11 chars + ellipsis.
+    // CHIP_MAX_CHARS = 12: 11 chars + ellipsis.
     assert_eq!(view.header.chip.as_deref(), Some("Authenticat…"));
     assert_eq!(view.header.chip.as_deref().unwrap().chars().count(), 12);
 }

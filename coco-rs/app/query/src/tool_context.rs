@@ -1,9 +1,7 @@
 //! `ToolContextFactory` — single owner of `ToolUseContext` construction.
 //!
-//! TS: `services/tools/toolExecution.ts` builds the per-call context from the
-//! `query()` loop's shared state. Rust keeps the same discipline: one factory
-//! owns the field mapping, and the engine just asks for a fresh context per
-//! turn.
+//! One factory owns the field mapping from the `query()` loop's shared
+//! state, and the engine asks for a fresh context per turn.
 //!
 //! The factory exists so the refactor plan's I6 invariant (ToolUseContext is
 //! accurate, not hardcoded defaults) is enforceable by tests — callers can
@@ -62,7 +60,7 @@ use crate::config::QueryEngineConfig;
 
 /// Immutable inputs needed to build a `ToolUseContext`.
 ///
-/// This mirrors the QueryEngine state that is relevant to tool execution,
+/// Carries the QueryEngine state relevant to tool execution,
 /// minus per-call overrides (which go through [`ToolContextOverrides`]).
 ///
 /// All `Arc`/`Option<Arc<_>>` fields are cheap to clone; the factory keeps them
@@ -159,9 +157,7 @@ pub(crate) struct ToolContextOverrides {
     /// spawns a drain task that forwards those updates to `event_tx`
     /// as `TuiOnlyEvent::ToolProgress` events.
     ///
-    /// TS parity: `onProgress` callback passed per-turn into
-    /// `StreamingToolExecutor`. Absent (`None`) ⇒ tools run without
-    /// progress reporting (equivalent to the pre-Phase-9 baseline).
+    /// `None` ⇒ tools run without progress reporting.
     pub(crate) progress_tx: Option<coco_tool_runtime::ProgressSender>,
     /// Currently-active model name. Engine passes
     /// `ModelRuntime::current_model_id()` so `main_loop_model`
@@ -188,9 +184,8 @@ pub(crate) struct ToolContextOverrides {
     pub(crate) current_model_supports_client_side_tool_search: bool,
     /// Post-budget message snapshot from `build_prompt`. Threaded onto
     /// `ToolUseContext.messages` so tools observe the exact view this
-    /// turn's model just received. TS parity: `query.ts:548` sets
-    /// `toolUseContext.messages = messagesForQuery`. `None` falls back
-    /// to an empty snapshot for test stubs / pre-first-turn paths.
+    /// turn's model just received. `None` falls back to an empty
+    /// snapshot for test stubs / pre-first-turn paths.
     pub(crate) messages_snapshot:
         Option<std::sync::Arc<Vec<std::sync::Arc<coco_messages::Message>>>>,
 }
@@ -241,8 +236,8 @@ impl ToolContextFactory {
         // Plan-mode paths resolve unconditionally: fall back to the global
         // config home when this engine wasn't handed one, so plan-file
         // reads/writes are exempt in every runtime (TUI / subagent / SDK /
-        // headless). Mirrors TS `getPlansDirectory()`, which always resolves a
-        // default rather than going dark when no per-engine home is set.
+        // headless). Always resolves a default rather than going dark when
+        // no per-engine home is set.
         let config_home = self
             .config_home
             .clone()
@@ -264,12 +259,11 @@ impl ToolContextFactory {
             .unwrap_or_else(|| self.config.model_id.clone());
 
         // Merge the per-engine live Command-source rules into the
-        // batch-time `allow_rules` snapshot. TS parity:
-        // `getAppState().alwaysAllowRules.command` is read at every
-        // permission check; we snapshot once per batch (factory.build
-        // is called per batch). Cross-batch propagation works because
-        // each turn's build() re-reads the live Arc. The empty-fast-path
-        // avoids a clone when no skill has emitted rules yet.
+        // batch-time `allow_rules` snapshot. `alwaysAllowRules.command`
+        // is read at every permission check; we snapshot once per batch
+        // (factory.build is called per batch). Cross-batch propagation
+        // works because each turn's build() re-reads the live Arc. The
+        // empty-fast-path avoids a clone when no skill has emitted rules yet.
         let live_permission_rules = match self.config.live_permission_rules.as_ref() {
             Some(rules) => rules.read().await.clone(),
             None => Vec::new(),
@@ -348,8 +342,7 @@ impl ToolContextFactory {
             tools: self.tools.clone(),
             main_loop_model,
             // Honor the config-driven values that the previous inline
-            // constructor hardcoded. TS parity: these always flow from
-            // `queryConfig.*` through `toolUseContext.options.*`.
+            // constructor hardcoded.
             thinking_level: self.config.thinking_level.clone(),
             is_non_interactive: self.config.is_non_interactive,
             avoid_permission_prompts: self.config.avoid_permission_prompts,
@@ -389,10 +382,9 @@ impl ToolContextFactory {
                 .or_else(|| self.config.agent_id.clone()),
             team_name: env::env_opt(EnvKey::CocoTeamName),
             plan_verify_execution: self.config.plan_mode_settings.verify_execution,
-            // TS parity: `isPlanModeInterviewPhaseEnabled()` —
-            // settings-only in coco-rs (no Growthbook, no
-            // `USER_TYPE=ant`, no env var). Drives the
-            // EnterPlanMode post-execute instruction-text variant.
+            // `isPlanModeInterviewPhaseEnabled()` is settings-only
+            // (no Growthbook, no env var). Drives the EnterPlanMode
+            // post-execute instruction-text variant.
             is_plan_interview_phase: matches!(
                 self.config.plan_mode_settings.workflow,
                 coco_config::PlanModeWorkflow::Interview
@@ -411,9 +403,8 @@ impl ToolContextFactory {
                 // Permission rules from settings.json (user /
                 // project / policy) merged with the per-engine live
                 // Command-source rules emitted by skills earlier this
-                // user message. TS parity: `loadPermissionRules` for
-                // the base + `alwaysAllowRules.command` for the live
-                // delta — both read through the same evaluator slot.
+                // user message. Base rules plus the live delta both
+                // read through the same evaluator slot.
                 // Plan Tier 3 polish.
                 allow_rules,
                 deny_rules,
@@ -428,8 +419,7 @@ impl ToolContextFactory {
             user_message_id: overrides.user_message_id,
             // Fork isolation: when fork_isolation is set and the
             // config didn't pre-supply an agent_id, auto-gen one
-            // (TS parity: `forkedAgent.ts::createSubagentContext`
-            // always allocates a fresh agentId per fork).
+            // (a fresh agentId is always allocated per fork).
             agent_id: self
                 .config
                 .agent_id
@@ -558,11 +548,11 @@ impl ToolContextFactory {
                 .map(|arc| AppStateReadHandle::new(arc.clone())),
             // Fork isolation: fresh `DenialTracker` per fork so a
             // fork's circuit-breaker streak cannot leak into the
-            // parent's consecutive-denial counter (TS parity:
-            // `createSubagentContext` always creates a fresh
-            // `denialTrackingState`). The classifier site honors this
-            // by reading `ctx.local_denial_tracking` before the
-            // engine-level session tracker.
+            // parent's consecutive-denial counter (a fresh
+            // `denialTrackingState` is created per fork). The
+            // classifier site honors this by reading
+            // `ctx.local_denial_tracking` before the engine-level
+            // session tracker.
             local_denial_tracking: self.config.fork_isolation.as_ref().map(|_| {
                 Arc::new(tokio::sync::Mutex::new(
                     coco_tool_runtime::DenialTracker::new(),
@@ -570,14 +560,13 @@ impl ToolContextFactory {
             }),
             // Query-tracking chain id: forks start a fresh UUID so
             // telemetry can group fork traffic separately from main
-            // loop. TS: `queryTracking.chainId = randomUUID()`.
+            // loop.
             query_chain_id: self
                 .config
                 .fork_isolation
                 .as_ref()
                 .map(|_| uuid::Uuid::new_v4().to_string()),
             // Query-tracking depth: parent depth + 1 (capped at 16).
-            // TS: `queryTracking.depth = parent.depth + 1`.
             query_depth: self
                 .config
                 .fork_isolation

@@ -67,9 +67,6 @@ async fn enter_plan_mode_returns_confirmation_message() {
 
 #[tokio::test]
 async fn enter_plan_mode_stashes_previous_mode() {
-    // TS parity: EnterPlanModeTool.ts:88-94 — `setAppState` flips
-    // mode → Plan and stashes `prePlanMode: currentMode`. Rust writes
-    // the same on app_state via execute().
     use std::sync::Arc;
     use tokio::sync::RwLock;
     let app_state = Arc::new(RwLock::new(ToolAppState {
@@ -378,7 +375,7 @@ async fn exit_plan_mode_ts_clear_context_choice_sets_mode_and_pending_flag() {
     assert!(guard.pending_clear_message_history);
 }
 
-/// Seed app_state for an ExitPlanMode test. TS parity: appState is
+/// Seed app_state for an ExitPlanMode test. appState is
 /// fully initialized at session bootstrap — we do the Rust equivalent
 /// by writing the three mode-related fields up front.
 fn plan_mode_app_state(
@@ -440,9 +437,6 @@ async fn exit_plan_mode_restores_default_when_no_stash() {
 
 #[tokio::test]
 async fn exit_plan_mode_restoring_to_auto_strips_dangerous_rules() {
-    // TS: ExitPlanModeV2Tool.ts:380-394 strips dangerous rules when
-    // restoring to Auto. Rust mirrors by snapshotting + stashing on
-    // app_state.stripped_dangerous_rules.
     use coco_types::PermissionRule;
     use coco_types::PermissionRuleSource;
     use coco_types::PermissionRuleValue;
@@ -558,13 +552,6 @@ async fn exit_plan_mode_execute_sets_exit_flags_on_app_state() {
 
 #[tokio::test]
 async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() {
-    // TS parity: when auto was effectively active during the plan
-    // (dangerous rules stripped) but we aren't restoring to Auto, set
-    // `needs_auto_mode_exit_attachment`. This covers the
-    // `autoWasUsedDuringPlan && !finalRestoringAuto` branch in
-    // ExitPlanModeV2Tool.ts:370-378. Here we simulate it by starting
-    // with pre_plan_mode=None (so restore→Default) AND pre-stripped
-    // dangerous rules (as if Auto was active during plan).
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
@@ -576,8 +563,8 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
     coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
 
     // Simulate "Auto was active during plan" on app_state — the
-    // shared store is the source of truth (TS parity:
-    // `appState.toolPermissionContext.strippedDangerousRules`).
+    // shared store is the source of truth
+    // (`appState.toolPermissionContext.strippedDangerousRules`).
     let app_state = Arc::new(RwLock::new(ToolAppState {
         permission_mode: Some(PermissionMode::Plan),
         stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
@@ -829,9 +816,6 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
 
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.is_teammate = true;
-    // TS parity: `isPlanModeRequired()` must be true for the mailbox
-    // path to fire. Voluntary teammates (required=false) fall through
-    // to normal exit.
     ctx.plan_mode_required = true;
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
@@ -930,9 +914,6 @@ async fn teammate_exit_plan_with_empty_plan_errors() {
 
 #[tokio::test]
 async fn voluntary_teammate_exits_locally_without_mailbox_write() {
-    // TS parity: `isTeammate() && !isPlanModeRequired()` →
-    // ExitPlanMode exits locally (like a non-swarm session); no
-    // plan_approval_request is sent to the leader.
     use tempfile::tempdir;
     let tmp = tempdir().unwrap();
     let config_home = tmp.path().to_path_buf();
@@ -1094,7 +1075,7 @@ async fn exit_plan_mode_tool_spec_hides_internal_fields_and_tightens_allowed_pro
         !props.contains_key("user_choice"),
         "user_choice leaked into model schema"
     );
-    // `allowedPrompts` stays — and its item mirrors TS:
+    // `allowedPrompts` stays — its item shape:
     // `{ tool: enum["Bash"], prompt }` with both required.
     let items = &schema["properties"]["allowedPrompts"]["items"];
     let required: Vec<&str> = items["required"]
@@ -1116,8 +1097,7 @@ async fn exit_plan_mode_tool_spec_hides_internal_fields_and_tightens_allowed_pro
 
 // ── Prompt + post-execute parity tests (G5.1) ──
 //
-// Byte-precise comparisons against the TS reference at
-// `tools/EnterPlanModeTool/prompt.ts` and `tools/ExitPlanModeTool/prompt.ts`.
+// Byte-precise comparisons against the reference prompts.
 // Any drift (a missing newline, a moved bullet, a renamed tool reference)
 // will fail this test rather than silently change what the model sees.
 
@@ -1125,8 +1105,6 @@ use coco_tool_runtime::PromptOptions;
 use pretty_assertions::assert_eq as ts_assert_eq;
 
 /// External-arm `EnterPlanMode` prompt with `whatHappens=WHAT_HAPPENS_SECTION`.
-/// TS source: `tools/EnterPlanModeTool/prompt.ts:23-98` with
-/// `${ASK_USER_QUESTION_TOOL_NAME}` substituted to `AskUserQuestion`.
 const TS_ENTER_PLAN_MODE_PROMPT_FIVE_PHASE: &str =
 "Use this tool proactively when you're about to start a non-trivial implementation task. Getting user sign-off on your approach before writing code prevents wasted effort and ensures alignment. This tool transitions you into plan mode where you can explore the codebase and design an implementation approach for user approval.
 
@@ -1227,8 +1205,7 @@ async fn enter_plan_mode_prompt_five_phase_matches_ts_byte_precise() {
 
 #[tokio::test]
 async fn enter_plan_mode_prompt_interview_omits_what_happens() {
-    // TS `tools/EnterPlanModeTool/prompt.ts:19-21`: when
-    // `isPlanModeInterviewPhaseEnabled()`, `whatHappens` is `''`,
+    // When `isPlanModeInterviewPhaseEnabled()`, `whatHappens` is `''`,
     // so the `## What Happens in Plan Mode` block disappears. The
     // surrounding structure (Examples, Important Notes) stays.
     let opts = PromptOptions {
@@ -1253,8 +1230,6 @@ async fn enter_plan_mode_prompt_interview_omits_what_happens() {
     assert!(actual.contains("If you would use AskUserQuestion to clarify"));
 }
 
-/// TS source: `tools/ExitPlanModeTool/prompt.ts` with
-/// `${ASK_USER_QUESTION_TOOL_NAME}` substituted to `AskUserQuestion`.
 const TS_EXIT_PLAN_MODE_PROMPT: &str =
 "Use this tool when you are in plan mode and have finished writing your plan to the plan file and are ready for user approval.
 
@@ -1284,7 +1259,7 @@ async fn exit_plan_mode_prompt_matches_ts_byte_precise() {
 
 #[test]
 fn enter_plan_mode_build_instructions_five_phase_matches_ts() {
-    // TS `EnterPlanModeTool.ts:108-118` — the non-interview branch.
+    // Non-interview branch.
     let confirmation = "Hello.";
     let expected = "Hello.\n\nIn plan mode, you should:\n\
                     1. Thoroughly explore the codebase to understand existing patterns\n\
@@ -1301,7 +1276,7 @@ fn enter_plan_mode_build_instructions_five_phase_matches_ts() {
 
 #[test]
 fn enter_plan_mode_build_instructions_interview_matches_ts() {
-    // TS `EnterPlanModeTool.ts:104-107` — the interview branch.
+    // Interview branch.
     let confirmation = "Hello.";
     let expected = "Hello.\n\nDO NOT write or edit any files except the plan file. \
                     Detailed workflow instructions will follow.";
@@ -1315,7 +1290,7 @@ async fn enter_plan_mode_execute_data_carries_short_confirmation_and_flag() {
     // the short confirmation + the `isInterviewPhase` flag into
     // `data`. The full workflow splice now lives in `render_for_model`
     // (covered by `enter_plan_mode_render_for_model_*` below). This
-    // matches TS `EnterPlanModeTool.ts::call` shape exactly.
+    // matches the expected `execute` output shape exactly.
     let mut ctx = ctx_with_mode(PermissionMode::Default);
     ctx.is_plan_interview_phase = false;
     let result = <EnterPlanModeTool as DynTool>::execute(&EnterPlanModeTool, json!({}), &ctx)
@@ -1349,7 +1324,7 @@ async fn enter_plan_mode_execute_data_carries_short_confirmation_and_flag() {
 #[test]
 fn enter_plan_mode_render_for_model_five_phase_branch() {
     // Renderer pulls the workflow flag out of `data` (written by
-    // `execute`) and produces a single Text part with the full TS
+    // `execute`) and produces a single Text part with the full
     // 6-step splice.
     let data = json!({
         "message": "Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach.",

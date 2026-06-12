@@ -1,14 +1,10 @@
 //! Spawn the skill-change watcher and hot-reload the session's skill
 //! catalog + slash-command registry on `.md` edits.
 //!
-//! TS parity: `utils/skills/skillChangeDetector.ts`, registered at
-//! startup in `main.tsx` (`void skillChangeDetector.initialize()`).
-//!
 //! The detector scans each debounced burst and emits the pending change;
 //! this forwarder runs blocking `ConfigChange(source=Skills)` hooks
 //! before mutating the live [`coco_skills::SkillManager`] and rebuilding
-//! the slash-command registry (the coco-rs equivalent of TS
-//! `clearCommandsCache()`).
+//! the slash-command registry.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -75,9 +71,8 @@ pub fn spawn(
                     }
 
                     // Rebuild the live catalog and slash-command registry
-                    // from the fresh on-disk skills (TS
-                    // `clearCommandsCache()`), then push the refreshed list
-                    // to the `/` autocomplete.
+                    // from the fresh on-disk skills, then push the refreshed
+                    // list to the `/` autocomplete.
                     let count = runtime.reload_plugins(&cwd).await;
                     tracing::info!(commands = count, "skills changed: command registry rebuilt");
                     let snapshot = runtime.current_command_registry().await.snapshot_for_ui();

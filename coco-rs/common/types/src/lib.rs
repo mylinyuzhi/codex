@@ -592,8 +592,6 @@ impl std::str::FromStr for PermissionMode {
 impl PermissionMode {
     /// Next mode when the user presses Shift+Tab.
     ///
-    /// TS: `getNextPermissionMode()` in utils/permissions/getNextPermissionMode.ts
-    ///
     /// Cycle: `Default → AcceptEdits → Plan → [BypassPermissions] → [Auto] → Default`.
     /// Optional modes are skipped when their gate flag is false.
     pub fn next_in_cycle(self, bypass_available: bool, auto_available: bool) -> Self {

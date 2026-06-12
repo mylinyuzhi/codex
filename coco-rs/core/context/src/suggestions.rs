@@ -1,6 +1,4 @@
 //! Input suggestions — command, file, and history suggestions.
-//!
-//! TS: utils/suggestions/ (1.2K LOC) + utils/processUserInput/ (1.8K)
 
 /// A suggestion for the input prompt.
 #[derive(Debug, Clone)]

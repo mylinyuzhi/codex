@@ -1,20 +1,15 @@
 //! Per-agent ephemeral checklist backing the legacy `TodoWrite` tool
-//! (V1). Deliberately minimal — TS only stores this in `AppState.todos`,
-//! never on disk.
-//!
-//! **TS source**: `utils/todo/types.ts` + `tools/TodoWriteTool/TodoWriteTool.ts`
-//! (keying logic: `context.agentId ?? getSessionId()`).
+//! (V1). Deliberately minimal — stored only in memory, never on disk.
+//! Keyed by `agent_id ?? session_id`.
 
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// A single todo item, byte-matching TS `TodoItemSchema`:
-/// `{ content: min(1), status: 'pending'|'in_progress'|'completed', activeForm: min(1) }`.
+/// A single todo item: `{ content: min(1), status: 'pending'|'in_progress'|'completed', activeForm: min(1) }`.
 ///
-/// No `id` field — TS uses positional identity and replace-all
-/// semantics. Matching that exactly is a TS-alignment contract.
+/// No `id` field — uses positional identity and replace-all semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoItem {
     pub content: String,

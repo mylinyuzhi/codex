@@ -84,8 +84,8 @@ pub struct TurnReminderInput<'a> {
     pub fallback_permission_mode: PermissionMode,
     /// Session-scoped auto-mode classifier activity. `true` only when
     /// `core/permissions::AutoModeState::is_active()` returns true. Combined
-    /// with `mode == Plan` this mirrors TS `inPlanWithAuto` so auto-mode
-    /// reminders fire in both Auto-mode and Plan+auto-classifier.
+    /// with `mode == Plan` this enables auto-mode reminders to fire in
+    /// both Auto-mode and Plan+auto-classifier.
     pub is_auto_classifier_active: bool,
 
     // ── Tools ──
@@ -98,7 +98,7 @@ pub struct TurnReminderInput<'a> {
     // ── History + key for todo lookup ──
     /// Full session history up to this turn (used for assistant-turn counting).
     pub history: &'a MessageHistory,
-    /// Key into `app_state.todos_by_agent` — TS uses `agentId ?? sessionId`.
+    /// Key into `app_state.todos_by_agent` (resolved from `agentId ?? sessionId`).
     pub todo_key: String,
 
     // ── Compaction / token budget ──
@@ -118,7 +118,7 @@ pub struct TurnReminderInput<'a> {
 
     // ── Per-turn user context ──
     /// Today's local ISO date, injected every turn for the
-    /// `user_context` reminder (TS `prependUserContext.currentDate`).
+    /// `user_context` reminder.
     /// `Some` on the live engine path; `None` in tests suppresses it.
     pub current_date: Option<String>,
 
@@ -276,7 +276,7 @@ pub async fn run_turn_reminders(
     let is_sub_agent = agent_id.is_some();
     let has_user_input = user_input.is_some();
 
-    // Pre-scan history for TS-parity turn counters. These are typed over
+    // Pre-scan history for turn counters. These are typed over
     // [`ToolName`] — no hardcoded tool-name strings anywhere in the engine
     // integration path.
     let messages = history.as_slice();
@@ -285,7 +285,7 @@ pub async fn run_turn_reminders(
     let turns_since_last_task_tool =
         count_assistant_turns_since_any_tool(messages, TASK_MANAGEMENT_TOOLS);
     // Verify-plan cadence counts human turns since the `plan_mode_exit`
-    // attachment. TS: `getVerifyPlanReminderTurnCount`.
+    // attachment.
     let turns_since_plan_exit =
         count_human_turns_since_attachment(messages, coco_types::AttachmentKind::PlanModeExit);
 

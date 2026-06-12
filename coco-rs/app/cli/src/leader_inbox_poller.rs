@@ -1,13 +1,11 @@
 //! Continuous leader-side inbox poller for cross-process teammate
 //! messages, idle notifications, and permission requests.
 //!
-//! TS: `hooks/useInboxPoller.ts` — a 1s `useInterval` poll (plus an initial
-//! poll on mount) that scans the team-lead inbox continuously, independent
-//! of whether the leader is taking a turn. This mirrors the leader branch
-//! (`useInboxPoller.ts:251-364`):
-//! - **`PermissionRequest`** → route it (deduped by `tool_use_id`,
-//!   `:340-345`) to the leader's approval queue, which prompts the human and
-//!   replies to the worker via mailbox.
+//! A 1s poll scans the team-lead inbox continuously, independent
+//! of whether the leader is taking a turn. Leader branch behavior:
+//! - **`PermissionRequest`** → route it (deduped by `tool_use_id`) to the
+//!   leader's approval queue, which prompts the human and replies to the
+//!   worker via mailbox.
 //! - **regular plain-text message** (gap 4b) → surface to the leader's model
 //!   as a coordinator-framed entry on the [`coco_query::CommandQueue`]
 //!   (`QueueOrigin::Coordinator`), drained into the leader's next turn. This
@@ -24,13 +22,13 @@
 //! - The approval queue is the registered
 //!   [`crate::leader_permission`] setter (→ `TuiPermissionBridge` →
 //!   `send_permission_response_via_mailbox`); it carries the human-UI +
-//!   reply that TS does inline in the hook.
+//!   reply done inline in the hook.
 //!
 //! Worker-side responses are NOT handled here: the worker's
-//! `MailboxPermissionBridge` polls its own inbox for the reply (TS routes
-//! those via `useSwarmPermissionPoller`). Plan-approval / team-permission /
-//! mode-set / shutdown / sandbox message types stay on their existing paths
-//! (left unread for their dedicated consumers).
+//! `MailboxPermissionBridge` polls its own inbox for the reply.
+//! Plan-approval / team-permission / mode-set / shutdown / sandbox
+//! message types stay on their existing paths (left unread for their
+//! dedicated consumers).
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -44,10 +42,10 @@ use coco_system_reminder::QueueOrigin;
 
 use crate::session_runtime::SessionRuntime;
 
-/// TS `useInboxPoller.ts:107` `INBOX_POLL_INTERVAL_MS = 1000`.
+/// Inbox poll interval: 1000 ms.
 const INBOX_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
-/// Canonical leader inbox name. TS `TEAM_LEAD_NAME = 'team-lead'`.
+/// Canonical leader inbox name.
 const TEAM_LEAD_NAME: &str = "team-lead";
 
 /// Spawn the continuous leader inbox poller. Returns the `JoinHandle` the
@@ -58,7 +56,6 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // tool_use_ids already dispatched to the leader UI — dedup so a
         // failed mark-read on a prior tick doesn't re-prompt the human.
-        // TS dedups the ToolUseConfirm queue by tool_use_id (:340-345).
         let mut dispatched: HashSet<String> = HashSet::new();
         loop {
             poll_once(&runtime, &mut dispatched).await;
@@ -79,15 +76,11 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> tokio::task::JoinHandle<()> {
 /// this closes: previously ONLY the TUI installed the poller, so a headless /
 /// SDK leader that approved a teammate shutdown never ran teardown — leaking
 /// stale `team.json` membership + orphaned task assignments (even for
-/// in-process teammates, whose teardown is not pane-gated). TS runs
-/// `useInboxPoller` on every leader entrypoint, interactive AND print
-/// (`cli/print.ts:2497-2613`).
+/// in-process teammates, whose teardown is not pane-gated).
 ///
 /// Note: a single-shot `-p` leader exits right after its turn, so the 1 s
-/// background poll may not fire — TS additionally drains the inbox until no
-/// teammates remain active before exiting (`print.ts`). That bounded
-/// end-of-run drain is a separate follow-up; this install covers long-running
-/// leaders (SDK server, interactive).
+/// background poll may not fire — the bounded end-of-run drain is a separate
+/// follow-up; this install covers long-running leaders (SDK server, interactive).
 pub async fn install_leader(
     runtime: Arc<SessionRuntime>,
     bridge: Option<coco_tool_runtime::ToolPermissionBridgeRef>,
@@ -110,8 +103,7 @@ pub async fn install_leader(
 }
 
 async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
-    // Resolve the active team from the roster (TS reads
-    // `appState.teamContext?.teamName` each tick, `:143-150`).
+    // Resolve the active team from the roster.
     let Some(handle) = runtime.current_agent_handle().await else {
         return;
     };
@@ -180,7 +172,6 @@ async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
                 // pane (pane-based teammates only — in-process ones carry
                 // no pane id and exit via their own runner-loop break),
                 // remove its team-file membership, and unassign its tasks.
-                // TS `useInboxPoller.ts:687-741`.
                 let agent_id = format!("{from}@{team}");
                 if let Err(e) = handle
                     .teardown_teammate(&agent_id, from, pane_id.as_deref(), backend_type.as_deref())
@@ -198,10 +189,9 @@ async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
 }
 
 /// Enqueue a teammate-originated message onto the leader's mid-turn command
-/// queue with `QueueOrigin::Coordinator` framing (TS `wrapCommandText`'s
-/// "teammate routed a message via the swarm coordinator" case). Drained into
-/// the leader's next turn as a `queued_command` attachment. `Later` priority
-/// so it never jumps ahead of the human's own queued input.
+/// queue with `QueueOrigin::Coordinator` framing. Drained into the leader's
+/// next turn as a `queued_command` attachment. `Later` priority so it never
+/// jumps ahead of the human's own queued input.
 async fn enqueue_coordinator_message(queue: &CommandQueue, content: String) {
     if content.trim().is_empty() {
         return;

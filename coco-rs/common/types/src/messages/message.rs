@@ -230,7 +230,7 @@ pub struct ApiError {
     pub error_type: Option<String>,
 }
 
-/// Attachment message: `kind` carries the TS-parity discriminant (60 variants),
+/// Attachment message: `kind` carries the discriminant (60 variants),
 /// `body` carries the typed payload.
 ///
 /// **Invariant**: `kind` and `body` must agree — e.g. `kind = HookCancelled`

@@ -1,8 +1,5 @@
 //! Permission setup — initial mode selection, mode descriptions, default rule
 //! generation, and configuration validation.
-//!
-//! TS: utils/permissions/permissionSetup.ts (~1.5K LOC)
-//!     utils/permissions/PermissionMode.ts
 
 use coco_types::PermissionBehavior;
 use coco_types::PermissionMode;
@@ -19,8 +16,6 @@ use crate::rule_compiler;
 ///
 /// Maps to `PermissionMode` but uses names that are clearer in an interactive
 /// selection dialog.
-///
-/// TS: permissionSetup — interactive mode selector, plan mode transitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionModeChoice {
     /// Standard interactive mode — ask before risky operations.
@@ -149,16 +144,12 @@ pub fn is_default_mode(mode: Option<PermissionMode>) -> bool {
 // ── Dangerous permission detection ──
 
 /// Interpreters and runners dangerous on both Bash and PowerShell.
-///
-/// TS: `CROSS_PLATFORM_CODE_EXEC` in dangerousPatterns.ts
 const CROSS_PLATFORM_CODE_EXEC: &[&str] = &[
     "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua", "npx",
     "bunx", "npm run", "yarn run", "pnpm run", "bun run", "bash", "sh", "ssh",
 ];
 
 /// Dangerous bash patterns: cross-platform interpreters + bash-specific shells/evaluators.
-///
-/// TS: `DANGEROUS_BASH_PATTERNS` in dangerousPatterns.ts
 const DANGEROUS_BASH_PATTERNS: &[&str] = &[
     // Cross-platform (shared with PowerShell)
     "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua", "npx",
@@ -168,15 +159,11 @@ const DANGEROUS_BASH_PATTERNS: &[&str] = &[
 ];
 
 /// Additional patterns only dangerous for Anthropic-internal users.
-///
-/// TS: conditional `process.env.USER_TYPE === 'ant'` block in dangerousPatterns.ts
 const DANGEROUS_BASH_PATTERNS_ANT_ONLY: &[&str] = &[
     "fa run", "coo", "gh", "gh api", "curl", "wget", "git", "kubectl", "aws", "gcloud", "gsutil",
 ];
 
 /// PowerShell-specific dangerous patterns (on top of CROSS_PLATFORM_CODE_EXEC).
-///
-/// TS: `isDangerousPowerShellPermission()` patterns in permissionSetup.ts
 const DANGEROUS_POWERSHELL_PATTERNS: &[&str] = &[
     // Nested PS + shells
     "pwsh",
@@ -210,8 +197,6 @@ const DANGEROUS_POWERSHELL_PATTERNS: &[&str] = &[
 ];
 
 /// Check if a content string matches any dangerous pattern using the 5-variant check.
-///
-/// TS: `isDangerousBashPermission()` variant matching in permissionSetup.ts
 fn content_matches_dangerous_pattern(content: &str, pattern: &str) -> bool {
     let lower = pattern.to_lowercase();
     content == lower
@@ -225,8 +210,6 @@ fn content_matches_dangerous_pattern(content: &str, pattern: &str) -> bool {
 ///
 /// A rule is dangerous if it would auto-allow commands that execute arbitrary
 /// code, bypassing the classifier's safety evaluation.
-///
-/// TS: `isDangerousBashPermission()` in permissionSetup.ts
 pub fn is_dangerous_bash_permission(
     tool_name: &str,
     rule_content: Option<&str>,
@@ -268,8 +251,6 @@ pub fn is_dangerous_bash_permission(
 /// Checks both the original pattern and its `.exe` variant (e.g. "npm run"
 /// also checks "npm.exe run"). Multi-word patterns add `.exe` after the first
 /// word only.
-///
-/// TS: `isDangerousPowerShellPermission()` in permissionSetup.ts
 pub fn is_dangerous_powershell_permission(tool_name: &str, rule_content: Option<&str>) -> bool {
     if tool_name != ToolName::PowerShell.as_str() {
         return false;
@@ -434,8 +415,6 @@ pub fn default_session_rules() -> Vec<PermissionRule> {
 /// - **BypassPermissions / DontAsk**: wildcard allow-all.
 /// - **Plan**: read-only + plan-mode tools; all writes denied.
 /// - **Bubble**: no session rules (parent agent decides).
-///
-/// TS: getDefaultToolRulesForMode() in permissionSetup.ts
 pub fn get_default_rules_for_mode(mode: PermissionMode) -> Vec<PermissionRule> {
     match mode {
         PermissionMode::Default | PermissionMode::Auto => default_session_rules(),
@@ -472,9 +451,8 @@ pub fn get_default_rules_for_mode(mode: PermissionMode) -> Vec<PermissionRule> {
             }]
         }
         PermissionMode::Plan => {
-            // Tools with is_read_only()=true are allowed in plan mode.
-            // TS: permission evaluator checks tool.isReadOnly() at runtime;
-            // Rust whitelists them statically here.
+            // Tools with is_read_only()=true are allowed in plan mode;
+            // whitelisted statically here.
             let read_tools = [
                 ToolName::Read,
                 ToolName::Glob,

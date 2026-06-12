@@ -1,8 +1,5 @@
 //! Shell utility functions: quoting, escaping, command splitting, shell
 //! detection, and working directory tracking helpers.
-//!
-//! Ported from TS: utils/bash/shellQuoting.ts, utils/shell/resolveDefaultShell.ts,
-//! utils/shell/bashProvider.ts.
 
 use crate::tokenizer::TokenKind;
 use crate::tokenizer::tokenize;

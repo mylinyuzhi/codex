@@ -1,7 +1,4 @@
 //! MCP tool and resource discovery.
-//!
-//! TS: services/mcp/client.ts — fetchToolsForClient(), fetchResourcesForClient(),
-//! fetchCommandsForClient()
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,8 +14,6 @@ use crate::types::McpConnectionState;
 use crate::types::McpToolDefinition;
 
 /// Tool annotations from an MCP server.
-///
-/// TS: tool.annotations — readOnlyHint, destructiveHint, openWorldHint, title.
 #[derive(Debug, Clone, Default)]
 pub struct ToolAnnotations {
     /// Whether the tool only reads data (safe for concurrent execution).
@@ -63,8 +58,6 @@ pub struct DiscoveredResource {
 }
 
 /// Cache for discovered tools/resources per server.
-///
-/// TS: memoizeWithLRU — caches fetchToolsForClient results by server name.
 #[derive(Debug, Default)]
 pub struct DiscoveryCache {
     tools: HashMap<String, Vec<DiscoveredTool>>,
@@ -107,8 +100,8 @@ impl DiscoveryCache {
 
 /// Discover tools from a connected MCP server.
 ///
-/// TS: fetchToolsForClient() — sends tools/list, converts to Tool format,
-/// truncates descriptions, extracts annotations.
+/// Sends `tools/list`, converts to the internal format, truncates descriptions,
+/// and extracts annotations.
 pub async fn discover_tools_from_server(
     manager: &McpConnectionManager,
     server_name: &str,
@@ -162,7 +155,7 @@ pub async fn discover_tools_from_server(
 
 /// Discover resources from a connected MCP server.
 ///
-/// TS: fetchResourcesForClient() — sends resources/list.
+/// Sends `resources/list`.
 pub async fn discover_resources(
     manager: &McpConnectionManager,
     server_name: &str,
@@ -225,8 +218,6 @@ pub async fn discover_resources(
 ///
 /// Invalidates the discovery cache for the server and re-fetches
 /// tools and resources.
-///
-/// TS: fetchToolsForClient.bust(name) — cache invalidation on reconnect.
 pub async fn refresh_server_capabilities(
     manager: &McpConnectionManager,
     server_name: &str,
@@ -250,9 +241,6 @@ pub async fn refresh_server_capabilities(
 }
 
 /// Discover tools and resources from all connected servers.
-///
-/// TS: Combined fetchToolsForClient() + fetchResourcesForClient() across
-/// all connected servers.
 pub async fn discover_all(
     manager: &McpConnectionManager,
     cache: &Arc<RwLock<DiscoveryCache>>,
@@ -284,9 +272,7 @@ pub struct ServerCapabilities {
 
 // ── Dynamic resource discovery ──
 
-/// Query parameters for runtime resource discovery.
-///
-/// TS: services/mcp/resources.ts — dynamic resource lookup by URI pattern,
+/// Query parameters for runtime resource discovery by URI pattern,
 /// name prefix, or MIME type.
 #[derive(Debug, Clone, Default)]
 pub struct DynamicResourceQuery {
@@ -326,8 +312,7 @@ impl DynamicResourceQuery {
 
 /// Discover resources matching a query across all connected servers.
 ///
-/// TS: Combined fetchResourcesForClient() with filtering. Queries each
-/// server's cached resources and applies the filter locally.
+/// Queries each server's cached resources and applies the filter locally.
 pub async fn discover_resources_matching(
     manager: &McpConnectionManager,
     cache: &Arc<RwLock<DiscoveryCache>>,
@@ -393,8 +378,6 @@ fn convert_server_tools(server_name: &str, tools: &[McpToolDefinition]) -> Vec<D
 }
 
 /// Extract tool annotations from the input schema.
-///
-/// TS: tool.annotations?.readOnlyHint, destructiveHint, openWorldHint, title
 fn extract_annotations(schema: &serde_json::Value) -> ToolAnnotations {
     let annotations = schema.get("annotations");
 

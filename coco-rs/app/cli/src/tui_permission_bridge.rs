@@ -93,8 +93,8 @@ pub struct TuiPermissionBridge {
     notification_tx: mpsc::Sender<CoreEvent>,
     pending: PendingApprovals,
     /// Late-bound `Weak<SessionRuntime>` used to fire the
-    /// `Notification` hook (TS `executeNotificationHooks`) when an
-    /// `Ask` permission lands in front of the user. Set by
+    /// `Notification` hook when an `Ask` permission lands in front
+    /// of the user. Set by
     /// [`Self::set_notification_runtime`] from `tui_runner` after
     /// `SessionRuntime::build` returns. Weak avoids extending the
     /// runtime's lifetime through the bridge.
@@ -150,7 +150,7 @@ impl TuiPermissionBridge {
     }
 
     /// Generate an on-demand LLM risk explanation for a pending permission
-    /// prompt (TS `generatePermissionExplanation`). Delegates to
+    /// prompt. Delegates to
     /// [`SessionRuntime::explain_permission_risk`] (the single home for the
     /// explainer call) via the late-bound runtime Weak; returns `None` when the
     /// runtime isn't bound (tests / early bootstrap). The interactive Ctrl+E
@@ -216,11 +216,9 @@ impl ToolPermissionBridge for TuiPermissionBridge {
             );
         }
 
-        // TS `useNotifyAfterTimeout('Claude Code is waiting for your input',
-        // 'permission_prompt')` (`PermissionRequest.tsx:190`): fire the
-        // Notification hook before the prompt is shown so user-defined
-        // notifiers run in lockstep with TS. Best-effort — no runtime
-        // installed (e.g. tests) leaves the hook unfired.
+        // Fire the Notification hook before the prompt is shown so
+        // user-defined notifiers run. Best-effort — no runtime installed
+        // (e.g. tests) leaves the hook unfired.
         if let Some(runtime) = self
             .notification_runtime
             .read()
@@ -241,8 +239,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         // Step 2: emit the right prompt event onto the TUI channel.
         //
         // AskUserQuestion gets a dedicated rich prompt (Question UI:
-        // multi-question, multiSelect, preview, notes) — TS parity with
-        // `AskUserQuestionPermissionRequest.tsx`. All other tools get
+        // multi-question, multiSelect, preview, notes). All other tools get
         // the generic Allow / Deny `Permission` prompt.
         //
         // Both paths land back here via the same `pending` oneshot
@@ -280,7 +277,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 permission_suggestions: request.suggestions.clone(),
                 // Carry the raw input for both choice and classic dialogs:
                 // choices splice `user_choice`; classic read permissions
-                // derive TS-style path-scoped "always allow" updates.
+                // derive path-scoped "always allow" updates.
                 original_input: Some(request.input.clone()),
                 cwd: request.cwd.clone(),
                 worker_badge: request.worker_badge.clone(),
@@ -390,14 +387,10 @@ fn build_exit_plan_mode_choices(
 /// `updated_input` carries a user-supplied rewrite of the tool input
 /// (e.g. `AskUserQuestion` answers). When `Some`, downstream
 /// (`PermissionController::resolve` → `tool_call_preparer`) substitutes
-/// it for the original input before invoking the tool. TS parity:
-/// `permissionDecision.updatedInput` at
-/// `services/tools/toolExecution.ts:1130-1131`.
+/// it for the original input before invoking the tool.
 ///
 /// `content_blocks` carries optional image attachments (etc.) the user
-/// pasted alongside the answer. Mirrors TS
-/// `PermissionAllowDecision.contentBlocks` at
-/// `types/permissions.ts:183`. Today the TUI doesn't have a paste-into-
+/// pasted alongside the answer. Today the TUI doesn't have a paste-into-
 /// question gesture so callers pass `None`; the bridge plumbing is in
 /// place so SDK clients (which already ship the field via
 /// `ApprovalResolveParams.content_blocks`) flow through unchanged.

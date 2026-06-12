@@ -1,8 +1,8 @@
 //! End-to-end scoping tests for the per-engine `live_command_rules`
 //! Arc.
 //!
-//! These tests pin the lifecycle invariants that mirror TS
-//! `query()`'s closure-captured `appState.alwaysAllowRules.command`:
+//! These tests pin the lifecycle invariants for the per-engine
+//! `appState.alwaysAllowRules.command` slot:
 //!
 //! - **Engine = 1 user message**: every `QueryEngine::new` allocates a
 //!   fresh empty Arc. There is no cross-engine sharing.
@@ -99,7 +99,7 @@ fn skill_cmd_rule(tool_pattern: &str) -> PermissionRule {
 
 #[tokio::test]
 async fn new_engine_starts_with_empty_live_rules() {
-    // TS parity: a fresh `query()` invocation has an empty
+    // A fresh engine starts with an empty
     // `appState.alwaysAllowRules.command` slot.
     let engine = make_engine();
     assert!(engine.live_command_rules.read().await.is_empty());
@@ -130,7 +130,7 @@ async fn factory_sees_handle_writes_within_same_engine() {
     // rule via the handle; turn 2's `factory.build()` MUST observe it
     // in `permission_context.allow_rules[Command]`. This is what
     // makes inline skills' `allowed-tools` honored on the very next
-    // turn (TS parity: `getAppState` reads same closure-captured ref).
+    // turn (`getAppState` reads same closure-captured ref).
     let engine = make_engine();
     engine
         .permission_rule_handle

@@ -1,5 +1,5 @@
 //! Unit tests for [`PromptMode`] prefix detection and [`InputState`] mode
-//! derivation. TS parity reference: `components/PromptInput/inputModes.ts`.
+//! derivation.
 
 use super::InputState;
 use super::PromptMode;
@@ -26,7 +26,7 @@ fn prompt_mode_bang_prefix_is_bash() {
 
 #[test]
 fn prompt_mode_leading_space_kills_prefix() {
-    // TS getModeFromInput uses startsWith — leading whitespace defeats it.
+    // Leading whitespace defeats the prefix match.
     assert_eq!(PromptMode::from_text(" !ls"), PromptMode::Normal);
     assert_eq!(PromptMode::from_text("\t#x"), PromptMode::Normal);
 }
@@ -50,7 +50,7 @@ fn strip_prefix_normal_passes_text_through() {
 fn strip_prefix_bash_drops_bang_and_one_space() {
     assert_eq!(PromptMode::Bash.strip_prefix("!ls"), "ls");
     assert_eq!(PromptMode::Bash.strip_prefix("! ls"), "ls");
-    // Multiple leading spaces: only one consumed (matches TS `slice(1)`).
+    // Multiple leading spaces: only one consumed (strip one optional space after `!`).
     assert_eq!(PromptMode::Bash.strip_prefix("!  ls"), " ls");
     assert_eq!(PromptMode::Bash.strip_prefix("!"), "");
 }

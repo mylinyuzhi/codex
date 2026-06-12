@@ -1,6 +1,6 @@
 //! Session transcript persistence via JSONL rollout format.
 //!
-//! TS: utils/sessionStorage.ts — JSONL append-only transcript at
+//! JSONL append-only transcript at
 //! `~/.coco/projects/{sanitized_cwd}/{session_id}.jsonl`.
 //!
 //! Each line is a self-contained JSON entry: transcript messages
@@ -39,7 +39,6 @@ use wire::tool_result_use_id;
 pub use wire::transcript_entries_for_message;
 
 /// Maximum transcript file size we will fully read into memory (50 MB).
-/// Matches the TS `MAX_TRANSCRIPT_READ_BYTES` constant.
 const MAX_TRANSCRIPT_READ_BYTES: u64 = 50 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -50,7 +49,7 @@ const MAX_TRANSCRIPT_READ_BYTES: u64 = 50 * 1024 * 1024;
 /// Centralised so the write side (`storage::wire::transcript_entries_for_message`),
 /// the read side (`storage::wire::reconstruct_regular_message`), and
 /// the lite-metadata head/tail scan (`storage::read_transcript_metadata`)
-/// can't drift. Mirrors TS `isTranscriptMessage` (`sessionStorage.ts:139-146`).
+/// can't drift.
 pub mod entry_kind {
     pub const USER: &str = "user";
     pub const ASSISTANT: &str = "assistant";
@@ -60,8 +59,8 @@ pub mod entry_kind {
 
 /// Token usage for a single transcript entry.
 ///
-/// Wire shape is **snake_case JSON** — Rust-native, not TS-byte-
-/// compatible. See module doc for the cross-implementation policy.
+/// Wire shape is **snake_case JSON** — Rust-native. See module doc
+/// for the cross-implementation policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TranscriptUsage {
     pub input_tokens: i64,
@@ -75,7 +74,7 @@ pub struct TranscriptUsage {
 /// A transcript message entry (user, assistant, system, attachment).
 ///
 /// **Wire format is Rust-native snake_case JSON.** Coco-rs deliberately
-/// does NOT mirror the TS Claude Code byte layout — the file content
+/// does NOT match the original claude-code byte layout — the file content
 /// is semantically equivalent (same UUIDs, same timestamps, same
 /// `tool_use_id`-keyed records, same chain semantics, same metadata
 /// categories) but field names follow Rust convention so we don't
@@ -129,12 +128,10 @@ pub struct TranscriptEntry {
 /// Metadata entries that live alongside transcript messages in the JSONL.
 ///
 /// `type:` discriminator is kebab-case (`custom-title`, `last-prompt`,
-/// `file-history-snapshot`, …) to match TS Claude Code's discriminator
-/// strings — those drive cross-system tooling that key on them and
-/// changing them would force re-indexing. Payload field NAMES, on the
-/// other hand, are Rust snake_case; we don't mirror TS camelCase for
-/// payloads (see [`TranscriptEntry`] doc). Field VALUES carry the same
-/// semantic content as TS.
+/// `file-history-snapshot`, …) — these drive cross-system tooling that
+/// keys on them; changing them would force re-indexing. Payload field
+/// NAMES are Rust snake_case; field VALUES carry the same semantic
+/// content (see [`TranscriptEntry`] doc).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum MetadataEntry {
@@ -164,8 +161,7 @@ pub enum MetadataEntry {
     },
     /// File-history snapshot recorded by the rewind subsystem. Replayed
     /// on resume by [`build_file_history_snapshot_chain`] to rebuild
-    /// the rewind picker and the disk-backup mapping (TS algorithm
-    /// `buildFileHistorySnapshotChain` at `sessionStorage.ts:2248`).
+    /// the rewind picker and the disk-backup mapping.
     /// The `snapshot` payload is a passthrough JSON blob to keep
     /// `coco-session` free of a `coco-context` dependency —
     /// `coco-context::FileHistorySnapshot` owns the typed shape and
@@ -277,10 +273,7 @@ pub enum MetadataEntry {
 ///
 /// Three fields — `kind`, `tool_use_id`, `replacement`. Records are
 /// keyed by `tool_use_id`, which is globally unique within a session.
-/// Wire shape is snake_case, like the rest of the JSONL envelope; the
-/// content semantics (one record per replaced tool result, exact
-/// persisted-output string) match TS Claude Code's
-/// `ContentReplacementRecord`.
+/// Wire shape is snake_case, like the rest of the JSONL envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ContentReplacementRecord {
@@ -324,8 +317,8 @@ pub struct ModelCostEntry {
 ///
 /// `starting_parent_uuid` is the already-written prefix parent. Once the
 /// first new message is written, later already-written messages in `messages`
-/// no longer advance the parent. That mirrors TS `recordTranscript` and keeps
-/// compact-preserved suffixes from reconnecting the new branch to the old tail.
+/// no longer advance the parent. This keeps compact-preserved suffixes from
+/// reconnecting the new branch to the old tail.
 #[derive(Debug, Clone, Default)]
 pub struct ChainWriteOptions {
     pub cwd: String,
@@ -333,9 +326,9 @@ pub struct ChainWriteOptions {
     pub is_sidechain: bool,
     pub agent_id: Option<String>,
     pub starting_parent_uuid: Option<String>,
-    /// Git branch for `cwd` at the time of the chain write. Stamped on
-    /// every transcript line — TS `sessionStorage.ts:1013-1019,1062`
-    /// resolves this once via `getBranch()`. `None` ⇒ field is omitted.
+    /// Git branch for `cwd` at the time of the chain write. Resolved
+    /// once by the caller and stamped on every transcript line.
+    /// `None` ⇒ field is omitted.
     pub git_branch: Option<String>,
 }
 
@@ -375,9 +368,8 @@ impl Serialize for Entry {
 // ---------------------------------------------------------------------------
 
 /// Lightweight metadata extracted from a transcript file without loading
-/// every message. Surfaced by the resume picker (`--resume`). Same
-/// semantic fields as TS `LogOption`, snake_case JSON like the rest of
-/// the wire envelope.
+/// every message. Surfaced by the resume picker (`--resume`).
+/// Snake_case JSON like the rest of the wire envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TranscriptMetadata {
     pub session_id: String,
@@ -420,8 +412,7 @@ pub struct TranscriptMetadata {
 
 /// Per-agent metadata sidecar — written when a background AgentTool
 /// spawn registers, read when the model invokes `agent/resume` to
-/// rehydrate the spawn. Same semantic fields as TS `AgentMetadata`,
-/// snake_case wire.
+/// rehydrate the spawn. Snake_case wire.
 ///
 /// Persisted as `<sessions_dir>/<session_id>/subagents/agent-<id>.meta.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -449,7 +440,7 @@ pub struct AgentMetadata {
 
 /// Manages reading and writing JSONL session transcripts.
 ///
-/// Path layout (TS-aligned, see [`ProjectPaths`]):
+/// Path layout (see [`ProjectPaths`]):
 ///
 /// ```text
 /// <memory_base>/projects/<sanitize(cwd)>/<session_id>.jsonl                  ← transcript
@@ -466,8 +457,7 @@ pub struct TranscriptStore {
 }
 
 impl TranscriptStore {
-    /// Build a store scoped to one project. Path layout follows TS
-    /// `sessionStorage.ts:202-258`; the [`ProjectPaths`] facade
+    /// Build a store scoped to one project. The [`ProjectPaths`] facade
     /// owns the slug + NFC + djb2-hash math so this struct just
     /// delegates.
     pub fn new(paths: Arc<ProjectPaths>) -> Self {
@@ -487,21 +477,19 @@ impl TranscriptStore {
     }
 
     /// `<project>/<session_id>/subagents/agent-<agent_id>.jsonl` —
-    /// background-agent transcript. Mirrors TS
-    /// `getAgentTranscriptPath` (`utils/sessionStorage.ts:247-258`).
+    /// background-agent transcript.
     pub fn agent_transcript_path(&self, session_id: &str, agent_id: &str) -> PathBuf {
         self.paths.agent_transcript(session_id, agent_id)
     }
 
     /// `<project>/<session_id>/subagents/agent-<agent_id>.meta.json` —
-    /// metadata sidecar for a background agent's spawn. Mirrors TS
-    /// `getAgentMetadataPath` (`utils/sessionStorage.ts:260-262`).
+    /// metadata sidecar for a background agent's spawn.
     pub fn agent_metadata_path(&self, session_id: &str, agent_id: &str) -> PathBuf {
         self.paths.agent_metadata(session_id, agent_id)
     }
 
     /// `<project>/<session_id>/tool-results/` — persisted tool result
-    /// blob directory. TS: `toolResultStorage.ts:104-106`.
+    /// blob directory.
     pub fn tool_results_session_dir(&self, session_id: &str) -> PathBuf {
         self.paths.tool_results_dir(session_id)
     }
@@ -513,7 +501,7 @@ impl TranscriptStore {
     /// the TUI on shutdown calls it for the active project's
     /// [`TranscriptStore`].
     ///
-    /// Mirrors TS `utils/cleanup.ts::cleanupOldSessionFiles`: direct files under
+    /// Direct files under
     /// `tool-results/` and one-level nested tool directories are unlinked when
     /// their file mtime is older than the retention cutoff; then empty tool,
     /// `tool-results`, and session artifact directories are removed best-effort.
@@ -711,7 +699,6 @@ impl TranscriptStore {
     }
 
     /// Write an agent's metadata sidecar (`agent-<id>.meta.json`).
-    /// Mirrors TS `writeAgentMetadata` (`utils/sessionStorage.ts:283-290`).
     pub fn write_agent_metadata(
         &self,
         session_id: &str,
@@ -728,7 +715,7 @@ impl TranscriptStore {
     }
 
     /// Read an agent's metadata sidecar; returns `Ok(None)` when
-    /// the file doesn't exist. Mirrors TS `readAgentMetadata`.
+    /// the file doesn't exist.
     pub fn read_agent_metadata(
         &self,
         session_id: &str,
@@ -833,12 +820,10 @@ impl TranscriptStore {
     /// Persist a file-history snapshot to the JSONL transcript.
     ///
     /// `snapshot_json` is the `FileHistorySnapshot`'s serialized JSON
-    /// shape (see `coco-context::FileHistorySnapshot`). Mirrors TS
-    /// `insertFileHistorySnapshot` (`utils/sessionStorage.ts:1085`).
+    /// shape (see `coco-context::FileHistorySnapshot`).
     /// `is_snapshot_update == true` means we're rewriting an existing
-    /// snapshot in place (TS `tracked_edit` updates a not-yet-flushed
-    /// snapshot); resume's chain builder uses last-wins on (`message_id`,
-    /// `is_snapshot_update`) ordering.
+    /// snapshot in place (a `tracked_edit` update); resume's chain builder
+    /// uses last-wins on (`message_id`, `is_snapshot_update`) ordering.
     pub fn insert_file_history_snapshot(
         &self,
         session_id: &str,
@@ -860,7 +845,6 @@ impl TranscriptStore {
     ///
     /// `payload` is the serialized [`coco_compact::staged::CommitEntry`]
     /// (snake_case).
-    /// `utils/sessionStorage.ts:1541 recordContextCollapseCommit`.
     pub fn append_marble_origami_commit(
         &self,
         session_id: &str,
@@ -870,8 +854,7 @@ impl TranscriptStore {
     }
 
     /// Persist a marble-origami snapshot entry to the transcript
-    /// (last-wins on resume). TS:
-    /// `utils/sessionStorage.ts:1563 recordContextCollapseSnapshot`.
+    /// (last-wins on resume).
     pub fn append_marble_origami_snapshot(
         &self,
         session_id: &str,
@@ -922,10 +905,9 @@ impl TranscriptStore {
     }
 
     /// Load all content-replacement records for this `session_id`
-    /// filtered by `agent_id` presence. TS `sessionStorage.ts:3682-3693`
-    /// routes records into two maps purely by `agentId`-vs-no-agentId:
-    /// no per-message-uuid scope, because `tool_use_id` is globally
-    /// unique within a session.
+    /// filtered by `agent_id` presence. Records are routed purely by
+    /// `agent_id`-vs-no-`agent_id` — no per-message-uuid scope, because
+    /// `tool_use_id` is globally unique within a session.
     pub fn load_content_replacements_for_chain(
         &self,
         session_id: &str,
@@ -942,9 +924,6 @@ impl TranscriptStore {
     /// `session_id` (snapshot last-wins). Each `serde_json::Value` is
     /// the original payload — caller deserializes back into
     /// `coco_compact::staged::{CommitEntry, SnapshotEntry}`.
-    ///
-    /// TS: `utils/sessionStorage.ts:2345-2351 loadAllLogs` filter +
-    /// last-wins logic.
     pub fn load_marble_origami_entries(
         &self,
         session_id: &str,
@@ -971,17 +950,13 @@ impl TranscriptStore {
         Ok((commits, last_snapshot))
     }
 
-    /// Replay file-history snapshots from the transcript JSONL.
-    ///
-    /// Replay file-history snapshots in conversation-chain order, with
-    /// `is_snapshot_update` semantics.
+    /// Replay file-history snapshots from the transcript JSONL in
+    /// conversation-chain order, with `is_snapshot_update` semantics.
     ///
     /// `chain_message_uuids` is the resolved chain of message UUIDs in
-    /// conversation order (typically computed by
-    /// `coco_session::recovery::load_conversation_for_resume` from the
-    /// reconstructed `messages` Vec). Per TS
-    /// `utils/sessionStorage.ts:2248-2272 buildFileHistorySnapshotChain`,
-    /// the chain walk drives lookup — disk append order is irrelevant
+    /// conversation order (typically from
+    /// `coco_session::recovery::load_conversation_for_resume`).
+    /// The chain walk drives lookup — disk append order is irrelevant
     /// once the messages map is built. Caller deserializes each Value
     /// into the typed snapshot (decoupled so `coco-session` doesn't
     /// depend on `coco-context`).
@@ -1023,8 +998,7 @@ impl TranscriptStore {
     }
 
     /// Extract lightweight metadata from a transcript without loading all
-    /// messages. Reads the first and last few KB of the file (like the TS
-    /// `readLiteMetadata`).
+    /// messages. Reads the first and last few KB of the file.
     pub fn read_metadata(&self, session_id: &str) -> crate::Result<TranscriptMetadata> {
         let path = self.transcript_path(session_id);
         read_transcript_metadata(&path, session_id)
@@ -1088,8 +1062,7 @@ fn try_remove_empty_dir(path: &Path) {
 // ---------------------------------------------------------------------------
 
 /// Walk a conversation chain and reconstruct the file-history snapshot
-/// list to replay on resume. Mirrors TS `buildFileHistorySnapshotChain`
-/// (`utils/sessionStorage.ts:2248-2272`):
+/// list to replay on resume:
 ///
 /// 1. Index the metadata entries by their OUTER `message_id` (the
 ///    JSONL row's field), keeping the LAST entry per outer id.
@@ -1097,14 +1070,12 @@ fn try_remove_empty_dir(path: &Path) {
 ///    look up its corresponding snapshot. If absent → continue.
 /// 3. `is_snapshot_update == false` → push a new snapshot and remember
 ///    its position by the INNER `snapshot.messageId` (not the outer
-///    one — TS keys on the inner field because `trackEdit` writes
-///    update entries whose outer `messageId` is the **current** turn
-///    while the inner `snapshot.messageId` keeps the original
-///    snapshot's id).
+///    one — `trackEdit` writes update entries whose outer `messageId`
+///    is the **current** turn while the inner `snapshot.messageId`
+///    keeps the original snapshot's id).
 /// 4. `is_snapshot_update == true` → if an entry exists for the inner
 ///    `snapshot.messageId`, overwrite it in place; otherwise treat as
-///    a new append (TS does the same — `existingIndex === undefined`
-///    falls through to the push branch).
+///    a new append (`existingIndex === undefined` falls through to push).
 pub fn build_file_history_snapshot_chain(
     entries: &[Entry],
     chain_message_uuids: &[String],
@@ -1112,8 +1083,7 @@ pub fn build_file_history_snapshot_chain(
     use std::collections::HashMap;
     // Step 1: build outer-messageId → (inner_message_id, snapshot,
     // is_snapshot_update). Later entries overwrite earlier ones for the
-    // same outer id (matches TS Map<UUID, FileHistorySnapshotMessage>
-    // last-write-wins at `sessionStorage.ts:3490-3510`).
+    // same outer id (last-write-wins).
     let mut by_outer: HashMap<&str, (String, &serde_json::Value, bool)> = HashMap::new();
     for entry in entries {
         let Entry::Metadata(MetadataEntry::FileHistorySnapshot {
@@ -1152,10 +1122,9 @@ pub fn build_file_history_snapshot_chain(
 }
 
 /// Collect every `content-replacement` record for `(session_id,
-/// agent_id)`. TS `sessionStorage.ts:3682-3693` routes records by
-/// `agentId` presence and applies them all on resume — no further
-/// per-message scope, because `tool_use_id` is globally unique within
-/// a session.
+/// agent_id)`. Records are routed by `agent_id` presence and applied
+/// all on resume — no further per-message scope, because `tool_use_id`
+/// is globally unique within a session.
 pub fn content_replacements_for_chain(
     entries: &[Entry],
     session_id: &str,
@@ -1271,11 +1240,10 @@ fn parse_entry(line: &str) -> Entry {
 
 /// Lite-read window: when a transcript exceeds this size, scan only
 /// the first and last `LITE_READ_WINDOW` bytes rather than loading
-/// the whole file. Matches TS `LITE_METADATA_WINDOW = 64 KB` —
-/// session-picker metadata (`first_prompt`, `custom_title`, `tag`,
-/// `last_prompt`, `git_branch`, `cwd`) lives at the top of the
-/// transcript, while the re-appended-on-exit values land near the
-/// tail; 64 KB at each end is enough to capture both without
+/// the whole file (64 KB on each end). Session-picker metadata
+/// (`first_prompt`, `custom_title`, `tag`, `last_prompt`, `git_branch`,
+/// `cwd`) lives at the top of the transcript, while re-appended-on-exit
+/// values land near the tail; 64 KB at each end captures both without
 /// streaming the multi-megabyte body.
 const LITE_READ_WINDOW: u64 = 64 * 1024;
 
@@ -1322,7 +1290,7 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
     // captures `first_prompt`, `cwd`, `git_branch`, and the
     // sidechain/message-count signal; the tail pass picks up the
     // metadata entries (`custom-title`, `tag`, `last-prompt`) that
-    // TS re-appends on exit so they survive head-truncation.
+    // are re-appended on exit so they survive head-truncation.
     let content = if file_size > LITE_READ_WINDOW * 2 {
         read_head_and_tail(path, LITE_READ_WINDOW)?
     } else {
@@ -1358,14 +1326,11 @@ fn read_transcript_metadata(path: &Path, session_id: &str) -> crate::Result<Tran
                 }
                 if first_prompt.is_empty() && t.entry_type == entry_kind::USER {
                     let candidate = extract_text_content(t);
-                    // TS parity: `sessionStorage.ts:125`'s
-                    // `SKIP_FIRST_PROMPT_PATTERN` filters synthetic
-                    // interrupt markers so the resume picker shows the
-                    // user's real first prompt, not "[Request
-                    // interrupted by user]". Coco-rs uses literal
-                    // equality against the two interrupt markers from
-                    // `coco-messages::creation` — short-circuits any
-                    // legacy XML-prefix path too.
+                    // Filters synthetic interrupt markers so the resume
+                    // picker shows the user's real first prompt, not
+                    // "[Request interrupted by user]". Uses literal
+                    // equality against the interrupt markers from
+                    // `coco-messages::creation`.
                     if !is_synthetic_first_prompt_candidate(&candidate) {
                         first_prompt = candidate;
                     }
@@ -1486,8 +1451,6 @@ fn metadata_payload_session_id(payload: &serde_json::Value) -> Option<String> {
 /// JSONL lines at the seams (the byte right after the head window
 /// and the byte at the start of the tail window may sit mid-record)
 /// so the caller's `parse_entry` loop only sees complete lines.
-///
-/// TS parity: `readSessionLite()` in `utils/listSessionsImpl.ts`.
 fn read_head_and_tail(path: &Path, window: u64) -> crate::Result<String> {
     use std::io::Read;
     use std::io::Seek;
@@ -1580,7 +1543,6 @@ fn list_transcript_sessions(sessions_dir: &Path) -> crate::Result<Vec<Transcript
 
 /// Result of [`resolve_session_file_path`] — the transcript file
 /// found plus the project path (or worktree path) it lives under.
-/// Mirrors TS `sessionStoragePortable.ts:403-466` return shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSessionFile {
     /// Absolute path to `<session_id>.jsonl`.
@@ -1594,7 +1556,7 @@ pub struct ResolvedSessionFile {
 
 /// Locate the transcript file for `session_id`.
 ///
-/// Resolution order (TS-equivalent):
+/// Resolution order:
 /// 1. **Direct project lookup**: if `cwd_hint` is `Some`, compute the
 ///    `ProjectPaths` for that cwd and check `<project_dir>/<sid>.jsonl`.
 /// 2. **Worktree fallback**: if step 1 missed, shell out to

@@ -1,7 +1,5 @@
 //! URL/form elicitation handling.
 //!
-//! TS: elicitation.ts — user prompts for OAuth URLs or form data.
-//!
 //! Elicitation allows MCP servers to collect user input during tool execution
 //! via forms or URL-based flows. The server sends an `ElicitationRequest` and
 //! the client returns an `ElicitationResult` with the collected values.
@@ -44,8 +42,8 @@ pub struct ElicitationField {
 
 /// An elicitation request from an MCP server.
 ///
-/// TS: ElicitationRequest — carries either form fields or a URL the user
-/// should visit to complete an action (e.g. OAuth consent).
+/// Carries either form fields or a URL the user should visit to complete an
+/// action (e.g. OAuth consent).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationRequest {
     pub server_name: String,

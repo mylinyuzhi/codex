@@ -1,8 +1,5 @@
 //! Hook orchestration — parallel execution, result aggregation, and env injection.
 //!
-//! TS: utils/hooks.ts (executeHooks, executeHooksOutsideREPL, executePreToolHooks,
-//! executePostToolHooks, executePreCompactHooks, executePostCompactHooks,
-//! executeSessionStartHooks, executeSessionEndHooks, executeStopFailureHooks).
 //!
 //! This module provides the high-level orchestration layer that:
 //! 1. Builds structured hook inputs (serialized as JSON for command stdin)
@@ -38,25 +35,20 @@ use crate::HookRegistry;
 use crate::execute_hook;
 
 /// Default timeout for tool-related hook execution (10 minutes).
-///
-/// TS: TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 * 60 * 1000
 const DEFAULT_HOOK_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Default timeout for Prompt (LLM) hooks (30 seconds), independent of
 /// the generic tool-hook timeout.
 ///
-/// TS: `execPromptHook.ts:55` — `hook.timeout ? hook.timeout * 1000 : 30000`.
 const DEFAULT_PROMPT_HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default timeout for Agent (LLM-judge) hooks (60 seconds), independent
 /// of the generic tool-hook timeout.
 ///
-/// TS: `execAgentHook.ts:75` — `hook.timeout ? hook.timeout * 1000 : 60000`.
 const DEFAULT_AGENT_HOOK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Default timeout for SessionEnd hooks (1.5 seconds).
 ///
-/// TS: SESSION_END_HOOK_TIMEOUT_MS_DEFAULT = 1500
 const SESSION_END_HOOK_TIMEOUT: Duration = Duration::from_millis(1500);
 
 // ---------------------------------------------------------------------------
@@ -95,8 +87,8 @@ pub use crate::inputs::base_from_ctx;
 
 /// Structured JSON output from a hook command's stdout.
 ///
-/// TS: hookJSONOutputSchema — the hook writes JSON to stdout for structured control.
-/// Supports both flat fields (Rust-native) and nested `hookSpecificOutput` (TS compat).
+/// `hookJSONOutputSchema` — the hook writes JSON to stdout for structured control.
+/// Supports both flat fields (Rust-native) and nested `hookSpecificOutput`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HookJsonOutput {
@@ -143,9 +135,8 @@ pub struct HookJsonOutput {
     /// When true, the hook runner should re-wake after async completion.
     #[serde(default, alias = "asyncRewake")]
     pub async_rewake: bool,
-    /// TS-style nested event-specific output.
+    /// Nested event-specific output.
     ///
-    /// TS: hookSpecificOutput — event-tagged output with event-specific fields.
     /// When present, fields from this object override flat-format fields.
     #[serde(default, alias = "hookSpecificOutput")]
     pub hook_specific_output: Option<HookSpecificOutput>,
@@ -166,15 +157,13 @@ pub use coco_types::HookSpecificOutput;
 pub use coco_types::PermissionRequestDecision;
 
 /// Parse hook stdout, attempting JSON first, falling back to plain text.
-///
-/// TS: parseHookOutput()
 pub fn parse_hook_output(stdout: &str) -> ParsedHookOutput {
     let trimmed = stdout.trim();
     if !trimmed.starts_with('{') {
         return ParsedHookOutput::PlainText(stdout.to_string());
     }
     // Distinguish "not valid JSON at all" (→ plain text) from "valid JSON but
-    // wrong shape" (→ validation error). TS `parseHookOutput` returns
+    // wrong shape" (→ validation error). `parseHookOutput` returns
     // `validationError` only for the latter; the result loop surfaces it as a
     // `hook_non_blocking_error` and does NOT inject the text as context.
     match serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -194,7 +183,7 @@ pub fn parse_hook_output(stdout: &str) -> ParsedHookOutput {
     }
 }
 
-/// Schema hint appended to hook JSON validation errors (TS `parseHookOutput`).
+/// Schema hint appended to hook JSON validation errors.
 const HOOK_OUTPUT_SCHEMA_HINT: &str = "\
 {
   \"continue\": \"boolean (optional)\",
@@ -223,10 +212,9 @@ pub enum ParsedHookOutput {
 
 /// Blocking error from a hook.
 ///
-/// TS: HookBlockingError.
+/// Blocking error from a hook.
 ///
-/// `source` carries the typed provenance — TS implicitly threads this
-/// through `command` (a shell string), but coco-rs has three real
+/// `source` carries the typed provenance — three real
 /// providers (Command / Function / Llm) and consumers (telemetry, error
 /// rendering, log filtering) need to tell them apart without parsing
 /// the command string.
@@ -276,8 +264,6 @@ pub enum HookBlockingSource {
 }
 
 /// Aggregated result from executing all matching hooks for a single event.
-///
-/// TS: AggregatedHookResult
 #[derive(Debug, Clone, Default)]
 pub struct AggregatedHookResult {
     pub blocking_error: Option<HookBlockingError>,
@@ -320,9 +306,8 @@ pub struct SessionStartHookExecution {
 
 /// Elicitation response from a hook.
 ///
-/// TS: elicitationResponse in HookResult. `action` is the typed
-/// `ElicitationAction` (Accept / Decline / Cancel) — the wire
-/// shape is fixed by `coco_types::ElicitationAction`'s lowercase serde.
+/// `action` is the typed `ElicitationAction` (Accept / Decline / Cancel)
+/// — the wire shape is fixed by `coco_types::ElicitationAction`'s lowercase serde.
 #[derive(Debug, Clone)]
 pub struct ElicitationResponse {
     pub action: ElicitationAction,
@@ -336,8 +321,6 @@ impl AggregatedHookResult {
 }
 
 /// Result of executing a single hook (command, prompt, http, etc).
-///
-/// TS: HookOutsideReplResult
 #[derive(Debug, Clone)]
 pub struct SingleHookResult {
     pub command: String,
@@ -379,8 +362,7 @@ impl SingleHookResult {
 
 /// Workspace-trust gate.
 ///
-/// TS: `shouldSkipHookDueToTrust()` (`utils/hooks.ts:286`) — a global
-/// guard that blocks ALL hook execution in interactive mode when the
+/// A global guard that blocks ALL hook execution in interactive mode when the
 /// user has not yet accepted workspace trust for the current project.
 /// Returns `true` to skip hooks.
 ///
@@ -402,9 +384,6 @@ pub fn should_skip_hook_due_to_trust(ctx: &OrchestrationContext) -> bool {
 }
 
 /// Plugin context for hook environment variables.
-///
-/// TS: execCommandHook() sets CLAUDE_PLUGIN_ROOT, CLAUDE_PLUGIN_DATA,
-/// and CLAUDE_PLUGIN_OPTION_* env vars for plugin/skill hooks.
 #[derive(Debug, Clone, Default)]
 pub struct HookPluginContext {
     /// Root directory for the plugin or skill.
@@ -418,8 +397,6 @@ pub struct HookPluginContext {
 }
 
 /// Build the set of environment variables to inject into a hook command process.
-///
-/// TS: env vars built inside execCommandHook() — CLAUDE_PROJECT_DIR, session_id, etc.
 pub fn build_hook_env(
     session_id: &str,
     cwd: &str,
@@ -460,7 +437,7 @@ pub fn build_hook_env_with_plugin(
         env.insert("CLAUDE_PROJECT_DIR".to_string(), dir.to_string());
     }
 
-    // Plugin/skill env vars (TS parity).
+    // Plugin/skill env vars.
     if let Some(ctx) = plugin_ctx {
         if let Some(root) = &ctx.plugin_root {
             env.insert("CLAUDE_PLUGIN_ROOT".to_string(), root.clone());
@@ -473,7 +450,7 @@ pub fn build_hook_env_with_plugin(
             }
         }
         for (key, value) in &ctx.plugin_options {
-            // Sanitize key to valid env var identifier (TS parity).
+            // Sanitize key to valid env var identifier.
             let env_key = key
                 .chars()
                 .map(|c| {
@@ -487,7 +464,7 @@ pub fn build_hook_env_with_plugin(
                 .to_ascii_uppercase();
             env.insert(format!("CLAUDE_PLUGIN_OPTION_{env_key}"), value.clone());
         }
-        // Skill root uses CLAUDE_PLUGIN_ROOT for consistency (TS parity).
+        // Skill root uses CLAUDE_PLUGIN_ROOT for consistency.
         if let Some(root) = &ctx.skill_root {
             env.insert("CLAUDE_PLUGIN_ROOT".to_string(), root.clone());
         }
@@ -496,8 +473,7 @@ pub fn build_hook_env_with_plugin(
     // CLAUDE_ENV_FILE — for SessionStart, Setup, CwdChanged, FileChanged.
     // Hooks write shell snippets to this path; the next bash command
     // sources them via `coco_shell::SessionEnvReader`. Location matches
-    // TS `sessionEnvironment.ts:18-23`:
-    //   <coco_home>/session-env/<session_id>/{event}-hook-{idx}.sh
+    // Location: <coco_home>/session-env/<session_id>/{event}-hook-{idx}.sh
     // where `event` is lowercase ("setup", "sessionstart", …) so the
     // reader's regex picks them up.
     if let Some(idx) = hook_index
@@ -530,8 +506,6 @@ pub fn build_hook_env_with_plugin(
 // ---------------------------------------------------------------------------
 
 /// Execute matching hooks in parallel with per-hook timeouts.
-///
-/// TS: executeHooksOutsideREPL runs all hooks via `Promise.all(hookPromises)`.
 ///
 /// Each hook runs in its own tokio task. A `CancellationToken` can abort all
 /// outstanding hooks. Returns one `SingleHookResult` per matched hook.
@@ -602,9 +576,8 @@ async fn execute_hooks_parallel_filtered(
     llm_handle: Option<&std::sync::Arc<dyn crate::llm_handle::HookLlmHandle>>,
     workspace_trust_accepted: Option<bool>,
 ) -> Vec<SingleHookResult> {
-    // TS `shouldSkipHookDueToTrust()`: a global trust gate that bails
-    // out before matching any hooks. Same fail-closed shape — if the
-    // workspace is explicitly untrusted, no hook fires.
+    // Global trust gate — if the workspace is explicitly untrusted,
+    // no hook fires.
     if matches!(workspace_trust_accepted, Some(false)) {
         tracing::debug!(
             event = ?event,
@@ -628,8 +601,7 @@ async fn execute_hooks_parallel_filtered(
                 tracing::debug!("HTTP hooks not supported for {event:?}, skipping");
                 return false;
             }
-            // Policy `allowedHttpHookUrls` enforcement (TS
-            // `execHttpHook.ts:137-145`). `None` = no restriction;
+            // Policy `allowedHttpHookUrls` enforcement. `None` = no restriction;
             // `Some(empty)` = block all HTTP hooks; `Some(non-empty)` =
             // URL must match one pattern.
             if let HookHandler::Http { url, .. } = &h.handler
@@ -674,9 +646,8 @@ async fn execute_hooks_parallel_filtered(
 
     for (idx, hook) in matching.iter().enumerate() {
         // Intersect per-hook `allowed_env_vars` with policy
-        // `httpHookAllowedEnvVars` when both are set (TS
-        // `execHttpHook.ts:163-167`). When policy is `None`, the per-hook
-        // list passes through untouched.
+        // `httpHookAllowedEnvVars` when both are set. When policy is `None`,
+        // the per-hook list passes through untouched.
         let handler = match (&hook.handler, policy_set.as_ref()) {
             (
                 HookHandler::Http {
@@ -722,8 +693,7 @@ async fn execute_hooks_parallel_filtered(
         let async_rewake = hook.async_rewake;
         // Only clone sender for sync hooks. Async hooks deliver
         // out-of-band through `async_registry`; their result is later
-        // surfaced to the model via the reminder pipeline
-        // (TS `getAsyncHookResponseAttachments()`).
+        // surfaced to the model via the reminder pipeline.
         let tx = if is_async || async_rewake {
             None
         } else {
@@ -754,7 +724,6 @@ async fn execute_hooks_parallel_filtered(
 
         tokio::spawn(async move {
             // Progress polling: emit Progress events every 1s while hook runs.
-            // TS: hookEvents.ts — progress interval polling.
             let progress_handle = if let Some(etx) = event_tx.clone() {
                 let hid = hook_id.clone();
                 let hname = command_label.clone();
@@ -782,8 +751,7 @@ async fn execute_hooks_parallel_filtered(
 
             let result = tokio::select! {
                 _ = cancel.cancelled() => {
-                    // TS `hook_cancelled` (`utils/attachments.ts:397`,
-                    // API-hidden, UI surfaces cancel + command metadata).
+                    // `hook_cancelled`: API-hidden, UI surfaces cancel + command metadata.
                     let attachment = AttachmentMessage::silent_hook_cancelled(
                         HookCancelledPayload {
                             hook_name: command_label.clone(),
@@ -837,9 +805,8 @@ async fn execute_hooks_parallel_filtered(
                             &emitter,
                         ),
                         Ok(Err(e)) => {
-                            // TS `hook_error_during_execution`
-                            // (`utils/attachments.ts:405-414`, API-hidden,
-                            // UI-visible): the hook itself crashed.
+                            // `hook_error_during_execution` (API-hidden, UI-visible):
+                            // the hook itself crashed.
                             let err_msg = format!("{e}");
                             let attachment = AttachmentMessage::silent_hook_error_during_execution(
                                 HookErrorDuringExecutionPayload {
@@ -863,7 +830,7 @@ async fn execute_hooks_parallel_filtered(
                             }
                         }
                         Err(_elapsed) => {
-                            // Timeout is a non-blocking error in TS terms;
+                            // Timeout is a non-blocking error;
                             // emit `hook_non_blocking_error` for UI / audit.
                             let err_msg = format!("hook timed out after {timeout:?}");
                             let attachment = AttachmentMessage::silent_hook_non_blocking_error(
@@ -938,19 +905,16 @@ async fn execute_hooks_parallel_filtered(
 
 /// Aggregate individual hook results into a single `AggregatedHookResult`.
 ///
-/// TS: result aggregation inside the executeHooks() async generator and
-/// `processHookJSONOutput()`.
-///
 /// Backwards-compatible shim that calls
 /// [`aggregate_results_for_event`] without the
 /// `hookSpecificOutput.hookEventName` cross-check. Prefer the
 /// `_for_event` variant in new code so mismatched event names are
-/// rejected (TS parity: `hooks.ts:583-590`).
+/// rejected.
 pub fn aggregate_results(results: &[SingleHookResult]) -> AggregatedHookResult {
     aggregate_results_for_event(results, None)
 }
 
-/// Same as [`aggregate_results`] but enforces TS's
+/// Same as [`aggregate_results`] but enforces the
 /// `hookSpecificOutput.hookEventName === expected` invariant. When a
 /// hook firing for event `Some(expected)` emits a `hookSpecificOutput`
 /// claiming a different event, the nested output is ignored and a
@@ -1093,14 +1057,13 @@ pub fn aggregate_results_for_event(
                     agg.async_rewake = true;
                 }
 
-                // Process hookSpecificOutput (TS-style nested output).
+                // Process hookSpecificOutput (nested output).
                 // Fields from hookSpecificOutput override flat-format fields.
                 if let Some(specific) = &json.hook_specific_output {
                     let claimed = specific.claimed_event();
                     let mismatch = expected_event.map(|exp| exp != claimed).unwrap_or(false);
                     if mismatch {
-                        // TS `processHookJSONOutput` throws here
-                        // (`hooks.ts:583-590`). We log + skip instead so
+                        // Event name mismatch: log + skip instead of throwing so
                         // a misconfigured hook doesn't poison every
                         // result in the batch — the flat-format fields
                         // above are still applied.
@@ -1116,10 +1079,10 @@ pub fn aggregate_results_for_event(
                 }
             }
             ParsedHookOutput::PlainText(text) => {
-                // TS only turns plain stdout into model context on a clean exit
-                // (`result.status === 0` → hook_success). A failed hook's stderr
-                // is surfaced as a `hook_non_blocking_error` attachment (emitted
-                // in `process_execution_result`), never injected as success-context.
+                // Plain stdout becomes model context only on a clean exit
+                // (hook_success). A failed hook's stderr is surfaced as a
+                // `hook_non_blocking_error` attachment (emitted in
+                // `process_execution_result`), never injected as success-context.
                 let trimmed = text.trim();
                 if r.succeeded && !trimmed.is_empty() {
                     agg.additional_contexts.push(trimmed.to_string());
@@ -1129,7 +1092,7 @@ pub fn aggregate_results_for_event(
                 // Valid-JSON-but-wrong-shape output is surfaced as a
                 // `hook_non_blocking_error` at execution time (see
                 // `process_execution_result`) and must NOT be injected as model
-                // context — mirroring TS `parseHookOutput` validationError.
+                // context.
             }
         }
     }
@@ -1137,7 +1100,7 @@ pub fn aggregate_results_for_event(
     agg
 }
 
-/// Merge two permission behaviors, applying TS precedence: deny > ask > allow.
+/// Merge two permission behaviors: deny > ask > allow.
 fn merge_permission(
     current: Option<PermissionBehavior>,
     new: PermissionBehavior,
@@ -1158,10 +1121,10 @@ fn merge_permission(
 /// loop populates `SingleHookResult.sdk_output` from an `SdkCallback`
 /// handler — bypasses the legacy shell-hook stdout parser.
 ///
-/// TS parity: mirrors `processHookJSONOutput` but consumes the typed
-/// `hookJSONOutputSchema` shape directly. The top-level fields
-/// (`continue`, `suppressOutput`, `decision`, `reason`, `systemMessage`)
-/// and the nested `hookSpecificOutput` union are applied in one pass.
+/// Consumes the typed `hookJSONOutputSchema` shape directly. The
+/// top-level fields (`continue`, `suppressOutput`, `decision`, `reason`,
+/// `systemMessage`) and the nested `hookSpecificOutput` union are applied
+/// in one pass.
 fn apply_sdk_hook_output(
     agg: &mut AggregatedHookResult,
     output: &coco_types::SdkHookOutput,
@@ -1187,7 +1150,7 @@ fn apply_sdk_hook_output(
         agg.system_message = Some(msg.clone());
     }
 
-    // Top-level decision (TS `'approve' | 'block'`).
+    // Top-level decision: 'approve' | 'block'.
     match output.decision {
         Some(HookDecision::Approve) => {
             agg.permission_behavior = Some(merge_permission(
@@ -1216,9 +1179,9 @@ fn apply_sdk_hook_output(
             .clone_from(&output.reason);
     }
 
-    // hookSpecificOutput dispatch. TS-parity cross-check: when the
-    // hook fired for event X emits `hookSpecificOutput.hookEventName = Y`,
-    // ignore the nested fields and log (matches the legacy parser).
+    // hookSpecificOutput dispatch: when the hook fired for event X emits
+    // `hookSpecificOutput.hookEventName = Y`, ignore the nested fields and
+    // log (matches the legacy parser).
     if let Some(specific) = &output.hook_specific_output {
         let claimed = specific.claimed_event();
         let mismatch = expected_event.map(|exp| exp != claimed).unwrap_or(false);
@@ -1237,7 +1200,7 @@ fn apply_sdk_hook_output(
 
 /// Apply event-specific output from `hookSpecificOutput` to the aggregated result.
 ///
-/// TS: processHookJSONOutput() — switches on hookSpecificOutput.hookEventName.
+/// Switches on `hookSpecificOutput.hookEventName`.
 fn apply_hook_specific_output(
     agg: &mut AggregatedHookResult,
     specific: &HookSpecificOutput,
@@ -1405,8 +1368,7 @@ pub struct OrchestrationContext {
     pub project_dir: Option<PathBuf>,
     pub permission_mode: Option<String>,
     /// Path to the active session transcript, threaded into every
-    /// hook input's `transcript_path` field (TS parity:
-    /// `createBaseHookInput()` in `utils/hooks.ts:301-328`).
+    /// hook input's `transcript_path` field.
     pub transcript_path: Option<String>,
     /// Subagent identifier — `Some` when the orchestration runs inside
     /// an `AgentTool` worker. Plumbed onto every fired hook's base input.
@@ -1419,10 +1381,10 @@ pub struct OrchestrationContext {
     pub disable_all_hooks: bool,
     /// When true, only managed (policy-level) hooks are allowed.
     pub allow_managed_hooks_only: bool,
-    /// Workspace-trust gate (TS `shouldSkipHookDueToTrust()`):
+    /// Workspace-trust gate:
     /// `Some(true)` = trust accepted, hooks may run; `Some(false)` =
     /// not yet accepted, all hooks skipped; `None` = no dialog has run
-    /// (defaults to "trusted" in coco-rs until the dialog ships).
+    /// (defaults to "trusted" until the dialog ships).
     pub workspace_trust_accepted: Option<bool>,
     /// Sink for silent `AttachmentMessage`s produced by hook execution
     /// (cancel / error / timeout). Use [`AttachmentEmitter::noop`] in tests
@@ -1443,13 +1405,11 @@ pub struct OrchestrationContext {
     /// Policy-level env-var allowlist
     /// (`policySettings.httpHookAllowedEnvVars`). When `Some`, the
     /// per-hook `allowed_env_vars` is intersected with this set before
-    /// interpolation runs (TS `execHttpHook.ts:163-167`).
+    /// interpolation runs.
     pub http_env_var_policy: Option<Vec<String>>,
     /// Registry that captures stdout/stderr/exit-code of `is_async`
     /// hooks so the reminder pipeline can deliver them on later turns.
-    /// `None` = legacy fire-and-forget behaviour. TS parity:
-    /// `AsyncHookRegistry.ts` + `getAsyncHookResponseAttachments()`
-    /// (`utils/attachments.ts:3464`).
+    /// `None` = legacy fire-and-forget behaviour.
     pub async_registry: Option<std::sync::Arc<crate::async_registry::AsyncHookRegistry>>,
     /// Sink for `asyncRewake` exit-code-2 notifications. These bypass the
     /// async registry and enqueue a task-notification directly.
@@ -1511,8 +1471,6 @@ pub async fn execute_event(
 }
 
 /// Execute PreToolUse hooks and return the aggregated result.
-///
-/// TS: executePreToolHooks()
 pub async fn execute_pre_tool_use(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -1564,8 +1522,6 @@ pub async fn execute_pre_tool_use(
 }
 
 /// Execute PostToolUse hooks and return the aggregated result.
-///
-/// TS: executePostToolHooks()
 pub async fn execute_post_tool_use(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -1620,8 +1576,7 @@ pub async fn execute_post_tool_use(
 
 /// Execute PostToolUseFailure hooks and return the aggregated result.
 ///
-/// TS: `executePostToolUseFailureHooks()` —
-/// `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.
+/// Input: `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_post_tool_use_failure(
     registry: &HookRegistry,
@@ -1679,7 +1634,7 @@ pub async fn execute_post_tool_use_failure(
 
 /// Execute PreCompact hooks and return custom instructions / display messages.
 ///
-/// TS: executePreCompactHooks() — returns {newCustomInstructions, userDisplayMessage}.
+/// Returns `{newCustomInstructions, userDisplayMessage}`.
 pub async fn execute_pre_compact(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -1766,7 +1721,7 @@ pub struct PreCompactResult {
 
 /// Execute PostCompact hooks and return display messages.
 ///
-/// TS: executePostCompactHooks() — returns {userDisplayMessage}.
+/// Returns `{userDisplayMessage}`.
 pub async fn execute_post_compact(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -1846,8 +1801,6 @@ pub struct PostCompactResult {
 }
 
 /// Execute SessionStart hooks.
-///
-/// TS: executeSessionStartHooks()
 pub async fn execute_session_start(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -1925,9 +1878,7 @@ async fn execute_session_start_raw(
 
 /// Execute UserPromptSubmit hooks before each turn's LLM call.
 ///
-/// TS: `executeUserPromptSubmitHooks()` consumed by
-/// `processUserInput.ts:182-263`. Returns the aggregated result so the
-/// caller can:
+/// Returns the aggregated result so the caller can:
 /// - emit a system warning on `blocking_error` (suppressing the turn),
 /// - skip the turn on `prevent_continuation` (keeping the prompt),
 /// - drop `additional_contexts` (already pushed onto the sync buffer
@@ -1983,10 +1934,8 @@ pub async fn execute_user_prompt_submit(
 /// Push the reminder-bearing slice of an aggregated hook result onto
 /// `ctx.sync_event_sink`. No-op if no sink is wired.
 ///
-/// Mirrors TS `processSessionStartHooks` /
-/// `executeUserPromptSubmitHooks` which synthesize attachment messages
-/// per-result and per-aggregate. Render gates (TS
-/// `messages.ts:4099-4115` `normalizeAttachmentForAPI`):
+/// Push reminder-bearing hook results onto `ctx.sync_event_sink`.
+/// Render gates:
 /// - `hook_success` only renders when `hookEvent` is `SessionStart` or
 ///   `UserPromptSubmit` AND content is non-empty.
 /// - The other three reminder kinds always render given non-empty
@@ -2074,9 +2023,8 @@ fn build_sync_hook_events(
 /// Execute SubagentStart hooks before a subagent begins running.
 ///
 /// Aggregated `additional_contexts` are returned to the caller for
-/// injection into the subagent's first user message — TS parity:
-/// `runAgent.ts:530-555` collects `additionalContexts` then pushes a
-/// `hook_additional_context` attachment onto `initialMessages`.
+/// injection into the subagent's first user message as
+/// `hook_additional_context` attachments.
 pub async fn execute_subagent_start(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2130,8 +2078,7 @@ pub async fn execute_subagent_start(
 /// Execute SubagentStop hooks after a subagent finishes (success, failure,
 /// or cancel).
 ///
-/// TS: `SubagentStopHookInputSchema` (`coreSchemas.ts:550-567`):
-/// `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.
+/// Input: `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.
 /// `agent_transcript_path` is required on the wire — pass an empty
 /// string when the subagent does not persist a transcript.
 #[allow(clippy::too_many_arguments)]
@@ -2192,8 +2139,6 @@ pub async fn execute_subagent_stop(
 }
 
 /// Execute SessionEnd hooks with a tighter timeout.
-///
-/// TS: executeSessionEndHooks() — uses SESSION_END_HOOK_TIMEOUT_MS_DEFAULT.
 pub async fn execute_session_end(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2239,20 +2184,16 @@ pub async fn execute_session_end(
 
 /// Execute StopFailure hooks.
 ///
-/// TS: executeStopFailureHooks()
 /// Execute `Stop` hooks and return the aggregated result.
 ///
 /// Stop hooks fire when a turn ends naturally (no tool calls, `end_turn` stop).
 /// A blocking Stop hook's feedback is injected back into the conversation and
-/// the loop continues — matching TS `query.ts` `handleStopHooks()` behavior.
+/// the loop continues.
 ///
-/// `stop_hook_active` mirrors TS `StopHookInputSchema` — it is `true`
-/// when this Stop firing is the loop's reentrant call after a previous
-/// Stop hook blocked. `last_assistant_message` carries the final
-/// assistant-text payload so hooks can read it without parsing the
-/// transcript file.
-///
-/// TS: `services/tools/stopHooks.ts` + `handleStopHooks()` in query.ts.
+/// `stop_hook_active` is `true` when this Stop firing is the loop's
+/// reentrant call after a previous Stop hook blocked.
+/// `last_assistant_message` carries the final assistant-text payload so
+/// hooks can read it without parsing the transcript file.
 pub async fn execute_stop(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2308,14 +2249,14 @@ pub async fn execute_stop(
 
 /// Merge function-hook results into the aggregate result of settings
 /// hooks. Iteration is in **registration order** so a function hook
-/// registered before any settings hook fires first; this matches TS
+/// registered before any settings hook fires first; this matches
 /// `Promise.all` resolution order where hooks share one stream.
 ///
 /// `blocking_error` is **first-blocker-wins**: whichever side (settings
 /// or function) wrote to the slot first keeps it. Settings hooks
 /// always run before function hooks within `execute_stop`, so if both
 /// block, the settings-hook message is the one rendered to the user.
-/// That's a TS-parity divergence noted in
+/// That's an implementation gap noted in
 /// [`coco-hooks/CLAUDE.md`](../../CLAUDE.md) "Function hooks";
 /// settings/function priority becomes observable only when both block
 /// the same event, which no in-tree use case does today.
@@ -2352,8 +2293,7 @@ struct FunctionHookEvalResult {
 /// the model".
 ///
 /// All predicates fan out **in parallel** via
-/// [`futures::future::join_all`] — TS parity with the `Promise.all`
-/// pattern in `executeHooks`. The result `Vec` preserves registration
+/// [`futures::future::join_all`]. The result `Vec` preserves registration
 /// order so [`apply_function_hook_results`]' first-blocker-wins
 /// reduction is deterministic across runs.
 ///
@@ -2463,7 +2403,7 @@ pub async fn execute_stop_failure(
 }
 
 // ---------------------------------------------------------------------------
-// Round-out: 14 remaining event-specific entry points (TS parity)
+// Event-specific entry points
 // ---------------------------------------------------------------------------
 //
 // Each helper builds the appropriate input, populates the env, runs
@@ -2472,7 +2412,6 @@ pub async fn execute_stop_failure(
 // directly — none of them need anything beyond `OrchestrationContext`.
 
 /// Execute Setup hooks (init / maintenance triggers).
-/// TS: `executeSetupHooks()` (`utils/hooks.ts:3902`).
 pub async fn execute_setup(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2520,8 +2459,7 @@ pub async fn execute_setup(
 
 /// Execute Notification hooks (e.g. permission_prompt, idle_prompt).
 ///
-/// TS: `executeNotificationHooks()` + `NotificationHookInputSchema`
-/// (`coreSchemas.ts:473-482`): `{message, title?, notification_type}`.
+/// Input: `{message, title?, notification_type}`.
 pub async fn execute_notification(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2574,9 +2512,8 @@ pub async fn execute_notification(
 /// Execute PermissionRequest hooks. Output `hookSpecificOutput.decision`
 /// drives the dialog's allow / deny outcome.
 ///
-/// TS: `executePermissionRequestHooks()` + `PermissionRequestHookInputSchema`
-/// (`coreSchemas.ts:425-434`): `{tool_name, tool_input, permission_suggestions?}`
-/// — note that TS does NOT include `tool_use_id` on this event.
+/// Input: `{tool_name, tool_input, permission_suggestions?}`
+/// — `tool_use_id` is NOT included on this event.
 pub async fn execute_permission_request(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2629,8 +2566,7 @@ pub async fn execute_permission_request(
 /// Execute PermissionDenied hooks (after the auto-mode classifier rules
 /// the call out). Output's `retry: true` lets the model retry.
 ///
-/// TS: `executePermissionDeniedHooks()` + `PermissionDeniedHookInputSchema`
-/// (`coreSchemas.ts:461-471`): `{tool_name, tool_input, tool_use_id, reason}`.
+/// Input: `{tool_name, tool_input, tool_use_id, reason}`.
 pub async fn execute_permission_denied(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2684,9 +2620,7 @@ pub async fn execute_permission_denied(
 
 /// Execute Elicitation hooks (MCP elicitation gating).
 ///
-/// TS: `executeElicitationHooks()` + `ElicitationHookInputSchema`
-/// (`coreSchemas.ts:627-643`):
-/// `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.
+/// Input: `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_elicitation(
     registry: &HookRegistry,
@@ -2745,9 +2679,7 @@ pub async fn execute_elicitation(
 
 /// Execute ElicitationResult hooks (after the user responds to MCP).
 ///
-/// TS: `executeElicitationResultHooks()` + `ElicitationResultHookInputSchema`
-/// (`coreSchemas.ts:645-660`):
-/// `{mcp_server_name, elicitation_id?, mode?, action, content?}`.
+/// Input: `{mcp_server_name, elicitation_id?, mode?, action, content?}`.
 pub async fn execute_elicitation_result(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2802,7 +2734,6 @@ pub async fn execute_elicitation_result(
 }
 
 /// Execute ConfigChange hooks (settings file mutated mid-session).
-/// TS: `executeConfigChangeHooks()` (`utils/hooks.ts:4214`).
 pub async fn execute_config_change(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2852,9 +2783,7 @@ pub async fn execute_config_change(
 
 /// Execute InstructionsLoaded hooks (CLAUDE.md / rule discovery).
 ///
-/// TS: `executeInstructionsLoadedHooks()` + `InstructionsLoadedHookInputSchema`
-/// (`coreSchemas.ts:695-706`):
-/// `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.
+/// Input: `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_instructions_loaded(
     registry: &HookRegistry,
@@ -2912,7 +2841,6 @@ pub async fn execute_instructions_loaded(
 }
 
 /// Execute CwdChanged hooks (working directory swap).
-/// TS: `executeCwdChangedHooks()` (`utils/hooks.ts:4260`).
 pub async fn execute_cwd_changed(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2961,9 +2889,8 @@ pub async fn execute_cwd_changed(
 }
 
 /// Execute FileChanged hooks (a watched file changed).
-/// TS: `executeFileChangedHooks()` (`utils/hooks.ts:4278`). Coco-rs does
-/// not yet ship a chokidar-equivalent watcher (P4 / `crate-coco-hooks.md`),
-/// so callers wire this from external file-watch infrastructure.
+///
+/// Callers wire this from external file-watch infrastructure.
 pub async fn execute_file_changed(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -2986,7 +2913,7 @@ pub async fn execute_file_changed(
         HookEventType::FileChanged,
         ctx.project_dir.as_deref().and_then(|p| p.to_str()),
     );
-    // TS matches FileChanged hooks against the basename of `file_path`.
+    // Match FileChanged hooks against the basename of `file_path`.
     let basename = std::path::Path::new(file_path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -3016,8 +2943,7 @@ pub async fn execute_file_changed(
     ))
 }
 
-/// Execute WorktreeCreate hook (TS one-shot:
-/// `executeWorktreeCreateHook()`). The hook's stdout (or
+/// Execute WorktreeCreate hook. The hook's stdout (or
 /// `hookSpecificOutput.worktreePath`) holds the absolute worktree path.
 pub async fn execute_worktree_create(
     registry: &HookRegistry,
@@ -3065,7 +2991,6 @@ pub async fn execute_worktree_create(
 }
 
 /// Execute WorktreeRemove hook.
-/// TS: `executeWorktreeRemoveHook()` (`utils/hooks.ts:4967`).
 pub async fn execute_worktree_remove(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -3112,9 +3037,8 @@ pub async fn execute_worktree_remove(
 }
 
 /// Run one of the task-shaped events through the parallel executor.
-/// `task_type` is the matcher field (TS uses `task_type` on TaskCreated /
-/// TaskCompleted matchers; TeammateIdle has no matcher in TS but we
-/// allow `None` to match-all here).
+/// `task_type` is the matcher field for TaskCreated / TaskCompleted;
+/// TeammateIdle uses `None` to match-all.
 async fn run_event_with_input<I: serde::Serialize>(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -3157,9 +3081,7 @@ async fn run_event_with_input<I: serde::Serialize>(
 
 /// Execute TaskCreated hooks.
 ///
-/// TS: `executeTaskCreatedHooks()` + `TaskCreatedHookInputSchema`
-/// (`coreSchemas.ts:601-612`):
-/// `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
+/// Input: `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
 pub async fn execute_task_created(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -3181,9 +3103,6 @@ pub async fn execute_task_created(
 }
 
 /// Execute TaskCompleted hooks.
-///
-/// TS: `executeTaskCompletedHooks()` + `TaskCompletedHookInputSchema`
-/// (`coreSchemas.ts:614-625`).
 pub async fn execute_task_completed(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -3206,8 +3125,7 @@ pub async fn execute_task_completed(
 
 /// Execute TeammateIdle hooks.
 ///
-/// TS: `executeTeammateIdleHooks()` + `TeammateIdleHookInputSchema`
-/// (`coreSchemas.ts:591-599`): `{teammate_name, team_name}`.
+/// Input: `{teammate_name, team_name}`.
 pub async fn execute_teammate_idle(
     registry: &HookRegistry,
     ctx: &OrchestrationContext,
@@ -3227,15 +3145,11 @@ pub async fn execute_teammate_idle(
 // ---------------------------------------------------------------------------
 
 /// Format a blocking error from a PreToolUse hook.
-///
-/// TS: getPreToolHookBlockingMessage()
 pub fn format_pre_tool_blocking_message(hook_name: &str, error: &HookBlockingError) -> String {
     format!("{hook_name} hook error: {}", error.blocking_error)
 }
 
 /// Format a blocking error from a Stop hook.
-///
-/// TS: getStopHookMessage()
 pub fn format_stop_hook_message(error: &HookBlockingError) -> String {
     format!("Stop hook feedback:\n{}", error.blocking_error)
 }
@@ -3250,8 +3164,8 @@ pub fn format_stop_hook_message(error: &HookBlockingError) -> String {
 /// `HookHandler::Agent` execution paths.
 ///
 /// When `llm_handle` is `Some`, Prompt and Agent handlers route through
-/// the LLM and yield a `CommandOutput` shaped to match a TS hook's
-/// stdout JSON `{"decision": "block", "reason": "..."}` so the existing
+/// the LLM and yield a `CommandOutput` shaped as stdout JSON
+/// `{"decision": "block", "reason": "..."}` so the existing
 /// JSON-output code path in `aggregate_results` interprets the
 /// blocking/success state without any new branches. When `llm_handle`
 /// is `None`, falls back to the legacy passthrough in [`execute_hook`].
@@ -3342,11 +3256,9 @@ async fn run_hook_via_handle_or_fallback(
         }
     };
 
-    // TS hooks substitute `$ARGUMENTS` (and `$0`/`$1`/...) with the
-    // serialized hook input JSON before the LLM call. Stand-in: if
-    // `stdin_input` is `Some`, we splice it into a `$ARGUMENTS`
-    // placeholder so users get the same UX. Implementations that want
-    // richer substitution can do it inside `evaluate_*`.
+    // Substitute `$ARGUMENTS` with the serialized hook input JSON
+    // before the LLM call. Implementations that want richer substitution
+    // can do it inside `evaluate_*`.
     let processed = match stdin_input {
         Some(args) => prompt.replace("$ARGUMENTS", args),
         None => prompt,
@@ -3361,8 +3273,8 @@ async fn run_hook_via_handle_or_fallback(
     };
 
     // Map evaluation outcomes back onto the JSON-output shape that
-    // `aggregate_results` already understands. exit_code 2 = blocking
-    // (TS convention), 1 = non-blocking error, 0 = success.
+    // `aggregate_results` already understands. exit_code 2 = blocking,
+    // 1 = non-blocking error, 0 = success.
     let (exit_code, stdout, stderr) = match outcome {
         HookEvaluationResult::Ok => (0, String::new(), String::new()),
         HookEvaluationResult::Blocking { reason } => {
@@ -3387,8 +3299,8 @@ async fn run_hook_via_handle_or_fallback(
 /// timeout if set, otherwise a handler-type default.
 ///
 /// Command / Http / SdkCallback fall back to the event-supplied
-/// `default`. Prompt and Agent hooks are LLM-driven and carry their own
-/// TS defaults (30s / 60s) independent of the generic 10-minute
+/// `default`. Prompt and Agent hooks are LLM-driven and use shorter
+/// defaults (30s / 60s) independent of the generic 10-minute
 /// tool-hook timeout, so an unconfigured judge can't hang for minutes.
 fn resolve_timeout(handler: &HookHandler, default: Duration) -> Duration {
     let (explicit, handler_default) = match handler {
@@ -3444,12 +3356,12 @@ fn process_execution_result(
             stdout,
             stderr,
         } => {
-            // Exit code 2 is the TS "blocking error" convention.
+            // Exit code 2 is the "blocking error" convention.
             let parsed = parse_hook_output(&stdout);
             let stdout_has_json_control = matches!(parsed, ParsedHookOutput::Json(_));
             // Valid-JSON-but-wrong-shape stdout is a non-blocking validation
-            // error (TS `parseHookOutput` validationError): surface it for
-            // UI/audit. Aggregation suppresses the raw text from model context.
+            // error: surface it for UI/audit. Aggregation suppresses the raw
+            // text from model context.
             if let ParsedHookOutput::ValidationError(msg) = &parsed {
                 emitter.emit(AttachmentMessage::silent_hook_non_blocking_error(
                     HookNonBlockingErrorPayload {
@@ -3461,7 +3373,7 @@ fn process_execution_result(
                 ));
             }
             let blocked = exit_code == 2 && !stdout_has_json_control;
-            // TS (`hooks.ts`): a non-zero, non-2 plain exit yields ONLY a
+            // A non-zero, non-2 plain exit yields ONLY a
             // `hook_non_blocking_error` carrying the stderr — it never becomes
             // model context. Emit that attachment here (the aggregator already
             // suppresses the failed-hook stdout from `additional_contexts`).
@@ -3514,8 +3426,8 @@ fn process_execution_result(
             sdk_output: None,
         },
         HookExecutionResult::SdkOutput(out) => {
-            // Compute `blocked` directly from the typed output. TS
-            // semantics: top-level `decision: 'block'` or
+            // Compute `blocked` directly from the typed output:
+            // top-level `decision: 'block'` or
             // `hookSpecificOutput.PreToolUse.permissionDecision: 'deny'`
             // both signal a blocking-error result. Elicitation
             // `action: decline` is also a block. Everything else is a
@@ -3576,8 +3488,6 @@ fn is_sdk_output_blocking(out: &coco_types::SdkHookOutput) -> bool {
 }
 
 /// Get the SessionEnd hook timeout, optionally overridden via env var.
-///
-/// TS: getSessionEndHookTimeoutMs()
 fn session_end_timeout() -> Duration {
     env::env_opt(EnvKey::CocoSessionEndHooksTimeoutMs)
         .and_then(|raw| raw.parse::<u64>().ok())

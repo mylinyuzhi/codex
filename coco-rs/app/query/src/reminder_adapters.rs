@@ -41,8 +41,7 @@ use coco_system_reminder::TeammateMailboxInfo;
 /// Wraps `coco_lsp::DiagnosticsStore` to provide `DiagnosticsSource`.
 ///
 /// Drains newly-dirty diagnostic entries (one `take_dirty` call per
-/// turn) and groups them by file. Matches TS `getLSPDiagnosticAttachments`
-/// drain-on-read semantics.
+/// turn) and groups them by file. Drain-on-read semantics.
 #[derive(Clone, Debug)]
 pub struct LspDiagnosticsAdapter {
     store: Arc<coco_lsp::DiagnosticsStore>,
@@ -178,7 +177,7 @@ impl McpSource for McpAdapter {
         // Parse `@server:uri` tokens from the user prompt. We don't
         // call out to MCP here — the reminder just announces which
         // resources were referenced; actual content fetch belongs in
-        // a future `mcp_resource` reminder (TS `messages.ts:3877`).
+        // a future `mcp_resource` reminder.
         let mut out = Vec::new();
         let servers = self.manager.registered_server_names();
         for token in input.split_whitespace() {
@@ -236,11 +235,9 @@ impl IdeBridgeSource for IdeBridgeAdapter {
 
 /// Bridges the per-session [`coco_tool_runtime::PendingMessageStore`]
 /// to the `agent_pending_messages` reminder source. On each turn for
-/// the recipient agent, drains the queue and maps it into TS-parity
+/// the recipient agent, drains the queue and maps it into
 /// `AgentPendingMessage` entries; the orchestrator then wraps each one
 /// as a `queued_command` attachment.
-///
-/// TS source: `attachments.ts:1085-1101 getAgentPendingMessageAttachments`.
 #[derive(Clone)]
 pub struct SwarmAdapter {
     pending: coco_tool_runtime::PendingMessageStoreRef,
@@ -298,9 +295,9 @@ impl SwarmAdapter {
 #[async_trait]
 impl SwarmSource for SwarmAdapter {
     /// Always `None` — intentional divergence, NOT an unfinished stub.
-    /// TS surfaces a teammate's unread mailbox as a `<teammate_mailbox>`
-    /// reminder; coco-rs instead delivers each mailbox message as a real
-    /// injected TURN (the in-process `runner_loop` scan / the cross-process
+    /// Always `None` — intentional divergence, NOT an unfinished stub.
+    /// A teammate's unread mailbox is delivered as a real injected TURN
+    /// (the in-process `runner_loop` scan / the cross-process
     /// `teammate_inbox_pump`). Returning a mailbox snapshot here too would
     /// double-deliver the same content (once as a turn, once as a reminder).
     /// The leader→teammate `agent_pending_messages` reminder (below) and the
@@ -314,8 +311,7 @@ impl SwarmSource for SwarmAdapter {
     }
     async fn agent_pending_messages(&self, agent_id: Option<&str>) -> Vec<AgentPendingMessage> {
         let Some(id) = agent_id else {
-            // TS `attachments.ts:1088`: `if (!agentId) return []` — main
-            // thread has no inbox of pending peer messages.
+            // Main thread has no inbox of pending peer messages.
             return Vec::new();
         };
         self.pending
@@ -341,8 +337,7 @@ impl SwarmSource for SwarmAdapter {
 /// `nested_memories` is intentionally a no-op here — nested CLAUDE.md
 /// discovery happens upstream in `coco-context` and is delivered to
 /// the orchestrator via `GeneratorContext.nested_memories`. This
-/// adapter only owns the heuristic / LLM-ranked relevant-memory recall
-/// (TS `findRelevantMemories`).
+/// adapter only owns the heuristic / LLM-ranked relevant-memory recall.
 #[derive(Clone)]
 pub struct MemoryAdapter {
     runtime: Arc<coco_memory::MemoryRuntime>,
@@ -383,9 +378,9 @@ impl MemorySource for MemoryAdapter {
         // heuristic. Either way we get up to 5 freshness-tagged
         // entries the system-reminder generator renders.
         // `recent_tools` is the engine's
-        // `collect_recent_successful_tools(history)` snapshot — TS
-        // parity threads it into the ranker's user prompt so reference
-        // docs for tools the model is actively exercising rank lower.
+        // `collect_recent_successful_tools(history)` snapshot — threaded
+        // into the ranker's user prompt so reference docs for tools the
+        // model is actively exercising rank lower.
         self.runtime
             .recall(input, recent_tools)
             .await

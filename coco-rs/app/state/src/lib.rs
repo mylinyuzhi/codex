@@ -1,6 +1,4 @@
 //! Application state tree (Arc<RwLock<AppState>>).
-//!
-//! TS: state/AppState.ts + AppStateStore.ts (Zustand-like pattern)
 
 // All swarm orchestration moved to the `coco_coordinator` crate (PR #3
 // steps 3-6). Consumers (CLI, query, TUI, tools) import directly from
@@ -16,7 +14,7 @@ use tokio::sync::RwLock;
 
 /// The central application state.
 ///
-/// TS: AppState has 80+ fields spanning model, session, agent, token tracking,
+/// 80+ fields spanning model, session, agent, token tracking,
 /// tasks, MCP, plugins, notifications, speculation, remote, and feature flags.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppState {
@@ -131,11 +129,6 @@ pub struct AppState {
 
     /// Standalone agent context (non-team agent identity).
     ///
-    /// TS: `AppState.standaloneAgentContext`. In TS, the `/rename`
-    /// runner sets `standaloneAgentContext.name`, the
-    /// `useSwarmBanner` hook reads it, and the prompt-bar renders the
-    /// chosen name.
-    ///
     /// **Rust status — declared, not yet wired**: this field exists on
     /// the type but no live `Arc<RwLock<AppState>>` instance is held
     /// by any subsystem (engine + tools share `ToolAppState`; TUI
@@ -150,8 +143,6 @@ pub struct AppState {
     pub standalone_agent_context: Option<StandaloneAgentContext>,
 
     /// Task ID of the teammate currently being viewed.
-    ///
-    /// TS: `AppState.viewingAgentTaskId`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewing_agent_task_id: Option<String>,
 
@@ -179,8 +170,6 @@ pub struct AppState {
 
     // ── Sandbox ──
     /// Worker sandbox permission queue (leader side).
-    ///
-    /// TS: `AppState.workerSandboxPermissions` — queue + selectedIndex.
     #[serde(default)]
     pub worker_sandbox_permissions: WorkerSandboxPermissions,
 
@@ -264,8 +253,6 @@ pub enum NotificationLevel {
 pub use coco_types::TaskEntry;
 
 /// Inbox entry from a teammate agent.
-///
-/// TS: `AppState.inbox.messages[]` — richer than original stub.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxEntry {
     /// Unique message ID.
@@ -288,8 +275,6 @@ pub struct InboxEntry {
 }
 
 /// Inbox message processing status.
-///
-/// TS: `status: 'pending' | 'processing' | 'processed'`
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxMessageStatus {
@@ -321,8 +306,6 @@ pub struct PendingSandboxRequest {
 }
 
 /// Worker sandbox permission queue (leader side).
-///
-/// TS: `AppState.workerSandboxPermissions`
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkerSandboxPermissions {
     #[serde(default)]
@@ -332,8 +315,6 @@ pub struct WorkerSandboxPermissions {
 }
 
 /// Entry in the sandbox permission queue.
-///
-/// TS: `workerSandboxPermissions.queue[]`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SandboxQueueEntry {
     pub request_id: String,

@@ -18,9 +18,6 @@ const POLL_INTERVAL_MS: u64 = 500;
 /// Wait until the leader sends a [`mailbox::ProtocolMessage::PlanApprovalResponse`]
 /// matching `request_id`. Polls the teammate's inbox at
 /// [`POLL_INTERVAL_MS`] and respects the cancellation flag.
-///
-/// TS: `inProcessRunner.ts` plan-mode-entry hook awaits the leader's
-/// response before continuing implementation.
 pub async fn wait_for_plan_approval(
     identity: &TeammateIdentity,
     cancelled: &AtomicBool,

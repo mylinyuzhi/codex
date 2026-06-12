@@ -1,7 +1,4 @@
 //! Plugin schema types — manifest, marketplace, installation records.
-//!
-//! TS: utils/plugins/schemas.ts (PluginManifest, PluginMarketplaceEntry,
-//! InstalledPluginsFile, PluginScope, etc.)
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -48,9 +45,9 @@ pub struct PluginAuthor {
 // Plugin manifest (V2 — full manifest from plugin.json / PLUGIN.toml)
 // ---------------------------------------------------------------------------
 
-/// Full plugin manifest with all fields from the TS PluginManifestSchema.
+/// Full plugin manifest.
 ///
-/// Loaded from `PLUGIN.toml` (Rust convention) or `plugin.json` (TS compat).
+/// Loaded from `PLUGIN.toml` (Rust convention) or `plugin.json` (JSON compat).
 /// Unknown top-level fields are silently ignored via `#[serde(deny_unknown_fields)]`
 /// being intentionally absent.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -158,8 +155,7 @@ pub enum ManifestPaths {
 
 /// Command metadata from manifest object-mapping format.
 ///
-/// TS: CommandMetadataSchema in schemas.ts -- either `source` (file path)
-/// or `content` (inline markdown), but not both.
+/// Either `source` (file path) or `content` (inline markdown), but not both.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CommandMetadata {
     /// Relative path to command markdown file.
@@ -187,7 +183,7 @@ pub struct CommandMetadata {
 
 /// Commands contribution in plugin manifest.
 ///
-/// TS: PluginManifestCommandsSchema -- supports path, array, or object mapping.
+/// Supports path, array, or object mapping.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ManifestCommands {
@@ -205,7 +201,7 @@ pub enum ManifestCommands {
 
 /// Hooks contribution in plugin manifest.
 ///
-/// TS: PluginManifestHooksSchema -- file path, inline config, or array of either.
+/// File path, inline config, or array of either.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ManifestHooks {

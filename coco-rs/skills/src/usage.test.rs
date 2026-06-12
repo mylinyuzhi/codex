@@ -150,10 +150,9 @@ fn load_all_returns_empty_on_corrupt_file() {
 }
 
 #[test]
-fn parses_ts_style_camel_case_aliases() {
-    // A skill_usage.json written by TS uses camelCase keys. The Rust
-    // port reads them via serde alias so migrating users don't lose
-    // their history.
+fn parses_camel_case_aliases() {
+    // A skill_usage.json with camelCase keys is read via serde alias
+    // so migrating users don't lose their history.
     let tmp = TempDir::new().unwrap();
     std::fs::write(
         tmp.path().join("skill_usage.json"),
@@ -161,7 +160,7 @@ fn parses_ts_style_camel_case_aliases() {
     )
     .unwrap();
     let map = load_all(tmp.path());
-    let stats = map.get("legacy-skill").expect("TS-style entry parsed");
+    let stats = map.get("legacy-skill").expect("camelCase entry parsed");
     assert_eq!(stats.usage_count, 9);
     assert_eq!(stats.last_used_at_ms, 12345);
 }

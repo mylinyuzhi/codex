@@ -8,9 +8,6 @@
 //! path so PowerShell behaves like Bash: a permission gate, a read-only
 //! fast path, and a destructive warning phase before the child is ever
 //! spawned.
-//!
-//! TS: `tools/PowerShellTool/PowerShellTool.tsx`, `powershellSecurity.ts`,
-//! `powershellPermissions.ts`, `clmTypes.ts`.
 
 use coco_messages::ToolResult;
 use coco_sandbox::SandboxBypass;
@@ -40,21 +37,15 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// Max pwsh command timeout (10 minutes) — matches Bash max.
 const MAX_TIMEOUT_MS: u64 = 600_000;
 
-/// Model-facing PowerShell tool description. Byte-aligned port of TS
-/// `tools/PowerShellTool/prompt.ts:73-145` `getPrompt()`. Runtime
-/// interpolations are resolved to coco-rs's constants:
-/// - edition section: TS `getEditionSection(null)` (detection-unresolved
-///   default — coco-rs does not resolve the pwsh edition at prompt-build
-///   time, so the conservative 5.1-safe guidance is emitted);
-/// - `getMaxTimeoutMs()` = 600000ms / 10 min ([`MAX_TIMEOUT_MS`]);
-/// - `getDefaultTimeoutMs()` = 120000ms / 2 min ([`DEFAULT_TIMEOUT_MS`]);
-/// - `getMaxOutputLength()` = 30000 chars (TS `BASH_MAX_OUTPUT_DEFAULT`,
-///   matching [`PowerShellTool::max_result_size_bound`]);
-/// - background-usage note and sleep guidance are included (TS default-on;
-///   gated off only by `COCO_SHELL_DISABLE_BACKGROUND_TASKS`).
-///
-/// Tool-name placeholders (`Glob`/`Grep`/`Read`/`Edit`/`Write`/
-/// `PowerShell`) are resolved from their TS `*_TOOL_NAME` constants.
+/// Model-facing PowerShell tool description. Runtime interpolations
+/// are resolved to coco-rs constants:
+/// - edition: detection-unresolved default — coco-rs does not resolve the
+///   pwsh edition at prompt-build time, so conservative 5.1-safe guidance
+///   is emitted;
+/// - max timeout = 600000ms / 10 min ([`MAX_TIMEOUT_MS`]);
+/// - default timeout = 120000ms / 2 min ([`DEFAULT_TIMEOUT_MS`]);
+/// - max output = 30000 chars ([`PowerShellTool::max_result_size_bound`]);
+/// - background-usage note and sleep guidance are included.
 const POWERSHELL_PROMPT: &str = "Executes a given PowerShell command with optional timeout. Working directory persists between commands; shell state (variables, functions) does not.
 
 IMPORTANT: This tool is for terminal operations via PowerShell: git, npm, docker, and PS cmdlets. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.
@@ -136,9 +127,8 @@ Usage notes:
 pub struct PowerShellInput {
     /// The PowerShell command to execute
     ///
-    /// TS `z.strictObject({ command: z.string(), ... })`: `command` is the
-    /// only non-optional field, so it must be plain (no `#[serde(default)]`)
-    /// to stay in the derived `required` array.
+    /// `command` is the only non-optional field, so it must be plain (no
+    /// `#[serde(default)]`) to stay in the derived `required` array.
     pub command: String,
     /// Optional timeout in milliseconds. Defaults to 120000 (2 min)
     /// and cannot exceed 600000 (10 min).
@@ -151,9 +141,8 @@ pub struct PowerShellInput {
     /// Set this to true to dangerously override sandbox mode and run
     /// commands without sandboxing.
     ///
-    /// R7-T23: TS `PowerShellTool.tsx` exposes the same
-    /// `dangerouslyDisableSandbox` opt-out as BashTool. Wire-format
-    /// `dangerouslyDisableSandbox` (camelCase) for TS parity.
+    /// Wire-format name is `dangerouslyDisableSandbox` (camelCase) to match
+    /// BashTool's opt-out field.
     #[serde(default, rename = "dangerouslyDisableSandbox")]
     pub dangerously_disable_sandbox: bool,
     /// Optional human-readable description for the background-task UI.
@@ -173,7 +162,7 @@ impl Tool for PowerShellTool {
     /// message}` vs the latter + `backgroundTaskId` /
     /// `assistantAutoBackgrounded` / `backgroundedByUser`). Modeling
     /// as a tagged enum would require a `Bash`-style refactor of the
-    /// renderer; deferred to a follow-up TS-parity pass.
+    /// renderer; deferred to a follow-up pass.
     type Output = Value;
 
     fn to_auto_classifier_input(&self, input: &PowerShellInput) -> Option<String> {
@@ -188,26 +177,22 @@ impl Tool for PowerShellTool {
         ToolName::PowerShell.as_str()
     }
 
-    /// Short UI label. TS `PowerShellTool.tsx:277-281`
-    /// `async description({ description })` returns the caller-supplied
-    /// `description` field, falling back to `'Run PowerShell command'`. The
-    /// long model-facing guidance lives in [`Self::prompt`].
+    /// Short UI label: the caller-supplied `description` field, falling back
+    /// to `'Run PowerShell command'`. The long model-facing guidance lives in
+    /// [`Self::prompt`].
     fn description(&self, input: &PowerShellInput, _options: &DescriptionOptions) -> String {
         match input.description.as_deref() {
             Some(d) if !d.is_empty() => d.to_string(),
             _ => "Run PowerShell command".into(),
         }
     }
-    /// Model-facing tool description. TS `PowerShellTool.tsx:282-284`
-    /// `async prompt()` returns `getPrompt()`.
+    /// Model-facing tool description.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         POWERSHELL_PROMPT.into()
     }
 
-    /// Mirror Bash's read-only fast path. TS
-    /// `isSearchOrReadPowerShellCommand` (`readOnlyValidation.ts`) runs
-    /// the same classifier; a command classified as search/read is
-    /// concurrency-safe and skips the user-approval flow upstream.
+    /// Mirror Bash's read-only fast path. A command classified as search/read
+    /// is concurrency-safe and skips the user-approval flow upstream.
     fn is_read_only(&self, input: &PowerShellInput) -> bool {
         let (is_search, is_read) = classify_ps_command(&input.command);
         is_search || is_read
@@ -240,7 +225,7 @@ impl Tool for PowerShellTool {
         })
     }
 
-    /// TS `maxResultSizeChars: 30_000` at `PowerShellTool.tsx:275`.
+    /// `maxResultSizeChars: 30_000`.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
         coco_tool_runtime::ResultSizeBound::Chars(30_000)
     }
@@ -259,27 +244,23 @@ impl Tool for PowerShellTool {
         ValidationResult::Valid
     }
 
-    /// Render the PowerShell envelope. TS parity:
-    /// `PowerShellTool.tsx:383-435 mapToolResultToToolResultBlockParam`.
-    ///
-    /// Branches mirror Bash's render so future fg→bg promotion
-    /// requires only execute-side changes:
+    /// Render the PowerShell envelope. Branches mirror Bash's render so
+    /// future fg→bg promotion requires only execute-side changes:
     /// 1. **Status==background** (user-initiated `run_in_background:true`):
     ///    emit prebuilt `message` field.
     /// 2. **Foreground**: build `[processedStdout, errorMessage,
     ///    backgroundInfo]` joined with `\n`, skipping empties.
     ///    `processedStdout` strips leading blank lines + trims trailing
-    ///    whitespace. Oversized text output is persisted by the
-    ///    query-level generic Level 1 tool-result pipeline.
-    ///    `backgroundTaskId` triggers one of three messages
-    ///    (`assistantAutoBackgrounded` /
+    ///    whitespace. Oversized text output is persisted by the query-level
+    ///    generic Level 1 tool-result pipeline. `backgroundTaskId` triggers
+    ///    one of three messages (`assistantAutoBackgrounded` /
     ///    `backgroundedByUser` / default).
     ///
-    /// The `isImage` branch (TS:395-398) is intentionally unimplemented
-    /// because `execute_foreground` decodes UTF-16 stdout into a UTF-8
-    /// string before the data envelope is built — image bytes would be
-    /// mangled by that decode. Wire image detection into the execute path
-    /// (emit `structuredContent`) before adding the render branch.
+    /// The `isImage` branch is intentionally unimplemented because
+    /// `execute_foreground` decodes UTF-16 stdout into UTF-8 before the
+    /// data envelope is built — image bytes would be mangled by that decode.
+    /// Wire image detection into the execute path (emit `structuredContent`)
+    /// before adding the render branch.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         if data
             .get("status")
@@ -374,10 +355,9 @@ impl Tool for PowerShellTool {
 
         // ── Stage 1: CLM type + git-internal guard ──
         //
-        // TS `powershellCommandIsSafe()` runs before the child is spawned;
-        // commands using .NET types outside the CLM allowlist or writing
-        // to `.git/{hooks,refs,objects,HEAD,config}` are rejected hard.
-        // Read-only commands skip this gate because a harmless
+        // Runs before the child is spawned; commands using .NET types outside
+        // the CLM allowlist or writing to `.git/{hooks,refs,objects,HEAD,config}`
+        // are rejected hard. Read-only commands skip this gate because a harmless
         // `Get-Content ./x` must not be blocked because it mentions
         // `[IO.File]::ReadAllText(...)` in a string literal.
         let (is_search, is_read) = classify_ps_command(&input.command);
@@ -398,10 +378,9 @@ impl Tool for PowerShellTool {
 
         // ── Stage 2: UNC path guard ──
         //
-        // UNC paths (`\\server\share\...`) in command arguments can be
-        // used for NTLM credential leakage. TS
-        // `tools/PowerShellTool/pathValidation.ts` rejects any non-
-        // whitelisted UNC path before execution.
+        // UNC paths (`\\server\share\...`) in command arguments can be used
+        // for NTLM credential leakage. Rejects any non-whitelisted UNC path
+        // before execution.
         for token in input.command.split_ascii_whitespace() {
             if is_vulnerable_unc_path(token) {
                 return Err(ToolError::PermissionDenied {
@@ -414,10 +393,9 @@ impl Tool for PowerShellTool {
         }
 
         // Sandbox decision parity with Bash. Resolve the active state +
-        // bypass flag here — BEFORE the background branch — so the
-        // foreground AND background paths apply the same platform wrap.
-        // #38 / TS `PowerShellTool.tsx:746-750,767`: backgrounded pwsh is
-        // sandboxed identically to foreground.
+        // bypass flag here — BEFORE the background branch — so the foreground
+        // AND background paths apply the same platform wrap. #38: backgrounded
+        // pwsh is sandboxed identically to foreground.
         let sandbox_state = if ctx.features.enabled(coco_types::Feature::Sandbox) {
             ctx.sandbox_state.clone()
         } else {
@@ -529,8 +507,7 @@ async fn execute_foreground(
         .min(MAX_TIMEOUT_MS);
 
     // 4-tier cwd resolution. Spawn at live session cwd; reset guard
-    // runs AFTER exec to match TS `PowerShellTool.tsx:520-525` —
-    // annotation lands on the offending command's stderr.
+    // runs AFTER exec — annotation lands on the offending command's stderr.
     let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
 
     // Build a per-call pwsh provider. PowerShell isn't currently
@@ -579,9 +556,8 @@ async fn execute_foreground(
         });
     }
 
-    // setCwd(new_cwd) → resetCwdIfOutsideProject (TS parity with
-    // `PowerShellTool.tsx:520-525`). `Set-Location C:\foo` in turn N
-    // persists into turn N+1; if it drifted outside the allowed set,
+    // setCwd(new_cwd) → resetCwdIfOutsideProject. `Set-Location C:\foo` in
+    // turn N persists into turn N+1; if it drifted outside the allowed set,
     // session_cwd snaps back to original and we annotate stderr.
     let reset_message =
         crate::tools::shell_cwd::finalize_cwd_post_exec(ctx, cmd_result.new_cwd.clone()).await;
@@ -593,8 +569,8 @@ async fn execute_foreground(
         .as_deref()
         .map(decode_ps_output)
         .unwrap_or_else(|| cmd_result.stdout.clone());
-    // Strip + record any `<claude-code-hint />` tags (TS PowerShellTool strips
-    // in both foreground and background, same as Bash).
+    // Strip + record any `<claude-code-hint />` tags (both foreground and
+    // background, same as Bash).
     let stdout = crate::tools::bash::maybe_strip_and_record_hints(stdout, command);
     let mut stderr = cmd_result
         .stderr_bytes

@@ -1,15 +1,6 @@
 # coco-lsp
 
-AI-friendly LSP client — queries by symbol name + kind instead of exact line/column. Rust-native LSP core (server manager, lifecycle, JSON-RPC, symbol cache, incremental sync) + TS-ported `services/lsp/` diagnostic store + plugin extensions layered on top.
-
-## TS Source
-- `services/lsp/LSPServerManager.ts` — multi-server lifecycle (Rust: `server.rs`)
-- `services/lsp/LSPServerInstance.ts` — per-server instance + health (Rust: `lifecycle.rs`)
-- `services/lsp/LSPClient.ts` — LSP operations (Rust: `client.rs`)
-- `services/lsp/LSPDiagnosticRegistry.ts` — diagnostic store + debounce (Rust: `diagnostics.rs`)
-- `services/lsp/config.ts` — config loading (Rust: `config.rs`)
-- `services/lsp/manager.ts` — manager coordination
-- `services/lsp/passiveFeedback.ts` — passive feedback
+AI-friendly LSP client — queries by symbol name + kind instead of exact line/column. Rust-native LSP core (server manager, lifecycle, JSON-RPC, symbol cache, incremental sync) + diagnostic store + plugin extensions.
 
 ## Key Types
 
@@ -64,17 +55,16 @@ Config files: `~/.coco/lsp_servers.json` (user) → `.coco/lsp_servers.json` (pr
 The agent-facing `LspTool` lives in `coco-tools` and dispatches via the
 `coco_tool_runtime::LspHandle` trait. The concrete adapter
 (`coco_cli::lsp_handle_adapter::LspManagerAdapter`) wraps an
-`Arc<LspServerManager>` + the manager's `DiagnosticsStore`. TS parity
-table:
+`Arc<LspServerManager>` + the manager's `DiagnosticsStore`. Integration seam:
 
-| TS | Rust seam |
-|----|-----------|
-| `tools/LSPTool/LSPTool.ts` | `coco-tools::tools::lsp_tool::LspTool` |
-| `tools/LSPTool/formatters.ts` | `coco-tools::tools::lsp::format_*` |
-| `services/lsp/manager.ts::isLspConnected()` | `LspHandle::is_connected()` (sync; backed by `LspServerManager::has_configured_servers` + adapter `has_active` AtomicBool) |
-| `services/lsp/manager.ts::initialize()` | `LspManagerAdapter::prewarm(project_root)` — parallel `join_all` over deduped `(server_id)` set |
-| `FileWriteTool.ts::lspManager.saveFile()` + `clearDeliveredDiagnosticsForFile()` | `LspHandle::notify_save(path)` (adapter calls both) |
-| `LSPServerManager.openFile/changeFile/saveFile/closeFile` | `LspClient::sync_file/update_file/notify_save/...` (via raw JSON-RPC) |
+| Operation | Implementation |
+|-----------|---------------|
+| LSP tool | `coco-tools::tools::lsp_tool::LspTool` |
+| Formatters | `coco-tools::tools::lsp::format_*` |
+| `isLspConnected()` | `LspHandle::is_connected()` (sync; backed by `LspServerManager::has_configured_servers` + adapter `has_active` AtomicBool) |
+| `initialize()` | `LspManagerAdapter::prewarm(project_root)` — parallel `join_all` over deduped `(server_id)` set |
+| Save + clear diagnostics | `LspHandle::notify_save(path)` (adapter calls both) |
+| Open/change/save/close file | `LspClient::sync_file/update_file/notify_save/...` (via raw JSON-RPC) |
 
 `LspHandle::send_request(file, method, params)` is the universal dispatch
 path — it auto-routes via `find_project_root(file)` so files in a git

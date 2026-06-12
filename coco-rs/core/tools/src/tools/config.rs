@@ -1,10 +1,9 @@
 //! ConfigTool — get/set known config keys.
 //!
-//! TS: `tools/ConfigTool/ConfigTool.ts` — input is `setting` (required)
-//! plus `value` (optional; omit to read). Mutating sets currently emit an
-//! instructional message instead of writing config — the authoritative
-//! path is the CLI `config` subcommand or direct edits to
-//! `~/.coco/config.json`.
+//! Input is `setting` (required) plus `value` (optional; omit to read).
+//! Mutating sets currently emit an instructional message instead of writing
+//! config — the authoritative path is the CLI `config` subcommand or direct
+//! edits to `~/.coco/config.json`.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -19,9 +18,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-/// Model-facing prompt. Mirrors the structure of TS
-/// `ConfigTool/prompt.ts` `generatePrompt()` (intro + get/set usage +
-/// configurable-settings list), adapted to coco's setting keys.
+/// Model-facing prompt. Covers intro + get/set usage +
+/// configurable-settings list.
 const CONFIG_PROMPT: &str = "Get or set coco configuration settings.
 
 View or change coco settings. Use when the user requests configuration changes, asks about current settings, or when adjusting a setting would benefit them.
@@ -42,7 +40,7 @@ View or change coco settings. Use when the user requests configuration changes, 
 - verbose — true/false — verbose output
 - debug — true/false — debug logging";
 
-/// Typed input for [`ConfigTool`]. Mirrors TS `ConfigTool` strictObject:
+/// Typed input for [`ConfigTool`].
 /// `setting` (required) + `value` (optional — omit to read).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ConfigInput {
@@ -53,9 +51,8 @@ pub struct ConfigInput {
     pub value: Option<ConfigValue>,
 }
 
-/// A config value — `string | boolean | number`, mirroring TS
-/// `z.union([z.string(), z.boolean(), z.number()])`. Untagged so the
-/// model can pass any of the three scalar JSON types.
+/// A config value — `string | boolean | number`. Untagged so the model
+/// can pass any of the three scalar JSON types.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ConfigValue {
@@ -75,7 +72,7 @@ pub enum ConfigOperation {
 }
 
 /// Typed output. `operation` is `get`/`set`; `setting`/`value` echo the
-/// resolved request. Mirrors TS `ConfigTool` output object.
+/// resolved request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigOutput {
     /// Human-readable status / next-step instruction.
@@ -112,8 +109,7 @@ impl Tool for ConfigTool {
         CONFIG_PROMPT.into()
     }
 
-    /// TS `ConfigTool.ts`: `isConcurrencySafe() { return true }`. Reads
-    /// are obviously safe; sets currently just emit an instructional
+    /// Reads are obviously safe; sets currently just emit an instructional
     /// message rather than writing config, so they're safe too. Should
     /// the tool ever start mutating a shared settings file, demote to
     /// input-conditional safety like BashTool.
@@ -121,7 +117,7 @@ impl Tool for ConfigTool {
         true
     }
     fn is_read_only(&self, input: &ConfigInput) -> bool {
-        // A read is `value` omitted (TS `value === undefined` ⇒ get).
+        // A read is `value` omitted.
         input.value.is_none()
     }
     fn should_defer(&self) -> bool {
@@ -159,7 +155,7 @@ impl Tool for ConfigTool {
             });
         }
 
-        // TS `ConfigTool.ts`: `value === undefined` ⇒ get, else set.
+        // `value` absent ⇒ get, else set.
         let data = match input.value {
             None => ConfigOutput {
                 message: format!(

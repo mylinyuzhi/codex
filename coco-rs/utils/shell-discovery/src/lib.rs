@@ -1,9 +1,5 @@
 //! Shell binary discovery — PowerShell, Git Bash, Windows path conversion.
 //!
-//! TS source: `utils/shell/powershellDetection.ts`,
-//! `utils/shell/powershellProvider.ts`, `utils/windowsPaths.ts`,
-//! `utils/shell/bashProvider.ts:findGitBashPath`.
-//!
 //! Used by `coco-hooks` (Command handler with `shell: "powershell" | "bash"`)
 //! and any future consumer that needs to spawn a shell on Windows. The
 //! crate sits at L0 (no internal deps) so it stays reusable across

@@ -90,7 +90,7 @@ pub use response_metadata::SpeechModelResponseMetadata;
 pub use response_metadata::TranscriptionModelResponseMetadata;
 pub use response_metadata::VideoModelResponseMetadata;
 
-/// Type alias matching the TS SDK's `CallWarning` type.
+/// Type alias for call warnings.
 pub type CallWarning = Warning;
 
 // Re-export usage types

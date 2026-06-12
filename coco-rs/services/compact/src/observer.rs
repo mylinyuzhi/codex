@@ -1,7 +1,5 @@
 //! Compaction observer pattern for cache invalidation and post-compact hooks.
 //!
-//! TS: postCompactCleanup.ts — observers notified after compaction.
-//!
 //! Two callback hooks:
 //! - `on_compaction_complete`: receives the `CompactResult` metadata
 //! - `on_post_compact`: receives the final compacted messages, allowing

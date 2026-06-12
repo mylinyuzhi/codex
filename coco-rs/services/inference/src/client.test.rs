@@ -140,8 +140,7 @@ fn mock_client(text: &str) -> ApiClient {
 }
 
 /// A token already cancelled before the call must short-circuit the retry loop
-/// at the top of the first attempt — the model is never invoked. Mirrors TS
-/// `withRetry.ts:190` checking `signal?.aborted` before each request (#137).
+/// at the top of the first attempt — the model is never invoked.
 #[tokio::test]
 async fn test_precancelled_token_short_circuits_before_request() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));

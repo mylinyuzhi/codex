@@ -1,7 +1,5 @@
 //! Permission bridge trait — async permission forwarding for teammate agents.
 //!
-//! TS: utils/swarm/inProcessRunner.ts createInProcessCanUseTool()
-//!
 //! When a teammate agent's tool needs approval, the request is forwarded
 //! to the team leader via this bridge. The leader responds through the
 //! mailbox, and the bridge completes the pending request.
@@ -17,8 +15,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// A permission request from a teammate to the leader.
-///
-/// TS: SwarmPermissionRequest in utils/swarm/permissionSync.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPermissionRequest {
     /// Server-assigned correlation id for this approval request. Used by
@@ -26,10 +22,9 @@ pub struct ToolPermissionRequest {
     /// `control/cancelRequest` to cancel pending approvals. Fresh per
     /// request, decoupled from any tool invocation id.
     pub id: String,
-    /// The model-assigned tool-invocation id (e.g. `toolu_01ABC...`) that
-    /// this approval corresponds to. Matches TS
-    /// `SDKControlPermissionRequestSchema.tool_use_id` — SDK clients use
-    /// it to group the approval UI with the tool-call rendering.
+    /// The model-assigned tool-invocation id (e.g. `toulu_01ABC...`) that
+    /// this approval corresponds to. SDK clients use it to group the
+    /// approval UI with the tool-call rendering.
     pub tool_use_id: String,
     /// Agent that needs permission.
     pub agent_id: String,
@@ -44,7 +39,7 @@ pub struct ToolPermissionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     /// Permission updates suggested by the evaluator for "always allow".
-    /// TS: `PermissionDecision.suggestions`, e.g. `Read(<dir>/**)`.
+    /// e.g. `Read(<dir>/**)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<coco_types::PermissionUpdate>,
     /// Optional multi-choice payload propagated from
@@ -54,13 +49,11 @@ pub struct ToolPermissionRequest {
     /// as `{ ..originalInput, user_choice: "<value>" }` so the tool's
     /// `execute()` can branch on the selection.
     ///
-    /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
     /// Identity badge for a cross-process teammate whose tool needs the
     /// leader's approval — surfaced in the prompt so the human sees who
     /// is asking. `None` for the leader's own (in-process) requests.
-    /// TS: `workerBadge` on `PermissionRequest.tsx:89`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_badge: Option<coco_types::WorkerBadge>,
 }
@@ -99,13 +92,10 @@ pub struct ToolPermissionResolution {
     /// tool. Used by `AskUserQuestion` to splice user-selected
     /// `answers` (and optional `annotations`) into the tool's data
     /// envelope so `render_for_model` can produce the answered prose.
-    /// TS parity: `permissionDecision.updatedInput` at
-    /// `services/tools/toolExecution.ts:1130-1131`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_input: Option<serde_json::Value>,
     /// Optional content blocks (image attachments etc.) the user
-    /// supplied alongside the approval. Mirrors TS `PermissionAllowDecision.contentBlocks`
-    /// (`types/permissions.ts:183`) — typically populated when the user
+    /// supplied alongside the approval — typically populated when the user
     /// pasted an image while answering `AskUserQuestion`. Consumers
     /// (e.g. the engine's tool-execution path) attach these to the
     /// next user message in the conversation. Carried as
@@ -123,7 +113,6 @@ pub struct ToolPermissionResolution {
 /// 2. Leader resolves via the mailbox or UI
 /// 3. Implementation completes the pending request
 ///
-/// TS: createInProcessCanUseTool() + PermissionBridge in inProcessRunner.ts
 #[async_trait::async_trait]
 pub trait ToolPermissionBridge: Send + Sync {
     /// Send a permission request and wait for the leader's response.

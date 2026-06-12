@@ -15,9 +15,8 @@
 //! module owns the closure construction so `app/cli/main.rs` doesn't
 //! grow a 50-line lambda.
 //!
-//! TS parity — none. TS spawns subagents via `runAgent.ts` directly
-//! against the parent's `claudeAPIClient`; multi-provider role
-//! resolution is a Rust-only feature so the wiring lives here.
+//! Multi-provider role resolution is a Rust-only feature so the wiring
+//! lives here.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -42,8 +41,7 @@ use tracing::warn;
 use crate::session_runtime::SessionRuntime;
 
 /// Stale agent-worktree GC threshold — crash-leaked `agent-*` worktrees
-/// older than this are swept at session start. Mirrors TS
-/// `cleanupStaleAgentWorktrees` (cleanup.ts: 30-day `DEFAULT_CLEANUP_PERIOD_DAYS`).
+/// older than this are swept at session start (30-day retention).
 const STALE_WORKTREE_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Per-runtime handles required to construct the production
@@ -144,14 +142,12 @@ pub async fn build_agent_team_wiring(
     // Without this install, `worktree_manager()` stays `None` and every such
     // spawn fails fast with "no AgentWorktreeManager is configured".
     //
-    // TS parity: agent worktree creation is UNGATED — `AgentTool.tsx` calls
-    // `createAgentWorktree(slug)` whenever `effectiveIsolation === "worktree"`
-    // with no feature/setting/flag check; it only requires being inside a git
-    // repo (`findCanonicalGitRoot(getCwd())`). So we install whenever
-    // discovery succeeds and skip silently otherwise — a later isolation
-    // request then surfaces the existing clear error. (`Feature::Worktree`
-    // gates the separate interactive EnterWorktree/ExitWorktree tools, not
-    // subagent isolation, so it is deliberately not consulted here.)
+    // Agent worktree creation is ungated — it only requires being inside a
+    // git repo. We install whenever discovery succeeds and skip silently
+    // otherwise — a later isolation request then surfaces the existing clear
+    // error. (`Feature::Worktree` gates the separate interactive
+    // EnterWorktree/ExitWorktree tools, not subagent isolation, so it is
+    // deliberately not consulted here.)
     match AgentWorktreeManager::discover_from_cwd(Path::new(&cwd)) {
         Ok(manager) => {
             let manager = Arc::new(manager);
@@ -162,8 +158,8 @@ pub async fn build_agent_team_wiring(
             // session-memory / shell-snapshot sweeps in `session_runtime`.
             // `cleanup_stale` runs synchronous git subprocesses, so it goes
             // through `spawn_blocking` to avoid stalling a runtime worker.
-            // Bare mode skips the sweep (TS: `cleanupStaleAgentWorktrees` lives
-            // inside the `!isBareMode()` housekeeping, not the create path).
+            // Bare mode skips the sweep (lives inside bare-mode housekeeping,
+            // not the create path).
             if !coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode) {
                 tokio::spawn(async move {
                     let removed = tokio::task::spawn_blocking(move || {
@@ -189,9 +185,8 @@ pub async fn build_agent_team_wiring(
         handle.set_team_task_list_router(router);
     }
 
-    // Per-agent transcript store for `SwarmAgentHandle::resume_agent`
-    // (TS parity: `tools/AgentTool/resumeAgent.ts`). The same Arc is
-    // shared across spawns so concurrent bg agents read/write
+    // Per-agent transcript store for `SwarmAgentHandle::resume_agent`.
+    // The same Arc is shared across spawns so concurrent bg agents read/write
     // through one store; absent only in minimal test embeddings.
     if let Some(transcript_store) = runtime.current_agent_transcript_store().await {
         handle.set_transcript_store(transcript_store);
@@ -216,10 +211,7 @@ pub async fn build_agent_team_wiring(
                 // plan-mode / system-reminder / tool config silently
                 // ignored the user's `~/.coco/settings.json`.
                 //
-                // TS parity: `runAgent.ts:667-695` shares the parent's
-                // `toolUseContext.options` directly; subagents see the
-                // exact same config tree the leader does.
-                //
+                // Subagents inherit the parent's config tree.
                 // Overwrite those fields here from the live RuntimeConfig
                 // so subagent engines compact at the user's tuned
                 // thresholds, honour the user's sandbox mode, etc.
@@ -256,9 +248,7 @@ pub async fn build_agent_team_wiring(
                 // Per-engine `live_command_rules` is fresh for every
                 // forked subagent (constructed inside
                 // `QueryEngine::new`), so the subagent's skill rules
-                // cannot leak to the parent — different Arcs. No
-                // NoOp override needed: TS parity stays without an
-                // explicit isolation seam.
+                // cannot leak to the parent — different Arcs.
                 engine.with_model_runtime_source(runtime_source)
             })
         })
@@ -290,34 +280,29 @@ pub async fn build_agent_team_wiring(
     // Pass the leader's full system prompt as the teammate base. The
     // runner-loop composes this with `TEAMMATE_PROMPT_ADDENDUM` so
     // teammates inherit the same CLAUDE.md + env-context + memory
-    // blocks the leader uses (TS parity: `inProcessRunner.ts` builds
-    // the teammate prompt by composing `getSystemPrompt(...)` with
-    // the team addendum).
+    // blocks the leader uses.
     if let Some(base_prompt) = runtime.current_engine_config().await.system_prompt.clone() {
         handle.set_teammate_base_system_prompt(base_prompt).await;
     }
 
     // Wire the hook registry so SubagentStart / SubagentStop hooks fire
-    // around subagent execution. TS parity: `runAgent.ts:530-555`.
+    // around subagent execution.
     handle.set_hook_registry(runtime.hook_registry.clone());
 
     // Wire the MCP handle so per-agent inline `mcpServers: [{name: config}]`
     // entries get registered as dynamic servers at spawn and torn down
-    // at SubagentStop. TS parity: `runAgent.ts:95-218
-    // initializeAgentMcpServers`. String-ref entries don't need this
-    // wire — they reuse the parent's pre-existing connection.
+    // at SubagentStop. String-ref entries don't need this wire — they
+    // reuse the parent's pre-existing connection.
     if let Some(mcp) = runtime.current_mcp_handle().await {
         handle.set_mcp_handle(mcp.clone());
         install_coco_guide_context_builder(&mut handle, runtime.clone(), mcp).await;
     }
 
     // Auto-sync per-agent project snapshots into local memory dirs at
-    // bootstrap. TS parity: `loadAgentsDir.ts:268-282` calls
-    // `checkAgentMemorySnapshot` + `initializeFromSnapshot` while
-    // loading agent definitions. `prompt-update` is policy-treated as
-    // an automatic re-sync here — Rust has no interactive prompt at
-    // bootstrap and forcing manual approval would leave newer team
-    // baselines silently unconsumed.
+    // bootstrap. `prompt-update` is treated as an automatic re-sync
+    // here — there is no interactive prompt at bootstrap and forcing
+    // manual approval would leave newer team baselines silently
+    // unconsumed.
     sync_agent_memory_snapshots(&runtime, &cwd).await;
 
     Ok(AgentTeamWiring {
@@ -326,18 +311,14 @@ pub async fn build_agent_team_wiring(
 }
 
 /// Install the coco-guide dynamic-context builder onto the swarm
-/// handle. TS parity: `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`
-/// reads runtime context off `toolUseContext.options` —
-/// `commands` / `agentDefinitions.activeAgents` / `mcpClients` /
-/// `getSettings_DEPRECATED()` — and emits the dynamic block when at
+/// handle. Reads runtime context — commands, active agents, MCP
+/// clients, resolved settings — and emits the dynamic block when at
 /// least one source is non-empty.
 ///
-/// In coco-rs the equivalent data lives across three crates; the
-/// closure captures `Arc`-shared handles that resolve the snapshot
-/// at spawn time (so a re-loaded command registry or settings change
-/// before the next spawn picks up the latest state). Failure to
-/// install (no MCP wired) leaves the static prompt — TS-parity for
-/// the "no toolUseContext.options.mcpClients" branch.
+/// The closure captures `Arc`-shared handles that resolve the snapshot
+/// at spawn time so a re-loaded command registry or settings change
+/// before the next spawn picks up the latest state. Failure to install
+/// (no MCP wired) leaves the static prompt.
 async fn install_coco_guide_context_builder(
     handle: &mut coco_coordinator::agent_handle::SwarmAgentHandle,
     runtime: Arc<SessionRuntime>,
@@ -359,8 +340,7 @@ async fn install_coco_guide_context_builder(
             tokio::runtime::Handle::current().block_on(async move {
                 let cmd_reg = runtime_inner.current_command_registry().await;
                 // Slash commands: split prompt-type into custom (non-plugin)
-                // and plugin-sourced, matching TS filter shape at
-                // `claudeCodeGuideAgent.ts:128 / :162-164`.
+                // and plugin-sourced.
                 let mut custom_commands: Vec<coco_subagent::GuideCommandEntry> = Vec::new();
                 let mut plugin_commands: Vec<coco_subagent::GuideCommandEntry> = Vec::new();
                 for cmd in cmd_reg.all() {
@@ -381,8 +361,7 @@ async fn install_coco_guide_context_builder(
                     }
                 }
 
-                // Active non-built-in agents. TS filter:
-                // `agentDefinitions.activeAgents.filter(a => a.source !== 'built-in')`.
+                // Active non-built-in agents.
                 let catalog = runtime_inner.current_agent_catalog().await;
                 let custom_agents: Vec<coco_subagent::GuideAgentEntry> = catalog
                     .active()

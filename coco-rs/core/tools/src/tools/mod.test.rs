@@ -17,7 +17,7 @@ fn test_register_all_tools_count() {
     // `StructuredOutputTool` is intentionally **not** in the baseline:
     // it's conditionally injected via `register_structured_output_tool`
     // only when the non-interactive bootstrap parses `--json-schema`
-    // (TS parity: `tools.ts` `specialTools` excludes it).
+    // (`specialTools` excludes it).
     assert_eq!(registry.len(), 42, "expected 42 tools registered");
 }
 

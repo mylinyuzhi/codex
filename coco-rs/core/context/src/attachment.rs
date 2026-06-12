@@ -1,7 +1,7 @@
 //! Attachment system for per-turn context injection.
 //!
-//! TS: attachments.ts (4K LOC) — files, PDFs, memories, hooks, teammates,
-//! deferred tools, agent listings, MCP instructions.
+//! Handles files, PDFs, memories, hooks, teammates, deferred tools,
+//! agent listings, and MCP instructions.
 //!
 //! Attachments are generated in three parallel batches:
 //! - **UserInput**: files/agents mentioned in the prompt
@@ -43,7 +43,7 @@ const DEFAULT_MAX_TOKENS_PER_ATTACHMENT: i64 = 8_000;
 
 /// PDF page threshold: PDFs with more pages become lightweight references.
 /// PDFs with more than this many pages stay a reference; smaller ones are
-/// inlined as extracted text. TS `PDF_AT_MENTION_INLINE_THRESHOLD`.
+/// inlined as extracted text.
 const PDF_INLINE_THRESHOLD: i32 = 10;
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ pub enum AttachmentBatch {
     MainThreadOnly,
 }
 
-/// The primary attachment enum — each variant maps to a TS `Attachment.type`.
+/// The primary attachment enum — each variant corresponds to one attachment type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Attachment {
@@ -347,7 +347,7 @@ fn default_edit_tool() -> ToolName {
 ///
 /// Mirrors `coco_config::PlanModeWorkflow` but lives here to avoid
 /// `core/context` depending on `coco-config` (would invert the dep
-/// layering). The engine converts settings → attachment at build time.
+/// layering); the engine converts settings → attachment at build time.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanWorkflow {
@@ -358,7 +358,7 @@ pub enum PlanWorkflow {
 
 /// Phase-4 prompt variant — only affects 5-phase Full.
 ///
-/// Mirrors `coco_config::PlanPhase4Variant`. Same layering rationale as
+/// Mirrors `coco_config::PlanPhase4Variant`; same layering rationale as
 /// `PlanWorkflow`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -378,7 +378,6 @@ pub enum ReminderType {
     /// Subsequent plan-mode turns: short reminder (prompt-cache friendly).
     Sparse,
     /// Returning to plan mode after previously exiting in this session.
-    /// TS: `plan_mode_reentry` case in `normalizeAttachmentForAPI`.
     /// Instructs the model to evaluate the existing plan file against
     /// the new request before refining or overwriting it.
     Reentry,
@@ -549,8 +548,7 @@ pub fn generate_file_attachment(
         .into_owned();
 
     // PDF: large PDFs stay a reference; small ones (≤ threshold pages) inline
-    // their extracted text like a regular file (TS `tryGetPDFReference` returns
-    // null below the threshold so `generateFileAttachment` falls through).
+    // their extracted text like a regular file.
     let pdf_text: Option<String> = if is_pdf_path(&abs_path) {
         match extract_pdf_text(&abs_path) {
             Some(text) => {
@@ -632,7 +630,7 @@ fn generate_pdf_reference(path: &Path, display_path: &str, page_count: i32) -> O
 }
 
 /// Page count from already-extracted PDF text: `pdf-extract` separates pages
-/// with form feed (`\u{0C}`), matching `read.rs::read_pdf`. TS `getPDFPageCount`.
+/// with form feed (`\u{0C}`), matching `read.rs::read_pdf`.
 fn pdf_page_count_from_text(text: &str) -> i32 {
     let pages = if text.contains('\u{0C}') {
         text.split('\u{0C}')
@@ -645,7 +643,6 @@ fn pdf_page_count_from_text(text: &str) -> i32 {
 }
 
 /// Size-based page estimate (~100KB/page) used only when text extraction fails.
-/// TS `tryGetPDFReference` size-heuristic fallback.
 fn pdf_page_count_heuristic(path: &Path) -> i32 {
     let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) as f64;
     ((file_size / (100.0 * 1024.0)).ceil() as i32).max(1)
@@ -1031,13 +1028,13 @@ impl AttachmentBudget {
 // Parallel batch orchestration
 // ---------------------------------------------------------------------------
 
-/// Timeout for each batch generation (TS: 1000ms).
+/// Timeout for each batch generation.
 const BATCH_TIMEOUT_MS: u64 = 1000;
 
 /// Collect attachments for a specific batch from a list of pre-generated attachments.
 ///
-/// TS: getAttachments() runs three parallel batches with 1000ms timeout each.
-/// In Rust, callers generate all attachments then partition by batch.
+/// Runs three parallel batches with 1000ms timeout each. Callers generate
+/// all attachments then partition by batch.
 ///
 /// `is_subagent`: if true, MainThreadOnly batch is filtered out.
 pub fn collect_batched_attachments(

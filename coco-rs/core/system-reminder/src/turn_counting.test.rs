@@ -252,8 +252,8 @@ fn mixed_tool_names_only_match_exact() {
 
 #[test]
 fn task_management_tools_constant_contains_only_mutation_tools() {
-    // TS parity (`attachments.ts:3345-3348`): the silence counter only sees
-    // TaskCreate + TaskUpdate as activity. Read-only tools are excluded.
+    // The silence counter only sees TaskCreate + TaskUpdate as activity.
+    // Read-only tools are excluded.
     assert_eq!(
         TASK_MANAGEMENT_TOOLS,
         &[ToolName::TaskCreate, ToolName::TaskUpdate]

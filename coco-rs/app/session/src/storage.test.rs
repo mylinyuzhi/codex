@@ -468,12 +468,11 @@ fn test_file_history_snapshot_chain_last_wins_on_update() {
     // The rewind subsystem's `track_edit` flow rewrites a not-yet-
     // flushed snapshot in place — `is_snapshot_update = true` should
     // overwrite the prior entry for the same INNER `snapshot.messageId`
-    // rather than appending a new row. TS-parity invariant for
-    // `buildFileHistorySnapshotChain` (`sessionStorage.ts:2248-2272`).
+    // rather than appending a new row.
     //
     // The update entry's outer `message_id` (the current turn's id)
     // differs from the inner `snapshot.messageId` (the original
-    // snapshot's id); TS keys on the INNER field.
+    // snapshot's id); the builder keys on the INNER field.
     let (_dir, store, _project_dir) = test_store();
     let sid = "update-session";
     store
@@ -534,8 +533,7 @@ fn test_file_history_snapshot_chain_last_wins_on_update() {
 #[test]
 fn test_file_history_snapshot_chain_unknown_id_ignored() {
     // An update whose inner messageId has not been recorded yet should
-    // be treated as a fresh insert (TS parity at
-    // `sessionStorage.ts:2264`: `existingIndex === undefined` falls
+    // be treated as a fresh insert (`existingIndex === undefined` falls
     // through to push). The chain walk uses the conversation-ordered
     // UUID list — entries for ids absent from the chain are silently
     // skipped.
@@ -616,10 +614,8 @@ fn test_marble_origami_entries_filtered_by_session() {
     );
 }
 
-/// Wire-format regression: transcript JSONL is snake_case JSON; the
-/// content is semantically equivalent to TS Claude Code but the
-/// field names follow Rust convention. No `serde(rename_all =
-/// "camelCase")` on the wire types.
+/// Wire-format regression: transcript JSONL is snake_case JSON.
+/// No `serde(rename_all = "camelCase")` on the wire types.
 #[test]
 fn test_transcript_entry_serializes_with_snake_case_keys() {
     let entry = TranscriptEntry {
@@ -646,7 +642,7 @@ fn test_transcript_entry_serializes_with_snake_case_keys() {
         extra: serde_json::Map::new(),
     };
     let v = serde_json::to_value(&entry).unwrap();
-    // Snake_case wire — no TS-byte mirror. See storage.rs module doc.
+    // Snake_case wire. See storage.rs module doc.
     assert!(v.get("parent_uuid").is_some());
     assert!(v.get("session_id").is_some());
     assert!(v.get("is_sidechain").is_some());
@@ -867,10 +863,8 @@ fn test_replay_metadata_filters_to_selected_chain_and_agent() {
     // File-history snapshots key by the message the snapshot was
     // attached to; the chain walk respects conversation order so
     // entries for messages outside the chain are skipped.
-    // Content-replacement records key by `tool_use_id` only (TS
-    // `toolResultStorage.ts:475-479`) and are routed purely by
-    // `agentId` presence (TS `sessionStorage.ts:3682-3693`) — no
-    // per-message scope.
+    // Content-replacement records key by `tool_use_id` only and are
+    // routed purely by `agent_id` presence — no per-message scope.
     let chain_uuids: Vec<String> = vec!["msg-current".into()];
     let entries = vec![
         Entry::Metadata(MetadataEntry::FileHistorySnapshot {

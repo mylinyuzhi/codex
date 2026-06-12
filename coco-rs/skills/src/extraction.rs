@@ -1,8 +1,6 @@
-//! Bundled-skill file extraction with TS-equivalent security model.
+//! Bundled-skill file extraction.
 //!
-//! TS source: `skills/bundledSkills.ts:131-220`.
-//!
-//! Mirrors the TS extraction pipeline:
+//! Extraction pipeline:
 //! 1. Per-process nonce dir (`~/.coco/bundled-skills/<nonce>/<skill>/`).
 //! 2. Group files by parent dir; mkdir each subtree once with mode 0o700.
 //! 3. Write each file via `O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0o600.
@@ -26,10 +24,9 @@ use tokio::sync::OnceCell;
 /// Per-process root dir. Created once, never re-randomized for the lifetime
 /// of the process.
 ///
-/// Mirrors TS `getBundledSkillsRoot()` from `utils/permissions/filesystem.ts`:
-///   `<tmpdir>/coco-<uid>/bundled-skills/<VERSION>/<nonce>`
+/// Layout: `<tmpdir>/coco-<uid>/bundled-skills/<VERSION>/<nonce>`
 ///
-/// **Security model** (TS comment, verbatim): the per-process nonce in the
+/// **Security model**: the per-process nonce in the
 /// path is the load-bearing defense; uid/VERSION alone are public knowledge
 /// and squattable. The nonce uses 16 bytes of cryptographic randomness — NOT
 /// time/pid — because timestamps and PIDs are observable and predictable.
@@ -45,8 +42,6 @@ fn bundled_skills_root() -> &'static Path {
 }
 
 /// 16 cryptographically-random bytes encoded as 32 lowercase hex chars.
-///
-/// TS: `randomBytes(16).toString('hex')`.
 fn generate_secure_nonce() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 16];
@@ -59,7 +54,7 @@ fn generate_secure_nonce() -> String {
     s
 }
 
-/// Process-uid-scoped temp directory. Mirrors TS `getClaudeTempDir()`.
+/// Process-uid-scoped temp directory.
 ///
 /// Layout: `<tmpdir>/coco-<uid>/`. UID scoping prevents one user from
 /// stomping another's bundled-skill dirs on multi-user systems. The
@@ -83,8 +78,6 @@ fn current_uid() -> u32 {
 }
 
 /// Deterministic extraction directory for a bundled skill.
-///
-/// TS: `getBundledSkillExtractDir(skillName)`.
 pub fn extract_dir_for(skill_name: &str) -> PathBuf {
     bundled_skills_root().join(skill_name)
 }
@@ -107,8 +100,6 @@ fn cells() -> &'static CellMap {
 /// **Concurrency**: many callers may invoke this for the same skill at the
 /// same time; the underlying `OnceCell` ensures exactly one extraction
 /// happens, others await its completion.
-///
-/// TS parity: `bundledSkills.ts:131-145 extractBundledSkillFiles`.
 pub async fn extract_bundled_skill_files(
     skill_name: &str,
     files: &HashMap<String, String>,
@@ -199,7 +190,7 @@ async fn write_skill_files(dir: &Path, files: &HashMap<String, String>) -> crate
 
 async fn mkdir_secure(path: &Path) -> crate::Result<()> {
     // Recursive create. Set mode 0o700 on Unix after; std doesn't accept a
-    // mode arg in `create_dir_all`. Mirrors TS `mkdir({recursive:true, mode:0o700})`.
+    // mode arg in `create_dir_all`.
     tokio::fs::create_dir_all(path).await.map_err(|e| {
         crate::SkillsError::generic(format!("create_dir_all({}): {e}", path.display()))
     })?;
@@ -226,7 +217,7 @@ async fn safe_write_file(path: &Path, content: &[u8]) -> crate::Result<()> {
     use tokio::io::AsyncWriteExt;
 
     // O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode 0o600.
-    // Equivalent to TS `open(p, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600)`.
+    // Equivalent to `open(p, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0o600)`.
     // tokio::fs::OpenOptions exposes custom_flags/mode directly on Unix.
     let mut opts = tokio::fs::OpenOptions::new();
     opts.write(true)
@@ -247,8 +238,7 @@ fn libc_o_nofollow() -> i32 {
     // a constant isn't worth it. Hard-coded values per platform: Linux/macOS
     // both use 0x100 in modern toolchains. If the constant ever drifts, the
     // open() will simply behave like a normal open without symlink protection;
-    // the per-process nonce dir is the primary security boundary anyway
-    // (see TS comment in bundledSkills.ts:169-175).
+    // the per-process nonce dir is the primary security boundary anyway.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         0x20000 // O_NOFOLLOW on both glibc and Darwin
@@ -262,7 +252,7 @@ fn libc_o_nofollow() -> i32 {
 #[cfg(windows)]
 async fn safe_write_file(path: &Path, content: &[u8]) -> crate::Result<()> {
     use tokio::io::AsyncWriteExt;
-    // Windows: equivalent of TS `'wx'` flag — create new, fail if exists.
+    // Windows: equivalent of `'wx'` flag — create new, fail if exists.
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -278,7 +268,7 @@ async fn safe_write_file(path: &Path, content: &[u8]) -> crate::Result<()> {
 
 /// Normalize and validate a skill-relative path; reject traversal.
 ///
-/// TS: `bundledSkills.ts:196-206 resolveSkillFilePath`. Rejects:
+/// Rejects:
 /// - absolute paths,
 /// - `..` segments against either `path::sep` or literal `/`.
 fn resolve_skill_file_path(base_dir: &Path, rel_path: &str) -> crate::Result<PathBuf> {
@@ -287,9 +277,8 @@ fn resolve_skill_file_path(base_dir: &Path, rel_path: &str) -> crate::Result<Pat
             "bundled skill file path is absolute: {rel_path}"
         )));
     }
-    // Check both native sep and literal `/` — Windows allows both, and TS
-    // checks both because the values map may use `/` separators on every
-    // platform.
+    // Check both native sep and literal `/` — Windows allows both (the
+    // values map may use `/` separators on every platform).
     let native_segments: Vec<_> = Path::new(rel_path).components().collect();
     for c in &native_segments {
         if matches!(c, Component::ParentDir) {
@@ -306,8 +295,7 @@ fn resolve_skill_file_path(base_dir: &Path, rel_path: &str) -> crate::Result<Pat
     Ok(base_dir.join(rel_path))
 }
 
-/// Prepend `Base directory for this skill: <dir>` to a prompt string,
-/// matching TS `prependBaseDir`.
+/// Prepend `Base directory for this skill: <dir>` to a prompt string.
 pub fn prepend_base_dir(prompt: &str, base_dir: &Path) -> String {
     format!(
         "Base directory for this skill: {}\n\n{}",

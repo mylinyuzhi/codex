@@ -269,7 +269,7 @@ fn status_activity_lines(state: &AppState) -> Vec<ActivityLine> {
 fn append_plan_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     // V2 (plan_tasks) and V1 (todos_by_agent) are rendered through the
     // dedicated todo panel module so the V1/V2 mutual exclusion,
-    // priority sort, and TS-aligned glyphs live in one place.
+    // priority sort, and glyphs live in one place.
     crate::widgets::todo_panel::append_lines(state, lines);
 
     if !state.session.active_tasks.is_empty() {
@@ -298,9 +298,8 @@ fn append_plan_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
 fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
     // Tree mode: when the Teammates view is expanded we draw a leader
     // row at the top and prefix each subagent with ├─ / └─ tree
-    // connectors (highlighted ╞═ / ╘═ on the focused row). TS parity
-    // with `TeammateSpinnerLine.tsx:83`. Otherwise we keep the flat
-    // 2-space indent used by the inline activity surface.
+    // connectors (highlighted ╞═ / ╘═ on the focused row). Otherwise
+    // we keep the flat 2-space indent used by the inline activity surface.
     let tree_mode = matches!(
         state.session.expanded_view,
         coco_types::ExpandedView::Teammates
@@ -347,10 +346,8 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         } else {
             "  "
         };
-        // Kind badge: differentiate TS `InProcessTeammateTask` (persistent
-        // team member, `@name` prefix) from `LocalAgentTask` (Agent-tool
-        // worker, plain agent_type). Mirrors TS `TeammateSpinnerLine`'s
-        // `@{agentName}` rendering vs `AgentProgressLine`'s plain label.
+        // Kind badge: differentiate persistent team members (`@name` prefix)
+        // from Agent-tool workers (plain agent_type).
         let agent_type = &agent.agent_type;
         let label = match agent.kind {
             crate::state::SubagentKind::Teammate => match agent.team_name.as_deref() {
@@ -380,12 +377,11 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         }
         lines.push(ActivityLine { spans });
 
-        // TS `TeammateSpinnerLine.tsx:160-169` active-text builder:
-        // `summarizeRecentActivities` collapses trailing search/read
-        // tools into a single line; otherwise falls back to the most
-        // recent activity description. We append the canonical `· N
-        // tools` stats segment in the same line so the user gets both
-        // the action and the count without expanding the transcript.
+        // Active-text builder: collapse trailing search/read tools into
+        // a single line; otherwise fall back to the most recent activity
+        // description. Append the `· N tools` stats segment in the same
+        // line so the user gets both the action and the count without
+        // expanding the transcript.
         let has_tool_subline = agent.tool_count > 0 || agent.last_tool_name.is_some();
         if has_tool_subline && matches!(agent.status, SubagentStatus::Running) {
             let active_text =
@@ -403,8 +399,8 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             lines.push(ActivityLine { spans: subline });
         }
 
-        // Completion summary mirrors TS `Done (N tools · ... · duration)`
-        // plus the final assistant message preview when one was captured.
+        // Completion summary: `Done (N tools · ... · duration)` plus the
+        // final assistant message preview when one was captured.
         if matches!(
             agent.status,
             SubagentStatus::Completed | SubagentStatus::Failed

@@ -1,11 +1,10 @@
 //! `/permissions` rule-editor overlay state.
 //!
-//! Tabbed overlay (Allow / Ask / Deny / Workspace) — TS parity:
-//! `components/permissions/rules/PermissionRuleList.tsx`. The shape
-//! mirrors the `/agents` dialog (tab strip + per-tab cursor + inline
-//! forms) and reuses [`WizardTextField`] for the add-rule / add-directory
-//! text inputs and [`PermissionAskChoice`]-style option rows for the
-//! destination selector.
+//! Tabbed overlay (Allow / Ask / Deny / Workspace). The shape mirrors
+//! the `/agents` dialog (tab strip + per-tab cursor + inline forms) and
+//! reuses [`WizardTextField`] for the add-rule / add-directory text inputs
+//! and [`PermissionAskChoice`]-style option rows for the destination
+//! selector.
 //!
 //! Data is a CLI-built snapshot pushed via
 //! `TuiOnlyEvent::OpenPermissionsEditor`; every mutation round-trips
@@ -31,8 +30,7 @@ pub enum PermissionsEditorTab {
 }
 
 impl PermissionsEditorTab {
-    /// TS parity: the rule list opens on the Allow tab once the
-    /// recently-denied tab (not ported — auto-mode-specific) is skipped.
+    /// The rule list opens on the Allow tab by default.
     pub const DEFAULT: Self = Self::Allow;
     pub const ORDER: [Self; 4] = [Self::Allow, Self::Ask, Self::Deny, Self::Workspace];
 
@@ -71,8 +69,7 @@ pub fn source_destination(source: PermissionRuleSource) -> Option<PermissionUpda
     }
 }
 
-/// Short inline source tag used by row rendering. Lowercase, English-only
-/// to match the TS source tags.
+/// Short inline source tag used by row rendering. Lowercase, English-only.
 pub fn short_source_label(source: PermissionRuleSource) -> &'static str {
     match source {
         PermissionRuleSource::UserSettings => "user",
@@ -137,8 +134,8 @@ impl PermDirRow {
     }
 }
 
-/// The three writable scopes offered by the destination selector, in TS
-/// order (project-local first, then project, then user).
+/// The three writable scopes offered by the destination selector
+/// (project-local first, then project, then user).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorDestination {
     Local,
@@ -322,7 +319,7 @@ impl PermissionsEditorState {
 
     /// Refresh the rule / directory data in place after a persisted edit,
     /// preserving the focused tab while clamping cursors and dropping any
-    /// open form. Mirrors the agents dialog's in-place library refresh.
+    /// open form.
     pub fn refresh_from_payload(&mut self, payload: PermissionsEditorPayload) {
         let rebuilt = Self::from_payload(payload);
         self.rules = rebuilt.rules;
@@ -370,7 +367,7 @@ impl PermissionsEditorState {
     }
 
     /// Move the active tab's cursor by `delta`, clamped to the list (no
-    /// wrap — TS clamps at the ends).
+    /// wrap).
     pub fn nav(&mut self, delta: i32) -> bool {
         let len = self.active_len();
         let cursor = self.active_cursor_mut();

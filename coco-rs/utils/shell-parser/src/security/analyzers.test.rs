@@ -482,7 +482,7 @@ fn test_excess_closing_braces_quoted_ok() {
 }
 
 // =========================================================================
-// Phase 5: New TS-parity analyzers
+// Phase 5: New analyzers
 // =========================================================================
 
 // -- EvalLikeBuiltinAnalyzer --
@@ -1229,8 +1229,7 @@ fn test_timeout_fused_k_invalid_rejected() {
 
 #[test]
 fn test_dangerous_variables_redirect_contexts() {
-    // $VAR before a redirect, and a redirect before $VAR — both flag now
-    // (the original port only matched `$VAR |`). TS validateDangerousVariables.
+    // $VAR before a redirect, and a redirect before $VAR — both flag.
     for src in [
         "cat $FILE > out.txt",
         "cat > $OUT",

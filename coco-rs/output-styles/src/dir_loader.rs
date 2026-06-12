@@ -1,21 +1,17 @@
 //! Markdown directory loader for output styles.
 //!
-//! TS source: `outputStyles/loadOutputStylesDir.ts`. Reads `.md` files
-//! from one or more directories recursively, parses YAML frontmatter,
-//! and emits one [`OutputStyleConfig`] per file. The filename (stem) is
-//! the default style name; `name`, `description`, and
-//! `keep-coding-instructions` frontmatter fields override or supplement
-//! the defaults.
+//! Reads `.md` files from one or more directories recursively, parses YAML
+//! frontmatter, and emits one [`OutputStyleConfig`] per file. The filename
+//! stem is the default style name; `name`, `description`, and
+//! `keep-coding-instructions` frontmatter fields override or supplement the
+//! defaults.
 //!
-//! `force-for-plugin` is only meaningful on plugin styles; finding it
-//! here logs a warning and ignores the value (TS parity with the
-//! `logForDebugging` warn at `loadOutputStylesDir.ts:65-69`).
+//! `force-for-plugin` is only meaningful on plugin styles; finding it here
+//! logs a warning and ignores the value.
 //!
-//! TS uses a multi-source markdown loader (managed/user/project, with
-//! priority + dedup). coco-rs threads the (dir, source) pair in from
-//! the caller — paths are resolved at the CLI bootstrap layer where
-//! `~/.coco/`, the project tree, and managed/policy locations are
-//! known.
+//! The (dir, source) pair is threaded in from the caller — paths are resolved
+//! at the CLI bootstrap layer where `~/.coco/`, the project tree, and
+//! managed/policy locations are known.
 
 use std::path::Path;
 
@@ -30,9 +26,8 @@ use crate::error::OutputStylesError;
 /// Load every `.md` output-style file recursively under `dir`.
 ///
 /// Returns an empty `Vec` if `dir` doesn't exist or isn't readable —
-/// matches TS `loadMarkdownFilesForSubdir` "fail open" semantics so a
-/// missing config dir never breaks bootstrap. Per-file parse errors are
-/// logged at `warn` level and the offending file is skipped.
+/// "fail open" so a missing config dir never breaks bootstrap. Per-file
+/// parse errors are logged at `warn` level and the offending file is skipped.
 ///
 /// `source` is attached to each loaded style and drives priority during
 /// aggregation. Use [`OutputStyleSource::UserSettings`] for `~/.coco`,
@@ -113,7 +108,7 @@ pub fn build_config_from_parsed(
 ) -> OutputStyleConfig {
     let stem = filename_stem(path);
 
-    // `name` fallback: filename stem (matches TS `loadOutputStylesDir.ts:42`).
+    // `name` fallback: filename stem.
     let name = parsed
         .data
         .get("name")
@@ -129,16 +124,14 @@ pub fn build_config_from_parsed(
             description_from_markdown(&parsed.content, &format!("Custom {stem} output style"))
         });
 
-    // `keep-coding-instructions` accepts both bool and stringly-typed
-    // bool — TS at `loadOutputStylesDir.ts:53-62` does the same dance.
+    // `keep-coding-instructions` accepts both bool and stringly-typed bool.
     let keep_coding_instructions = parsed
         .data
         .get("keep-coding-instructions")
         .and_then(parse_ts_boolean_frontmatter);
 
-    // `force-for-plugin` warning when present on non-plugin style —
-    // matches TS `loadOutputStylesDir.ts:65-69`. Plugin loader handles
-    // the real read.
+    // `force-for-plugin` warning when present on non-plugin style.
+    // Plugin loader handles the real read.
     if !matches!(source, OutputStyleSource::Plugin) && parsed.data.contains_key("force-for-plugin")
     {
         tracing::warn!(
@@ -167,8 +160,7 @@ fn filename_stem(path: &Path) -> String {
 }
 
 /// First non-empty line of the markdown content, with leading `#`s
-/// stripped, capped at 100 chars. TS:
-/// `markdownConfigLoader.ts::extractDescriptionFromMarkdown`.
+/// stripped, capped at 100 chars.
 pub(crate) fn coerce_description_to_string(value: &FrontmatterValue) -> Option<String> {
     match value {
         FrontmatterValue::String(s) => {

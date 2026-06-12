@@ -32,9 +32,8 @@ use crate::sdk_server::pending_map::ResolveOutcome;
 /// - `INVALID_REQUEST` if no session is active.
 /// - `INVALID_REQUEST` if a turn is already in flight (one-at-a-time).
 ///
-/// TS reference: `runHeadless()` inside `print.ts` kicks off a single
-/// turn per headless invocation; coco-rs lets the SDK client drive the
-/// cadence via `turn/start`.
+/// In headless mode a single turn is kicked off per invocation; coco-rs
+/// lets the SDK client drive the cadence via `turn/start`.
 pub(super) async fn handle_turn_start(
     params: TurnStartParams,
     ctx: &HandlerContext,
@@ -143,8 +142,6 @@ pub(super) async fn handle_turn_start(
 /// `CancellationToken` it received from `turn/start`. The runner is
 /// expected to observe `cancel.is_cancelled()` at tool boundaries and
 /// emit a `turn/failed` notification before exiting.
-///
-/// TS reference: `SDKControlInterruptRequestSchema` (controlSchemas.ts).
 pub(super) async fn handle_turn_interrupt(ctx: &HandlerContext) -> HandlerResult {
     let slot = ctx.state.session.read().await;
     let Some(session) = slot.as_ref() else {
@@ -183,8 +180,6 @@ pub(super) async fn handle_turn_interrupt(ctx: &HandlerContext) -> HandlerResult
 /// - `INVALID_REQUEST` if `request_id` does not match any pending approval.
 ///   This usually means the client replied twice or is responding to a
 ///   stale/cancelled request.
-///
-/// TS reference: `controlSchemas.ts` `SDKControlPermissionRequestSchema`.
 pub(super) async fn handle_approval_resolve(
     params: ApprovalResolveParams,
     ctx: &HandlerContext,

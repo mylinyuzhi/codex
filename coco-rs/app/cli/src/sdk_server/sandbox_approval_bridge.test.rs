@@ -10,9 +10,8 @@ use crate::sdk_server::handlers::SdkServerState;
 
 #[tokio::test]
 async fn test_synthetic_tool_names_match_ts() {
-    // TS parity: `cli/structuredIO.ts:62`. The wire string is part
-    // of the contract — SDK clients pattern-match on it to surface
-    // the right approval dialog.
+    // The wire string is part of the contract — SDK clients
+    // pattern-match on it to surface the right approval dialog.
     assert_eq!(SANDBOX_NETWORK_ACCESS_TOOL_NAME, "SandboxNetworkAccess");
     assert_eq!(SANDBOX_PATH_ACCESS_TOOL_NAME, "SandboxPathAccess");
 }

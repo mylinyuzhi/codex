@@ -16,20 +16,15 @@
 //! <sessions_dir>/<session_id>/subagents/agent-<id>.meta.json # AgentSpawnMetadata
 //! ```
 //!
-//! Mirrors TS `getAgentTranscriptPath` /
-//! `getAgentMetadataPath` (`utils/sessionStorage.ts:247-262`).
-//!
 //! ## Why a separate file from the per-task `.output`
 //!
 //! `coco_cli::disk_task_output` writes raw text deltas to
 //! `<config_home>/cache/tasks/<session>/<task_id>.output` for the
-//! `TaskOutput` model-facing tool. That file is text — TS-faithful
-//! `initTaskOutputAsSymlink` would point it at the JSONL transcript
-//! so `TaskOutput` reads structured entries instead. coco-rs keeps
+//! `TaskOutput` model-facing tool. That file is text — coco-rs keeps
 //! them as separate streams: text for the model's progress view,
-//! JSONL for resume. The deliberate divergence preserves
-//! `TaskOutput`'s text contract while still giving `agent/resume`
-//! a clean conversation log to rehydrate from.
+//! JSONL for resume. This preserves `TaskOutput`'s text contract
+//! while still giving `agent/resume` a clean conversation log to
+//! rehydrate from.
 
 use std::sync::Arc;
 

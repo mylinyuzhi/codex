@@ -1,8 +1,6 @@
 //! Background-task callback trait — the seam between tools and the
 //! task subsystem.
 //!
-//! TS source: `utils/task/framework.ts`, `tasks/LocalShellTask/`,
-//! `tasks/LocalAgentTask/`, `tools/BashTool/BashTool.tsx`.
 //!
 //! ## One trait, one Arc
 //!
@@ -41,7 +39,7 @@ pub enum DetachOutcome {
     /// fg awaiter `Notify` was woken. The task is now backgrounded.
     Detached,
     /// Second-or-later call — the task was already in the detached
-    /// state. No-op, matches TS `if (task.isBackgrounded) return false`.
+    /// state. No-op (task is already backgrounded).
     AlreadyDetached,
     /// Task id unknown to the runtime — no per-task entry exists.
     Unknown,
@@ -54,8 +52,7 @@ impl DetachOutcome {
     }
 }
 
-/// Request to spawn a background shell task. Mirrors TS
-/// `LocalShellSpawnInput`.
+/// Request to spawn a background shell task.
 #[derive(Clone)]
 pub struct BackgroundShellRequest {
     pub command: String,
@@ -78,7 +75,7 @@ pub struct BackgroundShellRequest {
     /// `false` (auto-backgroundable foreground commands) means the timeout
     /// does NOT kill — paired with `auto_detach_ms = timeout_ms`, the fg
     /// awaiter is released and the child keeps running in the background until
-    /// natural exit (TS `shouldAutoBackground` parity). `true` keeps the
+    /// natural exit (`shouldAutoBackground`). `true` keeps the
     /// hard-kill-on-timeout behaviour (explicit bg, `sleep`, subagents).
     pub kill_on_timeout: bool,
     /// Optional sandbox runtime state.

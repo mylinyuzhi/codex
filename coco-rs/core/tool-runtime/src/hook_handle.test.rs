@@ -18,7 +18,6 @@ fn test_pre_outcome_default_is_not_blocked() {
 #[test]
 fn test_outcomes_have_suppress_output_field() {
     // Regression guard: both outcome types carry suppress_output
-    // matching TS types/hooks.ts:56-59.
     let pre = PreToolUseOutcome {
         suppress_output: true,
         ..Default::default()

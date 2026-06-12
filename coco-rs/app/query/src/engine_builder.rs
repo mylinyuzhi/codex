@@ -326,8 +326,7 @@ impl QueryEngine {
     /// writes. `SessionRuntime` owns one `Arc<Mutex<HashSet<Uuid>>>`
     /// per session and clones it into every per-turn engine so
     /// already-persisted messages don't get rewritten on each new
-    /// engine instance. TS parity: `Project.recordTranscript` skips
-    /// already-persisted entries by uuid.
+    /// engine instance. Skips already-persisted entries by uuid.
     pub fn with_transcript_dedup(
         mut self,
         seen: Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>,
@@ -350,9 +349,8 @@ impl QueryEngine {
     }
 
     /// Whether the staged-collapse strategy is currently active. Used
-    /// as the mutual-exclusion gate for autocompact (TS
-    /// autoCompact.ts:215-223) — when collapse owns the threshold
-    /// ladder, proactive autocompact is suppressed.
+    /// as the mutual-exclusion gate for autocompact — when collapse
+    /// owns the threshold ladder, proactive autocompact is suppressed.
     ///
     /// Inert by default: `with_staged_ledger` has no production callers
     /// (matches TS-feature-stripped `feature('CONTEXT_COLLAPSE')` state),
@@ -368,8 +366,7 @@ impl QueryEngine {
     /// Snapshot the current post-turn cache-safe params. `None` until
     /// the first turn finalises, and after `clear_cache_safe_params`.
     /// Future post-turn fork features (`/btw`, `promptSuggestion`,
-    /// `postTurnSummary`) read this to share the parent's prompt
-    /// cache. TS parity: `forkedAgent.ts::getLastCacheSafeParams`.
+    /// `postTurnSummary`) read this to share the parent's prompt cache.
     pub async fn last_cache_safe_params(&self) -> Option<coco_types::CacheSafeParams> {
         self.last_cache_safe_params.read().await.clone()
     }
@@ -388,8 +385,7 @@ impl QueryEngine {
 
     /// Drop the cache-safe params slot. Called from `/clear`-style
     /// regen paths so a fork after `/clear` doesn't accidentally
-    /// reuse the pre-clear cache key. TS parity:
-    /// `forkedAgent.ts::saveCacheSafeParams(null)`.
+    /// reuse the pre-clear cache key.
     pub async fn clear_cache_safe_params(&self) {
         *self.last_cache_safe_params.write().await = None;
     }
@@ -436,17 +432,16 @@ impl QueryEngine {
         .await;
     }
 
-    /// Cache-break tracking attribution. Mirrors TS `getTrackingKey`:
-    /// subagents land under `agent:custom` (with their `agent_id`),
-    /// SDK calls under `sdk`, everything else under `repl_main_thread`.
+    /// Cache-break tracking attribution. Subagents land under
+    /// `agent:custom` (with their `agent_id`), SDK calls under `sdk`,
+    /// everything else under `repl_main_thread`.
     ///
     /// When the engine config carries a `query_source_override`
     /// (set by [`crate::forked_agent::ForkDispatcher`] from
     /// [`crate::forked_agent::ForkedAgentOptions::query_source`]),
     /// the override wins so log lines self-identify the fork variant
     /// (e.g. `prompt_suggestion`, `extract_memories`,
-    /// `session_memory_auto`) instead of collapsing all forks to
-    /// `sdk`. TS parity: `runForkedAgent({querySource})`.
+    /// `session_memory_auto`) instead of collapsing all forks to `sdk`.
     pub(crate) fn query_source_label(&self) -> &str {
         if let Some(override_label) = self.config.query_source_override.as_deref() {
             return override_label;
@@ -558,21 +553,19 @@ impl QueryEngine {
 
     /// Install the running-task manager so post-compact attachments can
     /// snapshot active background agents and re-emit them as
-    /// `task_status` reminders. TS: `createAsyncAgentAttachmentsIfNeeded`
-    /// reads `appState.tasks` directly; coco-rs reads from the
-    /// `TaskManager` exposed by `coco-tasks::running`. Optional — when
-    /// absent, post-compact emits zero `task_status` attachments
-    /// (degrades gracefully to TS feature-stripped behavior).
+    /// `task_status` reminders. Reads from the `TaskManager` exposed by
+    /// `coco-tasks::running`. Optional — when absent, post-compact emits
+    /// zero `task_status` attachments.
     pub fn with_running_tasks(mut self, running: Arc<coco_tasks::running::TaskManager>) -> Self {
         self.running_tasks = Some(running);
         self
     }
 
     /// Snapshot running async-agent tasks for post-compact attachment
-    /// emission. Filters per TS `compact.ts:1577-1582`: skip the agent
-    /// that owns this engine's `agent_id`, drop pending tasks (not yet
-    /// meaningful), drop terminal tasks the `TaskOutput` tool already
-    /// consumed (`BgAgentExtras.retrieved`).
+    /// emission. Filters: skip the agent that owns this engine's
+    /// `agent_id`, drop pending tasks (not yet meaningful), drop
+    /// terminal tasks the `TaskOutput` tool already consumed
+    /// (`BgAgentExtras.retrieved`).
     pub(crate) async fn snapshot_async_agents_for_post_compact(
         &self,
     ) -> Vec<coco_compact::AsyncAgentSnapshot> {
@@ -597,10 +590,9 @@ impl QueryEngine {
             {
                 continue;
             }
-            // TS `compact.ts:1578` — once the `TaskOutput` tool serves
-            // a terminal agent's output, the compact reminder stops
-            // re-announcing it. coco-rs reads it through the typed
-            // `BgAgentExtras` variant on `TaskExtras`.
+            // Once the `TaskOutput` tool serves a terminal agent's
+            // output, the compact reminder stops re-announcing it.
+            // Read through the typed `BgAgentExtras` variant on `TaskExtras`.
             if t.status.is_terminal() && t.bg_agent_extras().map(|e| e.retrieved).unwrap_or(false) {
                 continue;
             }
@@ -633,7 +625,7 @@ impl QueryEngine {
     /// Install the compaction observer registry. Caller builds the
     /// registry, registers per-subsystem observers, then hands an
     /// `Arc` to the engine so notifications fire in `try_full_compact`.
-    /// Omitting this leaves an empty registry — equivalent to TS skipping
+    /// Omitting this leaves an empty registry — equivalent to skipping
     /// `runPostCompactCleanup` when the corresponding caches don't exist.
     pub fn with_compaction_observers(
         mut self,
@@ -706,9 +698,6 @@ impl QueryEngine {
     /// system-reminders that needs state from an owning crate
     /// (hooks, LSP, tasks, skills, MCP, swarm, bridge, memory).
     /// Omitted sources → corresponding reminders silently skip.
-    ///
-    /// TS parity: this is the analog of `toolUseContext.options.*`
-    /// that TS's `getAttachments` reads from.
     pub fn with_reminder_sources(mut self, sources: coco_system_reminder::ReminderSources) -> Self {
         self.reminder_sources = sources;
         self
@@ -725,10 +714,6 @@ impl QueryEngine {
     /// `agent_pending_messages` system-reminder. Production wires the
     /// SAME `Arc<InMemoryPendingMessageStore>` here AND on the
     /// `SwarmAdapter`. Default is a no-op store.
-    ///
-    /// TS parity: `LocalAgentTask.tsx:162-167 queuePendingMessage`
-    /// (push) + `attachments.ts:1085-1101 getAgentPendingMessageAttachments`
-    /// (drain).
     pub fn with_pending_messages(
         mut self,
         store: coco_tool_runtime::PendingMessageStoreRef,
@@ -781,7 +766,7 @@ impl QueryEngine {
     /// from `wire_engine` so every per-turn engine sees the same
     /// `Arc<Mutex<Option<CancellationToken>>>` shared across the
     /// session — rapid `/clear` cycles cancel the prior in-flight
-    /// suggestion fork. TS: module-level `currentAbortController`.
+    /// suggestion fork.
     pub fn with_current_suggestion_abort(
         mut self,
         slot: std::sync::Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
@@ -915,9 +900,8 @@ impl QueryEngine {
     /// first batch's [`ToolContextFactory::build`] sees a concrete mode. If
     /// already `Some(_)` (e.g. session resumed, prior-run state
     /// carried), the existing value is preserved — user + tool
-    /// intent trumps config. TS parity: `appState` is
-    /// initialized-once at session-create and never re-seeded from
-    /// config afterward.
+    /// intent trumps config. `appState` is initialized-once at
+    /// session-create and never re-seeded from config afterward.
     pub fn with_app_state(mut self, app_state: Arc<RwLock<ToolAppState>>) -> Self {
         // Bootstrap the live mode on first attach. This is a one-shot
         // write — subsequent runs that reuse the same app_state see
@@ -966,17 +950,14 @@ impl QueryEngine {
     ///
     /// `QueryEngine` is built fresh per turn (`SessionRuntime::build_engine`),
     /// but the steering queue must survive across engines so messages typed
-    /// during turn N are still pending when turn N+1's engine starts. This
-    /// is the Rust analog of the TS module-level singleton in
-    /// `utils/messageQueueManager.ts`. The session runtime owns the queue
-    /// and hands it to every engine via this builder.
+    /// during turn N are still pending when turn N+1's engine starts.
+    /// The session runtime owns the queue and hands it to every engine
+    /// via this builder.
     ///
     /// Teammate messages also flow through this queue (with
     /// [`coco_system_reminder::QueueOrigin::Coordinator`] /
-    /// [`coco_system_reminder::QueueOrigin::TaskNotification`]) — TS
-    /// parity with `getAgentPendingMessageAttachments`
-    /// (`attachments.ts:1085`) which converts coordinator messages to
-    /// `queued_command` attachments with `origin: 'coordinator'`.
+    /// [`coco_system_reminder::QueueOrigin::TaskNotification`]) — coordinator
+    /// messages become `queued_command` attachments with `origin: 'coordinator'`.
     pub fn with_command_queue(mut self, queue: CommandQueue) -> Self {
         self.command_queue = queue;
         self
@@ -998,8 +979,8 @@ impl QueryEngine {
     /// By default `QueryEngine::new` installs an
     /// [`crate::engine_live_rules::EngineLiveRulesHandle`] that folds
     /// `Command`-destination `permission_updates` into the engine's own
-    /// `live_command_rules` Arc — the per-user-msg-scoped store mirrors
-    /// TS `query()`'s closure-captured `appState.alwaysAllowRules.command`.
+    /// `live_command_rules` Arc — the per-user-msg-scoped store for
+    /// always-allowed command rules.
     /// Production paths inherit this default; tests/standalone callers
     /// can swap in [`coco_tool_runtime::NoOpPermissionRuleHandle`] when
     /// they want updates dropped instead.
@@ -1017,9 +998,8 @@ impl QueryEngine {
     }
 }
 
-/// Render a Rust `TaskStatus` to the TS `LocalAgentTaskState.status` string
-/// shape — `'pending' | 'running' | 'completed' | 'failed' | 'killed'`
-/// (TS only has 5 statuses; see `Task.ts:15-21`).
+/// Render a `TaskStatus` to its wire string form —
+/// `'pending' | 'running' | 'completed' | 'failed' | 'killed'`.
 fn task_status_to_ts_string(status: coco_types::TaskStatus) -> String {
     match status {
         coco_types::TaskStatus::Pending => "pending",

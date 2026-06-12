@@ -1,46 +1,40 @@
 //! Agent worktree manager — Phase 6, Workstream C.
 //!
-//! TS: `src/utils/worktree.ts` (`createAgentWorktree` at `:902-952`,
-//! `removeAgentWorktree` at `:961-1020`, `hasWorktreeChanges` at
-//! `:1144-1173`). Ported to Rust with the Rust-specific caveat that
-//! the parent's cwd is **not** changed — subagents see the worktree
-//! via `ToolUseContext::cwd_override` (async-local equivalent is
-//! absent in Rust; explicit field propagation is the substitute).
+//! The parent's cwd is **not** changed — subagents see the worktree
+//! via `ToolUseContext::cwd_override` (explicit field propagation is the
+//! substitute for an async-local cwd).
 //!
 //! # Scope for the first Rust slice
 //!
-//! Ported (parity with TS):
+//! Implemented:
 //! - `git worktree add -B <branch> <path>` against canonical git root.
 //! - `hasWorktreeChanges`: dirty working tree (`git status --porcelain`) OR
 //!   new commits since creation (`rev-list --count <head>..HEAD`).
 //! - `git worktree remove --force` + `git branch -D`.
-//! - Post-creation setup: settings.local.json copy + git core.hooksPath
-//!   config (TS `worktree.ts:510-578`, items 1 + 2).
-//! - Periodic stale-worktree sweep (`cleanup_stale`, TS `:1058-1136`):
+//! - Post-creation setup: settings.local.json copy + git core.hooksPath config.
+//! - Periodic stale-worktree sweep (`cleanup_stale`):
 //!   age + clean-tree + remote-reachable (unpushed-commit fail-close) +
 //!   `git worktree prune`.
 //!
 //! Deferred (out of scope per plan review):
 //! - Hook-based VCS (`WorktreeCreate` hook).
-//! - Commit-attribution prepare-commit-msg hook (`:603-623`).
-//! - Resume metadata (`runAgent.ts:738-742`).
+//! - Commit-attribution prepare-commit-msg hook.
+//! - Resume metadata.
 //!
 //! # Canonical git root
 //!
 //! Agent worktrees always land in the **canonical** repo's
 //! `.coco/worktrees/` dir, even when spawned from inside a session
-//! worktree. TS calls `findCanonicalGitRoot` for this reason
-//! (`worktree.ts:926`); the Rust equivalent is
-//! [`AgentWorktreeManager::canonical_git_root`], resolved at manager
-//! construction so subagent worktrees never nest.
+//! worktree. The canonical root is resolved via
+//! [`AgentWorktreeManager::canonical_git_root`] at manager construction
+//! so subagent worktrees never nest.
 //!
 //! # Cleanup-on-change policy
 //!
 //! If the child agent made no changes (staged, unstaged, or
 //! untracked), the worktree is removed after the agent completes. If
 //! changes exist, the worktree is **kept** on disk for the user to
-//! inspect — matches TS `AgentTool.tsx:680-684` and the `kept`
-//! variant of [`WorktreeCleanupOutcome`].
+//! inspect — see the `kept` variant of [`WorktreeCleanupOutcome`].
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -72,8 +66,7 @@ pub struct AgentWorktreeSession {
 
 /// Outcome returned by [`AgentWorktreeManager::cleanup_if_unchanged`].
 ///
-/// TS parity: `AgentTool.tsx:649-684` returns `{worktreePath?, worktreeBranch?}`
-/// where empty = removed, populated = kept on disk.
+/// Empty result = removed, populated = kept on disk.
 #[derive(Debug, Clone)]
 pub enum WorktreeCleanupOutcome {
     /// Worktree was removed because the child agent made no changes.
@@ -192,20 +185,18 @@ impl From<std::io::Error> for WorktreeError {
 
 /// Configuration for optional post-creation setup behaviors.
 ///
-/// All fields are opt-in. The defaults (`Default::default()`) give
-/// TS-parity minimum setup: settings.local.json copy + core.hooksPath
-/// config only. Enable `symlink_directories` to avoid duplicating
-/// large dirs like `node_modules` across worktrees
-/// (TS `worktree.ts:580-585`).
+/// All fields are opt-in. The defaults (`Default::default()`) give the
+/// minimum setup: settings.local.json copy + core.hooksPath config only.
+/// Enable `symlink_directories` to avoid duplicating large dirs like
+/// `node_modules` across worktrees.
 #[derive(Debug, Clone, Default)]
 pub struct AgentWorktreeConfig {
     /// Directories to symlink from the main repo into each new
     /// worktree. Relative to the main repo root.
     ///
-    /// TS parity: `settings.worktree.symlinkDirectories` at
-    /// `worktree.ts:581-585`. Typical values: `["node_modules",
-    /// "target", ".venv"]`. Missing source dirs are silently
-    /// skipped (TS matches this behavior).
+    /// Configured via `settings.worktree.symlinkDirectories`. Typical
+    /// values: `["node_modules", "target", ".venv"]`. Missing source dirs
+    /// are silently skipped.
     pub symlink_directories: Vec<PathBuf>,
 }
 
@@ -242,10 +233,9 @@ impl AgentWorktreeManager {
     /// Discover the canonical git root from `cwd`, falling back to
     /// `NotInRepo` if the directory isn't inside a git repo.
     ///
-    /// TS parity: `findCanonicalGitRoot(getCwd())` at `worktree.ts:926`.
-    /// The canonical form resolves symlinks + walks to the main repo,
-    /// not the nearest `.git` — so a session spawned inside a
-    /// worktree still sees the main repo as its root.
+    /// Resolves symlinks and walks to the main repo, not the nearest
+    /// `.git` — so a session spawned inside a worktree still sees the
+    /// main repo as its root.
     pub fn discover_from_cwd(cwd: &Path) -> Result<Self, WorktreeError> {
         // Use `git rev-parse --git-common-dir` for canonical resolution.
         // `--git-common-dir` returns the SHARED .git directory across
@@ -288,11 +278,10 @@ impl AgentWorktreeManager {
 
     /// Create a fresh agent worktree with the given slug.
     ///
-    /// Slug format per TS `AgentTool.tsx:591`: `agent-<first-8-hex>`
-    /// derived from the agent id. Validated here to reject path
-    /// separators + shell metacharacters.
+    /// Slug format: `agent-<first-8-hex>` derived from the agent id.
+    /// Validated here to reject path separators + shell metacharacters.
     ///
-    /// Side effects (TS parity, items 1 + 2 of `performPostCreationSetup`):
+    /// Side effects (post-creation setup):
     /// - Copy `.coco/settings.local.json` into the worktree.
     /// - Configure `core.hooksPath` to point at the main repo's hooks
     ///   (so husky / custom hooks resolve correctly).
@@ -312,9 +301,8 @@ impl AgentWorktreeManager {
             std::fs::create_dir_all(parent)?;
         }
 
-        // `-B` creates-or-resets the branch; matches TS
-        // `getOrCreateWorktree` behavior where an existing agent
-        // worktree can be reused.
+        // `-B` creates-or-resets the branch; an existing agent worktree
+        // can be reused.
         let add_output = Command::new("git")
             .arg("-C")
             .arg(&self.canonical_git_root)
@@ -336,7 +324,7 @@ impl AgentWorktreeManager {
         let _ = copy_settings_local(&self.canonical_git_root, &worktree_path);
         let _ = configure_hooks_path(&self.canonical_git_root, &worktree_path);
         // Symlink configured directories (e.g. node_modules) from the
-        // main repo. TS parity: `symlinkDirectories` setting.
+        // main repo per the `symlinkDirectories` setting.
         if !self.config.symlink_directories.is_empty() {
             let _ = symlink_directories(
                 &self.canonical_git_root,
@@ -357,8 +345,7 @@ impl AgentWorktreeManager {
     /// `true` when the provided hook registry contains at least one
     /// `WorktreeCreate` handler.
     ///
-    /// TS parity: `worktree.ts:912` `hasWorktreeCreateHook()`. When
-    /// `true`, the caller may route worktree creation through the
+    /// When `true`, the caller may route worktree creation through the
     /// hook runner to support non-git VCS (Jujutsu, Mercurial, etc.).
     /// When `false`, falls back to `git worktree add`.
     ///
@@ -379,9 +366,8 @@ impl AgentWorktreeManager {
     /// crashed before `cleanup_if_unchanged` could run (parent
     /// killed by ESC/Ctrl+C, crash, lost connection, etc.).
     ///
-    /// TS parity: `worktree.ts:1058-1136` `cleanupStaleAgentWorktrees`
-    /// uses a 30-day threshold. Returns the number of worktrees
-    /// removed.
+    /// Uses a 30-day threshold by default. Returns the number of
+    /// worktrees removed.
     ///
     /// Silently skips worktrees that still have changes — user's
     /// work is preserved even if the agent metadata is lost.
@@ -420,8 +406,7 @@ impl AgentWorktreeManager {
             // remote. The stale path has no original head to diff against (the
             // session metadata is gone after a crash/kill), so committed work
             // is guarded by the unpushed-commit check rather than head..HEAD.
-            // Fail-closed: a git error keeps the worktree. TS
-            // cleanupStaleAgentWorktrees (worktree.ts:1101-1118).
+            // Fail-closed: a git error keeps the worktree.
             if has_worktree_changes(&path, "").unwrap_or(true)
                 || has_unpushed_commits(&path).unwrap_or(true)
             {
@@ -441,7 +426,6 @@ impl AgentWorktreeManager {
         }
         if removed > 0 {
             // Drop git's internal registry entries for the now-deleted dirs.
-            // TS cleanupStaleAgentWorktrees (worktree.ts:1132-1134).
             let _ = git_stdout(&self.canonical_git_root, &["worktree", "prune"]);
         }
         removed
@@ -450,19 +434,15 @@ impl AgentWorktreeManager {
     /// Remove the worktree if the child agent made no changes; keep
     /// it on disk otherwise.
     ///
-    /// TS parity: `AgentTool.tsx:644-685` `cleanupWorktreeIfNeeded`.
-    ///
     /// "Changes" means a dirty working tree (`git status --porcelain`) OR
     /// commits made since `session.head_commit` — a clean tree can still hold
     /// committed work that the force-remove + `branch -D` below would destroy.
-    /// Mirrors TS `hasWorktreeChanges` (`worktree.ts:1155-1173`).
     pub fn cleanup_if_unchanged(&self, session: AgentWorktreeSession) -> WorktreeCleanupOutcome {
         let has_changes = match has_worktree_changes(&session.path, &session.head_commit) {
             Ok(b) => b,
             Err(_) => {
                 // Can't determine — err on the side of keeping for
-                // user inspection. Matches TS fallback where a
-                // failed status query defaults to "keep".
+                // user inspection; a failed status query defaults to "keep".
                 return WorktreeCleanupOutcome::Kept {
                     path: session.path,
                     branch: session.branch,
@@ -510,7 +490,7 @@ impl AgentWorktreeManager {
 /// Match exactly the `agent-<8-hex-chars>` slug shape used by
 /// [`AgentWorktreeManager::create_for`]. This narrow pattern keeps
 /// stale-sweep from touching user-named EnterWorktree slugs like
-/// `wt-myfeature`. TS parity: `worktree.ts:1022-1029` comment.
+/// `wt-myfeature`.
 fn is_agent_slug(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("agent-") else {
         return false;
@@ -548,9 +528,9 @@ fn get_head_commit(path: &Path) -> Result<String, WorktreeError> {
 /// from). A clean working tree can still hold committed work that
 /// `git worktree remove --force` + `branch -D` would destroy, so the commit
 /// check is essential — without it an agent that commits its output loses it.
-/// Mirrors TS `hasWorktreeChanges` (worktree.ts:1155-1173). An empty
-/// `head_commit` (the stale sweep, where the original head is unknown) skips
-/// the commit check; that path guards committed work via [`has_unpushed_commits`].
+/// An empty `head_commit` (the stale sweep, where the original head is unknown)
+/// skips the commit check; that path guards committed work via
+/// [`has_unpushed_commits`].
 fn has_worktree_changes(path: &Path, head_commit: &str) -> Result<bool, WorktreeError> {
     if !coco_git::get_uncommitted_changes(path)?.is_empty() {
         return Ok(true);
@@ -572,9 +552,8 @@ fn has_commits_since(path: &Path, head_commit: &str) -> Result<bool, WorktreeErr
 }
 
 /// Any commit on HEAD not reachable from a remote — unpushed work the stale
-/// sweep must preserve (it has no original head to diff against). Mirrors TS
-/// `cleanupStaleAgentWorktrees`' `git rev-list --max-count=1 HEAD --not
-/// --remotes` (worktree.ts:1101-1118).
+/// sweep must preserve (it has no original head to diff against).
+/// Uses `git rev-list --max-count=1 HEAD --not --remotes`.
 fn has_unpushed_commits(path: &Path) -> Result<bool, WorktreeError> {
     let out = git_stdout(
         path,
@@ -604,13 +583,13 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> Result<String, WorktreeError> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// TS parity: `worktree.ts:516-534` — copies `.coco/settings.local.json`
-/// from the main repo into the worktree so child agents inherit
-/// local settings (auth tokens, per-project preferences).
+/// Copies `.coco/settings.local.json` from the main repo into the worktree
+/// so child agents inherit local settings (auth tokens, per-project
+/// preferences).
 fn copy_settings_local(repo_root: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
     let src = repo_root.join(".coco").join("settings.local.json");
     if !src.exists() {
-        return Ok(()); // no local settings to propagate — TS also no-ops.
+        return Ok(()); // no local settings to propagate — no-op.
     }
     let dst = worktree_path.join(".coco").join("settings.local.json");
     if let Some(parent) = dst.parent() {
@@ -620,8 +599,7 @@ fn copy_settings_local(repo_root: &Path, worktree_path: &Path) -> Result<(), Wor
     Ok(())
 }
 
-/// TS parity: `worktree.ts:538-578` — configures
-/// `core.hooksPath` inside the worktree to point at the main
+/// Configures `core.hooksPath` inside the worktree to point at the main
 /// repo's `.husky/` or `.git/hooks/`, so pre-commit / post-commit
 /// hooks resolve correctly in the worktree.
 fn configure_hooks_path(repo_root: &Path, worktree_path: &Path) -> Result<(), WorktreeError> {
@@ -650,14 +628,13 @@ fn configure_hooks_path(repo_root: &Path, worktree_path: &Path) -> Result<(), Wo
     Ok(())
 }
 
-/// TS parity: `worktree.ts:580-585` — symlinks configured
-/// directories from the main repo into the fresh worktree so large
-/// dirs (node_modules, target, .venv) aren't duplicated across
-/// every agent's worktree.
+/// Symlinks configured directories from the main repo into the fresh
+/// worktree so large dirs (node_modules, target, .venv) aren't
+/// duplicated across every agent's worktree.
 ///
-/// Missing source dirs are silently skipped (TS matches). Any
-/// already-existing entry in the worktree is left alone — a later
-/// agent might have populated it and we refuse to clobber.
+/// Missing source dirs are silently skipped. Any already-existing entry
+/// in the worktree is left alone — a later agent might have populated it
+/// and we refuse to clobber.
 fn symlink_directories(
     repo_root: &Path,
     worktree_path: &Path,

@@ -1,11 +1,11 @@
-//! Hook input types for all 27 TS-canonical event types.
+//! Hook input types for all 27 event types.
 //!
 //! Each event-specific struct embeds `BaseHookInput` via `#[serde(flatten)]`.
-//! The TS-wire `hook_event_name` discriminator is supplied by the
+//! The `hook_event_name` discriminator is supplied by the
 //! [`HookInput`] enum's `#[serde(tag = "hook_event_name")]` representation
 //! — it is not a Rust field on the inner structs (one source of truth).
 //!
-//! Field shapes mirror `entrypoints/sdk/coreSchemas.ts` from claude-code TS.
+//! Field shapes match `coreSchemas.ts`.
 
 use coco_types::HookEventType;
 use serde::Deserialize;
@@ -14,10 +14,10 @@ use serde::Serialize;
 use crate::orchestration::OrchestrationContext;
 
 // ---------------------------------------------------------------------------
-// Enum-typed fields (TS zod enums)
+// Enum-typed fields
 // ---------------------------------------------------------------------------
 
-/// SessionStart `source`. TS: `enum(['startup','resume','clear','compact'])`.
+/// SessionStart `source`: `startup | resume | clear | compact`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,7 +28,7 @@ pub enum SessionStartSource {
     Compact,
 }
 
-/// Setup `trigger`. TS: `enum(['init','maintenance'])`.
+/// Setup `trigger`: `init` or `maintenance`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,7 +37,7 @@ pub enum SetupTrigger {
     Maintenance,
 }
 
-/// Pre/PostCompact `trigger`. TS: `enum(['manual','auto'])`.
+/// Pre/PostCompact `trigger`: `manual` or `auto`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,8 +46,7 @@ pub enum CompactTrigger {
     Auto,
 }
 
-/// SessionEnd `reason`. TS:
-/// `enum(['clear','resume','logout','prompt_input_exit','other','bypass_permissions_disabled'])`.
+/// SessionEnd `reason`: `clear`, `resume`, `logout`, `prompt_input_exit`, `other`, or `bypass_permissions_disabled`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -60,7 +59,7 @@ pub enum ExitReason {
     BypassPermissionsDisabled,
 }
 
-/// FileChanged `event`. TS: `enum(['change','add','unlink'])`.
+/// FileChanged `event`: `change`, `add`, or `unlink`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,8 +69,7 @@ pub enum FileChangeEvent {
     Unlink,
 }
 
-/// ConfigChange `source`. TS:
-/// `enum(['user_settings','project_settings','local_settings','policy_settings','skills'])`.
+/// ConfigChange `source`: `user_settings`, `project_settings`, `local_settings`, `policy_settings`, or `skills`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,8 +81,7 @@ pub enum ConfigChangeSource {
     Skills,
 }
 
-/// InstructionsLoaded `memory_type`. TS:
-/// `enum(['User','Project','Local','Managed'])`.
+/// InstructionsLoaded `memory_type`: `User`, `Project`, `Local`, or `Managed`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemoryType {
@@ -94,8 +91,7 @@ pub enum MemoryType {
     Managed,
 }
 
-/// InstructionsLoaded `load_reason`. TS:
-/// `enum(['session_start','nested_traversal','path_glob_match','include','compact'])`.
+/// InstructionsLoaded `load_reason`: `session_start`, `nested_traversal`, `path_glob_match`, `include`, or `compact`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -107,7 +103,7 @@ pub enum InstructionsLoadReason {
     Compact,
 }
 
-/// Elicitation `mode`. TS: `enum(['form','url'])`.
+/// Elicitation `mode`: `form` or `url`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -116,7 +112,7 @@ pub enum ElicitationMode {
     Url,
 }
 
-/// ElicitationResult `action`. TS: `enum(['accept','decline','cancel'])`.
+/// ElicitationResult `action`: `accept`, `decline`, or `cancel`.
 ///
 /// Re-exported from `coco_types` so the hook **input** type
 /// (`ElicitationResultInput.action`) and the hook **output** type
@@ -233,19 +229,15 @@ pub fn elicitation_action_wire_str(action: ElicitationAction) -> &'static str {
 
 /// Common base fields for all hook inputs.
 ///
-/// TS: `BaseHookInputSchema` (`coreSchemas.ts:387-411`). All four base
-/// fields (`session_id`, `transcript_path`, `cwd`) are required; in
-/// practice TS callers default `transcript_path` to an empty string
-/// when no transcript file is being persisted, so we mirror that here
-/// (the field is `String`, defaulting to `""` via `base_from_ctx`).
+/// Base fields for all hook inputs. `transcript_path` defaults to
+/// `""` via `base_from_ctx` when no transcript file is being persisted.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BaseHookInput {
     pub session_id: String,
     pub cwd: String,
     /// Path to the on-disk transcript file. Empty string when the
-    /// session is not persisting a transcript (matches TS practice of
-    /// always emitting a string value). Defaults to `""` on
+    /// session is not persisting a transcript. Defaults to `""` on
     /// deserialize so older fixtures missing the field still parse.
     #[serde(default)]
     pub transcript_path: String,
@@ -257,7 +249,7 @@ pub struct BaseHookInput {
     pub agent_id: Option<String>,
     /// Subagent type (e.g. `"Explore"`, `"Review"`) — set on subagent
     /// hooks AND on main-thread hooks when the session was launched
-    /// via `--agent` (TS parity).
+    /// via `--agent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
 }
@@ -266,7 +258,7 @@ pub struct BaseHookInput {
 // Tool-related inputs
 // ---------------------------------------------------------------------------
 
-/// Input for PreToolUse hooks. TS: `PreToolUseHookInputSchema`.
+/// Input for PreToolUse hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreToolUseInput {
@@ -277,7 +269,7 @@ pub struct PreToolUseInput {
     pub tool_use_id: String,
 }
 
-/// Input for PostToolUse hooks. TS: `PostToolUseHookInputSchema`.
+/// Input for PostToolUse hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostToolUseInput {
@@ -291,8 +283,7 @@ pub struct PostToolUseInput {
 
 /// Input for PostToolUseFailure hooks.
 ///
-/// TS: `PostToolUseFailureHookInputSchema` (`coreSchemas.ts:448-459`):
-/// `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.
+/// Fields: `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PostToolUseFailureInput {
@@ -303,7 +294,7 @@ pub struct PostToolUseFailureInput {
     pub tool_use_id: String,
     pub error: String,
     /// `true` when the tool call was aborted because the user
-    /// interrupted the turn (TS `processInterrupt` path).
+    /// interrupted the turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_interrupt: Option<bool>,
 }
@@ -312,7 +303,7 @@ pub struct PostToolUseFailureInput {
 // Session lifecycle inputs
 // ---------------------------------------------------------------------------
 
-/// Input for SessionStart hooks. TS: `SessionStartHookInputSchema`.
+/// Input for SessionStart hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStartInput {
@@ -325,7 +316,7 @@ pub struct SessionStartInput {
     pub model: Option<String>,
 }
 
-/// Input for SessionEnd hooks. TS: `SessionEndHookInputSchema`.
+/// Input for SessionEnd hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEndInput {
@@ -334,7 +325,7 @@ pub struct SessionEndInput {
     pub reason: ExitReason,
 }
 
-/// Input for Setup hooks. TS: `SetupHookInputSchema`.
+/// Input for Setup hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupInput {
@@ -345,8 +336,7 @@ pub struct SetupInput {
 
 /// Input for Stop hooks.
 ///
-/// TS: `StopHookInputSchema` (`coreSchemas.ts:513-527`):
-/// `{stop_hook_active, last_assistant_message?}`.
+/// Fields: `{stop_hook_active, last_assistant_message?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopInput {
@@ -361,7 +351,7 @@ pub struct StopInput {
     pub last_assistant_message: Option<String>,
 }
 
-/// Input for StopFailure hooks. TS: `StopFailureHookInputSchema`.
+/// Input for StopFailure hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopFailureInput {
@@ -380,8 +370,7 @@ pub struct StopFailureInput {
 
 /// Input for PreCompact hooks.
 ///
-/// TS: `PreCompactHookInputSchema` (`coreSchemas.ts:569-577`):
-/// `{trigger: enum('manual','auto'), custom_instructions: string | null}`.
+/// Fields: `{trigger: enum('manual','auto'), custom_instructions: string | null}`.
 /// `custom_instructions` is **nullable, not optional** — the field is
 /// always present on the wire, with `null` indicating no instructions.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -390,16 +379,14 @@ pub struct PreCompactInput {
     #[serde(flatten)]
     pub base: BaseHookInput,
     pub trigger: CompactTrigger,
-    /// `None` serializes to JSON `null` (TS-nullable parity); the
-    /// field is intentionally NOT skip_serializing_if so it always
-    /// appears on the wire.
+    /// `None` serializes to JSON `null`; the field is intentionally
+    /// NOT skip_serializing_if so it always appears on the wire.
     pub custom_instructions: Option<String>,
 }
 
 /// Input for PostCompact hooks.
 ///
-/// TS: `PostCompactHookInputSchema` (`coreSchemas.ts:579-589`):
-/// `{trigger: enum('manual','auto'), compact_summary: string}`. Both
+/// Fields: `{trigger: enum('manual','auto'), compact_summary: string}`. Both
 /// fields are required.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,7 +401,7 @@ pub struct PostCompactInput {
 // Subagent inputs
 // ---------------------------------------------------------------------------
 
-/// Input for SubagentStart hooks. TS: `SubagentStartHookInputSchema`.
+/// Input for SubagentStart hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubagentStartInput {
@@ -426,8 +413,7 @@ pub struct SubagentStartInput {
 
 /// Input for SubagentStop hooks.
 ///
-/// TS: `SubagentStopHookInputSchema` (`coreSchemas.ts:550-567`):
-/// `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.
+/// Fields: `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubagentStopInput {
@@ -437,7 +423,7 @@ pub struct SubagentStopInput {
     pub agent_type: String,
     pub agent_id: String,
     /// Path to the subagent's transcript file. Empty string when the
-    /// subagent is not persisting one (TS marks this required).
+    /// subagent is not persisting one.
     pub agent_transcript_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_assistant_message: Option<String>,
@@ -447,7 +433,7 @@ pub struct SubagentStopInput {
 // User interaction inputs
 // ---------------------------------------------------------------------------
 
-/// Input for UserPromptSubmit hooks. TS: `UserPromptSubmitHookInputSchema`.
+/// Input for UserPromptSubmit hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserPromptSubmitInput {
@@ -458,9 +444,8 @@ pub struct UserPromptSubmitInput {
 
 /// Input for PermissionRequest hooks.
 ///
-/// TS: `PermissionRequestHookInputSchema` (`coreSchemas.ts:425-434`):
-/// `{tool_name, tool_input, permission_suggestions?}` — note that TS
-/// does NOT include `tool_use_id` on this event.
+/// Fields: `{tool_name, tool_input, permission_suggestions?}` — note that
+/// `tool_use_id` is NOT included on this event.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRequestInput {
@@ -468,16 +453,14 @@ pub struct PermissionRequestInput {
     pub base: BaseHookInput,
     pub tool_name: String,
     pub tool_input: serde_json::Value,
-    /// Suggested permission updates from upstream classifiers. JSON
-    /// pass-through to match TS `PermissionUpdate[]`.
+    /// Suggested permission updates from upstream classifiers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_suggestions: Option<serde_json::Value>,
 }
 
 /// Input for PermissionDenied hooks.
 ///
-/// TS: `PermissionDeniedHookInputSchema` (`coreSchemas.ts:461-471`):
-/// `{tool_name, tool_input, tool_use_id, reason}`.
+/// Fields: `{tool_name, tool_input, tool_use_id, reason}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionDeniedInput {
@@ -495,8 +478,7 @@ pub struct PermissionDeniedInput {
 
 /// Input for Notification hooks.
 ///
-/// TS: `NotificationHookInputSchema` (`coreSchemas.ts:473-482`):
-/// `{message, title?, notification_type}`.
+/// Fields: `{message, title?, notification_type}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationInput {
@@ -510,8 +492,7 @@ pub struct NotificationInput {
 
 /// Input for Elicitation hooks.
 ///
-/// TS: `ElicitationHookInputSchema` (`coreSchemas.ts:627-643`):
-/// `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.
+/// Fields: `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationInput {
@@ -531,8 +512,7 @@ pub struct ElicitationInput {
 
 /// Input for ElicitationResult hooks.
 ///
-/// TS: `ElicitationResultHookInputSchema` (`coreSchemas.ts:645-660`):
-/// `{mcp_server_name, elicitation_id?, mode?, action, content?}`.
+/// Fields: `{mcp_server_name, elicitation_id?, mode?, action, content?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationResultInput {
@@ -552,7 +532,7 @@ pub struct ElicitationResultInput {
 // File / config / environment change inputs
 // ---------------------------------------------------------------------------
 
-/// Input for FileChanged hooks. TS: `FileChangedHookInputSchema`.
+/// Input for FileChanged hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChangedInput {
@@ -562,7 +542,7 @@ pub struct FileChangedInput {
     pub event: FileChangeEvent,
 }
 
-/// Input for ConfigChange hooks. TS: `ConfigChangeHookInputSchema`.
+/// Input for ConfigChange hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigChangeInput {
@@ -575,8 +555,7 @@ pub struct ConfigChangeInput {
 
 /// Input for InstructionsLoaded hooks.
 ///
-/// TS: `InstructionsLoadedHookInputSchema` (`coreSchemas.ts:695-706`):
-/// `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.
+/// Fields: `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstructionsLoadedInput {
@@ -593,7 +572,7 @@ pub struct InstructionsLoadedInput {
     pub parent_file_path: Option<String>,
 }
 
-/// Input for CwdChanged hooks. TS: `CwdChangedHookInputSchema`.
+/// Input for CwdChanged hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CwdChangedInput {
@@ -607,7 +586,7 @@ pub struct CwdChangedInput {
 // Worktree inputs
 // ---------------------------------------------------------------------------
 
-/// Input for WorktreeCreate hooks. TS: `WorktreeCreateHookInputSchema`.
+/// Input for WorktreeCreate hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeCreateInput {
@@ -616,7 +595,7 @@ pub struct WorktreeCreateInput {
     pub name: String,
 }
 
-/// Input for WorktreeRemove hooks. TS: `WorktreeRemoveHookInputSchema`.
+/// Input for WorktreeRemove hooks.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorktreeRemoveInput {
@@ -631,8 +610,7 @@ pub struct WorktreeRemoveInput {
 
 /// Input for TaskCreated hooks.
 ///
-/// TS: `TaskCreatedHookInputSchema` (`coreSchemas.ts:601-612`):
-/// `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
+/// Fields: `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCreatedInput {
@@ -650,8 +628,7 @@ pub struct TaskCreatedInput {
 
 /// Input for TaskCompleted hooks.
 ///
-/// TS: `TaskCompletedHookInputSchema` (`coreSchemas.ts:614-625`):
-/// `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
+/// Fields: `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCompletedInput {
@@ -669,8 +646,7 @@ pub struct TaskCompletedInput {
 
 /// Input for TeammateIdle hooks.
 ///
-/// TS: `TeammateIdleHookInputSchema` (`coreSchemas.ts:591-599`):
-/// `{teammate_name, team_name}`.
+/// Fields: `{teammate_name, team_name}`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeammateIdleInput {
@@ -684,13 +660,12 @@ pub struct TeammateIdleInput {
 // Unified enum
 // ---------------------------------------------------------------------------
 
-/// Generic hook input — unified envelope for every TS hook event.
+/// Generic hook input — unified envelope for every hook event.
 ///
 /// Internally tagged on `hook_event_name` (PascalCase wire literal,
 /// matching `HookEventType`). The tag field is supplied by serde from
 /// the variant identity, so inner structs do NOT carry a redundant
-/// `hook_event_name` field. Wire shape is identical to the prior
-/// `untagged` representation:
+/// `hook_event_name` field. Wire shape:
 ///
 /// ```json
 /// {"hook_event_name":"PreToolUse","session_id":"s","tool_name":"Read",...}
@@ -699,7 +674,7 @@ pub struct TeammateIdleInput {
 /// Compared with `untagged`, this representation:
 ///  - lets schemars emit a discriminated `oneOf` with `const` on the
 ///    tag field, which downstream codegen (Pydantic discriminated
-///    unions, TS native discriminated-union narrowing) consumes natively;
+///    unions) consumes natively;
 ///  - replaces serde's try-each-variant deserialize loop with O(1)
 ///    dispatch on the tag value.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -774,7 +749,7 @@ impl HookInput {
         }
     }
 
-    /// The hook event name (TS wire-format string) for this input.
+    /// The hook event name (wire-format string) for this input.
     pub fn event_name(&self) -> &'static str {
         self.event().as_str()
     }
@@ -787,8 +762,7 @@ impl HookInput {
 /// Build base input from orchestration context.
 ///
 /// `transcript_path` defaults to `""` when the context does not carry
-/// one — TS marks the field required, and emitting an empty string
-/// rather than `null` matches its serde shape.
+/// one — emitting an empty string rather than `null` matches the wire shape.
 pub fn base_from_ctx(ctx: &OrchestrationContext) -> BaseHookInput {
     BaseHookInput {
         session_id: ctx.session_id.clone(),

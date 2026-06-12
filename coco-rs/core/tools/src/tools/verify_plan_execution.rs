@@ -1,18 +1,12 @@
 //! VerifyPlanExecutionTool — record a post-plan verification checkpoint.
 //!
-//! TS parity: `tools.ts` conditionally registers `VerifyPlanExecutionTool`
-//! when `CLAUDE_CODE_VERIFY_PLAN === 'true'`; the mirrored source tree only
-//! contains the conditional references, not the tool implementation. coco-rs
-//! ships a small built-in tool so `verify_plan_reminder` always points at a
+//! Ships a small built-in tool so `verify_plan_reminder` always points at a
 //! callable tool instead of a dangling name.
 //!
-//! **Scope.** TS's (unavailable) tool triggers a *background verification*
-//! agent (`state/AppStateStore.ts` carries `verificationStarted` /
-//! `verificationCompleted` sub-flags for that flow). coco-rs deliberately
-//! ships the simpler shape: this tool does **not** verify anything itself —
-//! the model is expected to inspect files and run checks first; calling the
-//! tool only *records the checkpoint* and clears `pending_plan_verification`
-//! so the `verify_plan_reminder` nudge stops firing.
+//! **Scope.** This tool does **not** verify anything itself — the model is
+//! expected to inspect files and run checks first; calling the tool only
+//! *records the checkpoint* and clears `pending_plan_verification` so the
+//! `verify_plan_reminder` nudge stops firing.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -50,9 +44,8 @@ pub enum VerifyPlanExecutionStatus {
     NoPendingVerification,
 }
 
-/// Typed output. Wire fields use snake_case (no TS source to mirror —
-/// coco-rs-only tool); legacy `planFilePath` (camelCase) is dropped
-/// per the "disregard backward compatibility" directive.
+/// Typed output. Wire fields use snake_case; legacy `planFilePath` (camelCase)
+/// is dropped per the "disregard backward compatibility" directive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VerifyPlanExecutionOutput {

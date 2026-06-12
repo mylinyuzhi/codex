@@ -1,8 +1,7 @@
 //! Git Bash binary discovery on Windows.
 //!
-//! TS: `utils/shell/bashProvider.ts::findGitBashPath` walks PATH and
-//! standard install locations. Non-Windows platforms always return
-//! `None` — `/bin/sh` works directly without discovery.
+//! Walks PATH and standard install locations. Non-Windows platforms
+//! always return `None` — `/bin/sh` works directly without discovery.
 
 #[cfg(target_os = "windows")]
 use std::path::Path;

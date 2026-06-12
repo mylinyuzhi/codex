@@ -1,11 +1,10 @@
 //! Eager memory-file discovery — root→CWD walk loaded once at session
 //! start.
 //!
-//! TS source: `utils/claudemd.ts:790-960` (`getMemoryFiles`).
 //! Per-file lazy traversal lives in [`crate::nested_memory`] and is
 //! driven by file-read triggers, not this module.
 //!
-//! **Naming**: TS calls these `CLAUDE.md` files. coco-rs supports both
+//! **Naming**: coco-rs supports both
 //! `CLAUDE.md` and `AGENTS.md` (Codex / Cursor convention) at every
 //! eager-load position, matched case-insensitively via
 //! [`crate::memory_filenames::find_memory_files`]. The struct is named
@@ -50,7 +49,7 @@ pub enum MemoryFileSource {
 
 /// Discover all memory files for the given working directory.
 ///
-/// Walk order (TS parity, `claudemd.ts:790-960`):
+/// Walk order:
 /// 0. Managed `/etc/coco/{CLAUDE,AGENTS}.md` + unconditional `/etc/coco/rules`.
 /// 1. User-global `~/.coco/{CLAUDE,AGENTS}.md` + unconditional `~/.coco/rules`.
 /// 2. From filesystem root walking down to `cwd` inclusive, in each dir:
@@ -64,8 +63,8 @@ pub enum MemoryFileSource {
 /// includes per tier (only user-global memory may include external files).
 ///
 /// Files closer to `cwd` are loaded last → highest model-attention
-/// priority (TS header comment: "Files are loaded in reverse order of
-/// priority"). Duplicates resolved via canonicalized-path dedup (e.g.
+/// priority ("Files are loaded in reverse order of priority"). Duplicates
+/// resolved via canonicalized-path dedup (e.g.
 /// when CWD == filesystem root or when symlinks loop back).
 ///
 /// Per-file lazy traversal — adding `<between-cwd-and-file>/CLAUDE.md`
@@ -82,8 +81,7 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
     let mut processed: HashSet<PathBuf> = HashSet::new();
 
     // 0. Managed (policy) `/etc/coco/{CLAUDE,AGENTS}.md` + unconditional
-    //    `/etc/coco/rules`. Loaded first (TS `getMemoryPath('Managed')`,
-    //    claudemd.ts:803-823). Lowest model-attention, always applied.
+    //    `/etc/coco/rules`. Loaded first. Lowest model-attention, always applied.
     let managed_dir = managed_memory_dir();
     for path in find_memory_files(&managed_dir, MEMORY_FILE_CANDIDATES) {
         try_push(
@@ -102,8 +100,7 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
         cwd,
     );
 
-    // 1. User-global `~/.coco/{CLAUDE,AGENTS}.md` + unconditional
-    //    `~/.coco/rules` (TS claudemd.ts:826-846).
+    // 1. User-global `~/.coco/{CLAUDE,AGENTS}.md` + unconditional `~/.coco/rules`.
     if let Some(home) = dirs_home() {
         let coco_dir = home.join(".coco");
         for path in find_memory_files(&coco_dir, MEMORY_FILE_CANDIDATES) {
@@ -125,7 +122,7 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
     }
 
     // 2. Walk root→cwd inclusive. Build dirs from cwd up, then reverse
-    //    so loading proceeds root→cwd (TS `claudemd.ts:850-857`).
+    //    so loading proceeds root→cwd.
     let mut dirs: Vec<PathBuf> = Vec::new();
     let mut current = cwd.to_path_buf();
     loop {
@@ -144,7 +141,6 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
     // the worktree, so the same content sits at two distinct paths and would
     // load twice. `nested` lets us skip the main repo's checked-in copy in the
     // dirs above the worktree. `None` for regular repos / non-repos → no skip.
-    // TS: claudemd.ts:868-875.
     let nested = nested_worktree_roots(cwd);
 
     for dir in &dirs {
@@ -152,7 +148,7 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
         // unconditional-rules) files in dirs inside the main repo but above
         // the worktree — the worktree has its own checkout. `CLAUDE.local.md`
         // is gitignored (only in the main repo, never duplicated) so it stays
-        // loaded below the guard. TS: claudemd.ts:881-884.
+        // loaded below the guard.
         let skip_project = nested
             .as_ref()
             .is_some_and(|roots| dir_in_skip_zone(dir, roots));
@@ -182,8 +178,7 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
             }
 
             // <dir>/.coco/rules/*.md unconditional rules (no `paths:`
-            // frontmatter) — always-on project guidance. TS processMdRules
-            // ({conditionalRule:false}) at claudemd.ts:909-919. Conditional
+            // frontmatter) — always-on project guidance. Conditional
             // (`paths:`) rules stay in the lazy per-file traversal.
             push_unconditional_rules(
                 &dir.join(".coco").join("rules"),
@@ -213,10 +208,10 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
 /// Resolve `(worktree_root, canonical_root)` when `cwd` sits inside a git
 /// worktree nested under its main repository, else `None`.
 ///
-/// - worktree root = `git rev-parse --show-toplevel` (TS `findGitRoot`), via
+/// - worktree root = `git rev-parse --show-toplevel`, via
 ///   [`crate::git_utils::get_git_root`].
-/// - canonical root = [`coco_git::find_canonical_git_root`] (TS
-///   `findCanonicalGitRoot`), via `git rev-parse --git-common-dir`.
+/// - canonical root = [`coco_git::find_canonical_git_root`], via
+///   `git rev-parse --git-common-dir`.
 ///
 /// Both are canonicalized before comparison so a symlink-unresolved
 /// `--show-toplevel` (e.g. macOS `/tmp` → `/private/tmp`) can't defeat the
@@ -225,14 +220,14 @@ pub fn discover_memory_files(cwd: &Path) -> Vec<MemoryFile> {
 ///
 /// Security: delegating canonical-root resolution to `git rev-parse` means we
 /// inherit git's own gitdir/commondir validation. The hand-rolled `.git` /
-/// `commondir` parsing TS must security-check (git.ts:142-170, to stop a
-/// malicious repo redirecting `commondir` at a trusted path) doesn't exist
-/// here, and this skip path executes nothing — a mis-resolution is a
-/// memory-content quirk, not a trust/hook-execution bypass (that surface is
-/// settings.json loading, a separate path).
+/// `commondir` parsing that must be security-checked (to stop a malicious repo
+/// redirecting `commondir` at a trusted path) doesn't exist here, and this skip
+/// path executes nothing — a mis-resolution is a memory-content quirk, not a
+/// trust/hook-execution bypass (that surface is settings.json loading, a
+/// separate path).
 ///
-/// Not memoized (TS LRU-memoizes both lookups); discovery runs at session
-/// start + per subagent spawn, so the two `git` calls are off the hot path.
+/// Not memoized; discovery runs at session start + per subagent spawn, so the
+/// two `git` calls are off the hot path.
 pub(crate) fn nested_worktree_roots(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
     let worktree_root = canon_or_self(Path::new(&crate::git_utils::get_git_root(cwd)?));
     let canonical_root = canon_or_self(&coco_git::find_canonical_git_root(cwd)?);
@@ -244,8 +239,7 @@ pub(crate) fn nested_worktree_roots(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
 /// repo (`canonical_root`) but above the worktree (`worktree_root`). Checked-in
 /// memory there is also checked out into the worktree, so loading it would
 /// duplicate the worktree's own copy. `dir` is canonicalized before comparison;
-/// the roots are already canonical from [`nested_worktree_roots`]. Mirrors TS
-/// `pathInWorkingPath(dir, canonicalRoot) && !pathInWorkingPath(dir, gitRoot)`.
+/// the roots are already canonical from [`nested_worktree_roots`].
 pub(crate) fn dir_in_skip_zone(dir: &Path, roots: &(PathBuf, PathBuf)) -> bool {
     let (worktree_root, canonical_root) = roots;
     let dir = canon_or_self(dir);
@@ -265,9 +259,8 @@ fn managed_memory_dir() -> PathBuf {
 }
 
 /// Whether `@import` of files OUTSIDE the project cwd is permitted for this
-/// memory tier. Only user-global memory may pull in external files (TS:
-/// User memory passes `includeExternal: true`, every other tier uses the
-/// default-off project flag).
+/// memory tier. Only user-global memory may pull in external files; every
+/// other tier uses the default-off project flag.
 pub(crate) fn allows_external_imports(source: MemoryFileSource) -> bool {
     matches!(source, MemoryFileSource::UserGlobal)
 }

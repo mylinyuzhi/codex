@@ -10,14 +10,11 @@
 //! `app/cli` is the only place that knows about both the trait and
 //! the queue, so the wiring lives here.
 //!
-//! ## TS parity
+//! ## Notification priority
 //!
-//! Translates [`coco_tasks::TaskNotification`] → [`QueuedCommand`]
-//! exactly as TS `enqueuePendingNotification({value, mode:
-//! 'task-notification'})` lands in `messageQueueManager.ts` —
-//! defaults priority to `'later'` for terminal events (TS
-//! `messageQueueManager.ts:142-149`), `'next'` for stalls (TS
-//! `LocalShellTask.tsx:89-94`).
+//! Translates [`coco_tasks::TaskNotification`] → [`QueuedCommand`]:
+//! defaults priority to `'later'` for terminal events,
+//! `'next'` for stalls.
 
 use async_trait::async_trait;
 use coco_query::command_queue::{CommandQueue, QueuePriority, QueuedCommand};
@@ -45,10 +42,8 @@ impl NotificationSink for CommandQueueNotificationSink {
         fields(task_id = %n.task_id, agent_id = ?n.agent_id, kind = kind_label(&n.kind))
     )]
     async fn push(&self, n: TaskNotification) {
-        // Priority follows the producer site in TS, NOT the
-        // `enqueuePendingNotification` default — every non-stall
-        // call uses default 'later' (TS terminal path), stall uses
-        // 'next' (TS `LocalShellTask.tsx:92`).
+        // Priority by notification kind: every non-stall call uses
+        // 'later', stall uses 'next'.
         let priority = match &n.kind {
             NotificationKind::Stall { .. } => QueuePriority::Next,
             NotificationKind::ShellTerminal { .. } | NotificationKind::AgentTerminal { .. } => {

@@ -1,7 +1,6 @@
 //! Skill and command search autocomplete (/command mentions).
 //!
 //! Uses nucleo for fuzzy matching with weighted scoring.
-//! TS: `commandSuggestions.ts` uses Fuse.js with weighted keys.
 
 use nucleo::Matcher;
 use nucleo::Utf32String;
@@ -88,10 +87,8 @@ impl SkillSearchManager {
         self.skills = skills;
     }
 
-    /// Search skills/commands matching the query using nucleo fuzzy matching.
-    ///
-    /// TS: Fuse.js with weighted keys (name: 3, parts: 2, aliases: 2, description: 0.5).
-    /// Rust: nucleo pattern matching with manual weight multiplication.
+    /// Search skills/commands matching the query using nucleo fuzzy matching
+    /// with weighted keys (name: 3, parts: 2, aliases: 2, description: 0.5).
     pub fn search(&self, query: &str) -> Vec<SuggestionItem> {
         if query.is_empty() {
             return self

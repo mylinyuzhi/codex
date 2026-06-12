@@ -1,8 +1,7 @@
 //! Memory entry data types.
 //!
-//! TS: `memdir/memoryTypes.ts` (271 LOC) — `MEMORY_TYPES`, `MemoryType`,
-//! `parseMemoryType`. The four-type taxonomy is a closed set; content
-//! that falls outside it is rejected by `MemoryEntryType::parse`.
+//! The four-type taxonomy is a closed set; content that falls outside
+//! it is rejected by `MemoryEntryType::parse`.
 
 use std::path::PathBuf;
 
@@ -11,13 +10,9 @@ use serde::Serialize;
 
 /// File name of the per-directory memory index. Always loaded into the
 /// model's context.
-///
-/// TS: `ENTRYPOINT_NAME` in `memdir/memdir.ts`.
 pub const ENTRYPOINT_NAME: &str = "MEMORY.md";
 
-/// One of the four memory taxonomy variants.
-///
-/// TS: `MemoryType` in `memdir/memoryTypes.ts`. The set is closed —
+/// One of the four memory taxonomy variants. The set is closed —
 /// content outside it cannot be saved as a memory.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,9 +38,9 @@ impl MemoryEntryType {
         }
     }
 
-    /// TS: `parseMemoryType()` — accept the four canonical strings, reject
-    /// anything else. Returns `None` for malformed / missing types so the
-    /// caller can decide whether to skip the file or coerce to `User`.
+    /// Accept the four canonical strings, reject anything else. Returns
+    /// `None` for malformed / missing types so the caller can decide
+    /// whether to skip the file or coerce to `User`.
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "user" => Some(Self::User),

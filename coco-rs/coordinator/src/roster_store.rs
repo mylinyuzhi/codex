@@ -317,7 +317,7 @@ impl TeamRosterStore {
 
     /// Persist a teammate's permission mode to `team.json` and the live
     /// roster. Leader-side write-back paired with a `ModeSetRequest` to the
-    /// teammate's mailbox. TS: `teamHelpers.ts:357 setMemberMode`.
+    /// teammate's mailbox.
     pub async fn set_member_mode(
         &self,
         team_name: &str,
@@ -345,11 +345,11 @@ impl TeamRosterStore {
 
     /// Persist MULTIPLE teammates' permission modes to `team.json` in ONE
     /// atomic write, then upsert each changed member into the live roster.
-    /// Mirrors TS `setMultipleMemberModes` (`teamHelpers.ts:415`): batching
-    /// avoids the read-modify-write race of looping [`Self::set_member_mode`]
-    /// (N reads + N writes of the same file). Members not present in the team
-    /// file, or already at the requested mode, are skipped; the file is
-    /// rewritten only when at least one member actually changes.
+    /// Batching avoids the read-modify-write race of looping
+    /// [`Self::set_member_mode`] (N reads + N writes of the same file).
+    /// Members not present in the team file, or already at the requested
+    /// mode, are skipped; the file is rewritten only when at least one
+    /// member actually changes.
     pub async fn set_member_modes(
         &self,
         team_name: &str,
@@ -420,9 +420,9 @@ impl TeamRosterStore {
     /// `notifier` is the session's task-list handle (when available). On
     /// the success path — and only when the team's task-list directory was
     /// actually removed — it fires a "tasks changed" notification so any
-    /// in-process subscriber refreshes its view. This mirrors TS, where
-    /// `cleanupTeamDirectories` calls `notifyTasksUpdated()` inside the
-    /// `rm(tasksDir)` `try` (never the `catch`). A `None` notifier (or a
+    /// in-process subscriber refreshes its view. The notification fires
+    /// only on successful directory removal (never on failure). A `None`
+    /// notifier (or a
     /// failed tasks-dir removal) skips the notification.
     pub async fn delete_team(
         &self,

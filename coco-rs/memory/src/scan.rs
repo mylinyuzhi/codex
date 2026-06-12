@@ -1,8 +1,7 @@
 //! Single Scanner — the only entry point for listing memory files.
 //!
-//! TS: `memdir/memoryScan.ts`. Walks the directory, reads only the first
-//! 30 lines of each `.md` (enough for frontmatter), sorts by mtime
-//! descending, caps at 200 files.
+//! Walks the directory, reads only the first 30 lines of each `.md`
+//! (enough for frontmatter), sorts by mtime descending, caps at 200 files.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -37,15 +36,12 @@ pub fn scan_memory_files(dir: &Path) -> Vec<ScannedMemory> {
     scan_memory_files_with_cancel(dir, None)
 }
 
-/// Cancellable variant — bails early when `cancel` flips. TS parity:
-/// `memdir/memoryScan.ts::scanMemoryFiles(dir, signal)` accepts an
-/// `AbortSignal` so a long directory walk can be killed when the
-/// caller (recall ranker / extract subagent dispatch) is aborted.
-/// `None` means "no cancellation" — equivalent to passing a never-
-/// firing signal.
+/// Cancellable variant — bails early when `cancel` flips. A long
+/// directory walk can be killed when the caller (recall ranker /
+/// extract subagent dispatch) is aborted. `None` means "no
+/// cancellation".
 ///
-/// **Recursive** — TS uses `readdir(memoryDir, { recursive: true })`,
-/// so a topic file at `<memdir>/feedback/testing.md` is visible to
+/// **Recursive** — a topic file at `<memdir>/feedback/testing.md` is visible to
 /// both the ranker manifest and the heuristic fallback. `filename`
 /// holds the path *relative to* `dir` (e.g. `"feedback/testing.md"`),
 /// which is the form the ranker returns in its `selected_memories`
@@ -107,7 +103,7 @@ pub fn scan_memory_files_with_cancel(
             continue;
         }
         // Relative path from the scan root, normalized to forward
-        // slashes for cross-platform parity with TS strings.
+        // slashes for cross-platform consistency.
         let filename = match path.strip_prefix(dir) {
             Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
             Err(_) => basename.to_string(),
@@ -139,8 +135,7 @@ pub fn scan_memory_files_with_cancel(
 
 /// Format scanned memories as a manifest line list for prompt injection.
 ///
-/// TS parity: `memdir/memoryScan.ts::formatMemoryManifest`. One line
-/// per file: `- [type] filename (iso-timestamp): description`.
+/// One line per file: `- [type] filename (iso-timestamp): description`.
 ///
 /// - The `[type] ` tag is rendered ONLY when frontmatter parsed (with
 ///   trailing space). Files without frontmatter render as
@@ -148,8 +143,8 @@ pub fn scan_memory_files_with_cancel(
 /// - The `: description` suffix is included only when frontmatter has
 ///   a non-empty description.
 /// - Empty input → empty string (caller decides whether to render the
-///   "## Existing memory files" wrapper). This matches TS where an
-///   empty list yields `''` and the section is omitted entirely.
+///   "## Existing memory files" wrapper; an empty list omits the section
+///   entirely).
 pub fn format_memory_manifest(memories: &[ScannedMemory]) -> String {
     if memories.is_empty() {
         return String::new();
@@ -176,8 +171,7 @@ pub fn format_memory_manifest(memories: &[ScannedMemory]) -> String {
     lines.join("\n")
 }
 
-/// Render an mtime (ms since epoch) as an ISO-8601 UTC timestamp —
-/// matches TS `new Date(mtimeMs).toISOString()` (`memoryScan.ts:88`).
+/// Render an mtime (ms since epoch) as an ISO-8601 UTC timestamp.
 fn format_iso_timestamp(mtime_ms: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(mtime_ms)
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
@@ -198,7 +192,7 @@ pub fn memory_age_days(mtime_ms: i64) -> i64 {
     }
 }
 
-/// Human-readable age. TS `memoryAge`: `today` / `yesterday` / `N days ago`.
+/// Human-readable age: `today` / `yesterday` / `N days ago`.
 pub fn memory_age_string(mtime_ms: i64) -> String {
     match memory_age_days(mtime_ms) {
         0 => "today".to_string(),
@@ -208,10 +202,8 @@ pub fn memory_age_string(mtime_ms: i64) -> String {
 }
 
 /// Stale-memory caveat prepended to surfaced content when the memory
-/// is older than one day. Verbatim port of TS `memoryAge.ts:33-42
-/// memoryFreshnessText` — surfaced via `attachments.ts:2327-2332
-/// memoryHeader`, which owns the spacing (the caller inserts the blank
-/// line). Returns an empty string for memories ≤1 day old (treat as fresh).
+/// is older than one day. The caller inserts the blank line before this
+/// text. Returns an empty string for memories ≤1 day old (treat as fresh).
 pub fn memory_freshness_text(mtime_ms: i64) -> String {
     let days = memory_age_days(mtime_ms);
     if days <= 1 {

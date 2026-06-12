@@ -2,9 +2,6 @@
 //! (V1). Lives in `coco-types` so [`crate::app_state::ToolAppState`]
 //! can carry typed snapshots without depending on the higher-level
 //! handle/implementation crates (`coco-tool-runtime`, `coco-tasks`).
-//!
-//! TS parity: `utils/tasks.ts` (`TaskSchema`, `TaskStatusSchema`) +
-//! `utils/todo/types.ts` (`TodoItemSchema`).
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -12,8 +9,7 @@ use std::collections::HashMap;
 
 // ── Task (V2) DTOs ────────────────────────────────────────────────────
 
-/// Task status wire format — matches TS `TaskStatusSchema`
-/// (`utils/tasks.ts:69-74`). **Distinct** from [`crate::TaskStatus`],
+/// Task status wire format. **Distinct** from [`crate::TaskStatus`],
 /// which is the 6-variant running-task lifecycle enum.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,7 +30,7 @@ impl TaskListStatus {
     }
 }
 
-/// A durable plan-item, matching TS `TaskSchema` (`utils/tasks.ts:76-89`).
+/// A durable plan-item.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
@@ -71,7 +67,7 @@ pub struct TaskRecordUpdate {
     pub metadata_merge: Option<HashMap<String, serde_json::Value>>,
 }
 
-/// Outcome of a `claim_task` call (TS `ClaimTaskResult`).
+/// Outcome of a `claim_task` call.
 #[derive(Debug, Clone)]
 pub enum TaskClaimOutcome {
     Success(TaskRecord),
@@ -90,19 +86,18 @@ pub enum TaskClaimOutcome {
 
 // ── Todo (V1) DTOs ────────────────────────────────────────────────────
 
-/// A TodoWrite item — byte-matches TS `TodoItemSchema` (no `id` field,
-/// positional identity).
+/// A TodoWrite item (no `id` field, positional identity).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoRecord {
-    /// TS `TodoItemSchema.content: z.string().min(1)`.
+    /// Non-empty content string.
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub content: String,
     /// `status` is a plain `String` (TUI/store paths pre-date typing); the
-    /// allowed values are declared on the schema. TS `z.enum([...])`.
+    /// allowed values are declared on the schema.
     #[cfg_attr(feature = "schema", schemars(extend("enum" = ["pending", "in_progress", "completed"])))]
     pub status: String,
-    /// TS `TodoItemSchema.activeForm: z.string().min(1)`.
+    /// Non-empty active form identifier.
     #[serde(rename = "activeForm")]
     #[cfg_attr(feature = "schema", schemars(length(min = 1)))]
     pub active_form: String,
@@ -112,22 +107,14 @@ pub struct TodoRecord {
 
 /// Which panel the TUI should have expanded in the task area.
 ///
-/// TS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants:
-/// `'none' | 'tasks' | 'teammates'`).
+/// **`Teammates` ≠ general subagents.** `Teammates` strictly shows agents
+/// with persistent teammate identity (`agentId@teamName`, survives `/clear`,
+/// mailbox-based). Async subagents spawned by the `Agent` tool render inline
+/// in the transcript and in the `BackgroundTaskStatus` pill row — **not** here.
 ///
-/// **`Teammates` ≠ general subagents.** In TS, `expandedView ===
-/// 'teammates'` mounts `TeammateSpinnerTree`, which strictly filters
-/// `task.type === 'in_process_teammate'` — i.e. agents created by
-/// `spawnTeammate()` with persistent identity (`agentId@teamName`,
-/// survives `/clear`, mailbox-based). Async subagents from the
-/// `Agent` tool (TS `LocalAgentTask`, type `'local_agent'`) render
-/// inline in the transcript via `AgentProgressLine` and in the
-/// `BackgroundTaskStatus` pill row — **not** here.
-///
-/// A subagent only appears in this view when the Agent tool was
-/// invoked with `isAgentSwarmsEnabled() && teamName` set, which
-/// routes through `spawnTeammate()` and transforms the worker into
-/// a first-class teammate.
+/// A subagent only appears in this view when the Agent tool was invoked with
+/// `teamName` set, which routes through `spawnTeammate()` and transforms the
+/// worker into a first-class teammate.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

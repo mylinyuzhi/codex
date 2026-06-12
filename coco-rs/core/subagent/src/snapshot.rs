@@ -24,12 +24,12 @@ pub struct AgentCatalogSnapshot {
     /// PascalCase entries (`Explore`, `Plan`) sort before lowercase
     /// entries (`build`, `coco-guide`).
     active: BTreeMap<String, AgentDefinition>,
-    /// Active `agent_type`s in TS source-load order (built-in → plugin →
+    /// Active `agent_type`s in source-load order (built-in → plugin →
     /// user → project → flag → managed; first-occurrence position within
     /// that, mirroring JS `Map` key-insertion semantics in
     /// `getActiveAgentsFromList`). Used only for prompt rendering so the
     /// model-visible "Available agent types" block — and its prompt-cache
-    /// key — matches TS byte-for-byte. Lookups/counts use `active`.
+    /// key — is deterministic. Lookups/counts use `active`.
     load_order: Vec<String>,
     /// All loaded definitions (including those overridden by higher-priority
     /// sources). Used by `/agents show` to display source chains.
@@ -52,8 +52,8 @@ impl AgentCatalogSnapshot {
         self.active.values()
     }
 
-    /// Active agents in TS source-load order. Prompt rendering uses this
-    /// so the "Available agent types" block matches TS
+    /// Active agents in source-load order. Prompt rendering uses this
+    /// so the "Available agent types" block matches
     /// `getActiveAgentsFromList` (loadAgentsDir.ts:193-220).
     pub fn active_in_load_order(&self) -> impl Iterator<Item = &AgentDefinition> {
         self.load_order
@@ -78,7 +78,7 @@ impl AgentCatalogSnapshot {
     /// Active agents whose `required_mcp_servers` are all satisfied by
     /// the connected MCP server set. Definitions with no requirements
     /// pass through unchanged. Matching is case-insensitive substring
-    /// (TS parity: `loadAgentsDir.ts:hasRequiredMcpServers`).
+    /// (`loadAgentsDir.ts:hasRequiredMcpServers`).
     ///
     /// AgentTool's prompt-rendering layer should use this filter so the
     /// model never sees an agent it can't actually call — pre-filter
@@ -102,7 +102,7 @@ impl AgentCatalogSnapshot {
     }
 }
 
-/// Compute the TS source-load order of active `agent_type`s. Mirrors
+/// Compute the source-load order of active `agent_type`s. Mirrors
 /// `getActiveAgentsFromList` (loadAgentsDir.ts:193-220): iterate sources
 /// ascending by precedence (built-in → plugin → user → project → flag →
 /// managed), and within a source in load order, recording each name at
@@ -138,7 +138,7 @@ fn compute_load_order(
 
 /// Standalone-helper variant of `AgentCatalogSnapshot::active_with_mcp`.
 /// Useful when callers already hold a `Vec<&AgentDefinition>` and just
-/// need to filter it. TS: `filterAgentsByMcpRequirements`.
+/// need to filter it.
 pub fn filter_agents_by_mcp_requirements<'a>(
     agents: impl IntoIterator<Item = &'a AgentDefinition>,
     connected_servers: &[String],
@@ -151,7 +151,7 @@ pub fn filter_agents_by_mcp_requirements<'a>(
 
 /// Pure predicate — `true` when every entry in
 /// `def.required_mcp_servers` matches at least one connected server
-/// (case-insensitive substring). TS: `hasRequiredMcpServers`.
+/// (case-insensitive substring).
 pub fn has_required_mcp_servers(def: &AgentDefinition, connected_servers: &[String]) -> bool {
     if def.required_mcp_servers.is_empty() {
         return true;

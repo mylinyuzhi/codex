@@ -250,7 +250,7 @@ fn test_team_permission_update_rejects_non_add_rules_update() {
     let json = r#"{"type":"team_permission_update","permissionUpdate":{"type":"removeRules","rules":[{"toolName":"Edit","ruleContent":"/proj/**"}],"behavior":"allow","destination":"session"},"directoryPath":"/proj","toolName":"Edit"}"#;
     assert!(
         parse_protocol_message(json).is_none(),
-        "team_permission_update mirrors TS and only accepts addRules"
+        "team_permission_update only accepts addRules, not removeRules"
     );
 }
 

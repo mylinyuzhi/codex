@@ -29,9 +29,7 @@ pub enum CommandsError {
     GitFailed { message: String },
 
     /// In-prompt shell expansion was aborted because a command was
-    /// permission-denied or failed. Mirrors TS `MalformedCommandError`,
-    /// which throws out of `getPromptForCommand` with no partial
-    /// substitution.
+    /// permission-denied or failed, with no partial substitution.
     #[error("shell command failed: {message}")]
     ShellCommandError { message: String },
 

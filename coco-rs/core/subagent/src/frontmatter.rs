@@ -1,7 +1,6 @@
 //! Parse a markdown agent file into an `AgentDefinition`.
 //!
-//! TS: `loadAgentsDir.ts:541-755` — frontmatter shapes per-field validation.
-//! Both kebab-case (`max_turns`) and TS camelCase (`maxTurns`) keys are
+//! Both snake_case (`max_turns`) and camelCase (`maxTurns`) keys are
 //! accepted; output normalizes to the `AgentDefinition` field set.
 
 use std::path::Path;
@@ -61,15 +60,11 @@ pub fn parse_agent_markdown(
     frontmatter: &std::collections::HashMap<String, FrontmatterValue>,
     source: AgentSource,
 ) -> Result<(AgentDefinition, Vec<ValidationError>), FrontmatterParseError> {
-    // TS `loadAgentsDir.ts:554`: `if (!agentType || typeof agentType !== 'string') return null`
-    // — the falsy check rejects empty string. Rust mirrors that here so a
-    // file with `name: ""` is treated the same as a missing key. The JSON
-    // path adds `prompt: z.string().min(1)`; bare-name validation in the
-    // markdown path is already non-empty by symmetry.
+    // The falsy check rejects empty string — a file with `name: ""` is
+    // treated the same as a missing key.
     let name = read_str(frontmatter, "name")
         .filter(|s| !s.trim().is_empty())
         .ok_or(FrontmatterParseError::MissingName)?;
-    // TS `loadAgentsDir.ts:565`: `whenToUse = whenToUse.replace(/\\n/g, '\n')`.
     // YAML keeps the literal `\n` token; restore the real newline.
     let description = read_str_aliased(frontmatter, &["description", "whenToUse", "when_to_use"])
         .map(|s| s.replace("\\n", "\n"))
@@ -115,10 +110,8 @@ pub fn parse_agent_markdown(
             }),
         }
     } else if read_int(frontmatter, "effort").is_some() {
-        // TS `parseEffortValue` overloads `effort:` with a numeric
-        // (budget-tokens) form. coco-rs's downstream
-        // (`session_runtime::thinking_level_for_effort_from`) takes
-        // a `ReasoningEffort` enum directly — there is no consumer
+        // The downstream consumer (`session_runtime::thinking_level_for_effort_from`)
+        // takes a `ReasoningEffort` enum directly — there is no consumer
         // for numeric input, so accepting it would silently drop
         // the operator's intent. Reject loudly and point at the
         // proper config surface.
@@ -206,16 +199,14 @@ pub fn parse_agent_markdown(
     def.skills = read_csv_or_list(frontmatter, "skills").unwrap_or_default();
     def.mcp_servers = parse_mcp_servers(frontmatter);
     // NOTE: `required_mcp_servers` is intentionally NOT read from
-    // frontmatter — TS (loadAgentsDir.ts:693) only reads `mcpServers` and
-    // sets `requiredMcpServers` programmatically, never from a markdown
-    // field. The struct field stays for programmatic use.
+    // frontmatter — only `mcpServers` is read; `requiredMcpServers` is
+    // set programmatically, never from a markdown field. The struct
+    // field stays for programmatic use.
     // Hooks parsing: nested `hooks:` mapping flows through verbatim
     // as `serde_json::Value`. `coco_hooks::load_hooks_from_config`
-    // consumes it at SubagentStart time. TS parity:
-    // `loadAgentsDir.ts:711 parseHooksFromFrontmatter` runs Zod
-    // validation client-side; coco-rs defers validation until the
-    // hook loader actually parses the value (errors surface as
-    // tracing::warn there, matching TS's logForDebugging).
+    // consumes it at SubagentStart time. Validation is deferred until
+    // the hook loader actually parses the value (errors surface as
+    // tracing::warn).
     def.hooks = frontmatter
         .get("hooks")
         .map(FrontmatterValue::to_json)
@@ -225,7 +216,7 @@ pub fn parse_agent_markdown(
 }
 
 /// Parse `mcpServers:` from frontmatter into `Vec<AgentMcpServerSpec>`.
-/// Handles three TS-supported shapes:
+/// Handles three shapes:
 /// - String list (string-ref form): `mcpServers: [github, slack]`
 /// - Mixed sequence (string-ref + inline): `mcpServers: [github, {slack: {...}}]`
 /// - Pure inline mapping list: `mcpServers: [{slack: {command: ./mcp}}]`
@@ -262,7 +253,6 @@ fn parse_mcp_servers(
                 Some(AgentMcpServerSpec::Name(s.clone()))
             }
             FrontmatterValue::Mapping(m) if m.len() == 1 => {
-                // TS: `Object.entries(spec)` with `entries.length === 1`.
                 // Multiple keys per inline entry is rejected as malformed.
                 let (name, config) = m.iter().next()?;
                 let mut single = std::collections::BTreeMap::new();
@@ -274,7 +264,7 @@ fn parse_mcp_servers(
         .collect()
 }
 
-/// Validate a color string against the TS `AgentColorName` set. Invalid
+/// Validate a color string against the `AgentColorName` set. Invalid
 /// values produce a warning and the color is dropped.
 pub fn parse_color_value(raw: &str, warnings: &mut Vec<ValidationError>) -> Option<AgentColorName> {
     match raw.parse::<AgentColorName>() {
@@ -317,7 +307,7 @@ fn read_bool(map: &std::collections::HashMap<String, FrontmatterValue>, key: &st
 }
 
 /// Try each key in order; return the first hit. Used for fields that accept
-/// both camelCase (TS form) and snake_case (Rust form) keys.
+/// both camelCase and snake_case keys.
 fn read_str_aliased(
     map: &std::collections::HashMap<String, FrontmatterValue>,
     keys: &[&str],
@@ -351,8 +341,7 @@ fn read_csv_or_list_aliased(
 // downstream consumer (`thinking_level_for_effort_from`) takes the
 // enum, so numeric input was silently dropped.
 
-/// TS `PermissionMode` (`types/permissions.ts`). Coco-rs accepts the same
-/// nine variants; unrecognized values surface as a warning.
+/// Accepted `permissionMode` values; unrecognized values surface as a warning.
 const VALID_PERMISSION_MODES: &[&str] = &[
     "default",
     "plan",
@@ -369,8 +358,7 @@ const VALID_PERMISSION_MODES: &[&str] = &[
 /// - a YAML list (`tools:\n  - Read\n  - Edit`), or
 /// - a single comma-separated string (`tools: Read, Edit`).
 ///
-/// TS `markdownConfigLoader.ts` `parseToolListString` splits on commas; the
-/// flat-string form is the most common idiom in user-authored agent files.
+/// The flat-string form is the most common idiom in user-authored agent files.
 fn read_csv_or_list(
     map: &std::collections::HashMap<String, FrontmatterValue>,
     key: &str,

@@ -3,7 +3,7 @@ use serde_json::Value;
 use vercel_ai_provider::ProviderMetadata;
 
 /// Build provider metadata for the Responses API response.
-/// Nests all fields under the `"openai"` key to match TS SDK behavior.
+/// Nests all fields under the `"openai"` key.
 pub fn build_responses_provider_metadata(
     response_id: Option<&str>,
     service_tier: Option<&str>,

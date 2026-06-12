@@ -1,8 +1,7 @@
 //! Post-compact file restoration.
 //!
-//! TS: `createPostCompactFileAttachments()` in compact.ts — after compaction,
-//! re-injects the N most recently read files so the model retains context for
-//! files it was actively working on.
+//! After compaction, re-injects the N most recently read files so the model
+//! retains context for files it was actively working on.
 //!
 //! Flow:
 //! 1. Caller snapshots `FileReadState` before clearing it.
@@ -32,16 +31,16 @@ use crate::types::POST_COMPACT_TOKEN_BUDGET;
 
 /// Sentinel text prefix for file-unchanged stubs in tool results.
 ///
-/// TS: `FILE_UNCHANGED_STUB` — tool results starting with this are dedup stubs,
-/// not actual file reads. Their corresponding tool_use should be excluded from
-/// the "already read in preserved messages" set.
+/// Tool results starting with this are dedup stubs, not actual file reads.
+/// Their corresponding tool_use should be excluded from the "already read in
+/// preserved messages" set.
 const FILE_UNCHANGED_STUB_PREFIX: &str = "File unchanged since last read";
 
 /// Create post-compact file attachment messages.
 ///
-/// TS: `createPostCompactFileAttachments()` — re-injects the most recently
-/// accessed files from the pre-compact `FileReadState` snapshot, skipping
-/// files already visible in preserved messages and excluded paths.
+/// Re-injects the most recently accessed files from the pre-compact
+/// `FileReadState` snapshot, skipping files already visible in preserved
+/// messages and excluded paths.
 ///
 /// `snapshot` is ordered by LRU recency (most recent last, from
 /// `FileReadState::snapshot_by_recency`).
@@ -161,7 +160,6 @@ pub fn create_post_compact_file_attachments_with_priority_and_limit<
         };
 
         // Format as system-reminder message matching the Read tool pattern.
-        // TS: `createAttachmentMessage(attachment)` wraps as system-reminder.
         let text = format!(
             "Called the {read_tool_name} tool with the following input: \
              {{\"file_path\":\"{filename}\"}}\n\
@@ -170,8 +168,7 @@ pub fn create_post_compact_file_attachments_with_priority_and_limit<
             content = f.content,
         );
 
-        // TS: roughTokenCountEstimation(jsonStringify(result)) — estimates on
-        // the full formatted message, not just file content.
+        // Token estimate covers the full formatted message, not just file content.
         let att_tokens = coco_messages::estimate_text_tokens(&text);
         if used_tokens + att_tokens > POST_COMPACT_TOKEN_BUDGET {
             tracing::debug!(
@@ -207,9 +204,9 @@ pub fn create_post_compact_file_attachments_with_priority_and_limit<
 
 /// Collect file paths from Read tool calls in preserved messages.
 ///
-/// TS: `collectReadToolFilePaths()` — scans preserved messages for assistant
-/// Read tool_use blocks whose tool results are NOT file-unchanged stubs.
-/// Files already visible in preserved messages don't need re-injection.
+/// Scans preserved messages for assistant Read tool_use blocks whose tool
+/// results are NOT file-unchanged stubs. Files already visible in preserved
+/// messages don't need re-injection.
 fn collect_read_tool_file_paths<M: std::borrow::Borrow<Message>>(
     messages: &[M],
 ) -> HashSet<PathBuf> {
@@ -262,8 +259,8 @@ fn collect_read_tool_file_paths<M: std::borrow::Borrow<Message>>(
 
 /// Check if a path should be excluded from post-compact restoration.
 ///
-/// TS: `shouldExcludeFromPostCompactRestore()` — excludes plan files and
-/// CLAUDE.md/memory-managed paths (they're re-injected via their own systems).
+/// Excludes plan files and CLAUDE.md/memory-managed paths (they're
+/// re-injected via their own systems).
 fn should_exclude_from_restore(path: &Path, cwd: &Path, plan_file: Option<&Path>) -> bool {
     if let Some(plan) = plan_file
         && path == plan

@@ -551,7 +551,7 @@ fn test_to_llm_prompt_empty() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// TS-parity regression tests for Round 10 deep-review fixes.
+// Regression tests for Round 10 deep-review fixes.
 // ─────────────────────────────────────────────────────────────────────
 
 fn assistant_msg_with_request_id(text: &str, request_id: &str) -> Message {
@@ -575,7 +575,7 @@ fn assistant_msg_with_request_id(text: &str, request_id: &str) -> Message {
 
 #[test]
 fn merge_assistants_by_request_id_keeps_distinct_ids_separate() {
-    // TS messages.ts:2257-2261 — different message.id stays separate.
+    // Different request_ids must stay separate.
     let msgs = vec![
         user_msg("hi"),
         assistant_msg_with_request_id("first", "req-A"),
@@ -613,7 +613,6 @@ fn merge_assistants_by_request_id_merges_matching_ids() {
 
 #[test]
 fn merge_assistants_with_no_request_id_stays_separate() {
-    // TS strict equality: undefined !== undefined in this comparison.
     // Synthetic / test messages with no request_id never merge.
     let msgs = vec![
         user_msg("hi"),
@@ -638,7 +637,7 @@ fn smoosh_folds_into_is_error_tool_result() {
     use coco_llm_types::ToolResultPart;
 
     // Construct a Tool LlmMessage with an is_error=true tool_result whose
-    // output is a Content array. TS smooshIntoToolResult filters incoming
+    // output is a Content array. smooshIntoToolResult filters incoming
     // blocks to text-only and proceeds — Rust must do the same.
     let tool_msg = LlmMessage::Tool {
         content: vec![ToolContentPart::ToolResult(ToolResultPart {
@@ -675,7 +674,7 @@ fn smoosh_folds_into_is_error_tool_result() {
     };
     assert!(
         value.contains("<system-reminder>"),
-        "SR text must be folded into is_error tool_result (TS-parity fix)"
+        "SR text must be folded into is_error tool_result"
     );
 }
 
@@ -735,8 +734,7 @@ fn sanitize_strips_non_text_from_is_error_tool_result() {
     assert_eq!(text, "stderr line 1\n\nstderr line 2");
 }
 
-/// TS-parity forward synthesis (`utils/messages.ts:5301-5326`):
-/// when an assistant tool_use has no matching tool_result anywhere
+/// When an assistant tool_use has no matching tool_result anywhere
 /// in the transcript, normalize_messages_for_api must inject an
 /// `is_error: true` placeholder so the next provider call doesn't
 /// hit `unexpected tool_use_id`.
@@ -1019,8 +1017,8 @@ fn exit_plan_mode_input(result: &[LlmMessage]) -> serde_json::Value {
 
 #[test]
 fn normalize_strips_injected_exit_plan_mode_fields_for_api() {
-    // TS parity: `normalizeToolInputForAPI` removes `plan` / `planFilePath`
-    // injected by `normalizeToolInput` — the wire schema is empty.
+    // `plan` / `planFilePath` are injected locally but stripped before the
+    // API call — the wire schema is empty.
     let assistant = exit_plan_mode_assistant(serde_json::json!({
         "plan": "## Plan\n- ship it",
         "planFilePath": "/tmp/plans/slug.md",

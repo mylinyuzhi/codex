@@ -2,20 +2,10 @@
 
 Pre/post event interception with scoped priority: Command / Prompt / Http / Agent handlers, SSRF guard, async hook registry, `if` permission-rule conditions, matcher patterns (exact / pipe-separated / regex / glob), dedup + `once` tracking, HTTP URL allowlist + per-hook env-var allowlist, `expectedHookEvent` JSON cross-check.
 
-## TS Source
-- `schemas/hooks.ts` — HookMatcher / HookCommand zod schemas
-- `utils/hooks/hooksSettings.ts`, `hooksConfigManager.ts`, `hooksConfigSnapshot.ts` — settings layer
-- `utils/hooks/hookHelpers.ts`, `execAgentHook.ts`, `execHttpHook.ts`, `execPromptHook.ts` — executors
-- `utils/hooks/AsyncHookRegistry.ts` — async hook state
-- `utils/hooks/ssrfGuard.ts` — private-IP blocklist for HTTP hooks
-- `utils/hooks/sessionHooks.ts`, `postSamplingHooks.ts`, `skillImprovement.ts` — callback-style hooks
-- `utils/hooks/registerFrontmatterHooks.ts`, `registerSkillHooks.ts` — integration with skills/commands
-- `utils/hooks/apiQueryHookHelper.ts`, `fileChangedWatcher.ts`, `hookEvents.ts` — pipeline glue
-
 ## Key Types
 - `HookDefinition` — `event` (`HookEventType`, 27 variants matching TS), `matcher`, `handler`, `priority` (asc), `scope` (Session>Local>Project>User>Builtin), `if_condition`, `once`, `is_async`, `async_rewake`, `status_message`
-- `HookHandler` — `Command{command,timeout_ms,shell}` / `Prompt{prompt,model,timeout_ms}` / `Http{url,headers,timeout_ms,allowed_env_vars}` / `Agent{prompt,model,timeout_ms}` (TS-aligned schema)
-- `FunctionHookPredicate` (trait) — `evaluate(&[Arc<Message>]) -> bool` + `name()`. Implementations are `Send + Sync + Debug` and must be pure. Used by `FunctionHook` (an in-memory hook registered at session bootstrap rather than loaded from settings) to express TS-parity in-process callbacks like `StructuredOutput` Stop enforcement and Swarm teammate init. Stored on `HookRegistry.function_hooks` (separate from settings-loaded `hooks` because closures cannot `Serialize` / `Deserialize`). TS source: `addFunctionHook` in `utils/hooks/sessionHooks.ts`.
+- `HookHandler` — `Command{command,timeout_ms,shell}` / `Prompt{prompt,model,timeout_ms}` / `Http{url,headers,timeout_ms,allowed_env_vars}` / `Agent{prompt,model,timeout_ms}`
+- `FunctionHookPredicate` (trait) — `evaluate(&[Arc<Message>]) -> bool` + `name()`. Implementations are `Send + Sync + Debug` and must be pure. Used by `FunctionHook` (an in-memory hook registered at session bootstrap rather than loaded from settings) to express in-process callbacks like `StructuredOutput` Stop enforcement and Swarm teammate init. Stored on `HookRegistry.function_hooks` (separate from settings-loaded `hooks` because closures cannot `Serialize` / `Deserialize`).
 - `HookEvaluationResult` — `Ok` / `Blocking{reason}` / `Cancelled` / `NonBlockingError{error}` for LLM-driven Prompt/Agent paths
 - `HookLlmHandle` (trait) — async `evaluate_prompt` / `evaluate_agent` callbacks installed via `OrchestrationContext.llm_handle`; impl lives in `coco-query` to keep coco-hooks below the inference layer
 - `HookExecutionResult` — `CommandOutput{exit_code,stdout,stderr}` or `PromptText(String)`
@@ -30,12 +20,12 @@ Pre/post event interception with scoped priority: Command / Prompt / Http / Agen
 ## Key Functions
 - `execute_hook()` — Command via `sh -c` + stdin piping (30 s default), Prompt/Agent text-passthrough fallback (real LLM eval lives in `run_hook_via_handle_or_fallback` once `llm_handle` is installed), HTTP defaults to **10-minute** timeout, hardcoded POST, allowlist-gated env-var interpolation, CRLF-sanitized headers, SSRF gate (private/link-local block, loopback allowed)
 - `load_hooks_from_config()` — deserialize snake_case event-keyed JSON; accepts both `allowed_env_vars` and `allowedEnvVars`; `model` honored on Prompt + Agent; top-level `timeout` (sec) applied to Command/Http/Prompt/Agent when handler-level `timeout_ms` absent
-- `matcher_matches()` — TS parity: `None` all, `"*"` needs value, simple alnum/`_`/`|`, else regex with glob fallback
-- `aggregate_results_for_event()` — TS-parity event-name cross-check: when `hookSpecificOutput.hookEventName` doesn't match the firing event, the nested fields are skipped with a warning instead of silently applied (TS `processHookJSONOutput` throws; we degrade)
+- `matcher_matches()` — `None` matches all, `"*"` requires a value, simple alnum/`_`/`|`, else regex with glob fallback
+- `aggregate_results_for_event()` — event-name cross-check: when `hookSpecificOutput.hookEventName` doesn't match the firing event, the nested fields are skipped with a warning instead of silently applied
 
 ## Orchestration Entry Points
 
-All take `&HookRegistry, &OrchestrationContext, ...` and return `AggregatedHookResult` (or a richer per-event result for compaction). 27 events, 24 entry points (Compact has separate Pre/Post helpers; TaskCreated/TaskCompleted/TeammateIdle have distinct TS-aligned input structs but share an internal `run_event_with_input` runner). Every event has at least one wired trigger site:
+All take `&HookRegistry, &OrchestrationContext, ...` and return `AggregatedHookResult` (or a richer per-event result for compaction). 27 events, 24 entry points (Compact has separate Pre/Post helpers; TaskCreated/TaskCompleted/TeammateIdle have distinct input structs but share an internal `run_event_with_input` runner). Every event has at least one wired trigger site:
 
 | Event | Function | Trigger sites in coco-rs |
 |---|---|---|
@@ -71,7 +61,7 @@ Each entry point flows policy fields off `OrchestrationContext` (HTTP allowlist,
 
 ## Notification subtypes
 
-`execute_notification` carries an opaque `notification_type` string. Coco-rs fires the same five types TS does (`auth_success` is intentionally not ported — see "Skipped from TS"):
+`execute_notification` carries an opaque `notification_type` string. Coco-rs fires five types (`auth_success` is intentionally omitted — see "Skipped"):
 
 | `notification_type` | Trigger | Site |
 |---|---|---|
@@ -90,13 +80,13 @@ Each entry point flows policy fields off `OrchestrationContext` (HTTP allowlist,
 - `ssrf` — URL → IP resolution + private/link-local blocklist + URL-allowlist matcher
 - `sync_hook_buffer` — FIFO of completed sync hook events for the per-turn reminder pipeline
 
-## Skipped from TS (intentional)
+## Skipped (intentional)
 
-- `auth_success` notification — TS surfaces a "you're logged in" toast after OAuth + key-store flows. Coco-rs handles auth via `coco-cli login` / settings flows that already render their own confirmation; bolting a `Notification` hook onto them would only fire on interactive UX paths the user just initiated, which never matched the spirit of the hook (background notifiers). Leave the variant available in case a non-interactive auth path lands later.
+- `auth_success` notification — Coco-rs handles auth via `coco-cli login` / settings flows that already render their own confirmation; bolting a `Notification` hook onto them would only fire on interactive UX paths the user just initiated, which never matched the spirit of the hook (background notifiers). Leave the variant available in case a non-interactive auth path lands later.
 
 ## Pending (TUI dialog UI required)
 
-- `elicitation_dialog` / `elicitation_complete` notification subtypes — both fire only when an MCP elicitation actually opens a dialog. Today the `SendElicitation` callsites have no UI; the hook wrapper short-circuits or auto-rejects before any dialog could open. When a TUI elicitation dialog lands (`services/mcp/elicitationHandler.ts:230-301` is the TS reference), fire these from the dialog-show / dialog-close edges.
+- `elicitation_dialog` / `elicitation_complete` notification subtypes — both fire only when an MCP elicitation actually opens a dialog. Today the `SendElicitation` callsites have no UI; the hook wrapper short-circuits or auto-rejects before any dialog could open. When a TUI elicitation dialog lands, fire these from the dialog-show / dialog-close edges.
 
 ## Done in earlier waves (kept here as anchors)
 
@@ -107,4 +97,4 @@ Each entry point flows policy fields off `OrchestrationContext` (HTTP allowlist,
 
 ## Open (loader semantics)
 
-- `hooksConfigSnapshot` capture/refresh semantics — TS keeps a pinned snapshot per session for deterministic re-fires; the Rust loader is stateless. Low priority — only matters for hot-reload edge cases where a hook is removed mid-turn.
+- `hooksConfigSnapshot` capture/refresh semantics — a pinned snapshot per session enables deterministic re-fires; the Rust loader is stateless (low priority — only matters for hot-reload edge cases where a hook is removed mid-turn).

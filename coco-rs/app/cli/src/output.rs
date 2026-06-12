@@ -1,7 +1,4 @@
 //! CLI output formatting for non-TUI mode.
-//!
-//! TS: cli/print.ts (5594 LOC) — message rendering, markdown, diff display.
-//! TS: cli/structuredIO.ts (859 LOC) — NDJSON SDK protocol.
 
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
@@ -31,7 +28,7 @@ fn render_text(msg: &Message) -> String {
         Message::User(u) => {
             // Post-Phase-2: all `Message::User` are genuine human input.
             // Meta / reminder text lives in `Message::Attachment`.
-            // Slash-command echo/result rows carry TS command tags — strip
+            // Slash-command echo/result rows carry command tags — strip
             // them so text mode shows `> /cmd` / the result, not raw XML.
             let text = extract_text(&u.message);
             if coco_messages::is_command_input(&text) {
@@ -155,8 +152,6 @@ pub fn format_turn_summary(turn: i32, tool_count: i32, duration_ms: i64) -> Stri
 }
 
 /// NDJSON message types for SDK protocol.
-///
-/// TS: SDKMessage, StdoutMessage — NDJSON protocol for SDK communication.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SdkMessage {

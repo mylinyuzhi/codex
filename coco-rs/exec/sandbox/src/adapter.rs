@@ -1,10 +1,6 @@
 //! Claude-specific glue between settings + permission rules and the sandbox
 //! runtime config.
 //!
-//! TS source: `utils/sandbox/sandbox-adapter.ts::convertToSandboxRuntimeConfig`
-//! and the path-resolve helpers `resolvePathPatternForSandbox` /
-//! `resolveSandboxFilesystemPath`.
-//!
 //! ## Layering
 //!
 //! This module is the steering wheel; the rest of `coco-sandbox` is the engine.
@@ -55,8 +51,7 @@ pub struct AdapterInputs<'a> {
     /// User-facing sandbox mode (from settings + env). Drives [`EnforcementLevel`].
     pub mode: SandboxMode,
     /// Directory used to resolve settings-relative paths in permission rules.
-    /// TS: `getSettingsRootPathForSource(source)` per-source — Rust port
-    /// collapses to the project's settings root.
+    /// Per-source resolution collapses to the project's settings root.
     pub settings_root: &'a Path,
     /// Original working directory at session start.
     pub original_cwd: &'a Path,
@@ -109,8 +104,6 @@ pub struct AdapterOutput {
 
 /// Build the runtime sandbox config from settings, permission rules, and
 /// session context. Pure synchronous logic — no I/O.
-///
-/// TS: `convertToSandboxRuntimeConfig(settings)` lines 172–381.
 pub fn build_runtime_config(inputs: AdapterInputs<'_>) -> AdapterOutput {
     let mut settings = inputs.settings.clone();
 
@@ -503,8 +496,6 @@ pub fn bare_repo_scrub_paths(cwd: &Path, original_cwd: &Path) -> Vec<PathBuf> {
 
 /// Best-effort delete of planted bare-repo files. Errors are logged at debug
 /// level and never propagated — `ENOENT` is the expected common case.
-///
-/// TS: `scrubBareGitRepoFiles()` line 404.
 pub fn scrub_bare_repo_files(paths: &[PathBuf]) {
     for p in paths {
         let res = if p.is_dir() {
@@ -524,8 +515,6 @@ pub fn scrub_bare_repo_files(paths: &[PathBuf]) {
 ///
 /// In a worktree, `<cwd>/.git` is a file containing `gitdir: <main>/.git/worktrees/<name>`.
 /// Returns the main repo path (not its `.git` dir) so callers can add it as a writable root.
-///
-/// TS: `detectWorktreeMainRepoPath()` line 422.
 pub fn detect_worktree_main_repo(cwd: &Path) -> Option<PathBuf> {
     let git_path = cwd.join(".git");
     let content = std::fs::read_to_string(&git_path).ok()?;
@@ -556,8 +545,6 @@ pub fn detect_worktree_main_repo(cwd: &Path) -> Option<PathBuf> {
 
 /// Reason a user-enabled sandbox cannot run, for surfacing to the user once at
 /// startup. Returns `None` if sandbox isn't requested, or if it's working.
-///
-/// TS: `getSandboxUnavailableReason()` line 562.
 pub fn sandbox_unavailable_reason(
     settings: &SandboxSettings,
     platform_supported: bool,

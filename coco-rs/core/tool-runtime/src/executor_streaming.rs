@@ -1,16 +1,13 @@
 //! Streaming entry-point for [`StreamingToolExecutor`] — Phase 9.
 //!
-//! TS: `services/tools/StreamingToolExecutor.ts` (`addTool` / `processQueue`
-//! / `discard`). TS drives streaming at the **executor** level via
-//! `addTool(block)` being called from the stream consumer as tool_use
-//! blocks finish parsing; coco-rs mirrors that structure through
-//! [`StreamingHandle`], with one deliberate divergence: Rust defers
-//! history-append until the assistant message is committed (after the
-//! stream's Finish), while TS yields tool_results through an async
-//! generator as soon as they're ready. Both designs preserve the I1
-//! invariant — TS uses an outer reconciliation net
-//! (`yieldMissingToolResultBlocks`, `query.ts:123-149`); Rust's
-//! deferred-commit construction precludes orphan cases by design.
+//! Streaming is driven at the **executor** level via `addTool(block)` being
+//! called from the stream consumer as tool_use blocks finish parsing;
+//! coco-rs mirrors that structure through [`StreamingHandle`], with one
+//! deliberate divergence: Rust defers history-append until the assistant
+//! message is committed (after the stream's Finish), while the streaming
+//! executor yields tool_results through an async generator as soon as they're
+//! ready. Both designs preserve the I1 invariant — the Rust deferred-commit
+//! construction precludes orphan cases by design.
 //!
 //! ## Consumer visibility
 //!
@@ -23,9 +20,7 @@
 //!
 //! Each safe plan is spawned onto a [`tokio::task::JoinSet`] at
 //! `feed_plan` time so it advances **autonomously** while the engine
-//! continues consuming stream events. This mirrors TS's implicit
-//! promise-execution model: creating a promise immediately enqueues
-//! its callback on the JS event loop. In Rust, `FuturesUnordered`
+//! continues consuming stream events. In Rust, `FuturesUnordered`
 //! without an outer poll-driver would starve safe tools of CPU — the
 //! futures wouldn't advance until `commit_flush` awaited them, which
 //! defeats the whole "start during stream" goal.
@@ -37,22 +32,22 @@
 //!
 //! ## Concurrency gate
 //!
-//! Mirrors TS `canExecuteTool` at `StreamingToolExecutor.ts:129-135`:
+//! Concurrency rules:
 //!
 //! - No tools executing → any plan may start.
 //! - Only safe tools executing → more safe plans may start.
 //! - Any unsafe tool pending → all subsequent plans hold for
 //!   `commit_flush`.
 //!
-//! coco-rs tightens TS slightly: once *any* unsafe plan is fed, *all*
+//! coco-rs tightens slightly: once *any* unsafe plan is fed, *all*
 //! subsequent feeds (safe or unsafe) hold, so there's never a mixed
 //! safe+unsafe inflight state. Unsafe plans run serially in
-//! `commit_flush` after the inflight safe batch drains, preserving
-//! the TS rule without requiring a tool-level interlock.
+//! `commit_flush` after the inflight safe batch drains, without
+//! requiring a tool-level interlock.
 //!
 //! ## `StreamingDiscarded` variant
 //!
-//! Reserved for TS-parity discard semantics. Under the default
+//! Reserved for discard semantics. Under the default
 //! coco-rs post-commit design, discarded tool_uses were never
 //! committed into an assistant message, so their `UnstampedToolCallOutcome`s
 //! can be safely dropped. Callers that want to surface them (e.g.
@@ -106,7 +101,7 @@ where
     /// unknown tool / schema fail / pre-hook stop / permission deny.
     pending_early: Vec<UnstampedToolCallOutcome>,
     /// Gate latch: once any unsafe plan is fed, subsequent safe
-    /// plans also hold to preserve TS's no-safe-during-unsafe rule.
+    /// plans also hold to preserve the no-safe-during-unsafe rule.
     any_unsafe_fed: bool,
 }
 
@@ -168,9 +163,8 @@ where
     ///
     /// Default engine path drops these outcomes because their
     /// tool_use blocks never entered the assistant message. Callers
-    /// implementing TS-parity semantics can iterate the return value
-    /// to emit synthetic error tool_results if they committed the
-    /// assistant message before discarding.
+    /// can iterate the return value to emit synthetic error tool_results
+    /// if they committed the assistant message before discarding.
     pub async fn discard(mut self) -> Vec<UnstampedToolCallOutcome> {
         // Abort any inflight spawned tasks; wait for cancellation.
         self.inflight.shutdown().await;

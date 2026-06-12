@@ -38,7 +38,7 @@ pub fn to_camel_case(s: &str) -> String {
 
 /// Return the provider options object for an OpenAI-compatible provider.
 ///
-/// Precedence mirrors the TS SDK: camelCase provider key, raw provider key,
+/// Precedence: camelCase provider key, raw provider key,
 /// then the shared `openaiCompatible` fallback.
 pub fn get_effective_provider_options<'a>(
     raw_name: &str,

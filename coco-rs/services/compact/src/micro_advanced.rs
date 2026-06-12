@@ -1,9 +1,6 @@
 //! Enhanced micro-compaction: budget-aware tool result clearing, file-unchanged
 //! stub removal, and thinking block compaction.
 //!
-//! TS: services/compact/microCompact.ts (530 LOC) — time-based MC, cached MC,
-//! tool result clearing with keep-recent semantics.
-//!
 //! This module extends the basic micro-compaction (`micro.rs`) with:
 //! - Token-budget-aware clearing (stop once enough tokens are freed)
 //! - Removal of "[file unchanged]" placeholder stubs

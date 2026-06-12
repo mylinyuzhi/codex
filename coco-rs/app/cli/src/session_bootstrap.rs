@@ -46,14 +46,13 @@ pub struct EngineResources {
     pub model_id: String,
     pub provider_api: Option<ProviderApi>,
     pub startup: StartupPermissionState,
-    /// Slash-command registry built once with the full TS-parity load
-    /// order (builtins → extended → skills → plugin contributions →
-    /// TS-parity P1 handlers). Both the SDK `initialize.commands`
-    /// advertisement and the TUI `dispatch_slash_command` chain
-    /// resolve through this slot. Wrapped in `RwLock` so
-    /// `/reload-plugins` can hot-swap the inner `Arc<CommandRegistry>`
-    /// without rebuilding the session — consumers snapshot the inner
-    /// `Arc` once per dispatch (see
+    /// Slash-command registry built once with the full load order
+    /// (builtins → extended → skills → plugin contributions → P1 handlers).
+    /// Both the SDK `initialize.commands` advertisement and the TUI
+    /// `dispatch_slash_command` chain resolve through this slot. Wrapped in
+    /// `RwLock` so `/reload-plugins` can hot-swap the inner
+    /// `Arc<CommandRegistry>` without rebuilding the session — consumers
+    /// snapshot the inner `Arc` once per dispatch (see
     /// [`crate::session_runtime::SessionRuntime::current_command_registry`]).
     pub command_registry: Arc<tokio::sync::RwLock<Arc<CommandRegistry>>>,
     /// Session-scoped `SkillManager`. Hoisted out of
@@ -88,18 +87,16 @@ pub struct EngineResources {
 /// tools (Write / Edit / NotebookEdit) can dispatch `didSave` +
 /// `clearDeliveredDiagnosticsForFile` through `ctx.lsp.notify_save`.
 ///
-/// The adapter is **prewarmed** before returning (TS parity:
-/// `manager.initialize()` at session bootstrap so `LSPTool.isEnabled`
-/// reads accurate running-state by turn 1). Prewarm is best-effort —
+/// The adapter is **prewarmed** before returning so `LSPTool.isEnabled`
+/// reads accurate running-state by turn 1. Prewarm is best-effort —
 /// servers that fail to spawn just flip the adapter's `is_connected`
 /// gate to `false`, hiding the tool cleanly instead of throwing on the
 /// first call.
 /// Fire-and-forget startup marketplace maintenance, shared by the TUI,
-/// headless, and SDK entry points. TS parity: `installPluginsForHeadless`
-/// (`print.ts:1721`) + `useOfficialMarketplaceNotification` — ensure the
-/// official marketplace, register seed marketplaces (`COCO_PLUGIN_SEED_DIR`),
-/// reconcile declared `extraKnownMarketplaces`, then uninstall plugins that
-/// were delisted from their marketplace.
+/// headless, and SDK entry points. Ensures the official marketplace,
+/// registers seed marketplaces (`COCO_PLUGIN_SEED_DIR`), reconciles
+/// declared `extraKnownMarketplaces`, then uninstalls plugins that were
+/// delisted from their marketplace.
 ///
 /// Runs on every surface (not just the interactive TUI) so delisting +
 /// seed-marketplace enforcement applies to `coco --print` / `chat` / `review`
@@ -133,7 +130,7 @@ pub async fn build_lsp_handle_if_enabled(
     let manager = coco_lsp::create_manager(Some(coco_home), Some(cwd.to_path_buf()));
     let adapter = crate::lsp_handle_adapter::LspManagerAdapter::new(manager);
     // Merge plugin-contributed LSP servers before prewarm so they spawn
-    // eagerly alongside disk-configured servers (TS extractLspServersFromPlugins).
+    // eagerly alongside disk-configured servers.
     let plugins = coco_plugins::load_enabled_plugins(coco_home, cwd);
     let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
     adapter
@@ -176,9 +173,8 @@ pub fn build_engine_resources(
     let output_style_manager =
         build_output_style_manager(runtime_config, cwd, &plugin_style_sources);
 
-    // `--add-dir` flow into the env block. TS:
-    // `enhanceSystemPromptWithEnvDetails([...], model, additionalWorkingDirectories)`.
-    // Single source of truth lives in `headless::resolve_additional_dirs_display`.
+    // `--add-dir` flows into the env block. Single source of truth lives
+    // in `headless::resolve_additional_dirs_display`.
     let additional_working_directories = resolve_additional_dirs_display(cli, cwd);
 
     let system_prompt = build_system_prompt_for_model(
@@ -242,11 +238,11 @@ pub fn build_engine_resources(
     })
 }
 
-/// Construct the TS-parity slash-command registry (builtins → extended
-/// → skills → plugin contributions → TS-parity P1 handlers) AND return
-/// the `SkillManager` Arc that backed the skill-derived commands. The
-/// caller threads the manager into `SessionRuntime` so the per-turn
-/// reminder pipeline's `SkillsSource` reads the same in-memory catalog.
+/// Construct the slash-command registry (builtins → extended → skills →
+/// plugin contributions → P1 handlers) AND return the `SkillManager`
+/// Arc that backed the skill-derived commands. The caller threads the
+/// manager into `SessionRuntime` so the per-turn reminder pipeline's
+/// `SkillsSource` reads the same in-memory catalog.
 pub(crate) fn build_session_command_registry(
     cli: &Cli,
     runtime_config: &RuntimeConfig,
@@ -263,15 +259,15 @@ pub(crate) fn build_session_command_registry(
     ));
 
     // Plugin-contributed skills (namespaced `plugin:skill`) into the live
-    // SkillManager so the model catalog + dispatch see them (TS plugin skills).
+    // SkillManager so the model catalog + dispatch see them.
     let plugin_refs: Vec<&coco_plugins::loader::LoadedPluginV2> = plugins.iter().collect();
     for skill in coco_plugins::skill_bridge::load_all_plugin_skills_v2(&plugin_refs) {
         skill_manager.register(skill);
     }
 
     // Builtin (compiled-in) plugins: seed the registry once, then register any
-    // enabled builtin skills (TS `getBuiltinPluginSkillCommands`). No-op until a
-    // builtin is registered in `init_builtin_plugins`.
+    // enabled builtin skills. No-op until a builtin is registered in
+    // `init_builtin_plugins`.
     coco_plugins::builtins::init_builtin_plugins();
     for skill in coco_plugins::builtin_plugin_skills(&config_home) {
         skill_manager.register(skill);
@@ -293,7 +289,7 @@ pub(crate) fn build_session_command_registry(
 /// Load the active plugin set for this session once: marketplace versioned
 /// cache + local `inline` dirs, gated by settings.json `enabled_plugins`.
 /// Shared by the output-style, command, skill, and hook registration paths so
-/// a session loads plugins exactly once (TS `loadAllPlugins().enabled`).
+/// a session loads plugins exactly once.
 pub(crate) fn load_session_plugins(cwd: &Path) -> Vec<coco_plugins::loader::LoadedPluginV2> {
     coco_plugins::load_enabled_plugins(&global_config::config_home(), cwd)
 }
@@ -301,7 +297,7 @@ pub(crate) fn load_session_plugins(cwd: &Path) -> Vec<coco_plugins::loader::Load
 /// Derive the plugin output-style sources from a loaded plugin set (default
 /// `<plugin>/output-styles/` dir + manifest `output_styles` extras). Fed into
 /// [`build_output_style_manager`] so plugin-contributed styles surface
-/// alongside user / project / managed styles (TS `loadPluginOutputStyles`).
+/// alongside user / project / managed styles.
 pub(crate) fn plugin_output_style_sources(
     plugins: &[coco_plugins::loader::LoadedPluginV2],
 ) -> Vec<coco_output_styles::PluginOutputStyleSource> {
@@ -314,10 +310,8 @@ pub(crate) fn plugin_output_style_sources(
 /// Resolve [`coco_skills::SkillLoadGates`] from the resolved `RuntimeConfig`,
 /// the `--setting-sources` set, the `strictPluginOnlyCustomization` policy
 /// (`skills` surface), `--add-dir`, and `COCO_DISABLE_POLICY_SKILLS`.
-///
-/// TS parity: `loadSkillsDir.ts::getSkillDirCommands` — the
-/// `isSettingSourceEnabled(...) && !skillsLocked` guards plus the managed-skill
-/// env gate.
+/// Applies `isSettingSourceEnabled(...) && !skillsLocked` guards plus the
+/// managed-skill env gate.
 pub(crate) fn resolve_skill_load_gates(
     cli: &Cli,
     runtime_config: &RuntimeConfig,
@@ -354,8 +348,7 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
     let project_enabled = enabled.contains(&SettingSource::Project);
 
     // `--add-dir` plus settings `permissions.additionalDirectories`, resolved
-    // to `.coco/skills` roots in `build_session_skill_manager`. TS folds both
-    // into `getAdditionalDirectoriesForClaudeMd`.
+    // to `.coco/skills` roots in `build_session_skill_manager`.
     let mut additional_dirs = cli_add_dirs.to_vec();
     for dir in &runtime_config
         .settings
@@ -397,8 +390,7 @@ pub(crate) fn resolve_skill_load_gates_with_add_dirs(
 /// [`coco_types::Feature::Lsp`] at the caller (CLI / SDK / TUI). When
 /// `None`, the runtime's LSP slot stays unset and
 /// `LspTool::is_enabled()` reports `false` (via `NoOpLspHandle`), so
-/// the tool is hidden from the model's tool list — TS parity
-/// (`LSPTool.isEnabled() = isLspConnected()`).
+/// the tool is hidden from the model's tool list.
 pub async fn install_session_late_binds(
     runtime: Arc<SessionRuntime>,
     cwd: &Path,
@@ -410,10 +402,9 @@ pub async fn install_session_late_binds(
     // background spawns and the engine's `Task*` tools see one
     // source of truth.
     //
-    // Disk-output session dir mirrors TS's
-    // `getProjectTempDir()/{sessionId}/tasks/`. Captured ONCE here so
-    // subsequent `/clear` regenerations don't invalidate paths held
-    // by in-flight `DiskTaskOutput` instances.
+    // Disk-output session dir: `<config_home>/cache/tasks/<session_id>/`.
+    // Captured ONCE here so subsequent `/clear` regenerations don't
+    // invalidate paths held by in-flight `DiskTaskOutput` instances.
     let task_session_id = runtime.current_session_id().await;
     let task_session_dir = coco_config::global_config::config_home()
         .join("cache")
@@ -425,9 +416,7 @@ pub async fn install_session_late_binds(
     // push a `<task-notification>` envelope onto the queue. The
     // engine's per-turn drain
     // (`engine_finalize_turn::drain_command_queue_into_history`)
-    // then injects it as a User message wrapped in
-    // `<system-reminder>` — TS parity for
-    // `enqueuePendingNotification({mode: 'task-notification'})`.
+    // then injects it as a User message wrapped in `<system-reminder>`.
     let sink: coco_tasks::NotificationSinkRef = Arc::new(
         crate::command_queue_sink::CommandQueueNotificationSink::new(
             runtime.command_queue().clone(),
@@ -452,12 +441,12 @@ pub async fn install_session_late_binds(
         .attach_team_task_list_router(task_list_router as coco_tool_runtime::TeamTaskListRouterRef)
         .await;
 
-    // Per-agent transcript persistence (TS-faithful resume). The
-    // project paths match the runtime's transcript path so
+    // Per-agent transcript persistence. The project paths match the
+    // runtime's transcript path so
     // `<project_dir>/<session_id>/subagents/agent-<id>.*` lives
     // alongside the main session JSONL. Skipped under
     // `--no-session-persistence` so a print run that spawns subagents
-    // writes no subagent JSONL (TS `appendEntry` shouldSkipPersistence guard).
+    // writes no subagent JSONL.
     if runtime.persist_session() {
         let agent_transcript_store: Arc<dyn coco_tool_runtime::AgentTranscriptStore> = Arc::new(
             crate::agent_transcript_persistence::SessionAgentTranscriptStore::new(Arc::new(
@@ -518,11 +507,10 @@ pub async fn install_session_late_binds(
 /// the live `ToolRegistry` so they reach the model. A best-effort MCP skill sync
 /// follows.
 ///
-/// Mirrors codex-rs (single session-owned manager, eager concurrent connect with
-/// per-server fault isolation) and the TS shared-connect funnel. `existing_manager`
-/// lets the SDK path share the manager it already handed to `SdkServer` (for
-/// `mcp/setServers`); `None` builds a fresh one for TUI / headless. No UI:
-/// server-initiated elicitations during the connect handshake are declined.
+/// `existing_manager` lets the SDK path share the manager it already handed to
+/// `SdkServer` (for `mcp/setServers`); `None` builds a fresh one for TUI /
+/// headless. No UI: server-initiated elicitations during the connect handshake
+/// are declined.
 pub async fn bootstrap_session_mcp(
     runtime: &Arc<SessionRuntime>,
     cwd: &Path,
@@ -582,7 +570,7 @@ pub async fn bootstrap_session_mcp(
     // install real tools (success) or re-surface the authenticate tool (login
     // failed). This is what makes the model-driven authenticate flow complete:
     // the per-server pseudo-tool starts OAuth, and on completion the real tools
-    // swap in automatically (TS: the McpAuthTool background `setAppState`).
+    // swap in automatically.
     {
         let (reconnect_tx, mut reconnect_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         manager.lock().await.set_reconnect_notifier(reconnect_tx);
@@ -600,8 +588,8 @@ pub async fn bootstrap_session_mcp(
     // timeout logs and is skipped so the registry degrades gracefully. MCP skills
     // sync once connections settle. `await_connect` chooses the timing:
     //   - `true`  (headless / single-turn): block so MCP tools are registered
-    //     before the first turn (TS print awaits the connect batch). Bounded by
-    //     the per-server timeout in `connect_and_register_mcp`.
+    //     before the first turn. Bounded by the per-server timeout in
+    //     `connect_and_register_mcp`.
     //   - `false` (interactive / long-lived SDK): connect in the background so
     //     startup isn't blocked (codex-rs pattern); tools appear within seconds.
     let registry = runtime.tools().clone();
@@ -630,8 +618,8 @@ pub async fn bootstrap_session_mcp(
 /// Connect every registered-but-not-yet-connected MCP server concurrently
 /// (per-server error-isolated + time-boxed) and register each connected server's
 /// tools into `registry` so the model can see them. Best-effort: a failed or slow
-/// server logs a warning and is skipped (codex-rs / TS parity — a broken server
-/// never aborts the rest). No UI: elicitations during connect are declined.
+/// server logs a warning and is skipped — a broken server never aborts the rest.
+/// No UI: elicitations during connect are declined.
 /// Reused by [`bootstrap_session_mcp`] and `SessionRuntime::reload_plugin_mcp_servers`.
 pub(crate) async fn connect_and_register_mcp(
     manager: Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>,
@@ -649,9 +637,9 @@ pub(crate) async fn connect_and_register_mcp(
             continue;
         }
         // Skip a doomed connect and surface the authenticate tool directly,
-        // either because the server recently 401'd (cached, TS `isMcpAuthCached`)
-        // or because we hold OAuth discovery for it but no usable token (TS
-        // `hasMcpDiscoveryButNoToken`). Both avoid a network round-trip.
+        // either because the server recently 401'd (cached) or because we hold
+        // OAuth discovery for it but no usable token. Both avoid a network
+        // round-trip.
         if snapshot.is_needs_auth_cached(&name).await || snapshot.needs_auth_without_connect(&name)
         {
             snapshot.mark_needs_auth(&name).await;
@@ -690,10 +678,9 @@ pub(crate) async fn connect_and_register_mcp(
 /// connection state: install real tools when `Connected`, surface the
 /// per-server `mcp__<server>__authenticate` pseudo-tool when `NeedsAuth`, and
 /// leave existing registrations untouched otherwise. The "leave untouched"
-/// arm is the fix for the strand hole — a transient `Failed`/`Pending` must not
-/// deregister an already-surfaced auth tool (TS keeps it alive via the
-/// needs-auth cache). Reused by [`connect_and_register_mcp`] and the
-/// post-OAuth reconnect listener in [`bootstrap_session_mcp`].
+/// arm prevents a transient `Failed`/`Pending` from deregistering an
+/// already-surfaced auth tool. Reused by [`connect_and_register_mcp`]
+/// and the post-OAuth reconnect listener in [`bootstrap_session_mcp`].
 pub(crate) async fn reconcile_mcp_server_registration(
     manager: &coco_mcp::McpConnectionManager,
     registry: &coco_tool_runtime::ToolRegistry,

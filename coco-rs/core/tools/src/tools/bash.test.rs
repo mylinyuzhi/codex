@@ -8,11 +8,11 @@ use serde_json::json;
 // ── R7-T25: tool prompt content checks ──
 //
 // Verify that the BashTool model-facing prompt() includes the critical
-// TS instructional content (avoid-native-commands list, parallel calls
+// instructional content (avoid-native-commands list, parallel calls
 // guidance, git safety protocol, sandbox-related notes). Regression
 // guard against the prompt being silently truncated to a stub. The full
-// guidance lives in prompt() (TS `getSimplePrompt()`); description() is
-// only the short per-call UI label ("Run shell command").
+// guidance lives in prompt(); description() is only the short per-call
+// UI label ("Run shell command").
 
 #[tokio::test]
 async fn test_bash_prompt_includes_avoid_native_commands_list() {
@@ -72,12 +72,12 @@ fn test_bash_description_is_short_label() {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-stage permission pipeline (TS-aligned)
+// Multi-stage permission pipeline
 // ---------------------------------------------------------------------------
 
 /// Read-only fast path: `cat`, `ls`, `grep`, `git log`, etc. must be reported
 /// as non-destructive and concurrency-safe so the executor auto-approves and
-/// batches them with other safe tools. TS: `readOnlyValidation.ts:1876`.
+/// batches them with other safe tools.
 #[test]
 fn test_bash_read_only_fast_path() {
     let cases = [
@@ -110,9 +110,7 @@ fn test_bash_read_only_fast_path() {
 }
 
 /// Non-read-only commands (mutations, installs, shell execution) must be
-/// reported as destructive so the permission evaluator asks the user. TS:
-/// anything not in `checkReadOnlyConstraints()` falls through to the Ask
-/// phase.
+/// reported as destructive so the permission evaluator asks the user.
 ///
 /// NOTE: output redirect detection (`echo x > file`) is not yet handled
 /// by `coco_shell::read_only::is_read_only_command` — that's a known
@@ -159,9 +157,9 @@ fn test_bash_missing_command_conservative() {
     assert!(!<BashTool as DynTool>::is_destructive(&BashTool, &input));
 }
 
-/// shell-163 / TS parity: `eval` and `IFS=` injection are routed through the
-/// *ask* permission flow, NOT hard-failed at the Deny gate. TS
-/// `bashSecurity.ts` returns `behavior: 'ask'` (never `'deny'`) for these — the
+/// shell-163: `eval` and `IFS=` injection are routed through the
+/// *ask* permission flow, NOT hard-failed at the Deny gate. The security
+/// check returns `behavior: 'ask'` (never `'deny'`) for these — the
 /// user can approve them through the normal permission prompt. BashTool only
 /// hard-fails on `SecuritySeverity::Deny` (bash.rs), which is now reserved for
 /// genuinely-catastrophic constructs (raw control chars, `/proc/*/environ`).
@@ -236,7 +234,7 @@ fn test_bash_default_timeout_zero_clamps_to_one() {
     assert_eq!(super::default_timeout_ms(&config), 1);
 }
 
-// TS `BashTool` does not enforce a max timeout (the configured max is only an
+// Does not enforce a max timeout (the configured max is only an
 // advisory schema hint), so there is no `max_timeout_ms` helper to test.
 #[test]
 fn test_bash_timeout_above_config_max_is_not_rejected() {
@@ -352,9 +350,9 @@ async fn test_bash_pwd() {
     assert!(!result.data["stdout"].as_str().unwrap().is_empty());
 }
 
-/// TS `outputLimits.ts` — `BASH_MAX_OUTPUT_DEFAULT = 30_000`. Our Bash
-/// tool must advertise the same persistence threshold so cross-runtime
-/// sessions handle large outputs identically. Regression guard for R4-T6.
+/// `BASH_MAX_OUTPUT_DEFAULT = 30_000`. Our Bash tool must advertise the same
+/// persistence threshold so cross-runtime sessions handle large outputs
+/// identically. Regression guard for R4-T6.
 #[test]
 fn test_bash_max_result_size_bound_matches_ts() {
     assert_eq!(
@@ -379,11 +377,9 @@ fn test_bash_max_output_bytes_pass_through() {
     assert_eq!(super::max_output_bytes(&config), 0);
 }
 
-/// TS `BashTool.tsx:643-649` swaps the shell's cwd via `getCwd()` which the
-/// runtime overrides for isolated subagents. coco-rs threads the same
-/// information through `ctx.cwd_override` — the foreground shell must run
-/// inside that directory so worktree-isolated tasks don't leak into the
-/// host process cwd. Regression guard for R4-T5.
+/// The shell's cwd is overridden for isolated subagents via `ctx.cwd_override`
+/// — the foreground shell must run inside that directory so worktree-isolated
+/// tasks don't leak into the host process cwd. Regression guard for R4-T5.
 #[tokio::test]
 async fn test_bash_respects_cwd_override() {
     let dir = tempfile::tempdir().unwrap();
@@ -539,7 +535,7 @@ fn test_sandbox_state_active_non_excluded_wraps() {
     assert!(snap.should_wrap, "active + non-excluded → wrap");
 }
 
-/// Auto-background-on-timeout defaults ON (TS `shouldAutoBackground`).
+/// Auto-background-on-timeout defaults ON.
 #[test]
 fn test_auto_background_on_timeout_default_enabled() {
     let config = coco_config::ToolConfig::default();
@@ -612,8 +608,8 @@ async fn test_bash_cancel_kills_child_and_returns_cancelled() {
     ));
 }
 
-/// R5-T14: structured output schema — regression guard. TS
-/// `BashTool.tsx:279-293` requires stdout/stderr/exitCode/interrupted.
+/// R5-T14: structured output schema — regression guard. Requires
+/// stdout/stderr/exitCode/interrupted.
 #[tokio::test]
 async fn test_bash_structured_output_schema() {
     let ctx = ToolUseContext::test_default();
@@ -729,7 +725,7 @@ fn test_stall_only_checks_last_line() {
 // unit tests in that crate. These crate-local tests serve as smoke
 // checks that the integration path (BashTool spawn → TaskRuntime →
 // CommandQueueNotificationSink → render_notification) still produces
-// the TS-aligned shape.
+// the expected shape.
 
 #[test]
 fn test_task_notification_format() {
@@ -773,9 +769,8 @@ fn test_stall_notification_omits_status() {
 
 // ── R7-T11: _simulatedSedEdit short-circuit tests ──
 //
-// TS `BashTool.tsx:355-419` (`applySedEdit`): when the BashTool input
-// includes `_simulatedSedEdit: { filePath, newContent }`, the tool
-// skips bash entirely and writes the precomputed content to the file
+// When the BashTool input includes `_simulatedSedEdit: { filePath, newContent }`,
+// the tool skips bash entirely and writes the precomputed content to the file
 // while preserving its original encoding + line endings, returning a
 // sed-shaped result envelope. The tests exercise success, ENOENT,
 // and the encoding/line-ending preservation that distinguishes this
@@ -873,9 +868,9 @@ async fn test_bash_simulated_sed_edit_preserves_crlf_line_endings() {
     .await
     .unwrap();
 
-    // Sed-edit must preserve CRLF — TS `applySedEdit` reuses the
-    // detected line ending. coco-rs FileWriteTool always normalizes
-    // to LF, so this is the key distinction.
+    // Sed-edit must preserve CRLF — it reuses the detected line ending.
+    // coco-rs FileWriteTool always normalizes to LF, so this is the
+    // key distinction.
     let on_disk = std::fs::read(&file).unwrap();
     assert!(
         on_disk.windows(2).any(|w| w == b"\r\n"),
@@ -1046,7 +1041,7 @@ async fn test_bash_simulated_sed_edit_does_not_run_command() {
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code hints — model-facing stripping (TS BashTool.tsx:780-784)
+// Claude Code hints — model-facing stripping
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1071,7 +1066,7 @@ fn test_maybe_strip_and_record_hints_passthrough_when_no_tag() {
 }
 
 // ---------------------------------------------------------------------------
-// render_for_model — TS parity with BashTool.tsx::mapToolResultToToolResultBlockParam
+// render_for_model
 // ---------------------------------------------------------------------------
 
 mod render_for_model_tests {
@@ -1218,10 +1213,9 @@ mod render_for_model_tests {
 
     #[test]
     fn background_task_id_assistant_auto_uses_budget_message() {
-        // TS `BashTool.tsx:609-610`: when the fg→bg auto-promotion fires
-        // (assistantAutoBackgrounded), the model sees a verbose message
-        // that names the blocking budget so it learns to delegate next
-        // time. The default short message is wrong here.
+        // When the fg→bg auto-promotion fires (assistantAutoBackgrounded),
+        // the model sees a verbose message that names the blocking budget so
+        // it learns to delegate next time. The default short message is wrong here.
         let data = json!({
             "stdout": "",
             "stderr": "",
@@ -1245,10 +1239,9 @@ mod render_for_model_tests {
 
     #[test]
     fn background_task_id_user_initiated_uses_manual_message() {
-        // TS `BashTool.tsx:611-612` `backgroundedByUser` branch — Ctrl+B
-        // path. Coco-rs's TUI doesn't yet wire the keystroke, but the
-        // renderer already keys on the `backgroundedByUser` field so
-        // adding the keybinding is data-only.
+        // `backgroundedByUser` branch — Ctrl+B path. Coco-rs's TUI doesn't
+        // yet wire the keystroke, but the renderer already keys on the
+        // `backgroundedByUser` field so adding the keybinding is data-only.
         let data = json!({
             "stdout": "running\n",
             "stderr": "",
@@ -1270,7 +1263,7 @@ mod render_for_model_tests {
     #[test]
     fn background_task_id_default_uses_short_message() {
         // Default path (`run_in_background: true` issued by the model)
-        // — TS `BashTool.tsx:613-614`. Short message; no budget mention.
+        // — short message; no budget mention.
         let data = json!({
             "stdout": "",
             "stderr": "",
@@ -1297,8 +1290,7 @@ mod render_for_model_tests {
     }
 
     // `format_byte_size` lives in `shell_render.rs`; its byte-identity
-    // contract test (TS `utils/format.ts::formatFileSize`) lives in
-    // `shell_render.test.rs` next to the implementation.
+    // contract test lives in `shell_render.test.rs` next to the implementation.
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,7 +1310,7 @@ fn test_truncate_output_is_head_only_with_lines_marker() {
         !out.contains("L9"),
         "tail must be dropped (head-only): {out}"
     );
-    // TS lines marker, not chars.
+    // Lines marker, not chars.
     assert!(out.contains("lines truncated"), "got: {out}");
     assert!(!out.contains("chars truncated"), "got: {out}");
 }
@@ -1347,7 +1339,7 @@ async fn test_bash_check_permissions_jq_danger_asks() {
 #[tokio::test]
 async fn test_bash_check_permissions_common_substitution_not_prompted() {
     // The broad substitution analyzers are deliberately NOT routed (they lack
-    // TS's safe-substitution carve-outs and would over-prompt). A common
+    // safe-substitution carve-outs and would over-prompt). A common
     // `$(...)` in a non-read-only command passes through, not Ask.
     let ctx = ToolUseContext::test_default();
     let result = <BashTool as DynTool>::check_permissions(
@@ -1367,7 +1359,7 @@ async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
     // acceptEdits auto-allows a pure-create subcommand anywhere in a compound
     // command (#164), but `rm`/`mv`/`cp`/`sed` are NO LONGER blanket-allowed —
     // they route through the dangerous-removal/sed gates and defer to the rule
-    // pipeline (TS acceptEdits auto-accepts file-edit tools, not bash `rm`).
+    // pipeline (acceptEdits auto-accepts file-edit tools, not bash `rm`).
     let mut ctx = ToolUseContext::test_default();
     ctx.permission_context.mode = coco_types::PermissionMode::AcceptEdits;
 
@@ -1397,7 +1389,7 @@ async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
     );
 }
 
-// ── Path-constraint gate (TS `checkPathConstraints`) ──
+// ── Path-constraint gate ──
 //
 // The 4th bash force-ask gate: an output redirection (or process substitution)
 // that writes OUTSIDE the allowed working dirs — or via a shell-expanded /
@@ -1452,7 +1444,7 @@ async fn test_bash_redirect_within_tree_passes() {
 
 #[tokio::test]
 async fn test_bash_redirect_devnull_passes() {
-    // /dev/null is always safe — it discards output (TS parity).
+    // /dev/null is always safe.
     let ctx = ToolUseContext::test_default();
     let result = <BashTool as DynTool>::check_permissions(
         &BashTool,
@@ -1469,7 +1461,7 @@ async fn test_bash_redirect_devnull_passes() {
 #[tokio::test]
 async fn test_bash_process_substitution_asks() {
     // `> >(tee …)` writes via a process sub whose target never appears as a
-    // redirect target — TS forces Ask on process substitution.
+    // redirect target — process substitution forces Ask.
     let ctx = ToolUseContext::test_default();
     let result = <BashTool as DynTool>::check_permissions(
         &BashTool,
@@ -1483,7 +1475,7 @@ async fn test_bash_process_substitution_asks() {
     );
 }
 
-// ── Per-subcommand write-path gate (TS `validateCommandPaths`) ──
+// ── Per-subcommand write-path gate ──
 
 #[tokio::test]
 async fn test_bash_write_outside_tree_asks() {

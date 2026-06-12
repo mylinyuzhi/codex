@@ -9,8 +9,6 @@
 /// Surfaced when a CLI/SDK emits a `<claude-code-hint />` tag referencing a
 /// plugin and the pre-store gate passed. Show-once per plugin. The user
 /// picks install / dismiss / disable-all.
-///
-/// TS: `PluginHintMenu.tsx` + `useClaudeCodeHintRecommendation.tsx`.
 #[derive(Debug, Clone)]
 pub struct PluginHintState {
     /// Fully-qualified plugin ID (`name@marketplace`).
@@ -41,7 +39,7 @@ impl PluginHintState {
     }
 }
 
-/// User decision on a plugin-hint dialog. TS: `'yes' | 'no' | 'disable'`.
+/// User decision on a plugin-hint dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginHintResponse {
     /// Install the recommended plugin.

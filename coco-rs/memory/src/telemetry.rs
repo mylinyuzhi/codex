@@ -1,17 +1,12 @@
 //! Memory subsystem telemetry events.
 //!
-//! Each variant maps to one TS `tengu_*` event. Emission goes through
+//! Each variant maps to one `tengu_*` event. Emission goes through
 //! [`MemoryTelemetryEmitter`] so call sites stay free of OTel imports.
 
 /// Memory event taxonomy.
-///
-/// TS: scattered `logEvent('tengu_*', ...)` calls in
-/// `memdir/memdir.ts`, `services/extractMemories/`, `services/autoDream/`,
-/// `services/SessionMemory/`.
 #[derive(Debug, Clone)]
 pub enum MemoryEvent {
     /// Memory directory loaded into the system prompt.
-    /// TS: `tengu_memdir_loaded`.
     MemdirLoaded {
         line_count: i64,
         byte_count: i64,
@@ -21,46 +16,40 @@ pub enum MemoryEvent {
     },
 
     /// Memory subsystem is gated off.
-    /// TS: `tengu_memdir_disabled`.
     MemdirDisabled { reason: DisableReason },
 
     /// Extraction agent ran a tool that wasn't allow-listed.
-    /// TS: `tengu_auto_mem_tool_denied`.
     ExtractionToolDenied { tool_name: String },
 
     /// Background extraction skipped because the main agent already
     /// wrote memory files this turn.
-    /// TS: `tengu_extract_memories_skipped_direct_write`.
     ExtractionSkippedDirectWrite { message_count: i32 },
 
     /// A new extraction request arrived while one was in-flight; the
     /// service stashed the latest context for a single trailing run.
-    /// TS: `tengu_extract_memories_coalesced`.
     ExtractionCoalesced,
 
     /// Background extraction completed.
-    /// TS: `tengu_extract_memories_extraction`.
     ExtractionCompleted {
         turn_count: i32,
         input_tokens: i64,
         output_tokens: i64,
-        /// TS `cache_read_input_tokens` — input tokens served from
+        /// `cache_read_input_tokens` — input tokens served from
         /// the prompt cache. Higher = better forked-agent hit-rate.
         cache_read_tokens: i64,
-        /// TS `cache_creation_input_tokens` — input tokens written
+        /// `cache_creation_input_tokens` — input tokens written
         /// into the prompt cache. Should be small per-turn after
         /// the first one.
         cache_creation_tokens: i64,
-        /// TS `files_written` — count after MEMORY.md is filtered
-        /// out (`extractMemories.ts:465-467`). The index file is
-        /// mechanical; only topic-file writes count as "saved".
+        /// `files_written` — count after MEMORY.md is filtered
+        /// out. The index file is mechanical; only topic-file writes
+        /// count as "saved".
         files_written: i32,
         duration_ms: i64,
     },
 
     /// Background extraction subagent failed (turn budget exhausted,
     /// permission denial cascade, runner error, etc).
-    /// TS: `tengu_extract_memories_error`.
     ExtractionError { duration_ms: i64 },
 
     /// `/extract` (or equivalent slash command) forced an extraction
@@ -69,29 +58,26 @@ pub enum MemoryEvent {
     ExtractionManual,
 
     /// Auto-dream consolidation fired.
-    /// TS: `tengu_auto_dream_fired`.
     AutoDreamFired {
         hours_since_last: i64,
         sessions_since_last: i32,
     },
 
     /// Auto-dream consolidation completed.
-    /// TS: `tengu_auto_dream_completed`.
     AutoDreamCompleted {
         sessions_reviewed: i32,
         files_changed: i32,
-        /// TS `cache_read` field on `tengu_auto_dream_completed`.
+        /// `cache_read` field on `tengu_auto_dream_completed`.
         cache_read_tokens: i64,
-        /// TS `cache_created` field on `tengu_auto_dream_completed`.
+        /// `cache_created` field on `tengu_auto_dream_completed`.
         cache_creation_tokens: i64,
-        /// TS `output` (output tokens) field.
+        /// `output` (output tokens) field.
         output_tokens: i64,
         duration_ms: i64,
     },
 
     /// Auto-dream consolidation subagent failed. Lock mtime is rolled
     /// back so the next time-gate window doesn't restart at "now".
-    /// TS: `tengu_auto_dream_failed`.
     AutoDreamFailed,
 
     /// `/dream` forced a consolidation bypassing the three gates. Lock
@@ -101,7 +87,6 @@ pub enum MemoryEvent {
     AutoDreamManual,
 
     /// Session-memory extraction fired.
-    /// TS: `tengu_session_memory_extraction`.
     SessionMemoryExtracted {
         input_tokens: i64,
         output_tokens: i64,
@@ -112,39 +97,32 @@ pub enum MemoryEvent {
 
     /// Session-memory subsystem registered its post-sampling hook
     /// at session bootstrap.
-    /// TS: `tengu_session_memory_init`.
     SessionMemoryInit { auto_compact_enabled: bool },
 
     /// Session-memory file was just read into context (typically
     /// from the setup pass before the forked update agent runs).
-    /// TS: `tengu_session_memory_file_read`.
     SessionMemoryFileRead { content_length: i64 },
 
     /// Session-memory content loaded for compaction or other
     /// downstream consumers.
-    /// TS: `tengu_session_memory_loaded`.
     SessionMemoryLoaded { content_length: i64 },
 
     /// `/summary` command forced a session-memory update bypassing
     /// the threshold gates.
-    /// TS: `tengu_session_memory_manual_extraction`.
     SessionMemoryManualExtraction,
 
     /// chmod 0o700/0o600 on a session-memory path failed. Flagged
     /// because the file body is potentially sensitive (conversation
     /// summary) and a failed chmod means it may be group/world
-    /// readable on multi-user hosts. No TS analog — TS gets atomic
-    /// `wx`+`mode` from Node's `writeFile`; Rust's chmod path can
-    /// race on platforms where setting permissions atomically isn't
-    /// always available.
+    /// readable on multi-user hosts. Rust's chmod path can race on
+    /// platforms where setting permissions atomically isn't always
+    /// available.
     SessionMemoryPermsFailed { path: String },
 
     /// KAIROS daily-log midnight rollover detected. The session
     /// crossed midnight local time; the engine receives the
     /// `Some(yesterday)` rollover signal so it can act on the date
-    /// flip. TS source-of-truth: `getDateChangeAttachments` +
-    /// `sessionTranscript.flushOnDateChange` (private TS module —
-    /// we mirror the *signal* only).
+    /// flip. We mirror the rollover *signal* only.
     KairosRollover {
         /// Day that just ended (`%Y-%m-%d`).
         yesterday: String,
@@ -198,7 +176,7 @@ impl MemoryTelemetryEmitter for NoopEmitter {
 /// Cheap (no allocations beyond what the structured-field machinery
 /// requires) and dependency-free — no need to construct an
 /// [`coco_otel::OtelManager`] just to hand the crate an emitter. The
-/// payload field names match the TS `tengu_*` event payload keys, so
+/// payload field names match the `tengu_*` event payload keys, so
 /// dashboards keyed off those names keep working byte-for-byte.
 #[derive(Debug, Default)]
 pub struct TracingEmitter;
@@ -380,10 +358,10 @@ impl MemoryTelemetryEmitter for TracingEmitter {
 
 /// Adapter that maps [`MemoryEvent`] onto an [`coco_otel::OtelManager`].
 ///
-/// Each TS `tengu_*` event lands as a counter; numeric payload fields
+/// Each `tengu_*` event lands as a counter; numeric payload fields
 /// (token counts, durations, file counts) are emitted as histograms /
 /// `record_duration` so dashboards can chart distribution. Tag values
-/// preserve the TS event names so downstream pipelines that already
+/// preserve the event names so downstream pipelines that already
 /// know `tengu_extract_memories_extraction` keep working.
 #[derive(Clone)]
 pub struct OtelEmitter {

@@ -1,6 +1,4 @@
-//! Cross-App Access (XAA) / Enterprise Managed Authorization.
-//!
-//! TS: `services/mcp/xaa.ts` (SEP-990, ID-JAG spec).
+//! Cross-App Access (XAA) / Enterprise Managed Authorization (SEP-990, ID-JAG).
 //!
 //! Obtains an MCP access token WITHOUT a browser consent screen by chaining:
 //!   1. RFC 8693 Token Exchange at the IdP: `id_token` → ID-JAG
@@ -31,7 +29,7 @@ use tracing::warn;
 use crate::xaa_idp_login::discover_authorization_server;
 use crate::xaa_idp_login::discover_prm;
 
-/// Default HTTP timeout for XAA requests (TS: `XAA_REQUEST_TIMEOUT_MS`).
+/// Default HTTP timeout for XAA requests.
 pub const XAA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
@@ -55,7 +53,7 @@ pub enum AsAuthMethod {
     ClientSecretPost,
 }
 
-/// Static inputs to the XAA orchestrator (mirrors TS `XaaConfig`).
+/// Static inputs to the XAA orchestrator.
 #[derive(Debug, Clone)]
 pub struct XaaConfig {
     /// Client ID registered at the MCP server's authorization server.
@@ -101,7 +99,7 @@ pub struct JwtBearerRequest {
     pub scope: Option<String>,
 }
 
-/// Successful XAA orchestration result (mirrors TS `XaaResult`).
+/// Successful XAA orchestration result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XaaResult {
     /// AS-issued access token (the bearer token for subsequent MCP requests).
@@ -132,7 +130,7 @@ pub enum XaaError {
         status: u16,
         body: String,
         /// Whether callers should drop any cached id_token because the IdP
-        /// deemed it invalid (TS: `shouldClearIdToken`).
+        /// deemed it invalid.
         should_clear_id_token: bool,
     },
     #[error("malformed response: {0}")]
@@ -217,7 +215,7 @@ pub async fn request_jwt_authorization_grant(
     Ok(parsed.access_token)
 }
 
-/// `Authorization: Basic` value for `client_secret_basic`, matching TS:
+/// `Authorization: Basic` value for `client_secret_basic`:
 /// Base64 of `encodeURIComponent(id):encodeURIComponent(secret)`.
 fn basic_auth_header(client_id: &str, client_secret: &str) -> String {
     let raw = format!(
@@ -307,7 +305,7 @@ pub async fn exchange_jwt_auth_grant(
 }
 
 /// Full XAA flow: PRM → AS metadata → token-exchange → jwt-bearer →
-/// `access_token`. Mirrors TS `performCrossAppAccess`.
+/// `access_token`.
 pub async fn perform_cross_app_access(
     client: &Client,
     server_url: &str,
@@ -425,8 +423,8 @@ struct AccessTokenResponse {
 }
 
 /// Decide whether a non-2xx IdP response should invalidate the cached
-/// id_token. TS semantics: 4xx / invalid_grant / invalid_token → clear;
-/// 5xx → keep (server-side glitch).
+/// id_token. 4xx / invalid_grant / invalid_token → clear; 5xx → keep
+/// (server-side glitch).
 fn should_clear_id_token_on_status(status: u16, body: &str) -> bool {
     if (500..600).contains(&status) {
         return false;
@@ -442,9 +440,8 @@ fn should_clear_id_token_on_status(status: u16, body: &str) -> bool {
     false
 }
 
-/// Redact any token-bearing JSON fields from `raw`. Matches TS
-/// `SENSITIVE_TOKEN_RE` — crucial for not leaking the subject_token on
-/// 4xx error bodies that echo it back.
+/// Redact any token-bearing JSON fields from `raw` — crucial for not leaking
+/// the subject_token on 4xx error bodies that echo it back.
 pub(crate) fn redact_tokens(raw: &str) -> String {
     const SENSITIVE: &[&str] = &[
         "access_token",

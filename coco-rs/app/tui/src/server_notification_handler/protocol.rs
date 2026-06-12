@@ -9,8 +9,8 @@
 //! wire — it rides on [`ServerNotification::TaskStarted`] /
 //! [`ServerNotification::TaskProgress`] / [`ServerNotification::TaskCompleted`]
 //! with [`TaskStartedParams::task_type`] discriminating (`bg_agent`,
-//! `in_process_teammate`, `shell`, `dream`, …). Matches TS, which has no
-//! `subagent/*` SDK events either. See the `TaskStarted` arm below for the
+//! `in_process_teammate`, `shell`, `dream`, …). There are no `subagent/*`
+//! SDK events on the wire. See the `TaskStarted` arm below for the
 //! `SubagentInstance` projection.
 //!
 //! Item lifecycle (`ItemStarted`, `ItemUpdated`, `ItemCompleted`,
@@ -117,9 +117,8 @@ pub(super) fn handle(
             state.session.set_busy(true);
             state.session.stream_stall = false;
             // Reset pause accumulators + sample a fresh spinner verb +
-            // anchor the turn start. TS parity: `loadingStartTimeRef`
-            // is re-anchored at turn start; `Spinner.tsx:166`
-            // `useState` initializer samples a verb once per turn.
+            // anchor the turn start. The loading time ref is re-anchored at
+            // turn start; the spinner verb is sampled once per turn.
             state.ui.ephemeral.start_turn(
                 coco_tui_ui::widgets::spinner_verbs::pick_verb_random(),
                 state.clock.now(),
@@ -192,9 +191,7 @@ pub(super) fn handle(
             state.session.compaction_phase = None;
             // Suppress the next ContextUsageWarning emission — the
             // freshly-compacted token count won't be reflected in the
-            // banner until the next API response arrives. TS:
-            // `services/compact/compactWarningHook.ts` subscribes
-            // `compactWarningStore` to gate the warning.
+            // banner until the next API response arrives.
             state.session.compact_warning_suppressed = true;
             state.ui.add_toast(Toast::info(
                 t!("toast.compacted_short", count = p.removed_messages).to_string(),
@@ -204,7 +201,6 @@ pub(super) fn handle(
         ServerNotification::ContextUsageWarning(p) => {
             // The next API response will deliver an accurate token count;
             // until then, drop the warning so we don't show a stale value.
-            // TS: `compactWarningHook.ts` gates on `compactWarningStore`.
             if !state.session.compact_warning_suppressed && p.percent_left < 10.0 {
                 state.ui.add_toast(Toast::warning(format!(
                     "Context {:.0}% remaining",
@@ -298,17 +294,15 @@ pub(super) fn handle(
 
         // === Task ===
         ServerNotification::TaskStarted(p) => {
-            // TS-aligned spawn projection. TS sets the teammate roster
-            // sidecar through `setAppState(... teamContext.teammates[id]
-            // = {...})` in the same process the SDK consumer reads; our
-            // TUI sits across a process boundary so the same metadata
-            // (`agent_name` / `team_name` / `color` / `backend_kind`)
-            // rides on `TaskStarted` for teammate rows only.
+            // Spawn projection for subagents and teammates. The teammate
+            // roster metadata (`agent_name` / `team_name` / `color` /
+            // `backend_kind`) rides on `TaskStarted` because the TUI sits
+            // across a process boundary.
             //
             // Subagent (BgAgent) rows leave those `None` — they're
             // discriminated by `task_type == "local_agent"` and identified
             // by `task_id`. See `coco_tasks::task_type_wire_name` for the
-            // TS-canonical wire strings (`Task.ts:6-13`).
+            // canonical wire strings.
             match p.task_type.as_deref() {
                 Some(s) if s == task_type_wire::LOCAL_AGENT => {
                     ensure_subagent_row(state, SubagentKind::Subagent, &p);
@@ -394,9 +388,9 @@ pub(super) fn handle(
             // BgAgent task IDs are also subagent IDs (see `TaskStateBase
             // ::identity` in coco-types). Mirror the progress counters
             // onto the matching `SubagentInstance` so the activity
-            // panel can render `<last_tool> · N tools · M tok` like
-            // TS `AgentProgressLine`. Counters are monotonically maxed
-            // so an out-of-order snapshot can't roll them backwards.
+            // panel can render `<last_tool> · N tools · M tok`.
+            // Counters are monotonically maxed so an out-of-order
+            // snapshot can't roll them backwards.
             if let Some(agent) = state
                 .session
                 .subagents
@@ -404,14 +398,12 @@ pub(super) fn handle(
                 .find(|a| a.agent_id == p.task_id)
             {
                 // Coordinator-side rings (`runner_loop.rs`,
-                // `agent_handle/spawn.rs`) enforce the cap-5 ring
-                // buffer per TS `LocalAgentTask.tsx:40`
-                // `MAX_RECENT_ACTIVITIES = 5`. The TUI does not
-                // re-cap on receive — it trusts the producer. Copying
-                // the slice verbatim avoids the earlier
-                // `last_tool_name`-only fallback that dropped
-                // intermediate tools whenever multiple calls fired
-                // between progress events.
+                // `agent_handle/spawn.rs`) enforce the cap-5 ring buffer
+                // (`MAX_RECENT_ACTIVITIES = 5`). The TUI does not re-cap
+                // on receive — it trusts the producer. Copying the slice
+                // verbatim avoids the earlier `last_tool_name`-only fallback
+                // that dropped intermediate tools whenever multiple calls
+                // fired between progress events.
                 if !p.recent_activities.is_empty() {
                     agent.recent_activities = p.recent_activities.clone();
                 }
@@ -424,12 +416,11 @@ pub(super) fn handle(
             true
         }
         ServerNotification::TaskPanelChanged(p) => {
-            // Unified snapshot refresh — mirrors TS `notifyTasksUpdated`.
-            // Before we replace the snapshot, diff the old/new statuses so
-            // we can stamp per-task `Completed` timestamps (TS
-            // `RECENT_COMPLETED_TTL_MS = 30_000` priority lift) and
-            // detect the "all completed" transition (TS
-            // `HIDE_DELAY_MS = 5_000` panel auto-hide).
+            // Unified snapshot refresh. Before we replace the snapshot, diff
+            // the old/new statuses so we can stamp per-task `Completed`
+            // timestamps (`RECENT_COMPLETED_TTL_MS = 30_000` priority lift)
+            // and detect the "all completed" transition
+            // (`HIDE_DELAY_MS = 5_000` panel auto-hide).
             let now = state.clock.now_ms();
             let prev_statuses: std::collections::HashMap<&str, coco_types::TaskListStatus> = state
                 .session
@@ -719,7 +710,7 @@ pub(super) fn handle(
             true
         }
         ServerNotification::SandboxViolationsDetected { count } => {
-            // Non-blocking count surface: TS shows violations in an expandable
+            // Non-blocking count surface: violations render as an expandable
             // count view, not a blocking modal — a per-burst modal would
             // interrupt the turn repeatedly. A toast keeps the user informed;
             // the model also sees the details via `<sandbox_violations>`.
@@ -832,7 +823,7 @@ pub(super) fn handle(
             true
         }
 
-        // === TS P2 additions ===
+        // === P2 additions ===
         ServerNotification::LocalCommandOutput(p) => {
             const MAX_LOCAL_OUTPUT: usize = 50;
             state
@@ -859,9 +850,10 @@ pub(super) fn handle(
             // No elicitation dialog UI exists yet, so there is no matching
             // prompt to dismiss. Unconditionally calling `dismiss_prompt()`
             // would close an UNRELATED active prompt (permission / plan / MCP
-            // approval). TS matches (server, elicitation_id) against the queued
-            // elicitation and dismisses only that entry; until the dialog lands
-            // we ignore the notification rather than dismiss the wrong prompt.
+            // approval). The correct approach is to match (server, elicitation_id)
+            // against the queued elicitation and dismiss only that entry; until
+            // the dialog lands we ignore the notification rather than dismiss the
+            // wrong prompt.
             tracing::debug!(
                 server = %p.mcp_server_name,
                 elicitation_id = %p.elicitation_id,
@@ -913,9 +905,8 @@ pub(super) fn handle(
 
         // === Plugins ===
         // Surfaces the "Plugins changed. Run /reload-plugins to activate."
-        // banner; the user must run `/reload-plugins` explicitly. TS
-        // parity: `useManagePlugins.ts:293-300` (color: 'suggestion' is
-        // the lightest priority — closest TUI analogue is the info toast).
+        // banner; the user must run `/reload-plugins` explicitly. Uses
+        // the info toast (lightest priority).
         ServerNotification::PluginsChanged { reason: _ } => {
             state.ui.add_toast(Toast::info(
                 "Plugins changed. Run /reload-plugins to activate.".to_string(),
@@ -953,15 +944,10 @@ pub(super) fn handle(
                     .session
                     .stamp_tool_executions_with_assistant_uuid(&message);
                 // Persist the raw markdown body for `/copy` and the
-                // rewind-overlay preview. TS parity: `record_agent_markdown`
-                // is invoked on every assistant message append — defined in
-                // `state/session.rs:379` but previously had no production
-                // caller, leaving `last_agent_markdown` permanently `None`
-                // and dangling features (`/copy`, transcript markdown
-                // export) silently broken. The text extractor pulls plain
-                // `AssistantContent::Text` parts only; reasoning / tool
-                // calls / files are intentionally skipped (TS does the same
-                // via its `firstTextContent` walk).
+                // rewind-overlay preview. `record_agent_markdown` is invoked
+                // on every assistant message append. The text extractor pulls
+                // plain `AssistantContent::Text` parts only; reasoning / tool
+                // calls / files are intentionally skipped.
                 let text = coco_messages::wrapping::extract_text_from_message(message.as_ref());
                 state.session.record_agent_markdown(&text);
             }
@@ -1098,10 +1084,9 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
     let (agent_type, color, team_name, tool_use_id) = match kind {
         SubagentKind::Subagent => {
             // `TaskStartedParams` doesn't yet surface the BgAgent's
-            // declared agent_type (Explore / Plan / Review / …) — TS
-            // bridges via a parallel `SubagentTypeAttachment`. Until
-            // that lands, fall back to the wire literal so the badge
-            // is at least non-empty.
+            // declared agent_type (Explore / Plan / Review / …). Until
+            // a `SubagentTypeAttachment` event lands, fall back to the
+            // wire literal so the badge is at least non-empty.
             (
                 task_type_wire::LOCAL_AGENT.to_string(),
                 None,

@@ -1,7 +1,5 @@
 //! Shell tokenizer that splits command strings into tokens respecting quotes,
 //! escapes, heredocs, and variable expansions.
-//!
-//! Ported from TS: utils/bash/bashParser.ts tokenizer section.
 
 /// Token types produced by the shell tokenizer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

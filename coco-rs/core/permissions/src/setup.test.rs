@@ -104,7 +104,7 @@ fn test_dangerous_bash_interpreter_patterns() {
 
 #[test]
 fn test_dangerous_bash_ts_aligned_patterns() {
-    // Patterns from TS CROSS_PLATFORM_CODE_EXEC
+    // Patterns from CROSS_PLATFORM_CODE_EXEC
     assert!(is_dangerous_bash_permission(
         "Bash",
         Some("python2 *"),
@@ -135,7 +135,7 @@ fn test_dangerous_bash_ts_aligned_patterns() {
         Some("yarn run *"),
         /*is_ant*/ false
     ));
-    // Bash-specific from TS
+    // Bash-specific
     assert!(is_dangerous_bash_permission(
         "Bash",
         Some("env *"),

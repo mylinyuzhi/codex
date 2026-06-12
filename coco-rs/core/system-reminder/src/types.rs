@@ -1,10 +1,10 @@
 //! Core types for the system-reminder subsystem.
 //!
-//! Naming follows **TS-first**: every [`AttachmentType`] variant serializes to
-//! the exact discriminator string used in `src/utils/attachments.ts` (e.g.
-//! `"plan_mode"`, `"plan_mode_exit"`, `"plan_mode_reentry"`, `"auto_mode_exit"`).
-//! This keeps wire compatibility with transcripts / SDK consumers that round-trip
-//! attachment types through JSON.
+//! Every [`AttachmentType`] variant serializes to the exact discriminator
+//! string used on the wire (e.g. `"plan_mode"`, `"plan_mode_exit"`,
+//! `"plan_mode_reentry"`, `"auto_mode_exit"`). This keeps wire compatibility
+//! with transcripts / SDK consumers that round-trip attachment types through
+//! JSON.
 
 use std::path::PathBuf;
 
@@ -14,31 +14,28 @@ use serde_json::Value;
 
 use coco_types::SkillDiscoveryPayload;
 
-/// Tier determines when a generator runs, mirroring TS
-/// `getAttachments` (`attachments.ts:743-1003`) which splits generators into
-/// three parallel batches:
+/// Tier determines when a generator runs. Generators are split into three
+/// parallel batches:
 ///
-/// - `allThreadAttachments` → [`ReminderTier::Core`]
-/// - `mainThreadAttachments` (gated on `isMainThread`) → [`ReminderTier::MainAgentOnly`]
-/// - `userInputAttachments` (gated on `input` presence) → [`ReminderTier::UserPrompt`]
+/// - All-thread attachments → [`ReminderTier::Core`]
+/// - Main-thread attachments (gated on `is_main_agent`) → [`ReminderTier::MainAgentOnly`]
+/// - User-input attachments (gated on `has_user_input`) → [`ReminderTier::UserPrompt`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReminderTier {
-    /// Runs for every agent, including sub-agents (TS `allThreadAttachments`).
+    /// Runs for every agent, including sub-agents.
     Core,
-    /// Main agent only (TS `mainThreadAttachments`; gated on `!toolUseContext.agentId`).
+    /// Main agent only (gated on `is_main_agent`).
     MainAgentOnly,
-    /// Only when user input is present this turn (TS `userInputAttachments`;
-    /// gated on `input != null`).
+    /// Only when user input is present this turn (gated on `has_user_input`).
     UserPrompt,
 }
 
 /// XML tag used to wrap reminder content.
 ///
-/// TS uses `<system-reminder>` for almost all attachment cases via
-/// `wrapInSystemReminder` / `wrapMessagesInSystemReminder`
-/// (`messages.ts:3097-3134`). Phase C may introduce additional tags
-/// (e.g. `<new-diagnostics>`) if we observe TS emitting them.
+/// `<system-reminder>` is used for almost all attachment cases.
+/// Additional tags (e.g. `<new-diagnostics>`) may be introduced for
+/// specific reminder types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum XmlTag {
@@ -65,241 +62,186 @@ impl XmlTag {
 /// `TaskReminder`, `CompactionReminder`, `AutoMode`, `CriticalSystemReminder`,
 /// `VerifyPlanReminder`, `DateChange`, etc.
 ///
-/// Wire format (snake_case) matches TS `Attachment.type` exactly.
+/// Wire format (snake_case) matches `Attachment.type` exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentType {
     // ── Plan-mode reminders (Core tier; run for subagents too) ──
-    /// TS `plan_mode` (`attachments.ts:881`, `messages.ts:3826`).
-    /// Carries full/sparse internally via [`ThrottleManager::should_use_full_content`].
+    /// Plan-mode steady-state. Carries full/sparse internally via
+    /// [`ThrottleManager::should_use_full_content`].
     PlanMode,
-    /// TS `plan_mode_exit` (`attachments.ts:882`, `messages.ts:3848`).
+    /// Emitted on the turn plan mode exits.
     PlanModeExit,
-    /// TS `plan_mode_reentry` (`messages.ts:3829`).
+    /// Emitted on the first turn after re-entering plan mode.
     PlanModeReentry,
 
     // ── Auto-mode reminders (Core tier) ──
-    /// TS `auto_mode_exit` (`attachments.ts:888`, `messages.ts:3863`).
+    /// Emitted on the turn auto mode exits.
     AutoModeExit,
 
-    // ── Todo / task reminders (Core tier — TS `allThreadAttachments`) ──
-    /// TS `todo_reminder` (`attachments.ts:893`, `messages.ts:3663`).
+    // ── Todo / task reminders (Core tier) ──
     /// Emitted when the agent hasn't used `TodoWrite` for ≥10 turns.
     TodoReminder,
-    /// TS `task_reminder` (`attachments.ts:893` when `isTodoV2Enabled`,
-    /// `messages.ts:3680`). Emitted when V2 task tools haven't been used
-    /// for ≥10 turns.
+    /// Emitted when V2 task tools haven't been used for ≥10 turns.
     TaskReminder,
 
     // ── Critical system reminder (Core tier) ──
-    /// TS `critical_system_reminder` (`attachments.ts:919`,
-    /// `messages.ts:3872`). Per-turn user-supplied instruction, injected
-    /// verbatim.
+    /// Per-turn user-supplied instruction, injected verbatim.
     CriticalSystemReminder,
 
     // ── Auto-mode steady-state (Core tier) ──
-    /// TS `auto_mode` (`attachments.ts:885`, `messages.ts:3860`).
-    /// Full/Sparse cadence while the engine is in auto mode (or plan-with-
-    /// auto). Symmetric to [`PlanMode`](Self::PlanMode).
+    /// Full/Sparse cadence while the engine is in auto mode (or plan-with-auto).
+    /// Symmetric to [`PlanMode`](Self::PlanMode).
     AutoMode,
 
     // ── Compaction + date-change notices (Core tier) ──
-    /// TS `compaction_reminder` (`attachments.ts:924`, `messages.ts:4139`).
-    /// One-shot "auto-compact enabled" nudge once the context nears its
-    /// capacity.
+    /// One-shot "auto-compact enabled" nudge once the context nears its capacity.
     CompactionReminder,
-    /// TS `date_change` (`attachments.ts:830`, `messages.ts:4162`). Fires
-    /// when the local ISO date rolls past the previously-seen date within
+    /// Fires when the local ISO date rolls past the previously-seen date within
     /// the session (e.g. coding past midnight).
     DateChange,
 
-    /// coco-rs per-turn baseline user context. Mirrors TS
-    /// `prependUserContext` (`utils/api.ts:449`) which prepends an
-    /// `isMeta` `<system-reminder>` carrying `currentDate`
-    /// (`context.ts:186`) on every turn. Unlike [`DateChange`](Self::DateChange)
-    /// (a one-shot rollover notice), this fires unconditionally so the
-    /// model always has the date — the KAIROS memory instruction
-    /// (`memory/src/prompt/builders.rs`) references `currentDate` in context.
+    /// Per-turn baseline user context. Prepends an `isMeta`
+    /// `<system-reminder>` carrying `currentDate` on every turn. Unlike
+    /// [`DateChange`](Self::DateChange) (a one-shot rollover notice), this
+    /// fires unconditionally so the model always has the date.
     UserContext,
 
     // ── Verify-plan reminder (MainAgentOnly tier) ──
-    /// TS `verify_plan_reminder` (`attachments.ts:3894`, `messages.ts:4240`).
     /// Fires every 10 human turns after ExitPlanMode while
     /// `pending_plan_verification` hasn't been resolved. Main-thread only —
-    /// sub-agents don't own the plan. TS gates on `USER_TYPE === 'ant' &&
-    /// CLAUDE_CODE_VERIFY_PLAN=true`; coco-rs ships `VerifyPlanExecution`
-    /// and gates on the user-facing
+    /// sub-agents don't own the plan. Gated on the
     /// `settings.system_reminder.attachments.verify_plan_reminder` flag.
     VerifyPlanReminder,
 
     // ── Phase 1 engine-local reminders (Core tier unless noted) ──
-    /// TS `ultrathink_effort` (`attachments.ts:1446`, `messages.ts:4170`).
     /// Fires when the user prompt contains the `ultrathink` keyword,
     /// asking the model to apply high reasoning effort on this turn.
-    /// TS gates on `feature('ULTRATHINK')` + GrowthBook; coco-rs gates on
-    /// the opt-in `ultrathink_effort` settings flag (default off — matches
-    /// TS external-build behavior).
+    /// Gated on the opt-in `ultrathink_effort` settings flag (default off).
     UltrathinkEffort,
 
-    /// TS `token_usage` (`attachments.ts:3807`, `messages.ts:4058`).
     /// Main-thread-only usage report injected every turn when enabled.
-    /// TS gates on `CLAUDE_CODE_ENABLE_TOKEN_USAGE_ATTACHMENT`; coco-rs
-    /// gates on the opt-in `token_usage` settings flag (default off).
+    /// Gated on the opt-in `token_usage` settings flag (default off).
     TokenUsage,
 
-    /// TS `budget_usd` (`attachments.ts:3846`, `messages.ts:4067`).
-    /// Main-thread-only cost report; fires whenever `max_budget_usd` is
-    /// set. No external feature gate in TS beyond the budget being set.
+    /// Main-thread-only cost report; fires whenever `max_budget_usd` is set.
     BudgetUsd,
 
-    /// TS `output_token_usage` (`attachments.ts:3828`, `messages.ts:4076`).
     /// Per-turn output-token report with optional turn budget.
-    /// TS gates on `feature('TOKEN_BUDGET')`; coco-rs gates on the opt-in
-    /// `output_token_usage` settings flag (default off — matches TS
-    /// external-build behavior).
+    /// Gated on the opt-in `output_token_usage` settings flag (default off).
     OutputTokenUsage,
 
-    /// TS `companion_intro` (`attachments.ts:864`, `messages.ts:4232`,
-    /// body from `buddy/prompt.ts:7`). One-shot intro emitted once per
-    /// session when a companion is configured and hasn't been announced
-    /// yet. TS gates on `feature('BUDDY')` + `getCompanion()`; coco-rs
-    /// gates on the opt-in `companion_intro` settings flag (default off).
+    /// One-shot intro emitted once per session when a companion is configured
+    /// and hasn't been announced yet. Gated on the opt-in `companion_intro`
+    /// settings flag (default off).
     CompanionIntro,
 
-    // ── Phase 2 history-diff delta reminders (Core tier — TS `allThreadAttachments`) ──
-    /// TS `deferred_tools_delta` (`attachments.ts:1455`, `messages.ts:4178`).
+    // ── Phase 2 history-diff delta reminders (Core tier) ──
     /// Announces tool additions / removals via ToolSearch mid-session.
     /// Engine pre-computes the delta against prior announcements in
     /// history; generator emits when the delta is non-empty.
     DeferredToolsDelta,
 
-    /// TS `agent_listing_delta` (`attachments.ts:1490`, `messages.ts:4194`).
     /// Announces agent-type additions / removals for the Agent tool.
     /// Engine pre-computes the delta (with `is_initial` on first emit +
     /// optional concurrency note).
     AgentListingDelta,
 
-    /// TS `mcp_instructions_delta` (`messages.ts:4216`). Announces MCP
-    /// server instructions added / removed since last announcement.
-    /// Engine pre-computes by diffing current server instructions
-    /// against prior announcements in history.
+    /// Announces MCP server instructions added / removed since last
+    /// announcement. Engine pre-computes by diffing current server
+    /// instructions against prior announcements in history.
     McpInstructionsDelta,
 
     // ── Phase 3 cross-crate state reminders (Core tier unless noted) ──
-    /// TS `hook_success` (`messages.ts:4099`). Success output from
-    /// SessionStart / UserPromptSubmit hook execution. MainAgentOnly
-    /// per TS main-thread batch.
+    /// Success output from SessionStart / UserPromptSubmit hook execution.
+    /// MainAgentOnly.
     HookSuccess,
-    /// TS `hook_blocking_error` (`messages.ts:4090`). Hook blocked the
-    /// turn due to a command error.
+    /// Hook blocked the turn due to a command error.
     HookBlockingError,
-    /// TS `hook_additional_context` (`messages.ts:4117`). Hook supplied
-    /// extra context lines.
+    /// Hook supplied extra context lines.
     HookAdditionalContext,
-    /// TS `hook_stopped_continuation` (`messages.ts:4130`). Hook halted
-    /// a continuation.
+    /// Hook halted a continuation.
     HookStoppedContinuation,
-    /// TS `async_hook_response` (`messages.ts:4026`). Post-async-hook
-    /// response: systemMessage and/or additionalContext as separate
-    /// messages.
+    /// Post-async-hook response: systemMessage and/or additionalContext as
+    /// separate messages.
     AsyncHookResponse,
 
-    /// TS `diagnostics` (`messages.ts:3812`). LSP/IDE diagnostics for
-    /// files changed this turn. Wrapped in `<new-diagnostics>` inside
-    /// `<system-reminder>`.
+    /// LSP/IDE diagnostics for files changed this turn. Wrapped in
+    /// `<new-diagnostics>` inside `<system-reminder>`.
     Diagnostics,
 
-    /// TS `output_style` (`messages.ts:3797`). Active output-style
-    /// reinforcement; MainAgentOnly.
+    /// Active output-style reinforcement; MainAgentOnly.
     OutputStyle,
 
-    /// TS `queued_command` (`messages.ts:3739`). Mid-turn queued user /
-    /// system command drained into the turn.
+    /// Mid-turn queued user / system command drained into the turn.
     QueuedCommand,
 
-    /// TS `task_status` (`messages.ts:3954`). Background-task status
-    /// report emitted post-compaction.
+    /// Background-task status report emitted post-compaction.
     TaskStatus,
 
-    /// TS `skill_listing` (`messages.ts:3728`). Listing of available
-    /// skills.
+    /// Listing of available skills.
     SkillListing,
 
-    /// TS `invoked_skills` (`messages.ts:3644`). Content of skills
-    /// invoked in the current session.
+    /// Content of skills invoked in the current session.
     InvokedSkills,
 
-    /// TS `teammate_mailbox` (agentSwarms-gated). Unread messages for
-    /// the current teammate.
+    /// Unread messages for the current teammate (agentSwarms-gated).
     TeammateMailbox,
 
-    /// TS `team_context` (agentSwarms-gated). One-shot team-coordination
-    /// context injected on the first turn.
+    /// One-shot team-coordination context injected on the first turn
+    /// (agentSwarms-gated).
     TeamContext,
 
-    /// TS `agent_pending_messages` (`attachments.ts:916`). Pending
-    /// inbox messages for the agent.
+    /// Pending inbox messages for the agent.
     AgentPendingMessages,
 
-    // ── Memory reminders (Core tier — TS `allThreadAttachments`) ──
-    /// TS `nested_memory` (`attachments.ts:872`, `messages.ts:3700`).
+    // ── Memory reminders (Core tier) ──
     /// Per-turn injection of nested CLAUDE.md / memory file contents
     /// triggered by @-mention path traversal. Data sourced from
     /// `core/context::Attachment::NestedMemory`.
     NestedMemory,
-    /// TS `relevant_memories` (`messages.ts:3708`). Semantically-ranked
-    /// memory file contents surfaced via async prefetch (TS moved it
-    /// out of `getAttachments` to `startRelevantMemoryPrefetch`).
-    /// Multi-message reminder (one message per memory entry) wrapped
-    /// in a single `<system-reminder>`.
+    /// Semantically-ranked memory file contents surfaced via async prefetch.
+    /// Multi-message reminder (one message per memory entry) wrapped in a
+    /// single `<system-reminder>`.
     RelevantMemories,
 
-    // ── Phase 4 user-input-tier reminders (UserPrompt — only when user_input present) ──
-    /// TS `file` case in `userInputAttachments` (`attachments.ts:775`).
+    // ── Phase 4 user-input-tier reminders (UserPrompt) ──
     /// Announces @-mentioned files; file content itself is loaded via
     /// `core/context::Attachment::File`.
     AtMentionedFiles,
-    /// TS `mcp_resource` (`attachments.ts:778`). Lists MCP resources
-    /// referenced in the prompt.
+    /// Lists MCP resources referenced in the prompt.
     McpResources,
-    /// TS `agent_mention` (`attachments.ts:781`). User-requested agent
-    /// invocations.
+    /// User-requested agent invocations.
     AgentMentions,
 
     // ── Main-thread IDE reminders ──
-    /// TS `selected_lines_in_ide` (`attachments.ts:946`). IDE-sourced
-    /// selection context.
+    /// IDE-sourced selection context.
     IdeSelection,
-    /// TS `opened_file_in_ide` (`attachments.ts:949`). IDE-opened file
-    /// notification.
+    /// IDE-opened file notification.
     IdeOpenedFile,
 
-    // ── Reminder-native silent attachments (Part 1: cocode-rs-style) ──
-    /// TS `already_read_file` (`utils/messages.ts:4252` → `[]`; payload
-    /// defined at `utils/attachments.ts:324`). Records paths already loaded
-    /// this session so the @-mention / memory pipelines don't re-inject the
-    /// same content. Silent: carries `ReminderMetadata::AlreadyReadFile`
-    /// for UI/transcript but injects zero API tokens.
+    // ── Reminder-native silent attachments ──
+    /// Records paths already loaded this session so the @-mention / memory
+    /// pipelines don't re-inject the same content. Silent: carries
+    /// `ReminderMetadata::AlreadyReadFile` for UI/transcript but injects
+    /// zero API tokens.
     ///
     /// Lives in this crate because dedup state is intrinsic to reminder
     /// flow: `AtMentionedFilesGenerator`, `NestedMemoryGenerator`, and
     /// `RelevantMemoriesGenerator` all consult it before emitting file
     /// content.
     AlreadyReadFile,
-    /// TS `edited_image_file` (`utils/messages.ts:4254` → `[]`; payload
-    /// defined at `utils/attachments.ts:457`). Records image-file changes
-    /// that can't be diffed textually. Silent marker; UI may highlight
-    /// the changed file.
+    /// Records image-file changes that can't be diffed textually. Silent
+    /// marker; UI may highlight the changed file.
     EditedImageFile,
 
-    // ── Audit-add (May 2026) — model-visible TS attachment.
-    /// TS `skill_discovery` (`attachments.ts:538-542`). Heuristic skill
-    /// suggestions for the current prompt. UserPrompt tier.
+    // ── Audit-add (May 2026) — model-visible attachment.
+    /// Heuristic skill suggestions for the current prompt. UserPrompt tier.
     SkillDiscovery,
 }
 
 impl AttachmentType {
-    /// The tier this reminder belongs to. Maps each variant to its TS batch.
+    /// The tier this reminder belongs to (determines injection batch).
     pub const fn tier(self) -> ReminderTier {
         match self {
             Self::PlanMode
@@ -313,7 +255,7 @@ impl AttachmentType {
             | Self::CompactionReminder
             | Self::DateChange
             | Self::UserContext
-            // TS `allThreadAttachments` batch — ultrathink + companion intro + deltas + swarm.
+            // Core batch — ultrathink + companion intro + deltas + swarm.
             | Self::UltrathinkEffort
             | Self::CompanionIntro
             | Self::DeferredToolsDelta
@@ -327,14 +269,13 @@ impl AttachmentType {
             | Self::NestedMemory
             | Self::RelevantMemories
             => ReminderTier::Core,
-            // TS `userInputAttachments` batch (`attachments.ts:773-814`) —
-            // only fires when the user submitted input this turn.
+            // UserPrompt batch — only fires when the user submitted input this turn.
             Self::AtMentionedFiles
             | Self::McpResources
             | Self::AgentMentions
             // Audit-add: skill discovery is a per-prompt heuristic.
             | Self::SkillDiscovery => ReminderTier::UserPrompt,
-            // TS `mainThreadAttachments` batch (`attachments.ts:944`).
+            // MainAgentOnly batch.
             Self::VerifyPlanReminder
             | Self::TokenUsage
             | Self::BudgetUsd
@@ -358,8 +299,8 @@ impl AttachmentType {
         }
     }
 
-    /// The XML tag for this reminder. TS wraps all of these via
-    /// `wrapMessagesInSystemReminder`, so they share [`XmlTag::SystemReminder`].
+    /// The XML tag for this reminder. Almost all reminders share
+    /// [`XmlTag::SystemReminder`].
     pub const fn xml_tag(self) -> XmlTag {
         match self {
             Self::PlanMode
@@ -408,10 +349,10 @@ impl AttachmentType {
             | Self::EditedImageFile
             | Self::SkillDiscovery
             => XmlTag::SystemReminder,
-            // TS `diagnostics` wraps its content in `<new-diagnostics>`
-            // before the outer `<system-reminder>`. For simplicity the
-            // generator bakes the inner tag into the body text; the
-            // outer `<system-reminder>` is still applied by the pipeline.
+            // `diagnostics` wraps its content in `<new-diagnostics>`
+            // before the outer `<system-reminder>`. The generator bakes
+            // the inner tag into the body text; the outer `<system-reminder>`
+            // is applied by the pipeline.
             Self::Diagnostics => XmlTag::SystemReminder,
         }
     }
@@ -467,7 +408,7 @@ impl AttachmentType {
     }
 
     /// Every [`AttachmentType`] variant in declaration order. Used by the
-    /// parity test to assert that each TS-sourced reminder has a default
+    /// completeness test to assert that each reminder has a default
     /// generator registered + a config toggle.
     pub const fn all() -> &'static [AttachmentType] {
         &[
@@ -528,8 +469,8 @@ impl std::fmt::Display for AttachmentType {
 /// Lift the reminder subset into the full [`coco_types::AttachmentKind`]
 /// taxonomy (60 variants).
 ///
-/// `AttachmentType` is the **subset** of TS `Attachment.type` this crate
-/// owns as reminder-producing generators (41 model-visible + 2 silent =
+/// `AttachmentType` is the subset of attachment types this crate owns
+/// as reminder-producing generators (41 model-visible + 2 silent =
 /// 43 variants). The full union lives in `coco-types` so every consumer
 /// crate can reference a single authoritative discriminator without
 /// pulling system-reminder as a dependency.
@@ -576,8 +517,8 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
             AttachmentType::InvokedSkills => K::InvokedSkills,
             AttachmentType::TeammateMailbox => K::TeammateMailbox,
             AttachmentType::TeamContext => K::TeamContext,
-            // `AgentPendingMessages` is a coco-rs-synthetic grouping that
-            // maps to TS `queued_command` with a coordinator-origin flag.
+            // `AgentPendingMessages` is a synthetic grouping that maps to
+            // `queued_command` with a coordinator-origin flag.
             // Route it to `QueuedCommand` to preserve the wire tag.
             AttachmentType::AgentPendingMessages => K::QueuedCommand,
             AttachmentType::AtMentionedFiles => K::File,
@@ -596,9 +537,9 @@ impl From<AttachmentType> for coco_types::AttachmentKind {
 
 /// Role of an injected message, used by multi-message reminders.
 ///
-/// Most reminders produce a single user message (TS `createUserMessage` in
-/// `messages.ts:3678`). A few (e.g. `already_read_file` when we port it) need
-/// paired assistant/user messages to carry `tool_use` + `tool_result` blocks.
+/// Most reminders produce a single user message. A few (e.g. `already_read_file`
+/// when we port it) need paired assistant/user messages to carry
+/// `tool_use` + `tool_result` blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
@@ -608,22 +549,20 @@ pub enum MessageRole {
 
 /// Content block inside a multi-message reminder.
 ///
-/// Mirrors TS's Anthropic content-block shapes (`text` / `image` /
-/// `tool_use` / `tool_result`) in `messages.ts` so multi-message reminders
-/// can produce exact-equivalent API payloads.
+/// Matches Anthropic content-block shapes (`text` / `image` /
+/// `tool_use` / `tool_result`) so multi-message reminders can produce
+/// exact-equivalent API payloads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     /// Plain text block.
     Text { text: String },
-    /// Image block — TS `attachment.prompt: ContentBlockParam[]` may carry
-    /// `{ type: 'image', ... }` blocks for mid-turn image pastes routed
-    /// through the queued-command path (`attachments.ts:1062-1075`).
+    /// Image block — carries mid-turn image pastes routed through the
+    /// queued-command path.
     Image {
         /// IANA media type (e.g. `image/png`, `image/jpeg`).
         media_type: String,
-        /// Base64-encoded image payload. Mirrors
-        /// `coco_context::ImageAttachment::base64_data`.
+        /// Base64-encoded image payload.
         data_base64: String,
     },
     /// Synthetic tool-use block.
@@ -644,7 +583,7 @@ pub enum ContentBlock {
 pub struct ReminderMessage {
     pub role: MessageRole,
     pub blocks: Vec<ContentBlock>,
-    /// TS `isMeta` on `createUserMessage`. Hidden from UI transcripts.
+    /// Hidden from UI transcripts.
     #[serde(default)]
     pub is_meta: bool,
 }
@@ -660,10 +599,9 @@ impl ReminderMessage {
     }
 
     /// Construct a user message with a single text block followed by image
-    /// blocks. Mirrors TS `attachments.ts:1067-1075` where queued commands
-    /// with image pastes emit `[text, ...imageBlocks]` so both reach the API.
-    /// `images` is a list of `(media_type, base64_data)` pairs; an empty
-    /// vec is equivalent to [`Self::user_text`].
+    /// blocks. Queued commands with image pastes emit `[text, ...imageBlocks]`
+    /// so both reach the API. `images` is a list of `(media_type, base64_data)`
+    /// pairs; an empty vec is equivalent to [`Self::user_text`].
     pub fn user_text_with_images(text: impl Into<String>, images: Vec<(String, String)>) -> Self {
         let mut blocks = vec![ContentBlock::Text { text: text.into() }];
         for (media_type, data_base64) in images {
@@ -692,9 +630,7 @@ impl ReminderMessage {
 /// The payload a generator produced for this turn.
 ///
 /// **Model-visible outputs** (injected into the API request):
-/// - `Text` → single user message (the 95% case — matches
-///   `normalizeAttachmentForAPI` returning `[wrapMessagesInSystemReminder([
-///   createUserMessage(...)])]`).
+/// - `Text` → single user message (the 95% case).
 /// - `Messages` → multiple paired messages (used for reminders that need
 ///   `tool_use` + `tool_result` structure).
 /// - `ModelAttachment` → JSON payload serialized then wrapped; for
@@ -704,14 +640,9 @@ impl ReminderMessage {
 /// [`crate::inject::NormalizedMessages::display_only`]):
 /// - `SilentAttachment` — structured payload for UI / telemetry.
 ///
-/// TS `Attachment` types whose `normalizeAttachmentForAPI` returns `[]`
-/// (e.g. `already_read_file`, `edited_image_file`) use `SilentAttachment`
-/// so the data reaches UI/transcript layers without reaching the model.
-///
-/// Historical note: earlier drafts had `Silent` / `SilentText` /
-/// `SilentMessages` variants. They were never constructed by any generator
-/// and have been removed — add them back if a future generator actually
-/// needs them.
+/// Attachment types that produce no API tokens (e.g. `already_read_file`,
+/// `edited_image_file`) use `SilentAttachment` so the data reaches
+/// UI/transcript layers without reaching the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReminderOutput {
@@ -800,8 +731,8 @@ pub struct EditedImageFileMeta {
 pub struct SystemReminder {
     pub attachment_type: AttachmentType,
     pub output: ReminderOutput,
-    /// TS `isMeta: true` on `createUserMessage`. Default true — reminders are
-    /// always meta unless a generator explicitly surfaces user-visible content.
+    /// Default true — reminders are always meta unless a generator explicitly
+    /// surfaces user-visible content.
     #[serde(default = "default_is_meta")]
     pub is_meta: bool,
     /// Explicit silent flag. Kept distinct from [`ReminderOutput::is_silent`]
@@ -850,9 +781,8 @@ impl SystemReminder {
     /// emits an API-visible `AttachmentMessage::api(...)`.
     ///
     /// Use this for reminder-native kinds whose
-    /// [`AttachmentKind::is_api_visible`] is `false` (TS
-    /// `normalizeAttachmentForAPI` returns `[]`) but whose body is still
-    /// useful to UI consumers.
+    /// [`AttachmentKind::is_api_visible`] is `false` (the API sees nothing)
+    /// but whose body is still useful to UI consumers.
     pub fn silent_text(attachment_type: AttachmentType, content: impl Into<String>) -> Self {
         Self {
             attachment_type,
@@ -876,11 +806,11 @@ impl SystemReminder {
 
     /// Build a silent attachment reminder carrying structured metadata.
     ///
-    /// Use for TS `Attachment` types whose `normalizeAttachmentForAPI`
-    /// returns `[]` but whose payload the UI still consumes (e.g.
-    /// `already_read_file`, `edited_image_file`). The `payload` is the
-    /// JSON projection of `metadata` — keeping both gives consumers a
-    /// typed path (`metadata`) and a wire-format path (`payload`).
+    /// Use for attachment types whose `normalizeAttachmentForAPI` returns `[]`
+    /// but whose payload the UI still consumes (e.g. `already_read_file`,
+    /// `edited_image_file`). The `payload` is the JSON projection of
+    /// `metadata` — keeping both gives consumers a typed path (`metadata`)
+    /// and a wire-format path (`payload`).
     pub fn silent_attachment(attachment_type: AttachmentType, metadata: ReminderMetadata) -> Self {
         let payload = serde_json::to_value(&metadata).unwrap_or(Value::Null);
         Self {

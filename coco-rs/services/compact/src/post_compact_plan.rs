@@ -1,13 +1,11 @@
 //! Post-compact plan-file re-injection.
 //!
-//! TS: `createPlanAttachmentIfNeeded()` in `compact.ts:1470-1486`. After
-//! compaction clears history, this function re-injects the current plan
-//! file's contents so the model can continue working on the plan it had
-//! been following before the context boundary.
+//! After compaction clears history, re-injects the current plan file's
+//! contents so the model can continue working on the plan it had been
+//! following before the context boundary.
 //!
-//! The attachment is wrapped in `<system-reminder>` (TS
-//! `createAttachmentMessage` of type `plan_file_reference`) and renders the
-//! verbatim text template from `messages.ts:3636-3642`.
+//! The attachment is wrapped in `<system-reminder>` as type
+//! `plan_file_reference` and renders a verbatim text template.
 //!
 //! Engine calls this alongside [`crate::create_post_compact_file_attachments`]
 //! during the full-compact flow.
@@ -36,9 +34,6 @@ pub fn create_plan_attachment_if_needed(
     if content.is_empty() {
         return None;
     }
-    // TS `messages.ts:3639` — verbatim string template. Keep this
-    // character-for-character with TS so the model sees identical text
-    // pre- and post-port.
     let text = format!(
         "A plan file exists from plan mode at: {path}\n\nPlan contents:\n\n{content}\n\nIf this plan is relevant to the current work and not already complete, continue working on it.",
         path = plan_file_path.display(),

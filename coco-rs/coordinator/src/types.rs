@@ -1,6 +1,4 @@
 //! Swarm multi-agent orchestration.
-//!
-//! TS: utils/swarm/ (7.5K LOC) — in-process runner, permission sync, team helpers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,8 +24,6 @@ use coco_types::TeammateProtocolContent as AgentMessageContent;
 // ── Teammate Identity ──
 
 /// Lightweight identity for a teammate (display/routing only).
-///
-/// TS: TeammateIdentity in utils/swarm/backends/types.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeammateIdentity {
     /// Unique agent ID (format: "name@team").
@@ -47,8 +43,6 @@ pub struct TeammateIdentity {
 // ── Spawn Result ──
 
 /// Result of attempting to spawn an agent within the swarm.
-///
-/// TS: AgentSpawnResult in utils/swarm/spawnInProcess.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpawnResult {
     pub agent_id: String,
@@ -81,8 +75,6 @@ impl AgentSpawnResult {
 // ── Handoff Classifier ──
 
 /// Post-execution gate that determines whether to auto-continue or pause.
-///
-/// TS: HandoffClassifier in auto-mode post-execution logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HandoffDecision {
@@ -116,8 +108,6 @@ pub enum PermissionResolver {
 }
 
 /// Full permission request forwarded from a worker to the leader.
-///
-/// TS: SwarmPermissionRequest in utils/swarm/permissionSync.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmPermissionRequest {
     pub id: String,
@@ -213,8 +203,6 @@ impl PermissionSyncBridge {
 pub use coco_types::BackendType;
 
 /// Persistent team member record.
-///
-/// TS: TeamFile.members[] in utils/swarm/teamHelpers.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamMember {
@@ -255,8 +243,6 @@ pub struct TeamMember {
 }
 
 /// A path that all teammates in the team are allowed to edit.
-///
-/// TS: `TeamAllowedPath` in utils/swarm/teamHelpers.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamAllowedPath {
@@ -271,8 +257,6 @@ pub struct TeamAllowedPath {
 }
 
 /// On-disk team file (persisted as JSON at ~/.coco/teams/{name}/config.json).
-///
-/// TS: TeamFile in utils/swarm/teamHelpers.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamFile {

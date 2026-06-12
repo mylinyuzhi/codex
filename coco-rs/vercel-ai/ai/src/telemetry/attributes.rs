@@ -1,14 +1,10 @@
 //! Telemetry attribute helpers.
 //!
-//! Utility functions for assembling telemetry operation names and attributes,
-//! matching the TS SDK's `assemble-operation-name.ts`, `get-base-telemetry-attributes.ts`,
-//! and `select-telemetry-attributes.ts`.
+//! Utility functions for assembling telemetry operation names and attributes.
 
 use std::collections::HashMap;
 
 /// Assemble a telemetry operation name from function ID and optional operation ID.
-///
-/// Matches TS `assembleOperationName`.
 pub fn assemble_operation_name(function_id: &str, operation_id: Option<&str>) -> String {
     match operation_id {
         Some(op_id) if !op_id.is_empty() => format!("{function_id}.{op_id}"),

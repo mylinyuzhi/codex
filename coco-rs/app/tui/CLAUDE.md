@@ -1,16 +1,7 @@
 # coco-tui
 
 Terminal UI using ratatui with The Elm Architecture (TEA). Consumes `CoreEvent`
-from `coco-query`; emits `UserCommand` back to core. Replaces TS Ink/React.
-
-## TS Source
-
-- `components/` (~389 files) — chat, permissions, tool displays, overlays, design system
-- `screens/{Doctor,REPL,ResumeConversation}.tsx` — top-level screens
-- `ink/` (~96 files) — custom React terminal renderer (replaced by ratatui)
-- `outputStyles/` — output formatting
-- `services/notifier.ts` — terminal bell/OSC notifications
-- `utils/{theme,terminal}.ts`, `costHook.ts`, `dialogLaunchers.tsx`, `replLauncher.tsx`
+from `coco-query`; emits `UserCommand` back to core.
 
 ## Architecture (TEA)
 

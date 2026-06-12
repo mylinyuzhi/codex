@@ -1,6 +1,4 @@
 //! OAuth flows, token storage/refresh for MCP servers.
-//!
-//! TS: services/mcp/auth.ts, auth/xaa.ts, auth/idp.ts
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -59,8 +57,6 @@ impl OAuthTokens {
 // ── Token persistence ──
 
 /// On-disk structure for all MCP OAuth credentials, keyed by server key.
-///
-/// TS: SecureStorageData.mcpOAuth — maps server keys to token entries.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct OAuthStorageFile {
     #[serde(default)]
@@ -104,8 +100,6 @@ impl StoredTokenEntry {
 }
 
 /// Persistent OAuth token store, backed by a JSON file on disk.
-///
-/// TS: ClaudeAuthProvider — reads/writes tokens via getSecureStorage().
 ///
 /// Tokens are keyed by a server key that combines the server name with a
 /// hash of its config, preventing credential reuse across different server
@@ -213,10 +207,8 @@ pub enum TokenCheckResult {
 ///
 /// If the current access token is still valid (not within 5 min of expiry),
 /// returns it as-is. If it needs refresh and a refresh_token is available,
-/// posts to the token endpoint to get new tokens.
-///
-/// TS: ClaudeAuthProvider.tokens() — refresh logic with transient retry and
-/// invalid_grant invalidation.
+/// posts to the token endpoint to get new tokens. On `invalid_grant` the
+/// stored tokens are evicted so subsequent attempts don't retry endlessly.
 pub async fn check_and_refresh_token(
     store: &OAuthTokenStore,
     server_key: &str,
@@ -276,8 +268,6 @@ pub async fn check_and_refresh_token(
 }
 
 /// Perform the OAuth2 token refresh POST.
-///
-/// TS: sdkRefreshAuthorization + normalizeOAuthErrorBody
 async fn do_token_refresh(
     token_url: &str,
     refresh_token: &str,
@@ -375,8 +365,6 @@ async fn do_token_refresh(
 /// Generate a unique server key from name + config hash.
 ///
 /// Prevents credential reuse across different servers sharing a name.
-///
-/// TS: getServerKey() — SHA-256 hash of (type, url, headers).
 pub fn server_key(server_name: &str, server_url: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hash;
@@ -392,7 +380,7 @@ pub fn server_key(server_name: &str, server_url: &str) -> String {
 
 /// Check if a server has discovery state but no usable tokens.
 ///
-/// TS: hasMcpDiscoveryButNoToken() — connection would 401.
+/// A server in this state would 401 on connect.
 pub fn has_discovery_but_no_token(store: &OAuthTokenStore, server_key: &str) -> bool {
     match store.load(server_key) {
         Ok(Some(tokens)) => tokens.access_token.is_empty() && tokens.refresh_token.is_none(),

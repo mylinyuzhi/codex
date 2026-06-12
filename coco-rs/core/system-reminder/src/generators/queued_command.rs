@@ -1,19 +1,13 @@
-//! TS `queued_command` generator.
+//! `queued_command` generator.
 //!
 //! Replays queued items the model didn't see live, wrapping each in the
-//! origin-specific framing TS prepends via `wrapCommandText`
-//! (`messages.ts:5496`). Each queued item becomes its own
-//! `<system-reminder>` block — matches TS's "N attachments → N wrappers"
-//! shape (`attachments.ts:829` returns one attachment per queued item;
-//! each goes through `normalizeAttachmentForAPI`'s `case 'queued_command':`
-//! at `messages.ts:3739` which calls `wrapMessagesInSystemReminder([
-//! createUserMessage(...)])`).
+//! origin-specific framing from `wrapCommandText`. Each queued item
+//! becomes its own `<system-reminder>` block.
 //!
 //! Earlier this generator filtered out everything without an
 //! `origin_system: true` flag — but since no production producer ever
-//! set that flag, it emitted nothing. The typed
-//! [`crate::QueueOrigin`] enum + per-origin framing brings TS parity
-//! end-to-end.
+//! set that flag, it emitted nothing. The typed [`crate::QueueOrigin`]
+//! enum + per-origin framing now handles all origins end-to-end.
 
 use async_trait::async_trait;
 
@@ -53,7 +47,7 @@ impl AttachmentGenerator for QueuedCommandGenerator {
                 if q.images.is_empty() {
                     ReminderMessage::user_text(text)
                 } else {
-                    // TS `attachments.ts:1067-1075`: text first, then images.
+                    // Text first, then images.
                     let images = q
                         .images
                         .iter()

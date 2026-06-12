@@ -62,8 +62,8 @@ pub fn handler(
 
 /// CommandHandler entry point used by the interactive slash dispatcher.
 ///
-/// Bare `/plugin`, `/plugins`, and `/marketplace` are local-jsx commands in TS:
-/// they open the plugin manager. Explicit subcommands keep the legacy text path
+/// Bare `/plugin`, `/plugins`, and `/marketplace` open the plugin manager
+/// overlay. Explicit subcommands keep the legacy text path
 /// so headless/scripted use remains stable.
 pub struct PluginHandler;
 
@@ -238,14 +238,13 @@ fn extract_toml_string_value(rest: &str) -> Option<String> {
 /// Install a plugin from a known marketplace, recording the installation
 /// in `installed_plugins.json` so the next session loads it.
 ///
-/// Accepts either `name@marketplace` (TS parity for plugin IDs) or just
+/// Accepts either `name@marketplace` or just
 /// `name` (search across all known marketplaces). If the plugin isn't
 /// found in any marketplace, the handler is honest about it instead of
 /// silently scaffolding an empty directory — the prior behavior misled
 /// users into thinking remote plugins had been fetched.
 ///
-/// TS: `services/plugins/PluginInstallationManager.ts`. Live-registry
-/// refresh is deferred to `/reload-plugins` (which re-runs
+/// Live-registry refresh is deferred to `/reload-plugins` (which re-runs
 /// `load_enabled_plugins`); a fresh install is not auto-activated mid-session.
 async fn install_plugin(target: &str) -> crate::Result<String> {
     if target.trim().is_empty() {
@@ -493,14 +492,14 @@ async fn search_plugins(query: &str) -> crate::Result<String> {
 }
 
 /// Settings directory where `enabled_plugins` lives (config root, same place
-/// the install path and loader read/write). TS single source of truth.
+/// the install path and loader read/write).
 fn settings_dir_for_plugins() -> PathBuf {
     coco_config::global_config::config_home()
 }
 
 /// Enable a plugin: set `enabled_plugins[<id>].enabled = true` in settings.json
-/// — the single source of truth the loader and policy layer read (TS
-/// `setPluginEnabledOp`). The orphaned `disabled_plugins.json` is gone.
+/// — the single source of truth the loader and policy layer read.
+/// The orphaned `disabled_plugins.json` is gone.
 async fn enable_plugin(name: &str) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin enable <name>".to_string());
@@ -509,11 +508,10 @@ async fn enable_plugin(name: &str) -> crate::Result<String> {
         return Ok(format!("Plugin '{name}' not found."));
     };
     // Enterprise-policy guard: org-blocked plugins cannot be enabled at any
-    // scope. Mirrors `install_plugin`'s blocklist gate (and TS
-    // `pluginOperations.ts:650-658`, which checks `isPluginBlockedByPolicy`
-    // on enable only — disable is intentionally ungated). Checked after the
-    // dir-exists check so we only block plugins the user could otherwise
-    // enable.
+    // scope. Same gate as `install_plugin`'s blocklist (checks
+    // `isPluginBlockedByPolicy` on enable only — disable is intentionally
+    // ungated). Checked after the dir-exists check so we only block plugins
+    // the user could otherwise enable.
     let policy = coco_plugins::security::EnterprisePolicy::from_managed_settings();
     if let coco_plugins::security::PolicyVerdict::BlockedPlugin { plugin } =
         coco_plugins::security::check_policy(&plugin_id, /*is_user_scope*/ true, &policy)
@@ -648,10 +646,9 @@ async fn marketplace_list() -> crate::Result<String> {
 
 /// Add a marketplace source.
 ///
-/// Input parsing mirrors TS `parseMarketplaceInput.ts`: SSH git URLs,
-/// HTTP/HTTPS (`.git` / Azure `/_git/` → Git source; github.com → Git
-/// with `.git` appended; everything else → Url source), local paths,
-/// and `owner/repo[#ref|@ref]` shorthand.
+/// Input parsing: SSH git URLs, HTTP/HTTPS (`.git` / Azure `/_git/` → Git
+/// source; github.com → Git with `.git` appended; everything else → Url
+/// source), local paths, and `owner/repo[#ref|@ref]` shorthand.
 async fn marketplace_add(source: &str) -> crate::Result<String> {
     if source.trim().is_empty() {
         return Ok("Usage: /plugin marketplace add <source>".to_string());
@@ -709,8 +706,6 @@ async fn marketplace_add(source: &str) -> crate::Result<String> {
 }
 
 /// Re-fetch a single marketplace (git pull / HTTP re-download) and reload it.
-///
-/// TS: `marketplaceManager.ts refreshMarketplace(name)`.
 async fn marketplace_update(name: &str) -> crate::Result<String> {
     if name.is_empty() {
         return Ok("Usage: /plugin marketplace update <name>".to_string());
@@ -748,7 +743,7 @@ async fn marketplace_update(name: &str) -> crate::Result<String> {
     }
 }
 
-/// Re-fetch every configured marketplace (TS `refreshAllMarketplaces`).
+/// Re-fetch every configured marketplace.
 /// Per-marketplace failures are collected and reported, not fatal.
 async fn marketplace_update_all() -> crate::Result<String> {
     let plugins_dir = resolve_plugins_dir();

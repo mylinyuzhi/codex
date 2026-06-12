@@ -1,4 +1,4 @@
-//! Disk-backed schedule store — mirrors TS `utils/cronTasks.ts`.
+//! Disk-backed schedule store.
 //!
 //! Durable tasks persist to `<cwd>/.coco/scheduled_tasks.json`; session tasks
 //! (`durable = false`) live in memory and die with the process. Reads degrade
@@ -51,7 +51,7 @@ impl DiskBackedScheduleStore {
     }
 
     /// File-backed tasks. Missing/corrupt file → `[]`; tasks whose cron no
-    /// longer parses are dropped (TS `readCronTasks`).
+    /// longer parses are dropped.
     async fn read_file_tasks(&self) -> Vec<CronTask> {
         let Ok((raw, _enc, _le)) =
             coco_file_encoding::read_with_format_async(&self.cron_file_path).await
@@ -110,7 +110,7 @@ impl ScheduleStore for DiskBackedScheduleStore {
     }
 
     async fn remove_cron_tasks(&self, ids: &[&str]) -> Result<(), coco_error::BoxedError> {
-        // Sweep the session store first (TS removeCronTasks); then the file.
+        // Sweep the session store first; then the file.
         self.session_tasks
             .write()
             .await

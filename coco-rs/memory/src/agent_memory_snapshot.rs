@@ -1,7 +1,5 @@
 //! Per-agent project-shared memory snapshots.
 //!
-//! TS: `tools/AgentTool/agentMemorySnapshot.ts`.
-//!
 //! Project teams can ship a baseline `MEMORY.md` (and any other `.md`
 //! files) for an agent type by committing them under
 //! `<cwd>/.coco/agent-memory-snapshots/<agentType>/` plus a
@@ -27,14 +25,13 @@ use serde::Serialize;
 use crate::agent_memory::agent_memory_dir;
 
 /// Subdirectory under `<cwd>/.coco/` where project snapshots live.
-/// TS: `SNAPSHOT_BASE = 'agent-memory-snapshots'`.
 pub const SNAPSHOT_BASE: &str = "agent-memory-snapshots";
 
 const SNAPSHOT_JSON: &str = "snapshot.json";
 const SYNCED_JSON: &str = ".snapshot-synced.json";
 
 /// Snapshot metadata file shape — only carries the snapshot's
-/// `updatedAt` timestamp. TS `snapshotMetaSchema`.
+/// `updatedAt` timestamp.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotMeta {
     /// ISO 8601 timestamp the snapshot was published.
@@ -43,7 +40,7 @@ pub struct SnapshotMeta {
 }
 
 /// Synced-marker file shape — records the snapshot timestamp the
-/// local copy was initialised from. TS `syncedMetaSchema`.
+/// local copy was initialised from.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncedMeta {
     /// ISO 8601 timestamp of the snapshot we last synced from.
@@ -52,7 +49,6 @@ pub struct SyncedMeta {
 }
 
 /// Action returned by [`check_agent_memory_snapshot`].
-/// TS `checkAgentMemorySnapshot` return shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SnapshotAction {
     /// No snapshot file exists — nothing to do.
@@ -70,7 +66,6 @@ pub enum SnapshotAction {
 use coco_paths::sanitize_agent_type_for_path;
 
 /// Snapshot directory for a given agent type.
-/// TS: `getSnapshotDirForAgent(agentType)`.
 pub fn snapshot_dir_for_agent(agent_type: &str, cwd: &Path) -> PathBuf {
     cwd.join(".coco")
         .join(SNAPSHOT_BASE)
@@ -101,8 +96,6 @@ fn write_meta<T: Serialize>(path: &Path, meta: &T) -> std::io::Result<()> {
 
 /// Determine what action (if any) is needed to sync project-shared
 /// snapshot state into the local agent memory dir.
-///
-/// TS: `checkAgentMemorySnapshot(agentType, scope)`.
 pub fn check_agent_memory_snapshot(
     agent_type: &str,
     scope: MemoryScope,
@@ -166,8 +159,6 @@ fn copy_snapshot_to_local(
 
 /// First-time initialise: copy snapshot files into local memory dir
 /// and record the synced timestamp.
-///
-/// TS: `initializeFromSnapshot(agentType, scope, snapshotTimestamp)`.
 pub fn initialize_from_snapshot(
     agent_type: &str,
     scope: MemoryScope,
@@ -180,8 +171,7 @@ pub fn initialize_from_snapshot(
 }
 
 /// Wipe existing `.md` files in the local memory dir, copy the
-/// snapshot in, and mark synced. TS:
-/// `replaceFromSnapshot(agentType, scope, snapshotTimestamp)`.
+/// snapshot in, and mark synced.
 pub fn replace_from_snapshot(
     agent_type: &str,
     scope: MemoryScope,
@@ -206,7 +196,7 @@ pub fn replace_from_snapshot(
 
 /// Record the snapshot timestamp as synced without changing local
 /// memory contents. Used when the user opts to keep their local edits
-/// over a newer project snapshot. TS: `markSnapshotSynced`.
+/// over a newer project snapshot.
 pub fn mark_snapshot_synced(
     agent_type: &str,
     scope: MemoryScope,
@@ -240,8 +230,7 @@ pub type PendingSnapshotInspector = Box<dyn Fn(&str, MemoryScope) -> Option<Stri
 ///
 /// The returned closure is `Send + Sync`; the captured paths are
 /// cloned into the closure so the loader can run in any blocking-pool
-/// task without lifetime coupling. TS parity:
-/// `loadAgentsDir.ts:262-294`.
+/// task without lifetime coupling.
 pub fn build_pending_inspector(cwd: PathBuf, home: PathBuf) -> PendingSnapshotInspector {
     Box::new(move |agent_type: &str, scope: MemoryScope| {
         match check_agent_memory_snapshot(agent_type, scope, &cwd, &home) {

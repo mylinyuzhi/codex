@@ -2,79 +2,51 @@
 
 Context compaction strategies: full LLM-summarized, micro (tool-result clearing), API-native server-side editing, reactive (prompt-too-long), session-memory, auto-trigger, and the wire serializer for Anthropic `context_management`.
 
-## TS Source
-- `services/compact/compact.ts` — full LLM-summarized compaction
-- `services/compact/microCompact.ts` — clear old tool results
-- `services/compact/apiMicrocompact.ts` — API-level thinking/tool clearing
-- `services/compact/autoCompact.ts` — threshold-based auto-trigger
-- `services/compact/sessionMemoryCompact.ts` — session memory compaction
-- `services/compact/grouping.ts` — message grouping for compaction
-- `services/compact/postCompactCleanup.ts` — file-attachment re-injection post-compact
-- `services/compact/prompt.ts` — summary prompt templates
-- `services/compact/timeBasedMCConfig.ts` — time-based MC config
+**Inert by default — features staged but not yet active:**
 
-**Inert by default — match TS-feature-stripped behavior:**
-
-- `Tool Result Budget` (Level 1 + 2) — TS lives in `utils/toolResultStorage.ts`
-  and wires through `services/tools/toolExecution.ts:1403` (`addToolResult`)
-  and `query.ts:99,379` (`applyToolResultBudget`). The feature is
-  **the first line of defense** before any compaction strategy runs.
-  Rust status: Phase 0 config staged on `coco_config::CompactConfig.tool_result_budget`
-  (`enabled` / `per_message_chars` / `persist_records`); runtime owners are
-  `coco-tool-runtime::tool_result_storage` (Level 1 — pending) and
-  `coco-query` (Level 2 wiring — pending). `coco-tools::BashTool` carries
-  a divergent Bash-only stub (`temp_dir()`, no `<persisted-output>` wrapper).
-  See `docs/coco-rs/tool-result-budget-plan.md`. **Three TS feature gates**
-  — `tengu_satin_quoll` (per-tool override, lives on `Tool` impls),
-  `tengu_hawthorn_window` (per-message char cap),
-  `tengu_hawthorn_steeple` (Level 2 enable).
-- `HISTORY_SNIP` — TS external is fully DCE'd
-  (`feature('HISTORY_SNIP')` strips imports of `services/compact/snipCompact.ts`
-  and `services/compact/snipProjection.ts`, neither of which exists in
-  external `src/`). Rust mirror: no runtime caller reads
-  `compact.experimental.history_snip.enabled`; the field is staged for
-  a future port.
-- `CONTEXT_COLLAPSE` (`marble_origami`) — TS external strips runtime
-  (`feature('CONTEXT_COLLAPSE')` DCEs the `services/contextCollapse/`
-  imports) but keeps `ContextCollapseCommitEntry` and
-  `ContextCollapseSnapshotEntry` in `types/logs.ts` for transcript-format
-  interop. Rust mirror: data types in `staged.rs` (kept), runtime
-  ledger never installed in production (`with_staged_ledger` has zero
-  callers), `apply_collapses_if_needed` reachable only via
-  `is_collapse_active()` whose first AND-clause is always false.
-- `display_collapses` — TS external runs the four
-  `utils/collapse*.ts` reducers in the rendering pipeline. Rust mirror:
-  config defaults stay `true`, but no renderer consults them yet; see
-  the TS-alignment-gap comment at
-  `app/tui/src/widgets/chat/mod.rs::build_lines` for the list of
-  pending reducers (`collapseTeammateShutdowns`,
-  `collapseHookSummaries`, `collapseBackgroundBashNotifications`,
-  `collapseReadSearchGroups`).
+- `Tool Result Budget` (Level 1 + 2) — **the first line of defense** before any
+  compaction strategy runs. Phase 0 config staged on
+  `coco_config::CompactConfig.tool_result_budget` (`enabled` / `per_message_chars` /
+  `persist_records`); runtime owners are `coco-tool-runtime::tool_result_storage`
+  (Level 1 — pending) and `coco-query` (Level 2 wiring — pending).
+  `coco-tools::BashTool` carries a Bash-only stub (`temp_dir()`, no
+  `<persisted-output>` wrapper). See `docs/coco-rs/tool-result-budget-plan.md`.
+  Feature gates: `tengu_satin_quoll` (per-tool override), `tengu_hawthorn_window`
+  (per-message char cap), `tengu_hawthorn_steeple` (Level 2 enable).
+- `HISTORY_SNIP` — no runtime caller reads `compact.experimental.history_snip.enabled`;
+  the field is staged for a future implementation.
+- `CONTEXT_COLLAPSE` (`marble_origami`) — data types in `staged.rs` (kept for
+  transcript-format interop); runtime ledger never installed in production
+  (`with_staged_ledger` has zero callers), `apply_collapses_if_needed` reachable
+  only via `is_collapse_active()` whose first AND-clause is always false.
+- `display_collapses` — config defaults stay `true`, but no renderer consults them
+  yet; see the comment at `app/tui/src/widgets/chat/mod.rs::build_lines` for the
+  list of pending reducers (`collapseTeammateShutdowns`, `collapseHookSummaries`,
+  `collapseBackgroundBashNotifications`, `collapseReadSearchGroups`).
 
 Four opt-in flag groups on `CompactConfig` track the future implementations:
 
 - `compact.experimental.history_snip.{enabled, auto_pct, model_invocable}` — default off
 - `compact.experimental.staged_compact.{enabled, stage_at_pct, commit_at_pct, persist_to_transcript}` — default off
 - `compact.experimental.display_collapses.{read_search, hook_summaries, background_bash, teammate_shutdowns}` — default on (gates pending reducers)
-- `compact.tool_result_budget.{enabled, per_message_chars, persist_records}` — default `(false, 200_000, true)`. TS gates: `tengu_hawthorn_steeple` (enable) + `tengu_hawthorn_window` (cap override). Per-tool override (`tengu_satin_quoll`) maps to `Tool::max_result_size_chars()` after the Phase 1.B `ResultSizeBound` migration.
+- `compact.tool_result_budget.{enabled, per_message_chars, persist_records}` — default `(false, 200_000, true)`. Feature gates: `tengu_hawthorn_steeple` (enable) + `tengu_hawthorn_window` (cap override). Per-tool override (`tengu_satin_quoll`) maps to `Tool::max_result_size_chars()` after the Phase 1.B `ResultSizeBound` migration.
 
-`compact.micro` carries two additional opt-ins whose defaults match TS
-external (`microcompactMessages` no-ops outside `feature('CACHED_MICROCOMPACT')`):
+`compact.micro` carries two additional opt-ins:
 
 - `compact.micro.count_based_enabled` — default `false`. Gates
   `coco_compact::micro_compact()` count-based clearing in the
   autocompact threshold path and `/compact` flow.
 - `compact.micro.clear_file_unchanged_stubs_enabled` — default `false`.
-  Gates per-turn `[file unchanged]` stub rewrite. No TS equivalent.
+  Gates per-turn `[file unchanged]` stub rewrite.
 
-## TS-Parity Status
+## Implementation Status
 
 The compact crate stays provider-agnostic. It performs message
 selection, stripping, PTL retry, boundary construction, and post-compact
 message assembly; `app/query` owns model execution, fork/cache behavior,
 tools, hooks, and app-state deltas.
 
-Current TS-parity fixes:
+Implemented behaviors:
 - Full and partial LLM compaction call a typed summarizer with
   `CompactSummaryAttempt` rather than rendering the conversation into a
   single legacy prompt string. The attempt separates `messages` (the
@@ -93,7 +65,7 @@ Current TS-parity fixes:
 - Compact-triggered SessionStart hook aggregate output is preserved:
   `initialUserMessage` is inserted into the rewritten history and
   `watchPaths` is forwarded to the CLI runtime's FileChanged watcher.
-- Partial post-compact assembly mirrors TS direction-specific order:
+- Partial post-compact assembly respects direction-specific order:
   `from`/Newest writes boundary → kept prefix → summary, while
   `up_to`/Oldest writes boundary → summary → kept tail.
 - `CompactResult.raw_summary` preserves the raw summarizer output for
@@ -111,7 +83,7 @@ P0–P1 normalization ports (see `docs/coco-rs/audit-gaps.md`):
 - `sanitize_error_tool_result_content`, `smoosh_system_reminder_into_tool_result`,
   `filter_orphaned_thinking_only_messages`, `filter_trailing_thinking_from_last_assistant`,
   `filter_whitespace_only_assistant_messages`, `ensure_non_empty_assistant_content`
-  — all live in `core/messages/src/normalize.rs` and run in TS-mandated
+  — all live in `core/messages/src/normalize.rs` and run in the canonical
   order inside `normalize_messages_for_api`.
 - `createPlanModeAttachmentIfNeeded` (Round 10c) — `post_compact_plan_mode.rs::create_plan_mode_attachment_if_needed` renders the Full-variant
   reminder text and emits an `AttachmentKind::PlanMode` message; engine
@@ -123,9 +95,8 @@ P0–P1 normalization ports (see `docs/coco-rs/audit-gaps.md`):
   plumbs the struct; `QueryEngine::last_compact_state` + `turn_counter`
   populate it; `CompactResult.is_recompaction` is now driven by it.
 
-Explicit non-ports: `HISTORY_SNIP`, `CONTEXT_COLLAPSE`, and
-`CACHED_MICROCOMPACT` ant-only/cache-aware paths remain disabled or
-staged per the root architecture rules.
+`HISTORY_SNIP`, `CONTEXT_COLLAPSE`, and `CACHED_MICROCOMPACT` paths
+remain disabled or staged per the root architecture rules.
 
 ## Configuration
 
@@ -142,8 +113,7 @@ Per-call run-options (summary token budget, keep-recent rounds, the
 global config struct above.
 
 All env vars use the `COCO_*` prefix (root `CLAUDE.md` → "Code
-Hygiene"). TS-style names (`CLAUDE_CODE_*` / unprefixed) are NOT
-honored.
+Hygiene"). `CLAUDE_CODE_*` / unprefixed names are NOT honored.
 
 Layering inside `coco_config::CompactConfig`:
 
@@ -260,9 +230,8 @@ non-Anthropic runtime slots always see `None` there and rely on layer 1 / 3.
   is currently driven by `coco_system_reminder::InvokedSkillsGenerator`
   on the next turn rather than a stand-alone helper here.
 - Observers: `CompactionObserver` trait + `CompactionObserverRegistry`
-  — replaces the TS `runPostCompactCleanup` god-function. Each crate
-  owning post-compact-invalidatable state registers its own observer
-  at startup.
+  — each crate owning post-compact-invalidatable state registers its
+  own observer at startup.
 - Prompts: `get_compact_prompt`, `get_partial_compact_prompt`,
   `format_compact_summary`, `get_compact_user_summary_message`.
 - Misc: `merge_hook_instructions`, `strip_images_from_messages`,
@@ -307,7 +276,7 @@ helper, which all three compact entry points
 Fast path (no images, no expiring attachments) returns the input
 Arc-vec via `to_vec()` (N×Arc::clone, zero `Message::clone`); slow
 path materializes one `Vec<Message>`, runs both passes in order, and
-re-wraps as Arc-vec. The TS-parity per-message rewrite helper
+re-wraps as Arc-vec. The per-message rewrite helper
 `strip_one_message_for_media_if_needed` is shared between the
 legacy owned-input `strip_images_from_messages` (used by tests +
 backward-compat) and the `StripImages` pass body.

@@ -1,14 +1,4 @@
 //! Shell-task spawning, driver, and terminal-state composition.
-//!
-//! TS source:
-//! - `tasks/LocalShellTask/LocalShellTask.tsx` — full lifecycle
-//!   (spawn / drain / killTask / terminal envelope).
-//! - `LocalShellTask.tsx:105-172 enqueueShellNotification` — terminal
-//!   `<task-notification>` envelope.
-//! - `LocalShellTask.tsx:148-156` — exit-code → status mapping
-//!   (zero = completed, non-zero = failed).
-//! - `BashTool.tsx:1128-1140` — progress yield cadence inside
-//!   `runShellCommand`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,11 +99,10 @@ impl TaskRuntime {
         ));
 
         // W3: progress timer — emits `bash_progress` events through
-        // `progress_tx` every `progress_throttle_ms` while the task
-        // runs. Matches TS's `~1s` `yield { type: 'progress', ... }`
-        // cadence (`tools/BashTool/BashTool.tsx:1128-1140`). The
-        // unified fg/bg path lets fg `tool.execute` observe progress
-        // via the same `ctx.progress_tx` channel it always used.
+        // `progress_tx` every `progress_throttle_ms` (~1s) while the
+        // task runs. The unified fg/bg path lets fg `tool.execute`
+        // observe progress via the same `ctx.progress_tx` channel it
+        // always used.
         if let Some(progress_tx) = request.progress_tx.clone() {
             spawn_progress_timer(
                 task_id.clone(),
@@ -126,10 +115,9 @@ impl TaskRuntime {
         }
 
         // W3: auto-detach timer — fires `signal_detach(task_id)` after
-        // `auto_detach_ms` of fg execution. Mirrors TS
-        // `ASSISTANT_BLOCKING_BUDGET_MS` (15 s) auto-background. Stops
-        // when the task terminates (`drain_done` fires). Bails when
-        // the task is already terminal at fire time.
+        // `auto_detach_ms` of fg execution (15 s blocking budget).
+        // Stops when the task terminates (`drain_done` fires). Bails
+        // when the task is already terminal at fire time.
         if let Some(ms) = request.auto_detach_ms {
             spawn_auto_detach_timer(
                 task_id.clone(),
@@ -176,8 +164,8 @@ impl TaskRuntime {
 }
 
 /// Result of one shell-task execution. Carries enough information
-/// for `apply_shell_terminal_state` to compose the TS-aligned
-/// summary string + status.
+/// for `apply_shell_terminal_state` to compose the summary string
+/// and status.
 enum WaitOutcome {
     Exited { code: i32 },
     TimedOut { budget_ms: i64 },
@@ -194,10 +182,9 @@ struct ShellOutcome {
 
 /// Spawn the child process directly (bypassing `coco_shell::ShellExecutor`
 /// — the BashTool security pipeline already cleared the command at
-/// the foreground entry point in `bash.rs::execute`, and TS streams
-/// stdout straight to disk which `ShellExecutor::execute_with_progress`
-/// doesn't expose). Streams stdout + stderr to the per-task disk file
-/// in real time so the stall watchdog observes growth.
+/// the foreground entry point in `bash.rs::execute`). Streams stdout
+/// + stderr to the per-task disk file in real time so the stall
+/// watchdog observes growth.
 ///
 /// W6: applies sandbox wrap (`bwrap` / Seatbelt) when `sandbox_state`
 /// is `Some` and the command isn't excluded by the sandbox settings.
@@ -342,8 +329,7 @@ async fn run_shell_task(
 /// Final lifecycle update for a shell task: flip status,
 /// broadcast on the watch, persist exit_code into the per-task
 /// `OnceLock` (W3: so `read_terminal_outputs` can return it to the
-/// fg `tool.execute` caller), and push the TS-aligned terminal
-/// notification.
+/// fg `tool.execute` caller), and push the terminal notification.
 #[allow(clippy::too_many_arguments)]
 async fn apply_shell_terminal_state(
     manager: &TaskManager,
@@ -360,14 +346,12 @@ async fn apply_shell_terminal_state(
             (TaskStatus::Completed, TerminalStatus::Completed, Some(0))
         }
         WaitOutcome::Exited { code } => {
-            // Non-zero exit. TS treats any non-zero as failure
-            // (`LocalShellTask.tsx:148-156`).
+            // Non-zero exit is treated as failure.
             (TaskStatus::Failed, TerminalStatus::Failed, Some(code))
         }
         WaitOutcome::TimedOut { budget_ms } => {
-            // TS doesn't distinguish timeout from failed in the
-            // status enum; coco-rs surfaces a clearer log line via
-            // the budget but the status remains Failed for the model.
+            // Timeout is surfaced as Failed for the model, with a
+            // clearer log line showing the budget.
             warn!(
                 target: "coco::task_runtime::shell",
                 task_id,

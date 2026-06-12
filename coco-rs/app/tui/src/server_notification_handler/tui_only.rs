@@ -52,9 +52,8 @@ fn enqueue_informational(
 }
 
 /// Seed the editable "always allow" prefix for a shell-tool approval. Returns
-/// `None` for non-shell tools or when no `command` string is present. Mirrors
-/// the TS `BashPermissionRequest` editable field's default
-/// (`coco_permissions::shell_rules::editable_prefix_default`).
+/// `None` for non-shell tools or when no `command` string is present.
+/// Delegates to `coco_permissions::shell_rules::editable_prefix_default`.
 fn seed_prefix_input(
     tool_name: &str,
     original_input: Option<&serde_json::Value>,
@@ -137,10 +136,8 @@ pub(super) fn handle(
         // === Question / elicitation / sandbox prompts ===
         TuiOnlyEvent::QuestionAsked { request_id, input } => {
             let questions = parse_question_items(&input);
-            // Plan-mode gate for the Skip-interview footer item — TS:
-            // `isInPlanMode` from `getPermissionMode()` at
-            // `AskUserQuestionPermissionRequest.tsx`. Captured at state
-            // construction so a mid-state mode flip doesn't change the
+            // Plan-mode gate for the Skip-interview footer item. Captured at
+            // state construction so a mid-state mode flip doesn't change the
             // available footer items mid-flight.
             let is_in_plan_mode = state.session.permission_mode == coco_types::PermissionMode::Plan;
             state.ui.push_prompt(PanePromptState::Question(
@@ -410,10 +407,10 @@ pub(super) fn handle(
         }
         // === `/context` full-color usage snapshot (inline in transcript) ===
         TuiOnlyEvent::OpenContextUsage { result } => {
-            // TS `/context` (`local-jsx`) prints `<ContextVisualization>` into
-            // the scrollback, not a modal. Build the `❯ /context` echo + the
-            // typed system snapshot and round-trip them through engine history
-            // so transcript / SDK / JSONL converge (same path as /help).
+            // `/context` prints `<ContextVisualization>` into the scrollback,
+            // not a modal. Build the `❯ /context` echo + the typed system
+            // snapshot and round-trip them through engine history so transcript
+            // / SDK / JSONL converge (same path as /help).
             let messages = coco_messages::build_context_usage_messages(/*args*/ "", result);
             if let Err(e) =
                 command_tx.try_send(crate::command::UserCommand::PushSlashResult { messages })
@@ -434,7 +431,6 @@ pub(super) fn handle(
         // Entries are pre-built by the slash dispatcher (no extra state
         // lookup needed here). On select the TUI sends a command to the
         // CLI bridge; on cancel it emits a transcript line + toast.
-        // TS: `commands/memory/memory.tsx`'s pre-flight render.
         TuiOnlyEvent::OpenMemoryDialog { entries } => {
             if entries.is_empty() {
                 state
@@ -450,9 +446,8 @@ pub(super) fn handle(
         // /skills — read-only overlay showing the skill catalog grouped
         // by source. Empty payload still opens the dialog so the user
         // sees the "no skills" hint instead of nothing happening.
-        // TS parity: `components/skills/SkillsMenu.tsx` (Esc to close;
-        // no selection). The slash dispatcher pre-groups + sorts +
-        // computes token estimates so the TUI is a pure projection.
+        // Esc to close; no selection. The slash dispatcher pre-groups +
+        // sorts + computes token estimates so the TUI is a pure projection.
         TuiOnlyEvent::OpenSkillsDialog { payload } => {
             state.ui.show_modal(ModalState::SkillsDialog(
                 crate::state::SkillsDialogState::from_wire(payload),
@@ -523,7 +518,7 @@ pub(super) fn handle(
         }
         // /copy [N] — branch into either direct clipboard write or the
         // CopyPicker modal based on `copy_full_response` + presence of
-        // code blocks. TS parity: `commands/copy/copy.tsx::call`.
+        // code blocks.
         TuiOnlyEvent::CopyCommandRequested { args } => {
             if let Some(message) = crate::copy::handle_copy_command(state, &args) {
                 enqueue_informational(state, SystemMessageLevel::Info, "", message, command_tx);
@@ -685,9 +680,8 @@ fn permission_detail_for_approval(
         return crate::state::PermissionDetail::ExitPlanMode {
             plan,
             plan_file_path,
-            // TS only renders/applies allowedPrompts when classifier
-            // permissions are enabled. coco-rs does not currently ship
-            // that prompt-rule classifier surface, so keep them hidden.
+            // The prompt-rule classifier surface is not yet shipped,
+            // so allowed_prompts is kept empty for now.
             allowed_prompts: Vec::new(),
         };
     }
@@ -735,9 +729,7 @@ fn append_queued_edit_images(
 /// Opens the bare picker and fires one batched per-row metadata
 /// command. The CLI driver responds with a single
 /// `RewindRowMetadataReady` carrying `(can_restore, +X -Y, files)`
-/// for every row — matches TS `MessageSelector.tsx:285-312`'s
-/// `Promise.all(messageOptions.map(...))` without overflowing the
-/// bounded TUI command channel.
+/// for every row without overflowing the bounded TUI command channel.
 fn on_open_rewind_picker(
     state: &mut AppState,
     command_tx: &tokio::sync::mpsc::Sender<crate::command::UserCommand>,
@@ -754,9 +746,8 @@ fn on_open_rewind_picker(
     // No empty-rewind early-out: `build_rewind_state` always appends
     // the synthetic `(current)` row, so `rewind.messages` is never
     // empty. The renderer's `picker_is_empty` check renders an inline
-    // "Nothing to rewind to yet." when only the synthetic row exists,
-    // matching TS `MessageSelector.tsx:325-327`. The picker still
-    // opens so Esc has a well-defined target.
+    // "Nothing to rewind to yet." when only the synthetic row exists.
+    // The picker still opens so Esc has a well-defined target.
 
     tracing::info!(
         target: "rewind::tui",
@@ -787,10 +778,9 @@ fn on_open_rewind_picker(
 
 /// Apply per-row metadata batch (`RewindRowMetadataReady`).
 ///
-/// TS: `MessageSelector.tsx:285-312`'s `setFileHistoryMetadata({...prev,
-/// [itemIndex]: diffStats_0})`. One in-place pass per row keyed by
-/// `message_id`; `metadata: None` is the typed signal that
-/// `fileHistoryCanRestore` was false (renders "⚠ No code restore").
+/// One in-place pass per row keyed by `message_id`; `metadata: None`
+/// signals that the checkpoint has no code restore (renders "⚠ No code
+/// restore").
 fn on_row_metadata_ready(state: &mut AppState, rows: Vec<coco_types::RewindRowMetadata>) -> bool {
     let Some(ModalState::Rewind(r)) = state.ui.modal.as_mut() else {
         return false;
@@ -829,9 +819,8 @@ fn on_row_metadata_ready(state: &mut AppState, rows: Vec<coco_types::RewindRowMe
 /// (`RewindRestorePreviewReady`). Drives the `RestoreOptions` phase
 /// for the selected row only; per-row labels are unaffected.
 ///
-/// TS: the `await fileHistoryGetDiffStats(...)` call at
-/// `MessageSelector.tsx:173`. `stats == None` mirrors
-/// `fileHistoryCanRestore == false`.
+/// `stats == None` signals that code restore is unavailable for this
+/// checkpoint.
 fn on_restore_preview_ready(
     state: &mut AppState,
     message_id: String,
@@ -933,8 +922,7 @@ fn on_rewind_completed(
             if let coco_messages::Message::User(u) = target_cell.source.as_ref() {
                 restored_permission_mode = u.permission_mode;
             }
-            // TS `textForResubmit` (`utils/messages.ts:2873-2886`) strips
-            // IDE-injected context tags so the restored prompt doesn't
+            // Strip IDE-injected context tags so the restored prompt doesn't
             // leak `<ide_opened_file>` / `<ide_selection>` blocks.
             let raw = match &target_cell.kind {
                 crate::transcript::cells::CellKind::UserText { text } => text.as_str(),
@@ -942,14 +930,11 @@ fn on_rewind_completed(
             };
             let stripped = crate::update_rewind::strip_ide_context_tags(raw);
             restored_input_text = Some(stripped).filter(|s| !s.is_empty());
-            // TS `restoreMessageSync` (`screens/REPL.tsx:3721-3737`)
-            // restores pasted images by reading them off the rewound
-            // message. Pasted images live on `UserContentPart::File`
-            // (`image/*` media type) as bytes/base64 — `to_bytes()`
-            // covers both; a remote URL cannot be re-attached as a
-            // paste pill (pills without bytes are dropped at submit),
-            // so it is skipped. Only the first image is surfaced
-            // (matches the TS shape).
+            // Restore pasted images from the rewound message. Pasted images
+            // live on `UserContentPart::File` (`image/*` media type) as
+            // bytes/base64 — `to_bytes()` covers both; a remote URL cannot
+            // be re-attached as a paste pill (pills without bytes are dropped
+            // at submit), so it is skipped. Only the first image is surfaced.
             if let coco_messages::Message::User(u) = target_cell.source.as_ref()
                 && let coco_messages::LlmMessage::User { content, .. } = &u.message
             {
@@ -982,25 +967,21 @@ fn on_rewind_completed(
     }
 
     // Rotate conversation_id on truncate so the next request breaks
-    // any prior cache key. TS: setConversationId(randomUUID()) inside
-    // rewindConversationTo (`screens/REPL.tsx:3673`).
+    // any prior cache key.
     if !target_message_id.is_empty() {
         state.session.conversation_id = Some(uuid::Uuid::new_v4().to_string());
     }
 
     // Clear the prompt-suggestion belt — stale suggestions from
     // earlier turns are no longer valid in the rewound conversation.
-    // TS: setAppState({...prev, promptSuggestion: {text: null, ...}})
-    // (`screens/REPL.tsx:3699-3705`).
     state.session.prompt_suggestions.clear();
 
-    // Paste buffer handling — TS `restoreMessageSync` rebuilds
-    // `pastedContents` from the rewound message's image blocks
-    // (`screens/REPL.tsx:3721-3737`). Each user message carries at most
-    // one image; if present, re-attach it WITH its bytes (a path-only
-    // pill stores `image_bytes: None` and `resolve_structured` silently
-    // drops it at submit); otherwise clear any leftover paste-buffer
-    // state so it doesn't leak into the new turn.
+    // Paste buffer handling — rebuild from the rewound message's image
+    // blocks. Each user message carries at most one image; if present,
+    // re-attach it WITH its bytes (a path-only pill stores
+    // `image_bytes: None` and `resolve_structured` silently drops it at
+    // submit); otherwise clear any leftover paste-buffer state so it
+    // doesn't leak into the new turn.
     state.ui.paste_manager.clear();
     if let Some((bytes, mime)) = restored_image {
         state.ui.paste_manager.add_image_data(bytes, mime);
@@ -1025,8 +1006,6 @@ fn on_rewind_completed(
 /// Tolerant parser — missing/optional fields use defaults so a
 /// model that emits a partial schema still produces a usable state
 /// rather than a blank screen.
-///
-/// TS: `AskUserQuestionPermissionRequest.tsx` reads the same shape.
 fn parse_question_items(input: &serde_json::Value) -> Vec<crate::state::QuestionItem> {
     // The tool schema dropped its hard `maxItems` caps so a weak model that
     // over-generates doesn't hard-fail validation (which retry-loops and
@@ -1081,7 +1060,6 @@ fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
 }
 
 /// Render a localized toast for the `/skills` dialog Enter result.
-/// TS mirror: `cli_inner_pretty.js:476991-477016` post-save toast.
 /// `total_edits` is the count the dialog computed at dispatch (read
 /// from `UiState.pending_skills_save_edits`); only consumed on the
 /// Ok branch.
@@ -1116,19 +1094,18 @@ fn format_skill_overrides_save_toast(
 /// Translate an [`coco_types::AgentsDialogPayload`] into the flat
 /// row list rendered by the Library tab.
 ///
-/// Source ordering follows TS `bW4.js` / `Gp6.js`: User → Project →
-/// Local (collapsed into Project until coco-rs distinguishes
-/// worktree-local from repo-root project) → Managed → Plugin →
-/// Flag → Built-in. Empty groups are omitted; built-in always renders
-/// last.
+/// Source ordering: User → Project → Local (collapsed into Project until
+/// coco-rs distinguishes worktree-local from repo-root project) → Managed
+/// → Plugin → Flag → Built-in. Empty groups are omitted; built-in always
+/// renders last.
 fn build_library_rows(payload: coco_types::AgentsDialogPayload) -> Vec<crate::state::LibraryRow> {
     use crate::state::LibraryRow;
     use coco_types::AgentSource;
     let mut rows = vec![LibraryRow::CreateNew];
 
-    // Group label + ordering matches TS Gp6.js. Local is intentionally
-    // grouped with Project until the loader gains worktree-local
-    // distinction (see `state/agents_dialog.rs` doc).
+    // Group label + ordering: Local is intentionally grouped with Project
+    // until the loader gains worktree-local distinction
+    // (see `state/agents_dialog.rs` doc).
     let group_order: &[(AgentSource, &str)] = &[
         (AgentSource::UserSettings, "dialog.agents_group_user"),
         (AgentSource::ProjectSettings, "dialog.agents_group_project"),

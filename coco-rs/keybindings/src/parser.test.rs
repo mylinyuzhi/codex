@@ -39,8 +39,8 @@ fn parses_multi_modifier_case_insensitive() {
 
 #[test]
 fn parses_meta_distinct_from_super() {
-    // TS keeps `meta` (alt-equivalent in terminals) and `super`
-    // (cmd/win, kitty-keyboard-protocol only) separate.
+    // `meta` (alt-equivalent in terminals) and `super`
+    // (cmd/win, kitty-keyboard-protocol only) are kept separate.
     let m = parse_combo("meta+k").unwrap();
     assert!(m.meta && !m.super_key);
 
@@ -63,7 +63,7 @@ fn parses_alt_aliases() {
 
 #[test]
 fn normalizes_named_keys() {
-    // TS canonical names: `escape`, `enter`, `delete`, `backspace`,
+    // Canonical names: `escape`, `enter`, `delete`, `backspace`,
     // `pageup`, `pagedown`, `space`.
     assert_eq!(parse_combo("Return").unwrap().key, "enter");
     assert_eq!(parse_combo("Escape").unwrap().key, "escape");
@@ -93,7 +93,7 @@ fn rejects_empty_and_multi_key() {
 
 #[test]
 fn parses_chord_with_two_combos_whitespace_separated() {
-    // TS chord syntax — whitespace-separated steps.
+    // Chord syntax: whitespace-separated steps.
     let chord = parse_chord("ctrl+x ctrl+k").unwrap();
     assert!(!chord.is_single());
     assert_eq!(chord.0.len(), 2);
@@ -103,8 +103,7 @@ fn parses_chord_with_two_combos_whitespace_separated() {
 
 #[test]
 fn handles_lone_space_as_space_key() {
-    // TS quirk (parser.ts:81): a literal single-space input is the
-    // space-key binding, not an empty chord.
+    // A literal single-space input is the space-key binding, not an empty chord.
     let chord = parse_chord(" ").unwrap();
     assert!(chord.is_single());
     assert_eq!(chord.0[0].key, "space");

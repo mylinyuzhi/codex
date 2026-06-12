@@ -34,7 +34,7 @@ fn default_layout_matches_observed_ts_slug_for_known_cwd() {
     // Our slug for the same cwd MUST match — pre-fix, the local
     // `sanitize_project_path` stripped the leading `/` and produced
     // `Users-…` instead of `-Users-…`, silently disagreeing with
-    // every other TS Claude Code instance pointed at the same repo.
+    // every other coco-rs instance pointed at the same repo.
     let dir = MemoryDir::resolve(
         Path::new("/home/u/.coco"),
         Path::new("/Users/linyuzhi/codespace/myagent/codex"),

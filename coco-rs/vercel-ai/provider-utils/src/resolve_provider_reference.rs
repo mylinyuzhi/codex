@@ -2,8 +2,7 @@
 //!
 //! `SharedV4ProviderReference` is `{ provider_name → file_id }`. When
 //! a provider receives a tool result with a file-reference part, it
-//! calls this helper to look up its own ID. Mirrors TS
-//! `@ai-sdk/provider-utils::resolveProviderReference`.
+//! calls this helper to look up its own ID.
 
 use vercel_ai_provider::SharedV4ProviderReference;
 

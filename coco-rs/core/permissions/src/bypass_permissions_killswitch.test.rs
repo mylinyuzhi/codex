@@ -100,9 +100,8 @@ fn check_reads_real_env_and_parser_without_leaking_it() {
     }
 }
 
-/// TS parity matrix for `isBypassPermissionsModeAvailable`
-/// (`permissionSetup.ts:939-943`). Every combination of the three
-/// inputs exhausted so future refactors can't silently break the gate.
+/// Exhaustive matrix for bypass capability: every combination of the three
+/// inputs verified so future refactors can't silently break the gate.
 #[test]
 fn compute_bypass_capability_matrix() {
     // Neither trigger → never available.
@@ -179,11 +178,9 @@ fn compute_bypass_capability_matrix() {
     ));
 }
 
-/// TS parity matrix for `initialPermissionModeFromCLI`
-/// (`permissionSetup.ts:689-811`). The walk-and-skip behavior is
-/// load-bearing: when the killswitch blocks `BypassPermissions`,
-/// the walk must fall through to the next candidate, not collapse
-/// straight to `Default`.
+/// Walk-and-skip behavior for initial permission mode resolution.
+/// When the killswitch blocks `BypassPermissions`, the walk must fall
+/// through to the next candidate, not collapse straight to `Default`.
 #[test]
 fn resolve_initial_permission_mode_matrix() {
     // — No candidates → Default, no notification.
@@ -202,7 +199,7 @@ fn resolve_initial_permission_mode_matrix() {
     assert!(r.notification.is_some());
 
     // — --dangerously-skip + --permission-mode acceptEdits, killswitch on
-    //   → AcceptEdits (TS walk-and-skip). This is the case my old code
+    //   → AcceptEdits (walk-and-skip). This is the case my old code
     //   collapsed to Default instead of falling through.
     let r = resolve_initial_permission_mode_with_env_truthy(
         true,

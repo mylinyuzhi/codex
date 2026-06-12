@@ -86,7 +86,7 @@ fn unknown_subcommand_returns_usage_hint() {
 
 #[test]
 fn list_includes_navigation_hints() {
-    // TS opens a 2-level menu (list → per-agent submenu). Flat-text
+    // The overlay opens a 2-level menu (list → per-agent submenu). Flat-text
     // listing must surface the equivalent navigation paths so users
     // discover `/agents show <name>` and `/agents <name>` shorthand.
     let out = render("list", empty_paths()).unwrap();
@@ -97,7 +97,7 @@ fn list_includes_navigation_hints() {
 
 #[test]
 fn name_shortcut_resolves_to_show() {
-    // `/agents general-purpose` should match the TS picker click
+    // `/agents general-purpose` should match the picker click behavior
     // (selects an agent → opens its detail submenu). Bundled
     // `general-purpose` is stable across releases.
     let direct = render("general-purpose", empty_paths()).unwrap();

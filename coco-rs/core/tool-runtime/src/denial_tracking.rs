@@ -1,11 +1,11 @@
 /// Tracks permission denials so auto-mode can fall back to prompting when the
 /// agent is stuck in a denial loop.
 ///
-/// TS `denialTracking.ts`: `shouldFallbackToPrompting` fires on
-/// `consecutiveDenials >= 3 || totalDenials >= 20`. There is no persistent
-/// "tripped" latch — the check runs fresh after each recorded denial, an
-/// allowed action clears the consecutive streak (`reset_consecutive`), and
-/// hitting the total cap resets both counters (`reset_after_total_limit`).
+/// `shouldFallbackToPrompting` fires on `consecutiveDenials >= 3 ||
+/// totalDenials >= 20`. There is no persistent "tripped" latch — the check
+/// runs fresh after each recorded denial, an allowed action clears the
+/// consecutive streak (`reset_consecutive`), and hitting the total cap resets
+/// both counters (`reset_after_total_limit`).
 ///
 /// Lives in `coco-tool-runtime` because it is per-`ToolUseContext` runtime
 /// state (fork-isolated when `local_denial_tracking` is set; session-scoped
@@ -51,8 +51,7 @@ impl DenialTracker {
     }
 
     /// Whether auto-mode should stop classifying and fall back to prompting:
-    /// 3 consecutive OR 20 total denials. TS `shouldFallbackToPrompting`
-    /// (`denialTracking.ts:40-45`).
+    /// 3 consecutive OR 20 total denials.
     pub fn should_fallback_to_prompting(&self) -> bool {
         self.consecutive_denials >= CONSECUTIVE_DENIAL_THRESHOLD
             || self.total_denials >= TOTAL_DENIAL_THRESHOLD
@@ -66,8 +65,6 @@ impl DenialTracker {
 
     /// Reset both counters after the total cap is hit so the session can
     /// continue past a single review prompt instead of denying forever.
-    /// TS `handleDenialLimitExceeded` total-limit branch
-    /// (`permissions.ts:1034-1040`).
     pub fn reset_after_total_limit(&mut self) {
         self.consecutive_denials = 0;
         self.total_denials = 0;

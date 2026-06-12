@@ -150,8 +150,7 @@ pub(crate) fn first_line_preview(text: &str, max: usize) -> String {
     out
 }
 
-/// Render the editable 2.1.142 `/skills` overlay. TS parity: `uJ4`
-/// (`cli_inner_pretty.js:476909`). Flat list, per-row 4-state
+/// Render the editable `/skills` overlay. Flat list, per-row 4-state
 /// override cycle, inline source label, lock annotation, filter
 /// input + sort toggle.
 pub(crate) fn skills_dialog_content(
@@ -192,9 +191,9 @@ pub(crate) fn skills_dialog_content(
     body.push_str(&hint_line(s));
     body.push('\n');
 
-    // Filter input row — mirrors TS `DN` with placeholder "Search
-    // skills…". Render the query in-line; downstream styling is
-    // applied by the higher-level surface renderer.
+    // Filter input row — placeholder "Search skills…". Render the query
+    // in-line; downstream styling is applied by the higher-level surface
+    // renderer.
     body.push('\n');
     body.push_str("⌕ ");
     if s.filter_query.is_empty() {
@@ -221,8 +220,7 @@ pub(crate) fn skills_dialog_content(
         }
     }
 
-    // Plugin footer (TS `cli_inner_pretty.js:477128-477133`): only
-    // rendered when at least one plugin row is present.
+    // Plugin footer: only rendered when at least one plugin row is present.
     if s.has_plugin_rows() {
         body.push_str("\n\n");
         body.push_str(&t!("dialog.skills_plugin_footer"));
@@ -394,9 +392,8 @@ fn render_error_tab(p: &PluginDialogState, body: &mut String) {
 }
 
 /// Format the "Space to cycle, Enter to save, …" hint line. Two
-/// variants per TS `cli_inner_pretty.js:477080-477090`: select mode
-/// shows the full ladder; filter-focused mode swaps in the filter
-/// instructions.
+/// variants: select mode shows the full ladder; filter-focused mode
+/// swaps in the filter instructions.
 fn hint_line(s: &SkillsDialogState) -> String {
     if s.filter_focused {
         return t!("dialog.skills_hint_filter_focused").to_string();
@@ -404,8 +401,7 @@ fn hint_line(s: &SkillsDialogState) -> String {
     t!("dialog.skills_hint_select").to_string()
 }
 
-/// One skill row in the dialog. Format mirrors TS `sT5`
-/// (`cli_inner_pretty.js:477137`):
+/// One skill row in the dialog:
 ///
 /// ```text
 ///   ✓ on        | my-skill · user · 42 tok
@@ -451,8 +447,6 @@ fn state_label_for_lock(state: SkillOverrideState) -> &'static str {
 }
 
 fn skills_source_label(source: SkillsDialogSource) -> &'static str {
-    // TS `xJ4` (`cli_inner_pretty.js:476897-476907`) — normalised
-    // labels shown inline next to each row.
     source.label_lower()
 }
 

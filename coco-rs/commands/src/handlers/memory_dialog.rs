@@ -1,25 +1,16 @@
 //! `/memory` command — open the memory-file selector dialog.
 //!
-//! TS source: `commands/memory/memory.tsx:1-89` (`local-jsx` command)
-//! + `components/memory/MemoryFileSelector.tsx::memoryOptions`.
-//!
 //! Behavior:
-//! 1. Pre-flight: `clearMemoryFileCaches() + await getMemoryFiles()` to
-//!    populate the selector list.
-//! 2. Render `<MemoryFileSelector>` — TS computes its row list at render
-//!    time by walking `getMemoryFiles()` and folding in "create
-//!    `~/.coco/CLAUDE.md`" / "create `./CLAUDE.md`" placeholders plus the
-//!    auto-memory folder entries (auto-mem, team-mem, per-agent dirs).
+//! 1. Pre-flight: re-discovers memory files to populate the selector list.
+//! 2. Computes the row list: discovered files + "create `~/.coco/CLAUDE.md`" /
+//!    "create `./CLAUDE.md`" placeholders + auto-memory folder entries.
 //! 3. On select: caller (TUI) writes the file (mode `wx` semantics) and
 //!    opens it in `$VISUAL || $EDITOR`.
 //! 4. On cancel: caller emits `Cancelled memory editing` system message.
 //!
-//! Rust handler scope: re-discovers memory files on every `/memory`
-//! invocation (TS does the same — `getMemoryFiles()` runs inside the
-//! React component's `use(...)` so each open hits the discovery
-//! pipeline) and emits
-//! `CommandResult::OpenDialog(DialogSpec::MemoryFileSelector)`. The
-//! dialog widget in `coco-tui` handles steps 3–4.
+//! Handler scope: re-discovers memory files on every `/memory` invocation
+//! and emits `CommandResult::OpenDialog(DialogSpec::MemoryFileSelector)`.
+//! The dialog widget in `coco-tui` handles steps 3–4.
 
 use async_trait::async_trait;
 use std::path::Path;
@@ -36,10 +27,8 @@ use crate::MemoryFileEntry;
 use crate::MemoryScope;
 
 /// One active agent's per-type memory directory. Constructed by the
-/// session bootstrap from `agentDefinitions.activeAgents.filter(a =>
-/// a.memory)` (TS `MemoryFileSelector.tsx:141-150`). The CLI resolver
-/// joins the `MemoryScope` + agent type via
-/// [`coco_memory::agent_memory::agent_memory_dir`].
+/// session bootstrap. The CLI resolver joins the `MemoryScope` + agent
+/// type via [`coco_memory::agent_memory::agent_memory_dir`].
 #[derive(Debug, Clone)]
 pub struct AgentMemoryEntry {
     /// Agent type (sanitized via
@@ -102,7 +91,7 @@ impl MemoryDialogHandler {
         self
     }
 
-    /// Build the entry list — TS-mirroring order:
+    /// Build the entry list — order:
     /// (1) managed (when configured),
     /// (2) all discovered memory files via
     ///     [`coco_context::discover_memory_files`] in discovery order,
@@ -112,10 +101,9 @@ impl MemoryDialogHandler {
     /// (4) auto-memory / team-memory / per-agent folder rows when
     ///     auto-memory is enabled.
     ///
-    /// Each `/memory` invocation recomputes — TS calls
-    /// `getMemoryFiles()` inside the React render, so the dialog
-    /// always sees a fresh discovery (newly-created CLAUDE.md files
-    /// show up without a session restart).
+    /// Each `/memory` invocation recomputes — the dialog always sees
+    /// a fresh discovery (newly-created CLAUDE.md files show up
+    /// without a session restart).
     pub fn entries(&self) -> Vec<MemoryFileEntry> {
         let user_claudemd = self.user_home.join("CLAUDE.md");
         let project_claudemd = self.project_root.join("CLAUDE.md");
@@ -169,8 +157,7 @@ impl MemoryDialogHandler {
         }
 
         // (3) "Create me" placeholders for user / project CLAUDE.md
-        // when discovery didn't surface them. TS:
-        // `MemoryFileSelector.tsx:55-65` — same fall-through.
+        // when discovery didn't surface them.
         if !have_user {
             out.push(MemoryFileEntry {
                 path: user_claudemd.clone(),
@@ -194,8 +181,7 @@ impl MemoryDialogHandler {
 
         // (4) Auto-mem / team-mem / per-agent folder rows. Gated on
         // `auto_mem_dir.is_some()` — when auto-memory is disabled the
-        // whole folder section is omitted. TS:
-        // `MemoryFileSelector.tsx:114-151` — same gate.
+        // whole folder section is omitted.
         if let Some(auto) = &self.auto_mem_dir {
             out.push(MemoryFileEntry {
                 path: auto.clone(),
@@ -244,9 +230,8 @@ impl CommandHandler for MemoryDialogHandler {
     }
 }
 
-/// Render a path with `~` substitution for `$HOME`. TS:
-/// `utils/file.ts::getDisplayPath`. Falls back to lossy display when
-/// the path is non-UTF8 (Windows / odd locales).
+/// Render a path with `~` substitution for `$HOME`. Falls back to lossy
+/// display when the path is non-UTF8 (Windows / odd locales).
 fn display_path(p: &Path) -> String {
     if let Ok(home) = std::env::var("HOME")
         && let Some(p_str) = p.to_str()
@@ -261,7 +246,7 @@ fn display_path(p: &Path) -> String {
 /// step (2) of [`MemoryDialogHandler::entries`].
 ///
 /// `project_claudemd` lets us tag the canonical project root file
-/// with the "checked in at ./CLAUDE.md" description that TS produces;
+/// with the "checked in at ./CLAUDE.md" description;
 /// any other `Project`-source file (subdir / @-imported) gets the
 /// generic display path.
 fn describe_discovered(

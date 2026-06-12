@@ -1,7 +1,5 @@
 //! Shell permission rule parsing and matching.
 //!
-//! TS: utils/permissions/shellRuleMatching.ts
-//!
 //! Three rule types for permission matching:
 //! - Exact: "git commit" matches only "git commit"
 //! - Prefix: "git " or "git:*" matches "git commit", "git push", etc.
@@ -14,16 +12,14 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 
 /// Case sensitivity for shell-rule command matching. Bash matches
-/// case-sensitively; PowerShell case-insensitively. Mirrors TS
-/// `matchWildcardPattern(..., caseInsensitive)` + the PowerShell
-/// `strEquals`/`strStartsWith` lowercasing.
+/// case-sensitively; PowerShell case-insensitively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShellCase {
     Sensitive,
     Insensitive,
 }
 
-/// Case-aware string equality (mirrors TS `strEquals`).
+/// Case-aware string equality.
 fn str_eq(a: &str, b: &str, case: ShellCase) -> bool {
     match case {
         ShellCase::Sensitive => a == b,
@@ -31,7 +27,7 @@ fn str_eq(a: &str, b: &str, case: ShellCase) -> bool {
     }
 }
 
-/// Case-aware prefix test (mirrors TS `strStartsWith`).
+/// Case-aware prefix test.
 fn str_starts_with(s: &str, prefix: &str, case: ShellCase) -> bool {
     match case {
         ShellCase::Sensitive => s.starts_with(prefix),
@@ -52,8 +48,6 @@ pub enum ShellPermissionRule {
 }
 
 /// Extract prefix from legacy `:*` syntax (e.g., "npm:*" → "npm").
-///
-/// TS: `permissionRuleExtractPrefix()` in shellRuleMatching.ts
 fn extract_legacy_prefix(rule: &str) -> Option<&str> {
     rule.strip_suffix(":*")
 }
@@ -61,8 +55,6 @@ fn extract_legacy_prefix(rule: &str) -> Option<&str> {
 /// Check if a pattern contains unescaped wildcards (not legacy `:*` syntax).
 ///
 /// A `*` is unescaped if preceded by an even number of backslashes (including 0).
-///
-/// TS: `hasWildcards()` in shellRuleMatching.ts
 fn has_wildcards(pattern: &str) -> bool {
     // Legacy :* is not a wildcard
     if pattern.ends_with(":*") {
@@ -93,8 +85,6 @@ fn has_wildcards(pattern: &str) -> bool {
 
 impl ShellPermissionRule {
     /// Parse a rule string into a ShellPermissionRule.
-    ///
-    /// TS: `parsePermissionRule()` in shellRuleMatching.ts
     ///
     /// Rules:
     /// - Ends with `:*` → Prefix (legacy syntax, e.g. "npm:*" → prefix "npm")
@@ -165,8 +155,6 @@ const WILDCARD_REGEX_CACHE_MAX: usize = 1024;
 
 /// Match a command against a wildcard pattern with escape support.
 ///
-/// TS: `matchWildcardPattern()` in shellRuleMatching.ts
-///
 /// - `*` matches any sequence of characters (including newlines)
 /// - `\*` matches a literal `*`
 /// - `\\` matches a literal `\`
@@ -179,8 +167,7 @@ fn match_wildcard_pattern(pattern: &str, command: &str) -> bool {
     match_wildcard_pattern_cased(pattern, command, ShellCase::Sensitive)
 }
 
-/// Case-aware wildcard match. `Insensitive` compiles the regex with the `(?i)`
-/// flag (mirrors TS `matchWildcardPattern(..., caseInsensitive)`).
+/// Case-aware wildcard match. `Insensitive` compiles the regex with the `(?i)` flag.
 fn match_wildcard_pattern_cased(pattern: &str, command: &str, case: ShellCase) -> bool {
     // PoisonError handling: if a thread panicked while holding the cache lock,
     // the cache contents are still consistent (we only store Option<Regex> and
@@ -265,7 +252,7 @@ fn compile_wildcard_regex(pattern: &str, case: ShellCase) -> Option<regex::Regex
     }
 
     // Phase 6: Match entire string with dotAll semantics (+ case-insensitive
-    // for PowerShell, mirroring TS `matchWildcardPattern(..., true)`).
+    // for PowerShell).
     let flags = match case {
         ShellCase::Sensitive => "(?s)",
         ShellCase::Insensitive => "(?si)",
@@ -299,26 +286,23 @@ fn regex_escape_except_star(s: &str) -> String {
     out
 }
 
-/// Posture for matching a Bash rule against a command. Mirrors the
-/// allow-vs-deny/ask asymmetry of TS `filterRulesByContentsMatchingInput`
-/// (bashPermissions.ts:778-935).
+/// Posture for matching a Bash rule against a command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleMatchPolicy {
     /// Deny or Ask: strip ALL leading env vars to a fixed point and re-split
     /// into subcommands so a denied/asked command cannot be hidden behind
     /// wrappers, env prefixes, or compounds (`FOO=1 curl`, `timeout 5 curl`,
-    /// `echo hi && curl`). TS passes `stripAllEnvVars:true, skipCompoundCheck:true`.
+    /// `echo hi && curl`).
     DenyOrAsk,
     /// Allow: safe-wrapper/redirection stripping only; prefix/wildcard rules
     /// MUST NOT match a compound candidate (cannot widen an allow by chaining,
-    /// e.g. `Bash(cd:*)` must not auto-allow `cd /p && curl evil`). TS keeps the
-    /// compound guard and does not strip arbitrary env vars.
+    /// e.g. `Bash(cd:*)` must not auto-allow `cd /p && curl evil`).
     Allow,
 }
 
-/// Build the candidate-command set a rule is tested against. Mirrors TS
-/// `filterRulesByContentsMatchingInput` (bashPermissions.ts:787-853): the
-/// original command (quotes preserved, for exact rules), the
+/// Build the candidate-command set a rule is tested against.
+///
+/// Produces: the original command (quotes preserved, for exact rules), the
 /// redirection-stripped form, safe-wrapper-stripped forms, and — for deny/ask
 /// — the env-var fixed-point expansion.
 fn build_candidate_commands(command: &str, policy: RuleMatchPolicy) -> Vec<String> {
@@ -366,7 +350,7 @@ fn build_candidate_commands(command: &str, policy: RuleMatchPolicy) -> Vec<Strin
 
 /// Whether `rule` matches `candidate` with the allow-posture compound guard:
 /// a prefix/wildcard rule never matches a compound command (so chaining cannot
-/// widen an allow). Mirrors TS `filterRulesByContentsMatchingInput:884-928`.
+/// widen an allow).
 fn rule_matches_candidate_with_compound_guard(
     rule: &ShellPermissionRule,
     candidate: &str,
@@ -378,7 +362,7 @@ fn rule_matches_candidate_with_compound_guard(
             if coco_shell::split_compound_command(candidate).len() > 1 {
                 return false;
             }
-            // TS bashRule.prefix is the bare word; normalize legacy/literal
+            // The prefix is the bare word; normalize legacy/literal
             // trailing-space forms and also allow an `xargs <prefix>` wrapper.
             let bare = prefix.trim_end();
             str_eq(candidate, bare, case)
@@ -446,8 +430,6 @@ pub fn is_dangerous_bash_permission(rule_content: &str) -> bool {
 }
 
 /// Generate a permission update suggestion for an exact command.
-///
-/// TS: `suggestionForExactCommand()` in shellRuleMatching.ts
 pub fn suggestion_for_exact_command(
     tool_name: &str,
     command: &str,
@@ -466,8 +448,6 @@ pub fn suggestion_for_exact_command(
 }
 
 /// Generate a permission update suggestion for a prefix match.
-///
-/// TS: `suggestionForPrefix()` in shellRuleMatching.ts
 pub fn suggestion_for_prefix(tool_name: &str, prefix: &str) -> coco_types::PermissionUpdate {
     coco_types::PermissionUpdate::AddRules {
         rules: vec![coco_types::PermissionRule {
@@ -486,11 +466,10 @@ pub fn suggestion_for_prefix(tool_name: &str, prefix: &str) -> coco_types::Permi
 /// prompt — the `Bash(git status:*)` row a user can accept to stop being asked
 /// for that command family.
 ///
-/// TS: `suggestionForExactCommand()` (bashPermissions.ts:266). A heredoc or
-/// other multiline command keys on a stable prefix — an exact rule would never
-/// re-match (the body changes every call) and a multiline body can embed `:*`
-/// mid-pattern, corrupting the settings file. A single-line command keys on its
-/// `command subcommand` prefix when one is extractable
+/// A heredoc or other multiline command keys on a stable prefix — an exact rule
+/// would never re-match (the body changes every call) and a multiline body can
+/// embed `:*` mid-pattern, corrupting the settings file. A single-line command
+/// keys on its `command subcommand` prefix when one is extractable
 /// ([`coco_shell::get_command_prefix`]), otherwise on the exact command.
 ///
 /// `tool_name` is the shell tool the rule targets (`Bash` / `PowerShell`).
@@ -528,13 +507,12 @@ pub fn bash_permission_suggestions(
 /// Default text for the permission dialog's editable "always allow" prefix
 /// field, given the raw bash command.
 ///
-/// TS: `BashPermissionRequest.tsx:227-231` — try a `command subcommand` prefix
-/// (`git status:*`), else a single-word prefix (`ls:*`, bare shells excluded),
-/// else fall back to the exact command. Unlike [`bash_permission_suggestions`]
-/// (which keys the saved rule and prefers an exact rule when no clean two-word
-/// prefix exists), this seeds an *editable* field, so it offers the broader
-/// single-word `:*` form via [`coco_shell::get_first_word_prefix`] as a starting
-/// point the user can refine.
+/// Tries a `command subcommand` prefix (`git status:*`), then a single-word
+/// prefix (`ls:*`, bare shells excluded), then falls back to the exact command.
+/// Unlike [`bash_permission_suggestions`] (which keys the saved rule and prefers
+/// an exact rule when no clean two-word prefix exists), this seeds an *editable*
+/// field, so it offers the broader single-word `:*` form via
+/// [`coco_shell::get_first_word_prefix`] as a starting point the user can refine.
 pub fn editable_prefix_default(command: &str) -> String {
     let trimmed = command.trim();
     if let Some(prefix) = coco_shell::get_command_prefix(trimmed) {

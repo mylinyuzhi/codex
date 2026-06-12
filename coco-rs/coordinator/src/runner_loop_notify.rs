@@ -9,8 +9,6 @@ use crate::constants::TEAM_LEAD_NAME;
 use crate::mailbox;
 
 /// Send a freeform message from a teammate to the team lead's inbox.
-///
-/// TS: `sendMessageToLeader(from, text, color, teamName)`.
 pub fn send_message_to_leader(
     from: &str,
     text: &str,
@@ -29,8 +27,6 @@ pub fn send_message_to_leader(
 }
 
 /// Send an idle notification to the leader.
-///
-/// TS: `sendIdleNotification(agentName, color, teamName, options?)`.
 pub fn send_idle_notification(
     agent_name: &str,
     color: Option<&str>,
@@ -51,8 +47,6 @@ pub fn send_idle_notification(
 }
 
 /// Format a task as a prompt string.
-///
-/// TS: `formatTaskAsPrompt(task)`.
 pub fn format_task_as_prompt(task_id: &str, subject: &str, description: &str) -> String {
     let mut prompt = format!("Complete all open tasks. Start with task #{task_id}: \n\n {subject}");
     if !description.is_empty() {
@@ -62,8 +56,6 @@ pub fn format_task_as_prompt(task_id: &str, subject: &str, description: &str) ->
 }
 
 /// Find the first available (unclaimed) task from a list.
-///
-/// TS: `findAvailableTask(tasks)`.
 pub fn find_available_task(
     tasks: &[coco_types::TaskEntry],
 ) -> Option<(usize, &coco_types::TaskEntry)> {

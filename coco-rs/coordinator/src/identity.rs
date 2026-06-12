@@ -1,7 +1,5 @@
 //! Teammate identity resolution — 3-tier priority system.
 //!
-//! TS: utils/teammate.ts, utils/teammateContext.ts
-//!
 //! Resolution priority:
 //! 1. Thread-local context (in-process teammates via `tokio::task_local!`)
 //! 2. Dynamic team context (set at runtime for tmux teammates)
@@ -31,8 +29,6 @@ tokio::task_local! {
 }
 
 /// Runtime context for in-process teammates (stored in task-local).
-///
-/// TS: `TeammateContext` in utils/teammateContext.ts
 #[derive(Debug, Clone)]
 pub struct TeammateContextData {
     pub agent_id: String,
@@ -51,8 +47,6 @@ pub struct TeammateContextData {
 }
 
 /// Run a future with teammate context set in task-local storage.
-///
-/// TS: `runWithTeammateContext(context, fn)`
 pub async fn run_with_teammate_context<F, T>(context: TeammateContextData, f: F) -> T
 where
     F: std::future::Future<Output = T>,
@@ -61,15 +55,11 @@ where
 }
 
 /// Get the current teammate context from task-local (if any).
-///
-/// TS: `getTeammateContext()`
 pub fn get_teammate_context() -> Option<TeammateContextData> {
     TEAMMATE_CONTEXT.try_with(std::clone::Clone::clone).ok()
 }
 
 /// Check if running as an in-process teammate.
-///
-/// TS: `isInProcessTeammate()`
 pub fn is_in_process_teammate() -> bool {
     TEAMMATE_CONTEXT.try_with(|_| ()).is_ok()
 }
@@ -81,8 +71,7 @@ pub fn is_in_process_teammate() -> bool {
 /// Called from `SendMessageTool` → `respond_to_shutdown` on the APPROVE
 /// path: the tool runs inline within the teammate's task-local scope, so
 /// it can flip the runner-loop's own `config.cancelled` Arc and let the
-/// loop exit on its next cancellation check. TS parity:
-/// `SendMessageTool.ts` `handleShutdownApproval` → `abortController.abort()`.
+/// loop exit on its next cancellation check.
 pub fn signal_self_stop() -> bool {
     TEAMMATE_CONTEXT
         .try_with(|ctx| {
@@ -102,8 +91,6 @@ pub fn signal_self_stop() -> bool {
 static DYNAMIC_CONTEXT: RwLock<Option<DynamicTeamContext>> = RwLock::new(None);
 
 /// Dynamic team context set at runtime (not via task-local).
-///
-/// TS: `dynamicTeamContext` in utils/teammate.ts
 #[derive(Debug, Clone)]
 pub struct DynamicTeamContext {
     pub agent_id: String,
@@ -115,8 +102,6 @@ pub struct DynamicTeamContext {
 }
 
 /// Set the dynamic team context.
-///
-/// TS: `setDynamicTeamContext(context)`
 pub fn set_dynamic_team_context(ctx: DynamicTeamContext) {
     if let Ok(mut guard) = DYNAMIC_CONTEXT.write() {
         *guard = Some(ctx);
@@ -124,8 +109,6 @@ pub fn set_dynamic_team_context(ctx: DynamicTeamContext) {
 }
 
 /// Clear the dynamic team context.
-///
-/// TS: `clearDynamicTeamContext()`
 pub fn clear_dynamic_team_context() {
     if let Ok(mut guard) = DYNAMIC_CONTEXT.write() {
         *guard = None;
@@ -133,8 +116,6 @@ pub fn clear_dynamic_team_context() {
 }
 
 /// Get the dynamic team context.
-///
-/// TS: `getDynamicTeamContext()`
 pub fn get_dynamic_team_context() -> Option<DynamicTeamContext> {
     DYNAMIC_CONTEXT.read().ok().and_then(|g| g.clone())
 }
@@ -142,8 +123,6 @@ pub fn get_dynamic_team_context() -> Option<DynamicTeamContext> {
 // ── Identity Resolution (3-tier) ──
 
 /// Get the current agent ID (3-tier priority).
-///
-/// TS: `getAgentId()`
 pub fn get_agent_id() -> Option<String> {
     // Tier 1: task-local
     if let Some(ctx) = get_teammate_context() {
@@ -158,8 +137,6 @@ pub fn get_agent_id() -> Option<String> {
 }
 
 /// Get the current agent display name (3-tier priority).
-///
-/// TS: `getAgentName()`
 pub fn get_agent_name() -> Option<String> {
     if let Some(ctx) = get_teammate_context() {
         return Some(ctx.agent_name);
@@ -172,7 +149,7 @@ pub fn get_agent_name() -> Option<String> {
 
 /// Get the current team name (3-tier priority: task-local → dynamic → env).
 ///
-/// TS: `getTeamName(teamContext?)` — the optional `teamContext` arg is dropped:
+/// The optional `teamContext` arg from the original design is omitted:
 /// no production caller ever supplied it (the live authority is the coordinator
 /// roster, not an `AppState.teamContext`).
 pub fn get_team_name() -> Option<String> {
@@ -186,8 +163,6 @@ pub fn get_team_name() -> Option<String> {
 }
 
 /// Get the parent session ID.
-///
-/// TS: `getParentSessionId()`
 pub fn get_parent_session_id() -> Option<String> {
     if let Some(ctx) = get_teammate_context() {
         return Some(ctx.parent_session_id);
@@ -199,15 +174,11 @@ pub fn get_parent_session_id() -> Option<String> {
 }
 
 /// Check if currently running as a teammate (not leader).
-///
-/// TS: `isTeammate()`
 pub fn is_teammate() -> bool {
     get_agent_id().is_some()
 }
 
 /// Get the teammate's assigned UI color.
-///
-/// TS: `getTeammateColor()`
 pub fn get_teammate_color() -> Option<String> {
     if let Some(ctx) = get_teammate_context() {
         return ctx.color;
@@ -219,8 +190,6 @@ pub fn get_teammate_color() -> Option<String> {
 }
 
 /// Check if plan mode is required.
-///
-/// TS: `isPlanModeRequired()`
 pub fn is_plan_mode_required() -> bool {
     if let Some(ctx) = get_teammate_context() {
         return ctx.plan_mode_required;
@@ -232,8 +201,6 @@ pub fn is_plan_mode_required() -> bool {
 }
 
 /// Check if there are any active in-process teammates.
-///
-/// TS: `hasActiveInProcessTeammates(appState)`
 pub fn has_active_in_process_teammates(tasks: &[TaskStateBase]) -> bool {
     tasks.iter().any(|t| {
         t.teammate_extras()
@@ -242,8 +209,6 @@ pub fn has_active_in_process_teammates(tasks: &[TaskStateBase]) -> bool {
 }
 
 /// Check if there are any working (non-idle) in-process teammates.
-///
-/// TS: `hasWorkingInProcessTeammates(appState)`
 pub fn has_working_in_process_teammates(tasks: &[TaskStateBase]) -> bool {
     tasks
         .iter()
@@ -252,8 +217,6 @@ pub fn has_working_in_process_teammates(tasks: &[TaskStateBase]) -> bool {
 
 /// Wait for all in-process teammates to become idle. Polls the
 /// supplied snapshot fn every 500ms until idle.
-///
-/// TS: `waitForTeammatesToBecomeIdle(setAppState, appState)`
 pub async fn wait_for_teammates_to_become_idle<F, Fut>(snapshot: F)
 where
     F: Fn() -> Fut,

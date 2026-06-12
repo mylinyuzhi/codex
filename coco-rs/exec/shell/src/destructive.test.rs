@@ -38,7 +38,7 @@ fn detects_git_data_loss() {
 
 #[test]
 fn git_clean_dry_run_is_not_flagged() {
-    // The dry-run exclusion (TS negative lookahead) must suppress the warning.
+    // The dry-run exclusion must suppress the warning.
     assert!(get_destructive_warning("git clean -n").is_none());
     assert!(get_destructive_warning("git clean --dry-run").is_none());
     assert!(get_destructive_warning("git clean -fn").is_none());
@@ -60,8 +60,7 @@ fn detects_sql_destructive() {
 
 #[test]
 fn non_ts_patterns_are_not_flagged() {
-    // These were coco-rs-invented patterns absent from TS; matching TS exactly
-    // means they no longer trigger an advisory.
+    // These patterns are not in the defined rule set and must not trigger an advisory.
     assert!(get_destructive_warning("docker rm container_id").is_none());
     assert!(get_destructive_warning("docker rmi image_id").is_none());
     assert!(get_destructive_warning("docker system prune -a").is_none());

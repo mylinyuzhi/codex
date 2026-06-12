@@ -1,8 +1,8 @@
 //! SSRF guard for HTTP hooks.
 //!
-//! TS: utils/hooks/ssrfGuard.ts — blocks private/link-local address ranges
-//! to prevent project-configured HTTP hooks from reaching cloud metadata
-//! endpoints (169.254.169.254) or internal infrastructure.
+//! Blocks private/link-local address ranges to prevent project-configured
+//! HTTP hooks from reaching cloud metadata endpoints (169.254.169.254) or
+//! internal infrastructure.
 //!
 //! Loopback (127.0.0.0/8, ::1) is intentionally ALLOWED — local dev policy
 //! servers are a primary HTTP hook use case.
@@ -179,8 +179,7 @@ pub async fn check_url_ssrf(url: &str) -> crate::Result<bool> {
 /// [`check_url_ssrf`] cannot: between the pre-flight resolution and reqwest's
 /// own resolution at connect time, a hostname can rebind to a private / cloud-
 /// metadata address. Installing this as reqwest's resolver makes the guarded
-/// resolution the one that actually drives the socket. Mirrors TS
-/// `ssrfGuardedLookup` (installed as axios's per-request `lookup`).
+/// resolution the one that actually drives the socket.
 ///
 /// NOTE: reqwest does NOT invoke a custom resolver when the URL host is an IP
 /// literal — those connect directly, so the [`check_url_ssrf`] pre-flight is
@@ -211,8 +210,6 @@ impl reqwest::dns::Resolve for SsrfGuardedResolver {
 }
 
 /// Check if a URL is allowed by the URL allowlist.
-///
-/// TS: execHttpHook.ts — allowedHttpHookUrls policy enforcement.
 /// Returns `true` if the URL is allowed (or no allowlist is set).
 pub fn url_matches_allowlist(url: &str, allowed_urls: &[String]) -> bool {
     if allowed_urls.is_empty() {

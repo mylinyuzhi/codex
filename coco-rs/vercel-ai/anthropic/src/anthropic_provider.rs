@@ -47,13 +47,13 @@ pub struct AnthropicProviderSettings {
     pub capabilities: AnthropicModelCapabilities,
     /// Endpoint topology — drives first-party-only beta inclusion.
     pub provider_topology: ProviderTopology,
-    /// Mirrors TS `!DISABLE_EXPERIMENTAL_BETAS`. Default true.
+    /// Enable experimental betas. Default true.
     pub experimental_betas_enabled: bool,
-    /// Mirrors TS `process.env.DISABLE_INTERLEAVED_THINKING`.
+    /// Disable interleaved thinking even on capable models.
     pub disable_interleaved_thinking: bool,
-    /// Mirrors TS `getInitialSettings().showThinkingSummaries`.
+    /// Show thinking summaries (suppresses redact-thinking beta when true).
     pub show_thinking_summaries: bool,
-    /// Mirrors TS `getIsNonInteractiveSession()`.
+    /// Non-interactive session flag (suppresses redact-thinking beta).
     pub non_interactive: bool,
     /// 1h-TTL allowlist patterns. Each entry is either an exact match for
     /// `query_source`, or a `prefix*` glob.

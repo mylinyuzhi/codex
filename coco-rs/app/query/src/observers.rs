@@ -4,9 +4,6 @@
 //! actual cache-invalidation logic lives here so the engine can register
 //! observers from the same crate that owns `Arc<RwLock<…>>` handles for
 //! file state, permission denial caches, and skill state.
-//!
-//! TS parity: replaces the `runPostCompactCleanup` god-function (TS
-//! commands/compact/compact.ts:340-410) with a pluggable registry pattern.
 
 use std::sync::Arc;
 
@@ -53,8 +50,7 @@ impl CompactionObserver for FileReadStateObserver {
 /// Observer that drops the permission `DenialTracker` history after a
 /// compaction. Without this, denials from pre-compact tool calls keep
 /// counting against the killswitch even though their conversational
-/// context is gone. TS: `denialMemory` cleared in
-/// `runPostCompactCleanup`.
+/// context is gone.
 pub struct ApprovalsObserver {
     denial_tracker: Arc<Mutex<coco_permissions::DenialTracker>>,
 }

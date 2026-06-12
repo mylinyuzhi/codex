@@ -91,8 +91,8 @@ async fn resolve_skips_already_enabled_dep() {
 
 #[tokio::test]
 async fn resolve_self_dep_detected_as_cycle() {
-    // Edge case: plugin a@m declares a@m as its own dep. TS treats this as
-    // a cycle (id appears twice in the stack on the recursive walk); the
+    // Edge case: plugin a@m declares a@m as its own dep. This is a cycle
+    // (id appears twice in the stack on the recursive walk); the
     // root-never-skipped rule applies on entry, so we don't short-circuit
     // out of the already-enabled check before the cycle detector fires.
     let root = PluginId::parse("a@m");

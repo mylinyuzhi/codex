@@ -1,22 +1,13 @@
-//! TS `ultrathink_effort` generator.
+//! `ultrathink_effort` generator.
 //!
-//! Mirrors `getUltrathinkEffortAttachment` (`attachments.ts:1446`) +
-//! `normalizeAttachmentForAPI` `case 'ultrathink_effort':`
-//! (`messages.ts:4170`). Fires when the user prompt contains the
-//! `ultrathink` keyword, asking the model to apply high reasoning
-//! effort for the current turn.
+//! Fires when the user prompt contains the `ultrathink` keyword, asking
+//! the model to apply high reasoning effort for the current turn.
 //!
 //! Gate chain (all must pass):
 //!
-//! 1. `ctx.config.attachments.ultrathink_effort` — user opt-in
-//!    (TS external-build default is off, matching the `feature('ULTRATHINK')`
-//!    build-time + `tengu_turtle_carbon` GrowthBook gate at
-//!    `thinking.ts:19-24`).
+//! 1. `ctx.config.attachments.ultrathink_effort` — user opt-in (default off).
 //! 2. `ctx.user_input` contains the word `ultrathink` (case-insensitive,
-//!    word-boundary — see [`contains_ultrathink_keyword`]). Mirrors
-//!    TS `hasUltrathinkKeyword` (`thinking.ts:29-31`).
-//!
-//! Content is the TS literal at `messages.ts:4173`.
+//!    word-boundary — see [`contains_ultrathink_keyword`]).
 
 use async_trait::async_trait;
 
@@ -27,22 +18,18 @@ use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
-/// TS body at `messages.ts:4173` — `${attachment.level}` is always
-/// `"high"` in TS (`attachments.ts:1451`), so coco-rs hardcodes the
-/// level to match.
+/// Reminder body — level is always `"high"`, so it is hardcoded.
 const BODY: &str =
     "The user has requested reasoning effort level: high. Apply this to the current turn.";
 
 const KEYWORD: &str = "ultrathink";
 
 /// True if `text` contains the `ultrathink` keyword as a whole word
-/// (case-insensitive). Mirrors TS `/\bultrathink\b/i.test(text)` from
-/// `thinking.ts:29-31`. Hand-rolled over `char_indices` so there is no
-/// fallible regex construction on the hot path.
+/// (case-insensitive, word-boundary). Hand-rolled over `char_indices`
+/// so there is no fallible regex construction on the hot path.
 ///
-/// TS `\b` delimits between a word character (`[A-Za-z0-9_]`) and a
-/// non-word character; coco-rs matches that semantics via
-/// [`is_word_char`].
+/// Word boundary: delimits between a word character (`[A-Za-z0-9_]`)
+/// and a non-word character — see [`is_word_char`].
 pub fn contains_ultrathink_keyword(text: &str) -> bool {
     let kw = KEYWORD;
     let kw_len = kw.len();

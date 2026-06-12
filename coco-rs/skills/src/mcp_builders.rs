@@ -1,9 +1,8 @@
 //! Write-once registry for MCP-sourced skill construction.
 //!
-//! TS: `skills/mcpSkillBuilders.ts`. The registry is the leaf module that
-//! both the registrar (`loadSkillsDir.ts` in TS, this crate in Rust) and
-//! the consumer (MCP client + capability discovery) can reference without
-//! forming a dependency cycle.
+//! The registry is the leaf module that both the registrar and the consumer
+//! (MCP client + capability discovery) can reference without forming a
+//! dependency cycle.
 //!
 //! Layer rule reminder: `coco-mcp` (L3) does not depend on `coco-skills`
 //! (L4). The wiring code in higher layers (e.g. `app/cli::SessionRuntime`)
@@ -61,10 +60,8 @@ pub struct McpSkillSpec {
 
 /// Strategy for converting an [`McpSkillSpec`] into a [`SkillDefinition`].
 ///
-/// TS: `MCPSkillBuilders` (the type alias holding `createSkillCommand`
-/// and `parseSkillFrontmatterFields`). In Rust we collapse both into a
-/// single trait method since the consumer only needs the end-to-end
-/// build path.
+/// In Rust we collapse both the creation and frontmatter-parsing steps into a
+/// single trait method since the consumer only needs the end-to-end build path.
 pub trait McpSkillBuilder: Send + Sync {
     /// Build a typed [`SkillDefinition`] from the MCP wire shape.
     fn build(&self, spec: &McpSkillSpec) -> Result<SkillDefinition, SkillsError>;
@@ -238,8 +235,6 @@ static MCP_SKILL_BUILDER: OnceLock<Arc<dyn McpSkillBuilder>> = OnceLock::new();
 /// already registered (no-op). Callers SHOULD NOT panic on a false
 /// return — test runners legitimately register multiple times across
 /// integration tests.
-///
-/// TS parity: `registerMCPSkillBuilders` (`mcpSkillBuilders.ts:33-35`).
 pub fn register_mcp_skill_builder(builder: Arc<dyn McpSkillBuilder>) -> bool {
     MCP_SKILL_BUILDER.set(builder).is_ok()
 }
@@ -248,9 +243,8 @@ pub fn register_mcp_skill_builder(builder: Arc<dyn McpSkillBuilder>) -> bool {
 /// [`DefaultMcpSkillBuilder`] if none was registered yet. Cheap to call
 /// — the fallback is a zero-sized type.
 ///
-/// TS parity: `getMCPSkillBuilders` (`mcpSkillBuilders.ts:37-44`), with
-/// the difference that the Rust version never panics on uninitialized
-/// state — fallback keeps the codepath unconditional.
+/// Never panics on uninitialized state — the fallback keeps the codepath
+/// unconditional.
 pub fn mcp_skill_builder() -> Arc<dyn McpSkillBuilder> {
     MCP_SKILL_BUILDER
         .get()

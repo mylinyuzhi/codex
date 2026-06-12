@@ -1,15 +1,14 @@
 //! Render the dynamic AgentTool prompt string.
 //!
-//! TS source: `tools/AgentTool/prompt.ts`. The Rust port mirrors the
-//! template byte-for-byte modulo three deliberate substitutions:
+//! The template is byte-for-byte faithful modulo three deliberate
+//! substitutions:
 //!
 //! - tool names (`Agent`, `SendMessage`, `Read`, `Glob`) come from the
 //!   typed [`coco_types::ToolName`] enum so any rename in the runtime
 //!   propagates here automatically;
-//! - the `process.env.USER_TYPE === 'ant'` branch (TS `isolation: "remote"`
-//!   bullet) is gated by [`PromptOptions::ant_build`] — coco-rs is a
-//!   3p build by default, so the bullet is suppressed unless callers
-//!   opt-in;
+//! - the `isolation: "remote"` bullet is gated by
+//!   [`PromptOptions::ant_build`] — coco-rs is a 3p build by default,
+//!   so the bullet is suppressed unless callers opt-in;
 //! - the `getFeatureValue_CACHED_MAY_BE_STALE('tengu_agent_list_attach', …)`
 //!   gate is replaced by an explicit [`PromptOptions::list_via_attachment`]
 //!   bool. The CLI bootstrap reads `COCO_AGENT_LIST_IN_MESSAGES` and
@@ -32,7 +31,7 @@ use crate::snapshot::AgentCatalogSnapshot;
 /// Inputs that shape the AgentTool prompt for a given turn.
 ///
 /// All fields default to "off" so existing callers keep their previous
-/// shape without opting into newer TS sections (fork, embedded tools,
+/// shape without opting into newer sections (fork, embedded tools,
 /// teammate variants, attachment listing, ant-only `remote` isolation).
 #[derive(Debug, Default, Clone)]
 pub struct PromptOptions {
@@ -50,40 +49,33 @@ pub struct PromptOptions {
     /// When true, the host build embeds search tools (`bfs`/`ugrep`)
     /// inside the Bash tool, so the "When NOT to use" section points
     /// at `find` / `grep` via Bash instead of dedicated `Glob` / `Grep`
-    /// tools. TS: `hasEmbeddedSearchTools()` in `prompt.ts:222-231`.
+    /// tools.
     pub has_embedded_search_tools: bool,
     /// True when the parent session is itself an in-process teammate.
     /// Drops the run_in_background / name / team_name / mode bullet
     /// because in-process teammates only support synchronous spawn.
-    /// TS: `isInProcessTeammate()` in `prompt.ts:277-279`.
     pub is_in_process_teammate: bool,
     /// True when the parent session is a (non in-process) teammate.
     /// Drops the name / team_name / mode bullet because teammates
-    /// cannot spawn other teammates. TS: `isTeammate()` in
-    /// `prompt.ts:280-282`. Ignored when [`is_in_process_teammate`] is
-    /// also true.
+    /// cannot spawn other teammates. Ignored when
+    /// [`is_in_process_teammate`] is also true.
     ///
     /// [`is_in_process_teammate`]: Self::is_in_process_teammate
     pub is_teammate: bool,
     /// Inject the agent list into a `<system-reminder>` attachment
-    /// instead of inline in the tool description. TS:
-    /// `shouldInjectAgentListInMessages()` in `prompt.ts:59-64`.
+    /// instead of inline in the tool description.
     pub list_via_attachment: bool,
     /// Pro subscriptions skip the inline "Launch multiple agents
     /// concurrently" bullet because the same guidance is shown by the
-    /// agent_listing_delta attachment for them. TS:
-    /// `getSubscriptionType() !== 'pro'` in `prompt.ts:246`.
+    /// agent_listing_delta attachment for them.
     pub is_pro_subscription: bool,
     /// True when the host disabled background tasks via
     /// `COCO_BACKGROUND_TASKS_DISABLE`. Suppresses the
-    /// `run_in_background` paragraphs. TS:
-    /// `process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` in
-    /// `prompt.ts:259`.
+    /// `run_in_background` paragraphs.
     pub background_tasks_disabled: bool,
     /// Internal-build flag enabling the `isolation: "remote"` bullet.
     /// coco-rs ships only the `worktree` runtime, so this stays off
-    /// in 3p builds. TS: `process.env.USER_TYPE === 'ant'` in
-    /// `prompt.ts:273`.
+    /// in 3p builds.
     pub ant_build: bool,
     /// Model-aware file-write tool for the usage examples, resolved by the
     /// caller from the model's available tools (`Write` for Claude,
@@ -102,11 +94,9 @@ impl<'a> AgentToolPromptRenderer<'a> {
         Self { snapshot }
     }
 
-    /// Format the agent listing block in TS source-load order (built-in →
-    /// plugin → user → project → flag → managed), matching
-    /// `getActiveAgentsFromList` + `prompt.ts:198-199` so the
-    /// model-visible block and its prompt-cache key are byte-faithful to
-    /// TS.
+    /// Format the agent listing block in source-load order (built-in →
+    /// plugin → user → project → flag → managed) so the
+    /// model-visible block and its prompt-cache key are stable.
     pub fn agent_list(&self, opts: &PromptOptions) -> String {
         self.snapshot
             .active_in_load_order()
@@ -117,12 +107,9 @@ impl<'a> AgentToolPromptRenderer<'a> {
     }
 
     /// Render the full AgentTool description that goes into the tool
-    /// schema. Coordinator mode keeps it slim (TS `prompt.ts:216-218`);
-    /// non-coordinator mode includes when-not-to-use, full usage notes,
-    /// optional fork section, "Writing the prompt", and examples.
-    ///
-    /// The structure mirrors `getPrompt(agentDefinitions, isCoordinator,
-    /// allowedAgentTypes)` from `prompt.ts:66-287`.
+    /// schema. Coordinator mode keeps it slim; non-coordinator mode
+    /// includes when-not-to-use, full usage notes, optional fork
+    /// section, "Writing the prompt", and examples.
     pub fn full_prompt(&self, opts: &PromptOptions) -> String {
         let agent = ToolName::Agent.as_str();
 
@@ -130,9 +117,9 @@ impl<'a> AgentToolPromptRenderer<'a> {
             "Available agent types are listed in <system-reminder> messages in the conversation."
                 .to_owned()
         } else if self.snapshot.active_count() == 0 {
-            // Match the TS "no agents" rendering: keep the literal
-            // header sentence so downstream prompt-cache keys remain
-            // stable; the listing collapses to an empty line.
+            // Keep the literal header sentence so downstream
+            // prompt-cache keys remain stable; the listing collapses
+            // to an empty line.
             "Available agent types and the tools they have access to:".to_owned()
         } else {
             let listing = self.agent_list(opts);
@@ -165,8 +152,8 @@ impl<'a> AgentToolPromptRenderer<'a> {
         );
 
         if opts.coordinator_mode {
-            // TS `prompt.ts:216-218`: the coordinator system prompt
-            // already covers usage / examples / when-not-to-use.
+            // The coordinator system prompt already covers usage /
+            // examples / when-not-to-use.
             return shared;
         }
 
@@ -208,7 +195,7 @@ fn visible_to_prompt(def: &AgentDefinition, opts: &PromptOptions) -> bool {
         let Some(ready) = opts.ready_mcp_servers.as_ref() else {
             return false;
         };
-        // TS `loadAgentsDir.ts:237-241` does case-INsensitive substring match.
+        // Case-insensitive substring match.
         let all_ready = def.required_mcp_servers.iter().all(|required| {
             let needle = required.to_ascii_lowercase();
             ready
@@ -235,9 +222,9 @@ fn format_agent_line(def: &AgentDefinition) -> String {
     )
 }
 
-/// Reproduces TS `getToolsDescription` (`prompt.ts:15-37`) verbatim.
-/// `Wildcard` allowed-list mirrors TS `tools === undefined`:
-/// "All tools" (or "All tools except …" when deny-list is non-empty).
+/// Compute the tools description string.
+/// `Wildcard` allowed-list means "All tools"
+/// (or "All tools except …" when deny-list is non-empty).
 pub fn format_tools_description(
     allowed: &coco_types::ToolAllowList,
     disallowed: &[String],
@@ -269,8 +256,7 @@ pub fn format_tools_description(
     }
 }
 
-/// "When NOT to use" guidance — verbatim TS `prompt.ts:232-240` minus
-/// the fork-enabled short-circuit. Empty string when fork is enabled.
+/// "When NOT to use" guidance. Empty string when fork is enabled.
 fn when_not_to_use_section(opts: &PromptOptions) -> String {
     if opts.fork_enabled {
         return String::new();
@@ -278,17 +264,17 @@ fn when_not_to_use_section(opts: &PromptOptions) -> String {
     let agent = ToolName::Agent.as_str();
     let file_read = ToolName::Read.as_str();
     let glob = ToolName::Glob.as_str();
-    // TS `prompt.ts:222-231`: embedded builds point at `find`/`grep`
-    // via Bash; non-embedded uses the Glob tool for both file lookup
-    // and content search (intentional — Glob is both find-the-file and
-    // first-pass file enumeration).
+    // Embedded builds point at `find`/`grep` via Bash; non-embedded
+    // uses the Glob tool for both file lookup and content search
+    // (intentional — Glob is both find-the-file and first-pass file
+    // enumeration).
     let (file_search_hint, content_search_hint) = if opts.has_embedded_search_tools {
         ("`find` via the Bash tool", "`grep` via the Bash tool")
     } else {
         let glob = format!("the {glob} tool");
-        // Both halves point at Glob in TS; using a single owned string
-        // keeps allocations minimal but the duplicated value is fine
-        // for one prompt render.
+        // Both halves point at Glob; using a single owned string keeps
+        // allocations minimal but the duplicated value is fine for
+        // one prompt render.
         return format!(
             "\nWhen NOT to use the {agent} tool:\n\
              - If you want to read a specific file path, use the {file_read} tool or {glob} \
@@ -313,19 +299,19 @@ fn when_not_to_use_section(opts: &PromptOptions) -> String {
     )
 }
 
-/// Full usage-notes block — TS `prompt.ts:255-284`.
+/// Full usage-notes block.
 fn usage_notes_section(opts: &PromptOptions) -> String {
     let agent = ToolName::Agent.as_str();
     let send_message = ToolName::SendMessage.as_str();
 
     let mut s = String::new();
     s.push_str("Usage notes:\n");
-    // TS `prompt.ts:256` — first bullet always present.
+    // First bullet always present.
     s.push_str(
         "- Always include a short description (3-5 words) summarizing what the agent will do",
     );
     // Concurrency hint — only when the agent list is inline AND the
-    // user is non-pro. TS `prompt.ts:243-249`.
+    // user is non-pro.
     if !opts.list_via_attachment && !opts.is_pro_subscription {
         s.push_str(
             "\n- Launch multiple agents concurrently whenever possible, to maximize \
@@ -340,8 +326,8 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
          should send a text message back to the user with a concise summary of the result.",
     );
 
-    // run_in_background paragraphs — TS `prompt.ts:259-265` gates on
-    // !DISABLE_BACKGROUND_TASKS && !isInProcessTeammate && !forkEnabled.
+    // run_in_background paragraphs — gates on
+    // !background_tasks_disabled && !is_in_process_teammate && !fork_enabled.
     if !opts.background_tasks_disabled && !opts.is_in_process_teammate && !opts.fork_enabled {
         s.push_str(
             "\n- You can optionally run agents in the background using the run_in_background \
@@ -356,7 +342,7 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
     }
     s.push('\n');
 
-    // SendMessage continuation — TS `prompt.ts:267`.
+    // SendMessage continuation.
     let fresh_agent_phrase = if opts.fork_enabled {
         " Each fresh Agent invocation with a subagent_type starts without context \u{2014} \
          provide a complete task description."
@@ -368,7 +354,7 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
          name as the `to` field. The agent resumes with its full context preserved.{fresh_agent_phrase}\n",
     ));
 
-    // Trust + research-vs-write — TS `prompt.ts:268-269`.
+    // Trust + research-vs-write.
     s.push_str("- The agent's outputs should generally be trusted\n");
     let user_intent_clause = if opts.fork_enabled {
         ""
@@ -380,7 +366,7 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
          (search, file reads, web fetches, etc.){user_intent_clause}\n",
     ));
 
-    // Proactive + parallel hint — TS `prompt.ts:270-271`.
+    // Proactive + parallel hint.
     s.push_str(
         "- If the agent description mentions that it should be used proactively, then you \
          should try your best to use it without the user having to ask for it first. Use your \
@@ -393,7 +379,7 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
          send a single message with both tool calls.\n",
     ));
 
-    // Worktree isolation — TS `prompt.ts:272`.
+    // Worktree isolation.
     s.push_str(
         "- You can optionally set `isolation: \"worktree\"` to run the agent in a temporary \
          git worktree, giving it an isolated copy of the repository. The worktree is \
@@ -401,7 +387,7 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
          worktree path and branch are returned in the result.",
     );
 
-    // Ant-only remote isolation — TS `prompt.ts:273-275`.
+    // Ant-only remote isolation.
     if opts.ant_build {
         s.push_str(
             "\n- You can set `isolation: \"remote\"` to run the agent in a remote CCR \
@@ -410,7 +396,7 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
         );
     }
 
-    // Teammate / in-process teammate notices — TS `prompt.ts:276-283`.
+    // Teammate / in-process teammate notices.
     if opts.is_in_process_teammate {
         s.push_str(
             "\n- The run_in_background, name, team_name, and mode parameters are not available \
@@ -426,9 +412,9 @@ fn usage_notes_section(opts: &PromptOptions) -> String {
     s
 }
 
-/// "When to fork" block — TS `prompt.ts:80-96`. Returned with the
-/// leading `\n\n` already included so the caller can concatenate
-/// without a follow-up blank-line check.
+/// "When to fork" block. Returned with the leading `\n\n` already
+/// included so the caller can concatenate without a follow-up
+/// blank-line check.
 fn when_to_fork_section() -> String {
     "\n\n## When to fork\n\
      \n\
@@ -464,8 +450,8 @@ fn when_to_fork_section() -> String {
         .to_owned()
 }
 
-/// "Writing the prompt" section — TS `prompt.ts:99-113`. Wraps the
-/// fresh-agent prefix branch on `fork_enabled`. Includes leading `\n\n`.
+/// "Writing the prompt" section. Wraps the fresh-agent prefix branch
+/// on `fork_enabled`. Includes leading `\n\n`.
 fn writing_the_prompt_section(opts: &PromptOptions) -> String {
     let fresh_prefix = if opts.fork_enabled {
         "When spawning a fresh agent (with a `subagent_type`), it starts with zero context. "
@@ -500,7 +486,7 @@ fn writing_the_prompt_section(opts: &PromptOptions) -> String {
     )
 }
 
-/// Examples block when fork is enabled — TS `prompt.ts:115-154`.
+/// Examples block when fork is enabled.
 fn fork_examples() -> String {
     let agent = ToolName::Agent.as_str();
     format!(
@@ -562,7 +548,7 @@ fn fork_examples() -> String {
     )
 }
 
-/// Examples block when fork is disabled — TS `prompt.ts:156-188`.
+/// Examples block when fork is disabled.
 fn current_examples(opts: &PromptOptions) -> String {
     let agent = ToolName::Agent.as_str();
     // Model-aware: name the file-write tool the model actually has

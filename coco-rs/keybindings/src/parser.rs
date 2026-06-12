@@ -1,9 +1,6 @@
-//! Key string parser.
-//!
-//! TS source: `keybindings/parser.ts:13-203`. Maps strings like
-//! `"ctrl+shift+a"`, `"cmd+k"`, `"enter"` into a structured [`KeyCombo`]
-//! and chord strings like `"ctrl+x ctrl+k"` into a multi-combo
-//! [`KeyChord`].
+//! Key string parser. Maps strings like `"ctrl+shift+a"`, `"cmd+k"`,
+//! `"enter"` into a structured [`KeyCombo`] and chord strings like
+//! `"ctrl+x ctrl+k"` into a multi-combo [`KeyChord`].
 //!
 //! ### Syntax
 //!
@@ -14,13 +11,13 @@
 //!   - `control` ≡ `ctrl`
 //!   - `option` ≡ `opt` ≡ `alt`
 //!   - `cmd` ≡ `command` ≡ `super` ≡ `win` (mapped to the `super`
-//!     field — TS-distinct from `meta`)
+//!     field — distinct from `meta`)
 //!   - `meta` is its own modifier (terminal alt-equivalent), kept
 //!     distinct from `super` so e.g. macOS `cmd+c` renders as
 //!     `cmd+c` not `opt+c`.
 //! - Chord (multi-combo): combos separated by **whitespace**:
 //!   `"ctrl+x ctrl+k"`. The single literal string `" "` (one space) is
-//!   the space-key binding (mirrors `parser.ts:81`).
+//!   the space-key binding.
 //!
 //! Returns a typed [`ParseError`] (thiserror enum) so callers can match
 //! on the failure mode rather than scrape strings.
@@ -35,10 +32,9 @@ pub struct KeyCombo {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
-    /// Meta — terminal alt-equivalent (Ink's `key.meta` historically).
-    /// Distinct from [`KeyCombo::super_key`]; the matching layer
-    /// (`match.ts:60-78` in TS) collapses `alt` and `meta` for chord
-    /// equality, but display and storage keep them separate.
+    /// Meta — terminal alt-equivalent. Distinct from [`KeyCombo::super_key`];
+    /// the matching layer collapses `alt` and `meta` for chord equality,
+    /// but display and storage keep them separate.
     pub meta: bool,
     /// Super — cmd / win, only delivered by terminals using the kitty
     /// keyboard protocol. Distinct from [`KeyCombo::meta`] so e.g. a
@@ -84,7 +80,7 @@ pub enum ParseError {
 /// into one or more combos.
 ///
 /// Special case: a single space character `" "` is the space-key
-/// binding (mirrors `parser.ts:81`), not an empty chord.
+/// binding, not an empty chord.
 pub fn parse_chord(input: &str) -> Result<KeyChord, ParseError> {
     if input == " " {
         return Ok(KeyChord(vec![named_combo("space")]));
@@ -153,9 +149,8 @@ pub fn parse_combo(input: &str) -> Result<KeyCombo, ParseError> {
     })
 }
 
-/// Normalize named keys to a canonical form. Keeps TS naming where
-/// it diverges from the user-facing string (e.g. `"return"` →
-/// `"enter"`, `"esc"` → `"escape"` to align with `parser.ts:48-50`).
+/// Normalize named keys to a canonical form (e.g. `"return"` →
+/// `"enter"`, `"esc"` → `"escape"`).
 fn normalize_key(raw: &str) -> String {
     match raw {
         "return" | "enter" => "enter".into(),

@@ -267,8 +267,8 @@ pub(crate) fn apply_patch_target_paths(patch: &str) -> Vec<&str> {
 }
 
 /// Read header preview: the path, plus a `· lines N-M` / `· from line N`
-/// suffix when offset/limit are present. Mirrors TS `FileReadTool/UI.tsx`
-/// (`lines {start}-{end}` when a limit is set, else `from line {start}`).
+/// suffix when offset/limit are present (`lines {start}-{end}` when a limit
+/// is set, else `from line {start}`).
 fn read_target_preview(input: &Value) -> String {
     let path = scalar_value(input, "file_path")
         .or_else(|| scalar_value(input, "path"))

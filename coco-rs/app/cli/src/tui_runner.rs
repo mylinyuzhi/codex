@@ -1,8 +1,7 @@
 //! TUI runner — orchestrates TUI ↔ QueryEngine ↔ FileHistory.
 //!
-//! TS equivalent: REPL.tsx is the orchestrator (React component owns QueryEngine,
-//! messages, file history, and permission state). In Rust we use an explicit
-//! async task (`run_agent_driver`) since ratatui is not a reactive framework.
+//! Uses an explicit async task (`run_agent_driver`) since ratatui is not a
+//! reactive framework.
 //!
 //! Architecture:
 //! ```text
@@ -54,8 +53,7 @@ use crate::Cli;
 
 /// Run the interactive TUI mode.
 ///
-/// TS: launchRepl() → <REPL /> (React/Ink component).
-/// Rust: spawns agent_driver as background task, runs TUI in foreground.
+/// Spawns agent_driver as background task, runs TUI in foreground.
 ///
 /// `resume_plan`: resolved by the binary entry from
 /// `--resume` / `--continue` / `--fork-session` flags. When `Some`,
@@ -122,12 +120,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         .map(coco_config_reload::RuntimeReloader::subscribe_errors)
         .map(spawn_config_reload_error_toasts);
     // Engine resources (client, tools, system prompt, command registry,
-    // startup-permission state) shared with
-    // SDK / headless via `session_bootstrap::build_engine_resources`.
-    // The slash-command registry uses the full TS-parity load order
-    // (builtins → extended → skills → plugin contributions → TS-parity
-    // P1 handlers), so `dispatch_slash_command` and the SDK
-    // `initialize.commands` advertisement share one Arc.
+    // startup-permission state) shared with SDK / headless via
+    // `session_bootstrap::build_engine_resources`. The slash-command
+    // registry uses the full load order (builtins → extended → skills →
+    // plugin contributions → P1 handlers), so `dispatch_slash_command`
+    // and the SDK `initialize.commands` advertisement share one Arc.
     let resources = build_engine_resources(cli, &runtime_config, &cwd)?;
     coco_cli::startup_profile::mark("engine_resources_built");
     let model_id = resources.model_id.clone();
@@ -148,8 +145,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let _ = session_manager.create(&model_id, &cwd);
     {
         // Background housekeeping: prune session files older than the
-        // default retention period. Mirrors TS `utils/cleanup.ts`
-        // `DEFAULT_CLEANUP_PERIOD_DAYS = 30`. Fire-and-forget.
+        // default retention period (30 days). Fire-and-forget.
         let mgr = session_manager.clone();
         let transcript_store =
             coco_session::TranscriptStore::new(coco_cli::paths::project_paths(&cwd));
@@ -213,8 +209,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Keep a concrete `Arc<TuiPermissionBridge>` alongside the trait
     // object so we can install the SessionRuntime weak-ref after
     // `SessionRuntime::build` returns (used to fire the Notification
-    // hook on permission prompts — TS parity with
-    // `PermissionRequest.tsx:190`).
+    // hook on permission prompts).
     let tui_permission_bridge_concrete =
         Arc::new(coco_cli::tui_permission_bridge::TuiPermissionBridge::new(
             notification_tx.clone(),
@@ -227,7 +222,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // pane teammate forwards deny-path prompts to the leader via mailbox IPC
     // (the leader polls its inbox + routes them to its approval UI) rather
     // than prompting in the teammate's own pane; the leader session keeps the
-    // TuiPermissionBridge. TS: pane workers install the mailbox bridge, the
+    // TuiPermissionBridge. Pane workers install the mailbox bridge, the
     // leader uses ToolUseConfirm. In-process teammates instead inherit the
     // leader's bridge via `wire_engine` and never reach this branch.
     let session_permission_bridge: coco_tool_runtime::ToolPermissionBridgeRef =
@@ -264,9 +259,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             permission_bridge: Some(session_permission_bridge),
             command_registry: command_registry.clone(),
             skill_manager: skill_manager.clone(),
-            // TS parity: load `~/.coco/agents` + `<cwd>/.coco/agents`
-            // and surface them in AgentTool's per-turn dynamic prompt
-            // listing. Worktree fallback is applied inside
+            // Load `~/.coco/agents` + `<cwd>/.coco/agents` and surface
+            // them in AgentTool's per-turn dynamic prompt listing.
+            // Worktree fallback is applied inside
             // `standard_agent_search_paths`.
             agent_search_paths: coco_cli::paths::standard_agent_search_paths(
                 &coco_config::global_config::config_home(),
@@ -302,16 +297,14 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     coco_cli::startup_profile::mark("session_late_binds");
 
     // Install the SessionRuntime weak-ref on the permission bridge so
-    // `Notification` hooks (TS `permission_prompt`) fire when the
-    // user is asked to approve a tool. Weak avoids extending the
+    // `Notification` hooks fire when the user is asked to approve a
+    // tool. Weak avoids extending the
     // runtime's lifetime through the bridge.
     tui_permission_bridge_concrete
         .set_notification_runtime(Arc::downgrade(&runtime))
         .await;
 
-    // Spawn the ConfigChange watcher (TS
-    // `executeConfigChangeHooks(source, path)` from
-    // `utils/settings/changeDetector.ts:292/344`). The watcher's
+    // Spawn the ConfigChange watcher. The watcher's
     // join-handle is leaked: it terminates on its own when the
     // reloader's broadcast channel closes (reloader drop) or when
     // `runtime.cancel` fires.
@@ -373,23 +366,21 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         ));
     }
 
-    // Plugin change detector — TS parity:
-    // `useManagePlugins.ts:293-300`. Lifecycle: held by
-    // `_plugin_watcher_guard` so the `Arc` lives until this function
-    // returns (TUI shutdown). The wrapped `FileWatcher` drops with the
-    // Arc, shutting its notify thread + throttle task down cleanly.
+    // Plugin change detector. Lifecycle: held by `_plugin_watcher_guard`
+    // so the `Arc` lives until this function returns (TUI shutdown). The
+    // wrapped `FileWatcher` drops with the Arc, shutting its notify
+    // thread + throttle task down cleanly.
     let _plugin_watcher_guard = coco_cli::plugin_watch::spawn(
         notification_tx.clone(),
         &cwd,
         &coco_config::global_config::config_home(),
     );
 
-    // Skill change detector — TS parity: `skillChangeDetector.ts`
-    // (registered at startup in `main.tsx`). Reloads the skill catalog
-    // (reminder + SkillTool) and rebuilds the slash-command registry on
-    // `.md` edits so authoring skills doesn't require a session restart.
-    // Held by `_skill_watcher_guard` until TUI shutdown (drop = clean
-    // stop), exactly like the plugin watcher above.
+    // Skill change detector. Reloads the skill catalog (reminder +
+    // SkillTool) and rebuilds the slash-command registry on `.md` edits
+    // so authoring skills doesn't require a session restart. Held by
+    // `_skill_watcher_guard` until TUI shutdown (drop = clean stop),
+    // exactly like the plugin watcher above.
     let _skill_watcher_guard = coco_cli::skill_watch::spawn(
         runtime.clone(),
         notification_tx.clone(),
@@ -402,24 +393,23 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // queue-drain pump. Self-terminates on session shutdown; held as a guard.
     let _cron_tick_guard = coco_cli::cron_tick::spawn(runtime.clone());
 
-    // Team-memory server sync — TS parity: `startTeamMemoryWatcher`
-    // (`setup.ts:365-368`). Pulls server team memory at session start,
-    // then debounce-pushes local edits. Fire-and-forget on the
-    // interactive path; no-ops unless team memory is enabled, the repo
-    // has a github `origin` slug, and a claude.ai OAuth token is present.
+    // Team-memory server sync. Pulls server team memory at session start,
+    // then debounce-pushes local edits. Fire-and-forget on the interactive
+    // path; no-ops unless team memory is enabled, the repo has a github
+    // `origin` slug, and a claude.ai OAuth token is present.
     coco_cli::team_memory_sync::bootstrap(
         &runtime.runtime_config,
         cwd.clone(),
         coco_config::global_config::config_home(),
     );
 
-    // Agent-teams role wiring (TS `useInboxPoller`). A LEADER registers the
-    // setter that routes a pane teammate's forwarded permission request to its
-    // approval UI + replies via mailbox, plus a continuous 1s inbox poll. A
-    // cross-process TEAMMATE instead runs the inbox→turn pump (gap 1) that
-    // drives turns from its own mailbox. `teammate_turn_done_tx` is the pump's
-    // completion handshake (threaded into `run_agent_driver` below); `None`
-    // for a leader. `pump_cancel` lets the exit path stop the pump so it drops
+    // Agent-teams role wiring. A LEADER registers the setter that routes a
+    // pane teammate's forwarded permission request to its approval UI +
+    // replies via mailbox, plus a continuous 1s inbox poll. A cross-process
+    // TEAMMATE instead runs the inbox→turn pump (gap 1) that drives turns
+    // from its own mailbox. `teammate_turn_done_tx` is the pump's completion
+    // handshake (threaded into `run_agent_driver` below); `None` for a
+    // leader. `pump_cancel` lets the exit path stop the pump so it drops
     // its `command_tx` clone and the driver can shut down.
     let mut teammate_turn_done_tx: Option<mpsc::Sender<String>> = None;
     let pump_cancel = CancellationToken::new();
@@ -431,8 +421,8 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         match coco_coordinator::identity::resolve_teammate_identity() {
             None => {
                 // Leader session: register the human approval queue + spawn the
-                // continuous 1s inbox poll (TS useInboxPoller) so worker
-                // prompts/idle/shutdown surface even while the leader is idle.
+                // continuous 1s inbox poll so worker prompts/idle/shutdown
+                // surface even while the leader is idle.
                 // Shared with the headless/SDK leader paths.
                 coco_cli::leader_inbox_poller::install_leader(
                     runtime.clone(),
@@ -473,12 +463,11 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         }
     }
 
-    // Official marketplace auto-install — TS parity
-    // (`useOfficialMarketplaceNotification`). Fire-and-forget on the
-    // interactive path only: retry-gated + backoff, opt-out via
-    // `COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE`, and non-fatal. Never blocks
-    // startup — the `anthropics/claude-plugins-official` marketplace is fetched
-    // once in the background and reused on subsequent launches.
+    // Official marketplace auto-install. Fire-and-forget on the interactive
+    // path only: retry-gated + backoff, opt-out via
+    // `COCO_PLUGINS_DISABLE_OFFICIAL_MARKETPLACE`, and non-fatal. Never
+    // blocks startup — the official marketplace is fetched once in the
+    // background and reused on subsequent launches.
     coco_cli::session_bootstrap::spawn_marketplace_startup(
         coco_config::global_config::config_home(),
     );
@@ -489,8 +478,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // the in-memory history so the first user prompt sees the prior
     // chain. Pre-populating the transcript dedup set with the loaded
     // uuids prevents `record_transcript_tail` from re-appending
-    // entries that are already on disk. TS parity:
-    // `processResumedConversation()` + `adoptResumedSessionFile()`.
+    // entries that are already on disk.
     if let Some(plan) = resume_plan {
         tracing::info!(
             target: "coco_cli::resume",
@@ -501,8 +489,8 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
             "resume: hydrating session",
         );
         hydrate_resume_plan(&plan, &runtime, &notification_tx).await;
-        // Reconcile coordinator mode to the resumed session (TS
-        // `matchSessionMode`). This flips `COCO_COORDINATOR_MODE` *before*
+        // Reconcile coordinator mode to the resumed session. This flips
+        // `COCO_COORDINATOR_MODE` *before*
         // the coordinator badge (below) and the first per-turn system
         // prompt are computed, so both reflect the resumed session's mode.
         if let Some(warning) = coco_cli::coordinator_mode_resume::reconcile_on_resume(
@@ -519,18 +507,15 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         );
     }
 
-    // TS parity (`main.tsx:2437/2577/2607`): fire SessionStart hooks
-    // once at session bootstrap. Output queues onto the shared
-    // sync-hook buffer and surfaces as `hook_*` reminders on the
-    // first turn's reminder pass.
+    // Fire SessionStart hooks once at session bootstrap. Output queues
+    // onto the shared sync-hook buffer and surfaces as `hook_*` reminders
+    // on the first turn's reminder pass.
     runtime.fire_session_start_hooks("startup").await;
 
-    // TS parity: TUI users opt into per-spawn periodic AgentSummary
-    // timers via `COCO_AGENT_SUMMARY_ENABLE` (TS uses an SDK control
-    // message — `agentProgressSummaries: true` — that TUI sessions
-    // can't send). Default off keeps LLM cost off the hot path.
-    // Coordinator mode auto-enables independently and ignores this
-    // flag (matches `AgentTool.tsx:750`).
+    // TUI users opt into per-spawn periodic AgentSummary timers via
+    // `COCO_AGENT_SUMMARY_ENABLE`. Default off keeps LLM cost off the
+    // hot path. Coordinator mode auto-enables independently and ignores
+    // this flag.
     if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoAgentSummaryEnable) {
         runtime
             .app_state
@@ -622,8 +607,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // `Ctrl+Shift+P` command palette resolve against the live registry
     // (builtins + extended + skills + plugin contributions). Without
     // this snapshot the popup silently shows nothing because the field
-    // defaults to an empty Vec. TS parity: `commands.ts::getCommands`
-    // is the catalog source for `commandSuggestions.ts`.
+    // defaults to an empty Vec.
     //
     // Two seed paths:
     //   * **Startup (here)** — direct mutation. The event loop hasn't
@@ -775,23 +759,18 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // Explicit drop: `Tui::drop` (inside App) is what leaves alt-screen
     // and disables raw mode. Without this the resume hint below would
     // scroll inside the alt buffer and vanish when the terminal
-    // restores the main buffer on exit. TS parity:
-    // `gracefulShutdown.ts::cleanupTerminalModes` runs before
-    // `printResumeHint`.
+    // restores the main buffer on exit.
     drop(app);
 
-    // TS parity (`gracefulShutdown.ts:431-437`): print the resume hint
-    // **before** any async cleanup so the user sees it immediately on
-    // Ctrl+C, even when the agent driver is mid-shutdown (tool flush,
-    // transcript append, telemetry). The driver writes only to stderr
-    // / log files, so it cannot clobber this stdout write.
+    // Print the resume hint **before** any async cleanup so the user sees
+    // it immediately on Ctrl+C, even when the agent driver is mid-shutdown
+    // (tool flush, transcript append, telemetry). The driver writes only
+    // to stderr / log files, so it cannot clobber this stdout write.
     coco_cli::resume_hint::print_resume_hint(&cwd, session_id.as_deref());
 
-    // TS parity (`gracefulShutdown.ts` cleanupSessionTeams): on leader exit,
-    // kill any orphaned tmux teammate panes, then remove the team dirs (+
-    // worktrees + tasks via cleanup_team_directories) for teams this session
-    // led, so neither the child processes nor the dirs orphan. (iTerm2 pane
-    // teardown via the it2 backend is a documented follow-up.)
+    // On leader exit: kill any orphaned tmux teammate panes, then remove the
+    // team dirs (+ worktrees + tasks via cleanup_team_directories) for teams
+    // this session led, so neither the child processes nor the dirs orphan.
     if let Some(sid) = session_id.as_deref()
         && let Err(e) = coco_coordinator::team_file::cleanup_session_teams(sid)
     {
@@ -868,9 +847,7 @@ fn spawn_config_reload_error_toasts(
 
 /// Agent driver — consumes UserCommands, drives QueryEngine, emits CoreEvents.
 ///
-/// TS: REPL.tsx's onSubmit → query() → onQueryEvent() loop.
 /// Runs as a background tokio task alongside the TUI event loop.
-///
 /// Events flow directly as `CoreEvent` from QueryEngine → TUI (no mapping layer).
 #[allow(clippy::too_many_arguments)]
 async fn run_agent_driver(
@@ -890,7 +867,7 @@ async fn run_agent_driver(
     // Per-session one-shot gate: title gen runs at most once per
     // session id, never the process. After `/resume` or `/clear` the
     // session id changes; the new id is not in the set, so the gate
-    // re-arms (TS parity: each session's title state is independent).
+    // re-arms (each session's title state is independent).
     // `Arc<RwLock<HashSet>>` because the SubmitInput body runs in a
     // spawned task — the outer scope must hand a shared handle to the
     // spawn for cross-turn observation.
@@ -901,13 +878,10 @@ async fn run_agent_driver(
     // Active-turn tracker. SubmitInput spawns the engine work into a
     // dedicated task and stores its `JoinHandle` + `TurnAbortController`
     // here; the dispatch loop continues to `recv()` so interrupting
-    // commands (`Interrupt`, `Compact`, `Rewind`,
-    // `Shutdown`) reach their arms without waiting for the engine to
-    // finish. TS parity: REPL.tsx's `query()` runs in the same single-
-    // threaded React event loop, so its keyboard `useInput` hook fires
-    // `abortController.abort()` "concurrently" with engine work — JS
-    // cooperative-async makes that natural; Rust needs an explicit
-    // `tokio::spawn` to free the recv loop.
+    // commands (`Interrupt`, `Compact`, `Rewind`, `Shutdown`) reach
+    // their arms without waiting for the engine to finish. Rust needs
+    // an explicit `tokio::spawn` to free the recv loop for concurrent
+    // keyboard events.
     let active_turn: Arc<Mutex<Option<ActiveTurn>>> = Arc::new(Mutex::new(None));
     let mut pending_editor_requests: HashMap<String, PendingEditorRequest> = HashMap::new();
     let mut explicit_shutdown = false;
@@ -974,8 +948,7 @@ async fn run_agent_driver(
 
                 // Slash-command interception. When the user typed `/foo args`,
                 // resolve through `runtime.command_registry` BEFORE handing
-                // raw text to the model. TS parity:
-                // `utils/processUserInput/processSlashCommand.tsx`.
+                // raw text to the model.
                 let mut effective_content = content;
                 if let Some((name, args)) = parse_slash_command(&effective_content) {
                     let outcome = dispatch_slash_command(name, args, &runtime, &event_tx).await;
@@ -990,7 +963,7 @@ async fn run_agent_driver(
                     {
                         SlashFollowup::Done => continue,
                         // Unknown command falls through to the model
-                        // as raw text — matches TS's behavior.
+                        // as raw text — falls through to the model.
                         SlashFollowup::NotFound => {}
                         SlashFollowup::RunEngine(rendered) => {
                             effective_content = rendered;
@@ -1002,8 +975,7 @@ async fn run_agent_driver(
                 // `running` state, but a slow gate could still let a
                 // second SubmitInput through. Cancel + await the prior
                 // turn before starting the new one — last-write-wins
-                // semantics, matches TS REPL.tsx behavior where a new
-                // onSubmit aborts the previous query() generator.
+                // semantics (a new submit aborts the previous turn).
                 drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
 
                 let turn_abort = TurnAbortController::new();
@@ -1313,10 +1285,8 @@ async fn run_agent_driver(
 
             UserCommand::RequestDiffStats { message_id } => {
                 // Async restore-preview diff for the selected checkpoint.
-                // TS: `await fileHistoryGetDiffStats(...)` at
-                // `MessageSelector.tsx:173`. `stats == None` carries
-                // `fileHistoryCanRestore == false`; the TUI suppresses
-                // code-restore choices for that row.
+                // `stats == None` carries `fileHistoryCanRestore == false`;
+                // the TUI suppresses code-restore choices for that row.
                 if let Some(fh) = &runtime.file_history {
                     let fh = fh.read().await;
                     let stats = if fh.can_restore(&message_id) {
@@ -1339,13 +1309,12 @@ async fn run_agent_driver(
                 }
             }
             UserCommand::RequestDiffStatsBatch { message_ids } => {
-                // TS: `Promise.all(messageOptions.map(...))` walk at
-                // `MessageSelector.tsx:285-312`. For each non-synthetic
-                // picker row, resolve `fileHistoryCanRestore` and (if
-                // restorable) compute the per-row `+X -Y` diff against
-                // the next row's snapshot — or the working tree for the
-                // last row. coco-rs uses the snapshot pair instead of
-                // walking `msg.toolUseResult.structuredPatch` because
+                // For each non-synthetic picker row, resolve
+                // `fileHistoryCanRestore` and (if restorable) compute
+                // the per-row `+X -Y` diff against the next row's
+                // snapshot — or the working tree for the last row.
+                // Uses the snapshot pair instead of walking
+                // `msg.toolUseResult.structuredPatch` because
                 // coco_messages has no typed tool-output side channel.
                 if let Some(fh) = &runtime.file_history {
                     let fh = fh.read().await;
@@ -1390,9 +1359,6 @@ async fn run_agent_driver(
                 // CancellationToken) and exits cleanly. The task slot
                 // stays Some until the task naturally completes — the
                 // next SubmitInput (or driver shutdown) drains it.
-                // TS parity: REPL.tsx Esc/Ctrl+C → abortController
-                // .abort('user-cancel') → query() generator yields,
-                // .finally reads `signal.reason` and may auto-restore.
                 if let Some(state) = active_turn.lock().await.as_ref() {
                     state.abort.abort(reason);
                     info!("Interrupt: cancelled active turn");
@@ -1507,9 +1473,8 @@ async fn run_agent_driver(
                 // Push onto the session-scoped command queue so the
                 // running engine sees it at its next drain point
                 // (mid-turn `Now` drain or end-of-turn full drain).
-                // TS parity: `handlePromptSubmit.ts:336-343` — when
-                // `queryGuard.isActive`, the prompt is enqueued
-                // instead of starting a fresh turn.
+                // When a turn is active, the prompt is enqueued instead
+                // of starting a fresh turn.
                 if prompt.trim().is_empty() {
                     continue;
                 }
@@ -1648,8 +1613,7 @@ async fn run_agent_driver(
                 custom_instructions,
             } => {
                 // Manual `/compact [instructions]` from the TUI.
-                // TS: commands/compact/compact.ts:40 — `args.trim()`
-                // becomes `customInstructions`.
+                // `custom_instructions` comes from trimming the args.
                 info!(
                     session_id = %session_id,
                     has_instructions = custom_instructions.is_some(),
@@ -1696,8 +1660,7 @@ async fn run_agent_driver(
                 // the new mode into team.json so the leader's roster reflects
                 // it — covers both an inbox-applied `ModeSetRequest` and a
                 // self-initiated Shift+Tab cycle. Leader sessions are not
-                // teammates, so this no-ops. TS: `useInboxPoller.ts:594` +
-                // `syncTeammateMode` (`teamHelpers.ts:397`).
+                // teammates, so this no-ops.
                 if coco_coordinator::identity::is_teammate()
                     && let Some(team) = coco_coordinator::identity::get_team_name()
                     && let Some(agent) = coco_coordinator::identity::get_agent_name()
@@ -1742,8 +1705,7 @@ async fn run_agent_driver(
                 // Leader responding to a teammate's plan-approval
                 // request. Write a `PlanApprovalResponse` envelope into
                 // the teammate's inbox; their `poll_teammate_approval`
-                // picks it up on the next turn boundary. TS parity:
-                // leader-side resolution of `ExitPlanModeV2Tool.ts:137-141`.
+                // picks it up on the next turn boundary.
                 let team_name = match env::var(EnvKey::CocoTeamName) {
                     Ok(t) if !t.is_empty() => t,
                     _ => {
@@ -1818,8 +1780,7 @@ async fn run_agent_driver(
                 // Apply any rule additions the user authorized
                 // ("Always Allow" or future destination-picker
                 // selections) BEFORE resolving the bridge. Order
-                // matches TS `applyPermissionUpdate` →
-                // `persistPermissionUpdates` so subsequent same-tool
+                // Order: apply before resolving bridge so subsequent same-tool
                 // calls within the turn pick up the rule.
                 if pending_entry.is_some() && approved && !permission_updates.is_empty() {
                     let updates_for_apply = permission_updates.clone();
@@ -1830,7 +1791,6 @@ async fn run_agent_driver(
                             // run the typed apply helper, write the
                             // mutated maps back. `apply_permission_updates`
                             // is the single source of truth for rule
-                            // mutation (TS `PermissionUpdate.ts`); we
                             // never edit the maps inline so audit logs
                             // and persistence consumers see one shape.
                             let ctx = coco_types::ToolPermissionContext {
@@ -1866,9 +1826,8 @@ async fn run_agent_driver(
                     // Persist updates whose destination wires to a
                     // settings.json layer (User / Project / Local).
                     // Session / CliArg / Command destinations are
-                    // in-memory only — matches TS
-                    // `persistPermissionUpdates` which no-ops on
-                    // non-persistable destinations.
+                    // in-memory only — session/CliArg/Command destinations
+                    // are not persisted.
                     //
                     // The inline dialog's "don't ask again" now emits a
                     // `LocalSettings` update, so this persists the rule to
@@ -1894,12 +1853,11 @@ async fn run_agent_driver(
                         }
                     }
 
-                    // TS `command_permissions` carries command-scoped
-                    // allowed tools. Do not encode deny/ask/reset events
-                    // as `allowedTools`. TS parity:
-                    // `processSlashCommand.tsx:909` emits one
-                    // `command_permissions` attachment per slash-command
-                    // invocation — event-stream semantics, not a snapshot.
+                    // `command_permissions` carries command-scoped allowed
+                    // tools. Do not encode deny/ask/reset events as
+                    // `allowedTools`. One `command_permissions` attachment
+                    // is emitted per slash-command invocation — event-stream
+                    // semantics, not a snapshot.
                     let mut allowed_tools = Vec::new();
                     for update in &permission_updates {
                         if let coco_types::PermissionUpdate::AddRules { rules, destination } =
@@ -1946,8 +1904,7 @@ async fn run_agent_driver(
                 // `applied_updates` are forwarded so audit/logging
                 // downstream sees the user's intent. Stale request_ids
                 // (already resolved or timed-out) are logged and
-                // dropped — TS does the same when a prompt closes
-                // after the engine moved on.
+                // dropped when stale (already resolved or timed-out).
                 if let Some(entry) = pending_entry {
                     let resolved = coco_cli::tui_permission_bridge::send_resolution(
                         entry,
@@ -2006,12 +1963,10 @@ async fn run_agent_driver(
             }
 
             UserCommand::FireIdleNotification { message } => {
-                // TS parity (`REPL.tsx:3934-3937` →
-                // `services/notifier.ts::sendNotification`): the TUI
-                // detected an idle window past
-                // `messageIdleNotifThresholdMs`; route through the
-                // hook orchestrator so registered `Notification`
-                // hooks fire with `notification_type = "idle_prompt"`.
+                // The TUI detected an idle window past the idle threshold;
+                // route through the hook orchestrator so registered
+                // `Notification` hooks fire with
+                // `notification_type = "idle_prompt"`.
                 let registry = runtime.hook_registry();
                 let factory = runtime.orchestration_ctx_factory();
                 let ctx = (factory)();
@@ -2035,8 +1990,8 @@ async fn run_agent_driver(
                 // Ctrl+B single press: flip every foreground BgAgent /
                 // Shell row to backgrounded server-side. The TUI mirror
                 // in `session.subagents` is updated optimistically inside
-                // `TuiCommand::BackgroundAllTasks` (update.rs) — TS aligns
-                // here: foreground→background is a UI-state transition,
+                // `TuiCommand::BackgroundAllTasks` (update.rs) — foreground→background
+                // is a UI-state transition,
                 // not a task lifecycle event, so no `task/*` wire event
                 // fires now. The eventual real `task/completed` (with
                 // `output_file` populated) flows when the bg task
@@ -2106,17 +2061,15 @@ async fn run_agent_driver(
         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
         drain_pending_memory_extraction(&runtime).await;
     }
-    // G8: re-append metadata one more time at process-exit so the
-    // tail window of the final transcript JSONL definitely carries
-    // the user's title/tag/agent-name. TS parity: cleanup handler in
-    // `utils/sessionStorage.ts:457` calls `reAppendSessionMetadata`
-    // from the process-exit hook. Best-effort — IO errors here are
-    // logged but don't propagate out of the driver.
+    // Re-append metadata one more time at process-exit so the tail window
+    // of the final transcript JSONL definitely carries the user's
+    // title/tag/agent-name. Best-effort — IO errors here are logged but
+    // don't propagate out of the driver.
     {
         let session_id = runtime.current_session_id().await;
         let mgr = Arc::clone(&runtime.session_manager);
-        // TS `saveMode` parity: snapshot the session's coordinator-mode
-        // state at the exit checkpoint so `--resume` re-derives it via
+        // Snapshot the session's coordinator-mode state at the exit
+        // checkpoint so `--resume` re-derives it via
         // `reconcile_on_resume`. Gated on agent-teams so non-team
         // transcripts stay clean. `Option<&'static str>` is Send → moved
         // into the blocking closure alongside the re-append.
@@ -2148,15 +2101,11 @@ async fn run_agent_driver(
 
 /// Wait up to `coco_memory::service::extract::DEFAULT_DRAIN_TIMEOUT`
 /// (60s) for an in-flight extraction fork to finish before the session
-/// shuts down. TS parity: `print.ts` awaits
-/// `drainPendingExtraction(60_000)` before emitting the lifecycle exit.
-/// Silently no-ops when `Feature::AutoMemory` is off (no runtime).
+/// shuts down. Silently no-ops when `Feature::AutoMemory` is off.
 ///
 /// Covers all three memory subagents:
-/// - **Extract** (`drain` polling, 60s default, TS
-///   `drainPendingExtraction(60_000)`).
-/// - **Session memory** (`wait_for_extraction`, 15s default, TS
-///   `waitForSessionMemoryExtraction`). An in-flight SM fork that
+/// - **Extract** (`drain` polling, 60s default).
+/// - **Session memory** (`wait_for_extraction`, 15s default). An in-flight SM fork that
 ///   doesn't drain leaves a half-written `summary.md` that the next
 ///   compact reads as truth.
 /// - **Dream** is intentionally NOT drained — the PID-lock + rollback
@@ -2255,19 +2204,16 @@ enum SlashOutcome {
     /// `runtime.session_manager.toggle_tag(session_id, &tag)`.
     TriggerTag { tag: String },
     /// Push `path` onto the engine's `session_additional_dirs` so the
-    /// next turn's permission context sees the wider scope. TS:
-    /// `useWorkingDirectories` REPL hook reacting to `/add-dir`.
+    /// next turn's permission context sees the wider scope.
     TriggerAddDir { path: String },
     /// Open a concrete session plan file through the same external
     /// editor terminal handoff used by prompt and memory editing.
     TriggerOpenPlanEditor { path: std::path::PathBuf },
     /// Rebuild the slash-command registry from disk and atomically
-    /// swap. Triggered by `/reload-plugins`. TS:
-    /// `useManagePlugins.refreshActivePlugins`.
+    /// swap. Triggered by `/reload-plugins`.
     TriggerReloadPlugins,
     /// Reload the live `HookRegistry` from the latest `RuntimeConfig`
-    /// snapshot. Triggered by `/hooks reload`. TS:
-    /// `updateHooksConfigSnapshot()` (`utils/hooks/hooksConfigSnapshot.ts`).
+    /// snapshot. Triggered by `/hooks reload`.
     /// Slash commands run only at turn boundaries (the dispatch loop
     /// `drain_active_turn`s before invoking them), so
     /// PreToolUse/PostToolUse for an in-flight call cannot see
@@ -2409,9 +2355,8 @@ async fn dispatch_resume(
                 "slash resume: hydrating session",
             );
             hydrate_resume_plan(&plan, runtime, event_tx).await;
-            // Reconcile coordinator mode to the resumed session, same as the
-            // startup path (TS `matchSessionMode` is wired into the REPL
-            // resume too). Runs at a turn boundary, so the env flip is
+            // Reconcile coordinator mode to the resumed session. Runs at a
+            // turn boundary, so the env flip is
             // observed by the next prompt assembly.
             if let Some(warning) = coco_cli::coordinator_mode_resume::reconcile_on_resume(
                 plan.conversation.mode.as_deref(),
@@ -2495,9 +2440,7 @@ async fn load_resume_plan_for_target(
 }
 
 /// Case-insensitive exact resolve of `/resume <name>` when the
-/// argument doesn't match any session id directly. TS parity:
-/// `searchSessionsByCustomTitle(arg, { exact: true })` in
-/// `commands/resume/resume.tsx:244-262`.
+/// argument doesn't match any session id directly.
 ///
 /// Returns the unique session on a 1-match (after project filtering),
 /// or bails with a diagnostic listing the top-N candidates. The
@@ -2752,10 +2695,8 @@ enum SlashFollowup {
 }
 
 /// Process a [`SlashOutcome`] into a [`SlashFollowup`] for the
-/// caller. Eats the 9 trigger variants in one place so the dispatch
-/// arms in `run_agent_loop` no longer triple-duplicate the same
-/// match. TS parity: `processSlashCommand.tsx` has a single dispatch
-/// point per command-type, not three.
+/// caller. Handles the trigger variants in one place so the dispatch
+/// arms in `run_agent_loop` no longer triple-duplicate the same match.
 async fn handle_slash_outcome(
     outcome: SlashOutcome,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -3111,14 +3052,12 @@ async fn dispatch_slash_command(
 ) -> SlashOutcome {
     // Runtime-state-aware commands intercepted before registry lookup:
     // their behavior depends on per-session state (session_id, plan
-    // file, app_state) that the static registry can't carry. TS:
-    // `commands/plan/plan.tsx` reads `appState.toolPermissionContext`
-    // + `getPlan()` / `getPlanFilePath()` directly.
+    // file, app_state) that the static registry can't carry.
     if matches!(name, "plan" | "planning") {
         return dispatch_plan(args, runtime, event_tx).await;
     }
     // `/permissions` (no arg) / `/permissions list` — open the tabbed
-    // rule-editor overlay (TS `<PermissionRuleList>`). The subcommand
+    // rule-editor overlay. The subcommand
     // forms (`allow` / `deny` / `reset`) keep their session-mutation
     // behavior below for power users + SDK parity.
     if name == "permissions" && matches!(args.trim(), "" | "list") {
@@ -3152,8 +3091,7 @@ async fn dispatch_slash_command(
     // of letting a registry text handler print without clearing.
     // Resolve aliases (`/reset`, `/new`) to the canonical `clear` name
     // first so they trigger the same flow instead of falling through to
-    // the generic registry handler. TS parity: `commands/clear/index.ts`
-    // declares aliases `['reset', 'new']`.
+    // the generic registry handler (`clear` declares aliases `['reset', 'new']`).
     let resolves_to_clear = runtime
         .current_command_registry()
         .await
@@ -3166,8 +3104,8 @@ async fn dispatch_slash_command(
         return dispatch_context(runtime, event_tx).await;
     }
     // `/config` (alias `/settings`) with no args opens the interactive settings
-    // panel (TS `commands/config` local-jsx panel), reusing the same overlay as
-    // the `Ctrl+,` keybind. `config <key> <value>` still falls through to the
+    // panel, reusing the same overlay as the `Ctrl+,` keybind. `config <key>
+    // <value>` still falls through to the
     // registry text handler that writes settings.json.
     if matches!(name, "config" | "settings") && args.trim().is_empty() {
         let _ = event_tx
@@ -3180,7 +3118,7 @@ async fn dispatch_slash_command(
     }
     // `/copy [N]` — the picker + arg-parsing + lookback logic lives in
     // the TUI (only it owns the transcript view); the dispatcher just
-    // hands off the raw args. TS parity: `commands/copy/copy.tsx`.
+    // hands off the raw args.
     if name == "copy" {
         let _ = event_tx
             .send(CoreEvent::Tui(TuiOnlyEvent::CopyCommandRequested {
@@ -3201,7 +3139,7 @@ async fn dispatch_slash_command(
     }
     // `/rewind` flows through the standard registry → handler →
     // `DialogSpec::MessageSelector` → `OpenRewindPicker` path. The
-    // handler ignores args to match TS; this dispatcher does only the
+    // handler ignores args; this dispatcher does only the
     // mechanical translation in the generic `DialogSpec` arm below.
 
     // Snapshot once per dispatch — `/reload-plugins` may swap the
@@ -3214,7 +3152,7 @@ async fn dispatch_slash_command(
     let Some(handler) = cmd.handler.as_ref() else {
         // Registered shell with no handler. For Prompt-type commands the
         // safe default is to fall through to the model so it sees the
-        // raw `/foo` — TS does the same when the loader returns nothing.
+        // raw `/foo` — safe default when the loader returns nothing.
         // Local-type commands genuinely need a handler; surface a
         // breadcrumb so the user knows the command is mis-wired.
         if matches!(cmd.command_type, coco_types::CommandType::Prompt(_)) {
@@ -3486,10 +3424,9 @@ async fn dispatch_slash_command(
 
 /// Pure decision used by `dispatch_plan`: after a `/plan <description>`
 /// successfully flips into plan mode, should the slash command fire a
-/// query for the description? TS parity: `commands/plan/plan.tsx:84-89`
-/// — `description && description !== 'open'` selects `shouldQuery: true`.
-/// Returns `Some(trimmed_description)` when a query should fire, else
-/// `None`. Pure so the TS-parity rule is regression-tested without a
+/// query for the description? Returns `Some(trimmed_description)` when a
+/// query should fire (`description` is non-empty and not `"open"`), else
+/// `None`. Pure so this rule is regression-tested without a
 /// `SessionRuntime` fixture.
 fn plan_command_query_after_flip(args: &str) -> Option<&str> {
     let trimmed = args.trim();
@@ -3502,21 +3439,19 @@ fn plan_command_query_after_flip(args: &str) -> Option<&str> {
 
 /// `/plan` dispatch with full session-runtime context.
 ///
-/// Mirrors TS `commands/plan/plan.tsx:64-121` byte-for-byte intent:
-/// typing `/plan` IS the consent to enter plan mode, so the dispatcher
+/// Typing `/plan` IS the consent to enter plan mode, so the dispatcher
 /// flips state directly via the same dual-write path
 /// `UserCommand::SetPermissionMode` uses (engine_config + app_state)
 /// plus the plan-mode-specific patch (`pre_plan_mode`,
 /// `plan_mode_entry_ms`, `needs_plan_mode_exit_attachment` cleared).
 /// The model never sees a redundant `EnterPlanMode` Yes/No dialog.
 ///
-/// Per-arg behaviour matches TS:
+/// Per-arg behaviour:
 /// - `""`         → flip if needed, then show current plan or hint
 /// - `"open"`     → flip if needed, ensure file, launch `$EDITOR`/`vi`
 /// - `<description>` → flip if needed; if state changed, fire a query
-///   with the description (TS `shouldQuery: true`); if already in
-///   plan mode, ignore the description and show the plan (TS lines
-///   92-119).
+///   with the description; if already in plan mode, ignore the
+///   description and show the plan.
 async fn dispatch_plan(
     args: &str,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -3533,11 +3468,9 @@ async fn dispatch_plan(
         .as_deref();
     let plans_dir = session_plans_dir(&runtime.config_home, project_dir, plans_directory_setting);
 
-    // TS `commands/plan/plan.tsx:70-91` reads `appState.toolPermissionContext.mode`
-    // first; coco-rs does the same — live cross-turn state
-    // (`app_state.permission_mode`) wins when present, else fall
-    // back to the engine_config value (covers the "app_state not yet
-    // primed" case at the start of a fresh session).
+    // Live cross-turn state (`app_state.permission_mode`) wins when
+    // present, else fall back to the engine_config value (covers the
+    // "app_state not yet primed" case at the start of a fresh session).
     let live_app_mode = runtime.app_state.read().await.permission_mode;
     let prev_mode = match live_app_mode {
         Some(m) => m,
@@ -3545,10 +3478,9 @@ async fn dispatch_plan(
     };
     let was_in_plan = prev_mode == coco_types::PermissionMode::Plan;
 
-    // TS `commands/plan/plan.tsx:73-82` flips state for ALL `/plan`
-    // invocations when not already in plan mode — bare `/plan`,
-    // `/plan open`, and `/plan <description>` all consent to plan
-    // mode equally.
+    // Flip state for ALL `/plan` invocations when not already in plan
+    // mode — bare `/plan`, `/plan open`, and `/plan <description>` all
+    // consent to plan mode equally.
     if !was_in_plan {
         runtime
             .update_engine_config(|cfg| cfg.permission_mode = coco_types::PermissionMode::Plan)
@@ -3562,7 +3494,7 @@ async fn dispatch_plan(
             session_id = %session_id,
             from = ?prev_mode,
             to = ?coco_types::PermissionMode::Plan,
-            "TUI /plan: direct-toggle to Plan mode (TS commands/plan/plan.tsx parity)",
+            "TUI /plan: direct-toggle to Plan mode",
         );
     }
 
@@ -3609,11 +3541,9 @@ async fn dispatch_plan(
     }
 
     // `/plan <description>` —
-    // - TS lines 73-91: flipped to plan mode → fire query with the
-    //   user input (`shouldQuery: true`). coco-rs returns
-    //   `RunEngine { content: <description> }`.
-    // - TS lines 92-119: already in plan mode → ignore the
-    //   description, just show the plan. coco-rs matches.
+    // - Flipped to plan mode → fire query with the user input.
+    //   Returns `RunEngine { content: <description> }`.
+    // - Already in plan mode → ignore the description, just show the plan.
     if was_in_plan {
         let content = coco_context::get_plan(&session_id, &plans_dir, /*agent_id*/ None);
         let text = match content {
@@ -3644,10 +3574,8 @@ async fn dispatch_plan(
 /// In-flight turn handle. Each `SubmitInput` / `ExecuteSkill` spawns
 /// the engine call into a child task so the `command_rx` recv loop stays
 /// responsive (Interrupt / ClearConversation / Compact / Rewind / Shutdown
-/// can reach their arms while the engine runs). TS:
-/// `screens/REPL.tsx`'s React event loop fires `abortController.abort()`
-/// "concurrently" with engine work — JS cooperative-async makes that
-/// natural; Rust needs an explicit `tokio::spawn`.
+/// can reach their arms while the engine runs). Rust's explicit
+/// `tokio::spawn` keeps the recv loop unblocked.
 struct ActiveTurn {
     id: uuid::Uuid,
     task: tokio::task::JoinHandle<()>,
@@ -3667,11 +3595,9 @@ struct ActiveTurn {
 /// with a corpse `JoinHandle` until the next user command forces
 /// `drain_active_turn()` to collect it.
 ///
-/// Mirrors TS `screens/REPL.tsx:2887-3023` `try { onQueryImpl(...) }
-/// finally { queryGuard.end(...) }` — `Drop` runs on both normal
-/// scope-exit and panic unwind. `try_send` is non-blocking and safe
-/// in `Drop`; the receiver is drained promptly so the bounded channel
-/// (buffer 16) should never be full in practice.
+/// `Drop` runs on both normal scope-exit and panic unwind. `try_send`
+/// is non-blocking and safe in `Drop`; the receiver is drained promptly
+/// so the bounded channel (buffer 16) should never be full in practice.
 struct TurnDoneGuard {
     turn_id: uuid::Uuid,
     tx: mpsc::Sender<uuid::Uuid>,
@@ -3794,7 +3720,7 @@ async fn drain_completed_turn(slot: &Arc<Mutex<Option<ActiveTurn>>>, turn_id: uu
 /// Run a manual full LLM compaction. Used by `UserCommand::Compact` and
 /// the slash dispatcher's `TriggerCompact` outcome — both routes feed
 /// through here so typed `/compact` and palette `/compact` behave
-/// identically. TS: `commands/compact/compact.ts:40`.
+/// identically.
 async fn run_manual_compact(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
@@ -3841,7 +3767,7 @@ async fn run_manual_compact_inner(
 }
 
 /// Run the clear flow. Drains any active turn first since clear mutates
-/// session_id + resets several per-session caches. TS: `clearConversation()`.
+/// session_id + resets several per-session caches.
 ///
 /// Plan I-1 (Authority): emits a wire-visible event after the clear so
 /// the TUI's `TranscriptView` and SDK NDJSON observers stay coherent.
@@ -3867,7 +3793,7 @@ async fn run_clear_conversation(
 
 /// Force auto-memory consolidation now (skips the three-gate scheduler).
 /// Mirrors the SDK runner's `/dream` short-circuit. Silently no-ops
-/// when `Feature::AutoMemory` is off — matches TS.
+/// when `Feature::AutoMemory` is off.
 ///
 /// Uses [`coco_memory::DreamService::force`] so the time / session /
 /// scan-throttle gates are bypassed; the PID + mtime CAS lock is still
@@ -3898,10 +3824,10 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
     };
     let history_msgs = runtime.history.lock().await.as_slice().to_vec();
     let tokens = coco_messages::estimate_tokens_for_messages(&history_msgs);
-    // TS parity (`sessionMemory.ts:441-442`): manual /summary still
-    // walks history to decide whether to advance the safely-summarized
-    // cursor. last_message_id is the latest history uuid; the cursor
-    // only advances inside `force` when the previous assistant turn
+    // Manual /summary still walks history to decide whether to advance
+    // the safely-summarized cursor. last_message_id is the latest history
+    // uuid; the cursor only advances inside `force` when the previous
+    // assistant turn
     // had no tool calls.
     let last_msg_id = history_msgs
         .last()
@@ -3918,8 +3844,7 @@ async fn run_session_memory_force(runtime: &Arc<crate::session_runtime::SessionR
 /// Fast-role auto-generated), persists it via
 /// [`coco_cli::session_rename::persist_rename`] (writes both
 /// `CustomTitle` + `AgentName` and patches the PID registry), and
-/// surfaces a single system-line confirmation. TS parity:
-/// `commands/rename/rename.ts`.
+/// surfaces a single system-line confirmation.
 async fn run_session_rename(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
@@ -3928,8 +3853,7 @@ async fn run_session_rename(
     use coco_cli::session_rename::auto_generate_session_name;
     use coco_cli::session_rename::persist_rename;
 
-    // Teammate guard — names are set by the team leader (TS parity:
-    // `rename.ts:27` `if (isTeammate()) onDone(...) return`).
+    // Teammate guard — names are set by the team leader.
     if coco_coordinator::identity::is_teammate() {
         emit_slash_text(
             event_tx,
@@ -3943,8 +3867,7 @@ async fn run_session_rename(
     }
 
     // Resolve the new name. `Auto` runs the Fast-role generator
-    // against `messages_after_compact_boundary` (TS:
-    // `getMessagesAfterCompactBoundary(context.messages)`).
+    // against `messages_after_compact_boundary`.
     let name = match request {
         coco_commands::ParsedRename::Explicit(n) => n,
         coco_commands::ParsedRename::Auto => match auto_generate_session_name(runtime).await {
@@ -3973,8 +3896,7 @@ async fn run_session_rename(
 /// `/reload-plugins` runner — rescans plugin + skill dirs and
 /// atomically swaps the active `CommandRegistry`. Snapshots taken by
 /// in-flight dispatches stay valid (they hold the prior `Arc`); the
-/// swap is observed by the next dispatch. TS:
-/// `useManagePlugins.refreshActivePlugins`.
+/// swap is observed by the next dispatch.
 ///
 /// After the swap we also push the fresh visible-command list to the
 /// TUI via [`TuiOnlyEvent::AvailableCommandsRefreshed`] so the `/`
@@ -3986,11 +3908,10 @@ async fn run_reload_plugins(
 ) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let count = runtime.reload_plugins(&cwd).await;
-    // TS `refreshActivePlugins` rebuilds commands AND agents AND hooks in one
-    // action — chain the agent-catalog + hook reloads so `/reload-plugins` also
-    // picks up newly enabled/disabled plugin agents and hooks, not just commands
-    // + skills. MCP/LSP re-register is deferred (needs the MCP connection
-    // manager threaded into SessionRuntime).
+    // Chain the agent-catalog + hook reloads so `/reload-plugins` also
+    // picks up newly enabled/disabled plugin agents and hooks, not just
+    // commands + skills. MCP/LSP re-register is deferred (needs the MCP
+    // connection manager threaded into SessionRuntime).
     runtime.reload_agent_catalog().await;
     runtime.reload_lsp_servers(&cwd).await;
     let hook_note = match runtime.reload_hooks().await {
@@ -4009,8 +3930,7 @@ async fn run_reload_plugins(
 }
 
 /// `/hooks reload` runner — rebuild the live `HookRegistry` from the
-/// latest `RuntimeConfig` snapshot. TS parity:
-/// `updateHooksConfigSnapshot()`.
+/// latest `RuntimeConfig` snapshot.
 async fn run_reload_hooks(
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
@@ -4025,7 +3945,7 @@ async fn run_reload_hooks(
 /// `/add-dir <abs-path>` runner — pushes the (already-validated)
 /// absolute path onto `engine_config.session_additional_dirs` so the
 /// next turn's `ToolPermissionContext.additional_dirs` carries it.
-/// Source is `Session` (TS parity) — never persisted to settings.json.
+/// Source is `Session` — never persisted to settings.json.
 async fn run_add_working_dir(runtime: &Arc<crate::session_runtime::SessionRuntime>, path: &str) {
     let path_owned = path.to_string();
     runtime
@@ -4074,12 +3994,10 @@ async fn run_session_tag(
 /// `None` for non-mutating args so the caller falls through.
 /// `/color <name|default>` — set the prompt bar color for this session.
 ///
-/// TS parity: `commands/color/color.ts` — the same `RESET_ALIASES`, the
-/// same teammate guard, the same error messages. Persists to the live
-/// `ToolAppState.agent_color` so the prompt-bar UI sees the change
-/// without a session restart. Returns `None` for the empty-args case so
-/// the registry handler still produces the "Available colors: …"
-/// listing.
+/// Persists to the live `ToolAppState.agent_color` so the prompt-bar UI
+/// sees the change without a session restart. Returns `None` for the
+/// empty-args case so the registry handler still produces the
+/// "Available colors: …" listing.
 async fn dispatch_color(
     args: &str,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
@@ -4104,11 +4022,11 @@ async fn dispatch_color(
     if trimmed.is_empty() {
         // Empty args fall through to the registry handler, which
         // produces the canonical "Please provide a color..." listing
-        // (identical to TS empty-args output).
+        // (identical to the registry handler's empty-args output).
         return None;
     }
 
-    // Reset aliases mirror `commands/color/color.ts:18`.
+    // Reset aliases.
     const RESET_ALIASES: &[&str] = &["default", "reset", "none", "gray", "grey"];
     let lower = trimmed.to_ascii_lowercase();
     if RESET_ALIASES.contains(&lower.as_str()) {
@@ -4371,11 +4289,10 @@ async fn process_submit_turn(
     session_id: String,
     turn_abort: TurnAbortSignal,
 ) {
-    // Resolve @-mentions through the shared cross-path helper.
-    // TS parity: `processUserInput.ts:504` calls `getAttachmentMessages`
-    // which produces both file-attachment system-reminders and
-    // changed-file notifications. The same pipeline now feeds headless
-    // and SDK paths via `coco_cli::at_mention_turn::resolve_turn_inputs`.
+    // Resolve @-mentions through the shared cross-path helper (produces
+    // both file-attachment system-reminders and changed-file notifications).
+    // The same pipeline feeds headless and SDK paths via
+    // `coco_cli::at_mention_turn::resolve_turn_inputs`.
     let cwd = std::env::current_dir().unwrap_or_default();
     let user_uuid =
         uuid::Uuid::parse_str(&user_message_id).unwrap_or_else(|_| uuid::Uuid::new_v4());
@@ -4394,12 +4311,11 @@ async fn process_submit_turn(
     // same TurnStarted.
     let cycle_turn_id = coco_types::TurnId::generate();
 
-    // TS parity (`processUserInput.ts:182-263`): fire UserPromptSubmit
-    // hooks BEFORE building the engine. Output queues onto the shared
-    // sync-hook buffer so the next turn surfaces `hook_*` reminders;
-    // a blocking_error suppresses the turn and surfaces a
-    // TurnEnded(Failed); prevent_continuation keeps the prompt but
-    // skips the engine.
+    // Fire UserPromptSubmit hooks BEFORE building the engine. Output
+    // queues onto the shared sync-hook buffer so the next turn surfaces
+    // `hook_*` reminders; a blocking_error suppresses the turn and
+    // surfaces a TurnEnded(Failed); prevent_continuation keeps the
+    // prompt but skips the engine.
     let prompt_hook_result = runtime.fire_user_prompt_submit_hooks(&content).await;
     if let Some(blocking) = &prompt_hook_result.blocking_error {
         let warning = format!(
@@ -4495,13 +4411,11 @@ async fn process_submit_turn(
     let (core_event_tx, mut core_event_rx) = mpsc::channel::<CoreEvent>(256);
     let event_tx_clone = event_tx.clone();
     // Capture refs into the forwarder so it can fire a metadata
-    // re-append whenever a compaction completes mid-turn (G8). TS
-    // parity: `services/compact/compact.ts:711, 1057` calls
-    // `reAppendSessionMetadata()` right after both the manual and
-    // reactive compact paths. coco-rs's engine emits a single
-    // `ContextCompacted` event from all three compact sites
-    // (manual / reactive / microcompact), so observing the event in
-    // the forwarder catches every variant without per-path hooks.
+    // re-append whenever a compaction completes mid-turn (G8). The
+    // engine emits a single `ContextCompacted` event from all three
+    // compact sites (manual / reactive / microcompact), so observing
+    // the event in the forwarder catches every variant without
+    // per-path hooks.
     let session_manager_for_forward = Arc::clone(&runtime.session_manager);
     let session_id_for_forward = session_id.clone();
     let forward_handle = tokio::spawn(async move {
@@ -4566,7 +4480,7 @@ async fn process_submit_turn(
     // - the engine observed cancel mid-loop and returned `Ok(cancelled=true)`
     //   (clean cancel path), or
     // - the user-cancel raced the engine and arrived after Ok return
-    //   (late-cancel path — TS REPL.tsx `.finally` analog).
+    //   (late-cancel path).
     //
     // The reason comes from `turn_abort.reason()` — `UserCommand::Interrupt`
     // sets `UserCancel`; `drain_active_turn` sets `SystemPreempt`. When
@@ -4696,7 +4610,6 @@ async fn handle_auto_truncate(
 
 /// Explicit `/rewind` command driver — picker-confirmed.
 ///
-/// TS: REPL.tsx `rewindConversationTo()` + `fileHistoryRewind()`.
 /// Branches on `restore_type`:
 ///
 /// - `Both` / `CodeOnly` — `file_history.rewind()` restores files.
@@ -4732,8 +4645,7 @@ async fn handle_rewind(
     );
 
     // Summarize variants: dispatch to partial_compact_conversation
-    // and replace the history with the resulting messages. TS:
-    // `screens/REPL.tsx:4918-4988` (`onSummarize` branch).
+    // and replace the history with the resulting messages.
     if matches!(
         restore_type,
         RestoreType::SummarizeFrom { .. } | RestoreType::SummarizeUpTo { .. }
@@ -4743,10 +4655,9 @@ async fn handle_rewind(
     }
 
     // Code rewind (file restore)
-    // TS: fileHistoryRewind() in REPL.tsx onRestoreCode prop
     // CodeOnly + Both restore files; Summarize variants do NOT
-    // restore files (TS parity: summarize keeps the workspace
-    // intact, only the conversation is rewritten).
+    // restore files — summarize keeps the workspace intact, only
+    // the conversation is rewritten.
     if matches!(restore_type, RestoreType::Both | RestoreType::CodeOnly)
         && let Some(fh) = file_history
     {
@@ -4775,7 +4686,6 @@ async fn handle_rewind(
     // Conversation rewind: truncate the agent-side history at the
     // target message, emit TuiOnlyEvent so the TUI mirrors the
     // truncate on its display side.
-    // TS: rewindConversationTo() + restoreMessageSync() in REPL.tsx
     let should_truncate = matches!(
         restore_type,
         RestoreType::Both | RestoreType::ConversationOnly
@@ -4799,7 +4709,6 @@ async fn handle_rewind(
                     files_changed,
                     "Explicit rewind: truncated history",
                 );
-                // TS `tengu_conversation_rewind` (`screens/REPL.tsx:3665-3670`).
                 coco_otel::events::emit_conversation_rewind(
                     pre_count as i64,
                     h.len() as i64,
@@ -4844,9 +4753,7 @@ async fn handle_rewind(
             .await;
     }
 
-    // Protocol-level event for SDK consumers (Phase 3.2). Coco-rs ext
-    // — TS doesn't emit a wire event for rewind because the React
-    // state-update is the source of truth.
+    // Protocol-level event for SDK consumers (Phase 3.2).
     let _ = event_tx
         .send(CoreEvent::Protocol(ServerNotification::RewindCompleted(
             coco_types::RewindCompletedParams {
@@ -4862,9 +4769,7 @@ async fn handle_rewind(
 /// rewind options, replace the agent history with the result, and
 /// emit a TUI signal to mirror the truncation in the display.
 ///
-/// TS: `screens/REPL.tsx:4918-4988` (`onSummarize`). Direction
-/// mapping: `SummarizeFrom` ↔ TS `'from'` (== `Newest` in coco-rs);
-/// `SummarizeUpTo` ↔ TS `'up_to'` (== `Oldest` in coco-rs).
+/// Direction mapping: `SummarizeFrom` == `Newest`; `SummarizeUpTo` == `Oldest`.
 async fn handle_summarize_rewind(
     restore_type: &coco_tui::state::RestoreType,
     message_id: &str,
@@ -5024,7 +4929,7 @@ fn spawn_auto_title_task(runtime: Arc<crate::session_runtime::SessionRuntime>, p
 /// catalog is anchored at `coco-tui` and can't be reached from
 /// `coco-cli`).
 ///
-/// Steps (mirror TS `cli_inner_pretty.js:476991-477016` save flow):
+/// Steps:
 ///
 /// - Atomic write to `.coco/settings.local.json` via
 ///   [`coco_config::LocalSettingsWriter::write_local`] — the writer
@@ -5122,8 +5027,7 @@ fn save_error_kind(e: &coco_config::SettingsWriteError) -> coco_types::SkillOver
 /// shape coco-rs uses for system-reminder image attachments) so we
 /// encode once at the bridge and the engine ships it through unchanged.
 ///
-/// MIME defaults to `image/png` when missing — matches TS
-/// `attachments.ts:1119-1121` (`media_type ?? 'image/png'`).
+/// MIME defaults to `image/png` when missing.
 fn image_data_to_queued(images: &[coco_tui::ImageData]) -> Vec<QueuedImage> {
     use base64::Engine;
     images
@@ -5313,8 +5217,7 @@ fn build_system_message_from_push_kind(kind: coco_tui::SystemPushKind) -> coco_m
     coco_messages::Message::System(sys)
 }
 
-/// Run a prompt-mode bash submission (`!ls -la`). Mirrors TS's
-/// `LocalShellTask` semantics: the model loop is bypassed entirely;
+/// Run a prompt-mode bash submission (`!ls -la`). The model loop is bypassed entirely;
 /// the command runs once in the session cwd via [`coco_shell::ShellExecutor`]
 /// and the merged stdout+stderr is folded back into the transcript as a
 /// `MessageContent::BashOutput`.
@@ -5532,8 +5435,7 @@ async fn prepare_agent_create(
     Ok(blocking)
 }
 
-/// Build the markdown body written by the create wizard. Mirrors the
-/// minimal TS template — frontmatter carries the wizard inputs plus
+/// Build the markdown body written by the create wizard. Frontmatter carries the wizard inputs plus
 /// an auto-assigned color from the eight-color palette so new agents
 /// land with visual distinction in the Library list.
 fn build_agent_template(

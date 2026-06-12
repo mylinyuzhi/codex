@@ -12,7 +12,7 @@ use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
-// Auto-mode classifier projection (TS `WebFetchTool.toAutoClassifierInput`)
+// Auto-mode classifier projection (WebFetchTool.toAutoClassifierInput)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -42,7 +42,7 @@ fn test_webfetch_classifier_input_url_only_when_no_prompt() {
 }
 
 // ---------------------------------------------------------------------------
-// WebFetch per-domain permissions (TS `WebFetchTool.checkPermissions`)
+// WebFetch per-domain permissions (WebFetchTool.checkPermissions)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -405,12 +405,10 @@ async fn test_websearch_accepts_allowed_domains_alone() {
 
 // ── R7-T25: websearch prompt content checks ──
 //
-// TS `WebSearchTool/prompt.ts:5-33` `getWebSearchPrompt()` (surfaced via
-// the tool's `prompt()`) includes a "CRITICAL REQUIREMENT" block that the
+// The tool's `prompt()` includes a "CRITICAL REQUIREMENT" block that the
 // model MUST follow (always include a Sources section). Also injects the
 // current month/year so the model uses the right year for recent-events
-// queries. The short `description()` label only mirrors TS
-// `Claude wants to search the web for: ${query}`.
+// queries.
 #[tokio::test]
 async fn test_websearch_prompt_includes_sources_requirement() {
     use coco_tool_runtime::PromptOptions;
@@ -630,9 +628,8 @@ use super::is_preapproved_host;
 use super::is_preapproved_url;
 use super::resolve_redirect_url;
 
-/// Exact-hostname entries in TS match only their exact host (not
-/// subdomains, not parent domains). Verified against
-/// `preapproved.ts:154-166` `isPreapprovedHost`.
+/// Exact-hostname entries match only their exact host (not subdomains,
+/// not parent domains).
 #[test]
 fn test_is_preapproved_host_exact_hostname_match() {
     // `docs.python.org` is in the list as an exact entry.
@@ -645,9 +642,8 @@ fn test_is_preapproved_host_exact_hostname_match() {
     assert!(is_preapproved_url("https://huggingface.co"));
 }
 
-/// Subdomains of exact-hostname entries must NOT match. TS at
-/// `preapproved.ts:155` uses `HOSTNAME_ONLY.has(hostname)` which is an
-/// exact set lookup, not a suffix check.
+/// Subdomains of exact-hostname entries must NOT match — the lookup is
+/// exact, not a suffix check.
 #[test]
 fn test_is_preapproved_host_rejects_subdomains() {
     // `docs.python.org` is in the list but `sub.docs.python.org` is NOT.
@@ -661,7 +657,6 @@ fn test_is_preapproved_host_rejects_subdomains() {
 }
 
 /// Path-scoped entries (host + path-prefix) enforce segment boundary.
-/// TS `preapproved.ts:162` checks `pathname === p || pathname.startsWith(p + '/')`.
 /// `github.com/anthropics` must match `github.com/anthropics` and
 /// `github.com/anthropics/claude-code` but NOT `github.com/anthropics-evil`.
 #[test]
@@ -735,8 +730,8 @@ fn test_is_preapproved_host_vercel_docs_path_scoped() {
     assert!(!is_preapproved_url("https://vercel.com/docs-evil"));
 }
 
-/// WebFetchTool::check_permissions auto-allows a preapproved docs host
-/// (TS `WebFetchTool.ts:104-121`), short-circuiting the approval prompt.
+/// WebFetchTool::check_permissions auto-allows a preapproved docs host,
+/// short-circuiting the approval prompt.
 #[tokio::test]
 async fn test_webfetch_check_permissions_allows_preapproved_host() {
     let ctx = ToolUseContext::test_default();
@@ -810,14 +805,13 @@ fn test_check_redirect_metadata_service_blocked() {
 }
 
 // ---------------------------------------------------------------------------
-// R1 regression guards — TS `isPermittedRedirect` has FOUR checks, not one.
-// The round-2 verification found that my earlier check_redirect only
+// R1 regression guards — `isPermittedRedirect` has FOUR checks, not one.
+// The round-2 verification found that the earlier check_redirect only
 // implemented the host-equivalence check (#4). These tests lock in #1-#3.
 // ---------------------------------------------------------------------------
 
 /// R1-a: Protocol downgrade must be blocked. `https://example.com/` →
-/// `http://example.com/` is a clear TLS downgrade attempt. TS
-/// `utils.ts:220-222`.
+/// `http://example.com/` is a clear TLS downgrade attempt.
 #[test]
 fn test_check_redirect_protocol_downgrade_blocked() {
     let decision = check_redirect("https://example.com/", "http://example.com/");
@@ -836,10 +830,9 @@ fn test_check_redirect_protocol_upgrade_blocked() {
     assert!(matches!(decision, RedirectDecision::CrossOrigin { .. }));
 }
 
-/// R1-b: Port change on the same host must be blocked. This is the SSRF
-/// bug round-2 caught — without the port check, a malicious server at
-/// `example.com:443` could redirect to `example.com:9999` and bypass
-/// same-origin. TS `utils.ts:224-226`.
+/// R1-b: Port change on the same host must be blocked. Without the port
+/// check, a malicious server at `example.com:443` could redirect to
+/// `example.com:9999` and bypass same-origin.
 #[test]
 fn test_check_redirect_port_change_blocked() {
     let decision = check_redirect("https://example.com:443/", "https://example.com:9999/");
@@ -850,8 +843,7 @@ fn test_check_redirect_port_change_blocked() {
 }
 
 /// R1-b: Default port vs explicit default port compare equal. For HTTPS
-/// that's `example.com` == `example.com:443`. Tests the normalization in
-/// `split_host_port`.
+/// that's `example.com` == `example.com:443`.
 #[test]
 fn test_check_redirect_default_port_equals_implicit() {
     let decision = check_redirect("https://example.com/", "https://example.com:443/path");
@@ -875,7 +867,7 @@ fn test_check_redirect_same_explicit_port_allowed() {
 }
 
 /// R1-c: Redirect with userinfo (`user:pass@host`) must be blocked —
-/// the server is attempting credential injection. TS `utils.ts:228-230`.
+/// the server is attempting credential injection.
 #[test]
 fn test_check_redirect_with_userinfo_blocked() {
     let decision = check_redirect("https://example.com/", "https://attacker:pwd@example.com/");
@@ -1134,8 +1126,6 @@ fn test_resolve_redirect_relative_path() {
 
 // ---------------------------------------------------------------------------
 // render_for_model — picks the right body field per execution branch
-// TS parity: WebFetchTool.ts::mapToolResultToToolResultBlockParam emits the
-// `result` field; coco-rs splits into `extracted` / `content` / `message`.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1216,7 +1206,7 @@ fn test_persist_binary_content_writes_file() {
 }
 
 // ---------------------------------------------------------------------------
-// WebFetch schema requires both url and prompt (TS z.strictObject({url, prompt}))
+// WebFetch schema requires both url and prompt
 // ---------------------------------------------------------------------------
 
 #[test]

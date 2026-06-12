@@ -1,14 +1,13 @@
 //! Shell command execution in skill prompts.
 //!
-//! TS: executeShellCommandsInPrompt() in promptShellExecution.ts --
-//! executes shell commands embedded in skill / slash-command markdown
+//! Executes shell commands embedded in skill / slash-command markdown
 //! content before sending to the model.
 //!
-//! Both paths support the same two TS marker syntaxes:
+//! Both paths support the same two marker syntaxes:
 //! - Fenced bang block: ```` ```! command ``` ```` — whole block replaced
 //!   with the command's stdout.
 //! - Inline bang span: `` !`command` `` — replaced with stdout, but only
-//!   when the `!` is preceded by start-of-line or whitespace (TS uses a
+//!   when the `!` is preceded by start-of-line or whitespace (uses a
 //!   positive lookbehind; the `regex` crate has none, so the guard is a
 //!   manual char scan).
 //!
@@ -21,7 +20,7 @@
 //! 2. [`execute_shell_in_prompt_with_tool`] — the production path. Routes EACH
 //!    command through the injected [`BashToolHandle`], which performs the real
 //!    per-command permission check + Bash execution. A denied or failing
-//!    command ABORTS the whole expansion (`Err`) — mirroring TS
+//!    command ABORTS the whole expansion (`Err`) — mirroring
 //!    `MalformedCommandError`, which throws out of `Promise.all` and aborts
 //!    `getPromptForCommand` with no partial substitution.
 
@@ -45,19 +44,16 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// exists; it is injected into the command/skill handlers at session
 /// bootstrap.
 ///
-/// TS parity: `executeShellCommandsInPrompt` calls
-/// `hasPermissionsToUseTool(BashTool, { command }, ctx, …)` and then
-/// `BashTool.call({ command }, ctx)` for each marker. The handle folds
-/// both of those into one call.
+/// The handle folds both the permission check and the Bash execution into
+/// one call.
 #[async_trait]
 pub trait BashToolHandle: Send + Sync {
     /// Permission-check then execute `command` through the Bash tool.
     ///
     /// `allowed_tools` are the skill frontmatter `allowed-tools`
     /// entries, surfaced to the permission evaluator as
-    /// `alwaysAllowRules.command` (TS `loadSkillsDir.ts` injects them
-    /// into `toolPermissionContext.alwaysAllowRules.command`). Slash
-    /// commands pass an empty slice — only configured rules apply.
+    /// `alwaysAllowRules.command`. Slash commands pass an empty slice —
+    /// only configured rules apply.
     ///
     /// Returns the formatted stdout/stderr block to substitute on
     /// success, or an error message on permission-deny / execution
@@ -92,9 +88,8 @@ impl BashToolHandle for NoOpBashToolHandle {
 /// Returns the content with shell commands replaced by their output.
 ///
 /// # Security
-/// - MCP-sourced skills skip shell execution entirely (`skip_shell`),
-///   matching TS `loadSkillsDir.ts:374` (`loadedFrom !== 'mcp'`). MCP
-///   skills are remote and untrusted — their markdown body must never run
+/// - MCP-sourced skills skip shell execution entirely (`skip_shell`).
+///   MCP skills are remote and untrusted — their markdown body must never run
 ///   inline shell.
 /// - Commands inherit the current working directory.
 /// - Timeout prevents hanging commands.
@@ -105,8 +100,7 @@ pub async fn execute_shell_in_prompt(content: &str, skip_shell: bool) -> String 
 
     // Fenced bang blocks run first, then inline spans. Each pass works on
     // the output of the previous so a command's stdout is never re-scanned
-    // for further patterns (TS resolves all matches against the original
-    // text in parallel; sequential here is equivalent for non-overlapping
+    // for further patterns (sequential here is equivalent for non-overlapping
     // matches and avoids re-executing stdout that happens to contain a
     // pattern).
     let after_blocks = replace_block_shell(content).await;
@@ -115,7 +109,7 @@ pub async fn execute_shell_in_prompt(content: &str, skip_shell: bool) -> String 
 
 /// Replace fenced bang blocks ```` ```! \n body \n``` ```` with their stdout.
 ///
-/// TS `BLOCK_PATTERN` = `/```!\s*\n?([\s\S]*?)\n?```/g`: a triple-backtick
+/// The block pattern `/```!\s*\n?([\s\S]*?)\n?```/g`: a triple-backtick
 /// immediately followed by `!`, optional whitespace then optional newline,
 /// a lazy body, an optional trailing newline, and the closing fence.
 async fn replace_block_shell(content: &str) -> String {
@@ -138,13 +132,13 @@ async fn replace_block_shell(content: &str) -> String {
         let body_raw = &after_open[..close_rel];
         let after_close = &after_open[close_rel + FENCE.len()..];
 
-        // TS strips leading `\s*\n?` after `!` and a single trailing `\n`
+        // Strips leading `\s*\n?` after `!` and a single trailing `\n`
         // before the closing fence. `trim()` on the captured body is the
         // load-bearing equivalent — the command string fed to the shell is
         // `match[1]?.trim()`.
         let command = body_raw.trim();
         if command.is_empty() {
-            // Empty command: TS skips execution and leaves the match in
+            // Empty command: skips execution and leaves the match in
             // place (the `if (command)` guard is false). Preserve the
             // original fenced block verbatim.
             result.push_str(OPEN);
@@ -161,25 +155,24 @@ async fn replace_block_shell(content: &str) -> String {
     result
 }
 
-/// Execute the two TS marker syntaxes through an injected
+/// Execute the two marker syntaxes through an injected
 /// [`BashToolHandle`], substituting each command's output.
 ///
-/// Markers (TS `promptShellExecution.ts`):
+/// Markers:
 /// - **Block:** ```` ```!\n<cmd>\n``` ```` — a fenced code block opened
 ///   with `` ```! ``.
 /// - **Inline:** `` !`<cmd>` `` — a `!` (preceded by start-of-text or
-///   whitespace, mirroring the TS lookbehind) immediately followed by a
-///   backtick-delimited command.
+///   whitespace) immediately followed by a backtick-delimited command.
 ///
 /// Each command is routed through `handle.execute_with_permissions`,
 /// which performs the real permission check and Bash execution. On any
 /// `Err` (permission denied OR command failure) the WHOLE expansion is
-/// aborted with that message — mirroring TS `MalformedCommandError`,
+/// aborted with that message — mirroring `MalformedCommandError`,
 /// which throws out of the per-marker `Promise.all` so the caller
 /// performs NO partial substitution.
 ///
-/// The caller is responsible for the MCP skip (TS `loadedFrom !== 'mcp'`
-/// gate): MCP-sourced skills must not call this at all.
+/// The caller is responsible for the MCP skip: MCP-sourced skills must
+/// not call this at all.
 pub async fn execute_shell_in_prompt_with_tool(
     content: &str,
     handle: &dyn BashToolHandle,
@@ -190,10 +183,9 @@ pub async fn execute_shell_in_prompt_with_tool(
         return Ok(content.to_string());
     }
 
-    // TS substitutes via `result.replace(match[0], () => output)` per
-    // marker. We have absolute byte spans from the scan, so rebuild the
-    // string in one pass (markers are non-overlapping and sorted by
-    // start offset).
+    // Substitutes per marker using absolute byte spans from the scan,
+    // rebuilding the string in one pass (markers are non-overlapping and
+    // sorted by start offset).
     let mut out = String::with_capacity(content.len());
     let mut last = 0usize;
     for marker in &markers {
@@ -219,9 +211,9 @@ struct ShellMarker {
 /// Scan `content` for block (```` ```! ````) and inline (`` !`cmd` ``)
 /// markers, returning them sorted by start offset and de-overlapped
 /// (a later marker whose start falls inside an already-accepted span is
-/// dropped). Mirrors TS which concatenates block + inline matches; an
-/// inline `` !`…` `` inside a block body is already consumed by the
-/// block marker so it must not match again.
+/// dropped). Block and inline matches are concatenated; an inline
+/// `` !`…` `` inside a block body is already consumed by the block marker
+/// so it must not match again.
 fn scan_shell_markers(content: &str) -> Vec<ShellMarker> {
     let mut markers: Vec<ShellMarker> = Vec::new();
     scan_block_markers(content, &mut markers);
@@ -242,12 +234,12 @@ fn scan_shell_markers(content: &str) -> Vec<ShellMarker> {
     accepted
 }
 
-/// Locate ```` ```! ```` fenced blocks. Mirrors TS
-/// `/```!\s*\n?([\s\S]*?)\n?```/g`: the opening fence is `` ```! ``
+/// Locate ```` ```! ```` fenced blocks.
+/// Pattern: `/```!\s*\n?([\s\S]*?)\n?```/g`: the opening fence is `` ```! ``
 /// followed by optional whitespace and an optional newline; the body is
 /// captured lazily up to the next `` ``` ``, with a trailing newline
 /// trimmed from the body. Empty / whitespace-only commands are skipped
-/// (TS `if (command)` after `.trim()`).
+/// (the `if (command)` guard after `.trim()`).
 fn scan_block_markers(content: &str, out: &mut Vec<ShellMarker>) {
     const OPEN: &str = "```!";
     const CLOSE: &str = "```";
@@ -256,7 +248,7 @@ fn scan_block_markers(content: &str, out: &mut Vec<ShellMarker>) {
     while let Some(rel) = content[search..].find(OPEN) {
         let start = search + rel;
         // Body begins after the opener + any inline whitespace + one
-        // optional newline (TS `\s*\n?`). `\s` includes newlines, so a
+        // optional newline (`\s*\n?`). `\s` includes newlines, so a
         // run of whitespace before the body is consumed; the lazy body
         // then trims one leading newline implicitly via `\n?`.
         let mut body_start = start + OPEN.len();
@@ -270,7 +262,7 @@ fn scan_block_markers(content: &str, out: &mut Vec<ShellMarker>) {
             Some(close_rel) => {
                 let body_end = body_start + close_rel;
                 let end = body_end + CLOSE.len();
-                // Trim one trailing newline from the body (TS `\n?` before
+                // Trim one trailing newline from the body (`\n?` before
                 // the closing fence) then trim for the `if (command)` gate.
                 let raw_body = content[body_start..body_end].trim_end_matches('\n');
                 let command = raw_body.trim();
@@ -288,8 +280,8 @@ fn scan_block_markers(content: &str, out: &mut Vec<ShellMarker>) {
     }
 }
 
-/// Locate `` !`cmd` `` inline markers. Mirrors TS
-/// `/(?<=^|\s)!`([^`]+)`/gm` (gated by `text.includes('!`')`): a `!`
+/// Locate `` !`cmd` `` inline markers.
+/// Pattern: `/(?<=^|\s)!`([^`]+)`/gm` (gated by `text.includes('!`')`): a `!`
 /// preceded by start-of-text or an ASCII/Unicode whitespace char,
 /// immediately followed by a backtick, a non-backtick command, and a
 /// closing backtick. Empty / whitespace-only commands are skipped.
@@ -301,7 +293,7 @@ fn scan_inline_markers(content: &str, out: &mut Vec<ShellMarker>) {
     while let Some(rel) = content[search..].find("!`") {
         let bang = search + rel;
         // Lookbehind: `!` must be at start-of-text or preceded by
-        // whitespace (TS `(?<=^|\s)`).
+        // whitespace (`(?<=^|\s)`).
         let preceded_ok = bang == 0
             || content[..bang]
                 .chars()
@@ -315,7 +307,7 @@ fn scan_inline_markers(content: &str, out: &mut Vec<ShellMarker>) {
         match content[cmd_start..].find('`') {
             Some(close_rel) => {
                 if close_rel == 0 {
-                    // Empty command (TS `[^`]+` requires ≥1 char) — skip.
+                    // Empty command (`[^`]+` requires ≥1 char) — skip.
                     search = cmd_start;
                     continue;
                 }
@@ -338,13 +330,13 @@ fn scan_inline_markers(content: &str, out: &mut Vec<ShellMarker>) {
 
 /// Replace inline `` !`command` `` spans with their stdout (handle-free path).
 ///
-/// TS `INLINE_PATTERN` = `/(?<=^|\s)!`([^`]+)`/gm`: a `!` preceded by
+/// The inline pattern `/(?<=^|\s)!`([^`]+)`/gm`: a `!` preceded by
 /// start-of-line or whitespace, then a backtick-delimited command. The Rust
 /// `regex` crate has no lookbehind, so the word-boundary guard is a manual
 /// char scan — rejects `` foo!`x` `` while accepting `` !`x` `` at line start
 /// and after whitespace.
 async fn replace_inline_shell(content: &str) -> String {
-    // Cheap gate: 93% of skills have no inline bang span (TS gates the
+    // Cheap gate: 93% of skills have no inline bang span (gates the
     // expensive scan on `text.includes('!`')`).
     if !content.contains("!`") {
         return content.to_string();
@@ -362,7 +354,7 @@ async fn replace_inline_shell(content: &str) -> String {
         let bang_at = idx + bang_rel;
 
         // Word-boundary guard: the char before `!` must be start-of-line
-        // or whitespace. TS lookbehind is `(?<=^|\s)`. `next_back()` is
+        // or whitespace. Lookbehind is `(?<=^|\s)`. `next_back()` is
         // `None` at start-of-line (`bang_at == 0`), which is a valid
         // boundary.
         let preceded_ok = content[..bang_at]
@@ -402,9 +394,9 @@ async fn replace_inline_shell(content: &str) -> String {
 }
 
 /// Run a shell command and return its trimmed stdout. On non-zero exit,
-/// spawn failure, or timeout this returns an empty string (TS surfaces a
-/// `MalformedCommandError`; here the prompt simply drops the failed
-/// substitution — see followups for full permission/error wiring).
+/// spawn failure, or timeout this returns an empty string (the prompt
+/// simply drops the failed substitution — see followups for full
+/// permission/error wiring).
 async fn run_shell_command(command: &str) -> String {
     let output = tokio::time::timeout(
         DEFAULT_TIMEOUT,

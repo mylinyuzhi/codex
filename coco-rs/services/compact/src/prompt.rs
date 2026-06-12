@@ -1,12 +1,9 @@
 //! Compaction prompt templates.
 //!
-//! TS: services/compact/prompt.ts — detailed analysis + summary structure.
-//!
 //! Three templates: full, partial-from (suffix-summarize, prefix-keep) and
-//! partial-up-to (prefix-summarize, suffix-keep). Mirrors the TS sections
-//! including the `<example>` output structure and the trailing
-//! "Additional summarization instructions" example, both of which are
-//! load-bearing for output consistency.
+//! partial-up-to (prefix-summarize, suffix-keep). The `<example>` output
+//! structure and the trailing "Additional summarization instructions" example
+//! are load-bearing for output consistency.
 
 use coco_messages::PartialCompactDirection;
 
@@ -199,9 +196,9 @@ Here's an example of how your output should be structured:
 Please provide your summary based on the RECENT messages only (after the retained earlier context), following this structure and ensuring precision and thoroughness in your response.
 "#;
 
-/// 'up_to' direction (TS PARTIAL_COMPACT_UP_TO_PROMPT): summary precedes
-/// kept tail, so model must produce "Work Completed" / "Context for
-/// Continuing Work" sections instead of "Current Work" / "Next Step".
+/// 'up_to' direction: summary precedes kept tail, so model must produce
+/// "Work Completed" / "Context for Continuing Work" sections instead of
+/// "Current Work" / "Next Step".
 const PARTIAL_COMPACT_UP_TO_TEMPLATE: &str = r#"Your task is to create a detailed summary of this conversation. This summary will be placed at the start of a continuing session; newer messages that build on this context will follow after your summary (you do not see them here). Summarize thoroughly so that someone reading only your summary and then the newer messages can fully understand what happened and continue the work.
 
 {ANALYSIS_INSTRUCTION}
@@ -312,8 +309,6 @@ pub fn get_partial_compact_prompt(
 }
 
 /// Format the compact summary by stripping <analysis> scratchpad and extracting <summary>.
-///
-/// TS: formatCompactSummary() — strips analysis block, extracts summary content.
 pub fn format_compact_summary(summary: &str) -> String {
     let mut result = summary.to_string();
 
@@ -336,7 +331,7 @@ pub fn format_compact_summary(summary: &str) -> String {
         result = format!("Summary:\n{}", content.trim());
     }
 
-    // Clean up runs of 3+ newlines → 2 (matches TS regex /\n\n+/g → \n\n)
+    // Clean up runs of 3+ newlines → 2
     let mut cleaned = String::with_capacity(result.len());
     let mut consecutive_newlines = 0u32;
     for ch in result.chars() {
@@ -356,11 +351,11 @@ pub fn format_compact_summary(summary: &str) -> String {
 
 /// Build the user-facing summary message shown after compaction.
 ///
-/// TS: `getCompactUserSummaryMessage()`. Caller passes the **already
-/// formatted** summary (call `format_compact_summary` first). The
-/// `recent_messages_preserved` flag adds the "Recent messages are
-/// preserved verbatim." line — set it when the kept tail follows the
-/// summary directly (partial / session-memory paths).
+/// Caller passes the **already formatted** summary (call
+/// `format_compact_summary` first). The `recent_messages_preserved` flag
+/// adds the "Recent messages are preserved verbatim." line — set it when
+/// the kept tail follows the summary directly (partial / session-memory
+/// paths).
 pub fn get_compact_user_summary_message(
     summary: &str,
     suppress_follow_up: bool,

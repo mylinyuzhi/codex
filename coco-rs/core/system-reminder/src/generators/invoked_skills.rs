@@ -1,7 +1,6 @@
-//! TS `invoked_skills` generator.
+//! `invoked_skills` generator.
 //!
-//! Mirrors `normalizeAttachmentForAPI` `case 'invoked_skills':`
-//! (`messages.ts:3644`). Renders each invoked skill as
+//! Renders each invoked skill as
 //! `### Skill: ${name}\nPath: ${path}\n\n${content}`, joined by
 //! `\n\n---\n\n`, prefixed by the guideline header.
 

@@ -1,7 +1,5 @@
-//! User-visible memory notices — TS parity with the
-//! `appendSystemMessage(createMemorySavedMessage(...))` calls in
-//! `services/extractMemories/extractMemories.ts:491-496` and
-//! `services/autoDream/autoDream.ts:240-247`.
+//! User-visible memory notices — surfacing "Saved N memories" / "Improved N memories"
+//! after a successful extract / dream run.
 //!
 //! After a successful extract / dream run, the service pushes a
 //! [`MemoryUserNotice`] onto the runtime's [`NoticeInbox`]. The engine
@@ -19,22 +17,19 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-/// Display verb for the user-visible message. Mirrors TS
-/// `createMemorySavedMessage` default ("Saved") + the
-/// `autoDream.ts:247` override (`verb: 'Improved'`) for dream
-/// consolidations.
+/// Display verb for the user-visible message. Default is "Saved";
+/// dream consolidations use "Improved".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NoticeVerb {
     /// ExtractService wrote new memory files — primary turn-end
-    /// save event. TS: default `createMemorySavedMessage` verb.
+    /// save event.
     Saved,
     /// DreamService merged / pruned existing memories — auto-dream
-    /// success. TS: `autoDream.ts:247` `verb: 'Improved'`.
+    /// success.
     Improved,
     /// Main agent (or user via `/memory` editor) directly edited a
     /// memory file via `Edit`/`Write`/`NotebookEdit`. Emitted by the
-    /// engine's post-write classification pass — Gap 4 / TS
-    /// `useMemoryUpdateNotification`. Distinct from `Saved`/`Improved`
+    /// engine's post-write classification pass (Gap 4). Distinct from `Saved`/`Improved`
     /// so the TUI can render it with a different color and copy
     /// ("Memory updated: foo.md") that hints the user, not a subagent,
     /// owned the change.

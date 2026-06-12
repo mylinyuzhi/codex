@@ -11,8 +11,6 @@
 //! creator helpers for each variant also live here so the
 //! protocol-shape definition and its emitters stay together.
 //!
-//! TS: `utils/teammateMailbox.ts`.
-
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -33,8 +31,6 @@ use super::io::{TeammateMessage, write_to_mailbox};
 // ── Protocol Message Helpers ──
 
 /// Check if a message text is a structured protocol message.
-///
-/// TS: `isStructuredProtocolMessage(messageText)`
 pub fn is_structured_protocol_message(text: &str) -> bool {
     let trimmed = text.trim();
     if !trimmed.starts_with('{') {
@@ -420,8 +416,6 @@ impl From<PermissionUpdateDestination> for WirePermissionUpdateDestination {
 }
 
 /// All structured protocol message types.
-///
-/// TS: various type definitions in utils/teammateMailbox.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProtocolMessage {
@@ -468,7 +462,6 @@ pub enum ProtocolMessage {
         /// when deriving scoped grants.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
-        /// TS: `permission_suggestions: unknown[]`
         #[serde(default)]
         permission_suggestions: Vec<serde_json::Value>,
     },
@@ -588,8 +581,6 @@ pub enum ProtocolMessage {
 }
 
 /// Send a shutdown request to an agent's mailbox.
-///
-/// TS: `sendShutdownRequestToMailbox(targetName, teamName, reason)`
 pub fn send_shutdown_request(
     target_name: &str,
     team_name: &str,
@@ -621,8 +612,6 @@ pub fn send_shutdown_request(
 }
 
 /// Create an idle notification protocol message.
-///
-/// TS: `createIdleNotification(agentId, options)`
 pub fn create_idle_notification(
     from: &str,
     idle_reason: Option<&str>,
@@ -641,8 +630,6 @@ pub fn create_idle_notification(
 }
 
 /// Create a mode set request protocol message.
-///
-/// TS: `createModeSetRequestMessage(params)`
 pub fn create_mode_set_request(mode: PermissionMode, from: &str) -> String {
     let msg = ProtocolMessage::ModeSetRequest {
         mode,
@@ -703,8 +690,6 @@ pub fn read_resolved_permission(
 }
 
 /// Read all pending permission requests.
-///
-/// TS: `readPendingPermissions(teamName?)`
 pub fn read_pending_permissions(
     team_name: &str,
 ) -> crate::Result<Vec<crate::types::SwarmPermissionRequest>> {
@@ -725,8 +710,6 @@ pub fn read_pending_permissions(
 }
 
 /// Resolve a pending permission (move from pending/ to resolved/).
-///
-/// TS: `resolvePermission(requestId, resolution, teamName?)`
 pub fn resolve_permission(
     team_name: &str,
     request_id: &str,
@@ -742,8 +725,6 @@ pub fn resolve_permission(
 }
 
 /// Clean up old resolved permissions.
-///
-/// TS: `cleanupOldResolutions(teamName?, maxAgeMs?)`
 pub fn cleanup_old_resolutions(team_name: &str, max_age_ms: i64) -> crate::Result<()> {
     let dir = resolved_permissions_dir(team_name);
     if !dir.is_dir() {
@@ -770,8 +751,6 @@ pub fn cleanup_old_resolutions(team_name: &str, max_age_ms: i64) -> crate::Resul
 }
 
 /// Poll for a resolved permission response (non-blocking).
-///
-/// TS: `pollForResponse(requestId, agentName?, teamName?)`
 pub fn poll_for_response(
     team_name: &str,
     request_id: &str,
@@ -780,8 +759,6 @@ pub fn poll_for_response(
 }
 
 /// Remove a worker's resolved response file.
-///
-/// TS: `removeWorkerResponse(requestId, agentName?, teamName?)`
 pub fn remove_worker_response(team_name: &str, request_id: &str) -> crate::Result<()> {
     let path = resolved_permissions_dir(team_name).join(format!("{request_id}.json"));
     if path.exists() {
@@ -791,8 +768,6 @@ pub fn remove_worker_response(team_name: &str, request_id: &str) -> crate::Resul
 }
 
 /// Send a permission request to the leader's mailbox.
-///
-/// TS: `sendPermissionRequestViaMailbox(request)`
 pub fn send_permission_request_via_mailbox(
     request: &crate::types::SwarmPermissionRequest,
 ) -> crate::Result<()> {
@@ -822,8 +797,6 @@ pub fn send_permission_request_via_mailbox(
 }
 
 /// Send a permission response to a worker's mailbox.
-///
-/// TS: `sendPermissionResponseViaMailbox(workerName, resolution, requestId, teamName?)`
 pub fn send_permission_response_via_mailbox(
     worker_name: &str,
     request_id: &str,
@@ -857,8 +830,6 @@ pub fn send_permission_response_via_mailbox(
 }
 
 /// Send a sandbox permission request to the leader's mailbox.
-///
-/// TS: `sendSandboxPermissionRequestViaMailbox(host, requestId, teamName?)`
 pub fn send_sandbox_permission_request_via_mailbox(
     worker_name: &str,
     worker_id: &str,
@@ -886,8 +857,6 @@ pub fn send_sandbox_permission_request_via_mailbox(
 }
 
 /// Send a sandbox permission response to a worker's mailbox.
-///
-/// TS: `sendSandboxPermissionResponseViaMailbox(workerName, requestId, host, allow, teamName?)`
 pub fn send_sandbox_permission_response_via_mailbox(
     worker_name: &str,
     request_id: &str,
@@ -915,8 +884,6 @@ pub fn send_sandbox_permission_response_via_mailbox(
 // ── Protocol Message Creators ──
 
 /// Create a permission request protocol message string.
-///
-/// TS: `createPermissionRequestMessage(params)`
 pub fn create_permission_request_message(
     request_id: &str,
     agent_id: &str,
@@ -940,8 +907,6 @@ pub fn create_permission_request_message(
 }
 
 /// Create a permission response protocol message string.
-///
-/// TS: `createPermissionResponseMessage(params)`
 pub fn create_permission_response_message(
     request_id: &str,
     approved: bool,
@@ -1001,7 +966,6 @@ fn permission_response_payload(
 /// in-process case) ⇒ the teammate already exits via its runner-loop
 /// break, so the leader only removes membership.
 ///
-/// TS: `createShutdownApprovedMessage(params)` (`SendMessageTool.ts:330`).
 pub fn create_shutdown_approved_message(
     request_id: &str,
     from: &str,
@@ -1019,8 +983,6 @@ pub fn create_shutdown_approved_message(
 }
 
 /// Create a shutdown rejected protocol message string.
-///
-/// TS: `createShutdownRejectedMessage(params)`
 pub fn create_shutdown_rejected_message(request_id: &str, from: &str, reason: &str) -> String {
     let msg = ProtocolMessage::ShutdownRejected {
         request_id: request_id.to_string(),
@@ -1039,8 +1001,6 @@ pub fn create_shutdown_rejected_message(request_id: &str, from: &str, reason: &s
 /// echoed) which the runner picks up via
 /// [`super::super::runner_loop::wait_for_plan_approval`].
 ///
-/// TS: `createPlanApprovalRequestMessage(params)` — mirrors the wire
-/// shape used in `inProcessRunner.ts`.
 pub fn create_plan_approval_request_message(
     from: &str,
     request_id: &str,
@@ -1061,55 +1021,55 @@ pub fn create_plan_approval_request_message(
 
 /// Check if a message is a specific protocol type. Returns typed variant if match.
 impl ProtocolMessage {
-    /// TS: `isIdleNotification(text)`
+    /// Returns true if this message is an idle notification.
     pub fn is_idle_notification(&self) -> bool {
         matches!(self, Self::IdleNotification { .. })
     }
-    /// TS: `isPermissionRequest(text)`
+    /// Returns true if this message is a permission request.
     pub fn is_permission_request(&self) -> bool {
         matches!(self, Self::PermissionRequest { .. })
     }
-    /// TS: `isPermissionResponse(text)`
+    /// Returns true if this message is a permission response.
     pub fn is_permission_response(&self) -> bool {
         matches!(self, Self::PermissionResponse { .. })
     }
-    /// TS: `isShutdownRequest(text)`
+    /// Returns true if this message is a shutdown request.
     pub fn is_shutdown_request(&self) -> bool {
         matches!(self, Self::ShutdownRequest { .. })
     }
-    /// TS: `isShutdownApproved(text)`
+    /// Returns true if this message is a shutdown approval.
     pub fn is_shutdown_approved(&self) -> bool {
         matches!(self, Self::ShutdownApproved { .. })
     }
-    /// TS: `isShutdownRejected(text)`
+    /// Returns true if this message is a shutdown rejection.
     pub fn is_shutdown_rejected(&self) -> bool {
         matches!(self, Self::ShutdownRejected { .. })
     }
-    /// TS: `isTaskAssignment(text)`
+    /// Returns true if this message is a task assignment.
     pub fn is_task_assignment(&self) -> bool {
         matches!(self, Self::TaskAssignment { .. })
     }
-    /// TS: `isTeamPermissionUpdate(text)`
+    /// Returns true if this message is a team permission update.
     pub fn is_team_permission_update(&self) -> bool {
         matches!(self, Self::TeamPermissionUpdate { .. })
     }
-    /// TS: `isModeSetRequest(text)`
+    /// Returns true if this message is a mode set request.
     pub fn is_mode_set_request(&self) -> bool {
         matches!(self, Self::ModeSetRequest { .. })
     }
-    /// TS: `isSandboxPermissionRequest(text)`
+    /// Returns true if this message is a sandbox permission request.
     pub fn is_sandbox_permission_request(&self) -> bool {
         matches!(self, Self::SandboxPermissionRequest { .. })
     }
-    /// TS: `isSandboxPermissionResponse(text)`
+    /// Returns true if this message is a sandbox permission response.
     pub fn is_sandbox_permission_response(&self) -> bool {
         matches!(self, Self::SandboxPermissionResponse { .. })
     }
-    /// TS: `isPlanApprovalRequest(text)`
+    /// Returns true if this message is a plan approval request.
     pub fn is_plan_approval_request(&self) -> bool {
         matches!(self, Self::PlanApprovalRequest { .. })
     }
-    /// TS: `isPlanApprovalResponse(text)`
+    /// Returns true if this message is a plan approval response.
     pub fn is_plan_approval_response(&self) -> bool {
         matches!(self, Self::PlanApprovalResponse { .. })
     }

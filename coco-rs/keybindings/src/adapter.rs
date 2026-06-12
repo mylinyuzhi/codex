@@ -2,9 +2,6 @@
 //!
 //! Feature-gated behind `crossterm`. The TUI enables this; library
 //! callers that don't depend on crossterm are unaffected.
-//!
-//! TS analog: `keybindings/match.ts:29-47` (`getKeyName`) plus the
-//! escape+meta quirk fix in `match.ts:99-101`.
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -17,7 +14,7 @@ use crate::parser::KeyCombo;
 /// Returns `None` for events that aren't bindable shortcuts (e.g. raw
 /// modifier-only events without a base key).
 ///
-/// Behaviour matches the TS chord matcher:
+/// Behaviour:
 ///
 /// * Named keys (Enter, Esc, Tab, Backspace, Delete, arrows, PageUp /
 ///   PageDown, Home, End) map to their canonical lowercase names.
@@ -52,15 +49,14 @@ pub fn from_crossterm(event: KeyEvent) -> Option<KeyCombo> {
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let shift = mods.contains(KeyModifiers::SHIFT);
     let mut alt = mods.contains(KeyModifiers::ALT);
-    // TS distinguishes `meta` (alt-equivalent in legacy terminals) from
+    // `meta` (alt-equivalent in legacy terminals) is distinct from
     // `super` (cmd/win, only via kitty keyboard protocol). crossterm
     // exposes both, so we keep them separate.
     let mut meta = mods.contains(KeyModifiers::META);
     let super_key = mods.contains(KeyModifiers::SUPER);
 
-    // TS quirk fix: terminals (and Ink historically) set the Alt/Meta
-    // modifier on Esc keystrokes. Strip both so a plain `escape`
-    // binding matches. See `resolver.ts:88-90` and `match.ts:99-101`.
+    // Terminals (and Ink historically) set the Alt/Meta modifier on Esc
+    // keystrokes. Strip both so a plain `escape` binding matches.
     if matches!(event.code, KeyCode::Esc) {
         alt = false;
         meta = false;

@@ -2,8 +2,7 @@
 //!
 //! # Safety & concurrency model
 //!
-//! This tool sets the following flags on the [`Tool`] trait, matching the
-//! Claude Code TypeScript `GrepTool` exactly:
+//! This tool sets the following flags on the [`Tool`] trait:
 //!
 //! - `is_read_only(_) = true` — the tool only reads files and emits text.
 //! - `is_concurrency_safe(_) = true` — two Grep calls may execute in parallel
@@ -71,17 +70,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::input_types::GrepOutputMode;
 
-/// Default head_limit when unspecified (TS: DEFAULT_HEAD_LIMIT = 250).
+/// Default head_limit when unspecified.
 const DEFAULT_HEAD_LIMIT: usize = 250;
 
-/// Maximum column width for content lines (TS: --max-columns 500).
+/// Maximum column width for content lines (`--max-columns 500`).
 const MAX_COLUMN_WIDTH: usize = 500;
 
 /// Absolute cap on in-memory matches to avoid unbounded memory usage.
 const MAX_IN_MEMORY_MATCHES: usize = 100_000;
 
-/// Tool description shown to the model. Byte-for-byte copy of TS Claude Code
-/// `tools/GrepTool/prompt.ts::getDescription()`.
+/// Tool description shown to the model.
 const GREP_DESCRIPTION: &str = "\
 A powerful search tool built on ripgrep
 
@@ -171,7 +169,7 @@ impl Sink for ContextAwareSink<'_> {
 }
 
 /// Decode sink bytes as UTF-8 (lossy), trim trailing newline/whitespace, and
-/// cap at [`MAX_COLUMN_WIDTH`] (TS: `--max-columns 500`).
+/// cap at [`MAX_COLUMN_WIDTH`].
 fn decode_sink_bytes(bytes: &[u8]) -> String {
     let raw = String::from_utf8_lossy(bytes);
     let trimmed = raw.trim_end();
@@ -211,9 +209,8 @@ struct GrepSearchParams {
 
 /// Content-mode format options. Parsed from input at call time and
 /// passed through to `format_content()` so the formatter can honor
-/// `-n: false` (TS `GrepTool.ts:357-360`: when `show_line_numbers` is
-/// false, the `-n` flag is omitted from ripgrep and output lines are
-/// emitted without the line-number segment).
+/// `-n: false` (when `show_line_numbers` is false, the `-n` flag is
+/// omitted and output lines are emitted without the line-number segment).
 #[derive(Debug, Clone, Copy)]
 struct ContentFormatOptions {
     show_line_numbers: bool,
@@ -222,9 +219,7 @@ struct ContentFormatOptions {
 impl Default for ContentFormatOptions {
     fn default() -> Self {
         Self {
-            // TS default is `true` (`GrepTool.ts:68-70`
-            // `'-n': semanticBoolean(z.boolean().optional()) ... Defaults
-            // to true`).
+            // Default is `true`.
             show_line_numbers: true,
         }
     }
@@ -236,9 +231,8 @@ impl Default for ContentFormatOptions {
 
 /// Typed input for [`GrepTool`].
 ///
-/// Wire-shape preserves TS `GrepTool.ts` exactly: dashed flag names
-/// `-A` / `-B` / `-C` / `-i` / `-n` come straight from the ripgrep CLI
-/// vocabulary and round through `#[serde(rename)]`. The Rust idents
+/// Wire-shape uses dashed flag names `-A` / `-B` / `-C` / `-i` / `-n`
+/// from the ripgrep CLI vocabulary via `#[serde(rename)]`. The Rust idents
 /// use descriptive snake_case (`before_context_short`, etc.).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct GrepInput {
@@ -332,14 +326,13 @@ impl Tool for GrepTool {
         GREP_DESCRIPTION.into()
     }
 
-    /// Model-facing tool description (schema-listing time). TS
-    /// `GrepTool.ts:241-242` `async prompt()` returns the SAME
-    /// `getDescription()` text as `async description()`.
+    /// Model-facing tool description (schema-listing time). Returns the same
+    /// text as `description()`.
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         GREP_DESCRIPTION.into()
     }
 
-    /// Grep never modifies state (TS: `isReadOnly() = true`).
+    /// Grep never modifies state.
     fn is_read_only(&self, _input: &GrepInput) -> bool {
         true
     }
@@ -350,18 +343,17 @@ impl Tool for GrepTool {
     /// Safe to run in parallel with other concurrency-safe tools. The
     /// `StreamingToolExecutor` batches consecutive safe tools and dispatches
     /// them via `tokio::spawn` up to `COCO_MAX_TOOL_USE_CONCURRENCY`
-    /// (default 10). TS: `isConcurrencySafe() = true`.
+    /// (default 10).
     fn is_concurrency_safe(&self, _input: &GrepInput) -> bool {
         true
     }
 
-    /// Result persistence threshold — matches TS `maxResultSizeChars: 20_000`.
+    /// Result persistence threshold: 20 000 chars.
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
         coco_tool_runtime::ResultSizeBound::Chars(20_000)
     }
 
     /// `Self::Output = String` — emit unwrapped (no JSON escape).
-    /// TS parity: `GrepTool.ts::mapToolResultToToolResultBlockParam`.
     fn render_for_model(&self, out: &String) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
             text: out.clone(),
@@ -459,7 +451,7 @@ impl Tool for GrepTool {
         let case_insensitive = input.case_insensitive;
         let multiline = input.multiline;
 
-        // Context precedence (TS): context > -C > separate -B/-A
+        // Context precedence: context > -C > separate -B/-A
         let context_both = input
             .context
             .or(input.context_short)
@@ -495,9 +487,8 @@ impl Tool for GrepTool {
             .map(|n| n as usize)
             .unwrap_or(0);
 
-        // TS `GrepTool.ts:68` `-n: semanticBoolean(z.boolean().optional())`
-        // defaults to `true`. Passing `-n: false` suppresses line numbers
-        // in content-mode output. R5-T13.
+        // `-n` defaults to `true`. Passing `-n: false` suppresses line numbers
+        // in content-mode output.
         let show_line_numbers = input.show_line_numbers.unwrap_or(true);
         let content_opts = ContentFormatOptions { show_line_numbers };
 
@@ -628,8 +619,7 @@ fn run_grep_search(
             }
 
             // R6-T20: skip files matching file-read ignore patterns.
-            // TS `GrepTool.ts:412-427` passes these patterns to ripgrep
-            // via `--glob '!...'`; coco-rs filters them per-entry here
+            // Filtered per-entry rather than via ripgrep `--glob '!...'`
             // so we don't have to round-trip through the globset/walker
             // override system.
             if crate::tools::read_permissions::is_read_ignored_with_matcher(
@@ -707,7 +697,7 @@ fn build_directory_walker(params: &GrepSearchParams) -> ignore::WalkBuilder {
     let ignore_service = IgnoreService::new(ignore_config);
     let mut walker_builder = ignore_service.create_walk_builder(&params.search_path);
 
-    // Exclude VCS directories (TS: --glob !.git etc.)
+    // Exclude VCS directories
     const VCS_EXCLUDES: &[&str] = &["!.git", "!.svn", "!.hg", "!.bzr", "!.jj", "!.sl"];
     let mut override_builder = ignore::overrides::OverrideBuilder::new(&params.search_path);
     let all_added = VCS_EXCLUDES
@@ -739,11 +729,11 @@ fn build_directory_walker(params: &GrepSearchParams) -> ignore::WalkBuilder {
     walker_builder
 }
 
-/// Split a glob filter string into individual patterns, matching TS GrepTool
-/// exactly: first split on whitespace, then for each whitespace-segment, if
-/// it contains a `{...}` brace expression keep it intact, otherwise split
-/// further on commas. This lets users pass combined filters like
-/// `"*.js *.ts"`, `"*.js,*.ts"`, or `"*.{js,ts}"`.
+/// Split a glob filter string into individual patterns: first split on
+/// whitespace, then for each whitespace-segment, if it contains a `{...}`
+/// brace expression keep it intact, otherwise split further on commas. This
+/// lets users pass combined filters like `"*.js *.ts"`, `"*.js,*.ts"`, or
+/// `"*.{js,ts}"`.
 fn split_glob_pattern(pattern: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for segment in pattern.split_whitespace() {
@@ -763,9 +753,9 @@ fn split_glob_pattern(pattern: &str) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Output formatting (TS-compatible flat format)
+// Output formatting
 //
-// Per Claude Code TS GrepTool.mapToolResultToToolResultBlockParam:
+// Output format per mode:
 //   • files_with_matches: "Found N file(s){limit_info}\npath1\npath2..." /
 //                         "No files found" when empty
 //   • content:            bare ripgrep lines (path:lineno:content) joined by \n,
@@ -783,9 +773,9 @@ fn format_grep_output(
     content_opts: ContentFormatOptions,
 ) -> String {
     // Empty result short-circuit for `files_with_matches`. For `content` and
-    // `count` the per-mode formatters handle emptiness themselves so that TS
-    // semantics (e.g. count mode appends "Found 0 total occurrences across 0
-    // files." even with no matches) are preserved.
+    // `count` the per-mode formatters handle emptiness themselves (e.g. count
+    // mode appends "Found 0 total occurrences across 0 files." even with no
+    // matches).
     if result.matches.is_empty() && matches!(output_mode, GrepOutputMode::FilesWithMatches) {
         return "No files found".to_string();
     }
@@ -802,7 +792,7 @@ fn format_grep_output(
 }
 
 /// Format the comma-joined pagination hint. Empty when not truncated and
-/// `offset == 0`, matching TS [`formatLimitInfo`].
+/// `offset == 0`.
 fn format_limit_info(applied_limit: Option<usize>, applied_offset: usize) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(2);
     if let Some(limit) = applied_limit {
@@ -869,12 +859,10 @@ fn format_content(
     effective_limit: usize,
     opts: ContentFormatOptions,
 ) -> String {
-    // Build output lines in TS flat format. When `-n: true` (default) the
-    // format is `path:linenum:content` / `path-linenum-content`. When
-    // `-n: false` the line number segment is dropped entirely, yielding
-    // `path:content` / `path-content`. Context breaks are `--` in both
-    // cases. Matches TS `GrepTool.ts:357-360` which only appends `-n` to
-    // ripgrep's args when `show_line_numbers` is true.
+    // Build output lines. When `-n: true` (default) the format is
+    // `path:linenum:content` / `path-linenum-content`. When `-n: false` the
+    // line number segment is dropped entirely, yielding `path:content` /
+    // `path-content`. Context breaks are `--` in both cases.
     let mut lines: Vec<String> = Vec::with_capacity(matches.len());
     for m in matches {
         if m.is_break {
@@ -899,9 +887,6 @@ fn format_content(
     let applied_limit = was_truncated.then_some(effective_limit);
     let limit_info = format_limit_info(applied_limit, offset);
 
-    // TS parity: if body is empty, substitute the literal "No matches found"
-    // and still append the pagination block if applicable (e.g. offset > 0).
-    // See TS GrepTool.ts lines 267-277.
     let body = if display.is_empty() {
         "No matches found".to_string()
     } else {
@@ -941,9 +926,6 @@ fn format_count(matches: &[GrepMatchLine], offset: usize, effective_limit: usize
     let total_matches: usize = display.iter().map(|(_, n)| *n).sum();
     let num_files = display.len();
 
-    // TS parity: empty count body uses the literal "No matches found" in
-    // place of the file list, and the summary is still appended. See TS
-    // GrepTool.ts lines 280-291.
     let body = if display.is_empty() {
         "No matches found".to_string()
     } else {

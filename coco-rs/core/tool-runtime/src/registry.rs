@@ -13,7 +13,7 @@ use crate::traits::DynTool;
 /// 2. `ToolOverrides::permits`    — what the active model accepts
 /// 3. `ToolFilter::allows`        — agent allow/deny lists
 ///
-/// **No `PermissionMode` layer (TS parity).** Plan mode does NOT narrow
+/// **No `PermissionMode` layer.** Plan mode does NOT narrow
 /// the model's tool schema — the full tool set is exposed in every mode.
 /// Plan-mode read-only is enforced at *call time* by `coco_permissions`
 /// (read-only / session-plan-file write → allow; any other write → ask,
@@ -110,8 +110,7 @@ impl ToolRegistry {
     /// **MCP naming convention** (B3.3): tools that report `mcp_info()`
     /// are normalized to their `qualified_name()` form
     /// `mcp__<server>__<tool>` if their primary name doesn't already
-    /// follow that convention. This mirrors TS `toolExecution.ts:287-300`
-    /// + `mcpStringUtils.ts` behavior and prevents hostile MCP servers
+    /// follow that convention. This prevents hostile MCP servers
     ///   from shadowing built-in tools (e.g. an MCP server advertising a
     ///   tool named "Read" is registered as "mcp__foo__Read" rather than
     ///   overwriting the real Read tool).
@@ -173,13 +172,13 @@ impl ToolRegistry {
     ///
     /// A deferred tool whose wire-name appears in
     /// `ctx.discovered_tool_names` is treated as if it were not
-    /// deferred — that is the TS-parity mechanism through which the
+    /// deferred — that is the mechanism through which the
     /// model "loads" a tool via `ToolSearch`. `always_load()` still
     /// short-circuits the deferral check independent of discovery.
     ///
     /// When [`coco_types::Feature::ToolSearch`] is **off**, the
-    /// deferral check is bypassed entirely (TS `'standard'` mode):
-    /// every enabled tool's full schema lands in turn-1 requests.
+    /// deferral check is bypassed entirely: every enabled tool's
+    /// full schema lands in turn-1 requests.
     /// Keeps the per-Provider serialization path identical, just
     /// without the lazy-loading optimization.
     pub fn loaded_tools(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
@@ -241,7 +240,7 @@ impl ToolRegistry {
     /// `loaded_tools`) and would make the model re-search forever. Unlike
     /// [`Self::deferred_tools`] this does NOT exclude already-discovered
     /// names: re-selecting a discovered tool is an idempotent no-op
-    /// (TS `select:` semantics).
+    /// (`select:` semantics: re-selecting a discovered tool is idempotent).
     pub fn searchable_deferred(&self, ctx: &ToolUseContext) -> Vec<Arc<dyn DynTool>> {
         let inner = self
             .inner
@@ -261,9 +260,7 @@ impl ToolRegistry {
     ///
     /// Called when an MCP server disconnects. Removes all tools whose
     /// `mcp_info().server_name` matches the given server name, plus
-    /// their aliases.
-    ///
-    /// TS: full re-discovery on reconnect, old tools cleaned up.
+    /// their aliases. Full re-discovery happens on reconnect.
     pub fn deregister_by_server(&self, server_name: &str) {
         let mut inner = self
             .inner

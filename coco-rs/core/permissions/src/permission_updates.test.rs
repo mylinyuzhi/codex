@@ -199,8 +199,7 @@ fn test_supports_persistence() {
     assert!(!supports_persistence(PermissionUpdateDestination::Session));
     assert!(!supports_persistence(PermissionUpdateDestination::CliArg));
     // Skill-driven rules are in-memory; they belong to the `Command`
-    // bucket which never persists. TS parity: `alwaysAllowRules.command`
-    // is session-lifetime only.
+    // bucket which never persists (session-lifetime only).
     assert!(!supports_persistence(PermissionUpdateDestination::Command));
 }
 

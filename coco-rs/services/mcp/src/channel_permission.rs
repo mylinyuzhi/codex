@@ -1,8 +1,7 @@
 //! Channel permission relay for MCP servers.
 //!
-//! TS: services/mcp/permissions.ts — channel-based permission checks for MCP
-//! server operations. Allows callers to approve/deny MCP server access to
-//! specific channels (e.g. Slack channels, GitHub repos) at runtime.
+//! Allows callers to approve/deny MCP server access to specific channels
+//! (e.g. Slack channels, GitHub repos) at runtime.
 
 use std::future::Future;
 

@@ -84,29 +84,27 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(SleepTool));
 
     // `StructuredOutputTool` is **intentionally excluded** from the
-    // default base set. Mirrors TS `tools.ts:300-307` where the name is
-    // in `specialTools` and filtered out of `getAllBaseTools()`; the
-    // only entry-point is the explicit injection in non-interactive
-    // bootstrap paths via [`register_structured_output_tool`].
+    // default base set — the name is in `specialTools` and filtered out
+    // of `getAllBaseTools()`; the only entry-point is the explicit
+    // injection in non-interactive bootstrap paths via
+    // [`register_structured_output_tool`].
 }
 
 /// Register the `StructuredOutput` synthetic tool with a user-supplied
 /// JSON schema.
 ///
-/// Mirrors TS `main.tsx:1879-1901`: only the non-interactive bootstrap
+/// Only the non-interactive bootstrap
 /// paths (headless print mode, SDK NDJSON) call this after parsing
 /// `--json-schema`. TUI never reaches it — `tui_runner` never invokes
 /// this function, and the tool is absent from
 /// [`register_all_tools`] so interactive sessions never see it.
 ///
 /// Returns the parsed/compiled tool's reference so callers can install
-/// matching Stop-hook enforcement (TS
-/// `registerStructuredOutputEnforcement` lives at the same call site).
+/// matching Stop-hook enforcement at the same call site.
 ///
-/// Errors are propagated as `String` (Ajv-equivalent: invalid schema
-/// shape, unsupported keyword, …). TS `createSyntheticOutputTool`
-/// returns `{error}` in the same shape; coco-rs leaves it to the caller
-/// to log + decide whether to abort the run.
+/// Errors are propagated as `String` (invalid schema shape, unsupported
+/// keyword, …); the caller is responsible for logging and deciding
+/// whether to abort the run.
 pub fn register_structured_output_tool(
     registry: &coco_tool_runtime::ToolRegistry,
     schema: serde_json::Value,
@@ -205,12 +203,12 @@ pub fn deregister_mcp_server(registry: &coco_tool_runtime::ToolRegistry, server_
 
 /// Surface a per-server `mcp__<server>__authenticate` pseudo-tool for a server
 /// in the `NeedsAuth` state, telling the model exactly which server needs
-/// authentication (TS: `processServer` surfacing `[createMcpAuthTool(...)]`).
+/// authentication.
 ///
 /// Goes through the same `replace_server_tools` swap as [`register_mcp_tools`],
 /// so the pseudo-tool is owned by `server_name` and is removed automatically
 /// when the real tools register after a successful reconnect — no explicit
-/// delete step (mirrors the TS `mcp__<server>__*` prefix wipe).
+/// delete step (the `mcp__<server>__*` prefix wipe handles cleanup).
 pub fn register_mcp_auth_tool(
     registry: &coco_tool_runtime::ToolRegistry,
     server_name: &str,
@@ -283,11 +281,6 @@ pub(crate) async fn record_file_edit(
 /// Check whether a write to `path` with the given `content` should be
 /// blocked because it would leak a secret into team memory.
 ///
-/// TS: `services/teamMemorySync/teamMemSecretGuard.ts:checkTeamMemSecrets`
-/// — invoked from `FileWriteTool.ts:157` and `FileEditTool.ts` to reject
-/// writes that put API keys / tokens / credentials into a team-memory
-/// path (which would be synced to all repository collaborators).
-///
 /// Path detection is layered: first the authoritative resolution via
 /// `coco_memory::team_paths::is_team_mem_path` (using
 /// `MemoryConfig::resolve_memory_dir(project_root)` from the resolved
@@ -305,7 +298,7 @@ pub(crate) async fn record_file_edit(
 /// boundary. The user can write secrets to any non-team-memory path
 /// without triggering the check, and the regex set in
 /// `coco-secret-redact` covers common patterns but isn't exhaustive.
-/// The intent matches TS: prevent the most common accident of putting
+/// The intent: prevent the most common accident of putting
 /// `API_KEY=sk-...` into a synced memory file.
 /// Reject Edit/Write/NotebookEdit calls whose target falls outside the
 /// caller-installed write fence on `ToolUseContext::allowed_write_roots`.
@@ -313,9 +306,6 @@ pub(crate) async fn record_file_edit(
 /// Empty fence = no restriction (the common case). When non-empty
 /// (forked memory-extraction / auto-dream subagents), the path must
 /// be a descendant of one of the listed roots after `..` normalization.
-///
-/// TS: `services/extractMemories/extractMemories.ts:createAutoMemCanUseTool`
-/// (memdir-only sandbox for the extraction agent).
 pub(crate) fn check_write_root_fence(
     ctx: &coco_tool_runtime::ToolUseContext,
     path: &std::path::Path,
@@ -426,7 +416,7 @@ pub(crate) fn check_team_mem_secret(
 ///     `ToolUseContext` for this project root (cwd override or process
 ///     cwd) and call
 ///     `coco_memory::team_paths::is_team_mem_path`. This is the
-///     authoritative TS-aligned path that handles custom memory dirs
+///     authoritative path that handles custom memory dirs
 ///     set via `COCO_REMOTE_MEMORY_DIR` or `COCO_MEMORY_PATH_OVERRIDE`.
 ///  2. **Substring fallback** — match `**/.coco/memory/team/**` as
 ///     a heuristic for paths whose resolved memory dir doesn't match
@@ -474,11 +464,6 @@ fn is_team_memory_path(ctx: &coco_tool_runtime::ToolUseContext, path: &std::path
 /// so the app/query layer can load any nested CLAUDE.md / memory files
 /// in the file's ancestry on the next turn boundary.
 ///
-/// TS: `FileReadTool.ts:848,870,1038`
-/// `context.nestedMemoryAttachmentTriggers?.add(fullFilePath)`. Drained
-/// by `getNestedMemoryAttachments` (TS `utils/attachments.ts:2165`)
-/// after the tool batch completes.
-///
 /// Fire-and-forget; no error path because the trigger set is purely
 /// advisory — failure to record means at worst the next turn misses
 /// a nested memory load, never a tool failure.
@@ -498,15 +483,11 @@ pub(crate) async fn track_nested_memory_attachment(
 ///
 /// 1. **Nested-dir discovery** — walk up the file's ancestry to find
 ///    any `.coco/skills/` directories not yet loaded; push them into
-///    `ctx.dynamic_skill_dir_triggers`. TS:
-///    `FileReadTool.ts:578-591` (`discoverSkillDirsForPaths` +
-///    `addSkillDirectories`).
+///    `ctx.dynamic_skill_dir_triggers`.
 /// 2. **Conditional-skill activation** — push the file path itself
 ///    into `ctx.dynamic_skill_path_triggers` so the app/query drain
 ///    can match it against any skill's `paths` frontmatter via
-///    `SkillsSource::activate_skills_for_paths`. TS:
-///    `activateConditionalSkillsForPaths(filePaths, cwd)` from the
-///    same Read/Write/Edit/Bash post-success hook.
+///    `SkillsSource::activate_skills_for_paths`.
 ///
 /// Both are deferred to the app/query post-batch drain so concurrent
 /// safe-tool execution can share one activation pass. Cwd resolution
@@ -521,10 +502,9 @@ pub(crate) async fn track_skill_triggers(ctx: &coco_tool_runtime::ToolUseContext
     let Some(cwd) = cwd else { return };
 
     // (2) Conditional activation runs against the **raw** file path
-    // (TS parity: `activateConditionalSkillsForPaths` uses the input
-    // path as-is). Canonicalization is wrong here — if cwd is itself a
-    // symlink, the canonical file path won't have cwd as a prefix and
-    // the activation pass would silently skip the file.
+    // (uses the input path as-is). Canonicalization is wrong here —
+    // if cwd is itself a symlink, the canonical file path won't have
+    // cwd as a prefix and the activation pass would silently skip the file.
     {
         let mut path_triggers = ctx.dynamic_skill_path_triggers.write().await;
         path_triggers.insert(path.display().to_string());
@@ -548,7 +528,7 @@ pub(crate) async fn track_skill_triggers(ctx: &coco_tool_runtime::ToolUseContext
 
 /// Track a file edit for checkpoint/rewind before modifying.
 ///
-/// TS: `fileHistoryTrackEdit()` — called from FileEditTool, FileWriteTool,
+/// Called from FileEditTool, FileWriteTool,
 /// NotebookEditTool, BashTool before file modifications.
 /// Silently no-ops if file history is not configured on the context.
 pub(crate) async fn track_file_edit(ctx: &coco_tool_runtime::ToolUseContext, path: &Path) {
@@ -558,7 +538,6 @@ pub(crate) async fn track_file_edit(ctx: &coco_tool_runtime::ToolUseContext, pat
         &ctx.session_id_for_history,
     ) {
         // Use user_message_id (the originating user message UUID), NOT tool_use_id.
-        // TS: fileHistoryTrackEdit(filePath, parentMessage.uuid)
         if let Some(msg_id) = &ctx.user_message_id {
             let mut fh = fh.write().await;
             if let Err(e) = fh.track_edit(path, msg_id, config_home, sid).await {

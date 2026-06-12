@@ -2,10 +2,6 @@
 
 Minimal YAML frontmatter parser for markdown files (skills, commands, agents, memories, output styles).
 
-## TS Source
-- `utils/frontmatterParser.ts` (~370 LOC)
-- `utils/yaml.ts` — general YAML helper
-
 ## Key Types
 | Type | Purpose |
 |------|---------|

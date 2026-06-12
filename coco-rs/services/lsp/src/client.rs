@@ -578,8 +578,6 @@ impl LspClient {
         // Covers every extension declared by `BUILTIN_SERVERS` in `config.rs`
         // — typescript-language-server in particular needs the correct
         // languageId (NOT "plaintext") or it silently ignores didOpen.
-        // TS parity: `LSPServerManager.openFile` reads
-        // `server.config.extensionToLanguage[ext]`.
         let language_id: &'static str = path
             .extension()
             .and_then(|ext| ext.to_str())
@@ -877,8 +875,7 @@ impl LspClient {
     /// Dispatch a raw JSON-RPC request through this client's connection.
     ///
     /// Intended for the `coco-tool-runtime::LspHandle` adapter, which
-    /// already builds the protocol-level params (TS parity:
-    /// `LSPTool.ts:getMethodAndParams`). Higher-level typed wrappers
+    /// already builds the protocol-level params. Higher-level typed wrappers
     /// (`definition`, `references`, …) remain the right entry point for
     /// in-crate callers — this method skips capability checks and
     /// symbol-position resolution.

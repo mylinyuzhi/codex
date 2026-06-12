@@ -16,9 +16,8 @@ use snafu::Snafu;
 pub enum SystemReminderError {
     /// A generator exceeded its configured per-turn timeout.
     ///
-    /// Matches TS `attachments.ts:767` — each parallel attachment gather has
-    /// a 1000ms AbortController. Timed-out generators contribute zero
-    /// reminders; the turn continues normally.
+    /// Each parallel attachment gather has a 1000ms timeout. Timed-out
+    /// generators contribute zero reminders; the turn continues normally.
     #[snafu(display("Reminder generator {generator} timed out after {timeout_ms}ms"))]
     GeneratorTimeout {
         generator: String,

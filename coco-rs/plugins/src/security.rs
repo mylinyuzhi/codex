@@ -1,8 +1,5 @@
 //! Plugin security validation.
 //!
-//! TS source: `utils/plugins/validatePlugin.ts:903` (path traversal +
-//! impersonation), `utils/plugins/pluginPolicy.ts:20` (enterprise policy).
-//!
 //! Three pillars:
 //! 1. Path traversal — reject `..`, absolute paths, escaping symlinks.
 //! 2. Official-name impersonation — regex + non-ASCII homograph check.
@@ -24,8 +21,6 @@ pub enum PathValidation {
 }
 
 /// Validate a relative path against a plugin root directory.
-///
-/// TS: `validatePlugin.ts validatePaths(manifest, root)`.
 pub fn validate_paths(rel_path: &str) -> PathValidation {
     if rel_path.is_empty() {
         return PathValidation::Ok;
@@ -33,7 +28,7 @@ pub fn validate_paths(rel_path: &str) -> PathValidation {
     if Path::new(rel_path).is_absolute() {
         return PathValidation::Absolute;
     }
-    // Reject `..` against both native sep AND literal `/` (TS double-checks).
+    // Reject `..` against both native sep AND literal `/`.
     for c in Path::new(rel_path).components() {
         if matches!(c, Component::ParentDir) {
             return PathValidation::DotDotSegment;
@@ -45,9 +40,8 @@ pub fn validate_paths(rel_path: &str) -> PathValidation {
     PathValidation::Ok
 }
 
-/// Resolve `rel` under `root` and verify the canonical result stays inside.
-///
-/// TS: catches symlink escapes (`fs.realpath` + `startsWith` check).
+/// Resolve `rel` under `root` and verify the canonical result stays inside
+/// (catches symlink escapes).
 pub fn validate_resolved_under(root: &Path, rel: &str) -> PathValidation {
     let v = validate_paths(rel);
     if v != PathValidation::Ok {
@@ -63,10 +57,7 @@ pub fn validate_resolved_under(root: &Path, rel: &str) -> PathValidation {
     }
 }
 
-/// TS-mirroring impersonation regex patterns.
-///
-/// Source: `utils/plugins/marketplaceHelpers.ts ALLOWED_OFFICIAL_MARKETPLACE_NAMES`
-/// + `validatePlugin.ts impersonation regex`.
+/// Impersonation regex patterns for official plugin names.
 fn official_patterns() -> &'static [regex::Regex] {
     use std::sync::OnceLock;
     static PATTERNS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
@@ -112,8 +103,6 @@ pub enum ImpersonationResult {
 
 /// Check if a plugin name impersonates an official name.
 ///
-/// TS: `validatePlugin.ts checkImpersonation(name)`.
-///
 /// Two checks:
 /// 1. Direct regex against the raw input.
 /// 2. NFKD normalization, then regex against the normalized form.
@@ -150,8 +139,7 @@ pub fn check_impersonation(name: &str, is_from_official_marketplace: bool) -> Im
 }
 
 /// Cheap homograph-fold: map common Cyrillic/Greek confusables to ASCII.
-/// Not a full NFKD implementation, but covers the attack surface TS
-/// `validatePlugin` worries about.
+/// Not a full NFKD implementation, but covers the confusable attack surface.
 fn ascii_fold(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -176,13 +164,11 @@ fn ascii_fold(s: &str) -> String {
 }
 
 /// Enterprise policy applied to plugin install / load.
-///
-/// TS: `pluginPolicy.ts EnterprisePluginPolicy`.
 #[derive(Debug, Clone, Default)]
 pub struct EnterprisePolicy {
     /// Per-plugin org force-disable list, keyed by `name@marketplace`
-    /// ([`PluginId`] display form). TS: `policySettings.enabledPlugins[id]
-    /// === false` — the single source of truth across install / enable / UI.
+    /// ([`PluginId`] display form). Single source of truth across install /
+    /// enable / UI.
     pub blocked_plugins: HashSet<String>,
     /// Only allow plugins from approved marketplaces.
     pub strict_known_marketplaces: bool,
@@ -200,13 +186,10 @@ pub struct EnterprisePolicy {
 impl EnterprisePolicy {
     /// Build the policy from managed/enterprise (`Policy`-scope) settings.
     ///
-    /// TS: `pluginPolicy.ts` reads `getSettingsForSource('policySettings')`.
-    /// The per-plugin blocklist is every `enabled_plugins[id].enabled ==
-    /// false` entry in the policy layer (mirrors TS `enabledPlugins[id] ===
-    /// false`); `strict_plugin_only_customization` carries the managed flag.
-    ///
-    /// Marketplace-level fields map from the managed `strict_known_marketplaces`
-    /// allowlist (presence ⇒ strict) and `blocked_marketplaces` denylist.
+    /// The per-plugin blocklist is every `enabled_plugins[id].enabled == false`
+    /// entry in the policy layer. Marketplace-level fields map from the managed
+    /// `strict_known_marketplaces` allowlist (presence ⇒ strict) and
+    /// `blocked_marketplaces` denylist.
     pub fn from_managed_settings() -> Self {
         coco_config::settings::policy::load_policy_settings()
             .map(|p| Self::from_policy_settings(&p))
@@ -239,7 +222,7 @@ impl EnterprisePolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyVerdict {
     Ok,
-    /// Per-plugin org force-disable (TS `enabledPlugins[id] === false`).
+    /// Per-plugin org force-disable.
     BlockedPlugin {
         plugin: String,
     },
@@ -253,16 +236,13 @@ pub enum PolicyVerdict {
 }
 
 /// Check a plugin against enterprise policy.
-///
-/// TS: `pluginPolicy.ts isPluginBlockedByPolicy(plugin, policy)`.
 pub fn check_policy(
     plugin: &PluginId,
     is_user_scope: bool,
     policy: &EnterprisePolicy,
 ) -> PolicyVerdict {
     // Primary gate: per-plugin org blocklist. Applies regardless of
-    // marketplace (a blocked id can be bare or `name@marketplace`), matching
-    // TS where `isPluginBlockedByPolicy(id)` is checked first at every site.
+    // marketplace (a blocked id can be bare or `name@marketplace`).
     if policy.blocked_plugins.contains(&plugin.to_string()) {
         return PolicyVerdict::BlockedPlugin {
             plugin: plugin.to_string(),

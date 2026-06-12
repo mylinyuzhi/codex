@@ -240,7 +240,7 @@ async fn agent_model_params(ctx: &coco_tool_runtime::SchemaContext) -> serde_jso
 }
 
 /// Verifies the AgentTool model-facing schema exposes exactly the
-/// nine TS-mirrored user fields. The five PR11 "internal-only knobs"
+/// nine user fields. The five PR11 "internal-only knobs"
 /// (`effort`, `use_exact_tools`, `mcp_servers`, `disallowed_tools`,
 /// `max_turns`, `initial_prompt`) were intentionally removed — the
 /// coordinator now reads them off the resolved `AgentDefinition` only.
@@ -267,11 +267,11 @@ async fn test_agent_tool_input_schema_exposes_nine_user_fields() {
         "schema must expose exactly the 9 user fields"
     );
 
-    // `mode` enum carries the PermissionMode wire variants — the TS
-    // INTERNAL `permissionModeSchema` set (the 5 external modes + `bubble`
-    // + feature-gated `auto`). `ask`/`deny` are `PermissionBehavior`
-    // values, NOT modes, and must be absent (they fail to parse and are
-    // silently dropped to the parent mode by `resolve_subagent_mode`).
+    // `mode` enum carries the PermissionMode wire variants: the 5 external
+    // modes + `bubble` + feature-gated `auto`. `ask`/`deny` are
+    // `PermissionBehavior` values, NOT modes, and must be absent (they fail
+    // to parse and are silently dropped to the parent mode by
+    // `resolve_subagent_mode`).
     let mode_enum = p["mode"].get("enum").unwrap().as_array().unwrap();
     let mode_values: Vec<&str> = mode_enum.iter().filter_map(|v| v.as_str()).collect();
     for expected in [
@@ -317,8 +317,7 @@ async fn test_agent_tool_input_schema_exposes_nine_user_fields() {
 
 /// Step-4 schema-honesty gate: when the session can't actually
 /// honour `run_in_background` (env disable OR fork-subagent mode),
-/// the model-facing schema MUST drop the field. TS parity:
-/// `AgentTool.tsx:110-125 lazySchema().omit({ run_in_background: true })`.
+/// the model-facing schema MUST drop the field.
 #[tokio::test]
 async fn test_agent_tool_session_schema_drops_run_in_background_when_disabled() {
     let static_schema = <AgentTool as DynTool>::runtime_validation_schema(&AgentTool).as_value();
@@ -409,9 +408,8 @@ fn test_agent_spawn_request_inheritance_fields_are_serde_skip() {
 
 #[test]
 fn test_agent_classifier_input_surfaces_subagent_type_and_mode() {
-    // TS `AgentTool.toAutoClassifierInput`: the gate sees which agent type
-    // runs and at what permission mode — `(subagent_type, mode=…): prompt` —
-    // NOT the cosmetic `description`.
+    // The gate sees which agent type runs and at what permission mode —
+    // `(subagent_type, mode=…): prompt` — NOT the cosmetic `description`.
     assert_eq!(
         <AgentTool as DynTool>::to_auto_classifier_input(
             &AgentTool,
@@ -428,7 +426,7 @@ fn test_agent_classifier_input_surfaces_subagent_type_and_mode() {
 
 #[test]
 fn test_agent_classifier_input_prompt_only_when_no_tags() {
-    // No subagent_type / mode → TS prefix is a bare `": "`.
+    // No subagent_type / mode → prefix is a bare `": "`.
     assert_eq!(
         <AgentTool as DynTool>::to_auto_classifier_input(
             &AgentTool,
@@ -829,8 +827,7 @@ async fn test_send_message_success() {
 
 #[tokio::test]
 async fn test_send_message_string_without_summary_rejected() {
-    // TS `SendMessageTool.ts:668-674` requires `summary` whenever the
-    // message is a plain string.
+    // `summary` is required whenever the message is a plain string.
     let ctx = ctx_with_agent(MockAgentHandle::with_send(Ok("ok".into())));
     let result = <SendMessageTool as DynTool>::execute(
         &SendMessageTool,
@@ -1225,8 +1222,7 @@ async fn test_send_message_shutdown_response_routes_to_handle() {
 
 #[tokio::test]
 async fn test_send_message_shutdown_response_wrong_target_rejected() {
-    // TS `SendMessageTool.ts:695-700`: shutdown_response must target the
-    // team lead.
+    // `shutdown_response` must target the team lead.
     let handle = Arc::new(ShutdownRecordingHandle::default());
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle.clone();
@@ -1261,9 +1257,9 @@ async fn test_send_message_shutdown_response_missing_request_id_rejected() {
     assert!(handle.response.lock().await.is_none());
 }
 
-/// TS `SendMessageTool.ts:705-714`: rejecting a shutdown (`approve: false`)
-/// without a non-empty `reason` is a validation error — the leader (and the
-/// worker's own next turn) must know WHY it declined.
+/// Rejecting a shutdown (`approve: false`) without a non-empty `reason` is a
+/// validation error — the leader (and the worker's own next turn) must know
+/// WHY it declined.
 #[tokio::test]
 async fn test_send_message_shutdown_response_reject_without_reason_rejected() {
     let handle = Arc::new(ShutdownRecordingHandle::default());
@@ -1299,7 +1295,7 @@ async fn test_send_message_shutdown_response_reject_without_reason_rejected() {
     assert!(handle.response.lock().await.is_some());
 }
 
-// ── Auto-resume path (TS `SendMessageTool.ts:822-872` parity) ──
+// ── Auto-resume path ──
 
 /// Mock TaskHandle that returns a pre-canned status for any task_id.
 /// Used by the auto-resume tests to simulate a stopped bg task.
@@ -1624,12 +1620,10 @@ async fn test_team_create_success() {
 
 #[tokio::test]
 async fn test_team_delete_empty_input_accepted() {
-    // TS parity (`TeamDeleteTool.ts:21`): the input schema is
-    // `z.strictObject({})` — no `name` field. Empty input passes
-    // through to the handle, which resolves the team from the active
-    // session context. Without a side-channel mock here the underlying
-    // call returns an error; we just verify the schema doesn't reject
-    // empty input upfront.
+    // The input schema has no fields — empty input passes through to the
+    // handle, which resolves the team from the active session context.
+    // Without a side-channel mock here the underlying call returns an
+    // error; we just verify the schema doesn't reject empty input upfront.
     let ctx = ToolUseContext::test_default();
     let result =
         <TeamDeleteTool as DynTool>::execute(&TeamDeleteTool, serde_json::json!({}), &ctx).await;
@@ -1713,8 +1707,7 @@ async fn test_agent_tool_threads_definition_from_catalog_to_spawn_request() {
 
 #[tokio::test]
 async fn test_agent_tool_isolation_falls_back_to_definition() {
-    // TS `AgentTool.tsx:431` `effectiveIsolation = isolation ?? selectedAgent.isolation`:
-    // an agent whose frontmatter declares `isolation: worktree` must isolate
+    // An agent whose frontmatter declares `isolation: worktree` must isolate
     // even when the model omits the param.
     use coco_subagent::AgentCatalogSnapshot;
     use coco_types::{AgentDefinition, AgentIsolation, AgentSource, AgentTypeId, SubagentType};
@@ -1840,8 +1833,7 @@ async fn test_agent_tool_threads_none_when_catalog_absent() {
 }
 
 // ---------------------------------------------------------------------------
-// render_for_model — TS parity with AgentTool.tsx::mapToolResultToToolResultBlockParam
-// (4 branches: teammate_spawned / async_launched / completed / failed)
+// render_for_model — 4 branches: teammate_spawned / async_launched / completed / failed
 // ---------------------------------------------------------------------------
 
 mod render_for_model_tests {
@@ -1853,8 +1845,7 @@ mod render_for_model_tests {
 
     #[test]
     fn teammate_spawned_emits_spawn_message() {
-        // TS `AgentTool.tsx:1308-1312`: agent_id + name + team_name +
-        // mailbox hint are the four required signals.
+        // agent_id + name + team_name + mailbox hint are the four required signals.
         let data = json!({
             "status": "teammate_spawned",
             "agentId": "agent-7",

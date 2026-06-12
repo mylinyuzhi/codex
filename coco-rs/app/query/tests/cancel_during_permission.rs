@@ -12,14 +12,12 @@
 //!    paired (Anthropic / OpenAI providers reject otherwise).
 //! 3. Surface the cancellation in `QueryResult.cancelled = true`.
 //!
-//! This pins the existing TS-aligned behavior (TS:
-//! `query.ts:1015-1028` calls `yieldMissingToolResultBlocks` after
-//! abort) so future refactors don't silently break it.
+//! This pins the cancel → tool_result synthesis behavior so future
+//! refactors don't silently break it.
 //!
 //! Driven through the public `QueryEngine` API (`run` →
 //! `run_internal_with_messages`) — no reaching into
-//! `permission_controller` internals. Mirrors how TS verifies the
-//! same invariant indirectly via the query loop.
+//! `permission_controller` internals.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

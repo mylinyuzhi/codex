@@ -4,11 +4,9 @@ Code retrieval subsystem: BM25 full-text + vector semantic + AST symbol
 extraction + PageRank repo-map. Single `RetrievalFacade` entry point for
 agents, TUI, and CLI.
 
-**Note**: This crate is **not** ported from claude-code TS. TS has a small
-related helper (`utils/codeIndexing.ts`) that drives background `git grep` /
-file-listing and is not a full retrieval engine. `coco-retrieval` is a new
-subsystem. It predates the TS-port direction and is owned by coco-rs directly
-(see `../CLAUDE.md` for workspace conventions).
+**Note**: This crate is a new coco-rs subsystem, not a port of any upstream
+component. It is owned directly by coco-rs (see `../CLAUDE.md` for workspace
+conventions).
 
 ## Feature Flags
 

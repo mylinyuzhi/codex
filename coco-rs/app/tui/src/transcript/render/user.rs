@@ -38,11 +38,9 @@ pub(super) fn try_render(
                 lines.extend(rendered);
                 return Some(());
             }
-            // Subtle background tint behind user prompt rows. TS parity:
-            // `UserPromptMessage` wraps the body in `<Box
-            // backgroundColor="userMessageBackground">`, which paints the
-            // full row width rather than just the glyphs — the bg must
-            // therefore live on the `Line`, not on individual spans.
+            // Subtle background tint behind user prompt rows. The background
+            // must paint the full row width rather than just the glyphs — the
+            // bg must therefore live on the `Line`, not on individual spans.
             for line in text.lines() {
                 let span = Span::raw(format!("❯ {line}")).fg(w.styles.user_message());
                 let mut chat_line = Line::from(span);
@@ -62,8 +60,8 @@ pub(super) fn try_render(
             // Memory injections (nested CLAUDE.md / relevant memories) collapse to
             // a compact `◆ memory · <path>` chip: a width-1 marker aligned to the
             // column-2 gutter, distinct from tool/assistant dots by shape + dim
-            // styling. Other attachments mirror TS `AttachmentMessage` and show
-            // the body's first line; silent / structured payloads render nothing.
+            // styling. Other attachments show the body's first line;
+            // silent / structured payloads render nothing.
             if let Some(path) = super::compact_file_reference_chip_path(cell.source.as_ref(), w.cwd)
             {
                 lines.push(Line::from(vec![
@@ -91,11 +89,9 @@ pub(super) fn try_render(
             // Dim "Interrupted · …" row. The `for_tool_use` flag is
             // the engine-authoritative answer to "was a tool in flight
             // when the user cancelled?" (computed once in
-            // `finalize_user_cancel`). Surfaces a more specific
-            // wording for mid-tool cancellation so users see the
-            // distinction TS encodes via the
-            // `INTERRUPT_MESSAGE_FOR_TOOL_USE` text variant in
-            // persisted JSONL.
+            // `finalize_user_cancel`). Surfaces a more specific wording
+            // for mid-tool cancellation so users see the distinction
+            // encoded in the `INTERRUPT_MESSAGE_FOR_TOOL_USE` text variant.
             let key = if *for_tool_use {
                 "chat.interrupted_for_tool_use_marker"
             } else {

@@ -1,21 +1,13 @@
 //! EnterWorktree + ExitWorktree tools — git worktree isolation.
 //!
-//! TS:
-//! - `src/tools/EnterWorktreeTool/EnterWorktreeTool.ts`
-//! - `src/tools/ExitWorktreeTool/ExitWorktreeTool.ts`
-//!
 //! Worktree tools let the model (usually an agent) work in an isolated
 //! git worktree — create a branch, modify files there, and tear it
 //! down. The process CWD (and `session_cwd`) restoration is handled here.
 //!
-//! TS additionally calls `clearSystemPromptSections` /
-//! `clearMemoryFileCaches` / `getPlansDirectory.cache.clear` on enter/exit
-//! because it *memoizes* `getUserContext` / `getMemoryFiles`. coco-rs does
-//! not memoize: `app/query::build_prompt` re-runs
+//! coco-rs does not memoize: `app/query::build_prompt` re-runs
 //! `coco_context::discover_memory_files(cwd)` every turn from the live
 //! process cwd, and the plans dir / system prompt are recomputed per turn.
-//! So changing the cwd here is sufficient — there is no cache to invalidate
-//! (a deliberate, simpler adaptation of the TS behavior).
+//! So changing the cwd here is sufficient — there is no cache to invalidate.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -31,11 +23,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
 
-/// Model-facing tool prompt — TS parity:
-/// `EnterWorktreeTool/prompt.ts::getEnterWorktreeToolPrompt()`. The path /
-/// brand details are adapted to coco-rs (worktrees live under
-/// `../worktrees/`, isolation is git-only) — see this module's header for
-/// why the TS cache-invalidation behavior is a no-op here.
+/// Model-facing tool prompt. The path / brand details are adapted to coco-rs
+/// (worktrees live under `../worktrees/`, isolation is git-only) — see this
+/// module's header for why cache-invalidation is a no-op here.
 const ENTER_WORKTREE_PROMPT: &str = r#"Use this tool ONLY when the user explicitly asks to work in a worktree. This tool creates an isolated git worktree and switches the current session into it.
 
 ## When to Use
@@ -64,10 +54,9 @@ const ENTER_WORKTREE_PROMPT: &str = r#"Use this tool ONLY when the user explicit
 - `name` (optional): A name for the worktree. If not provided, a random name is generated.
 "#;
 
-/// Model-facing tool prompt — TS parity:
-/// `ExitWorktreeTool/prompt.ts::getExitWorktreeToolPrompt()`. The tmux note
-/// is dropped (coco-rs worktrees have no tmux session) and the
-/// cache-clearing detail is adapted (no memoized caches to clear here).
+/// Model-facing tool prompt. The tmux note is dropped (coco-rs worktrees have
+/// no tmux session) and the cache-clearing detail is adapted (no memoized
+/// caches to clear here).
 const EXIT_WORKTREE_PROMPT: &str = r#"Exit a worktree session created by EnterWorktree and return the session to the original working directory.
 
 ## Scope
@@ -141,11 +130,9 @@ impl Tool for EnterWorktreeTool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
     fn description(&self, _input: &EnterWorktreeInput, _options: &DescriptionOptions) -> String {
-        // TS parity: `EnterWorktreeTool.ts::description()`.
         "Creates an isolated worktree (via git or configured hooks) and switches the session into it"
             .into()
     }
-    /// TS parity: `EnterWorktreeTool/prompt.ts::getEnterWorktreeToolPrompt()`.
     /// The model's tool description is sourced from `prompt()`, not the
     /// short `description()` UI label.
     async fn prompt(&self, _options: &PromptOptions) -> String {
@@ -181,8 +168,7 @@ impl Tool for EnterWorktreeTool {
                 error_code: None,
             })?;
 
-        // #44 / TS `EnterWorktreeTool.ts:79-81` (`getCurrentWorktreeSession`):
-        // refuse to nest worktree sessions — doing so would lose the
+        // Refuse to nest worktree sessions — doing so would lose the
         // original cwd needed to restore on exit.
         if app_state.read().await.active_worktree.is_some() {
             return Err(ToolError::InvalidInput {
@@ -193,10 +179,9 @@ impl Tool for EnterWorktreeTool {
             });
         }
 
-        // #46 / TS `validateWorktreeSlug` (utils/worktree.ts:66-87): reject
-        // path-traversal in the provided name BEFORE slugifying or touching
-        // git. (A `None` name falls through to the generated slug, always
-        // valid.)
+        // Reject path-traversal in the provided name BEFORE slugifying or
+        // touching git. (A `None` name falls through to the generated slug,
+        // always valid.)
         if let Some(name) = input
             .name
             .as_deref()
@@ -223,8 +208,7 @@ impl Tool for EnterWorktreeTool {
         let worktree_path = current_cwd.join("..").join("worktrees").join(&slug);
         let worktree_path_string = worktree_path.to_string_lossy().to_string();
 
-        // Resolve the base branch the worktree branches FROM, mirroring TS
-        // `getOrCreateWorktree` (`utils/worktree.ts:277-328`): resolve the repo's
+        // Resolve the base branch the worktree branches FROM: resolve the repo's
         // default branch, prefer the local `origin/<default>` ref, else fetch it
         // (no-prompt), else fall back to the current `HEAD`. `original_head_commit`
         // is the resolved base SHA, so ExitWorktree's `discardedCommits` counts
@@ -272,7 +256,7 @@ impl Tool for EnterWorktreeTool {
             .filter(|s| !s.is_empty());
 
         // Create from the resolved base with `-B` (reset any orphan branch left
-        // by a prior removed worktree dir — TS `worktree.ts:326-328`).
+        // by a prior removed worktree dir).
         let output = tokio::process::Command::new("git")
             .current_dir(&current_cwd)
             .args([
@@ -355,10 +339,9 @@ impl Tool for EnterWorktreeTool {
 
 // ── ExitWorktreeTool ──
 //
-// TS: `tools/ExitWorktreeTool/ExitWorktreeTool.ts:29-145`. The active
-// worktree target lives in session app state, so the model only chooses
-// whether to keep or remove it. This tool restores the process/session cwd
-// before optional removal so later shell commands do not inherit a removed
+// The active worktree target lives in session app state, so the model only
+// chooses whether to keep or remove it. This tool restores the process/session
+// cwd before optional removal so later shell commands do not inherit a removed
 // directory.
 
 /// Typed input for [`ExitWorktreeTool`].
@@ -383,21 +366,21 @@ pub enum ExitWorktreeAction {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExitWorktreeOutput {
-    /// Whether the worktree was kept or removed (TS `action`).
+    /// Whether the worktree was kept or removed.
     #[serde(default)]
     pub action: ExitWorktreeAction,
-    /// The cwd the session was restored to (TS `originalCwd`).
+    /// The cwd the session was restored to.
     #[serde(default)]
     pub original_cwd: String,
     pub worktree_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_branch: Option<String>,
-    /// Uncommitted files discarded by `action: "remove"` (TS `discardedFiles`).
-    /// `None` when the worktree was kept.
+    /// Uncommitted files discarded by `action: "remove"`. `None` when the
+    /// worktree was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discarded_files: Option<i64>,
-    /// Commits ahead of base discarded by `action: "remove"`
-    /// (TS `discardedCommits`). `None` when the worktree was kept.
+    /// Commits ahead of base discarded by `action: "remove"`. `None` when
+    /// the worktree was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discarded_commits: Option<i64>,
     pub message: String,
@@ -431,11 +414,9 @@ impl Tool for ExitWorktreeTool {
         ctx.features.enabled(coco_types::Feature::Worktree)
     }
     fn description(&self, _input: &ExitWorktreeInput, _options: &DescriptionOptions) -> String {
-        // TS parity: `ExitWorktreeTool.ts::description()`.
         "Exits a worktree session created by EnterWorktree and restores the original working directory"
             .into()
     }
-    /// TS parity: `ExitWorktreeTool/prompt.ts::getExitWorktreeToolPrompt()`.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         EXIT_WORKTREE_PROMPT.to_string()
     }
@@ -482,10 +463,9 @@ impl Tool for ExitWorktreeTool {
 
         // For removals, count what would be discarded (uncommitted files +
         // commits ahead of the base HEAD) BEFORE the worktree is torn down.
-        // The same count drives the safety gate (TS
-        // `ExitWorktreeTool.validateInput`) AND the `discardedFiles` /
-        // `discardedCommits` output fields. TS re-runs `countWorktreeChanges`
-        // at execution time for accurate output; we mirror that.
+        // The same count drives the safety gate AND the `discardedFiles` /
+        // `discardedCommits` output fields. Re-runs `countWorktreeChanges` at
+        // execution time for accurate output.
         //
         // Safety gate: unless the caller passed `discard_changes`, refuse to
         // remove a worktree that has uncommitted work — `git worktree remove
@@ -537,7 +517,7 @@ impl Tool for ExitWorktreeTool {
                 }
             }
 
-            // TS falls back to 0/0 when the git count fails on a force-remove.
+            // Falls back to 0/0 when the git count fails on a force-remove.
             match summary {
                 Some(s) => (Some(s.changed_files as i64), Some(s.commits_ahead as i64)),
                 None => (Some(0), Some(0)),
@@ -599,10 +579,9 @@ impl Tool for ExitWorktreeTool {
         if matches!(input.action, ExitWorktreeAction::Remove) {
             ctx.lsp.shutdown_for_root(&worktree_path).await;
         }
-        // TS `ExitWorktreeTool` (`ExitWorktreeTool.ts:261-320`) synthesizes the
-        // structured fields into a user-facing narrative: branch (keep) /
-        // discard summary (remove) + the restored session cwd. (TS also names
-        // a tmux session; coco-rs worktrees have none, so that part is dropped.)
+        // Synthesize the structured fields into a user-facing narrative:
+        // branch (keep) / discard summary (remove) + the restored session cwd.
+        // (coco-rs worktrees have no tmux session, so that detail is omitted.)
         let restored_cwd = restore_target.display().to_string();
         let message = match input.action {
             ExitWorktreeAction::Keep => {
@@ -658,11 +637,10 @@ impl Tool for ExitWorktreeTool {
     }
 }
 
-/// TS `utils/worktree.ts:66-87 validateWorktreeSlug`: reject a worktree
-/// name that would escape the worktrees dir via path traversal. Runs
-/// before any git/chdir side effect. Each `/`-separated segment must be
-/// non-empty and match `[a-zA-Z0-9._-]+`; `.`/`..` segments and names
-/// over 64 chars are rejected.
+/// Reject a worktree name that would escape the worktrees dir via path
+/// traversal. Runs before any git/chdir side effect. Each `/`-separated
+/// segment must be non-empty and match `[a-zA-Z0-9._-]+`; `.`/`..` segments
+/// and names over 64 chars are rejected.
 fn validate_worktree_slug(slug: &str) -> Result<(), ToolError> {
     const MAX_WORKTREE_SLUG_LENGTH: usize = 64;
     let len = slug.chars().count();

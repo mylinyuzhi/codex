@@ -1,6 +1,6 @@
 //! Subagent handoff safety classifier — pure-logic prompt builders.
 //!
-//! TS: `tools/AgentTool/agentToolUtils.ts:classifyHandoffIfNeeded` runs a
+//! `tools/AgentTool/agentToolUtils.ts:classifyHandoffIfNeeded` runs a
 //! 2-stage LLM classifier on the subagent's transcript before returning
 //! the result to the parent. Stage 1 (broad triage) flags anything
 //! suspicious; stage 2 (focused review) confirms or clears the flag.
@@ -28,17 +28,17 @@ pub enum HandoffClassification {
 }
 
 /// Whether classification should run for this hand-off. Gates *solely*
-/// on a non-empty transcript — mirroring TS
+/// on a non-empty transcript — mirrors
 /// `agentToolUtils.ts:411-412` (`const agentTranscript =
 /// buildTranscriptForClassifier(...); if (!agentTranscript) return null`).
-/// TS does NOT exempt read-only agents or zero-tool turns; `subagentType`
+/// Read-only agents and zero-tool turns are NOT exempt; `subagentType`
 /// and `totalToolUseCount` feed analytics only. The feature + auto-mode
 /// gate is [`handoff_classifier_active`].
 pub fn should_classify(transcript: &str) -> bool {
     !transcript.trim().is_empty()
 }
 
-/// TS hand-off review user message — fed verbatim to the classifier so
+/// Hand-off review user message — fed verbatim to the classifier so
 /// it knows the transcript represents a sub-agent returning control to
 /// the main agent (not a fresh tool call). Pulled from
 /// `tools/AgentTool/agentToolUtils.ts:417`. Keep byte-faithful — the
@@ -52,9 +52,10 @@ pub const HANDOFF_REVIEW_USER_PROMPT: &str = "Sub-agent has finished and is hand
 /// dedicated markdown file (rather than a Rust string literal) so prompt
 /// changes are reviewable as a diff in isolation — the same auditability
 /// pattern OpenAI's Codex CLI uses for its `guardian/policy.md`. The
-/// TS YOLO classifier's own block-rules `.txt` is not shipped in the source
-/// tree, so this is coco-rs's first-party policy, not a byte-faithful port;
-/// the user-message framing ([`HANDOFF_REVIEW_USER_PROMPT`]) stays TS-faithful.
+/// YOLO classifier's own block-rules `.txt` is not shipped in the source
+/// tree, so this is coco-rs's first-party policy; the user-message
+/// framing ([`HANDOFF_REVIEW_USER_PROMPT`]) is byte-faithful to the
+/// original.
 pub const HANDOFF_CLASSIFIER_POLICY: &str = include_str!("handoff_classifier_policy.md");
 
 /// Stage 1 system + user prompts. The model is asked to triage the
@@ -65,7 +66,7 @@ pub const HANDOFF_CLASSIFIER_POLICY: &str = include_str!("handoff_classifier_pol
 /// one-line first-pass framing. The user message uses
 /// [`HANDOFF_REVIEW_USER_PROMPT`] verbatim, paired with the agent type,
 /// tool-use count, and the transcript so a stateless classifier has the
-/// same context the TS YOLO flow gets through `agentMessages`.
+/// same context the YOLO flow gets through `agentMessages`.
 pub fn stage1_prompts(
     agent_type: &str,
     transcript: &str,
@@ -112,8 +113,8 @@ pub fn stage2_prompts(stage1_verdict: &str, transcript: &str) -> (String, String
 pub fn parse_classifier_response(text: &str) -> HandoffClassification {
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        // Fail-open on empty responses (TS parity — classifier failures
-        // should never block legitimate output).
+        // Fail-open on empty responses — classifier failures should
+        // never block legitimate output.
         return HandoffClassification::Safe;
     }
     let upper = trimmed.to_ascii_uppercase();
@@ -129,12 +130,11 @@ pub fn parse_classifier_response(text: &str) -> HandoffClassification {
     HandoffClassification::Blocked { reason }
 }
 
-/// Compose the TS-faithful warning payload for a confirmed block.
+/// Compose the warning payload for a confirmed block.
 /// Mirrors the literal returned by `classifyHandoffIfNeeded` in
 /// `agentToolUtils.ts:476` — keep the wording byte-faithful so model
-/// behaviour around the warning stays consistent across the TS and
-/// Rust runtimes. Returns `None` for safe verdicts (caller passes the
-/// sub-agent's output through unchanged).
+/// behaviour around the warning stays consistent. Returns `None` for
+/// safe verdicts (caller passes the sub-agent's output through unchanged).
 ///
 /// Empty reasons (e.g. classifier returned just `"BLOCKED"` with no
 /// detail) collapse to `"unspecified safety concern"` so the message
@@ -158,18 +158,18 @@ pub fn render_block_message(verdict: &HandoffClassification) -> Option<String> {
 }
 
 /// Warning text returned when the classifier itself was unreachable.
-/// TS parity: `agentToolUtils.ts:469`. Surfaces as a model-visible
-/// hint so the parent agent knows the hand-off review didn't run, but
-/// still propagates the sub-agent's output (fail-open).
+/// `agentToolUtils.ts:469`. Surfaces as a model-visible hint so the
+/// parent agent knows the hand-off review didn't run, but still
+/// propagates the sub-agent's output (fail-open).
 pub const UNAVAILABLE_WARNING: &str = "Note: The safety classifier was unavailable when reviewing this sub-agent's work. \
      Please carefully verify the sub-agent's actions and output before acting on them.";
 
-/// TS `agentToolUtils.ts:404-405` — handoff classification only runs
+/// `agentToolUtils.ts:404-405` — handoff classification only runs
 /// when the parent's permission mode is [`PermissionMode::Auto`] AND the
 /// `TRANSCRIPT_CLASSIFIER` feature is on. Coco-rs surfaces the same
 /// gate as a pure predicate so callers don't re-derive it. The
-/// `feature_enabled` flag captures the feature-flag layer (TS
-/// `feature('TRANSCRIPT_CLASSIFIER')` ≈ coco-rs runtime config; coco-rs
+/// `feature_enabled` flag captures the feature-flag layer
+/// (`feature('TRANSCRIPT_CLASSIFIER')` ≈ coco-rs runtime config; coco-rs
 /// ships no such kill-switch yet, so callers pass `true`).
 pub fn handoff_classifier_active(
     permission_mode: Option<coco_types::PermissionMode>,
@@ -182,7 +182,7 @@ pub fn handoff_classifier_active(
 /// Strips tool-result bodies (only emits `tool_result` markers) so the
 /// classifier sees actions, not data, and the prompt stays bounded.
 ///
-/// TS: `agentToolUtils.ts:buildTranscriptForClassifier`. TS reads
+/// `agentToolUtils.ts:buildTranscriptForClassifier` reads
 /// `tool_result` blocks out of a user message's content array; coco-rs
 /// stores them as the [`coco_types::messages::Message::ToolResult`]
 /// variant but tags them `[user]` in the summary so the prompt the

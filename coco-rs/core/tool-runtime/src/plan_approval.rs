@@ -1,7 +1,7 @@
 //! Plan-approval protocol messages exchanged between teammates and team
 //! leads via the mailbox. Producers:
 //! - teammate `ExitPlanModeTool` serializes [`PlanApprovalRequest`] and
-//!   writes it to the lead's inbox (TS: ExitPlanModeV2Tool.ts:264-313).
+//!   writes it to the lead's inbox.
 //! - leader's `SendMessage` reply serializes [`PlanApprovalResponse`]
 //!   into the teammate's inbox.
 //!
@@ -10,16 +10,15 @@
 //! structs — avoids string-keyed `serde_json::Value` access on internal
 //! coco↔coco payloads per CLAUDE.md "Typed Structs over JSON Values".
 //!
-//! Wire format intentionally mirrors the TS JSON shape. Field renames
-//! are explicit so both TS-originated messages (camelCase) and
-//! Rust-originated messages (either style) round-trip cleanly.
+//! Wire format uses explicit field renames so both camelCase and
+//! snake_case messages round-trip cleanly.
 
 use coco_types::PermissionMode;
 use serde::Deserialize;
 use serde::Serialize;
 
 /// Either side of the plan-approval handshake. Tagged on `type` to
-/// match the TS `{ "type": "plan_approval_request", ... }` shape.
+/// tagged on `type` with `"plan_approval_request"` / `"plan_approval_response"`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PlanApprovalMessage {

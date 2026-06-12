@@ -1,7 +1,5 @@
 //! Windows path → POSIX path conversion for bash interop.
 //!
-//! TS: `utils/windowsPaths.ts::windowsPathToPosixPath`.
-//!
 //! Git Bash on Windows expects POSIX-shaped paths: drive `C:` becomes
 //! `/c`, backslashes become forward slashes. PowerShell consumes
 //! native Windows paths and skips this conversion. The function is

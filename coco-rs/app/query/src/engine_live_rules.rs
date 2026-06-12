@@ -1,10 +1,10 @@
 //! Per-engine `PermissionRuleHandle` for skill-emitted Command-source
 //! rules.
 //!
-//! # Scope (mirrors TS `query()` lifecycle)
+//! # Scope
 //!
-//! TS keeps skill `allowed-tools` rules in `appState.alwaysAllowRules.command`,
-//! captured by the `getAppState` closure that lives for **one `query()` call**:
+//! Skill `allowed-tools` rules accumulate in
+//! `appState.alwaysAllowRules.command` for **one `query()` call**:
 //!
 //! - **Within one user message** — every turn of that `query()` invocation
 //!   sees rules accumulated by earlier turns (cross-turn propagation).

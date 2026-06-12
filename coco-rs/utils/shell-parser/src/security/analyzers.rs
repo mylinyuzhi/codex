@@ -247,9 +247,8 @@ impl Analyzer for DangerousVariablesAnalyzer {
     fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         // Look for `$VAR`/`${VAR}` adjacent to a pipe OR a redirect, in unquoted
         // context only. Inside double quotes, `"$VAR" | cmd` is safe because the
-        // variable expands as a single word. TS `validateDangerousVariables`
-        // flags both orderings: `$VAR\s*[|<>]` and `[<>|]\s*$VAR` (the original
-        // port only matched the pipe-after case).
+        // variable expands as a single word. Flags both orderings: `$VAR\s*[|<>]`
+        // and `[<>|]\s*$VAR`.
         #[allow(clippy::expect_used)]
         static VAR_REDIR_RE: Lazy<Regex> = Lazy::new(|| {
             Regex::new(
@@ -483,8 +482,7 @@ pub struct ZshDangerousCommandsAnalyzer;
 impl Analyzer for ZshDangerousCommandsAnalyzer {
     fn analyze(&self, cmd: &ParsedShell, analysis: &mut SecurityAnalysis) {
         // Zsh-only builtins. `mapfile` is excluded here (it's a bash builtin
-        // already covered by EvalLikeBuiltinAnalyzer). `zcompile`/`autoload`
-        // are zsh-specific additions beyond the TS list.
+        // already covered by EvalLikeBuiltinAnalyzer).
         const ZSH_CMDS: &[&str] = &[
             "zmodload", "emulate", "sysopen", "zcompile", "autoload", "sysread", "syswrite",
             "sysseek", "zpty", "ztcp", "zsocket", "zf_rm", "zf_mv", "zf_ln", "zf_chmod",
@@ -1214,14 +1212,13 @@ impl Analyzer for ExcessClosingBracesAnalyzer {
 }
 
 // =============================================================================
-// New Deny Phase Analyzers (TS parity)
+// New Deny Phase Analyzers
 // =============================================================================
 
 /// Eval-like builtins that execute arguments as shell code.
 ///
-/// Matches TS `EVAL_LIKE_BUILTINS` from `ast.ts`. These builtins can execute
-/// arbitrary code through their arguments, making them dangerous when the
-/// arguments are not fully controlled.
+/// These builtins can execute arbitrary code through their arguments,
+/// making them dangerous when the arguments are not fully controlled.
 ///
 /// Safe-path exceptions:
 /// - `command -v/-V foo` (existence check only)
@@ -1296,7 +1293,7 @@ impl Analyzer for EvalLikeBuiltinAnalyzer {
 
 /// Detects builtins whose NAME arguments trigger array subscript evaluation.
 ///
-/// Matches TS `SUBSCRIPT_EVAL_FLAGS` from `ast.ts`. When builtins like `test -v`,
+/// When builtins like `test -v`,
 /// `printf -v`, `read -a`, `unset -v`, `wait -p` receive a NAME argument,
 /// bash re-parses it and evaluates array subscripts. This means
 /// `read 'a[$(id)]'` silently executes `id`.
@@ -1454,7 +1451,7 @@ impl Analyzer for SubscriptEvalAnalyzer {
 
 /// Detects arithmetic comparisons in `[[` that evaluate subscripts.
 ///
-/// Matches TS `TEST_ARITH_CMP_OPS`. In `[[ ARG -eq ARG ]]`, both operands
+/// In `[[ ARG -eq ARG ]]`, both operands
 /// are arithmetically evaluated. If an operand contains `[`, it may execute
 /// code via array subscript evaluation: `[[ arr[$(cmd)] -eq 0 ]]`.
 pub struct ArithComparisonAnalyzer;

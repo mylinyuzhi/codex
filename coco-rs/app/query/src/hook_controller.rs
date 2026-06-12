@@ -163,13 +163,13 @@ impl<'a> HookController<'a> {
         }
     }
 
-    /// Fire `PermissionDenied` hooks (TS `executePermissionDeniedHooks`).
+    /// Fire `PermissionDenied` hooks.
     ///
     /// Called from `tool_call_preparer::prepare_one_pending_tool_call`
     /// when an auto-mode classifier denial is observed, before the
     /// `PermissionController` writes the error tool_result. Returns the
     /// aggregated `retry` flag so the caller can hint the model that the
-    /// hook says it may retry. Mirrors TS `toolExecution.ts:1075-1101`.
+    /// hook says it may retry.
     pub(crate) async fn run_permission_denied(
         &self,
         tool_name: &str,

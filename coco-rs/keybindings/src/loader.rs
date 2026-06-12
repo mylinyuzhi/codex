@@ -1,16 +1,12 @@
 //! User keybinding configuration loader with hot-reload support.
 //!
-//! TS source: `keybindings/loadUserBindings.ts:1-472`. Loads
-//! `~/.coco/keybindings.json`, merges with [`crate::defaults`], runs
+//! Loads `~/.coco/keybindings.json`, merges with [`crate::defaults`], runs
 //! validation, and emits hot-reload events when the file changes.
-//!
-//! Differences from TS:
 //!
 //! * Path is `~/.coco/keybindings.json` (or `$COCO_CONFIG_DIR/keybindings.json`)
 //!   per the coco-rs config-home rule. Resolution goes through
 //!   [`coco_utils_common::find_coco_home`].
-//! * No `isKeybindingCustomizationEnabled` GrowthBook gate — coco-rs
-//!   always allows user customization.
+//! * User customization is always allowed.
 //! * Hot reload uses `coco-file-watch`. The classifier filters to the
 //!   target path (we watch the parent dir so create-after-startup
 //!   works, but only emit when `keybindings.json` itself changes).

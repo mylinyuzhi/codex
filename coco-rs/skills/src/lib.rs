@@ -1,6 +1,4 @@
 //! Skill system — markdown workflow loading, discovery, execution.
-//!
-//! TS: skills/ (SkillDefinition, SkillManager, bundled + user + project + plugin skills)
 
 pub mod bundled;
 pub mod error;
@@ -41,8 +39,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Execution context for a skill.
-///
-/// TS: `context: 'inline' | 'fork'`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillContext {
@@ -54,16 +50,12 @@ pub enum SkillContext {
 }
 
 /// A skill definition loaded from a markdown file.
-///
-/// TS: `SkillDefinition` + frontmatter fields from `loadSkillsDir.ts`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillDefinition {
     pub name: String,
     /// User-facing override of `name`, populated from the frontmatter
     /// `name` field. `None` falls back to `name` for display.
     ///
-    /// TS: `displayName` on the prompt-command record (`loadSkillsDir.ts:239`,
-    /// rendered through `userFacingName(): displayName || skillName`).
     /// Skill identity / lookup always uses `name` (which is path-derived);
     /// `display_name` only changes how the skill is shown in typeahead,
     /// help listings, and similar surfaces.
@@ -73,8 +65,6 @@ pub struct SkillDefinition {
     pub prompt: String,
     pub source: SkillSource,
     /// Alternative names for this skill (e.g., short forms).
-    ///
-    /// TS: `BundledSkillDefinition.aliases`
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,70 +102,51 @@ pub struct SkillDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<serde_json::Value>,
     /// Display hint for arguments (e.g., `[filename]`).
-    ///
-    /// TS: `argument-hint` frontmatter key.
+    /// Frontmatter key: `argument-hint`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument_hint: Option<String>,
     /// Whether users can type `/name` to invoke this skill. Default: true.
-    ///
-    /// TS: `user-invocable` frontmatter key.
     #[serde(default = "default_true")]
     pub user_invocable: bool,
     /// Prevents the model from invoking this skill via the Skill tool.
-    ///
-    /// TS: `disable-model-invocation` frontmatter key.
     #[serde(default)]
     pub disable_model_invocation: bool,
     /// Shell configuration for the skill (opaque JSON).
-    ///
-    /// TS: `shell` frontmatter key (FrontmatterShell).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<serde_json::Value>,
     /// Character count of the skill's prompt content (for token estimation).
-    ///
-    /// TS: `contentLength` on PromptCommand.
     #[serde(default)]
     pub content_length: i64,
     /// Whether the description came verbatim from the frontmatter
     /// `description` field (true) or was synthesised from the markdown
     /// body via `extract_description_from_markdown` (false).
-    ///
-    /// TS: `hasUserSpecifiedDescription` on the prompt-command record
-    /// (`loadSkillsDir.ts:241`). Consumers like the bundled-skill listing
-    /// can decide to surface only user-written descriptions.
+    /// Consumers like the bundled-skill listing can decide to surface only
+    /// user-written descriptions.
     #[serde(default)]
     pub has_user_specified_description: bool,
     /// UI label shown while the skill is executing (e.g. spinner caption).
-    /// `None` falls back to the consumer-side default — TS hard-codes the
-    /// default string `'running'` in `createSkillCommand`
-    /// (`loadSkillsDir.ts:336`).
+    /// `None` falls back to the consumer-side default (`'running'`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_message: Option<String>,
     /// Whether this skill is hidden from typeahead/help but still invocable.
-    ///
-    /// TS: `isHidden` — separate from `user_invocable` (which blocks user invocation entirely).
+    /// Separate from `user_invocable` (which blocks user invocation entirely).
     #[serde(default)]
     pub is_hidden: bool,
     /// Optional feature gate. When set, the skill is only visible/invocable
     /// if the listed feature is enabled (`Features::enabled(feature)`).
-    ///
-    /// TS: `Command.isEnabled?: () => boolean` from `types/command.ts:180`.
     /// Used by every gated bundled skill (loop, schedule, dream, hunter,
     /// claude-api, claude-in-chrome, run-skill-generator).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gated_by: Option<Feature>,
     /// Reference files extracted lazily on first invocation.
     ///
-    /// TS: `BundledSkillDefinition.files: Record<string, string>` in
-    /// `skills/bundledSkills.ts:36`. Keys are relative paths (forward slashes,
-    /// no `..`); values are file contents. When set, the skill prompt is
-    /// prefixed with `Base directory for this skill: <dir>` so the model
-    /// can Read/Grep these files via the same contract as on-disk skills.
+    /// Keys are relative paths (forward slashes, no `..`); values are file
+    /// contents. When set, the skill prompt is prefixed with
+    /// `Base directory for this skill: <dir>` so the model can Read/Grep
+    /// these files via the same contract as on-disk skills.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub files: HashMap<String, String>,
     /// On-disk extraction directory after first invocation.
-    ///
-    /// TS: `Command.skillRoot` (set by `registerBundledSkill`).
     /// `None` until the skill is first invoked AND has `files`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_root: Option<PathBuf>,
@@ -184,8 +155,6 @@ pub struct SkillDefinition {
 impl SkillDefinition {
     /// Whether this skill is enabled in the given feature set.
     /// Skills without `gated_by` are always enabled.
-    ///
-    /// TS: `Command.isEnabled?.()` callback semantics.
     pub fn is_enabled(&self, features: &Features) -> bool {
         match self.gated_by {
             Some(feat) => features.enabled(feat),
@@ -196,9 +165,6 @@ impl SkillDefinition {
     /// Name to surface in typeahead / help listings / `/skills`. Returns
     /// the frontmatter-supplied [`Self::display_name`] when set, otherwise
     /// falls back to the canonical [`Self::name`] used for lookup.
-    ///
-    /// TS: `Command.userFacingName(): displayName || skillName` from
-    /// `loadSkillsDir.ts:337-339`.
     pub fn user_facing_name(&self) -> &str {
         self.display_name.as_deref().unwrap_or(&self.name)
     }
@@ -225,8 +191,6 @@ pub enum SkillSource {
         plugin_name: String,
     },
     /// Enterprise/policy-managed skills.
-    ///
-    /// TS: `policySettings` source in `getSkillsPath()`.
     Managed {
         path: PathBuf,
     },
@@ -246,9 +210,6 @@ pub enum SkillSource {
 /// `Mutex` so the read-heavy catalog isn't blocked when a listing pass
 /// mutates the sent set.
 ///
-/// TS parity: `attachments.ts:2700-2730` `sentSkillNames` is a per-agent
-/// `Map`; we model it as `Mutex<HashMap<String, HashSet<String>>>` keyed
-/// by `agent_id.unwrap_or("")`.
 #[derive(Default, Debug)]
 pub struct SkillManager {
     /// Disk + MCP skill catalog. Both halves share one lock so a
@@ -256,9 +217,8 @@ pub struct SkillManager {
     catalog: std::sync::RwLock<SkillCatalog>,
     /// Skills already announced in a `skill_listing` reminder, keyed by
     /// `agent_id.unwrap_or("")` so the main thread (empty key) and each
-    /// subagent get their own turn-0 listing — matching TS's per-agent
-    /// Map. Separate lock from [`Self::catalog`] so listing-time
-    /// mutation doesn't block reads.
+    /// subagent get their own turn-0 listing. Separate lock from
+    /// [`Self::catalog`] so listing-time mutation doesn't block reads.
     announcements: std::sync::Mutex<HashMap<String, HashSet<String>>>,
 }
 
@@ -267,7 +227,7 @@ pub struct SkillManager {
 /// single lock acquisition.
 ///
 /// **Conditional split.** Disk skills land in one of two maps based on
-/// their frontmatter `paths` field (TS `loadSkillsDir.ts:771-790`):
+/// their frontmatter `paths` field:
 ///
 /// - `disk` — unconditional + activated-conditional skills. These are
 ///   visible to the model (`listing()`, `visible()`, `get()`).
@@ -277,9 +237,7 @@ pub struct SkillManager {
 ///
 /// Promotion is one-way and session-persistent via
 /// [`Self::activated_conditional_names`] — once activated, a skill
-/// survives reloads and stays in `disk` for the rest of the session,
-/// matching TS `activatedConditionalSkillNames` in
-/// `loadSkillsDir.ts:829`.
+/// survives reloads and stays in `disk` for the rest of the session.
 #[derive(Default, Debug)]
 struct SkillCatalog {
     /// Visible disk / bundled skills, keyed by skill name.
@@ -288,15 +246,12 @@ struct SkillCatalog {
     /// `listing()` / `visible()` / `get()` until promoted.
     disk_conditional: HashMap<String, Arc<SkillDefinition>>,
     /// Names of conditional skills that have been activated this
-    /// session. Survives reloads (TS parity:
-    /// `activatedConditionalSkillNames` survives cache clears within
-    /// a session per `loadSkillsDir.ts:810`).
+    /// session. Survives reloads — once activated, stays active for the
+    /// entire session regardless of cache clears.
     activated_conditional_names: HashSet<String>,
     /// MCP-sourced skills, keyed by `(server_name, skill_name)` so a
-    /// per-server unregister can drop a slice without touching the
-    /// rest. TS: server-scoped skill maps managed by the MCP
-    /// connection manager (`services/mcp/client.ts`). MCP skills have
-    /// no on-disk `paths` semantics (see `mcp_builders.rs`).
+    /// per-server unregister can drop a slice without touching the rest.
+    /// MCP skills have no on-disk `paths` semantics (see `mcp_builders.rs`).
     mcp: HashMap<(String, String), Arc<SkillDefinition>>,
     /// Canonical file identities already loaded for disk skills.
     disk_file_identities: HashSet<PathBuf>,
@@ -309,8 +264,7 @@ impl SkillCatalog {
     fn len(&self) -> usize {
         self.disk.len() + self.mcp.len()
     }
-    /// Whether `skill` should be routed to the conditional bucket on
-    /// register. TS: `loadSkillsDir.ts:776-779` predicate.
+    /// Whether `skill` should be routed to the conditional bucket on register.
     fn is_conditional(&self, skill: &SkillDefinition) -> bool {
         !skill.paths.is_empty() && !self.activated_conditional_names.contains(&skill.name)
     }
@@ -343,7 +297,7 @@ impl SkillManager {
     /// Compute the set of skill names not yet announced to `agent_id`,
     /// then mark them as sent. Returns `(new_skills, is_initial)` where
     /// `is_initial` is true on the first non-empty announcement for this
-    /// agent (TS `attachments.ts:2725` `sent.size === 0` check).
+    /// agent (`sent.size === 0` check).
     pub fn take_unannounced_skills(
         &self,
         agent_id: Option<&str>,
@@ -369,10 +323,6 @@ impl SkillManager {
     /// on the next listing pass. Called after a disk reload (the catalog
     /// changed, so an edited same-named skill must surface again) and on
     /// `/clear` (the conversation is reset).
-    ///
-    /// TS parity: `resetSentSkillNames()` (`attachments.ts:2607-2613`)
-    /// wipes the `sentSkillNames` Map on every debounced reload
-    /// (`skillChangeDetector.ts:276`) and on `/clear` (`caches.ts:75-79`).
     pub fn reset_announcements(&self) {
         let mut guard = self
             .announcements
@@ -385,9 +335,9 @@ impl SkillManager {
     /// safe to call on a shared `Arc<SkillManager>`.
     ///
     /// Skills with non-empty `paths` and no prior activation are routed
-    /// to the hidden conditional bucket (TS `loadSkillsDir.ts:771-790`).
-    /// They surface only after [`Self::activate_for_paths`] matches a
-    /// file the model touched this session.
+    /// to the hidden conditional bucket. They surface only after
+    /// [`Self::activate_for_paths`] matches a file the model touched this
+    /// session.
     pub fn register(&self, skill: SkillDefinition) {
         let mut guard = self.write_catalog();
         guard.insert_disk(skill);
@@ -399,8 +349,6 @@ impl SkillManager {
     /// [`crate::mcp_builders::mcp_skill_builder`]) to parse the spec into
     /// a typed [`SkillDefinition`] with [`SkillSource::Mcp`].
     ///
-    /// TS parity: `services/mcp/client.ts::fetchMcpSkillsForClient` →
-    /// the registered builders make a `SkillDefinition` per resource.
     pub fn register_mcp_skill(&self, spec: crate::mcp_builders::McpSkillSpec) -> crate::Result<()> {
         let builder = crate::mcp_builders::mcp_skill_builder();
         let key = (spec.server_name.clone(), spec.name.clone());
@@ -424,11 +372,9 @@ impl SkillManager {
     /// Replace the entire disk-skill catalog with a fresh set. Used by
     /// the watcher's reload path; MCP-sourced skills are preserved.
     ///
-    /// `activated_conditional_names` survives the reload — TS parity:
-    /// once a conditional skill is activated this session it stays
-    /// activated even if the disk catalog is rebuilt
-    /// (`loadSkillsDir.ts:810` — `activatedConditionalSkillNames`
-    /// outlives `clearSkillCaches`).
+    /// `activated_conditional_names` survives the reload — once a conditional
+    /// skill is activated this session it stays activated even if the disk
+    /// catalog is rebuilt.
     ///
     /// `&self`: interior-mut via the shared `RwLock`.
     pub fn reload_disk_skills(&self, fresh: impl IntoIterator<Item = SkillDefinition>) {
@@ -447,19 +393,15 @@ impl SkillManager {
     /// skills (in stable sorted order) so callers can log / emit
     /// telemetry.
     ///
-    /// Mirrors TS `activateConditionalSkillsForPaths`
-    /// (`loadSkillsDir.ts:997-1058`):
-    /// - patterns interpret as gitignore-style globs anchored at `cwd`
-    ///   (TS uses the `ignore` library; we use the Rust `ignore` crate)
-    /// - file paths outside `cwd`, empty, or escaping via `..` are
-    ///   skipped (TS lines 1014-1027)
-    /// - activation is one-way and persistent for the session via
-    ///   [`SkillCatalog::activated_conditional_names`]
+    /// - Patterns are gitignore-style globs anchored at `cwd`
+    ///   (uses the Rust `ignore` crate).
+    /// - File paths outside `cwd`, empty, or escaping via `..` are skipped.
+    /// - Activation is one-way and persistent for the session via
+    ///   [`SkillCatalog::activated_conditional_names`].
     ///
     /// The reminder pipeline's `skill_listing` generator picks up the
     /// newly-visible names on the next turn via
-    /// [`Self::take_unannounced_skills`] — no separate notification is
-    /// emitted here (TS `dynamic_skills_changed` is analytics-only).
+    /// [`Self::take_unannounced_skills`].
     pub fn activate_for_paths(&self, file_paths: &[PathBuf], cwd: &Path) -> Vec<String> {
         let mut guard = self.write_catalog();
         if guard.disk_conditional.is_empty() {
@@ -467,12 +409,11 @@ impl SkillManager {
         }
 
         // Normalize files to absolute cwd-rooted paths, skipping
-        // anything outside cwd (TS: `relativePath.startsWith('..')` /
-        // absolute check). We need ABSOLUTE paths under `cwd` because
-        // `matched_path_or_any_parents` (the TS-parity matcher — walks
-        // parent dirs so a bare-dir pattern like `build` matches
-        // `build/foo.rs`) requires its input to be a descendant of the
-        // matcher's root.
+        // anything outside cwd (relative paths starting with `..` or
+        // absolute paths outside cwd). We need ABSOLUTE paths under `cwd`
+        // because `matched_path_or_any_parents` (walks parent dirs so a
+        // bare-dir pattern like `build` matches `build/foo.rs`) requires
+        // its input to be a descendant of the matcher's root.
         let absolute_files: Vec<PathBuf> = file_paths
             .iter()
             .filter_map(|p| relative_to_cwd(p, cwd).map(|rel| cwd.join(rel)))
@@ -512,8 +453,7 @@ impl SkillManager {
     }
 
     /// Number of conditional (hidden) skills currently awaiting
-    /// activation. TS parity: `getConditionalSkillCount()`
-    /// (`loadSkillsDir.ts:1063`). Test/diagnostic surface only.
+    /// activation. Test/diagnostic surface only.
     pub fn conditional_skill_count(&self) -> usize {
         self.read_catalog().disk_conditional.len()
     }
@@ -576,9 +516,7 @@ impl SkillManager {
     }
 
     /// Iterate skills currently enabled under the given feature set.
-    ///
-    /// TS: `commands.filter(c => c.isEnabled?.() ?? true)` applied at
-    /// every typeahead / Skill-tool listing call site.
+    /// Applied at every typeahead / Skill-tool listing call site.
     pub fn visible(&self, features: &Features) -> Vec<Arc<SkillDefinition>> {
         self.all()
             .into_iter()
@@ -665,11 +603,9 @@ impl SkillManager {
     /// — both `SKILL.md` directories and flat `.md` files), tagging each with
     /// the given setting-source scope.
     ///
-    /// TS: `loadSkillsFromCommandsDir` (`loadSkillsDir.ts:566-623`), which
-    /// feeds `getSkillDirCommands` and dedups against `skills/` by realpath.
-    /// The source's path is preserved so `canonical_skill_identity` can
-    /// dedup these against the `skills/`-loaded copies via
-    /// `disk_file_identities`.
+    /// Dedups against `skills/` by realpath. The source's path is preserved so
+    /// `canonical_skill_identity` can dedup against the `skills/`-loaded copies
+    /// via `disk_file_identities`.
     fn load_legacy_command_scope(&self, scope: SettingScope, dir: &Path) {
         self.load_with_source(dir, SkillDirFormat::Legacy, |path| scope.source_for(path));
     }
@@ -694,8 +630,7 @@ impl SettingScope {
 }
 
 /// Per-scope skill directory configuration for `SkillManager::load_scoped`.
-///
-/// TS: `getSkillsPath()` returns paths for managed, user, and project skill sources.
+/// Returns paths for managed, user, and project skill sources.
 #[derive(Debug, Clone, Default)]
 pub struct SkillScopes {
     /// Enterprise/policy skills (highest priority).
@@ -748,9 +683,6 @@ pub enum SkillDirFormat {
 }
 
 /// Walk directories and discover skill files, deduplicating by canonical path.
-///
-/// TS: `getSkillDirCommands()` — discovers skills from multiple directories
-/// and deduplicates by `realpath()`.
 pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
     discover_skills_with_format(dirs, SkillDirFormat::SkillMdOnly)
 }
@@ -758,8 +690,7 @@ pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
 /// Walk up from each file path to the cwd boundary and collect any
 /// `<ancestor>/.coco/skills/` directories that exist on disk.
 ///
-/// TS: `loadSkillsDir.ts:861-915` `discoverSkillDirsForPaths`. The
-/// scanner runs on every Read/Write/Edit so the model can pick up
+/// The scanner runs on every Read/Write/Edit so the model can pick up
 /// nested project skills without having to opt into them at startup.
 ///
 /// # Algorithm
@@ -773,15 +704,14 @@ pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillDefinition> {
 /// 4. Sort the results by path depth (deepest first) so deeper skills
 ///    take precedence when the manager loads them.
 ///
-/// **Differences from TS**:
-/// - No memoization cache. TS uses a module-level `dynamicSkillDirs`
-///   `Set<string>` to skip dirs it has already stat'd. coco-rs returns
-///   the full list each call; the caller (Read/Write/Edit) is
-///   responsible for deduplicating against its own state if desired.
-/// - No gitignore filtering. TS uses `git check-ignore` to skip
-///   skill dirs under `node_modules/` etc. coco-rs follows up via
-///   `coco-file-ignore` if the caller wants it; this base function
-///   stays gitignore-agnostic so it has no `git` dependency.
+/// **Implementation notes**:
+/// - No memoization cache. A module-level set to skip already-stat'd dirs
+///   would save work, but this function returns the full list each call; the
+///   caller (Read/Write/Edit) is responsible for deduplicating against its
+///   own state if desired.
+/// - No gitignore filtering. Uses `git check-ignore` semantics are delegated
+///   to `coco-file-ignore` if the caller wants them; this base function stays
+///   gitignore-agnostic so it has no `git` dependency.
 ///
 /// Returns paths relative to (or absolute under) the cwd, deepest first.
 pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<PathBuf> {
@@ -789,9 +719,9 @@ pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<Pa
     let mut result: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
-    // #197 / TS `discoverSkillDirsForPaths` runs `isPathGitignored` before
-    // adding each dir, so e.g. `node_modules/pkg/.coco/skills` is skipped.
-    // Fails open outside a git repo (PathChecker ignores nothing).
+    // Runs `isPathGitignored` before adding each dir, so e.g.
+    // `node_modules/pkg/.coco/skills` is skipped. Fails open outside a
+    // git repo (PathChecker ignores nothing).
     let ignore_checker = coco_file_ignore::PathChecker::new(
         &resolved_cwd,
         &coco_file_ignore::IgnoreConfig::default(),
@@ -834,8 +764,8 @@ pub fn discover_skill_dirs_for_paths(file_paths: &[&Path], cwd: &Path) -> Vec<Pa
     }
 
     // Deepest-first ordering so the manager honors nesting precedence.
-    // TS sorts by path-component count; we do the same via separator
-    // count, which is platform-correct because PathBuf uses native sep.
+    // Sorts by path-component count via separator count, which is
+    // platform-correct because PathBuf uses native sep.
     result.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
     result
 }
@@ -915,7 +845,7 @@ fn try_load_skill(
     skills: &mut Vec<SkillDefinition>,
     seen_paths: &mut HashSet<PathBuf>,
 ) {
-    // Deduplicate by canonical path (TS: realpath)
+    // Deduplicate by canonical path (realpath)
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if !seen_paths.insert(canonical) {
         tracing::debug!("skipping duplicate skill at {}", path.display());
@@ -933,29 +863,26 @@ fn try_load_skill(
     }
 }
 
-/// Derive a skill's canonical name from its file path. Mirrors
 /// First non-empty line of `content` as a description, with `# heading`
 /// markers stripped and the result capped at 100 characters.
 ///
-/// Mirrors TS `extractDescriptionFromMarkdown` in
-/// `utils/markdownConfigLoader.ts:52-69`. Used by the skill loader as a
-/// fallback when `frontmatter.description` is missing — every skill ends
-/// up with *some* human-readable label even if the author skipped the
-/// frontmatter field.
+/// Used by the skill loader as a fallback when `frontmatter.description` is
+/// missing — every skill ends up with *some* human-readable label even if
+/// the author skipped the frontmatter field.
 pub fn extract_description_from_markdown(content: &str, default_description: &str) -> String {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        // Strip leading `#`/`##`/etc. heading markers, like TS `^#+\s+(.+)$`.
+        // Strip leading `#`/`##`/etc. heading markers (`^#+\s+(.+)$`).
         let body = trimmed.trim_start_matches('#').trim_start().to_string();
         let text = if body.is_empty() {
             trimmed.to_string()
         } else {
             body
         };
-        // Cap at 100 chars (TS: substring(0, 97) + '...'). char_indices to
+        // Cap at 100 chars (97 chars + '...'). char_indices to
         // stay UTF-8 safe.
         if text.chars().count() > 100 {
             let cut: String = text.chars().take(97).collect();
@@ -966,7 +893,7 @@ pub fn extract_description_from_markdown(content: &str, default_description: &st
     default_description.to_string()
 }
 
-/// TS `getCommandName` (`loadSkillsDir.ts:554-559`):
+/// Computes the skill name from its file path:
 ///
 /// - `<dir>/SKILL.md` (case-insensitive) → `<dir>` basename
 /// - `<dir>/<stem>.md` → `<stem>`
@@ -1011,9 +938,8 @@ fn parse_csv_list(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse a whitespace-separated list — TS `argumentNames.split(/\s+/)`.
-/// Filters numeric-only names (they conflict with `$N` shorthand) per
-/// TS `parseArgumentNames` `isValidName`.
+/// Parse a whitespace-separated list (split on whitespace).
+/// Validates argument names: filters numeric-only names (they conflict with `$N` shorthand).
 fn parse_argument_names_field(value: &str) -> Vec<String> {
     value
         .split_whitespace()
@@ -1024,17 +950,17 @@ fn parse_argument_names_field(value: &str) -> Vec<String> {
 
 /// Parse skill markdown content into a `SkillDefinition`.
 ///
-/// **Strict TS parity** — mirrors `claude-code-kim/src/skills/loadSkillsDir.ts`:
+/// Parsing rules:
 ///
 /// - The whole file is fed to [`coco_frontmatter::parse`]. Frontmatter
-///   only matches when `---` opens the file (TS regex `^---\s*\n…`); any
+///   only matches when `---` opens the file (regex `^---\s*\n…`); any
 ///   leading `# heading` line is part of the body, not a name.
 /// - The skill `name` comes from the file path, never from a heading or
 ///   from the frontmatter `name` field:
 ///     - `<dir>/SKILL.md` (case-insensitive) → `<dir>` basename
 ///     - `<dir>/<stem>.md` → `<stem>` (parser compatibility; not used by
 ///       session/project discovery)
-/// - Frontmatter `name`, if present, is silently ignored. (TS exposes it
+/// - Frontmatter `name`, if present, is silently ignored. (Upstream exposes it
 ///   as `displayName` on the command record; coco-rs `SkillDefinition`
 ///   has no separate displayName field, so we drop it to avoid a
 ///   misleading override of the path-derived name.)
@@ -1062,12 +988,6 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
     let lookup_scalar_string =
         |aliases: &[&str]| -> Option<String> { lookup(aliases).and_then(scalar_to_string) };
 
-    // TS `loadSkillsDir.ts:208-214`:
-    //   const validatedDescription = coerceDescriptionToString(...)
-    //   const description = validatedDescription
-    //     ?? extractDescriptionFromMarkdown(markdownContent, fallbackLabel)
-    //   const hasUserSpecifiedDescription = validatedDescription !== null
-    //
     // Body fallback ensures every skill ends up with *some* human-readable
     // description even if the author skipped the frontmatter field.
     let raw_description = lookup_str(&["description"]).filter(|s| !s.trim().is_empty());
@@ -1075,7 +995,6 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
     let description = raw_description
         .unwrap_or_else(|| extract_description_from_markdown(&frontmatter.content, "Skill"));
 
-    // TS `loadSkillsDir.ts:239`: `displayName: frontmatter.name != null ? String(...) : undefined`.
     // Coerce numeric / bool scalars to string so authors can write
     // `name: 42` without losing it. Sequences / mappings are not valid
     // displayName shapes; treat them as absent.
@@ -1090,10 +1009,9 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
         .and_then(|raw| raw.parse::<ModelRole>().ok());
     let when_to_use = lookup_str(&["when-to-use", "when_to_use"]);
 
-    // TS reads the `arguments` frontmatter key (`utils/argumentSubstitution.ts:50`).
-    // Legacy `argument-names` / `argument_names` aliases are accepted for
-    // disk skills that pre-date the rename. TS `parseArgumentNames` splits on
-    // whitespace, not commas, and drops numeric-only names.
+    // Reads the `arguments` frontmatter key. Legacy `argument-names` /
+    // `argument_names` aliases are accepted for disk skills that pre-date
+    // the rename. Splits on whitespace, not commas, and drops numeric-only names.
     let argument_names = lookup(&["arguments", "argument-names", "argument_names"])
         .map(|v| match v {
             FrontmatterValue::Sequence(_) => v
@@ -1129,8 +1047,7 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
             };
             raw.into_iter()
                 .flat_map(|p| expand_braces(&p))
-                // TS `parseSkillPaths` (`loadSkillsDir.ts:159-178`):
-                // strip trailing `/**` because the `ignore` library matches a
+                // Strip trailing `/**` because the `ignore` library matches a
                 // bare path as both the path and everything inside it.
                 .map(|p| {
                     if let Some(stripped) = p.strip_suffix("/**") {
@@ -1143,7 +1060,7 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
                 .collect()
         })
         .map(|patterns: Vec<String>| {
-            // TS: if all patterns are bare `**`, treat as no paths.
+            // If all patterns are bare `**`, treat as no paths.
             if patterns.is_empty() || patterns.iter().all(|p| p == "**") {
                 Vec::new()
             } else {
@@ -1174,7 +1091,6 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
 
     let prompt = frontmatter.content.trim().to_string();
     let content_length = prompt.len() as i64;
-    // TS: isHidden = !(userInvocable ?? true)
     let is_hidden = !user_invocable;
 
     Ok(SkillDefinition {
@@ -1182,9 +1098,8 @@ fn parse_skill_markdown(content: &str, path: &Path) -> crate::Result<SkillDefini
         display_name,
         description,
         prompt,
-        // TS `createSkillCommand` hard-codes `progressMessage: 'running'`
-        // (`loadSkillsDir.ts:336`). Mirror it so consumers don't have to
-        // know the default.
+        // Hard-codes `progressMessage: 'running'` so consumers don't have
+        // to know the default.
         progress_message: Some("running".to_string()),
         has_user_specified_description,
         source: SkillSource::User {
@@ -1244,8 +1159,6 @@ fn scalar_to_string(v: &coco_frontmatter::FrontmatterValue) -> Option<String> {
 }
 
 /// Platform-specific managed configuration base directory.
-///
-/// TS: `getManagedFilePath()` in `managedPath.ts`.
 fn managed_base_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -1259,16 +1172,11 @@ fn managed_base_path() -> PathBuf {
 }
 
 /// Platform-specific managed skills directory.
-///
-/// TS: `getManagedFilePath()` + `.claude/skills` in `loadSkillsDir.ts:641`.
 pub fn get_managed_skills_path() -> PathBuf {
     managed_base_path().join("skills")
 }
 
 /// Platform-specific managed legacy `commands/` directory.
-///
-/// TS: `getManagedFilePath()` + `.claude/commands` (the managed scope of
-/// `loadMarkdownFilesForSubdir('commands', …)`).
 pub fn get_managed_commands_path() -> PathBuf {
     managed_base_path().join("commands")
 }
@@ -1277,9 +1185,8 @@ pub fn get_managed_commands_path() -> PathBuf {
 /// app layer from `--setting-sources`, the `strictPluginOnlyCustomization`
 /// policy (`skills` surface), `--add-dir`, and `COCO_DISABLE_POLICY_SKILLS`.
 ///
-/// TS parity: the `isSettingSourceEnabled(...) && !skillsLocked` guards in
-/// `loadSkillsDir.ts::getSkillDirCommands`. Bundled skills always load and are
-/// not gated here. When `skills_locked` is set, only managed (policy) skills
+/// Controls which disk scopes load. Bundled skills always load and are not
+/// gated here. When `skills_locked` is set, only managed (policy) skills
 /// load — user, project, legacy, and additional dirs are all skipped (the
 /// policy locks customization surfaces to plugin-only sources).
 #[derive(Debug, Clone)]
@@ -1292,7 +1199,7 @@ pub struct SkillLoadGates {
     /// and not locked.
     pub project_enabled: bool,
     /// Load legacy `.coco/commands` dirs (managed → user → project up-to-home).
-    /// Gated like project per TS `loadSkillsFromCommandsDir` (`!skillsLocked`).
+    /// Gated like project (`!skillsLocked`).
     pub legacy_enabled: bool,
     /// Load `.coco/skills` under each `--add-dir` path. Requires project scope
     /// enabled (and not locked).
@@ -1325,13 +1232,12 @@ impl SkillLoadGates {
 ///
 /// Single source of truth so the command registry, the `/context` usage
 /// detail, the `/skills` dialog, and the reminder `SkillsSource` all read
-/// the same catalog and cannot drift. Mirrors TS `loadSkillsDir.ts`
-/// (`getLimitedSkillToolCommands`), which always folds bundled commands
-/// into the session skill set.
+/// the same catalog and cannot drift. Always folds bundled commands into
+/// the session skill set.
 ///
 /// `gates` controls which disk scopes load (per `--setting-sources` and the
 /// `strictPluginOnlyCustomization` policy). `skills_locked` forces a managed-
-/// only load. Order mirrors TS: managed → user → project walk-up → additional
+/// only load. Load order: managed → user → project walk-up → additional
 /// `--add-dir` `.coco/skills`. The [`SkillManager`] dedups by canonical path
 /// (first-wins), so overlapping dirs don't double-register.
 pub fn build_session_skill_manager(
@@ -1352,7 +1258,7 @@ pub fn build_session_skill_manager(
     }
 
     // User + project + additional skills, and legacy commands, are ALL skipped
-    // when the `skills` surface is locked (TS `!skillsLocked`).
+    // when the `skills` surface is locked.
     if !gates.skills_locked {
         if gates.user_enabled {
             manager.load_scoped(&SkillScopes {
@@ -1376,11 +1282,10 @@ pub fn build_session_skill_manager(
                 });
             }
         }
-        // Legacy commands-as-skills. TS `getSkillDirCommands` folds the
-        // deprecated `commands/` dirs (managed → user → project up-to-home)
-        // via `loadSkillsFromCommandsDir` (`loadSkillsDir.ts:713`), both
-        // `SKILL.md` dirs and flat `.md`. Dedup by canonical realpath inside
-        // `insert_disk` (first-wins → the `skills/` copy loaded above).
+        // Legacy commands-as-skills: folds the deprecated `commands/` dirs
+        // (managed → user → project up-to-home), both `SKILL.md` dirs and
+        // flat `.md`. Dedup by canonical realpath inside `insert_disk`
+        // (first-wins → the `skills/` copy loaded above).
         if gates.legacy_enabled {
             manager.load_legacy_command_scope(SettingScope::Managed, &get_managed_commands_path());
             manager.load_legacy_command_scope(SettingScope::User, &config_home.join("commands"));
@@ -1413,7 +1318,7 @@ pub(crate) fn project_skill_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
 
 /// Legacy `.coco/commands` directories walked from `cwd` up to home,
 /// mirroring [`project_skill_dirs_up_to_home`] but for the deprecated
-/// commands subdir. TS `getProjectDirsUpToHome('commands', cwd)`.
+/// commands subdir.
 pub(crate) fn project_command_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
     project_dirs_up_to_home(cwd, "commands")
 }
@@ -1421,9 +1326,9 @@ pub(crate) fn project_command_dirs_up_to_home(cwd: &Path) -> Vec<PathBuf> {
 /// Walk from `cwd` upward, collecting `.coco/<subdir>` at each level, and stop
 /// at the **git root OR home — whichever comes first**.
 ///
-/// TS `getProjectDirsUpToHome` (`utils/markdownConfigLoader.ts:234-289`) stops
-/// after processing the git root specifically to "prevent commands from parent
-/// directories outside the repository from appearing in the project scope".
+/// Stops after processing the git root specifically to "prevent commands from
+/// parent directories outside the repository from appearing in the project
+/// scope".
 /// Without the git-root boundary, sibling repos sharing a parent dir (e.g.
 /// `~/projects` holding a stray `~/projects/.coco/skills`) would leak skills
 /// into every child repo. We detect the git root by the presence of a `.git`
@@ -1437,7 +1342,7 @@ fn project_dirs_up_to_home(cwd: &Path, subdir: &str) -> Vec<PathBuf> {
     let mut current = cwd.to_path_buf();
     loop {
         dirs.push(current.join(".coco").join(subdir));
-        // Stop after including the git root (TS parity — project isolation).
+        // Stop after including the git root (project isolation).
         if current.join(".git").exists() {
             break;
         }
@@ -1467,11 +1372,10 @@ pub struct SkillListingResult {
 
 /// Inject skill descriptions into a system prompt, respecting a character budget.
 ///
-/// TS: `formatCommandsWithinBudget()` in `prompt.ts` — caps at 1% of context
-/// window, max 250 chars per entry, bundled skills never truncated.
+/// Caps at 1% of context window, max 250 chars per entry, bundled skills
+/// never truncated.
 ///
-/// The 4-state `skill_overrides` resolution layer applies three filters
-/// (TS mirror: `cli_inner_pretty.js:513858-513869` + listing-budget loop):
+/// The 4-state `skill_overrides` resolution layer applies three filters:
 ///
 /// 1. `effective == Off` → skip the row entirely.
 /// 2. `effective == NameOnly` → emit `- /name` with no description
@@ -1480,8 +1384,7 @@ pub struct SkillListingResult {
 ///    (author intent + non-default state ⇒ hide from model).
 ///
 /// With the default-empty [`coco_config::SkillOverrideTiers`] every
-/// skill resolves to `On` so the filters are no-ops — PR2 callers
-/// observe identical output to the pre-gate baseline.
+/// skill resolves to `On` so the filters are no-ops.
 pub fn inject_skill_listing(
     skills: &[&SkillDefinition],
     max_budget_chars: usize,
@@ -1615,8 +1518,8 @@ pub fn get_invocable_skills(manager: &SkillManager) -> Vec<Arc<SkillDefinition>>
 
 /// Generate the SkillTool system prompt with skill listing.
 ///
-/// TS: `getPrompt()` in `tools/SkillTool/prompt.ts` — generates instruction
-/// text explaining how to invoke skills, plus the formatted skill listing.
+/// Generates instruction text explaining how to invoke skills, plus the
+/// formatted skill listing.
 ///
 /// `tiers` drives the 4-state override filters applied inside
 /// [`inject_skill_listing`]. Pass [`coco_config::SkillOverrideTiers::default()`]
@@ -1627,13 +1530,12 @@ pub fn generate_skill_tool_prompt(
     context_window_tokens: i64,
     tiers: &coco_config::SkillOverrideTiers,
 ) -> SkillListingResult {
-    // Budget: 1% of context window × 4 chars/token (TS: default 8000 chars)
+    // Budget: 1% of context window × 4 chars/token (default 8000 chars).
     let budget = ((context_window_tokens as f64 * 0.01 * 4.0) as usize).max(2000);
 
     let mut result = inject_skill_listing(skills, budget, tiers);
 
     if !result.listing.is_empty() {
-        // Prepend instruction text (TS: getPrompt() static text)
         let instructions = "\
 The following skills are available for use with the Skill tool:
 
@@ -1646,7 +1548,7 @@ The following skills are available for use with the Skill tool:
 
 /// Dynamically discover skills from a directory encountered during file operations.
 ///
-/// TS: Dynamic skill discovery triggered during Read/Write/Glob tool execution.
+/// Dynamic skill discovery triggered during Read/Write/Glob tool execution.
 /// Skills found here are inserted after plugins but before built-in commands.
 pub fn discover_dynamic_skills(dir: &Path) -> Vec<SkillDefinition> {
     let skills_dir = dir.join(".coco").join("skills");
@@ -1658,8 +1560,8 @@ pub fn discover_dynamic_skills(dir: &Path) -> Vec<SkillDefinition> {
 
 /// Expand brace patterns in a glob string.
 ///
-/// TS: `expandBraces()` in `frontmatterParser.ts` — recursively expands
-/// `*.{ts,tsx}` → `["*.ts", "*.tsx"]` and nested `{a,{b,c}}` patterns.
+/// Recursively expands `*.{ts,tsx}` → `["*.ts", "*.tsx"]` and nested
+/// `{a,{b,c}}` patterns.
 pub fn expand_braces(pattern: &str) -> Vec<String> {
     // Find the first top-level brace group
     let Some(open) = pattern.find('{') else {
@@ -1724,17 +1626,13 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
 /// Estimate the token count for a skill's frontmatter (name +
 /// description + `when_to_use`).
 ///
-/// TS source: `loadSkillsDir.ts:101-104` — sums `skill.name`,
-/// `skill.description`, and `skill.whenToUse` after a `.filter(Boolean)`
-/// (drops null/undefined) and a `.join(' ')`. We approximate the join
-/// with a small overhead constant since char/token ratio swamps the
-/// space-character difference.
+/// Sums `name`, `description`, and `when_to_use` with a small overhead
+/// constant since char/token ratio swamps the join-space difference.
 pub fn estimate_skill_tokens(skill: &SkillDefinition) -> i64 {
     (estimate_skill_frontmatter_bytes(skill) / 4) as i64
 }
 
-/// Estimate of a skill's frontmatter character length (TS
-/// `estimateSkillFrontmatterChars`). The 2.1.142 `/skills` dialog
+/// Estimate of a skill's frontmatter character length. The `/skills` dialog
 /// divides this by the current model's bytes-per-token ratio to
 /// render the token column, so the byte count is more useful than
 /// the pre-divided token estimate when the model is mutable mid-
@@ -1745,13 +1643,10 @@ pub fn estimate_skill_frontmatter_bytes(skill: &SkillDefinition) -> usize {
 }
 
 /// Normalize `file_path` to a cwd-relative path suitable for gitignore
-/// matching. Returns `None` for paths outside `cwd` (or any other
-/// shape TS's `activateConditionalSkillsForPaths` skips):
+/// matching. Returns `None` for paths outside `cwd`:
 /// - empty after normalization
 /// - escapes via `..`
-/// - absolute after relativization (Windows cross-drive case in TS)
-///
-/// TS source: `loadSkillsDir.ts:1014-1027`.
+/// - absolute after relativization (Windows cross-drive case)
 fn relative_to_cwd(file_path: &Path, cwd: &Path) -> Option<PathBuf> {
     let rel: PathBuf = if file_path.is_absolute() {
         file_path.strip_prefix(cwd).ok()?.to_path_buf()

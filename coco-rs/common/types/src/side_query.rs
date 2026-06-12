@@ -1,7 +1,5 @@
 //! Side-query types — data types for LLM side-queries.
 //!
-//! TS: utils/sideQuery.ts (SideQueryOptions, response types)
-//!
 //! These are pure data types (no async). The async `SideQuery` trait
 //! that uses these types lives in `coco-tool-runtime` (which has async-trait).
 //! This split lets both `coco-permissions` and `coco-tool-runtime` share the
@@ -305,8 +303,7 @@ impl SideQueryRequest {
     }
 
     /// Builder: suppress the agent's standard system-prompt prefix
-    /// before `system` for this side-query. Mirrors TS
-    /// `skipSystemPromptPrefix: true` (e.g. `findRelevantMemories.ts:101`):
+    /// before `system` for this side-query (`skipSystemPromptPrefix: true`):
     /// rankers and side-questions should not be biased by the
     /// Claude Code preamble that describes the main agent's tools and
     /// persona.
@@ -329,11 +326,6 @@ impl SideQueryResponse {
 /// Parameters that must be **byte-identical** between the parent
 /// session's last turn and a post-turn fork's first request to share
 /// the parent's prompt cache.
-///
-/// TS: `utils/forkedAgent.ts::CacheSafeParams` + module-level
-/// `lastCacheSafeParams` slot, written by `handleStopHooks` after each
-/// turn and read by `runForkedAgent` callers (`/btw`,
-/// `promptSuggestion`, `postTurnSummary`).
 ///
 /// **Coco-rs scope**: this is the cross-layer DTO. The slot itself
 /// lives on `coco_query::QueryEngine` (`last_cache_safe_params:

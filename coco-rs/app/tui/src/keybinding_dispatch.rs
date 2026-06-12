@@ -8,8 +8,8 @@
 //! pure-logic resolver.
 //!
 //! Returns `None` when the action has no TUI-side handler. The caller
-//! treats that as "swallow without effect" so unmapped TS actions
-//! don't fall through to the legacy hardcoded cascade.
+//! treats that as "swallow without effect" so unmapped actions don't
+//! fall through to the legacy hardcoded cascade.
 
 use coco_keybindings::KeybindingAction;
 
@@ -19,10 +19,9 @@ use crate::state::SlashCommandName;
 
 /// Map a resolved [`KeybindingAction`] to the TUI-side command.
 ///
-/// `None` means no handler is wired (either intentionally — the
-/// action represents a feature coco-rs hasn't built yet — or because
-/// the action is layered above this dispatch point, e.g.
-/// `command:foo` slash commands flow through the slash-command
+/// `None` means no handler is wired — either the action represents a
+/// feature not yet built, or it is layered above this dispatch point
+/// (e.g. `command:foo` slash commands flow through the slash-command
 /// runner, not this map).
 ///
 /// The legacy cascade in `keybinding_bridge::map_key` only runs when
@@ -35,27 +34,25 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // ── App-level (Global) ──────────────────────────────────────
         // Ctrl+C and Ctrl+D both go through `update::exit`'s
         // double-press machine — they do NOT immediately quit. See
-        // `defaults.rs:68-71` for the TS-mirrored comment and
-        // `reserved.rs` for the user-rebind block.
+        // `defaults.rs` and `reserved.rs` for the user-rebind block.
         AppInterrupt => TuiCommand::Interrupt,
         AppExit => TuiCommand::RequestExit,
         AppRedraw => TuiCommand::ClearScreen,
-        // TS `app:toggleTodos` (Ctrl+T) — cycle the right-rail
-        // expanded view between None / Tasks / (Teammates if running).
+        // `app:toggleTodos` (Ctrl+T) — cycle the right-rail expanded
+        // view between None / Tasks / (Teammates if running).
         // `update::handle_command` does the cycle math.
         AppToggleTodos => TuiCommand::ToggleExpandedTasksView,
-        // TS `app:toggleTranscript` (Ctrl+O) — open the verbose,
-        // scrollable transcript state. Pressing it again from inside
-        // the state closes it (handled in the state branch below).
+        // `app:toggleTranscript` (Ctrl+O) — open the verbose, scrollable
+        // transcript state. Pressing it again from inside the state closes
+        // it (handled in the state branch below).
         AppToggleTranscript => TuiCommand::ToggleTranscript,
-        // TS `app:toggleTeammatePreview` (Ctrl+Shift+O) — toggle
-        // teammate spinner-line message previews on/off.
+        // `app:toggleTeammatePreview` (Ctrl+Shift+O) — toggle teammate
+        // spinner-line message previews on/off.
         AppToggleTeammatePreview => TuiCommand::ToggleTeammateMessagePreview,
-        // coco-rs-only `app:toggleTeamRoster` (Ctrl+Shift+T) — open the
-        // teammate roster / mode picker. Gated on the session having a
-        // teammate so the binding is an inert no-op in non-team sessions
-        // (it returns `None`, swallowing the key without a cascade fallthrough)
-        // rather than shadowing the key globally.
+        // `app:toggleTeamRoster` (Ctrl+Shift+T) — open the teammate roster /
+        // mode picker. Gated on the session having a teammate so the binding
+        // is an inert no-op in non-team sessions (returns `None`, swallowing
+        // the key without a cascade fallthrough) rather than shadowing globally.
         AppToggleTeamRoster => {
             return state
                 .session
@@ -66,7 +63,6 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         }
         AppGlobalSearch => TuiCommand::ShowGlobalSearch,
         AppQuickOpen => TuiCommand::ShowQuickOpen,
-        // coco-rs extensions folded from the old hardcoded cascade.
         // `app:forceQuit` (ctrl+q) deliberately bypasses the `app:exit`
         // double-press confirmation — it is the power-user immediate quit.
         AppForceQuit => TuiCommand::Quit,
@@ -75,11 +71,9 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         AppSettings => TuiCommand::ShowSettings,
         AppSessionBrowser => TuiCommand::ShowSessionBrowser,
         AppPlanEditor => TuiCommand::OpenPlanEditor,
-        // KAIROS (`app:toggleBrief`) / TERMINAL_PANEL (`app:toggleTerminal`)
-        // are TS feature-gated. coco-rs doesn't ship those features and
-        // doesn't emit them in defaults; if a user explicitly binds the
-        // action we silently no-op (matches TS where `useKeybinding`
-        // is never registered when the feature is off).
+        // `app:toggleBrief` / `app:toggleTerminal` are feature-gated
+        // capabilities not yet shipped. If a user explicitly binds one,
+        // silently no-op — the keybinding is accepted but has no effect.
         AppToggleBrief | AppToggleTerminal => return None,
 
         // ── History navigation ──────────────────────────────────────
@@ -121,30 +115,23 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         }
         ChatNewline => TuiCommand::InsertNewline,
         ChatExternalEditor => TuiCommand::OpenExternalEditor,
-        // TS `chat:stash` saves the current input draft for later.
-        // coco-rs implements a single-slot swap variant: pressing the
-        // binding stashes the current text and restores the prior
-        // stash if any — same key triggers both directions, so users
-        // recover their draft with the same shortcut they used to
-        // stash it. Update handler in `update.rs` does the swap.
+        // `chat:stash` saves the current input draft for later.
+        // Single-slot swap: pressing the binding stashes the current
+        // text and restores the prior stash if any — same key triggers
+        // both directions. Update handler in `update.rs` does the swap.
         ChatStash => TuiCommand::StashInputDraft,
         ChatImagePaste => TuiCommand::PasteFromClipboard,
-        // `chat:undo` is full input-history undo in TS
-        // (`PromptInput.tsx::handleUndo` over a useUndoableState hook).
-        // coco-rs hasn't ported the undoable-input stack yet; silently
+        // `chat:undo` — undoable-input stack not yet implemented; silently
         // no-op so a user-bound key doesn't fall through to the legacy
         // cascade. Implement when the stack lands.
         ChatUndo => return None,
-        // `chat:messageActions` is the entry into the message-actions
-        // cursor (Shift+↑ in TS). Gated on TS `MESSAGE_ACTIONS` feature;
-        // coco-rs doesn't ship that state so we silently no-op.
+        // `chat:messageActions` — message-actions cursor not yet shipped;
+        // silently no-op.
         ChatMessageActions => return None,
-        // coco-rs extension (ctrl+shift+r): toggle <system-reminder>
-        // visibility in the transcript.
+        // ctrl+shift+r: toggle <system-reminder> visibility in the transcript.
         ChatToggleSystemReminders => TuiCommand::ToggleSystemReminders,
-        // coco-rs extension (tab): state-dependent — an active inline
-        // ghost or visible prompt suggestion accepts it instead of
-        // toggling plan mode, mirroring the old cascade's Tab arms.
+        // Tab is state-dependent — an active inline ghost or visible prompt
+        // suggestion accepts it instead of toggling plan mode.
         ChatTogglePlanMode => {
             if state.ui.input.active_inline_ghost().is_some() {
                 TuiCommand::AutocompleteAccept
@@ -171,8 +158,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         ConfirmCycleMode => TuiCommand::CyclePermissionMode,
         ConfirmToggle => TuiCommand::SurfaceConfirm,
         ConfirmToggleExplanation => TuiCommand::TogglePermissionExplanation,
-        // TS dev-only debug toggle (`PermissionToggleDebug`); coco-rs
-        // has no equivalent debug surface.
+        // `PermissionToggleDebug`: no equivalent debug surface.
         PermissionToggleDebug => return None,
 
         // ── Tabs ────────────────────────────────────────────────────
@@ -231,8 +217,6 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         // ── ModelPicker ─────────────────────────────────────────────
         // Left/Right cycle the *effort axis* — separate from Up/Down
         // (`SelectPrevious` / `SelectNext`) which move between models.
-        // Previously both pairs routed to SurfacePrev/SurfaceNext, so
-        // ←/→ silently scrolled the list (latent TS-parity gap).
         ModelPickerDecreaseEffort => TuiCommand::ModelPickerCycleEffort(-1),
         ModelPickerIncreaseEffort => TuiCommand::ModelPickerCycleEffort(1),
 
@@ -243,25 +227,20 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         SelectCancel => TuiCommand::Cancel,
 
         // ── Plugin ──────────────────────────────────────────────────
-        // Plugin state actions (`space` toggle / `i` install) bound
-        // in the `Plugin` context. coco-rs doesn't open a Plugin
-        // state so the context never activates from defaults; if a
-        // user re-binds one of these to a global context we silently
-        // no-op until the state lands.
+        // Plugin context actions — no Plugin state yet; silently no-op
+        // until the state lands.
         PluginToggle | PluginInstall => return None,
 
         // ── Settings ────────────────────────────────────────────────
         SettingsClose => TuiCommand::SurfaceConfirm,
-        // SettingsSearch / SettingsRetry are inside-state state
-        // machine actions (not application-level TuiCommands). The
-        // Settings state reads them directly from the resolver
-        // when it owns key dispatch — they intentionally route through
-        // None here. Once the state state machine ports them,
-        // promote to actual TuiCommand variants.
+        // SettingsSearch / SettingsRetry are inside-state state-machine
+        // actions (not application-level TuiCommands). The Settings state
+        // reads them directly from the resolver when it owns key dispatch
+        // — they intentionally route to None here.
         SettingsSearch | SettingsRetry => return None,
 
         // ── Voice ───────────────────────────────────────────────────
-        // TS `VOICE_MODE` feature gate; coco-rs has no voice subsystem.
+        // Voice subsystem not implemented.
         VoicePushToTalk => return None,
 
         // ── Scroll (internal) ───────────────────────────────────────
@@ -290,12 +269,10 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
             .unwrap_or(TuiCommand::Noop),
 
         // ── MessageActions:* (11 variants) ───────────────────────────
-        // Internal context; the validator rejects user bindings into it,
-        // so these only fire from defaults — and `MESSAGE_ACTIONS` isn't
-        // ported, so no defaults emit them. Match arm exists purely so
-        // the match is exhaustive without a wildcard. Returning None
-        // matches TS, where the cursor handlers are only registered
-        // while the message-actions state is mounted.
+        // Internal context; the validator rejects user bindings into it.
+        // Message-actions state is not yet implemented so no defaults
+        // emit these. Match arm exists purely to keep the match exhaustive
+        // without a wildcard.
         MessageActionsPrev
         | MessageActionsNext
         | MessageActionsTop

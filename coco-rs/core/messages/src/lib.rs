@@ -1,6 +1,4 @@
 //! Message creation, normalization, history, cost tracking, lookups.
-//!
-//! TS: utils/messages.ts (~193K LOC), history.ts, cost-tracker.ts
 
 pub mod command_tags;
 pub mod content_kind;

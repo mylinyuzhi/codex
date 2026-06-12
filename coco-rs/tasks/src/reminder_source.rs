@@ -1,18 +1,17 @@
 //! `TaskStatusSource` impl on [`crate::running::TaskManager`].
 //!
-//! TS `createAsyncAgentAttachmentsIfNeeded` (`services/compact/compact.ts:1568-1598`)
-//! fires post-compaction so the model rediscovers background agents
+//! Fires post-compaction so the model rediscovers background agents
 //! whose `<task-notification>` envelope was wiped from the
 //! `CommandQueue` by compaction. Both **still-running** agents (so the
 //! model doesn't spawn a duplicate) AND **terminal** agents whose
 //! results haven't been retrieved must be re-injected — compaction
 //! cleared the queue that delivered them inline.
 //!
-//! ## TS-aligned filter (mirrors `compact.ts:1576-1583`)
+//! ## Filter
 //!
 //! Skip conditions, applied in order:
 //!
-//! 1. **Not a BgAgent** — TS only generates `task_status` reminders for
+//! 1. **Not a BgAgent** — `task_status` reminders are only generated for
 //!    backgrounded agent tasks. Shell / dream / teammate / remote
 //!    tasks don't carry the "don't spawn a duplicate" affordance.
 //! 2. **`status == Pending`** — never started; nothing to report.

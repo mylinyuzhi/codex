@@ -1,7 +1,7 @@
 //! Central store for agent definitions. Built-ins + per-source loaders feed
 //! the store; `snapshot()` returns an immutable per-turn view.
 //!
-//! TS: `loadAgentsDir.ts:193-221` `getActiveAgentsFromList`.
+//! `loadAgentsDir.ts:193-221` `getActiveAgentsFromList`.
 //!
 //! Sync-only: `load()` and `reload()` walk the filesystem with `std::fs`.
 //! No tokio, no watcher — `app/state` owns the watcher and calls
@@ -19,7 +19,7 @@ use crate::frontmatter::parse_agent_markdown;
 use crate::snapshot::AgentCatalogSnapshot;
 use crate::validation::{AgentDefinitionValidator, ValidationDiagnostic, ValidationError};
 
-/// Maximum size for an agent markdown file. TS `loadAgentsDir.ts` rejects
+/// Maximum size for an agent markdown file. `loadAgentsDir.ts` rejects
 /// files over 1 MiB so a malformed agent never bloats the prompt. Match
 /// the limit verbatim — files larger than this are silently skipped with
 /// a debug log so the loader stays robust on misconfigured workspaces.
@@ -30,12 +30,12 @@ const MAX_AGENT_FILE_SIZE_BYTES: u64 = 1024 * 1024;
 /// arbitrary on Windows/APFS). Sort by file path so same-priority
 /// collisions resolve identically across platforms.
 ///
-/// Walks the directory two levels deep (TS parity: `loadAgentsDir.ts`
-/// uses `walkdir({ max_depth: 2 })` so an `agents/<group>/foo.md`
-/// layout is supported alongside `agents/foo.md`). Files larger than
-/// [`MAX_AGENT_FILE_SIZE_BYTES`] are skipped with a `debug!` log, again
-/// matching TS so the loader can never be DoSed by a stray binary that
-/// happens to end in `.md`.
+/// Walks the directory two levels deep (`loadAgentsDir.ts` uses
+/// `walkdir({ max_depth: 2 })` so an `agents/<group>/foo.md` layout is
+/// supported alongside `agents/foo.md`). Files larger than
+/// [`MAX_AGENT_FILE_SIZE_BYTES`] are skipped with a `debug!` log so the
+/// loader can never be DoSed by a stray binary that happens to end in
+/// `.md`.
 fn sorted_md_paths(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = Vec::new();
     collect_md_paths(dir, 0, &mut paths)?;
@@ -44,7 +44,7 @@ fn sorted_md_paths(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 fn collect_md_paths(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    // TS walks two levels — root entries (depth 0) and one nested
+    // Walks two levels — root entries (depth 0) and one nested
     // subdirectory (depth 1). Anything deeper is ignored.
     const MAX_DEPTH: usize = 1;
 
@@ -134,9 +134,9 @@ pub struct AgentSearchPaths {
     pub flag_dirs: Vec<PathBuf>,
     pub policy_dirs: Vec<PathBuf>,
     /// Plugin-contributed agent directories. Each carries the owning plugin's
-    /// name so loaded agents are namespaced `<plugin>:<agent>` (TS
-    /// `loadPluginAgents`). The caller (`app/cli`) maps a plugin's `agents/`
-    /// dir + manifest `agents` dirs to these.
+    /// name so loaded agents are namespaced `<plugin>:<agent>`. The caller
+    /// (`app/cli`) maps a plugin's `agents/` dir + manifest `agents` dirs
+    /// to these.
     pub plugin_dirs: Vec<PluginAgentDir>,
 }
 
@@ -162,10 +162,10 @@ impl AgentSearchPaths {
 /// so the pure-logic crate stays free of `coco-memory` deps.
 ///
 /// `memory_scope` is the agent's declared
-/// [`AgentDefinition::memory_scope`]. TS uses this scope verbatim;
+/// [`AgentDefinition::memory_scope`]. The scope is used verbatim;
 /// agents without a declared scope skip the inspector call.
 ///
-/// TS parity: `loadAgentsDir.ts:262-294` calls
+/// `loadAgentsDir.ts:262-294` calls
 /// `checkAgentMemorySnapshot(agentType, scope)` and sets
 /// `pendingSnapshotUpdate` on the definition when the result is
 /// `prompt-update`. The Rust loader does the same lookup but defers
@@ -178,7 +178,7 @@ impl AgentSearchPaths {
 pub type SnapshotInspectorFn = Box<dyn Fn(&str, MemoryScope) -> Option<String> + Send + Sync>;
 
 /// Aggregates built-ins, plugins, user, project, flag, and policy agents
-/// into a single catalog with TS-parity precedence.
+/// into a single catalog with correct source-precedence ordering.
 pub struct AgentDefinitionStore {
     catalog: BuiltinAgentCatalog,
     paths: AgentSearchPaths,
@@ -187,11 +187,11 @@ pub struct AgentDefinitionStore {
     snapshot_inspector: Option<SnapshotInspectorFn>,
     /// When true, post-process every loaded definition to auto-inject
     /// `Read` / `Edit` / `Write` into `allowed_tools` for agents that
-    /// declare a `memory_scope`. TS parity:
-    /// `loadAgentsDir.ts:455-467,662-674` does this at parse time when
-    /// `isAutoMemoryEnabled()` is true. The injection is a no-op for
-    /// wildcard agents (empty `allowed_tools` = "use default" in
-    /// coco-rs) — matches TS's `tools !== undefined` guard.
+    /// declare a `memory_scope`. `loadAgentsDir.ts:455-467,662-674`
+    /// does this at parse time when `isAutoMemoryEnabled()` is true.
+    /// The injection is a no-op for wildcard agents (empty
+    /// `allowed_tools` = "use default" in coco-rs) — matches the
+    /// `tools !== undefined` guard.
     auto_memory_enabled: bool,
 }
 
@@ -211,11 +211,11 @@ impl AgentDefinitionStore {
     /// Toggle auto-memory tool injection. When `true`, every agent with
     /// a non-empty `allowed_tools` and a declared `memory_scope` has
     /// `Read` / `Edit` / `Write` ensured present in its allow-list at
-    /// load time. Matches TS `loadAgentsDir.ts:455-467` which runs the
-    /// same transform when `isAutoMemoryEnabled()` is true. Caller
-    /// (CLI bootstrap) reads `RuntimeConfig.features.enabled(AutoMemory)`
-    /// and forwards the bool here. Off by default so the pure-logic
-    /// crate doesn't pre-suppose a feature surface.
+    /// load time. `loadAgentsDir.ts:455-467` runs the same transform
+    /// when `isAutoMemoryEnabled()` is true. Caller (CLI bootstrap)
+    /// reads `RuntimeConfig.features.enabled(AutoMemory)` and forwards
+    /// the bool here. Off by default so the pure-logic crate doesn't
+    /// pre-suppose a feature surface.
     pub fn set_auto_memory_enabled(&mut self, enabled: bool) {
         self.auto_memory_enabled = enabled;
     }
@@ -268,8 +268,8 @@ impl AgentDefinitionStore {
         // Inode dedup: a symlinked agent file under one source (e.g.
         // `~/.coco/agents/foo.md` -> `<project>/.coco/agents/foo.md`)
         // would otherwise parse twice and double-count in the source-
-        // precedence map. TS `loadAgentsDir.ts:159-172` keys the dedup
-        // on `(dev, ino)`. Same here on Unix; Windows skips because
+        // precedence map. `loadAgentsDir.ts:159-172` keys the dedup on
+        // `(dev, ino)`. Same here on Unix; Windows skips because
         // `MetadataExt::dev/ino` aren't portable — Windows users get
         // the path-based sort behaviour we always had.
         let mut seen: HashSet<(u64, u64)> = HashSet::new();
@@ -311,8 +311,8 @@ impl AgentDefinitionStore {
         // Decorate each active definition with its pending-snapshot
         // status. The closure stays out of the pure-logic crate's IO
         // graph — caller wires it at bootstrap. Agents without a
-        // declared `memory_scope` skip the call (matches TS, which
-        // only invokes `checkAgentMemorySnapshot(agentType,
+        // declared `memory_scope` skip the call (matches the original,
+        // which only invokes `checkAgentMemorySnapshot(agentType,
         // definition.memory)` when `memory` is set).
         if let Some(inspect) = self.snapshot_inspector.as_ref() {
             for (name, def) in active.iter_mut() {
@@ -324,10 +324,10 @@ impl AgentDefinitionStore {
                 }
             }
         }
-        // Auto-memory tool injection — TS parity:
+        // Auto-memory tool injection —
         // `loadAgentsDir.ts:455-467` runs this when `isAutoMemoryEnabled()`
         // and the agent declares a `memory` scope. Wildcard
-        // (empty allow-list) skips the injection because TS's
+        // (empty allow-list) skips the injection because the
         // `tools !== undefined` guard treats wildcard as "all tools
         // already".
         if self.auto_memory_enabled {
@@ -360,7 +360,7 @@ impl AgentDefinitionStore {
 }
 
 /// Namespace a plugin-sourced agent `<plugin>:<agent>` and strip the fields a
-/// plugin agent is not trusted to declare. TS `loadPluginAgents` deliberately
+/// plugin agent is not trusted to declare. `loadPluginAgents` deliberately
 /// drops `permissionMode` / `hooks` / `mcpServers` for plugin agents so a
 /// plugin cannot escalate beyond install-time trust.
 fn apply_plugin_namespace_and_gate(def: &mut AgentDefinition, plugin_name: &str) {
@@ -395,7 +395,7 @@ fn collect_dir(
 
     for path in paths {
         // Skip symlink-equivalent files we already loaded from a
-        // higher-priority source. TS `loadAgentsDir.ts:159-172`.
+        // higher-priority source. `loadAgentsDir.ts:159-172`.
         if !record_inode_seen(&path, seen_inodes) {
             tracing::debug!(
                 target: "coco_subagent",
@@ -486,8 +486,8 @@ fn load_one(
 /// the agent declares a `memory_scope` AND has an `Explicit` allow-list.
 /// **`Wildcard` allow-lists are skipped** — the agent already sees every
 /// tool, so injection is meaningless (and the type system, via
-/// [`ToolAllowList::as_explicit_mut`], makes it unrepresentable). TS
-/// parity: `loadAgentsDir.ts:455-467,662-674`. Idempotent — running the
+/// [`ToolAllowList::as_explicit_mut`], makes it unrepresentable).
+/// `loadAgentsDir.ts:455-467,662-674`. Idempotent — running the
 /// function repeatedly leaves the tool list unchanged after the first
 /// call, so future re-loads with auto-memory still on don't duplicate
 /// entries.
@@ -500,8 +500,8 @@ fn inject_memory_tools(def: &mut AgentDefinition) {
         // Wildcard — every tool already visible.
         return;
     };
-    // TS injects in [Write, Edit, Read] order (loadAgentsDir.ts:458-462,
-    // 665-669); keep byte-faithful so the prompt-cache key matches TS.
+    // Inject in [Write, Edit, Read] order (loadAgentsDir.ts:458-462,
+    // 665-669); keep byte-faithful so the prompt-cache key is stable.
     for tool in [ToolName::Write, ToolName::Edit, ToolName::Read] {
         let name = tool.as_str();
         if !list.iter().any(|t| t == name) {
@@ -510,8 +510,8 @@ fn inject_memory_tools(def: &mut AgentDefinition) {
     }
 }
 
-/// Apply TS-parity precedence: later (higher-or-equal-priority) source
-/// wins. Equal-priority later wins matches TS `Map.set` semantics in
+/// Apply source precedence: later (higher-or-equal-priority) source wins.
+/// Equal-priority later wins matches `Map.set` semantics in
 /// `getActiveAgentsFromList`. Caller controls iteration order via the
 /// `paths` field on `AgentSearchPaths`; intra-directory order is sorted
 /// in `sorted_md_paths` for cross-OS determinism.

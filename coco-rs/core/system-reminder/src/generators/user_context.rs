@@ -1,21 +1,14 @@
-//! TS `prependUserContext` generator (per-turn baseline user context).
+//! `prependUserContext` generator (per-turn baseline user context).
 //!
-//! TS injects a single `isMeta` `<system-reminder>` user message at the
-//! head of every API request via `prependUserContext`
-//! (`utils/api.ts:449-474`). Its body wraps the `getUserContext()` map
-//! (`context.ts:155-189`) — `{ currentDate, claudeMd? }` — as `# key\nvalue`
-//! blocks. coco-rs injects `claudeMd` (CLAUDE.md discovery) through the
-//! static system prompt (`app/query::build_prompt`), so this generator
-//! carries only the `currentDate` block — the piece TS sources *only* from
-//! `prependUserContext` and that the KAIROS memory instruction
-//! (`memory/src/prompt/builders.rs`) references as "`currentDate` in your
-//! context".
+//! Injects a single `isMeta` `<system-reminder>` user message at the head
+//! of every API request. Its body wraps `{ currentDate }` as a `# key\nvalue`
+//! block. `claudeMd` (CLAUDE.md discovery) is injected through the static
+//! system prompt (`app/query::build_prompt`) instead.
 //!
 //! Unlike [`DateChangeGenerator`](super::DateChangeGenerator) (a one-shot
-//! notice when the local date rolls over mid-session), this fires every
-//! turn so the date is always present. The engine supplies
-//! `ctx.current_date` each turn; `None` (the unit-test default) suppresses
-//! it, matching TS's `NODE_ENV === 'test'` skip.
+//! notice when the local date rolls over mid-session), this fires every turn
+//! so the date is always present. The engine supplies `ctx.current_date` each
+//! turn; `None` (the unit-test default) suppresses it.
 
 use async_trait::async_trait;
 
@@ -27,8 +20,7 @@ use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
-/// Emit the per-turn `currentDate` user-context reminder (TS
-/// `prependUserContext`).
+/// Emits the per-turn `currentDate` user-context reminder.
 #[derive(Debug, Default)]
 pub struct UserContextGenerator;
 
@@ -57,12 +49,11 @@ impl AttachmentGenerator for UserContextGenerator {
         if date.is_empty() {
             return Ok(None);
         }
-        // TS `prependUserContext` body verbatim (`utils/api.ts:462-472`),
-        // minus the outer `<system-reminder>` tags which the injection
-        // pipeline re-applies via `wrap_with_tag`. The context map carries
-        // only `currentDate` (claudeMd lives in the system prompt). The
-        // six-space indent before IMPORTANT is the TS template-literal
-        // artifact, preserved for byte-parity.
+        // `prependUserContext` body, minus the outer `<system-reminder>` tags
+        // which the injection pipeline re-applies via `wrap_with_tag`. The
+        // context map carries only `currentDate` (claudeMd lives in the system
+        // prompt). The six-space indent before IMPORTANT is a template-literal
+        // artifact preserved for model compatibility.
         let content = format!(
             "As you answer the user's questions, you can use the following context:\n\
              # currentDate\n\

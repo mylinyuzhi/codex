@@ -4,9 +4,6 @@
 //! Each file is a JSON array of [`TeammateMessage`]. Concurrent writes
 //! are serialised by the advisory lock helpers in
 //! [`super::lock::with_inbox_lock`].
-//!
-//! TS: `utils/teammateMailbox.ts` (path resolution, read / write / mark
-//! / clear, format helpers).
 
 use std::path::PathBuf;
 
@@ -20,8 +17,6 @@ use super::lock::{read_messages_no_lock, with_inbox_lock};
 // ── Core Message Type ──
 
 /// A message in the teammate mailbox.
-///
-/// TS: `TeammateMessage` in utils/teammateMailbox.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeammateMessage {
     pub from: String,
@@ -44,8 +39,6 @@ fn inbox_dir(team_name: &str) -> PathBuf {
 }
 
 /// Get the inbox file path for a specific agent.
-///
-/// TS: `getInboxPath(agentName, teamName)`
 pub fn inbox_path(agent_name: &str, team_name: &str) -> PathBuf {
     inbox_dir(team_name).join(format!("{agent_name}.json"))
 }
@@ -53,8 +46,6 @@ pub fn inbox_path(agent_name: &str, team_name: &str) -> PathBuf {
 // ── Read / Write ──
 
 /// Read all messages from an agent's inbox.
-///
-/// TS: `readMailbox(agentName, teamName)`
 pub fn read_mailbox(agent_name: &str, team_name: &str) -> crate::Result<Vec<TeammateMessage>> {
     let path = inbox_path(agent_name, team_name);
     if !path.exists() {
@@ -69,8 +60,6 @@ pub fn read_mailbox(agent_name: &str, team_name: &str) -> crate::Result<Vec<Team
 }
 
 /// Read only unread messages.
-///
-/// TS: `readUnreadMessages(agentName, teamName)`
 pub fn read_unread_messages(
     agent_name: &str,
     team_name: &str,
@@ -81,11 +70,9 @@ pub fn read_unread_messages(
 
 /// Write a message to a recipient's inbox.
 ///
-/// TS: `writeToMailbox(recipientName, message, teamName)` — uses
-/// `proper-lockfile` with 10 retries and 5-100 ms exponential backoff.
-/// We mirror that with `fs2`'s advisory exclusive lock on a sidecar
-/// `.lock` file; concurrent writers spin with backoff until they
-/// acquire it. Read-after-lock prevents the classic TOCTOU of
+/// Uses `fs2`'s advisory exclusive lock on a sidecar `.lock` file with
+/// 10 retries and 5-100 ms exponential backoff; concurrent writers spin
+/// until they acquire it. Read-after-lock prevents the classic TOCTOU of
 /// "read-mailbox → append → write" losing a concurrent peer's message.
 pub fn write_to_mailbox(
     recipient_name: &str,
@@ -110,8 +97,6 @@ pub fn write_to_mailbox(
 
 /// Mark all messages as read.
 ///
-/// TS: `markMessagesAsRead(agentName, teamName)`
-///
 /// Read-modify-write under `with_inbox_lock` — same TOCTOU avoidance as
 /// [`write_to_mailbox`]. An unlocked RMW here could clobber a peer's
 /// `write_to_mailbox` that appended between this fn's read and write-back.
@@ -132,8 +117,6 @@ pub fn mark_messages_as_read(agent_name: &str, team_name: &str) -> crate::Result
 }
 
 /// Mark a message as read by index.
-///
-/// TS: `markMessageAsReadByIndex(agentName, teamName, messageIndex)`
 ///
 /// Locked RMW (see [`mark_messages_as_read`]). The append-only inbox keeps
 /// any earlier `index` valid even if a peer appended concurrently — and the
@@ -160,8 +143,6 @@ pub fn mark_message_as_read_by_index(
 
 /// Mark messages as read by predicate.
 ///
-/// TS: `markMessagesAsReadByPredicate(agentName, predicate, teamName?)`
-///
 /// Locked RMW (see [`mark_messages_as_read`]).
 pub fn mark_messages_as_read_by_predicate(
     agent_name: &str,
@@ -186,8 +167,6 @@ pub fn mark_messages_as_read_by_predicate(
 }
 
 /// Clear an agent's inbox.
-///
-/// TS: `clearMailbox(agentName, teamName)`
 pub fn clear_mailbox(agent_name: &str, team_name: &str) -> crate::Result<()> {
     let path = inbox_path(agent_name, team_name);
     if path.exists() {
@@ -197,8 +176,6 @@ pub fn clear_mailbox(agent_name: &str, team_name: &str) -> crate::Result<()> {
 }
 
 /// Format teammate messages for display in the conversation.
-///
-/// TS: `formatTeammateMessages(messages)`
 pub fn format_teammate_messages(messages: &[TeammateMessage]) -> String {
     messages
         .iter()

@@ -144,9 +144,8 @@ fn app_toggle_teammate_preview_maps_to_toggle_teammate_message_preview() {
 
 #[test]
 fn feature_gated_actions_silently_no_op() {
-    // TS-mirror: when a feature isn't ported, the action returns
-    // None so the keystroke is swallowed silently (matches TS where
-    // useKeybinding is never registered for unported features).
+    // When a feature isn't ported, the action returns None so the
+    // keystroke is swallowed silently.
     let state = fresh_state();
     let gated = [
         KeybindingAction::ChatUndo,
@@ -167,7 +166,7 @@ fn feature_gated_actions_silently_no_op() {
     for action in gated {
         assert!(
             dispatch_action(&action, &state).is_none(),
-            "{action:?} should return None — TS feature-gated action with no coco-rs surface",
+            "{action:?} should return None — feature-gated action with no surface yet",
         );
     }
 }

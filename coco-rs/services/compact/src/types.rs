@@ -13,7 +13,7 @@ use coco_types::CompactTrigger;
 use serde::Deserialize;
 use serde::Serialize;
 
-// ── TS constants (from autoCompact.ts) ──────────────────────────────
+// ── Auto-compact constants ───────────────────────────────────────────
 
 /// Buffer below effective context window for auto-compact trigger.
 pub const AUTOCOMPACT_BUFFER_TOKENS: i64 = 13_000;
@@ -39,7 +39,7 @@ pub const MAX_PTL_RETRIES: i32 = 3;
 /// Max streaming retries for the summary LLM call.
 pub const MAX_COMPACT_STREAMING_RETRIES: i32 = 2;
 
-// ── Post-compact attachment budgets (from compact.ts) ───────────────
+// ── Post-compact attachment budgets ─────────────────────────────────
 
 /// Maximum recently-read files to re-inject after compaction.
 pub const POST_COMPACT_MAX_FILES_TO_RESTORE: usize = 5;
@@ -56,7 +56,7 @@ pub const POST_COMPACT_MAX_TOKENS_PER_SKILL: i64 = 5_000;
 /// Total token budget for all skill re-injections.
 pub const POST_COMPACT_SKILLS_TOKEN_BUDGET: i64 = 25_000;
 
-// ── Cleared-content markers (must match TS exactly) ─────────────────
+// ── Cleared-content markers ──────────────────────────────────────────
 
 /// Placeholder inserted when old tool result content is cleared.
 pub const CLEARED_TOOL_RESULT_MESSAGE: &str = "[Old tool result content cleared]";
@@ -78,8 +78,8 @@ pub enum CompactSummaryKind {
 /// `messages` contains the conversation slice being summarized as real
 /// role-preserving messages. `context_messages` contains the structured
 /// conversation to send to the summarizer. They differ for partial
-/// "from/newest" compaction, where TS preserves the earlier context on
-/// the first attempt and only summarizes the selected tail.
+/// "from/newest" compaction, where the earlier context is preserved on
+/// the first attempt and only the selected tail is summarized.
 ///
 /// `summary_request` is the instruction prompt appended by the query layer
 /// as a final user message or fork prompt.
@@ -156,11 +156,8 @@ fn default_trigger() -> CompactTrigger {
 
 /// Info about a re-compaction scenario.
 ///
-/// TS uses these fields for the `tengu_compact` analytics event
-/// (H1/H2/H3/H5 chain disambiguation in `compact.ts:317`). coco-rs
-/// threads the struct through `CompactRunOptions` so compact results
-/// preserve the chain state even though there is no equivalent analytics
-/// event sink today.
+/// Threaded through `CompactRunOptions` so compact results preserve the
+/// chain state (H1/H2/H3/H5 disambiguation).
 #[derive(Debug, Clone)]
 pub struct RecompactionInfo {
     pub is_recompaction: bool,
@@ -196,8 +193,8 @@ pub struct TokenWarningState {
 
 /// Strategy for API-native context editing.
 ///
-/// Mirrors the Anthropic `context_management.edits` payload, with each
-/// variant mapping to one wire `type` (TS `apiMicrocompact.ts`).
+/// Maps to the Anthropic `context_management.edits` payload, with each
+/// variant mapping to one wire `type`.
 #[derive(Debug, Clone)]
 pub enum ContextEditStrategy {
     /// `clear_tool_uses_20250919`: clear tool result content / tool inputs
@@ -209,10 +206,9 @@ pub enum ContextEditStrategy {
         /// policy default.
         keep_recent: Option<ToolUseKeep>,
         /// Minimum number of input tokens the API must free during this
-        /// edit. TS `apiMicrocompact.ts:118-121` sets this to
-        /// `triggerThreshold - keepTarget` so the server clears enough
-        /// even when its default would clear less. Without this, the
-        /// `keep_target` config is informational only.
+        /// edit. Set to `triggerThreshold - keepTarget` so the server
+        /// clears enough even when its default would clear less. Without
+        /// this, the `keep_target` config is informational only.
         clear_at_least: Option<i64>,
         /// Which tool inputs to clear.
         clear_inputs: ClearToolInputs,
@@ -230,8 +226,8 @@ pub enum ContextEditStrategy {
 
 /// Retention policy for tool uses under `clear_tool_uses_20250919`.
 ///
-/// TS shape: `{type: 'tool_uses', value: number}`. We only model the
-/// numeric variant — the wire format has no symbolic "all" for this field.
+/// Wire shape: `{type: 'tool_uses', value: number}`. Only the numeric
+/// variant is modeled — the wire format has no symbolic "all" for this field.
 #[derive(Debug, Clone, Copy)]
 pub struct ToolUseKeep {
     /// Number of recent tool uses to keep.
@@ -240,25 +236,25 @@ pub struct ToolUseKeep {
 
 /// Retention policy for thinking blocks under `clear_thinking_20251015`.
 ///
-/// TS shape: `{type: 'thinking_turns', value: number} | 'all'`. The
-/// `'all'` literal is preserved as a distinct variant so callers cannot
-/// accidentally smuggle a sentinel value through the numeric path.
+/// Wire shape: `{type: 'thinking_turns', value: number} | 'all'`. The
+/// `'all'` literal is a distinct variant so callers cannot accidentally
+/// smuggle a sentinel value through the numeric path.
 #[derive(Debug, Clone, Copy)]
 pub enum ThinkingKeep {
-    /// Keep all thinking blocks (TS `'all'`).
+    /// Keep all thinking blocks (wire: `'all'`).
     All,
-    /// Keep the last N turns (TS `{type: 'thinking_turns', value: N}`).
+    /// Keep the last N turns (wire: `{type: 'thinking_turns', value: N}`).
     Recent { turns: i32 },
 }
 
 /// Which tool inputs to clear during context editing.
 #[derive(Debug, Clone)]
 pub enum ClearToolInputs {
-    /// Clear inputs for all eligible tools (TS `clear_tool_inputs: true`).
+    /// Clear inputs for all eligible tools (wire: `clear_tool_inputs: true`).
     All,
     /// Clear inputs only for the listed builtin tools.
     SpecificTools(Vec<coco_types::ToolName>),
-    /// Don't clear inputs (TS `clear_tool_inputs: false` / omitted).
+    /// Don't clear inputs (wire: `clear_tool_inputs: false` / omitted).
     None,
 }
 
@@ -268,10 +264,6 @@ pub enum ClearToolInputs {
 /// warn the user about the (now-stale) pre-compact token count. Cleared at
 /// the start of each new compaction attempt or when the next API response
 /// gives an accurate token count.
-///
-/// TS: `services/compact/compactWarningState.ts` — pure state, separate
-/// from the React hook (`compactWarningHook.ts`) so the print/SDK paths
-/// can use it without dragging React into the module graph.
 #[derive(Debug, Default)]
 pub struct CompactWarningState {
     suppressed: AtomicBool,
@@ -303,9 +295,8 @@ impl CompactWarningState {
 /// Collect names of tools that were "discovered" via ToolSearch in the
 /// conversation (i.e. deferred-load tools that were materialized).
 ///
-/// TS: `extractDiscoveredToolNames(messages)` in `utils/toolSearch.ts`.
 /// Returned set is sorted (BTreeSet) so the boundary marker stores them
-/// deterministically — TS sorts before persisting too.
+/// deterministically.
 pub fn extract_discovered_tool_names<M: std::borrow::Borrow<Message>>(
     messages: &[M],
 ) -> BTreeSet<String> {

@@ -1,27 +1,18 @@
 //! NotebookEditTool — Jupyter `.ipynb` cell editing.
 //!
-//! TS: `tools/NotebookEditTool/NotebookEditTool.ts:90-433` — full
-//! Jupyter notebook cell editing with replace/insert/delete modes,
-//! cell ID and index lookup, output clearing on replace, and
-//! nbformat-aware cell ID generation.
-//!
-//! Wire shape (TS:50-55 + :44-48):
+//! Wire shape:
 //!   - notebook_path  : string (required, absolute .ipynb path)
 //!   - cell_id        : string (required, cell UUID or "cell-N" index)
 //!   - new_source     : string (content for replace/insert)
 //!   - cell_type      : enum { code, markdown } (required for insert)
-//!     **raw is NOT supported** — matches TS limitation
+//!     **raw is NOT supported**
 //!   - edit_mode      : enum { replace, insert, delete }
 //!
-//! Cell ID generation (TS:381-386): uses
-//! `Math.random().toString(36).substring(2, 15)` — a 13-char alphanumeric
-//! base-36 string — and only applies when the notebook's nbformat is ≥
-//! 4.5. We do the same with rand::thread_rng so new cells round-trip
-//! identically between TS and Rust writers.
+//! Cell ID generation uses a 13-char alphanumeric base-36 string and
+//! only applies when the notebook's nbformat is ≥ 4.5.
 //!
-//! File-history hook: `track_file_edit` runs before the
-//! `tokio::fs::write` so a pre-edit backup is captured for the rewind
-//! subsystem (TS: `NotebookEditTool.ts:312` calls `fileHistoryTrackEdit`).
+//! File-history hook: `track_file_edit` runs before `tokio::fs::write`
+//! so a pre-edit backup is captured for the rewind subsystem.
 
 use async_trait::async_trait;
 use coco_messages::ToolResult;
@@ -38,18 +29,14 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-/// Short per-call UI label. TS `tools/NotebookEditTool/prompt.ts`
-/// `DESCRIPTION`, returned by `async description()`.
+/// Short per-call UI label.
 const NOTEBOOK_EDIT_SHORT_DESCRIPTION: &str =
     "Replace the contents of a specific cell in a Jupyter notebook.";
 
-/// Long-form model-facing description. TS
-/// `tools/NotebookEditTool/prompt.ts` `PROMPT`, returned by
-/// `async prompt()`.
+/// Long-form model-facing description.
 const NOTEBOOK_EDIT_PROMPT: &str = "Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new source. Jupyter notebooks are interactive documents that combine code, text, and visualizations, commonly used for data analysis and scientific computing. The notebook_path parameter must be an absolute path, not a relative path. The cell_id identifies the target cell — either a cell ID/UUID, or \"cell-N\" for the N-th cell (0-indexed). Use edit_mode=insert to add a new cell at the position of cell_id (or at the top when cell_id is omitted). Use edit_mode=delete to delete the cell identified by cell_id.";
 
-/// Cell type for the `insert` mode. `raw` is not supported (matches TS
-/// `NotebookEditTool.ts` limitation).
+/// Cell type for the `insert` mode. `raw` is not supported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NotebookCellType {
@@ -137,8 +124,7 @@ pub enum NotebookEditOutput {
         #[serde(default)]
         cell_index: usize,
         /// Freshly-generated cell id (nbformat ≥ 4.5) or `null` for
-        /// older notebooks. Serialized as JSON `null` rather than
-        /// omitted, mirroring TS `NotebookEditTool.ts:380-390`.
+        /// older notebooks. Serialized as JSON `null` rather than omitted.
         new_cell_id: Option<String>,
     },
     Delete {
@@ -172,7 +158,6 @@ impl Tool for NotebookEditTool {
     type Output = NotebookEditOutput;
 
     fn to_auto_classifier_input(&self, input: &NotebookEditInput) -> Option<String> {
-        // TS `NotebookEditTool`: `${notebook_path} ${mode}: ${new_source}`.
         // `edit_mode` (replace / insert / delete) is security-relevant, so it
         // rides along with the path and payload.
         Some(format!(
@@ -196,8 +181,7 @@ impl Tool for NotebookEditTool {
         NOTEBOOK_EDIT_SHORT_DESCRIPTION.into()
     }
 
-    /// Model-facing tool description (schema-listing time). TS
-    /// `NotebookEditTool.ts:98-99` `async prompt()` → `PROMPT`.
+    /// Model-facing tool description (schema-listing time).
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         NOTEBOOK_EDIT_PROMPT.into()
     }
@@ -209,10 +193,9 @@ impl Tool for NotebookEditTool {
         Some("edit a Jupyter notebook ipynb cell")
     }
 
-    /// TS `NotebookEditTool.ts:185-216`: reject non-`.ipynb` paths
-    /// (errorCode 2 → redirect to FileEdit) and require a `cell_type`
-    /// for insert (errorCode 5). UNC paths (`\\…` / `//…`) bypass the
-    /// extension check, matching TS.
+    /// Reject non-`.ipynb` paths (errorCode 2 → redirect to FileEdit)
+    /// and require a `cell_type` for insert (errorCode 5). UNC paths
+    /// (`\\…` / `//…`) bypass the extension check.
     fn validate_input(
         &self,
         input: &NotebookEditInput,
@@ -282,8 +265,8 @@ impl Tool for NotebookEditTool {
         let edit_mode = input.edit_mode;
         let cell_id = input.cell_id.as_str();
 
-        // Enforce read-before-edit, matching TS `NotebookEditTool.ts:218-237`.
-        // Without this guard the model can edit a notebook it never saw (or
+        // Enforce read-before-edit: without this guard the model can edit a
+        // notebook it never saw (or
         // edit against a stale view after an external change), silently
         // clobbering data. Mirrors the same check in `FileEditTool` /
         // `FileWriteTool`. The check runs only when `file_read_state` is
@@ -301,8 +284,8 @@ impl Tool for NotebookEditTool {
                     source: None,
                 });
             }
-            // mtime drift check mirrors `FileEditTool.ts:451-467` — reject
-            // edits staged against a view that is older than the current
+            // mtime drift check — reject edits staged against a view that is
+            // older than the current
             // disk mtime so we don't quietly overwrite external changes.
             if let Some(entry) = frs_read.peek(&abs_path)
                 && let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
@@ -357,9 +340,9 @@ impl Tool for NotebookEditTool {
         // Resolve cell index from cell_id. For insert with an empty
         // cell_id we default to position 0 so the model can create the
         // first cell without having to pass "0" explicitly. For insert
-        // with a referenced cell, TS places the new cell AFTER it
-        // (`NotebookEditTool.ts:365-366`: `cellIndex += 1`), so the new
-        // cell follows the one named — not before it.
+        // with a referenced cell, places the new cell AFTER it
+        // (cellIndex += 1), so the new cell follows the one named — not
+        // before it.
         let cell_index = if matches!(edit_mode, NotebookEditMode::Insert) && cell_id.is_empty() {
             0
         } else {
@@ -371,9 +354,9 @@ impl Tool for NotebookEditTool {
             }
         };
 
-        // TS `NotebookEditTool.ts:371-377`: replacing one-past-the-end is
-        // an append-insert. `cell_type` then defaults to code (the
-        // `validate_input` gate only requires it for an *explicit* insert).
+        // Replacing one-past-the-end is treated as an append-insert.
+        // `cell_type` then defaults to code (the `validate_input` gate
+        // only requires it for an *explicit* insert).
         let effective_mode =
             if matches!(edit_mode, NotebookEditMode::Replace) && cell_index == cells.len() {
                 NotebookEditMode::Insert
@@ -382,17 +365,16 @@ impl Tool for NotebookEditTool {
             };
 
         // R5-T15: return the actual cell ID (string) rather than a bare
-        // index. TS emits `new_cell_id` for insert and `cell_id` for
+        // index. `new_cell_id` for insert and `cell_id` for
         // replace/delete so the model can reference cells by the ID it
         // wrote. `cell_index` is still returned for debuggability.
         let mut resolved_cell_id: Option<String> = None;
         let mut new_cell_id: Option<String> = None;
 
-        // TS `NotebookEditTool.ts:380-390`: the id surfaced to the
-        // model is `cell_id` from input for replace/delete and a
-        // freshly-generated 13-char base-36 string for insert — but
+        // The id surfaced to the model is `cell_id` from input for replace/delete
+        // and a freshly-generated 13-char base-36 string for insert — but
         // only when nbformat ≥ 4.5. Older notebooks have no cell-id
-        // field, so TS renders the literal string `undefined`.
+        // field, so renders the literal string `undefined`.
         let supports_ids = nbformat > 4 || (nbformat == 4 && nbformat_minor >= 5);
         let displayed_cell_id = |id: Option<&str>| -> String {
             match id {
@@ -417,15 +399,14 @@ impl Tool for NotebookEditTool {
 
                 // Capture the resolved cell's id BEFORE mutating the
                 // source — the id field is not touched by replace, so
-                // reading it here matches TS semantics.
+                // reading it here preserves the expected semantics.
                 resolved_cell_id = cells[cell_index]
                     .get("id")
                     .and_then(|v| v.as_str())
                     .map(String::from);
 
-                // TS `NotebookEditTool.ts:421-424`: only code cells reset
-                // execution state. Read the *current* type before any
-                // cell_type switch.
+                // Only code cells reset execution state. Read the *current*
+                // type before any cell_type switch.
                 let was_code = cells[cell_index].get("cell_type").and_then(|v| v.as_str())
                     == Some(NotebookCellType::Code.as_str());
 
@@ -435,8 +416,8 @@ impl Tool for NotebookEditTool {
                     cells[cell_index]["outputs"] = Value::Array(vec![]);
                 }
 
-                // TS `NotebookEditTool.ts:425-427`: apply a cell_type
-                // switch on replace when the input differs from the cell.
+                // Apply a cell_type switch on replace when the input differs
+                // from the cell.
                 if let Some(ct) = input.cell_type
                     && cells[cell_index].get("cell_type").and_then(|v| v.as_str())
                         != Some(ct.as_str())
@@ -463,11 +444,9 @@ impl Tool for NotebookEditTool {
                     new_cell["outputs"] = Value::Array(vec![]);
                 }
 
-                // Cell ID generation — nbformat ≥ 4.5 only (TS:381-386).
-                // TS uses `Math.random().toString(36).substring(2, 15)`
-                // which is a 13-char base-36 alphanumeric. We match that
-                // with a rand::thread_rng-based generator so new cells
-                // look identical to TS-written ones.
+                // Cell ID generation — nbformat ≥ 4.5 only.
+                // Generates a 13-char base-36 alphanumeric using
+                // rand::thread_rng.
                 if supports_ids {
                     let generated = generate_cell_id();
                     new_cell["id"] = Value::String(generated.clone());
@@ -520,8 +499,7 @@ impl Tool for NotebookEditTool {
         }
 
         // Capture pre-edit content for file history before mutating.
-        // TS: NotebookEditTool.ts:312 calls fileHistoryTrackEdit
-        // before serialization. Mirrors Edit/Write/apply_patch ordering.
+        // Mirrors Edit/Write/apply_patch ordering.
         crate::track_file_edit(ctx, std::path::Path::new(notebook_path)).await;
 
         tokio::fs::write(notebook_path, &updated)
@@ -532,13 +510,12 @@ impl Tool for NotebookEditTool {
                 source: None,
             })?;
 
-        // TS parity with FileWriteTool/FileEditTool — notify the LSP
-        // server of the save so diagnostics refresh. Best-effort.
+        // Notify the LSP server of the save so diagnostics refresh. Best-effort.
         ctx.lsp
             .notify_save(std::path::Path::new(notebook_path))
             .await;
 
-        // Build the TS-shaped response. For insert: include `new_cell_id`
+        // Build the response. For insert: include `new_cell_id`
         // (or null when nbformat < 4.5). For replace/delete: include
         // `cell_id` from the resolved cell. Always include `cell_index`
         // for debuggability.
@@ -554,7 +531,7 @@ impl Tool for NotebookEditTool {
                 message: result_msg,
                 notebook_path: notebook_path_string,
                 cell_index,
-                // TS emits `new_cell_id` even when null (nbformat < 4.5).
+                // `new_cell_id` is emitted even when null (nbformat < 4.5).
                 new_cell_id,
             },
             NotebookEditMode::Delete => NotebookEditOutput::Delete {
@@ -631,11 +608,9 @@ fn source_to_lines(source: &str) -> Vec<Value> {
 
 /// Generate a Jupyter cell ID.
 ///
-/// TS `NotebookEditTool.ts:381-386` uses
-/// `Math.random().toString(36).substring(2, 15)` — a 13-char lowercase
-/// alphanumeric (base-36) string. We replicate the format exactly so
-/// notebooks written by coco-rs round-trip visually identical with
-/// TS-written notebooks.
+/// Generates a 13-char lowercase alphanumeric (base-36) string,
+/// matching the format produced by
+/// `Math.random().toString(36).substring(2, 15)`.
 pub(crate) fn generate_cell_id() -> String {
     use rand::Rng;
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";

@@ -104,8 +104,7 @@ fn searching_past_context_keeps_placeholder_when_transcript_unset() {
         None,
         None,
     );
-    // Placeholder visible to the model — TS exposes this via
-    // `<your sessions directory>` when projectDir isn't resolvable.
+    // Placeholder visible to the model when projectDir isn't resolvable.
     assert!(p.contains("<your sessions directory>"));
 }
 
@@ -141,16 +140,15 @@ fn kairos_searching_past_context_appends_block() {
 #[test]
 fn extract_prompt_includes_manifest_and_message_count() {
     // Manifest is now the line list only (no header). Builder wraps
-    // it with `## Existing memory files` + the trailing nudge — TS
-    // parity (`extractMemories/prompts.ts:30-33`).
+    // it with `## Existing memory files` + the trailing nudge.
     let p = build_extract_prompt(
         40,
         "- [project] foo.md (2026-05-09T08:00:00.000Z): hook",
         false,
         false,
     );
-    // TS opener double-substitutes the count — both the "most recent"
-    // line and the budget-reminder line should reflect it.
+    // The count appears twice — both the "most recent" line and the
+    // budget-reminder line should reflect it.
     assert!(p.contains("most recent ~40 messages"));
     assert!(p.contains("last ~40 messages"));
     assert!(p.contains("## Existing memory files"));
@@ -162,9 +160,8 @@ fn extract_prompt_includes_manifest_and_message_count() {
 
 #[test]
 fn extract_prompt_omits_manifest_section_when_empty() {
-    // TS parity: empty `existingMemories` yields a manifest = ''
-    // ternary, so the whole `## Existing memory files` section is
-    // dropped. Rust caller passes `""` from `format_memory_manifest`
+    // When `existingMemories` is empty the whole `## Existing memory files`
+    // section is dropped. Rust caller passes `""` from `format_memory_manifest`
     // when the dir is empty.
     let p = build_extract_prompt(5, "", false, false);
     assert!(
@@ -198,10 +195,9 @@ fn dream_prompt_includes_four_phases() {
 
 #[test]
 fn dream_prompt_includes_bash_readonly_constraint_in_extra_block() {
-    // TS parity (`autoDream.ts:216-218`): the `extra` block always
-    // includes the read-only Bash constraint reminder so the dream
-    // subagent doesn't waste turns on writes/redirects that
-    // `createAutoMemCanUseTool` would deny.
+    // The `extra` block always includes the read-only Bash constraint
+    // reminder so the dream subagent doesn't waste turns on
+    // writes/redirects that `createAutoMemCanUseTool` would deny.
     let p = build_dream_prompt(Path::new("/m"), Path::new("/p"), &[]);
     assert!(
         p.contains("Tool constraints for this run"),
@@ -225,10 +221,10 @@ fn dream_prompt_appends_session_list_after_constraint() {
 
 #[test]
 fn session_template_has_ten_section_headers() {
-    // TS `DEFAULT_SESSION_MEMORY_TEMPLATE` (services/SessionMemory/prompts.ts:11-41)
-    // has exactly 10 H1 sections: Session Title, Current State, Task
-    // specification, Files and Functions, Workflow, Errors & Corrections,
-    // Codebase and System Documentation, Learnings, Key results, Worklog.
+    // `DEFAULT_SESSION_MEMORY_TEMPLATE` has exactly 10 H1 sections:
+    // Session Title, Current State, Task specification, Files and
+    // Functions, Workflow, Errors & Corrections, Codebase and System
+    // Documentation, Learnings, Key results, Worklog.
     let template = build_session_memory_template();
     let headers = template.lines().filter(|l| l.starts_with("# ")).count();
     assert_eq!(headers, 10);
@@ -257,11 +253,10 @@ fn session_memory_update_prompt_emphasizes_structure_preservation() {
 
 #[test]
 fn session_memory_update_prompt_appends_oversized_section_warning() {
-    // TS parity (`prompts.ts:164-196 generateSectionReminders`): when
-    // a section exceeds the per-section budget, the prompt appends a
-    // sorted list of the oversized sections so the model knows to
-    // condense them. Use a 50-byte section limit (≈12 tokens) so the
-    // body easily exceeds it.
+    // When a section exceeds the per-section budget
+    // (`generateSectionReminders`), the prompt appends a sorted list of
+    // the oversized sections so the model knows to condense them. Use a
+    // 50-byte section limit (≈12 tokens) so the body easily exceeds it.
     let big_body = "x".repeat(2_000);
     let notes = format!("# Session Title\n_hint_\n\n# Worklog\n{big_body}\n");
     let p = build_session_memory_update_prompt(

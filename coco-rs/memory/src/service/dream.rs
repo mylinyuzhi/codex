@@ -1,6 +1,6 @@
 //! Auto-dream consolidation service.
 //!
-//! TS: `services/autoDream/autoDream.ts`. Three-gate scheduling:
+//! Three-gate scheduling:
 //!
 //! 1. **Time** — at least `dream_min_hours` since last consolidation.
 //! 2. **Sessions** — at least `dream_min_sessions` distinct sessions
@@ -30,7 +30,7 @@ use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
 
 /// Scan throttle — bail if we already attempted a consolidation
-/// within this window. TS `SESSION_SCAN_INTERVAL_MS = 600_000`.
+/// within this window (`SESSION_SCAN_INTERVAL_MS = 600_000`).
 pub const SCAN_THROTTLE: Duration = Duration::from_secs(10 * 60);
 
 /// One per-call outcome.
@@ -79,10 +79,9 @@ pub struct DreamService {
     config: MemoryConfig,
     agent: crate::service::extract::AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
-    /// User-visible notice channel — TS parity with
-    /// `autoDream.ts:240-247 appendSystemMessage(... verb: 'Improved')`.
-    /// Engine drains the inbox once per turn and injects a
-    /// `SystemMemorySavedMessage` with `verb: "Improved"`.
+    /// User-visible notice channel — engine drains the inbox once per
+    /// turn and injects a `SystemMemorySavedMessage` with `verb:
+    /// "Improved"`.
     notices: crate::notice::NoticeInbox,
     /// Scan-throttle stamp. `std::sync::Mutex` (not tokio) because the
     /// critical section is two cheap operations on `Option<Instant>`
@@ -171,10 +170,9 @@ impl DreamService {
     /// the agent for narrow grep. `enumerate_sessions` lazily produces
     /// the session-ID slice — invoked **only** after the time + scan
     /// gates pass so callers don't pay the directory walk on every
-    /// turn. TS parity (`autoDream.ts:155`): TS only runs
-    /// `listSessionsTouchedSince` after the time gate. `now_ms` is the
-    /// current wall clock — accept it as a parameter so tests stay
-    /// deterministic.
+    /// turn (`listSessionsTouchedSince` only runs after the time gate).
+    /// `now_ms` is the current wall clock — accept it as a parameter so
+    /// tests stay deterministic.
     pub async fn maybe_consolidate<F>(
         &self,
         transcript_dir: &std::path::Path,
@@ -190,9 +188,9 @@ impl DreamService {
 
     /// Force a consolidation regardless of the time / session / scan
     /// throttle gates — bound to the `/dream` slash command. Still
-    /// honors the `dream_enabled` and `kairos_mode` settings (TS parity:
-    /// manual `/dream` runs as the disk-skill in the main loop, but
-    /// auto-dream is never invoked when these are off). The PID + mtime
+    /// honors the `dream_enabled` and `kairos_mode` settings (manual
+    /// `/dream` runs as the disk-skill in the main loop, but auto-dream
+    /// is never invoked when these are off). The PID + mtime
     /// CAS lock is still acquired so a manual run cannot race with an
     /// auto-dream in flight. The `enumerate_sessions` closure is
     /// invoked unconditionally under force so the prompt's
@@ -241,10 +239,9 @@ impl DreamService {
             None => return DreamOutcome::Skipped(SkipReason::InProgress),
         };
 
-        // Time gate first — TS parity (`autoDream.ts:140-141`):
-        // `lastConsolidatedAt` stat happens before any session scan, so
-        // we mirror that order here. Eager `lock::last_consolidated_at`
-        // is one stat; cheap regardless of the scan throttle.
+        // Time gate first — `lastConsolidatedAt` stat happens before any
+        // session scan. Eager `lock::last_consolidated_at` is one stat;
+        // cheap regardless of the scan throttle.
         let prior_last_ms = lock::last_consolidated_at(&self.memory_dir);
         let hours_since_initial = prior_last_ms
             .map(|m| (now_ms.saturating_sub(m)) / (60 * 60 * 1000))
@@ -256,12 +253,12 @@ impl DreamService {
         }
 
         // Snapshot the prior scan-throttle stamp so we can roll back
-        // on Failed / cancellation. TS `lastSessionScanAt` only
-        // advances on a real-fired consolidation; if we update before
-        // the fork runs and the fork fails, retries within 10 min
-        // would be needlessly throttled.
+        // on Failed / cancellation. `lastSessionScanAt` only advances
+        // on a real-fired consolidation; if we update before the fork
+        // runs and the fork fails, retries within 10 min would be
+        // needlessly throttled.
         let prior_scan_at: Option<Instant> = if !force {
-            // Scan throttle — TS `SESSION_SCAN_INTERVAL_MS = 600_000`.
+            // Scan throttle — `SESSION_SCAN_INTERVAL_MS = 600_000`.
             let mut last = self
                 .last_scan_at
                 .lock()
@@ -278,8 +275,9 @@ impl DreamService {
             None
         };
 
-        // Session enumeration — lazy, invoked here so callers don't
-        // pay the directory walk on time-gated / scan-throttled turns.
+        // Session enumeration — lazy, invoked only after the time +
+        // scan gates pass so callers don't pay the directory walk on
+        // every turn.
         let sessions_since_last = enumerate_sessions();
 
         if !force && (sessions_since_last.len() as i32) < self.config.dream_min_sessions {
@@ -296,7 +294,7 @@ impl DreamService {
         // Lock — kept under both paths so manual /dream and auto-dream
         // never race over MEMORY.md edits. The `LockGuard` RAII type
         // ensures the lock file's mtime is rolled back on cancellation
-        // — TS finally-block parity for async-runtime cancellation.
+        // for async-runtime cancellation.
         let lock_guard = match lock::try_acquire(&self.memory_dir) {
             LockOutcome::Acquired(g) => g,
             LockOutcome::Held => {
@@ -340,19 +338,16 @@ impl DreamService {
             subagent_type: Some("general-purpose".into()),
             definition: Some(memory_def),
             constraints: Some(AgentSpawnConstraints {
-                // No cap — TS doesn't set `maxTurns` on the dream fork
-                // (`autoDream.ts:230`); the agent stops naturally when
-                // it has nothing left to merge. Capping at 20 silently
-                // truncated long consolidations.
+                // No cap — the agent stops naturally when it has nothing
+                // left to merge. Capping at 20 silently truncated long
+                // consolidations.
                 max_turns: None,
                 allowed_write_roots: vec![self.memory_dir.clone()],
             }),
-            // TS `runForkedAgent({skipTranscript: true})`
-            // (`autoDream.ts:230`) — same reason as extract: keep the
-            // background subagent's tool-uses out of the user's main
-            // JSONL transcript.
+            // Keep the background subagent's tool-uses out of the user's
+            // main JSONL transcript.
             skip_transcript: true,
-            // TS `autoDream.ts:224` `canUseTool: createAutoMemCanUseTool(memoryRoot)`.
+            // `canUseTool: createAutoMemCanUseTool(memoryRoot)`.
             can_use_tool: Some(crate::can_use_tool::create_auto_mem_handle_with_telemetry(
                 self.memory_dir.clone(),
                 self.telemetry.clone(),
@@ -439,7 +434,6 @@ impl DreamService {
                 // auto path — under force we never mutated it.
                 drop(lock_guard);
                 self.restore_scan_at_if_unforced(force, prior_scan_at);
-                // TS parity (`autoDream.ts:267`).
                 self.telemetry.emit(MemoryEvent::AutoDreamFailed);
                 let _ = prior_mtime_ms; // kept for tracing breadcrumb
                 DreamOutcome::Failed { reason: e }

@@ -36,16 +36,15 @@ pub struct LanguageModelV4Request {
 
 /// Response information.
 ///
-/// Mirrors TS `LanguageModelV4ResponseMetadata & { headers?, body? }` —
-/// `id`, `timestamp`, `modelId` from the metadata flattened in, plus
-/// optional headers and body for telemetry.
+/// Response information — `id`, `timestamp`, `modelId` from the spec metadata
+/// flattened in, plus optional headers and body for telemetry.
 #[derive(Debug, Clone)]
 pub struct LanguageModelV4Response {
     /// ID for the generated response, if the provider sends one.
     pub id: Option<String>,
     /// The timestamp of the response, parsed from the provider.
-    /// Stored as a typed `DateTime<Utc>` (TS spec: `Date`) — providers
-    /// converting from Unix seconds or ISO 8601 should land here.
+    /// Stored as a typed `DateTime<Utc>` — providers converting from
+    /// Unix seconds or ISO 8601 should land here.
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
     /// The model ID used for the response.
     pub model_id: Option<String>,

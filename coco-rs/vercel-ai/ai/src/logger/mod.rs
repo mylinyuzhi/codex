@@ -1,7 +1,6 @@
 //! Logger module for warning logging.
 //!
-//! This module provides warning logging functionality matching the TypeScript
-//! `@ai-sdk/ai` logger pattern.
+//! This module provides warning logging functionality for the AI SDK.
 
 mod log_warnings;
 

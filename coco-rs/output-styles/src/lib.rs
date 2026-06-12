@@ -1,22 +1,8 @@
-//! Output styles — TS-parity definitions, loaders, and resolution.
+//! Output style catalog, loaders, and resolution.
 //!
-//! ## TS Source
-//!
-//! - `constants/outputStyles.ts` — `OutputStyleConfig`, built-in catalog
-//!   (`default` / `Explanatory` / `Learning`), `getAllOutputStyles`,
-//!   `getOutputStyleConfig`, `hasCustomOutputStyle`.
-//! - `outputStyles/loadOutputStylesDir.ts` — reads project + user
-//!   `.coco/output-styles/*.md` via the markdown discovery loader,
-//!   parses `name` / `description` / `keep-coding-instructions`.
-//! - `utils/plugins/loadPluginOutputStyles.ts` — reads
-//!   `<plugin>/output-styles/*.md` plus manifest `outputStyles` extras,
-//!   parses `force-for-plugin`, namespaces names as `pluginName:baseName`.
-//! - `constants/prompts.ts` — system-prompt injection
-//!   (`# Output Style: <name>\n<prompt>` block + intro toggle +
-//!   `keepCodingInstructions` gate on the doing-tasks section).
-//! - `utils/messages.ts:3797` and `utils/attachments.ts:1597` —
-//!   per-turn reminder template + main-thread, non-default gate.
-//! - `commands/output-style/output-style.tsx` — deprecated CLI stub.
+//! Built-in styles (`default` / `Explanatory` / `Learning`), project + user
+//! `.coco/output-styles/*.md` discovery, plugin-sourced styles, system-prompt
+//! injection, and per-turn reminder generation.
 //!
 //! ## Architecture
 //!

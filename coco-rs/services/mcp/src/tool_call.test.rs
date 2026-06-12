@@ -19,7 +19,7 @@ fn test_truncate_description_over_limit() {
     let long = "x".repeat(3000);
     let truncated = truncate_description(&long);
     assert!(truncated.len() < 3000);
-    // TS marker: a single U+2026 ellipsis, not three ASCII dots.
+    // Truncation suffix uses a single U+2026 ellipsis, not three ASCII dots.
     assert!(truncated.ends_with("… [truncated]"));
     assert!(!truncated.contains("..."));
     assert!(truncated.starts_with(&"x".repeat(MAX_DESCRIPTION_LENGTH)));

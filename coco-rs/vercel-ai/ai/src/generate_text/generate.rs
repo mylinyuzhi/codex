@@ -307,7 +307,7 @@ pub async fn generate_text(options: GenerateTextOptions) -> Result<GenerateTextR
     match generate_text_inner(options, call_id_for_error.clone()).await {
         Ok(result) => Ok(result),
         Err(error) => {
-            // Notify telemetry integrations of the error (TS: globalTelemetry.onError)
+            // Notify telemetry integrations of the error
             crate::telemetry::notify_error(&integrations_for_error, &error).await;
             Err(error)
         }
@@ -502,8 +502,7 @@ async fn generate_text_inner(
         let step_tools_context = tools_context.clone();
 
         let effective_model = step_model.as_ref().unwrap_or(&model);
-        // Deep-merge call-level + step-level provider options (TS parity:
-        // `mergeObjects(providerOptions, prepareStepResult?.providerOptions)`).
+        // Deep-merge call-level + step-level provider options.
         // Step keys layer onto call keys; nested objects merge recursively.
         let effective_provider_options = build_call_options::merge_provider_options(
             provider_options.as_ref(),
@@ -569,7 +568,7 @@ async fn generate_text_inner(
             .await?
         };
 
-        // Log warnings from the provider (called unconditionally per TS SDK)
+        // Log warnings from the provider (called unconditionally)
         crate::logger::log_warnings(&crate::logger::LogWarningsOptions::new(
             result.warnings.clone(),
             model.provider(),
@@ -750,7 +749,7 @@ async fn generate_text_inner(
         final_result.total_usage = total_usage.clone();
 
         // Parse structured output if output spec is configured and finish reason is "stop"
-        // (TS SDK only parses output when finishReason === 'stop')
+        // Only parse output when finishReason === 'stop'
         if let Some(output_spec) = output
             && final_result.finish_reason.is_stop()
             && let Ok(Some(parsed)) = output_spec.parse_complete_output(&final_result.text)
@@ -800,8 +799,7 @@ async fn generate_text_inner(
     final_result.request = last_step.request.clone();
     final_result.response = last_step.response.clone();
 
-    // Parse structured output if output spec is configured and finish reason is "stop"
-    // (TS SDK only parses output when finishReason === 'stop')
+    // Only parse structured output when finish reason is "stop"
     if let Some(output_spec) = output
         && final_result.finish_reason.is_stop()
         && let Ok(Some(parsed)) = output_spec.parse_complete_output(&final_result.text)

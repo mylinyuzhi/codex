@@ -1,19 +1,12 @@
-//! TS `output_token_usage` generator.
+//! `output_token_usage` generator.
 //!
-//! Mirrors `getOutputTokenUsageAttachment` (`attachments.ts:3828`) +
-//! `normalizeAttachmentForAPI` `case 'output_token_usage':`
-//! (`messages.ts:4076`). Main-thread-only per-turn output-token report
-//! with optional turn budget.
+//! Main-thread-only per-turn output-token report with optional turn budget.
 //!
 //! Gate chain:
 //!
-//! 1. `ctx.config.attachments.output_token_usage` — opt-in (TS gates
-//!    on `feature('TOKEN_BUDGET')`; external builds default off).
-//! 2. `ctx.output_token_budget` is `Some(n)` with `n > 0` — TS
-//!    `getCurrentTurnTokenBudget() !== null && > 0`. `None` or
+//! 1. `ctx.config.attachments.output_token_usage` — opt-in (default off).
+//! 2. `ctx.output_token_budget` is `Some(n)` with `n > 0`. `None` or
 //!    non-positive suppresses emission.
-//!
-//! Content is the TS literal at `messages.ts:4084`.
 
 use async_trait::async_trait;
 
@@ -51,8 +44,8 @@ impl AttachmentGenerator for OutputTokenUsageGenerator {
         let turn = format_number(ctx.output_tokens_turn);
         let budget_str = format_number(budget);
         let session = format_number(ctx.output_tokens_session);
-        // TS `messages.ts:4084`: `Output tokens — turn: ${turn}/${budget} · session: ${session}`.
-        // The em-dash and middle-dot are verbatim from TS (`\u2014` / `\u00b7`).
+        // Format: `Output tokens — turn: ${turn}/${budget} · session: ${session}`.
+        // Em-dash and middle-dot are kept verbatim for model compatibility.
         let body = format!(
             "Output tokens \u{2014} turn: {turn} / {budget_str} \u{00b7} session: {session}"
         );
@@ -63,8 +56,7 @@ impl AttachmentGenerator for OutputTokenUsageGenerator {
     }
 }
 
-/// Mirrors TS `formatNumber` (comma-separated thousands) for i64.
-/// TS uses `Intl.NumberFormat('en-US')` which produces fixed-comma output.
+/// Format `n` with comma-separated thousands (e.g. 1234567 → "1,234,567").
 fn format_number(n: i64) -> String {
     let digits = n.unsigned_abs().to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);

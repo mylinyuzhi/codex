@@ -1,25 +1,20 @@
 //! Bundled skill definitions shipped with the binary.
 //!
-//! TS source: `skills/bundledSkills.ts` (220 LOC) + `skills/bundled/*.ts`
-//! (registry in `skills/bundled/index.ts:24-78`).
+//! ## Inventory rules
 //!
-//! ## TS-mirroring rules
-//!
-//! 1. **Inventory**: matches `skills/bundled/index.ts` exactly. Skills that TS
-//!    ships only as gated registrations (`feature(...)` calls) are gated here
-//!    via `gated_by: Some(Feature::*)`. Skills TS ships ant-only
-//!    (`if (process.env.USER_TYPE !== 'ant') return`) are general-purpose
-//!    workflows, so coco-rs registers them **unconditionally** — the
-//!    `USER_TYPE === 'ant'` visibility convention is intentionally dropped
+//! 1. **Inventory**: matches the upstream bundled skill set exactly. Skills that
+//!    ship only as gated registrations (`feature(...)` calls) are gated here
+//!    via `gated_by: Some(Feature::*)`. Skills that upstream ships as ant-only
+//!    are general-purpose workflows and are registered **unconditionally** here
 //!    (see root `CLAUDE.md` "Always-Enabled General-Purpose Commands").
-//! 2. **No Rust-only extras**: TS does NOT ship `commit`, `review-pr`, or
-//!    `pdf` as bundled skills (`/commit` is a top-level `commands/commit.ts`,
-//!    `review-pr` is covered by `commands/review.ts`, and PDF reading is
-//!    handled by the Read tool). They were removed in Round 11.
+//! 2. **No coco-only extras**: `/commit`, `review-pr`, and `pdf` are not
+//!    bundled skills — `/commit` is a slash command, `review-pr` is covered by
+//!    the review command, and PDF reading is handled by the Read tool. They were
+//!    removed in Round 11.
 //! 3. **Feature flags**: each gated skill maps to a `coco_types::Feature`
 //!    variant — see `features.rs` and `parity-skills-commands-plugins.md §1.3`.
 //! 4. **`disable_model_invocation` / `user_invocable`**: matched per-skill to
-//!    TS frontmatter.
+//!    upstream frontmatter.
 
 use coco_types::Feature;
 use coco_types::ToolName;
@@ -71,7 +66,7 @@ fn bundled(
 
 /// Get all bundled skill definitions.
 ///
-/// **Selection logic** (coco-rs diverges from TS by dropping the ant gate):
+/// **Selection logic** (coco-rs drops the ant gate):
 /// - Always-on skills (update-config, keybindings-help, batch) plus the
 ///   formerly-ant general-purpose skills (verify, debug, skillify, remember,
 ///   simplify, stuck, lorem-ipsum) are returned unconditionally.
@@ -84,7 +79,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
 
     // ───────────────── unconditional ─────────────────
 
-    // /update-config — TS: skills/bundled/updateConfig.ts (unconditional)
+    // /update-config(unconditional)
     {
         let mut s = bundled(
             "update-config",
@@ -101,8 +96,8 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // /keybindings-help — TS: skills/bundled/keybindings.ts (unconditional)
-    // TS uses `userInvocable: false` so only the model invokes.
+    // /keybindings-help(unconditional)
+    // Uses `userInvocable: false` so only the model invokes.
     {
         let mut s = bundled(
             "keybindings-help",
@@ -118,11 +113,11 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
             "When the user wants to customize keyboard shortcuts, rebind keys, add chord bindings, or modify keybindings.json".to_string(),
         );
         s.user_invocable = false;
-        s.is_hidden = true; // matches TS isHidden = !userInvocable
+        s.is_hidden = true; // isHidden = !userInvocable
         skills.push(s);
     }
 
-    // /batch — TS: skills/bundled/batch.ts (unconditional, disable_model_invocation)
+    // /batch(unconditional, disable_model_invocation)
     {
         let mut s = bundled(
             "batch",
@@ -146,7 +141,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
     // ─── formerly ant-only — now unconditional (coco-rs drops USER_TYPE gate) ───
 
     {
-        // /verify — TS: skills/bundled/verify.ts (general-purpose)
+        // /verify(general-purpose)
         skills.push(bundled(
             "verify",
             "Verify a code change does what it should by running the app",
@@ -159,7 +154,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
             ],
         ));
 
-        // /debug — TS: skills/bundled/debug.ts (ant-only, disable_model_invocation)
+        // /debug(ant-only, disable_model_invocation)
         let mut debug_skill = bundled(
             "debug",
             "Debug your current Claude Code session by reading the session debug log. Includes all event logging",
@@ -174,7 +169,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         debug_skill.disable_model_invocation = true;
         skills.push(debug_skill);
 
-        // /skillify — TS: skills/bundled/skillify.ts (ant-only)
+        // /skillify(ant-only)
         let mut sk = bundled(
             "skillify",
             "Convert a workflow into a reusable skill file",
@@ -189,7 +184,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         sk.when_to_use = Some("When user wants to automate a repeatable workflow".to_string());
         skills.push(sk);
 
-        // /remember — TS: skills/bundled/remember.ts (ant-only)
+        // /remember(ant-only)
         let mut rem = bundled(
             "remember",
             "Save information to memory for future conversations",
@@ -203,7 +198,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         rem.when_to_use = Some("Use when reviewing or organizing memory entries".to_string());
         skills.push(rem);
 
-        // /simplify — TS: skills/bundled/simplify.ts (ant-only)
+        // /simplify(ant-only)
         skills.push(bundled(
             "simplify",
             "Review changed code for reuse, quality, and efficiency, then fix any issues found",
@@ -218,7 +213,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
             ],
         ));
 
-        // /stuck — TS: skills/bundled/stuck.ts (ant-only)
+        // /stuck(ant-only)
         skills.push(bundled(
             "stuck",
             "Help when stuck in loops or debugging dead ends",
@@ -231,7 +226,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
             ],
         ));
 
-        // /lorem-ipsum — TS: skills/bundled/loremIpsum.ts (ant-only)
+        // /lorem-ipsum(ant-only)
         let mut li = bundled(
             "lorem-ipsum",
             "Generate filler text for long context testing. Specify token count as argument (e.g., /lorem-ipsum 50000). Outputs approximately the requested number of tokens.",
@@ -244,7 +239,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
 
     // ───────────────── feature-gated ─────────────────
 
-    // /loop — TS: skills/bundled/loop.ts (gated AGENT_TRIGGERS)
+    // /loop(gated AGENT_TRIGGERS)
     {
         let mut s = bundled(
             "loop",
@@ -261,7 +256,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // /schedule — TS: skills/bundled/scheduleRemoteAgents.ts (gated AGENT_TRIGGERS_REMOTE)
+    // /schedule(gated AGENT_TRIGGERS_REMOTE)
     {
         let mut s = bundled(
             "schedule",
@@ -280,7 +275,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // /claude-api — TS: skills/bundled/claudeApi.ts (gated BUILDING_CLAUDE_APPS)
+    // /claude-api(gated BUILDING_CLAUDE_APPS)
     {
         let mut s = bundled(
             "claude-api",
@@ -300,7 +295,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // /dream — TS: skills/bundled/dream.ts (gated KAIROS|KAIROS_DREAM)
+    // /dream(gated KAIROS|KAIROS_DREAM)
     {
         let mut s = bundled(
             "dream",
@@ -318,7 +313,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // /hunter — TS: skills/bundled/hunter.ts (gated REVIEW_ARTIFACT)
+    // /hunter(gated REVIEW_ARTIFACT)
     {
         let mut s = bundled(
             "hunter",
@@ -335,7 +330,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // /claude-in-chrome — TS: skills/bundled/claudeInChrome.ts
+    // /claude-in-chrome
     // (gated by `shouldAutoEnableClaudeInChrome()` runtime check)
     {
         let mut s = bundled(
@@ -353,7 +348,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(s);
     }
 
-    // /run-skill-generator — TS: skills/bundled/runSkillGenerator.ts (gated RUN_SKILL_GENERATOR)
+    // /run-skill-generator(gated RUN_SKILL_GENERATOR)
     {
         let mut s = bundled(
             "run-skill-generator",

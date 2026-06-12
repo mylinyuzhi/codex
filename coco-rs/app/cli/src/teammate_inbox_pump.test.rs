@@ -288,7 +288,7 @@ async fn scan_prioritizes_shutdown_over_plain_in_real_mailbox() {
     .unwrap();
 
     let framed = scan_tick(&id).await.expect("a framed prompt");
-    // TS priority: shutdown > team-lead > peer.
+    // Priority: shutdown > team-lead > peer.
     assert!(
         framed.contains("shutdown request"),
         "shutdown must outrank the peer message; got: {framed}"

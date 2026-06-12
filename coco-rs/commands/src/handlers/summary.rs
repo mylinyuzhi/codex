@@ -5,8 +5,6 @@
 //! and dispatch to
 //! [`coco_memory::SessionMemoryService::force`].
 //!
-//! TS: `commands/summary` (manual extraction trigger).
-//!
 //! Sentinel format (one line):
 //!   `__COCO_SUMMARY_NOW__\n<status text>`
 

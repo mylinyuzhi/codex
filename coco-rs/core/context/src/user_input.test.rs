@@ -62,7 +62,7 @@ fn test_quoted_path_with_line_range() {
     let input = process_user_input("Check @\"src/lib.rs\"#L10-20");
     // The quoted path parser consumes until closing ", so the #L is outside
     // For quoted paths the line range would need to be inside the quotes
-    // TS behavior: @"file"#L10-20 — the # is after closing quote
+    // @"file"#L10-20 — the # is after closing quote
     // Our parser: @"file" stops at ", so #L10-20 is not part of the mention
     assert_eq!(input.mentions.len(), 1);
     assert_eq!(input.mentions[0].text, "src/lib.rs");
@@ -77,7 +77,7 @@ fn test_line_range_single_line() {
     assert_eq!(input.mentions[0].text, "src/main.rs");
     assert_eq!(input.mentions[0].mention_type, MentionType::FilePath);
     assert_eq!(input.mentions[0].line_start, Some(10));
-    // TS parity: `#L10` alone defaults `lineEnd` to `lineStart`.
+    // `#L10` alone defaults `lineEnd` to `lineStart`.
     assert_eq!(input.mentions[0].line_end, Some(10));
 }
 
@@ -94,7 +94,7 @@ fn test_line_range_span() {
 fn test_line_range_invalid_fragment_ignored() {
     let input = process_user_input("Look at @src/main.rs#heading");
     assert_eq!(input.mentions.len(), 1);
-    // TS parity: non-#L fragments are stripped from the path.
+    // Non-#L fragments are stripped from the path.
     assert_eq!(input.mentions[0].text, "src/main.rs");
     assert_eq!(input.mentions[0].line_start, None);
     assert_eq!(input.mentions[0].line_end, None);
@@ -114,7 +114,7 @@ fn test_agent_mention() {
 fn test_quoted_agent_mention() {
     let input = process_user_input("Ask @\"code-reviewer (agent)\" to check");
     assert_eq!(input.mentions.len(), 1);
-    // TS parity: ` (agent)` suffix is stripped from the mention text.
+    // ` (agent)` suffix is stripped from the mention text.
     assert_eq!(input.mentions[0].text, "code-reviewer");
     assert_eq!(input.mentions[0].mention_type, MentionType::Agent);
 }
@@ -185,7 +185,7 @@ fn test_parse_line_range_single() {
     let (path, start, end) = parse_line_range("src/main.rs#L42");
     assert_eq!(path, "src/main.rs");
     assert_eq!(start, Some(42));
-    // TS parity: lineEnd defaults to lineStart for `#L<n>` alone.
+    // lineEnd defaults to lineStart for `#L<n>` alone.
     assert_eq!(end, Some(42));
 }
 

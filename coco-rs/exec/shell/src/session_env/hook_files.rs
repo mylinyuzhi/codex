@@ -1,7 +1,5 @@
 //! Read hook-emitted env-shell files for a session.
 //!
-//! TS source: `utils/sessionEnvironment.ts:60-144` (`getSessionEnvironmentScript`).
-//!
 //! Layout: `$COCO_HOME/session-env/<session_id>/{event}-hook-{idx}.sh`
 //! where `event ∈ {setup, sessionstart, cwdchanged, filechanged}`.
 //!
@@ -53,8 +51,8 @@ pub fn session_env_dir(coco_home: &Path, session_id: &str) -> PathBuf {
 
 /// Reader + small cache for the concatenated hook env script.
 ///
-/// Caching mirrors TS — recompute is cheap but the script is sourced
-/// on every bash command, so we avoid the dir walk in the hot path.
+/// Recompute is cheap but the script is sourced on every bash command,
+/// so we avoid the dir walk in the hot path.
 /// Call [`invalidate`](Self::invalidate) when the source files may
 /// have changed (e.g. a fresh hook event just ran).
 #[derive(Debug)]

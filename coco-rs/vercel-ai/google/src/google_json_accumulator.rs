@@ -1,6 +1,6 @@
 //! Incremental JSON builder for Google's streaming `partialArgs` chunks.
 //!
-//! Mirrors TS `google-json-accumulator.ts`. During tool-call function calling,
+//! During tool-call function calling,
 //! Gemini emits `partialArgs` arrays where each entry is a typed leaf value
 //! addressed by a JSONPath (`$.recipe.ingredients[0].name`). This accumulator
 //! reconstructs both the structured `serde_json::Value` and a running JSON

@@ -95,9 +95,9 @@ pub struct RuntimeConfig {
     pub features: Features,
     /// Per-tier `skill_overrides` map preserved without merging.
     /// Drives the 4-state Skill tool gate, listing filters, and the
-    /// `/skills` dialog. **The TS resolution semantics are non-trivial
-    /// — see [`SkillOverrideTiers`] docs and `coco-skills::overrides`
-    /// for the three resolvers (`oT5` / `aT5` / `st` mirrors).**
+    /// `/skills` dialog. Resolution semantics are non-trivial — see
+    /// [`SkillOverrideTiers`] docs and `coco-skills::overrides` for the
+    /// three resolvers (`oT5` / `aT5` / `st` mirrors).
     pub skill_overrides: SkillOverrideTiers,
     /// Layer 2 of the tool-filter pipeline — extra tools the active
     /// main-loop model adds beyond the baseline + baseline tools it
@@ -109,7 +109,7 @@ pub struct RuntimeConfig {
     /// from the `--setting-sources` CSV flag (`None` ⇒ all five). `Policy` and
     /// `Flag` are always present (read-only, admin/CLI controlled). Consumed by
     /// the skill/agent/hook/mcp loaders to skip user/project/local scopes that
-    /// the operator disabled. TS: `getEnabledSettingSources`.
+    /// the operator disabled.
     pub enabled_setting_sources: std::collections::HashSet<crate::settings::SettingSource>,
 }
 
@@ -242,8 +242,7 @@ impl RuntimeConfigBuilder {
 /// `None` ⇒ all five sources. An explicit (possibly empty) string parses
 /// `user`/`project`/`local`/`flag`/`policy` tokens; unknown tokens are
 /// ignored. `Policy` and `Flag` are ALWAYS present — they're admin-managed
-/// (read-only) and CLI-supplied, so the operator can never disable them. TS:
-/// `parseSettingSourcesFlag` + `getEnabledSettingSources`.
+/// (read-only) and CLI-supplied, so the operator can never disable them.
 pub fn parse_enabled_setting_sources(
     csv: Option<&str>,
 ) -> std::collections::HashSet<crate::settings::SettingSource> {

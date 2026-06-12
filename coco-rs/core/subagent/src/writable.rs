@@ -10,10 +10,10 @@
 //!    keeps the TUI and CLI in lock-step on what "writable" means.
 //!
 //! 2. **What color should a freshly-created agent default to?**
-//!    TS picks the next unused entry from the eight-colour palette so
-//!    a new agent has visual distinctness in the Library list. Mirror
-//!    that behaviour by scanning the active snapshot for occupied
-//!    colours and returning the first unoccupied one.
+//!    The next unused entry from the eight-colour palette is selected so
+//!    a new agent has visual distinctness in the Library list. Scan the
+//!    active snapshot for occupied colours and return the first unoccupied
+//!    one.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -32,12 +32,8 @@ use crate::snapshot::AgentCatalogSnapshot;
 /// `config_home` is normally `coco_config::global_config::config_home()`
 /// (i.e. `~/.coco/`), `cwd` is the active worktree root.
 ///
-/// TS parity: maps `AGENT_PATHS.FOLDER_NAME = '.claude'` + scope
-/// resolution from `components/agents/agentFileUtils.ts:20-55`.
-/// coco-rs serves user agents from `~/.coco/agents/` (not `.claude/`)
-/// because the `~/.coco/` config home is the multi-provider canonical
-/// root; the `<cwd>/.coco/agents/` project path keeps project-level
-/// config uniformly under `.coco/`.
+/// coco-rs serves user agents from `~/.coco/agents/` and project agents
+/// from `<cwd>/.coco/agents/`, keeping all config uniformly under `.coco/`.
 pub fn resolve_writable_agent_dir(
     source: AgentSource,
     config_home: &Path,
@@ -56,11 +52,10 @@ pub fn resolve_writable_agent_dir(
 /// Pick the colour to assign to a freshly-created agent.
 ///
 /// Preference order:
-/// 1. The first palette entry not currently used by any active
-///    agent (TS `getNextUnusedColor` parity).
-/// 2. When every palette entry is taken, cycle by active-agent
-///    count so the new agent still picks up a colour — visually
-///    distinct rotation beats greyscale fallback.
+/// 1. The first palette entry not currently used by any active agent.
+/// 2. When every palette entry is taken, cycle by active-agent count
+///    so the new agent still picks up a colour — visually distinct
+///    rotation beats greyscale fallback.
 ///
 /// Returns `None` only when the palette is empty (impossible — the
 /// type guarantees eight entries) so callers can `.unwrap()` if they

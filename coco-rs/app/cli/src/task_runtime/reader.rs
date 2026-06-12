@@ -1,8 +1,5 @@
 //! `TaskReader` trait implementation — read-only inspection of task
 //! state and on-disk output.
-//!
-//! TS source: `utils/task/framework.ts` (state-snapshot read side) +
-//! `utils/task/diskOutput.ts` (`getTaskOutputDelta`).
 
 use std::sync::Arc;
 

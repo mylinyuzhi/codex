@@ -1,7 +1,6 @@
 //! Tool result budget — Level 1 (per-tool persistence) + Level 2
 //! (per-message aggregate cap).
 //!
-//! TS: `utils/toolResultStorage.ts` (1040 LoC).
 //!
 //! **Level 1** (per-tool): each tool declares
 //! [`crate::Tool::max_result_size_bound`]. When a tool result exceeds
@@ -18,8 +17,7 @@
 //! `tool_use_id` so subsequent prompt projections replay byte-
 //! identical `<persisted-output>` previews.
 //!
-//! Both levels are **inert by default** (matching TS feature-gated
-//! behaviour) — `apply_tool_result_budget` returns the input
+//! Both levels are **inert by default** — `apply_tool_result_budget` returns the input
 //! unchanged when `state.per_message_chars` is `i64::MAX` (the
 //! "feature off" sentinel) and `persist_to_disk` is only called by
 //! callers that know their tool opted in.
@@ -34,26 +32,25 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-/// Default per-tool persistence threshold (TS `DEFAULT_MAX_RESULT_SIZE_CHARS`).
+/// Default per-tool persistence threshold.
 pub const DEFAULT_MAX_RESULT_SIZE_CHARS: i64 = 50_000;
 
 /// Default [`Tool::max_result_size_bound`] declaration for tools that do not
-/// opt out or tighten the cap (TS tool default: `100_000`, then clamped by
+/// opt out or tighten the cap (tool default: `100_000`, then clamped by
 /// [`DEFAULT_MAX_RESULT_SIZE_CHARS`]).
 pub const DEFAULT_TOOL_MAX_RESULT_SIZE_BOUND: ResultSizeBound = ResultSizeBound::Chars(100_000);
 
-/// Default per-message aggregate cap (TS
-/// `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS`).
+/// Default per-message aggregate cap.
 pub const DEFAULT_MAX_PER_MESSAGE_CHARS: i64 = 200_000;
 
-/// Subdirectory name for tool results within a session (TS `TOOL_RESULTS_SUBDIR`).
+/// Subdirectory name for tool results within a session.
 pub const TOOL_RESULTS_SUBDIR: &str = "tool-results";
 
-/// XML tag wrapping the persisted-output reference message (TS `PERSISTED_OUTPUT_TAG`).
+/// XML tag wrapping the persisted-output reference message.
 pub const PERSISTED_OUTPUT_TAG: &str = "<persisted-output>";
 pub const PERSISTED_OUTPUT_CLOSING_TAG: &str = "</persisted-output>";
 
-/// Replacement marker for Level 2 budget eviction (TS `TOOL_RESULT_CLEARED_MESSAGE`).
+/// Replacement marker for Level 2 budget eviction.
 pub const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]";
 
 /// Per-tool persistence cap declaration.
@@ -63,7 +60,6 @@ pub const TOOL_RESULT_CLEARED_MESSAGE: &str = "[Old tool result content cleared]
 /// the tool's opt-out explicit so callers (Level 1 persist + Level 2
 /// aggregate budget) match on it instead of comparing to a magic number.
 ///
-/// TS: `Tool.maxResultSizeChars: number | typeof Infinity`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultSizeBound {
     /// Cap inline result at this many UTF-8 bytes. Must be positive;
@@ -71,7 +67,7 @@ pub enum ResultSizeBound {
     Chars(i64),
     /// Tool opts out of Level 1 persistence — its content is canonical
     /// (e.g. `Read` on a tracked file the model will read again). Inline
-    /// regardless of length. TS: `Tool.maxResultSizeChars = Infinity`.
+    /// regardless of length (`Tool.maxResultSizeChars = Infinity`).
     Unbounded,
 }
 
@@ -100,14 +96,10 @@ impl ResultSizeBound {
     }
 }
 
-/// Resolved persistence threshold for one tool. Mirrors TS
-/// `getPersistenceThreshold(toolName, declaredMaxResultSizeChars)`:
+/// Resolved persistence threshold for one tool.
 ///
 /// - [`ResultSizeBound::Unbounded`] declared → opt-out (returned verbatim).
 /// - Otherwise: clamps `declared` against [`DEFAULT_MAX_RESULT_SIZE_CHARS`].
-///
-/// The TS `tengu_satin_quoll` GrowthBook per-tool override is not
-/// modelled here.
 pub fn resolve_persistence_threshold(declared: ResultSizeBound) -> ResultSizeBound {
     match declared {
         ResultSizeBound::Unbounded => ResultSizeBound::Unbounded,
@@ -115,7 +107,7 @@ pub fn resolve_persistence_threshold(declared: ResultSizeBound) -> ResultSizeBou
     }
 }
 
-/// Per-session tool-result directory (TS `getToolResultsDir`).
+/// Per-session tool-result directory.
 pub fn tool_results_dir(session_dir: &Path) -> PathBuf {
     session_dir.join(TOOL_RESULTS_SUBDIR)
 }
@@ -144,7 +136,7 @@ pub struct PersistedMcpBinaryOutput {
     pub mime_type: String,
 }
 
-/// Preview size in bytes for the reference message (TS `PREVIEW_SIZE_BYTES`).
+/// Preview size in bytes for the reference message.
 pub const PREVIEW_SIZE_BYTES: usize = 2000;
 
 /// Return a UTF-8-safe preview no longer than `max_bytes`.
@@ -180,8 +172,7 @@ pub fn generate_preview(content: &str, max_bytes: usize) -> (String, bool) {
 /// whether to invoke based on `content.len() > resolve_persistence_threshold(...)`.
 ///
 /// `content` is the raw tool result body. `is_json` selects extension
-/// (`.json` vs `.txt`) and is informational only — content is written
-/// verbatim. TS parity: `persistToolResultToDisk`.
+/// (`.json` vs `.txt`) and is informational only — content is written verbatim.
 pub async fn persist_to_disk(
     session_dir: &Path,
     id: &str,
@@ -223,9 +214,8 @@ pub fn mcp_binary_output_path(session_dir: &Path, id: &str, mime_type: Option<&s
 
 /// Persist binary MCP output to disk and return a model-visible reference.
 ///
-/// TS parity: `utils/mcpOutputStorage.ts` stores binary MCP payloads under the
-/// same per-session `tool-results` directory as text tool results, deriving the
-/// file extension from MIME type.
+/// Stores binary MCP payloads under the same per-session `tool-results`
+/// directory as text tool results, deriving the file extension from MIME type.
 pub async fn persist_mcp_binary_to_disk(
     session_dir: &Path,
     id: &str,
@@ -258,8 +248,7 @@ pub async fn persist_mcp_binary_to_disk(
     })
 }
 
-/// Render the `<persisted-output>` reference message body (TS
-/// `formatPersistedReference`).
+/// Render the `<persisted-output>` reference message body.
 pub fn render_persisted_reference(persisted: &PersistedToolResult) -> String {
     let mut buf = String::with_capacity(persisted.preview.len() + 256);
     buf.push_str(PERSISTED_OUTPUT_TAG);
@@ -309,7 +298,7 @@ pub fn empty_tool_result_message(tool_name: &str) -> String {
 ///   across re-renders.
 /// - `seen_ids`: tool_use_ids the budget has already considered. Once
 ///   seen, a result is "frozen" — never re-replaced even if it
-///   shrinks under the cap (matches TS behaviour).
+///   shrinks under the cap.
 /// - `per_message_chars`: budget cap. `i64::MAX` ⇒ feature off
 ///   (`apply_tool_result_budget` returns input unchanged).
 #[derive(Debug, Default, Clone)]
@@ -350,8 +339,8 @@ pub struct ToolResultCandidate {
     pub tool_name: Option<String>,
     /// Whether this candidate's tool opted out of persistence
     /// (declared [`ResultSizeBound::Unbounded`] for `max_result_size_bound`).
-    /// When `true`, the budget pipeline skips it (TS uses the same opt-out
-    /// for canonical-content tools like `Read` on a tracked file).
+    /// When `true`, the budget pipeline skips it (canonical-content tools
+    /// like `Read` on a tracked file use this).
     pub persistence_opted_out: bool,
     /// Whether the persisted file should use `.json` rather than
     /// `.txt`.
@@ -377,8 +366,8 @@ pub struct ContentReplacement {
 
 /// Type alias for transcript-persisted records. Identical layout to
 /// [`ContentReplacement`] (same payload — the budget pass emits, the
-/// transcript persists, the resume path reads back). TS uses a single
-/// `ContentReplacementRecord` type; we keep both names so the call site
+/// transcript persists, the resume path reads back). We keep both names
+/// so the call site
 /// reads naturally (`outcome.newly_replaced` vs `records: &[...Record]`).
 pub type ContentReplacementRecord = ContentReplacement;
 
@@ -393,7 +382,7 @@ pub struct BudgetOutcome {
 }
 
 /// Decide which fresh tool-result candidates to persist to fit the
-/// per-message char budget. Mirrors TS `applyToolResultBudget`:
+/// per-message char budget:
 ///
 /// 1. Re-apply cached replacements from `state.replacements`.
 /// 2. Compute aggregate size using cached replacement length for
@@ -425,8 +414,8 @@ pub async fn apply_tool_result_budget(
     };
     let (per_message_chars, seen_ids, replacements) = snapshot;
 
-    // Partition by prior decision (mirrors TS `partitionByPriorDecision` + the
-    // per-message budget walk). Already-replaced IDs (`mustReapply`) are
+    // Partition by prior decision (per-message budget walk). Already-replaced
+    // IDs (`mustReapply`) are
     // re-applied by the caller from `state.replacements` and contribute 0 to
     // the trigger total. `frozen` (seen, never replaced) counts at full size;
     // `fresh` (never seen) is the new message's content, budgeted this pass.
@@ -443,7 +432,7 @@ pub async fn apply_tool_result_budget(
     }
 
     // A re-processed message has no fresh candidates; freeze and return so the
-    // caller just re-applies cached replacements (TS `fresh.length === 0`).
+    // caller just re-applies cached replacements.
     if fresh.is_empty() {
         let mut state = state.write().await;
         for c in candidates {
@@ -453,8 +442,7 @@ pub async fn apply_tool_result_budget(
     }
 
     // Opted-out tools (Read, `Unbounded`) and content that is already a
-    // persisted reference never persist and never count toward the trigger —
-    // matching TS `eligible = fresh.filter(!shouldSkip)` (freshSize).
+    // persisted reference never persist and never count toward the trigger.
     let mut eligible: Vec<&ToolResultCandidate> = fresh
         .iter()
         .copied()

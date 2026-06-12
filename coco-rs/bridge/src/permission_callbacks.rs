@@ -1,9 +1,8 @@
 //! IDE-side permission relay.
 //!
-//! TS: `bridge/bridgePermissionCallbacks.ts`. When the agent needs
-//! approval for a tool call and an IDE is connected, the bridge
-//! forwards the approval request to the IDE's native UI instead of
-//! showing the TUI's own permission overlay.
+//! When the agent needs approval for a tool call and an IDE is
+//! connected, the bridge forwards the approval request to the IDE's
+//! native UI instead of showing the TUI's own permission overlay.
 //!
 //! The actual wire protocol is implemented by `BridgeServer` (see
 //! `server.rs`). This module provides the pure-logic shape of the
@@ -36,8 +35,7 @@ pub struct BridgePermissionRequest {
 }
 
 /// Risk classification fed to the IDE so it can style / highlight the
-/// approval UI. Mirrors `RiskLevel` from the TUI crate but lives here
-/// to keep the bridge schema self-contained.
+/// approval UI. Lives here to keep the bridge schema self-contained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BridgeRiskLevel {

@@ -41,7 +41,7 @@ fn learning_includes_request_format_and_examples() {
     assert!(learning.prompt.contains("# Learning Style Active"));
     assert!(learning.prompt.contains("**Learn by Doing**"));
     assert!(learning.prompt.contains("TODO(human)"));
-    // Verbatim TS phrase — protects against accidental rewrites.
+    // Verbatim phrase — protects against accidental rewrites.
     assert!(learning.prompt.contains("Whole Function Example"));
     assert!(learning.prompt.contains("Partial Function Example"));
     assert!(learning.prompt.contains("Debugging Example"));

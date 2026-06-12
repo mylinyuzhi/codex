@@ -1,22 +1,17 @@
 //! ToolSearchTool — keyword search and direct selection for deferred tools.
 //!
-//! Mirrors TS `tools/ToolSearchTool/ToolSearchTool.ts` (1:1 grammar +
-//! scoring + envelope shape) with one **multi-provider** divergence
-//! called out below.
-//!
 //! ## Two query modes
 //!
 //! 1. **Direct selection** — `select:Tool1,Tool2,Tool3` (case-insensitive
 //!    prefix). The model explicitly names the deferred tools it wants
 //!    "unlocked". Comma-separated, whitespace-tolerant. Missing names
-//!    are silently dropped (per TS `ToolSearchTool.ts:358-406`); a name
-//!    already present in the regular pool resolves harmlessly. Returns
-//!    the resolved subset in `matches`.
+//!    are silently dropped; a name already present in the regular pool
+//!    resolves harmlessly. Returns the resolved subset in `matches`.
 //!
 //! 2. **Keyword search** — any other query. Splits on whitespace; tokens
 //!    starting with `+` are *required* (the candidate must match all
 //!    `+terms`); the remaining tokens are *optional* (contribute to the
-//!    score). Score formula (TS `ToolSearchTool.ts:259-301`):
+//!    score). Score formula:
 //!
 //!    | Match | Score |
 //!    |---|---|
@@ -32,12 +27,11 @@
 //!
 //! ## Promotion mechanism (multi-provider divergence)
 //!
-//! TS routes the match list through an Anthropic-specific
-//! `tool_reference` content-block beta, which the Anthropic API server
-//! expands into `<functions>...</functions>` markup inline on the next
-//! turn. coco-rs supports OpenAI/Google/DeepSeek/etc., so this path is
-//! not available: we instead emit an `AppStatePatch` that inserts each
-//! matched name into [`coco_types::ToolAppState::discovered_tool_names`].
+//! The Anthropic `tool_reference` content-block beta expands into
+//! `<functions>...</functions>` markup inline on the next turn, but this
+//! is provider-specific. For all other providers we instead emit an
+//! `AppStatePatch` that inserts each matched name into
+//! [`coco_types::ToolAppState::discovered_tool_names`].
 //! On the next turn, `engine_prompt::build_tool_definitions` and the
 //! `DeferredToolsDeltaGenerator` both observe the patch via
 //! `ToolUseContext::discovered_tool_names`:
@@ -46,7 +40,7 @@
 //!     discovered deferred tools into the loaded pool, so their full
 //!     schema is sent in the next request (model can invoke them).
 //!   - **Reminder** — `DeferredToolsDeltaGenerator` sees a non-empty
-//!     `added` set in `compute_tools_delta` and emits a TS-byte-aligned
+//!     `added` set in `compute_tools_delta` and emits a
 //!     `<system-reminder>` announcing the new tools.
 //!
 //! Net effect: the model sees the same "tool became callable next turn"
@@ -83,10 +77,7 @@ const PROMPT_HEAD: &str =
 
 const PROMPT_TAIL: &str = " Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query, matches it against the deferred tool list, and returns the matched tools' complete JSONSchema definitions inside a <functions> block. Once a tool's schema appears in that result, it is callable exactly like any tool defined at the top of the prompt.\n\nResult format: each matched tool appears as one <function>{\"description\": \"...\", \"name\": \"...\", \"parameters\": {...}}</function> line inside the <functions> block — the same encoding as the tool list at the top of this prompt.\n\nQuery forms:\n- \"select:Read,Edit,Grep\" — fetch these exact tools by name\n- \"notebook jupyter\" — keyword search, up to max_results best matches\n- \"+slack send\" — require \"slack\" in the name, rank by remaining terms";
 
-/// TS `prompt.ts:34-42 getToolLocationHint`. The "deferred tools appear
-/// by name in <system-reminder> messages" path is the only one coco-rs
-/// implements (the legacy per-call `<available-deferred-tools>` block
-/// is not ported).
+/// Deferred tools appear by name in `<system-reminder>` messages.
 const PROMPT_LOCATION_HINT: &str = "Deferred tools appear by name in <system-reminder> messages.";
 
 /// Parse a `select:Tool1,Tool2,...` query into a list of tool names.
@@ -94,9 +85,7 @@ const PROMPT_LOCATION_HINT: &str = "Deferred tools appear by name in <system-rem
 /// each name is trimmed; empty names are dropped.
 ///
 /// **Prefix is case-insensitive** — `select:`, `Select:`, `SELECT:` all
-/// trigger select mode. TS `ToolSearchTool.ts:363` uses the regex
-/// `/^select:(.+)$/i` (the `/i` flag is case-insensitive). We mirror
-/// that behavior by lowercasing the prefix check.
+/// trigger select mode (case-insensitive prefix check).
 pub(super) fn parse_select_query(query: &str) -> Option<Vec<String>> {
     // Case-insensitive prefix match: if the first 7 chars (lowercased)
     // equal `"select:"`, strip them. Otherwise return None.
@@ -118,7 +107,6 @@ pub(super) fn parse_select_query(query: &str) -> Option<Vec<String>> {
 
 /// Tool-name decomposition used for the keyword-scoring path.
 ///
-/// TS parity: `parseToolName` (`ToolSearchTool.ts:132-161`).
 ///   - MCP wire-name `mcp__server__action_subaction` → `is_mcp = true`,
 ///     `parts = ["server", "action", "subaction"]`, `full = "server
 ///     action subaction"`. The `mcp__` prefix is stripped; remaining
@@ -173,8 +161,7 @@ fn parse_tool_name(name: &str) -> ParsedToolName {
     }
 }
 
-/// Pre-compile word-boundary regexes for the search terms. TS
-/// parity: `compileTermPatterns` (`ToolSearchTool.ts:167`). Returns
+/// Pre-compile word-boundary regexes for the search terms. Returns
 /// `None` for any term that fails to compile (e.g. a term consisting
 /// entirely of regex metacharacters — `escape` guarantees this won't
 /// happen, but we still tolerate it).
@@ -221,10 +208,8 @@ fn score_tool(
             score += if parsed.is_mcp { 6 } else { 5 };
         }
 
-        // Full-name fallback — only if no part match landed. TS
-        // `ToolSearchTool.ts:278` `if parsed.full.includes(term) &&
-        // score === 0`. The check runs per-term so the first hit
-        // captures the fallback bonus.
+        // Full-name fallback — only if no part match landed. The check
+        // runs per-term so the first hit captures the fallback bonus.
         if score == 0 && parsed.full.contains(term) {
             score += 3;
         }
@@ -249,8 +234,7 @@ fn score_tool(
     score
 }
 
-/// Run the keyword path over the deferred-tool list. Mirrors TS
-/// `searchToolsWithKeywords` (`ToolSearchTool.ts:186-302`).
+/// Run the keyword path over the deferred-tool list.
 fn search_with_keywords(
     deferred: &[Arc<dyn DynTool>],
     all: &[Arc<dyn DynTool>],
@@ -262,9 +246,8 @@ fn search_with_keywords(
     let query_trimmed = query_lower.trim();
 
     // Fast path 1: exact name match (deferred first, then full set).
-    // TS `ToolSearchTool.ts:198-204` — "selecting an already-loaded
-    // tool is a harmless no-op that lets the model proceed without
-    // retry churn."
+    // Selecting an already-loaded tool is a harmless no-op that lets
+    // the model proceed without retry churn.
     if let Some(t) = deferred
         .iter()
         .find(|t| t.name().eq_ignore_ascii_case(query_trimmed))
@@ -276,9 +259,9 @@ fn search_with_keywords(
         return vec![t.name().to_string()];
     }
 
-    // Fast path 2: `mcp__<server>` prefix. TS `ToolSearchTool.ts:208-216`
-    // returns up to `max_results` MCP tools whose qualified name starts
-    // with the query. Length > 5 guards against the bare `mcp__` query.
+    // Fast path 2: `mcp__<server>` prefix — returns up to `max_results`
+    // MCP tools whose qualified name starts with the query. Length > 5
+    // guards against the bare `mcp__` query.
     if query_trimmed.starts_with(MCP_PREFIX) && query_trimmed.len() > MCP_PREFIX.len() {
         let hits: Vec<String> = deferred
             .iter()
@@ -311,7 +294,7 @@ fn search_with_keywords(
     }
 
     // Scoring terms = required followed by optional when any required;
-    // otherwise just all tokens. TS `ToolSearchTool.ts:230-232`.
+    // otherwise just all tokens.
     let scoring_terms: Vec<String> = if required.is_empty() {
         tokens.iter().map(|s| (*s).to_string()).collect()
     } else {
@@ -348,7 +331,7 @@ fn search_with_keywords(
         .collect();
 
     // Pre-filter: require ALL `+term` matches on parts OR description
-    // OR search_hint. TS `ToolSearchTool.ts:235-257`.
+    // OR search_hint.
     let candidates: Vec<&ToolWithText> = if required.is_empty() {
         prepared.iter().collect()
     } else {
@@ -418,7 +401,7 @@ fn build_discovery_patch(matches: &[String]) -> Option<coco_types::AppStatePatch
     }))
 }
 
-/// Serde default for `max_results` — mirrors TS `.default(5)`.
+/// Serde default for `max_results` — default is 5.
 fn default_tool_search_max_results() -> Option<i64> {
     Some(DEFAULT_MAX_RESULTS as i64)
 }
@@ -514,7 +497,6 @@ impl Tool for ToolSearchTool {
     ///    expands the block into inline `<functions>` markup before
     ///    the prompt reaches the model. Client-side `tools` array is
     ///    NOT modified — cache prefix stays warm across discoveries.
-    ///    TS parity: `ToolSearchTool.ts:444-470`.
     ///
     /// 2. **Text list** (every other provider + non-capable Anthropic
     ///    models) — single `Text` part rendering matches as
@@ -526,7 +508,7 @@ impl Tool for ToolSearchTool {
     ///
     /// The empty-match branch is identical across paths (a model that
     /// matched zero tools has no schemas to surface either way), and
-    /// matches TS byte-for-byte: `No matching deferred tools found` +
+    /// Empty-match text: `No matching deferred tools found` +
     /// the pending-MCP-server suffix when servers are still
     /// mid-handshake.
     fn render_for_model(&self, out: &ToolSearchOutput) -> Vec<ToolResultContentPart> {
@@ -591,10 +573,9 @@ impl Tool for ToolSearchTool {
         // `passes_filter_pipeline` is inert (it can't enter `loaded_tools`)
         // and would make the model re-search forever. `searchable_deferred`
         // is the deferred pool that passes the pipeline (discovered names
-        // kept so re-select is an idempotent no-op — TS `select:`
-        // semantics); `enabled` is the exact-name fallback corpus of
-        // pipeline-passing tools that aren't deferred (already loaded →
-        // harmless no-op match, TS `ToolSearchTool.ts:199-204`).
+        // kept so re-select is an idempotent no-op); `enabled` is the
+        // exact-name fallback corpus of pipeline-passing tools that aren't
+        // deferred (already loaded → harmless no-op match).
         let deferred: Vec<Arc<dyn DynTool>> = ctx.tools.searchable_deferred(ctx);
         let enabled_tools = ctx.tools.enabled(ctx);
         let total_deferred_tools = deferred.len() as i64;
@@ -628,10 +609,10 @@ impl Tool for ToolSearchTool {
         // history (the `tool_reference` blocks themselves).
         let use_tool_reference = ctx.model_supports_tool_reference;
 
-        // Direct selection mode — `select:Tool1,Tool2,...`. Missing
-        // names are silently dropped (TS parity). Names that resolve
-        // in the full pool but not the deferred set are returned
-        // anyway so the model proceeds without retry churn.
+        // Direct selection mode — `select:Tool1,Tool2,...`. Missing names
+        // are silently dropped. Names that resolve in the full pool but not
+        // the deferred set are returned anyway so the model proceeds without
+        // retry churn.
         if let Some(names) = parse_select_query(&raw_query) {
             if names.is_empty() {
                 return Err(ToolError::InvalidInput {
@@ -743,8 +724,7 @@ async fn build_envelope(
     mcp: &coco_tool_runtime::McpHandleRef,
 ) -> ToolSearchOutput {
     // Empty-result retry hint: only attach when there's genuine MCP-
-    // server churn so the model gets actionable info, not noise. TS
-    // parity: `ToolSearchTool.ts:422-433`.
+    // server churn so the model gets actionable info, not noise.
     let pending_mcp_servers = if matches.is_empty() {
         let pending = mcp.pending_server_names().await;
         if pending.is_empty() {

@@ -12,9 +12,7 @@
 //! `JsonRpcMessage` envelopes only. The `SdkServer` dispatch loop on top
 //! of it owns the `ClientRequest` → handler routing.
 //!
-//! TS reference: `src/cli/structuredIO.ts` — `StructuredIO` class. TS
-//! uses raw strings + ad-hoc JSON parsing; coco-rs types the wire
-//! format as `JsonRpcMessage` from the start.
+//! Wire format is typed as `JsonRpcMessage` from the start.
 //!
 //! See `event-system-design.md` §5 and §12.
 

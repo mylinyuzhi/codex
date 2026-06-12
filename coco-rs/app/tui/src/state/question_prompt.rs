@@ -251,10 +251,8 @@ impl QuestionPromptState {
 
     /// Build the "Chat about this" rejection-feedback prose.
     ///
-    /// Byte-for-byte mirror of TS `handleRespondToClaude` at
-    /// `claude-code/src/components/permissions/AskUserQuestionPermissionRequest/AskUserQuestionPermissionRequest.tsx:300-316`.
-    /// The leading-whitespace lines are intentional — TS uses an
-    /// indented template literal and ships the literal indentation.
+    /// The leading-whitespace lines are intentional — the indented
+    /// template literal and literal indentation are load-bearing.
     pub fn chat_about_this_feedback(&self) -> String {
         let questions_with_answers = self.format_questions_with_answers(/*concise=*/ false);
         format!(
@@ -267,9 +265,8 @@ impl QuestionPromptState {
     }
 
     /// Build the "Skip interview and plan immediately" rejection-feedback
-    /// prose. Byte-for-byte mirror of TS `handleFinishPlanInterview`
-    /// (`AskUserQuestionPermissionRequest.tsx:340-356`). Caller is
-    /// responsible for gating on `is_in_plan_mode` — this fn is pure.
+    /// prose. Caller is responsible for gating on `is_in_plan_mode` —
+    /// this fn is pure.
     pub fn skip_interview_feedback(&self) -> String {
         let questions_with_answers = self.format_questions_with_answers(/*concise=*/ false);
         format!(
@@ -279,9 +276,8 @@ impl QuestionPromptState {
         )
     }
 
-    /// Helper used by both feedback builders. TS source has identical
-    /// loop bodies in both handlers — extracted here to keep the prose
-    /// constants the only place that diverges.
+    /// Helper used by both feedback builders — extracted to keep the
+    /// prose constants the only place that diverges.
     fn format_questions_with_answers(&self, _concise: bool) -> String {
         self.questions
             .iter()
@@ -340,10 +336,10 @@ impl QuestionPromptState {
     }
 
     /// Whether `q` currently resolves to a non-empty answer. Drives the
-    /// multi-question nav strip's ☒/☐ checkbox (TS `figures.checkboxOn/Off`
-    /// keyed on `answers[q.question]`). Single-select questions pre-select the
-    /// first option, so they read as answered unless "Other" is focused with an
-    /// empty buffer; multi-select reads unanswered until something is checked.
+    /// multi-question nav strip's ☒/☐ checkbox. Single-select questions
+    /// pre-select the first option, so they read as answered unless "Other"
+    /// is focused with an empty buffer; multi-select reads unanswered until
+    /// something is checked.
     pub(crate) fn question_has_answer(&self, q: &QuestionItem) -> bool {
         !self.committed_answer_for(q).trim().is_empty()
     }

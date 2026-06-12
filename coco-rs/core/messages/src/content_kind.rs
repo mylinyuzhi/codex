@@ -21,10 +21,10 @@
 //!   output, JSON-shaped tool inputs/results, `.json/.jsonl/.jsonc`
 //!   attachments. Structured data is denser; short keys + braces yield
 //!   ~2 chars/token in practice.
-//! - [`ContentKind::Image`] → fixed [`IMAGE_MAX_TOKEN_SIZE`]. TS parity:
-//!   max 2000×2000 image = theoretical 5333 tokens via `(w*h)/750`;
-//!   the conservative 2000 constant ensures auto-compact triggers in
-//!   time. Used for image/document/binary file parts of unknown size.
+//! - [`ContentKind::Image`] → fixed [`IMAGE_MAX_TOKEN_SIZE`]. Max 2000×2000
+//!   image = theoretical 5333 tokens via `(w*h)/750`; the conservative 2000
+//!   constant ensures auto-compact triggers in time. Used for
+//!   image/document/binary file parts of unknown size.
 
 use crate::AssistantContent;
 use crate::ToolResultContentPart;
@@ -33,8 +33,6 @@ use crate::UserContent;
 
 /// Fixed token cost for an image / document / binary attachment part.
 ///
-/// TS parity with `IMAGE_MAX_TOKEN_SIZE = 2000` in
-/// `services/tokenEstimation.ts:411` and `microCompact.ts:38`.
 /// Sized to the theoretical max for a 2000×2000 image (5333 tokens by
 /// Anthropic's `(width*height)/750` formula) but reduced to 2000 so
 /// auto-compact triggers conservatively rather than late.
@@ -71,9 +69,9 @@ pub fn estimate_part(kind: ContentKind, chars: i64) -> i64 {
 ///
 /// File parts dispatch on filename extension: `.json/.jsonl/.jsonc`
 /// → [`ContentKind::Json`] using the filename length as a proxy for
-/// stringified body length (TS-parity narrow — full body bytes aren't
-/// reachable from this layer). Other extensions → [`ContentKind::Image`]
-/// fixed-cost (covers images, PDFs, unknown binary).
+/// stringified body length (full body bytes aren't reachable from this
+/// layer). Other extensions → [`ContentKind::Image`] fixed-cost
+/// (covers images, PDFs, unknown binary).
 pub fn classify_user(part: &UserContent) -> (ContentKind, i64) {
     match part {
         UserContent::Text(t) => (ContentKind::Text, t.text.len() as i64),

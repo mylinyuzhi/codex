@@ -1,8 +1,6 @@
 //! Session memory compaction: use session memory as a compact summary
 //! instead of calling the LLM to re-summarize.
 //!
-//! TS: services/compact/sessionMemoryCompact.ts (630 LOC)
-//!
 //! When session memory has been extracted (by the memory extraction pipeline),
 //! compaction can use it directly as the summary, avoiding a costly LLM call.
 //! This module selects which messages to keep, merges similar memories, and
@@ -35,7 +33,6 @@ pub struct SessionMemoryCompactConfig {
     /// Optional auto-compact threshold guard. When set, the compaction
     /// returns `None` if the resulting context would still be ≥ this
     /// value, forcing the caller to fall back to LLM summarization.
-    /// TS: `sessionMemoryCompact.ts:605-614`.
     pub auto_compact_threshold: Option<i64>,
     /// Optional max length (chars) for the inlined session memory
     /// content; longer content is truncated and a pointer to the
@@ -66,11 +63,11 @@ const SESSION_MEMORY_TRUNCATION_MARKER: &str =
 /// memory content as a summary, keeping only recent messages.
 ///
 /// `last_summarized_message_id` is the uuid of the last assistant message
-/// already covered by `session_memory` — `Some(uuid)` matches TS's normal
-/// case (extraction has run, anchor is known); `None` means resumed
-/// session (memory exists from disk but boundary is unknown). When the
-/// uuid doesn't appear in `messages`, returns `Ok(None)` so the caller
-/// falls back to LLM-based compaction (TS sessionMemoryCompact.ts:554).
+/// already covered by `session_memory` — `Some(uuid)` means extraction has
+/// run and the anchor is known; `None` means resumed session (memory exists
+/// from disk but boundary is unknown). When the uuid doesn't appear in
+/// `messages`, returns `Ok(None)` so the caller falls back to LLM-based
+/// compaction.
 ///
 /// Returns `None` when:
 /// - Session memory is empty / template-only;
@@ -91,7 +88,7 @@ pub fn compact_session_memory(
         return Ok(None);
     }
 
-    // Resolve the last-summarized boundary index. TS:
+    // Resolve the last-summarized boundary index:
     //   - Some + found  → start after that index.
     //   - Some + not found → bail (caller falls back to LLM).
     //   - None → resumed session: pretend boundary is just before tail
@@ -200,7 +197,7 @@ pub fn compact_session_memory(
             .collect(),
         preserved_segment: None,
     };
-    // Suffix-preserving: anchor is the summary's uuid (TS sessionMemoryCompact.ts:489-491).
+    // Suffix-preserving: anchor is the summary's uuid.
     annotate_boundary_with_preserved_segment(&mut boundary_struct, summary_uuid, &messages_to_keep);
 
     Ok(Some(CompactResult {
@@ -220,9 +217,7 @@ pub fn compact_session_memory(
 }
 
 /// Inputs to [`should_extract_memory`] — caller-supplied counters
-/// describing the current turn's relationship to the last-extracted
-/// state. Mirrors the per-call argument bundle TS passes around in
-/// `services/SessionMemory/sessionMemory.ts:134 shouldExtractMemory`.
+/// describing the current turn's relationship to the last-extracted state.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionMemoryExtractionInputs {
     /// Total estimated tokens in the conversation right now.
@@ -234,10 +229,9 @@ pub struct SessionMemoryExtractionInputs {
     pub tool_calls_in_last_turn: i32,
 }
 
-/// Thresholds used by [`should_extract_memory`]. Defaults match TS:
-/// `minimum_message_tokens_to_init = 10_000`, `minimum_tokens_between_update
-/// = 5_000`, `min_tools_for_update = 3`. Keep these as a struct so
-/// settings.json overrides can tune without touching the algorithm.
+/// Thresholds used by [`should_extract_memory`]: `minimum_message_tokens_to_init
+/// = 10_000`, `minimum_tokens_between_update = 5_000`, `min_tools_for_update = 3`.
+/// Kept as a struct so settings.json overrides can tune without touching the algorithm.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionMemoryExtractionThresholds {
     pub minimum_message_tokens_to_init: i64,
@@ -257,7 +251,6 @@ impl Default for SessionMemoryExtractionThresholds {
 
 /// Pure decision: should the session-memory extractor run this turn?
 ///
-/// TS: `services/SessionMemory/sessionMemory.ts:134 shouldExtractMemory`.
 ///  - **Init** (no prior extract): require ≥ `minimum_message_tokens_to_init`.
 ///  - **Update** (prior extract exists): require token-delta ≥
 ///    `minimum_tokens_between_update` AND
@@ -388,8 +381,7 @@ pub fn merge_similar_memories(memories: &[(String, String)]) -> Vec<(String, Str
 ///
 /// Starts from `last_summarized_index + 1` and expands backwards until we
 /// meet both minimum thresholds, or hit the max cap, or hit the floor at
-/// the previous CompactBoundary. Mirrors TS
-/// `calculateMessagesToKeepIndex` (sessionMemoryCompact.ts:324).
+/// the previous CompactBoundary.
 ///
 /// Floor rationale: the preserved-segment chain has a disk discontinuity
 /// at the previous boundary (att[0]→summary shortcut from dedup-skip);
@@ -466,14 +458,12 @@ fn calculate_messages_to_keep_index(
 }
 
 /// Detect whether the on-disk session memory file contains only the
-/// extractor's empty template (no actual content yet). TS:
-/// `isSessionMemoryEmpty` checks for the boilerplate sections and
-/// returns true when no narrative content has been written.
+/// extractor's empty template (no actual content yet).
 ///
 /// Heuristic: the template uses second-level headings (`## ...`) and a
-/// known trailer; a file with no body lines under any heading is
-/// considered empty. We additionally accept the canonical placeholder
-/// strings TS recognizes ("No memories yet", "(empty)").
+/// known trailer; a file with no body lines under any heading is considered
+/// empty. Also recognizes canonical placeholder strings ("No memories yet",
+/// "(empty)").
 pub(crate) fn is_session_memory_template_only(content: &str) -> bool {
     let normalized = content.trim();
     if normalized.is_empty() {
@@ -508,13 +498,11 @@ pub(crate) fn is_session_memory_template_only(content: &str) -> bool {
 /// Adjust the keep index to preserve tool_use/tool_result pairs **and**
 /// thinking blocks that share an `AssistantMessage.uuid` with kept rounds.
 ///
-/// TS: `adjustIndexToPreserveAPIInvariants` (sessionMemoryCompact.ts:232).
 /// Step 1 walks backwards including assistant messages that own tool_use
 /// blocks referenced by tool_results in the kept range. Step 2 walks
-/// backwards including assistant messages whose `uuid` (TS uses
-/// `message.id`) matches a kept assistant — those messages may contain
-/// thinking blocks that the API requires for tool-call validity on
-/// thinking-enabled models.
+/// backwards including assistant messages whose `uuid` matches a kept
+/// assistant — those messages may contain thinking blocks that the API
+/// requires for tool-call validity on thinking-enabled models.
 pub fn adjust_index_to_preserve_api_invariants(
     messages: &[Arc<Message>],
     start_index: usize,
@@ -561,8 +549,7 @@ pub fn adjust_index_to_preserve_api_invariants(
     }
 
     // Step 2: include assistant messages sharing UUID with kept assistants
-    // (thinking-block reconstitution). TS uses message.id; we use uuid which
-    // is the closest stable identifier in our stream-collected messages.
+    // (thinking-block reconstitution).
     let kept_uuids: HashSet<uuid::Uuid> = messages[adjusted..]
         .iter()
         .filter_map(|arc| match arc.as_ref() {
@@ -604,7 +591,6 @@ fn collect_tool_use_ids(messages: &[Arc<Message>]) -> HashSet<String> {
 }
 
 /// Check if a message contains meaningful text content.
-/// TS: `hasTextBlocks(message)` in sessionMemoryCompact.ts.
 pub fn has_text_blocks(message: &Message) -> bool {
     match message {
         Message::User(u) => match &u.message {

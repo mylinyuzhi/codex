@@ -9,7 +9,6 @@
 //! happens in the consuming layer (`coco-commands` or app) to avoid a circular
 //! dependency (`coco-commands` already depends on `coco-plugins`).
 //!
-//! TS: utils/plugins/loadPluginCommands.ts
 
 use std::path::Path;
 

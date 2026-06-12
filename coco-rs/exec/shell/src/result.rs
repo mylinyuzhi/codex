@@ -45,8 +45,7 @@ pub struct CommandResult {
     /// Whether the command was interrupted by an external cancel signal.
     /// Distinct from `timed_out`: `interrupted` means the user pressed
     /// Ctrl+C / sent cancel token / aborted the session, rather than
-    /// the timeout watchdog firing. TS `BashTool.tsx:279-293`
-    /// `outputSchema.interrupted`.
+    /// the timeout watchdog firing.
     #[serde(default)]
     pub interrupted: bool,
 }

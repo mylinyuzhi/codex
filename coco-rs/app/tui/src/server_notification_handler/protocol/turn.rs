@@ -105,9 +105,9 @@ pub(super) fn on_turn_ended(
 /// turn end; cancel paths take the `Interrupted` branch.
 fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedParams) -> bool {
     state.session.set_busy(false);
-    // TS REPL.tsx:3901 — `updateLastInteractionTime(true)` also fires
-    // here so the idle window starts ticking from "user has had a
-    // chance to read the response", not "agent stopped".
+    // `updateLastInteractionTime(true)` fires here so the idle window
+    // starts ticking from "user has had a chance to read the response",
+    // not "agent stopped".
     let now = state.clock.now();
     state.session.last_query_completion_at = Some(now);
     state.session.last_user_interaction_at = now;
@@ -173,8 +173,8 @@ fn on_turn_completed_outcome(state: &mut AppState, p: &coco_types::TurnEndedPara
 /// banner, and run auto-restore when the cancel was user-initiated AND
 /// the idle guards + lossless-tail predicate hold.
 ///
-/// Mirrors TS `REPL.tsx:3010-3022` — the `.finally` block that fires
-/// after `abortController.abort('user-cancel')` resolves the query.
+/// Corresponds to the `.finally` block that fires after
+/// `abortController.abort('user-cancel')` resolves the query.
 pub(super) fn on_turn_interrupted_outcome(
     state: &mut AppState,
     abort_reason: coco_types::TurnAbortReason,
@@ -204,13 +204,11 @@ pub(super) fn on_turn_interrupted_outcome(
     let user_cancel = matches!(abort_reason, coco_types::TurnAbortReason::UserCancel);
 
     // Auto-restore is gated on:
-    // - reason == UserCancel  → TS `signal.reason === 'user-cancel'`
-    //   (treat None/legacy senders as non-user-initiated — conservative)
-    // - empty input            → TS `inputValueRef.current === ''`
-    // - empty queue            → TS `getCommandQueueLength() === 0`
-    // - no state             → coco-rs analogue of "not viewing a
-    //                            teammate task" + "no modal up"
-    // - lossless tail          → TS `messagesAfterAreOnlySynthetic`
+    // - reason == UserCancel  (treat None/legacy senders as non-user-initiated — conservative)
+    // - empty input            (`inputValueRef.current === ''`)
+    // - empty queue            (`getCommandQueueLength() === 0`)
+    // - no active surface      (not viewing a teammate task, no modal up)
+    // - lossless tail          (`messagesAfterAreOnlySynthetic`)
     // Predicates walk the engine-authoritative cell list directly.
     let cells = state.session.transcript.cells();
     let mut auto_restored = false;
@@ -228,13 +226,13 @@ pub(super) fn on_turn_interrupted_outcome(
         auto_restored = true;
     }
 
-    // TS parity: `createUserInterruptionMessage` rendered as the dim
-    // `Interrupted · What should Claude do instead?` chat row
-    // (InterruptedByUser.tsx). Only fires for UserCancel — SystemPreempt
-    // means a sibling op (Clear/Compact/Rewind/Shutdown) is about to
-    // mutate history anyway. Skipped when auto-restore truncated to
-    // the last user prompt: the prompt is now back in the input and
-    // adding "you interrupted yourself" would be noise.
+    // The user interruption message renders as the dim
+    // `Interrupted · What should Claude do instead?` chat row. Only fires
+    // for UserCancel — SystemPreempt means a sibling op
+    // (Clear/Compact/Rewind/Shutdown) is about to mutate history anyway.
+    // Skipped when auto-restore truncated to the last user prompt: the
+    // prompt is now back in the input and adding "you interrupted yourself"
+    // would be noise.
     //
     // The engine's `finalize_user_cancel` pushes a typed
     // `SystemMessage::UserInterruption` with the authoritative
@@ -244,11 +242,11 @@ pub(super) fn on_turn_interrupted_outcome(
     true
 }
 
-/// In-place auto-restore — mirrors TS `restoreMessageSync`. Truncates
-/// the message list at `idx` (the last user message), pops the user's
-/// text back into the input bar, regenerates `conversation_id` so the
-/// next turn starts a fresh cache key, and clears UI state that no
-/// longer corresponds to a real conversation tail.
+/// In-place auto-restore. Truncates the message list at `idx` (the last
+/// user message), pops the user's text back into the input bar,
+/// regenerates `conversation_id` so the next turn starts a fresh cache
+/// key, and clears UI state that no longer corresponds to a real
+/// conversation tail.
 ///
 /// Dispatches `UserCommand::Rewind { mode: AutoRestore }` directly via
 /// `command_tx.try_send`. The engine truncates its authoritative

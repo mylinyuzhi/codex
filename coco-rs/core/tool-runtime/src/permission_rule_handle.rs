@@ -6,12 +6,9 @@
 //! `AppStatePatch`, so subsequent tool calls (and subsequent turns)
 //! see the new rules without breaking the prompt-cache prefix.
 //!
-//! TS parity: `SkillTool.ts:775-806` returns a `contextModifier` that
-//! wraps `getAppState` to inject `alwaysAllowRules.command`; the
-//! streaming executor applies it to `this.toolUseContext` post-execute
-//! (`StreamingToolExecutor.ts:391-395`). Rust uses a typed callback
-//! handle instead of closure-wrapping to keep the data flow trivially
-//! `Send + Sync`.
+//! The streaming executor applies permission rule updates to the tool context
+//! post-execute. Rust uses a typed callback handle instead of closure-wrapping
+//! to keep the data flow trivially `Send + Sync`.
 //!
 //! # Callback pattern
 //!

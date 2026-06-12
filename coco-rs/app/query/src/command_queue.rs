@@ -1,16 +1,13 @@
 //! Mid-turn command queue for steering.
 //!
-//! TS: utils/messageQueueManager.ts (547 LOC).
-//!
 //! Enables mid-turn message injection: human-typed prompts, teammate
 //! messages, task notifications, and channel pub-sub events are queued
-//! and drained at end-of-turn into the conversation history. The Rust
-//! port mirrors the TS module-level singleton pattern by hoisting the
-//! [`CommandQueue`] onto `SessionRuntime` and injecting it into every
-//! per-turn `QueryEngine` via `with_command_queue`.
+//! and drained at end-of-turn into the conversation history. The queue
+//! is hoisted onto `SessionRuntime` and injected into every per-turn
+//! `QueryEngine` via `with_command_queue`.
 //!
-//! TS' `QueryGuard` 3-state FSM is intentionally not ported: in the
-//! Rust port the dispatch loop in `tui_runner` serialises turns via
+//! The `QueryGuard` 3-state FSM is intentionally not ported: the
+//! dispatch loop in `tui_runner` serialises turns via
 //! `drain_active_turn`, and the TUI gates `QueueInput` vs `SubmitInput`
 //! on the local `is_streaming()` flag — there's no concurrent
 //! queue-processor coroutine to guard against.
@@ -38,8 +35,8 @@ pub enum QueuePriority {
 
 /// A command queued for mid-turn injection.
 ///
-/// The `origin` field carries the typed [`QueueOrigin`] tag (mirrors TS
-/// `MessageOrigin`) so the `queued_command` system-reminder can render
+/// The `origin` field carries the typed [`QueueOrigin`] tag so the
+/// `queued_command` system-reminder can render
 /// the correct framing per producer (coordinator / task-notification /
 /// channel / human). `None` is rendered as human input by
 /// [`coco_system_reminder::wrap_command_text`].
@@ -47,8 +44,7 @@ pub enum QueuePriority {
 pub struct QueuedCommand {
     /// Stable identifier minted at construction. Threads through
     /// `CommandQueued`/`CommandDequeued` events so TUI / SDK clients
-    /// can pair the lifecycle observations of one queue entry. Mirrors
-    /// TS `QueuedCommand.uuid` (`utils/handlePromptSubmit.ts:343`).
+    /// can pair the lifecycle observations of one queue entry.
     #[serde(default = "Uuid::new_v4")]
     pub id: Uuid,
     /// The prompt text or slash command.
@@ -65,8 +61,8 @@ pub struct QueuedCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<QueueOrigin>,
     /// Image attachments paired with the queued text (mid-turn screenshot
-    /// pastes). Mirrors TS `attachment.prompt: ContentBlockParam[]` carrying
-    /// image blocks; see `attachments.ts:1062-1075`. Empty for text-only
+    /// pastes). Carries image blocks alongside the text prompt.
+    /// Empty for text-only
     /// queue items, which is the common case.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<QueuedImage>,

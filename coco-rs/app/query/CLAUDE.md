@@ -4,17 +4,6 @@ Multi-turn agent loop driver. Orchestrates the full turn cycle: prompt build,
 LLM call, tool execution, compaction, command-queue drain, budget/continue
 decisions. Emits `coco_types::CoreEvent` directly (no intermediate event enum).
 
-## TS Source
-
-- `QueryEngine.ts` — multi-turn loop
-- `query.ts` — single-turn execution
-- `query/{config,deps,stopHooks,tokenBudget}.ts` — gates + budget + stop-hook handling
-- `utils/messageQueueManager.ts` — mid-turn command queue (module-level singleton in TS)
-- `utils/queueProcessor.ts` — queue draining strategy
-- `utils/attachments.ts` — `getQueuedCommandAttachments` (origin framing + system-reminder wrap)
-- `utils/processUserInput/{processBashCommand.tsx,processSlashCommand.tsx,processTextPrompt.ts,processUserInput.ts}`
-- `tasks/LocalMainSessionTask.ts` — task adapter for main loop
-
 ## Key Types
 
 | Type | Purpose |
@@ -71,9 +60,9 @@ Stream: `TextDelta`, `ThinkingDelta`, `ToolUseQueued`, `ToolUseStarted`,
 
 ## Steering (Mid-Turn Injection)
 
-Users can type while the LLM is working. The TS pattern uses a module-level
-singleton; in coco-rs the queue is **`SessionRuntime`-scoped** (`runtime.command_queue`)
-because `QueryEngine` is rebuilt per turn — `SessionRuntime::wire_engine` calls
+Users can type while the LLM is working. In coco-rs the queue is
+**`SessionRuntime`-scoped** (`runtime.command_queue`) because `QueryEngine` is
+rebuilt per turn — `SessionRuntime::wire_engine` calls
 `engine.with_command_queue(self.command_queue.clone())` so every turn observes
 the same `Arc`-shared queue.
 
@@ -81,14 +70,12 @@ the same `Arc`-shared queue.
 input through `UserCommand::QueueCommand`, which constructs a `QueuedCommand`
 (default priority `Next`, origin `Human`), pushes it onto the runtime queue,
 and emits `ServerNotification::CommandQueued { id, preview }`. Each item has
-a `Uuid` for id-based removal — there is no `from|timestamp|text[..100]`
-dedup string (TS-style).
+a `Uuid` for id-based removal.
 
 **Drain path.** At turn boundaries (after a turn finishes, before the next API
 request), `engine_finalize_turn` calls `drain_command_queue_into_history`. Each
 queued item becomes one `Message::Attachment(AttachmentKind::QueuedCommand)`
-carrying a User-role LLM message. The body is **double-wrapped**, mirroring
-TS `getQueuedCommandAttachments`:
+carrying a User-role LLM message. The body is **double-wrapped**:
 
 1. `wrap_command_text(prompt, origin)` — origin-specific framing prose
    (e.g. "The user sent the following message while you were working:").
@@ -100,10 +87,10 @@ pass `smoosh_system_reminder_into_tool_result` then folds the wrapped User
 message into the preceding Tool message when present, preserving Anthropic's
 strict tool_use/tool_result adjacency.
 
-**No mid-turn `Now` drain.** TS supports interleaving `Now`-priority items
-mid-turn; coco-rs intentionally does not — it would break tool_use/tool_result
-pairing on non-streaming providers. All priorities are honored at the
-turn-boundary drain in FIFO-within-priority order.
+**No mid-turn `Now` drain.** Interleaving `Now`-priority items mid-turn is
+intentionally unsupported — it would break tool_use/tool_result pairing on
+non-streaming providers. All priorities are honored at the turn-boundary drain
+in FIFO-within-priority order.
 
 **Clear semantics.** `SessionRuntime::clear_conversation` is a full reset and
 wipes the queue so in-flight queued commands from the pre-clear session cannot
@@ -134,7 +121,7 @@ surfaces**:
   (in `fork_context.rs`) for per-call isolation: auto agent_id,
   fresh `DenialTrackingState`, fresh `query_chain_id` + `query_depth`
   bump (capped at 16), `allowed_write_roots` fence, `require_can_use_tool`
-  toggle. TS: `utils/forkedAgent.ts::createSubagentContext`.
+  toggle.
 - **Subagent** (`AgentTool` model-spawned via
   `coco_tool_runtime::AgentHandle`) — full multi-turn child engine,
   may run for hours, lives in `task_runtime`. Different cache
@@ -147,7 +134,7 @@ rather than model-spawned. Per-fork tool gating goes through the
 `CanUseToolHandle` callback at `core/tool-runtime/src/execution.rs`
 step 3.5.
 
-### `ForkedAgentOptions::for_label` cache-parity defaults
+### `ForkedAgentOptions::for_label` cache-safe defaults
 
 The conservative shape preserves the parent's prompt cache:
 `max_turns=Some(1)`, `transcript_mode=Disabled`, `skip_cache_write=true`,
@@ -160,9 +147,7 @@ leaves a trail.
 
 ### promptSuggestion 9-step guard + 12-rule filter
 
-Post-turn promptSuggestion runs through `prompt_suggestion::try_generate_suggestion`
-which mirrors TS `services/PromptSuggestion/promptSuggestion.ts:125-456`
-byte-for-byte:
+Post-turn promptSuggestion runs through `prompt_suggestion::try_generate_suggestion`:
 
 1. abort check (singleton in caller's hands)
 2. `assistant_turn_count < 2` ⇒ `TooFewTurns`
@@ -185,10 +170,9 @@ The verbatim `SUGGESTION_PROMPT` (30 lines) lives at
 
 When the LLM stream finishes with a non-clean `stop_reason`,
 `engine.rs::run_session_loop` synthesizes a typed-signal assistant
-message via `helpers::build_abnormal_stop_api_error_message` (TS parity:
-`services/api/claude.ts:2258-2292` + `services/api/errors.ts:1184-1207`
-`getErrorMessageIfRefusal`). The message has empty content and
-carries the human-readable explanation on `AssistantMessage.api_error.message`.
+message via `helpers::build_abnormal_stop_api_error_message`. The message
+has empty content and carries the human-readable explanation on
+`AssistantMessage.api_error.message`.
 
 Three abnormal-stop branches feed this synthesizer:
 
@@ -221,9 +205,8 @@ Three abnormal-stop branches feed this synthesizer:
    would 4xx on a hardcoded 64k); phase 2 injects the resume-nudge
    meta message up to `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT` times;
    phase 3 falls through. All three sub-branches push the synthetic
-   message so transcripts carry the explicit truncation marker —
-   matches TS yielding `createAssistantAPIErrorMessage` at the
-   stream layer regardless of subsequent recovery state. Phase 1
+   message so transcripts carry the explicit truncation marker
+   regardless of subsequent recovery state. Phase 1
    reads `ModelInfo` from the **post-plan-swap** client so plan-mode
    sessions escalate against the active Plan role, not Main.
 
@@ -254,8 +237,7 @@ that `build_abnormal_stop_api_error_message` emits.
 
 After each tool batch `engine_finalize_turn::spawn_tool_use_summary`
 optionally spawns a blocking Fast-role call that produces a ≤30-char
-mobile-row label. Lives in `tool_use_summary.rs`; TS source
-`services/toolUseSummary/toolUseSummaryGenerator.ts`. Four gates, all
+mobile-row label. Lives in `tool_use_summary.rs`. Four gates, all
 enforced in `spawn_tool_use_summary`:
 
 1. `Feature::ToolUseSummary` enabled — **default off**. Mobile-row UX
@@ -266,12 +248,11 @@ enforced in `spawn_tool_use_summary`:
    text. Users opt in via `settings.json` `features.tool_use_summary =
    true` once their Fast role is wired to a non-reasoning model.
 2. model runtime registry wired (Fast role configured).
-3. `agent_id.is_none()` — subagents don't surface in the mobile UI
-   (TS `!toolUseContext.agentId` at `query.ts:1419`).
+3. `agent_id.is_none()` — subagents don't surface in the mobile UI.
 4. Tool batch non-empty.
 
 `QueryParams.max_tokens` is intentionally `None` — defer to the Fast
-model's own `max_output_tokens` from `ModelInfo`. The TS port hard-coded
-`64` for Haiku; that cap is unsafe on reasoning models. Non-clean
-terminations propagate through `coco-inference`'s abnormal-stop_reason
-warn (see `services/inference/CLAUDE.md`).
+model's own `max_output_tokens` from `ModelInfo`. Hardcoding `64` for
+any model is unsafe on reasoning models. Non-clean terminations propagate
+through `coco-inference`'s abnormal-stop_reason warn (see
+`services/inference/CLAUDE.md`).

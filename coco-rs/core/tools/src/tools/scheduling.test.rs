@@ -8,10 +8,9 @@ use serde_json::json;
 
 // ── R7-T22: cron expression validation tests ──
 //
-// TS `CronCreateTool.ts:82-103` validates the cron expression in
-// `validateInput` so the model gets a clear error before the schedule
-// store rejects. coco-rs implements a lightweight 5-field validator
-// inline; these tests cover the grammar.
+// `validateInput` validates the cron expression so the model gets a clear
+// error before the schedule store rejects. coco-rs implements a lightweight
+// 5-field validator inline; these tests cover the grammar.
 
 #[test]
 fn test_cron_validator_accepts_basic_expressions() {
@@ -91,7 +90,7 @@ fn test_cron_create_validate_input_accepts_valid() {
 #[test]
 fn test_cron_create_validate_input_rejects_unreachable() {
     // tools-web-mcp#54: syntactically valid but never fires (Feb 30) — the
-    // coco-cron reachability check (TS errorCode 2) must reject before execute.
+    // coco-cron reachability check (errorCode 2) must reject before execute.
     let ctx = ToolUseContext::test_default();
     let result = <CronCreateTool as DynTool>::validate_input(
         &CronCreateTool,
@@ -106,7 +105,7 @@ fn test_cron_create_validate_input_rejects_unreachable() {
     }
 }
 
-// ── tools-web-mcp#60: durable-cron teammate guard (TS getTeammateContext) ──
+// ── tools-web-mcp#60: durable-cron teammate guard ──
 
 #[test]
 fn test_cron_create_rejects_durable_for_in_process_teammate() {
@@ -161,7 +160,7 @@ async fn test_cron_list_returns_jobs_wrapper_when_empty() {
     let result = <CronListTool as DynTool>::execute(&CronListTool, json!({}), &ctx)
         .await
         .unwrap();
-    // TS shape: `{ jobs: [] }`. Not a bare array, not a string.
+    // Output shape: `{ jobs: [] }`. Not a bare array, not a string.
     assert!(
         result.data["jobs"].is_array(),
         "CronList output must be wrapped as {{ jobs: [...] }}, got: {:?}",
@@ -170,7 +169,7 @@ async fn test_cron_list_returns_jobs_wrapper_when_empty() {
     assert_eq!(result.data["jobs"].as_array().unwrap().len(), 0);
 }
 
-// ── render_for_model — TS parity for cron tool envelopes ──────────────
+// ── render_for_model — cron tool envelopes ──────────────
 
 #[test]
 fn cron_create_render_recurring_durable() {
@@ -222,7 +221,7 @@ fn cron_create_render_one_shot_session_only() {
 fn cron_delete_render_uses_cancelled_verb() {
     use super::CronDeleteTool;
     use coco_tool_runtime::ToolResultContentPart;
-    // TS `CronDeleteTool.ts:90`: `Cancelled job ${id}.`.
+    // Render format: `Cancelled job ${id}.`.
     let data = json!({"id": "job-42"});
     let parts = <CronDeleteTool as DynTool>::render_for_model(&CronDeleteTool, &data);
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {

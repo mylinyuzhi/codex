@@ -1,4 +1,4 @@
-//! Sandbox settings — TS-parity with `entrypoints/sandboxTypes.ts`.
+//! Sandbox settings.
 //!
 //! Single source of truth for sandbox configuration consumed by both
 //! `~/.coco/settings.json` deserialization and the sandbox runtime
@@ -6,10 +6,7 @@
 //! produces its own platform-bound `SandboxConfig` (which is a separate
 //! type owned by the sandbox crate — adapter output, not user-facing).
 //!
-//! ## Relationship to TS
-//!
-//! Mirrors `entrypoints/sandboxTypes.ts::SandboxSettings` field-for-field
-//! (snake_case ↔ camelCase), plus two coco-rs-specific high-level fields:
+//! Two coco-rs-specific high-level fields extend the base schema:
 //!
 //! - `mode`: posture enum (ReadOnly/WorkspaceWrite/FullAccess/ExternalSandbox).
 //!   Distinct from `enabled`: `enabled` is the feature gate, `mode` controls
@@ -19,11 +16,11 @@
 //!
 //! ## Env overrides
 //!
-//! Four scalar fields can be overridden via env vars (TS-parity scope):
+//! Four scalar fields can be overridden via env vars:
 //! `COCO_SANDBOX_MODE`, `COCO_SANDBOX_EXCLUDED_COMMANDS`,
 //! `COCO_SANDBOX_ALLOW_NETWORK`, `COCO_SANDBOX_FAIL_IF_UNAVAILABLE`.
 //! The rich nested fields (`filesystem`, `network`) have no env paths;
-//! they only come from settings.json (matching TS).
+//! they only come from settings.json.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -88,8 +85,6 @@ impl NetworkMode {
 }
 
 /// Filesystem access configuration for the sandbox.
-///
-/// TS parity: `entrypoints/sandboxTypes.ts::SandboxFilesystemConfig`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct FilesystemConfig {
     /// Paths allowed for write access (defaults to CWD).
@@ -104,7 +99,6 @@ pub struct FilesystemConfig {
     /// Paths to re-allow reading within `deny_read` regions.
     /// Takes precedence over `deny_read` for matching paths.
     ///
-    /// TS parity: `entrypoints/sandboxTypes.ts:71-77` `allowRead`.
     #[serde(default)]
     pub allow_read: Vec<PathBuf>,
     /// Allow writing to `.git/config` and `~/.gitconfig`.
@@ -120,16 +114,14 @@ pub struct FilesystemConfig {
     /// when the adapter receives flat unsourced rules, the gate degrades
     /// to "all sources contribute" (safe default).
     ///
-    /// TS parity: `entrypoints/sandboxTypes.ts:78-83` + `sandbox-adapter.ts:343-347`.
     #[serde(default)]
     pub allow_managed_read_paths_only: bool,
 }
 
 /// Network access configuration for the sandbox.
 ///
-/// TS parity: `entrypoints/sandboxTypes.ts::SandboxNetworkConfig`. The
-/// `denied_domains` and `mode` fields are coco-rs extensions that gracefully
-/// degrade when consumed by TS-shaped clients (extra fields ignored).
+/// The `denied_domains` and `mode` fields are coco-rs extensions that
+/// gracefully degrade when consumed by clients that ignore extra fields.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct NetworkConfig {
     /// Network access mode (Full or Limited).
@@ -178,7 +170,6 @@ pub struct NetworkConfig {
     /// the adapter receives flat unsourced rules, the gate degrades to
     /// "all sources contribute" (safe default).
     ///
-    /// TS parity: `entrypoints/sandboxTypes.ts:18-24` + `sandbox-adapter.ts:152-164`.
     #[serde(default)]
     pub allow_managed_domains_only: bool,
 }
@@ -200,8 +191,6 @@ pub struct MitmProxyConfig {
 pub type IgnoreViolationsConfig = HashMap<String, Vec<String>>;
 
 /// Custom ripgrep configuration for sandbox-runtime ripgrep dispatch.
-///
-/// TS parity: `entrypoints/sandboxTypes.ts:135-141` `ripgrep`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RipgrepConfig {
     /// Path to the ripgrep binary.
@@ -211,7 +200,7 @@ pub struct RipgrepConfig {
     pub args: Vec<String>,
 }
 
-/// Sandbox settings — TS-parity with `SandboxSettingsSchema`.
+/// Sandbox settings.
 ///
 /// Deserialized directly from `~/.coco/settings.json`'s `sandbox` block;
 /// consumed by both the high-level posture decision (`mode`) and the
@@ -236,7 +225,6 @@ pub struct SandboxSettings {
     #[serde(default)]
     pub allow_network: bool,
 
-    // === TS-parity fields ===
     /// Enable sandbox mode.
     ///
     /// When `false` (default), commands run directly without sandbox wrapping.
@@ -246,8 +234,6 @@ pub struct SandboxSettings {
     pub enabled: bool,
 
     /// Hard-fail at startup when `enabled == true` but sandbox can't run.
-    ///
-    /// Mirrors TS `sandbox.failIfUnavailable` (`entrypoints/sandboxTypes.ts:95`).
     #[serde(default)]
     pub fail_if_unavailable: bool,
 
@@ -369,11 +355,10 @@ impl SandboxSettings {
     ///
     /// `settings.sandbox` is already a fully-defaulted `SandboxSettings`
     /// (every field has a `#[serde(default)]`). This step layers the four
-    /// TS-parity scalar env overrides on top — `mode`, `excluded_commands`,
+    /// scalar env overrides on top — `mode`, `excluded_commands`,
     /// `allow_network`, `fail_if_unavailable`. Rich nested fields
-    /// (`filesystem`, `network`) intentionally have no env path: TS doesn't
-    /// expose one and pulling structured data through a single env var is
-    /// a footgun.
+    /// (`filesystem`, `network`) intentionally have no env path:
+    /// pulling structured data through a single env var is a footgun.
     pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = settings.sandbox.clone();
 
@@ -727,8 +712,7 @@ fn matches_exclusion_pattern(variant: &str, pattern: &str) -> bool {
 ///
 /// Used by the sandbox adapter to honor `allow_managed_domains_only` —
 /// when set, only `policy_settings`-sourced rules contribute domains
-/// to the runtime allowlist. TS parity:
-/// `entrypoints/sandboxTypes.ts:18-24`, `sandbox-adapter.ts:152-164`.
+/// to the runtime allowlist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourcedRule {
     /// Raw rule string (e.g., `"WebFetch(domain:example.com)"`).
@@ -781,8 +765,7 @@ impl SettingsWithSource {
 
     /// Flatten per-source `sandbox.filesystem.allow_read` paths,
     /// tagged by source. Used by the sandbox adapter to honor
-    /// `allow_managed_read_paths_only`. TS parity:
-    /// `sandbox-adapter.ts:343-347`.
+    /// `allow_managed_read_paths_only`.
     pub fn sourced_filesystem_allow_read(&self) -> Vec<(SettingSource, Vec<PathBuf>)> {
         let mut out: Vec<(SettingSource, Vec<PathBuf>)> = Vec::new();
         for (source, raw) in &self.per_source {

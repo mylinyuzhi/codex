@@ -1,7 +1,5 @@
 //! Bash command permission checking pipeline.
 //!
-//! TS: tools/BashTool/bashPermissions.ts (97K)
-//!
 //! Implements wrapper stripping, env var filtering, command prefix extraction,
 //! and compound command splitting for the permission rule matching system.
 
@@ -9,8 +7,6 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 /// Safe environment variables — no code execution or library loading risk.
-///
-/// TS: SAFE_ENV_VARS constant (~40 entries).
 static SAFE_ENV_VARS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
     [
         // Go
@@ -88,7 +84,7 @@ static BARE_SHELL_PREFIXES: LazyLock<HashSet<&str>> = LazyLock::new(|| {
 
 /// Strip safe wrapper commands from a command string.
 ///
-/// TS: stripSafeWrappers() — two-phase stripping:
+/// Two-phase stripping:
 /// Phase 1: Strip leading safe env vars + comments
 /// Phase 2: Strip wrapper commands (timeout, time, nice, stdbuf, nohup)
 ///
@@ -119,8 +115,7 @@ pub fn strip_safe_wrappers(command: &str) -> String {
 
 /// Strip all leading env var assignments (safe or not).
 ///
-/// TS: stripAllLeadingEnvVars() — used for deny rule matching.
-/// Optionally checks against a blocklist of hijack variables.
+/// Used for deny rule matching. Optionally checks against a blocklist of hijack variables.
 pub fn strip_all_env_vars(command: &str, check_hijack: bool) -> String {
     let mut rest = command.trim();
 
@@ -137,22 +132,20 @@ pub fn strip_all_env_vars(command: &str, check_hijack: bool) -> String {
 /// Extract a stable `command subcommand` prefix for a permission suggestion
 /// (e.g., `git commit` from `git commit -m msg`).
 ///
-/// TS: `getSimpleCommandPrefix()` (bashPermissions.ts:161) — split on
-/// whitespace, skip leading SAFE env-var assignments (bail on the first unsafe
-/// one), then require the second token to be shaped like a subcommand.
+/// Splits on whitespace, skips leading SAFE env-var assignments (bails on the
+/// first unsafe one), then requires the second token to be shaped like a
+/// subcommand.
 ///
 /// Returns `None` (caller falls back to an exact rule) when the command is a
 /// single bare word, when the second token is a flag / path / filename / number
 /// rather than a subcommand, or when an unsafe leading env assignment is present
-/// (a prefix keyed on a specific env value is a poor rule — TS returns null for
-/// the same reason).
+/// (a prefix keyed on a specific env value is a poor rule).
 ///
 /// Unlike the allow-rule matcher, this does NOT strip safe *wrappers*
-/// (`timeout`/`nice`/`nohup`/…) — TS skips only env assignments here. A wrapper
-/// command therefore becomes the first token: `nohup npm start` → `nohup npm`,
-/// `timeout 60 cargo test` → `None` (the duration `60` is not a subcommand). The
-/// bare-shell guard lives in [`get_first_word_prefix`] (TS `getFirstWordPrefix`),
-/// not here.
+/// (`timeout`/`nice`/`nohup`/…) — only env assignments are skipped here. A
+/// wrapper command therefore becomes the first token: `nohup npm start` →
+/// `nohup npm`, `timeout 60 cargo test` → `None` (the duration `60` is not a
+/// subcommand). The bare-shell guard lives in [`get_first_word_prefix`], not here.
 pub fn get_command_prefix(command: &str) -> Option<String> {
     let tokens: Vec<&str> = command.split_whitespace().collect();
 
@@ -179,8 +172,7 @@ pub fn get_command_prefix(command: &str) -> Option<String> {
 /// Extract a single-word command prefix (e.g., `python3` from
 /// `python3 script.py`) for the editable-prefix field's default value.
 ///
-/// TS: `getFirstWordPrefix()` (bashPermissions.ts:243) — the UI-only fallback
-/// used to seed the dialog's editable prefix input when
+/// UI-only fallback used to seed the dialog's editable prefix input when
 /// [`get_command_prefix`] declines (the second token isn't a subcommand). It
 /// skips leading SAFE env assignments (bail on unsafe), requires the command
 /// word to be a clean lowercase name (rejects paths, flags, numbers), and —
@@ -214,8 +206,6 @@ pub fn get_first_word_prefix(command: &str) -> Option<String> {
 /// `None` when the command has no heredoc / nothing usable precedes it. A
 /// heredoc body changes every call, so an exact rule would never re-match — the
 /// caller suggests this prefix instead.
-///
-/// TS: `extractPrefixBeforeHeredoc()` (bashPermissions.ts:307).
 pub fn heredoc_command_prefix(command: &str) -> Option<String> {
     let idx = command.find("<<")?;
     if idx == 0 {
@@ -245,8 +235,7 @@ pub fn heredoc_command_prefix(command: &str) -> Option<String> {
     Some(rest.iter().take(2).copied().collect::<Vec<_>>().join(" "))
 }
 
-/// If `token` is a `NAME=value` env assignment (TS `ENV_VAR_ASSIGN_RE`,
-/// `^[A-Za-z_]\w*=`), return `NAME`.
+/// If `token` is a `NAME=value` env assignment (`^[A-Za-z_]\w*=`), return `NAME`.
 fn env_assignment_name(token: &str) -> Option<&str> {
     let eq = token.find('=')?;
     let name = &token[..eq];
@@ -258,8 +247,6 @@ fn env_assignment_name(token: &str) -> Option<&str> {
 
 /// Whether `token` has the subcommand shape `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` —
 /// a lowercase word with optional `-segments` (`commit`, `run`, `force-push`).
-///
-/// TS: the second-token regex in `getSimpleCommandPrefix()`.
 fn looks_like_subcommand(token: &str) -> bool {
     let bytes = token.as_bytes();
     if bytes.is_empty() || !bytes[0].is_ascii_lowercase() {
@@ -343,9 +330,7 @@ pub fn split_compound_command(command: &str) -> Vec<String> {
 }
 
 /// Remove unquoted output-redirection clauses (`> file`, `>> file`, `2> file`,
-/// `&> file`, `2>&1`, `>&2`, `>&-`, …) from a command, mirroring the observable
-/// effect of TS `extractOutputRedirections().commandWithoutRedirections`
-/// (commands.ts:634) for the common single-line case.
+/// `&> file`, `2>&1`, `>&2`, `>&-`, …) from a command.
 ///
 /// Used to build rule-matching candidates so e.g. `Bash(python:*)` matches
 /// `python s.py > out.txt`. Quote-guarded: redirections inside single/double
@@ -431,8 +416,6 @@ pub fn strip_output_redirections(command: &str) -> String {
 /// way [`strip_output_redirections`] guards them. `/dev/null` is NOT filtered
 /// here — the caller decides which targets are safe.
 ///
-/// Mirrors the target set TS `extractOutputRedirections` (commands.ts) feeds
-/// into `validateOutputRedirections` (`tools/BashTool/pathValidation.ts`).
 /// Returned tokens are raw (may still contain shell-expansion syntax); callers
 /// in `coco-tools` apply `coco_permissions::has_shell_expansion` /
 /// `is_path_within_allowed_dirs`. Lives here (not `coco-permissions`) because
@@ -518,11 +501,9 @@ pub fn extract_output_redirect_targets(command: &str) -> Vec<String> {
 }
 
 /// Detect process substitution: input `<(cmd)` or a redirect to output process
-/// substitution `> >(cmd)`, allowing whitespace between operators. Quote-naive,
-/// mirroring TS `checkPathConstraints`'s process-substitution regex
-/// (`/>>\s*>\s*\(|>\s*>\s*\(|<\s*\(/`). Such commands can execute arbitrary
-/// commands whose writes never appear as redirect targets, so the caller forces
-/// an Ask.
+/// substitution `> >(cmd)`, allowing whitespace between operators. Quote-naive.
+/// Such commands can execute arbitrary commands whose writes never appear as
+/// redirect targets, so the caller forces an Ask.
 pub fn has_process_substitution(command: &str) -> bool {
     let chars: Vec<char> = command.chars().collect();
     let n = chars.len();

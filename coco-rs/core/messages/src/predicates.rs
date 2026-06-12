@@ -151,8 +151,7 @@ pub fn tool_call_count(msg: &Message) -> usize {
 /// Count tool calls in the **last** assistant message of `messages`,
 /// walking from the tail. Returns 0 when no assistant message exists.
 ///
-/// TS: `hasToolCallsInLastAssistantTurn` style — used by the
-/// session-memory natural-break gate and by compact's SM-first
+/// Used by the session-memory natural-break gate and by compact's SM-first
 /// short-circuit to decide whether the last turn ended on a tool
 /// call (orphan-risk for downstream summaries).
 pub fn count_tool_calls_in_last_assistant_turn<M: std::borrow::Borrow<Message>>(
@@ -172,9 +171,9 @@ pub fn count_tool_calls_in_last_assistant_turn<M: std::borrow::Borrow<Message>>(
 /// `is_compact_summary` user message). When no boundary exists, the
 /// whole slice is returned.
 ///
-/// TS: `getMessagesAfterCompactBoundary` — feeds the rename auto-name
-/// path and any other consumer that needs "messages since the last
-/// compaction" without re-walking compact state machinery.
+/// Feeds the rename auto-name path and any other consumer that needs
+/// "messages since the last compaction" without re-walking compact
+/// state machinery.
 pub fn messages_after_compact_boundary<M: std::borrow::Borrow<Message>>(messages: &[M]) -> &[M] {
     for (idx, m) in messages.iter().enumerate().rev() {
         let msg = m.borrow();

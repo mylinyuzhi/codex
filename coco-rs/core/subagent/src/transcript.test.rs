@@ -109,10 +109,10 @@ fn test_filter_keeps_substantive_assistant() {
 
 #[test]
 fn test_filter_keeps_whitespace_text_plus_reasoning() {
-    // TS parity (`hasOnlyWhitespaceTextContent`): a turn cancelled after
-    // emitting leading whitespace before a thinking block has a non-text
-    // block, so it is NOT whitespace-only and must survive. (Regression:
-    // the old predicate treated Reasoning as "passing" and dropped it.)
+    // A turn cancelled after emitting leading whitespace before a thinking
+    // block has a non-text block, so it is NOT whitespace-only and must
+    // survive. (Regression: the old predicate treated Reasoning as
+    // "passing" and dropped it.)
     let messages = vec![
         user("hello"),
         assistant(vec![

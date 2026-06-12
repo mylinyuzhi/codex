@@ -28,8 +28,7 @@ fn test_expand_skill_prompt_braced_arguments() {
 
 #[test]
 fn test_expand_skill_prompt_positional_args() {
-    // TS parity (argumentSubstitution.ts:129-133): $N is
-    // zero-indexed — alias for $ARGUMENTS[N]. So `$0` is the
+    // $N is zero-indexed — alias for $ARGUMENTS[N]. So `$0` is the
     // first parsed arg, `$1` is the second.
     let result = expand_skill_prompt_simple("Compare $0 with $1", "old.rs new.rs");
     assert_eq!(result, "Compare old.rs with new.rs");

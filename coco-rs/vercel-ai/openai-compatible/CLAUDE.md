@@ -2,9 +2,9 @@
 
 Generic OpenAI-compatible provider for any API following the OpenAI protocol (xAI, Groq, Together, Fireworks, DeepSeek, etc.).
 
-## TS Source
+## SDK Spec
 
-Ports `@ai-sdk/openai-compatible` v4 (not from `claude-code/src/`).
+Implements the `@ai-sdk/openai-compatible` v4 specification.
 
 ## Key Types
 

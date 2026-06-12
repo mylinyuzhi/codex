@@ -28,10 +28,8 @@ use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 
 /// Turn-boundary glyph at the start of each assistant text response.
-/// TS `BLACK_CIRCLE` from `constants/figures.ts` picks `⏺` on macOS for
-/// vertical alignment and `●` elsewhere; we standardise on `⏺` which
-/// renders cleanly in modern Linux/macOS/Windows Terminal fonts and
-/// keeps a consistent visual across platforms.
+/// Standardised on `⏺` which renders cleanly in modern Linux/macOS/Windows
+/// Terminal fonts and keeps a consistent visual across platforms.
 pub(crate) const ASSISTANT_DOT: &str = "⏺";
 
 /// The shared turn-boundary marker for assistant text (finalized + streaming),
@@ -264,14 +262,13 @@ pub(super) fn try_render(
 ) -> Option<()> {
     match &cell.kind {
         CellKind::AssistantText { text, .. } => {
-            // TS parity: `AssistantTextMessage` renders the body with a
-            // leading `BLACK_CIRCLE` turn marker on the first line. The
-            // marker is a first-class renderer input (`LeadMarker`); the
-            // renderer lands it at column 0 and keeps wrapped prose at the
-            // body indent — no fragile first-span string-matching here.
-            // Empty responses still get a marker-only line. Memoized by content
-            // (see COMMITTED_MD_MEMO) so repeated history replays / fallback
-            // rebuilds don't re-run pulldown + syntect.
+            // Renders the body with a leading `BLACK_CIRCLE` turn marker on
+            // the first line. The marker is a first-class renderer input
+            // (`LeadMarker`); the renderer lands it at column 0 and keeps
+            // wrapped prose at the body indent — no fragile first-span
+            // string-matching here. Empty responses still get a marker-only
+            // line. Memoized by content (see COMMITTED_MD_MEMO) so repeated
+            // history replays / fallback rebuilds don't re-run pulldown + syntect.
             lines.extend(render_committed_assistant_markdown(
                 text,
                 CommittedAssistantMarkdownOptions {
@@ -314,9 +311,9 @@ pub(super) fn try_render(
             Some(())
         }
         CellKind::AssistantRedactedThinking => {
-            // ✻ (teardrop asterisk) signals "still thinking" — TS uses
-            // this glyph for the redacted/in-flight variant so users
-            // can tell at a glance the block isn't finalized.
+            // ✻ (teardrop asterisk) signals "still thinking" — used for
+            // the redacted/in-flight variant so users can tell at a glance
+            // the block isn't finalized.
             lines.push(Line::from(
                 Span::raw(t!("chat.redacted_thinking").to_string())
                     .fg(w.styles.thinking())

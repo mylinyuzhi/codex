@@ -1,35 +1,27 @@
 //! Background pills bar — flat `@name` list for backgrounded subagents.
 //!
-//! TS source: `components/tasks/BackgroundTaskStatus.tsx:153-156` and
-//! `AgentPill` (same file, lines 280-377). The TS shape is a flat
-//! `React.Fragment` list of `@{name}` `Text` nodes joined by a single
-//! space, with idle/selected/viewed states picking different `Text`
-//! styles (dim, inverse, colored). No brackets, no glyph, no elapsed
-//! segment, no completion-flash window — backgrounded tasks remain in
-//! the row indefinitely (TS `runningTasks` filter is just
-//! `isBackgroundTask`, not "running within last 5 s").
+//! A flat `@{name}` list joined by a single space, with idle/selected/viewed
+//! states picking different styles (dim, inverse, colored). No brackets,
+//! no glyph, no elapsed segment, no completion-flash window — backgrounded
+//! tasks remain in the row indefinitely (the filter is `isBackgroundTask`,
+//! not "running within last 5 s").
 //!
-//! Width budgeting per pill matches TS `_temp1`:
-//! `stringWidth("@" + name) + (i > 0 ? 1 : 0)`.
+//! Width budgeting per pill: `stringWidth("@" + name) + (i > 0 ? 1 : 0)`.
 //!
-//! TS-DIVERGE: three TS pieces are deliberately unimplemented and
-//! tracked here so a future port can pick them up cleanly:
-//! - **Leader pill** (`mainPill = { name: "main", ... }` in
-//!   `BackgroundTaskStatus.tsx:64-76`): TS always prepends a leader
+//! DIVERGE: three pieces are deliberately unimplemented and tracked here
+//! so a future port can pick them up cleanly:
+//! - **Leader pill**: the upstream implementation always prepends a leader
 //!   row to the pills list. coco-rs has no "main" leader concept on
 //!   the pills bar yet — the leader's status surfaces through the
 //!   status indicator instead.
-//! - **Summary pill** (`getPillLabel(runningTasks)` +
-//!   `<SummaryPill>` branch at `BackgroundTaskStatus.tsx:200-233`):
-//!   in non-teammate mode TS shows a single aggregated label
-//!   ("3 running"). coco-rs always shows the per-task pill list and
-//!   relies on overflow tail for compactness.
-//! - **Horizontal scrolling** (`calculateHorizontalScrollWindow` +
-//!   left/right arrow indicators, `BackgroundTaskStatus.tsx:114-145`):
-//!   TS scrolls the pill row when it overflows and tracks a focused
-//!   pill index. coco-rs renders `[+N more]` as a static tail
-//!   instead — simpler, no focus state, but no way to inspect
-//!   overflowed pills without entering the Teammates view.
+//! - **Summary pill**: in non-teammate mode the upstream shows a single
+//!   aggregated label ("3 running"). coco-rs always shows the per-task
+//!   pill list and relies on overflow tail for compactness.
+//! - **Horizontal scrolling**: the upstream scrolls the pill row when it
+//!   overflows and tracks a focused pill index. coco-rs renders
+//!   `[+N more]` as a static tail instead — simpler, no focus state,
+//!   but no way to inspect overflowed pills without entering the
+//!   Teammates view.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -48,18 +40,16 @@ use coco_tui_ui::style::UiStyles;
 /// commit to painting another pill.
 const OVERFLOW_RESERVE: usize = 12;
 
-/// Single-space gap between adjacent pills. TS:
-/// `BackgroundTaskStatus.tsx:154` (`needsSeparator && <Text> </Text>`).
+/// Single-space gap between adjacent pills.
 const PILL_GAP: &str = " ";
 
-/// Prefix marker. TS renders `@{name}` literally — see `AgentPill`
-/// branches (`<Text ...>@{name}</Text>`).
+/// Prefix marker — renders `@{name}` literally.
 const PILL_PREFIX: &str = "@";
 
 /// Per-pill view-model. `label` is the agent's display name (the
-/// `@` prefix is added by the renderer). `is_idle` mirrors TS's
-/// `isIdle` predicate — backgrounded subagents whose status has
-/// reached a terminal value render dimmed.
+/// `@` prefix is added by the renderer). `is_idle` is true for
+/// backgrounded subagents whose status has reached a terminal value
+/// (renders dimmed).
 #[derive(Debug, Clone)]
 pub(crate) struct PillEntry<'a> {
     pub(crate) label: &'a str,
@@ -81,9 +71,7 @@ impl BackgroundPillsView<'_> {
 
 /// Project `AppState` into the pills view-model.
 ///
-/// Inclusion rule mirrors TS `runningTasks.filter(isBackgroundTask)` +
-/// `_temp6 (type === "in_process_teammate")`:
-/// every subagent flagged `is_backgrounded` participates, regardless
+/// Every subagent flagged `is_backgrounded` participates, regardless
 /// of run status — terminal ones render with `is_idle = true`.
 pub(crate) fn build_view(state: &AppState) -> BackgroundPillsView<'_> {
     let pills = state
@@ -142,10 +130,9 @@ impl Widget for BackgroundPills<'_> {
             if i > 0 {
                 spans.push(Span::raw(PILL_GAP));
             }
-            // TS: idle pills use `<Text dimColor>`; running pills use
-            // `<Text color={color}>` with the agent's accent. coco-rs
-            // doesn't yet thread agent-specific colors through, so we
-            // fall back to `text` for running and `dim` for idle.
+            // Idle pills are dim; running pills use the agent's accent
+            // color. Agent-specific colors are not yet threaded through,
+            // so we fall back to `text` for running and `dim` for idle.
             let color = if pill.is_idle {
                 self.styles.dim()
             } else {

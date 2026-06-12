@@ -132,7 +132,7 @@ fn dedupe_dir_styles(
     user: Vec<LoadedDirStyle>,
     project: Vec<LoadedDirStyle>,
 ) -> DirStyleGroups {
-    // TS dedupes physical files before style-name priority is applied,
+    // Dedupe physical files before style-name priority is applied,
     // scanning managed → user → project. This prevents symlinked
     // config dirs from double-loading the same markdown file.
     let mut seen = std::collections::HashSet::new();
@@ -193,10 +193,9 @@ impl OutputStyleManager {
         self.active.as_ref()
     }
 
-    /// All loaded style names in TS catalog order including built-ins.
+    /// All loaded style names in insertion order including built-ins.
     /// Never includes the `default` sentinel — callers that need it
-    /// for the SDK `available_output_styles` field prepend it
-    /// themselves to preserve TS wire shape.
+    /// for the SDK `available_output_styles` field prepend it themselves.
     pub fn names(&self) -> Vec<String> {
         self.aggregated.names()
     }

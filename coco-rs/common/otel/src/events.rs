@@ -1,7 +1,5 @@
 //! Application event catalog for analytics/telemetry.
 //!
-//! TS: services/analytics/ — 37 core Datadog events + 8 OAuth events.
-//!
 //! Each event carries structured attributes emitted via `tracing::info!`
 //! and picked up by the OTel pipeline.
 
@@ -9,8 +7,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 /// Application event types (L3 — application-level analytics).
-///
-/// These mirror the TS `AnalyticsEvent` types from services/analytics/.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppEventType {
@@ -214,8 +210,6 @@ pub fn emit_tool_use(tool_name: &str, duration_ms: i64, success: bool) {
 }
 
 /// Emit a file-history backup-created event.
-///
-/// TS: `tengu_file_history_backup_file_created` (`fileHistory.ts:788`).
 pub fn emit_file_backup_created(file_path: &str, version: i32, file_size: u64) {
     emit_event(
         &AppEvent::new(AppEventType::FileBackupCreated)
@@ -226,8 +220,6 @@ pub fn emit_file_backup_created(file_path: &str, version: i32, file_size: u64) {
 }
 
 /// Emit a file-history snapshot-success event.
-///
-/// TS: `tengu_file_history_snapshot_success` (`fileHistory.ts:330`).
 pub fn emit_file_snapshot_success(tracked_files: usize, snapshot_count: usize) {
     emit_event(
         &AppEvent::new(AppEventType::FileEdit)
@@ -238,8 +230,6 @@ pub fn emit_file_snapshot_success(tracked_files: usize, snapshot_count: usize) {
 }
 
 /// Emit a file-history track-edit-success event.
-///
-/// TS: `tengu_file_history_track_edit_success` (`fileHistory.ts:178`).
 pub fn emit_file_track_edit_success(file: &str, version: i32, is_new_file: bool) {
     emit_event(
         &AppEvent::new(AppEventType::FileEdit)
@@ -251,8 +241,6 @@ pub fn emit_file_track_edit_success(file: &str, version: i32, is_new_file: bool)
 }
 
 /// Emit a file-history rewind-success event.
-///
-/// TS: `tengu_file_history_rewind_success` (`fileHistory.ts:386`).
 pub fn emit_file_rewind_success(tracked_files: usize, files_changed: usize) {
     emit_event(
         &AppEvent::new(AppEventType::FileRewind)
@@ -263,8 +251,6 @@ pub fn emit_file_rewind_success(tracked_files: usize, files_changed: usize) {
 }
 
 /// Emit a file-history rewind-failed event.
-///
-/// TS: `tengu_file_history_rewind_failed` (`fileHistory.ts:391`).
 pub fn emit_file_rewind_failed(reason: &str) {
     emit_event(
         &AppEvent::new(AppEventType::FileRewind)
@@ -273,8 +259,7 @@ pub fn emit_file_rewind_failed(reason: &str) {
     );
 }
 
-/// Emit a conversation-rewind event. TS: `tengu_conversation_rewind`
-/// (`screens/REPL.tsx:3665-3670`). Recorded when the user truncates
+/// Emit a conversation-rewind event. Recorded when the user truncates
 /// the active history via the rewind picker.
 pub fn emit_conversation_rewind(
     pre_count: i64,

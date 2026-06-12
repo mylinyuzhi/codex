@@ -1,7 +1,5 @@
 //! Multi-source MCP config loading and deduplication.
 //!
-//! TS: services/mcp/config.ts — loads from 7 scopes, deduplicates by name.
-//!
 //! Sources checked in order (later overrides earlier by server name):
 //! managed → enterprise → claudeai → project → user → local → dynamic
 
@@ -74,8 +72,6 @@ impl McpConfigLoader {
     }
 
     /// Register Claude.ai org-managed configs (fetched via API at startup).
-    ///
-    /// TS: fetchClaudeAIMcpConfigsIfEligible() in claudeai.ts
     pub fn register_claudeai_configs(
         configs: &[ScopedMcpServerConfig],
         target: &mut Vec<ScopedMcpServerConfig>,

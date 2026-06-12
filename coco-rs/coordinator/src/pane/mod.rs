@@ -1,7 +1,5 @@
 //! Backend traits and detection for teammate execution.
 //!
-//! TS: utils/swarm/backends/types.ts, registry.ts, detection.ts
-//!
 //! Three execution modes:
 //! - **tmux**: Terminal panes visible to leader, supports hide/show
 //! - **iTerm2**: Native split panes with automatic layout
@@ -22,8 +20,6 @@ use coco_types::AgentColorName;
 pub type PaneId = String;
 
 /// Result from creating a teammate pane.
-///
-/// TS: `CreatePaneResult`
 #[derive(Debug, Clone)]
 pub struct CreatePaneResult {
     pub pane_id: PaneId,
@@ -31,8 +27,6 @@ pub struct CreatePaneResult {
 }
 
 /// Result from backend detection.
-///
-/// TS: `BackendDetectionResult`
 #[derive(Debug, Clone)]
 pub struct BackendDetectionResult {
     pub backend_type: BackendType,
@@ -45,8 +39,6 @@ pub struct BackendDetectionResult {
 // ── PaneBackend Trait ──
 
 /// Interface for pane management backends (tmux, iTerm2).
-///
-/// TS: `PaneBackend` in utils/swarm/backends/types.ts
 #[async_trait]
 pub trait PaneBackend: Send + Sync {
     fn backend_type(&self) -> BackendType;
@@ -78,8 +70,6 @@ pub trait PaneBackend: Send + Sync {
     ) -> crate::Result<()>;
 
     /// Enable pane border status display (shows pane titles).
-    ///
-    /// TS: `enablePaneBorderStatus(windowTarget?, useExternalSession?)`
     async fn enable_pane_border_status(&self, window_target: Option<&str>) -> crate::Result<()>;
 
     async fn rebalance_panes(&self, window_target: &str, has_leader: bool) -> crate::Result<()>;
@@ -95,8 +85,6 @@ pub trait PaneBackend: Send + Sync {
 // ── TeammateExecutor Trait ──
 
 /// Configuration for spawning a teammate.
-///
-/// TS: `TeammateSpawnConfig` in utils/swarm/backends/types.ts
 #[derive(Debug, Clone, Default)]
 pub struct TeammateSpawnConfig {
     pub name: String,
@@ -125,8 +113,6 @@ pub struct TeammateSpawnConfig {
 }
 
 /// System prompt assembly mode.
-///
-/// TS: `systemPromptMode?: 'default' | 'replace' | 'append'`
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SystemPromptMode {
     /// System prompt + teammate addendum.
@@ -139,8 +125,6 @@ pub enum SystemPromptMode {
 }
 
 /// Result from spawning a teammate.
-///
-/// TS: `TeammateSpawnResult`
 #[derive(Debug)]
 pub struct TeammateSpawnResult {
     pub success: bool,
@@ -153,8 +137,6 @@ pub struct TeammateSpawnResult {
 }
 
 /// Common interface for teammate execution.
-///
-/// TS: `TeammateExecutor` in utils/swarm/backends/types.ts
 #[async_trait]
 pub trait TeammateExecutor: Send + Sync {
     fn backend_type(&self) -> BackendType;
@@ -185,8 +167,6 @@ pub trait TeammateExecutor: Send + Sync {
 // ── Backend Registry ──
 
 /// Backend registry — detects, caches, and provides backends.
-///
-/// TS: `registry.ts` — detectAndGetBackend, getTeammateExecutor, etc.
 pub struct BackendRegistry {
     detection_result: RwLock<Option<BackendDetectionResult>>,
     in_process_backend: RwLock<Option<Arc<dyn TeammateExecutor>>>,
@@ -227,8 +207,6 @@ impl BackendRegistry {
 
     /// Detect the best available pane backend.
     ///
-    /// TS: `detectAndGetBackend()`
-    ///
     /// Priority:
     /// 1. Inside tmux → use tmux
     /// 2. iTerm2 + it2 CLI → use iTerm2
@@ -263,8 +241,6 @@ impl BackendRegistry {
     }
 
     /// Check if in-process mode is active.
-    ///
-    /// TS: `isInProcessEnabled()`
     pub async fn is_in_process_enabled(&self) -> bool {
         *self.in_process_fallback_active.read().await
     }
@@ -280,8 +256,6 @@ impl BackendRegistry {
     }
 
     /// Get the appropriate teammate executor.
-    ///
-    /// TS: `getTeammateExecutor(preferInProcess?)`
     pub async fn get_teammate_executor(
         &self,
         prefer_in_process: bool,
@@ -297,7 +271,6 @@ impl BackendRegistry {
 
     /// Select a teammate executor using the resolved AgentTeams mode.
     ///
-    /// TS parity:
     /// - `in-process` always returns the in-process executor.
     /// - explicit `tmux` / `iterm2` fail loudly when that backend is
     ///   unavailable or not registered.
@@ -352,8 +325,6 @@ impl BackendRegistry {
     }
 
     /// Get the resolved teammate mode string.
-    ///
-    /// TS: `getResolvedTeammateMode()`
     pub async fn get_resolved_teammate_mode(&self) -> &'static str {
         if *self.in_process_fallback_active.read().await {
             "in-process"
@@ -363,8 +334,6 @@ impl BackendRegistry {
     }
 
     /// Reset all caches (for testing).
-    ///
-    /// TS: `resetBackendDetection()`
     pub async fn reset(&self) {
         *self.detection_result.write().await = None;
         *self.in_process_backend.write().await = None;
@@ -383,21 +352,19 @@ impl Default for BackendRegistry {
 
 /// Check if running inside tmux.
 ///
-/// TS: `isInsideTmuxSync()` — checks TMUX env var captured at load.
+/// Checks TMUX env var captured at load.
 pub fn is_inside_tmux() -> bool {
     StartupPaneEnv::capture().is_inside_tmux()
 }
 
 /// Get the leader's tmux pane ID.
 ///
-/// TS: `getLeaderPaneId()` — returns TMUX_PANE env var.
+/// Returns the TMUX_PANE env var.
 pub fn get_leader_pane_id() -> Option<String> {
     StartupPaneEnv::capture().tmux_pane
 }
 
 /// Check if tmux is available on the system.
-///
-/// TS: `isTmuxAvailable()`
 pub async fn is_tmux_available() -> bool {
     tokio::process::Command::new("tmux")
         .arg("-V")
@@ -407,15 +374,11 @@ pub async fn is_tmux_available() -> bool {
 }
 
 /// Check if running inside iTerm2.
-///
-/// TS: `isInITerm2()`
 pub fn is_in_iterm2() -> bool {
     StartupPaneEnv::capture().is_in_iterm2()
 }
 
 /// Check if the it2 CLI is available.
-///
-/// TS: `isIt2CliAvailable()`
 pub async fn is_it2_cli_available() -> bool {
     tokio::process::Command::new("it2")
         .arg("session")

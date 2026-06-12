@@ -203,13 +203,11 @@ impl ToolBuilder {
 
 /// Type alias for inferring tool input type.
 ///
-/// In TypeScript, this would be: `type InferToolInput<T> = T extends Tool<infer Input, any> ? Input : never;`
 /// In Rust, types are inferred at compile time, so this is primarily for documentation.
 pub type InferToolInput<T> = T;
 
 /// Type alias for inferring tool output type.
 ///
-/// In TypeScript, this would be: `type InferToolOutput<T> = T extends Tool<any, infer Output> ? Output : never;`
 /// In Rust, types are inferred at compile time, so this is primarily for documentation.
 pub type InferToolOutput<T> = T;
 

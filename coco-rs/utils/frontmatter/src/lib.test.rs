@@ -71,7 +71,7 @@ fn test_no_closing_delimiter() {
 
 #[test]
 fn test_nested_mapping() {
-    // serde_yml backing — supports nested objects (TS YAML parity).
+    // serde_yml backing — supports nested objects.
     let input = r#"---
 hooks:
   PreToolUse:
@@ -104,7 +104,7 @@ body"#;
 
 #[test]
 fn test_inline_mapping_in_sequence() {
-    // TS `mcpServers` inline form: `[{name: {…}}]`.
+    // `mcpServers` inline form: `[{name: {…}}]`.
     let input = r#"---
 mcpServers:
   - github
@@ -164,8 +164,8 @@ fn test_empty_frontmatter_block() {
 #[test]
 fn test_yaml_special_chars_auto_quoted() {
     // Values containing YAML-special chars like `*`, `{`, `}` parse as
-    // strings via the TS-style `quoteProblematicValues` retry path
-    // rather than blowing up the whole frontmatter.
+    // strings via the auto-quote retry path rather than blowing up the
+    // whole frontmatter.
     let input = "---\npaths: *.{ts,tsx}, src/**/*.{js,jsx}\nname: glob-skill\n---\nbody";
     let fm = parse(input);
     assert_eq!(fm.data.get("name").unwrap().as_str(), Some("glob-skill"));

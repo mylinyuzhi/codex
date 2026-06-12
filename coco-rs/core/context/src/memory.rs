@@ -1,6 +1,4 @@
 //! Memory file discovery and loading.
-//!
-//! TS: memdir/ — CLAUDE.md management, auto-extraction, session memory.
 
 use serde::Deserialize;
 use serde::Serialize;

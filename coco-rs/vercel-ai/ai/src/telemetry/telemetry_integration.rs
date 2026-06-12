@@ -4,8 +4,7 @@
 //! custom telemetry backends to receive lifecycle events from
 //! generate_text, stream_text, and other functions.
 //!
-//! Uses the same callback event types as user callbacks,
-//! matching the TS SDK design.
+//! Uses the same callback event types as user callbacks.
 
 use crate::generate_text::OnChunkEvent;
 use crate::generate_text::OnFinishEvent;
@@ -21,7 +20,7 @@ use crate::generate_text::StepResult;
 /// All methods have default no-op implementations, so you only need to
 /// implement the events you care about.
 ///
-/// Uses the same event types as user callbacks, matching the TS SDK design.
+/// Uses the same event types as user callbacks.
 #[async_trait::async_trait]
 pub trait TelemetryIntegration: Send + Sync {
     /// Called when generation starts.

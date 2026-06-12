@@ -1,13 +1,12 @@
 //! Destructive command warning patterns.
 //!
-//! TS: `tools/BashTool/destructiveCommandWarning.ts`. This is **purely
-//! informational** — it does NOT affect permission logic or auto-approval.
-//! The returned note is meant for display in the permission-request UI; the
-//! BashTool never denies a command on the basis of these patterns (matching
-//! TS, where the warning rides behind a default-off feature flag).
+//! This is **purely informational** — it does NOT affect permission logic or
+//! auto-approval. The returned note is meant for display in the
+//! permission-request UI; the BashTool never denies a command on the basis of
+//! these patterns (the warning rides behind a default-off feature flag).
 //!
-//! Patterns are word-boundary regexes mirroring TS exactly. The `regex` crate
-//! has no negative-lookahead, so the one TS rule that uses one (`git clean`
+//! Patterns are word-boundary regexes. The `regex` crate has no
+//! negative-lookahead, so the one rule that uses one (`git clean`
 //! force-but-not-dry-run) is expressed as a force-match minus a dry-run match.
 
 use std::sync::LazyLock;
@@ -32,8 +31,8 @@ impl Rule {
     }
 }
 
-/// Ordered destructive-command rules (first match wins), mirroring the TS
-/// `DESTRUCTIVE_PATTERNS` array order and warnings verbatim.
+/// Ordered destructive-command rules (first match wins). Warnings are
+/// informational strings surfaced in the permission-request UI.
 #[allow(clippy::expect_used)] // static init of compile-time-constant patterns
 static RULES: LazyLock<Vec<(Rule, &'static str)>> = LazyLock::new(|| {
     let re = |p: &str| Regex::new(p).expect("valid destructive pattern");

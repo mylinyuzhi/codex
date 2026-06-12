@@ -24,11 +24,10 @@ fn tiers_match_ts_attachment_batches() {
         ReminderTier::UserPrompt
     );
 
-    // TS lists skill_listing in allThreadAttachments, so sub-agents can
-    // still discover available skills.
+    // skill_listing is Core tier so sub-agents can still discover available skills.
     assert_eq!(AttachmentType::SkillListing.tier(), ReminderTier::Core);
 
-    // TS lists IDE state in mainThreadAttachments, not userInputAttachments.
+    // IDE state is MainAgentOnly, not UserPrompt tier.
     assert_eq!(
         AttachmentType::IdeSelection.tier(),
         ReminderTier::MainAgentOnly
@@ -220,9 +219,9 @@ fn coverage_reminder_binding_round_trips_through_attachment_type() {
             );
         };
         let lifted: coco_types::AttachmentKind = at.into();
-        // AgentPendingMessages is a coco-rs synthetic that maps to TS
-        // `queued_command`. Coverage records this at the TS kind; the
-        // generator produces the synthetic Rust type. Accept either.
+        // AgentPendingMessages is a synthetic type that maps to the
+        // `queued_command` wire kind. Coverage records the wire kind;
+        // the generator produces the synthetic type. Accept either.
         let synthetic_ok = matches!(at, crate::types::AttachmentType::AgentPendingMessages)
             && matches!(k, coco_types::AttachmentKind::QueuedCommand);
         assert!(

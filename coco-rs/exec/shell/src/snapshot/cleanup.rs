@@ -1,8 +1,6 @@
 //! Stale shell-snapshot cleanup.
 //!
-//! TS source: `utils/cleanupRegistry.ts` — claude-code registers a cleanup
-//! callback per snapshot, fired at graceful shutdown. Our equivalent has
-//! two parts:
+//! Two parts handle cleanup:
 //!
 //! - **`Drop` on [`ShellSnapshot`](super::ShellSnapshot)** — best-effort
 //!   unlink for the current session's own file when the handle drops.
@@ -11,7 +9,7 @@
 //!   sweep any file older than `retention` that was left behind by a
 //!   previous run that crashed before `Drop` could fire.
 //!
-//! With the TS-aligned naming `snapshot-<shell>-<ts>-<rand>.<ext>`, every
+//! With the naming scheme `snapshot-<shell>-<ts>-<rand>.<ext>`, every
 //! filename is unique across sessions, so we no longer need to special-case
 //! "the active session's file" — mtime alone tells us what's stale.
 

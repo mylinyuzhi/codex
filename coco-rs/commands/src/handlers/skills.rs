@@ -1,8 +1,6 @@
 //! `/skills` — open the editable 4-state override dialog or run the
 //! text subcommand variants.
 //!
-//! TS: `commands/skills/{index.ts,skills.tsx}` is a pure picker — `call(onDone,
-//! context)` takes no args and always renders `<SkillsMenu>` (no `argumentHint`).
 //! coco mirrors that no-arg dialog: the invocation returns a
 //! [`crate::CommandResult::OpenDialog`] carrying a fully-built
 //! [`coco_types::SkillsDialogPayload`] with every row pre-populated:
@@ -10,7 +8,7 @@
 //! and `lock` — the TUI consumer renders without recomputing.
 //!
 //! Sub-commands (`list` / `show <name>` / `paths`) are a coco-only extension on
-//! top of the TS picker — text output so SDK / headless / scripted callers get
+//! top of the picker — text output so SDK / headless / scripted callers get
 //! a flat enumeration they can parse.
 
 use std::path::Path;
@@ -87,9 +85,9 @@ impl CommandHandler for SkillsHandler {
 /// catalog, populating every per-row override field so the dialog
 /// can render + save without round-tripping to the handler.
 ///
-/// **Bundled skills appear in the dialog** — TS 2.1.142 `xJ4` shows
-/// them with the `built-in` source label and they're not locked, so
-/// the user can disable a noisy bundled skill via `/skills`.
+/// **Bundled skills appear in the dialog** — shown with the `built-in`
+/// source label and not locked, so the user can disable a noisy bundled
+/// skill via `/skills`.
 ///
 /// **Conditional (`paths`-gated) skills appear too** — they sit in
 /// `SkillManager.disk_conditional` until activated by a matching
@@ -237,10 +235,10 @@ fn render(args: &str, config_home: &Path, cwd: &Path) -> crate::Result<String> {
         "show" => render_show(&manager, rest),
         "paths" => render_paths(config_home, cwd),
         // `/skills <name>` is a UX shorthand for `/skills show <name>`.
-        // TS doesn't expose this — its `<SkillsMenu>` is read-only and
-        // skills are invoked by typing `/<name>` directly. We accept the
-        // shorthand so the flat-text path matches `/agents <name>` and
-        // saves a keystroke; users still invoke a skill via `/<name>`.
+        // The skills menu is read-only; skills are invoked by typing `/<name>`
+        // directly. We accept the shorthand so the flat-text path matches
+        // `/agents <name>` and saves a keystroke; users still invoke a
+        // skill via `/<name>`.
         other if manager.get(other).is_some() => render_show(&manager, other),
         other => format!(
             "Unknown /skills subcommand: {other}\n\nUsage: /skills [list|show <name>|paths]\nTo run a skill, type /<skill-name>."

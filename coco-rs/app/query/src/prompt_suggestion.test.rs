@@ -50,8 +50,6 @@ fn test_clear_drops_suggestion() {
 
 #[test]
 fn test_system_prompt_byte_faithful_with_ts() {
-    // SUGGESTION_PROMPT must remain byte-faithful with TS
-    // services/PromptSuggestion/promptSuggestion.ts:258-287.
     // Length pin guards against accidental drift.
     let prompt = SUGGESTION_PROMPT;
     assert!(
@@ -69,9 +67,9 @@ fn test_system_prompt_byte_faithful_with_ts() {
 
 #[test]
 fn test_constants_match_ts() {
-    // Pin TS PR #18143 incident: parent uncached threshold is 10k.
+    // Parent uncached threshold is 10k.
     assert_eq!(MAX_PARENT_UNCACHED_TOKENS, 10_000);
-    // 18 single-word allow-list (TS:403-424).
+    // 17 single-word allow-list entries.
     assert_eq!(ALLOWED_SINGLE_WORDS.len(), 17);
     assert!(ALLOWED_SINGLE_WORDS.contains(&"yes"));
     assert!(ALLOWED_SINGLE_WORDS.contains(&"commit"));
@@ -330,8 +328,8 @@ fn test_filter_rule_done() {
 
 #[test]
 fn test_filter_rule_meta_text() {
-    // TS: `meta_text` rule — TS:372-380 — `\bstay(s|ing)? silent\b`
-    // (no past-tense "stayed silent" form, matching TS verbatim).
+    // `meta_text` rule — `\bstay(s|ing)? silent\b`
+    // (no past-tense "stayed silent" form).
     let cases = [
         "nothing found",
         "nothing found.",
@@ -526,7 +524,7 @@ fn test_filter_accepts_normal_user_input() {
 fn test_get_suggestion_suppress_reason_priority_order() {
     let mut ctx = ctx_default();
     ctx.disabled = true;
-    ctx.pending_permission = true; // Both set — disabled wins (first in TS order).
+    ctx.pending_permission = true; // Both set — disabled wins (first in order).
     assert_eq!(
         get_suggestion_suppress_reason(&ctx),
         Some(SuppressReason::Disabled)

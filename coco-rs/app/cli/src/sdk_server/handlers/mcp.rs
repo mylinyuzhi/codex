@@ -18,9 +18,6 @@ use super::HandlerResult;
 /// If an `McpConnectionManager` is wired, returns the actual connection
 /// state for every registered server. Otherwise returns an empty list
 /// (persistence disabled).
-///
-/// TS reference: `SDKControlMcpStatusResponseSchema`
-/// (controlSchemas.ts:165-173).
 pub(super) async fn handle_mcp_status(ctx: &HandlerContext) -> HandlerResult {
     let manager = {
         let manager_slot = ctx.state.mcp_manager.read().await;
@@ -157,8 +154,8 @@ async fn register_server_tools(
 
 /// Surface the per-server `mcp__<server>__authenticate` pseudo-tool for a
 /// NeedsAuth server in the shared `ToolRegistry`. Mirrors
-/// [`register_server_tools`] but registers the auth affordance instead of real
-/// tools (TS: `processServer` surfacing `[createMcpAuthTool(...)]`).
+/// [`register_server_tools`] but registers the auth affordance instead
+/// of real tools.
 async fn register_server_auth_tool(
     ctx: &HandlerContext,
     server_name: &str,
@@ -205,9 +202,9 @@ async fn deregister_server_tools(ctx: &HandlerContext, server_name: &str) {
 /// (`ServerRequest::RequestElicitation` →
 /// `ClientRequest::ElicitationResolve` synchronous reply). When a
 /// session runtime with a hook registry is wired, we wrap the closure
-/// so `Elicitation` / `ElicitationResult` hooks fire first — TS parity
-/// (`elicitationHandler.ts:91-107`). A hook can program-respond with
-/// accept/decline and short-circuit the bridge entirely.
+/// so `Elicitation` / `ElicitationResult` hooks fire first — a hook
+/// can program-respond with accept/decline and short-circuit the
+/// bridge entirely.
 async fn build_send_elicitation(
     ctx: &HandlerContext,
     server_name: &str,
@@ -273,11 +270,8 @@ pub(crate) async fn build_send_elicitation_for_state(
 /// Allocates a fresh `request_id`, serializes the rmcp `Elicitation`
 /// payload, sends a `ServerRequest::RequestElicitation` via the
 /// transport, awaits the client's response, and maps the result back to
-/// the rmcp [`coco_mcp::ElicitationResponse`] shape.
-///
-/// TS parity: `cli/structuredIO.ts::createStructuredIOQueryConfig` —
-/// the SDK client is the ultimate authority for MCP elicitations in
-/// SDK mode.
+/// the rmcp [`coco_mcp::ElicitationResponse`] shape. The SDK client is
+/// the ultimate authority for MCP elicitations in SDK mode.
 async fn bridge_elicitation_to_sdk_client(
     state: &Arc<super::SdkServerState>,
     server_name: &str,

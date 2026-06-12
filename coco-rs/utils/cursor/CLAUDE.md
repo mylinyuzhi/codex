@@ -2,9 +2,6 @@
 
 TUI text cursor with kill ring, word movement, and UTF-8 safe indexing.
 
-## TS Source
-- `utils/Cursor.ts` (~1530 LOC — full cursor state machine + kill ring)
-
 ## Key Types
 | Type | Purpose |
 |------|---------|

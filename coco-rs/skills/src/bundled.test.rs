@@ -3,7 +3,7 @@ use coco_types::Features;
 
 #[test]
 fn catalog_includes_formerly_ant_skills() {
-    // coco-rs drops the TS `USER_TYPE === 'ant'` gate: these general-purpose
+    // coco-rs drops the `USER_TYPE === 'ant'` gate: these general-purpose
     // skills are available to every user, alongside the always-on set.
     let skills = get_bundled_skills();
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
@@ -28,7 +28,7 @@ fn catalog_includes_formerly_ant_skills() {
 
 #[test]
 fn no_rust_only_extras() {
-    // commit/review-pr/pdf were removed in Round 11 — TS does not ship them as bundled.
+    // commit/review-pr/pdf were removed in Round 11 — not shipped as bundled skills.
     let skills = get_bundled_skills();
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
     assert!(!names.contains(&"commit"));

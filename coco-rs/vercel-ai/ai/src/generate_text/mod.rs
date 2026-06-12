@@ -47,16 +47,16 @@ pub use callback::OnToolCallStartEvent;
 pub use callback::StreamTextCallbacks;
 pub use callback::ToolCallOutcome;
 
-// TS-parity event type aliases (TS SDK renamed these in a later version)
-/// Preferred name for [`OnStartEvent`] (TS SDK: `GenerateTextStartEvent`).
+// Event type aliases (alternate names used in the spec)
+/// Preferred name for [`OnStartEvent`].
 pub type GenerateTextStartEvent = callback::OnStartEvent;
-/// Preferred name for [`OnStepStartEvent`] (TS SDK: `GenerateTextStepStartEvent`).
+/// Preferred name for [`OnStepStartEvent`].
 pub type GenerateTextStepStartEvent = callback::OnStepStartEvent;
-/// Preferred name for [`OnStepFinishEvent`] (TS SDK: `GenerateTextStepEndEvent`).
+/// Preferred name for [`OnStepFinishEvent`].
 pub type GenerateTextStepEndEvent = callback::OnStepFinishEvent;
-/// Preferred name for [`OnFinishEvent`] (TS SDK: `GenerateTextEndEvent`).
+/// Preferred name for [`OnFinishEvent`].
 pub type GenerateTextEndEvent = callback::OnFinishEvent;
-/// Preferred name for [`OnChunkEvent`] (TS SDK: `StreamTextChunkEvent`).
+/// Preferred name for [`OnChunkEvent`].
 pub type StreamTextChunkEvent = callback::OnChunkEvent;
 
 // collect_tool_approvals

@@ -5,10 +5,9 @@
 //! raw `arguments` / `input_json` string into a `serde_json::Value`
 //! for [`vercel_ai_provider::ToolCallPart`].
 //!
-//! **Coco-rs-specific deviation from upstream `@ai-sdk/provider-utils`.**
-//! The TypeScript SDK uses bare `JSON.parse`. This crate exposes
-//! aggressive repair (markdown fence stripping, single-quote → double-
-//! quote conversion, trailing-comma fix, Python literal mapping,
+//! **Coco-rs-specific deviation from upstream `@ai-sdk/provider-utils`:**
+//! exposes aggressive repair (markdown fence stripping, single-quote →
+//! double-quote conversion, trailing-comma fix, Python literal mapping,
 //! truncation completion) because coco-rs targets diverse OpenAI-
 //! compatible endpoints (GLM, Doubao, DeepSeek, Groq, xAI, Ollama)
 //! whose tool-call argument strings are messier than first-party
@@ -22,8 +21,7 @@
 //!
 //! Adapters that fail this call fall back to `Value::Object({})` (not
 //! `invalid = true`) so the schema-validation schema validator reports the
-//! missing fields specifically. Mirrors TS Claude Code's
-//! `parsed ?? {}` fallback in `utils/messages.ts:2694`.
+//! missing fields specifically.
 //!
 //! Parallel implementation: `coco-utils-json-repair` lives one layer
 //! higher (`utils/`) and is used by `app/query` for schema-validation work; we
@@ -77,13 +75,12 @@ pub fn parse_with_repair(raw: &str) -> Result<(Value, RepairOutcome), String> {
 ///    AND the raw bytes can be echoed back to the LLM if the agent
 ///    loop wants to reflect the malformed input verbatim.
 ///
-/// **Coco-rs deviation from TS Claude Code's `parsed ?? {}`
-/// (`utils/messages.ts:2694`)**: TS substitutes `{}` so the LLM
-/// gets a "missing required field" reply on the next turn; coco-rs
-/// keeps the raw string so the validator + telemetry have full
-/// signal. The trade-off chosen here favours diagnosability and
-/// model-side context: the raw output is visible to whatever path
-/// builds the final `<tool_use_error>` body.
+/// **Coco-rs deviation**: some adapters substitute `{}` on failure so the
+/// LLM gets a "missing required field" reply on the next turn; coco-rs
+/// keeps the raw string so the validator + telemetry have full signal.
+/// The trade-off favours diagnosability and model-side context: the raw
+/// output is visible to whatever path builds the final
+/// `<tool_use_error>` body.
 ///
 /// Emits a `warn!` on both repair-assisted parses and total
 /// failures so ops can monitor real-world repair frequency without

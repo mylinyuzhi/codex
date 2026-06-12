@@ -1,8 +1,5 @@
 //! `generateToolUseSummary` side-fork (`ModelRole::Fast`).
 //!
-//! TS source: `services/toolUseSummary/toolUseSummaryGenerator.ts` (~113 LOC)
-//! and the spawn/await sites in `query.ts:1411-1482` + `query.ts:1055-1060`.
-//!
 //! Spawns a fire-and-forget call against `ModelRole::Fast` after each
 //! tool batch to produce a ≤30-char "git-commit-subject"-style label.
 //! The label drives the mobile-app one-line progress row that summarizes
@@ -10,26 +7,24 @@
 //!
 //! # Multi-LLM mapping
 //!
-//! TS hardcodes `queryHaiku()`. In coco-rs's multi-provider port the
-//! equivalent is `ModelRole::Fast`, resolved via the shared
-//! `ModelRuntimeRegistry`. For Anthropic users this maps to Haiku; for OpenAI
-//! to `gpt-4o-mini` (or whatever the user configured); for Google to
-//! Gemini Flash. **Never hardcode `"Haiku"` or any provider-specific
-//! model id here** — the resolver is the only entry point.
+//! `ModelRole::Fast` is resolved via the shared `ModelRuntimeRegistry`.
+//! For Anthropic users this maps to Haiku; for OpenAI to `gpt-4o-mini`
+//! (or whatever the user configured); for Google to Gemini Flash.
+//! **Never hardcode `"Haiku"` or any provider-specific model id here** —
+//! the resolver is the only entry point.
 //!
 //! # Never-throws contract
 //!
 //! Tool-use summary is non-critical UX polish. Every error path
 //! returns `None` and logs at `tracing::debug` — the parent turn
-//! must never observe a failure. TS parity: `.then(...).catch(() => null)`.
+//! must never observe a failure.
 //!
 //! # Gating
 //!
 //! The caller must enforce:
-//! 1. `Feature::ToolUseSummary` enabled (TS `config.gates.emitToolUseSummaries`)
-//! 2. `agent_id.is_none()` (TS `!toolUseContext.agentId` — subagents don't
-//!    surface in the mobile UI, so the Fast-tier call would burn tokens
-//!    for nothing)
+//! 1. `Feature::ToolUseSummary` enabled
+//! 2. `agent_id.is_none()` — subagents don't surface in the mobile UI,
+//!    so the Fast-tier call would burn tokens for nothing
 //! 3. tool batch non-empty
 //!
 //! If any gate fails, do not call `generate_tool_use_summary`.
@@ -57,10 +52,7 @@ use coco_llm_types::UserContentPart;
 use coco_types::ModelRole;
 use coco_types::ToolUseSummaryParams;
 
-/// System prompt — byte-for-byte port of TS
-/// `toolUseSummaryGenerator.ts:15-24`. Do not edit without updating
-/// TS too; the two prompts are versioned together so the same model
-/// behavior is observed across the TS↔Rust port.
+/// System prompt for the tool-use-summary side-fork.
 const TOOL_USE_SUMMARY_SYSTEM_PROMPT: &str = "Write a short summary label describing what these tool calls accomplished. It appears as a single-line row in a mobile app and truncates around 30 characters, so think git-commit-subject, not sentence.
 
 Keep the verb in past tense and the most distinctive noun. Drop articles, connectors, and long location context first.
@@ -73,22 +65,19 @@ Examples:
 - Ran failing tests";
 
 /// `lastAssistantText` is truncated to 200 chars before being included
-/// in the user prompt. Matches TS `query.ts:1432-1434` (slice(0, 200)).
+/// in the user prompt.
 const LAST_ASSISTANT_TEXT_MAX: usize = 200;
 
-/// Per-field truncation cap for serialized tool input/output. Matches
-/// TS `truncateJson(value, 300)` at `toolUseSummaryGenerator.ts:59-60`.
+/// Per-field truncation cap for serialized tool input/output.
 const TOOL_FIELD_TRUNCATE: usize = 300;
 
 /// 10 second hard cap on the side-fork. The summary is non-critical,
 /// so a slow Fast-tier model gets cancelled rather than dragging the
-/// next iteration. TS has no explicit timeout (relies on
-/// `signal: toolUseContext.abortController.signal`); coco-rs uses a
-/// concrete timeout to avoid orphaning tasks when the parent cancels.
+/// next iteration. Uses a concrete timeout to avoid orphaning tasks
+/// when the parent cancels.
 const TOOL_USE_SUMMARY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One tool's worth of summary input. Matches TS `ToolInfo` at
-/// `toolUseSummaryGenerator.ts:26-30`.
+/// One tool's worth of summary input.
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
     /// Tool name as it appears in the model's tool_use block.
@@ -113,7 +102,7 @@ pub struct ToolUseSummaryInput {
     /// Last text-typed block from the most recent assistant message.
     /// Provides "user intent" context to the summarizer. Truncated to
     /// [`LAST_ASSISTANT_TEXT_MAX`] before being injected into the user
-    /// prompt — matches TS `query.ts:1432-1434`.
+    /// prompt.
     pub last_assistant_text: Option<String>,
 }
 
@@ -128,14 +117,12 @@ impl ToolUseSummaryInput {
 ///
 /// Walks the history in reverse to find the most recent assistant
 /// message. Extracts that message's text parts (for
-/// `last_assistant_text` — TS `query.ts:1422-1434`) and tool-call
-/// parts (for `tools` + `preceding_tool_use_ids`). Then walks forward
-/// from the assistant to gather matching tool-result content (output).
+/// `last_assistant_text`) and tool-call parts (for `tools` +
+/// `preceding_tool_use_ids`). Then walks forward from the assistant to
+/// gather matching tool-result content (output).
 ///
 /// Returns `None` if no assistant message exists or it has no tool
 /// calls — in either case there's nothing to summarize.
-///
-/// TS counterpart: inline scan at `query.ts:1437-1466`.
 pub fn build_input_from_history<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
 ) -> Option<ToolUseSummaryInput> {
@@ -162,10 +149,8 @@ pub fn build_input_from_history<M: std::borrow::Borrow<coco_messages::Message>>(
     for part in assistant_content {
         match part {
             AssistantContentPart::Text(t) => {
-                // TS picks the LAST text block — `textBlocks.at(-1)` at
-                // query.ts:1429. Loop overwrites so the final assignment
-                // wins, matching that semantics for multi-text assistant
-                // messages.
+                // Loop overwrites so the final assignment wins —
+                // the last text block is the "user intent" snippet.
                 last_text = Some(t.text.clone());
             }
             AssistantContentPart::ToolCall(tc) => {
@@ -336,10 +321,8 @@ fn build_prompt(input: &ToolUseSummaryInput) -> Vec<LlmMessage> {
 
     if let Some(text) = input.last_assistant_text.as_deref() {
         let prefix = if text.chars().count() > LAST_ASSISTANT_TEXT_MAX {
-            // Char-boundary safe truncation. `String.slice(0, 200)` in
-            // TS is code-unit based but our prompts are short ASCII in
-            // practice; chars() is the safe Rust equivalent that won't
-            // panic on multi-byte UTF-8.
+            // Char-boundary safe truncation; chars() won't panic on
+            // multi-byte UTF-8.
             text.chars()
                 .take(LAST_ASSISTANT_TEXT_MAX)
                 .collect::<String>()
@@ -378,9 +361,8 @@ fn build_prompt(input: &ToolUseSummaryInput) -> Vec<LlmMessage> {
 }
 
 /// Truncate a `serde_json::Value`'s string representation to
-/// `max_len` chars. Mirrors TS `truncateJson` at
-/// `toolUseSummaryGenerator.ts:102-112` — caller-side guard so the
-/// model never sees pathologically large tool outputs.
+/// `max_len` chars — caller-side guard so the model never sees
+/// pathologically large tool outputs.
 fn truncate_json(value: &serde_json::Value, max_len: usize) -> String {
     let s = match serde_json::to_string(value) {
         Ok(s) => s,

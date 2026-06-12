@@ -1,14 +1,9 @@
-//! Output style catalog types — TS `OutputStyleConfig` mirror.
-//!
-//! TS source: `constants/outputStyles.ts:11-27`.
+//! Output style catalog types.
 
 use serde::Deserialize;
 use serde::Serialize;
 
 /// A single output style definition.
-///
-/// Mirrors the TS `OutputStyleConfig` exactly, including the optional
-/// `keep_coding_instructions` and plugin-only `force_for_plugin` flags.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OutputStyleConfig {
     /// Display name. Used both as the catalog key and shown in pickers
@@ -19,10 +14,8 @@ pub struct OutputStyleConfig {
     /// Short description shown in `/config` and the picker.
     pub description: String,
 
-    /// The system-prompt body injected when this style is active. For
-    /// the sentinel `default` style this is empty (the TS catalog
-    /// stores `null`; we keep an empty `OutputStyleConfig` consumers
-    /// never pass into the prompt builder, so the prompt section stays
+    /// The system-prompt body injected when this style is active. Empty
+    /// for the sentinel `default` style (so the prompt section stays
     /// absent when no style is active — see [`builtin::builtin_styles`]).
     pub prompt: String,
 
@@ -31,24 +24,19 @@ pub struct OutputStyleConfig {
 
     /// When `Some(true)`, the standard "Doing tasks" coding instructions
     /// stay on top of this style. When `Some(false)` or `None`, the
-    /// style fully replaces them. TS frontmatter key:
-    /// `keep-coding-instructions`.
+    /// style fully replaces them. Frontmatter key: `keep-coding-instructions`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_coding_instructions: Option<bool>,
 
     /// Plugin-only: when `Some(true)`, the style is force-applied as
     /// long as the plugin is enabled, overriding `settings.output_style`.
-    /// TS frontmatter key: `force-for-plugin`. Parsed-but-ignored on
+    /// Frontmatter key: `force-for-plugin`. Parsed-but-ignored on
     /// non-plugin sources (with a warning in the dir loader).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force_for_plugin: Option<bool>,
 }
 
 /// Where this output style came from.
-///
-/// TS source: the discriminator on `OutputStyleConfig.source`,
-/// `'built-in' | 'plugin' | SettingSource` where `SettingSource` is one
-/// of `policySettings` / `userSettings` / `projectSettings`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum OutputStyleSource {
@@ -66,12 +54,8 @@ pub enum OutputStyleSource {
 
 impl OutputStyleSource {
     /// Aggregation priority — higher value wins when names collide.
-    ///
-    /// TS `getAllOutputStyles` adds groups in order
-    /// `[plugin, user, project, managed]` after built-ins, so a
-    /// later-added group overwrites an earlier one. We translate that
-    /// into a numeric priority for explicit ordering inside
-    /// [`crate::resolver::aggregate`].
+    /// Built-ins are lowest priority; groups are layered `plugin → user →
+    /// project → managed` with managed being highest.
     pub const fn priority(self) -> u8 {
         match self {
             Self::BuiltIn => 0,

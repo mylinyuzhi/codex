@@ -1,20 +1,16 @@
 //! Slash-command suggestion ranker.
 //!
 //! Pure function over a `query` plus a snapshot of `SlashCommandInfo`s.
-//! TS source: `src/utils/suggestions/commandSuggestions.ts` —
-//! `generateCommandSuggestions` builds a Fuse.js index but then layers
-//! a hand-written priority hierarchy on top so prefix matches always
-//! beat fuzzy hits. The Rust port skips Fuse entirely: the registry
-//! holds at most ~100 commands and a hand-rolled ranker matches TS
-//! behaviour more tightly than a fuzzy library would.
+//! The implementation skips Fuse entirely: the registry holds at most ~100
+//! commands and a hand-rolled ranker with an explicit priority hierarchy
+//! ensures prefix matches always beat fuzzy hits.
 //!
 //! ## Empty query — source-aware grouping
 //!
-//! When the user has typed just `/` (no query yet), TS first lifts
-//! the top-5 frequently-used skills out of the alphabetical list
-//! (`getSkillUsageScore` → `recentlyUsed.slice(0, 5)`), then groups
-//! everything else by source in this order: builtin → user → project
-//! → policy → other. Usage scores travel with the snapshot
+//! When the user has typed just `/` (no query yet), the top-5
+//! frequently-used skills are lifted out of the alphabetical list, then
+//! everything else is grouped by source in this order: builtin → user →
+//! project → policy → other. Usage scores travel with the snapshot
 //! ([`SlashCommandInfo::usage_score`]) — the ranker never touches the
 //! filesystem on the hot popup path; the agent driver populates them
 //! at snapshot time via [`coco_skills::usage::load_all`].
@@ -33,14 +29,14 @@
 //!
 //! Within a priority bucket, shorter names sort first so `/help`
 //! outranks `/help-extra` when the user types `/h`. Usage score
-//! breaks remaining ties (TS `b.usage - a.usage` after Fuse score).
+//! breaks remaining ties (usage score descending).
 //!
 //! ## Source suffix on description
 //!
 //! Every popup row's description is annotated with the command's
 //! origin — `(plugin-name) text`, `text (bundled)`, `text (user)`,
 //! `text (project)`, `text (policy)`. Builtin and MCP commands have
-//! no suffix. Mirrors TS `formatDescriptionWithSource`.
+//! no suffix.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -51,8 +47,7 @@ use coco_types::CommandTypeTag;
 use crate::state::SlashCommandInfo;
 use crate::widgets::suggestion_popup::SuggestionItem;
 
-/// How many "recently used" skills float to the top of the empty-query
-/// list. TS: `commandsWithScores.slice(0, 5)`.
+/// How many "recently used" skills float to the top of the empty-query list.
 const RECENT_LIMIT: usize = 5;
 
 /// Rank a snapshot of slash commands against `query` and return popup
@@ -66,14 +61,13 @@ pub fn rank(query: &str, commands: &[SlashCommandInfo]) -> Vec<SuggestionItem> {
     }
 }
 
-/// Source bucket order used by the empty-query layout. Mirrors TS
-/// concatenation order:
+/// Source bucket order used by the empty-query layout:
 /// `[recently used] → builtin → user → project → policy → other`.
 fn empty_bucket(cmd: &SlashCommandInfo) -> EmptyBucket {
     if cmd.kind != CommandTypeTag::Prompt {
-        // Local / LocalOverlay commands are the "builtin" surface in
-        // TS, regardless of where the underlying handler lives. Skill-
-        // backed prompt commands group by `source`.
+        // Local / LocalOverlay commands are always in the Builtin surface
+        // regardless of where the underlying handler lives. Skill-backed
+        // prompt commands group by `source`.
         return EmptyBucket::Builtin;
     }
     match &cmd.source {
@@ -168,9 +162,9 @@ fn rank_filtered(query: &str, commands: &[SlashCommandInfo]) -> Vec<SuggestionIt
 }
 
 /// Build a popup row from a command snapshot. Description carries the
-/// optional `argument_hint` in front of the prose, and a source-tag
-/// suffix at the back so users can see provenance (plugin / user /
-/// project / policy / bundled).
+/// optional `argument_hint` in front of the prose, and a source-tag suffix
+/// at the back so users can see provenance (plugin / user / project / policy
+/// / bundled).
 fn to_item(cmd: &SlashCommandInfo) -> SuggestionItem {
     SuggestionItem {
         label: format!("/{}", cmd.name),
@@ -181,12 +175,8 @@ fn to_item(cmd: &SlashCommandInfo) -> SuggestionItem {
 
 /// Compose the description shown next to the command label.
 ///
-/// TS `commandSuggestions.ts:273-278` weaves three pieces into the
-/// description:
-///   `[argument_hint]  formatDescriptionWithSource(cmd)`
-///
-/// We replicate the same composition: argument hint up front, base
-/// description in the middle, source/plugin annotation at the tail.
+/// Three pieces: argument hint up front, base description in the middle,
+/// source/plugin annotation at the tail.
 fn build_description(cmd: &SlashCommandInfo) -> Option<String> {
     let base = source_annotated_description(cmd);
     match (cmd.argument_hint.as_deref(), base) {
@@ -197,8 +187,7 @@ fn build_description(cmd: &SlashCommandInfo) -> Option<String> {
     }
 }
 
-/// TS `formatDescriptionWithSource` — wraps the bare description with
-/// a provenance suffix or plugin prefix:
+/// Wraps the bare description with a provenance suffix or plugin prefix:
 ///
 /// - `plugin` with name  → `"(plugin-name) text"`
 /// - `plugin` no name    → `"text (plugin)"`
@@ -208,9 +197,8 @@ fn build_description(cmd: &SlashCommandInfo) -> Option<String> {
 /// - `policy`            → `"text (policy)"`
 /// - `builtin` / `mcp` / unknown → unchanged
 ///
-/// Builtin and MCP intentionally have no suffix in TS — those
-/// surfaces are the user's expected default, so the suffix would be
-/// noise. We preserve that.
+/// Builtin and MCP intentionally have no suffix — those surfaces are the
+/// user's expected default, so the suffix would be noise.
 fn source_annotated_description(cmd: &SlashCommandInfo) -> Option<String> {
     let base = cmd.description.as_deref().unwrap_or("");
     let suffix_only_view = base.is_empty();
@@ -229,8 +217,8 @@ fn source_annotated_description(cmd: &SlashCommandInfo) -> Option<String> {
         Some(CommandSource::Project) => format_with_suffix(base, "project"),
         Some(CommandSource::Managed) => format_with_suffix(base, "policy"),
         Some(CommandSource::Skills) | Some(CommandSource::CommandsDeprecated) => {
-            // TS treats both as "skills"-class user-installed skills;
-            // they originate from the user's settings directory tree.
+            // Both are user-installed skills that originate from the
+            // user's settings directory tree.
             format_with_suffix(base, "user")
         }
         Some(CommandSource::Builtin) | Some(CommandSource::Mcp { .. }) | None => {
@@ -300,12 +288,9 @@ fn classify(needle: &str, cmd: &SlashCommandInfo) -> Option<Priority> {
 /// keeps the fallback typo-friendly (`clr` → `clear`, span 5 vs needle 3)
 /// while rejecting wildly-spread matches like `abc` → `build-and-clear`.
 ///
-/// Both inputs must already be lowercased.
-///
-/// TS parity: stands in for Fuse.js `threshold: 0.3`. Fuse penalises
-/// matches by edit-distance; the explicit span cap here gives a
-/// similar "don't reach too far" guarantee without pulling in a fuzzy
-/// library for ~80 commands.
+/// Both inputs must already be lowercased. The explicit span cap gives a
+/// "don't reach too far" guarantee without pulling in a fuzzy library for
+/// ~80 commands.
 fn is_tight_subsequence(needle: &str, haystack: &str) -> bool {
     let needle_chars: Vec<char> = needle.chars().collect();
     if needle_chars.is_empty() {

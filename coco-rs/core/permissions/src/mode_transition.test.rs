@@ -143,7 +143,7 @@ fn test_transition_plan_to_plan_no_stash() {
     assert_eq!(result.pre_plan_mode, Some(PermissionMode::Default));
 }
 
-// ── resolve_subagent_mode (TS runAgent.ts:412-434 parity) ──
+// ── resolve_subagent_mode ──
 
 #[test]
 fn subagent_inherits_parent_default_when_no_request() {
@@ -202,8 +202,7 @@ fn subagent_request_ignored_when_parent_auto() {
 
 #[test]
 fn auto_transition_clears_stash_on_leaving_auto() {
-    // TS parity: `permissionSetup.ts:627-637` restores dangerous
-    // permissions (clears the stash) when the classifier exits.
+    // Restores dangerous permissions (clears the stash) when the classifier exits.
     let mut state = coco_types::ToolAppState {
         stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
         ..Default::default()

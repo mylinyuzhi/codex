@@ -8,7 +8,7 @@ use serde::Serialize;
 
 /// A warning returned by the provider or model.
 ///
-/// This matches the TypeScript `SharedV4Warning` type from the Vercel AI SDK v4 spec.
+/// Matches the `SharedV4Warning` type from the Vercel AI SDK v4 spec.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[non_exhaustive]

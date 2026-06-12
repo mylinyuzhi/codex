@@ -1,8 +1,7 @@
 //! SendUserMessageTool — sends structured messages to the user with optional file attachments.
 //!
-//! TS: `tools/BriefTool/BriefTool.ts`. Status distinguishes normal
-//! replies from proactive (unsolicited) updates so the UI can render
-//! them differently.
+//! Status distinguishes normal replies from proactive (unsolicited)
+//! updates so the UI can render them differently.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -18,11 +17,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Short model-facing label — TS parity: `BriefTool/prompt.ts::DESCRIPTION`.
+/// Short model-facing label.
 const SEND_USER_MESSAGE_DESCRIPTION: &str = "Send a message to the user";
 
-/// Full model-facing tool prompt — TS parity:
-/// `BriefTool/prompt.ts::BRIEF_TOOL_PROMPT`.
+/// Full model-facing tool prompt.
 const SEND_USER_MESSAGE_TOOL_PROMPT: &str = "Send a message the user will read. Text outside this tool is visible in the detail view, but most won't open it — the answer lives here.
 
 `message` supports markdown. `attachments` takes file paths (absolute or cwd-relative) for images, diffs, logs.
@@ -31,8 +29,7 @@ const SEND_USER_MESSAGE_TOOL_PROMPT: &str = "Send a message the user will read. 
 
 /// Message intent — controls how the UI renders the message.
 ///
-/// TS parity: `BriefTool.ts` `status: z.enum(['normal', 'proactive'])`.
-/// Wire format stays lowercase (matches TS).
+/// Wire format stays lowercase.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SendUserMessageStatus {
@@ -84,8 +81,7 @@ pub struct SendUserMessageOutput {
     pub status: SendUserMessageStatus,
     pub attachments: Vec<SendUserMessageAttachment>,
     /// Millisecond Unix timestamp captured at delivery time, encoded
-    /// as a decimal string (mirrors TS where JS numbers can't safely
-    /// represent ms-precision Unix timestamps).
+    /// as a decimal string to avoid floating-point precision loss.
     pub timestamp: String,
 }
 
@@ -110,9 +106,8 @@ impl Tool for SendUserMessageTool {
     fn description(&self, _input: &SendUserMessageInput, _options: &DescriptionOptions) -> String {
         SEND_USER_MESSAGE_DESCRIPTION.into()
     }
-    /// TS parity: `BriefTool.ts::prompt()` → `BRIEF_TOOL_PROMPT`. The
-    /// model's tool description is sourced from `prompt()`, not the short
-    /// `description()` UI label.
+    /// The model's tool description is sourced from `prompt()`, not the
+    /// short `description()` UI label.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         SEND_USER_MESSAGE_TOOL_PROMPT.to_string()
     }
@@ -130,14 +125,12 @@ impl Tool for SendUserMessageTool {
         true
     }
 
-    /// TS `BriefTool.ts`: `isConcurrencySafe() { return true }`. These
-    /// messages are a side-channel to the user — multiple messages in the
-    /// same turn are independent and stamped with their own timestamps.
+    /// These messages are a side-channel to the user — multiple messages in
+    /// the same turn are independent and stamped with their own timestamps.
     fn is_concurrency_safe(&self, _input: &SendUserMessageInput) -> bool {
         true
     }
 
-    /// TS parity: `BriefTool.ts::mapToolResultToToolResultBlockParam`.
     /// The model only needs the delivery confirmation; the message body
     /// + attachments + timestamp are TUI/state concerns and would waste
     /// tokens if JSON-stringified for the model.
@@ -153,10 +146,9 @@ impl Tool for SendUserMessageTool {
         }]
     }
 
-    /// #48 / TS `BriefTool.ts:163-168` → `validateAttachmentPaths`
-    /// (attachments.ts:26-61): reject non-existent / not-a-regular-file /
-    /// inaccessible attachment paths up-front (errorCode 1) so the model
-    /// self-corrects instead of receiving a false success.
+    /// #48: reject non-existent / not-a-regular-file / inaccessible attachment
+    /// paths up-front (errorCode 1) so the model self-corrects instead of
+    /// receiving a false success.
     fn validate_input(
         &self,
         input: &SendUserMessageInput,
@@ -208,10 +200,8 @@ impl Tool for SendUserMessageTool {
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<SendUserMessageOutput>, ToolError> {
         // Defensive empty-string guard. Pre-typed-migration this caught
-        // omitted `message`; the typed `Input` now rejects missing
-        // fields at deserialize time so this only catches the
-        // explicitly-empty `""` case (TS parity — zod `z.string()`
-        // accepts empty strings unless `.min(1)` is used).
+        // omitted `message`; the typed `Input` now rejects missing fields at
+        // deserialize time so this only catches the explicitly-empty `""` case.
         if input.message.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "message parameter is required".into(),

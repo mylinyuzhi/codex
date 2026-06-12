@@ -1,7 +1,7 @@
 //! Async hook registry — tracks hooks that run in the background.
 //!
-//! TS: utils/hooks/AsyncHookRegistry.ts — manages pending async hooks,
-//! polls for completion, delivers responses when ready.
+//! Manages pending async hooks, polls for completion, delivers responses
+//! when ready.
 //!
 //! When a hook outputs `{"async": true}` as its first line, the hook
 //! continues executing in the background. The registry tracks the pending
@@ -16,8 +16,6 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 
 /// Default timeout for async hooks (15 seconds).
-///
-/// TS: DEFAULT_ASYNC_HOOK_TIMEOUT = 15000
 const DEFAULT_ASYNC_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A pending async hook awaiting completion.
@@ -43,11 +41,8 @@ pub struct PendingAsyncHook {
     pub delivered: bool,
     /// `asyncRewake: true` + exit code 2 — the agent should wake on
     /// completion to inject the hook's stderr as a `<system-reminder>`
-    /// task notification. TS parity:
-    /// `executeInBackground()` ENQUEUES a `task-notification` and
-    /// `wakeIfIdle()` resumes the model. Coco-rs consumers (reminder
-    /// source, queue processor) read this flag to drive equivalent
-    /// behaviour.
+    /// task notification. Consumers (reminder source, queue processor)
+    /// read this flag to drive equivalent behaviour.
     pub rewake_requested: bool,
 }
 
@@ -64,8 +59,7 @@ pub struct AsyncHookResponse {
     /// True when the hook was registered with `asyncRewake: true` and
     /// completed with the rewake-on-block exit code (2). Consumers
     /// (reminder pipeline / queue processor) should surface this as a
-    /// task-notification and wake the model. TS:
-    /// `getAsyncHookResponseAttachments()` + `wakeIfIdle()`.
+    /// task-notification and wake the model.
     pub rewake_requested: bool,
 }
 
@@ -105,8 +99,8 @@ impl AsyncHookRegistry {
         self.pending.lock().await.insert(hook_id, hook);
     }
 
-    /// Mark a pending async hook as needing rewake on completion.
-    /// TS: `asyncRewake: true` + exit-code-2 → `wakeIfIdle()`.
+    /// Mark a pending async hook as needing rewake on completion
+    /// (`asyncRewake: true` + exit-code-2).
     pub async fn mark_rewake(&self, hook_id: &str) {
         if let Some(hook) = self.pending.lock().await.get_mut(hook_id) {
             hook.rewake_requested = true;
@@ -177,9 +171,7 @@ impl AsyncHookRegistry {
         self.pending.lock().await.retain(|_, h| !h.delivered);
     }
 
-    /// Finalize all pending hooks (shutdown path).
-    ///
-    /// TS: finalizePendingAsyncHooks() — called on session cleanup.
+    /// Finalize all pending hooks (shutdown path / session cleanup).
     pub async fn finalize_all(&self) -> Vec<AsyncHookResponse> {
         let mut pending = self.pending.lock().await;
         let mut responses = Vec::new();

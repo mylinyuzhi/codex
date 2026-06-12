@@ -1,9 +1,7 @@
 //! Error dialog — renders the body text that `surface_content` wraps in
 //! a centered error modal.
 //!
-//! TS reference: src/components/ErrorBanner.tsx (inline) and the
-//! fullscreen error state triggered by terminal errors. Unlike a toast,
-//! an error state blocks input until dismissed — used for
+//! Unlike a toast, an error state blocks input until dismissed — used for
 //! `TurnEnded(Failed)` and non-retryable `Error` events so the user must
 //! acknowledge them.
 //!

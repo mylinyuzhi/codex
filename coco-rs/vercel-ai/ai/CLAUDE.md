@@ -2,9 +2,9 @@
 
 High-level SDK matching `@ai-sdk/ai` v4 (generate_text / stream_text / generate_object / embed / rerank / generate_image / generate_speech / generate_video / transcribe). Builds on `vercel-ai-provider` types + `vercel-ai-provider-utils` helpers.
 
-## TS Source
+## SDK Spec
 
-Ports `@ai-sdk/ai` v4 spec (not from `claude-code/src/`). Anthropic-specific concerns (OAuth, policy limits, 529 retry, etc.) belong in `vercel-ai-anthropic`, not here — see the "Multi-Provider SDK" design decision in the workspace `CLAUDE.md`.
+Implements the `@ai-sdk/ai` v4 specification. Anthropic-specific concerns (OAuth, policy limits, 529 retry, etc.) belong in `vercel-ai-anthropic`, not here — see the "Multi-Provider SDK" design decision in the workspace `CLAUDE.md`.
 
 ## Key Types
 
@@ -36,13 +36,13 @@ Errors: `AIError`, `RetryError`, `NoObjectGeneratedError`, `NoImageGeneratedErro
 
 Callbacks in `generate_text/callback.rs` fire at the **provider boundary** and are NOT bridged into `coco_types::CoreEvent`. The agent loop (`QueryEngine`) consumes them internally and re-emits `AgentStreamEvent` / `ServerNotification`. Trace correlation uses shared `session_id` / `turn_id` context. See `docs/coco-rs/event-system-design.md` §1.7 and plan WS-9.
 
-## TS → Rust Idiom Mapping
+## Idiom Mapping
 
-| TypeScript | Rust |
-|------------|------|
+| Concept | Rust |
+|---------|------|
 | `Promise<T>` | `impl Future<Output = T>` |
 | `ReadableStream<T>` | `Pin<Box<dyn Stream<Item = T>>>` |
-| `TOOLS extends ToolSet` | `TOOLS: ToolSet` trait bound |
+| Generic type constraints | Trait bounds |
 | Union types | Enums |
 | `Record<string, T>` | `HashMap<String, T>` |
 | `AbortSignal` | `CancellationToken` |

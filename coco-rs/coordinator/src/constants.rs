@@ -1,30 +1,20 @@
-//! Swarm constants matching TS `utils/swarm/constants.ts`.
+//! Swarm constants.
 
 use coco_config::EnvKey;
 
 /// Name used for the team leader agent.
-///
-/// TS: `TEAM_LEAD_NAME = 'team-lead'`
 pub const TEAM_LEAD_NAME: &str = "team-lead";
 
 /// Tmux session name for the swarm coordinator.
-///
-/// TS: `SWARM_SESSION_NAME = 'claude-swarm'`
 pub const SWARM_SESSION_NAME: &str = "claude-swarm";
 
 /// Tmux window name for the swarm view layout.
-///
-/// TS: `SWARM_VIEW_WINDOW_NAME = 'swarm-view'`
 pub const SWARM_VIEW_WINDOW_NAME: &str = "swarm-view";
 
 /// Tmux session name for hidden panes.
-///
-/// TS: `HIDDEN_SESSION_NAME = 'claude-hidden'`
 pub const HIDDEN_SESSION_NAME: &str = "claude-hidden";
 
 /// Tmux command name.
-///
-/// TS: `TMUX_COMMAND = 'tmux'`
 pub const TMUX_COMMAND: &str = "tmux";
 
 // Swarm + plan-mode env vars use the `COCO_` prefix (coco-rs native).
@@ -56,8 +46,6 @@ pub const PARENT_SESSION_ID_ENV_VAR: EnvKey = EnvKey::CocoParentSessionId;
 pub const VERIFY_PLAN_ENV_VAR: EnvKey = EnvKey::CocoVerifyPlan;
 
 /// Generate a swarm socket name based on the current PID.
-///
-/// TS: `getSwarmSocketName()` → `'claude-swarm-{pid}'`
 pub fn swarm_socket_name() -> String {
     format!("claude-swarm-{}", std::process::id())
 }

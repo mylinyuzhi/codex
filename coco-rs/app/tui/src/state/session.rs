@@ -239,9 +239,7 @@ pub struct SessionState {
     /// `App::new` from `std::process::id()`.
     pub pid: u32,
     /// Conversation identifier — rotated on rewind so cache breaks
-    /// invalidate cleanly on the next request. TS: REPL holds a
-    /// `conversationId` minted from `randomUUID()` and re-mints it
-    /// inside `rewindConversationTo` (`screens/REPL.tsx:3673`).
+    /// invalidate cleanly on the next request.
     pub conversation_id: Option<String>,
     /// Working directory.
     pub working_dir: Option<String>,
@@ -260,14 +258,11 @@ pub struct SessionState {
     /// Start time for the current compaction operation, if visible in the UI.
     pub compaction_started_at: Option<Instant>,
     /// Current compaction sub-phase (drives the spinner text). `None`
-    /// when no compaction is running. Maps to TS REPL.tsx:2502
-    /// `spinnerMessage` switch on `onCompactProgress` events.
+    /// when no compaction is running.
     pub compaction_phase: Option<CompactionPhaseLabel>,
     /// Whether the post-compact warning suppressor is active. When
     /// true, the TokenWarning banner is hidden because the displayed
-    /// pre-compact token count is stale. TS:
-    /// `services/compact/compactWarningHook.ts` subscribes
-    /// `compactWarningStore`.
+    /// pre-compact token count is stale.
     pub compact_warning_suppressed: bool,
     /// Connected MCP servers.
     pub mcp_servers: Vec<McpServerStatus>,
@@ -293,8 +288,7 @@ pub struct SessionState {
     /// Set by the orchestrator (tui_runner) at startup.
     pub file_history_enabled: bool,
     /// Whether the rewind picker should expose `Summarize up to here`.
-    /// TS gates this behind `'external' === 'ant'`; we surface it via
-    /// `settings.json` (`rewind.allow_summarize_up_to`, default false).
+    /// Surfaced via `settings.json` (`rewind.allow_summarize_up_to`, default false).
     pub allow_summarize_up_to: bool,
     /// Available slash commands for `/` autocomplete and `/help` palette.
     /// Snapshotted from `CommandRegistry::visible()` at session start
@@ -374,13 +368,12 @@ pub struct SessionState {
     /// Latest IDE diagnostics update (set by IdeDiagnosticsUpdated, replaces prior value).
     pub ide_diagnostics: Option<IdeDiagnosticsUpdatedParams>,
     /// Wall-clock at which the most recent turn completed. Drives
-    /// idle-prompt notification firing (TS REPL.tsx:3933 —
-    /// `lastQueryCompletionTime` + `messageIdleNotifThresholdMs`).
-    /// Set by `on_turn_completed`; cleared on new submit / `idle_prompt_fired`.
+    /// idle-prompt notification firing. Set by `on_turn_completed`;
+    /// cleared on new submit / `idle_prompt_fired`.
     pub last_query_completion_at: Option<Instant>,
     /// Wall-clock of the most recent user keystroke or input event.
     /// Used to short-circuit idle firing when the user has interacted
-    /// since the turn completed. TS: `getLastInteractionTime()`.
+    /// since the turn completed.
     pub last_user_interaction_at: Instant,
     /// Idle-prompt single-shot. After a turn completes we fire
     /// `idle_prompt` notification at most once per
@@ -653,15 +646,13 @@ pub enum ToolStatus {
 
 /// Subagent instance tracking.
 ///
-/// TS parity with `CoordinatorAgentStatus.tsx` / `AgentProgressLine` /
-/// `TeammateSpinnerLine`. Lifecycle is split into two orthogonal axes:
-/// terminal lifecycle in [`SubagentStatus`], and the UI-only
-/// foreground-vs-background flag in [`Self::is_backgrounded`]. A task
-/// can be backgrounded while still `Running` (TS: `task.status ===
-/// 'running' && task.extras.isBackgrounded`).
+/// Lifecycle is split into two orthogonal axes: terminal lifecycle in
+/// [`SubagentStatus`], and the UI-only foreground-vs-background flag in
+/// [`Self::is_backgrounded`]. A task can be backgrounded while still
+/// `Running`.
 #[derive(Debug, Clone)]
 pub struct SubagentInstance {
-    /// Which TS concept this row tracks. See [`SubagentKind`].
+    /// Which concept this row tracks. See [`SubagentKind`].
     pub kind: SubagentKind,
     pub agent_id: String,
     pub agent_type: String,
@@ -682,32 +673,28 @@ pub struct SubagentInstance {
     /// protocol handler hasn't populated it yet. The renderer shows
     /// `elapsed = now - started_at` only when this is set.
     pub started_at_ms: Option<i64>,
-    /// Most recently dispatched tool. Mirror of `TaskProgress.last_tool_name`
+    /// Most recently dispatched tool. Mirrors `TaskProgress.last_tool_name`
     /// for BgAgent rows so the AgentProgressLine subline can render
-    /// `<tool> · N tools · M tok` like the TS reference. `None` before
-    /// the first tool call.
+    /// `<tool> · N tools · M tok`. `None` before the first tool call.
     pub last_tool_name: Option<String>,
-    /// Cumulative tool invocation count. Lifted from `TaskProgress.usage.tool_uses`
-    /// for parity with TS `AgentProgressLine`'s "8 tool uses" metric.
-    /// Monotonically maxed at the bridge so out-of-order progress
-    /// snapshots don't roll the counter backwards.
+    /// Cumulative tool invocation count. Lifted from
+    /// `TaskProgress.usage.tool_uses`. Monotonically maxed at the bridge
+    /// so out-of-order progress snapshots don't roll the counter backwards.
     pub tool_count: i32,
-    /// Cumulative total token count. Mirror of
+    /// Cumulative total token count. Mirrors
     /// `TaskProgress.usage.total_tokens` — monotonically maxed for the
     /// same reason as [`Self::tool_count`]. Zero means "not yet reported".
     pub total_tokens: i64,
     /// UI-only flag for the foreground→background transition (Ctrl+B).
     /// Not produced by any wire event — the optimistic flip lives in
-    /// `update::handle_command(TuiCommand::BackgroundAllTasks)`. TS:
-    /// `task.extras.isBackgrounded`, orthogonal to status.
+    /// `update::handle_command(TuiCommand::BackgroundAllTasks)`.
+    /// Orthogonal to status.
     pub is_backgrounded: bool,
     /// Cap-5 ring buffer of recent tool activities invoked by this
-    /// subagent. Mirrors TS `MAX_RECENT_ACTIVITIES = 5`
-    /// (`tasks/LocalAgentTask/LocalAgentTask.tsx:40`). Populated by
-    /// copying [`coco_types::TaskProgress::recent_activities`] verbatim
-    /// — the coordinator-side rings (`runner_loop.rs`,
-    /// `agent_handle/spawn.rs`) own the push policy. Renderers display
-    /// in insertion order (oldest first).
+    /// subagent. Populated by copying
+    /// [`coco_types::TaskProgress::recent_activities`] verbatim — the
+    /// coordinator-side rings own the push policy. Renderers display in
+    /// insertion order (oldest first).
     pub recent_activities: Vec<coco_types::TaskActivity>,
     /// Final assistant message after the subagent completes — first
     /// 80 chars rendered inline so the user sees the closing statement
@@ -715,8 +702,7 @@ pub struct SubagentInstance {
     pub final_message: Option<String>,
 }
 
-/// Subagent lifecycle status. Mirrors the terminal axis of TS
-/// `TaskStatus` filtered down to what the TUI displays. The orthogonal
+/// Subagent lifecycle status. Covers what the TUI displays. The orthogonal
 /// foreground/background axis lives on [`SubagentInstance::is_backgrounded`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentStatus {
@@ -725,26 +711,21 @@ pub enum SubagentStatus {
     Failed,
 }
 
-/// What TS concept a [`SubagentInstance`] row represents.
+/// What kind of agent a [`SubagentInstance`] row represents.
 ///
-/// TS keeps these strictly separate (`InProcessTeammateTask` vs
-/// `LocalAgentTask`); coco-rs collapses them into one TUI struct
-/// (`SubagentInstance`) but tags the kind so renderers can show the
+/// Collapses the agent-tool-spawned worker and the coordinator-spawned
+/// team member into one TUI struct, tagged so renderers can show the
 /// right badge / placement and lifecycle handlers can apply the right
-/// semantics (teammate lives across `/clear`; subagent evicts).
-///
-/// The unification at the TUI struct level is a coco-rs choice — both
+/// semantics (teammate lives across `/clear`; subagent evicts). Both
 /// surfaces share the same status / tool-count / token / final-message
-/// vocabulary, so duplicating types yielded no benefit.
+/// vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentKind {
-    /// `Agent`-tool spawned worker. TS `LocalAgentTask` (type
-    /// `'local_agent'`). Transient — evicts on completion. Has
-    /// `tool_use_id` pointing to the parent assistant's `ToolUse`.
+    /// `Agent`-tool spawned worker. Transient — evicts on completion.
+    /// Has `tool_use_id` pointing to the parent assistant's `ToolUse`.
     Subagent,
-    /// Coordinator-spawned persistent team member. TS
-    /// `InProcessTeammateTask` (type `'in_process_teammate'`).
-    /// Lives across `/clear`. Identity is `agent_name@team_name`.
+    /// Coordinator-spawned persistent team member. Lives across `/clear`.
+    /// Identity is `agent_name@team_name`.
     Teammate,
 }
 

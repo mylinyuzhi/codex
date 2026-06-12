@@ -73,7 +73,7 @@ pub(crate) struct TurnReminderContext<'a> {
 mod tests;
 
 impl QueryEngine {
-    /// Run the per-turn system-reminder pipeline (TS QueryEngine.ts Phase D.3).
+    /// Run the per-turn system-reminder pipeline.
     ///
     /// 1. `plan_reminder.turn_start_side_effects_only` (mode reconcile +
     ///    mailbox + leader-pending). Mutates `app_state` BEFORE the
@@ -118,10 +118,9 @@ impl QueryEngine {
         // app_state snapshot.
         //
         // `turn_number` uses **human turns** (non-meta user messages)
-        // so plan-mode / auto-mode throttle cadence matches TS
-        // (counts human turns, not LLM iterations). Tool-result
-        // rounds within one human turn share the same counter value
-        // so reminders don't spam mid-turn.
+        // so plan-mode / auto-mode throttle cadence counts human turns,
+        // not LLM iterations. Tool-result rounds within one human turn
+        // share the same counter value so reminders don't spam mid-turn.
         // Take the app_state snapshot *before* building the stub so
         // the reminder context observes the same discovered-tool set
         // that `engine_prompt::build_tool_definitions` will use this
@@ -178,9 +177,8 @@ impl QueryEngine {
                 .collect();
             (loaded, deferred)
         };
-        // `reminder_tools` retains its TS name as the model-visible
-        // (loaded) tool list — used by `TurnReminderInput::tools` and
-        // unchanged consumers below.
+        // `reminder_tools` is the model-visible (loaded) tool list —
+        // used by `TurnReminderInput::tools` and unchanged consumers below.
         let reminder_tools = reminder_loaded_tools.clone();
         let reminder_skill_listing_enabled = reminder_loaded_tools
             .iter()
@@ -258,9 +256,8 @@ impl QueryEngine {
             );
         }
 
-        // TS `autoModeStateModule?.isAutoModeActive()`. `None` means the
-        // engine was built without a permissions auto-mode state — auto
-        // mode is therefore inactive, matching TS's `?? false` fallback.
+        // `None` means the engine was built without a permissions
+        // auto-mode state — auto mode is therefore inactive (false fallback).
         let reminder_auto_classifier_active = self
             .auto_mode_state
             .as_ref()
@@ -273,38 +270,34 @@ impl QueryEngine {
         let reminder_is_auto_mode = reminder_permission_mode == PermissionMode::Auto
             || (reminder_permission_mode == PermissionMode::Plan
                 && reminder_auto_classifier_active);
-        // TS `isTodoV2Enabled()` — coco-rs reads the explicit
-        // `Feature::TaskV2` gate (default-on) which drives the V1/V2
-        // mutual exclusion at tool level (`is_enabled` on TodoWrite vs
-        // TaskCreate/Get/List/Update). The flag is the source of truth;
-        // `TASK_MANAGEMENT_TOOLS` is still used by `turn_runner` for
-        // counting turns since the last task mutation, but no longer
-        // for V2-mode detection.
+        // Read the explicit `Feature::TaskV2` gate (default-on) which
+        // drives the V1/V2 mutual exclusion at tool level (`is_enabled`
+        // on TodoWrite vs TaskCreate/Get/List/Update). The flag is the
+        // source of truth; `TASK_MANAGEMENT_TOOLS` is still used by
+        // `turn_runner` for counting turns since the last task mutation,
+        // but no longer for V2-mode detection.
         let reminder_task_v2_enabled = self.config.features.enabled(Feature::TaskV2);
-        // TS `isAutoCompactEnabled()` — a user-facing toggle. coco-rs
-        // resolves it through `QueryEngineConfig.compact.auto.is_active()`
+        // Resolves through `QueryEngineConfig.compact.auto.is_active()`
         // (user toggle AND env kill switches) so the SDK / CLI / TUI
         // can control it per session without re-reading settings from
         // disk.
         let reminder_auto_compact_enabled = self.config.is_auto_compact_active();
-        // TS `getDeferredToolsDelta` — diff the current **deferred**
-        // tool set against the last announced set on app_state. The
-        // loaded set is supplied so a tool that moves deferred →
-        // loaded (model discovered via `ToolSearch`) stays silently
-        // in the announced pool. Non-empty added or removed triggers
-        // the `deferred_tools_delta` reminder.
+        // Diff the current **deferred** tool set against the last
+        // announced set on app_state. The loaded set is supplied so a
+        // tool that moves deferred → loaded (model discovered via
+        // `ToolSearch`) stays silently in the announced pool.
+        // Non-empty added or removed triggers the `deferred_tools_delta`
+        // reminder.
         let reminder_deferred_tools_delta = compute_tools_delta(
             &reminder_deferred_tools,
             &reminder_loaded_tools,
             &app_state_snapshot.last_announced_tools,
         );
-        // Clone the deferred list for post-emit bookkeeping — TS
-        // `getDeferredToolsDelta` replaces `announced` with the
-        // current deferred set after emission.
+        // Clone the deferred list for post-emit bookkeeping — replaces
+        // `announced` with the current deferred set after emission.
         let reminder_deferred_tools_clone = reminder_deferred_tools.clone();
-        // TS `getAgentListingDeltaAttachment` — diff the current
-        // agent-type set (from `SessionBootstrap`) against the
-        // last-announced set on app_state.
+        // Diff the current agent-type set (from `SessionBootstrap`)
+        // against the last-announced set on app_state.
         let reminder_current_agents: Vec<String> = self
             .session_bootstrap
             .as_ref()
@@ -314,37 +307,33 @@ impl QueryEngine {
             &reminder_current_agents,
             &app_state_snapshot.last_announced_agents,
         );
-        // TS date-change latch: current local ISO date vs. the one
-        // stored on `ToolAppState.last_emitted_date`. When they
-        // differ, emit once + update the latch. Runs at turn start
-        // so the reminder sees today's date even for long-running
-        // sessions that cross midnight.
+        // Date-change latch: current local ISO date vs. the one stored
+        // on `ToolAppState.last_emitted_date`. When they differ, emit
+        // once + update the latch. Runs at turn start so the reminder
+        // sees today's date even for long-running sessions that cross
+        // midnight.
         let reminder_new_date = self.observe_date_change().await;
-        // TS `prependUserContext.currentDate` (`context.ts:186`) — today's
-        // local ISO date injected every turn (independent of the rollover
-        // latch above) so the model always has the date. Cache-shared forks
-        // (`fork_label.is_some()`) are EXCLUDED: they reuse the parent's
-        // byte-for-byte prompt prefix, and TS `runForkedAgent` does not
-        // re-run `prependUserContext` — injecting a per-turn message would
-        // break cache parity (PR #18143). Main loop + real subagents
-        // (`fork_label` None) get it, mirroring TS `query.ts` / `generateAgent.ts`.
+        // Today's local ISO date injected every turn (independent of the
+        // rollover latch above) so the model always has the date.
+        // Cache-shared forks (`fork_label.is_some()`) are EXCLUDED: they
+        // reuse the parent's byte-for-byte prompt prefix and injecting a
+        // per-turn message would break cache parity (PR #18143). Main loop
+        // + real subagents (`fork_label` None) get it.
         let reminder_current_date = self
             .config
             .fork_label
             .is_none()
             .then(|| chrono::Local::now().format("%Y-%m-%d").to_string());
 
-        // TS `getAttachments(input, ...)` — the user's raw prompt
-        // text for this turn. Extract from the most-recent non-meta
-        // user message's text content; used by both the
-        // ultrathink-keyword gate and mention-based reminders.
+        // The user's raw prompt text for this turn. Extract from the
+        // most-recent non-meta user message's text content; used by
+        // both the ultrathink-keyword gate and mention-based reminders.
         //
-        // TS parity: `input` is non-null only on the first tool-loop
-        // iteration of a human turn, not on subsequent tool-result
-        // rounds (query.ts nulls it out). coco-rs tracks the last
-        // user-message UUID that has already been reminder-scanned
-        // and skips re-parsing it so the user-input tier fires once
-        // per human turn, not once per tool-result iteration.
+        // Only the first tool-loop iteration of a human turn gets a
+        // non-null input; subsequent tool-result rounds skip it. Track
+        // the last user-message UUID already reminder-scanned so the
+        // user-input tier fires once per human turn, not once per
+        // tool-result iteration.
         let reminder_current_user_uuid = history.iter().rev().find_map(|m| match m.as_ref() {
             Message::User(u) => Some(u.uuid),
             _ => None,
@@ -383,10 +372,10 @@ impl QueryEngine {
                 })
                 .collect();
 
-        // TS `toolUseContext.options.*` bag analog — fan-out to every
-        // per-subsystem source (hooks / LSP / tasks / skills / MCP /
-        // swarm / IDE / memory) in parallel, with per-source timeout
-        // + error-to-default. Empty `ReminderSources` → all defaults.
+        // Fan-out to every per-subsystem source (hooks / LSP / tasks /
+        // skills / MCP / swarm / IDE / memory) in parallel, with
+        // per-source timeout + error-to-default.
+        // Empty `ReminderSources` → all defaults.
         //
         // Resolve relative paths against cwd so they match the absolute
         // keys used by `FileReadState` (populated by `mention_resolver`
@@ -419,15 +408,12 @@ impl QueryEngine {
             });
         // One-shot flag: every successful compaction (full / SM / reactive)
         // sets it; the next reminder build consumes (swap-to-false) so
-        // `task_status` only fires on the immediately-following turn —
-        // matching TS `getUnifiedTaskAttachments` post-compact emission
-        // surface (`attachments.ts:962`).
+        // `task_status` only fires on the immediately-following turn.
         let just_compacted = self
             .pending_just_compacted
             .swap(false, std::sync::atomic::Ordering::SeqCst);
         // Tools the model successfully invoked since the previous human
-        // turn. TS `collectRecentSuccessfulTools` (`utils/attachments.ts`)
-        // feeds this into the `findRelevantMemories` ranker so it can
+        // turn. Fed into the `findRelevantMemories` ranker so it can
         // deprioritize reference docs for tools the model is actively
         // exercising. Empty when no human-turn boundary is established
         // yet (start of conversation, or no successful tool runs).
@@ -451,10 +437,9 @@ impl QueryEngine {
         // might try to load (@-mentions + nested memory + relevant
         // memory prefetch) with the session file-read cache. Paths
         // whose mtime still matches disk are "already loaded into
-        // context" — we emit a silent dedup marker so downstream
-        // tooling (transcript, telemetry) knows the model has current
-        // content for those paths. Mirrors TS `already_read_file`
-        // emission surface area (`utils/attachments.ts:3100`).
+        // context" — emit a silent dedup marker so downstream tooling
+        // (transcript, telemetry) knows the model has current content
+        // for those paths.
         let reminder_already_read_file_paths: Vec<std::path::PathBuf> =
             if let Some(frs) = &self.file_read_state {
                 let mut candidates: Vec<std::path::PathBuf> = reminder_mentioned_paths.clone();
@@ -523,11 +508,11 @@ impl QueryEngine {
             // Phase 1 engine-local inputs.
             total_cost_usd: cost_tracker.total_cost_usd(),
             max_budget_usd: self.config.max_budget_usd,
-            // Injected at turn start — TS `getTurnOutputTokens()` is zero
-            // at this point; cumulative session count comes from usage.
+            // Injected at turn start — output token count is zero at this
+            // point; cumulative session count comes from usage.
             output_tokens_turn: 0,
             output_tokens_session: total_usage.output_tokens.total,
-            // Not yet wired (requires feature('TOKEN_BUDGET')-equivalent).
+            // Not yet wired.
             output_token_budget: None,
             // Companion subsystem lives in a future Buddy crate; for now
             // suppress the reminder by leaving these unset.
@@ -536,9 +521,9 @@ impl QueryEngine {
             has_prior_companion_intro: false,
             deferred_tools_delta: reminder_deferred_tools_delta.clone(),
             agent_listing_delta: reminder_agent_listing_delta.clone(),
-            // McpSource.instructions() returns the current per-server
-            // map; engine diffs against `last_announced_mcp_instructions`
-            // to produce the delta (same pattern as deferred_tools_delta).
+            // McpSource.instructions() returns the current per-server map;
+            // engine diffs against `last_announced_mcp_instructions` to
+            // produce the delta (same pattern as deferred_tools_delta).
             mcp_instructions_delta: compute_mcp_instructions_delta(
                 &materialized.mcp_instructions_current,
                 &app_state_snapshot.last_announced_mcp_instructions,
@@ -547,8 +532,8 @@ impl QueryEngine {
             // Sources that aren't wired → default output → generator skips.
             hook_events: materialized.hook_events,
             diagnostics: materialized.diagnostics,
-            // TS `getOutputStyleAttachment` — reads style name from
-            // `SessionBootstrap` (CLI-resolved from `settings.output_style`).
+            // Reads style name from `SessionBootstrap`
+            // (CLI-resolved from `settings.output_style`).
             // This is a simple read, not cross-crate state, so no Source
             // trait is needed.
             output_style: self
@@ -633,8 +618,7 @@ impl QueryEngine {
         // - Cadence counters the TUI / tests observe via app_state
         //   (`plan_mode_attachment_count` +
         //   `plan_mode_turns_since_last_attachment`). These mirror
-        //   the ThrottleManager state but are exposed on app_state
-        //   for TS parity with `getAppState().planModeAttachmentCount`.
+        //   the ThrottleManager state but are exposed on app_state.
         let stale_plan_exit_flag =
             app_state_snapshot.needs_plan_mode_exit_attachment && reminder_is_plan_mode;
         let stale_auto_exit_flag =
@@ -646,7 +630,7 @@ impl QueryEngine {
                 reminders.iter().map(|r| r.attachment_type).collect();
             if let Some(state) = self.app_state.as_ref() {
                 let mut guard = state.write().await;
-                // TS clears stale one-shot exit flags when the engine is
+                // Clear stale one-shot exit flags when the engine is
                 // still in the matching mode instead of preserving them
                 // for a later, unrelated turn.
                 if stale_plan_exit_flag {
@@ -657,7 +641,7 @@ impl QueryEngine {
                 }
                 if fired_types.contains(&ReminderAttachmentType::PlanModeExit) {
                     guard.needs_plan_mode_exit_attachment = false;
-                    // TS: exit resets the plan-mode cadence cycle.
+                    // Exit resets the plan-mode cadence cycle.
                     guard.plan_mode_attachment_count = 0;
                     guard.plan_mode_turns_since_last_attachment = 0;
                     guard.last_human_turn_uuid_seen = None;
@@ -669,17 +653,16 @@ impl QueryEngine {
                     guard.has_exited_plan_mode = false;
                 }
                 if fired_types.contains(&ReminderAttachmentType::PlanMode) {
-                    // Bump the TS-parity cadence counter + reset the
-                    // "turns since last attachment" counter so the TUI
-                    // and integration tests observe the same cadence
-                    // state as the pre-Phase-D PlanModeReminder flow.
+                    // Bump the cadence counter + reset the "turns since
+                    // last attachment" counter so the TUI and integration
+                    // tests observe the same cadence state as the
+                    // pre-Phase-D PlanModeReminder flow.
                     guard.plan_mode_attachment_count =
                         guard.plan_mode_attachment_count.saturating_add(1);
                     guard.plan_mode_turns_since_last_attachment = 0;
                     // Stamp the current human-turn UUID so subsequent
                     // tool-result rounds sharing the same UUID don't
-                    // advance the counter (mirror of the old
-                    // `observe_turn_and_count` behavior).
+                    // advance the counter.
                     if let Some(uuid) = history.iter().rev().find_map(|m| match m.as_ref() {
                         Message::User(u) => Some(u.uuid),
                         _ => None,
@@ -687,10 +670,9 @@ impl QueryEngine {
                         guard.last_human_turn_uuid_seen = Some(uuid);
                     }
                 }
-                // TS `getDeferredToolsDelta` replaces the announced
-                // set with the current **deferred** tool list after
-                // successful emission. Subsequent turns then diff
-                // against the fresh baseline.
+                // Replace the announced set with the current **deferred**
+                // tool list after successful emission. Subsequent turns
+                // then diff against the fresh baseline.
                 if fired_types.contains(&ReminderAttachmentType::DeferredToolsDelta) {
                     guard.last_announced_tools =
                         reminder_deferred_tools_clone.iter().cloned().collect();
@@ -754,8 +736,7 @@ impl QueryEngine {
 }
 
 /// Tool names the assistant successfully invoked since the previous
-/// human turn. TS parity with `collectRecentSuccessfulTools`
-/// (`utils/attachments.ts`):
+/// human turn:
 ///
 /// - Slice messages from the most recent user message to the end —
 ///   that's "this human turn".

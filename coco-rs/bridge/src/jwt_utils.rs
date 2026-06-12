@@ -1,9 +1,8 @@
 //! JWT (HS256) signing + validation for the IDE bridge.
 //!
-//! TS: `bridge/jwtUtils.ts`. This module implements just enough of
-//! JWS to sign and validate a short-lived session token; it does NOT
-//! aim to be a general-purpose JWT library (use `jsonwebtoken` for
-//! general JWT needs).
+//! Implements just enough of JWS to sign and validate a short-lived
+//! session token; not a general-purpose JWT library (use `jsonwebtoken`
+//! for general JWT needs).
 //!
 //! Supports only HS256 (HMAC-SHA256) — the bridge has a shared secret
 //! between IDE and CLI, no public-key verification needed.

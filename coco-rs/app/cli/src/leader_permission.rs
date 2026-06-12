@@ -7,9 +7,6 @@
 //! to the setter registered here; we route it to the leader's human approval
 //! UI (the session's `TuiPermissionBridge`) and write the decision back to
 //! the worker's inbox.
-//!
-//! TS: `useInboxPoller.ts` routes a `PermissionRequest` into the leader's
-//! `ToolUseConfirm` queue, then replies via `sendPermissionResponseViaMailbox`.
 
 use std::sync::Arc;
 
@@ -38,8 +35,7 @@ pub async fn register(bridge: ToolPermissionBridgeRef) {
 /// `run_with_teammate_context` scope, so the live identity resolves here: the
 /// in-process analog of the cross-process badge set in [`handle_request`].
 /// No-op for the leader's own requests (not a teammate) and for requests that
-/// already carry a badge. TS: in-process teammates badge from their own
-/// `identity` (`inProcessRunner.ts:234`).
+/// already carry a badge.
 pub fn enrich_in_process_worker_badge(request: &mut ToolPermissionRequest) {
     use coco_coordinator::identity;
     if request.worker_badge.is_some() || !identity::is_in_process_teammate() {
@@ -94,8 +90,8 @@ async fn handle_request(bridge: ToolPermissionBridgeRef, value: serde_json::Valu
         suggestions: Vec::new(),
         choices: None,
         // Badge the worker so the leader sees who is asking. Color is the
-        // worker's assigned per-teammate palette entry (coco-rs improves
-        // on TS's hardcoded `cyan`); fall back to Cyan when unassigned.
+        // worker's assigned per-teammate palette entry; fall back to Cyan
+        // when unassigned.
         worker_badge: Some(coco_types::WorkerBadge {
             name: worker_name.to_string(),
             color: coco_coordinator::pane::layout::get_teammate_color(&agent_id)

@@ -1,8 +1,6 @@
 //! Yolo classifier — two-stage XML LLM-based permission classification.
 //!
-//! TS: `utils/permissions/yoloClassifier.ts`.
-//!
-//! Wire-shape parity with TS:
+//! Wire-shape:
 //!
 //! * **Output**: `<block>yes</block><reason>one short sentence</reason>` for
 //!   block; `<block>no</block>` (no `<reason>`) for allow. The system prompt
@@ -20,7 +18,7 @@
 //!   to stage 2; if stage 2 is also unparseable → block (safe default).
 //!
 //! The two stages share the same system prompt so the Anthropic 1h prompt
-//! cache hits across calls (TS comment §708-710).
+//! cache hits across calls.
 
 use coco_types::ToolName;
 use regex::Regex;
@@ -47,14 +45,12 @@ pub struct YoloClassifierResult {
     /// Which stage produced this result (1 = fast, 2 = extended thinking).
     pub stage: Option<i32>,
     /// The classifier model could not respond (transport / capacity error),
-    /// as opposed to actively blocking. TS `classifierResult.unavailable`
-    /// (`permissions.ts:843-876`). Distinct from `should_block` so the
+    /// as opposed to actively blocking. Distinct from `should_block` so the
     /// decision layer can fail-open/closed instead of treating an outage as
     /// a malicious block.
     pub unavailable: bool,
     /// The classifier prompt exceeded the model's context window — a
-    /// deterministic condition that will not recover on retry. TS
-    /// `classifierResult.transcriptTooLong` (`permissions.ts:818-842`).
+    /// deterministic condition that will not recover on retry.
     pub transcript_too_long: bool,
 }
 
@@ -77,8 +73,7 @@ impl YoloClassifierResult {
 
 /// Whether a classifier transport error string indicates the prompt overran
 /// the model's context window (deterministic — retry cannot help) vs. a
-/// transient outage. TS detects the literal `'prompt is too long'` API error
-/// (`permissions.ts` transcript-too-long branch).
+/// transient outage.
 fn is_transcript_too_long_error(err: &str) -> bool {
     let lower = err.to_lowercase();
     lower.contains("prompt is too long")
@@ -88,7 +83,7 @@ fn is_transcript_too_long_error(err: &str) -> bool {
 }
 
 /// Projects a tool's raw input down to the security-relevant fields the
-/// auto-mode classifier should see (TS `Tool.toAutoClassifierInput`).
+/// auto-mode classifier should see.
 ///
 /// `None` ⇒ the caller has no projection for this `(tool, input)` pair —
 /// either the tool is unknown or it declares no classifier-relevant input — in
@@ -103,9 +98,7 @@ pub type InputProjector<'a> =
 /// `AutoModeRules` share one type.
 pub use coco_types::ClassifierMode;
 
-/// Auto-mode configuration rules.
-///
-/// TS: AutoModeRules — user-configurable allow/deny/environment rules.
+/// Auto-mode configuration rules: user-configurable allow/deny/environment rules.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AutoModeRules {
     /// Rules for what to automatically allow.
@@ -117,15 +110,14 @@ pub struct AutoModeRules {
     /// Environment context for the classifier.
     #[serde(default)]
     pub environment: Vec<String>,
-    /// Which classifier stages run (Both / Fast / Thinking). TS
-    /// `twoStageClassifier`. Defaults to `Both` (two-stage escalation).
+    /// Which classifier stages run (Both / Fast / Thinking).
+    /// Defaults to `Both` (two-stage escalation).
     #[serde(default)]
     pub classifier_mode: ClassifierMode,
     /// When the LLM classifier is unavailable (transient transport/capacity
     /// outage), fail OPEN to a manual prompt in interactive sessions instead
-    /// of denying. Default `false` = fail closed (deny), matching TS's shipped
-    /// `tengu_iron_gate_closed` default. Coco replaces that GrowthBook gate
-    /// with this setting. Independent of `classifier_mode`.
+    /// of denying. Default `false` = fail closed (deny). Independent of
+    /// `classifier_mode`.
     #[serde(default)]
     pub classifier_unavailable_fail_open: bool,
 }
@@ -146,10 +138,9 @@ pub enum TranscriptRole {
 
 /// A content block in the transcript.
 ///
-/// TS `TranscriptBlock` (`yoloClassifier.ts:287-289`) carries only `Text`
-/// (user-authored) and `ToolCall` (assistant tool_use). Assistant prose and
-/// tool *results* are deliberately excluded — both are attacker-influenceable
-/// and must not reach the security classifier.
+/// Carries only `Text` (user-authored) and `ToolCall` (assistant tool_use).
+/// Assistant prose and tool *results* are deliberately excluded — both are
+/// attacker-influenceable and must not reach the security classifier.
 #[derive(Debug, Clone)]
 pub enum TranscriptBlock {
     /// User text message.
@@ -162,9 +153,6 @@ pub enum TranscriptBlock {
 }
 
 /// Safe-tool allowlist — tools that never need classifier review.
-///
-/// TS: SAFE_TOOLS constant in yoloClassifier.ts.
-/// TS: `SAFE_YOLO_ALLOWLISTED_TOOLS` in classifierShared.ts
 const SAFE_TOOLS: &[&str] = &[
     // Read-only file operations
     ToolName::Read.as_str(),
@@ -194,11 +182,9 @@ const SAFE_TOOLS: &[&str] = &[
     ToolName::SendMessage.as_str(),
     // Misc safe
     ToolName::Sleep.as_str(),
-    // NB: `SendUserMessage` is intentionally NOT allowlisted here — TS
-    // `SAFE_YOLO_ALLOWLISTED_TOOLS` omits it. It is still auto-allowed in
-    // auto-mode via the read-only fast path (`SendUserMessageTool::is_read_only`
-    // is always true), so this only keeps the allowlist faithful to TS without
-    // changing behavior.
+    // NB: `SendUserMessage` is intentionally NOT allowlisted here — it is
+    // still auto-allowed in auto-mode via the read-only fast path
+    // (`SendUserMessageTool::is_read_only` is always true).
 ];
 
 /// Check if a tool is in the safe-tool allowlist (no classifier needed).
@@ -238,9 +224,9 @@ pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
                     });
                 }
             }
-            // Tool results are NOT included: TS `buildTranscriptEntries` keeps
-            // only user text + assistant tool_use blocks. Tool output is
-            // attacker-influenceable and must not reach the security gate.
+            // Tool results are NOT included: only user text + assistant
+            // tool_use blocks are kept. Tool output is attacker-influenceable
+            // and must not reach the security gate.
             _ => {}
         }
     }
@@ -250,8 +236,8 @@ pub fn build_transcript_entries<M: std::borrow::Borrow<coco_messages::Message>>(
 
 /// Build the classifier system prompt.
 ///
-/// Mirrors TS `replaceOutputFormatWithXml` — the system prompt pins the
-/// XML output format and the "begin with `<block>`" invariant.
+/// The system prompt pins the XML output format and the "begin with `<block>`"
+/// invariant.
 pub fn build_classifier_system_prompt(rules: &AutoModeRules) -> String {
     let mut prompt = String::from(
         "You are a security classifier for an AI coding assistant. \
@@ -303,7 +289,7 @@ pub fn build_classifier_system_prompt(rules: &AutoModeRules) -> String {
         prompt.push('\n');
     }
 
-    // TS `replaceOutputFormatWithXml` — the XML output format block.
+    // XML output format block.
     prompt.push_str(
         "## Output Format\n\
          \n\
@@ -330,9 +316,9 @@ pub fn format_action_for_classifier(
     // Per-tool projection (curated, security-relevant fields) when the tool
     // provides one; otherwise the raw input JSON. A `Some("")` projection
     // (no security relevance) is fast-allowed upstream in `classify_yolo_action`
-    // before reaching here (TS `toCompact` empty contract). A `None` projection
-    // (no projector / un-annotated tool) is NOT an auto-allow — the action must
-    // reach the classifier, so it falls back to the raw input JSON.
+    // before reaching here. A `None` projection (no projector / un-annotated
+    // tool) is NOT an auto-allow — the action must reach the classifier, so it
+    // falls back to the raw input JSON.
     let projected = projector
         .and_then(|project| project(tool_name, input))
         .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_default());
@@ -340,20 +326,19 @@ pub fn format_action_for_classifier(
     format!("<action>\ntool: {tool_name}\ninput: {truncated}\n</action>")
 }
 
-/// Stage 1 token budget. TS `both`-mode value (`yoloClassifier.ts:781`).
+/// Stage 1 token budget (both-mode).
 const STAGE_1_MAX_TOKENS: i64 = 64;
 
-/// Stage 2 token budget. TS extended-thinking value.
+/// Stage 2 token budget (extended-thinking).
 const STAGE_2_MAX_TOKENS: i64 = 4096;
 
-/// Single-stage `fast`-mode token budget. TS `mode === 'fast' ? 256`
-/// (`yoloClassifier.ts:781`).
+/// Single-stage fast-mode token budget.
 const FAST_ONLY_MAX_TOKENS: i64 = 256;
 
-/// Stage 1 suffix (TS `XML_S1_SUFFIX`, `yoloClassifier.ts:550`).
+/// Stage 1 suffix nudge for fast classification.
 pub const XML_S1_SUFFIX: &str = "\nErr on the side of blocking. <block> immediately.";
 
-/// Stage 2 suffix (TS `XML_S2_SUFFIX`, `yoloClassifier.ts:560-561`).
+/// Stage 2 suffix nudge for extended-thinking classification.
 pub const XML_S2_SUFFIX: &str = "\nReview the classification process and follow it carefully, making sure you deny \
      actions that should be blocked. As a reminder, explicit (not suggestive or implicit) \
      user confirmation is required to override blocks. Use <thinking> before responding \
@@ -374,7 +359,7 @@ pub struct ClassifyRequest {
 
 /// Classify a proposed tool action using the two-stage XML classifier.
 ///
-/// Mirrors TS `classifyYoloActionXml` in `both` mode (the default).
+/// Default is `both` mode:
 ///
 /// 1. Stage 1 (fast): 64 tokens, `stop_sequences=["</block>"]`, S1 suffix.
 ///    * `<block>no</block>` → return Allow.
@@ -402,12 +387,12 @@ where
         return YoloClassifierResult::verdict(false, "Safe tool (allowlisted)".into(), None);
     }
 
-    // TS `toCompact` empty-projection fast-allow (yoloClassifier.ts:1021-1029):
-    // a tool whose security-relevant projection encodes to "" declares no
-    // classifier-relevant input → allow without invoking the LLM. This also
-    // guards the provider against an empty `<action>` block. A `None`
-    // projection (no projector / un-annotated tool) is NOT an auto-allow — it
-    // falls through to the raw-JSON classifier path below.
+    // Empty-projection fast-allow: a tool whose security-relevant projection
+    // encodes to "" declares no classifier-relevant input → allow without
+    // invoking the LLM. This also guards the provider against an empty
+    // `<action>` block. A `None` projection (no projector / un-annotated tool)
+    // is NOT an auto-allow — it falls through to the raw-JSON classifier path
+    // below.
     if let Some(project) = projector
         && let Some(projected) = project(tool_name, input)
         && projected.trim().is_empty()
@@ -424,7 +409,7 @@ where
     let action = format_action_for_classifier(tool_name, input, projector);
     let transcript_text = format_transcript(&transcript);
 
-    // TS wraps the entire user content (transcript + action) in
+    // Wrap the entire user content (transcript + action) in a
     // `<transcript>...</transcript>` envelope so the model sees a clearly
     // bounded record vs. its own output.
     let user_body = format!(
@@ -437,7 +422,6 @@ where
 
     match rules.classifier_mode {
         // Single fast stage — 256 tokens, no stop sequence, verdict final.
-        // TS `fast` mode (`yoloClassifier.ts:826-857`).
         ClassifierMode::Fast => {
             let result = classify_fn(ClassifyRequest {
                 system_prompt,
@@ -454,8 +438,7 @@ where
                 "Blocked by fast classifier",
             )
         }
-        // Single extended stage — 4096 tokens, no stop sequence. TS
-        // `thinking` mode (`yoloClassifier.ts:860-880`).
+        // Single extended stage — 4096 tokens, no stop sequence.
         ClassifierMode::Thinking => {
             let result = classify_fn(ClassifyRequest {
                 system_prompt,
@@ -488,7 +471,7 @@ where
             if let Ok(response) = stage1_result {
                 match parse_xml_block(&response) {
                     Some(false) => {
-                        // Allow — stage 1 verdict is sufficient (TS line 808-822).
+                        // Allow — stage 1 verdict is sufficient.
                         return YoloClassifierResult::verdict(
                             false,
                             "Allowed by fast classifier".into(),
@@ -527,11 +510,10 @@ where
 /// Shared by the `Fast` / `Thinking` single-stage modes and `Both`-mode
 /// stage 2. `Ok` + `<block>no>` → allow (`allow_reason` when no `<reason>`);
 /// `<block>yes>` → block with the parsed reason, falling back to
-/// `block_reason` when the model emitted no `<reason>` (TS
-/// `parseXmlReason ?? 'No reason provided'` / `'Blocked by fast classifier'`);
+/// `block_reason` when the model emitted no `<reason>`;
 /// unparseable → block (safe default). `Err` flags `unavailable` /
 /// `transcript_too_long` so the decision layer can fail-open (interactive) or
-/// fail-closed (headless). TS `permissions.ts:818-876`.
+/// fail-closed (headless).
 fn interpret_final_verdict(
     result: Result<String, String>,
     stage: i32,
@@ -591,8 +573,7 @@ fn interpret_final_verdict(
 /// conversation forwards, matching the order the agent produced it.
 fn format_transcript(entries: &[TranscriptEntry]) -> String {
     let mut out = String::new();
-    // #68: TS `yoloClassifier.ts buildTranscriptEntries` applies NO fixed
-    // N-entry cap — it renders the full transcript and relies on upstream
+    // No fixed N-entry cap — render the full transcript and rely on upstream
     // compaction to bound history size. The previous `.saturating_sub(10)`
     // window dropped older actions the classifier needs to judge.
     for entry in entries {
@@ -617,7 +598,7 @@ fn format_transcript(entries: &[TranscriptEntry]) -> String {
 
 /// Strip `<thinking>...</thinking>` blocks (and unterminated thinking text)
 /// so XML tags inside the model's chain-of-thought don't get matched by
-/// the block/reason parsers. TS `stripThinking` (`yoloClassifier.ts:567`).
+/// the block/reason parsers.
 fn strip_thinking(text: &str) -> String {
     #[allow(clippy::expect_used)]
     static CLOSED: LazyLock<Regex> = LazyLock::new(|| {
@@ -635,7 +616,7 @@ fn strip_thinking(text: &str) -> String {
 
 /// Parse `<block>yes|no</block>`. Closing tag is optional because stage 1
 /// uses `stop_sequences = ["</block>"]` and the provider truncates before
-/// the closer is emitted. TS `parseXmlBlock` (`yoloClassifier.ts:578-584`).
+/// the closer is emitted.
 fn parse_xml_block(text: &str) -> Option<bool> {
     #[allow(clippy::expect_used)]
     static RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -650,7 +631,7 @@ fn parse_xml_block(text: &str) -> Option<bool> {
     })
 }
 
-/// Parse `<reason>...</reason>` (non-greedy). TS `parseXmlReason`.
+/// Parse `<reason>...</reason>` (non-greedy).
 fn parse_xml_reason(text: &str) -> Option<String> {
     #[allow(clippy::expect_used)]
     static RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -687,15 +668,13 @@ fn extract_assistant_blocks(
                 // Assistant text is deliberately dropped: it is model-authored
                 // and could be crafted to steer the security classifier
                 // (prompt injection into the permission gate). Only tool_use
-                // blocks are kept. TS `yoloClassifier.ts:341-356`.
+                // blocks are kept.
                 coco_messages::AssistantContent::ToolCall(tc) => match projector {
                     // Projector present (production): include the curated
                     // projection, or SKIP the block when the tool declares no
-                    // classifier-relevant input (`None`). Mirrors TS
-                    // `toCompactBlock`, which returns '' (→ omitted) for
-                    // unprojected / unknown tools. A deser failure still yields
-                    // `Some(raw)` from the blanket impl, so malformed inputs
-                    // are kept (TS `catch { encoded = input }`), never skipped.
+                    // classifier-relevant input (`None`). A deser failure still
+                    // yields `Some(raw)` from the blanket impl, so malformed
+                    // inputs are kept, never skipped.
                     Some(project) => {
                         project(&tc.tool_name, &tc.input).map(|summary| TranscriptBlock::ToolCall {
                             tool_name: tc.tool_name.clone(),

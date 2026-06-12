@@ -1,13 +1,9 @@
 //! Team discovery — enumerate teams and teammate statuses.
-//!
-//! TS: utils/teamDiscovery.ts
 
 use crate::team_file;
 use crate::types::BackendType;
 
 /// Summary of a team.
-///
-/// TS: `TeamSummary`
 #[derive(Debug, Clone)]
 pub struct TeamSummary {
     pub name: String,
@@ -17,8 +13,6 @@ pub struct TeamSummary {
 }
 
 /// Status of a single teammate.
-///
-/// TS: `TeammateStatus` in utils/teamDiscovery.ts
 #[derive(Debug, Clone)]
 pub struct TeammateStatus {
     pub name: String,
@@ -56,8 +50,6 @@ impl TeammateRunStatus {
 }
 
 /// Get teammate statuses for a team by reading the team file.
-///
-/// TS: `getTeammateStatuses(teamName)`
 pub fn get_teammate_statuses(team_name: &str) -> Vec<TeammateStatus> {
     let Some(team_file) = team_file::read_team_file(team_name).ok().flatten() else {
         return Vec::new();

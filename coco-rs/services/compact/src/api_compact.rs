@@ -1,13 +1,12 @@
 //! API-native context management config builder.
 //!
-//! TS: services/compact/apiMicrocompact.ts. **This module produces the
-//! `context_management` payload sent to providers that support
-//! server-side context editing** (today: Anthropic). Multi-provider
-//! dispatch lives at the `services/inference` layer via the
-//! `ProviderContextEditing` capability trait — providers without
-//! server-side support return `None` from `encode_context_management`,
-//! and the client-side fallback (`crate::micro_advanced::*`) handles
-//! the same effect at the cost of cache invalidation.
+//! Produces the `context_management` payload sent to providers that support
+//! server-side context editing (today: Anthropic). Multi-provider dispatch
+//! lives at the `services/inference` layer via the `ProviderContextEditing`
+//! capability trait — providers without server-side support return `None`
+//! from `encode_context_management`, and the client-side fallback
+//! (`crate::micro_advanced::*`) handles the same effect at the cost of
+//! cache invalidation.
 //!
 //! The two strategies emitted here are:
 //!
@@ -24,17 +23,16 @@ use crate::types::ContextEditStrategy;
 use crate::types::ThinkingKeep;
 
 /// Default trigger threshold for `clear_tool_uses` (input tokens).
-/// Matches TS `DEFAULT_MAX_INPUT_TOKENS` and `CompactApiNativeConfig` default.
+/// Matches `CompactApiNativeConfig` default.
 pub const DEFAULT_API_MAX_INPUT_TOKENS: i64 = 180_000;
 
 /// Default keep-target for `clear_tool_uses` (input tokens after clearing).
-/// Matches TS `DEFAULT_TARGET_INPUT_TOKENS`.
 pub const DEFAULT_API_TARGET_INPUT_TOKENS: i64 = 40_000;
 
 /// Tool names whose results are eligible for `clear_tool_inputs`.
 ///
-/// Matches TS `TOOLS_CLEARABLE_RESULTS` — read/search/web tools that may
-/// have produced large but no-longer-essential output.
+/// Read/search/web tools that may have produced large but no-longer-essential
+/// output.
 pub const TOOLS_CLEARABLE_RESULTS: &[ToolName] = &[
     ToolName::Bash,
     ToolName::PowerShell,
@@ -47,12 +45,10 @@ pub const TOOLS_CLEARABLE_RESULTS: &[ToolName] = &[
 
 /// Tool names that should be **excluded** from `clear_tool_uses`.
 ///
-/// Matches TS `TOOLS_CLEARABLE_USES` plus `ApplyPatch` — file-mutating
-/// tools whose tool_use inputs (the actual edit specifications) carry
-/// semantic value beyond the resulting tool_result, so we keep their
-/// inputs intact. TS list dates from before `ApplyPatch` was added; the
-/// gpt-5 ApplyPatch overlay applies the same rationale (input *is* the
-/// patch spec) so we proactively include it.
+/// File-mutating tools whose tool_use inputs (the actual edit
+/// specifications) carry semantic value beyond the resulting tool_result,
+/// so their inputs are kept intact. `ApplyPatch` is included because its
+/// input *is* the patch spec.
 pub const TOOLS_EXCLUDE_FROM_CLEAR_USES: &[ToolName] = &[
     ToolName::Edit,
     ToolName::Write,
@@ -62,9 +58,8 @@ pub const TOOLS_EXCLUDE_FROM_CLEAR_USES: &[ToolName] = &[
 
 /// Per-call overrides driving [`get_api_context_management`].
 ///
-/// Mirrors TS `getAPIContextManagement` parameter object. Static
-/// gates (`clear_tool_results` / `clear_tool_uses` / threshold / target)
-/// come from `coco_config::ApiNativeConfig`; the model-state-driven
+/// Static gates (`clear_tool_results` / `clear_tool_uses` / threshold /
+/// target) come from `coco_config::ApiNativeConfig`; the model-state-driven
 /// fields (thinking / redact-thinking / clear-all-thinking) are passed
 /// per-call by the inference layer.
 #[derive(Debug, Clone, Default)]
@@ -74,7 +69,7 @@ pub struct ApiContextOptions {
     /// Whether redact-thinking is active (skip `clear_thinking` — redacted
     /// blocks have no model-visible content).
     pub is_redact_thinking_active: bool,
-    /// Force `clear_thinking { keep: 1 }` (TS: long-idle / >1h gap).
+    /// Force `clear_thinking { keep: 1 }` (triggered on long-idle / >1h gap).
     pub clear_all_thinking: bool,
     /// Whether to enable `clear_tool_uses_20250919` clearing tool result
     /// content. Sourced from `CompactApiNativeConfig.clear_tool_results`.
@@ -119,9 +114,8 @@ impl ApiContextOptions {
 /// should treat that as "omit `context_management` from the request" so
 /// the API falls back to defaults.
 ///
-/// TS: `getAPIContextManagement(options)`. Output ordering matches TS
-/// (thinking first, tool_results second, tool_uses third) so server-side
-/// edit application has a stable shape.
+/// Output order: thinking first, tool_results second, tool_uses third,
+/// for stable server-side edit application.
 #[must_use]
 pub fn get_api_context_management(opts: &ApiContextOptions) -> Vec<ContextEditStrategy> {
     let mut strategies = Vec::new();
@@ -149,9 +143,8 @@ pub fn get_api_context_management(opts: &ApiContextOptions) -> Vec<ContextEditSt
     };
 
     // `clear_at_least = trigger - keep_target` so Anthropic frees the
-    // gap rather than its default smaller cut. TS apiMicrocompact.ts:118-121.
-    // Skip when keep_target ≥ trigger (config error: would request a
-    // negative clear).
+    // gap rather than its default smaller cut. Skip when keep_target ≥ trigger
+    // (config error: would request a negative clear).
     let keep_target = if opts.keep_target > 0 {
         opts.keep_target
     } else {

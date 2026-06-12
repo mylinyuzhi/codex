@@ -55,10 +55,9 @@ async fn main() -> Result<()> {
     coco_sandbox::dispatch_or_continue(std::env::args_os());
 
     let cli = Cli::parse();
-    // `--bare` is the flag form of bare mode (TS `isBareMode` = env OR
-    // `--bare`); export the env so every downstream
-    // `is_env_truthy(CocoBareMode)` read — session bootstrap and the per-turn
-    // finalize — observes it.
+    // `--bare` is the flag form of bare mode; export the env so every
+    // downstream `is_env_truthy(CocoBareMode)` read — session bootstrap
+    // and the per-turn finalize — observes it.
     if cli.bare {
         // SAFETY: set once at startup, single-threaded, before any task spawn.
         unsafe {
@@ -81,9 +80,9 @@ async fn main() -> Result<()> {
         "coco entry"
     );
 
-    // `--no-session-persistence` is print-mode-only (TS main.tsx:1855-1859):
-    // it suppresses session transcript/usage writes for a one-shot run, but an
-    // interactive TUI session relies on persistence to stay resumable.
+    // `--no-session-persistence` is print-mode-only: it suppresses session
+    // transcript/usage writes for a one-shot run, but an interactive TUI
+    // session relies on persistence to stay resumable.
     if cli.no_session_persistence
         && !(cli.non_interactive
             || cli.prompt.is_some()
@@ -120,8 +119,7 @@ async fn main() -> Result<()> {
                 // (or `coco --continue` when no id is given) and
                 // hand off to the interactive TUI so the user can
                 // actually continue the conversation, not just
-                // inspect metadata. TS parity: `coco resume` is the
-                // discoverable entry point for `--resume`/`--continue`.
+                // inspect metadata.
                 let mut cli_for_resume = cli.clone();
                 match session_id.clone() {
                     Some(id) => cli_for_resume.resume = Some(id),
@@ -306,7 +304,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // TS mode selection: --print / piped → headless; default → interactive TUI
+    // Mode selection: --print / piped → headless; default → interactive TUI
     let is_piped = !std::io::IsTerminal::is_terminal(&std::io::stdout());
     if cli.prompt.is_some() || is_piped {
         let prompt = cli.prompt.as_deref().unwrap_or("Hello!");
@@ -337,8 +335,6 @@ async fn main() -> Result<()> {
 }
 
 /// Run a single-turn print mode (--print / piped stdout).
-///
-/// TS: runHeadless() in cli/print.ts
 async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
     // Resolve `--resume` / `--continue` / `--fork-session` once at
     // the boot edge so headless and TUI share identical semantics.
@@ -396,8 +392,6 @@ async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<()> {
 }
 
 /// Run in SDK mode: NDJSON-over-stdio JSON-RPC control protocol.
-///
-/// TS reference: `src/cli/structuredIO.ts` — the `StructuredIO` loop.
 async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let cwd = std::env::current_dir()?;
     tracing::info!(
@@ -429,8 +423,8 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // manager is created here only so `SdkServer` can hold it for `mcp/setServers`.
 
     // Slash-command registry — built once inside `build_engine_resources`
-    // with the full TS-parity load order (builtins → extended → skills →
-    // plugin contributions → TS-parity P1 handlers). Both the SDK
+    // with the full load order (builtins → extended → skills →
+    // plugin contributions → P1 handlers). Both the SDK
     // `initialize.commands` advertisement and the TUI dispatch chain
     // (`tui_runner::dispatch_slash_command`) read from the same Arc.
     let command_registry = resources.command_registry.clone();
@@ -438,15 +432,14 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
 
     // Use the manager built inside `build_engine_resources` — the
     // active style already shaped the system prompt, and we surface
-    // the same name + catalog on the SDK init message so TS clients
+    // the same name + catalog on the SDK init message so SDK clients
     // and TUI status lines stay consistent.
     let output_style_manager = resources.output_style_manager.clone();
     let current_output_style = output_style_manager.active_name_for_sdk();
     let mut available_output_styles = output_style_manager.names();
-    // TS exposes `default` as a selectable option in the picker even
-    // though it isn't in the catalog (it represents "no style"). The
-    // SDK schema lists every name a client can set on `outputStyle`,
-    // so we prepend the sentinel here.
+    // Prepend `default` as a selectable option even though it isn't in
+    // the catalog — it represents "no style". The SDK schema lists every
+    // name a client can set on `outputStyle`.
     if !available_output_styles
         .iter()
         .any(|n| n == coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME)
@@ -491,10 +484,8 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let permission_mode = resources.startup.mode;
 
     let transport = StdioTransport::new();
-    // Plugin file watcher → SDK NDJSON: matches TUI parity so SDK
-    // clients receive `plugins/changed`. TS:
-    // `useManagePlugins.ts:293-300` notifies the user regardless of
-    // surface; coco-rs's SDK path was previously missing this wire.
+    // Plugin file watcher → SDK NDJSON: mirrors TUI so SDK clients
+    // receive `plugins/changed` notifications.
     let (plugin_notif_tx, plugin_notif_rx) = tokio::sync::mpsc::channel(16);
     let _plugin_watcher_guard =
         coco_cli::plugin_watch::spawn(plugin_notif_tx, &cwd, &global_config::config_home());
@@ -547,9 +538,9 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     .await?;
 
     // Sandbox hot-reload for the long-lived SDK NDJSON server: settings.json
-    // `sandbox.*` edits re-flow into the live SandboxState (TS `sandbox-adapter`
-    // covers REPL and print/SDK alike). Held for the session; the task exits
-    // when `sandbox_reloader` drops at the end of `run_sdk_mode`.
+    // `sandbox.*` edits re-flow into the live SandboxState. Held for the
+    // session; the task exits when `sandbox_reloader` drops at the end of
+    // `run_sdk_mode`.
     let _sandbox_reload = match (sandbox_reloader.as_ref(), session_runtime.sandbox_state()) {
         (Some(reloader), Some(state)) => Some(coco_cli::sandbox_reload::spawn_sandbox_reload(
             state,
@@ -561,17 +552,16 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
 
     // Install the SDK sandbox approval bridge onto the live SandboxState so a
     // denied sandbox path/network operation can be approved over the SDK
-    // control channel (TS `createSandboxAskCallback`). The bridge is
-    // interior-mutable on the persistent `Arc<SandboxState>`, so it survives
-    // hot-reload. No-op when sandbox is disabled.
+    // control channel. The bridge is interior-mutable on the persistent
+    // `Arc<SandboxState>`, so it survives hot-reload. No-op when sandbox is
+    // disabled.
     if let Some(sandbox_state) = session_runtime.sandbox_state() {
         sandbox_state.set_approval_bridge(Arc::new(
             coco_cli::sdk_server::SdkSandboxApprovalBridge::new(state.clone()),
         ));
     }
 
-    // SDK NDJSON is a non-interactive session (TS parity:
-    // `isNonInteractiveSession === true`). Inject the `StructuredOutput`
+    // SDK NDJSON is a non-interactive session. Inject the `StructuredOutput`
     // tool + register its Stop function hook when `--json-schema` is
     // set. Done post-SessionRuntime so the hook lands in the same
     // `HookRegistry` the engine will dispatch from. TUI never reaches
@@ -612,17 +602,15 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     // No-op when AgentTeams is off or this session is itself a teammate.
     coco_cli::leader_inbox_poller::install_leader(session_runtime.clone(), None).await;
 
-    // TS parity (`main.tsx:2437/2577/2607`): SessionStart hooks fire
-    // once at session bootstrap; output queues onto the shared
-    // sync-hook buffer and surfaces as `hook_*` reminders on the
-    // first turn's reminder pass.
+    // SessionStart hooks fire once at session bootstrap; output queues
+    // onto the shared sync-hook buffer and surfaces as `hook_*` reminders
+    // on the first turn's reminder pass.
     session_runtime.fire_session_start_hooks("startup").await;
 
-    // TS `executeSetupHooks('maintenance')` runs at every interactive
-    // bootstrap to give project setup hooks a chance to refresh state
-    // (env files, build artefacts, …). The 'init' trigger is reserved
-    // for the explicit `coco init` flow, which runs in a separate
-    // entry path. Failure is logged + tolerated.
+    // Setup hooks fire at every interactive bootstrap to give project
+    // setup hooks a chance to refresh state (env files, build artefacts,
+    // …). The 'init' trigger is reserved for the explicit `coco init`
+    // flow. Failure is logged + tolerated.
     session_runtime
         .fire_setup_hooks(coco_hooks::orchestration::SetupTrigger::Maintenance)
         .await;
@@ -653,10 +641,9 @@ async fn run_sdk_mode(cli: &Cli) -> Result<()> {
     let dispatch_result = server.run().await;
 
     // Wait for any in-flight auto-memory extraction to complete before
-    // we exit so partial writes aren't dropped on process shutdown. TS
-    // parity: `print.ts` awaits `drainPendingExtraction(60_000)` before
-    // emitting the lifecycle exit. Done after `server.run()` so the
-    // dispatch loop has already stopped accepting new turns.
+    // we exit so partial writes aren't dropped on process shutdown. Done
+    // after `server.run()` so the dispatch loop has already stopped
+    // accepting new turns.
     let session_runtime_guard = state.session_runtime.read().await;
     if let Some(session_runtime) = session_runtime_guard.as_ref() {
         // Persist coordinator mode at exit so a later `--resume` re-derives the

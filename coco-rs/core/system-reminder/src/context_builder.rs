@@ -27,8 +27,7 @@ use crate::generator::GeneratorContextBuilder;
 /// - `needs_plan_mode_exit_attachment` — forwards the one-shot flag.
 /// - `needs_auto_mode_exit_attachment` — forwards the one-shot flag.
 /// - `is_auto_mode` — `mode == Auto` **or** (`mode == Plan` and
-///   `is_auto_classifier_active`). Mirrors TS `inAuto || inPlanWithAuto`
-///   (`attachments.ts:1341-1344`). The classifier flag is a session-scoped
+///   `is_auto_classifier_active`). The classifier flag is a session-scoped
 ///   `AutoModeState.is_active()` read by the engine before building the
 ///   `TurnReminderInput`; keeping it as a parameter here avoids pulling
 ///   `core/permissions` into this helper's dependency graph.
@@ -66,8 +65,7 @@ pub fn apply_app_state<'a>(
 
 /// Apply the per-agent todo-list snapshot from `app_state`.
 ///
-/// TS keys todos by `agentId ?? sessionId` (see
-/// `getTodoReminderAttachments` at `attachments.ts:3304`). Callers pass the
+/// Todos are keyed by `agentId ?? sessionId`; callers pass the
 /// already-resolved key.
 pub fn apply_todos_for_key<'a>(
     builder: GeneratorContextBuilder<'a>,

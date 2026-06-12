@@ -36,7 +36,7 @@ fn headless_ctx(cwd: Option<&str>) -> AutoModeContext<'_> {
     }
 }
 
-/// Mock classifier that always allows (TS wire shape: `<block>no</block>`).
+/// Mock classifier that always allows (`<block>no</block>`).
 async fn mock_allow(_req: ClassifyRequest) -> Result<String, String> {
     Ok("<block>no</block>".into())
 }
@@ -92,7 +92,7 @@ async fn test_safe_tool_allows_and_resets_streak() {
     )
     .await;
     assert!(matches!(result, Some(PermissionDecision::Allow { .. })));
-    // Any allow clears the consecutive streak (TS recordSuccess).
+    // Any allow clears the consecutive streak.
     assert_eq!(tracker.consecutive_denials, 0);
 }
 
@@ -344,7 +344,7 @@ async fn test_denial_limit_consecutive_falls_back_to_ask() {
         .await;
     }
     // The 3rd consecutive block crosses the threshold → interactive Ask with
-    // a transcript-review warning (TS handleDenialLimitExceeded).
+    // a transcript-review warning.
     match last {
         Some(PermissionDecision::Ask { message, .. }) => {
             assert!(message.contains("consecutive"), "got: {message}");
@@ -441,8 +441,8 @@ async fn test_classifier_unavailable_interactive_denies_by_default() {
         None,
     )
     .await;
-    // Default posture is fail-closed (matches TS `tengu_iron_gate_closed`):
-    // a transient outage denies even when an interactive prompt is reachable.
+    // Default posture is fail-closed: a transient outage denies even when
+    // an interactive prompt is reachable.
     assert!(matches!(result, Some(PermissionDecision::Deny { .. })));
 }
 

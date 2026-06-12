@@ -82,8 +82,6 @@ impl OAuthTokens {
 }
 
 /// Login method enforcement.
-///
-/// TS: getAuthTokenSource() priority chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoginMethod {
@@ -111,7 +109,6 @@ pub struct AuthResolveOptions {
 
 /// Resolve the auth method from environment variables and config.
 ///
-/// TS: services/api/client.ts — environment-based provider detection.
 /// Priority order:
 /// 1. ANTHROPIC_AUTH_TOKEN env var (raw auth token)
 /// 2. ANTHROPIC_API_KEY env var → ApiKey
@@ -275,8 +272,6 @@ pub fn clear_stored_oauth_tokens(config_dir: &Path) -> Result<(), coco_error::Bo
 ///
 /// Results are cached for 5 minutes per command string to avoid repeated
 /// subprocess invocations on every API call.
-///
-/// TS: getApiKeyFromApiKeyHelper() -- runs a command to get the key.
 pub fn get_api_key_from_helper(helper_command: &str) -> Option<String> {
     // Check cache first.
     if let Ok(cache) = api_key_cache().lock()

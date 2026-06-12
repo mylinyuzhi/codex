@@ -1,7 +1,5 @@
 //! iTerm2 pane backend for teammate execution.
 //!
-//! TS: utils/swarm/backends/ITermBackend.ts
-//!
 //! Uses the `it2` CLI to manage native iTerm2 split panes.
 //! Most cosmetic methods (color, title, rebalance) are no-ops
 //! due to it2 CLI performance overhead (each call spawns Python).
@@ -22,8 +20,6 @@ use crate::types::BackendType;
 const IT2_COMMAND: &str = "it2";
 
 /// iTerm2 pane backend.
-///
-/// TS: `class ITermBackend implements PaneBackend`
 pub struct ITermBackend {
     /// Session IDs of created teammate panes (for recovery).
     teammate_session_ids: Mutex<Vec<String>>,

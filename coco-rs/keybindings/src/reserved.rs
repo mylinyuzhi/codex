@@ -1,6 +1,4 @@
-//! Reserved shortcuts — TS port of `keybindings/reservedShortcuts.ts`.
-//!
-//! Three categories:
+//! Reserved shortcuts. Three categories:
 //!
 //! * [`NON_REBINDABLE`] — hardcoded in coco-rs; user attempts to rebind
 //!   produce a validator **error**.
@@ -9,8 +7,6 @@
 //!   reach the application.
 //! * [`MACOS_RESERVED`] — additional macOS-only shortcuts the OS
 //!   intercepts (Cmd+C/V/X, Cmd+Q, etc.).
-//!
-//! See `keybindings/reservedShortcuts.ts:16-83` for the TS source.
 
 use crate::validator::Severity;
 
@@ -27,8 +23,6 @@ pub struct ReservedShortcut {
 }
 
 /// Shortcuts that cannot be rebound — they are hardcoded in coco-rs.
-///
-/// TS source: `reservedShortcuts.ts:16-33`.
 pub const NON_REBINDABLE: &[ReservedShortcut] = &[
     ReservedShortcut {
         key: "ctrl+c",
@@ -49,10 +43,9 @@ pub const NON_REBINDABLE: &[ReservedShortcut] = &[
 
 /// Terminal/OS-reserved shortcuts that may not reach the application.
 ///
-/// TS source: `reservedShortcuts.ts:43-54`. Note: `ctrl+s` (XOFF) and
-/// `ctrl+q` (XON) are deliberately **not** here because most modern
-/// terminals disable flow control by default and we use `ctrl+s` for
-/// the stash feature.
+/// Note: `ctrl+s` (XOFF) and `ctrl+q` (XON) are deliberately **not** here
+/// because most modern terminals disable flow control by default and we use
+/// `ctrl+s` for the stash feature.
 pub const TERMINAL_RESERVED: &[ReservedShortcut] = &[
     ReservedShortcut {
         key: "ctrl+z",
@@ -67,8 +60,6 @@ pub const TERMINAL_RESERVED: &[ReservedShortcut] = &[
 ];
 
 /// macOS-only OS-intercepted shortcuts.
-///
-/// TS source: `reservedShortcuts.ts:59-67`.
 pub const MACOS_RESERVED: &[ReservedShortcut] = &[
     ReservedShortcut {
         key: "cmd+c",
@@ -110,8 +101,6 @@ pub const MACOS_RESERVED: &[ReservedShortcut] = &[
 /// Return all reserved shortcuts for the current platform — non-rebindable
 /// first (highest priority), terminal-reserved next, macOS additions on
 /// macOS hosts.
-///
-/// TS source: `reservedShortcuts.ts:73-83`.
 pub fn get_reserved_shortcuts() -> Vec<ReservedShortcut> {
     let mut reserved: Vec<ReservedShortcut> = NON_REBINDABLE
         .iter()
@@ -130,8 +119,6 @@ pub fn get_reserved_shortcuts() -> Vec<ReservedShortcut> {
 ///
 /// Whitespace separates chord steps (each step normalized
 /// independently); `+` separates a step's modifiers and base key.
-///
-/// TS source: `reservedShortcuts.ts:91-127`.
 pub fn normalize_key_for_comparison(key: &str) -> String {
     key.split_whitespace()
         .map(normalize_step)

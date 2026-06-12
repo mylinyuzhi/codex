@@ -371,12 +371,11 @@ fn extract_discovered_tool_names_picks_up_toolsearch_input() {
     assert!(names.contains("Edit"));
 }
 
-/// TS-parity (`compact.ts:166-184`): images nested inside
-/// `tool_result.content` arrays must be replaced with `[image]` placeholders
-/// before compact summary, not just images at the top level of user
-/// messages. Without this, BashTool tool_results containing detected image
-/// bytes (`is_likely_image_bytes` → `structuredContent`) survive the strip
-/// and re-trip prompt-too-long during compaction.
+/// Images nested inside `tool_result.content` arrays must be replaced with
+/// `[image]` placeholders before compact summary, not just images at the top
+/// level of user messages. Without this, BashTool tool_results containing
+/// detected image bytes (`is_likely_image_bytes` → `structuredContent`)
+/// survive the strip and re-trip prompt-too-long during compaction.
 #[test]
 fn strip_images_walks_tool_result_content() {
     use coco_llm_types::ToolResultContent;

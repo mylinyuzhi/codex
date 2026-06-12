@@ -1,17 +1,14 @@
 //! Rate-limit state for reminder generators.
 //!
-//! Constants and semantics are **TS-first**:
+//! Presets:
 //!
-//! - [`ThrottleConfig::plan_mode`] / [`ThrottleConfig::auto_mode`] — TS
-//!   `PLAN_MODE_ATTACHMENT_CONFIG` / `AUTO_MODE_ATTACHMENT_CONFIG`
-//!   (`attachments.ts:259-267`). 5-turn throttle with a full reminder every
-//!   5th attachment (so attachments #1, #6, #11, … are Full).
-//! - [`ThrottleConfig::todo_reminder`] — TS `TODO_REMINDER_CONFIG` (`attachments.ts:254-257`).
-//!   10-turn throttle on reminder cadence. TS additionally gates on
-//!   `turnsSinceLastTodoWrite >= 10`; that's an absence check on history and
-//!   stays in the generator's `generate()` path (not the throttle manager).
-//! - [`ThrottleConfig::verify_plan_reminder`] — TS `VERIFY_PLAN_REMINDER_CONFIG`
-//!   (`attachments.ts:291-293`). 10-turn throttle.
+//! - [`ThrottleConfig::plan_mode`] / [`ThrottleConfig::auto_mode`] — 5-turn
+//!   throttle with a full reminder every 5th attachment (so attachments
+//!   #1, #6, #11, … are Full).
+//! - [`ThrottleConfig::todo_reminder`] — 10-turn throttle on reminder cadence.
+//!   An additional absence check on history stays in the generator's
+//!   `generate()` path (not the throttle manager).
+//! - [`ThrottleConfig::verify_plan_reminder`] — 10-turn throttle.
 //!
 //! The manager uses interior mutability (`std::sync::RwLock`) because callers
 //! hold it by shared reference inside async tasks. Lock guards are never held
@@ -41,9 +38,8 @@ pub struct ThrottleConfig {
     /// Cadence for the Full vs Sparse content split. `None` = always Full.
     ///
     /// `Some(n)` → Full on the 1st generation and every n-th thereafter
-    /// (i.e. `session_count == 0 || session_count % n == 0`). Matches TS
-    /// `FULL_REMINDER_EVERY_N_ATTACHMENTS`, which makes attachments
-    /// #1, #6, #11, … Full when `n = 5`.
+    /// (i.e. `session_count == 0 || session_count % n == 0`), which makes
+    /// attachments #1, #6, #11, … Full when `n = 5`.
     pub full_content_every_n: Option<i32>,
 }
 
@@ -58,7 +54,7 @@ impl ThrottleConfig {
         }
     }
 
-    /// TS `PLAN_MODE_ATTACHMENT_CONFIG`: 5-turn throttle, full every 5th.
+    /// Plan mode: 5-turn throttle, full every 5th.
     pub const fn plan_mode() -> Self {
         Self {
             min_turns_between: 5,
@@ -68,12 +64,12 @@ impl ThrottleConfig {
         }
     }
 
-    /// TS `AUTO_MODE_ATTACHMENT_CONFIG`: identical to plan_mode.
+    /// Auto mode: identical to plan_mode.
     pub const fn auto_mode() -> Self {
         Self::plan_mode()
     }
 
-    /// TS `TODO_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS`: 10.
+    /// Todo reminder: 10 turns between reminders.
     pub const fn todo_reminder() -> Self {
         Self {
             min_turns_between: 10,
@@ -83,7 +79,7 @@ impl ThrottleConfig {
         }
     }
 
-    /// TS `VERIFY_PLAN_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS`: 10.
+    /// Verify-plan reminder: 10 turns between reminders.
     pub const fn verify_plan_reminder() -> Self {
         Self {
             min_turns_between: 10,
@@ -196,10 +192,9 @@ impl ThrottleManager {
 
     /// Decide Full vs Sparse for the *next* generation.
     ///
-    /// Full when `session_count == 0` or `session_count % n == 0`. Matches TS
-    /// `attachmentCount % FULL_REMINDER_EVERY_N_ATTACHMENTS === 1` at
-    /// `attachments.ts:1229` — because TS increments count *before* the check,
-    /// `count = 1,6,11,…` maps to our `session_count = 0,5,10,…`.
+    /// Full when `session_count == 0` or `session_count % n == 0`.
+    /// Because the check increments count *before* comparing, `count = 1,6,11,…`
+    /// maps to our `session_count = 0,5,10,…`.
     pub fn should_use_full_content(
         &self,
         attachment_type: AttachmentType,

@@ -1,9 +1,6 @@
 //! `/theme` — open the standalone theme picker.
 //!
-//! TS source: `commands/theme/theme.tsx`. Its `call` is `(onDone, _context)` —
-//! it ignores any argument and always renders `<ThemePicker>` (and
-//! `commands/theme/index.ts` declares no `argumentHint`). The picker is the
-//! only mode; coco-rs mirrors that exactly.
+//! Ignores any argument and always opens the theme picker.
 
 use async_trait::async_trait;
 
@@ -15,8 +12,8 @@ pub struct ThemeHandler;
 
 #[async_trait]
 impl CommandHandler for ThemeHandler {
-    /// Always open the picker overlay. TS ignores any typed argument, so we do
-    /// too — the live-preview picker is the single entry point.
+    /// Always open the picker overlay — the live-preview picker is the single
+    /// entry point; any typed argument is ignored.
     async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
         Ok(CommandResult::OpenDialog(DialogSpec::ThemePicker))
     }

@@ -309,8 +309,8 @@ pub(crate) fn plugin_hint_content(
     ph: &PluginHintState,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    // Mirror TS PluginHintMenu.tsx: a short body describing the plugin plus
-    // a 3-option select (install / dismiss / disable-all).
+    // A short body describing the plugin plus a 3-option select
+    // (install / dismiss / disable-all).
     let options = [
         t!("dialog.plugin_hint_install", name = ph.plugin_name.as_str()).to_string(),
         t!("dialog.plugin_hint_no").to_string(),

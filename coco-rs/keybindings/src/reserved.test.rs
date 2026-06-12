@@ -43,7 +43,7 @@ fn normalize_collapses_aliases_and_sorts_modifiers() {
 #[test]
 fn normalize_handles_chord_per_step() {
     // Splitting a chord on `+` first would mangle "x ctrl" into a
-    // modifier list — verify per-step normalization (TS bug fix).
+    // modifier list — verify per-step normalization is applied.
     let normalized = normalize_key_for_comparison("ctrl+x ctrl+b");
     assert_eq!(normalized, "ctrl+x ctrl+b");
 }

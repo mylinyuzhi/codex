@@ -1,7 +1,5 @@
 //! Team file I/O — disk persistence for team configuration.
 //!
-//! TS: utils/swarm/teamHelpers.ts — readTeamFile, writeTeamFileAsync, getTeamDir.
-//!
 //! File layout:
 //! ```text
 //! ~/.coco/teams/
@@ -22,8 +20,6 @@ use crate::types::TeamFile;
 ///
 /// `COCO_TEAMS_DIR` overrides it (tests isolate the teams/mailbox tree; a
 /// future swarm-leader can relocate it). Otherwise `~/.coco/teams/`.
-///
-/// TS: `~/.claude/teams/`
 pub fn teams_base_dir() -> PathBuf {
     if let Some(dir) = coco_config::env::env_opt(coco_config::EnvKey::CocoTeamsDir) {
         return PathBuf::from(dir);
@@ -35,22 +31,16 @@ pub fn teams_base_dir() -> PathBuf {
 }
 
 /// Get the team directory for a given team name.
-///
-/// TS: `getTeamDir(teamName)` → `~/.claude/teams/{sanitized-name}/`
 pub fn get_team_dir(team_name: &str) -> PathBuf {
     teams_base_dir().join(crate::types::sanitize_name(team_name))
 }
 
 /// Get the team file path for a given team name.
-///
-/// TS: `getTeamFilePath(teamName)` → `~/.claude/teams/{name}/config.json`
 pub fn get_team_file_path(team_name: &str) -> PathBuf {
     get_team_dir(team_name).join("config.json")
 }
 
 /// Read a team file from disk.
-///
-/// TS: `readTeamFile(teamName)`
 pub fn read_team_file(team_name: &str) -> crate::Result<Option<TeamFile>> {
     let path = get_team_file_path(team_name);
     if !path.exists() {
@@ -62,8 +52,6 @@ pub fn read_team_file(team_name: &str) -> crate::Result<Option<TeamFile>> {
 }
 
 /// Write a team file to disk.
-///
-/// TS: `writeTeamFileAsync(teamName, teamFile)`
 pub fn write_team_file(team_name: &str, team_file: &TeamFile) -> crate::Result<()> {
     let path = get_team_file_path(team_name);
     if let Some(parent) = path.parent() {
@@ -80,8 +68,7 @@ pub fn write_team_file(team_name: &str, team_file: &TeamFile) -> crate::Result<(
 /// for the **teammate** side, which has no leader-side roster manager to
 /// upsert. Used when a (cross-process) teammate self-cycles or applies a
 /// `ModeSetRequest`, so the leader's roster view reflects the live mode.
-/// No-op when the team file or member is missing. TS:
-/// `teamHelpers.ts:357 setMemberMode`.
+/// No-op when the team file or member is missing.
 pub fn set_member_mode_in_team_file(
     team_name: &str,
     member_name: &str,
@@ -98,8 +85,6 @@ pub fn set_member_mode_in_team_file(
 }
 
 /// Remove a teammate from the team file by agent ID.
-///
-/// TS: `removeMemberByAgentId(teamName, agentId)`
 pub(crate) fn remove_member_by_agent_id(team_name: &str, agent_id: &str) -> crate::Result<bool> {
     let Some(mut team_file) = read_team_file(team_name)? else {
         return Ok(false);
@@ -141,9 +126,9 @@ pub fn list_team_names() -> Vec<String> {
 
 /// Outcome of [`cleanup_team_directories`].
 ///
-/// `tasks_dir_removed` mirrors the TS success-path guard: TS calls
-/// `notifyTasksUpdated()` **only** after `rm(tasksDir)` succeeds (the
-/// `catch` path does not notify). Callers that own a task-list change
+/// `tasks_dir_removed` gates callers' task-list change notification:
+/// `notifyTasksUpdated()` fires **only** after `rm(tasksDir)` succeeds
+/// (the `catch` path does not notify). Callers that own a task-list change
 /// notifier (e.g. [`crate::roster_store::TeamRosterStore::delete_team`])
 /// fire it iff this flag is `true`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -157,15 +142,13 @@ pub struct CleanupOutcome {
 /// Clean up everything a team owns: per-member worktrees, the team dir,
 /// and the team's task-list directory.
 ///
-/// TS: `cleanupTeamDirectories(teamName)` (`teamHelpers.ts:641-683`) —
-/// destroy each `member.worktreePath`, then `rm` the team dir, then `rm`
-/// `getTasksDir(sanitizedName)`. The worktree + tasks-dir steps are
-/// best-effort (TS `Promise.allSettled`): a failure there is logged and
-/// must not abort the team-dir removal.
+/// Destroys each `member.worktreePath`, then removes the team dir, then
+/// removes `getTasksDir(sanitizedName)`. The worktree + tasks-dir steps are
+/// best-effort: a failure there is logged and must not abort the team-dir
+/// removal.
 ///
 /// Returns [`CleanupOutcome::tasks_dir_removed`] so the caller can fire a
-/// task-list change notification on the success path only — TS notifies
-/// inside the `rm(tasksDir)` `try`, never the `catch`. The notification
+/// task-list change notification on the success path only. The notification
 /// itself is wired at the caller (it owns the task-list handle); this
 /// low-level file-IO helper stays dependency-free.
 pub fn cleanup_team_directories(team_name: &str) -> crate::Result<CleanupOutcome> {
@@ -205,8 +188,7 @@ pub fn cleanup_team_directories(team_name: &str) -> crate::Result<CleanupOutcome
         ));
     // `tasks_dir_removed` stays `true` when the dir never existed (nothing
     // orphaned) and flips to `false` only when an attempted removal failed
-    // — that flag gates the caller's task-list change notification, exactly
-    // like TS notifies inside the `rm(tasksDir)` `try` but not its `catch`.
+    // — that flag gates the caller's task-list change notification.
     let mut tasks_dir_removed = true;
     if tasks_dir.is_dir()
         && let Err(e) = std::fs::remove_dir_all(&tasks_dir)
@@ -229,9 +211,6 @@ pub fn cleanup_team_directories(team_name: &str) -> crate::Result<CleanupOutcome
 /// `coco` processes orphan — gh-32730 class), THEN remove the team dir +
 /// worktrees + tasks. Pane-kill must precede dir removal because it reads
 /// the member list out of the team file.
-///
-/// TS: `cleanupSessionTeams()` → `killOrphanedTeammatePanes` +
-/// `cleanupTeamDirectories`.
 pub fn cleanup_session_teams(session_id: &str) -> crate::Result<()> {
     for name in list_team_names() {
         if let Ok(Some(tf)) = read_team_file(&name)
@@ -254,7 +233,7 @@ pub fn cleanup_session_teams(session_id: &str) -> crate::Result<()> {
 
 /// Destroy a git worktree.
 ///
-/// TS: `destroyWorktree(worktreePath)` — runs `git worktree remove`, falls back to rm.
+/// Runs `git worktree remove`, falls back to rm.
 pub fn destroy_worktree(worktree_path: &str) -> crate::Result<()> {
     let path = std::path::Path::new(worktree_path);
     if !path.exists() {
@@ -276,8 +255,6 @@ pub fn destroy_worktree(worktree_path: &str) -> crate::Result<()> {
 static SESSION_TEAMS: std::sync::RwLock<Option<Vec<String>>> = std::sync::RwLock::new(None);
 
 /// Register a team for cleanup when the session ends.
-///
-/// TS: `registerTeamForSessionCleanup(teamName)`
 pub fn register_team_for_session_cleanup(team_name: &str) {
     let mut guard = SESSION_TEAMS
         .write()
@@ -289,8 +266,6 @@ pub fn register_team_for_session_cleanup(team_name: &str) {
 }
 
 /// Unregister a team from session cleanup.
-///
-/// TS: `unregisterTeamForSessionCleanup(teamName)`
 pub fn unregister_team_for_session_cleanup(team_name: &str) {
     let mut guard = SESSION_TEAMS
         .write()
@@ -317,8 +292,6 @@ pub fn get_session_cleanup_teams() -> Vec<String> {
 /// (`AgentHandle::teardown_teammate` → registry pane backend); an iTerm2
 /// pane left by a crash is a documented follow-up, not killed with the
 /// wrong backend.
-///
-/// TS: `killOrphanedTeammatePanes(teamName)`.
 pub fn kill_orphaned_teammate_panes(team_name: &str) -> crate::Result<()> {
     let Some(team_file) = read_team_file(team_name)? else {
         return Ok(());

@@ -1,8 +1,7 @@
 //! `TeamCreateTool` and `TeamDeleteTool` — team lifecycle.
 //!
-//! TS: `tools/TeamCreateTool/`, `tools/TeamDeleteTool/`. Grouped here
-//! because both have a tiny surface and share the `AgentHandle`-routed
-//! dispatch shape.
+//! Grouped here because both have a tiny surface and share the
+//! `AgentHandle`-routed dispatch shape.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::CreateTeamRequest;
@@ -17,8 +16,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
-/// Full model-facing prompt for [`TeamCreateTool`]. TS parity:
-/// `TeamCreateTool/prompt.ts getPrompt()` (template literal, `.trim()`-ed).
+/// Full model-facing prompt for [`TeamCreateTool`].
 const TEAM_CREATE_PROMPT: &str = r#"# TeamCreate
 
 ## When to Use
@@ -128,8 +126,7 @@ Teammates should:
 - Use TaskUpdate to mark tasks completed.
 - If you are an agent in the team, the system will automatically send idle notifications to the team lead when you stop."#;
 
-/// Full model-facing prompt for [`TeamDeleteTool`]. TS parity:
-/// `TeamDeleteTool/prompt.ts getPrompt()` (template literal, `.trim()`-ed).
+/// Full model-facing prompt for [`TeamDeleteTool`].
 const TEAM_DELETE_PROMPT: &str = r#"# TeamDelete
 
 Remove team and task directories when the swarm work is complete.
@@ -144,11 +141,6 @@ This operation:
 Use this when all teammates have finished their work and you want to clean up the team resources. The team name is automatically determined from the current session's team context."#;
 
 /// Typed input for [`TeamCreateTool`].
-///
-/// TS parity: `TeamCreateTool.ts:37-49 inputSchema` (`z.strictObject`) —
-/// `team_name` is required, `description` / `agent_type` are optional.
-/// (No `#[derive(Default)]`: `team_name` is a required non-`Option` field
-/// per the TS `z.string()` without `.optional()`.)
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct TeamCreateInput {
     /// Name for the new team to create.
@@ -190,13 +182,12 @@ impl Tool for TeamCreateTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
-    /// Short UI label. TS parity: `TeamCreateTool.ts:107-109 description()`.
+    /// Short UI label.
     fn description(&self, _input: &TeamCreateInput, _options: &DescriptionOptions) -> String {
         "Create a new team for coordinating multiple agents".into()
     }
 
-    /// Full model-facing tool description. TS parity:
-    /// `TeamCreateTool.ts:111-113 prompt()` → `TeamCreateTool/prompt.ts getPrompt()`.
+    /// Full model-facing tool description.
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         TEAM_CREATE_PROMPT.to_string()
     }
@@ -284,8 +275,7 @@ impl Tool for TeamCreateTool {
 
 /// Typed input for [`TeamDeleteTool`] — no parameters.
 ///
-/// TS `TeamDeleteTool.ts:21`: `inputSchema = z.strictObject({})` — the
-/// tool reads the team name from the active session context, not from
+/// The tool reads the team name from the active session context, not from
 /// tool input.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TeamDeleteInput {}
@@ -316,13 +306,12 @@ impl Tool for TeamDeleteTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::AgentTeams)
     }
-    /// Short UI label. TS parity: `TeamDeleteTool.ts:50-52 description()`.
+    /// Short UI label.
     fn description(&self, _input: &TeamDeleteInput, _options: &DescriptionOptions) -> String {
         "Clean up team and task directories when the swarm is complete".into()
     }
 
-    /// Full model-facing tool description. TS parity:
-    /// `TeamDeleteTool.ts:54-56 prompt()` → `TeamDeleteTool/prompt.ts getPrompt()`.
+    /// Full model-facing tool description.
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         TEAM_DELETE_PROMPT.to_string()
     }

@@ -1,7 +1,5 @@
 //! `COCO_SHELL_PREFIX` formatting.
 //!
-//! TS source: `utils/bash/shellPrefix.ts` (`formatShellPrefixCommand`).
-//!
 //! Wraps a command with a user-supplied shell prefix. The prefix may include
 //! its own arguments — anything before the last ` -` is treated as the
 //! executable path (and quoted as one unit), anything from `-` onward is

@@ -1,7 +1,7 @@
 //! Google Imagen / Gemini image model provider options.
 //!
-//! Mirrors TS `google-image-model-options.ts` — these options are passed via
-//! `providerOptions.google` and forwarded to the Imagen `:predict` API.
+//! These options are passed via `providerOptions.google` and forwarded
+//! to the Imagen `:predict` API.
 
 use serde::Deserialize;
 use serde::Serialize;

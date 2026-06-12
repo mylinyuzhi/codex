@@ -2,7 +2,7 @@
 //!
 //! This module provides callback types that allow users to hook into
 //! the generation lifecycle. Event types are shared between user callbacks
-//! and telemetry integrations, matching the TS SDK design.
+//! and telemetry integrations.
 //!
 //! # Relationship to CoreEvent
 //!
@@ -65,8 +65,7 @@ impl CallbackModelInfo {
 
 /// Event data for the on_start callback.
 ///
-/// Contains comprehensive information about the generation request,
-/// matching the TS SDK's rich event types.
+/// Contains comprehensive information about the generation request.
 #[derive(Clone)]
 pub struct OnStartEvent {
     // --- Identity ---
@@ -503,8 +502,7 @@ pub enum ToolCallOutcome {
 
 /// Event for tool call finish.
 ///
-/// Uses a discriminated union (`ToolCallOutcome`) for success/error,
-/// matching the TS SDK pattern.
+/// Uses a discriminated union (`ToolCallOutcome`) for success/error.
 #[derive(Clone)]
 pub struct OnToolCallFinishEvent {
     /// Unique call ID.
@@ -621,14 +619,12 @@ impl OnToolCallFinishEvent {
     }
 }
 
-/// OnStepFinishEvent IS a StepResult, matching the TS SDK pattern
-/// where step finish events carry the full step result.
+/// `OnStepFinishEvent` IS a `StepResult` — step finish events carry the full step result.
 pub type OnStepFinishEvent = StepResult;
 
 /// Event data for the on_finish callback.
 ///
-/// Wraps the final StepResult and includes aggregate data,
-/// matching the TS SDK pattern.
+/// Wraps the final StepResult and includes aggregate data.
 #[derive(Debug, Clone)]
 pub struct OnFinishEvent {
     /// The final step result (includes all StepResult fields).
@@ -723,8 +719,7 @@ pub enum ChunkEventData {
 
 /// Event for on_chunk callback in stream_text.
 ///
-/// Uses a typed enum instead of flat string fields,
-/// matching the TS SDK's rich chunk types.
+/// Uses a typed enum for the chunk data.
 #[derive(Debug, Clone)]
 pub struct OnChunkEvent {
     /// The chunk data.

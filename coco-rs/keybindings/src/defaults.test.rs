@@ -17,9 +17,8 @@ fn default_config_parses_every_chord() {
 
 #[test]
 fn defaults_cover_every_user_context_except_known_skips() {
-    // Some contexts have no defaults in TS (Help is one entry; Plugin
-    // has 2). Verify every context in the table parses, not that we
-    // hit them all.
+    // Some contexts have few defaults (Help is one entry; Plugin has 2).
+    // Verify every context in the table parses, not that we hit them all.
     let blocks = default_blocks();
     let contexts: std::collections::HashSet<_> = blocks.iter().map(|b| b.context).collect();
 

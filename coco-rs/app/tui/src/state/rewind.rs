@@ -1,7 +1,4 @@
-//! Rewind state state — MessageSelector equivalent from TS.
-//!
-//! TS: src/components/MessageSelector.tsx
-//!
+//! Rewind state.
 //! The Rust state machine has four phases: MessageSelect (pick a user
 //! message), RestoreOptions (choose what to restore), SummarizeFeedback
 //! (Rust's dedicated input phase for TS's inline option input), and
@@ -17,18 +14,14 @@ pub enum RewindPhase {
     /// Choosing what to restore after picking a message.
     RestoreOptions,
     /// Optional free-text feedback box shown when the user picks a
-    /// Summarize variant. TS: `MessageSelector.tsx:107-128` renders
-    /// the input inside the option list itself; we use a dedicated
-    /// phase to keep the state machine explicit.
+    /// Summarize variant. Rendered as a dedicated phase to keep the
+    /// state machine explicit.
     SummarizeFeedback,
     /// Executing the rewind (loading indicator).
     Confirming,
 }
 
 /// What to restore during rewind.
-///
-/// TS: RestoreOption = 'both' | 'conversation' | 'code' | 'summarize' |
-/// 'summarize_up_to' | 'nevermind' (`MessageSelector.tsx:31`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestoreType {
     /// Restore both code (file history) and conversation (truncate messages).
@@ -39,16 +32,14 @@ pub enum RestoreType {
     CodeOnly,
     /// Summarize messages from the picked message onward; keep the
     /// prefix as-is, replace the suffix with a single summary
-    /// message. Direction = `from` in TS.
+    /// message.
     SummarizeFrom { feedback: Option<String> },
     /// Summarize messages up to the picked message (exclusive); keep
-    /// subsequent messages as-is. Direction = `up_to` in TS. Gated
-    /// by `settings.rewind.allow_summarize_up_to` (default false) to
-    /// match TS's Anthropic-only `'external' === 'ant'` gating.
+    /// subsequent messages as-is. Gated by
+    /// `settings.rewind.allow_summarize_up_to` (default false).
     SummarizeUpTo { feedback: Option<String> },
-    /// Cancel selection — go back to the message list. Mirrors TS's
-    /// `'nevermind'` option (`MessageSelector.tsx:129-132`). Selecting
-    /// it never reaches `handle_rewind`; the confirm handler routes it
+    /// Cancel selection — go back to the message list. Selecting it
+    /// never reaches `handle_rewind`; the confirm handler routes it
     /// back to `RewindPhase::MessageSelect`.
     Nevermind,
 }
@@ -75,9 +66,6 @@ impl RestoreType {
 }
 
 /// A user message that can be rewound to.
-///
-/// TS: MessageSelector shows user messages with truncated content,
-/// relative timestamps, and file change counts.
 #[derive(Debug, Clone)]
 pub struct RewindableMessage {
     /// UUID of the user message. `Uuid::nil()` for the synthetic
@@ -91,38 +79,31 @@ pub struct RewindableMessage {
     /// Index in the full messages vec (for display ordering). `-1`
     /// for the synthetic `(current)` row.
     pub message_index: i32,
-    /// Display text after TS-equivalent prompt/display tag handling.
+    /// Display text after prompt/display tag handling.
     /// Width-dependent truncation belongs in presentation.
     pub display_text: String,
     /// Pre-rendered relative timestamp ("3 minutes ago"). Computed
     /// at state-build time so the picker render doesn't need a
-    /// clock. TS: `formatRelativeTimeAgo(message.timestamp)`
-    /// (`MessageSelector.tsx:336`).
+    /// clock.
     pub relative_time: String,
     /// Permission mode active when this message was created.
     pub permission_mode: Option<PermissionMode>,
     /// Per-row file metadata derived from transcript tool results
     /// between this user message and the next selectable user message.
     /// It renders only after async `can_restore_code` confirms that a
-    /// restorable snapshot exists. TS: `computeDiffStatsBetweenMessages`
-    /// inside the `fileHistoryMetadata` map (`MessageSelector.tsx:285-312`).
+    /// restorable snapshot exists.
     pub diff_stats: Option<DiffStatsPreview>,
     /// Whether file-history can restore this message at all (snapshot
-    /// exists). TS: `fileHistoryCanRestore` returning false renders
-    /// "⚠ No code restore". `None` = unknown / still loading.
+    /// exists). `false` renders "⚠ No code restore". `None` = unknown /
+    /// still loading.
     pub can_restore_code: Option<bool>,
     /// True for the synthetic last row that anchors the default
     /// selection to "now". Selecting it dispatches no rewind — equivalent
-    /// to pressing Esc. TS: virtual `currentUUID` user-message in
-    /// `MessageSelector.tsx:60-66`, rendered as `(current)` italic at
-    /// line 591-601.
+    /// to pressing Esc. Rendered as `(current)` italic.
     pub is_current_prompt: bool,
 }
 
 /// Rewind state.
-///
-/// TS: MessageSelector component state (selectedIndex, messageToRestore,
-/// selectedRestoreOption, diffStatsForRestore, etc.)
 #[derive(Debug, Clone)]
 pub struct RewindState {
     /// Current flow phase.
@@ -139,16 +120,15 @@ pub struct RewindState {
     pub diff_stats: Option<DiffStatsPreview>,
     /// Message UUID that [`Self::diff_stats`] belongs to. Row metadata
     /// and restore preview intentionally have different lifetimes:
-    /// TS computes per-row metadata between adjacent user turns, then
-    /// loads restore stats for the selected checkpoint separately.
+    /// per-row metadata is computed between adjacent user turns, then
+    /// restore stats for the selected checkpoint load separately.
     pub diff_stats_message_id: Option<uuid::Uuid>,
     /// Whether file history is enabled for this session.
     pub file_history_enabled: bool,
     /// Whether file history has changes for selected message.
     pub has_file_changes: bool,
     /// Whether the `SummarizeUpTo` option is shown in the picker.
-    /// TS: gated by `'external' === 'ant'`; we surface it via the
-    /// `rewind.allow_summarize_up_to` setting (default false).
+    /// Surfaced via `rewind.allow_summarize_up_to` setting (default false).
     pub allow_summarize_up_to: bool,
     /// Captured user feedback when the picker is in the
     /// SummarizeFeedback phase. None until the user types something.
@@ -158,16 +138,13 @@ pub struct RewindState {
     /// to dispatch SummarizeFrom or SummarizeUpTo).
     pub pending_summarize: Option<SummarizeDirection>,
     /// True when the picker was opened pre-anchored to a specific
-    /// message (skipping the message-select phase). TS:
-    /// `preselectedMessage` (`MessageSelector.tsx:42-44`). Esc dismisses
+    /// message (skipping the message-select phase). Esc dismisses
     /// fully instead of stepping back to the message list since there
     /// is no list to step back into.
     pub preselected: bool,
 }
 
 /// Direction selector for partial-compact rewind options.
-///
-/// TS: `direction = 'from' | 'up_to'` in `MessageSelector.tsx:195`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummarizeDirection {
     From,
@@ -176,11 +153,9 @@ pub enum SummarizeDirection {
 
 /// Preview of what file rewind would change.
 ///
-/// TS: `DiffStats` from `utils/fileHistory.ts:55-61`. `file_paths`
-/// contains the changed-file paths in display order — used by the
-/// pick-list to render `basename +X -Y` for single-file rows and by
-/// the confirm screen to assemble "a and b" / "a and N other files"
-/// labels (`MessageSelector.tsx:481-523`).
+/// `file_paths` contains the changed-file paths in display order — used by
+/// the pick-list to render `basename +X -Y` for single-file rows and by the
+/// confirm screen to assemble "a and b" / "a and N other files" labels.
 #[derive(Debug, Clone, Default)]
 pub struct DiffStatsPreview {
     pub insertions: i64,
@@ -198,10 +173,8 @@ impl DiffStatsPreview {
 
 /// Build available restore options based on file history state.
 ///
-/// TS: getRestoreOptions(canRestoreCode) in MessageSelector.tsx
-/// (lines 93-134). Summarize is always offered; SummarizeUpTo is
-/// gated behind `allow_summarize_up_to` to mirror TS's Anthropic-only
-/// flag.
+/// Summarize is always offered; SummarizeUpTo is gated behind
+/// `allow_summarize_up_to`.
 pub fn build_restore_options(
     file_history_enabled: bool,
     has_file_changes: bool,
@@ -220,10 +193,9 @@ pub fn build_restore_options(
     if allow_summarize_up_to {
         opts.push(RestoreType::SummarizeUpTo { feedback: None });
     }
-    // TS appends `nevermind` last (`MessageSelector.tsx:129-132`).
-    // Selecting it cancels back to MessageSelect — same behavior as
-    // pressing Esc, but explicitly listed in the picker so the
-    // affordance is discoverable.
+    // Nevermind is appended last. Selecting it cancels back to
+    // MessageSelect — same behavior as pressing Esc, but explicitly
+    // listed in the picker so the affordance is discoverable.
     opts.push(RestoreType::Nevermind);
     opts
 }

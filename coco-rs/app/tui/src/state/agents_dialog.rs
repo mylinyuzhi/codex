@@ -1,10 +1,7 @@
 //! `/agents` dialog state.
 //!
-//! Two-tab overlay (Running + Library) — TS parity:
-//! `cli_unpack_pretty/decls/functions/E24.js` (tab shell `_G`) hosting
-//! `V24.js` (Running tab content) and `bW4.js` (Library tab content).
-//!
-//! Lives in its own module rather than extending `surface_payloads.rs`
+//! Two-tab overlay (Running + Library). Lives in its own module rather
+//! than extending `surface_payloads.rs`
 //! (already 1289 LoC) per the workspace's "no files > 1600 LoC" rule.
 //! Data sources:
 //!   - **Library**: snapshot of `coco_subagent::AgentDefinitionStore`
@@ -32,8 +29,7 @@ pub enum AgentsDialogTab {
 }
 
 impl AgentsDialogTab {
-    /// TS parity: `E24.js:248-253` opens with `selectedTab = 0` and the
-    /// first child is the Running tab.
+    /// Opens with the Running tab selected by default.
     pub const DEFAULT: Self = Self::Running;
 
     /// Cycle to the next tab — wraps. `delta > 0` is right (`→`),
@@ -53,8 +49,7 @@ impl AgentsDialogTab {
 #[derive(Debug, Clone)]
 pub enum LibraryRow {
     /// First row in the list. Selecting it opens the inline 4-step
-    /// create wizard. TS parity: `bW4.js:176` — `onCreateNew`
-    /// callback wires it to the wizard.
+    /// create wizard.
     CreateNew,
     /// Group header (rendered dim, not selectable). One per source
     /// that has at least one agent. The renderer skips these when
@@ -68,20 +63,20 @@ pub enum LibraryRow {
         /// `whenToUse` description, truncated on render.
         description: Option<String>,
         /// Source group this row belongs to. Drives precedence display,
-        /// inline source label (TS `name · source` row layout), and
+        /// inline source label (`name · source` row layout), and
         /// "cannot be modified" hint for built-in rows.
         source: AgentSource,
         /// Optional badge color from frontmatter. Renderer uses it for
         /// the row tint; `None` falls back to the theme default.
         color: Option<AgentColorName>,
         /// `true` for built-in entries — the renderer dims them and
-        /// adds the "cannot be modified" hint per TS `bW4.js:306-327`.
+        /// adds the "cannot be modified" hint.
         is_builtin: bool,
         /// `true` when this `agent_type` is shadowed by a higher-
         /// priority source. Renderer adds an "(overridden)" suffix.
         is_overridden: bool,
         /// Number of currently-running invocations of this agent —
-        /// drives the `· N running` badge (TS `bW4.js:276`).
+        /// drives the `· N running` badge.
         running_count: u32,
         /// Absolute markdown source path. `None` for built-in /
         /// plugin / in-memory entries that aren't editable. Drives
@@ -98,10 +93,8 @@ impl LibraryRow {
         !matches!(self, Self::SourceHeader { .. })
     }
 
-    /// Short inline source label used by the Library row renderer
-    /// (TS `bW4.js` `name · user · ...` layout). Lowercase to keep
-    /// alignment compact; no localization (matches TS's English-only
-    /// source tags).
+    /// Short inline source label used by the Library row renderer.
+    /// Lowercase to keep alignment compact.
     pub fn short_source_label(source: AgentSource) -> &'static str {
         match source {
             AgentSource::UserSettings => "user",
@@ -335,11 +328,10 @@ impl Default for CreateWizardState {
 
 /// Wizard step. Linear forward / back via Enter / Esc.
 ///
-/// TS parity: `CreateAgentWizard` is multi-step with a final review
-/// screen. coco-rs ships a narrower form (`Name` → `Description` →
-/// `Source`) plus a `Confirm` screen so the user can review the
-/// inputs before the irreversible filesystem write. Tools / model /
-/// memory are left to `$EDITOR` per the project's A3 折中 decision.
+/// Four steps: `Name` → `Description` → `Source` → `Confirm`, so the
+/// user can review inputs before the irreversible filesystem write.
+/// Tools / model / memory are left to `$EDITOR` per the A3 折中
+/// decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateWizardStep {
     Name,
@@ -374,10 +366,10 @@ impl WizardSource {
 }
 
 /// Returns `true` when `c` is acceptable as a Name-input character.
-/// The wizard rejects invalid Name chars at input time (TS-aligned
-/// filter pattern) so the user gets immediate visual feedback rather
-/// than a deferred Enter-time error message. Whitespace, punctuation,
-/// and non-ASCII letters are all rejected here.
+/// The wizard rejects invalid Name chars at input time so the user
+/// gets immediate visual feedback rather than a deferred Enter-time
+/// error message. Whitespace, punctuation, and non-ASCII letters are
+/// all rejected here.
 pub fn is_valid_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
@@ -473,13 +465,12 @@ pub struct AgentsDialogState {
     /// Clamped at render time when the underlying list shrinks.
     pub running_cursor: usize,
     /// Flat list of rows for the Library tab. Ordering: CreateNew
-    /// first, then each source group (header + rows) in TS-aligned
-    /// order (User, Project, Local, Managed, Plugin, CLI, Built-in).
+    /// first, then each source group (header + rows) in order
+    /// (User, Project, Local, Managed, Plugin, CLI, Built-in).
     /// Built-in rows always render last with `cannot be modified`.
     pub library: Vec<LibraryRow>,
     /// `agent_type` of every agent the user has invoked in this
-    /// session. Promoted above the source-grouped order. TS
-    /// `bW4.js:11-25` `usedThisSession` Set.
+    /// session. Promoted above the source-grouped order.
     pub used_this_session: BTreeSet<String>,
     /// Inline create wizard. `Some` ⇒ the Library tab renders the
     /// wizard instead of the list. `None` ⇒ list view.

@@ -1,13 +1,12 @@
 //! `app:toggleTranscript` handler — open / close the transcript state.
 //!
-//! Mirrors TS `useGlobalKeybindings.tsx::handleToggleTranscript`
-//! (lines 90-150 minus the KAIROS escape hatch). Two-way toggle:
+//! Two-way toggle:
 //!
 //! * not in transcript → open `ModalState::Transcript` with default state
 //! * already in transcript → dismiss the modal (back to chat)
 //!
 //! coco-rs's transcript is a cell-level reader. It keeps expansion state in
-//! the state only and does not mirror TS's show-all path.
+//! the state only and does not implement a show-all path.
 
 use crate::state::AppState;
 use crate::state::ModalState;

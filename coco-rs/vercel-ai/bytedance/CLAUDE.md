@@ -2,9 +2,9 @@
 
 ByteDance Seedance video provider for Vercel AI SDK v4 (via ModelArk API).
 
-## TS Source
+## Origin
 
-Not a port of anything in `@ai-sdk/*` or `claude-code/src/` — coco-rs addition covering ByteDance's ModelArk video API (Seedance model family).
+coco-rs addition covering ByteDance's ModelArk video API (Seedance model family). Not based on any existing SDK spec.
 
 ## Key Types
 

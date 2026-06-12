@@ -1,11 +1,10 @@
 //! Per-recipient pending-message store.
 //!
-//! Mirrors TS `LocalAgentTaskState.pendingMessages: string[]` — a
-//! FIFO of strings queued by `SendMessageTool` for a recipient agent
+//! Per-recipient FIFO of strings queued by `SendMessageTool` for a recipient agent
 //! that's currently running. The recipient's next turn drains the
 //! queue via the `agent_pending_messages` system-reminder, which
 //! renders each item as a `queued_command` attachment with `origin:
-//! coordinator` framing (TS `attachments.ts:1085-1101`).
+//! coordinator` framing.
 //!
 //! ## Why a dedicated trait
 //!
@@ -15,8 +14,6 @@
 //! - Putting the data on `TaskStateBase` would require every consumer
 //!   that reads tasks to thread it through, and serialise the queue in
 //!   wire transcripts where it doesn't belong.
-//!
-//! ## TS source
 //!
 //! - `tasks/LocalAgentTask/LocalAgentTask.tsx:136` —
 //!   `pendingMessages: string[]` field on `LocalAgentTaskState`.
@@ -60,9 +57,8 @@ pub trait PendingMessageStore: Send + Sync {
 
     /// Drain (return + clear) every pending message for `recipient_agent_id`.
     /// Returns an empty Vec when the recipient has nothing queued or
-    /// the store isn't wired. Drain-on-read semantics match TS
-    /// `drainPendingMessages` — once the reminder generator has them,
-    /// they are gone from the queue.
+    /// the store isn't wired. Drain-on-read: once the reminder generator
+    /// has them, they are gone from the queue.
     async fn drain(&self, recipient_agent_id: &str) -> Vec<PendingMessage>;
 
     /// Peek the queue without draining. Used by the system-reminder

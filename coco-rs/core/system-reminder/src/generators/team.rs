@@ -1,28 +1,18 @@
 //! Team / swarm reminder generators (3 variants).
 //!
 //! - [`TeammateMailboxGenerator`] — emits the pre-formatted unread-message
-//!   bundle from `formatTeammateMessages` (TS; coco-rs engine/swarm
-//!   layer pre-formats and passes the final string via
-//!   `ctx.teammate_mailbox`). `attachments.ts:3532`.
-//! - [`TeamContextGenerator`] — one-shot "Team Coordination" injection
-//!   on the first turn for a teammate. Body matches TS
-//!   `messages.ts:3470-3494` verbatim, including the team-leader
-//!   paragraph, task-list workflow note, and the JSON message-format
-//!   block. The first-turn-only gate is enforced upstream — the engine
-//!   passes `Some(snapshot)` only on the first turn — so the generator
-//!   itself fires whenever the snapshot is present.
-//! - [`AgentPendingMessagesGenerator`] — emits one
-//!   `<system-reminder>` per pending teammate message, each wrapped via
-//!   `wrapCommandText(coordinator)`. Mirrors TS
-//!   `getAgentPendingMessageAttachments` (`attachments.ts:1085-1101`)
-//!   which returns `Attachment[]` of N `queued_command` items each
-//!   tagged with `origin: { kind: 'coordinator' }`. The wire-level
-//!   `AttachmentKind::QueuedCommand` mapping is preserved by
+//!   bundle. The engine/swarm layer pre-formats and passes the final string
+//!   via `ctx.teammate_mailbox`.
+//! - [`TeamContextGenerator`] — one-shot "Team Coordination" injection on
+//!   the first turn for a teammate. The first-turn-only gate is enforced
+//!   upstream — the engine passes `Some(snapshot)` only on the first turn.
+//! - [`AgentPendingMessagesGenerator`] — emits one `<system-reminder>` per
+//!   pending teammate message, each wrapped via `wrapCommandText(coordinator)`.
+//!   The wire-level `AttachmentKind::QueuedCommand` mapping is preserved by
 //!   `From<AttachmentType> for AttachmentKind`.
 //!
-//! All three are TS `allThreadAttachments` (Core tier) and gated on
-//! agent-swarms availability upstream; coco-rs leaves that gate to
-//! the engine (populates `None` / empty when swarms are disabled).
+//! All three are Core tier and gated on agent-swarms availability upstream;
+//! the engine populates `None` / empty when swarms are disabled.
 
 use async_trait::async_trait;
 
@@ -96,8 +86,7 @@ impl AttachmentGenerator for TeamContextGenerator {
         let Some(t) = ctx.team_context.as_ref() else {
             return Ok(None);
         };
-        // TS renders the team-coordination prompt with four interpolated
-        // fields; any missing field would produce a nonsense injection,
+        // Any missing field would produce a nonsense injection,
         // so skip if team_name or agent_id is empty.
         if t.team_name.is_empty() || t.agent_id.is_empty() {
             return Ok(None);
@@ -109,13 +98,12 @@ impl AttachmentGenerator for TeamContextGenerator {
     }
 }
 
-/// Render the team-context body. Verbatim from TS `messages.ts:3470-3494`,
-/// with the four field substitutions inlined.
+/// Render the team-context body with the four field substitutions inlined.
 ///
-/// Note: TS does not emit a separate "agent_id" line — only `agentName`,
-/// `teamName`, `teamConfigPath`, `taskListPath` are interpolated. The
-/// agent_id field on [`crate::TeamContextSnapshot`] is kept for future
-/// use (and to gate-check), but is not surfaced in the body.
+/// Note: only `agentName`, `teamName`, `teamConfigPath`, `taskListPath`
+/// are interpolated. The `agent_id` field on
+/// [`crate::TeamContextSnapshot`] is kept for future use (and to
+/// gate-check), but is not surfaced in the body.
 fn render_team_context(t: &crate::TeamContextSnapshot) -> String {
     format!(
         "# Team Coordination\n\n\
@@ -160,18 +148,14 @@ impl AttachmentGenerator for AgentPendingMessagesGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // TS emits one `queued_command` attachment per drained message
-        // (`attachments.ts:1095-1100`), each tagged with coordinator
-        // origin. We reproduce that shape: N `ReminderMessage`s, each
+        // One `queued_command` attachment is emitted per drained message,
+        // each tagged with coordinator origin: N `ReminderMessage`s, each
         // becoming its own `<system-reminder>` block via the inject
-        // pipeline (`inject.rs:157-193`). Coordinator framing matches
-        // `wrapCommandText` (`messages.ts:5503-5504`).
+        // pipeline. Coordinator framing matches `wrapCommandText`.
         //
-        // The TS payload is just the message text (`drainPendingMessages`
-        // returns `string[]`). The Rust-side `AgentPendingMessage.from`
-        // field is intentionally not surfaced in the body to stay
-        // byte-equivalent with TS — the coordinator framing already
-        // signals the source.
+        // The payload is just the message text. The `AgentPendingMessage.from`
+        // field is intentionally not surfaced in the body — the coordinator
+        // framing already signals the source.
         let messages: Vec<ReminderMessage> = ctx
             .agent_pending_messages
             .iter()

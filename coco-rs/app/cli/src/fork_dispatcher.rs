@@ -5,10 +5,9 @@
 //! drive a *fresh* [`coco_query::QueryEngine`] without mutating the
 //! parent. This module owns that bridge.
 //!
-//! TS reference: `utils/forkedAgent.ts::runForkedAgent` —
-//! constructs an `AgentQueryConfig` from `lastCacheSafeParams`,
-//! runs a one-shot turn against a fresh engine, returns the
-//! response text. coco-rs threads the same contract through the
+//! Constructs an `AgentQueryConfig` from `lastCacheSafeParams`,
+//! runs a one-shot turn against a fresh engine, and returns the
+//! response text. The contract is threaded through the
 //! [`coco_query::forked_agent::ForkDispatcher`] trait so that
 //! `app/query` stays free of CLI / runtime types.
 //!
@@ -71,8 +70,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
 
         // Resolve the parent runtime config. The fork inherits the
         // parent's tool/sandbox/web_*/feature/role configuration so
-        // the child engine sees the same world the parent does — TS
-        // parity: forks share `toolUseContext` with the parent.
+        // the child engine sees the same world the parent does.
         let runtime_config = self.runtime.runtime_config.as_ref();
 
         // Forks inherit the parent's settings-driven permission rules;
@@ -118,7 +116,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             tool_overrides: runtime_config.tool_overrides.clone(),
             is_non_interactive: true,
             // Forks are fire-and-forget — no UI to prompt, so a residual `Ask`
-            // must fail closed. TS forked agents set `shouldAvoidPermissionPrompts`.
+            // must fail closed.
             avoid_permission_prompts: true,
             // Fork dispatch is fire-and-forget — model-driven thinking
             // / effort overrides would invalidate the parent cache, so
@@ -143,7 +141,6 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             // reads `fork_isolation` and applies auto agent_id,
             // fresh denial tracking, query_chain_id / query_depth
             // bump, allowed_write_roots fence, and require_can_use_tool).
-            // TS parity: `forkedAgent.ts::createSubagentContext`.
             fork_isolation: Some(Arc::new({
                 let mut iso =
                     coco_query::fork_context::ForkContextOverrides::for_label(options.fork_label);
@@ -200,9 +197,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
                 )) as coco_error::BoxedError
             })?;
 
-        // Multi-message capture (TS parity:
-        // `utils/forkedAgent.ts::runForkedAgent` returns the engine's
-        // actual `Vec<Message>`). Strip the parent-history prefix +
+        // Multi-message capture. Strip the parent-history prefix +
         // the user prompt the fork prepended so the caller only sees
         // the fork's own emissions. Slicing an Arc-vec is a vec of
         // pointer bumps — no deep clone of message bodies.

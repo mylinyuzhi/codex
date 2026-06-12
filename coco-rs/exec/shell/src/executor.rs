@@ -9,8 +9,6 @@
 //! session-env, extglob, eval-quoting, pwd-tracking, encoding) lives in
 //! the provider. Adding a new shell means adding a `ShellProvider` impl,
 //! not editing this file.
-//!
-//! TS source: `utils/Shell.ts` (spawn + wait + post-cwd handling).
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -272,9 +270,9 @@ impl ShellExecutor {
 
     /// Check command safety before execution.
     ///
-    /// Destructive commands are NOT hard-denied — TS treats destructive
-    /// detection as an informational advisory. A destructive command surfaces
-    /// its note as the approval reason (escalate-to-ask), never a block.
+    /// Destructive commands are NOT hard-denied — destructive detection is an
+    /// informational advisory. A destructive command surfaces its note as the
+    /// approval reason (escalate-to-ask), never a block.
     pub fn check_safety(&self, command: &str) -> SafetyResult {
         if crate::read_only::is_read_only_command(command) {
             return SafetyResult::Safe;
@@ -614,9 +612,7 @@ fn apply_sandbox_wrap(
 }
 
 /// Best-effort post-command scrub of planted bare-repo files in `cwd` /
-/// `original_cwd`. Mirrors TS `cleanupAfterCommand()` calling
-/// `scrubBareGitRepoFiles()` (sandbox-adapter.ts:963-966), mitigation for
-/// anthropics/claude-code#29316.
+/// `original_cwd`. Mitigation for anthropics/claude-code#29316.
 fn scrub_bare_repo_after_command(options: &ExecOptions, cwd: &Path, original_cwd: &Path) {
     if options.sandbox.is_none() {
         return;

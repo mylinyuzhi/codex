@@ -1,9 +1,5 @@
 //! `.coco/rules/*.md` discovery + frontmatter `paths` glob matching.
 //!
-//! TS source: `claudemd.ts:697-1397` — `processMdRules`,
-//! `processConditionedMdRules`, plus `splitPathInFrontmatter`
-//! / `parseFrontmatterPaths` from `frontmatterParser.ts:189-279`.
-//!
 //! ## Two flavours of rule
 //!
 //! - **Unconditional** — no `paths:` frontmatter. Eager-loaded once
@@ -13,9 +9,8 @@
 //!   (those weren't eager-loaded).
 //! - **Conditional** — has `paths: <glob list>` frontmatter. Loaded
 //!   per-file-trigger when the trigger file matches one of the
-//!   patterns. Mirrors TS `processConditionedMdRules`
-//!   (`claudemd.ts:1354-1397`) — gitignore-style matching via the
-//!   `ignore` crate, normalised to `relative_to(base_dir)` paths.
+//!   patterns. Uses gitignore-style matching via the `ignore` crate,
+//!   normalised to `relative_to(base_dir)` paths.
 //!
 //! ## Filename matching for rules
 //!
@@ -44,12 +39,11 @@ pub struct RuleFile {
 
 /// Parse the `paths` frontmatter field of a rule file.
 ///
-/// TS: `splitPathInFrontmatter` (`frontmatterParser.ts:189-232`) +
-/// `parseFrontmatterPaths` (lines 254-279). Splits on commas (respecting
-/// brace nesting), then expands `{a,b}` brace alternatives into separate
-/// patterns, drops trailing `/**` (gitignore normalises `path/**` to
-/// `path` matching path + descendants), and treats an empty result or
-/// pure `**` as "no globs" (= unconditional).
+/// Splits on commas (respecting brace nesting), then expands `{a,b}`
+/// brace alternatives into separate patterns, drops trailing `/**`
+/// (gitignore normalises `path/**` to `path` matching path +
+/// descendants), and treats an empty result or pure `**` as "no
+/// globs" (= unconditional).
 ///
 /// Accepts:
 /// - YAML string: `paths: "src/**/*.ts, lib/**/*.rs"`
@@ -72,7 +66,7 @@ pub fn parse_paths_field(input: &coco_frontmatter::FrontmatterValue) -> Option<V
         .into_iter()
         .flat_map(|p| expand_braces(&p))
         // gitignore: `path/**` matches `path` and everything inside.
-        // Stripping the suffix matches TS `parseFrontmatterPaths` line 263.
+        // Strip the trailing `/**` suffix.
         .map(|p| p.strip_suffix("/**").map(String::from).unwrap_or(p))
         .filter(|p| !p.is_empty())
         .collect();
@@ -85,8 +79,7 @@ pub fn parse_paths_field(input: &coco_frontmatter::FrontmatterValue) -> Option<V
 }
 
 /// Comma-split that respects brace nesting (`{a,b}` stays together).
-/// Mirrors TS `splitPathInFrontmatter` for the comma loop only — brace
-/// expansion happens in [`expand_braces`].
+/// Brace expansion happens in [`expand_braces`].
 fn split_paths_in_string(input: &str) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -126,8 +119,7 @@ fn expand_braces(pattern: &str) -> Vec<String> {
     let Some(open) = pattern.find('{') else {
         return vec![pattern.to_string()];
     };
-    // Find matching `}` after `open`. Innermost-first: scan for next
-    // `}` since TS uses a non-nested regex for the same step.
+    // Find matching `}` after `open`. Innermost-first: scan for next `}`.
     let after_open = &pattern[open + 1..];
     let Some(close_rel) = after_open.find('}') else {
         return vec![pattern.to_string()];
@@ -151,10 +143,10 @@ fn expand_braces(pattern: &str) -> Vec<String> {
 /// - `conditional=false` ⇒ only files without `paths:` frontmatter.
 /// - `conditional=true` ⇒ only files with `paths:` frontmatter.
 ///
-/// Empty result on read errors (`ENOENT`/`EACCES`/`ENOTDIR`) — matches
-/// TS `processMdRules` defensive read at `claudemd.ts:730-738`.
+/// Empty result on read errors (`ENOENT`/`EACCES`/`ENOTDIR`) — defensive
+/// read, matching expected behaviour on inaccessible paths.
 ///
-/// Cycle detection on visited directories (mirrors TS `visitedDirs`).
+/// Cycle detection on visited directories.
 pub fn collect_rule_files(rules_dir: &Path, conditional: bool) -> Vec<RuleFile> {
     let mut out: Vec<RuleFile> = Vec::new();
     let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
@@ -229,12 +221,10 @@ fn read_rule_file(path: &Path) -> Option<RuleFile> {
 /// resolved relative to `base_dir`.
 ///
 /// `base_dir` for Project rules is `dirname(dirname(rules_dir))` — i.e.
-/// the dir hosting the `.coco/rules/` subtree (TS
-/// `processConditionedMdRules:1372`). For Managed/User it's the original
-/// CWD.
+/// the dir hosting the `.coco/rules/` subtree. For Managed/User it's
+/// the original CWD.
 ///
-/// Matching uses [`ignore`] (gitignore semantics) — same library TS
-/// uses (`ignore` npm package).
+/// Matching uses [`ignore`] (gitignore semantics).
 pub fn filter_rules_matching(
     rules: Vec<RuleFile>,
     target_file: &Path,

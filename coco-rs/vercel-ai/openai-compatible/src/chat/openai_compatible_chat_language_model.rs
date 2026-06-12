@@ -564,7 +564,7 @@ fn create_chat_stream(
                         state.close_reasoning();
                         state.close_text();
 
-                        // Finalize tool calls (TS parity):
+                        // Finalize tool calls:
                         // 1. Forward any pending un-named buffered deltas
                         //    into the tracker. The tracker rejects them
                         //    because `function.name` is missing — we

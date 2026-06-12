@@ -28,7 +28,7 @@ fn test_extended_builtins_no_overlap_with_base() {
     let mut ext_registry = CommandRegistry::new();
     register_extended_builtins(&mut ext_registry);
     // `/review`, `/security-review`, `/insights` etc. moved to the
-    // TS-parity handler set (Prompt-type). Include them so `key_commands`
+    // P1 handler set (Prompt-type). Include them so `key_commands`
     // below stays meaningful when checking the "post-extension" surface.
     register_ts_parity_handlers(
         &mut ext_registry,
@@ -72,11 +72,10 @@ fn test_extended_builtins_no_overlap_with_base() {
     assert!(base_registry.get("help").is_some());
     assert!(base_registry.get("clear").is_some());
     let clear = ext_registry.get("clear").expect("extended clear exists");
-    // TS parity: `commands/clear/index.ts` declares aliases `['reset', 'new']`.
     assert!(
         clear.base.aliases.iter().any(|a| a == "reset")
             && clear.base.aliases.iter().any(|a| a == "new"),
-        "/clear should expose reset/new aliases (TS parity)"
+        "/clear should expose reset/new aliases"
     );
     // Aliases resolve back to the canonical /clear via registry lookup.
     assert_eq!(
@@ -281,16 +280,15 @@ fn test_config_read_handler_accepts_jsonc_settings() {
     assert_eq!(output, r#"Current value of `language`: "zh-CN""#);
 }
 
-/// `/output-style` is the deprecated stub from TS
-/// `commands/output-style/output-style.tsx`. The handler must:
-///   1. Return the verbatim TS deprecation message regardless of args.
+/// `/output-style` is the deprecated stub. The handler must:
+///   1. Return the deprecation message regardless of args.
 ///   2. Be registered in the extended-builtins registry.
 ///   3. Be marked `is_hidden: true` so it doesn't show up in
-///      typeahead/picker (matches TS `isHidden: true`).
+///      typeahead/picker.
 ///   4. Stay reachable by name via `/help output-style` lookups.
 #[test]
-fn test_output_style_handler_returns_ts_deprecation_message() {
-    // Args ignored — TS handler accepts but ignores them too.
+fn test_output_style_handler_returns_deprecation_message() {
+    // Args ignored — handler accepts but ignores them.
     let expected = "/output-style has been deprecated. Use /config to change your output style, \
                     or set it in your settings file. Changes take effect on the next session.";
     assert_eq!(output_style_handler(""), expected);
@@ -307,10 +305,7 @@ fn test_output_style_command_registered_and_hidden() {
         .get(names::OUTPUT_STYLE)
         .expect("/output-style must be registered");
     assert_eq!(cmd.base.name, "output-style");
-    assert!(
-        cmd.base.is_hidden,
-        "/output-style must be hidden to mirror TS isHidden:true"
-    );
+    assert!(cmd.base.is_hidden, "/output-style must be hidden");
     assert_eq!(
         cmd.base.description,
         "Deprecated: use /config to change output style"
@@ -331,8 +326,8 @@ fn test_output_style_command_registered_and_hidden() {
 }
 
 #[test]
-fn test_color_handler_empty_lists_ts_palette() {
-    // Empty args mirrors TS commands/color/color.ts:34-39.
+fn test_color_handler_empty_lists_palette() {
+    // Empty args: list the available color palette.
     let out = color_handler("");
     assert!(out.starts_with("Please provide a color"));
     for c in [
@@ -344,8 +339,7 @@ fn test_color_handler_empty_lists_ts_palette() {
 
 #[test]
 fn test_color_handler_valid_colors_case_insensitive() {
-    // Both lowercase and uppercase resolve to the canonical lowercase
-    // name (TS lower-cases args before validating).
+    // Both lowercase and uppercase resolve to the canonical lowercase name.
     assert_eq!(color_handler("red"), "Session color set to: red");
     assert_eq!(color_handler("RED"), "Session color set to: red");
     assert_eq!(color_handler("Cyan"), "Session color set to: cyan");
@@ -353,7 +347,7 @@ fn test_color_handler_valid_colors_case_insensitive() {
 
 #[test]
 fn test_color_handler_reset_aliases() {
-    // TS RESET_ALIASES = ['default','reset','none','gray','grey'].
+    // Reset aliases: 'default','reset','none','gray','grey'.
     for alias in ["default", "reset", "none", "gray", "grey", "DEFAULT"] {
         assert_eq!(
             color_handler(alias),

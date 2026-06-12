@@ -6,9 +6,9 @@
 //! The bulk of the breadth comes from the quote/heredoc-aware analyzer suite
 //! in `coco_shell_parser::security` (`default_analyzers()` + `analyze()`).
 //! Those 29 analyzers run against a tree-sitter parse and surface every risk
-//! TS's `bashSecurity.ts` validators catch. Per TS parity, every analyzer-caught
-//! risk maps to [`SecuritySeverity::Ask`] — TS routes all of these through the
-//! normal permission prompt (`behavior: 'ask'`), never an outright deny.
+//! the validator suite catches. Every analyzer-caught risk maps to
+//! [`SecuritySeverity::Ask`] — routed through the normal permission prompt,
+//! never an outright deny.
 //!
 //! A small set of additional checks (`Deny` for raw control characters /
 //! `/proc/*/environ` access) is a DELIBERATE coco-rs divergence: those are
@@ -39,9 +39,9 @@ pub enum SecuritySeverity {
 
 /// Run all security checks on a command string.
 ///
-/// Combines the full `coco_shell_parser` analyzer suite (mapped to `Ask`, per
-/// TS parity) with a couple of coco-rs-specific catastrophic `Deny` checks
-/// (raw control characters, `/proc/*/environ` access).
+/// Combines the full `coco_shell_parser` analyzer suite (mapped to `Ask`) with
+/// a couple of coco-rs-specific catastrophic `Deny` checks (raw control
+/// characters, `/proc/*/environ` access).
 pub fn check_security(command: &str) -> Vec<SecurityCheck> {
     let mut checks = analyzer_checks(command);
 
@@ -54,7 +54,8 @@ pub fn check_security(command: &str) -> Vec<SecurityCheck> {
 }
 
 /// Run the `coco_shell_parser` analyzer suite and map each risk to an `Ask`
-/// security check. TS asks (never denies) for every one of these patterns.
+/// security check. Every pattern routes through the permission prompt, never
+/// an outright deny.
 fn analyzer_checks(command: &str) -> Vec<SecurityCheck> {
     let mut parser = ShellParser::new();
     let parsed = parser.parse(command);

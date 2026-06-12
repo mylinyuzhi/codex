@@ -1,11 +1,9 @@
 //! `StructuredOutput` synthetic tool.
 //!
 //! Captures the model's final response as schema-validated JSON for SDK
-//! consumers. Mirrors TS
-//! [`tools/SyntheticOutputTool/SyntheticOutputTool.ts`](https://example/SyntheticOutputTool.ts):
+//! consumers.
 //!
-//! - Wire name is `"StructuredOutput"` (TS
-//!   `SYNTHETIC_OUTPUT_TOOL_NAME = 'StructuredOutput'`).
+//! - Wire name is `"StructuredOutput"`.
 //! - The tool's `input_schema()` **is** the user-supplied JSON schema —
 //!   the model sees it via the standard tool-calling protocol and the
 //!   provider's strict-tool-input validation does the first-line
@@ -21,10 +19,8 @@
 //!   bootstrap paths (headless print mode, SDK NDJSON) after a
 //!   `--json-schema` value has been parsed.
 //!
-//! TS-divergence note: TS uses Ajv for client-side validation;
-//! coco-rs uses the [`jsonschema`] crate. Both validate against the same
-//! Draft 7 / 2020-12 dialect range; observable behavior is equivalent
-//! for the schemas the model is asked to produce.
+//! Uses the [`jsonschema`] crate for client-side validation against
+//! Draft 7 / 2020-12 dialect range.
 
 use async_trait::async_trait;
 use coco_messages::ToolResult;
@@ -37,11 +33,10 @@ use coco_types::ToolId;
 use coco_types::ToolName;
 use serde_json::Value;
 
-/// User-facing prompt body — TS verbatim
-/// (`SyntheticOutputTool.ts:50-52`).
+/// User-facing prompt body.
 const TOOL_PROMPT: &str = "Use this tool to return your final response in the requested structured format. You MUST call this tool exactly once at the end of your response to provide the structured output.";
 
-/// User-facing description — TS verbatim (`SyntheticOutputTool.ts:48`).
+/// User-facing description.
 const TOOL_DESCRIPTION: &str = "Return structured output in the requested format";
 
 /// Compiled-validator-backed structured-output tool.
@@ -61,8 +56,6 @@ impl StructuredOutputTool {
     ///
     /// Returns an error string when the supplied schema fails its own
     /// meta-validation (invalid keywords, unsupported `$ref`, etc.).
-    /// Mirrors TS `buildSyntheticOutputTool` which returns `{error}` for
-    /// the same condition.
     pub fn new(schema: Value) -> Result<Self, String> {
         let schema = coco_tool_runtime::ToolInputSchema::from_value(schema)
             .map_err(|e| format!("invalid JSON schema: {e}"))?;
@@ -79,11 +72,10 @@ impl StructuredOutputTool {
 #[async_trait]
 impl Tool for StructuredOutputTool {
     /// Untyped input — the schema is user-supplied at runtime, not a
-    /// fixed Rust type. Equivalent to TS's `z.object({}).passthrough()`.
+    /// fixed Rust type.
     type Input = Value;
     /// String-typed output — `render_for_model` emits the canonical
-    /// success message verbatim so the model sees the same text TS
-    /// returns (`SyntheticOutputTool.ts:61`).
+    /// success message verbatim.
     type Output = String;
 
     fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {

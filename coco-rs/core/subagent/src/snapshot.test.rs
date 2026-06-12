@@ -34,7 +34,7 @@ fn test_has_required_mcp_servers_one_missing() {
 
 #[test]
 fn test_has_required_mcp_servers_case_insensitive_substring() {
-    // TS parity: `availableServers.some(s => s.toLowerCase().includes(pattern.toLowerCase()))`.
+    // Case-insensitive substring match.
     let def = def_with_required_mcp("agent", &["GitHub"]);
     assert!(has_required_mcp_servers(&def, &["github-prod".into()],));
     let def_substr = def_with_required_mcp("agent", &["lack"]);

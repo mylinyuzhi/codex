@@ -39,14 +39,14 @@ pub enum AttachmentKind {
     AutoModeExit,
     TodoReminder,
     TaskReminder,
-    /// TS: user-supplied per-turn critical instruction
+    /// User-supplied per-turn critical instruction
     /// (`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).
     ///
     /// **coco-rs dual role**: also serves as the generic carrier kind for
     /// `coco_messages::create_meta_message` / `create_system_reminder_message`
     /// (post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The
     /// reminder-generator path reads `ctx.config.critical_instruction`
-    /// for the TS-aligned case; engine-internal meta injection reuses the
+    /// for the standard case; engine-internal meta injection reuses the
     /// same kind because API-visible + UI-hidden wrapped text is exactly
     /// its visibility profile. Both paths land in `Message::Attachment`
     /// with `AttachmentBody::Api(LlmMessage)`.

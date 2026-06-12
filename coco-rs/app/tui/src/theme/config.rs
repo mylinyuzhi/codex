@@ -38,9 +38,7 @@ impl ThemeRuntimeState {
         if path.exists() {
             return Self::load_from_path(path);
         }
-        // No TUI-local `theme.json`: honor `GlobalConfig.theme` (`~/.coco.json`),
-        // mirroring TS where the active theme lives in GlobalConfig
-        // (`~/.claude.json`), not in `settings.json`.
+        // No TUI-local `theme.json`: honor `GlobalConfig.theme` (`~/.coco.json`).
         let config = ThemeConfig {
             active: global_theme_setting().unwrap_or_default(),
             ..ThemeConfig::default()
@@ -148,7 +146,6 @@ impl ThemeSetting {
 
 impl Default for ThemeSetting {
     fn default() -> Self {
-        // TS `config.ts` defaults `theme: 'dark'`.
         Self::Named(ThemeName::Dark.id().to_string())
     }
 }
@@ -827,8 +824,7 @@ pub(crate) fn persisted_active_setting() -> ThemeSetting {
     global_theme_setting().unwrap_or_default()
 }
 
-/// The theme selection from `GlobalConfig` (`~/.coco.json`) — TS parity (TS
-/// stores the active theme in GlobalConfig at `~/.claude.json`). `None` when
+/// The theme selection from `GlobalConfig` (`~/.coco.json`). `None` when
 /// unset/empty. Consulted only when no TUI-local `theme.json` exists; the
 /// in-app picker still writes `theme.json`, which takes precedence.
 fn global_theme_setting() -> Option<ThemeSetting> {

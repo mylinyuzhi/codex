@@ -1,23 +1,17 @@
-//! Memory reminder generators (2 variants, TS memory-family
-//! reminders).
+//! Memory reminder generators (2 variants).
 //!
-//! - `NestedMemoryGenerator` → TS `nested_memory` (`messages.ts:3700`).
-//!   Fires per-turn when @-mention traversal surfaced nested CLAUDE.md
-//!   / memory files. One text reminder per nested-memory entry, joined
-//!   by `\n\n` within a single `<system-reminder>` (TS emits a vec of
-//!   createUserMessage inside one wrapMessagesInSystemReminder call,
-//!   so coco-rs collapses to one reminder with newline-joined parts to
-//!   keep the XML tag count stable).
+//! - `NestedMemoryGenerator` — `nested_memory` attachment. Fires per-turn
+//!   when @-mention traversal surfaced nested CLAUDE.md / memory files.
+//!   One text reminder per nested-memory entry, joined by `\n\n` within
+//!   a single `<system-reminder>` to keep the XML tag count stable.
 //!
-//! - `RelevantMemoriesGenerator` → TS `relevant_memories`
-//!   (`messages.ts:3708`). Multi-message reminder: one user message
-//!   per memory entry, wrapped in a single `<system-reminder>`.
-//!   Async-prefetched; engine awaits the prefetch at turn start.
+//! - `RelevantMemoriesGenerator` — `relevant_memories` attachment.
+//!   Multi-message reminder: one user message per memory entry, wrapped
+//!   in a single `<system-reminder>`. Async-prefetched; engine awaits
+//!   the prefetch at turn start.
 //!
 //! **Data flow**: the owning `memory` / `context` crates materialize
 //! `Vec<NestedMemoryInfo>` / `Vec<RelevantMemoryInfo>` into ctx.
-//! The data structs mirror TS attachment shapes
-//! (`NestedMemoryAttachment.content` / `RelevantMemoriesAttachment.memories`).
 //!
 //! **Scope**: the data is already modeled in
 //! `core/context::Attachment::{NestedMemory, RelevantMemories}`.
@@ -43,9 +37,8 @@ use coco_config::SystemReminderConfig;
 
 /// Single nested-memory entry surfaced by @-mention traversal.
 ///
-/// Mirrors `coco_context::NestedMemoryAttachment.content` — the TS
-/// template reads `attachment.content.path` + `attachment.content.content`
-/// (note the nested `.content` struct).
+/// Mirrors `coco_context::NestedMemoryAttachment.content` (carries `path`
+/// and `content` fields from the nested struct).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NestedMemoryInfo {
     pub path: String,
@@ -92,13 +85,9 @@ impl AttachmentGenerator for NestedMemoryGenerator {
         if ctx.nested_memories.is_empty() {
             return Ok(None);
         }
-        // TS `messages.ts:3703`: `Contents of ${path}:\n\n${content}`.
-        // TS emits one user message per attachment; coco-rs collapses
-        // into a single text reminder with `\n\n` separators so the
-        // XML wrapping stays one pair of `<system-reminder>` tags
-        // (matches TS batching inside one wrapMessagesInSystemReminder
-        // call since each nested_memory attachment produces one
-        // message in the same wrap).
+        // Format per entry: `Contents of ${path}:\n\n${content}`.
+        // Collapsed into one text reminder with `\n\n` separators so
+        // the XML wrapping stays one pair of `<system-reminder>` tags.
         let parts: Vec<String> = ctx
             .nested_memories
             .iter()
@@ -126,8 +115,7 @@ impl AttachmentGenerator for NestedMemoryGenerator {
 // ---------------------------------------------------------------------------
 
 /// Produces a multi-message reminder — one user message per memory
-/// entry — inside a single `<system-reminder>` wrapper (TS
-/// `wrapMessagesInSystemReminder` with a vec of createUserMessage).
+/// entry — inside a single `<system-reminder>` wrapper.
 #[derive(Debug, Default)]
 pub struct RelevantMemoriesGenerator;
 
@@ -181,11 +169,11 @@ impl AttachmentGenerator for RelevantMemoriesGenerator {
 }
 
 /// Fallback header for pre-existing relevant-memory entries that lack
-/// a stored `header`. TS `memoryHeader(path, mtimeMs)` at
-/// `memoryHeader.ts` produces `Memory: ${path} (last modified ${relativeAge})`;
-/// without access to that helper from this crate we emit a minimal
-/// stable variant. Engine should populate `header` whenever possible
-/// to preserve prompt-cache stability across turns.
+/// a stored `header`. The expected format is
+/// `Memory: ${path} (last modified ${relativeAge})`; without access to a
+/// relative-age helper here we emit a minimal stable variant. Engine
+/// should populate `header` whenever possible to preserve prompt-cache
+/// stability across turns.
 fn fallback_header(path: &str, _mtime_ms: i64) -> String {
     format!("Memory: {path}")
 }

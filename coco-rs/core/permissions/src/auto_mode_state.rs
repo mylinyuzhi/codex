@@ -1,7 +1,5 @@
 //! Session-scoped auto-mode state.
 //!
-//! TS: utils/permissions/autoModeState.ts (39 LOC)
-//!
 //! Three boolean flags controlling auto-mode lifecycle:
 //! - `active`: whether the classifier runs on tool calls
 //! - `cli_flag`: whether `--auto` was passed at startup
@@ -69,8 +67,7 @@ impl AutoModeState {
 
     /// Whether the auto-mode gate is enabled (can enter/stay in auto).
     ///
-    /// TS: `isAutoModeGateEnabled()` — checks circuit_broken + settings + model.
-    /// Simplified here: just checks the circuit breaker.
+    /// Checks the circuit breaker; a full implementation would also check settings and model.
     pub fn is_gate_enabled(&self) -> bool {
         !self.is_circuit_broken()
     }

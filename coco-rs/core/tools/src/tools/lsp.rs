@@ -1,7 +1,6 @@
 //! Shared LSP DTOs + AI-friendly formatters used by `LspTool`.
 //!
-//! TS: `tools/LSPTool/formatters.ts`. The action enum lives in
-//! [`crate::input_types::LspAction`] (9-variant TS-mirror) and dispatch
+//! The action enum lives in [`crate::input_types::LspAction`] and dispatch
 //! lives in [`crate::tools::lsp_tool`]. This file is a leaf module —
 //! pure data + pure formatters, no I/O, no async, no `ctx`.
 
@@ -210,7 +209,7 @@ fn format_location(loc: &LspLocation, cwd: Option<&str>) -> String {
     format!("{path}:{line}:{character}")
 }
 
-// ── Formatters (ported from TS formatters.ts) ──
+// ── Formatters ──
 
 /// Format go-to-definition / go-to-implementation results.
 pub fn format_definition_result(locations: &[LspLocation], cwd: Option<&str>) -> String {
@@ -491,12 +490,11 @@ pub fn count_unique_files(locations: &[LspLocation]) -> i32 {
 /// `coco_config::LspConfig::resolve` finalizer floors negative values
 /// to `0`, so this is the right sentinel to read here).
 ///
-/// **SECURITY** (TS parity, `LSPTool.ts:170-173`): UNC paths (`\\…` or
-/// `//…`) are rejected without `path.exists()` — on Windows the stat
-/// call would attempt to resolve the share and leak NTLM credentials.
-/// Linux/macOS treat `//path` as `/path` so the practical attack
-/// surface there is nil, but we mirror the guard for cross-platform
-/// safety.
+/// **SECURITY**: UNC paths (`\\…` or `//…`) are rejected without
+/// `path.exists()` — on Windows the stat call would attempt to resolve
+/// the share and leak NTLM credentials. Linux/macOS treat `//path` as
+/// `/path` so the practical attack surface there is nil, but the guard
+/// is kept for cross-platform safety.
 pub fn validate_lsp_file(path: &Path, max_bytes: u64) -> Result<(), String> {
     let display = path.to_string_lossy();
     if display.starts_with("\\\\") || display.starts_with("//") {

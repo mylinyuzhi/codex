@@ -42,8 +42,8 @@ fn returns_true_when_most_recent_assistant_over_threshold() {
 
 #[test]
 fn looks_only_at_most_recent_assistant_turn() {
-    // TS `findLast` semantics: an old over-threshold assistant must
-    // NOT trigger fallback once a fresh under-threshold turn lands.
+    // An old over-threshold assistant must NOT trigger fallback once a
+    // fresh under-threshold turn lands.
     let msgs = vec![
         assistant_with_total(500_000),
         create_user_message("interim"),

@@ -91,9 +91,8 @@ pub struct Theme {
     // ── Messages ──
     pub user_message: Color,
     /// Optional background tint applied to user-message lines.
-    /// TS: components/messages/UserMessage draws a terminal-adaptive subtle
-    /// tint so user prompts separate visually from assistant prose. None =
-    /// inherit terminal background.
+    /// A subtle tint so user prompts separate visually from assistant prose.
+    /// None = inherit terminal background.
     pub user_message_bg: Option<Color>,
     pub assistant_message: Color,
     pub thinking: Color,

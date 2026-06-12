@@ -215,7 +215,7 @@ async fn install_server(server_id: &str) -> crate::Result<String> {
     let install_handle = tokio::spawn(async move { installer_clone.install_server(&id).await });
 
     // Drain events until the sender drops (installer finishes). The
-    // 60-second floor matches the longest TS install (gopls is the
+    // 60-second floor matches the longest install (gopls is the
     // outlier — npm-based installs finish in seconds).
     let mut lines = vec![format!("Installing '{server_id}' ...")];
     let drain = async {

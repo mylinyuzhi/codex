@@ -1,10 +1,7 @@
 //! Auto-mode exit reminder generator.
 //!
-//! Phase B ships the exit banner only. Steady-state `auto_mode` Full/Sparse
-//! cadence (TS `auto_mode` attachment) lands in Phase C alongside the
-//! classifier-backed auto-mode runtime.
-//!
-//! Text comes from TS (`messages.ts:3863`, case `auto_mode_exit`) via
+//! One-shot exit banner. Steady-state auto-mode Full/Sparse cadence is
+//! handled by `auto_mode_enter.rs`. Text is rendered by
 //! `coco_context::render_auto_mode_exit_reminder`.
 
 use async_trait::async_trait;
@@ -47,9 +44,8 @@ impl AttachmentGenerator for AutoModeExitGenerator {
         if !ctx.needs_auto_mode_exit_attachment {
             return Ok(None);
         }
-        // Suppress when still in auto mode — the flag is stale. TS clears
-        // stale exit flags in this branch; the engine mirrors that
-        // app-state cleanup after generation.
+        // Suppress when still in auto mode — the flag is stale. The engine
+        // mirrors this app-state cleanup after generation.
         if ctx.is_auto_mode {
             return Ok(None);
         }

@@ -58,7 +58,7 @@ async fn nested_memory_emits_ts_template_for_single_entry() {
         .unwrap()
         .expect("emits");
     let text = r.content().unwrap();
-    // TS template: "Contents of {path}:\n\n{content}"
+    // Expected format: "Contents of {path}:\n\n{content}"
     assert_eq!(text, "Contents of /repo/CLAUDE.md:\n\ncoding rules here");
 }
 

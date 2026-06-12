@@ -1,21 +1,18 @@
 //! Message grouping by API round.
 //!
-//! TS: grouping.ts (64 LOC) — segment messages at API-round boundaries.
+//! Groups messages at API-round boundaries, segmenting by **assistant message
+//! UUID** (not user messages). A new group starts when an assistant message
+//! with a different UUID appears. This correctly handles single-prompt agentic
+//! sessions where the entire workload is one human turn with many tool-call
+//! rounds.
 //!
-//! Groups by **assistant message UUID** (not user messages). A new group starts
-//! when an assistant message with a different UUID appears. This correctly
-//! handles single-prompt agentic sessions where the entire workload is one
-//! human turn with many tool-call rounds.
+//! The grouping key is `AssistantMessage.uuid` (internal unique ID). coco-rs
+//! creates exactly one `AssistantMessage` per API round via stream collection.
+//! If the message pipeline ever changes to yield multiple `AssistantMessage`s
+//! per response, this function must be updated to use a shared response ID
+//! instead.
 //!
-//! **TS uses `message.id` (API response ID)**, which is shared across streaming
-//! chunks from the same response. Rust uses `AssistantMessage.uuid` (internal
-//! unique ID). These produce identical results because coco-rs creates exactly
-//! one `AssistantMessage` per API round via stream collection. If the message
-//! pipeline ever changes to yield multiple `AssistantMessage`s per response,
-//! this function must be updated to use a shared response ID instead.
-//!
-//! When no assistant messages exist, all messages land in a single group
-//! (matching TS behavior).
+//! When no assistant messages exist, all messages land in a single group.
 
 use std::borrow::Borrow;
 

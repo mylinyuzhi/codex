@@ -1,14 +1,13 @@
-//! Keybinding actions — closed enum mirroring TS `KEYBINDING_ACTIONS`.
+//! Keybinding actions — closed enum of all `KEYBINDING_ACTIONS`.
 //!
-//! TS source:
-//! - `keybindings/schema.ts:64-172` — the 86 publicly-validated actions.
-//! - `keybindings/defaultBindings.ts:196-213, 268-294` — internal-only
-//!   actions (`scroll:*`, `selection:*`, `messageActions:*`) used by the
-//!   default bindings but absent from the user-facing schema.
+//! Two categories:
+//! - 86 publicly-validated actions (user-facing schema).
+//! - Internal-only actions (`scroll:*`, `selection:*`, `messageActions:*`)
+//!   used by the default bindings but absent from the user-facing schema.
 //!
 //! Wire format is `namespace:camelCase` (e.g. `"app:exit"`). The `Command`
 //! variant captures user `command:foo` bindings (validated against
-//! TS regex `^command:[a-zA-Z0-9:\-_]+$`, see schema.ts:195-198).
+//! regex `^command:[a-zA-Z0-9:\-_]+$`).
 
 use std::borrow::Cow;
 use std::fmt;
@@ -20,11 +19,11 @@ use serde::Serialize;
 /// All keybinding actions. Wire format is `namespace:camelCase`.
 ///
 /// Custom (de)serialization via `String` ensures we accept and emit the
-/// exact TS strings while still getting compile-time match coverage.
+/// exact wire strings while still getting compile-time match coverage.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum KeybindingAction {
-    // ── App-level (Global context) — schema.ts:65-75 ─────────────────
+    // ── App-level (Global context) ────────────────────────────────────
     AppInterrupt,
     AppExit,
     AppToggleTodos,
@@ -36,40 +35,40 @@ pub enum KeybindingAction {
     AppRedraw,
     AppGlobalSearch,
     AppQuickOpen,
-    /// coco-rs extension (no TS counterpart): immediate quit without the
-    /// double-press confirmation `app:exit` goes through. Default `ctrl+q`.
+    /// coco-rs extension: immediate quit without the double-press confirmation
+    /// `app:exit` goes through. Default `ctrl+q`.
     AppForceQuit,
-    /// coco-rs extension (no TS counterpart): open the help overlay.
-    /// Default `f1`. (`?` on an empty composer also opens help, hardcoded
-    /// in the TUI because it must fall through to typing otherwise.)
+    /// coco-rs extension: open the help overlay. Default `f1`. (`?` on an
+    /// empty composer also opens help, hardcoded in the TUI because it must
+    /// fall through to typing otherwise.)
     AppHelp,
-    /// coco-rs extension (no TS counterpart): open the command palette.
-    /// Default `ctrl+p`; `history:search` (ctrl+r) opens the same surface.
+    /// coco-rs extension: open the command palette. Default `ctrl+p`;
+    /// `history:search` (ctrl+r) opens the same surface.
     AppCommandPalette,
-    /// coco-rs extension (no TS counterpart): open the settings overlay.
-    /// Default `ctrl+,` (the conventional settings shortcut).
+    /// coco-rs extension: open the settings overlay. Default `ctrl+,` (the
+    /// conventional settings shortcut).
     AppSettings,
-    /// coco-rs extension (no TS counterpart): open the session browser /
-    /// resume picker. Default `ctrl+s` (folded from the old TUI cascade).
+    /// coco-rs extension: open the session browser / resume picker. Default
+    /// `ctrl+s` (folded from the old TUI cascade).
     AppSessionBrowser,
-    /// coco-rs extension (no TS counterpart): open the plan editor for the
-    /// current plan. Default `ctrl+g` (folded from the old TUI cascade).
+    /// coco-rs extension: open the plan editor for the current plan. Default
+    /// `ctrl+g` (folded from the old TUI cascade).
     AppPlanEditor,
 
-    // ── History navigation — schema.ts:77-79 ──────────────────────────
+    // ── History navigation ────────────────────────────────────────────
     HistorySearch,
     HistoryPrevious,
     HistoryNext,
 
-    // ── Chat input — schema.ts:81-93 ──────────────────────────────────
+    // ── Chat input ───────────────────────────────────────────────────
     ChatCancel,
     ChatKillAgents,
     ChatCycleMode,
     ChatModelPicker,
     ChatFastMode,
     ChatThinkingToggle,
-    /// coco-rs extension (no TS counterpart): cycle the Main role's
-    /// thinking effort forward through the current model's
+    /// coco-rs extension: cycle the Main role's thinking effort forward
+    /// through the current model's
     /// `supported_thinking_levels`, wrapping at the end. Bound to
     /// `ctrl+t` in Chat context (shadowing the global `app:toggleTodos`
     /// while the user is at the input); `app:toggleTodos` remains
@@ -82,21 +81,21 @@ pub enum KeybindingAction {
     ChatStash,
     ChatImagePaste,
     ChatMessageActions,
-    /// coco-rs extension (no TS counterpart): toggle `<system-reminder>`
-    /// visibility in the transcript. Default `ctrl+shift+r`.
+    /// coco-rs extension: toggle `<system-reminder>` visibility in the
+    /// transcript. Default `ctrl+shift+r`.
     ChatToggleSystemReminders,
-    /// coco-rs extension (no TS counterpart): toggle plan mode. Default
-    /// `tab` in Chat — dispatch is state-dependent (an active inline ghost
-    /// or prompt suggestion accepts instead of toggling).
+    /// coco-rs extension: toggle plan mode. Default `tab` in Chat — dispatch
+    /// is state-dependent (an active inline ghost or prompt suggestion accepts
+    /// instead of toggling).
     ChatTogglePlanMode,
 
-    // ── Autocomplete menu — schema.ts:95-98 ───────────────────────────
+    // ── Autocomplete menu ────────────────────────────────────────────
     AutocompleteAccept,
     AutocompleteDismiss,
     AutocompletePrevious,
     AutocompleteNext,
 
-    // ── Confirmation dialogs — schema.ts:100-108 ──────────────────────
+    // ── Confirmation dialogs ──────────────────────────────────────────
     ConfirmYes,
     ConfirmNo,
     ConfirmPrevious,
@@ -107,35 +106,35 @@ pub enum KeybindingAction {
     ConfirmToggle,
     ConfirmToggleExplanation,
 
-    // ── Tabs — schema.ts:110-111 ──────────────────────────────────────
+    // ── Tabs ─────────────────────────────────────────────────────────
     TabsNext,
     TabsPrevious,
 
-    // ── Transcript viewer — schema.ts:113-114 ─────────────────────────
+    // ── Transcript viewer ────────────────────────────────────────────
     TranscriptExit,
 
-    // ── History search — schema.ts:116-119 ────────────────────────────
+    // ── History search ───────────────────────────────────────────────
     HistorySearchNext,
     HistorySearchAccept,
     HistorySearchCancel,
     HistorySearchExecute,
 
-    // ── Task — schema.ts:121 ──────────────────────────────────────────
+    // ── Task ─────────────────────────────────────────────────────────
     TaskBackground,
 
-    // ── Theme picker — schema.ts:123 ──────────────────────────────────
+    // ── Theme picker ─────────────────────────────────────────────────
     ThemeToggleSyntaxHighlighting,
 
-    // ── Help menu — schema.ts:125 ─────────────────────────────────────
+    // ── Help menu ────────────────────────────────────────────────────
     HelpDismiss,
 
-    // ── Attachments — schema.ts:127-130 ───────────────────────────────
+    // ── Attachments ──────────────────────────────────────────────────
     AttachmentsNext,
     AttachmentsPrevious,
     AttachmentsRemove,
     AttachmentsExit,
 
-    // ── Footer indicators — schema.ts:132-138 ─────────────────────────
+    // ── Footer indicators ────────────────────────────────────────────
     FooterUp,
     FooterDown,
     FooterNext,
@@ -144,14 +143,14 @@ pub enum KeybindingAction {
     FooterClearSelection,
     FooterClose,
 
-    // ── Message selector (rewind) — schema.ts:140-144 ─────────────────
+    // ── Message selector (rewind) ────────────────────────────────────
     MessageSelectorUp,
     MessageSelectorDown,
     MessageSelectorTop,
     MessageSelectorBottom,
     MessageSelectorSelect,
 
-    // ── Diff dialog — schema.ts:146-152 ───────────────────────────────
+    // ── Diff dialog ──────────────────────────────────────────────────
     DiffDismiss,
     DiffPreviousSource,
     DiffNextSource,
@@ -160,33 +159,33 @@ pub enum KeybindingAction {
     DiffPreviousFile,
     DiffNextFile,
 
-    // ── Model picker — schema.ts:154-155 ──────────────────────────────
+    // ── Model picker ─────────────────────────────────────────────────
     ModelPickerDecreaseEffort,
     ModelPickerIncreaseEffort,
 
-    // ── Select component — schema.ts:157-160 ──────────────────────────
+    // ── Select component ─────────────────────────────────────────────
     SelectNext,
     SelectPrevious,
     SelectAccept,
     SelectCancel,
 
-    // ── Plugin dialog — schema.ts:162-163 ─────────────────────────────
+    // ── Plugin dialog ────────────────────────────────────────────────
     PluginToggle,
     PluginInstall,
 
-    // ── Permission dialog — schema.ts:165 ─────────────────────────────
+    // ── Permission dialog ────────────────────────────────────────────
     PermissionToggleDebug,
 
-    // ── Settings — schema.ts:167-169 ──────────────────────────────────
+    // ── Settings ─────────────────────────────────────────────────────
     SettingsSearch,
     SettingsRetry,
     SettingsClose,
 
-    // ── Voice — schema.ts:171 (feature-gated `VOICE_MODE` in TS) ──────
+    // ── Voice (feature-gated `VOICE_MODE`) ───────────────────────────
     VoicePushToTalk,
 
-    // ── Internal: Scroll context — defaultBindings.ts:196-213 ─────────
-    // Not in schema.ts; not user-rebindable, but referenced by defaults.
+    // ── Internal: Scroll context ──────────────────────────────────────
+    // Not in the user-facing schema; not user-rebindable, but referenced by defaults.
     ScrollPageUp,
     ScrollPageDown,
     ScrollLineUp,
@@ -194,11 +193,10 @@ pub enum KeybindingAction {
     ScrollTop,
     ScrollBottom,
 
-    // ── Internal: Selection — defaultBindings.ts:210-211 ──────────────
+    // ── Internal: Selection ──────────────────────────────────────────
     SelectionCopy,
 
-    // ── Internal: MessageActions context — defaultBindings.ts:271-294
-    // (feature-gated `MESSAGE_ACTIONS` in TS) ─────────────────────────
+    // ── Internal: MessageActions context (feature-gated `MESSAGE_ACTIONS`) ─
     MessageActionsPrev,
     MessageActionsNext,
     MessageActionsTop,
@@ -211,7 +209,7 @@ pub enum KeybindingAction {
     MessageActionsC,
     MessageActionsP,
 
-    // ── Slash command escape hatch — schema.ts:194-198 ────────────────
+    // ── Slash command escape hatch ───────────────────────────────────
     /// `command:foo` user binding. Executes the slash command as if typed.
     /// Only valid in the `Chat` context (validated by `validator`).
     /// Inner string excludes the `command:` prefix.
@@ -391,7 +389,7 @@ pub enum UnknownActionReason {
     /// Not in the closed enum and not a `command:foo` pattern.
     NotARecognizedAction,
     /// Matched the `command:` prefix but the suffix violated the
-    /// `^command:[a-zA-Z0-9:\-_]+$` shape from schema.ts:195-198.
+    /// `^command:[a-zA-Z0-9:\-_]+$` shape.
     InvalidCommandName,
 }
 
@@ -418,7 +416,7 @@ impl FromStr for KeybindingAction {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Slash command escape hatch — keep before the closed-set match so
-        // the regex check runs even if a future TS revision adds a literal
+        // the regex check runs even if a future schema revision adds a literal
         // `command:foo` to KEYBINDING_ACTIONS.
         if let Some(rest) = s.strip_prefix("command:") {
             if rest.is_empty()

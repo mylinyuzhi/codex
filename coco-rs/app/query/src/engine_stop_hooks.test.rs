@@ -134,7 +134,7 @@ fn loop_turn_state() -> LoopTurnState {
 /// the death-spiral guard must surface BOTH the human-readable details
 /// (forwarded to `executeStopFailureHooks` as `error_details`) and the
 /// canonical short code (forwarded as `error`, the field hook matchers
-/// filter on per TS `matchQuery: error`).
+/// filter on).
 #[test]
 fn c3_last_assistant_api_error_payload_returns_typed_payload_when_present() {
     let history = history_from(vec![

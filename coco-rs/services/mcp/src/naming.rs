@@ -1,7 +1,6 @@
 //! Server/tool name normalization.
 //!
-//! TS: services/mcp/normalization.ts + mcpStringUtils.ts
-//! Naming convention: "mcp__<normalized_server>__<normalized_tool>" for ToolId.
+//! Naming convention: `mcp__<normalized_server>__<normalized_tool>` for ToolId.
 
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::MCP_TOOL_SEPARATOR;
@@ -15,8 +14,6 @@ const CLAUDEAI_SERVER_PREFIX: &str = "claude.ai ";
 /// Replaces any character outside `[a-zA-Z0-9_-]` with underscore.
 /// For claude.ai servers: also collapses consecutive underscores and strips
 /// leading/trailing underscores to prevent interference with the `__` delimiter.
-///
-/// TS: `normalizeNameForMCP()` in normalization.ts
 pub fn normalize_name_for_mcp(name: &str, is_claudeai: bool) -> String {
     let mut normalized = String::with_capacity(name.len());
     for ch in name.chars() {
@@ -52,7 +49,6 @@ pub fn normalize_name_for_mcp(name: &str, is_claudeai: bool) -> String {
 /// Construct an MCP tool ID string from server and tool names.
 ///
 /// Names are normalized before construction to ensure wire-format compatibility.
-/// TS: `buildMcpToolName()` in mcpStringUtils.ts
 pub fn mcp_tool_id(server: &str, tool: &str) -> String {
     let is_claudeai = server.starts_with(CLAUDEAI_SERVER_PREFIX);
     let norm_server = normalize_name_for_mcp(server, is_claudeai);
@@ -68,8 +64,6 @@ pub fn mcp_tool_id_raw(server: &str, tool: &str) -> String {
 }
 
 /// Get the MCP prefix for a server (normalized), e.g. `"mcp__slack__"`.
-///
-/// TS: `getMcpPrefix()` in mcpStringUtils.ts
 pub fn mcp_prefix(server: &str) -> String {
     let is_claudeai = server.starts_with(CLAUDEAI_SERVER_PREFIX);
     let norm = normalize_name_for_mcp(server, is_claudeai);
@@ -77,8 +71,6 @@ pub fn mcp_prefix(server: &str) -> String {
 }
 
 /// Get the display name of an MCP tool by stripping the server prefix.
-///
-/// TS: `getMcpDisplayName()` in mcpStringUtils.ts
 pub fn mcp_display_name(full_name: &str, server: &str) -> String {
     let prefix = mcp_prefix(server);
     full_name
@@ -89,8 +81,6 @@ pub fn mcp_display_name(full_name: &str, server: &str) -> String {
 
 /// Parse an MCP tool ID string into (server, tool) components.
 /// Returns None if the string doesn't match "mcp__<server>__<tool>".
-///
-/// TS: `mcpInfoFromString()` in mcpStringUtils.ts
 pub fn parse_mcp_tool_id(id: &str) -> Option<(String, String)> {
     let rest = id.strip_prefix(MCP_TOOL_PREFIX)?;
     let (server, tool) = rest.split_once(MCP_TOOL_SEPARATOR)?;
@@ -98,25 +88,18 @@ pub fn parse_mcp_tool_id(id: &str) -> Option<(String, String)> {
 }
 
 /// 25-letter alphabet: a-z minus 'l' (looks like 1/I). 25^5 ≈ 9.8M space.
-///
-/// TS: `ID_ALPHABET` in channelPermissions.ts.
 const ID_ALPHABET: &str = "abcdefghijkmnopqrstuvwxyz";
 
 /// Substring blocklist — 5 random letters can spell things. If a generated ID
 /// contains any of these, re-hash with a salt. Non-exhaustive; covers the
 /// send-to-your-boss-by-accident tier.
-///
-/// TS: `ID_AVOID_SUBSTRINGS` in channelPermissions.ts.
 const ID_AVOID_SUBSTRINGS: &[&str] = &[
     "fuck", "shit", "cunt", "cock", "dick", "twat", "piss", "crap", "bitch", "whore", "ass", "tit",
     "cum", "fag", "dyke", "nig", "kike", "rape", "nazi", "damn", "poo", "pee", "wank", "anus",
 ];
 
 /// FNV-1a → u32, then base-25 encode into 5 letters. Not crypto — a stable
-/// short letters-only ID. tool_use_ids are ASCII so byte iteration matches the
-/// TS `charCodeAt` (UTF-16 unit) loop.
-///
-/// TS: `hashToId()` in channelPermissions.ts.
+/// short letters-only ID. tool_use_ids are ASCII so byte iteration is correct.
 fn hash_to_id(input: &str) -> String {
     let mut h: u32 = 0x811c_9dc5;
     for b in input.bytes() {
@@ -135,8 +118,6 @@ fn hash_to_id(input: &str) -> String {
 /// Short ID from a tool_use_id. 5 letters from a 25-char alphabet (a-z minus
 /// 'l'). Re-hashes with a salt suffix if the result contains a blocklisted
 /// substring. Caps at 10 retries.
-///
-/// TS: `shortRequestId()` in channelPermissions.ts.
 pub fn short_request_id(tool_use_id: &str) -> String {
     let mut candidate = hash_to_id(tool_use_id);
     for salt in 0..10 {
@@ -151,14 +132,12 @@ pub fn short_request_id(tool_use_id: &str) -> String {
     candidate
 }
 
-/// Parse a channel permission reply, mirroring the TS regex
+/// Parse a channel permission reply matching
 /// `/^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i`.
 ///
 /// Returns `(approve, five_letter_id)` where `approve` is `true` for `y`/`yes`
 /// and `false` for `n`/`no`. The id must be exactly 5 letters, each in `a-k` or
 /// `m-z` (no `l`). Input is case-insensitive; the returned id is lowercased.
-///
-/// TS: `PERMISSION_REPLY_RE` in channelPermissions.ts.
 pub fn parse_permission_reply(input: &str) -> Option<(bool, String)> {
     let trimmed = input.trim();
     // Split into the verb and the id across the run of inner whitespace.

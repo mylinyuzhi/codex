@@ -1,6 +1,6 @@
 # coco-shell-parser
 
-Shell command parsing (tree-sitter + tokenizer fallback) and security analysis. Infrastructure layer for `exec/shell`, which layers TS-ported read-only validation and destructive warnings on top.
+Shell command parsing (tree-sitter + tokenizer fallback) and security analysis. Infrastructure layer for `exec/shell`, which layers read-only validation and destructive warnings on top.
 
 ## Security Analyzers
 

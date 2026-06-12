@@ -1,9 +1,7 @@
-//! TS `critical_system_reminder` generator.
+//! `critical_system_reminder` generator.
 //!
-//! Mirrors `getCriticalSystemReminderAttachment` (`attachments.ts:1587`) +
-//! `normalizeAttachmentForAPI` `case 'critical_system_reminder':`
-//! (`messages.ts:3872`). Emits a user-supplied instruction verbatim on
-//! every turn while `config.critical_instruction` is non-empty.
+//! Emits a user-supplied instruction verbatim on every turn while
+//! `config.critical_instruction` is non-empty.
 //!
 //! No cadence / no throttle: critical means "I want this in the model's
 //! context every turn until I clear it." The caller is responsible for
@@ -45,9 +43,7 @@ impl AttachmentGenerator for CriticalSystemReminderGenerator {
         let Some(instruction) = ctx.config.critical_instruction.as_deref() else {
             return Ok(None);
         };
-        // Trim to treat whitespace-only as "not set". TS's equivalent reads
-        // `toolUseContext.criticalSystemReminder_EXPERIMENTAL` and short-
-        // circuits on missing/empty.
+        // Trim to treat whitespace-only as "not set" and short-circuit.
         if instruction.trim().is_empty() {
             return Ok(None);
         }

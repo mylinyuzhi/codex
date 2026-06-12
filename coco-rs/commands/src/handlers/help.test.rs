@@ -51,7 +51,6 @@ async fn test_help_clear_and_config_aliases_match_registry() {
     assert!(clear.aliases.contains(&"reset") && clear.aliases.contains(&"new"));
     let config = find_command("config").expect("config entry exists");
     assert_eq!(config.aliases, &["settings"]);
-    // TS parity: /status has no alias, /tasks aliases only "bashes".
     let status = find_command("status").expect("status entry exists");
     assert!(status.aliases.is_empty());
     let tasks = find_command("tasks").expect("tasks entry exists");

@@ -842,7 +842,7 @@ async fn test_execute_with_serial_tool_applies_patch_before_next_context() {
     // A serial unsafe tool followed by another serial unsafe tool.
     // The first tool's patch must be visible (via shared state read)
     // by the time the second run_one is called — serial mode applies
-    // between tools per TS `toolOrchestration.ts:130-141`.
+    // between tools.
     let app_state = Arc::new(RwLock::new(coco_types::ToolAppState::default()));
     let exec = StreamingToolExecutor::new().with_app_state(app_state.clone());
 
@@ -902,7 +902,7 @@ async fn test_execute_with_early_outcome_is_barrier_between_safe_batches() {
     // EarlyOutcome must NOT share a batch with safe neighbors, and
     // its completion_seq lands between the two safe outcomes'
     // completion_seqs in partition order — NOT globally before both
-    // (TS `toolOrchestration.ts:91-115` + plan I12).
+    // (plan I12).
     let a = Arc::new(SafeTool { name: "a".into() });
     let c = Arc::new(SafeTool { name: "c".into() });
 
@@ -983,7 +983,7 @@ async fn test_execute_with_every_plan_gets_one_outcome() {
 
 #[test]
 fn resolve_max_concurrency_zero_falls_back_to_default() {
-    // TS `parseInt(...) || 10`: 0 is falsy → default (would otherwise build a
+    // 0 falls back to default (would otherwise build a
     // 0-permit Semaphore and deadlock every concurrent-safe tool).
     assert_eq!(
         resolve_max_concurrency(Some("0".to_string())),

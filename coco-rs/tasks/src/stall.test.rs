@@ -25,7 +25,7 @@ fn directed_questions_match() {
 
 #[test]
 fn directed_question_without_question_mark_does_not_match() {
-    // TS requires both the directive AND the trailing `?`.
+    // Requires both the directive AND the trailing `?`.
     assert!(!matches_interactive_prompt(
         "Do you want to continue please"
     ));

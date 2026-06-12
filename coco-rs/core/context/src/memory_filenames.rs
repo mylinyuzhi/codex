@@ -1,14 +1,14 @@
 //! Memory-file basename matching with case-insensitive lookup.
 //!
-//! coco-rs supports both `CLAUDE.md` (TS-original) and `AGENTS.md`
+//! coco-rs supports both `CLAUDE.md` and `AGENTS.md`
 //! (cross-ecosystem convention shared with Codex / Cursor / similar
 //! agents). Filenames match case-insensitively so `Claude.md`,
 //! `agents.md`, `CLAUDE.MD` etc. all load identically across
 //! case-sensitive (Linux ext4) and case-insensitive (macOS APFS,
 //! Windows NTFS) filesystems.
 //!
-//! Divergence from TS: TS only loads files literally named `CLAUDE.md`
-//! / `CLAUDE.local.md` with exact case. coco-rs broadens both axes.
+//! The original only loads files literally named `CLAUDE.md` /
+//! `CLAUDE.local.md` with exact case. coco-rs broadens both axes.
 //! The `<system-reminder>` template, dedup keys (absolute path
 //! strings), and trigger pipeline are unchanged — only filename
 //! resolution is broader.
@@ -37,10 +37,9 @@ pub const MEMORY_LOCAL_FILE_CANDIDATES: &[&str] = &["CLAUDE.local.md", "AGENTS.l
 /// same tree never injects the same memory twice. Files that differ in size
 /// are never read for comparison (cheap pre-filter).
 ///
-/// Empty result on read errors (`ENOENT`, `EACCES`, `ENOTDIR`) — matches
-/// TS `processMdRules` defensive read behavior in `claudemd.ts:730-738`.
-/// Directory entries that happen to share a candidate name are skipped;
-/// only regular files (or symlinks resolving to files) are returned.
+/// Empty result on read errors (`ENOENT`, `EACCES`, `ENOTDIR`) — defensive
+/// read behavior; skips entries that happen to share a candidate name.
+/// Only regular files (or symlinks resolving to files) are returned.
 pub fn find_memory_files(dir: &Path, candidates: &[&str]) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();

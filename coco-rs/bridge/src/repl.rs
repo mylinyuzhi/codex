@@ -1,8 +1,5 @@
 //! REPL bridge for headless/non-TUI communication.
 //!
-//! TS: bridge/replBridge.ts, bridge/replBridgeTransport.ts,
-//! bridge/bridgeMessaging.ts
-//!
 //! Provides input/output message routing and session state
 //! synchronization for SDK and daemon callers that bypass the TUI.
 //! The REPL bridge sits between the agent loop and a transport
@@ -35,8 +32,6 @@ use tracing::warn;
 // ---------------------------------------------------------------------------
 
 /// Inbound message from an SDK consumer or remote client.
-///
-/// TS: bridge/bridgeMessaging.ts — handleIngressMessage, isEligibleBridgeMessage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplInMessage {
@@ -61,8 +56,6 @@ pub enum ReplInMessage {
 }
 
 /// Outbound message to an SDK consumer or remote client.
-///
-/// TS: bridge/bridgeMessaging.ts — makeResultMessage, StdoutMessage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplOutMessage {
@@ -106,8 +99,6 @@ pub enum ReplOutMessage {
 }
 
 /// SDK control requests (subset relevant to REPL bridge).
-///
-/// TS: controlSchemas.ts — SDKControlRequest discriminated union.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum ControlRequest {
@@ -128,11 +119,8 @@ pub enum ControlRequest {
     /// Runtime dispatch goes through [`ControlRequestHandler::handle`].
     /// The production handler (`app/cli`) must reject
     /// `BypassPermissions` when the session's startup capability gate
-    /// is off — matching the SDK `handle_set_permission_mode` guard
-    /// (`app/cli/src/sdk_server/handlers/runtime.rs`) and the TUI
-    /// `UserCommand::SetPermissionMode` guard (`tui_runner.rs`).
-    /// The default [`RejectingControlHandler`] fails closed so an
-    /// un-wired bridge never silently grants bypass.
+    /// is off. The default [`RejectingControlHandler`] fails closed so
+    /// an un-wired bridge never silently grants bypass.
     SetPermissionMode { mode: PermissionMode },
     /// Query MCP server status.
     McpStatus,
@@ -147,8 +135,6 @@ pub enum ControlRequest {
 }
 
 /// Permission decision from SDK consumer.
-///
-/// TS: controlSchemas.ts — SDKControlPermissionResponse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "behavior", rename_all = "snake_case")]
 pub enum PermissionDecision {
@@ -158,8 +144,6 @@ pub enum PermissionDecision {
 }
 
 /// Outbound control requests from agent to SDK.
-///
-/// TS: controlSchemas.ts — SDKControlPermissionRequest, request_input, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum SdkControlOutbound {
@@ -186,8 +170,6 @@ pub enum SdkControlOutbound {
 // ---------------------------------------------------------------------------
 
 /// Connection state of the REPL bridge transport.
-///
-/// TS: replBridge.ts — BridgeState type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
@@ -225,8 +207,6 @@ const MAX_OUTBOUND_BUFFER: usize = 1000;
 /// Routes messages between the agent loop and a transport layer
 /// (SSE, WebSocket, NDJSON). Buffers outbound messages during
 /// disconnection and drains on reconnect.
-///
-/// TS: bridge/replBridge.ts — initBridgeCore + ReplBridgeHandle.
 pub struct ReplBridge {
     /// Session identifier.
     session_id: String,
@@ -313,8 +293,6 @@ impl ReplBridge {
     ///
     /// If the transport is disconnected, buffers the message up to
     /// `MAX_OUTBOUND_BUFFER`. Returns `Ok(())` even when buffered.
-    ///
-    /// TS: replBridge.ts — writeMessages / writeSdkMessages.
     pub async fn send(&self, msg: ReplOutMessage) -> crate::Result<()> {
         if self.state() == BridgeState::Connected {
             self.outgoing_tx
@@ -337,8 +315,6 @@ impl ReplBridge {
     }
 
     /// Drain buffered messages after reconnection.
-    ///
-    /// TS: replBridge.ts — drain on transport connect callback.
     pub async fn drain_buffer(&self) -> crate::Result<()> {
         let messages: Vec<ReplOutMessage> = {
             let mut buf = self.buffer.lock().await;
@@ -365,8 +341,6 @@ impl ReplBridge {
     }
 
     /// Send a result message and transition to idle.
-    ///
-    /// TS: replBridge.ts — sendResult().
     pub async fn send_result(&self, text: String) -> crate::Result<()> {
         self.send(ReplOutMessage::Result {
             text,

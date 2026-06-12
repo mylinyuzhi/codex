@@ -1,7 +1,5 @@
 //! Token and turn budget tracking for the query engine.
 //!
-//! TS: query/tokenBudget.ts (94 LOC)
-//!
 //! Tracks token consumption, turn counts, and detects diminishing returns
 //! (model producing less and less output per turn).
 
@@ -19,12 +17,10 @@ pub enum BudgetDecision {
 }
 
 /// Tracks token consumption and turn counts against configured limits.
-///
-/// TS: BudgetTracker with diminishing returns detection.
 pub struct BudgetTracker {
     pub max_tokens: Option<i64>,
-    /// Turn cap. `None` = unbounded (TS interactive REPL); `Some(n)` caps at n
-    /// (TS `--print --max-turns`, and every subagent/fork).
+    /// Turn cap. `None` = unbounded (interactive REPL); `Some(n)` caps at n
+    /// (`--print --max-turns`, and every subagent/fork).
     pub max_turns: Option<i32>,
     pub max_continuations: i32,
     pub min_remaining_tokens: i64,
@@ -76,9 +72,8 @@ impl BudgetTracker {
 
     /// Check whether the budget allows continuing.
     pub fn check(&self, current_turn: i32) -> BudgetDecision {
-        // Check turn limit. `None` = unbounded (TS interactive REPL): the model
-        // loops until it stops on its own, the token budget trips, or the user
-        // interrupts.
+        // Check turn limit. `None` = unbounded: the model loops until it stops
+        // on its own, the token budget trips, or the user interrupts.
         if let Some(max) = self.max_turns
             && current_turn >= max
         {

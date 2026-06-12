@@ -1,18 +1,13 @@
-//! TS `budget_usd` generator.
+//! `budget_usd` generator.
 //!
-//! Mirrors `getMaxBudgetUsdAttachment` (`attachments.ts:3846`) +
-//! `normalizeAttachmentForAPI` `case 'budget_usd':` (`messages.ts:4067`).
 //! Main-thread-only per-turn budget report; fires whenever the session
 //! has a configured USD cap.
 //!
 //! Gate chain:
 //!
-//! 1. `ctx.config.attachments.budget_usd` — default on (TS has no
-//!    additional feature flag once the budget is set).
+//! 1. `ctx.config.attachments.budget_usd` — default on.
 //! 2. `ctx.max_budget_usd.is_some()` — `None` means the user didn't
-//!    configure a cap (TS: `maxBudgetUsd === undefined`).
-//!
-//! Content is the TS literal at `messages.ts:4071`.
+//!    configure a cap.
 
 use async_trait::async_trait;
 
@@ -43,10 +38,9 @@ impl AttachmentGenerator for BudgetUsdGenerator {
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         // Surface cumulative session cost on every turn that has spend, even
         // when no USD cap is configured (max_budget_usd = None). The
-        // model-visible reminder still requires a cap (TS parity), but ops
-        // logs always benefit from the cost signal. Format to 6 decimals
-        // so floating-point ulp noise (e.g. `0.058757500000000004`) doesn't
-        // leak into the log.
+        // model-visible reminder requires a cap, but ops logs always benefit
+        // from the cost signal. Format to 6 decimals so floating-point ulp
+        // noise (e.g. `0.058757500000000004`) doesn't leak into the log.
         let used = ctx.total_cost_usd;
         if used > 0.0 {
             tracing::info!(
@@ -61,8 +55,8 @@ impl AttachmentGenerator for BudgetUsdGenerator {
             return Ok(None);
         };
         let remaining = total - used;
-        // TS `messages.ts:4071` template: `USD budget: $${used}/$${total}; $${remaining} remaining`
-        // — `$${}` is a literal `$` followed by the interpolated number.
+        // Format: `USD budget: $${used}/$${total}; $${remaining} remaining`
+        // (`$${}` = literal `$` + interpolated number).
         let body = format!("USD budget: ${used}/${total}; ${remaining} remaining");
         Ok(Some(SystemReminder::new(AttachmentType::BudgetUsd, body)))
     }

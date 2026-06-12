@@ -1,6 +1,5 @@
 //! Build [`UnstampedToolCallOutcome`] from a single tool call's raw
-//! result, running post-hooks and flattening `ToolMessageBuckets` in
-//! TS-parity order.
+//! result, running post-hooks and flattening `ToolMessageBuckets`.
 //!
 //! This is the `run_one` success/failure tail that follows
 //! `tool.execute()`. The preparer (`tool_call_preparer.rs`) owns the
@@ -54,11 +53,10 @@ pub(crate) struct RunOneTail<'a> {
     /// Per-session tool-result persistence root. `Some` ⇒ Level 1
     /// persistence is active for this session; the outcome builder
     /// checks `tool.max_result_size_bound()` against the rendered
-    /// output and persists to disk when over threshold (TS parity:
-    /// `utils/toolResultStorage.ts:persistToolResultToDisk`). `None`
-    /// ⇒ Level 1 is disabled (legacy behaviour) and tool results
-    /// stay inline. Wired by `tool_call_runner` from the engine's
-    /// resolved transcript/session artifact root.
+    /// output and persists to disk when over threshold. `None` ⇒
+    /// Level 1 is disabled (legacy behaviour) and tool results stay
+    /// inline. Wired by `tool_call_runner` from the engine's resolved
+    /// transcript/session artifact root.
     pub tool_result_session_dir: Option<std::path::PathBuf>,
 }
 
@@ -82,9 +80,6 @@ fn plain_text_parts(parts: &[ToolResultContentPart]) -> Option<String> {
 /// appropriate `ToolMessageBuckets`, flattens via `ToolMessageOrder`,
 /// and packages side-effects into [`ToolSideEffects`] so the
 /// scheduler can apply the patch at the correct moment.
-///
-/// TS parity: this is the success/failure tail of
-/// `toolExecution.ts:1478-1737`.
 pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> UnstampedToolCallOutcome {
     let RunOneTail {
         tool_use_id,
@@ -118,7 +113,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             let mut output_data = data;
 
             // PostToolUse runs on the success branch. Output rewrite
-            // is MCP-only per TS `toolHooks.ts:145`.
+            // is MCP-only.
             let post = HookController::new(hooks, orchestration_ctx, hook_tx)
                 .run_post_tool_use(&tool_name, &tool_use_id, &effective_input, &output_data)
                 .await;
@@ -164,16 +159,15 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
                         rendered_text
                     };
 
-                    // ── Tool Result Budget Level 1 (TS `persistToolResultToDisk`) ──
+                    // ── Tool Result Budget Level 1 ──
                     //
                     // When the tool opts into persistence (declared
                     // `max_result_size_bound() == Chars(_)`) AND the rendered
                     // output exceeds `resolve_persistence_threshold(declared)`,
                     // write the body to `<session_dir>/tool-results/<id>.{txt,json}`
                     // and replace the inline content with a `<persisted-output>`
-                    // reference message. Failures fall back to the inline
-                    // content (TS parity: persistence is best-effort, not
-                    // gating).
+                    // reference message. Failures fall back to inline content
+                    // (persistence is best-effort, not gating).
                     let rendered_output = if let Some(sess_dir) = tool_result_session_dir.as_ref() {
                         let resolved =
                             coco_tool_runtime::tool_result_storage::resolve_persistence_threshold(
@@ -243,9 +237,9 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             }
 
             // Collect post-hook additional_contexts into message
-            // form. TS emits them wrapped via system-reminder; we do
-            // the same so the attachment kind + format match the
-            // legacy `tool_result_processor` path.
+            // form. Emit them wrapped via system-reminder so the
+            // attachment kind + format match the legacy
+            // `tool_result_processor` path.
             let post_hook_msgs = render_hook_context_messages(
                 &tool_name,
                 &post.additional_contexts,
@@ -300,16 +294,12 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             let display_data = display_data_from_tool_error(&error).cloned();
             let error_message = error.to_string();
 
-            // TS `is_interrupt`: PostToolUseFailure carries `is_interrupt: true`
-            // when the failure was a user/runtime cancellation rather than a
-            // tool-internal error (TS `executePostToolUseFailureHooks` reads
-            // it from the AbortController's `signal.aborted`).
+            // PostToolUseFailure carries `is_interrupt: true` when the failure
+            // was a user/runtime cancellation rather than a tool-internal error.
             let is_interrupt = matches!(error, coco_tool_runtime::ToolError::Cancelled);
 
             // A user/runtime cancellation commits the explicit interrupt
-            // message, not the generic "Error: cancelled" (TS
-            // `formatError(AbortError)` → `INTERRUPT_MESSAGE_FOR_TOOL_USE`,
-            // committed as `Error: [Request interrupted by user for tool use]`).
+            // message, not the generic "Error: cancelled".
             let rendered_error = if is_interrupt {
                 format!("Error: {}", coco_messages::INTERRUPT_MESSAGE_FOR_TOOL_USE)
             } else {
@@ -360,8 +350,7 @@ pub(crate) async fn build_outcome_from_execution(args: RunOneTail<'_>) -> Unstam
             // short-circuited in `run_one` into a PreExecutionCancelled
             // EarlyReturn outcome (no failure hooks), so a `Cancelled`
             // seen here is a genuine MID-execution cancel — kept as
-            // ExecutionCancelled, which DOES fire PostToolUseFailure
-            // (TS `toolExecution.ts:1696`).
+            // ExecutionCancelled, which DOES fire PostToolUseFailure.
             let error_kind = match &error {
                 coco_tool_runtime::ToolError::Cancelled => ToolCallErrorKind::ExecutionCancelled,
                 _ => ToolCallErrorKind::ExecutionFailed,

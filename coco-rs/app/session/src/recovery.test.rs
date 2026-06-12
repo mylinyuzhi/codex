@@ -132,7 +132,7 @@ fn selected_contains(state: &SessionResumeState, uuid: &uuid::Uuid) -> bool {
 fn test_load_conversation_for_resume_basic_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s1.jsonl");
-    // TS-faithful DAG: user → assistant → user → assistant.
+    // DAG: user → assistant → user → assistant.
     // u2's parent is a1 so the leaf walker reconstructs the full
     // chain rather than stopping at the disconnected sub-tree.
     let body = format!(
@@ -454,9 +454,8 @@ fn test_load_session_state_for_resume_prunes_stale_compact_preserved_segment() {
     assert_eq!(state.total_output_tokens, 4);
 }
 
-/// New: tool_use / tool_result blocks must round-trip on resume so
-/// the resumed model sees its own prior tool calls. TS:
-/// `deserializeMessages` preserves `tool_use` / `tool_result` content.
+/// tool_use / tool_result blocks must round-trip on resume so
+/// the resumed model sees its own prior tool calls.
 #[test]
 fn test_load_conversation_for_resume_preserves_tool_blocks() {
     use coco_messages::AssistantContent;

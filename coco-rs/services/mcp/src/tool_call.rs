@@ -1,6 +1,4 @@
 //! MCP tool call handling.
-//!
-//! TS: core mcp_tool_call.ts — routes tool calls to MCP servers.
 
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::MCP_TOOL_SEPARATOR;
@@ -43,9 +41,8 @@ fn truncate_at_char_boundary(s: &str, max_len: usize) -> &str {
     &s[..end]
 }
 
-/// Truncate a tool description (or server instructions) to the maximum length
-/// with the TS suffix marker. TS `client.ts:1792` uses a Unicode horizontal
-/// ellipsis (U+2026), not three ASCII dots.
+/// Truncate a tool description (or server instructions) to the maximum length.
+/// Uses a Unicode horizontal ellipsis (U+2026), not three ASCII dots.
 pub fn truncate_description(description: &str) -> String {
     if description.len() <= MAX_DESCRIPTION_LENGTH {
         description.to_string()

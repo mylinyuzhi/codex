@@ -1,8 +1,8 @@
 //! Resolve a file part's media type to a full `type/subtype` form.
 //!
-//! Mirrors TS `resolve-full-media-type.ts` — for providers whose API requires
-//! the full IANA media type (not a top-level segment or a wildcard), this
-//! sniffs the subtype from inline bytes when only the top-level was supplied.
+//! For providers whose API requires the full IANA media type (not a top-level
+//! segment or a wildcard), this sniffs the subtype from inline bytes when
+//! only the top-level was supplied.
 
 use vercel_ai_provider::FilePart;
 use vercel_ai_provider::SharedV4FileData;

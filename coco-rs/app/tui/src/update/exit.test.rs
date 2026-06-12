@@ -69,9 +69,9 @@ fn queued_commands_route_to_interrupt_only() {
 
 #[test]
 fn idle_first_press_arms_only() {
-    // Mirrors TS: idle Ctrl+C never opens rewind — it only arms the
-    // double-press exit prompt. Auto-restore (if conditions match) is
-    // decided later by the TurnInterrupted handler, not here.
+    // Idle Ctrl+C never opens rewind — it only arms the double-press exit
+    // prompt. Auto-restore (if conditions match) is decided later by the
+    // TurnInterrupted handler, not here.
     let mut state = fresh_idle_state();
     let effect = on_interrupt(&mut state, Instant::now());
     assert_eq!(effect, ExitEffect::ArmOnly);
@@ -133,18 +133,17 @@ fn double_ctrl_d_within_window_quits() {
 fn ctrl_d_does_not_interrupt_busy_session() {
     let mut state = fresh_idle_state();
     state.session.set_busy(true);
-    // Ctrl+D is exit-only — never cancels work. (TS parity.)
+    // Ctrl+D is exit-only — never cancels work.
     let effect = on_request_exit(&mut state, Instant::now());
     assert_eq!(effect, ExitEffect::ArmOnly);
 }
 
-// ── Cross-key interaction (TS parity) ───────────────────────────
+// ── Cross-key interaction ────────────────────────────────────────
 
 #[test]
 fn ctrl_c_then_ctrl_d_then_ctrl_c_within_window_quits_on_ctrl_c() {
-    // Reproduces TS behaviour: each tracker has its own counter, so
-    // pressing Ctrl+D between two Ctrl+Cs does NOT cancel the Ctrl+C
-    // double-press counter.
+    // Each tracker has its own counter, so pressing Ctrl+D between two
+    // Ctrl+Cs does NOT cancel the Ctrl+C double-press counter.
     let mut state = fresh_idle_state();
     let t0 = Instant::now();
     on_interrupt(&mut state, t0); // arm Ctrl+C

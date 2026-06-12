@@ -1,8 +1,5 @@
 //! Per-fork tool-execution gate.
 //!
-//! TS source: `Tool.ts` `CanUseToolFn` type +
-//! `services/tools/toolExecution.ts:706-748` (the callback dispatch +
-//! `requireCanUseTool` interaction with hook auto-approve).
 //!
 //! ## Why a callback at the per-call gate
 //!
@@ -18,7 +15,7 @@
 //! honors the same step for direct callers. Decision variants:
 //!
 //! - [`CanUseToolDecision::Deny`] short-circuits with the message
-//!   surfaced as the `tool_result` content (TS parity).
+//!   surfaced as the `tool_result` content.
 //! - [`CanUseToolDecision::Allow`] with `updated_input: Some(...)`
 //!   rewrites the value passed to permissions AND execute. This is
 //!   the path-rewrite hook speculation overlay needs.
@@ -26,8 +23,7 @@
 //!   proceeds with the original input but skips the tool's
 //!   built-in `check_permissions` (the callback's opinion is final).
 //! - [`CanUseToolDecision::Ask`] falls through to the tool's
-//!   built-in `check_permissions` (TS parity for the
-//!   "callback abstains" case).
+//!   built-in `check_permissions` ("callback abstains" case).
 //!
 //! ## `requireCanUseTool` interaction with hook auto-approve
 //!
@@ -49,9 +45,7 @@ use serde_json::Value;
 
 use crate::cancellation::TurnAbortSignal;
 
-/// Reason field accompanying a [`CanUseToolDecision`]. Mirrors TS
-/// `permissionTypes.ts` `decisionReason` shape so analytics can
-/// pivot on the same values across runtimes.
+/// Reason field accompanying a [`CanUseToolDecision`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecisionReason {
     /// Free-form. Use when no other variant fits — caller-provided
@@ -75,9 +69,7 @@ pub enum DecisionReason {
 /// Why a speculation fork stopped (or which boundary caused a deny).
 ///
 /// Carried on the `Speculation` variant of [`DecisionReason`] so the
-/// telemetry / TUI toast can attribute the boundary precisely. TS
-/// parity: `services/PromptSuggestion/speculation.ts` `boundary`
-/// field on `SpeculationActive`.
+/// telemetry / TUI toast can attribute the boundary precisely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeculationBoundary {
     /// Edit / Write / NotebookEdit attempted in a mode that doesn't
@@ -91,7 +83,7 @@ pub enum SpeculationBoundary {
 
 /// Decision returned by a [`CanUseToolHandle::check`] call.
 ///
-/// TS shape: `{ behavior: 'allow' | 'deny' | 'ask', updatedInput?,
+/// Shape: `{ behavior: 'allow' | 'deny' | 'ask', updatedInput?,
 /// decisionReason, message? }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanUseToolDecision {

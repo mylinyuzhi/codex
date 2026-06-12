@@ -105,7 +105,7 @@ fn context_1m_emitted_on_capable_model() {
 #[test]
 fn tool_search_beta_emitted_on_capable_model() {
     // `tool-search-tool-2025-10-19` is a capability-only gate — no
-    // topology / experimental / agentic-query filter (TS parity).
+    // topology / experimental / agentic-query filter.
     let caps = AnthropicModelCapabilities {
         tool_reference: true,
         ..Default::default()

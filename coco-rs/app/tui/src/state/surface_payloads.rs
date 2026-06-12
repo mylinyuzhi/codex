@@ -8,7 +8,6 @@ use super::session::ProviderUnavailableReason;
 
 /// Permission approval state with tool-specific detail.
 ///
-/// TS: src/components/permissions/ (51 files, 12K LOC)
 /// Each tool type has a specialized review UI.
 #[derive(Debug, Clone)]
 pub struct PermissionPromptState {
@@ -16,26 +15,20 @@ pub struct PermissionPromptState {
     pub tool_name: String,
     pub description: String,
     pub detail: PermissionDetail,
-    /// Risk level badge from the permission explainer.
-    /// TS: PermissionRequestTitle shows color-coded LOW/MEDIUM/HIGH badge.
+    /// Risk level badge from the permission explainer — color-coded
+    /// LOW/MEDIUM/HIGH badge.
     pub risk_level: Option<RiskLevel>,
     /// Whether "Always Allow" option should be shown (gated by policy).
-    /// TS: shouldShowAlwaysAllowOptions() in permissionsLoader.ts
     pub show_always_allow: bool,
     /// Whether a background classifier check is in progress.
-    /// TS: `classifierCheckInProgress` in ToolUseConfirm.
     pub classifier_checking: bool,
     /// Set when classifier auto-approved; shows checkmark before dismissal.
-    /// TS: `classifierAutoApproved` + `classifierMatchedRule` in ToolUseConfirm.
     pub classifier_auto_approved: Option<String>,
     /// Optional multi-choice payload. `None` means render the classic
     /// yes/no/always dialog. `Some` switches the renderer into a
-    /// choice-list mode (mirrors `QuestionPromptState`): Up/Down moves
-    /// `selected_choice`, Enter (approve) echoes the picked value back
-    /// to the tool via `UserCommand::ApprovalResponse.updated_input`.
-    ///
-    /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option
-    /// grid, gated on `settings.showClearContextOnPlanAccept`.
+    /// choice-list mode: Up/Down moves `selected_choice`, Enter (approve)
+    /// echoes the picked value back to the tool via
+    /// `UserCommand::ApprovalResponse.updated_input`.
     pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
     /// Cursor position within `choices`, or within the classic
     /// approve / always-allow / deny action list when `choices.is_none()`.
@@ -74,8 +67,7 @@ pub struct PermissionPromptState {
 }
 
 /// A single-line editable text field for the permission dialog's "always
-/// allow" rule prefix. Mirrors the question prompt's free-text `OtherInputState`
-/// pattern, with a cursor for inline readline-style editing.
+/// allow" rule prefix, with a cursor for inline readline-style editing.
 #[derive(Debug, Clone)]
 pub struct PrefixInputState {
     /// Current rule text (e.g. `git status:*`). Empty → commit allows once.
@@ -149,9 +141,8 @@ impl PrefixInputState {
     }
 }
 
-/// Lifecycle of the lazily-fetched permission risk explanation. Mirrors TS,
-/// which fetches the explanation once on the first `confirm:toggleExplanation`
-/// (Ctrl+E) press rather than eagerly on every prompt.
+/// Lifecycle of the lazily-fetched permission risk explanation. Fetched once
+/// on the first Ctrl+E press rather than eagerly on every prompt.
 #[derive(Debug, Clone, Default)]
 pub enum ExplainerFetch {
     /// Not yet requested (panel never opened, or the explainer is disabled).
@@ -166,8 +157,6 @@ pub enum ExplainerFetch {
 }
 
 /// Risk level for permission explainer badge.
-///
-/// TS: types/permissions.ts — RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH'
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RiskLevel {
     Low,
@@ -177,47 +166,39 @@ pub enum RiskLevel {
 
 /// Tool-specific permission review content.
 ///
-/// Matches TS's 12 specialized permission request components.
+/// 12 specialized permission request variants.
 #[derive(Debug, Clone)]
 pub enum PermissionDetail {
     /// Bash command — show command, risk level, working directory.
-    /// TS: BashPermissionRequest/ (108KB)
     Bash {
         command: String,
         risk_description: Option<String>,
         working_dir: Option<String>,
     },
     /// File edit — show path and unified diff.
-    /// TS: FileEditPermissionRequest/ (16KB)
     FileEdit { path: String, diff: String },
     /// File write — show path and content preview.
-    /// TS: FileWritePermissionRequest/ (40KB)
     FileWrite {
         path: String,
         content_preview: String,
         is_new_file: bool,
     },
     /// Filesystem operation (mkdir, rm, mv, cp).
-    /// TS: FilesystemPermissionRequest/ (13KB)
     Filesystem { operation: String, path: String },
     /// Web fetch — show URL.
-    /// TS: WebFetchPermissionRequest/ (32KB)
     WebFetch { url: String, method: String },
     /// Skill execution — show skill name and description.
-    /// TS: SkillPermissionRequest/ (36KB)
     Skill {
         skill_name: String,
         skill_description: Option<String>,
     },
     /// Sed in-place edit — show pattern and replacement.
-    /// TS: SedEditPermissionRequest/ (32KB)
     SedEdit {
         path: String,
         pattern: String,
         replacement: String,
     },
     /// Notebook cell edit — show path, cell, and change.
-    /// TS: NotebookEditPermissionRequest/ (56KB)
     NotebookEdit {
         path: String,
         cell_id: String,
@@ -237,7 +218,7 @@ pub enum PermissionDetail {
     },
     /// Computer use (screen/mouse/keyboard) approval.
     ComputerUse { action: String, description: String },
-    /// ExitPlanMode approval — show the plan and TS-style response choices.
+    /// ExitPlanMode approval — show the plan and response choices.
     ExitPlanMode {
         plan: Option<String>,
         plan_file_path: Option<String>,
@@ -258,11 +239,6 @@ pub struct CostWarningPromptState {
 /// candidates plus an inline thinking-effort selector. Tab cycles the
 /// target role (Main / Fast / Plan / …); the confirm path persists
 /// to that role's slot in `~/.coco.json::model_roles`.
-///
-/// TS parity reference: `components/ModelPicker.tsx`. coco-rs extends
-/// the TS shape with a role pill so multi-provider users can configure
-/// every `ModelRole` from the same surface — TS only ever drives the
-/// `main` model.
 #[derive(Debug, Clone)]
 pub struct ModelPickerState {
     /// Which role we're configuring. Defaults to `Main` when launched
@@ -285,8 +261,7 @@ pub struct ModelPickerState {
 }
 
 /// Teams roster picker — lets the leader cycle a teammate's permission
-/// mode. TS parity: `components/teams/TeamsDialog.tsx` (per-member mode
-/// cycling). Members come from `session.subagents` (kind == Teammate); each
+/// mode. Members come from `session.subagents` (kind == Teammate); each
 /// member's CURRENT mode is seeded fresh from `team.json` so the picker shows
 /// and cycles from the live mode (not a hardcoded default). Left/Right cycles
 /// the focused member's mode in place; Enter dispatches it via
@@ -314,7 +289,7 @@ pub struct TeamRosterMember {
     /// This teammate's CURRENT permission mode, seeded from `team.json` and
     /// cycled in place by Left/Right when focused. Per-member so divergent
     /// teammate modes are each shown and edited correctly (a single shared
-    /// field could not represent that). TS: `teammate.mode` per row.
+    /// field could not represent that).
     pub mode: coco_types::PermissionMode,
 }
 
@@ -405,8 +380,7 @@ pub struct QuickOpenState {
 
 /// `/copy` picker state. The picker is mounted when the chosen
 /// assistant message contains code blocks AND the user has not opted
-/// into "always copy full response" via config — TS mirror at
-/// `commands/copy/copy.tsx::CopyPicker`.
+/// into "always copy full response" via config.
 #[derive(Debug, Clone)]
 pub struct CopyPickerState {
     /// The full markdown source of the picked assistant message.
@@ -614,9 +588,6 @@ pub struct McpServerOption {
 /// deny (+ optional feedback); the TUI dispatches
 /// `UserCommand::PlanApprovalResponse` which the engine writes back to
 /// the teammate's inbox.
-///
-/// TS source: `tools/ExitPlanModeTool/ExitPlanModeV2Tool.ts:137-141`
-/// builds the request; leader side surfaces via an ink modal.
 #[derive(Debug, Clone)]
 pub struct PlanApprovalPromptState {
     /// Correlation id that will travel back in the response.
@@ -755,10 +726,9 @@ impl MemoryDialogState {
     }
 }
 
-/// Standalone theme picker (TS `components/ThemePicker.tsx`). Opened by
-/// `/theme`; navigating live-previews the focused theme via an in-memory
-/// `apply_theme_setting`, Enter persists, Esc restores `original_setting` so
-/// the preview never sticks.
+/// Standalone theme picker. Opened by `/theme`; navigating live-previews
+/// the focused theme via an in-memory `apply_theme_setting`, Enter persists,
+/// Esc restores `original_setting` so the preview never sticks.
 #[derive(Debug, Clone)]
 pub struct ThemePickerState {
     /// Auto + every built-in / custom theme, in display order.

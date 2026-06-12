@@ -270,8 +270,8 @@ pub enum TextStreamPart {
     },
     /// Tool approval has been requested for an upcoming tool execution.
     ///
-    /// Mirrors TS `ToolApprovalRequestOutput`. Consumers should respond with a
-    /// `ToolApprovalResponse` (approve / deny) before the tool can run.
+    /// Consumers should respond with a `ToolApprovalResponse`
+    /// (approve / deny) before the tool can run.
     ToolApprovalRequest {
         /// ID of the approval request — referenced by the matching response.
         approval_id: String,
@@ -281,8 +281,6 @@ pub enum TextStreamPart {
         is_automatic: bool,
     },
     /// Tool approval response — emitted after a request is resolved.
-    ///
-    /// Mirrors TS `ToolApprovalResponseOutput`.
     ToolApprovalResponse {
         /// ID of the approval request this response is for.
         approval_id: String,
@@ -905,8 +903,7 @@ async fn stream_text_inner(
         let step_tools_context = tools_context.clone();
 
         let effective_model = step_model.as_ref().unwrap_or(&model);
-        // Deep-merge call-level + step-level provider options (TS parity:
-        // `mergeObjects(providerOptions, prepareStepResult?.providerOptions)`).
+        // Deep-merge call-level + step-level provider options.
         // Step keys layer onto call keys; nested objects merge recursively.
         let effective_provider_options = build_call_options::merge_provider_options(
             options.provider_options.as_ref(),

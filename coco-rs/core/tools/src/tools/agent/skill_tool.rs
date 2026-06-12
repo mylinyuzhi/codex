@@ -1,6 +1,4 @@
 //! `SkillTool` — execute a skill (slash command) within the main conversation.
-//!
-//! TS: `tools/SkillTool/`.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -18,9 +16,8 @@ use serde_json::Value;
 
 /// Typed input for [`SkillTool`].
 ///
-/// TS parity: `SkillTool.ts:291-298 inputSchema` — `skill` is required,
-/// `args` is optional. (No `#[derive(Default)]`: `skill` is a required
-/// non-`Option` field per the TS `z.string()` without `.optional()`.)
+/// `skill` is required, `args` is optional. (No `#[derive(Default)]`: `skill` is a required
+/// non-`Option` field.)
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SkillInput {
     /// The skill name. E.g., "commit", "review-pr", or "pdf"
@@ -34,8 +31,7 @@ pub struct SkillInput {
 /// prompt fed back into the agent's history) and `forked` (child agent
 /// ran in its own session, output aggregated).
 ///
-/// TS parity: `SkillTool.ts:301-326 outputSchema`. Wire field names
-/// preserved (`commandName`, `agentId`) via `rename` for cross-runtime
+/// Wire field names preserved (`commandName`, `agentId`) via `rename` for cross-runtime
 /// transcript compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -90,16 +86,13 @@ impl Tool for SkillTool {
     fn name(&self) -> &str {
         ToolName::Skill.as_str()
     }
-    /// Short UI label. TS parity:
-    /// `SkillTool.ts:342 description: async ({ skill }) => `Execute skill: ${skill}``.
+    /// Short UI label.
     fn description(&self, input: &SkillInput, _options: &DescriptionOptions) -> String {
         format!("Execute skill: {}", input.skill)
     }
 
-    /// Full model-facing tool description. TS parity:
-    /// `SkillTool.ts:344 prompt: async () => getPrompt(...)` →
-    /// `SkillTool/prompt.ts getPrompt()`. The `<command-name>` literal
-    /// matches TS `COMMAND_NAME_TAG` (`constants/xml.ts`).
+    /// Full model-facing tool description. The `<command-name>` literal
+    /// matches the XML tag used in skill injection.
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         "Execute a skill within the main conversation\n\
          \n\
@@ -129,9 +122,7 @@ impl Tool for SkillTool {
             .to_string()
     }
 
-    /// Render the skill envelope. TS parity:
-    /// `SkillTool.ts:843-862 mapToolResultToToolResultBlockParam`,
-    /// data shape per `SkillTool.ts:301-326 outputSchema`.
+    /// Render the skill envelope.
     fn render_for_model(&self, out: &SkillOutput) -> Vec<ToolResultContentPart> {
         let text = match out {
             SkillOutput::Inline { command_name, .. } => {
@@ -175,11 +166,10 @@ impl Tool for SkillTool {
             tool_overrides: Some(ctx.tool_overrides.clone()),
             parent_tool_filter: Some(ctx.tool_filter.clone()),
         };
-        // `gate` carries the inputs `QuerySkillRuntime` needs to
-        // enforce the TS 4-state Skill tool gate
-        // (`cli_inner_pretty.js:353567-353590`). With default-empty
-        // `skill_overrides` tiers the gate short-circuits to `On` so
-        // PR2 introduces no observable behavior change.
+        // `gate` carries the inputs `QuerySkillRuntime` needs to enforce
+        // the 4-state Skill tool gate. With default-empty `skill_overrides`
+        // tiers the gate short-circuits to `On` so PR2 introduces no
+        // observable behavior change.
         //
         // The handle resolves the skill (canonical name + aliases)
         // and tests every candidate against `typed_slashes_in_turn`

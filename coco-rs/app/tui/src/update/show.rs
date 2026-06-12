@@ -59,8 +59,7 @@ pub(crate) fn cycle_model(state: &mut AppState) {
 /// Open the teams roster picker, seeded from the live teammate list
 /// (`session.subagents` where `kind == Teammate` and still running). The
 /// leader cycles a focused teammate's permission mode (Left/Right) and
-/// applies it on Enter via `UserCommand::SetTeammateMode`. TS:
-/// `components/teams/TeamsDialog.tsx`.
+/// applies it on Enter via `UserCommand::SetTeammateMode`.
 pub(crate) fn team_roster(state: &mut AppState) {
     let team_name = state
         .session
@@ -71,10 +70,9 @@ pub(crate) fn team_roster(state: &mut AppState) {
         .unwrap_or_default();
 
     // Seed each member's CURRENT mode from team.json so the picker shows and
-    // cycles from the live mode rather than a hardcoded `Default`. TS reads
-    // `team.json` fresh on every render (`TeamsDialog.tsx`); we read it once
+    // cycles from the live mode rather than a hardcoded `Default`. Read once
     // when the picker opens. Members missing a stored mode fall back to
-    // `Default` (matches `permissionModeFromString(undefined)`).
+    // `Default`.
     let mode_by_name: std::collections::HashMap<String, coco_types::PermissionMode> =
         coco_coordinator::team_file::read_team_file(&team_name)
             .ok()
@@ -120,8 +118,8 @@ pub(crate) fn team_roster(state: &mut AppState) {
     }));
 }
 
-/// Open the standalone theme picker (TS `ThemePicker`). The choice list and
-/// the currently-saved setting come from the live `ThemeRuntimeState`; the
+/// Open the standalone theme picker. The choice list and the
+/// currently-saved setting come from the live `ThemeRuntimeState`; the
 /// cursor starts on the saved theme so Enter-without-moving is a no-op.
 pub(crate) fn open_theme_picker(state: &mut AppState) {
     let choices = state.ui.theme_state.choices.clone();
@@ -333,10 +331,8 @@ pub(super) fn export(state: &mut AppState) {
 }
 
 /// Open the rewind state pre-anchored to `target_uuid`, jumping
-/// straight to the RestoreOptions confirm screen. TS:
-/// `setMessageSelectorPreselect(raw); setIsMessageSelectorVisible(true)`
-/// (`screens/REPL.tsx:3783-3784`). Falls back to the bare picker
-/// (no preselected flag) when the uuid doesn't match any selectable
+/// straight to the RestoreOptions confirm screen. Falls back to the bare
+/// picker (no preselected flag) when the uuid doesn't match any selectable
 /// message. Caller is responsible for surfacing a toast in that case
 /// when needed; the slash route does not preselect or toast.
 pub(super) async fn rewind_for(
@@ -363,9 +359,8 @@ pub(super) async fn rewind_for(
 }
 
 /// Open the rewind state; renders inline empty-state when nothing is
-/// rewindable. TS: MessageSelector useEffect loads file-history metadata
-/// per row on mount (`MessageSelector.tsx:285-312`); we mirror that with
-/// one batched request containing every real row.
+/// rewindable. Loads file-history metadata per row with one batched
+/// request containing every real row.
 pub(super) async fn rewind(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     let rewind = update_rewind::build_rewind_state(state);
     let row_ids = preload_diff_stats_targets(&rewind);
@@ -380,9 +375,7 @@ pub(super) async fn rewind(state: &mut AppState, command_tx: &mpsc::Sender<UserC
 ///
 /// Used by both keyboard-gesture entry points (`rewind`, `rewind_for`)
 /// and the slash-route entry point (`tui_only::OpenRewindPicker`) so
-/// every opener loads availability identically — TS parity with
-/// `MessageSelector.tsx:285-312`'s `loadFileHistoryMetadata` on every
-/// picker mount.
+/// every opener loads availability identically on every picker mount.
 pub(crate) fn preload_diff_stats_targets(rewind: &crate::state::RewindState) -> Vec<uuid::Uuid> {
     if !rewind.file_history_enabled {
         return Vec::new();

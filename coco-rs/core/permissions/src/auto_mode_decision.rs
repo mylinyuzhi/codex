@@ -1,7 +1,5 @@
 //! Auto-mode classifier decision integration.
 //!
-//! TS: utils/permissions/classifierDecision.ts (98 LOC)
-//!
 //! Entry point for auto-mode permission checks. Called by the query engine
 //! after `PermissionEvaluator::evaluate()` returns `Ask` and the mode is
 //! `Auto`. Chains: safe-tool check → heuristic → LLM classifier → denial
@@ -44,8 +42,7 @@ pub struct AutoModeContext<'a> {
     pub cwd: Option<&'a str>,
     /// Additional writable roots (keys of `ToolPermissionContext.additional_dirs`).
     pub additional_dirs: &'a [String],
-    /// True when the session cannot show an interactive prompt (coco
-    /// equivalent of TS `shouldAvoidPermissionPrompts`). When set, decisions
+    /// True when the session cannot show an interactive prompt. When set, decisions
     /// that would otherwise fall back to an interactive Ask instead DENY — a
     /// headless Ask is auto-allowed downstream, so falling through would
     /// defeat the safety check. Distinct from session-level
@@ -58,8 +55,6 @@ pub struct AutoModeContext<'a> {
 /// Returns `None` when auto-mode is inactive (caller falls through to the
 /// interactive permission dialog). Returns `Some(decision)` when auto-mode
 /// handled the request.
-///
-/// TS: `hasPermissionsToUseTool` auto-mode branch (`permissions.ts:520-927`).
 //
 // Each parameter carries a distinct piece of caller-side state (rules,
 // state machines, denial cache, classifier callback). Bundling them
@@ -89,7 +84,7 @@ where
 
     // 2. Safe tool allowlist → Allow immediately (skip classifier). Any
     //    allowed action also clears the consecutive-denial streak so a few
-    //    safe calls between blocks don't trip the fallback (TS recordSuccess).
+    //    safe calls between blocks don't trip the fallback.
     if is_safe_tool(tool_name) {
         denial_tracker.reset_consecutive();
         return Some(allow());
@@ -98,7 +93,7 @@ where
     // 3. File-modifying tools: path-safety immunity + safe-in-cwd fast path.
     //    Replaces the old "relative or /tmp → allow" heuristic that
     //    auto-allowed CWD-escaping traversal and overrode non-classifier-
-    //    approvable safety blocks. TS `permissions.ts:532-548,600-656`.
+    //    approvable safety blocks.
     if is_file_modifying_tool(tool_name) {
         if let Some(path) = extract_file_modifying_path(tool_name, input) {
             match file_safety_decision(&path, auto_ctx) {
@@ -142,7 +137,7 @@ where
 
     // 6. Classifier could not produce a usable verdict.
     //    Transcript-too-long is deterministic (retry can't help) → manual
-    //    approval, or abort the turn in headless. TS `permissions.ts:818-842`.
+    //    approval, or abort the turn in headless.
     if result.transcript_too_long {
         let message = "Auto-mode classifier transcript exceeded the context window — \
              manual approval required"
@@ -159,13 +154,11 @@ where
             choices: None,
         });
     }
-    //    Transient outage. TS gates this on `tengu_iron_gate_closed` (default
-    //    true = fail closed: deny even in interactive mode); only the rare
-    //    open-gate path falls back to a prompt (`permissions.ts:843-876`).
-    //    Coco replaces the GrowthBook gate with the
-    //    `classifier_unavailable_fail_open` setting (default false = fail
-    //    closed, matching TS's shipped posture). Opting into fail-open
-    //    restores a manual prompt when interactive; headless always denies.
+    //    Transient outage. Default posture is fail closed (deny even in
+    //    interactive mode). The `classifier_unavailable_fail_open` setting
+    //    (default false = fail closed) can opt into fail-open behavior,
+    //    which restores a manual prompt when interactive; headless always
+    //    denies regardless.
     if result.unavailable {
         let avoid_prompts =
             !rules.classifier_unavailable_fail_open || auto_ctx.avoid_permission_prompts;
@@ -187,8 +180,7 @@ where
         denial_tracker.record_denial(tool_name);
 
         // Denial-limit fallback: 3 consecutive OR 20 total denials → let the
-        // user review (or abort the turn in headless). TS
-        // `handleDenialLimitExceeded`.
+        // user review (or abort the turn in headless).
         if denial_tracker.should_fallback_to_prompting() {
             let warning = denial_limit_warning(denial_tracker, &result.reason);
             // Reset both counters on the total cap so the session continues
@@ -252,7 +244,7 @@ fn require_interactive_or_deny(
     }
 }
 
-/// Build the denial-limit warning, mirroring TS wording. Reads counter values
+/// Build the denial-limit warning. Reads counter values
 /// before any reset.
 fn denial_limit_warning(tracker: &DenialTracker, latest_reason: &str) -> String {
     let lead = if tracker.hit_total_limit() {
@@ -274,7 +266,7 @@ fn denial_limit_warning(tracker: &DenialTracker, latest_reason: &str) -> String 
 /// Outcome of the file-modifying path-safety gate.
 enum FileSafety {
     /// Non-classifier-approvable safety block — never auto-allow, never
-    /// classify (TS marks these immune to all auto-approve paths).
+    /// classify (immune to all auto-approve paths).
     Immune { message: String },
     /// Path passed all safety checks and lands inside an allowed directory.
     AllowInCwd,
@@ -312,7 +304,7 @@ fn scan_path(candidate: &str) -> Scan {
 /// backtick shell expansion, `~user` tilde, NTFS ADS) are erased by path
 /// normalization, so they must be caught before resolution. Then, when the
 /// cwd is known, scans every symlink-resolved target so a symlink to a
-/// protected file is caught (TS `getPathsForPermissionCheck`). An immune
+/// protected file is caught. An immune
 /// block on ANY candidate dominates.
 fn file_safety_decision(path: &str, ctx: &AutoModeContext<'_>) -> FileSafety {
     let mut candidates: Vec<String> = vec![path.to_string()];
@@ -333,8 +325,7 @@ fn file_safety_decision(path: &str, ctx: &AutoModeContext<'_>) -> FileSafety {
         return FileSafety::Classify;
     }
     // Path passed every safety check. Auto-allow only when it lands inside an
-    // allowed directory; otherwise route to the classifier. Mirrors TS
-    // acceptEdits fast-path semantics.
+    // allowed directory; otherwise route to the classifier.
     match ctx.cwd {
         Some(cwd) if filesystem::is_path_within_allowed_dirs(path, cwd, ctx.additional_dirs) => {
             FileSafety::AllowInCwd

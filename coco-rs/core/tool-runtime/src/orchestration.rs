@@ -1,6 +1,5 @@
 //! Tool orchestration — batch execution with hook integration.
 //!
-//! TS: services/tools/toolOrchestration.ts (900 LOC) + toolExecution.ts (1.7K)
 //! Runs tools through the permission → execute → hook pipeline.
 
 use coco_messages::Message;
@@ -161,8 +160,6 @@ pub fn has_destructive_tool(tool_calls: &[(String, String, Value)], tools: &Tool
 }
 
 /// Get the tool result budget — maximum characters per tool result.
-///
-/// TS: TOOL_RESULT_BUDGET from constants
 pub const TOOL_RESULT_BUDGET_CHARS: usize = 100_000;
 
 /// Truncate a tool result to the budget.

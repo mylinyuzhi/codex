@@ -1,14 +1,10 @@
 //! Team/swarm configuration types.
 //!
-//! TS: configConstants.ts `TEAMMATE_MODES`, config.ts `ConfigOptions`.
-//!
 //! Whether the swarm subsystem is **active** is gated upstream by
 //! `Feature::AgentTeams`; this struct only carries internal parameters
 //! (mode, max agents, default model, etc.).
 
 /// How teammates are spawned.
-///
-/// TS: `TEAMMATE_MODES = ['auto', 'tmux', 'in-process']`
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
@@ -34,8 +30,6 @@ impl TeammateMode {
 }
 
 /// Team/swarm configuration.
-///
-/// TS: `ConfigOptions.showSpinnerTree`, `teammateMode`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TeamConfig {
     /// How to spawn teammates.

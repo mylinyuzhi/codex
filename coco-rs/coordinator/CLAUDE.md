@@ -6,14 +6,6 @@ in-process), agent identity / discovery / reconnect, and the
 [`coco_tool_runtime::AgentHandle`] implementation the tool layer
 invokes.
 
-## TS Source
-- `tasks/InProcessTeammateTask/`, `tasks/LocalAgentTask/` — task lifecycle
-- `utils/swarm/` — runner, mailbox, backends, layout, identity, discovery
-- `utils/teammateMailbox.ts`, `utils/teammateContext.ts` — mailbox IPC + thread-local context
-- `utils/swarm/backends/{TmuxBackend,ITermBackend,InProcessBackend,PaneBackendExecutor}.ts`
-- `coordinator/coordinatorMode.ts` — coordinator-mode runtime
-- `tools/AgentTool/forkSubagent.ts` — fork dispatch (consumed via `coco-subagent`)
-
 ## Layer
 
 L5 (root). Sits next to `commands`, `tasks`, `memory`. **Does NOT depend
@@ -28,7 +20,7 @@ import the other for the types alone.
 | Module | Purpose |
 |---|---|
 | `runner` / `runner_loop` | Outer lifecycle + per-iteration scheduling. `InProcessAgentRunner`, `PermissionBridge`, `InProcessRunnerConfig`, `AgentExecutionEngine` trait. |
-| `agent_handle/` | `SwarmAgentHandle: AgentHandle` — the bridge that AgentTool dispatches to. Split: `mod.rs` (struct + setters + trait impl + teammate dispatch), `spawn.rs` (sync + background subagent dispatch), `handoff.rs` (post-spawn classifier + AgentSummary), `resume.rs` (TS-aligned background-spawn resume). |
+| `agent_handle/` | `SwarmAgentHandle: AgentHandle` — the bridge that AgentTool dispatches to. Split: `mod.rs` (struct + setters + trait impl + teammate dispatch), `spawn.rs` (sync + background subagent dispatch), `handoff.rs` (post-spawn classifier + AgentSummary), `resume.rs` (background-spawn resume). |
 | `inprocess_backend` | `InProcessBackend: TeammateExecutor` — wraps `InProcessAgentRunner` for the registry. Lives outside `pane/` because it composes the runner. |
 | `mailbox/{mod,io,lock,protocol}.rs` | File-based teammate inboxes (`~/.claude/teams/{team}/inboxes/{agent}.json`) with `fs2` advisory locking + retry/jitter. Split into `io.rs` (path / JSON r/w), `lock.rs` (fs2 + 30-retry exponential backoff), `protocol.rs` (envelope codec). |
 | `team_file` | `~/.claude/teams/{team}/team.json` r/w + lock helpers. |
@@ -66,7 +58,7 @@ import the other for the types alone.
 - **Coordinator `<task-notification>` XML**: `runner_loop`'s cleanup
   path renders `coco_subagent::render_task_notification(...)` and pushes
   it to the leader's mailbox on worker terminate (when coordinator mode
-  is active). Mirrors TS `coordinatorMode.ts:130-152`.
+  is active).
 
 ## Conventions
 
@@ -88,11 +80,10 @@ Two distinct caches live in `pane::layout`, both reset by
 - `assign_teammate_color(name@team)` — per-teammate, persists across
   spawns within a session so `lead@my-team` always renders in the same
   color. Used by `agent_handle::spawn_teammate` and `send_message` color
-  routing. TS: `teammateLayoutManager.ts`.
+  routing.
 - `assign_agent_type_color(AgentTypeId)` — per-agent-type, so all
   `Explore` spawns share one color regardless of how many copies are
-  running. Populated by `agent_handle::spawn::spawn_subagent`. TS:
-  `tools/AgentTool/agentColorManager.ts`.
+  running. Populated by `agent_handle::spawn::spawn_subagent`.
 
 ## Open follow-ups (tracked in code as `TODO(...)`)
 

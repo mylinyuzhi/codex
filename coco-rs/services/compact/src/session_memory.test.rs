@@ -325,7 +325,6 @@ fn test_compact_session_memory_returns_none_for_template() {
 #[test]
 fn test_compact_session_memory_unrecognized_anchor_returns_none() {
     // last_summarized_message_id present but absent from history → bail.
-    // TS sessionMemoryCompact.ts:554.
     let messages = vec![make_user_message("hi"), make_assistant_message("hello")];
     let stale = uuid::Uuid::new_v4();
     let config = SessionMemoryCompactConfig::default();

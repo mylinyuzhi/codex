@@ -110,7 +110,7 @@ fn assistant_line(uuid: &str, parent: &str, text: &str, ts: &str) -> String {
 fn system_compact_boundary_line(uuid: &str, parent: Option<&str>, ts: &str) -> String {
     // On disk, the engine writes SystemMessage with `tag = "kind"`. The
     // outer entry's `parent_uuid` is null when this is treated as a
-    // chain break (TS-style), but we only assert chain-walk *behavior*
+    // chain break, but we only assert chain-walk *behavior*
     // — parent linkage is what really matters here. Compact boundary
     // does NOT truncate stored entries per the recovery fix.
     let mut e = json!({
@@ -284,8 +284,8 @@ fn microcompact_boundary_is_inline_not_chain_break() {
 // ---------------------------------------------------------------------------
 
 /// Two terminal user/assistant leaves with the **same** timestamp
-/// must pick the disk-first one (TS `findLatestMessage` first-wins
-/// on equal timestamps via strict `>`).
+/// must pick the disk-first one (first-wins on equal timestamps via
+/// strict `>`).
 #[test]
 fn multi_leaf_tie_break_picks_first_disk_occurrence() {
     let (_dir, _store, path) = fresh_store();
@@ -316,13 +316,13 @@ fn multi_leaf_tie_break_picks_first_disk_occurrence() {
     assert_eq!(
         asst_text.as_deref(),
         Some("branch-first"),
-        "tie-break must pick first-wins per TS findLatestMessage `t > maxTime`",
+        "tie-break must pick first-wins on equal timestamps (strict `>`)",
     );
 }
 
 /// A terminal `attachment` entry must not be picked as the leaf
 /// anchor. The walker steps back to the nearest user/assistant
-/// ancestor (TS `loadTranscriptFile:3768-3784`).
+/// ancestor.
 #[test]
 fn terminal_attachment_falls_back_to_user_assistant_ancestor() {
     let (_dir, _store, path) = fresh_store();
@@ -499,11 +499,9 @@ fn big_tool_result_replacement_survives_resume() {
 // File-history snapshot chain
 // ---------------------------------------------------------------------------
 
-/// The chain is walked in **conversation** order (matching TS
-/// `buildFileHistorySnapshotChain`'s `for (const message of
-/// conversation)` loop) — snapshots tied to messages outside the
-/// resumed chain are skipped, and snapshots inside it appear in
-/// chain-order, not disk-append order.
+/// The chain is walked in **conversation** order — snapshots tied to
+/// messages outside the resumed chain are skipped, and snapshots inside
+/// it appear in chain-order, not disk-append order.
 #[test]
 fn file_history_snapshot_chain_walks_conversation_order() {
     let (_dir, store, path) = fresh_store();
@@ -564,9 +562,8 @@ fn file_history_snapshot_chain_walks_conversation_order() {
 
 /// `is_snapshot_update = true` overwrites the slot keyed by the
 /// **inner** `snapshot.message_id`, not the outer entry's message_id.
-/// TS `recordFileHistorySnapshot` passes the current turn's messageId
-/// as the outer field while preserving the original snapshot's inner
-/// messageId so the chain builder updates the right slot.
+/// The current turn's message_id is the outer field while the original
+/// snapshot's inner message_id identifies the slot to update.
 #[test]
 fn file_history_snapshot_update_overwrites_by_inner_message_id() {
     let (_dir, store, path) = fresh_store();
@@ -708,8 +705,7 @@ fn session_resume_state_aggregates_tokens_and_turn_count() {
 
 /// Marble-origami entries are session-scoped via the payload's
 /// `session_id` field — entries tagged with a different session must
-/// be ignored by the loader (the TS load path uses `loadAllLogs`'s
-/// `entry.sessionId === sessionId` filter).
+/// be ignored by the loader.
 #[test]
 fn marble_origami_entries_filtered_by_session_id() {
     let (_dir, store, _path) = fresh_store();
@@ -754,8 +750,7 @@ fn marble_origami_entries_filtered_by_session_id() {
 /// To exercise the round-trip we put the attachment between an
 /// assistant and a follow-up user message so it sits inside the
 /// parent_uuid chain (the leaf walk anchors on user/assistant; a
-/// terminal attachment would be skipped per TS
-/// `loadTranscriptFile:3768-3784`).
+/// terminal attachment would be skipped).
 #[test]
 fn attachment_round_trip_preserves_kind_and_body() {
     let (_dir, store, path) = fresh_store();
@@ -954,7 +949,7 @@ fn parallel_tool_results_round_trip_and_replacements_apply() {
 
     // Replacement records apply by tool_use_id regardless of how many
     // blocks shared the original parent user entry — no per-message
-    // UUID filter (TS toolResultStorage shape).
+    // UUID filter.
     let by_id: HashSet<&str> = state
         .content_replacements
         .iter()

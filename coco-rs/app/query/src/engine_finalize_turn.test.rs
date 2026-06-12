@@ -3,10 +3,9 @@
 // flow through `CommandQueue` with `QueueOrigin::Coordinator` /
 // `QueueOrigin::TaskNotification`, and the drain at
 // `helpers::queued_command_to_attachment` applies origin-specific
-// framing via `wrap_command_text`. TS parity:
-// `getAgentPendingMessageAttachments` (`attachments.ts:1085-1100`)
-// also surfaces coordinator messages as `queued_command` attachments,
-// not as a separate `<teammate-message>` envelope.
+// framing via `wrap_command_text`. Coordinator messages surface as
+// `queued_command` attachments, not as a separate
+// `<teammate-message>` envelope.
 
 // Phase 7 — Wire stub-field tests for `build_suggestion_context`.
 //
@@ -348,7 +347,7 @@ async fn maybe_spawn_prompt_suggestion_records_and_emits_protocol_event() {
         .expect("dispatcher should record override argument");
     assert!(
         override_seen.is_none(),
-        "promptSuggestion must use the TS fork shape: user prompt only, no system override"
+        "promptSuggestion must use user prompt only, no system override"
     );
 }
 

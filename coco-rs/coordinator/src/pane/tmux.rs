@@ -1,7 +1,5 @@
 //! Tmux pane backend for teammate execution.
 //!
-//! TS: utils/swarm/backends/TmuxBackend.ts
-//!
 //! Manages tmux panes for teammates — creating splits, setting border colors
 //! and titles, hiding/showing panes, and rebalancing layouts.
 
@@ -19,13 +17,9 @@ use crate::constants::TMUX_COMMAND;
 use crate::types::BackendType;
 
 /// Delay for shell initialization after creating a pane (ms).
-///
-/// TS: `PANE_SHELL_INIT_DELAY_MS = 200`
 const PANE_SHELL_INIT_DELAY_MS: u64 = 200;
 
 /// Tmux pane backend.
-///
-/// TS: `class TmuxBackend implements PaneBackend`
 pub struct TmuxBackend {
     /// Whether we're inside tmux (leader's pane exists).
     is_native: bool,
@@ -72,7 +66,7 @@ impl TmuxBackend {
 
     /// The active window target (`session:window`) for the inherited client,
     /// or `None` when nothing is attached / the query fails. Used only as the
-    /// fallback target for per-window options. TS: `getCurrentWindowTarget()`.
+    /// fallback target for per-window options.
     async fn current_window_target(&self) -> Option<String> {
         self.run(&["display-message", "-p", "#{session_name}:#{window_index}"])
             .await
@@ -139,11 +133,10 @@ impl PaneBackend for TmuxBackend {
         color: AgentColorName,
     ) -> crate::Result<()> {
         let tmux_color = agent_color_to_tmux(color);
-        // Three-step sequence mirroring TS `TmuxBackend.ts:178-202`. Step 1
-        // sets the pane's foreground colour for the border; steps 2-3 set
-        // the per-pane `pane-border-style` and `pane-active-border-style`
-        // options so the border keeps its colour whether the pane is
-        // active or inactive (requires tmux 3.2+).
+        // Three-step sequence. Step 1 sets the pane's foreground colour for
+        // the border; steps 2-3 set the per-pane `pane-border-style` and
+        // `pane-active-border-style` options so the border keeps its colour
+        // whether the pane is active or inactive (requires tmux 3.2+).
         self.run(&[
             "select-pane",
             "-t",
@@ -188,7 +181,7 @@ impl PaneBackend for TmuxBackend {
         // Scope to the window (`-w -t <target>`), NOT the server (`-g`): a
         // global set mutates the user's unrelated tmux windows and is never
         // reverted on teardown. Fall back to the active window when no target
-        // is supplied; bail if none resolves. TS: `TmuxBackend.ts:233-252`.
+        // is supplied; bail if none resolves.
         let target = match window_target {
             Some(t) => t.to_string(),
             None => match self.current_window_target().await {
@@ -271,7 +264,6 @@ impl PaneBackend for TmuxBackend {
 impl TmuxBackend {
     /// Create a pane when the leader is inside tmux.
     ///
-    /// TS: `createTeammatePaneWithLeader(name, color)`
     /// Layout: 30% leader (left), 70% teammates (right, tiled).
     async fn create_teammate_pane_with_leader(
         &self,
@@ -306,8 +298,6 @@ impl TmuxBackend {
     }
 
     /// Create a pane in an external swarm session.
-    ///
-    /// TS: `createTeammatePaneExternal(name, color)`
     async fn create_teammate_pane_external(
         &self,
         name: &str,
@@ -321,8 +311,8 @@ impl TmuxBackend {
         let pane_id = if is_first {
             // Reuse an already-running swarm session/window if present rather
             // than recreating it — an unconditional `new-session` would orphan
-            // the prior session's panes. TS `createExternalSwarmSession`:
-            // has-session → list-windows → list-panes, reusing panes[0].
+            // the prior session's panes: has-session → list-windows →
+            // list-panes, reusing panes[0].
             let has_session = self
                 .run(&["has-session", "-t", SWARM_SESSION_NAME])
                 .await
@@ -417,10 +407,9 @@ impl TmuxBackend {
         tokio::time::sleep(std::time::Duration::from_millis(PANE_SHELL_INIT_DELAY_MS)).await;
 
         // Mirror the leader path: colored border + titled border, then tile
-        // the swarm window. TS `createTeammatePaneExternal` does the same after
-        // every external pane (TmuxBackend.ts:694-696). All ops route through
-        // `self.run`, which in external mode already addresses the dedicated
-        // swarm server, so no socket-aware variants are needed.
+        // the swarm window. All ops route through `self.run`, which in external
+        // mode already addresses the dedicated swarm server, so no
+        // socket-aware variants are needed.
         let _ = self.set_pane_border_color(&pane_id, color).await;
         let _ = self.set_pane_title(&pane_id, name, color).await;
         let _ = self.rebalance_panes_tiled(&swarm_window).await;
@@ -488,8 +477,6 @@ async fn run_tmux_with_socket(socket: &str, args: &[&str]) -> crate::Result<Stri
 }
 
 /// Map AgentColorName to tmux color strings.
-///
-/// TS: `getTmuxColorName(color)`
 fn agent_color_to_tmux(color: AgentColorName) -> &'static str {
     match color {
         AgentColorName::Red => "red",

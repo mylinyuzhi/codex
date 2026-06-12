@@ -1,10 +1,8 @@
 //! `/vim` — persist editor mode (vim ↔ normal).
 //!
-//! TS source: `commands/vim/vim.ts` flips `editorMode` in the global
-//! config and returns a status string. coco-rs has no `editor_mode`
-//! field on `Settings` yet, so we persist via `~/.coco/state/editor_mode`
-//! (single-line text file). The TUI reads the same file at startup to
-//! pick the initial mode; absence of the file means "normal".
+//! Flips editor mode (vim ↔ normal). Persisted via
+//! `~/.coco/state/editor_mode` (single-line text file). The TUI reads
+//! this file at startup; absence means "normal".
 
 use std::path::PathBuf;
 use std::pin::Pin;

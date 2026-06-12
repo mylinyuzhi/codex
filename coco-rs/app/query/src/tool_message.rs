@@ -1,15 +1,13 @@
 //! Message-bucket helpers for `ToolCallRunner`.
 //!
-//! TS parity: I5 of `docs/coco-rs/agent-loop-refactor-plan.md`. One tool
-//! call produces messages in six distinct buckets. The flatten template
-//! depends on whether the lifecycle reached:
+//! One tool call produces messages in six distinct buckets. The flatten
+//! template depends on whether the lifecycle reached:
 //!
 //! - `Success` — full pre-hook + execute + post-hook path. Non-MCP and MCP
 //!   tools emit the post-hook bucket in **different** positions relative
-//!   to `new_messages` (TS `toolExecution.ts:1498–1585`).
+//!   to `new_messages`.
 //! - `Failure` — `tool.execute()` threw. Post-hook is `PostToolUseFailure`,
-//!   no prevent-continuation, no MCP defer (TS catch at :1589 / return at
-//!   :1715–1737).
+//!   no prevent-continuation, no MCP defer.
 //! - `EarlyReturn` — unknown tool, schema failure, pre-hook stop,
 //!   permission denial. No post-hook ran; only a synthetic error
 //!   `tool_result` plus any pre-hook messages already emitted.
@@ -39,16 +37,15 @@ pub(crate) enum ToolMessagePath {
     /// Non-MCP and MCP success paths differ per I5.
     #[default]
     Success,
-    /// `tool.execute()` threw. Post-hook is `PostToolUseFailure`
-    /// (TS `toolExecution.ts:1696` inside the catch block at :1589).
-    /// TS returns `[error tool_result, ...failure hook messages]` at
-    /// :1715–1737 — MCP deferred logic does not apply.
+    /// `tool.execute()` threw. Post-hook is `PostToolUseFailure`.
+    /// Returns `[error tool_result, ...failure hook messages]` —
+    /// MCP deferred logic does not apply.
     Failure,
     /// Unknown tool / schema / pre-hook stop / permission denied.
     /// No post-hook ran; only pre-hook (if any emitted) + synthetic
-    /// error `tool_result` (per I3 step 12). JSON parse failure is
-    /// **not** here — it is a pre-commit drop handled by the
-    /// streaming accumulator before any bucket exists.
+    /// error `tool_result`. JSON parse failure is **not** here — it
+    /// is a pre-commit drop handled by the streaming accumulator
+    /// before any bucket exists.
     EarlyReturn,
 }
 
@@ -56,8 +53,7 @@ pub(crate) enum ToolMessagePath {
 ///
 /// Non-MCP emits post-hook inline between `tool_result` and
 /// `new_messages`; MCP defers post-hook to AFTER `new_messages` +
-/// `prevent_continuation`
-/// (TS `toolExecution.ts:1499` vs :1585).
+/// `prevent_continuation`.
 ///
 /// Use a typed enum (not `bool`) so call sites cannot accidentally
 /// invert true/false; matches "Prefer Typed Results Over Booleans".
@@ -70,11 +66,10 @@ pub(crate) enum ToolMessageOrder {
 }
 
 impl ToolMessageOrder {
-    /// Resolve from the running tool itself, matching TS `isMcp`
-    /// property. Using `Tool::is_mcp()` rather than `ToolId::Mcp`
-    /// keeps the MCP branch tied to the same predicate the runner
-    /// uses elsewhere and avoids drift between registry key and
-    /// runtime tool metadata.
+    /// Resolve from the running tool itself. Using `Tool::is_mcp()`
+    /// rather than `ToolId::Mcp` keeps the MCP branch tied to the
+    /// same predicate the runner uses elsewhere and avoids drift
+    /// between registry key and runtime tool metadata.
     pub(crate) fn for_tool(tool: &dyn DynTool) -> Self {
         if tool.is_mcp() {
             Self::Mcp
@@ -86,25 +81,22 @@ impl ToolMessageOrder {
 
 /// Six-bucket message payload for a single tool call (pre-flatten).
 ///
-/// TS parity — each bucket maps to a distinct TS emission site
-/// (`toolExecution.ts:815`, :1478, :1515, :1541, :1566, :1572, :1585).
 /// Buckets are runner-local; the scheduler never inspects them. They
 /// collapse into a `Vec<Message>` via [`ToolMessageBuckets::flatten`]
 /// while the runner still holds the `Arc<dyn DynTool>` (so the MCP
 /// predicate agrees with the tool implementation).
 #[derive(Debug, Default)]
 pub(crate) struct ToolMessageBuckets {
-    /// PreToolUse hook-emitted `message` events
-    /// (TS `toolExecution.ts:815`). Pushed before permission /
-    /// execution.
+    /// PreToolUse hook-emitted `message` events. Pushed before
+    /// permission / execution.
     pub(crate) pre_hook: Vec<Message>,
     /// The tool_result itself (or synthetic error). Always exactly one
     /// entry; wrapped in `Option` only so the builder can accumulate
     /// before sealing. Treat `None` as a programming error — enforced
     /// at `flatten` time.
     pub(crate) tool_result: Option<Message>,
-    /// `ToolResult::new_messages` emitted by the tool (TS
-    /// `toolExecution.ts:1566`). Empty on failure / early-return.
+    /// `ToolResult::new_messages` emitted by the tool. Empty on failure
+    /// / early-return.
     pub(crate) new_messages: Vec<Message>,
     /// PostToolUse (Success) or PostToolUseFailure (Failure) hook
     /// output — additional_contexts etc. Empty on EarlyReturn.
@@ -120,7 +112,7 @@ pub(crate) struct ToolMessageBuckets {
 }
 
 impl ToolMessageBuckets {
-    /// Flatten in TS-correct order.
+    /// Flatten in the correct order.
     ///
     /// | Path         | Flatten order                                                   |
     /// |--------------|-----------------------------------------------------------------|
@@ -171,8 +163,7 @@ impl ToolMessageBuckets {
                     }
                 }
                 ToolMessageOrder::Mcp => {
-                    // MCP: post_hook DEFERRED to after new_messages +
-                    // prevent. TS `toolExecution.ts:1499` vs :1585.
+                    // MCP: post_hook DEFERRED to after new_messages + prevent.
                     out.extend(new_messages);
                     if let Some(prevent) = prevent_continuation_attachment {
                         out.push(prevent);
@@ -181,15 +172,13 @@ impl ToolMessageBuckets {
                 }
             },
             ToolMessagePath::Failure => {
-                // TS catch at `toolExecution.ts:1715-1737` returns
-                // `[error tool_result, ...hookMessages]`. The
-                // success-block prevent append at :1572 is bypassed on
-                // exception; MCP defer does not apply.
+                // Returns `[error tool_result, ...hookMessages]`. The
+                // success-block prevent append is bypassed on exception;
+                // MCP defer does not apply.
                 debug_assert!(
                     prevent_continuation_attachment.is_none(),
                     "Failure path must never carry a prevent_continuation \
-                     attachment — TS success-block append is bypassed on \
-                     exception"
+                     attachment — success-block append is bypassed on exception"
                 );
                 out.extend(post_hook);
             }

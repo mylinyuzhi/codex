@@ -419,8 +419,7 @@ impl LanguageModelV4 for OpenAIChatLanguageModel {
         // repair. On parse failure, fall back to `Value::Object({})`
         // (not `invalid = true`) so schema validation in
         // `app/query` reports the specific missing fields instead of
-        // just "JSON broken". Mirrors TS Claude Code's `parsed ?? {}`
-        // in `utils/messages.ts:2694`.
+        // just "JSON broken".
         if let Some(ref tool_calls) = choice.message.tool_calls {
             for tc in tool_calls {
                 let input = vercel_ai_provider_utils::parse_tool_arguments_or_empty(
@@ -627,8 +626,7 @@ struct ChatStreamState {
     byte_stream: vercel_ai_provider_utils::ByteStream,
     buffer: String,
     pending: std::collections::VecDeque<LanguageModelV4StreamPart>,
-    /// Shared tool-call accumulator (TS parity:
-    /// `processStreamingToolCalls` from `@ai-sdk/provider-utils`).
+    /// Shared tool-call accumulator.
     /// OpenAI Chat is strict — id + function.name on first delta —
     /// which matches the tracker's default semantics, so we use it
     /// directly without the outer pending buffer that

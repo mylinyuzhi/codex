@@ -64,9 +64,8 @@ fn ctrl_modifier_preserved() {
 
 #[test]
 fn escape_strips_alt_and_meta_quirk() {
-    // Mirrors TS `resolver.ts:88-90` + `match.ts:99-101` — terminals
-    // set alt/meta on escape, but a plain `escape` binding should still
-    // match. Both modifiers are cleared.
+    // Terminals set alt/meta on escape, but a plain `escape` binding should
+    // still match. Both modifiers are cleared.
     let combo = from_crossterm(key(KeyCode::Esc, KeyModifiers::ALT | KeyModifiers::META)).unwrap();
     assert!(!combo.alt);
     assert!(!combo.meta);

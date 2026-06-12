@@ -1,7 +1,6 @@
 //! Skill usage tracking — frequency + recency-decayed score that drives
 //! the "recently used" section of the `/` autocomplete popup.
 //!
-//! TS source: `utils/suggestions/skillUsageTracking.ts`. Same formulas:
 //! 7-day half-life, minimum recency factor 0.1, 60-second debounce so
 //! a single skill invoked rapidly doesn't pound the filesystem.
 //!
@@ -13,7 +12,7 @@
 //! { "skills": { "name": { "usageCount": 5, "lastUsedAtMs": 1748313600000 } } }
 //! ```
 //!
-//! Stored as i64 millis (matches TS `Date.now()`).
+//! Stored as i64 millis (epoch ms).
 //!
 //! ## Writes are atomic
 //!
@@ -31,10 +30,8 @@
 //!
 //! The process-local debounce table is updated AFTER a successful
 //! write — a transient I/O failure leaves the debounce window open so
-//! the next call retries. This diverges from the TS reference, which
-//! updates the map before `saveGlobalConfig` and would block retries
-//! for 60s on failure. The Rust port prefers retry-friendly semantics
-//! over strict TS parity for this one detail.
+//! the next call retries. This prefers retry-friendly semantics: the
+//! debounce window stays open on failure so the next call can retry.
 //!
 //! Cross-process debounce is best-effort: two coco processes hitting
 //! the same skill within 60s each pass the in-memory check and write
@@ -55,23 +52,21 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Skip the disk write when the same skill records within this window.
-/// Matches TS `SKILL_USAGE_DEBOUNCE_MS = 60_000`.
 const DEBOUNCE_MS: i64 = 60_000;
 
-/// Half-life in days for the recency-decay weighting. Matches TS
-/// `recencyFactor = Math.pow(0.5, daysSinceUse / 7)`.
+/// Half-life in days for the recency-decay weighting.
+/// `recencyFactor = 0.5 ^ (daysSinceUse / 7)`.
 const HALF_LIFE_DAYS: f64 = 7.0;
 
 /// Floor for the recency factor so a once-popular skill that hasn't
-/// been used in months still beats a never-used skill. Matches TS
-/// `Math.max(recencyFactor, 0.1)`.
+/// been used in months still beats a never-used skill.
 const MIN_RECENCY_FACTOR: f64 = 0.1;
 
 /// Per-skill counters persisted to disk.
 ///
-/// Wire-compatible with TS `globalConfig.skillUsage[name]` shape — TS
-/// uses `usageCount` / `lastUsedAt`, which we accept via aliases for
-/// forward-compat with TS-generated files.
+/// Wire-compatible with the `globalConfig.skillUsage[name]` shape —
+/// uses `usageCount` / `lastUsedAt`, accepted via aliases for
+/// forward-compat with upstream-generated files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillUsageStats {
     #[serde(default, alias = "usageCount")]
@@ -90,7 +85,7 @@ fn usage_file_path(config_home: &Path) -> PathBuf {
     config_home.join("skill_usage.json")
 }
 
-/// Process-lifetime debounce cache. Mirrors the TS
+/// Process-lifetime debounce cache. Mirrors the
 /// `lastWriteBySkill: Map<string, number>` approach so the 60-second
 /// gate is a memory hit, not a file read.
 fn last_write_map() -> &'static Mutex<HashMap<String, i64>> {
@@ -111,8 +106,8 @@ fn now_ms() -> Option<i64> {
 }
 
 /// Record a skill invocation. Best-effort: errors are logged via
-/// `tracing` but never surface to the caller, matching TS which calls
-/// `saveGlobalConfig` and discards failures.
+/// `tracing` but never surface to the caller; the implementation
+/// discards failures.
 ///
 /// **Blocking I/O — wrap in `spawn_blocking` from async contexts.**
 /// The 60-second debounce makes most calls return immediately without
@@ -186,7 +181,7 @@ pub fn load_all(config_home: &Path) -> HashMap<String, SkillUsageStats> {
     }
 }
 
-/// Compute the ranking score for a single skill. Direct port of TS
+/// Compute the ranking score for a single skill. Port of
 /// `getSkillUsageScore`:
 ///
 /// ```text

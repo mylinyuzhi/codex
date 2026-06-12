@@ -40,7 +40,6 @@ pub const SHOW_THINKING_KEY: &str = "show_thinking";
 pub const COPY_FULL_RESPONSE_KEY: &str = "copy_full_response";
 
 /// The merged settings snapshot. Immutable after loading.
-/// TS: SettingsJson type in types.ts (Zod schema)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -204,9 +203,7 @@ pub struct Settings {
     /// intentionally unused**. Consumers must go through
     /// `RuntimeConfig.skill_overrides` (a [`crate::SkillOverrideTiers`])
     /// and the three resolvers in `coco-skills::overrides` to compute
-    /// effective state correctly. TS parity: the `skillOverrides`
-    /// setting introduced in v2.1.129 — see
-    /// `cli_inner_pretty.js:476885-476893` (`oT5` resolver).
+    /// effective state correctly.
     ///
     /// `BTreeMap` so on-disk JSON writes (the `/skills` dialog's save
     /// path in PR3) have deterministic key order — avoids noisy
@@ -269,7 +266,6 @@ pub struct Settings {
 
     // === File Checkpointing ===
     /// When false, disables file checkpointing for rewind.
-    /// TS: `fileCheckpointingEnabled` in supportedSettings.ts
     #[serde(default = "default_true")]
     pub file_checkpointing_enabled: bool,
 
@@ -286,8 +282,7 @@ pub struct Settings {
 /// locked surfaces. Managed (policy) and plugin sources always load.
 ///
 /// `true` locks all surfaces; an array locks only the listed surfaces;
-/// absent/false (`Disabled`) locks nothing. TS:
-/// `isRestrictedToPluginOnly` in `utils/settings/pluginOnlyPolicy.ts`.
+/// absent/false (`Disabled`) locks nothing.
 ///
 /// Untagged: the bool variant MUST precede the `Vec` variant so a JSON
 /// boolean deserializes into `AllLocked` rather than failing the array arm.
@@ -305,8 +300,7 @@ pub enum StrictPluginOnlyCustomization {
 }
 
 impl StrictPluginOnlyCustomization {
-    /// Whether `surface` is locked to plugin-only sources. Mirrors TS
-    /// `isRestrictedToPluginOnly(surface)`.
+    /// Whether `surface` is locked to plugin-only sources.
     pub fn is_restricted_to_plugin_only(&self, surface: &str) -> bool {
         match self {
             Self::Disabled => false,
@@ -422,7 +416,6 @@ pub struct PermissionsConfig {
     #[serde(default)]
     pub additional_directories: Vec<String>,
     /// When true, only rules from policy settings are respected.
-    /// TS: allowManagedPermissionRulesOnly
     #[serde(default)]
     #[serde(alias = "allowManagedPermissionRulesOnly")]
     pub allow_managed_permission_rules_only: bool,
@@ -514,12 +507,6 @@ pub struct WorktreeConfig {
 
 /// Plan-mode workflow + prompt configuration.
 ///
-/// TS parity (re-rooted on user config, not GrowthBook):
-/// - `workflow` ← `isPlanModeInterviewPhaseEnabled`
-/// - `phase4_variant` ← `getPewterLedgerVariant`
-/// - `explore_agent_count` ← `getPlanModeV2ExploreAgentCount`
-/// - `plan_agent_count` ← `getPlanModeV2AgentCount`
-///
 /// All fields have sensible defaults so users who don't touch their
 /// settings.json get the canonical 5-phase workflow + standard Phase 4.
 ///
@@ -555,11 +542,10 @@ pub struct PlanModeSettings {
     /// the `ExitPlanMode` tool_result. **Does not enforce** — the model
     /// can ignore the advisory. Default off.
     ///
-    /// TS parity: older hook paths were refactored into the
-    /// `VerifyPlanExecution` tool. This Rust setting remains the
-    /// simpler synchronous mtime check on `ExitPlanMode`; it is advisory
-    /// and does not perform post-implementation verification. Name kept
-    /// as `verify_execution` for settings.json backwards compatibility.
+    /// This setting triggers a synchronous mtime check on `ExitPlanMode`;
+    /// it is advisory and does not perform post-implementation verification.
+    /// Name kept as `verify_execution` for settings.json backwards
+    /// compatibility.
     #[serde(default)]
     pub verify_execution: bool,
     /// In plan mode, if the latest assistant message's context exceeds
@@ -567,10 +553,9 @@ pub struct PlanModeSettings {
     /// `models.plan` client to the `models.main` client to avoid
     /// truncation.
     ///
-    /// TS parity: `getRuntimeMainLoopModel`'s `exceeds200kTokens` branch
-    /// (utils/model/model.ts:152-159). TS hardcodes 200_000 as the
-    /// threshold; coco-rs exposes it so multi-LLM users can tune for
-    /// their plan-role model's actual context window.
+    /// When this token threshold is exceeded, the engine falls back from the
+    /// plan-role model to main to avoid truncation. Exposed so multi-LLM
+    /// users can tune for their plan-role model's actual context window.
     ///
     /// Default 200_000. Set to `i64::MAX` to disable fallback; set to 0
     /// to always fall back (effectively disabling plan-mode model swap).
@@ -618,11 +603,10 @@ impl Default for PlanModeSettings {
 pub enum PlanModeWorkflow {
     /// Original 5-phase workflow: Understand → Explore → Design → Final
     /// Plan → ExitPlanMode. Heavy agent parallelism in Phase 1 + 2.
-    /// TS: `getPlanModeV2MainAgentInstructions`.
     #[default]
     FivePhase,
     /// Iterative ask-as-you-go workflow: read a little, ask, update the
-    /// plan file, repeat. TS: `getPlanModeInterviewInstructions`.
+    /// plan file, repeat.
     Interview,
 }
 
@@ -637,14 +621,12 @@ pub struct SessionSettings {
     /// first time `ExitPlanMode` is approved and a plan file is
     /// non-empty. Uses whatever provider+model is currently bound to
     /// `ModelRole::Fast` — if no Fast role is configured, the feature
-    /// silently stays off. TS: `sessionTitle.ts::generateSessionTitle`
-    /// + `initReplBridge.ts::onUserMessage` lifecycle hook.
+    /// silently stays off.
     pub auto_title: bool,
 }
 
 /// Phase-4 "Final Plan" prompt strictness (5-phase workflow only).
-/// TS: `PewterLedgerVariant` — four arms with progressively stricter
-/// guidance on plan-file length.
+/// Four arms with progressively stricter guidance on plan-file length.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanPhase4Variant {

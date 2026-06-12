@@ -1,8 +1,6 @@
 //! Running background tasks — backgrounded agents, shells, in-process
 //! teammates (and the reserved remote-teammate slot), dream consolidation.
 //!
-//! TS: `Task.ts` — `TaskStateBase`, `TaskHandle`, `TaskType`, `TaskStatus`.
-//!
 //! ## Storage layout
 //!
 //! Two parallel maps keyed by task id (`String`):
@@ -311,8 +309,8 @@ impl TaskManager {
     /// Flip `is_backgrounded` on every non-terminal, non-already-backgrounded
     /// running task whose type supports backgrounding (BgAgent + Shell).
     /// Returns the wire ids that were just transitioned. Emits no wire event
-    /// — TS aligns: foreground→background is a pure UI-state transition, not
-    /// a task lifecycle event (the task continues running and will emit its
+    /// — foreground→background is a pure UI-state transition, not a task
+    /// lifecycle event (the task continues running and will emit its
     /// own `task/completed` with the `output_file` populated when it actually
     /// terminates). The TUI mirror in `session.subagents` flips to
     /// `Backgrounded` optimistically inside the keybinding handler before

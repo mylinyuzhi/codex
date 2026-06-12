@@ -1,18 +1,14 @@
 //! Per-skill `skill_overrides` resolution.
 //!
-//! Three pure functions that mirror TS resolvers in
-//! `cli_inner_pretty.js`:
+//! Three pure functions covering skill override resolution:
 //!
-//! | coco-rs                          | TS mirror | Lines       |
-//! |----------------------------------|-----------|-------------|
-//! | [`resolve_skill_override_lock`]  | `oT5`     | 476885-476893 |
-//! | [`resolve_skill_baseline`]       | `aT5`     | 476894-476896 |
-//! | [`effective_skill_state`]        | `st`      | 513847-513849 |
+//! - [`resolve_skill_override_lock`]
+//! - [`resolve_skill_baseline`]
+//! - [`effective_skill_state`]
 //!
 //! # Why three functions and not one
 //!
-//! The TS code keeps them separate because each is consumed at a
-//! different layer:
+//! Each is consumed at a different layer:
 //!
 //! - **Lock** ([`resolve_skill_override_lock`]) — drives the
 //!   `/skills` dialog visualisation. A locked row renders
@@ -23,18 +19,17 @@
 //!   the JSON patch) rather than written as a redundant override.
 //! - **Effective state** ([`effective_skill_state`]) — drives the
 //!   Skill tool gate and listing budget filter. Plugin source short-
-//!   circuits to [`SkillOverrideState::On`] (mirrors TS `st`).
+//!   circuits to [`SkillOverrideState::On`].
 //!
 //! # `disable_model_invocation` is intentionally **not** in
 //! [`effective_skill_state`]
 //!
-//! TS `st` does not check the author DMI flag. The Skill tool runs
+//! Does not check the author DMI flag. The Skill tool runs
 //! a separate DMI gate, and the listing budget applies a separate
 //! `XG$` predicate (`disable_model_invocation && state != "on"` →
 //! skip). Folding DMI into [`effective_skill_state`] would cause an
 //! author-DMI skill with no user override to silently disappear
-//! from the listing — a regression versus the TS behavior where the
-//! model sees the name but can't auto-invoke.
+//! from the listing — the model sees the name but can't auto-invoke.
 //!
 //! [`resolve_skill_override_lock`] **does** include DMI (as an
 //! author lock) because the dialog visualisation is the only place
@@ -48,8 +43,8 @@ use coco_types::SkillOverrideState;
 use crate::SkillDefinition;
 use crate::SkillSource;
 
-/// TS `oT5` mirror — return the highest-precedence lock on a skill
-/// override, or `None` if the user is free to edit it.
+/// Return the highest-precedence lock on a skill override, or `None`
+/// if the user is free to edit it.
 ///
 /// Precedence (highest first):
 /// 1. `policySettings.skill_overrides[name]` → [`SkillLockSource::Policy`]
@@ -89,8 +84,8 @@ pub fn resolve_skill_override_lock(
     None
 }
 
-/// TS `aT5` mirror — the project-or-user baseline used by the
-/// dialog's diff-against-baseline save algorithm.
+/// The project-or-user baseline used by the dialog's
+/// diff-against-baseline save algorithm.
 ///
 /// **Excludes** local / policy / flag tiers by design. The baseline
 /// answers "if I delete this skill's key from
@@ -106,8 +101,8 @@ pub fn resolve_skill_baseline(name: &str, tiers: &SkillOverrideTiers) -> SkillOv
         .unwrap_or(SkillOverrideState::On)
 }
 
-/// TS `st` mirror — the effective override state used by the Skill
-/// tool gate and listing budget filter.
+/// The effective override state used by the Skill tool gate and
+/// listing budget filter.
 ///
 /// Plugin-sourced skills short-circuit to [`SkillOverrideState::On`]
 /// (managed via `/plugin`, not `/skills`). Otherwise the highest-

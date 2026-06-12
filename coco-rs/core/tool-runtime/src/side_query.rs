@@ -1,7 +1,5 @@
 //! Side-query trait — async LLM inference abstraction for tools.
 //!
-//! TS: utils/sideQuery.ts
-//!
 //! **Split design**:
 //! - Data types (`SideQueryRequest`, `SideQueryResponse`, etc.) → `coco-types`
 //!   (shared by both `coco-tool` and `coco-permissions`)

@@ -49,7 +49,7 @@ pub struct ApplyPatchOutput {
 /// `create_apply_patch_freeform_tool`'s one-liner — the lark grammar
 /// ([`APPLY_PATCH_LARK_GRAMMAR`]) constrains the body, so the description only
 /// needs to tell the model this is a freeform (non-JSON) tool. There is no
-/// claude-code TS counterpart (gpt-5 / codex-family only).
+/// upstream counterpart (gpt-5 / codex-family only).
 const APPLY_PATCH_FREEFORM_DESCRIPTION: &str = "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.";
 
 /// The lark grammar the model's freeform output is constrained to — a verbatim
@@ -254,8 +254,8 @@ impl Tool for ApplyPatchTool {
             .await
             .map_err(|e| apply_patch_error_with_preview(&stderr, e, display_data.clone()))?;
 
-        // TS parity with Write/Edit — notify LSP of `didSave` per file
-        // touched so diagnostics refresh. Best-effort, errors swallowed.
+        // Notify LSP of `didSave` per file touched so diagnostics refresh.
+        // Best-effort, errors swallowed.
         for path in &path_effects.lsp_notify_paths {
             ctx.lsp.notify_save(path.as_path()).await;
         }

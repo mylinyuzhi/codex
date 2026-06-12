@@ -1,8 +1,6 @@
 //! `app:toggleTodos` handler — cycle the right-rail expanded view.
 //!
-//! Mirrors TS `useGlobalKeybindings.tsx::handleToggleTodos`
-//! (lines 51-89). Three-state cycle when there are running teammates,
-//! two-state otherwise:
+//! Three-state cycle when there are running teammates, two-state otherwise:
 //!
 //! * has running teammates: `None → Tasks → Teammates → None`
 //! * else: `None ↔ Tasks`
@@ -15,7 +13,7 @@ use coco_types::ExpandedView;
 use crate::state::AppState;
 use crate::state::session::SubagentStatus;
 
-/// Cycle the right-rail expanded view per the TS rules above.
+/// Cycle the right-rail expanded view per the rules described above.
 pub(super) fn cycle(state: &mut AppState) {
     let has_running_teammates = state
         .session
@@ -26,7 +24,7 @@ pub(super) fn cycle(state: &mut AppState) {
     state.session.expanded_view = next(state.session.expanded_view, has_running_teammates);
 }
 
-/// Pure cycle function — exposed for testing.
+/// Pure cycle function exposed for testing.
 pub(super) fn next(current: ExpandedView, has_running_teammates: bool) -> ExpandedView {
     if has_running_teammates {
         match current {

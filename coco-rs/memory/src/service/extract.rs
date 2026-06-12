@@ -1,10 +1,9 @@
 //! Turn-end memory extraction service.
 //!
-//! TS: `services/extractMemories/extractMemories.ts`. After every
-//! eligible turn, fork a subagent with a 5-turn cap and a memdir-only
-//! write fence. The agent reads existing memories (manifest pre-injected
-//! into its prompt), then writes / edits memory files based on the
-//! conversation slice since the last cursor.
+//! After every eligible turn, fork a subagent with a 5-turn cap and
+//! a memdir-only write fence. The agent reads existing memories
+//! (manifest pre-injected into its prompt), then writes / edits
+//! memory files based on the conversation slice since the last cursor.
 //!
 //! State machine:
 //! - throttle gate (every Nth turn)
@@ -14,14 +13,9 @@
 //!
 //! ## Cancellation safety
 //!
-//! TS gets atomic `in_progress` reset via JS's `try/finally` — the
-//! `finally` block runs even when the awaiting Promise is rejected.
-//! Rust has no equivalent for awaiting tasks that get **dropped**
-//! (engine shutdown, `tokio::join!` sibling failure, cancellation
-//! token fires). Without a Drop guard the `in_progress` flag stays
-//! `true` for the rest of the session, wedging every subsequent
-//! `maybe_extract` call into `Skipped(InProgress)` until process
-//! restart.
+//! Without a Drop guard the `in_progress` flag stays `true` for the
+//! rest of the session, wedging every subsequent `maybe_extract` call
+//! into `Skipped(InProgress)` until process restart.
 //!
 //! The fix: hold `in_progress` in a sync `Arc<AtomicBool>` and wrap
 //! it in [`InProgressGuard`] (RAII). The guard's `Drop` synchronously
@@ -51,15 +45,14 @@ use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
 
-/// Drain timeout on shutdown — TS `drainPendingExtraction(60_000)`.
+/// Drain timeout on shutdown (60 s).
 pub const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Max consecutive `Failed` outcomes before the throttle ceiling
 /// starts doubling per failure. Caps at `1 << MAX_BACKOFF_SHIFT`
 /// multiplier of the configured `extraction_throttle`. Prevents an
 /// `install_agent`-delayed SDK session from burning one fork per N
-/// turns forever — TS has no equivalent because TS doesn't have the
-/// "install handle later" lifecycle.
+/// turns forever.
 const MAX_BACKOFF_SHIFT: u32 = 5;
 
 /// Cross-turn extraction state. Separates the `in_progress` flag (now
@@ -75,13 +68,12 @@ struct ExtractState {
     /// delayed `install_agent` doesn't burn one fork per N turns.
     consecutive_failures: u32,
     /// Latest stashed `TurnInput` queued during an in-flight run.
-    /// TS parity (`extractMemories.ts:506-521`): the trailing run
-    /// uses **the most recent** stashed context — overwriting prior
-    /// stashes — so it picks up messages that arrived during the
-    /// primary run rather than re-running on the same stale slice.
-    /// Carrying the full `TurnInput` here means the closure
-    /// (`fork_messages`) is captured at stash time, so it serializes
-    /// the latest history when invoked.
+    /// The trailing run uses **the most recent** stashed context —
+    /// overwriting prior stashes — so it picks up messages that
+    /// arrived during the primary run rather than re-running on the
+    /// same stale slice. Carrying the full `TurnInput` here means
+    /// the closure (`fork_messages`) is captured at stash time, so
+    /// it serializes the latest history when invoked.
     pending_trailing: Option<TurnInput>,
 }
 
@@ -141,16 +133,15 @@ pub struct ExtractService {
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
     /// User-visible save notices land here on a successful
     /// extraction; the engine drains it once per turn and injects a
-    /// `SystemMemorySavedMessage` into history. TS parity:
-    /// `extractMemories.ts:491-496 appendSystemMessage(createMemorySavedMessage(...))`.
+    /// `SystemMemorySavedMessage` into history.
     notices: crate::notice::NoticeInbox,
     /// State guarded by an async mutex — cursor + throttle counter +
     /// pending-trailing slot. Excludes `in_progress` (see below).
     state: Mutex<ExtractState>,
     /// `in_progress` lives in a sync atomic so the RAII Drop guard can
     /// clear it without `.await`. A cancelled `maybe_extract` future
-    /// gets cleaned up by the guard's `Drop` — TS finally-block parity
-    /// for async-runtime cancellation.
+    /// gets cleaned up by the guard's `Drop`.
+    in_progress: Arc<AtomicBool>,
     in_progress: Arc<AtomicBool>,
     /// Watch channel carrying the current `in_progress` value. Eliminates
     /// the notify-after-check race in the polling `drain` path:
@@ -207,9 +198,8 @@ pub type LazyForkMessages = Box<dyn FnOnce() -> Vec<Arc<Message>> + Send>;
 /// fire after a primary run completes and may see new direct-writes
 /// that landed during the primary's window — get a fresh answer
 /// instead of the stale snapshot from when this `TurnInput` was first
-/// constructed. TS parity: `hasMemoryWritesSince` in
-/// `extractMemories.ts:121-148` is re-evaluated by every entry into
-/// `runExtraction`, not cached.
+/// constructed. Re-evaluated by every entry into the run path, not
+/// cached.
 pub type HasMemoryWritesFn = Box<dyn FnOnce() -> bool + Send>;
 
 /// Per-turn input: a lazy slice builder + turn-level signals.
@@ -379,10 +369,9 @@ impl ExtractService {
         let guard = {
             let mut state = self.state.lock().await;
             if direct_write {
-                // TS parity (`extractMemories.ts:347-360`): when the
-                // main agent wrote memory directly this turn, skip
-                // the fork AND advance the cursor past the range so
-                // the next eligible turn doesn't re-consider these
+                // When the main agent wrote memory directly this turn,
+                // skip the fork AND advance the cursor past the range
+                // so the next eligible turn doesn't re-consider these
                 // already-handled messages.
                 if let Some(ref id) = last_message_id {
                     state.last_cursor = Some(id.clone());
@@ -534,8 +523,7 @@ impl ExtractService {
     /// flags — bound to a `/extract` slash command (planned). Unlike
     /// the previous unconditional version this gates on `in_progress`
     /// before claiming, so two parallel forces can't race over the
-    /// memdir. TS `manuallyExtractMemories` has no production caller
-    /// today; the gate-then-claim shape mirrors what TS *should* do.
+    /// memdir.
     pub async fn force(&self, input: TurnInput) -> ExtractOutcome {
         if !self.config.extraction_enabled {
             return ExtractOutcome::Skipped(SkipReason::Disabled);
@@ -546,8 +534,7 @@ impl ExtractService {
         let Some(guard) = self.try_claim() else {
             return ExtractOutcome::Skipped(SkipReason::InProgress);
         };
-        // TS `tengu_extract_memories_manual` — surfaced so dashboards
-        // can split auto vs manual cadence.
+        // Emit so dashboards can split auto vs manual cadence.
         self.telemetry.emit(MemoryEvent::ExtractionManual);
         let fork_context = (input.fork_messages)();
         let outcome = self.run(input.message_count, fork_context).await;
@@ -667,7 +654,7 @@ impl ExtractService {
             run_in_background: false,
             auto_background_ms: None,
             // Fork mode so the child sees the parent's message slice
-            // prepended to its first turn (TS `forkContextMessages`).
+            // prepended to its first turn.
             isolation: if fork_context.is_empty() {
                 None
             } else {
@@ -678,13 +665,10 @@ impl ExtractService {
                 max_turns: Some(self.config.extraction_max_turns),
                 allowed_write_roots: vec![self.memory_dir.clone()],
             }),
-            // TS `runForkedAgent({skipTranscript: true})`
-            // (`extractMemories.ts:421-423`): the background agent
-            // must not record per-message entries to the user's
-            // transcript — its tool-uses race the main thread's
-            // writer and pollute the JSONL.
+            // The background agent must not record per-message entries
+            // to the user's transcript — its tool-uses race the main
+            // thread's writer and pollute the JSONL.
             skip_transcript: true,
-            // TS `extractMemories.ts:415` `canUseTool: createAutoMemCanUseTool(memoryDir)`.
             // Allows Read/Glob/Grep, read-only Bash, Edit/Write
             // within memory_dir; denies everything else. The
             // canUseTool gate runs at tool-runtime step 3.5,
@@ -714,8 +698,7 @@ impl ExtractService {
             Ok(response) => {
                 let duration_ms = start.elapsed().as_millis() as i64;
                 // Prefer the explicit `paths_written` list when the
-                // spawn driver populated it — this lets us mirror TS
-                // `extractMemories.ts:465-467` and exclude `MEMORY.md`
+                // spawn driver populated it — exclude `MEMORY.md`
                 // from the user-facing "Saved" count (the index file
                 // is mechanical). Fall back to `tool_use_counts` for
                 // legacy / minimal driver impls that haven't wired
@@ -763,9 +746,8 @@ impl ExtractService {
                     files_written,
                     duration_ms,
                 });
-                // TS `extractMemories.ts:490-496`: only push a
-                // user-visible notice when at least one topic file
-                // was written (the index doesn't count).
+                // Only push a user-visible notice when at least one
+                // topic file was written (the index doesn't count).
                 if !topic_paths.is_empty() {
                     self.notices.push(crate::notice::MemoryUserNotice {
                         written_paths: topic_paths,

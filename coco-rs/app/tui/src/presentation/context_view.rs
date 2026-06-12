@@ -1,5 +1,4 @@
-//! Full-color `/context` usage surface — the styled mirror of TS
-//! `components/ContextVisualization.tsx`.
+//! Full-color `/context` usage surface.
 //!
 //! Consumes the runtime-analyzed [`coco_types::ContextUsageResult`] and paints
 //! a colored usage grid, a per-category legend, source-grouped detail
@@ -31,10 +30,9 @@ const GLYPH_FREE: char = '\u{26F6}'; // ⛶ free cell
 
 /// Paint the full `/context` snapshot as styled scrollback lines: headline,
 /// colored category grid, per-category legend, source-grouped Memory / MCP /
-/// Agents / Skills detail, and suggestions. Printed inline in the transcript
-/// (TS `/context` `local-jsx` parity), not a modal — so the whole block is
-/// visible in native scrollback with no windowing. `cwd` shortens memory
-/// paths to project-relative form (mirrors TS `getDisplayPath`).
+/// Agents / Skills detail, and suggestions. Printed inline in the transcript,
+/// not a modal — so the whole block is visible in native scrollback with no
+/// windowing. `cwd` shortens memory paths to project-relative form.
 pub(crate) fn report_lines(
     report: &ContextUsageResult,
     styles: UiStyles<'_>,
@@ -114,7 +112,7 @@ pub(crate) fn report_lines(
             styles,
         ));
     }
-    // Free row drops the unit word, mirroring TS.
+    // Free row drops the unit word.
     lines.push(legend_row(
         styles.context_free(),
         GLYPH_FREE,
@@ -149,8 +147,7 @@ fn cell_glyph_color(cell: &GridCell, styles: UiStyles<'_>) -> (char, Color) {
     }
 }
 
-/// Map a category to a theme color. Mirrors the TS theme-key intent
-/// (promptBorder / inactive / cyan / permission / claude / warning / purple).
+/// Map a category to a theme color.
 fn kind_color(kind: ContextCategoryKind, styles: UiStyles<'_>) -> Color {
     match kind {
         ContextCategoryKind::SystemPrompt => styles.primary(),
@@ -401,13 +398,11 @@ fn append_suggestions(
     }
 }
 
-/// Mirror TS `getDisplayPath`: project-relative when the file is under `cwd`,
-/// else `~`-shortened for files in `$HOME`, else the absolute path verbatim.
+/// Project-relative when the file is under `cwd`, else `~`-shortened for
+/// files in `$HOME`, else the absolute path verbatim.
 ///
 /// `cwd` is the threaded session working dir, but the native-scrollback
-/// render path leaves it `None`, so fall back to the process cwd —
-/// matching TS, where `getDisplayPath` reads `getCwd()` itself rather than
-/// receiving it as an argument.
+/// render path leaves it `None`, so fall back to the process cwd.
 fn display_path(path: &str, cwd: Option<&str>) -> String {
     let resolved_cwd = cwd
         .filter(|c| !c.is_empty())

@@ -1,8 +1,8 @@
 //! PID + mtime CAS lock for auto-dream consolidation.
 //!
-//! TS: `services/autoDream/consolidationLock.ts`. The lock file's
-//! **mtime** is the `lastConsolidatedAt` timestamp; its body is the
-//! holder's PID. A stale-PID + 1h-mtime threshold lets a crashed parent
+//! The lock file's **mtime** is the `lastConsolidatedAt` timestamp;
+//! its body is the holder's PID. A stale-PID + 1h-mtime threshold
+//! lets a crashed parent
 //! release the lock for a follow-up reclaim.
 //!
 //! ## RAII guard
@@ -11,10 +11,8 @@
 //! attempt. Its sync `Drop` runs [`rollback`] (or [`release`] when the
 //! caller marked the run as committed via [`LockGuard::commit`]),
 //! restoring the prior mtime on failure / cancellation so the
-//! 24h auto-dream gate doesn't reset to "now". This is the
-//! cancellation-safe counterpart to TS `try / catch / finally`
-//! around `runForkedAgent` — Rust async-drop semantics mean a future
-//! that's cancelled mid-consolidation can't leak the lock file with
+//! 24h auto-dream gate doesn't reset to "now". Rust async-drop
+//! semantics mean a cancelled future can't leak the lock file with
 //! our live PID for the next hour.
 
 use std::path::Path;
@@ -141,10 +139,9 @@ pub fn try_acquire(memory_dir: &Path) -> LockOutcome {
             return LockOutcome::Held;
         }
         // Stale, dead, or same-process — fall through and reclaim.
-        // NB: do NOT `remove_file` here. TS parity
-        // (`consolidationLock.ts:71-81`) uses a single `writeFile`
-        // (POSIX `O_TRUNC | O_CREAT`) which atomically overwrites
-        // without an unlink window.
+        // NB: do NOT `remove_file` here. A single `writeFile`
+        // (POSIX `O_TRUNC | O_CREAT`) atomically overwrites without
+        // an unlink window.
     }
 
     if let Some(parent) = lock_path.parent()

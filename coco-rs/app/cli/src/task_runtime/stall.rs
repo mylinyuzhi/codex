@@ -3,13 +3,11 @@
 //! [`watchdog`] — for **shell** tasks only. Spawned by `spawn_shell_task`.
 //! Every [`STALL_CHECK_INTERVAL_MS`] checks whether the on-disk output has
 //! grown; if it's been frozen for [`STALL_THRESHOLD_MS`] AND the tail looks
-//! like an interactive prompt, fires a stall notification and exits. TS source:
-//! `tasks/LocalShellTask/LocalShellTask.tsx:46-104`.
+//! like an interactive prompt, fires a stall notification and exits.
 //!
-//! There is intentionally **no** agent-task watchdog: TS has none
-//! (`LocalAgentTask.tsx` has no stall logic), and agents — having no stdin and
-//! never emitting prompts — would only ever misfire the shell-shaped
-//! "interactive input" advice.
+//! There is intentionally **no** agent-task watchdog: agents have no stall
+//! logic, and agents — having no stdin and never emitting prompts — would
+//! only ever misfire the shell-shaped "interactive input" advice.
 
 use std::time::Duration;
 
@@ -77,7 +75,6 @@ pub async fn watchdog(
                 if !matches_interactive_prompt(&tail) {
                     // Not a prompt — keep watching but reset the
                     // growth marker so next eval is THRESHOLD out.
-                    // TS: `LocalShellTask.tsx:66-68`.
                     last_growth = tokio::time::Instant::now();
                     continue;
                 }
@@ -96,7 +93,7 @@ pub async fn watchdog(
                     kind: NotificationKind::Stall { output_tail: tail },
                 };
                 sink.push(n).await;
-                // One-shot per stall episode (TS parity).
+                // One-shot per stall episode.
                 return;
             }
         }

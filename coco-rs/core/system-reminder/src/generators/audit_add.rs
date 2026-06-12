@@ -1,30 +1,28 @@
 //! Audit-add reminder generators (May 2026).
 //!
 //! Only `skill_discovery` is a model-visible reminder produced here.
-//! API-hidden TS attachments (`command_permissions`, `dynamic_skill`,
+//! API-hidden attachments (`command_permissions`, `dynamic_skill`,
 //! `structured_output`, `max_turns_reached`) are emitted as typed
 //! silent `AttachmentMessage`s by their owner crates via
 //! `coco_messages::AttachmentEmitter`, drained by the engine inbox at
 //! turn start. `teammate_shutdown_batch` is `RuntimeBookkeeping` until
 //! the TUI collapse path lands.
 //!
-//! ## TS-divergence: `skill_discovery` uses keyword-match, not Haiku
+//! ## Implementation gap: `skill_discovery` uses keyword-match, not LLM
 //!
-//! TS `services/skillSearch/prefetch.ts` runs a Haiku-class LLM call
-//! against the user prompt + active skill catalog to suggest skills.
-//! coco-rs ships a **local substring + word-prefix heuristic** in
-//! `coco_skills::SkillManager::skill_discovery` because the TS-style
-//! AKI service isn't ported yet. The payload shape matches TS exactly
+//! The original design runs a fast LLM call against the user prompt +
+//! active skill catalog to suggest skills. coco-rs ships a **local
+//! substring + word-prefix heuristic** in
+//! `coco_skills::SkillManager::skill_discovery` because the LLM-backed
+//! AKI service isn't ported yet. The payload shape is preserved
 //! (`SkillDiscoveryPayload { skills, signal, source }`) but:
 //!
-//! - `source = Native` (TS uses `Native | Aki | Both` — coco-rs has no
-//!   AKI counterpart)
-//! - `signal = "local_keyword_match"` (TS uses `DiscoverySignal` enum:
-//!   `user_message`, `assistant_turn`, `write_pivot`, …)
+//! - `source = Native`
+//! - `signal = "local_keyword_match"`
 //!
-//! When/if the LLM-backed path ports over, swap the producer and update
-//! the `signal` value to the TS enum. Until then, downstream consumers
-//! that key on `signal` should treat the coco-rs value as opaque.
+//! When/if the LLM-backed path lands, swap the producer and update the
+//! `signal` value. Until then, downstream consumers that key on `signal`
+//! should treat the coco-rs value as opaque.
 
 use async_trait::async_trait;
 
@@ -37,9 +35,8 @@ use coco_config::SystemReminderConfig;
 
 // ── skill_discovery ────────────────────────────────────────────────────
 
-/// TS `skill_discovery` (`attachments.ts:538-542`). UserPrompt-tier
-/// heuristic skill suggestion. The source pre-renders the exact TS
-/// prompt from `messages.ts`; empty candidate lists thread `None`.
+/// `skill_discovery` generator — UserPrompt-tier heuristic skill suggestion.
+/// The source pre-renders the discovery prompt; empty candidate lists thread `None`.
 #[derive(Debug, Default)]
 pub struct SkillDiscoveryGenerator;
 

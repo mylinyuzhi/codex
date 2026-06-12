@@ -1,6 +1,4 @@
 //! Extended git operations for tool context.
-//!
-//! TS: utils/git/ (1K LOC) — gitignore, git settings, commit attribution.
 
 use std::path::Path;
 use std::process::Command;

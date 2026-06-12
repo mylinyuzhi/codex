@@ -1006,7 +1006,7 @@ pub struct ApprovalRequest {
 /// `Stream::ToolUseQueued`; `overrides` is the explicit map the test
 /// passed via `with_auto_answer_questions`. For each question the
 /// model asked, the override wins; otherwise we fall back to the
-/// question's first option (TS-aligned default).
+/// question's first option (the first option).
 ///
 /// Returns a `serde_json::Value` ready to ship as
 /// `UserCommand::ApprovalResponse.updated_input`. Returns the bare

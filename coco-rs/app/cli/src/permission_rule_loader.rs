@@ -6,12 +6,8 @@
 //! expects [`coco_types::PermissionRulesBySource`] indexed by
 //! [`coco_types::PermissionRuleSource`]).
 //!
-//! TS parity: `loadPermissionRules()` in
-//! `utils/permissions/permissionsLoader.ts` does the same string →
-//! typed conversion before threading the rules into the evaluator.
-//!
 //! Plugin-sourced rules are dropped: `coco-types` does not model a
-//! `Plugin` rule source, and TS treats plugin permissions as project
+//! `Plugin` rule source, and plugin permissions are treated as project
 //! contributions that are merged at a higher layer.
 
 use coco_config::SettingSource;
@@ -34,12 +30,9 @@ use crate::Cli;
 /// `permissions.additionalDirectories` (first) and `--add-dir` flags (second),
 /// for [`coco_query::QueryEngineConfig::session_additional_dirs`].
 ///
-/// TS: `initializeToolPermissionContext` (permissionSetup.ts:993-1014) — both
-/// flow through `addDirectories` with destination `cliArg`. Relative paths are
-/// resolved to absolute against `cwd`; the map key is the absolute path string
-/// (matches TS `additionalWorkingDirectories.set(path, …)` and the `/add-dir`
-/// runner). Non-existent directories are seeded as-is (TS treats `pathNotFound`
-/// as a silent skip — the evaluator simply never matches them).
+/// Both flow through with destination `cliArg`. Relative paths are resolved to
+/// absolute against `cwd`; the map key is the absolute path string. Non-existent
+/// directories are seeded as-is — the evaluator simply never matches them.
 pub fn seed_session_additional_dirs(
     cli: &Cli,
     settings: &SettingsWithSource,
@@ -129,10 +122,8 @@ pub fn typed_permission_rules(
     // Enterprise `allowManagedPermissionRulesOnly`: when set in managed/policy
     // settings, ONLY `policySettings`-sourced rules are honored for every
     // behavior — user/project/local/flag/CLI rules are all dropped so the
-    // managed admin owns the entire rule set. TS: loadAllPermissionRulesFromDisk
-    // returns only the policySettings source (permissionsLoader.ts:120-133).
-    // Enforced here in the LIVE load path (the single source the evaluator
-    // consumes), not the dead store loader.
+    // managed admin owns the entire rule set. Enforced here in the LIVE load
+    // path (the single source the evaluator consumes), not the dead store loader.
     if settings
         .merged
         .permissions
@@ -156,10 +147,6 @@ fn filter_to_policy_only(mut rules: PermissionRulesBySource) -> PermissionRulesB
 }
 
 /// Resolve the source root used for leading-`/` file permission rules.
-///
-/// TS evidence:
-/// - `settings.ts::getSettingsRootPathForSource`
-/// - `permissions/filesystem.ts::rootPathForSource`
 ///
 /// `Read(/foo/**)` in user settings is rooted at the coco config home;
 /// the same rule in project/local/policy/session/command/CLI sources is

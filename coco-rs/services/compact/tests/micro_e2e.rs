@@ -22,8 +22,8 @@ use coco_types::ToolName;
 fn test_realistic_mixed_tools() {
     // Build a conversation with a mix of compactable and non-compactable tools.
     // Each tool_result is preceded by an assistant tool_use whose tool_call_id
-    // matches — required by TS-aligned `collect_compactable_tool_ids` which
-    // scans assistant messages for compactable tool names.
+    // matches — `collect_compactable_tool_ids` scans assistant messages for
+    // compactable tool names.
     // Use distinct compactable tools so each generates a unique tool_use_id.
     let mut messages = vec![
         msg::user("do the work"),

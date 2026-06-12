@@ -73,7 +73,7 @@ fn test_tool_default_flags() {
     assert!(!tool.should_defer());
     assert!(!tool.always_load());
     assert_eq!(tool.interrupt_behavior(), InterruptBehavior::Block);
-    // TS default declaration is 100K; persistence clamps it to the
+    // Default declaration is 100K; persistence clamps it to the
     // 50K storage cap. Canonical tools opt out by overriding to
     // `ResultSizeBound::Unbounded`.
     assert_eq!(
@@ -82,19 +82,18 @@ fn test_tool_default_flags() {
     );
     assert!(tool.mcp_info().is_none());
     // R4: `is_open_world` defaults to false — tools are closed-world
-    // unless they opt in. Matches TS `Tool.ts:434` (optional field,
-    // undefined by default, no tool implements it unless it's an MCP
-    // wrapper forwarding the annotation from an MCP server).
+    // unless they opt in (optional field, undefined by default; no tool
+    // implements it unless it's an MCP wrapper forwarding the annotation
+    // from an MCP server).
     assert!(!tool.is_open_world(&json!({})));
     // T3: `is_mcp` derives from `mcp_info().is_some()`. Built-in tools
-    // (no mcp_info) are not MCP tools. Matches TS `Tool.ts:436`
-    // `isMcp?: boolean` field semantics.
+    // (no mcp_info) are not MCP tools.
     assert!(!tool.is_mcp());
 }
 
-/// T3: `is_mcp` must return true for tools that advertise McpToolInfo,
-/// mirroring TS `Tool.ts:436` `isMcp?: boolean` + the MCP wrapper path
-/// that sets `mcpInfo` on dynamically-registered MCP tools.
+/// T3: `is_mcp` must return true for tools that advertise McpToolInfo
+/// (the MCP wrapper path that sets `mcpInfo` on dynamically-registered
+/// MCP tools).
 #[test]
 fn test_is_mcp_derives_from_mcp_info() {
     struct McpStub;

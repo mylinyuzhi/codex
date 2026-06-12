@@ -246,8 +246,8 @@ async fn skill_listing_default_mode_with_skill_tool_injects() {
 
 #[tokio::test]
 async fn skill_listing_plan_mode_keeps_skill_tool_and_injects() {
-    // Mirror TS: plan mode no longer strips the Skill tool from the
-    // schema (layer-3 removal), so Skill stays in the loaded set and the
+    // Plan mode no longer strips the Skill tool from the schema
+    // (layer-3 removal), so Skill stays in the loaded set and the
     // skill-listing reminder is injected exactly as in Default mode.
     // Skill execution is gated at call time by the permission layer, not
     // by hiding the tool — so teaching the model about skills is correct.

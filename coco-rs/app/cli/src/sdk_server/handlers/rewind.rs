@@ -25,8 +25,6 @@ use super::HandlerResult;
 /// - `INVALID_REQUEST` if file history is not enabled on this server
 /// - `INVALID_REQUEST` if `user_message_id` doesn't match any snapshot
 /// - `INTERNAL_ERROR` if the rewind / diff operation fails (filesystem)
-///
-/// TS reference: `SDKControlRewindFilesRequestSchema` (controlSchemas.ts).
 pub(super) async fn handle_rewind_files(
     params: coco_types::RewindFilesParams,
     ctx: &HandlerContext,

@@ -1,7 +1,4 @@
-//! PowerShell tool — advanced features ported from TS PowerShellTool/.
-//!
-//! TS: tools/PowerShellTool/PowerShellTool.tsx, powershellPermissions.ts,
-//! clmTypes.ts, powershellSecurity.ts, readOnlyValidation.ts
+//! PowerShell tool — advanced features ported from PowerShellTool/.
 //!
 //! Provides CLM (Constrained Language Mode) security analysis, PowerShell-specific
 //! permission checking, command execution via pwsh, Windows path validation,
@@ -11,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 // ── CLM (Constrained Language Mode) type allowlist ──
-// TS: clmTypes.ts — Microsoft's CLM restricts .NET type usage to this allowlist
+// Microsoft's CLM restricts .NET type usage to this allowlist
 // when PS runs under AppLocker/WDAC system lockdown.
 
 static CLM_ALLOWED_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -164,8 +161,6 @@ static CLM_ALLOWED_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 
 /// Cmdlets that can write files at caller-specified paths.
 /// Used to guard against git-internal path attacks.
-///
-/// TS: GIT_SAFETY_WRITE_CMDLETS
 static GIT_SAFETY_WRITE_CMDLETS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "new-item",
@@ -184,7 +179,6 @@ static GIT_SAFETY_WRITE_CMDLETS: LazyLock<HashSet<&'static str>> = LazyLock::new
 });
 
 /// PowerShell search commands for collapsible display.
-/// TS: PS_SEARCH_COMMANDS
 static PS_SEARCH_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     ["select-string", "get-childitem", "findstr", "where.exe"]
         .into_iter()
@@ -192,7 +186,6 @@ static PS_SEARCH_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 });
 
 /// PowerShell read/view commands for collapsible display.
-/// TS: PS_READ_COMMANDS
 static PS_READ_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "get-content",
@@ -212,7 +205,6 @@ static PS_READ_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 });
 
 /// PowerShell semantic-neutral commands.
-/// TS: PS_SEMANTIC_NEUTRAL_COMMANDS
 static PS_SEMANTIC_NEUTRAL_COMMANDS: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| ["write-output", "write-host"].into_iter().collect());
 
@@ -220,8 +212,6 @@ static PS_SEMANTIC_NEUTRAL_COMMANDS: LazyLock<HashSet<&'static str>> =
 
 /// Normalize a type name for CLM lookup.
 /// Strips array suffix `[]` and generic brackets.
-///
-/// TS: normalizeTypeName()
 pub fn normalize_type_name(name: &str) -> String {
     let lower = name.to_lowercase();
     // Strip array suffix: "String[]" -> "string"
@@ -236,8 +226,6 @@ pub fn normalize_type_name(name: &str) -> String {
 
 /// Check if a type name is in Microsoft's CLM allowlist.
 /// Types NOT in this set are potentially unsafe (access system APIs that CLM blocks).
-///
-/// TS: isClmAllowedType()
 pub fn is_clm_allowed_type(type_name: &str) -> bool {
     let normalized = normalize_type_name(type_name);
     CLM_ALLOWED_TYPES.contains(normalized.as_str())
@@ -287,8 +275,6 @@ pub struct PsSecurityResult {
 }
 
 /// Analyze a PowerShell command for security concerns.
-///
-/// TS: powershellToolHasPermission() + powershellCommandIsSafe()
 pub fn analyze_ps_security(command: &str) -> PsSecurityResult {
     // Check for unsafe CLM type references
     let unsafe_types = find_unsafe_type_references(command);
@@ -323,8 +309,6 @@ pub fn analyze_ps_security(command: &str) -> PsSecurityResult {
 }
 
 /// Check if any argument references a git-internal path.
-///
-/// TS: isDotGitPathPS() + isGitInternalPathPS()
 fn has_git_internal_path(command: &str) -> bool {
     let git_internal_patterns = [
         ".git/hooks/",
@@ -347,8 +331,6 @@ fn has_git_internal_path(command: &str) -> bool {
 // ── Command classification ──
 
 /// Classify a PowerShell command as search or read.
-///
-/// TS: isSearchOrReadPowerShellCommand()
 pub fn classify_ps_command(command: &str) -> (bool, bool) {
     let trimmed = command.trim();
     if trimmed.is_empty() {
@@ -403,8 +385,7 @@ pub fn classify_ps_command(command: &str) -> (bool, bool) {
 // ── Windows path validation ──
 
 /// Validate that a path is a valid Windows path (if running on Windows).
-///
-/// TS: pathValidation.ts — checks for UNC path attacks.
+/// Checks for UNC path attacks.
 pub fn is_vulnerable_unc_path(path: &str) -> bool {
     // UNC paths start with \\ or // and could be used for credential theft
     let trimmed = path.trim();
@@ -417,8 +398,6 @@ pub fn is_vulnerable_unc_path(path: &str) -> bool {
 
 /// Attempt to decode UTF-16 LE output to UTF-8.
 /// PowerShell on Windows may produce UTF-16 LE output with BOM.
-///
-/// TS: Output encoding handling in PowerShellTool.tsx
 pub fn decode_ps_output(bytes: &[u8]) -> String {
     // Check for UTF-16 LE BOM (0xFF 0xFE)
     if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {

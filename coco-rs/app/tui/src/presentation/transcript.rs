@@ -355,8 +355,8 @@ fn is_meta(cell: &RenderedCell) -> bool {
     // contradict it. `derive::message_to_cells` already drops attachments with
     // `renders_in_transcript() == false`, so every surviving `CellKind::
     // Attachment` is content (`is_meta_message == false`) and renders as a row,
-    // not a collapsed "# [meta]" preview — mirrors TS, where renderable
-    // attachments are first-class content. System reminders still collapse.
+    // not a collapsed "# [meta]" preview — renderable attachments are
+    // first-class content. System reminders still collapse.
     match &cell.kind {
         CellKind::Attachment => coco_messages::predicates::is_meta_message(cell.source.as_ref()),
         CellKind::System(SystemCellKind::Informational) => {
@@ -367,8 +367,8 @@ fn is_meta(cell: &RenderedCell) -> bool {
             };
             !info.title.is_empty()
         }
-        // `/context` snapshot is first-class content (TS prints it inline), not
-        // a collapsible system reminder — render the full colored block.
+        // `/context` snapshot is first-class content, not a collapsible system
+        // reminder — render the full colored block.
         CellKind::System(SystemCellKind::ContextUsage) => false,
         CellKind::System(SystemCellKind::UserInterruption { .. }) => false,
         CellKind::System(_) => true,

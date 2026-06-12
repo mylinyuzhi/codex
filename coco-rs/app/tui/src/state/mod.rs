@@ -265,9 +265,9 @@ impl AppState {
     ///
     /// A bottom-pane prompt that does *not* pause (PlanExit, Question,
     /// McpServerApproval, …) leaves the indicator visible and the clock
-    /// running, so it must keep animating — mirroring the TS REPL, which
-    /// keeps the elapsed clock live through those dialogs. Streaming is
-    /// always armed: it produces a new visible row per painted frame.
+    /// running, so it must keep animating — the elapsed clock stays live
+    /// through those dialogs. Streaming is always armed: it produces a
+    /// new visible row per painted frame.
     pub(crate) fn ui_animation(&self) -> UiAnimation {
         if self.is_streaming() {
             return UiAnimation::StreamReveal;
@@ -284,16 +284,14 @@ impl AppState {
 
     /// Whether Ctrl+C has work to interrupt (streaming, busy session,
     /// queued commands). Used by the exit double-press to distinguish
-    /// "cancel a task" from "arm the exit prompt" — mirrors the boolean
-    /// `onInterrupt?.()` return in TS `useExitOnCtrlCD.ts:73-76`.
+    /// "cancel a task" from "arm the exit prompt".
     pub fn has_interruptible_work(&self) -> bool {
         self.is_streaming() || self.session.is_busy() || !self.session.queued_commands.is_empty()
     }
 
     /// Whether Esc-driven rewind is currently appropriate: the input
     /// must be empty, the session must have user-visible history, and
-    /// no state can be occluding the cursor. Mirrors TS
-    /// `PromptInput.tsx:1955` (`doublePressEscFromEmpty`).
+    /// no state can be occluding the cursor.
     ///
     /// "Session has history" reads from the engine-authoritative
     /// `transcript` view.
@@ -305,10 +303,8 @@ impl AppState {
 
     /// Cycle permission mode (Shift+Tab).
     ///
-    /// Delegates to [`PermissionMode::next_in_cycle`] so the TUI cycle
-    /// stays aligned with `core/permissions::get_next_permission_mode`
-    /// and the TS reference. Bypass/auto gate flags are forwarded from
-    /// the session.
+    /// Delegates to [`PermissionMode::next_in_cycle`]. Bypass/auto gate
+    /// flags are forwarded from the session.
     pub fn cycle_permission_mode(&mut self) {
         self.session.permission_mode = self.session.permission_mode.next_in_cycle(
             self.session.bypass_permissions_available,

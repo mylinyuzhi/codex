@@ -439,9 +439,7 @@ pub struct ShellConfig {
     pub disable_snapshot: bool,
     /// When true, snap the bash cwd back to the session's original cwd
     /// after every command — even if the cwd is inside the allowed
-    /// working set. TS parity:
-    /// `utils/envUtils.ts::shouldMaintainProjectWorkingDir` driven by
-    /// `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`.
+    /// working set. Driven by `COCO_BASH_MAINTAIN_PROJECT_WORKING_DIR`.
     pub maintain_project_working_dir: bool,
 }
 
@@ -505,7 +503,7 @@ pub struct PartialMemorySettings {
     /// `coco_memory::MemoryRuntime::render_system_prompt_section` so
     /// Cowork-style deployments can push operator-controlled memory
     /// governance into context without modifying crate-bundled
-    /// prompts. TS parity: `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES`.
+    /// prompts.
     pub extra_guidelines: Option<String>,
 }
 
@@ -526,10 +524,8 @@ pub struct MemoryConfig {
     /// Memory **base** directory override — replaces the per-project
     /// `<config_home>/projects/<slug>/memory/` layout's `<config_home>`
     /// component, NOT the full memory directory. Project slug + the
-    /// `projects/` / `memory/` segments are still appended. TS parity:
-    /// `CLAUDE_CODE_REMOTE_MEMORY_DIR` participates only as the base
-    /// (`getMemoryBaseDir()` in `memdir/paths.ts`). `directory` (full
-    /// path override) takes precedence when both are set.
+    /// `projects/` / `memory/` segments are still appended.
+    /// `directory` (full path override) takes precedence when both are set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_base_override: Option<PathBuf>,
     pub skip_index: bool,
@@ -548,7 +544,7 @@ pub struct MemoryConfig {
     pub dream_min_hours: i32,
     pub dream_min_sessions: i32,
 
-    /// Session memory — TS-aligned defaults, distinct feature from
+    /// Session memory — distinct feature from
     /// `compact_settings::SessionMemoryConfig`.
     pub session_memory_enabled: bool,
     pub session_memory_init_tokens: i64,
@@ -964,9 +960,8 @@ impl WebSearchConfig {
 // grows explicit on/off gates.
 
 /// 10 MB cap on the file the agent can dispatch LSP queries against.
-/// TS source: `tools/LSPTool/LSPTool.ts` — same number, same purpose
 /// (rust-analyzer chokes on huge generated bundles; pyright reads the
-/// whole file into memory).
+/// whole file into memory.)
 const DEFAULT_LSP_MAX_FILE_SIZE_BYTES: i64 = 10_000_000;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

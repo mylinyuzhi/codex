@@ -15,14 +15,12 @@ pub enum GrepOutputMode {
     Count,
 }
 
-/// Action for the LSP tool — mirrors TS `LSPTool` `operation` discriminated
-/// union (`tools/LSPTool/schemas.ts`).
+/// Action for the LSP tool — `operation` discriminated union.
 ///
-/// Wire format is camelCase to match TS exactly so the model's tool call
-/// validates against the same JSON shape across runtimes. Diagnostics are
-/// **not** an action — they flow through the passive `system_reminder`
-/// pipeline (TS: `passiveFeedback.ts`; Rust: `coco_lsp::DiagnosticsStore`
-/// + `app/query/reminder_adapters.rs`).
+/// Wire format is camelCase so the model's tool call validates against the
+/// same JSON shape across runtimes. Diagnostics are **not** an action —
+/// they flow through the passive `system_reminder` pipeline
+/// (`coco_lsp::DiagnosticsStore` + `app/query/reminder_adapters.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum LspAction {
@@ -64,7 +62,7 @@ impl LspAction {
         !matches!(self, Self::DocumentSymbol | Self::WorkspaceSymbol)
     }
 
-    /// Camel-case wire string (parity with TS `operation` field).
+    /// Camel-case wire string matching the `operation` field.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::GoToDefinition => "goToDefinition",

@@ -1,10 +1,8 @@
-//! TS `diagnostics` generator.
+//! `diagnostics` generator.
 //!
-//! Mirrors `normalizeAttachmentForAPI` `case 'diagnostics':`
-//! (`messages.ts:3812`). Wraps diagnostic-summary text inside
-//! `<new-diagnostics>…</new-diagnostics>` before the outer
-//! `<system-reminder>`. Engine pre-formats each file's block through
-//! its LSP/IDE adapter and populates `ctx.diagnostics`.
+//! Wraps diagnostic-summary text inside `<new-diagnostics>…</new-diagnostics>`
+//! before the outer `<system-reminder>`. Engine pre-formats each file's block
+//! through its LSP/IDE adapter and populates `ctx.diagnostics`.
 
 use async_trait::async_trait;
 
@@ -33,9 +31,9 @@ impl AttachmentGenerator for DiagnosticsGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // #105 / TS attachments.ts:2854-2862: diagnostics are only useful
-        // when the agent has the Bash tool to act on them. Read-only
-        // subagents (no Bash) get un-actionable reminders, so suppress.
+        // Diagnostics are only useful when the agent has the Bash tool to
+        // act on them. Read-only subagents (no Bash) get un-actionable
+        // reminders, so suppress.
         if !ctx
             .tools
             .iter()

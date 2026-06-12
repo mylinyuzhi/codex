@@ -465,7 +465,7 @@ fn test_bypass_mode_allows_all() {
     assert!(matches!(result, PermissionDecision::Allow { .. }));
 }
 
-/// TS: plan mode auto-allows if bypass was available; otherwise asks.
+/// Plan mode auto-allows if bypass was available; otherwise asks.
 /// Read-only tools always allowed in plan mode.
 #[test]
 fn test_plan_mode_asks_non_readonly() {
@@ -515,7 +515,7 @@ fn test_default_mode_asks() {
 }
 
 /// A fall-through Bash ask carries an "always allow `<prefix>:*`" suggestion so
-/// the prompt can offer a reusable grant (TS `checkCommandAndSuggestRules`).
+/// the prompt can offer a reusable grant.
 #[test]
 fn test_default_mode_bash_ask_carries_prefix_suggestion() {
     let ctx = empty_context(PermissionMode::Default);
@@ -562,7 +562,7 @@ fn suggestion_rule(updates: &[PermissionUpdate]) -> Option<(&str, &str)> {
     }
 }
 
-/// TS: dontAsk converts all 'ask' decisions to 'deny'.
+/// `DontAsk` converts all 'ask' decisions to 'deny'.
 #[test]
 fn test_dont_ask_mode_denies_all() {
     let ctx = empty_context(PermissionMode::DontAsk);
@@ -588,7 +588,7 @@ fn test_dont_ask_mode_denies_all() {
     assert!(matches!(result, PermissionDecision::Deny { .. }));
 }
 
-/// #72 / TS: dontAsk converts an EARLY-return ask (here a tool-wide ask rule,
+/// `DontAsk` converts an EARLY-return ask (here a tool-wide ask rule,
 /// which returns before mode fallthrough) into a deny — not just the
 /// fallthrough ask.
 #[test]
@@ -608,7 +608,7 @@ fn test_dont_ask_converts_early_ask_rule_to_deny() {
     assert!(matches!(result, PermissionDecision::Deny { .. }));
 }
 
-/// TS: dontAsk still honors explicit allow rules.
+/// `DontAsk` still honors explicit allow rules.
 #[test]
 fn test_dont_ask_mode_allows_explicit_rules() {
     let mut ctx = empty_context(PermissionMode::DontAsk);
@@ -627,7 +627,7 @@ fn test_dont_ask_mode_allows_explicit_rules() {
     assert!(matches!(result, PermissionDecision::Allow { .. }));
 }
 
-/// TS: WebFetch/WebSearch are NOT in the safe allowlist (network effects).
+/// WebFetch/WebSearch are NOT in the safe allowlist (network effects).
 #[test]
 fn test_web_tools_not_in_safe_list() {
     let ctx = empty_context(PermissionMode::AcceptEdits);
@@ -640,7 +640,7 @@ fn test_web_tools_not_in_safe_list() {
     assert!(matches!(result, PermissionDecision::Ask { .. }));
 }
 
-/// TS: Task management tools are in the safe allowlist.
+/// Task management tools are in the safe allowlist.
 #[test]
 fn test_task_tools_are_safe() {
     let ctx = empty_context(PermissionMode::AcceptEdits);
@@ -659,7 +659,7 @@ fn test_task_tools_are_safe() {
     }
 }
 
-/// TS: acceptEdits allows read-only tools AND file-modifying tools.
+/// `AcceptEdits` allows read-only tools AND file-modifying tools.
 #[test]
 fn test_accept_edits_allows_read_only_and_file_edits() {
     let ctx = empty_context(PermissionMode::AcceptEdits);
@@ -692,7 +692,7 @@ fn test_accept_edits_allows_read_only_and_file_edits() {
     assert!(matches!(result, PermissionDecision::Ask { .. }));
 }
 
-/// TS: acceptEdits still catches dangerous paths via step 6.
+/// `AcceptEdits` still catches dangerous paths via step 6.
 #[test]
 fn test_accept_edits_catches_dangerous_paths() {
     let ctx = empty_context(PermissionMode::AcceptEdits);

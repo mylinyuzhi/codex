@@ -5,8 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 /// Per-user global config. Separate from Settings.
-/// TS: GlobalConfig type in utils/config.ts, stored at ~/.claude.json
-/// Rust: stored at ~/.coco.json (or $COCO_CONFIG_DIR/global.json when set)
+/// Stored at `~/.coco.json` (or `$COCO_CONFIG_DIR/global.json` when set).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GlobalConfig {
@@ -25,12 +24,11 @@ pub struct GlobalConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub org_settings_cache: Option<serde_json::Value>,
     /// Plugin-hint recommendation state (show-once record + opt-out flag).
-    /// TS: `GlobalConfig.claudeCodeHints` in utils/config.ts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claude_code_hints: Option<ClaudeCodeHintsState>,
 }
 
-/// Persisted plugin-hint state. TS: `claudeCodeHints` block in GlobalConfig.
+/// Persisted plugin-hint state.
 ///
 /// `plugin` is a show-once record per plugin slug — a plugin is prompted
 /// for at most once ever. `disabled` is set when the user picks "don't show
@@ -55,9 +53,8 @@ pub struct ProjectConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub costs: Option<SessionCostState>,
     /// Set true once the project has completed onboarding (CLAUDE.md
-    /// exists). TS: `hasCompletedProjectOnboarding` in
-    /// `utils/config.ts`. Used by `maybeMarkProjectOnboardingComplete`
-    /// to short-circuit subsequent /init invocations.
+    /// exists). Used by `maybeMarkProjectOnboardingComplete` to
+    /// short-circuit subsequent /init invocations.
     #[serde(default)]
     pub has_completed_project_onboarding: bool,
 }
@@ -96,8 +93,7 @@ pub fn config_home() -> PathBuf {
 /// 1. If `COCO_CONFIG_DIR` is set, put `global.json` inside that dir so
 ///    the whole coco workspace (settings + global state + sessions)
 ///    moves as a unit. Useful for sandboxed / per-project setups.
-/// 2. Otherwise, fall back to `~/.coco.json` — TS parity with
-///    `~/.claude.json`, a sibling of `~/.coco/`.
+/// 2. Otherwise, fall back to `~/.coco.json`, a sibling of `~/.coco/`.
 pub fn global_config_path() -> PathBuf {
     if let Some(custom) =
         std::env::var_os(coco_utils_common::COCO_CONFIG_DIR_ENV).filter(|s| !s.is_empty())
@@ -185,9 +181,9 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
 ///
 /// **Reload semantics**: writes to disk; the live runtime keeps the
 /// pre-existing in-memory `Settings` until the user starts a new
-/// session (or the SettingsWatcher debounce fires and re-loads). This
-/// matches TS — slash-command settings writes are observed by the
-/// next session, not the current one.
+/// session (or the SettingsWatcher debounce fires and re-loads).
+/// Slash-command settings writes are observed by the next session,
+/// not the current one.
 pub fn write_user_setting(key: &str, value: serde_json::Value) -> crate::Result<PathBuf> {
     let path = user_settings_path();
     write_user_setting_to_path(&path, key, value)
@@ -227,11 +223,7 @@ fn write_user_setting_at_path(
 /// onboarding state is opportunistic — losing it doesn't impact
 /// correctness, only the cosmetic onboarding banner.
 ///
-/// TS: `projectOnboardingState.ts::maybeMarkProjectOnboardingComplete`.
-/// The TS version is called once per `/init` invocation and on every
-/// REPL prompt submit; we mirror the once-per-`/init` call site (the
-/// per-prompt cadence is a TS optimization to drive an Ink banner
-/// that coco-rs doesn't render).
+/// Called once per `/init` invocation.
 pub fn maybe_mark_project_onboarding_complete(cwd: &Path) {
     let key = cwd.to_string_lossy().to_string();
     let mut config = match load_global_config() {

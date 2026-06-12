@@ -1,22 +1,19 @@
-//! Keyboard shortcut management — TS port of `keybindings/`.
+//! Keyboard shortcut management.
 //!
 //! Two complementary representations:
 //!
 //! * [`KeybindingsConfig`] / [`KeybindingBlock`] — the JSON shape from
-//!   `~/.coco/keybindings.json` (mirrors TS `KeybindingsSchema` /
-//!   `KeybindingBlock`). Used by the loader and template generator.
+//!   `~/.coco/keybindings.json`. Used by the loader and template generator.
 //! * [`Keybinding`] (parsed) — the resolver's working unit: a typed
 //!   `(KeyChord, Option<KeybindingAction>, KeybindingContext)` triple.
-//!   Mirrors TS `ParsedBinding`.
 //!
 //! Use [`KeybindingsConfig::parse_bindings`] to convert from the wire
 //! shape to the resolver's parsed form, surfacing parse errors as a
 //! separate channel.
 //!
 //! Closed enums for [`KeybindingAction`] (~98 variants) and
-//! [`KeybindingContext`] (20 variants — 18 user-rebindable, 2 internal)
-//! mirror TS `KEYBINDING_ACTIONS` / `KEYBINDING_CONTEXTS` exactly. See
-//! the per-module docs for the TS-source citations.
+//! [`KeybindingContext`] (20 variants — 18 user-rebindable, 2 internal).
+//! See the per-module docs for details.
 
 pub mod action;
 pub mod context;
@@ -82,10 +79,9 @@ use std::collections::BTreeMap;
 
 /// A parsed keybinding — what the resolver consumes.
 ///
-/// `action: None` represents a TS `null` unbind: when the chord matches,
+/// `action: None` represents a null unbind: when the chord matches,
 /// the resolver returns [`ResolveOutcome::Unbound`] so the caller can
-/// swallow the keystroke without falling through to lower-priority
-/// handlers (`keybindings/schema.ts:199`).
+/// swallow the keystroke without falling through to lower-priority handlers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keybinding {
     pub chord: KeyChord,
@@ -120,9 +116,6 @@ impl Keybinding {
 
 /// One block from `keybindings.json`: a context plus a chord-keyed map
 /// of actions. `BTreeMap` so serialized output is deterministic.
-///
-/// TS source: `KeybindingBlock` in `keybindings/types.ts`; schema in
-/// `keybindings/schema.ts:177-208`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeybindingBlock {
     pub context: KeybindingContext,
@@ -132,8 +125,6 @@ pub struct KeybindingBlock {
 }
 
 /// Top-level `keybindings.json` shape.
-///
-/// TS source: `KeybindingsSchema` in `keybindings/schema.ts:214-229`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct KeybindingsConfig {
     /// `"$schema"` URL for editor validation. Optional.
@@ -143,7 +134,7 @@ pub struct KeybindingsConfig {
     #[serde(rename = "$docs", default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<String>,
     /// Ordered blocks. Later blocks/entries override earlier ones at
-    /// resolution time (last-wins, mirrors TS `findLast`).
+    /// resolution time (last-wins).
     #[serde(default)]
     pub bindings: Vec<KeybindingBlock>,
 }
@@ -155,8 +146,7 @@ impl KeybindingsConfig {
         serde_json::from_str(content)
     }
 
-    /// Serialize to pretty JSON with the documented two-space indent
-    /// (mirrors `keybindings/template.ts:46-51`).
+    /// Serialize to pretty JSON with the documented two-space indent.
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
         let mut s = serde_json::to_string_pretty(self)?;
         s.push('\n');

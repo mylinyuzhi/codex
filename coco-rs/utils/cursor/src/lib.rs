@@ -5,8 +5,6 @@
 //! - Kill ring (cut text buffer for Ctrl+K/Y)
 //! - Word boundary detection
 //! - UTF-8 safe character indexing
-//!
-//! TS: `src/utils/Cursor.ts` (1530 LOC)
 
 /// Maximum entries in the kill ring.
 const KILL_RING_MAX: usize = 10;

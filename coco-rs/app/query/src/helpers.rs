@@ -137,24 +137,19 @@ pub async fn drain_command_queue_into_history(
 /// Convert a [`QueuedCommand`] drained from the queue into a model-bound
 /// `AttachmentMessage` of kind [`AttachmentKind::QueuedCommand`].
 ///
-/// Two-step wrapping (TS parity):
+/// Two-step wrapping:
 ///
 /// 1. [`wrap_command_text`] adds origin-specific framing prose
 ///    ("The user sent a new message while you were working:" /
-///    "The coordinator sent a message…" / etc.), TS
-///    `wrapCommandText` (`messages.ts:5496-5512`).
+///    "The coordinator sent a message…" / etc.).
 /// 2. [`wrap_in_system_reminder`] wraps the result in
 ///    `<system-reminder>…</system-reminder>` so the model recognises
 ///    the entry as a system-injected interruption rather than a fresh
-///    user message — TS `wrapMessagesInSystemReminder`
-///    (`messages.ts:3097`) called from
-///    `normalizeAttachmentForAPI`'s `case 'queued_command':` branch
-///    (`messages.ts:3739`).
+///    user message.
 ///
 /// Image attachments (mid-turn screenshot pastes) ride along as
-/// additional `UserContentPart`s after the wrapped text, matching TS
-/// `getQueuedCommandAttachments` (`attachments.ts:1062-1075`) which
-/// appends image blocks after the text. Only the text gets the
+/// additional `UserContentPart`s after the wrapped text, appending
+/// image blocks after the text. Only the text gets the
 /// system-reminder wrap; image bytes ride alongside untouched.
 ///
 /// Lands as `Message::Attachment` with `kind = QueuedCommand`. The
@@ -184,8 +179,8 @@ pub fn queued_command_to_attachment(cmd: &QueuedCommand) -> Message {
 
 /// Whether the current budget state warrants forcing another turn.
 ///
-/// TS: `query/tokenBudget.ts:64` — continue when under 90% of budget AND not
-/// in diminishing-returns territory (continuation_count < 3).
+/// Continue when under 90% of budget AND not in diminishing-returns
+/// territory (continuation_count < 3).
 pub(crate) fn should_continue_for_budget(budget: &BudgetTracker) -> bool {
     let Some(max) = budget.max_tokens else {
         return false;
@@ -204,18 +199,14 @@ pub(crate) fn budget_pct_used(budget: &BudgetTracker) -> i32 {
     }
 }
 
-/// Build the user-facing assistant message for an abnormal-stop_reason
-/// turn — mirrors TS `services/api/claude.ts:2258-2292` and
-/// `services/api/errors.ts:1184-1207` (`getErrorMessageIfRefusal`).
+/// Build the user-facing assistant message for an abnormal-stop_reason turn.
 ///
 /// Returned message has empty content (the partial real response was
 /// already pushed) and `api_error.message` carrying the human-readable
-/// explanation. The typed [`coco_messages::StopReason`] is the
-/// canonical 8-variant `StopReason` — `ContextWindowExceeded`
-/// is a first-class variant (no raw-string sniffing needed). Message
-/// text stays provider-agnostic so it covers the multi-LLM unified
-/// bucket (Anthropic refusal, OpenAI content_filter, Google SAFETY /
-/// RECITATION → coco-rs `ContentFilter`).
+/// explanation. `ContextWindowExceeded` is a first-class variant
+/// (no raw-string sniffing needed). Message text stays provider-agnostic
+/// so it covers the multi-LLM unified bucket (Anthropic refusal, OpenAI
+/// content_filter, Google SAFETY / RECITATION → `ContentFilter`).
 pub(crate) fn build_abnormal_stop_api_error_message(
     parsed: coco_messages::StopReason,
     effective_max_tokens: Option<i64>,
@@ -262,10 +253,9 @@ pub(crate) fn build_abnormal_stop_api_error_message(
 /// gate (Finding **C15**). Distinct from
 /// [`build_abnormal_stop_api_error_message`] because the blocking-limit
 /// is a *client-side* gate decision — no real provider error reached the
-/// engine — and TS labels it `error: 'invalid_request'` rather than
+/// engine — and labels it `error: 'invalid_request'` rather than
 /// `prompt_too_long` so hook matchers can distinguish "we never sent"
-/// from "the provider rejected after sending". TS parity:
-/// `query.ts:642-647` `createAssistantAPIErrorMessage({ error: 'invalid_request' })`.
+/// from "the provider rejected after sending".
 pub(crate) fn build_blocking_limit_api_error_message(
     estimated_tokens: i64,
     context_window: i64,

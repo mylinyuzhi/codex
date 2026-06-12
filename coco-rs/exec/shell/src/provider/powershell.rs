@@ -1,8 +1,5 @@
 //! PowerShell provider (pwsh).
 //!
-//! TS source: `utils/shell/powershellProvider.ts:27-123`
-//! (`createPowerShellProvider`).
-//!
 //! Key points:
 //!
 //! - **CWD tracking** via `(Get-Location).Path | Out-File -FilePath …
@@ -66,7 +63,7 @@ impl PowerShellProvider {
     }
 
     /// Build the cwd-tracking + exit-code-capture tail appended to the
-    /// user command. Mirrors `bashProvider.ts:55-65` semantics for pwsh.
+    /// user command.
     fn ps_cwd_tracking(cwd_file_path: &Path) -> String {
         let escaped = Self::ps_quote(&cwd_file_path.display().to_string());
         format!(

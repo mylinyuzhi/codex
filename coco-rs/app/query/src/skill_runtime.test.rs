@@ -359,12 +359,11 @@ async fn test_inline_skill_without_allowed_tools_has_no_updates() {
 
 #[tokio::test]
 async fn test_inline_skill_with_allowed_tools_emits_command_rules() {
-    // TS parity: a skill frontmatter `allowed-tools: Read, Edit(*.md)`
-    // becomes a single `PermissionUpdate::AddRules { destination:
-    // Command }` carrying two `PermissionRule { source: Command,
-    // behavior: Allow, ... }` entries. The destination is `Command`
-    // (NOT `Session`) so the rules live in the same slot TS uses
-    // (`alwaysAllowRules.command`) — observable for audit + cleanly
+    // A skill frontmatter `allowed-tools: Read, Edit(*.md)` becomes a
+    // single `PermissionUpdate::AddRules { destination: Command }` carrying
+    // two `PermissionRule { source: Command, behavior: Allow, ... }` entries.
+    // The destination is `Command` (NOT `Session`) so the rules live in the
+    // `alwaysAllowRules.command` slot — observable for audit + cleanly
     // separated from user-clicked Always-Allow rules.
     let mut skill = sample_skill("editor", "Edit stuff", SkillContext::Inline, false, false);
     skill.allowed_tools = Some(vec!["Read".to_string(), "Edit(*.md)".to_string()]);
@@ -394,7 +393,7 @@ async fn test_inline_skill_with_allowed_tools_emits_command_rules() {
             assert_eq!(
                 *destination,
                 coco_types::PermissionUpdateDestination::Command,
-                "TS parity: destination is Command, not Session"
+                "destination must be Command, not Session"
             );
             assert_eq!(rules.len(), 2);
             assert_eq!(rules[0].source, coco_types::PermissionRuleSource::Command);
@@ -411,11 +410,10 @@ async fn test_inline_skill_with_allowed_tools_emits_command_rules() {
 
 #[tokio::test]
 async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
-    // TS-mirror behavior: fork-mode skills push `allowed-tools` into
-    // `extra_permission_rules` (auto-allow), NOT `allowed_tools`
-    // (registry filter). The forked subagent therefore sees the full
-    // inherited tool registry; the listed entries are simply
-    // auto-allowed.
+    // Fork-mode skills push `allowed-tools` into `extra_permission_rules`
+    // (auto-allow), NOT `allowed_tools` (registry filter). The forked
+    // subagent therefore sees the full inherited tool registry; the listed
+    // entries are simply auto-allowed.
     //
     // We assert this on the config the runtime hands to the engine
     // by recording the value through a capturing `AgentQueryEngine`.
@@ -462,7 +460,7 @@ async fn test_fork_skill_with_allowed_tools_does_not_narrow_registry() {
     .expect("ok");
 
     let config = captured.lock().unwrap().take().expect("captured config");
-    // Registry filter MUST be empty — TS doesn't narrow tools[] for skills.
+    // Registry filter MUST be empty — fork-skills do not narrow tools[].
     assert!(
         config.allowed_tools.is_empty(),
         "fork-skill must NOT set registry filter; got: {:?}",
