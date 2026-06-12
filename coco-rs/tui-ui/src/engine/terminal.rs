@@ -1,6 +1,8 @@
 //! Surface terminal substrate for the native-scrollback TUI.
 
 use crossterm::cursor::SetCursorStyle;
+use crossterm::event::DisableBracketedPaste;
+use crossterm::event::DisableFocusChange;
 use crossterm::queue;
 use crossterm::terminal::BeginSynchronizedUpdate;
 use crossterm::terminal::EndSynchronizedUpdate;
@@ -48,6 +50,22 @@ pub trait SurfaceBackend: Backend {
     }
 
     fn leave_modal_alt_screen(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Emit the terminal-mode-restore escapes (disable alternate scroll,
+    /// leave the alternate screen, disable bracketed paste and focus
+    /// reporting) through this backend's sink.
+    ///
+    /// Routing teardown escapes through the owned backend — rather than a
+    /// free `execute!(io::stdout(), …)` — keeps the exit byte order
+    /// observable and deterministically interleaved with the prompt-cursor
+    /// placement that must follow the alt-screen leave (`CSI ?1049l` does a
+    /// DECRC). The shell's panic / external-process path emits the same set
+    /// to global stdout, where no backend is reachable (`coco_tui`'s
+    /// `leave_tui_modes`). Default no-op for backends that do not model
+    /// terminal modes.
+    fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -100,6 +118,17 @@ where
     fn leave_modal_alt_screen(&mut self) -> Result<(), Self::Error> {
         write!(self, "\x1b[?1007l")?;
         queue!(self, LeaveAlternateScreen)?;
+        Write::flush(self)
+    }
+
+    fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
+        write!(self, "\x1b[?1007l")?;
+        queue!(
+            self,
+            LeaveAlternateScreen,
+            DisableBracketedPaste,
+            DisableFocusChange
+        )?;
         Write::flush(self)
     }
 

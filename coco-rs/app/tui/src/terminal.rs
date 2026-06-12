@@ -573,12 +573,6 @@ where
         Ok(())
     }
 
-    fn prepare_shell_prompt_after_exit(&mut self) -> Result<(), B::Error> {
-        self.leave_modal_alt_screen()?;
-        self.terminal.prepare_shell_prompt_after_exit()?;
-        self.terminal.backend_mut().flush()
-    }
-
     fn sync_surface_area(
         &mut self,
         state: &AppState,
@@ -756,13 +750,39 @@ where
     B: SurfaceBackend,
 {
     fn drop(&mut self) {
-        let _ = self.prepare_shell_prompt_after_exit();
+        // Teardown order is load-bearing. `LeaveAlternateScreen` is `CSI ?1049l`,
+        // which performs a DECRC cursor restore *even when no alt buffer was ever
+        // entered* — coco keeps the transcript in the main buffer, so the last
+        // DECSC saved by a history insert (`\x1b7`/`\x1b8`) sits up in finalized
+        // history. Placing the shell prompt before that restore lets the DECRC
+        // yank the cursor back into history, so whatever prints next (the resume
+        // hint) overprints transcript text. So: leave the alt-screen and restore
+        // terminal modes FIRST, then place the prompt as the final cursor word.
+        // TS parity: `gracefulShutdown.ts` exits the alt screen before
+        // `printResumeHint`.
+        //
+        // The mode-restore *escapes* go through the surface backend
+        // (`leave_terminal_modes`) instead of a free `execute!(io::stdout())`, so
+        // they interleave deterministically with the prompt placement and the
+        // trailing newline — no shared-global-stdout ordering assumption, and the
+        // sequence is unit-testable on a recording backend. Only the non-sink
+        // global state stays a free call (below), gated by
+        // `restore_terminal_on_drop`.
+        let _ = self.leave_modal_alt_screen();
+        let _ = self.terminal.backend_mut().leave_terminal_modes();
         if self.restore_terminal_on_drop {
-            let _ = restore_terminal();
+            // Process-global, non-sink terminal state: raw-mode termios and the
+            // kitty keyboard-enhancement stack / reporting reset. Cursor-neutral,
+            // so its position in the sequence is irrelevant; skipped in tests,
+            // which own no real terminal. The panic path restores the same state
+            // via `restore_terminal`.
+            crate::keyboard_modes::restore_keyboard_enhancement_stack();
+            let _ = disable_raw_mode();
+            crate::keyboard_modes::reset_keyboard_reporting_after_exit();
         }
+        let _ = self.terminal.prepare_shell_prompt_after_exit();
         // zsh shows PROMPT_EOL_MARK (`%`) when the command's final output
-        // does not end in a newline. Terminal mode restore emits escape
-        // sequences, so the newline must be the last best-effort write.
+        // does not end in a newline; emit it last so nothing follows it.
         let _ = self.terminal.backend_mut().write_drop_trailing_newline();
     }
 }

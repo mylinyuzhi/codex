@@ -4,6 +4,10 @@
 //! `coco_tui_ui::engine::seat` and is tested there; these tests pin the
 //! shell↔engine integration where the C1 and A4 regressions lived.
 
+use std::cell::RefCell;
+use std::convert::Infallible;
+use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,13 +18,19 @@ use coco_tui_ui::engine::compatibility::TerminalCompatibility;
 use coco_types::TokenUsage;
 use crossterm::Command as _;
 use pretty_assertions::assert_eq;
+use ratatui::backend::Backend;
+use ratatui::backend::ClearType;
 use ratatui::backend::TestBackend;
+use ratatui::backend::WindowSize;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::Cell;
+use ratatui::layout::Position;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 
 use crate::state::ModalState;
 use crate::surface::modal::HistorySurfaceMode;
+use coco_tui_ui::engine::terminal::SurfaceBackend;
 use coco_tui_ui::engine::terminal::SurfaceTerminal;
 
 use super::*;
@@ -262,6 +272,43 @@ fn alternate_scroll_commands_emit_xterm_private_mode_bytes() {
     assert_eq!(disabled, "\x1b[?1007l");
 }
 
+#[test]
+fn drop_teardown_routes_four_steps_through_backend_in_order() {
+    // Regression: the exit sequence must leave the alt-screen / restore terminal
+    // modes (the `CSI ?1049l` DECRC) BEFORE parking the shell-prompt cursor,
+    // else the DECRC yanks the cursor up into finalized history and the resume
+    // hint printed next overprints the transcript. All four teardown steps now
+    // route through the surface backend, so the order is observable here rather
+    // than relying on a shared-global-stdout assumption.
+    let width = 80;
+    let height = 24;
+    let log = TeardownLog::default();
+    let backend = RecordingBackend {
+        inner: TestBackend::new(width, height),
+        log: log.clone(),
+    };
+    let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
+    terminal.sync_screen_size(Size::new(width, height));
+    // Non-empty viewport so `prepare_shell_prompt_after_exit` runs its body and
+    // shows the cursor — our marker for the prompt-placement step.
+    terminal.set_viewport_area(Rect::new(0, 6, width, 4));
+    let mut tui = Tui::new_for_test(terminal, TerminalCompatibility::NativeScrollback);
+    // Force the modal alt-screen leave to emit so step 1 is exercised too.
+    tui.alt_screen_active = true;
+
+    drop(tui);
+
+    assert_eq!(
+        log.steps(),
+        vec![
+            "leave_modal_alt_screen",
+            "leave_terminal_modes",
+            "prepare_shell_prompt",
+            "trailing_newline",
+        ]
+    );
+}
+
 fn native_history_plan() -> SurfaceFramePlan {
     SurfaceFramePlan {
         modal_placement: None,
@@ -292,4 +339,105 @@ fn buffer_row(buffer: &Buffer, y: u16) -> String {
         row.push_str(buffer[(x, y)].symbol());
     }
     row
+}
+
+/// Ordered log of the teardown operations `Tui::drop` issues through the
+/// backend, so the regression test can pin their sequence.
+#[derive(Clone, Debug, Default)]
+struct TeardownLog(Rc<RefCell<Vec<&'static str>>>);
+
+impl TeardownLog {
+    fn record(&self, step: &'static str) {
+        self.0.borrow_mut().push(step);
+    }
+
+    fn steps(&self) -> Vec<&'static str> {
+        self.0.borrow().clone()
+    }
+}
+
+/// `TestBackend` wrapper that records the teardown-relevant operations in call
+/// order. Render/cursor methods delegate to the inner `TestBackend`;
+/// `show_cursor` is the unique marker for `prepare_shell_prompt_after_exit`.
+#[derive(Debug)]
+struct RecordingBackend {
+    inner: TestBackend,
+    log: TeardownLog,
+}
+
+impl Backend for RecordingBackend {
+    type Error = Infallible;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.log.record("prepare_shell_prompt");
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.inner.flush()
+    }
+
+    fn scroll_region_up(&mut self, region: Range<u16>, line_count: u16) -> Result<(), Self::Error> {
+        self.inner.scroll_region_up(region, line_count)
+    }
+
+    fn scroll_region_down(
+        &mut self,
+        region: Range<u16>,
+        line_count: u16,
+    ) -> Result<(), Self::Error> {
+        self.inner.scroll_region_down(region, line_count)
+    }
+}
+
+impl SurfaceBackend for RecordingBackend {
+    fn leave_modal_alt_screen(&mut self) -> Result<(), Self::Error> {
+        self.log.record("leave_modal_alt_screen");
+        Ok(())
+    }
+
+    fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
+        self.log.record("leave_terminal_modes");
+        Ok(())
+    }
+
+    fn write_drop_trailing_newline(&mut self) -> Result<(), Self::Error> {
+        self.log.record("trailing_newline");
+        Ok(())
+    }
 }
