@@ -2694,6 +2694,36 @@
         "code"
       ]
     },
+    "ExitPlanModeResult": {
+      "description": "UI-only data needed to render an ExitPlanMode result without reading private\ntool input/output wire fields.",
+      "type": "object",
+      "properties": {
+        "awaitingLeaderApproval": {
+          "type": "boolean"
+        },
+        "filePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isAgent": {
+          "type": "boolean"
+        },
+        "plan": {
+          "type": "string"
+        },
+        "planWasEdited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "plan",
+        "awaitingLeaderApproval",
+        "isAgent",
+        "planWasEdited"
+      ]
+    },
     "ExpandedView": {
       "description": "Which panel the TUI should have expanded in the task area.\n\nTS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants:\n`'none' | 'tasks' | 'teammates'`).\n\n**`Teammates` ≠ general subagents.** In TS, `expandedView ===\n'teammates'` mounts `TeammateSpinnerTree`, which strictly filters\n`task.type === 'in_process_teammate'` — i.e. agents created by\n`spawnTeammate()` with persistent identity (`agentId@teamName`,\nsurvives `/clear`, mailbox-based). Async subagents from the\n`Agent` tool (TS `LocalAgentTask`, type `'local_agent'`) render\ninline in the transcript via `AgentProgressLine` and in the\n`BackgroundTaskStatus` pill row — **not** here.\n\nA subagent only appears in this view when the Agent tool was\ninvoked with `isAgentSwarmsEnabled() && teamName` set, which\nroutes through `spawnTeammate()` and transforms the worker into\na first-class teammate.",
       "type": "string",
@@ -6565,6 +6595,23 @@
             "kind": {
               "type": "string",
               "const": "ask_user_question_result"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ]
+        },
+        {
+          "description": "Structured UI payload for ExitPlanMode result rendering. The model still\nsees the prose rendered from the tool result data.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ExitPlanModeResult"
+            },
+            "kind": {
+              "type": "string",
+              "const": "exit_plan_mode_result"
             }
           },
           "required": [

@@ -4,6 +4,13 @@ rustc-wrapper = "sccache"
 [env]
 SCCACHE_CACHE_SIZE = "40G"
 SCCACHE_IDLE_TIMEOUT = "0"
+# Bake jemalloc tuning into the library at build time. Consumed by jemalloc-sys
+# only when the `coco` binary is built with `--features jemalloc` (ignored
+# otherwise). Returns dirty/muzzy pages to the OS after 1s idle and caps arenas
+# to 4, keeping a long-running process's RSS bounded across sessions. Set here
+# (not via an exported `malloc_conf` symbol) so it applies on every platform —
+# macOS keeps jemalloc's `_rjem_` prefix and would ignore the symbol form.
+JEMALLOC_SYS_WITH_MALLOC_CONF = "dirty_decay_ms:1000,muzzy_decay_ms:1000,narenas:4"
 
 [profile.dev]
 incremental = false

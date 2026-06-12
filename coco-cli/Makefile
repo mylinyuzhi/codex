@@ -39,7 +39,7 @@ ifeq ($(PLATFORM_TAG),)
 	$(error TARGET=$(TARGET) is not a supported triple. Use one of: \
 	  x86_64-unknown-linux-musl, aarch64-unknown-linux-musl, aarch64-apple-darwin)
 endif
-	cd $(COCO_RS) && cargo build --release --target $(TARGET) -p coco-cli --bin coco
+	cd $(COCO_RS) && cargo build --release --target $(TARGET) -p coco-cli --bin coco --features jemalloc
 	mkdir -p $(VENDOR)/$(TARGET)/coco
 	cp $(COCO_RS)/target/$(TARGET)/release/coco $(VENDOR)/$(TARGET)/coco/coco
 	chmod +x $(VENDOR)/$(TARGET)/coco/coco

@@ -9,7 +9,7 @@ use crate::state::ModalState;
 use crate::state::PanePromptState;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
-use crate::state::PlanExitPromptState;
+use crate::state::PlanEntryPromptState;
 use crate::state::StreamingState;
 use crate::state::UiAnimation;
 use crate::state::session::TokenUsage;
@@ -455,7 +455,7 @@ fn test_ui_animation_idle_while_turn_paused_on_blocking_prompt() {
     assert_eq!(state.ui_animation(), UiAnimation::Idle);
 }
 
-/// TS-parity guard: a *non-pausing* prompt (PlanExit/Question/…) leaves
+/// TS-parity guard: a *non-pausing* prompt (PlanEntry/Question/…) leaves
 /// the status indicator visible with a running clock, so the spinner must
 /// stay armed — the TS REPL keeps the elapsed clock live through these
 /// dialogs. Over-suppressing here would freeze a visibly-ticking spinner.
@@ -465,7 +465,9 @@ fn test_ui_animation_spinner_during_non_pausing_prompt() {
     state.ui.ephemeral.start_turn("Thinking", Instant::now());
     state
         .ui
-        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState::default()));
+        .push_prompt(PanePromptState::PlanEntry(PlanEntryPromptState {
+            description: "plan".into(),
+        }));
     assert_eq!(state.ui_animation(), UiAnimation::SpinnerOnly);
 }
 
@@ -487,6 +489,8 @@ fn test_ui_animation_stream_reveal_overrides_prompt() {
     state.ui.streaming = Some(StreamingState::default());
     state
         .ui
-        .push_prompt(PanePromptState::PlanExit(PlanExitPromptState::default()));
+        .push_prompt(PanePromptState::PlanEntry(PlanEntryPromptState {
+            description: "plan".into(),
+        }));
     assert_eq!(state.ui_animation(), UiAnimation::StreamReveal);
 }
