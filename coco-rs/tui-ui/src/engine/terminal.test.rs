@@ -561,6 +561,58 @@ fn crossterm_surface_backend_emits_scroll_region_bytes() {
 }
 
 #[test]
+fn crossterm_surface_backend_leave_modes_omits_alt_screen_leave() {
+    // Regression: the main session never enters the alternate screen, so the
+    // exit mode-restore must NOT emit `LeaveAlternateScreen` (`CSI ?1049l`).
+    // An unpaired `?1049l` does a DECRC onto the stale `\x1b7` save the last
+    // history insert left in finalized history, yanking the cursor into the
+    // transcript so the resume hint overprints it. The modal-alt leave is a
+    // separate, conditional step (`leave_modal_alt_screen`). codex's
+    // `restore_common` omits the alt-screen leave for the same reason.
+    let capture = CapturedWriter::default();
+    let mut backend = CrosstermBackend::new(capture.clone());
+
+    backend
+        .leave_terminal_modes()
+        .expect("leave terminal modes");
+
+    let bytes = capture.ansi_bytes();
+    parse_with_vt100(&bytes);
+    assert!(
+        !bytes.contains("\x1b[?1049l"),
+        "exit mode-restore must not leave the alternate screen: {bytes:?}"
+    );
+    // Still tears down the input modes coco actually enabled.
+    assert!(
+        bytes.contains("\x1b[?2004l"),
+        "expected bracketed-paste disable in {bytes:?}"
+    );
+    assert!(
+        bytes.contains("\x1b[?1004l"),
+        "expected focus-reporting disable in {bytes:?}"
+    );
+}
+
+#[test]
+fn crossterm_surface_backend_leave_modal_alt_screen_still_leaves_alt() {
+    // The conditional modal-alt leave keeps emitting `?1049l` — that one is
+    // paired with the `?1049h` from entering the modal, so it is correct.
+    let capture = CapturedWriter::default();
+    let mut backend = CrosstermBackend::new(capture.clone());
+
+    backend
+        .leave_modal_alt_screen()
+        .expect("leave modal alt screen");
+
+    let bytes = capture.ansi_bytes();
+    parse_with_vt100(&bytes);
+    assert!(
+        bytes.contains("\x1b[?1049l"),
+        "modal-alt leave must emit the alternate-screen leave: {bytes:?}"
+    );
+}
+
+#[test]
 fn crossterm_surface_backend_direct_inserts_plain_history_rows() {
     let capture = CapturedWriter::default();
     let backend = CrosstermBackend::new(capture.clone());
