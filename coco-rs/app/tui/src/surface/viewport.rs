@@ -589,11 +589,25 @@ fn render_interaction_prompt(
 
     let box_area = center_horizontally(area, interaction_prompt_box_width(area.width));
     if let PanePromptState::Permission(p) = prompt {
-        let (title, lines, border_color) = crate::presentation::request::permission_styled_content(
-            p,
-            state.session.permission_mode,
-            styles,
-        );
+        // ExitPlanMode gets the dedicated "Ready to code?" panel — markdown
+        // plan + structured choices — instead of the flat permission body.
+        let (title, lines, border_color) = if matches!(
+            p.detail,
+            crate::state::PermissionDetail::ExitPlanMode { .. }
+        ) {
+            crate::presentation::request::exit_plan_approval_styled_content(
+                p,
+                box_area.width.saturating_sub(2),
+                state.ui.display_settings.syntax_highlighting,
+                styles,
+            )
+        } else {
+            crate::presentation::request::permission_styled_content(
+                p,
+                state.session.permission_mode,
+                styles,
+            )
+        };
         let lines = compact_prompt_lines(lines, area.height.saturating_sub(2) as usize);
         frame.render_widget(Clear, box_area);
         frame.render_widget(

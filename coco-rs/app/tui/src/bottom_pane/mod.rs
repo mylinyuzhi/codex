@@ -53,8 +53,7 @@ pub(crate) fn confirmation_map_key(state: &AppState, key: KeyEvent) -> Option<Tu
         KeyCode::Char(c @ '1'..='9') => Some(TuiCommand::PermissionDigit(
             c.to_digit(10).map(|d| d as usize).unwrap_or(0),
         )),
-        // Tab cycles multi-option confirmations (PlanExit approval
-        // target: Restore / AcceptEdits / Bypass). For simple Y/N
+        // Tab cycles multi-option confirmations; for simple Y/N
         // dialogs the handler is a no-op.
         KeyCode::Tab => Some(TuiCommand::SurfaceNext),
         KeyCode::BackTab => Some(TuiCommand::SurfacePrev),
@@ -118,11 +117,6 @@ pub(crate) async fn route_approve(
             plan::approve_plan_entry(state, command_tx).await;
             true
         }
-        PanePromptState::PlanExit(p) => {
-            let next_mode = p.next_mode;
-            plan::approve_plan_exit(state, next_mode, command_tx).await;
-            true
-        }
         // Approve is not a decision key for these — consume it but keep the
         // prompt open (Question/PlanApproval answer via Enter; CostWarning via
         // its own keys). Dismissing here orphaned the pending request.
@@ -164,11 +158,6 @@ pub(crate) async fn route_deny(
             permission::respond_mcp_server(m, /*approved*/ false, command_tx).await;
             true
         }
-        PanePromptState::PlanExit(p) => {
-            let plan_content = p.plan_content.clone();
-            plan::deny_plan_exit(plan_content, command_tx).await;
-            true
-        }
         PanePromptState::Question(_)
         | PanePromptState::CostWarning(_)
         | PanePromptState::PlanEntry(_)
@@ -197,10 +186,6 @@ pub(crate) async fn route_confirm(
         }
         PanePromptState::PlanApproval(p) => {
             plan::confirm_plan_approval(&p, command_tx).await;
-            state.ui.finish_taken_prompt();
-        }
-        PanePromptState::PlanExit(p) => {
-            plan::confirm_plan_exit(state, p.next_mode, command_tx).await;
             state.ui.finish_taken_prompt();
         }
         PanePromptState::Permission(ref p) => {
@@ -261,14 +246,12 @@ pub(crate) fn route_nav(state: &mut AppState, delta: i32) -> bool {
     if state.ui.modal.is_some() {
         return false;
     }
-    let bypass_available = state.session.bypass_permissions_available;
     let permission_mode = state.session.permission_mode;
     let Some(prompt) = state.ui.interaction.active_prompt.as_mut() else {
         return false;
     };
     match prompt {
         PanePromptState::Question(q) => question::question_nav(q, delta),
-        PanePromptState::PlanExit(p) => plan::nav_plan_exit(p, bypass_available, delta),
         PanePromptState::Permission(p) => permission::nav_permission(p, permission_mode, delta),
         PanePromptState::PlanApproval(p) => {
             if delta != 0 {

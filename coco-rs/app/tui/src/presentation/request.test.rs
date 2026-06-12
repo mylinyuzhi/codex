@@ -330,6 +330,70 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
 }
 
 #[test]
+fn exit_plan_approval_panel_renders_markdown_choices_and_teal_border() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
+        plan: Some("# Goal\n\n- Step one\n- Step two".to_string()),
+        plan_file_path: Some("/tmp/plan.md".to_string()),
+        allowed_prompts: vec![],
+    });
+    state.tool_name = coco_types::ToolName::ExitPlanMode.as_str().to_string();
+    state.selected_choice = 1;
+    state.choices = Some(vec![
+        PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::KeepAcceptEdits
+                .as_str()
+                .to_string(),
+            label: "Yes, auto-accept edits".to_string(),
+            description: Some("Keep going with elevated approval.".to_string()),
+        },
+        PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::KeepDefault.as_str().to_string(),
+            label: "Yes, manually approve edits".to_string(),
+            description: Some("Ask before each edit.".to_string()),
+        },
+        PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::No.as_str().to_string(),
+            label: "No, keep planning".to_string(),
+            description: None,
+        },
+    ]);
+
+    let (title, lines, border) = exit_plan_approval_styled_content(
+        &state,
+        /*width*/ 80,
+        coco_tui_ui::display::SyntaxHighlighting::Disabled,
+        UiStyles::new(&theme),
+    );
+    let body: Vec<String> = lines.iter().map(line_text).collect();
+    let joined = body.join("\n");
+
+    // Plan-mode teal border + "Ready to code?" title.
+    assert_eq!(border, theme.plan_mode);
+    assert!(title.contains("Ready to code?"), "title: {title}");
+    // The plan renders as markdown — body text survives, syntax markers consumed.
+    assert!(joined.contains("Here is Claude's plan:"), "{joined}");
+    assert!(joined.contains("Goal"), "heading text: {joined}");
+    assert!(
+        joined.contains("Step one") && joined.contains("Step two"),
+        "list body: {joined}"
+    );
+    assert!(joined.contains("Plan file: /tmp/plan.md"), "{joined}");
+    // The focused (selected) choice carries the ❯ pointer + ✓ check + description.
+    let focused = body
+        .iter()
+        .find(|t| t.contains("manually approve"))
+        .expect("focused choice row");
+    assert!(focused.starts_with("❯ ✓ "), "focused row: {focused}");
+    assert!(
+        body.iter().any(|t| t.contains("Ask before each edit.")),
+        "choice description missing: {joined}"
+    );
+    assert!(body.iter().any(|t| t.contains("No, keep planning")));
+}
+
+#[test]
 fn generic_permission_content_uses_display_input_not_raw_original_input() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();

@@ -361,13 +361,42 @@ fn exit_plan_mode_with_plan_renders_approval_and_plan_from_display_data() {
         /*width*/ 96,
     ));
 
-    assert!(out.contains("User approved the plan"), "{out}");
+    assert!(out.contains("User approved Claude's plan"), "{out}");
     assert!(out.contains("Plan saved to: /tmp/session-plan.md"), "{out}");
-    assert!(out.contains("# Plan"), "{out}");
-    assert!(out.contains("- Add tests"), "{out}");
+    // The plan is rendered as markdown, so the body text survives (the `#` /
+    // `-` syntax markers are consumed by the renderer).
+    assert!(out.contains("Edit the renderer"), "{out}");
+    assert!(out.contains("Add tests"), "{out}");
     assert!(
         !out.contains("model-facing instructions"),
         "must not show model-only tool result prose: {out}"
+    );
+}
+
+#[test]
+fn exit_plan_mode_renders_full_plan_without_row_cap() {
+    // The approved plan is the durable record — it must NOT be truncated to the
+    // structured-preview row cap the ephemeral approval panel uses.
+    let plan: String = (1..=40).map(|i| format!("- step {i}\n")).collect();
+    let display = exit_plan_display_data(&plan, None, false);
+    let out = text_of(&render_ex_width_with_display(
+        "ExitPlanMode",
+        None,
+        "ignored",
+        Some(&display),
+        /*is_error*/ false,
+        /*expanded*/ false,
+        /*width*/ 96,
+    ));
+
+    assert!(out.contains("step 1"), "first step missing: {out}");
+    assert!(
+        out.contains("step 40"),
+        "last step must survive (no cap): {out}"
+    );
+    assert!(
+        !out.contains("+") || !out.contains("lines"),
+        "must not emit a truncation marker: {out}"
     );
 }
 
@@ -390,7 +419,7 @@ fn exit_plan_mode_awaiting_leader_approval_renders_pending_notice() {
         "{out}"
     );
     assert!(out.contains("Plan saved to: /tmp/agent-plan.md"), "{out}");
-    assert!(out.contains("- Wait for lead"), "{out}");
+    assert!(out.contains("Wait for lead"), "{out}");
     assert!(
         !out.contains("model-facing instructions"),
         "must not show model-only tool result prose: {out}"

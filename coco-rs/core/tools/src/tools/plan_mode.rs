@@ -20,6 +20,7 @@ use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
+use coco_types::ExitPlanChoice;
 use coco_types::ExitPlanModeResult;
 use coco_types::PermissionMode;
 use coco_types::ToolDisplayData;
@@ -457,31 +458,21 @@ pub struct ExitPlanModeInput {
     pub user_choice: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExitPlanChoice {
-    ClearBypassPermissions,
-    ClearAcceptEdits,
-    KeepAcceptEdits,
-    KeepDefault,
-}
-
-impl ExitPlanChoice {
-    fn parse(raw: Option<&str>) -> Result<Option<Self>, ToolError> {
-        match raw {
-            None => Ok(None),
-            Some("yes-bypass-permissions") => Ok(Some(Self::ClearBypassPermissions)),
-            Some("yes-accept-edits") => Ok(Some(Self::ClearAcceptEdits)),
-            Some("yes-accept-edits-keep-context") => Ok(Some(Self::KeepAcceptEdits)),
-            Some("yes-default-keep-context") => Ok(Some(Self::KeepDefault)),
-            Some(other) => Err(ToolError::InvalidInput {
-                message: format!("Unsupported ExitPlanMode approval choice: {other}"),
-                error_code: Some("1".into()),
-            }),
+/// Parse the spliced `user_choice` into the shared [`ExitPlanChoice`].
+/// `None` input → no explicit choice (restore pre-plan); an unrecognized
+/// value is a hard input error. The wire-string mapping itself lives on
+/// `ExitPlanChoice` in `coco-types`, shared with the TUI bridge that produced it.
+fn parse_exit_plan_choice(raw: Option<&str>) -> Result<Option<ExitPlanChoice>, ToolError> {
+    match raw {
+        None => Ok(None),
+        Some(value) => {
+            ExitPlanChoice::from_wire(value)
+                .map(Some)
+                .ok_or_else(|| ToolError::InvalidInput {
+                    message: format!("Unsupported ExitPlanMode approval choice: {value}"),
+                    error_code: Some("1".into()),
+                })
         }
-    }
-
-    fn clears_context(self) -> bool {
-        matches!(self, Self::ClearBypassPermissions | Self::ClearAcceptEdits)
     }
 }
 
@@ -819,7 +810,7 @@ impl Tool for ExitPlanModeTool {
                 ctx.permission_context.stripped_dangerous_rules.is_some(),
             ),
         };
-        let choice = ExitPlanChoice::parse(input.user_choice.as_deref())?;
+        let choice = parse_exit_plan_choice(input.user_choice.as_deref())?;
         let restore_mode = match choice {
             Some(ExitPlanChoice::ClearBypassPermissions)
                 if ctx.permission_context.bypass_available =>
@@ -834,7 +825,11 @@ impl Tool for ExitPlanModeTool {
             }
             Some(ExitPlanChoice::KeepAcceptEdits) => PermissionMode::AcceptEdits,
             Some(ExitPlanChoice::KeepDefault) => PermissionMode::Default,
-            None => pre_plan_from_state.unwrap_or(PermissionMode::Default),
+            // `No` is a denial routed by the TUI before `execute`; if it ever
+            // arrives here, treat it like an absent choice — restore pre-plan.
+            Some(ExitPlanChoice::No) | None => {
+                pre_plan_from_state.unwrap_or(PermissionMode::Default)
+            }
         };
         let auto_was_active_during_plan =
             stripped_from_state || pre_plan_from_state == Some(PermissionMode::Auto);

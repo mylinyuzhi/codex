@@ -333,11 +333,12 @@ fn build_exit_plan_mode_choices(
     show_clear_context: bool,
     bypass_available: bool,
 ) -> Vec<coco_types::PermissionAskChoice> {
+    use coco_types::ExitPlanChoice;
     let mut choices = Vec::new();
     if show_clear_context {
         if bypass_available {
             choices.push(coco_types::PermissionAskChoice {
-                value: "yes-bypass-permissions".into(),
+                value: ExitPlanChoice::ClearBypassPermissions.as_str().into(),
                 label: "Yes, clear context and bypass permissions".into(),
                 description: Some(
                     "Start fresh and run implementation without approval prompts.".into(),
@@ -345,14 +346,14 @@ fn build_exit_plan_mode_choices(
             });
         } else {
             choices.push(coco_types::PermissionAskChoice {
-                value: "yes-accept-edits".into(),
+                value: ExitPlanChoice::ClearAcceptEdits.as_str().into(),
                 label: "Yes, clear context and auto-accept edits".into(),
                 description: Some("Start fresh and allow file edits during implementation.".into()),
             });
         }
     }
     choices.push(coco_types::PermissionAskChoice {
-        value: "yes-accept-edits-keep-context".into(),
+        value: ExitPlanChoice::KeepAcceptEdits.as_str().into(),
         label: if bypass_available {
             "Yes, and bypass permissions".into()
         } else {
@@ -361,12 +362,12 @@ fn build_exit_plan_mode_choices(
         description: Some("Keep this conversation and proceed with elevated edit approval.".into()),
     });
     choices.push(coco_types::PermissionAskChoice {
-        value: "yes-default-keep-context".into(),
+        value: ExitPlanChoice::KeepDefault.as_str().into(),
         label: "Yes, manually approve edits".into(),
         description: Some("Keep this conversation and ask before file edits.".into()),
     });
     choices.push(coco_types::PermissionAskChoice {
-        value: "no".into(),
+        value: ExitPlanChoice::No.as_str().into(),
         label: "No, keep planning".into(),
         description: None,
     });

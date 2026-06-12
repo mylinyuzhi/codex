@@ -303,6 +303,62 @@ pub struct PermissionAskChoice {
     pub description: Option<String>,
 }
 
+/// The user's response to an `ExitPlanMode` approval prompt.
+///
+/// The wire `value` strings are the single source of truth for the choice
+/// echoed back through `PermissionDecision::Ask.choices` →
+/// `ApprovalResponse.updated_input.user_choice`. Owning the mapping here keeps
+/// the producer (the TUI permission bridge, which builds the choice list) and
+/// the consumer (`ExitPlanModeTool::execute`, which branches on the picked
+/// value) from drifting apart.
+///
+/// TS parity: `ExitPlanModePermissionRequest.tsx` `ResponseValue` union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitPlanChoice {
+    /// Clear context, then implement with permissions bypassed.
+    ClearBypassPermissions,
+    /// Clear context, then implement auto-accepting edits.
+    ClearAcceptEdits,
+    /// Keep context; auto-accept edits (or bypass when the gate allows).
+    KeepAcceptEdits,
+    /// Keep context; restore the pre-plan mode (default → manual approval).
+    KeepDefault,
+    /// Reject the plan and stay in plan mode. Never reaches `execute` (the
+    /// TUI maps it to a denial) — carried so the bridge and the "is this a
+    /// rejection?" check share one wire constant.
+    No,
+}
+
+impl ExitPlanChoice {
+    /// Stable wire value echoed back in the approval response.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClearBypassPermissions => "yes-bypass-permissions",
+            Self::ClearAcceptEdits => "yes-accept-edits",
+            Self::KeepAcceptEdits => "yes-accept-edits-keep-context",
+            Self::KeepDefault => "yes-default-keep-context",
+            Self::No => "no",
+        }
+    }
+
+    /// Parse a wire value back into a choice; `None` for an unrecognized value.
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value {
+            "yes-bypass-permissions" => Some(Self::ClearBypassPermissions),
+            "yes-accept-edits" => Some(Self::ClearAcceptEdits),
+            "yes-accept-edits-keep-context" => Some(Self::KeepAcceptEdits),
+            "yes-default-keep-context" => Some(Self::KeepDefault),
+            "no" => Some(Self::No),
+            _ => None,
+        }
+    }
+
+    /// Whether this choice clears conversation context before implementing.
+    pub const fn clears_context(self) -> bool {
+        matches!(self, Self::ClearBypassPermissions | Self::ClearAcceptEdits)
+    }
+}
+
 /// The result of a permission check.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]

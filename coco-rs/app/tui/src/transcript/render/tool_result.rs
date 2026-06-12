@@ -419,18 +419,28 @@ fn push_exit_plan_file_path(
     );
 }
 
+/// Render the approved plan as full markdown, indented under the result header.
+///
+/// Mirrors claude-code `ExitPlanModeTool/UI.tsx` (`<Markdown>{plan}</Markdown>`
+/// inside `MessageResponse`). Unlike every other tool preview this is **not**
+/// row-capped: the approved plan is the durable record the user scrolls back to
+/// to re-read what was agreed — the ephemeral approval panel is what truncates.
 fn push_exit_plan_preview(
     cx: &ToolResultRenderCtx<'_>,
     result: &ExitPlanModeResult,
     lines: &mut Vec<Line<'static>>,
 ) {
-    push_text_preview(
-        cx,
-        &result.plan,
-        cx.rows(STRUCTURED_PREVIEW_ROWS),
-        lines,
-        cx.styles.text(),
-    );
+    let plan = result.plan.trim();
+    if plan.is_empty() {
+        return;
+    }
+    // `indent2` adds a 2-col margin on top of the markdown's own `body_indent`,
+    // landing the body under the `  └ ` header gutter; width budgets for it.
+    let width = cx.width.saturating_sub(4).max(1);
+    let opts = coco_tui_markdown::MarkdownOptions::new(cx.styles, width, cx.syntax_highlighting);
+    lines.extend(indent2(coco_tui_markdown::render_markdown(
+        plan, opts, None,
+    )));
 }
 
 fn apply_patch_preview(display_data: Option<&ToolDisplayData>) -> Option<&ApplyPatchPreview> {

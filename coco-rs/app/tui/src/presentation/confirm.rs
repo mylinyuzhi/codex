@@ -20,7 +20,6 @@ use crate::state::InvalidConfigState;
 use crate::state::McpServerApprovalPromptState;
 use crate::state::PlanApprovalPromptState;
 use crate::state::PlanEntryPromptState;
-use crate::state::PlanExitPromptState;
 use crate::state::PluginHintState;
 use crate::state::SandboxPermissionPromptState;
 use crate::state::TaskDetailState;
@@ -47,46 +46,6 @@ pub(crate) fn cost_warning_content(
             t!("dialog.cost_continue"),
         ),
         styles.warning(),
-    )
-}
-
-pub(crate) fn plan_exit_content(
-    p: &PlanExitPromptState,
-    bypass_permissions_available: bool,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    use crate::state::PlanExitTarget;
-
-    // TS parity: `buildPlanApprovalOptions()` offers "Yes, keep
-    // default" / "Yes, auto-accept edits" / (conditionally) "Yes, and
-    // bypass permissions" plus a "No" path. The bypass entry is only
-    // rendered when the session was authorized to reach
-    // `BypassPermissions` at startup — matching TS's
-    // `isBypassPermissionsModeAvailable` gate.
-    let plan_body = p
-        .plan_content
-        .clone()
-        .unwrap_or_else(|| t!("dialog.exit_plan_prompt").to_string());
-    let rendered: Vec<String> = PlanExitTarget::available(bypass_permissions_available)
-        .into_iter()
-        .map(|target| {
-            let label = match target {
-                PlanExitTarget::RestorePrePlan => t!("dialog.exit_plan_opt_restore"),
-                PlanExitTarget::AcceptEdits => t!("dialog.exit_plan_opt_accept_edits"),
-                PlanExitTarget::BypassPermissions => t!("dialog.exit_plan_opt_bypass"),
-            };
-            let marker = if target == p.next_mode { "▸ " } else { "  " };
-            format!("{marker}{label}")
-        })
-        .collect();
-    (
-        t!("dialog.title_exit_plan").to_string(),
-        format!(
-            "{plan_body}\n\n{}\n\n{}",
-            rendered.join("\n"),
-            t!("dialog.exit_plan_hint"),
-        ),
-        styles.plan(),
     )
 }
 
