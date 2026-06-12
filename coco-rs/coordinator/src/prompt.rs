@@ -1,15 +1,11 @@
 //! Teammate prompt addendum — system prompt additions for teammates.
 //!
-//! TS: utils/swarm/teammatePromptAddendum.ts
-//!
 //! Added to each teammate's system prompt to provide team-aware behavior:
 //! mailbox awareness, task coordination, shutdown handling, etc.
 
 use crate::pane::SystemPromptMode;
 
 /// System prompt addendum for in-process teammates.
-///
-/// TS: `TEAMMATE_SYSTEM_PROMPT_ADDENDUM` in `utils/swarm/teammatePromptAddendum.ts`
 ///
 /// Appended to the full main agent system prompt for teammates.
 /// Explains visibility constraints and communication requirements.
@@ -34,13 +30,9 @@ Approving shutdown terminates your process. Only reject (`approve: false`, with 
 ";
 
 /// Permission poll interval for in-process teammates (ms).
-///
-/// TS: `PERMISSION_POLL_INTERVAL_MS = 500`
 pub const PERMISSION_POLL_INTERVAL_MS: u64 = 500;
 
 /// Build the complete system prompt for a teammate.
-///
-/// TS: `runInProcessTeammate()` builds system prompt based on mode.
 pub fn build_teammate_system_prompt(
     base_prompt: Option<&str>,
     custom_prompt: Option<&str>,

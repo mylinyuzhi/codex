@@ -1,8 +1,5 @@
 //! Per-fork canUseTool policies for memory-related forks.
 //!
-//! TS source: `services/extractMemories/extractMemories.ts::createAutoMemCanUseTool`
-//! and `services/SessionMemory/sessionMemory.ts::createSessionMemCanUseTool`.
-//!
 //! Two production policies + one shared helper:
 //!
 //! - [`create_auto_mem_handle`] — used by ExtractMemories and AutoDream.
@@ -47,8 +44,6 @@ const TOOL_WRITE: &str = "Write";
 
 /// Build the auto-mem canUseTool handle.
 ///
-/// TS: `services/extractMemories/extractMemories.ts::createAutoMemCanUseTool`.
-///
 /// Policy:
 /// - `Read` / `Glob` / `Grep` ⇒ Allow unconditionally.
 /// - `Bash` ⇒ Allow when [`coco_shell_parser::safety::is_known_safe_command`]
@@ -64,10 +59,9 @@ pub fn create_auto_mem_handle(memory_dir: PathBuf) -> CanUseToolHandleRef {
 }
 
 /// Build the auto-mem handle with a telemetry emitter wired in so
-/// `ExtractionToolDenied` events fire on each policy denial. TS:
-/// `denyAutoMemTool` in `extractMemories.ts:154-164` emits
-/// `tengu_auto_mem_tool_denied` per deny — without this the variant
-/// is defined but never reaches dashboards.
+/// `ExtractionToolDenied` events fire on each policy denial —
+/// emitting `tengu_auto_mem_tool_denied` per deny so the variant
+/// reaches dashboards.
 pub fn create_auto_mem_handle_with_telemetry(
     memory_dir: PathBuf,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
@@ -135,8 +129,7 @@ impl CanUseToolHandle for AutoMemHandle {
                 "auto_mem_unknown_tool",
             ),
         };
-        // TS parity (`denyAutoMemTool` in `extractMemories.ts:156`):
-        // every Deny fires `tengu_auto_mem_tool_denied` with the
+        // Every Deny fires `tengu_auto_mem_tool_denied` with the
         // attempted tool name. Surfacing this lets operators see
         // _which_ policy is biting — useful when a model misroutes
         // a write or stumbles into an unsupported tool.
@@ -150,8 +143,6 @@ impl CanUseToolHandle for AutoMemHandle {
 }
 
 /// Build the session-mem canUseTool handle.
-///
-/// TS: `services/SessionMemory/sessionMemory.ts::createSessionMemCanUseTool`.
 ///
 /// Policy:
 /// - `Read` ⇒ Allow.
@@ -240,9 +231,7 @@ fn deny(message: String, reason_label: &str) -> CanUseToolDecision {
 /// has a redirection) and `rm -rf /` (mutating first stage) are
 /// rejected.
 ///
-/// TS parity: `extractMemories.ts::createAutoMemCanUseTool` calls
-/// `tool.isReadOnly(parsed.data)` which uses the same full shell
-/// parse + per-stage safe-command lookup.
+/// Uses the same full shell parse + per-stage safe-command lookup.
 fn bash_is_read_only(input: &Value) -> bool {
     let Some(cmd) = input.get("command").and_then(|v| v.as_str()) else {
         return false;
@@ -269,8 +258,7 @@ fn bash_is_read_only(input: &Value) -> bool {
 /// True when `input.file_path` (or `input.notebook_path`) is a
 /// descendant of `root`.
 ///
-/// Two-pass containment check matching TS
-/// `teamMemPaths.ts::validateTeamMemWritePath`:
+/// Two-pass containment check:
 ///
 /// 1. **Symlink-aware**: resolve the deepest existing ancestor of
 ///    both `root` and `candidate` via [`crate::path::realpath_deepest_existing`].

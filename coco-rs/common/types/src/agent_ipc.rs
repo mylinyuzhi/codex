@@ -1,11 +1,6 @@
 //! Inter-agent IPC message types: mailbox protocol used by leader and
 //! teammates, plus per-subagent execution snapshots stored in `AppState`.
 //!
-//! TS: `utils/teammateMailbox.ts` (15+ structured protocol message types),
-//! `utils/swarm/permissionSync.ts` (`SwarmPermissionRequest`),
-//! `state/AppState.tsx` (`teammates` map), `tasks/LocalAgentTask`
-//! (`LocalAgentTaskState.status`).
-//!
 //! Lives in `coco-types` (not `app/state`) so the future `coco-coordinator`
 //! crate can read and write these without depending on `coco-state`. The
 //! types are pure data with serde — no tokio, no app/state, no LLM.
@@ -73,8 +68,6 @@ pub struct SubagentRuntimeSnapshot {
 // on `identity::get_team_name`, now dropped.
 
 /// Standalone agent context (non-team agent identity).
-///
-/// TS: `AppState.standaloneAgentContext`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StandaloneAgentContext {
     pub name: String,
@@ -102,8 +95,6 @@ pub struct TaskEntry {
 }
 
 /// Sub-agent execution status.
-///
-/// TS: `LocalAgentTaskState.status` ∪ `InProcessTeammateTaskState.status`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubAgentStatus {
@@ -115,8 +106,6 @@ pub enum SubAgentStatus {
 }
 
 /// Per-subagent state snapshot shown in the AppState `sub_agents` map.
-///
-/// TS: `state/AppState.tsx` `subAgents: Record<string, SubAgentState>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubAgentState {
     pub agent_id: String,
@@ -137,8 +126,6 @@ pub struct SubAgentState {
 }
 
 /// Reason why an agent became idle.
-///
-/// TS: `IdleNotificationMessage.idleReason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IdleReason {
@@ -150,9 +137,6 @@ pub enum IdleReason {
 /// Inter-agent envelope for the mailbox system. Renamed from the original
 /// `AppState`-local `AgentMessage` to avoid collision with the unrelated
 /// [`crate::ThreadItemDetails::AgentMessage`] streaming-content variant.
-///
-/// TS: `utils/swarm/permissionSync.ts` `SwarmPermissionRequest` envelope
-/// shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeammateProtocolMessage {
     pub from_agent: String,

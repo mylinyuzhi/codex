@@ -92,11 +92,10 @@ impl QueryEngine {
     /// compaction was a no-op (circuit-breaker tripped or no progress).
     /// Caller propagates `Exhausted` to a terminal exit (push synthetic
     /// api_error → `TerminateExhausted` from recovery, or `Bail` from
-    /// the stream-open / mid-stream sites). TS parity: `query.ts:1166-1175`
-    /// — when `reactiveCompact.tryReactiveCompact(...)` returns null,
-    /// surface withheld lastMessage + `executeStopFailureHooks` + return
-    /// `'prompt_too_long'`. Without this signal, the loop would spin until
-    /// `BudgetTracker::Stop` (Finding **R1**).
+    /// the stream-open / mid-stream sites). When reactive compaction returns
+    /// null, surface withheld lastMessage + `executeStopFailureHooks` +
+    /// return `'prompt_too_long'`. Without this signal, the loop would spin
+    /// until `BudgetTracker::Stop` (Finding **R1**).
     pub(crate) async fn handle_context_overflow(
         &self,
         history: &mut MessageHistory,
@@ -149,8 +148,8 @@ impl QueryEngine {
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
     ) -> bool {
-        // Circuit-breaker check (TS reactiveCompact.ts).
-        // If we've already failed 3× in a row, don't keep wasting API calls.
+        // Circuit-breaker check: if we've already failed 3× in a row,
+        // don't keep wasting API calls.
         {
             let state = self.reactive_state.lock().await;
             if !state.should_attempt_reactive_compact() {
@@ -177,8 +176,7 @@ impl QueryEngine {
 
         // Step 0: if staged-collapse is active, try draining staged
         // ranges into commits before falling back to head-truncation.
-        // TS: query.ts:1094 `recoverFromOverflow()` precedes
-        // `truncateHeadForPTLRetry`. Drained commits don't strip
+        // Drained commits don't strip
         // messages here — they only mark them as committed; the next
         // `apply_collapses_if_needed` (run before each prompt build)
         // performs the actual splice. Until that pass is wired, this
@@ -197,7 +195,6 @@ impl QueryEngine {
                 "PTL recovery: drained staged collapses into commits"
             );
             // Persist each drained commit so resume can replay them.
-            // TS: utils/sessionStorage.ts:1541 recordContextCollapseCommit.
             if let (Some(store), Some(sid)) = (&self.transcript_store, &self.transcript_session_id)
             {
                 for entry in &drained {
@@ -278,8 +275,8 @@ impl QueryEngine {
             // Escalate when api_microcompact couldn't free enough — most
             // likely all old tool results are already cleared. Peel oldest
             // API-round groups until we've freed `drop_target` tokens.
-            // TS reactiveCompact.ts: head-truncation falls back here when
-            // the in-place tool-result clear can't recover budget.
+            // Head-truncation falls back here when the in-place tool-result
+            // clear can't recover budget.
             if freed < drop_target
                 && let Some(survivors) =
                     coco_compact::peel_head_for_ptl_retry(history.as_slice(), drop_target - freed)
@@ -337,8 +334,7 @@ impl QueryEngine {
         .await;
 
         // Reactive recovery shares the post-compact-cleanup path with
-        // full / SM compaction (TS commands/compact/compact.ts:201
-        // calls `runPostCompactCleanup()` after `tryReactiveCompact`).
+        // full / SM compaction.
         // We build a synthetic CompactResult — observers in
         // `app/query/src/observers.rs` only inspect `trigger` /
         // `is_main_agent`, not summary content, so empty fields are fine —
@@ -369,11 +365,10 @@ impl QueryEngine {
             .notify_post_compact(history.as_slice())
             .await;
 
-        // Reset the cache-break baseline — TS notifyCompaction(query_source, agent_id).
-        // Reactive shares the `repl_main_thread` tracking key with main loop, so
-        // we use the same source attribution as the API call site. After this,
-        // the next response's lower cache_read tokens won't false-positive
-        // as a break.
+        // Reset the cache-break baseline. Reactive shares the
+        // `repl_main_thread` tracking key with main loop, so use the same
+        // source attribution as the API call site. After this, the next
+        // response's lower cache_read tokens won't false-positive as a break.
         let qs = self.query_source_label();
         self.notify_model_compaction(qs).await;
 
@@ -389,8 +384,7 @@ impl QueryEngine {
             rt.session_memory.clear_after_compact().await;
         }
 
-        // TS `getUnifiedTaskAttachments(ctx)` only fires post-compaction; the
-        // next reminder build consumes (and clears) this flag.
+        // The next reminder build consumes (and clears) this flag.
         self.pending_just_compacted
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
@@ -418,8 +412,7 @@ impl QueryEngine {
     /// `TurnCompleted` is wire-protocol-load-bearing for Rust consumers (no
     /// async-generator-return equivalent in NDJSON RPC) — the Python SDK
     /// iterator, the TUI state machine, and the SDK dispatcher's
-    /// `StreamAccumulator` flush all key on it. The TS reference `query.ts`
-    /// has no analogous wire event; turn-end is signalled by generator return.
+    /// `StreamAccumulator` flush all key on it.
     // Crate-internal helper. `cycle_turn_id` + `stop_reason` are the
     // wire-emit gate; `usage` drives both the protocol payload and the
     // reasoning-metadata side-cache lookup. The per-round `turn_id`
@@ -435,19 +428,14 @@ impl QueryEngine {
         continuation: TurnContinuation,
         cycle_turn_id: Option<coco_types::TurnId>,
         stop_reason: Option<coco_messages::StopReason>,
-        // #3 / TS query.ts:1566-1578: whether a Sleep tool ran in the
-        // just-completed batch. `Later`-priority items (background
-        // task-completion notifications) drain only after a Sleep; else
-        // the boundary drain caps at `Next`.
+        // #3: whether a Sleep tool ran in the just-completed batch.
+        // `Later`-priority items (background task-completion notifications)
+        // drain only after a Sleep; else the boundary drain caps at `Next`.
         sleep_ran: bool,
     ) {
-        // Periodic terminal-task eviction. Fires every turn,
-        // regardless of success / failure / cancellation outcome —
-        // matches TS `applyTaskOffsetsAndEvictions`
-        // (`utils/task/framework.ts:213-249`) cadence inside
-        // `getAttachments`, which TS calls on every turn boundary
-        // regardless of how the turn ended. Without a periodic sweep,
-        // `TaskManager`'s in-memory map grows monotonically over a
+        // Periodic terminal-task eviction. Fires every turn regardless
+        // of success / failure / cancellation outcome. Without a periodic
+        // sweep `TaskManager`'s in-memory map grows monotonically over a
         // long session. The panel-grace gate is enforced inside
         // (`remove_completed` keeps `retain == true` or
         // `evict_after > now` tasks).
@@ -462,10 +450,10 @@ impl QueryEngine {
             }
         }
 
-        // Tool-use-summary side-fork — TS `query.ts:1411-1482` spawns
-        // **immediately** after `query_tool_execution_end`, BEFORE any
-        // post-tool processing (queue drain, microcompact, auto-compact,
-        // memory fan-out). The spawn captures the just-executed batch
+        // Tool-use-summary side-fork spawns **immediately** after
+        // `query_tool_execution_end`, BEFORE any post-tool processing
+        // (queue drain, microcompact, auto-compact, memory fan-out).
+        // The spawn captures the just-executed batch
         // (last assistant + matching tool results) from `history`; any
         // later compaction would summarize history and lose the batch
         // we want to label.
@@ -474,14 +462,14 @@ impl QueryEngine {
         //   * `Feature::ToolUseSummary` enabled (default off — UX polish
         //     that silently degrades on reasoning Fast models)
         //   * model runtime registry wired (Fast role configured)
-        //   * `agent_id.is_none()` (subagent skip — TS query.ts:1419)
+        //   * `agent_id.is_none()` (subagent skip)
         //   * tool batch non-empty (handled inside the spawn helper)
         // Never blocks; failure modes degrade to `None`.
         self.spawn_tool_use_summary(history).await;
 
-        // Post-compact turn counter: TS `query.ts:1524 tracking.turnCounter++`.
-        // No-op when no compact has happened yet (`last_compact_state == None`).
-        // Lock is brief; only ever held at turn boundaries.
+        // Post-compact turn counter: no-op when no compact has happened yet
+        // (`last_compact_state == None`). Lock is brief; only held at turn
+        // boundaries.
         if let Ok(mut guard) = self.last_compact_state.lock()
             && let Some(state) = guard.as_mut()
         {
@@ -499,11 +487,8 @@ impl QueryEngine {
         // channel messages (`QueueOrigin::Channel`). Each item drains
         // into history as a `Message::Attachment` of kind
         // `QueuedCommand` with origin-specific framing prepended via
-        // `wrap_command_text` — TS parity with
-        // `messageQueueManager.ts` (human prompts) +
-        // `getAgentPendingMessageAttachments`
-        // (`attachments.ts:1085-1100`, coordinator messages, all of
-        // which TS surfaces as `attachment.type === 'queued_command'`).
+        // `wrap_command_text` wraps each item (human prompts,
+        // coordinator messages) as `attachment.type === 'queued_command'`.
         // #3: `later`-priority items (background task notifications) drain
         // only when a Sleep tool ran this batch; otherwise cap at `next`.
         let drain_priority = if sleep_ran {
@@ -520,7 +505,7 @@ impl QueryEngine {
         )
         .await;
 
-        // Auto-compaction ladder (mirrors TS query.ts tail-of-turn):
+        // Auto-compaction ladder (tail-of-turn):
         //  0. Time-based microcompact — fire on long inactivity gap so the
         //     next API call doesn't carry stale tool result content.
         //  1. Threshold micro_compact — keep last N compactable tool uses.
@@ -564,10 +549,7 @@ impl QueryEngine {
                     );
                     let post_tb_tokens =
                         coco_messages::estimate_tokens_for_messages(history.as_slice());
-                    // TS does not emit a CompactBoundary for time-based MC —
-                    // it logs an analytics event (`tengu_time_based_microcompact`)
-                    // and leaves the trigger label to the surrounding flow.
-                    // Reuse `Auto` so the boundary trigger taxonomy matches TS;
+                    // Reuse `Auto` for the boundary trigger taxonomy;
                     // the `TimeBased` variant remains for callers that still
                     // want the distinction in custom UIs.
                     let _ = emit_protocol(
@@ -581,10 +563,9 @@ impl QueryEngine {
                         }),
                     )
                     .await;
-                    // TS: microCompact.ts:525 `notifyCacheDeletion` — the
-                    // next response's cache_read drop is from us, not a real
-                    // break. Use the same query_source attribution as the
-                    // main API call so they share the tracking key.
+                    // The next response's cache_read drop is from us, not a
+                    // real break. Use the same query_source attribution as
+                    // the main API call so they share the tracking key.
                     let qs = self.query_source_label();
                     self.notify_model_cache_deletion(qs).await;
                 }
@@ -595,9 +576,8 @@ impl QueryEngine {
         // re-reading the same file, accumulated `[file unchanged]`
         // tool_result placeholders eat tokens for no benefit. Replace
         // with a smaller marker so the next turn's prompt cache stays
-        // healthy. No TS equivalent in external builds — opt-in via
-        // `compact.micro.clear_file_unchanged_stubs_enabled` (default off,
-        // matches TS-feature-stripped behavior).
+        // healthy. Opt-in via
+        // `compact.micro.clear_file_unchanged_stubs_enabled` (default off).
         if self.config.compact.micro.enabled
             && self.config.compact.micro.clear_file_unchanged_stubs_enabled
         {
@@ -619,11 +599,10 @@ impl QueryEngine {
         let tool_calls_last_turn =
             coco_messages::count_tool_calls_in_last_assistant_turn(history.as_slice());
 
-        // Stop-hooks gate (TS `query/stopHooks.ts:136-157`): bare
-        // mode skips the entire post-turn fan-out (promptSuggestion +
-        // extractMemories + sessionMemory + autoDream). Used by
-        // `--bare` SDK / scripted `-p` invocations that don't want
-        // background work after each turn.
+        // Bare mode skips the entire post-turn fan-out (promptSuggestion +
+        // extractMemories + sessionMemory + autoDream). Used by `--bare`
+        // SDK / scripted `-p` invocations that don't want background work
+        // after each turn.
         let bare_mode_active = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode);
 
         // Auto-memory turn-end fan-out — black-boxed through
@@ -692,11 +671,9 @@ impl QueryEngine {
             );
         }
         if auto_compact_needed {
-            // Step 1: threshold micro_compact (count-based). TS external
-            // doesn't run this — `microcompactMessages` is a no-op outside
-            // `feature('CACHED_MICROCOMPACT')`. Opt-in via
+            // Step 1: threshold micro_compact (count-based). Opt-in via
             // `compact.micro.count_based_enabled` (default off). When off,
-            // we go straight to SM/LLM compaction below.
+            // go straight to SM/LLM compaction below.
             let pre_count = history.len() as i32;
             let pre_micro_tokens = estimated_tokens;
             if self.config.compact.micro.enabled && self.config.compact.micro.count_based_enabled {
@@ -725,9 +702,8 @@ impl QueryEngine {
             .await;
 
             if removed > 0 {
-                // Auto micro_compact mutated tool result content — TS
-                // notifyCacheDeletion semantics. Suppresses the false-
-                // positive cache-break warning on the next API call.
+                // Auto micro_compact mutated tool result content — suppress
+                // the false-positive cache-break warning on the next API call.
                 let qs = self.query_source_label();
                 self.notify_model_cache_deletion(qs).await;
             }
@@ -862,20 +838,16 @@ impl QueryEngine {
     /// `TurnCompleted` emission so text-only exits can run promptSuggestion
     /// after cache save but before closing the protocol turn.
     pub(crate) async fn flush_successful_turn_state(&self, history: &mut MessageHistory) {
-        // D8: snapshot post-turn cache-safe params for future
-        // post-turn fork features (`/btw`, `promptSuggestion`,
-        // `postTurnSummary`). TS parity: `handleStopHooks` calls
-        // `saveCacheSafeParams` here. Helper handles the empty-history
-        // skip + serialisation.
+        // D8: snapshot post-turn cache-safe params for future post-turn
+        // fork features (`/btw`, `promptSuggestion`, `postTurnSummary`).
+        // Helper handles the empty-history skip + serialisation.
         self.save_post_turn_cache_params(history).await;
 
         // Per-turn JSONL transcript append. Walks `history` and writes
         // any user/assistant/system/attachment message whose uuid isn't
         // already in the cross-engine dedup set. Skips silently when
         // the store / session id / dedup set aren't all wired (e.g.
-        // tests, headless runs without persistence). TS parity:
-        // `Project.recordTranscript` flushes the message list through a
-        // single deduping writer instead of splitting by tool/text turns.
+        // tests, headless runs without persistence).
         self.record_transcript_tail(history).await;
     }
 
@@ -1019,10 +991,10 @@ impl QueryEngine {
     /// [`LiveTranscript`]: coco_tool_runtime::LiveTranscript
     pub(crate) async fn record_transcript_tail(&self, history: &MessageHistory) {
         // Publish the post-turn message history to the live sink read by
-        // the AgentSummary timer (TS `agentSummary.ts` `getAgentTranscript`).
-        // Independent of the durable transcript store below — a sub-agent
-        // may have a live reader without a `transcript_store` wired, and the
-        // main loop has the store but no live reader.
+        // the AgentSummary timer. Independent of the durable transcript
+        // store below — a sub-agent may have a live reader without a
+        // `transcript_store` wired, and the main loop has the store but
+        // no live reader.
         if let Some(live) = self.live_transcript.as_ref() {
             live.set(history.iter().cloned().collect());
         }
@@ -1038,10 +1010,10 @@ impl QueryEngine {
         let mut seen_guard = seen.lock().await;
         let cwd_path = std::env::current_dir().unwrap_or_default();
         let cwd = cwd_path.display().to_string();
-        // TS-parity: `sessionStorage.ts:1013-1019` captures `getBranch()`
-        // once per chain and stamps it on every line. Treat a git
-        // failure (not in a repo, command missing) as `None` so the
-        // field is omitted rather than producing an empty string.
+        // Capture the git branch once per chain and stamp it on every
+        // line. Treat a git failure (not in a repo, command missing) as
+        // `None` so the field is omitted rather than producing an empty
+        // string.
         let git_branch = coco_git::get_current_branch(&cwd_path)
             .ok()
             .flatten()
@@ -1070,16 +1042,11 @@ impl QueryEngine {
     /// [`QueryEngine::pending_tool_use_summary`] so the await site at
     /// the top of the next `run_session_loop` iteration can drain it.
     ///
-    /// TS parity: `query.ts:1411-1482` spawns
-    /// `generateToolUseSummary({ tools, signal, lastAssistantText, … })`
-    /// and stashes the Promise on `nextPendingToolUseSummary`.
-    ///
     /// Silently no-ops when:
     ///   * `Feature::ToolUseSummary` is disabled (default — see
     ///     `coco_types::features` for the rationale)
     ///   * `model_runtimes` is `None` (no registry wired)
-    ///   * `agent_id` is `Some` (subagent skip — mirrors TS
-    ///     `!toolUseContext.agentId` at query.ts:1419)
+    ///   * `agent_id` is `Some` (subagent skip)
     ///   * `history` has no tool calls in the last assistant turn
     ///     (nothing to summarize)
     ///
@@ -1128,8 +1095,7 @@ impl QueryEngine {
     /// for SDK consumers; the TUI side-caches the payload without
     /// writing it to `MessageHistory` (per I-3: tool-use summaries are
     /// UI-only polish and must not pollute the authoritative
-    /// transcript). On `None` / join-error, silent skip — TS parity
-    /// `.catch(() => null)` at query.ts:1481.
+    /// transcript). On `None` / join-error, silent skip.
     ///
     /// **No drain-side timeout, no drain-side cancel guard**:
     ///
@@ -1144,10 +1110,8 @@ impl QueryEngine {
     ///   the inner future is dropped and the handle resolves to
     ///   `Ok(None)` near-instantly. The drain just awaits.
     ///
-    /// TS parity: `await pendingToolUseSummary` at query.ts:1056 has
-    /// no timeout — the expected case (per TS line 1054 comment) is
-    /// "haiku (~1s) resolved during model streaming (5-30s)" so the
-    /// await is a no-op in practice.
+    /// The expected case is that the Fast-role model resolves during
+    /// model streaming so the await is a no-op in practice.
     pub(crate) async fn drain_pending_tool_use_summary(
         &self,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
@@ -1189,9 +1153,8 @@ impl QueryEngine {
     /// - dispatch error (transport crash etc.)
     /// - empty / placeholder-only response from the model
     ///
-    /// TS parity: `query.ts` calls `handleStopHooks()` only when the
-    /// assistant did not request follow-up tool execution; `stopHooks.ts`
-    /// then starts `executePromptSuggestion()` under the non-bare gate.
+    /// Only spawns when the assistant did not request follow-up tool
+    /// execution (equivalent to the non-bare gate).
     pub(crate) async fn maybe_spawn_prompt_suggestion_after_stop(
         &self,
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
@@ -1207,9 +1170,8 @@ impl QueryEngine {
             .await;
     }
 
-    /// TS parity: `services/PromptSuggestion/promptSuggestion.ts`
-    /// calls `runForkedAgent` with the bespoke suggestion prompt as a
-    /// user message and `effort: undefined` (cache parity preserved).
+    /// Runs a one-shot forked agent with the bespoke suggestion prompt
+    /// as a user message; `effort: undefined` preserves cache parity.
     async fn spawn_prompt_suggestion_task(
         &self,
         app_state: std::sync::Arc<tokio::sync::RwLock<coco_types::ToolAppState>>,
@@ -1227,9 +1189,7 @@ impl QueryEngine {
         // Build the 9-step `SuggestionContext` from the parent's
         // cache + app_state snapshot BEFORE spawning. The pre-fork
         // guards (TooFewTurns / ApiError / CacheCold / suppress
-        // reasons) save the API round-trip when they fire — TS
-        // parity: `services/PromptSuggestion/promptSuggestion.ts:136-163`
-        // runs these checks before `generateSuggestion`.
+        // reasons) save the API round-trip when they fire.
         let ctx = build_suggestion_context(
             &cache,
             &app_state,
@@ -1245,9 +1205,8 @@ impl QueryEngine {
             return;
         }
 
-        // TS `currentAbortController` singleton: cancel any prior
-        // in-flight suggestion fork before starting a new one. This
-        // means rapid `/clear` cycles don't accumulate fork tasks
+        // Cancel any prior in-flight suggestion fork before starting a
+        // new one — rapid `/clear` cycles don't accumulate fork tasks
         // burning tokens. Allocate a fresh token, store it under the
         // session-scoped slot, hand a clone to the spawn so the next
         // spawn can cancel cleanly.
@@ -1270,8 +1229,7 @@ impl QueryEngine {
                 return;
             }
             // Install deny-all canUseTool so the fork can't actually
-            // invoke tools (TS: `runForkedAgent({canUseTool: deny-all})`
-            // at promptSuggestion.ts:302-306).
+            // invoke tools.
             let mut options = crate::forked_agent::ForkedAgentOptions::for_label(
                 coco_types::ForkLabel::PromptSuggestion,
             );
@@ -1282,19 +1240,18 @@ impl QueryEngine {
             let prompt = crate::prompt_suggestion::build_suggestion_system_prompt().to_string();
             // The fork sees the parent's system prompt/cache-key
             // params unchanged; the suggestion instruction is appended
-            // as the fork's user message, matching TS runForkedAgent.
+            // as the fork's user message.
             let result = dispatcher.dispatch(&cache, &options, &prompt, None).await;
             match result {
                 Ok(r) => {
-                    // Multi-message text walk (TS:332-349 — "model
-                    // may loop (try tool → denied → text in next
-                    // message)"). Walks every assistant message and
-                    // finds the first non-empty text block.
+                    // Multi-message text walk — model may loop (try
+                    // tool → denied → text in next message). Walks
+                    // every assistant message and finds the first
+                    // non-empty text block.
                     let generation =
                         crate::prompt_suggestion::extract_suggestion_generation(&r.messages);
                     // Post-fork validation (steps 7-9): aborted /
-                    // empty / NONE / 12-rule filter. TS:
-                    // promptSuggestion.ts:171-181.
+                    // empty / NONE / 12-rule filter.
                     let aborted_after = abort_for_task.is_cancelled();
                     if let Some(outcome) = crate::prompt_suggestion::post_fork_validation(
                         &generation.text,
@@ -1389,8 +1346,7 @@ impl QueryEngine {
         // Gap 4 — direct-edit toast. Walk the just-finished assistant
         // turn for Write/Edit/NotebookEdit calls and pair each with its
         // matching ToolResult so memory's `classify_written_path` pass
-        // can decide whether to emit a `ManualEdit` notice. TS parity:
-        // `services/useMemoryUpdateNotification` (UI post-write hook).
+        // can decide whether to emit a `ManualEdit` notice.
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let recent_tool_writes = extract_recent_tool_writes(history.as_slice(), &cwd);
 
@@ -1423,12 +1379,11 @@ impl QueryEngine {
 ///
 /// Success is read off `ToolResultMessage.is_error` — the only signal
 /// the engine reliably has post-execution. Skipping failed writes
-/// matches TS, which only fires the post-write hook on successful
-/// file mutations.
+/// means only successful file mutations trigger classification.
 ///
 /// Relative paths are anchored to `cwd` so the downstream
 /// `is_within_memory_dir` check (which canonicalises) sees an absolute
-/// path. Mirrors the resolution rule already used by `main_agent_wrote_memory`.
+/// path, consistent with `main_agent_wrote_memory`.
 fn extract_recent_tool_writes<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
     cwd: &std::path::Path,
@@ -1516,8 +1471,7 @@ fn extract_recent_tool_writes<M: std::borrow::Borrow<coco_messages::Message>>(
 /// `assistant_turn_count` and `last_response_was_api_error` come from
 /// deserializing the cache slot's `fork_context_messages`;
 /// `parent_uncached_tokens` is the last assistant's
-/// `input - cache_read_input + output` tokens (TS
-/// `getParentCacheSuppressReason`). Other fields come from
+/// `input - cache_read_input + output` tokens. Other fields come from
 /// `ToolAppState`.
 async fn build_suggestion_context(
     cache: &coco_types::CacheSafeParams,
@@ -1603,7 +1557,6 @@ async fn build_suggestion_context(
 /// for `AgentSpawnRequest::fork_context_messages`. When `last_cursor`
 /// is `None` (first extraction), return the full history.
 ///
-/// TS parity: `messagesSinceCursor` in `services/extractMemories/`.
 /// Takes the engine's already-shared `Arc<Message>` slice and
 /// `Arc::clone`s each entry — no deep `Message` body clones at
 /// this seam.
@@ -1623,8 +1576,7 @@ fn arc_messages_since(
     slice.to_vec()
 }
 
-/// Count user + assistant messages strictly after `since_uuid` —
-/// TS `countModelVisibleMessagesSince` (`extractMemories.ts:82-110`).
+/// Count user + assistant messages strictly after `since_uuid`.
 /// "Model-visible" = anything sent in API calls; excludes progress,
 /// system, attachment, tombstone, tool_use_summary. Threaded into
 /// the extraction agent's prompt so the "~N messages" guidance is
@@ -1632,8 +1584,8 @@ fn arc_messages_since(
 ///
 /// Fall-through: when `since_uuid` is `None` or doesn't match any
 /// message in `messages` (e.g. compaction trimmed the cursor), count
-/// the whole history — matches TS so a stale cursor doesn't permanently
-/// zero the count.
+/// the whole history so a stale cursor doesn't permanently zero the
+/// count.
 fn count_model_visible_since<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
     since_uuid: Option<&str>,
@@ -1660,10 +1612,9 @@ fn count_model_visible_since<M: std::borrow::Borrow<coco_messages::Message>>(
 
 /// Count cumulative `tool_use` blocks across all assistant messages
 /// strictly after `since_uuid` (or all messages when the cursor is
-/// `None` / not found). TS parity with `countToolCallsSince`
-/// (`services/SessionMemory/sessionMemory.ts:108-132`) — the gate
-/// signal SessionMemoryService uses to decide if enough work has
-/// accumulated since the last extraction.
+/// `None` / not found). This is the gate signal `SessionMemoryService`
+/// uses to decide if enough work has accumulated since the last
+/// extraction.
 fn count_tool_calls_since<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
     since_uuid: Option<&str>,
@@ -1701,11 +1652,9 @@ fn count_tool_calls_since<M: std::borrow::Borrow<coco_messages::Message>>(
 /// Detect whether any assistant turn since `since_uuid` wrote into the
 /// memory directory via Write / Edit / NotebookEdit. Used by
 /// `ExtractService::maybe_extract` to skip extraction when the user
-/// just curated memory directly — TS `hasMemoryWritesSince`
-/// (`extractMemories.ts:121-148`). When `since_uuid` is `None` (or
+/// just curated memory directly. When `since_uuid` is `None` (or
 /// the cursor uuid isn't found, e.g. compaction trimmed it), walk the
-/// entire history — matches TS's fall-through that scans all
-/// messages so a stale cursor doesn't permanently mask writes.
+/// entire history so a stale cursor doesn't permanently mask writes.
 fn main_agent_wrote_memory<M: std::borrow::Borrow<coco_messages::Message>>(
     messages: &[M],
     memory_dir: &std::path::Path,

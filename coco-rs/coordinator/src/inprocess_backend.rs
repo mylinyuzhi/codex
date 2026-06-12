@@ -1,7 +1,5 @@
 //! In-process teammate executor — wraps [`crate::runner::InProcessAgentRunner`].
 //!
-//! TS: `InProcessBackend` in `utils/swarm/backends/InProcessBackend.ts`.
-//!
 //! Implements [`crate::pane::TeammateExecutor`] so the coordinator's
 //! `BackendRegistry` can hold it as a trait object.
 

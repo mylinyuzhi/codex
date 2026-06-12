@@ -18,18 +18,16 @@ pub(crate) struct ToolInputNormalizationContext<'a> {
 /// Normalize assistant-emitted tool input before it reaches transcript,
 /// stream events, hooks, permission, and execution.
 ///
-/// TS parity: `utils/api.ts::normalizeToolInput`. Per-tool branches
-/// mirror the TS switch:
+/// Per-tool branches:
 ///
 /// - `ExitPlanMode` — inject `plan` + `planFilePath` so hooks/SDK
 ///   observe the plan content the tool will load from disk. The
 ///   matching strip step lives in `coco_messages::normalize` so the
 ///   wire schema (empty input) stays clean.
 /// - `Bash` — strip a leading `cd $cwd && ` prefix and rewrite `\\;`
-///   into `\;` (find-exec quoting fix). Mirrors TS `BashTool` arm.
+///   into `\;` (find-exec quoting fix).
 /// - `TaskOutput` — alias-map `agentId` / `bash_id` → `task_id` and
-///   `wait_up_to` (seconds) → `timeout` (ms). Mirrors TS
-///   `TASK_OUTPUT_TOOL_NAME` arm.
+///   `wait_up_to` (seconds) → `timeout` (ms).
 ///
 /// FileEdit normalization is intentionally **not** ported here: the TS
 /// branch reads the target file from disk to fuzz-match `old_string`

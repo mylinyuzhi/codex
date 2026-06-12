@@ -1,7 +1,5 @@
 //! Marketplace manager — search, install, and recommend plugins.
 //!
-//! TS: utils/plugins/marketplaceManager.ts + hintRecommendation.ts +
-//! installCounts.ts + officialMarketplace.ts
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -23,16 +21,16 @@ use crate::schemas::validate_marketplace_name;
 use crate::schemas::validate_official_name_source;
 
 // ---------------------------------------------------------------------------
-// Official marketplace constants (TS: officialMarketplace.ts)
+// Official marketplace constants
 // ---------------------------------------------------------------------------
 
-/// Official marketplace name (TS: `OFFICIAL_MARKETPLACE_NAME`).
+/// Official marketplace name.
 pub const OFFICIAL_MARKETPLACE_NAME: &str = "claude-plugins-official";
 
-/// Official marketplace GitHub organization (TS: `OFFICIAL_GITHUB_ORG`).
+/// Official marketplace GitHub organization.
 pub const OFFICIAL_GITHUB_ORG: &str = "anthropics";
 
-/// Official marketplace source (TS: `OFFICIAL_MARKETPLACE_SOURCE`).
+/// Official marketplace source.
 pub fn official_marketplace_source() -> MarketplaceSource {
     MarketplaceSource::Github {
         repo: format!("{OFFICIAL_GITHUB_ORG}/{OFFICIAL_MARKETPLACE_NAME}"),
@@ -42,13 +40,11 @@ pub fn official_marketplace_source() -> MarketplaceSource {
     }
 }
 
-/// CDN download base URL for official marketplace (TS: officialMarketplaceGcs.ts).
+/// CDN download base URL for official marketplace.
 pub const OFFICIAL_CDN_BASE: &str =
     "https://downloads.claude.ai/claude-code-releases/plugins/claude-plugins-official";
 
 /// Names reserved for official Anthropic marketplaces.
-///
-/// TS: `ALLOWED_OFFICIAL_MARKETPLACE_NAMES` in officialMarketplace.ts.
 pub const ALLOWED_OFFICIAL_MARKETPLACE_NAMES: &[&str] = &[
     "claude-code-marketplace",
     "claude-code-plugins",
@@ -63,7 +59,7 @@ pub const ALLOWED_OFFICIAL_MARKETPLACE_NAMES: &[&str] = &[
 /// Reserved marketplace names that cannot be used by third parties.
 pub const RESERVED_MARKETPLACE_NAMES: &[&str] = &["inline", "builtin"];
 
-/// Name used for built-in plugins (TS: `BUILTIN_MARKETPLACE_NAME`).
+/// Name used for built-in plugins.
 pub const BUILTIN_MARKETPLACE_NAME: &str = "builtin";
 
 /// Check if a marketplace name belongs to the official Anthropic set.
@@ -72,8 +68,6 @@ pub fn is_official_marketplace_name(name: &str) -> bool {
 }
 
 /// Parse a fully-qualified plugin ID ("name@marketplace") into parts.
-///
-/// TS: `parsePluginIdentifier()` in pluginIdentifier.ts.
 pub fn parse_plugin_id(plugin_id: &str) -> Option<(&str, &str)> {
     plugin_id.split_once('@')
 }
@@ -137,7 +131,6 @@ impl MarketplacePlugin {
 
 /// A recommendation surfaced by the hint system.
 ///
-/// TS: `PluginHintRecommendation` in hintRecommendation.ts.
 /// Recommends a plugin when a CLI/SDK emits a `<claude-code-hint />` tag
 /// referencing a plugin ID.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -155,14 +148,12 @@ pub struct PluginRecommendation {
 }
 
 // ---------------------------------------------------------------------------
-// Plugin hint recommendation pipeline (TS: hintRecommendation.ts)
+// Plugin hint recommendation pipeline
 // ---------------------------------------------------------------------------
 
 /// Hard cap on `claude_code_hints.plugin[]` — bounds config growth. Each
 /// shown plugin appends one slug; past this point we stop prompting (and
 /// stop appending) rather than let the config grow without limit.
-///
-/// TS: `MAX_SHOWN_PLUGINS` in hintRecommendation.ts.
 pub const MAX_SHOWN_PLUGINS: usize = 100;
 
 /// Pre-store gate called by shell tools when a `type="plugin"` hint is
@@ -185,13 +176,11 @@ pub const MAX_SHOWN_PLUGINS: usize = 100;
 /// already-installed check). When `None`, the installed check is skipped
 /// (best-effort; the resolve step still gates on cache membership).
 ///
-/// TS: `maybeRecordPluginHint(hint)`.
 pub fn maybe_record_plugin_hint(
     hint: &crate::hints::ClaudeCodeHint,
     installed: Option<&crate::loader::InstalledPluginsManager>,
 ) {
-    // Feature gate. TS: `getFeatureValue('tengu_lapis_finch', false)`. coco-rs
-    // has no GrowthBook; the behavior defaults on and is opt-out via the
+    // Feature gate: behavior defaults on and is opt-out via the
     // persisted `disabled` flag (checked below). See followups.
     if crate::hints::has_shown_hint_this_session() {
         return;
@@ -207,14 +196,14 @@ pub fn maybe_record_plugin_hint(
     }
 
     let plugin_id = hint.value.as_str();
-    // TS `parsePluginIdentifier`: first '@' splits name@marketplace.
+    // First '@' splits name@marketplace.
     let Some((name, marketplace)) = plugin_id.split_once('@') else {
         return;
     };
     if name.is_empty() || marketplace.is_empty() {
         return;
     }
-    // TS `isOfficialMarketplaceName` lowercases before checking the set.
+    // Lowercase before checking the official names set.
     if !is_official_marketplace_name(&marketplace.to_lowercase()) {
         return;
     }
@@ -238,10 +227,6 @@ pub fn maybe_record_plugin_hint(
 }
 
 /// Whether a plugin is force-disabled by org policy (managed settings).
-///
-/// TS: `isPluginBlockedByPolicy(pluginId)` in pluginPolicy.ts —
-/// `getSettingsForSource('policySettings')?.enabledPlugins?.[id] === false`.
-/// Reuses the existing managed-settings [`crate::security::EnterprisePolicy`].
 pub fn is_plugin_blocked_by_policy(plugin_id: &str) -> bool {
     let policy = crate::security::EnterprisePolicy::from_managed_settings();
     let id = crate::identifier::PluginId::parse(plugin_id);
@@ -254,8 +239,6 @@ pub fn is_plugin_blocked_by_policy(plugin_id: &str) -> bool {
 /// Resolve the pending hint to a renderable recommendation. Runs the
 /// marketplace lookup that the sync pre-store gate skipped. Returns `None`
 /// if the plugin isn't in the marketplace cache — the hint is discarded.
-///
-/// TS: `resolvePluginHint(hint)`.
 pub fn resolve_plugin_hint(
     hint: &crate::hints::ClaudeCodeHint,
     manager: &MarketplaceManager,
@@ -277,8 +260,6 @@ pub fn resolve_plugin_hint(
 /// Record that a prompt for this plugin was surfaced. Called regardless of
 /// the user's yes/no response — show-once semantics. Best-effort: persistence
 /// failures are swallowed (hint state is opportunistic).
-///
-/// TS: `markHintPluginShown(pluginId)`.
 pub fn mark_hint_plugin_shown(plugin_id: &str) {
     let mut global = match coco_config::global_config::load_global_config() {
         Ok(g) => g,
@@ -296,8 +277,6 @@ pub fn mark_hint_plugin_shown(plugin_id: &str) {
 
 /// Set the opt-out flag when the user picks "don't show plugin installation
 /// hints again". Best-effort persistence.
-///
-/// TS: `disableHintRecommendations()`.
 pub fn disable_hint_recommendations() {
     let mut global = match coco_config::global_config::load_global_config() {
         Ok(g) => g,
@@ -733,13 +712,10 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> crate::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Plugin delisting detection (TS: pluginBlocklist.ts + pluginFlagging.ts)
+// Plugin delisting detection
 // ---------------------------------------------------------------------------
 
 /// Detect plugins installed from a marketplace that are no longer listed there.
-///
-/// TS: `detectDelistedPlugins()` in `pluginBlocklist.ts` -- compares installed
-/// plugins against marketplace manifest to find removed plugins.
 ///
 /// Returns plugin IDs in `"name@marketplace"` format that have been delisted.
 pub fn detect_delisted_plugins(
@@ -768,8 +744,6 @@ pub fn detect_delisted_plugins(
 }
 
 /// Record of a delisted plugin for flagging.
-///
-/// TS: `pluginFlagging.ts` -- tracks plugins removed from marketplace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlaggedPlugin {
     pub plugin_id: String,
@@ -818,14 +792,12 @@ pub fn flag_delisted_plugin(
 /// Startup delisting sweep: uninstall every plugin installed from a known
 /// marketplace that is no longer listed in that marketplace's current manifest.
 ///
-/// TS: `detectAndUninstallDelistedPlugins()` (`utils/plugins/pluginBlocklist.ts`),
-/// called from `installPluginsForHeadless` and the interactive startup. For each
-/// known marketplace it diffs the installed ledger against the cached manifest,
-/// flags newly-delisted plugins (`flagged_plugins.json`), removes them from the
-/// installed ledger, and persists. A marketplace whose manifest can't be read is
-/// skipped (a fetch failure must never nuke installed plugins). `config_home` is
-/// the coco config root; the plugins dir is `<config_home>/plugins`. Returns the
-/// uninstalled plugin ids (`name@marketplace`).
+/// For each known marketplace it diffs the installed ledger against the cached
+/// manifest, flags newly-delisted plugins (`flagged_plugins.json`), removes them
+/// from the installed ledger, and persists. A marketplace whose manifest can't be
+/// read is skipped (a fetch failure must never nuke installed plugins).
+/// `config_home` is the coco config root; the plugins dir is
+/// `<config_home>/plugins`. Returns the uninstalled plugin ids (`name@marketplace`).
 pub fn detect_and_uninstall_delisted_plugins(config_home: &Path) -> Vec<String> {
     let plugins_dir = config_home.join("plugins");
     let installed_path = plugins_dir.join("installed_plugins.json");
@@ -868,12 +840,10 @@ pub fn detect_and_uninstall_delisted_plugins(config_home: &Path) -> Vec<String> 
 }
 
 // ---------------------------------------------------------------------------
-// Plugin auto-update (TS: pluginAutoupdate.ts)
+// Plugin auto-update
 // ---------------------------------------------------------------------------
 
 /// Auto-update check result for a single plugin.
-///
-/// TS: `pluginAutoupdate.ts` -- checks version, triggers update.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoUpdateCheck {
     pub plugin_id: String,
@@ -883,14 +853,12 @@ pub struct AutoUpdateCheck {
 }
 
 // ---------------------------------------------------------------------------
-// Seed marketplaces + reconcile-on-startup (TS: marketplaceManager.ts +
-// reconciler.ts, the file-config slice of installPluginsForHeadless)
+// Seed marketplaces + reconcile-on-startup
 // ---------------------------------------------------------------------------
 
 /// Read-only plugin seed directories from `COCO_PLUGIN_SEED_DIR`
 /// (PATH-delimited, precedence order). Empty when unset. Seed dirs are expected
-/// to be absolute (the container-image use case); no tilde expansion. TS
-/// `getPluginSeedDirs`.
+/// to be absolute (the container-image use case); no tilde expansion.
 pub fn get_plugin_seed_dirs() -> Vec<PathBuf> {
     let Some(raw) = coco_config::env::env_opt(coco_config::EnvKey::CocoPluginSeedDir) else {
         return Vec::new();
@@ -908,7 +876,7 @@ fn read_seed_known_marketplaces(seed_dir: &Path) -> Option<KnownMarketplacesFile
 /// Resolve a seed marketplace's on-disk location relative to THIS seed dir
 /// (not the build-time path baked into the seed JSON). Returns the first of
 /// `<seed>/marketplaces/<name>` (dir) or `<seed>/marketplaces/<name>.json` that
-/// exists. TS `findSeedMarketplaceLocation`.
+/// exists.
 fn find_seed_marketplace_location(seed_dir: &Path, name: &str) -> Option<PathBuf> {
     let base = seed_dir.join("marketplaces");
     let candidates = [base.join(name), base.join(format!("{name}.json"))];
@@ -920,7 +888,7 @@ fn find_seed_marketplace_location(seed_dir: &Path, name: &str) -> Option<PathBuf
 /// dirs; seed entries win over the primary (admin-managed, baked into the image).
 /// `install_location` is recomputed from the runtime seed dir; `auto_update` is
 /// forced off (seed is read-only). Returns true if anything changed (caller
-/// should clear caches). TS `registerSeedMarketplaces`.
+/// should clear caches).
 pub fn register_seed_marketplaces(plugins_dir: &Path) -> bool {
     register_seed_marketplaces_from(plugins_dir, &get_plugin_seed_dirs())
 }
@@ -984,8 +952,7 @@ fn register_seed_marketplaces_from(plugins_dir: &Path, seed_dirs: &[PathBuf]) ->
 /// User-declared marketplaces from settings.json `extraKnownMarketplaces`
 /// (name → source). The implicit official marketplace is intentionally NOT
 /// included here — it is owned by [`crate::official::ensure_official_marketplace`]
-/// (retry/backoff-gated). TS `getDeclaredMarketplaces` (the explicit-extras
-/// slice).
+/// (retry/backoff-gated).
 pub fn get_declared_marketplaces(config_home: &Path) -> HashMap<String, MarketplaceSource> {
     let mut out = HashMap::new();
     let Ok(raw) = std::fs::read_to_string(config_home.join("settings.json")) else {
@@ -1016,8 +983,8 @@ pub fn get_declared_marketplaces(config_home: &Path) -> HashMap<String, Marketpl
 /// materialized state: fetch + register any declared marketplace not present in
 /// `known_marketplaces.json`, or whose source changed. Best-effort, idempotent,
 /// additive — a fetch failure logs + skips (never aborts the rest). Returns the
-/// names installed/updated. TS `reconcileMarketplaces` (the file-declared slice;
-/// the implicit official marketplace is handled separately).
+/// names installed/updated. The implicit official marketplace is handled
+/// separately.
 pub async fn reconcile_marketplaces(plugins_dir: &Path, config_home: &Path) -> Vec<String> {
     let declared = get_declared_marketplaces(config_home);
     if declared.is_empty() {
@@ -1050,10 +1017,10 @@ pub async fn reconcile_marketplaces(plugins_dir: &Path, config_home: &Path) -> V
     done
 }
 
-/// Startup marketplace maintenance (TS `installPluginsForHeadless` minus the
-/// CCR zip-cache): register seed marketplaces, reconcile declared marketplaces,
-/// then uninstall delisted plugins. Best-effort + idempotent — safe to call
-/// fire-and-forget after [`crate::official::ensure_official_marketplace`].
+/// Startup marketplace maintenance: register seed marketplaces, reconcile
+/// declared marketplaces, then uninstall delisted plugins. Best-effort +
+/// idempotent — safe to call fire-and-forget after
+/// [`crate::official::ensure_official_marketplace`].
 /// Returns the delisted plugin ids (for logging).
 pub async fn run_marketplace_startup(config_home: &Path) -> Vec<String> {
     let plugins_dir = config_home.join("plugins");
@@ -1066,8 +1033,6 @@ pub async fn run_marketplace_startup(config_home: &Path) -> Vec<String> {
 const NO_AUTO_UPDATE_OFFICIAL: &[&str] = &["knowledge-work-plugins"];
 
 /// Check if auto-update is enabled for a marketplace.
-///
-/// TS: `isMarketplaceAutoUpdate()` in schemas.ts.
 pub fn is_marketplace_auto_update(marketplace_name: &str, explicit_setting: Option<bool>) -> bool {
     if let Some(setting) = explicit_setting {
         return setting;

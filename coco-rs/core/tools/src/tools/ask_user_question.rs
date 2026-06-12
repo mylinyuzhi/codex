@@ -1,8 +1,5 @@
 //! AskUserQuestionTool — structured multi-choice questions to the user.
 //!
-//! TS: `tools/AskUserQuestionTool/AskUserQuestionTool.tsx`,
-//!     `tools/AskUserQuestionTool/prompt.ts`.
-//!
 //! The tool returns the questions payload as its result; the TUI/CLI layer
 //! intercepts, presents the interactive overlay (see
 //! `app/tui/src/render_overlays/question.rs`), collects answers, and fills
@@ -55,20 +52,15 @@ pub struct AskUserQuestionInput {
     pub metadata: Option<Value>,
 }
 
-/// Short description shown in tool-catalog listings / `tools.ts`.
-///
-/// TS: `AskUserQuestionTool/prompt.ts:7` `DESCRIPTION`.
+/// Short description shown in tool-catalog listings.
 const ASK_USER_QUESTION_DESCRIPTION: &str = "Asks the user multiple choice questions to gather information, \
      clarify ambiguity, understand preferences, make decisions or offer \
      them choices.";
 
-/// Full system-prompt contribution for the tool. TS:
-/// `AskUserQuestionTool/prompt.ts:32-44` + markdown variant of
-/// `PREVIEW_FEATURE_PROMPT` (HTML variant only matters to web UIs).
+/// Full system-prompt contribution for the tool.
 ///
 /// `ExitPlanMode` is interpolated via `ToolName::ExitPlanMode.as_str()`
-/// — matches TS's `EXIT_PLAN_MODE_TOOL_NAME` constant interpolation and
-/// follows the "no hardcoded strings for closed sets" rule.
+/// — follows the "no hardcoded strings for closed sets" rule.
 static ASK_USER_QUESTION_PROMPT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     let exit = coco_types::ToolName::ExitPlanMode.as_str();
     format!(
@@ -100,8 +92,7 @@ Preview content is rendered as markdown in a monospace box. Multi-line text with
 
 /// Max display width of a question's `header` chip — mirrored in the schema
 /// description below and the TUI renderer's chip truncation
-/// (`app/tui::presentation::request::chip`). TS:
-/// `AskUserQuestionTool/prompt.ts` `ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12`.
+/// (`app/tui::presentation::request::chip`).
 const ASK_USER_QUESTION_CHIP_WIDTH: usize = 12;
 
 pub struct AskUserQuestionTool;
@@ -176,9 +167,7 @@ impl Tool for AskUserQuestionTool {
                     // `PermissionOutcome::Allow.updated_input` BEFORE `tool_call_preparer`
                     // re-validates the rewritten input. Declaring them here keeps
                     // schema validation green; the model itself is not expected to
-                    // populate these — the prompt teaches it to emit `questions`
-                    // only. TS parity: `mapToolResultToToolResultBlockParam` reads
-                    // `answers` and `annotations` from the result envelope.
+                    // populate these — the prompt teaches it to emit `questions` only.
                     "answers": {
                         "type": "object",
                         "description": "(Internal) User-supplied answers, spliced by the host before invocation. Map of question text → selected option label.",
@@ -189,7 +178,6 @@ impl Tool for AskUserQuestionTool {
                         "description": "(Internal) Per-question annotations (preview / notes), spliced by the host before invocation.",
                         "additionalProperties": { "type": "object" }
                     },
-                    // TS `commonFields.metadata` (AskUserQuestionTool.tsx:58-60).
                     // Optional analytics-tracking blob the model may emit alongside
                     // the question (e.g. `{source: "remember"}` for the /remember
                     // command). Echoed straight through to logs; never user-visible.
@@ -230,7 +218,6 @@ impl Tool for AskUserQuestionTool {
         true
     }
 
-    /// TS `AskUserQuestionTool.tsx`: `isConcurrencySafe() { return true }`.
     /// Multiple questions issued in the same turn are presented together by
     /// the TUI, so the executor can batch them concurrently rather than
     /// serializing.
@@ -279,9 +266,9 @@ impl Tool for AskUserQuestionTool {
         ValidationResult::Valid
     }
 
-    /// Render the user's answers as TS-shaped prose. The TUI/CLI
-    /// layer splices answers (and optional `annotations` for preview /
-    /// notes) into the tool result before the model sees it; this fn
+    /// Render the user's answers as prose. The TUI/CLI layer splices
+    /// answers (and optional `annotations` for preview / notes) into
+    /// the tool result before the model sees it; this fn
     /// reads that envelope and produces:
     ///
     ///   `User has answered your questions: "Q1"="A1" selected
@@ -290,7 +277,6 @@ impl Tool for AskUserQuestionTool {
     ///
     /// When the splicer hasn't run (test fixtures, dialog declined),
     /// fall back to the defensive JSON-or-string emit.
-    /// TS: `AskUserQuestionTool.tsx:224-249 mapToolResultToToolResultBlockParam`.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let answers = data
             .get("answers")
@@ -332,9 +318,8 @@ impl Tool for AskUserQuestionTool {
     /// raw JSON tool result. Returning `Ask` (at evaluator step 1c, before the
     /// read-only mode fallthrough) routes through the permission bridge, which
     /// emits `QuestionAsked` and pushes the Question overlay; the answer
-    /// round-trip (`updated_input` → `execute`) is already wired. Mirrors TS
-    /// `AskUserQuestionTool.checkPermissions` which unconditionally returns
-    /// `{ behavior: 'ask' }`. In `DontAsk` mode the evaluator converts this to
+    /// round-trip (`updated_input` → `execute`) is already wired. `DontAsk`
+    /// mode causes the evaluator to convert this to
     /// `Deny` (never prompt), which is the intended posture.
     async fn check_permissions(
         &self,

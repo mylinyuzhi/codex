@@ -77,8 +77,8 @@ use coco_coordinator::teammate::format_as_teammate_message;
 use coco_coordinator::types::TeammateIdentity;
 use coco_tui::UserCommand;
 
-/// Mailbox poll cadence. Mirrors the in-process runner's `POLL_INTERVAL_MS`
-/// (500 ms) — this pump is the cross-process analog of that loop.
+/// Mailbox poll cadence (500 ms) — this pump is the cross-process analog of
+/// the in-process runner loop.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Spawn the cross-process teammate inbox pump. The caller guarantees this

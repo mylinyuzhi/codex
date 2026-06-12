@@ -1,8 +1,7 @@
 //! Extended built-in command implementations.
 //!
-//! TS: commands/ (~65 directories). This module defines all command name
-//! constants and registers the 15 most important handlers beyond the original
-//! 25 in `lib.rs::register_builtins`.
+//! Defines all command name constants and registers the 15 most important
+//! handlers beyond the original 25 in `lib.rs::register_builtins`.
 
 use std::sync::Arc;
 
@@ -17,14 +16,14 @@ use coco_types::CommandSafety;
 use coco_types::CommandType;
 use coco_types::LocalCommandData;
 
-/// `/compact` visibility gate: hidden when `COCO_COMPACT_DISABLE` is truthy,
-/// matching TS `commands/compact/index.ts:9`. A function pointer (not a
-/// captured closure) so it fits `IsEnabledFn` and re-reads the env each call.
+/// `/compact` visibility gate: hidden when `COCO_COMPACT_DISABLE` is truthy.
+/// A function pointer (not a captured closure) so it fits `IsEnabledFn` and
+/// re-reads the env each call.
 fn compact_command_enabled() -> bool {
     !coco_config::env::is_env_truthy(coco_config::EnvKey::CocoCompactDisable)
 }
 
-// ── All command name constants (mirrors every TS commands/ directory) ─────
+// ── All command name constants ─────
 
 pub mod names {
     // Core
@@ -93,7 +92,7 @@ pub mod names {
     pub const PR_COMMENTS: &str = "pr-comments";
     pub const PASSES: &str = "passes";
 
-    // ── TS-parity: additional commands ──
+    // ── Additional commands ──
     pub const STATUSLINE: &str = "statusline";
     pub const RELOAD_PLUGINS: &str = "reload-plugins";
     pub const SECURITY_REVIEW: &str = "security-review";
@@ -101,7 +100,7 @@ pub mod names {
 
     // Slash commands deliberately NOT ported live in `commands/CLAUDE.md`
     // (Deliberately Not Ported). Audits and parity reviews should consult
-    // that list before flagging a missing TS command as a gap.
+    // that list before flagging a missing command as a gap.
     pub const ENV: &str = "env";
     pub const DEBUG_TOOL_CALL: &str = "debug-tool-call";
 }
@@ -139,10 +138,10 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
     use CommandSafety::BridgeSafe;
     use CommandSafety::LocalOnly;
 
-    // Synchronous handlers — types verified against TS source files.
-    // is_overlay=true → LocalOverlay (TS local-jsx), false → Local (TS local)
+    // Synchronous handlers.
+    // is_overlay=true → LocalOverlay, false → Local
     let sync_specs: Vec<SyncSpec> = vec![
-        // ── LocalOverlay (TS local-jsx) ──
+        // ── LocalOverlay ──
         (
             names::PLAN,
             "Toggle plan mode or view current plan",
@@ -162,7 +161,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             Some("[name]"),
         ),
         // /theme registered via `register_ts_parity_handlers` below — a custom
-        // CommandHandler returning `OpenDialog(ThemePicker)` on no args.
+        // CommandHandler that returns `OpenDialog(ThemePicker)` on no args.
         (
             names::IDE,
             "Manage IDE integrations",
@@ -274,7 +273,6 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
         (
             names::CONFIG,
             "Show or modify configuration",
-            // TS parity: `commands/config/index.ts:4` aliases `['settings']`.
             &["settings"],
             config_extended_handler,
             true,
@@ -299,8 +297,8 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             AlwaysSafe,
             Some("<question>"),
         ),
-        // /statusline registered as a Prompt below (mirrors TS:
-        // commands/statusline.tsx — invokes statusline-setup subagent).
+        // /statusline registered as a Prompt below (invokes statusline-setup
+        // subagent).
         (
             names::RELOAD_PLUGINS,
             "Reload plugin definitions",
@@ -318,8 +316,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             true,
             LocalOnly,
             // Optional name — bare `/rename` triggers Fast-role
-            // auto-generation in the runner. TS parity:
-            // `commands/rename/index.ts` argumentHint: '[name]'.
+            // auto-generation in the runner.
             Some("[name]"),
         ),
         (
@@ -331,7 +328,7 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             AlwaysSafe,
             Some("<name>"),
         ),
-        // ── Local (TS local) ──
+        // ── Local ──
         (
             names::VERSION,
             "Show version info",
@@ -527,14 +524,12 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             LocalOnly,
             Some("[list|install|uninstall] [name]"),
         ),
-        // /review moved to Prompt-type registration below (TS parity:
-        // `commands/review.ts` exports a `type: 'prompt'` Command, not a
-        // local handler). Kept here as a comment so future audits don't
-        // re-add the legacy local async-handler form.
+        // /review moved to Prompt-type registration below (it's a
+        // Prompt-type command, not a local handler). Kept here as a comment
+        // so future audits don't re-add the legacy local async-handler form.
         (
             names::CLEAR,
             "Clear conversation history and start fresh",
-            // TS parity: `commands/clear/index.ts` aliases `['reset', 'new']`.
             &["reset", "new"],
             handlers::clear::handler,
             false,
@@ -614,11 +609,9 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
             base,
             command_type,
             handler: Some(handler),
-            // `/compact` is hidden when the kill switch is set (TS
-            // `commands/compact/index.ts:9` `isEnabled: () =>
-            // !isEnvTruthy(DISABLE_COMPACT)`); every other async command is
-            // always enabled. The runtime hard-kill is enforced separately in
-            // `engine_compaction::run_manual_compact`.
+            // `/compact` is hidden when the kill switch is set; every other
+            // async command is always enabled. The runtime hard-kill is
+            // enforced separately in `engine_compaction::run_manual_compact`.
             is_enabled: if name == names::COMPACT {
                 Some(compact_command_enabled)
             } else {
@@ -628,13 +621,12 @@ pub fn register_extended_builtins(registry: &mut CommandRegistry) {
     }
 
     // Hide Rust-only debug commands from `/-typeahead`. They stay
-    // enabled (so power users can still invoke them by name) but the
-    // TS counterparts are literal `isEnabled:false, isHidden:true`
-    // stubs — keeping them hidden mirrors that visibility contract.
+    // enabled (so power users can still invoke them by name) but
+    // should not surface in `/-typeahead`.
     registry.set_hidden(names::ENV, true);
     registry.set_hidden(names::DEBUG_TOOL_CALL, true);
-    // `/output-style` is a deprecation stub; TS marks it hidden so it
-    // doesn't surface in `/-typeahead`. Match that here.
+    // `/output-style` is a deprecation stub; mark it hidden so it
+    // doesn't surface in `/-typeahead`.
     registry.set_hidden(names::OUTPUT_STYLE, true);
 
     // /security-review, /insights, /pr-comments — registered with their
@@ -768,7 +760,7 @@ fn add_dir_handler(args: &str) -> String {
     }
     // Resolve + validate before emitting the sentinel so the runner
     // sees only well-formed paths. `/add-dir` is a Session-source
-    // mutation: TS persists nothing, just widens the in-memory
+    // mutation: persists nothing, just widens the in-memory
     // additional_dirs map for the duration of the session. Runners
     // pick up the sentinel and call `runtime.update_engine_config`.
     let absolute = match std::path::PathBuf::from(path).canonicalize() {
@@ -813,25 +805,22 @@ fn ide_handler(args: &str) -> String {
     }
 }
 
-/// `/output-style` — deprecated stub. TS equivalent
-/// (`commands/output-style/output-style.tsx`) prints a redirect message
-/// to `/config`; we mirror that text verbatim so users on either CLI
-/// see the same deprecation hint.
+/// `/output-style` — deprecated stub that prints a redirect message
+/// to `/config`.
 fn output_style_handler(_args: &str) -> String {
     "/output-style has been deprecated. Use /config to change your output style, \
      or set it in your settings file. Changes take effect on the next session."
         .to_string()
 }
 
-/// Reset aliases that TS treats as "restore the default color"
-/// (`commands/color/color.ts:18`). The TUI intercept (`dispatch_color`
-/// in `coco-cli`) carries its own copy — kept in sync with this list.
+/// Reset aliases treated as "restore the default color".
+/// The TUI intercept (`dispatch_color` in `coco-cli`) carries its own
+/// copy — kept in sync with this list.
 const COLOR_RESET_ALIASES: &[&str] = &["default", "reset", "none", "gray", "grey"];
 
 /// `/color <name|default>` — set the prompt bar color for this session.
 ///
-/// Pure text-shape mirror of TS `commands/color/color.ts`. Persistence
-/// (writing to `ToolAppState.agent_color`) happens in
+/// Persistence (writing to `ToolAppState.agent_color`) happens in
 /// `tui_runner::dispatch_color`, which intercepts this command before
 /// the registry to gate on `is_teammate()` and mutate runtime state.
 /// This handler is the SDK / non-TUI fallback that produces the same
@@ -984,7 +973,7 @@ fn tasks_extended_handler(args: &str) -> String {
     }
 }
 
-// ── TS-parity: additional local handler functions ──
+// ── Additional local handler functions ──
 
 fn reload_plugins_handler(_args: &str) -> String {
     // Sentinel that runners pick up to call
@@ -1016,10 +1005,9 @@ pub const ADD_DIR_SENTINEL: &str = "__COCO_ADD_DIR__";
 pub const RELOAD_PLUGINS_SENTINEL: &str = "__COCO_RELOAD_PLUGINS__";
 /// Sentinel emitted by `/hooks reload`. Runners reload the live
 /// `HookRegistry` from the latest `RuntimeConfig` snapshot via
-/// `SessionRuntime::reload_hooks`. TS parity:
-/// `updateHooksConfigSnapshot()` (`utils/hooks/hooksConfigSnapshot.ts`).
+/// `SessionRuntime::reload_hooks`.
 ///
-/// Mirrors RELOAD_PLUGINS_SENTINEL: only fires from a slash command,
+/// Like RELOAD_PLUGINS_SENTINEL: only fires from a slash command,
 /// which runs only at turn boundaries (the dispatch loop in
 /// `tui_runner` `drain_active_turn`s before processing slash output),
 /// so pre/post hook consistency within a turn is preserved.
@@ -1072,8 +1060,7 @@ fn tag_handler(args: &str) -> String {
 /// auto-generate a kebab-case session name via the `ModelRole::Fast`
 /// resolver. Encoded as a typed enum (not `Option<String>`) so the
 /// "auto" branch is impossible to confuse with a "no sentinel
-/// matched" miss. TS parity: `rename.ts` empty-arg branch invokes
-/// `generateSessionName`.
+/// matched" miss.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedRename {
     Explicit(String),
@@ -1392,7 +1379,7 @@ fn debug_tool_call_handler(args: &str) -> String {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// TS-parity handlers (Round 11)
+// P1 handlers (Round 11)
 // ────────────────────────────────────────────────────────────────────────────
 
 const SECURITY_REVIEW_PROMPT: &str = include_str!("prompts/security_review.txt");
@@ -1403,7 +1390,7 @@ const REVIEW_PROMPT: &str = include_str!("prompts/review.txt");
 // handlers::commit_push_pr::PROMPT_TEMPLATE.
 const STATUSLINE_PROMPT: &str = include_str!("prompts/statusline.txt");
 
-/// Register the TS-parity P1 handlers wired in Round 11.
+/// Register the P1 handlers wired in Round 11.
 ///
 /// Includes:
 /// - `/rewind` (opens message-selector dialog)
@@ -1423,8 +1410,7 @@ pub fn register_ts_parity_handlers(
 ) {
     use coco_types::CommandSource;
 
-    // /rewind — TS: commands/rewind/rewind.ts.
-    // Aliases intentionally not registered; canonical name only.
+    // /rewind — aliases intentionally not registered; canonical name only.
     {
         let base = crate::builtin_base_ext(
             names::REWIND,
@@ -1445,8 +1431,7 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /model — TS: commands/model/model.tsx (local-jsx ModelPicker).
-    // No-args opens the picker overlay; with-args validates against
+    // /model — no-args opens the picker overlay; with-args validates against
     // the builtin registry and persists `model_roles.main`.
     {
         let mut base = crate::builtin_base_ext(
@@ -1467,9 +1452,7 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /theme — TS: commands/theme/theme.tsx (renders <ThemePicker>).
-    // TS takes no argument (index.ts declares no argumentHint; call ignores
-    // args) and always opens the live-preview picker — mirror that: no hint.
+    // /theme — takes no argument and always opens the live-preview picker.
     {
         let mut base = crate::builtin_base_ext(
             names::THEME,
@@ -1489,8 +1472,7 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /skills — TS: commands/skills/skills.tsx (local-jsx SkillsMenu).
-    // No-args opens the read-only catalog overlay; with-args
+    // /skills — no-args opens the read-only catalog overlay; with-args
     // (`list` / `show <name>` / `paths`) falls back to text output.
     {
         let mut base = crate::builtin_base_ext(
@@ -1511,8 +1493,7 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /agents — TS: bundled 2.1.142 E24.js (2-tab overlay).
-    // No-args opens the Running/Library overlay; with-args
+    // /agents — no-args opens the Running/Library overlay; with-args
     // (`list` / `show <name>` / `paths` / `validate` / `reload`)
     // falls back to text output.
     {
@@ -1534,7 +1515,7 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /plugin — TS local-jsx plugin manager. No-args opens the TUI dialog;
+    // /plugin — plugin manager. No-args opens the TUI dialog;
     // subcommands (`list`, `install`, `marketplace`, ...) keep text output for
     // headless/script consumers.
     {
@@ -1556,7 +1537,7 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /memory — TS: commands/memory/memory.tsx (local-jsx Dialog)
+    // /memory — opens the file-selector dialog
     {
         let mut base = crate::builtin_base_ext(
             names::MEMORY,
@@ -1581,7 +1562,7 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /init — TS: commands/init.ts (Prompt type, gated NEW vs OLD)
+    // /init — Prompt type, gated NEW vs OLD behavior
     {
         let mut base = crate::builtin_base_ext(
             names::INIT,
@@ -1606,12 +1587,10 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /security-review — moved-to-plugin TS: commands/security-review.ts.
-    // Uses ShellExpandingPromptHandler so `!`git ...`` markers in the
-    // prompt body are pre-resolved before the prompt is fed to the model
-    // (matches TS `executeShellCommandsInPrompt`). Pre-allows the
-    // tools the TS frontmatter declares so the agent can drive the
-    // review without prompting the user for permission on every step.
+    // /security-review — uses ShellExpandingPromptHandler so `!`git ...``
+    // markers in the prompt body are pre-resolved before the prompt is fed
+    // to the model. Pre-allows the tools declared in the frontmatter so the
+    // agent can drive the review without prompting for permission on each step.
     {
         let mut base = crate::builtin_base_ext(
             names::SECURITY_REVIEW,
@@ -1647,10 +1626,10 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /pr-comments — TS: commands/pr_comments/index.ts. Args (if any) are
-    // appended verbatim under "## Task" so the agent can scope to a
-    // specific PR number / repo path. The prompt body itself instructs
-    // the model to drive `gh pr` + `gh api` to fetch and format comments.
+    // /pr-comments — args (if any) are appended verbatim under "## Task" so
+    // the agent can scope to a specific PR number / repo path. The prompt
+    // body instructs the model to drive `gh pr` + `gh api` to fetch and
+    // format comments.
     register_static_prompt(
         registry,
         names::PR_COMMENTS,
@@ -1660,7 +1639,7 @@ pub fn register_ts_parity_handlers(
         handlers::prompt_command::ArgsHandling::AppendUnderTask,
     );
 
-    // /insights — TS: commands/insights.ts
+    // /insights
     register_static_prompt(
         registry,
         names::INSIGHTS,
@@ -1670,11 +1649,10 @@ pub fn register_ts_parity_handlers(
         handlers::prompt_command::ArgsHandling::AppendUnderTask,
     );
 
-    // /review — TS: commands/review.ts (Prompt-type, NOT a local handler).
-    // TS appends `PR number: ${args}` inline at the body's end — even
-    // when `args` is empty, the literal `PR number: ` line is present so
-    // the model sees an explicit value (or its absence). We mirror that
-    // exactly via `ArgsHandling::AppendInline`.
+    // /review — Prompt-type, not a local handler. Appends `PR number: ${args}`
+    // inline at the body's end — even when `args` is empty, the literal
+    // `PR number: ` line is present so the model sees an explicit value (or
+    // its absence). Handled via `ArgsHandling::AppendInline`.
     register_static_prompt(
         registry,
         names::REVIEW,
@@ -1686,9 +1664,9 @@ pub fn register_ts_parity_handlers(
         },
     );
 
-    // /commit-push-pr — TS: commands/commit-push-pr.ts. Inline-resolves git
-    // status / diff / branch / `git diff <default>...HEAD` / `gh pr view`
-    // and detects the repo's default branch before emitting the Prompt.
+    // /commit-push-pr — inline-resolves git status / diff / branch /
+    // `git diff <default>...HEAD` / `gh pr view` and detects the repo's
+    // default branch before emitting the Prompt.
     {
         let mut base = crate::builtin_base_ext(
             "commit-push-pr",
@@ -1717,9 +1695,9 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /commit — TS: commands/commit.ts. Builds git context (status / diff /
-    // log / branch) inline and emits a Prompt for the agent. Mirrors TS
-    // ALLOWED_TOOLS so the agent can stage + commit without re-prompting.
+    // /commit — builds git context (status / diff / log / branch) inline and
+    // emits a Prompt for the agent. Pre-allows tools so the agent can stage
+    // + commit without re-prompting.
     {
         let mut base = crate::builtin_base_ext(
             names::COMMIT,
@@ -1746,8 +1724,8 @@ pub fn register_ts_parity_handlers(
         });
     }
 
-    // /statusline — TS: commands/statusline.tsx. Pushes the args (or default)
-    // through the statusline-setup subagent.
+    // /statusline — pushes the args (or default) through the statusline-setup
+    // subagent.
     register_static_prompt(
         registry,
         names::STATUSLINE,
@@ -1761,8 +1739,8 @@ pub fn register_ts_parity_handlers(
     // when Feature::AutoMemory is on; the runner's `run_dream_consolidation`
     // and `run_session_memory_force` no-op when the runtime has no
     // MemoryRuntime, but surfacing the commands in /-typeahead under those
-    // conditions is misleading. TS gates `/dream` on `KAIROS|KAIROS_DREAM`;
-    // the closest coco-rs gate is the AutoMemory feature.
+    // conditions is misleading. These commands are gated on the AutoMemory
+    // feature.
     if features.enabled(coco_types::Feature::AutoMemory) {
         let mut dream_base = crate::builtin_base_ext(
             names::DREAM,
@@ -1806,8 +1784,7 @@ pub fn register_ts_parity_handlers(
     }
 }
 
-/// Bash patterns auto-allowed during a `/commit` Prompt turn. Mirrors TS
-/// `commands/commit.ts` `ALLOWED_TOOLS`.
+/// Bash patterns auto-allowed during a `/commit` Prompt turn.
 fn commit_allowed_tools() -> Vec<String> {
     vec![
         "Bash(git add:*)".to_string(),
@@ -1816,11 +1793,9 @@ fn commit_allowed_tools() -> Vec<String> {
     ]
 }
 
-/// Tools auto-allowed during a `/security-review` Prompt turn. Mirrors
-/// TS `commands/security-review.ts` frontmatter `allowed-tools` (the
-/// markdown declares: Bash(git diff:*), Bash(git status:*),
-/// Bash(git log:*), Bash(git show:*), Bash(git remote show:*), Read,
-/// Glob, Grep, LS, Task).
+/// Tools auto-allowed during a `/security-review` Prompt turn
+/// (Bash(git diff:*), Bash(git status:*), Bash(git log:*), Bash(git show:*),
+/// Bash(git remote show:*), Read, Glob, Grep, LS, Task).
 fn security_review_allowed_tools() -> Vec<String> {
     vec![
         "Bash(git diff:*)".to_string(),
@@ -1837,7 +1812,7 @@ fn security_review_allowed_tools() -> Vec<String> {
 }
 
 /// Bash + gh + Slack patterns auto-allowed during a `/commit-push-pr` Prompt
-/// turn. Mirrors TS `commands/commit-push-pr.ts` `ALLOWED_TOOLS`.
+/// turn.
 fn commit_push_pr_allowed_tools() -> Vec<String> {
     vec![
         "Bash(git checkout --branch:*)".to_string(),

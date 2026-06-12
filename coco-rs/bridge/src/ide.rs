@@ -1,7 +1,5 @@
 //! IDE bridge protocol — VS Code and JetBrains integration.
 //!
-//! TS: bridge/types.ts, bridge/sessionRunner.ts, bridge/bridgeMain.ts
-//!
 //! Provides typed message enums for bidirectional communication between
 //! the agent and IDE extensions, plus a server that accepts connections
 //! and routes messages.
@@ -27,8 +25,6 @@ const MAX_STDERR_LINES: usize = 10;
 // ---------------------------------------------------------------------------
 
 /// Messages from IDE to agent.
-///
-/// TS: bridge/types.ts — BridgeInMessage + control requests from sessionRunner.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IdeBridgeMessage {
@@ -86,8 +82,6 @@ pub enum IdeBridgeMessage {
 }
 
 /// A diagnostic entry from the IDE.
-///
-/// TS: bridge/sessionRunner.ts — activity/diagnostic reporting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdeDiagnostic {
     pub severity: DiagnosticSeverity,
@@ -115,8 +109,6 @@ pub enum DiagnosticSeverity {
 }
 
 /// Session state for status updates.
-///
-/// TS: bridge/types.ts — SessionDoneStatus and session lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
@@ -130,8 +122,6 @@ pub enum SessionState {
 }
 
 /// Session activity for status display.
-///
-/// TS: bridge/types.ts — SessionActivity type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionActivity {
     #[serde(rename = "type")]
@@ -141,8 +131,6 @@ pub struct SessionActivity {
 }
 
 /// Activity type for session status.
-///
-/// TS: SessionActivityType — tool_start, text, result, error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityType {
@@ -157,8 +145,6 @@ pub enum ActivityType {
 // ---------------------------------------------------------------------------
 
 /// Map tool names to human-readable verbs for IDE status display.
-///
-/// TS: bridge/sessionRunner.ts — TOOL_VERBS record.
 pub fn tool_verb(tool_name: &str) -> &str {
     if tool_name == ToolName::Read.as_str() {
         "Reading"
@@ -185,8 +171,6 @@ pub fn tool_verb(tool_name: &str) -> &str {
 }
 
 /// Build a tool activity summary string.
-///
-/// TS: bridge/sessionRunner.ts — toolSummary() function.
 pub fn tool_summary(tool_name: &str, input: &serde_json::Value) -> String {
     let verb = tool_verb(tool_name);
 
@@ -240,9 +224,6 @@ pub enum IdeType {
 
 /// IDE bridge server — accepts TCP connections and routes messages
 /// between the agent and connected IDEs.
-///
-/// TS: bridge/bridgeMain.ts — main bridge loop, session management,
-/// status updates.
 pub struct IdeBridgeServer {
     /// Incoming messages from all connected IDEs.
     incoming_tx: mpsc::Sender<IdeBridgeMessage>,
@@ -273,8 +254,6 @@ impl IdeBridgeServer {
     }
 
     /// Start listening for IDE connections on the given address.
-    ///
-    /// TS: bridgeMain.ts — bridge loop accepting SDK/REPL connections.
     pub async fn listen(&mut self, addr: &str) -> crate::Result<()> {
         let listener = TcpListener::bind(addr).await?;
         self.running
@@ -457,7 +436,7 @@ impl IdeBridgeServer {
 
     /// Record a session activity and send it to connected IDEs.
     ///
-    /// TS: bridge/sessionRunner.ts — activity tracking bounded to MAX_ACTIVITIES.
+    /// Bounded to `MAX_ACTIVITIES` entries per session.
     pub async fn record_activity(
         &self,
         session_id: &str,

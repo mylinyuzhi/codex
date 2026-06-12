@@ -208,8 +208,6 @@ pub async fn analyze_engine_context_with_sources(
     // system prompt (`build_system_prompt` → "# Project Instructions"), so
     // discover them independently here and attribute their tokens to the
     // Memory files category instead of burying them in System prompt.
-    // Mirrors TS `countMemoryFileTokens`, which counts memory from
-    // `getMemoryFiles()` independent of how the prompt was assembled.
     let cwd = std::env::current_dir().unwrap_or_default();
     let memory_files: Vec<MemoryFileEstimate> = coco_context::discover_memory_files(&cwd)
         .into_iter()
@@ -278,7 +276,7 @@ pub async fn analyze_engine_context_with_sources(
 
     // Estimated model-visible content: every category except the reserved
     // buffer and free space (system + tools + mcp + agents + memory + skills
-    // + messages). Mirrors TS analyzeContext `actualUsage`.
+    // + messages).
     let actual_usage = system_tokens
         + builtin_tool_tokens
         + mcp_tool_tokens
@@ -302,8 +300,7 @@ pub async fn analyze_engine_context_with_sources(
     // Headline total prefers the real billed usage (folds the whole prompt —
     // system, tools, memory, messages) once an API call has committed a usage
     // marker; with no call yet it falls back to the estimated content sum so a
-    // fresh session reflects its fixed overhead instead of 0. Mirrors TS
-    // `finalTotalTokens = totalFromAPI ?? actualUsage`.
+    // fresh session reflects its fixed overhead instead of 0.
     let total_tokens = if history.last_usage().is_some() {
         history.tokens_with_last_usage()
     } else {
@@ -316,7 +313,7 @@ pub async fn analyze_engine_context_with_sources(
     };
     // Free space tiles the grid against the estimated content sum (not the
     // billed headline) so grid + legend stay internally consistent and sum to
-    // the window. TS: `contextWindow - actualUsage - reservedTokens`.
+    // the window.
     let free_tokens = (max_tokens - actual_usage - reserved).max(0);
 
     Ok(ContextUsageReport {

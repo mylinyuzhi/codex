@@ -1,23 +1,16 @@
-//! TS `companion_intro` generator.
+//! `companion_intro` generator.
 //!
-//! Mirrors `getCompanionIntroAttachment` (`buddy/prompt.ts:15-36`) +
-//! `normalizeAttachmentForAPI` `case 'companion_intro':`
-//! (`messages.ts:4232`). One-shot intro emitted once per session when
-//! a companion is configured and hasn't been announced yet.
+//! One-shot intro emitted once per session when a companion is configured
+//! and hasn't been announced yet.
 //!
 //! Gate chain:
 //!
-//! 1. `ctx.config.attachments.companion_intro` — opt-in (TS gates on
-//!    `feature('BUDDY')`; external builds default off).
+//! 1. `ctx.config.attachments.companion_intro` — opt-in; external builds
+//!    default off.
 //! 2. `ctx.companion_name.is_some() && ctx.companion_species.is_some()`
-//!    — TS `getCompanion()` returns `{ name, species }` from global
-//!    config; absence suppresses the reminder.
+//!    — absence of name or species suppresses the reminder.
 //! 3. `!ctx.has_prior_companion_intro` — the engine pre-scans history
-//!    for a prior `companion_intro` attachment matching the current
-//!    name (TS `buddy/prompt.ts:23-27`).
-//!
-//! Body comes from the TS `companionIntroText(name, species)` template
-//! at `buddy/prompt.ts:7-13`, rendered verbatim for parity.
+//!    for a prior `companion_intro` attachment matching the current name.
 
 use async_trait::async_trait;
 
@@ -63,9 +56,8 @@ impl AttachmentGenerator for CompanionIntroGenerator {
     }
 }
 
-/// TS `companionIntroText(name, species)` at `buddy/prompt.ts:7-13`.
-/// Kept verbatim — any drift would desync model behavior around
-/// companion addressing.
+/// Renders the companion intro body. Any drift would desync model behavior
+/// around companion addressing.
 fn render_companion_intro(name: &str, species: &str) -> String {
     format!(
         "# Companion\n\nA small {species} named {name} sits beside the user's input box and occasionally comments in a speech bubble. You're not {name} — it's a separate watcher.\n\nWhen the user addresses {name} directly (by name), its bubble will answer. Your job in that moment is to stay out of the way: respond in ONE line or less, or just answer any part of the message meant for you. Don't explain that you're not {name} — they know. Don't narrate what {name} might say — the bubble handles that."

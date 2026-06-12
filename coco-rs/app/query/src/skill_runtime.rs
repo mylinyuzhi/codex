@@ -1,10 +1,6 @@
 //! `QuerySkillRuntime` — real implementation of
 //! [`coco_tool_runtime::SkillHandle`] backed by [`coco_skills::SkillManager`].
 //!
-//! TS: `src/tools/SkillTool/SkillTool.ts` — skill resolution +
-//! inline vs forked routing; `src/tools/SkillTool/prompt.ts` —
-//! dynamic skill listing.
-//!
 //! Phase 7-β completion: prior slice scaffolded the `SkillHandle`
 //! trait with a `NoOpSkillHandle` that returned `Unavailable`; this
 //! module lands the real implementation.
@@ -25,8 +21,7 @@
 //!
 //! ## Parent tool-use id tagging
 //!
-//! Per plan I5 and TS `SkillTool.ts:728` `tagMessagesWithToolUseID`,
-//! inline-expansion messages are tagged with
+//! Per plan I5, inline-expansion messages are tagged with
 //! `parent_tool_use_id = <the SkillTool call id>` so they group
 //! with the parent tool_result in transcripts. The runtime doesn't
 //! know the SkillTool's `tool_use_id` because `SkillHandle::invoke_skill`
@@ -124,11 +119,9 @@ impl SkillHandle for QuerySkillRuntime {
             });
         }
         // Author lock: `disable-model-invocation: true` requires the
-        // user to have typed `/<name>` in the current turn. TS parity
-        // (`cli_inner_pretty.js:353567-353574`): the rejection only
-        // fires when `Am7(name, ctx)` returned false. The previous
-        // coco-rs behavior unconditionally rejected — that was a
-        // pre-existing parity bug fixed here.
+        // user to have typed `/<name>` in the current turn. The rejection
+        // only fires when `user_invoked_via_slash` returned false. The
+        // previous behavior unconditionally rejected — that was a bug.
         if skill.disable_model_invocation && !user_invoked_via_slash(&skill, &gate) {
             tracing::warn!(
                 skill_name = %skill.name,
@@ -138,10 +131,9 @@ impl SkillHandle for QuerySkillRuntime {
                 name: skill.name.clone(),
             });
         }
-        // `skill_overrides` gate (TS `cli_inner_pretty.js:353581-353590`).
-        // Resolves to `On` for every skill when tiers are empty (the
-        // PR2 default) — so this short-circuits to no-op until users
-        // configure `skill_overrides` in their settings.json.
+        // `skill_overrides` gate. Resolves to `On` for every skill when
+        // tiers are empty (the default) — so this short-circuits to no-op
+        // until users configure `skill_overrides` in their settings.json.
         let effective = effective_skill_state(&skill, &gate.overrides);
         match effective {
             SkillOverrideState::Off => {
@@ -176,14 +168,13 @@ impl SkillHandle for QuerySkillRuntime {
             "skill resolved, expanding prompt"
         );
 
-        // Expand argument substitutions. TS parity:
-        // `SkillTool.ts:565-597` runs the expander before either inline
-        // injection or fork spawn. Beyond `$ARGS`/positionals, the skill's
-        // source directory and session id MUST be substituted so
+        // Expand argument substitutions. The expander runs before either
+        // inline injection or fork spawn. Beyond `$ARGS`/positionals, the
+        // skill's source directory and session id MUST be substituted so
         // `${CLAUDE_SKILL_DIR}` / `${CLAUDE_SESSION_ID}` resolve (and the
         // "Base directory for this skill:" header is prepended) — otherwise
-        // the literal tokens reach the model and skill-relative file resolution
-        // breaks (`SkillTool.ts:1073-1081`).
+        // the literal tokens reach the model and skill-relative file
+        // resolution breaks.
         let skill_dir = skill
             .skill_root
             .as_deref()
@@ -208,10 +199,8 @@ impl SkillHandle for QuerySkillRuntime {
         // `ToolResult.permission_updates` → executor's
         // `PermissionRuleHandle` → session config. Fork path inlines
         // them on `AgentQueryConfig.extra_permission_rules` so the
-        // subagent's first turn already sees them. TS parity:
-        // `SkillTool.ts` `contextModifier` for inline,
-        // `createGetAppStateWithAllowedTools` for fork — both write
-        // into `alwaysAllowRules.command`.
+        // subagent's first turn already sees them. Both write into
+        // the `Command` permission slot (`alwaysAllowRules.command`).
         let allow_rules = skill
             .allowed_tools
             .as_deref()
@@ -254,10 +243,8 @@ impl SkillHandle for QuerySkillRuntime {
                 })
             }
             SkillContext::Fork => {
-                // Fork: route the expanded prompt through the
-                // subagent engine. TS parity: `SkillTool.ts:636-692`
-                // spawns a fork agent with the skill's
-                // allowed_tools + model override.
+                // Fork: route the expanded prompt through the subagent
+                // engine with the skill's allowed_tools + model override.
                 let engine =
                     self.agent_engine
                         .clone()
@@ -285,11 +272,11 @@ impl SkillHandle for QuerySkillRuntime {
                     context_window: None,
                     prompt_cache: None,
                     max_output_tokens: None,
-                    // Fork skills mirror TS behavior: NO registry
-                    // narrowing. The subagent sees the full
-                    // inherited toolset; `extra_permission_rules` below
-                    // auto-allow the listed tools, others go through
-                    // the normal permission pipeline.
+                    // Fork skills do NOT narrow the tool registry. The
+                    // subagent sees the full inherited toolset;
+                    // `extra_permission_rules` below auto-allow the
+                    // listed tools, others go through the normal
+                    // permission pipeline.
                     allowed_tools: Vec::new(),
                     disallowed_tools: Vec::new(),
                     extra_permission_rules: allow_rules,
@@ -376,10 +363,9 @@ impl SkillHandle for QuerySkillRuntime {
             }
         };
 
-        // TS parity (`SkillTool.ts:619, 1059`): record usage at the
-        // model-invoked path so frequently-used skills surface in the
-        // `/` autocomplete's "recently used" section. Mirrors TS by
-        // recording on success only — a failed fork doesn't count.
+        // Record usage at the model-invoked path so frequently-used skills
+        // surface in the `/` autocomplete's "recently used" section.
+        // Record on success only — a failed fork doesn't count.
         // `spawn_blocking` keeps the async dispatcher unblocked when
         // `record` hits its slow path (read + atomic rename).
         if result.is_ok() {
@@ -399,11 +385,9 @@ impl SkillHandle for QuerySkillRuntime {
     ) -> Option<String> {
         let name = coco_tools::tools::skill_advanced::normalize_skill_name(name);
         let skill = self.manager.get(name)?;
-        // Mirror the listing-budget XG$ gate so a frontmatter
+        // Apply the same gate as the listing path so a frontmatter
         // `skills: [foo]` cannot smuggle a disable-model-invocation
-        // skill into the subagent's preloaded prompt. TS parity:
-        // `getSkillToolCommands()` filters via the same predicate
-        // (`cli_inner_pretty.js:513858-513869`).
+        // skill into the subagent's preloaded prompt.
         if skill.disabled || skill.disable_model_invocation {
             return None;
         }
@@ -422,7 +406,7 @@ impl SkillHandle for QuerySkillRuntime {
 /// Command-source allow rules. Each entry becomes one
 /// `PermissionRule` with `source: Command, behavior: Allow` so
 /// downstream evaluation matches both inline and fork paths via the
-/// same `Command` slot — TS parity: `alwaysAllowRules.command`.
+/// same `Command` slot (`alwaysAllowRules.command`).
 fn build_command_allow_rules(allowed_tools: &[String]) -> Vec<PermissionRule> {
     allowed_tools
         .iter()
@@ -435,11 +419,9 @@ fn build_command_allow_rules(allowed_tools: &[String]) -> Vec<PermissionRule> {
 }
 
 /// Whether the resolved skill matches *any* `/<word>` token the
-/// user typed in the current turn, including aliases. Mirrors TS
-/// `Am7(name, ctx)` but with alias-aware lookup — TS's loader
-/// canonicalises the slash before dispatch, so its single-name
-/// check is equivalent. coco-rs's SkillTool always receives the
-/// canonical name; this is where the alias bypass actually lives.
+/// user typed in the current turn, including aliases. Alias-aware:
+/// `SkillTool` always receives the canonical name; this is where
+/// the alias bypass actually lives.
 fn user_invoked_via_slash(skill: &coco_skills::SkillDefinition, gate: &SkillGateContext) -> bool {
     if gate.typed_slashes_in_turn.contains(skill.name.as_str()) {
         return true;

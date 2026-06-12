@@ -49,7 +49,7 @@ fn test_accept_edits_empty() {
 #[test]
 fn test_accept_edits_compound_command_finds_filesystem_subcommand() {
     // Split-aware: a pure-create command anywhere in a compound command
-    // auto-allows (TS checkPermissionMode), not just the first base executable.
+    // auto-allows, not just the first base executable.
     assert!(is_auto_allowed_in_accept_edits("cd src && mkdir out"));
     assert!(is_auto_allowed_in_accept_edits("cd build; touch out.txt"));
     // Rejects when no subcommand is a pure-create command (rm now gated).

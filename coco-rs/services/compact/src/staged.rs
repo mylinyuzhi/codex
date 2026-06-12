@@ -1,21 +1,13 @@
-//! Staged context-collapse strategy (TS `services/contextCollapse/`).
+//! Staged context-collapse strategy.
 //!
-//! TS background: an Anthropic-internal strategy that pre-stages spans
-//! of the conversation (`StagedRange`s) and commits them to compressed
-//! placeholders (`CommitEntry`) when a token threshold is crossed.
-//! When a prompt-too-long error fires it can drain the staged queue
-//! eagerly. The external Claude Code build strips the runtime impl
-//! but persists `marble-origami-commit` / `marble-origami-snapshot`
-//! transcript lines for cross-session continuity.
+//! Pre-stages spans of the conversation (`StagedRange`s) and commits them
+//! to compressed placeholders (`CommitEntry`) when a token threshold is
+//! crossed. When a prompt-too-long error fires it can drain the staged queue
+//! eagerly. `marble-origami-commit` / `marble-origami-snapshot` transcript
+//! lines are persisted for cross-session continuity.
 //!
-//! coco-rs ships a self-designed re-port behind
-//! `compact.experimental.staged_compact.*` with TS-compatible camelCase
-//! JSON fields and the type discriminator preserved verbatim.
-//!
-//! TS schema sources:
-//!   - types/logs.ts:255-269 `ContextCollapseCommitEntry`
-//!   - types/logs.ts:282-295 `ContextCollapseSnapshotEntry`
-//!   - utils/sessionStorage.ts:1541-1581 record helpers
+//! Enabled behind `compact.experimental.staged_compact.*`. Wire format uses
+//! camelCase JSON fields for transcript-format interop.
 //!
 //! State machine:
 //! ```text
@@ -30,9 +22,7 @@ use uuid::Uuid;
 
 /// One staged span awaiting commit.
 ///
-/// Same semantic fields as TS `staged[]` items inside
-/// `ContextCollapseSnapshotEntry`; wire is camelCase JSON for
-/// transcript-format interop with the TS source.
+/// Wire format is camelCase JSON for transcript-format interop.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagedRange {
@@ -48,9 +38,8 @@ pub struct StagedRange {
     pub staged_at: i64,
 }
 
-/// Committed collapse — archived span replaced by a placeholder. Same
-/// semantic shape as TS `ContextCollapseCommitEntry`; wire camelCase
-/// for transcript-format interop with the TS source.
+/// Committed collapse — archived span replaced by a placeholder.
+/// Wire format is camelCase JSON for transcript-format interop.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitEntry {
@@ -68,9 +57,8 @@ pub struct CommitEntry {
 }
 
 /// Latest snapshot of pending staged ranges + spawn-clock state.
-/// Same semantic shape as TS `ContextCollapseSnapshotEntry`; wire
-/// camelCase for transcript-format interop. Last-wins by
-/// `session_id` on resume.
+/// Wire format is camelCase JSON for transcript-format interop.
+/// Last-wins by `session_id` on resume.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotEntry {
@@ -126,8 +114,7 @@ impl SnapshotEntry {
 
 /// In-memory ledger holding committed entries + the latest snapshot.
 ///
-/// One ledger per session. Run-time API mirrors the TS module-level
-/// `let committed: CommitEntry[]` + `let snapshot: SnapshotEntry`.
+/// One ledger per session.
 #[derive(Debug, Default)]
 pub struct StagedCompactLedger {
     pub commits: Vec<CommitEntry>,
@@ -139,8 +126,7 @@ impl StagedCompactLedger {
         Self::default()
     }
 
-    /// Replay persisted entries on session resume. Mirrors TS
-    /// `restoreFromEntries(commits, snapshot)` (contextCollapse/persist.ts).
+    /// Replay persisted entries on session resume.
     pub fn restore_from_entries(
         &mut self,
         commits: Vec<CommitEntry>,
@@ -186,8 +172,8 @@ impl StagedCompactLedger {
         Some(entry)
     }
 
-    /// Drain *all* staged ranges into commits — TS `recoverFromOverflow`.
-    /// Returns the number of newly-committed entries.
+    /// Drain all staged ranges into commits on overflow recovery.
+    /// Returns the newly-committed entries.
     pub fn drain_overflow(
         &mut self,
         session_id: Uuid,
@@ -216,8 +202,8 @@ impl StagedCompactLedger {
         produced
     }
 
-    /// Reset everything — TS `resetContextCollapse()` (REPL.tsx:3686).
-    /// Called on rewind / autocompact failure when UUID mappings go stale.
+    /// Reset everything — called on rewind / autocompact failure when UUID
+    /// mappings go stale.
     pub fn reset(&mut self) {
         self.commits.clear();
         self.snapshot = None;
@@ -240,11 +226,9 @@ pub fn placeholder_text(range: &StagedRange) -> String {
 
 /// Apply committed collapses to a message slice, splicing each
 /// `[first_archived_uuid..=last_archived_uuid]` range with a single
-/// synthetic placeholder user message carrying `summary_uuid`.
-///
-/// TS: `services/contextCollapse/index.ts:applyCollapsesIfNeeded` —
-/// invoked before each prompt build so the LLM sees collapsed spans
-/// instead of the raw archived turns.
+/// synthetic placeholder user message carrying `summary_uuid`. Invoked
+/// before each prompt build so the LLM sees collapsed spans instead of
+/// raw archived turns.
 ///
 /// Behavior:
 ///   - Commits are processed in their `commits` order. Later commits
@@ -294,8 +278,8 @@ pub fn apply_collapses_if_needed<M: std::borrow::Borrow<Message>>(
 
 /// Generate the next 16-char uppercase-hex collapse id.
 ///
-/// TS encodes the id as a base-16 counter that resets at `0xFFFFFFFFFFFFFFFF`;
-/// we approximate with a per-vector monotonic counter to avoid global state.
+/// Uses a per-vector monotonic counter to avoid global state; wraps at
+/// `u64::MAX` via `wrapping_add`.
 fn next_collapse_id(commits: &[CommitEntry]) -> String {
     let n = commits.len() as u64;
     format!("{:016X}", n.wrapping_add(1))

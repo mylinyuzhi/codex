@@ -1,7 +1,4 @@
 //! API request/response logging for inference calls.
-//!
-//! TS: services/api/logging.ts — logAPIQuery, logAPIError, logAPISuccessAndDuration,
-//! gateway detection, error message extraction.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -19,8 +16,6 @@ use coco_llm_types::StopReason;
 // ---------------------------------------------------------------------------
 
 /// Known AI gateway proxies detectable from response headers or base URL.
-///
-/// TS: logging.ts — KnownGateway type + GATEWAY_FINGERPRINTS + GATEWAY_HOST_SUFFIXES.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KnownGateway {
@@ -120,8 +115,6 @@ fn extract_hostname(url_str: &str) -> Option<&str> {
 // ---------------------------------------------------------------------------
 
 /// Structured log of an outgoing API request.
-///
-/// TS: logAPIQuery parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestLog {
     /// Model ID sent to the provider.
@@ -171,8 +164,6 @@ pub fn format_request_log(log: &RequestLog) -> String {
 // ---------------------------------------------------------------------------
 
 /// Structured log of an API response (success).
-///
-/// TS: logAPISuccess parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseLog {
     /// Model that served the request (may differ from requested model).
@@ -263,8 +254,6 @@ pub fn format_response_log(log: &ResponseLog) -> String {
 // ---------------------------------------------------------------------------
 
 /// Structured log of an API error.
-///
-/// TS: logAPIError parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorLog {
     /// Model that was targeted.
@@ -361,7 +350,6 @@ pub fn parse_api_error_message(body: &str) -> Option<String> {
 /// Parse token counts from a "prompt too long" error message.
 ///
 /// Handles strings like "prompt is too long: 137500 tokens > 135000 maximum".
-/// TS: errors.ts — parsePromptTooLongTokenCounts.
 pub fn parse_prompt_too_long_tokens(message: &str) -> Option<(i64, i64)> {
     // Pattern: "prompt is too long" ... <actual> tokens > <limit>
     let lower = message.to_lowercase();

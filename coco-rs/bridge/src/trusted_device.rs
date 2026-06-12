@@ -1,9 +1,8 @@
 //! Trusted-device store for the IDE bridge.
 //!
-//! TS: `bridge/trustedDevice.ts`. When an IDE connects for the first
-//! time the user approves it once; the device's public fingerprint
-//! (usually a random UUID from the IDE side) is recorded so subsequent
-//! connections skip the approval prompt.
+//! When an IDE connects for the first time the user approves it once;
+//! the device's public fingerprint (usually a random UUID from the IDE
+//! side) is recorded so subsequent connections skip the approval prompt.
 //!
 //! Storage format: a JSON file at `~/.coco/trusted-devices.json`
 //! holding a list of entries `{ device_id, label, added_at, last_seen }`.

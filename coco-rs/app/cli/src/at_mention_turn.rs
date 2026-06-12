@@ -1,12 +1,7 @@
 //! Shared `@`-mention resolution + turn-message construction used by every
 //! entry path (TUI, headless, SDK).
 //!
-//! TS parity: `getAttachmentMessages` (`utils/attachments.ts:2937`) is the
-//! producer; `normalizeAttachmentForAPI` (`utils/messages.ts:3545`) the
-//! per-attachment renderer. TS calls both from `processUserInput.ts:504`
-//! and `query.ts:1580`. This module mirrors that single-call surface so
-//! every coco-rs entry point receives identical user-turn shaping —
-//! resolves `@path` mentions to file content, renders them as synthetic
+//! Resolves `@path` mentions to file content, renders them as synthetic
 //! `Read`-tool narration wrapped in `<system-reminder>`, and tracks the
 //! `FileReadState` dedup cache so subsequent turns return
 //! `Attachment::AlreadyReadFile` instead of re-loading.
@@ -32,7 +27,7 @@ use coco_tui::ImageData;
 
 /// Output of the per-turn user-input resolution pipeline.
 ///
-/// Field order is the TS-parity injection order: the user message first
+/// Field order is the injection order: the user message first
 /// (carrying the prompt + any clipboard images), then per-attachment
 /// system-reminder messages with file/image/dir content, then any
 /// edited-file notifications. [`build_messages_for_turn`] concatenates
@@ -42,10 +37,10 @@ pub struct ResolvedTurnInputs {
     /// if `images` was non-empty).
     pub user_message: Message,
     /// System-reminder messages for resolved `@`-mentioned files /
-    /// images / directories. TS parity: each attachment expands into
-    /// two messages (synthetic `tool_use` text + `tool_result`),
-    /// individually wrapped in `<system-reminder>` (image blocks pass
-    /// through unwrapped). See [`attachment_to_messages`].
+    /// images / directories. Each attachment expands into two messages
+    /// (synthetic `tool_use` text + `tool_result`), individually wrapped
+    /// in `<system-reminder>` (image blocks pass through unwrapped).
+    /// See [`attachment_to_messages`].
     pub attachment_messages: Vec<Message>,
     /// One system-reminder note per file detected as modified externally
     /// since the last turn.
@@ -131,8 +126,8 @@ pub async fn resolve_turn_inputs_text_only(
     resolve_turn_inputs(content, &[], cwd, Uuid::new_v4(), file_read_state).await
 }
 
-/// Concatenate the inputs into a `Vec<Message>` in TS-parity order
-/// (`user_message` → file/image/dir reminders → changed-file notes).
+/// Concatenate the inputs into a `Vec<Message>` in order:
+/// `user_message` → file/image/dir reminders → changed-file notes.
 ///
 /// Engine callers pass the result to [`engine.run_with_messages`].
 pub fn build_messages_for_turn(inputs: &ResolvedTurnInputs) -> Vec<Message> {
@@ -148,15 +143,10 @@ pub fn build_messages_for_turn(inputs: &ResolvedTurnInputs) -> Vec<Message> {
 /// Convert a resolved `@`-mention attachment into the model-visible
 /// system-reminder messages.
 ///
-/// TS parity: `case 'file' | 'image' | 'directory'` in
-/// `normalizeAttachmentForAPI` (`utils/messages.ts:3525,3545,3573`)
-/// produces *two* messages per attachment via
-/// `createToolUseMessage` + `createToolResultMessage`, both wrapped
-/// individually by `wrapMessagesInSystemReminder` (`messages.ts:3101`).
-/// Neither helper emits real `tool_use` / `tool_result` content
-/// blocks — both are plain user-role messages with synthetic narration
-/// text. The image branch keeps the image block unwrapped because
-/// `wrapMessagesInSystemReminder` only wraps text blocks.
+/// Produces *two* messages per attachment: a synthetic `tool_use`
+/// narration + `tool_result` wrapped in `<system-reminder>`. The image
+/// branch keeps the image block unwrapped because `<system-reminder>`
+/// only wraps text blocks.
 ///
 /// Returning a `Vec` (vs the previous `Option`) lets us emit the
 /// exact two-message shape; callers `flat_map` the results.
@@ -186,8 +176,7 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
             );
             // First message: text-only system-reminder with the synthetic
             // tool-use narration. Second message: the image block by itself
-            // — unwrapped, matching TS where `wrapMessagesInSystemReminder`
-            // leaves non-text blocks alone.
+            // — unwrapped, because `<system-reminder>` only wraps text blocks.
             vec![
                 coco_messages::wrapping::create_system_reminder_message(&call),
                 coco_messages::create_user_message_with_parts(vec![UserContentPart::File(
@@ -213,8 +202,7 @@ pub fn attachment_to_messages(att: &Attachment) -> Vec<Message> {
 }
 
 /// Convert a `detect_changed_files` attachment into the externally-modified
-/// notification message. TS: `case 'edited_text_file'`
-/// (`utils/messages.ts:3540`).
+/// notification message.
 pub fn changed_file_to_message(att: &Attachment) -> Option<Message> {
     match att {
         Attachment::File(f) => {

@@ -5,8 +5,7 @@
 //! user as a single assistant message; the parent conversation is
 //! unaffected.
 //!
-//! TS: `commands/btw/btw.tsx` + `utils/sideQuestion.ts`. The TS path
-//! renders into a modal overlay; coco-rs surfaces the answer inline
+//! coco-rs surfaces the answer inline
 //! (TUI shows it as a regular assistant message; SDK consumers see
 //! it on the existing message stream).
 //!

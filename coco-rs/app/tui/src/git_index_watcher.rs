@@ -1,9 +1,7 @@
 //! Watches `.git/index` to invalidate the file index after commits and
 //! checkouts.
 //!
-//! TS: `fileSuggestions.ts:142,738` — the TS implementation polls the git
-//! index mtime each keystroke and re-fires the search on change. The Rust
-//! port uses `coco_file_watch::FileWatcher` over the `notify` crate so the
+//! Uses `coco_file_watch::FileWatcher` over the `notify` crate so the
 //! refresh runs on actual filesystem events, not on every keystroke.
 
 use std::path::Path;

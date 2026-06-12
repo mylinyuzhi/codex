@@ -1,7 +1,4 @@
-//! Keystroke and chord display formatting.
-//!
-//! TS source: `keybindings/parser.ts:89-186` plus the platform-specific
-//! display strings in `keystrokeToDisplayString`. Two flavours:
+//! Keystroke and chord display formatting. Two flavours:
 //!
 //! * Canonical: lowercase, modifier order `ctrl+alt+shift+meta+cmd`,
 //!   readable key names. Used for hashing / equality / config files.
@@ -13,9 +10,7 @@ use crate::parser::KeyChord;
 use crate::parser::KeyCombo;
 
 /// Display platforms we distinguish for modifier-name rendering.
-///
-/// Mirrors TS `DisplayPlatform` (`parser.ts:151`). WSL and unknown both
-/// render as Linux-style modifiers.
+/// WSL and unknown both render as Linux-style modifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayPlatform {
     Macos,
@@ -40,8 +35,6 @@ impl DisplayPlatform {
 /// Canonical string for a single combo. Uses fixed modifier order
 /// (`ctrl+alt+shift+meta+cmd`) so two equivalent combos always render
 /// to the same string.
-///
-/// TS source: `parser.ts:89-100`.
 pub fn keystroke_to_string(combo: &KeyCombo) -> String {
     let mut parts: Vec<&str> = Vec::new();
     if combo.ctrl {
@@ -81,8 +74,6 @@ pub fn chord_to_string(chord: &KeyChord) -> String {
 /// Platform-aware single-combo display string. Use in status bars,
 /// help menus, and prompt placeholders.
 ///
-/// TS source: `parser.ts:157-176`.
-///
 /// Differences from [`keystroke_to_string`]:
 /// * Alt/meta are equivalent in terminals — render as `opt` on macOS,
 ///   `alt` elsewhere.
@@ -94,7 +85,7 @@ pub fn keystroke_to_display_string(combo: &KeyCombo, platform: DisplayPlatform) 
         parts.push("ctrl");
     }
     // Alt/meta collapse for terminal display — both render as `opt` on
-    // macOS, `alt` elsewhere (mirrors `parser.ts:163-167`).
+    // macOS, `alt` elsewhere.
     if combo.alt || combo.meta {
         parts.push(if matches!(platform, DisplayPlatform::Macos) {
             "opt"
@@ -106,7 +97,7 @@ pub fn keystroke_to_display_string(combo: &KeyCombo, platform: DisplayPlatform) 
         parts.push("shift");
     }
     // Distinct platform rendering for super (cmd/win): `cmd` on macOS,
-    // `super` elsewhere (mirrors `parser.ts:168-171`).
+    // `super` elsewhere.
     if combo.super_key {
         parts.push(if matches!(platform, DisplayPlatform::Macos) {
             "cmd"
@@ -134,9 +125,8 @@ pub fn chord_to_display_string(chord: &KeyChord, platform: DisplayPlatform) -> S
 }
 
 /// Map an internal key name to a human-readable display name.
-///
-/// TS source: `parser.ts:105-138`. Arrow keys render as glyphs;
-/// `escape` → `Esc`; other named keys get TitleCase or remain as-is.
+/// Arrow keys render as glyphs; `escape` → `Esc`; other named keys get
+/// TitleCase or remain as-is.
 fn key_to_display_name(key: &str) -> String {
     match key {
         "escape" => "Esc".into(),

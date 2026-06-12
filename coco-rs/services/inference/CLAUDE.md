@@ -2,15 +2,7 @@
 
 Thin multi-provider LLM client wrapper over `vercel-ai`. Generic retry, usage aggregation, cache-break detection, thinking-level conversion — and **nothing Anthropic-specific** (auth/OAuth/prompt-cache/rate-limit policy live in `vercel-ai-anthropic`, not here).
 
-## TS Source
-- `services/api/client.ts` — request dispatch, streaming composition
-- `services/api/withRetry.ts` — retry policy shape (backoff, auth retry)
-- `services/api/errors.ts`, `services/api/errorUtils.ts` — error classification
-- `services/api/logging.ts`, `services/api/dumpPrompts.ts` — request/response logs
-- `services/api/promptCacheBreakDetection.ts` — cache break detector
-- `services/api/usage.ts`, `services/api/emptyUsage.ts` — usage aggregation
-
-**Intentionally NOT ported here** (these belong in `vercel-ai-anthropic` or are Anthropic-only): `services/api/claude.ts`, `services/api/bootstrap.ts`, `services/api/filesApi.ts`, `services/api/referral.ts`, `services/api/sessionIngress.ts`, `services/api/adminRequests.ts`, `services/api/grove.ts`, `services/api/firstTokenDate.ts`, `services/api/metricsOptOut.ts`, `services/api/overageCreditGrant.ts`, `services/api/ultrareviewQuota.ts`, `services/oauth/`, `services/policyLimits/`, `services/claudeAiLimits.ts`, `services/rateLimitMessages.ts`, `utils/auth.ts`, `utils/betas.ts`.
+**Not in scope here** (these belong in `vercel-ai-anthropic` or are Anthropic-only concerns): OAuth, policy limits, rate-limit messaging, Claude.ai limits, auth helpers, beta resolution.
 
 ## Key Types
 
@@ -50,10 +42,9 @@ each owning a distinct concern:
   parameterless-tool convention); (b) non-empty unrecoverable
   garbage → `Value::String(raw)` so the raw model output is
   preserved for downstream diagnostics + `<tool_use_error>` echoes.
-  **Coco-rs deviation from TS** `parsed ?? {}`
-  (`utils/messages.ts:2694`): TS substitutes `{}` so the validator
-  reports "missing fields" only; coco-rs keeps the raw string so
-  schema validation + telemetry have the full signal. Adapters never raise
+  When input is non-empty unrecoverable garbage, coco-rs keeps the raw
+  string so schema validation + telemetry have the full signal (rather
+  than substituting `{}`). Adapters never raise
   `invalid=true` for any input; classification is schema validation's job
   exclusively (uniform contract across providers).
 - **schema validation — `app/query/src/tool_input_validate.rs`**.
@@ -65,16 +56,14 @@ each owning a distinct concern:
   `tool_call_preparer.rs` keeps catching hook-rewritten input).
   Sets `ToolCallPart.invalid_reason` to the structured variant
   (`SchemaViolation` / `NoSuchTool` / `JsonParseFailed`) so error wrap
-  picks the wrap prefix by `match`, not string compare. Mirrors TS
-  `services/tools/toolExecution.ts:614-680`.
+  picks the wrap prefix by `match`, not string compare.
 - **error wrap — `app/query/src/tool_call_preparer.rs::prepare_one_pending_tool_call`**.
   `tc.invalid` → synthetic
   `tool_result(is_error: true, content: "<tool_use_error>{prefix}: ...</tool_use_error>")`
   via `complete_tool_call_with_error_mode`. The agent loop's
   next turn carries the structured error back to the main LLM and
   the model self-corrects — there is no LLM repair callback, and
-  there is no static repair retry; recovery is the agent loop
-  itself. Mirrors TS Claude Code.
+  there is no static repair retry; recovery is the agent loop itself.
 
 If you find yourself adding tool-input parsing or validation
 logic to `vercel-ai/ai/src/generate_text/`, you almost certainly

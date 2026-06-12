@@ -1,7 +1,7 @@
 //! Durable plan-item store backing the `TaskCreate`/`TaskGet`/
 //! `TaskList`/`TaskUpdate` tools.
 //!
-//! **TS source**: `utils/tasks.ts`. Disk layout:
+//! Disk layout:
 //!
 //! ```text
 //! {config_home}/tasks/{sanitize(list_id)}/
@@ -14,8 +14,7 @@
 //!
 //! Locking: `fs2`-based exclusive advisory lock on `.lock` for list-
 //! level ops (create / reset / agent-busy claim) and on `{id}.json`
-//! for per-task updates / claims. 30-retry backoff matches the TS
-//! `proper-lockfile` budget (~2.6s on a 10-way race).
+//! for per-task updates / claims. 30-retry backoff (~2.6s on a 10-way race).
 
 use coco_config::EnvKey;
 use coco_config::env;
@@ -36,8 +35,7 @@ use tokio::sync::RwLock;
 
 use coco_tool_runtime::check_verification_nudge;
 
-/// Task status — 3 variants, matching TS `TaskStatusSchema` in
-/// `utils/tasks.ts:69-74`. **Not** the 6-variant `coco_types::TaskStatus`
+/// Task status — 3 variants. **Not** the 6-variant `coco_types::TaskStatus`
 /// which is for running background tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,7 +55,7 @@ impl TaskStatus {
     }
 }
 
-/// A durable plan-item, matching TS `TaskSchema` (`utils/tasks.ts:76-89`).
+/// A durable plan-item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
@@ -83,8 +81,8 @@ pub struct Task {
 
 /// Partial update applied in [`TaskListStore::update_task`]. `Option`
 /// fields are `None` to leave unchanged; `Some(None)` variants would
-/// need explicit sentinels — we don't expose those yet since TS only
-/// sets non-null values (null metadata keys are handled inline).
+/// need explicit sentinels — we don't expose those yet since only
+/// non-null values are set (null metadata keys are handled inline).
 #[derive(Debug, Clone, Default)]
 pub struct TaskUpdate {
     pub subject: Option<String>,
@@ -96,8 +94,7 @@ pub struct TaskUpdate {
     pub metadata_merge: Option<HashMap<String, serde_json::Value>>,
 }
 
-/// Outcome of a [`TaskListStore::claim_task`] call. Matches TS
-/// `ClaimTaskResult`.
+/// Outcome of a [`TaskListStore::claim_task`] call.
 #[derive(Debug, Clone)]
 pub enum ClaimResult {
     Success(Task),
@@ -120,8 +117,7 @@ const LOCK_RETRIES: u32 = 30;
 const LOCK_MIN_BACKOFF_MS: u64 = 5;
 const LOCK_MAX_BACKOFF_MS: u64 = 100;
 
-/// Resolve the task-list-id for the current process, matching TS
-/// `getTaskListId()` precedence (`utils/tasks.ts:199-210`):
+/// Resolve the task-list-id for the current process. Precedence:
 ///
 /// 1. `COCO_TASK_LIST_ID` env (explicit override)
 /// 2. In-process teammate's team name
@@ -157,7 +153,6 @@ pub fn resolve_task_list_id(
 }
 
 /// Sanitize a string for safe use as a filesystem path component.
-/// Matches TS `sanitizePathComponent` (`utils/tasks.ts:217-219`).
 pub fn sanitize_path_component(input: &str) -> String {
     input
         .chars()
@@ -193,7 +188,7 @@ pub trait TaskHookSink: Send + Sync {
 /// the whole session.
 pub struct TaskListStore {
     tasks_dir: PathBuf,
-    /// In-process change notifier (TS `notifyTasksUpdated`).
+    /// In-process change notifier.
     change_tx: tokio::sync::broadcast::Sender<()>,
     hook_sink: RwLock<Option<Arc<dyn TaskHookSink>>>,
 }
@@ -207,7 +202,7 @@ impl TaskListStore {
         // list-mutating op routes through `ensure_lock_file`, which
         // `create_dir_all`s the parent); readers tolerate its absence. This
         // avoids leaking an empty `tasks/<id>/` per session that never writes
-        // a task. TS parity: `ensureTasksDir` is writer-only (`utils/tasks.ts`).
+        // a task — the directory is writer-only.
         let (change_tx, _rx) = tokio::sync::broadcast::channel(16);
         Ok(Arc::new(Self {
             tasks_dir,
@@ -222,7 +217,7 @@ impl TaskListStore {
         *self.hook_sink.write().await = Some(sink);
     }
 
-    /// Subscribe to "tasks changed" notifications (TS `onTasksUpdated`).
+    /// Subscribe to "tasks changed" notifications.
     pub fn subscribe_changes(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.change_tx.subscribe()
     }
@@ -233,9 +228,7 @@ impl TaskListStore {
     /// but team teardown removes the whole task-list directory out-of-band
     /// (`coco_coordinator::team_file::cleanup_team_directories`) — no task
     /// op runs, so subscribers would otherwise miss the deletion. This
-    /// public hook lets that path emit the same signal. TS parity: the
-    /// `notifyTasksUpdated()` call inside `cleanupTeamDirectories`
-    /// (`teamHelpers.ts:677`).
+    /// public hook lets that path emit the same signal.
     pub fn notify_change(&self) {
         self.notify();
     }
@@ -409,8 +402,8 @@ impl TaskListStore {
 
     /// Reset this task list for a newly-created team.
     ///
-    /// Mirrors TS `resetTaskList`: preserve the highest assigned id as a
-    /// high-water mark, then remove all task JSON files under the list lock.
+    /// Preserve the highest assigned id as a high-water mark, then
+    /// remove all task JSON files under the list lock.
     pub async fn reset(&self) -> crate::Result<()> {
         self.with_list_lock(|| {
             let highest = self.highest_id_unlocked();
@@ -586,9 +579,8 @@ impl TaskListStore {
         Ok(true)
     }
 
-    /// Atomic claim (TS `claimTask`). `check_agent_busy=true` adds the
-    /// "agent already owns another open task" guard under the list
-    /// lock (TS `claimTaskWithBusyCheck`).
+    /// Atomic claim. `check_agent_busy=true` adds the
+    /// "agent already owns another open task" guard under the list lock.
     pub async fn claim_task(
         &self,
         task_id: &str,
@@ -596,7 +588,7 @@ impl TaskListStore {
         check_agent_busy: bool,
     ) -> crate::Result<ClaimResult> {
         // Early existence check outside the lock so missing ids return
-        // cleanly (TS lock layer errors on missing files).
+        // cleanly before attempting a lock.
         let Some(_) = self.get_task(task_id).await? else {
             return Ok(ClaimResult::TaskNotFound);
         };
@@ -714,7 +706,7 @@ impl TaskListStore {
 
     /// Should the model receive a verification-agent nudge after this
     /// update? Main-thread only, all tasks completed, ≥3 tasks, none
-    /// match `/verif/i`. Subjects are scanned in TS (`TaskUpdateTool.ts:345`).
+    /// match `/verif/i`.
     pub async fn should_nudge_verification_after_update(
         &self,
         just_completed: bool,
@@ -735,12 +727,10 @@ impl TaskListStore {
     /// Unassign all unresolved tasks owned by a teammate. Returns the
     /// list of `(id, subject)` pairs that were unassigned.
     ///
-    /// TS `unassignTeammateTasks` (`utils/tasks.ts:818-860`). We bypass
-    /// `update_task` and write directly under the per-task lock because
-    /// `TaskUpdate.owner: Option<String>` only expresses "set to Some",
-    /// not "clear to None" — TS `updateTask({owner: undefined})` clears
-    /// the field. Writing the file directly avoids needing to add a
-    /// sentinel variant just for this one caller.
+    /// Bypasses `update_task` and writes directly under the per-task lock
+    /// because `TaskUpdate.owner: Option<String>` only expresses "set to
+    /// Some", not "clear to None" — clearing the field requires writing
+    /// the file directly, avoiding a sentinel variant just for this one caller.
     pub async fn unassign_teammate_tasks(
         &self,
         teammate_id: &str,

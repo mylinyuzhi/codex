@@ -4,7 +4,6 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn wrap_system_reminder_matches_ts_format_exactly() {
-    // TS: `<system-reminder>\n${content}\n</system-reminder>`
     let wrapped = wrap_system_reminder("hello world");
     assert_eq!(
         wrapped,

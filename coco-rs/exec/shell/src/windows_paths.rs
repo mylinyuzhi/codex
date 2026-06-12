@@ -1,8 +1,7 @@
 //! Cross-platform path translation between Windows and POSIX forms.
 //!
-//! TS source: `utils/windowsPaths.ts` (`windowsPathToPosixPath`,
-//! `posixPathToWindowsPath`). LRU caching elided — these conversions are
-//! cheap pure string ops and the hot path runs once per shell command.
+//! LRU caching elided — these conversions are cheap pure string ops and
+//! the hot path runs once per shell command.
 //!
 //! Used by the bash provider when shelling out under Git Bash on Windows:
 //! the inner bash command needs POSIX paths (`/c/Users/foo`) but the

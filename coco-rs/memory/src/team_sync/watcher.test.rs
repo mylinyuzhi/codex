@@ -16,8 +16,7 @@ fn test_parse_http_status_returns_none_for_other_shapes() {
 
 #[test]
 fn test_debounce_constant_matches_ts() {
-    // TS `DEBOUNCE_MS = 2000`. Lock the value here so a future tweak
-    // to the constant forces a code review of the cross-language
-    // parity.
+    // Lock the value here so a future tweak to the constant forces a
+    // code review.
     assert_eq!(DEBOUNCE_MS, 2_000);
 }

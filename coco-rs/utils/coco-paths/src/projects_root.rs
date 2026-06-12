@@ -2,8 +2,6 @@
 //! `getProjectsDir`, `getProjectDir`, and `findProjectDir` (with the
 //! long-path prefix-fallback that handles Bun/Node hash divergence).
 //!
-//! TS: `utils/sessionStoragePortable.ts:325-380`.
-//!
 //! Most callers should use [`ProjectPaths`](crate::ProjectPaths) for
 //! per-project paths. These functions exist for the cross-project
 //! discovery case (e.g. `listSessions` walking every project dir).
@@ -38,13 +36,11 @@ pub fn project_dir(memory_base: &Path, project_path: &Path) -> PathBuf {
 ///   [`MAX_SANITIZED_LENGTH`] (i.e. its real disk name has a djb2
 ///   suffix) and a directory whose name starts with
 ///   `<prefix>-` exists. This is the long-path prefix fallback that
-///   handles TS Bun-vs-Node hash divergence — different runtimes can
+///   handles Bun-vs-Node hash divergence — different runtimes can
 ///   produce different suffixes for the same input, but they share
 ///   the truncated prefix.
 /// - `Ok(None)` when neither exact match nor prefix-match is found.
 /// - `Err` on I/O errors that aren't "not found".
-///
-/// TS: `findProjectDir` at `utils/sessionStoragePortable.ts:354-380`.
 pub fn find_project_dir(
     memory_base: &Path,
     project_path: &Path,

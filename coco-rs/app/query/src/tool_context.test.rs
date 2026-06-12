@@ -81,10 +81,9 @@ async fn test_factory_preserves_structured_turn_abort_reason() {
 
 #[tokio::test]
 async fn test_factory_main_loop_model_defaults_to_config_model_id() {
-    // Pre-A contract: when no current_model_id override is supplied,
-    // main_loop_model mirrors the static config.model_id. This path
-    // is used by tests and legacy single-client constructions that
-    // don't have a ModelRuntime.
+    // When no current_model_id override is supplied, main_loop_model
+    // falls back to the static config.model_id. This path is used by
+    // tests and legacy single-client constructions without a ModelRuntime.
     let config = test_config();
     let ctx = factory(config).build(Default::default()).await;
     assert_eq!(ctx.main_loop_model, "claude-test");
@@ -92,10 +91,9 @@ async fn test_factory_main_loop_model_defaults_to_config_model_id() {
 
 #[tokio::test]
 async fn test_factory_honors_current_model_id_override() {
-    // Pre-A fix: after a fallback switch, the engine passes the
-    // active-slot model id via ToolContextOverrides so tools and
-    // subagents see post-fallback state instead of the static config
-    // value (which was set at session bootstrap and never updated).
+    // After a fallback switch, the engine passes the active-slot model id
+    // via ToolContextOverrides so tools and subagents see post-fallback
+    // state instead of the static config value.
     let config = test_config();
     let ctx = factory(config)
         .build(ToolContextOverrides {
@@ -462,10 +460,10 @@ async fn test_factory_defaults_skill_handle_to_noop_unavailable() {
 //
 // Verifies the `engine.live_command_rules` Arc threaded into the
 // factory is read at every `build()` and folded into
-// `permission_context.allow_rules[Command]`. TS parity:
-// `getAppState().alwaysAllowRules.command` is read each permission
-// check; per-engine = per-user-msg scoping comes from the engine's
-// fresh-per-turn lifecycle (see `engine_live_rules` module docs).
+// `permission_context.allow_rules[Command]`. `alwaysAllowRules.command`
+// is read at each permission check; per-engine = per-user-msg scoping
+// comes from the engine's fresh-per-turn lifecycle
+// (see `engine_live_rules` module docs).
 
 fn skill_cmd_rule(tool_pattern: &str) -> coco_types::PermissionRule {
     coco_types::PermissionRule {
@@ -540,8 +538,7 @@ async fn test_factory_cross_batch_propagation_within_same_arc() {
     // Same Arc shared with the (hypothetical) engine + handle:
     // batch 1's `build()` sees `[Read]`, then a "tool emission"
     // appends `[Edit]`, batch 2's `build()` sees both. This is the
-    // cross-turn-within-user-msg path that TS gets via the
-    // closure-captured appState.
+    // cross-turn-within-user-msg propagation path.
     let config = test_config();
     let store: Arc<RwLock<Vec<coco_types::PermissionRule>>> =
         Arc::new(RwLock::new(vec![skill_cmd_rule("Read")]));
@@ -676,13 +673,10 @@ async fn test_factory_uses_live_permission_mode_override() {
 
 #[tokio::test]
 async fn test_factory_threads_messages_snapshot() {
-    // I7: post-budget messages snapshot from `build_prompt` reaches
-    // `ctx.messages` per turn. Verifies the field is no longer dead —
-    // without this, AgentTool fork-mode's `is_in_fork_child` recursion
-    // guard could never trigger and `parent_messages` was always empty.
-    //
-    // TS parity: `query.ts:548` sets `toolUseContext.messages =
-    // messagesForQuery` after `applyToolResultBudget` runs.
+    // Post-budget messages snapshot from `build_prompt` reaches
+    // `ctx.messages` per turn. Without this, AgentTool fork-mode's
+    // `is_in_fork_child` recursion guard could never trigger and
+    // `parent_messages` was always empty.
     let parent_msg = Arc::new(coco_messages::create_user_message("parent turn 1"));
     let snapshot = Arc::new(vec![parent_msg.clone()]);
     let ctx = factory(test_config())
@@ -709,11 +703,11 @@ async fn test_factory_defaults_messages_to_empty_when_no_snapshot() {
 
 #[tokio::test]
 async fn test_factory_messages_snapshot_supports_fork_recursion_guard() {
-    // I8: with the snapshot threaded, `coco_subagent::is_in_fork_child`
+    // With the snapshot threaded, `coco_subagent::is_in_fork_child`
     // correctly detects a parent history containing the
     // `<fork-boilerplate>` tag. Without the per-turn injection this
     // returned `false` on the empty default vec and fork-of-fork was
-    // silently allowed. TS parity: `AgentTool.tsx:332`.
+    // silently allowed.
     let directive = coco_subagent::build_fork_child_message("ignored");
     let in_fork_msg = Arc::new(coco_messages::create_user_message(&directive));
     let plain_msg = Arc::new(coco_messages::create_user_message("hello"));

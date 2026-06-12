@@ -108,7 +108,6 @@ impl coco_error::ErrorExt for ToolError {
 }
 
 /// Format a tool error for model consumption. Truncated at 10,000 chars.
-/// TS: formatToolError() — handles AbortError, ShellError, general errors.
 pub fn format_tool_error(error: &ToolError) -> String {
     let msg = match error {
         ToolError::Cancelled => "The tool execution was interrupted.".to_string(),
@@ -118,7 +117,7 @@ pub fn format_tool_error(error: &ToolError) -> String {
         other => other.to_string(),
     };
 
-    // TS: first 5k + "... [N truncated] ..." + last 5k
+    // first 5k + "... [N truncated] ..." + last 5k
     if msg.len() > 10_000 {
         let first = coco_utils_string::take_bytes_at_char_boundary(&msg, 5_000);
         let last = coco_utils_string::take_last_bytes_at_char_boundary(&msg, 5_000);
@@ -142,7 +141,6 @@ pub fn classify_tool_error(error: &ToolError) -> &'static str {
 }
 
 /// Synthetic errors for interrupted tool execution.
-/// TS: used when a tool call is cancelled due to sibling failure or user interrupt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SyntheticToolError {
@@ -167,7 +165,6 @@ impl fmt::Display for SyntheticToolError {
 }
 
 /// OTel telemetry event for tool execution completion.
-/// TS: emitted after every tool call for analytics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUseEvent {
     pub tool_id: ToolId,

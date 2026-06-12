@@ -1,12 +1,10 @@
 //! `/commit-push-pr` — orchestrated commit + push + PR prompt.
 //!
-//! TS source: `commands/commit-push-pr.ts`. The TS implementation builds a
-//! prompt that interpolates several `!\`...\`` shell substitutions
+//! Builds a prompt that interpolates several shell substitutions
 //! (`git status`, `git diff HEAD`, `git branch --show-current`,
 //! `git diff <default>...HEAD`, `gh pr view --json number`) and resolves
-//! the repository's default branch via `getDefaultBranch()`. The agent
-//! then runs the orchestrated commit → push → PR flow with `ALLOWED_TOOLS`
-//! pre-granted.
+//! the repository's default branch. The agent then runs the orchestrated
+//! commit → push → PR flow with `ALLOWED_TOOLS` pre-granted.
 //!
 //! This handler mirrors that shape: detect the default branch, run each
 //! of the shell substitutions inline, render the prompt template, append
@@ -112,7 +110,7 @@ impl CommandHandler for CommitPushPrHandler {
     }
 }
 
-/// Detect the repository's default branch. Mirrors TS `getDefaultBranch()`:
+/// Detect the repository's default branch:
 /// 1. Prefer `git symbolic-ref refs/remotes/origin/HEAD` (resolves to
 ///    `refs/remotes/origin/<branch>`); take the trailing segment.
 /// 2. Fall back to `git config --get init.defaultBranch`.
@@ -157,7 +155,7 @@ async fn run_git(cwd: &Path, args: &[&str]) -> crate::Result<String> {
 
 /// `gh pr view` returns non-zero when no PR exists for the branch — that's
 /// the *normal* path before the first push. Treat any non-zero status as
-/// "no PR yet" and emit empty output (matches TS `2>/dev/null || true`).
+/// "no PR yet" and emit empty output (equivalent to `2>/dev/null || true`).
 async fn run_gh_pr_view(cwd: &Path) -> String {
     match tokio::process::Command::new("gh")
         .current_dir(cwd)

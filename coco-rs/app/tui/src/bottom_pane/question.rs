@@ -27,8 +27,7 @@ pub(crate) fn map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Enter => Some(TuiCommand::SurfaceConfirm),
         KeyCode::Up => Some(TuiCommand::SurfacePrev),
         KeyCode::Down => Some(TuiCommand::SurfaceNext),
-        // Left/Right switch between questions (wrapping), mirroring codex
-        // `move_question` and the TS question tabs. Footer actions stay on Tab.
+        // Left/Right switch between questions (wrapping). Footer actions stay on Tab.
         KeyCode::Left => Some(TuiCommand::QuestionSwitchQuestion(-1)),
         KeyCode::Right => Some(TuiCommand::QuestionSwitchQuestion(1)),
         // Tab/Shift+Tab cycle between questions and the footer actions
@@ -48,14 +47,13 @@ pub(crate) fn map_key(key: KeyEvent) -> Option<TuiCommand> {
 
 /// Filter-keystroke routing for a Question prompt. Space toggles
 /// multi-select; printable chars edit the free-text input when it is
-/// focused; otherwise digits 1-9 jump to an option (TS `Select` number
-/// shortcuts). Question prompts have no filter — everything else is
-/// silently swallowed.
+/// focused; otherwise digits 1-9 jump to an option via number shortcuts.
+/// Question prompts have no filter — everything else is silently swallowed.
 pub(crate) fn filter_question(state: &mut AppState, c: char) {
     // The focused "Other" free-text input owns every printable char INCLUDING
     // space (multi-word answers) and digits; `question_free_text_input` returns
     // false unless that input is focused, so only when it is not do Space toggle
-    // a multi-select option and a digit jump to an option (TS `Select`).
+    // a multi-select option and a digit jump to an option.
     if question_free_text_input(state, c) {
         return;
     }
@@ -193,7 +191,6 @@ pub(crate) fn question_switch_question(state: &mut AppState, delta: i32) {
 
 /// Move the option cursor to the `digit`-th option (1-based) when a question is
 /// focused. Out-of-range digits are no-ops.
-/// Mirrors the TS `Select` number shortcuts.
 pub(crate) fn question_select_digit(state: &mut AppState, digit: i32) {
     use crate::state::QuestionFocusTarget;
     use crate::state::QuestionPage;
@@ -267,9 +264,7 @@ pub(crate) async fn question_select_digit_and_confirm(
 }
 
 /// Toggle the focused option's checked state in a multi-select question
-/// (Space). Single-select and footer focus are no-ops. TS `MultiSelect`
-/// onSpace handler in
-/// `claude-code/src/components/permissions/AskUserQuestionPermissionRequest/QuestionView.tsx`.
+/// (Space). Single-select and footer focus are no-ops.
 pub(crate) fn question_toggle_checked(state: &mut AppState) {
     use crate::state::QuestionFocusTarget;
     use crate::state::QuestionPage;
@@ -356,8 +351,7 @@ pub(crate) fn question_free_text_backspace(state: &mut AppState) -> bool {
 }
 
 /// Build the `{...original_input, answers, annotations}` payload shipped
-/// via `UserCommand::ApprovalResponse.updated_input`. Mirrors TS
-/// `submitAnswers` at `AskUserQuestionPermissionRequest.tsx:407`.
+/// via `UserCommand::ApprovalResponse.updated_input`.
 /// Submit all collected answers (Enter on the Submit tab, or on the sole
 /// question of a single-question prompt). Splices the payload into
 /// `updated_input` so the tool's `execute` sees the user's choices.
@@ -384,8 +378,8 @@ pub(crate) fn build_answer_payload(q: &crate::state::QuestionPromptState) -> ser
     let mut annotations = serde_json::Map::new();
 
     for qi in &q.questions {
-        // Multi-select submits exactly what is checked (possibly nothing — TS
-        // `SelectMulti` ships the selected array verbatim, with no coercion to
+        // Multi-select submits exactly what is checked (possibly nothing —
+        // the selected array is submitted verbatim, with no coercion to
         // the cursor position). Single-select submits only a committed choice.
         let chosen_indices: Vec<usize> = if qi.multi_select {
             qi.checked.clone()
@@ -405,9 +399,8 @@ pub(crate) fn build_answer_payload(q: &crate::state::QuestionPromptState) -> ser
         let answer = labels.join(", ");
         answers.insert(qi.question.clone(), serde_json::Value::String(answer));
 
-        // Annotation entry — preview from the selected option (TS
-        // `selectedOption?.preview`). The independent free-text value is part
-        // of `answers`, so it is not duplicated as a note.
+        // Annotation entry — preview from the selected option. The independent
+        // free-text value is part of `answers`, so it is not duplicated as a note.
         let preview = qi
             .selected
             .and_then(|idx| qi.options.get(idx))

@@ -32,9 +32,8 @@ async fn emits_prepend_user_context_body_when_date_present() {
         .unwrap()
         .expect("emits");
     assert_eq!(r.attachment_type, AttachmentType::UserContext);
-    // TS `prependUserContext` inner body (sans outer <system-reminder>),
     // currentDate-only context map. Six-space indent before IMPORTANT is
-    // the TS template-literal artifact.
+    // a template-literal artifact preserved for model compatibility.
     assert_eq!(
         r.content(),
         Some(

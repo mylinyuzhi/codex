@@ -6,8 +6,7 @@
 //! `SessionResult`, plus the hook-event forwarder bridge that carries
 //! `HookExecutionEvent` from `coco-hooks` into `CoreEvent::Protocol`.
 //!
-//! TS parity: this is the analog of `print.ts` + `runHeadless()` —
-//! every consumer of the SDK / TUI sees the same envelope of session
+//! Every consumer of the SDK / TUI sees the same envelope of session
 //! events, regardless of whether the inner loop succeeded or errored.
 //!
 //! Extracted from `engine.rs` so the multi-turn loop file can stay
@@ -120,12 +119,12 @@ impl QueryEngine {
     /// First message is the user message (used for file history snapshot UUID).
     /// Subsequent messages are attachment messages (is_meta=true, system-reminder wrapped).
     ///
-    /// Session lifecycle sequence (matches TS print.ts + QueryEngine.ts):
-    /// 1. SessionStarted  (if bootstrap attached)   — TS: buildSystemInitMessage
-    /// 2. SessionStateChanged(Running)              — TS: notifySessionStateChanged('running')
-    /// 3. run_session_loop: turn-by-turn work       — TS: query() generator loop
-    /// 4. SessionStateChanged(Idle)                 — TS: notifySessionStateChanged('idle')
-    /// 5. SessionResult (success or error subtype)  — TS: SDKResultMessage
+    /// Session lifecycle sequence:
+    /// 1. SessionStarted  (if bootstrap attached)
+    /// 2. SessionStateChanged(Running)
+    /// 3. run_session_loop: turn-by-turn work
+    /// 4. SessionStateChanged(Idle)
+    /// 5. SessionResult (success or error subtype)
     ///
     /// Steps 1/2/4/5 fire regardless of success or error so SDK consumers
     /// always see a complete session envelope.
@@ -187,15 +186,13 @@ impl QueryEngine {
         // via a child `CancellationToken` off `self.cancel`, and drained at
         // the single exit point below. See plan file WS-5.
         //
-        // TS: print.ts emits SDKHookStartedMessage/etc. directly from the
-        // hook execution path; in Rust we use this child task so
-        // orchestration stays independent of the coco-query event type.
+        // In Rust we use this child task so orchestration stays independent
+        // of the coco-query event type.
         let hook_cancel = self.cancel.child_token();
-        // TS `--include-hook-events` opt-in: only emit
-        // `SDKHookStarted/Progress/Response` to the SDK stream when the
-        // session was started with the flag. When disabled, skip the
-        // forwarder channel entirely so the orchestration layer never
-        // sees a sender (cheaper than emitting + dropping).
+        // Only emit hook events to the SDK stream when the session was started
+        // with the flag. When disabled, skip the forwarder channel entirely so
+        // the orchestration layer never sees a sender (cheaper than emitting +
+        // dropping).
         let (hook_tx_opt, hook_forwarder_handle) =
             if event_tx.is_some() && self.config.include_hook_events {
                 let (hook_event_tx, hook_event_rx) =
@@ -212,9 +209,8 @@ impl QueryEngine {
             };
 
         // History is owned here so StopFailure can carry the last assistant
-        // message text on the error path (TS parity: `executeStopFailureHooks`
-        // pulls the text out of `messages` at the call site). On success the
-        // QueryResult already exposes `response_text`.
+        // message text on the error path. On success the QueryResult already
+        // exposes `response_text`.
         let mut history = MessageHistory::new();
         // Stamp F9 envelope so every emit from this engine invocation
         // carries the active session + agent identity.
@@ -259,8 +255,7 @@ impl QueryEngine {
         // Subagent finalize: drop this agent's tracking entry from the
         // shared `CacheBreakDetector` so a long-running parent session
         // doesn't accumulate stale subagent snapshots that would push
-        // out the main thread's entry under the LRU cap. TS:
-        // runAgent.ts:18 `cleanupAgentTracking(agentId)`.
+        // out the main thread's entry under the LRU cap.
         if let Some(agent_id) = self.config.agent_id.as_deref()
             && let Ok(runtime) = self
                 .model_runtimes
@@ -305,18 +300,16 @@ impl QueryEngine {
         }
 
         // StopFailure — fire-and-forget hooks when the turn ended in an
-        // API / runtime error rather than a clean stop. TS:
-        // `executeStopFailureHooks()` (`utils/hooks.ts:3594`). Output
-        // and exit codes are intentionally ignored — this is observability
-        // only, not a recovery path. We swallow registry-level failures
-        // so a misconfigured hook can't suppress the user-visible error.
+        // API / runtime error rather than a clean stop. Output and exit
+        // codes are intentionally ignored — this is observability only,
+        // not a recovery path. We swallow registry-level failures so a
+        // misconfigured hook can't suppress the user-visible error.
         if let (Err(e), Some(hooks)) = (&result, &self.hooks) {
             let err_msg = e.to_string();
             let hook_ctx = self.orchestration_ctx();
             let last_text = extract_last_assistant_text(&history);
             let last_assistant_message = (!last_text.is_empty()).then_some(last_text);
-            // TS classifies via a small enum (`rate_limit` / `auth` / …).
-            // Without classification infrastructure here we pass a single
+            // Without error-classification infrastructure here we pass a single
             // bucket; users match on `error_details` for the raw text.
             if let Err(hook_err) = coco_hooks::orchestration::execute_stop_failure(
                 hooks,
@@ -332,8 +325,7 @@ impl QueryEngine {
         }
 
         // SessionResult — always emitted. On Err, we synthesize a minimal
-        // QueryResult-like view so SDK consumers see a terminal `result`
-        // event matching TS SDKResultErrorMessage.
+        // QueryResult-like view so SDK consumers see a terminal `result` event.
         let params = match &result {
             Ok(qr) => self.build_session_result_params(qr, /*error_messages*/ Vec::new()),
             Err(e) => self.build_session_error_params(e.to_string()),
@@ -374,7 +366,7 @@ impl QueryEngine {
             return;
         };
         // Wire format is whatever `PermissionMode`'s serde serialization
-        // produces — now camelCase matching TS `PermissionModeSchema`.
+        // produces — camelCase matching the `PermissionModeSchema` wire format.
         let permission_mode = serde_json::to_value(self.config.permission_mode)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
@@ -431,7 +423,7 @@ impl QueryEngine {
     }
 
     /// Synthesize a `SessionResultParams` for the error path (when
-    /// `run_session_loop` returned `Err`). Matches TS `SDKResultErrorSchema`.
+    /// `run_session_loop` returned `Err`).
     pub(crate) fn build_session_error_params(
         &self,
         error_msg: String,
@@ -456,10 +448,9 @@ impl QueryEngine {
     }
 
     /// Build a `SessionResultParams` from a completed `QueryResult`.
-    /// Matches TS `SDKResultMessage` shape (coreSchemas.ts:1407-1451).
     ///
-    /// `error_messages` is propagated into the `errors` field (for TS
-    /// `SDKResultErrorSchema` parity); success results pass an empty Vec.
+    /// `error_messages` is propagated into the `errors` field;
+    /// success results pass an empty Vec.
     pub(crate) fn build_session_result_params(
         &self,
         qr: &QueryResult,
@@ -491,9 +482,7 @@ impl QueryEngine {
             .clone()
             .unwrap_or_else(|| "end_turn".to_string());
         // `error_*` stop_reason subtypes are themselves error terminations,
-        // even with no accumulated error message. Mirrors TS
-        // `subtype: 'error_max_structured_output_retries'` / `'error_max_turns'`
-        // result branches.
+        // even with no accumulated error message.
         let stop_reason_is_error = stop_reason.starts_with("error_");
         let is_error = qr.cancelled
             || qr.budget_exhausted
@@ -574,10 +563,6 @@ impl QueryEngine {
     /// Associated function (no `&self`) so callers can drive a standalone
     /// task with `tokio::spawn(QueryEngine::forward_hook_events(...))`. Tests
     /// rely on this calling convention.
-    ///
-    /// TS: print.ts emits these directly from the hook execution path; in
-    /// Rust we use a child task so orchestration stays independent of
-    /// the coco-query event type.
     ///
     /// Graceful shutdown: the normal exit path is for the caller to drop
     /// the matching sender, which makes `rx.recv()` return `None` and

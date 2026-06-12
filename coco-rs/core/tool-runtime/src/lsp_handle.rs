@@ -4,7 +4,6 @@
 //! implementation in `app/cli/src/lsp_handle_adapter.rs` (wraps
 //! `Arc<coco_lsp::LspServerManager>`), injected via `ToolUseContext`.
 //!
-//! TS source: `tools/LSPTool/LSPTool.ts` + `services/lsp/LSPServerManager.ts`
 //! `sendRequest()` — tools call the JSON-RPC method by name and parse the
 //! raw response. The trait is intentionally thin: every typed shape lives
 //! in the tool layer (`core/tools/src/tools/lsp.rs`) so this crate stays
@@ -23,8 +22,7 @@ use serde_json::Value;
 pub trait LspHandle: Send + Sync {
     /// Whether at least one LSP server is configured **and** spawnable for the
     /// current workspace. Used by `Tool::is_enabled` to filter the `LSPTool`
-    /// out of the model's tool list when there are no servers — TS parity:
-    /// `LSPTool.isEnabled() { return isLspConnected() }`.
+    /// out of the model's tool list when there are no servers.
     ///
     /// Synchronous because `Tool::is_enabled` is sync. Implementations should
     /// back this with an `AtomicBool` (see
@@ -37,8 +35,8 @@ pub trait LspHandle: Send + Sync {
     /// if not already tracked, and forwarding `params` verbatim.
     ///
     /// `file_path` is always required, even for `workspace/symbol`, where
-    /// it acts as the *anchor* for server selection — TS uses the same
-    /// convention (the workspace-symbol schema still requires `filePath`).
+    /// it acts as the *anchor* for server selection — the workspace-symbol
+    /// schema still requires `filePath`.
     ///
     /// Returns the server's `result` (may be `Value::Null` when the server
     /// reports "no result"). Errors are returned for: no server for this
@@ -56,11 +54,9 @@ pub trait LspHandle: Send + Sync {
     /// diagnostics. Errors are silently swallowed — failing to notify
     /// must never fail the user's tool call.
     ///
-    /// TS: `FileWriteTool.ts` calls `lspManager.saveFile(path)` +
-    /// `clearDeliveredDiagnosticsForFile()`. The Rust handle implementation
-    /// is responsible for both — clearing the delivered-diagnostics LRU
-    /// here so re-published diagnostics for the saved file are not
-    /// suppressed by cross-turn dedup.
+    /// The Rust handle implementation is responsible for both — clearing
+    /// the delivered-diagnostics LRU here so re-published diagnostics
+    /// for the saved file are not suppressed by cross-turn dedup.
     async fn notify_save(&self, file_path: &Path);
 
     /// Proactively tear down every LSP server rooted at `root_path`.
@@ -80,7 +76,7 @@ pub trait LspHandle: Send + Sync {
 
     /// Re-read the on-disk LSP config and re-merge plugin-contributed servers,
     /// then re-prewarm. Called from `/reload-plugins` so newly enabled/disabled
-    /// plugin LSP servers take effect (TS `reinitializeLspServerManager`).
+    /// plugin LSP servers take effect.
     /// Default no-op — `NoOpLspHandle` and sessions without LSP inherit it.
     async fn reload(&self, _project_root: &Path) {}
 }

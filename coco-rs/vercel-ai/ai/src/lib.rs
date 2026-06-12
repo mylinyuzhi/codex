@@ -1,7 +1,7 @@
 //! vercel-ai - Vercel AI SDK core functions for Rust
 //!
 //! This crate provides high-level API functions for LLM interactions, matching
-//! `@ai-sdk/ai` TypeScript package. It builds on top of `vercel-ai-provider`
+//! the `@ai-sdk/ai` v4 specification. It builds on top of `vercel-ai-provider`
 //! types and `vercel-ai-provider-utils` utilities.
 //!
 //! # Core Functions
@@ -105,7 +105,7 @@ pub use generate_text::{
     DynamicToolCall,
     DynamicToolResult,
     GenerateTextCallbacks,
-    // TS-parity event type aliases
+    // event type aliases
     GenerateTextEndEvent,
     GenerateTextOptions,
     GenerateTextResult,

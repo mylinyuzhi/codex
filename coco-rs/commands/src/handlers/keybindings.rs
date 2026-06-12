@@ -1,13 +1,8 @@
 //! `/keybindings` — write template + open ~/.coco/keybindings.json in $EDITOR.
 //!
-//! TS source: `commands/keybindings/keybindings.ts`. The TS handler writes
-//! a template (with `wx` exclusive-create) so existing customizations are
-//! never clobbered, then opens the file in the user's editor.
-//!
-//! coco-rs follows the same shape but is intentionally minimal: it skips
-//! the feature-gate (`isKeybindingCustomizationEnabled`) since coco-rs has
-//! no equivalent gate, and the template is a small JSON skeleton instead
-//! of importing from `coco-keybindings` (which doesn't yet expose one).
+//! Writes a template (with `wx` exclusive-create) so existing customizations
+//! are never clobbered, then opens the file in the user's editor. Uses a
+//! small JSON skeleton as the template.
 
 use std::path::Path;
 use std::path::PathBuf;

@@ -28,7 +28,7 @@ fn test_sandbox_settings_default_disabled() {
     // High-level posture defaults
     assert_eq!(settings.mode, SandboxMode::ReadOnly);
     assert!(!settings.allow_network);
-    // TS-parity defaults
+    // defaults
     assert!(!settings.enabled);
     assert!(settings.auto_allow_bash_if_sandboxed);
     assert!(settings.allow_unsandboxed_commands);

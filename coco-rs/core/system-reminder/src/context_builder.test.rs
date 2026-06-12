@@ -54,7 +54,6 @@ fn sets_is_auto_mode_from_live_permission_mode() {
 
 #[test]
 fn plan_mode_with_active_auto_classifier_sets_is_auto_mode() {
-    // TS `inPlanWithAuto`: `mode == 'plan' && autoModeStateModule?.isAutoModeActive()`.
     // With the classifier active the auto-mode reminder must still fire
     // even though the live mode is `Plan`.
     let c = cfg();

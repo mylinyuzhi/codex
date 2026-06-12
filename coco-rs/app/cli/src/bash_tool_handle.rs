@@ -2,12 +2,9 @@
 //! shell markers through the real `Bash` tool with a per-command permission
 //! check.
 //!
-//! TS parity: `utils/promptShellExecution.ts:executeShellCommandsInPrompt`,
-//! which for each marker calls
-//! `hasPermissionsToUseTool(BashTool, { command }, ctx)` and then
-//! `BashTool.call({ command }, ctx)`. The skill loader
-//! (`skills/loadSkillsDir.ts`) injects the skill frontmatter `allowed-tools`
-//! into `toolPermissionContext.alwaysAllowRules.command` for the duration of
+//! For each marker, calls `hasPermissionsToUseTool(BashTool, { command }, ctx)`
+//! and then executes the command. The skill loader injects the skill
+//! frontmatter `allowed-tools` into the permission context for the duration of
 //! that call. Slash commands pass an empty `allowed_tools`.
 //!
 //! ## Why a snapshot `ToolUseContext`
@@ -88,8 +85,7 @@ impl BashToolHandle for SessionBashToolHandle {
         let input_value: Value = serde_json::json!({ "command": command });
 
         // Clone the base context and fold the caller's `allowed-tools` into the
-        // permission context as `Command`-source allow rules — TS
-        // `alwaysAllowRules.command = allowedTools`.
+        // permission context as `Command`-source allow rules.
         let mut ctx = self.base_ctx.clone();
         if !allowed_tools.is_empty() {
             let rules: Vec<PermissionRule> = allowed_tools
@@ -107,9 +103,9 @@ impl BashToolHandle for SessionBashToolHandle {
                 .extend(rules);
         }
 
-        // Mirror TS `hasPermissionsToUseTool`: evaluate with the tool's own
-        // permission check (Bash subcommand analysis) wired in. Anything other
-        // than `Allow` aborts the whole expansion (MalformedCommandError).
+        // Evaluate with the tool's own permission check (Bash subcommand
+        // analysis) wired in. Anything other than `Allow` aborts the whole
+        // expansion (MalformedCommandError).
         //
         // `check_permissions` is async but the evaluator's `ToolCheckFn` is
         // sync, so we compute the tool-level result up front and hand the
@@ -154,8 +150,8 @@ async fn bash_check(input: &BashInput, ctx: &ToolUseContext) -> coco_types::Tool
 }
 
 /// Format the Bash result `data` block (`{ stdout, stderr, .. }`) into the
-/// string substituted back into the prompt. Mirrors TS `formatBashOutput`:
-/// trimmed stdout, then a `[stderr]\n…` block when stderr is non-empty.
+/// string substituted back into the prompt: trimmed stdout, then a
+/// `[stderr]\n…` block when stderr is non-empty.
 fn format_bash_output(data: &Value) -> String {
     let stdout = data.get("stdout").and_then(Value::as_str).unwrap_or("");
     let stderr = data.get("stderr").and_then(Value::as_str).unwrap_or("");

@@ -1,10 +1,9 @@
 //! Session-memory service: 9-section markdown insights per session.
 //!
-//! TS: `services/SessionMemory/sessionMemory.ts`. Distinct from compact's
-//! `SessionMemoryConfig` — that one is a compact-time summary; this is
-//! a structured 9-section document the model edits incrementally during
-//! the conversation, capped at per-section + total-section token
-//! budgets.
+//! Distinct from compact's `SessionMemoryConfig` — that one is a
+//! compact-time summary; this is a structured 9-section document the
+//! model edits incrementally during the conversation, capped at
+//! per-section + total-section token budgets.
 //!
 //! Trigger gates:
 //! - Init: total context tokens ≥ `session_memory_init_tokens` (once).
@@ -53,10 +52,10 @@ use crate::telemetry::MemoryEvent;
 use crate::telemetry::MemoryTelemetryEmitter;
 use crate::telemetry::NoopEmitter;
 
-/// `wait_for_extraction` default timeout — TS 15s.
+/// `wait_for_extraction` default timeout — 15s.
 pub const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Stale extraction threshold — TS 60s. Past this we don't wait, the
+/// Stale extraction threshold — 60s. Past this we don't wait, the
 /// extraction is presumed crashed.
 pub const STALE_THRESHOLD: Duration = Duration::from_secs(60);
 
@@ -66,18 +65,17 @@ struct SessionState {
     last_extraction_tokens: i64,
     last_extraction_tool_calls: i32,
     /// Last message UUID folded into a successful extraction. Cumulative
-    /// tool-call counts are computed since this cursor — TS parity with
-    /// `lastMemoryMessageUuid` in `services/SessionMemory/sessionMemory.ts`.
-    /// Kept as `String` because the engine threads it through callsites
-    /// that already operate on the JSON-string form; converting at the
-    /// boundary is cheaper than UUID round-tripping every turn.
+    /// tool-call counts are computed since this cursor — mirrors
+    /// `lastMemoryMessageUuid`. Kept as `String` because the engine threads
+    /// it through callsites that already operate on the JSON-string form;
+    /// converting at the boundary is cheaper than UUID round-tripping every
+    /// turn.
     last_extraction_message_uuid: Option<String>,
     /// Last message UUID up to which the SM file is **safely** caught
     /// up — only advances when the previous assistant turn had no
-    /// tool calls, matching TS `updateLastSummarizedMessageIdIfSafe`
-    /// (`sessionMemory.ts:488-494`). Used by compact/summary readers
-    /// that need to know "where SM has covered to" without risking
-    /// orphaned tool_results in a downstream summary.
+    /// tool calls (`updateLastSummarizedMessageIdIfSafe`). Used by
+    /// compact/summary readers that need to know "where SM has covered to"
+    /// without risking orphaned tool_results in a downstream summary.
     last_summarized_message_uuid: Option<String>,
     /// Wall-clock at which the current in-flight extraction started.
     /// Only `Some` when `in_progress.load()` is `true`; the
@@ -127,9 +125,7 @@ pub struct SessionMemoryService {
     /// mid-call.
     session_id: ArcSwap<String>,
     /// Per-project filesystem layout — resolves the canonical
-    /// `<projectDir>/<sessionId>/session-memory/summary.md` path. TS
-    /// parity: `getSessionMemoryPath()` in
-    /// `utils/permissions/filesystem.ts:269`.
+    /// `<projectDir>/<sessionId>/session-memory/summary.md` path.
     project_paths: Arc<ProjectPaths>,
     config: MemoryConfig,
     agent: crate::service::extract::AgentSlot,
@@ -243,7 +239,7 @@ impl SessionMemoryService {
     /// Resolved on-disk path of the session-memory summary file.
     /// Re-computed each call against the current session id so
     /// `/clear` regen lands subsequent reads / writes in the new
-    /// session's directory. TS layout:
+    /// session's directory. Layout:
     /// `<projectDir>/<sessionId>/session-memory/summary.md`.
     pub fn file_path(&self) -> PathBuf {
         let id = self.read_session_id();
@@ -294,9 +290,9 @@ impl SessionMemoryService {
     }
 
     /// Wipe in-memory state and text cache after a compaction
-    /// completes — TS `clearAfterCompact` semantics. The on-disk
-    /// file is left alone; the next extract overwrites it
-    /// section-by-section via the forked-agent Edit pass.
+    /// completes (`clearAfterCompact` semantics). The on-disk file is
+    /// left alone; the next extract overwrites it section-by-section
+    /// via the forked-agent Edit pass.
     ///
     /// Atomic across `state` + `text_cache` for the same reason as
     /// [`Self::set_session_id`].
@@ -313,26 +309,25 @@ impl SessionMemoryService {
 
     /// Override the safely-summarized cursor manually — used by the
     /// SM-first compact path to anchor the kept-tail boundary after
-    /// a compact-and-keep-tail write. TS:
-    /// `setLastSummarizedMessageId` (`sessionMemoryUtils.ts:44-69`).
+    /// a compact-and-keep-tail write (`setLastSummarizedMessageId`).
     pub async fn set_last_summarized_message_id(&self, uuid: Option<Uuid>) {
         self.state.lock().await.last_summarized_message_uuid = uuid.map(|u| u.to_string());
     }
 
     /// Decide whether to fire a session-memory update.
     ///
-    /// `tool_calls_since_last_extraction` mirrors TS
+    /// `tool_calls_since_last_extraction` mirrors
     /// `countToolCallsSince(messages, lastMemoryMessageUuid)` —
     /// **cumulative** across all turns since the last successful
     /// extraction (or session start), not just the last assistant
     /// turn. The engine computes this by walking from
     /// [`Self::last_extraction_message_id`].
-    /// `had_tool_calls_in_last_turn` is the natural-break signal —
-    /// TS `hasToolCallsInLastAssistantTurn(messages)`. When the last
-    /// assistant turn used no tools, extraction can fire even when
-    /// the cumulative tool-call gate hasn't met threshold. `last_message_id`
-    /// is advanced into the cursor on a successful gate pass so the
-    /// next call's cumulative count starts from the right boundary.
+    /// `had_tool_calls_in_last_turn` is the natural-break signal
+    /// (`hasToolCallsInLastAssistantTurn`). When the last assistant
+    /// turn used no tools, extraction can fire even when the cumulative
+    /// tool-call gate hasn't met threshold. `last_message_id` is advanced
+    /// into the cursor on a successful gate pass so the next call's
+    /// cumulative count starts from the right boundary.
     pub async fn maybe_extract(
         &self,
         current_tokens: i64,
@@ -357,22 +352,20 @@ impl SessionMemoryService {
                 if current_tokens < self.config.session_memory_init_tokens {
                     return SessionMemoryOutcome::Skipped(SkipReason::BelowInitThreshold);
                 }
-                // TS parity (`sessionMemory.ts:138-181`
-                // shouldExtractMemory): the tool-call / natural-break
-                // disjunction applies to EVERY extraction, init included
-                // — not just updates. Once the init-token threshold is
-                // met we still require (tool calls ≥ threshold) OR (no
-                // tool calls in the last turn) before firing.
+                // The tool-call / natural-break disjunction applies to
+                // EVERY extraction, init included — not just updates.
+                // Once the init-token threshold is met we still require
+                // (tool calls ≥ threshold) OR (no tool calls in the last
+                // turn) before firing.
                 let tool_call_gate =
                     tool_calls_since_last_extraction >= self.config.session_memory_tool_calls;
                 let natural_break = !had_tool_calls_in_last_turn;
                 if !tool_call_gate && !natural_break {
                     return SessionMemoryOutcome::Skipped(SkipReason::NeitherToolCallsNorBreak);
                 }
-                // TS parity (`sessionMemory.ts:142`
-                // markSessionMemoryInitialized): flip synchronously at
-                // gate-pass, independent of the fork outcome — so a
-                // failed init fork doesn't re-arm the init-token gate.
+                // Flip `initialized` synchronously at gate-pass,
+                // independent of the fork outcome — so a failed init
+                // fork doesn't re-arm the init-token gate.
                 state.initialized = true;
             } else {
                 let token_growth = current_tokens - state.last_extraction_tokens;
@@ -445,8 +438,6 @@ impl SessionMemoryService {
             let mut state = self.state.lock().await;
             state.extraction_started_at = Some(start);
         }
-        // TS parity (`sessionMemory.ts:436`
-        // `tengu_session_memory_manual_extraction`).
         self.telemetry
             .emit(MemoryEvent::SessionMemoryManualExtraction);
         let outcome = self
@@ -470,8 +461,7 @@ impl SessionMemoryService {
         self.state.lock().await.last_extraction_message_uuid.clone()
     }
 
-    /// Last "safely summarized" message UUID as a String — TS parity
-    /// with `lastSummarizedMessageId` (`sessionMemoryUtils.ts:44-69`).
+    /// Last "safely summarized" message UUID as a String.
     pub async fn last_summarized_message_id(&self) -> Option<String> {
         self.state.lock().await.last_summarized_message_uuid.clone()
     }
@@ -487,8 +477,7 @@ impl SessionMemoryService {
             .and_then(|s| Uuid::parse_str(s).ok())
     }
 
-    /// Whether the SM file currently holds nothing but the seed
-    /// template — TS `isSessionMemoryEmpty` (`prompts.ts:220-224`).
+    /// Whether the SM file currently holds nothing but the seed template.
     pub async fn is_empty(&self) -> bool {
         let template = self.load_template().await;
         match tokio::fs::read_to_string(self.file_path()).await {
@@ -498,10 +487,8 @@ impl SessionMemoryService {
     }
 
     /// Read the optional template override from
-    /// `<session-memory-dir>/config/template.md` — coco-rs extension
-    /// loosely modeled on TS `loadSessionMemoryTemplate`
-    /// (`prompts.ts:86-104`). Falls back to the static 9-section
-    /// default on ENOENT or empty file.
+    /// `<session-memory-dir>/config/template.md`. Falls back to the
+    /// static 9-section default on ENOENT or empty file.
     async fn load_template(&self) -> String {
         if let Some(parent) = self.file_path().parent() {
             let path = parent.join("config").join("template.md");
@@ -570,8 +557,6 @@ impl SessionMemoryService {
     /// doesn't exist yet (no extraction has fired).
     pub async fn current_content(&self) -> Option<String> {
         let raw = tokio::fs::read_to_string(self.file_path()).await.ok()?;
-        // TS parity (`sessionMemoryUtils.ts:117 logEvent
-        // tengu_session_memory_loaded`).
         self.telemetry.emit(MemoryEvent::SessionMemoryLoaded {
             content_length: raw.len() as i64,
         });
@@ -609,7 +594,7 @@ impl SessionMemoryService {
         let file_path = self.file_path();
         let session_id_for_logs = self.read_session_id();
 
-        // Ensure parent dir exists. TS uses 0o700 for the dir, 0o600
+        // Ensure parent dir exists. Use 0o700 for the dir, 0o600
         // for the file — session memory contains a structured summary
         // of the conversation (potentially sensitive).
         if let Some(parent) = file_path.parent() {
@@ -655,8 +640,6 @@ impl SessionMemoryService {
             self.config.session_memory_per_section_tokens,
             self.config.session_memory_total_tokens,
         );
-        // TS parity (`sessionMemory.ts:228 logEvent
-        // tengu_session_memory_file_read`).
         self.telemetry.emit(MemoryEvent::SessionMemoryFileRead {
             content_length: current.len() as i64,
         });
@@ -688,7 +671,7 @@ impl SessionMemoryService {
                     .unwrap_or_default(),
             }),
             skip_transcript: true,
-            // TS `sessionMemory.ts:318` `canUseTool: createSessionMemCanUseTool(memoryPath)`.
+            // `canUseTool: createSessionMemCanUseTool(memoryPath)`.
             can_use_tool: Some(crate::can_use_tool::create_session_mem_handle(
                 file_path.clone(),
             )),
@@ -730,16 +713,15 @@ impl SessionMemoryService {
                 });
                 {
                     // `state.initialized` is flipped synchronously at the
-                    // gate-pass point in `maybe_extract` (TS
-                    // `markSessionMemoryInitialized`), not here — a failed
+                    // gate-pass point in `maybe_extract`
+                    // (`markSessionMemoryInitialized`), not here — a failed
                     // fork must NOT re-arm the init-token gate.
                     let mut state = self.state.lock().await;
                     state.last_extraction_tokens = current_tokens;
                     state.last_extraction_tool_calls = tool_calls_since_last_extraction;
-                    // TS parity (`sessionMemory.ts:488-494`
-                    // updateLastSummarizedMessageIdIfSafe): advance the
-                    // "safely summarized" cursor only when the prior
-                    // assistant turn had no tool calls.
+                    // Advance the "safely summarized" cursor only when
+                    // the prior assistant turn had no tool calls
+                    // (`updateLastSummarizedMessageIdIfSafe`).
                     if !had_tool_calls_in_last_turn && let Some(id) = last_message_id {
                         state.last_summarized_message_uuid = Some(id);
                     }

@@ -4,13 +4,6 @@ Central application state tree (`Arc<RwLock<AppState>>`). Zustand-like shared
 state touching ~80 fields; plus the **swarm** subsystem (21 modules) that ports
 coordinator / team / multi-pane orchestration.
 
-## TS Source
-
-- `state/{AppState.tsx,AppStateStore.ts,store.ts,onChangeAppState.ts,selectors.ts,teammateViewHelpers.ts}`
-- `bootstrap/state.ts` — non-reactive process singleton (session_id, cost accumulators, beta latches, client_type, etc.)
-- `projectOnboardingState.ts` — onboarding step tracker
-- `coordinator/coordinatorMode.ts` + `utils/swarm/` (backends: iTerm2/tmux/InProcess/Pane, layout, reconnect, mailbox, teammate prompt/model) — swarm/team orchestration
-
 ## Key Types
 
 | Type | Purpose |

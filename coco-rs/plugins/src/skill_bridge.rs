@@ -3,8 +3,6 @@
 //! Converts plugin skill paths into `SkillDefinition` instances with
 //! proper namespacing (plugin:skill-name) and source attribution.
 //!
-//! TS: utils/plugins/loadPluginCommands.ts — loads skills from plugin
-//! directories and namespaces them as `plugin:command-name`.
 
 use std::path::Path;
 
@@ -14,7 +12,7 @@ use coco_skills::load_skill_from_file;
 
 /// Load all skill definitions contributed by a plugin: reads `manifest.skills`
 /// (`ManifestPaths`) + scans `<path>/skills/`. Each skill is namespaced as
-/// `plugin-name:skill-name` (TS `loadPluginCommands()` + `getPluginSkills()`).
+/// `plugin-name:skill-name`.
 pub fn load_plugin_skills_v2(plugin: &crate::loader::LoadedPluginV2) -> Vec<SkillDefinition> {
     let mut skills = Vec::new();
     let plugin_name = &plugin.id.name;
@@ -124,7 +122,7 @@ fn load_skills_from_dir(dir: &Path, plugin_name: &str, skills: &mut Vec<SkillDef
 
 /// Apply plugin namespacing to a skill definition.
 ///
-/// TS: plugin skills are named `plugin-name:skill-name` or
+/// Skills are named `plugin-name:skill-name` or
 /// `plugin-name:namespace:skill-name` for nested directories.
 fn namespace_skill(skill: &mut SkillDefinition, plugin_name: &str, skill_name: &str) {
     skill.name = format!("{plugin_name}:{skill_name}");

@@ -1,7 +1,7 @@
 //! Skill change detection and dynamic reload.
 //!
-//! TS: utils/skills/skillChangeDetector.ts — watches skill directories
-//! for `.md` file changes, debounces, and triggers skill reload.
+//! Watches skill directories for `.md` file changes, debounces, and triggers
+//! skill reload.
 //!
 //! ## Reuse note
 //!
@@ -73,7 +73,7 @@ pub fn session_reload_scopes(config_home: &Path, cwd: &Path) -> Vec<SkillReloadS
     scopes
 }
 
-/// Debounce interval for skill file changes (matches TS 300ms).
+/// Debounce interval for skill file changes (300 ms).
 const SKILL_DEBOUNCE_MS: u64 = 300;
 
 /// Event emitted when skill files change.
@@ -85,19 +85,16 @@ pub struct SkillsChanged {
     /// `(skill_name, hooks_json)`. Populated before the live manager is
     /// mutated so subscribers can run blocking ConfigChange hooks first.
     ///
-    /// TS: `skillChangeDetector.ts` triggers both skill reload AND
-    /// `hooksConfigSnapshot` invalidation. In Rust the snapshot refresh
-    /// is the subscriber's responsibility — this field carries the
+    /// Triggers both skill reload AND `hooksConfigSnapshot` invalidation.
+    /// The snapshot refresh is the subscriber's responsibility — this field
+    /// carries the
     /// minimum data needed (opaque hook JSON) for coco-hooks to rebuild
     /// its skill-scope entries.
     pub skill_hook_declarations: Vec<(String, serde_json::Value)>,
 }
 
 /// Watches skill directories and reloads the [`SkillManager`] on
-/// changes.
-///
-/// TS: SkillChangeDetector — debounced file watcher that triggers skill
-/// reload.
+/// changes. Debounced file watcher that triggers skill reload.
 ///
 /// ## Lifecycle
 ///

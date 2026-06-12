@@ -1,7 +1,5 @@
 //! Agent query execution trait — drives multi-turn LLM conversations for agents.
 //!
-//! TS: tools/AgentTool/runAgent.ts (248 lines)
-//!
 //! **Split design** (same pattern as SideQuery, AgentHandle):
 //! - Trait definition → here in `coco-tool`
 //! - Implementation → `coco-query` (QueryEngine-based adapter)
@@ -25,8 +23,6 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 /// Configuration for a single agent query turn.
-///
-/// TS: Parameters passed to runAgent() in runAgent.ts
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AgentQueryConfig {
     /// System prompt for the agent.
@@ -63,8 +59,7 @@ pub struct AgentQueryConfig {
     /// where the parent intends to narrow the visible toolset.
     ///
     /// Fork-mode skills DO NOT populate this. They go through
-    /// [`AgentQueryConfig::extra_permission_rules`] instead, mirroring TS
-    /// `createGetAppStateWithAllowedTools` (which adds to
+    /// [`AgentQueryConfig::extra_permission_rules`] instead (which adds to
     /// `alwaysAllowRules.command` without narrowing tools[]).
     #[serde(default)]
     pub allowed_tools: Vec<String>,
@@ -79,8 +74,6 @@ pub struct AgentQueryConfig {
     /// `Clone`, but cross-process serialization would round-trip the
     /// rule strings via a different path).
     ///
-    /// TS parity: `createGetAppStateWithAllowedTools` wrapping
-    /// `getAppState` for forked-skill contexts (`forkedAgent.ts:147-171`).
     #[serde(skip)]
     pub extra_permission_rules: Vec<coco_types::PermissionRule>,
     /// Live teammate permission rules, read by the query engine when it
@@ -90,8 +83,7 @@ pub struct AgentQueryConfig {
     #[serde(skip)]
     pub live_permission_rules: Option<Arc<RwLock<Vec<coco_types::PermissionRule>>>>,
     /// Live teammate permission mode, read by the query engine when it
-    /// builds each tool context. This mirrors TS's app-state read at
-    /// permission-check time.
+    /// builds each tool context (read at permission-check time).
     #[serde(skip)]
     pub live_permission_mode: Option<Arc<RwLock<coco_types::PermissionMode>>>,
     /// Layer 2 tool overrides inherited from the parent. The subagent
@@ -123,27 +115,26 @@ pub struct AgentQueryConfig {
     /// Whether to preserve tool use results across compaction.
     #[serde(default)]
     pub preserve_tool_use_results: bool,
-    /// Permission mode resolved by the parent (main agent) via the TS
+    /// Permission mode resolved by the parent (main agent) via the
     /// inheritance rule: `agent.permission_mode if set and parent ∉
     /// {bypass, acceptEdits, auto} else parent.permission_mode`. When
     /// `None`, the adapter defaults to `PermissionMode::Default`.
-    /// TS: runAgent.ts:412-434 agentGetAppState override.
     #[serde(default)]
     pub permission_mode: Option<String>,
-    /// Branded agent ID (TS: `context.agentId`). Subagents get per-agent
+    /// Branded agent ID. Subagents get per-agent
     /// plan files `{slug}-agent-{id}.md`; setting this flows through to
     /// `ToolUseContext::agent_id` and `session_plan_file` so the Plan-mode
     /// auto-allow + SubAgent reminder variant trigger correctly.
     #[serde(default)]
     pub agent_id: Option<String>,
     /// Whether this agent runs as a swarm teammate (spawned via
-    /// `TeamCreate`). TS: `isTeammate()`. Controls ExitPlanMode teammate
+    /// `TeamCreate`). Controls ExitPlanMode teammate
     /// branch + bypass-permission behavior.
     #[serde(default)]
     pub is_teammate: bool,
     #[serde(default)]
     pub is_in_process_teammate: bool,
-    /// Per-role `plan_mode_required` flag. TS: `isPlanModeRequired()`.
+    /// Per-role `plan_mode_required` flag.
     /// Controls whether this teammate's ExitPlanMode sends an approval
     /// request to the leader (required) or exits locally (voluntary).
     #[serde(default)]
@@ -153,12 +144,10 @@ pub struct AgentQueryConfig {
     /// same slug cache.
     #[serde(default)]
     pub session_id: Option<String>,
-    /// Parent session's bypass-permissions capability. TS parity:
-    /// `spawnUtils.ts:53` / `spawnMultiAgent.ts:223` forward
-    /// `--dangerously-skip-permissions` to spawned child processes.
-    /// In-process subagents inherit the parent's capability through
-    /// this field instead of argv forwarding — the engine threads it
-    /// into `ToolPermissionContext.bypass_available` so child plan-mode
+    /// Parent session's bypass-permissions capability. In-process subagents
+    /// inherit the parent's capability through this field instead of argv
+    /// forwarding — the engine threads it into
+    /// `ToolPermissionContext.bypass_available` so child plan-mode
     /// auto-allow and Shift+Tab cycle behave consistently with the
     /// parent. Defaults to `false` so legacy callers stay safe.
     #[serde(default)]
@@ -167,15 +156,12 @@ pub struct AgentQueryConfig {
     /// isolation to the freshly-created worktree path, or by explicit
     /// `cwd:` tool input. Child `ToolUseContext.cwd_override` reads
     /// this; relative-path-resolving tools (Glob, Grep, Bash) scope
-    /// to the override, absolute-path tools ignore it — matches TS
-    /// `AsyncLocalStorage`-based behavior by construction.
+    /// to the override, absolute-path tools ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd_override: Option<std::path::PathBuf>,
     /// Fork-mode context messages: parent's history prepended to
     /// the child's turn. When non-empty, child runs with
-    /// `forkContextMessages` + this prompt. TS parity:
-    /// `AgentTool.tsx:622-632` (`isForkPath`: useExactTools,
-    /// forkContextMessages). Shared via `Arc<Message>` so the
+    /// `forkContextMessages` + this prompt. Shared via `Arc<Message>` so the
     /// in-process spawn path doesn't pay a serialize → Value →
     /// deserialize round-trip; cross-process transports serialize
     /// once at the wire boundary instead.
@@ -200,26 +186,23 @@ pub struct AgentQueryConfig {
     /// extraction / auto-dream subagents.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_write_roots: Vec<std::path::PathBuf>,
-    /// Reasoning-effort override forwarded from the AgentTool input
-    /// (TS `AgentTool.tsx:154-159`). Maps to the engine's
+    /// Reasoning-effort override forwarded from the AgentTool input.
+    /// Maps to the engine's
     /// thinking-level configuration. `None` falls back to the
     /// model-role default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<coco_types::ReasoningEffort>,
     /// When true, bypass agent-definition tool rendering and use the
-    /// parent's exact tool schemas verbatim (TS `runAgent.ts:624`,
-    /// `useExactTools`). Required for prompt-cache prefix sharing in
+    /// parent's exact tool schemas verbatim (`useExactTools`). Required for prompt-cache prefix sharing in
     /// fork-style spawns.
     #[serde(default)]
     pub use_exact_tools: bool,
-    /// Per-agent MCP server allow-list (TS `AgentTool.tsx:206`,
-    /// `runAgent.ts:50+`). When non-empty, only tools from these
+    /// Per-agent MCP server allow-list. When non-empty, only tools from these
     /// servers are exposed to the child. Empty = no MCP restriction
     /// from this layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<String>,
-    /// Inline initial-message body override (TS
-    /// `loadAgentsDir.ts::initial_prompt`). When set, replaces the
+    /// Inline initial-message body override (`initial_prompt`). When set, replaces the
     /// agent-definition's stored prompt body — useful for ad-hoc
     /// subagent spawns that don't match a registered definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,28 +240,25 @@ pub struct AgentQueryConfig {
     /// Per-fork tool-execution gate. Threaded onto the child engine's
     /// `ToolUseContext.can_use_tool` so app/query enforces the policy
     /// before the static permission evaluator. `None` preserves
-    /// existing behavior — no callback runs. TS parity:
-    /// `utils/forkedAgent.ts` `runForkedAgent({canUseTool})`.
+    /// existing behavior — no callback runs.
     #[serde(skip)]
     pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
 
     /// When `true`, hook auto-approve cannot bypass the `can_use_tool`
-    /// callback. TS: `requireCanUseTool`.
+    /// callback (`requireCanUseTool`).
     #[serde(default)]
     pub require_can_use_tool: bool,
 
     /// Typed fork discriminator for telemetry / log structured fields.
     /// When set, the engine's `query_source_label()` returns this
-    /// string so log readers tell apart the 9 fork variants. TS:
-    /// `runForkedAgent({forkLabel})`.
+    /// string so log readers tell apart the 9 fork variants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_label: Option<coco_types::ForkLabel>,
 
     /// Live message-history sink for the periodic AgentSummary timer.
     /// When `Some`, the child engine publishes its full message history
     /// into this handle after every turn finalize so the timer summarizes
-    /// the real transcript (TS `agentSummary.ts` `getAgentTranscript`)
-    /// instead of the raw output buffer. `None` ⇒ the engine skips the
+    /// the real transcript instead of the raw output buffer. `None` ⇒ the engine skips the
     /// per-turn snapshot entirely (zero cost on the non-summarized path).
     /// In-process only — the shared buffer is meaningless across IPC, so it
     /// is skipped at the JSON boundary like [`Self::event_tx`].
@@ -287,8 +267,6 @@ pub struct AgentQueryConfig {
 }
 
 /// Result of a multi-turn agent query.
-///
-/// TS: Return value from runAgent() generator + finalizeAgentTool()
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentQueryResult {
     /// Final response text from the agent.
@@ -316,8 +294,6 @@ pub struct AgentQueryResult {
 ///
 /// Implementations drive the LLM conversation loop:
 /// prompt → model → tool calls → tool results → repeat.
-///
-/// TS: runAgent() async generator in runAgent.ts
 #[async_trait::async_trait]
 pub trait AgentQueryEngine: Send + Sync {
     /// Execute a multi-turn agent query.

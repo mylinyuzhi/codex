@@ -154,7 +154,7 @@ impl InferenceError {
             }
             .build(),
             // Request timeout (408) and lock/conflict (409) — transient,
-            // retryable with the FULL backoff budget (TS withRetry retries both).
+            // retryable with the FULL backoff budget.
             408 | 409 => inference_error::NetworkSnafu {
                 message: truncate_body(body),
             }
@@ -168,16 +168,15 @@ impl InferenceError {
             // capacity-pressure bucket. Bounded in-client (MAX_CAPACITY_RETRIES)
             // so the model-runtime fallback chain engages fast rather than
             // hammering a saturated provider. Pairs 503+529 like
-            // `classify_stream_message`. TS caps 529 at MAX_529_RETRIES; coco-rs
-            // applies the same bound to the 503/529 pair — a deliberate
-            // multi-provider fast-fallback choice.
+            // `classify_stream_message`; coco-rs applies the same bound to
+            // both — a deliberate multi-provider fast-fallback choice.
             503 | 529 => inference_error::OverloadedSnafu {
                 retry_after_ms: retry_after,
             }
             .build(),
             // Other 5xx (500/502/504/...) — transient server errors, retryable
-            // with the FULL backoff budget (TS withRetry: status >= 500 retries
-            // up to DEFAULT_MAX_RETRIES). Keep the body for diagnostics.
+            // with the FULL backoff budget (status >= 500 retries up to
+            // DEFAULT_MAX_RETRIES). Keep the body for diagnostics.
             500..=599 => inference_error::NetworkSnafu {
                 message: truncate_body(body),
             }

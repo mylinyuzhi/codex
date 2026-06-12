@@ -143,7 +143,7 @@ fn test_group_single_user() {
 
 #[test]
 fn test_no_assistant_all_in_one_group() {
-    // Without assistant messages, everything lands in one group (matches TS)
+    // Without assistant messages, everything lands in one group
     let msgs = vec![user_msg(), user_msg()];
     let groups = group_messages_by_api_round(&msgs);
     assert_eq!(groups.len(), 1);

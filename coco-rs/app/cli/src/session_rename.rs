@@ -1,19 +1,18 @@
 //! Shared `/rename` helpers used by both the interactive TUI runner
 //! and the SDK / headless runner.
 //!
-//! TS reference: `src/commands/rename/rename.ts` and
-//! `src/commands/rename/generateSessionName.ts`. The runner-specific
-//! pieces (teammate guard, transcript echo, `emit_slash_text`) stay
-//! in each runner; the LLM call and the dual-write persistence both
-//! live here so the SDK and TUI paths can't drift apart.
+//! The runner-specific pieces (teammate guard, transcript echo,
+//! `emit_slash_text`) stay in each runner; the LLM call and the
+//! dual-write persistence both live here so the SDK and TUI paths
+//! can't drift apart.
 //!
 //! ## Side-effects intentionally NOT performed here (G6 / G7)
 //!
-//! - **Bridge title sync** (TS `updateBridgeSessionTitle`): claude.ai
-//!   CCR-backend-only — not a coco-rs target. See
-//!   `coco-rs/bridge/CLAUDE.md` "Deliberately Not Ported".
-//! - **`AppState.standaloneAgentContext.name` propagation**: TS uses
-//!   it to drive the prompt-bar banner. coco-rs has no live
+//! - **Bridge title sync**: claude.ai CCR-backend-only — not a
+//!   coco-rs target. See `coco-rs/bridge/CLAUDE.md`
+//!   "Deliberately Not Ported".
+//! - **`AppState.standaloneAgentContext.name` propagation**: used
+//!   to drive the prompt-bar banner. coco-rs has no live
 //!   `coco_state::AppState` instance and no banner widget reading
 //!   `standalone_agent_context`. Populating dead state is forbidden
 //!   by CLAUDE.md ("Don't design for hypothetical future
@@ -32,13 +31,11 @@ use crate::session_runtime::SessionRuntime;
 const RENAME_GENERATE_NAME_QUERY_SOURCE: &str = "rename_generate_name";
 
 /// User-facing failure message returned to the runner when an
-/// auto-rename attempt cannot produce a name. Each variant maps to
-/// exactly one TS-parity scenario:
+/// auto-rename attempt cannot produce a name.
 ///
-/// - `NoConversation` — TS `rename.ts`'s `!generated` branch when
-///   `getMessagesAfterCompactBoundary` is empty.
-/// - `LlmFailed` — provider error / timeout / parse mismatch. TS
-///   logs and returns null; we surface "try again or pass a name".
+/// - `NoConversation` — no messages after the compact boundary.
+/// - `LlmFailed` — provider error / timeout / parse mismatch;
+///   surfaces "try again or pass a name".
 ///
 /// All variants render to a single short user line. Detailed
 /// diagnostics go to `tracing::warn` inside [`auto_generate_session_name`].
@@ -63,9 +60,9 @@ impl AutoRenameError {
 /// Build a kebab-case session name via the `ModelRole::Fast` resolver.
 ///
 /// Snapshots `messages_after_compact_boundary` off the runtime's
-/// history, builds the TS-style conversation text, then tries native
-/// structured output before falling back to a forced
-/// `generate_session_name` tool call. Mirrors TS `generateSessionName`.
+/// history, builds the conversation text, then tries native structured
+/// output before falling back to a forced `generate_session_name` tool
+/// call.
 pub async fn auto_generate_session_name(
     runtime: &Arc<SessionRuntime>,
 ) -> Result<String, AutoRenameError> {
@@ -183,8 +180,7 @@ pub async fn persist_rename(
 /// Snapshot the conversation text used for auto-name generation.
 /// Walks the post-compact-boundary slice of the in-memory history,
 /// concatenating text from User / Assistant messages.
-/// Non-text content (tool calls, attachments, etc.) is skipped — TS
-/// `extractConversationText` makes the same choice.
+/// Non-text content (tool calls, attachments, etc.) is skipped.
 async fn snapshot_conversation_text(runtime: &Arc<SessionRuntime>) -> String {
     let history = runtime.history.lock().await;
     coco_session::title_generator::extract_conversation_text(history.as_slice())

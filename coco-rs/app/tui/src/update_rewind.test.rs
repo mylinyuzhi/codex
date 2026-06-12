@@ -53,10 +53,9 @@ fn set_selected_diff_stats(state: &mut RewindState, files_changed: i32) {
 
 #[test]
 fn test_build_rewind_state_appends_synthetic_current_row() {
-    // TS `MessageSelector.tsx:60-66` appends a virtual `(current)` row
-    // at the end of `messageOptions`. After the synthetic-row landing
-    // there are N+1 entries: N real + 1 synthetic, with selection on
-    // the synthetic row.
+    // A virtual `(current)` row is appended at the end of the message list.
+    // After the synthetic-row landing there are N+1 entries: N real + 1
+    // synthetic, with selection on the synthetic row.
     let state = make_state_with_messages(3);
     let state = build_rewind_state(&state);
 
@@ -129,7 +128,6 @@ fn test_handle_rewind_nav_jump_to_top_and_bottom() {
 
 #[test]
 fn test_handle_rewind_confirm_synthetic_row_dismisses() {
-    // TS `MessageSelector.tsx:165` — `if (!messages.includes(message_0)) onClose()`.
     // Confirm on the virtual current-prompt row never dispatches; it
     // closes the state (equivalent to Esc).
     let state = make_state_with_messages(3);
@@ -201,9 +199,8 @@ fn test_handle_rewind_confirm_no_code_restore_opens_options_without_code_choices
 
 #[test]
 fn test_handle_rewind_confirm_file_history_off_dispatches_directly() {
-    // TS `MessageSelector.tsx:169-172`: when file history is disabled
-    // the picker bypasses the option screen and immediately dispatches
-    // a conversation rewind (`restoreConversationDirectly`).
+    // When file history is disabled the picker bypasses the option screen
+    // and immediately dispatches a conversation rewind.
     let state = make_state_with_messages(2);
     let mut state = build_rewind_state(&state);
     state.file_history_enabled = false;
@@ -258,7 +255,7 @@ fn test_handle_rewind_confirm_nevermind_returns_to_message_select() {
     assert_eq!(
         state.phase,
         RewindPhase::MessageSelect,
-        "Nevermind returns to message picker, mirroring TS"
+        "Nevermind returns to message picker"
     );
     assert!(state.available_options.is_empty());
 }
@@ -288,9 +285,8 @@ fn test_handle_rewind_cancel_goes_back_from_options() {
 
 #[test]
 fn test_summarize_feedback_empty_submit_cancels_to_options() {
-    // TS `MessageSelector.tsx` summarize input declares
-    // `allowEmptySubmitToCancel: true`. Empty submit must NOT dispatch
-    // a rewind — it returns to the option list with feedback cleared.
+    // Empty submit must NOT dispatch a rewind — it returns to the option
+    // list with feedback cleared.
     let state = make_state_with_messages(2);
     let mut state = build_rewind_state(&state);
     state.file_history_enabled = true;
@@ -395,9 +391,8 @@ fn test_display_text_for_rewind_row_matches_ts_special_cases() {
 
 #[test]
 fn test_build_rewind_state_for_uuid_jumps_to_options_phase() {
-    // TS `MessageSelector.tsx:42-44, 72-83`: when `preselectedMessage`
-    // is provided, the picker skips the message-select phase entirely
-    // and lands on the confirm screen with that message selected.
+    // When a target UUID is provided, the picker skips the message-select
+    // phase entirely and lands on the confirm screen with that message selected.
     let state = make_state_with_messages(3);
     let target = test_uuid("msg-1");
     let state = build_rewind_state_for_uuid(&state, target);
@@ -434,9 +429,8 @@ fn test_build_rewind_state_for_uuid_nil_falls_back_to_pick_list() {
 
 #[test]
 fn test_handle_rewind_cancel_preselected_dismisses_from_options() {
-    // TS `MessageSelector.tsx:248-253`: when launched preselected, Esc
-    // closes the state entirely — there's no message list to step
-    // back to.
+    // When launched preselected, Esc closes the state entirely —
+    // there's no message list to step back to.
     let state = make_state_with_messages(2);
     let mut state = build_rewind_state_for_uuid(&state, test_uuid("msg-1"));
     assert_eq!(state.phase, RewindPhase::RestoreOptions);
@@ -450,8 +444,7 @@ fn test_handle_rewind_cancel_preselected_dismisses_from_options() {
 
 #[test]
 fn test_handle_rewind_confirm_nevermind_preselected_dismisses() {
-    // TS `MessageSelector.tsx:185-188`: nevermind on a preselected
-    // launch dismisses (TS line 186: `if (preselectedMessage) onClose()`).
+    // Nevermind on a preselected launch dismisses.
     let state = make_state_with_messages(2);
     let mut state = build_rewind_state_for_uuid(&state, test_uuid("msg-1"));
     state.option_selected = (state.available_options.len() as i32) - 1;

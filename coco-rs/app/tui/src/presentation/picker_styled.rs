@@ -68,8 +68,8 @@ pub(crate) fn export_lines(
 }
 
 /// Teams roster — the leader cycles a focused teammate's permission mode.
-/// TS: `components/teams/TeamsDialog.tsx`. Rows list the running teammates;
-/// the pill below shows the mode about to be applied on Enter.
+/// Rows list the running teammates; the pill below shows the mode about to
+/// be applied on Enter.
 pub(crate) fn team_roster_lines(
     r: &TeamRosterState,
     styles: UiStyles<'_>,

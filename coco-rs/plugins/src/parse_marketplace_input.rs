@@ -1,17 +1,14 @@
 //! Parse a user-supplied marketplace input into a typed
 //! [`crate::schemas::MarketplaceSource`].
 //!
-//! TS parity: `utils/plugins/parseMarketplaceInput.ts`. Recognised forms,
-//! checked in the same order as TS:
+//! Recognised forms, checked in priority order:
 //!
 //! 1. **Git SSH URL**: `user@host:path[.git][#ref]`
 //!    — any username (alphanumeric / dot / underscore / hyphen).
 //! 2. **HTTP / HTTPS** with `.git` suffix or `/_git/` (Azure DevOps) →
 //!    [`MarketplaceSource::Git`].
 //! 3. **HTTPS GitHub URL** (host is `github.com` or `www.github.com`) →
-//!    [`MarketplaceSource::Git`] with `.git` appended when absent
-//!    (TS keeps it HTTPS via the `git` source type rather than
-//!    converting to the github-shorthand source).
+//!    [`MarketplaceSource::Git`] with `.git` appended when absent.
 //! 4. **Generic HTTP / HTTPS** → [`MarketplaceSource::Url`].
 //! 5. **Local path** (starts with `/`, `./`, `../`, `~`, or a Windows
 //!    drive / backslash-relative form). Stat-classifies into
@@ -152,7 +149,7 @@ fn parse_http_or_https(s: &str) -> MarketplaceSource {
         && (host == "github.com" || host == "www.github.com")
         && let Some(_repo_seg) = github_repo_path_segment(url_no_frag)
     {
-        // TS: keep HTTPS but route through `git` source (clones via
+        // Keep HTTPS but route through `git` source (clones via
         // git, not fetched as JSON). Append `.git` when absent.
         let with_dotgit = if url_no_frag.ends_with(".git") {
             url_no_frag.to_string()
@@ -328,8 +325,8 @@ fn parse_github_shorthand(s: &str) -> Option<MarketplaceSource> {
     if !s.contains('/') || s.starts_with('@') || s.contains(':') {
         return None;
     }
-    // Accept both `#ref` and `@ref` as the fragment separator (TS:
-    // display formatter emits `@`, users naturally copy it back).
+    // Accept both `#ref` and `@ref` as the fragment separator
+    // (display formatter emits `@`, users naturally copy it back).
     let (repo, git_ref) = if let Some((repo, r)) = s.split_once('#') {
         (repo, (!r.is_empty()).then(|| r.to_string()))
     } else if let Some((repo, r)) = s.split_once('@') {
@@ -358,10 +355,9 @@ fn parse_github_shorthand(s: &str) -> Option<MarketplaceSource> {
 
 /// Best-effort marketplace-name derivation from a parsed source.
 ///
-/// TS: the equivalent name lives on the marketplace manifest itself
-/// (parsed after fetch). Coco-rs's CLI registers the marketplace by name
-/// before the first fetch, so we synthesize a placeholder name from the
-/// source shape and let later updates rewrite it from manifest content.
+/// The CLI registers the marketplace by name before the first fetch, so we
+/// synthesize a placeholder name from the source shape and let later updates
+/// rewrite it from manifest content.
 pub fn derive_marketplace_name(source: &MarketplaceSource) -> String {
     match source {
         MarketplaceSource::Github { repo, .. } => repo

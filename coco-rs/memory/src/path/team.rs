@@ -1,12 +1,12 @@
 //! Team-memory path validation combinators.
 //!
-//! TS: `memdir/teamMemPaths.ts`. Wires path-string validation,
-//! lexical containment, and symlink-aware real-path checks against
-//! the project's team-memory directory. The team directory is a
-//! shared subtree (`<personal>/team/`); writes pass through these
-//! combinators so a malicious server key (relative) or model-supplied
-//! path (absolute) can't escape the directory via traversal segments
-//! or planted symlinks.
+//! Wires path-string validation, lexical containment, and
+//! symlink-aware real-path checks against the project's team-memory
+//! directory. The team directory is a shared subtree
+//! (`<personal>/team/`); writes pass through these combinators so a
+//! malicious server key (relative) or model-supplied path (absolute)
+//! can't escape the directory via traversal segments or planted
+//! symlinks.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,9 +17,7 @@ use super::validate::lexical_normalize;
 use super::validate::validate_memory_path;
 use super::validate::validate_resolved_path;
 
-/// Validate a relative key against `team_dir`.
-///
-/// TS: `validateTeamMemKey` (`teamMemPaths.ts:265`). Two-pass check:
+/// Validate a relative key against `team_dir`. Two-pass check:
 ///
 /// 1. **Sanitize + lexical:** the key passes [`validate_memory_path`]
 ///    (null bytes, traversal, UNC, drive root, tilde, fullwidth /
@@ -42,9 +40,7 @@ pub fn validate_team_mem_key(
     Ok(resolved)
 }
 
-/// Validate an absolute file path against `team_dir`.
-///
-/// TS: `validateTeamMemWritePath` (`teamMemPaths.ts:228`). Same two
+/// Validate an absolute file path against `team_dir`. Same two
 /// passes as [`validate_team_mem_key`] but the input is an absolute
 /// path (model-supplied via the Edit/Write tool). Only null bytes are
 /// rejected at the string level — absolute paths are otherwise OK
@@ -68,8 +64,7 @@ pub fn validate_team_mem_write_path(
 
 /// Symlink-aware containment check.
 ///
-/// TS: `isRealPathWithinTeamDir` (`teamMemPaths.ts:183`). Resolves
-/// the deepest existing ancestor of *both* `candidate` and `team_dir`
+/// Resolves the deepest existing ancestor of *both* `candidate` and `team_dir`
 /// so a planted symlink in `team_dir`'s parent chain — which
 /// `team_dir.canonicalize()` alone would not see because `team_dir`
 /// doesn't yet exist — still trips the containment check.

@@ -103,8 +103,7 @@ fn snapshot_selected_row_marker_changes() {
 #[test]
 fn snapshot_uniform_name_column_padding() {
     // Verifies all rows share a single padded name column so the
-    // descriptions line up vertically, matching TS Claude Code's
-    // PromptInputFooterSuggestions layout.
+    // descriptions line up vertically.
     let items = vec![
         item("/m", Some("model")),
         item("/clear", Some("clear chat")),
@@ -127,7 +126,7 @@ fn empty_items_renders_nothing() {
 fn snapshot_unified_mixed_icons() {
     use super::SuggestionMeta;
     use coco_types::AgentColorName;
-    // Mirrors the TS unified `@` popup: agents (`*`) listed before files
+    // Verifies the unified `@` popup: agents (`*`) listed before files
     // (`+`), each row prefixed by its kind icon. Verifies icon dispatch
     // off `SuggestionMeta` and that agent + file rows share the column
     // grid.

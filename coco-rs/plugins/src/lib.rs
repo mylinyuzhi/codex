@@ -3,7 +3,6 @@
 //! resolves the active plugin set the session bootstrap registers contributions
 //! from (commands / hooks / skills via the bridges).
 //!
-//! TS: plugins/ + services/plugins/ + utils/plugins/ (loadAllPlugins, refresh)
 
 pub mod builtins;
 pub mod command_bridge;
@@ -81,8 +80,7 @@ pub fn get_plugin_dirs(config_dir: &Path, project_dir: &Path) -> Vec<PathBuf> {
 
 /// Read settings.json `enabled_plugins` into `(enabled_ids, disabled_ids)` keyed
 /// by the explicit boolean: `{ "enabled": true }` (or bare `true`) → enabled;
-/// `false` → disabled; absent value defaults to enabled. TS
-/// `enabledPlugins[id] === true`.
+/// `false` → disabled; absent value defaults to enabled.
 fn read_enabled_disabled_ids(
     config_home: &Path,
 ) -> (
@@ -122,9 +120,9 @@ fn read_enabled_disabled_ids(
 
 /// Production entry point: load the full ENABLED plugin set from every source —
 /// the marketplace versioned cache + local `inline` dirs — gated by settings.json
-/// `enabled_plugins`. Mirrors TS `loadAllPlugins().enabled`. This is the single
-/// source the session bootstrap and `/reload-plugins` register contributions
-/// from (commands / hooks / skills via the V2 bridges).
+/// `enabled_plugins`. This is the single source the session bootstrap and
+/// `/reload-plugins` register contributions from (commands / hooks / skills via
+/// the V2 bridges).
 pub fn load_enabled_plugins(config_home: &Path, project_dir: &Path) -> Vec<loader::LoadedPluginV2> {
     load_all_installed_plugins(config_home, project_dir)
         .into_iter()
@@ -146,9 +144,7 @@ fn read_enabled_plugin_overrides(config_home: &Path) -> std::collections::HashMa
 
 /// Skills contributed by enabled builtin plugins, honoring settings.json
 /// enable/disable overrides. Empty until a builtin is registered via
-/// [`builtins::init_builtin_plugins`] — wired so a future builtin's skills
-/// reach the model catalog alongside marketplace/inline plugin skills
-/// (TS `getBuiltinPluginSkillCommands`).
+/// [`builtins::init_builtin_plugins`].
 pub fn builtin_plugin_skills(config_home: &Path) -> Vec<coco_skills::SkillDefinition> {
     builtins::get_builtin_plugin_skills(&read_enabled_plugin_overrides(config_home))
 }
@@ -186,8 +182,8 @@ pub fn load_all_installed_plugins(
 /// Discover each plugin's agent directories: the conventional
 /// `<plugin>/agents/` dir plus any directory listed in the manifest `agents`
 /// field. Returned as `(plugin_name, dir)` pairs so the subagent loader can
-/// namespace each agent `<plugin>:<agent>`. TS `loadPluginAgents` (the
-/// directory sources; single-file manifest entries are not yet mapped).
+/// namespace each agent `<plugin>:<agent>` (single-file manifest entries are
+/// not yet mapped).
 pub fn plugin_agent_dirs(plugins: &[loader::LoadedPluginV2]) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     for plugin in plugins {

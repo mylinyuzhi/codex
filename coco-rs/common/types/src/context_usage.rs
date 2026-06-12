@@ -5,10 +5,6 @@
 //! home consumed by both the SDK/headless text renderer
 //! (`coco_query::context_analysis::format_markdown`) and the TUI styled
 //! surface (`coco_tui::presentation::context_view`) so the two never drift.
-//!
-//! Mirrors TS `utils/analyzeContext.ts` (grid) + `utils/contextSuggestions.ts`
-//! (heuristics). Token counts are local estimates (multi-provider port), so
-//! absolute figures differ from TS, but the layout/thresholds/strings match.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -227,8 +223,7 @@ pub enum SuggestionSeverity {
     Info,
 }
 
-/// An actionable suggestion shown under the `/context` view. Mirrors TS
-/// `ContextSuggestion` (`utils/contextSuggestions.ts`).
+/// An actionable suggestion shown under the `/context` view.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextSuggestion {
@@ -442,7 +437,7 @@ fn short_name(path: &str) -> &str {
 
 /// Compact token count with a `k`/`m` suffix (one decimal, trailing `.0`
 /// dropped): `506 → "506"`, `13_500 → "13.5k"`, `1_300_000 → "1.3m"`.
-/// Mirrors TS `formatTokens`. Shared by the SDK text form and the TUI.
+/// Shared by the SDK text form and the TUI.
 pub fn fmt_token_compact(n: i64) -> String {
     if n < 1000 {
         n.to_string()

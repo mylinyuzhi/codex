@@ -14,12 +14,6 @@ use serde::Serialize;
 use std::path::Path;
 
 /// Long-form tool description shown to the model.
-///
-/// TS: `tools/FileWriteTool/prompt.ts:11-18` `getWriteToolDescription()`.
-/// Byte-identical port — Rust Tool trait passes this string as the
-/// tool description in the model's tool spec, so the model receives
-/// the same usage guidance as TS Claude Code (read-before-write,
-/// edit-tool preference, no documentation-by-default, no emojis).
 const WRITE_TOOL_DESCRIPTION: &str = "Writes a file to the local filesystem.
 
 Usage:
@@ -39,8 +33,8 @@ pub struct WriteInput {
 }
 
 /// Typed output for [`WriteTool`] — tagged enum keyed by the operation
-/// performed. `filePath` is camelCase on the wire for TS parity
-/// (`FileWriteTool.ts:418-433 mapToolResultToToolResultBlockParam`).
+/// performed. `filePath` is camelCase on the wire
+/// (`mapToolResultToToolResultBlockParam`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WriteOutput {
@@ -86,15 +80,12 @@ impl Tool for WriteTool {
         ToolName::Write.as_str()
     }
 
-    /// Short per-call UI label. TS `FileWriteTool.ts:99-101`
-    /// `async description()` → `'Write a file to the local filesystem.'`.
+    /// Short per-call UI label: `'Write a file to the local filesystem.'`.
     fn description(&self, _input: &WriteInput, _options: &DescriptionOptions) -> String {
         "Write a file to the local filesystem.".into()
     }
 
-    /// Model-facing tool description (schema-listing time). TS
-    /// `FileWriteTool.ts:108-110` `async prompt()` →
-    /// `getWriteToolDescription()`; we hold the ported text in
+    /// Model-facing tool description (schema-listing time). Text held in
     /// [`WRITE_TOOL_DESCRIPTION`].
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         WRITE_TOOL_DESCRIPTION.into()
@@ -131,8 +122,7 @@ impl Tool for WriteTool {
         )
     }
 
-    /// Branch on the tagged enum to emit the TS-shaped confirmation
-    /// message. TS parity: `FileWriteTool.ts:418-433::mapToolResultToToolResultBlockParam`.
+    /// Branch on the tagged enum to emit the confirmation message.
     fn render_for_model(&self, out: &WriteOutput) -> Vec<ToolResultContentPart> {
         let file_path = out.file_path();
         let text = match out {
@@ -165,10 +155,9 @@ impl Tool for WriteTool {
 
         // Read-before-write enforcement + race detection.
         //
-        // TS `FileWriteTool.ts:198-206, 279-295`: when overwriting an
-        // existing file, the model MUST have read it first in this session.
-        // This prevents the "model hallucinates a replacement for a file it
-        // never saw" class of bugs. The check has three layers:
+        // When overwriting an existing file, the model MUST have read it first
+        // in this session. This prevents the "model hallucinates a replacement
+        // for a file it never saw" class of bugs. The check has three layers:
         //
         //   1. The file must exist in `readFileState` (Read was called).
         //   2. The stored mtime must still match the on-disk mtime (no one
@@ -213,7 +202,6 @@ impl Tool for WriteTool {
             // the current disk content when the stored entry is a full-view
             // read (offset/limit are None). For partial reads we can't
             // compare meaningfully, so we skip this layer.
-            // TS: `FileWriteTool.ts:286-293` fallback content comparison.
             if entry.offset.is_none()
                 && entry.limit.is_none()
                 && let Ok(raw) = std::fs::read(&abs_path)
@@ -244,11 +232,10 @@ impl Tool for WriteTool {
             });
         }
 
-        // Team-memory secret guard. TS `FileWriteTool.ts:156-160`:
-        // refuse to write content containing API keys / tokens /
-        // credentials into the team memory directory, because team
-        // memory is synced to all repo collaborators. Helper is a
-        // no-op for paths outside the team-memory pattern.
+        // Team-memory secret guard: refuse to write content containing API
+        // keys / tokens / credentials into the team memory directory, because
+        // team memory is synced to all repo collaborators. Helper is a no-op
+        // for paths outside the team-memory pattern.
         if let Some(err) = crate::check_team_mem_secret(ctx, path, content) {
             return Err(ToolError::ExecutionFailed {
                 message: err,
@@ -258,22 +245,14 @@ impl Tool for WriteTool {
         }
 
         // Track file edit for checkpoint/rewind before modifying.
-        // TS: FileWriteTool.ts line 259
         crate::track_file_edit(ctx, path).await;
 
         // Detect encoding + read existing content for diff + preservation.
-        // TS `FileWriteTool.ts:268-277, 297, 305`:
-        //   const meta = readFileSyncWithMetadata(path)
-        //   const enc  = meta?.encoding ?? 'utf8'
-        //   writeTextContent(path, content, enc, 'LF')
-        //
-        // Key TS design decision (line 300-305): **always write 'LF'** even
-        // when the original file used CRLF. The comment explains: "Write is
+        // Always write 'LF' even when the original file used CRLF: Write is
         // a full content replacement — the model sent explicit line endings
-        // in `content` and meant them. Do not rewrite them." We honor the
-        // same decision — only encoding is preserved, not line endings.
-        // For existing files, sniff the original encoding so we can
-        // preserve it on overwrite (TS `FileWriteTool.ts:268-277`).
+        // in `content` and meant them. Do not rewrite them. Only encoding is
+        // preserved, not line endings. For existing files, sniff the original
+        // encoding so we can preserve it on overwrite.
         let detected_encoding: coco_file_encoding::Encoding = if !is_new {
             std::fs::read(file_path)
                 .map(|raw| coco_file_encoding::detect_encoding(&raw))
@@ -295,9 +274,8 @@ impl Tool for WriteTool {
 
         // Encode the content using the detected encoding (UTF-8 default for
         // new files). `write_with_format` handles BOM prepending and line-
-        // ending normalization. We always pass `LineEnding::Lf` because TS
-        // intentionally writes LF regardless of source format — see the
-        // comment block above about the explicit design decision.
+        // ending normalization. Always pass `LineEnding::Lf` — see the
+        // comment above about the line-ending design decision.
         coco_file_encoding::write_with_format(
             path,
             content,
@@ -311,21 +289,17 @@ impl Tool for WriteTool {
         })?;
 
         crate::record_file_edit(ctx, path, content.to_string()).await;
-        // TS `FileWriteTool.ts` mirrors `FileReadTool.ts:578-591` skill
-        // auto-discovery + conditional-skill activation — when a
-        // write touches a path under a nested `.coco/skills/`
-        // ancestor or matches a `paths`-gated skill, the next batch
-        // boundary picks both up.
+        // Skill auto-discovery + conditional-skill activation — when a write
+        // touches a path under a nested `.coco/skills/` ancestor or matches
+        // a `paths`-gated skill, the next batch boundary picks both up.
         crate::track_skill_triggers(ctx, path).await;
-        // TS `FileWriteTool.ts` calls `clearDeliveredDiagnosticsForFile`
-        // + `lspManager.saveFile(path)` after every successful write so
-        // the language server re-indexes and emits fresh diagnostics.
+        // Clear delivered diagnostics + notify the language server to
+        // re-index and emit fresh diagnostics after every successful write.
         // `notify_save` is best-effort — no LSP server / no language
         // binding / RPC failure all become silent no-ops.
         ctx.lsp.notify_save(path).await;
 
-        // TS `FileWriteTool.ts:418-433` — return structured tagged
-        // envelope so render_for_model can branch on operation type.
+        // Return structured tagged envelope so render_for_model can branch on operation type.
         let data = if is_new {
             WriteOutput::Create {
                 file_path: file_path.to_string(),

@@ -9,7 +9,7 @@ fn all_has_20_contexts() {
 
 #[test]
 fn all_user_has_18_contexts() {
-    // Mirrors KEYBINDING_CONTEXTS in keybindings/schema.ts:12-32.
+    // 18 entries match the user-facing schema.
     assert_eq!(KeybindingContext::ALL_USER.len(), 18);
     for ctx in KeybindingContext::ALL_USER {
         assert!(
@@ -37,7 +37,7 @@ fn round_trip_via_string() {
 #[test]
 fn rejects_unknown_context() {
     assert!(KeybindingContext::from_str("Bogus").is_err());
-    // Lowercase is rejected — TS uses PascalCase exclusively.
+    // Wire format is PascalCase; lowercase should be rejected.
     assert!(KeybindingContext::from_str("global").is_err());
 }
 

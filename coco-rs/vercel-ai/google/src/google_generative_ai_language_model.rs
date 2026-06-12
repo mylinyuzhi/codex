@@ -827,7 +827,7 @@ fn convert_response_parts_with_metadata(
     for part in parts {
         let ts_meta = thought_signature_metadata(part, provider_options_name);
 
-        // Handle executable code (before text, per TS order)
+        // Handle executable code (before text)
         if let Some(ref exec_code) = part.executable_code {
             let call_id = id_gen();
             last_code_execution_tool_call_id = Some(call_id.clone());
@@ -1266,7 +1266,7 @@ fn process_stream_chunk(
         for part in &content.parts {
             let ts_meta = thought_signature_metadata(part, ctx.provider_options_name);
 
-            // Handle executable code (before text, per TS order)
+            // Handle executable code (before text)
             if let Some(ref exec_code) = part.executable_code {
                 let call_id = (ctx.id_gen)();
                 *ctx.last_code_execution_tool_call_id = Some(call_id.clone());

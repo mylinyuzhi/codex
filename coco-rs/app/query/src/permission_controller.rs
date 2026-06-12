@@ -38,18 +38,16 @@ pub(crate) struct PermissionController<'a> {
     session_id: &'a str,
     cancel: &'a CancellationToken,
     /// Hook registry + orchestration context for firing
-    /// `PermissionRequest` hooks before the dialog. TS:
-    /// `executePermissionRequestHooks` runs in the dialog gate so
-    /// hooks can override the user prompt with allow/deny.
+    /// `PermissionRequest` hooks before the dialog so hooks can
+    /// override the user prompt with allow/deny.
     hooks: Option<&'a Arc<HookRegistry>>,
     orchestration_ctx: Option<&'a OrchestrationContext>,
     cwd: Option<String>,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&'a mut crate::helpers::DeferredToolCompletionBuffer>,
-    /// True when the session cannot show an interactive permission prompt
-    /// (coco equivalent of TS `shouldAvoidPermissionPrompts`). When set, a
-    /// residual `Ask` with no permission bridge fails closed (Deny) rather
-    /// than silently auto-allowing. TS `permissions.ts:929-951`.
+    /// True when the session cannot show an interactive permission prompt.
+    /// When set, a residual `Ask` with no permission bridge fails closed
+    /// (Deny) rather than silently auto-allowing.
     avoid_permission_prompts: bool,
 }
 
@@ -161,18 +159,16 @@ impl<'a> PermissionController<'a> {
         suggestions: Vec<coco_types::PermissionUpdate>,
         choices: Option<Vec<coco_types::PermissionAskChoice>>,
     ) -> PermissionOutcome {
-        // TS reference: notifySessionStateChanged('requires_action') on
-        // can_use_tool entry, then transition back to running when the
-        // approval path resolves. No bridge preserves legacy headless
-        // auto-allow behavior.
+        // Transition to RequiresAction while waiting for the approval path,
+        // then back to Running when it resolves. No bridge preserves legacy
+        // headless auto-allow behavior.
         self.state_tracker
             .transition_to(SessionState::RequiresAction, self.event_tx)
             .await;
 
-        // PermissionRequest hook: TS `executePermissionRequestHooks`
-        // (`utils/hooks.ts:4157`) — fires before the dialog. If the
-        // hook returns a `decision` (allow/deny), it short-circuits
-        // the prompt entirely.
+        // PermissionRequest hook: fires before the dialog. If the hook
+        // returns a `decision` (allow/deny), it short-circuits the
+        // prompt entirely.
         if let (Some(registry), Some(ctx)) = (self.hooks, self.orchestration_ctx)
             && !ctx.disable_all_hooks
         {
@@ -240,10 +236,8 @@ impl<'a> PermissionController<'a> {
             // No interactive bridge. In a non-interactive (headless / SDK
             // print) session there is no one to prompt, so a residual `Ask`
             // must fail closed — DENY — rather than silently auto-allowing.
-            // Mirrors TS `permissions.ts:929-951`, which runs the
-            // PermissionRequest hook (above) and then AUTO_REJECTs when no
-            // hook decides. An interactive session with no bridge keeps the
-            // legacy embedded-host permissive fallback.
+            // An interactive session with no bridge keeps the legacy
+            // embedded-host permissive fallback.
             if self.avoid_permission_prompts {
                 warn!(
                     tool = tool_call.tool_name,
@@ -317,10 +311,7 @@ impl<'a> PermissionController<'a> {
                     // `tool_call_preparer::resolve_effective_input_from_permission`
                     // can substitute it for the original tool input. Used
                     // by `AskUserQuestion` to splice user-selected
-                    // `answers` into the tool's data envelope. TS parity:
-                    // `permissionDecision.updatedInput` →
-                    // `processedInput = permissionDecision.updatedInput`
-                    // at `services/tools/toolExecution.ts:1130-1131`.
+                    // `answers` into the tool's data envelope.
                     PermissionOutcome::Allow {
                         updated_input: resolution.updated_input,
                     }

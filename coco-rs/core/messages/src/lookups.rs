@@ -1,6 +1,6 @@
 //! Pre-computed O(1) lookup maps for message collections.
 //!
-//! TS: buildMessageLookups() — avoids O(n²) scans per render cycle.
+//! Builds indices to avoid O(n²) scans per render cycle.
 
 use crate::AssistantContent;
 use crate::LlmMessage;

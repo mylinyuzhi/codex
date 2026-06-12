@@ -5,14 +5,6 @@ taxonomy (User / Feedback / Project / Reference) + auto-extraction +
 auto-dream consolidation + per-session 9-section memory + KAIROS daily
 logs + LLM-ranked recall.
 
-## TS Source
-
-- `memdir/{memdir,memoryTypes,paths,memoryScan,memoryAge,findRelevantMemories,teamMemPaths,teamMemPrompts}.ts`
-- `services/extractMemories/{extractMemories,prompts}.ts`
-- `services/SessionMemory/{sessionMemory,sessionMemoryUtils,prompts}.ts`
-- `services/autoDream/{autoDream,config,consolidationLock,consolidationPrompt}.ts`
-- `utils/memoryFileDetection.ts`
-
 ## Crate Layout
 
 ```
@@ -65,12 +57,12 @@ src/
 - `MEMORY.md` is **model-curated**; the runtime never auto-regenerates it. We only read + truncate (line 200 / 25 KB caps).
 - `is_team_memory_path` uses an authoritative `MemoryDir` resolution + a `**/memory/team/**` substring fallback (gated by the secret detector).
 - Path resolution is anchored to `coco_git::find_canonical_git_root` so worktrees of one repo share one memdir.
-- `ExtractService::run` always sets `isolation = "fork"` + `fork_context_messages` so the child sees the parent's slice — TS parity (`AgentTool.tsx:622-632`).
+- `ExtractService::run` always sets `isolation = "fork"` + `fork_context_messages` so the child sees the parent's slice.
 - The write fence resolves relative paths against `ToolUseContext::cwd_override` before checking, so a model passing `./notes.md` lands inside the fence as expected.
-- `DreamService::maybe_consolidate` checks gates in TS-parity order (time → scan throttle → session) and accepts `enumerate_sessions` as `FnOnce()` — the closure runs **only** after the time + scan gates pass so callers don't pay enumeration cost on every turn.
-- `DreamService` rolls the lock mtime back on failure so the time-gate doesn't reset to "now"; the failure path also emits `MemoryEvent::AutoDreamFailed` for telemetry parity with TS `tengu_auto_dream_failed`.
+- `DreamService::maybe_consolidate` checks gates in order (time → scan throttle → session) and accepts `enumerate_sessions` as `FnOnce()` — the closure runs **only** after the time + scan gates pass so callers don't pay enumeration cost on every turn.
+- `DreamService` rolls the lock mtime back on failure so the time-gate doesn't reset to "now"; the failure path also emits `MemoryEvent::AutoDreamFailed` for telemetry coverage.
 - `MemoryRuntime::tick_dream` is the engine's per-turn entry point: it calls the installed `SessionEnumerator` (TranscriptStore-backed) lazily and threads the runtime's `transcript_dir`. Engine fans this out alongside extract + session-memory in `engine_finalize_turn`.
-- `ExtractService` emits `ExtractionCoalesced` when a request stashes for a trailing run and `ExtractionError` on subagent failure — full telemetry coverage of TS `tengu_extract_memories_*` events.
+- `ExtractService` emits `ExtractionCoalesced` when a request stashes for a trailing run and `ExtractionError` on subagent failure — full telemetry coverage.
 - `SessionMemoryService` writes the 9-section template if missing, then asks the agent to Edit-only — never overwrites the file wholesale.
 - `MemoryEvent::ExtractionCompleted::files_written` sums real `Write + Edit + NotebookEdit` invocations from `AgentSpawnResponse::tool_use_counts` — no fabricated counts.
 
@@ -93,8 +85,6 @@ existing `AgentSpawnRequest.constraints.allowed_write_roots` field
 (outer ring) both apply. Either alone would protect; both together
 guard against future field-renaming drift.
 
-TS source: `services/extractMemories/extractMemories.ts::createAutoMemCanUseTool`
-+ `services/SessionMemory/sessionMemory.ts::createSessionMemCanUseTool`.
 
 ## Deferred design work
 
@@ -110,9 +100,8 @@ markers in its block list, but every downstream consumer calls
 `collapse_text_parts` flattens any multi-part system message into one
 block with `cache_control: None`. Result: any MEMORY.md edit, env-time
 tick, or attachment refresh invalidates the entire system-prompt
-prefix cache. TS splits at `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` so the
-static prefix (identity + tools + CLAUDE.md) caches independently of
-dynamic content.
+prefix cache. The static prefix (identity + tools + CLAUDE.md) should cache
+independently of dynamic content.
 
 **Scope of fix**:
 1. `coco-context::SystemPrompt` — `full_text()` becomes optional;
@@ -135,8 +124,8 @@ dynamic content.
 tool. Anthropic and OpenAI honor tool-forcing reliably; Google Gemini's
 function-calling shape is asymmetric. The current text-fallback path in
 `runtime.rs:732-734` handles the Gemini case but pays a wasted LLM
-call. TS uses `output_format: { type: 'json_schema', schema: {...} }`
-which is universally supported by structured-output APIs.
+call. `output_format: { type: 'json_schema', schema: {...} }` is
+universally supported by structured-output APIs.
 
 **Scope of fix**:
 1. `coco-types::SideQueryRequest` — add

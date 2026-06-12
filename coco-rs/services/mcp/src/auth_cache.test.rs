@@ -55,8 +55,8 @@ async fn test_clear_is_per_server() {
 }
 
 /// A batched multi-server 401 storm must not corrupt the file: every concurrent
-/// `set` survives (TS serializes via a writeChain; here via the shared write
-/// lock). Cloned caches share the lock, mirroring cloned managers.
+/// `set` survives (serialized via the shared write lock). Cloned caches share
+/// the lock, mirroring cloned managers.
 #[tokio::test]
 async fn test_concurrent_set_storm_no_corruption() {
     let (_dir, cache) = cache();

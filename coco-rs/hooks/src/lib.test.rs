@@ -485,10 +485,10 @@ fn test_scope_ordering() {
 }
 
 #[test]
-fn test_ts_hook_events_are_all_present() {
-    // The 27 names mirror TS `HOOK_EVENTS`
-    // (`src/entrypoints/sdk/coreSchemas.ts:355-383`). If TS adds an event,
-    // this test fails until the new variant is wired in.
+fn test_all_hook_event_variants_are_present() {
+    // All 27 HookEventType names must round-trip through serde.
+    // If a new variant is added, this test fails until the new
+    // variant is wired in.
     let ts_events = [
         "PreToolUse",
         "PostToolUse",
@@ -521,7 +521,7 @@ fn test_ts_hook_events_are_all_present() {
     for name in ts_events {
         let parsed: HookEventType =
             serde_json::from_value(serde_json::Value::String(name.to_string()))
-                .unwrap_or_else(|e| panic!("missing TS event variant {name}: {e}"));
+                .unwrap_or_else(|e| panic!("missing event variant {name}: {e}"));
         let registry = HookRegistry::new();
         registry.register(HookDefinition {
             event: parsed,
@@ -667,7 +667,7 @@ fn test_load_hooks_from_config_http() {
     match &hooks[0].handler {
         HookHandler::Http { url, headers, .. } => {
             assert_eq!(url, "https://example.com/hook");
-            // TS schema has no `method` field — POST is hardcoded.
+            // The HTTP handler has no `method` field — POST is hardcoded.
             let hdrs = headers.as_ref().unwrap();
             assert_eq!(hdrs.get("Authorization").unwrap(), "Bearer abc");
         }
@@ -694,8 +694,8 @@ fn test_load_hooks_from_config_http_type_alias() {
 
 #[test]
 fn test_load_hooks_from_config_agent() {
-    // TS schema (`schemas/hooks.ts:128-163`): agent hooks have only
-    // `prompt` + optional `model`. No `agent_name` field exists.
+    // Agent hooks have only `prompt` + optional `model`.
+    // No `agent_name` field exists.
     let json = serde_json::json!({
         HookEventType::PreToolUse.as_str(): [{
             "type": "agent",
@@ -1135,7 +1135,7 @@ async fn test_command_hook_custom_shell() {
 }
 
 // -----------------------------------------------------------------------
-// matcher_matches — TS heuristic alignment tests
+// matcher_matches
 // -----------------------------------------------------------------------
 
 #[test]
@@ -1191,8 +1191,7 @@ fn test_sanitize_header_value_strips_crlf() {
 }
 
 // -----------------------------------------------------------------------
-// interpolate_env_vars_allowlisted tests (TS parity:
-// `execHttpHook.ts:89-108`)
+// interpolate_env_vars_allowlisted tests
 // -----------------------------------------------------------------------
 
 #[test]

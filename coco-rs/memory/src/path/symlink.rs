@@ -1,19 +1,18 @@
 //! Symlink-aware path resolution for write-validation.
 //!
-//! TS: `memdir/teamMemPaths.ts:realpathDeepestExisting`. Walks up the
-//! ancestry until canonicalize succeeds, then re-appends the dropped
-//! components. Lets us validate paths whose tail doesn't exist yet
-//! (we're about to create them) without choking on partial trees.
+//! Walks up the ancestry until canonicalize succeeds, then
+//! re-appends the dropped components. Lets us validate paths whose
+//! tail doesn't exist yet (we're about to create them) without
+//! choking on partial trees.
 //!
 //! **Fails closed** on three error classes that the original
 //! implementation silently swallowed:
 //!
 //! - **Dangling symlink** — `path` is a symlink pointing nowhere.
-//!   TS `teamMemPaths.ts:138-141` distinguishes via `lstat` after
-//!   `realpath` returns ENOENT; we use `symlink_metadata` for the same
-//!   effect. A planted `<team>/x.md -> /etc/passwd` would otherwise
-//!   pass through.
-//! - **ELOOP** — symlink loop. TS rejects at `:151-155`; we map any
+//!   Distinguishes via `lstat` after `realpath` returns ENOENT; we use
+//!   `symlink_metadata` for the same effect. A planted
+//!   `<team>/x.md -> /etc/passwd` would otherwise pass through.
+//! - **ELOOP** — symlink loop. Rejected; we map any
 //!   non-`NotFound`/`NotADirectory`/`InvalidFilename` IO error to
 //!   `None` so the caller's containment check fails closed.
 //! - **EACCES / EIO** — can't verify. Same fail-closed posture as

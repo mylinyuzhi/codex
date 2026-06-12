@@ -26,10 +26,9 @@
 //!    phase calls (Phase 9 stream consume → post-stream branch)
 //!    rather than embedding 360 LoC of event matching inline.
 //!
-//! TS source for the design: `query.ts:799-822` (in-stream withhold) +
-//! `query.ts:1062-1255` (post-stream recovery decision). The Rust
-//! split is structurally different (Rust doesn't have JS generators,
-//! so the loop is a normal `async fn`), but the semantics map 1:1.
+//! The Rust split is structurally different from the JS original
+//! (Rust doesn't have JS generators, so the loop is a normal `async fn`),
+//! but the semantics map 1:1.
 
 use std::collections::HashMap;
 use std::sync::Arc;

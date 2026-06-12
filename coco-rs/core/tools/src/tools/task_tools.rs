@@ -2,10 +2,8 @@
 //! shared `TaskListHandle` + `TodoListHandle` injected through
 //! `ToolUseContext`.
 //!
-//! **TS alignment**: see `tools/Task{Create,Get,List,Update,Stop,Output}Tool/`
-//! plus `tools/TodoWriteTool/`. Output projections are the exact TS shapes
-//! (JSON envelopes like a `task` wrapper or a `tasks` array) so the model
-//! sees the same payloads as in TS.
+//! Output projections use stable JSON envelopes (like a `task` wrapper
+//! or a `tasks` array) so the model sees consistent payloads.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -31,18 +29,17 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
-// ── Output projections (TS-shaped) ────────────────────────────────────
+// ── Output projections ────────────────────────────────────────────────
 
 /// Shape a freshly-created task for TaskCreate's `data`.
-/// TS `TaskCreateTool.ts:36-43` — `{task: {id, subject}}`.
+/// Returns `{task: {id, subject}}`.
 fn project_create(task: &TaskRecord) -> Value {
     serde_json::json!({
         "task": { "id": task.id, "subject": task.subject }
     })
 }
 
-/// TS `TaskGetTool.ts:20-32` — `{task: {id, subject, description, status,
-/// blocks, blockedBy} | null}`.
+/// Returns `{task: {id, subject, description, status, blocks, blockedBy} | null}`.
 fn project_get(task: Option<&TaskRecord>) -> Value {
     match task {
         Some(t) => serde_json::json!({
@@ -60,8 +57,7 @@ fn project_get(task: Option<&TaskRecord>) -> Value {
 }
 
 /// One TaskList entry: 4-5 fields (id, subject, status, blockedBy,
-/// owner?). Completed tasks resolve blockers out of blockedBy (TS
-/// `TaskListTool.ts:72-83`).
+/// owner?). Completed tasks resolve blockers out of blockedBy.
 fn project_list_entry(
     task: &TaskRecord,
     resolved_ids: &std::collections::HashSet<String>,
@@ -163,7 +159,7 @@ fn project_output_background(
 /// Snapshot the current plan-task list (filtered to model-visible
 /// entries) and return a patch that:
 /// 1. Stores the snapshot in `ToolAppState.plan_tasks`
-/// 2. Sets `expanded_view = Tasks` (matches TS auto-expand)
+/// 2. Sets `expanded_view = Tasks` (auto-expand)
 /// 3. Updates `verification_nudge_pending`
 ///
 /// The snapshot is computed *now* and moved into the closure. The
@@ -188,8 +184,7 @@ async fn build_task_list_patch(
 }
 
 /// After TodoWrite, snapshot the store for `key` and patch AppState.
-/// TodoWrite doesn't auto-expand by itself in TS, but we still update
-/// the shared snapshot so the TUI can render V1 lists.
+/// Updates the shared snapshot so the TUI can render V1 lists.
 async fn build_todo_patch(
     todo_list: &TodoListHandleRef,
     key: String,
@@ -210,11 +205,9 @@ async fn build_todo_patch(
 
 /// Key under which a TodoWrite list is stored in `TodoListHandle`.
 ///
-/// TS `TodoWriteTool.ts:67`: `const todoKey = context.agentId ?? getSessionId()`.
-/// In coco-rs the session id is passed to `ToolUseContext` as
-/// `session_id_for_history` at bootstrap; we use that as the fallback.
-/// As a last resort (tests without either), use a stable literal so
-/// list-local operations remain round-trippable.
+/// Uses `context.agentId` when present, falling back to `session_id_for_history`
+/// (passed to `ToolUseContext` at bootstrap). As a last resort (tests without
+/// either), uses a stable literal so list-local operations remain round-trippable.
 fn todo_key(ctx: &ToolUseContext) -> String {
     ctx.agent_id
         .as_ref()
@@ -462,7 +455,7 @@ pub struct TaskCreateTool;
 impl Tool for TaskCreateTool {
     type Input = TaskCreateInput;
     coco_tool_runtime::impl_runtime_schema!(TaskCreateInput);
-    /// Output is a TS-shaped `{task: {...}}` envelope built by
+    /// Output is a `{task: {...}}` envelope built by
     /// `project_create`. Kept as `Value` because the projection helper
     /// is shared across the 7 task tools and they share field-shape
     /// invariants the renderer reads positionally.
@@ -500,7 +493,6 @@ impl Tool for TaskCreateTool {
     }
 
     /// Render the create envelope as `Task #{id} created successfully: {subject}`.
-    /// TS parity: `TaskCreateTool.ts:130-135::mapToolResultToToolResultBlockParam`.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let task = data.get("task");
         let id = task
@@ -537,9 +529,9 @@ impl Tool for TaskCreateTool {
                 source: None,
             })?;
 
-        // TS `TaskCreateTool.ts:122-152` — fire TaskCreated hooks AFTER
-        // the task is persisted. A blocking hook rolls the task back so
-        // the model sees the failure and the store stays consistent.
+        // Fire TaskCreated hooks AFTER the task is persisted. A blocking
+        // hook rolls the task back so the model sees the failure and the
+        // store stays consistent.
         if let Some(handle) = ctx.hook_handle.as_ref() {
             let outcome = handle
                 .run_task_created(
@@ -564,7 +556,7 @@ impl Tool for TaskCreateTool {
             }
         }
 
-        // TS `TaskCreateTool.ts:116-119` — auto-expand the task panel.
+        // Auto-expand the task panel.
         let patch = build_task_list_patch(&ctx.task_list, false).await;
         Ok(ToolResult {
             data: project_create(&task),
@@ -578,8 +570,7 @@ impl Tool for TaskCreateTool {
 
 // ── TaskGetTool ───────────────────────────────────────────────────────
 
-/// Typed input for [`TaskGetTool`]. Wire key is `taskId` (camelCase)
-/// for TS parity.
+/// Typed input for [`TaskGetTool`]. Wire key is `taskId` (camelCase).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskGetInput {
     /// The task ID to look up
@@ -627,8 +618,7 @@ impl Tool for TaskGetTool {
     }
 
     /// Render the task envelope as a multi-line text block, or
-    /// "Task not found" when `task` is null. TS parity:
-    /// `TaskGetTool.ts:99-128::mapToolResultToToolResultBlockParam`.
+    /// "Task not found" when `task` is null.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let task = data.get("task");
         let text = match task {
@@ -672,10 +662,9 @@ impl Tool for TaskGetTool {
     }
 }
 
-/// Render a task object into the multi-line TaskGet text block. TS
-/// parity: `TaskGetTool.ts:107-122` — uses `#` prefix on every id, and
-/// always includes the Description line (TS doesn't conditionally
-/// suppress on empty).
+/// Render a task object into the multi-line TaskGet text block.
+/// Uses `#` prefix on every id, and always includes the Description
+/// line (never conditionally suppressed on empty).
 fn format_task_full(task: &Value) -> String {
     let id = task.get("id").and_then(Value::as_str).unwrap_or("?");
     let subject = task.get("subject").and_then(Value::as_str).unwrap_or("");
@@ -752,8 +741,7 @@ impl Tool for TaskListTool {
     }
 
     /// Render `{tasks: [...]}` as `#{id} [{status}] {subject}{owner}{blocked}`
-    /// per line. Empty list collapses to "No tasks found". TS parity:
-    /// `TaskListTool.ts:91-115::mapToolResultToToolResultBlockParam`.
+    /// per line. Empty list collapses to "No tasks found".
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let tasks = data.get("tasks").and_then(Value::as_array);
         let text = match tasks {
@@ -808,9 +796,8 @@ impl Tool for TaskListTool {
                 source: None,
             })?;
 
-        // TS `TaskListTool.ts:73-76` — any completed task id is removed
-        // from other tasks' `blockedBy` so the model only sees unresolved
-        // blockers.
+        // Any completed task id is removed from other tasks' `blockedBy`
+        // so the model only sees unresolved blockers.
         let resolved_ids: std::collections::HashSet<String> = all
             .iter()
             .filter(|t| t.status == TaskListStatus::Completed)
@@ -835,9 +822,8 @@ impl Tool for TaskListTool {
 
 // ── TaskUpdateTool ────────────────────────────────────────────────────
 
-/// Wire status values for [`TaskUpdateInput`]. TS
-/// `TaskStatusSchema().or(z.literal('deleted'))`. `deleted` routes to a task
-/// deletion in `execute`, not a persistent status set.
+/// Wire status values for [`TaskUpdateInput`].
+/// `deleted` routes to a task deletion in `execute`, not a persistent status set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskUpdateStatus {
@@ -860,7 +846,7 @@ impl TaskUpdateStatus {
     }
 }
 
-/// Typed input for [`TaskUpdateTool`]. Wire keys preserve TS camelCase
+/// Typed input for [`TaskUpdateTool`]. Wire keys are camelCase
 /// (`taskId`, `activeForm`, `addBlocks`, `addBlockedBy`).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskUpdateInput {
@@ -868,7 +854,7 @@ pub struct TaskUpdateInput {
     #[serde(rename = "taskId")]
     pub task_id: String,
     /// New status for the task — `deleted` routes to a delete (not a
-    /// status set). TS `TaskStatusSchema().or(z.literal('deleted'))`.
+    /// status set).
     #[serde(default)]
     pub status: Option<TaskUpdateStatus>,
     /// New subject for the task
@@ -899,9 +885,8 @@ pub struct TaskUpdateTool;
 #[async_trait::async_trait]
 impl Tool for TaskUpdateTool {
     type Input = TaskUpdateInput;
-    // `status` is the typed [`TaskUpdateStatus`] enum (TS
-    // `TaskStatusSchema().or(z.literal('deleted'))` =
-    // enum[pending, in_progress, completed, deleted]), so the derived
+    // `status` is the typed [`TaskUpdateStatus`] enum
+    // (enum[pending, in_progress, completed, deleted]), so the derived
     // schema carries the enum and is auto-closed — no hand-patching.
     coco_tool_runtime::impl_runtime_schema!(TaskUpdateInput);
     type Output = Value;
@@ -933,8 +918,7 @@ impl Tool for TaskUpdateTool {
         Some(TASK_UPDATE_SEARCH_HINT)
     }
 
-    /// Render the update envelope. TS parity:
-    /// `TaskUpdateTool.ts:364-405::mapToolResultToToolResultBlockParam`.
+    /// Render the update envelope.
     /// Error: surface the `error` field directly (or `Task #{id} not
     /// found` fallback). Success: `Updated task #{id} {fields...}` with
     /// optional teammate-completion + verification nudges.
@@ -951,9 +935,8 @@ impl Tool for TaskUpdateTool {
                 .map(|arr| arr.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
             let mut out = format!("Updated task #{task_id} {}", updated_fields.join(", "));
-            // TS `TaskUpdateTool.ts:386-394`: teammate-completion
-            // nudge fires before the verification nudge when both
-            // would apply.
+            // Teammate-completion nudge fires before the verification
+            // nudge when both would apply.
             if data
                 .get("completedNudgeNeeded")
                 .and_then(Value::as_bool)
@@ -994,9 +977,9 @@ impl Tool for TaskUpdateTool {
             });
         }
 
-        // Fetch existing — TS `TaskUpdateTool.ts:146-156` returns
-        // `{success: false, error}` when the task is missing rather than
-        // erroring out, so the model can handle it gracefully.
+        // Fetch existing — returns `{success: false, error}` when the
+        // task is missing rather than erroring out, so the model can
+        // handle it gracefully.
         let existing = match ctx.task_list.get_task(&task_id).await {
             Ok(Some(t)) => t,
             Ok(None) => {
@@ -1020,7 +1003,6 @@ impl Tool for TaskUpdateTool {
         let mut updated_fields: Vec<&'static str> = Vec::new();
 
         // ── Handle `status=deleted` — delete the task and return early.
-        // TS `TaskUpdateTool.ts:213-226`.
         if input.status == Some(TaskUpdateStatus::Deleted) {
             let deleted = ctx.task_list.delete_task(&task_id).await.map_err(|e| {
                 ToolError::ExecutionFailed {
@@ -1085,8 +1067,7 @@ impl Tool for TaskUpdateTool {
         }
 
         // Auto-owner assignment: when a teammate sets status=in_progress
-        // without an explicit owner and the task is unclaimed, auto-
-        // assign. TS `TaskUpdateTool.ts:188-199`.
+        // without an explicit owner and the task is unclaimed, auto-assign.
         if input.status == Some(TaskUpdateStatus::InProgress)
             && requested_owner.is_none()
             && existing.owner.is_none()
@@ -1108,9 +1089,7 @@ impl Tool for TaskUpdateTool {
         {
             // Fire pre-hook via task-list store: the store runs
             // `HookEventType::TaskCompleted` on transition to Completed (see
-            // `task_list.rs`). We could also run local pre-checks here, but to
-            // match TS `TaskUpdateTool.ts:232-265` the hook fires from inside
-            // `update_task`.
+            // `task_list.rs`). The hook fires from inside `update_task`.
             update.status = Some(new_status);
             status_change = Some((existing.status.as_str().into(), new_status.as_str().into()));
             updated_fields.push("status");
@@ -1128,9 +1107,7 @@ impl Tool for TaskUpdateTool {
         }
 
         // TaskCompleted hook fires BEFORE the status flip is persisted
-        // so a blocking hook leaves the task in its current state. TS:
-        // `executeTaskCompletedHooks` (`utils/hooks.ts:3789`) runs from
-        // `TaskUpdateTool.ts:232-265` before the store write.
+        // so a blocking hook leaves the task in its current state.
         if newly_completed && let Some(handle) = ctx.hook_handle.as_ref() {
             let outcome = handle
                 .run_task_completed(
@@ -1200,7 +1177,7 @@ impl Tool for TaskUpdateTool {
             }
         }
 
-        // Mailbox-notify the new owner (swarm only). TS `TaskUpdateTool.ts:277-298`.
+        // Mailbox-notify the new owner (swarm only).
         if let Some(new_owner) = update.owner.as_deref()
             && ctx.is_teammate
             && let Some(team_name) = ctx.team_name.as_deref()
@@ -1232,8 +1209,8 @@ impl Tool for TaskUpdateTool {
                 .await;
         }
 
-        // Verification nudge — TS `TaskUpdateTool.ts:334-349`. #213: only
-        // fire when the verification agent is actually registered.
+        // Verification nudge — #213: only fire when the verification agent
+        // is actually registered.
         let is_main_thread = ctx.agent_id.is_none();
         let verification_nudge = verification_agent_registered(ctx)
             && ctx
@@ -1241,13 +1218,12 @@ impl Tool for TaskUpdateTool {
                 .should_nudge_verification(newly_completed, is_main_thread)
                 .await;
 
-        // Teammate completion nudge — TS `TaskUpdateTool.ts:386-394`.
-        // Fires when a swarm teammate (in-process or otherwise)
+        // Teammate completion nudge — fires when a swarm teammate
         // transitions a task to completed; primes the next TaskList
         // call so the agent picks up unblocked downstream work.
         let completed_nudge = newly_completed && ctx.is_teammate;
 
-        // TS `TaskUpdateTool.ts:140-143` — auto-expand on update.
+        // Auto-expand on update.
         let patch = build_task_list_patch(&ctx.task_list, verification_nudge).await;
         Ok(ToolResult {
             data: project_update(
@@ -1280,8 +1256,7 @@ fn now_iso() -> String {
 
 // ── TaskStopTool ──────────────────────────────────────────────────────
 
-/// TS `TaskStopTool/prompt.ts::DESCRIPTION` (verbatim, incl. leading
-/// and trailing newlines).
+/// Prompt description for [`TaskStopTool`] (incl. leading and trailing newlines).
 const TASK_STOP_PROMPT: &str = "
 - Stops a running background task by its ID
 - Takes a task_id parameter identifying the task to stop
@@ -1289,10 +1264,10 @@ const TASK_STOP_PROMPT: &str = "
 - Use this tool when you need to terminate a long-running task
 ";
 
-/// Typed input for [`TaskStopTool`]. TS `TaskStopTool.ts:11-18`
-/// `z.strictObject` advertises exactly two optional keys — `task_id`
-/// (canonical) and `shell_id` (deprecated KillShell compatibility).
-/// Both are optional; `execute` enforces that at least one resolves.
+/// Typed input for [`TaskStopTool`]. Advertises exactly two optional
+/// keys — `task_id` (canonical) and `shell_id` (deprecated KillShell
+/// compatibility). Both are optional; `execute` enforces that at least
+/// one resolves.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskStopInput {
     /// The ID of the background task to stop.
@@ -1334,8 +1309,7 @@ impl Tool for TaskStopTool {
         Some("stop a running background task or shell")
     }
 
-    // TS `TaskStopTool.ts:98-103` emits `jsonStringify(output)` —
-    // i.e. the entire `{message, task_id, task_type}` envelope as
+    // The entire `{message, task_id, task_type}` envelope is emitted as
     // JSON. This matches the trait's default `render_for_model` impl
     // exactly, so no override is needed.
 
@@ -1357,11 +1331,9 @@ impl Tool for TaskStopTool {
             });
         }
 
-        // TS `TaskStopTool.ts:60-91` `validateInput`: the task must live
-        // in the running-task registry (`appState.tasks[id]`). Plan items
-        // live in a disjoint namespace (`utils/tasks.ts` on disk) and
-        // must be terminated via `TaskUpdate(status=completed|deleted)`
-        // — **not** this tool.
+        // The task must live in the running-task registry (`appState.tasks[id]`).
+        // Plan items live in a disjoint namespace and must be terminated
+        // via `TaskUpdate(status=completed|deleted)` — **not** this tool.
         let Some(handle) = ctx.task_handle.as_ref() else {
             return Err(ToolError::ExecutionFailed {
                 message: format!(
@@ -1371,9 +1343,9 @@ impl Tool for TaskStopTool {
                 source: None,
             });
         };
-        // #49 / TS `TaskStopTool.ts:60-91`: pre-check status so a
-        // not-running task reports errorCode 3 (distinct from not-found),
-        // and capture the real task type + command for the output.
+        // #49: pre-check status so a not-running task reports errorCode 3
+        // (distinct from not-found), and capture the real task type +
+        // command for the output.
         let state = handle.task_state(&task_id).await;
         if let Some(s) = &state
             && s.status != coco_types::TaskStatus::Running
@@ -1389,9 +1361,9 @@ impl Tool for TaskStopTool {
 
         match handle.kill_task(&task_id).await {
             Ok(()) => {
-                // TS `stopTask.ts:97-99`: command is the shell command for
-                // shell tasks, else the description. Type is the real wire
-                // name, not a hardcoded "background".
+                // Command is the shell command for shell tasks, else the
+                // description. Type is the real wire name, not a hardcoded
+                // "background".
                 let (task_type, command) = match &state {
                     Some(s) => (
                         s.task_type().wire_name().to_string(),
@@ -1427,12 +1399,10 @@ impl Tool for TaskStopTool {
     }
 }
 
-/// #213 / TS `builtInAgents.ts:64-69`: the verification nudge must only
-/// fire when the verification agent is actually registered (TS gates both
-/// the nudge and catalog inclusion on the same `VERIFICATION_AGENT` +
-/// `tengu_hive_evidence` conditions). coco-rs keys off the active agent
-/// catalog so 3P builds without the agent never get spawn-nonexistent-
-/// agent instructions.
+/// #213: the verification nudge must only fire when the verification
+/// agent is actually registered. Keys off the active agent catalog so
+/// 3P builds without the agent never get spawn-nonexistent-agent
+/// instructions.
 fn verification_agent_registered(ctx: &ToolUseContext) -> bool {
     ctx.agent_catalog.as_ref().is_some_and(|c| {
         c.find_active(coco_types::SubagentType::Verification.as_str())
@@ -1440,8 +1410,8 @@ fn verification_agent_registered(ctx: &ToolUseContext) -> bool {
     })
 }
 
-/// Lowercase wire string for a [`coco_types::TaskStatus`] (TS status
-/// names). `TaskStatus` has no `as_str`, so spell it out here.
+/// Lowercase wire string for a [`coco_types::TaskStatus`].
+/// `TaskStatus` has no `as_str`, so spell it out here.
 fn task_status_wire(status: coco_types::TaskStatus) -> &'static str {
     match status {
         coco_types::TaskStatus::Pending => "pending",
@@ -1454,7 +1424,7 @@ fn task_status_wire(status: coco_types::TaskStatus) -> &'static str {
 
 // ── TaskOutputTool ────────────────────────────────────────────────────
 
-/// TS `TaskOutputTool.tsx:172-181::prompt()` — verbatim deprecated notice.
+/// Prompt for [`TaskOutputTool`] — deprecated notice.
 const TASK_OUTPUT_PROMPT: &str = "DEPRECATED: Prefer using the Read tool on the task's output file path instead. Background tasks return their output file path in the tool result, and you receive a <task-notification> with the same path when the task completes — Read that file directly.
 
 - Retrieves output from a running or completed task (background shell, agent, or remote session)
@@ -1465,8 +1435,7 @@ const TASK_OUTPUT_PROMPT: &str = "DEPRECATED: Prefer using the Read tool on the 
 - Task IDs can be found using the /tasks command
 - Works with all task types: background shells, async agents, and remote sessions";
 
-/// Typed input for [`TaskOutputTool`]. TS `TaskOutputTool.tsx:30-34`
-/// `z.strictObject`: `task_id` is required (no `.optional()`), `block`
+/// Typed input for [`TaskOutputTool`]. `task_id` is required, `block`
 /// defaults to true, `timeout` is `0..=600000` defaulting to 30000.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TaskOutputInput {
@@ -1497,8 +1466,7 @@ pub struct TaskOutputTool;
 impl Tool for TaskOutputTool {
     type Input = TaskOutputInput;
     // `block`/`timeout` bounds + defaults are declared via `#[schemars(...)]`
-    // attrs on the struct (TS `.default(true)` / `.min(0).max(600000)
-    // .default(30000)`), so the derived schema is correct and auto-closed —
+    // attrs on the struct, so the derived schema is correct and auto-closed —
     // no hand-patching.
     coco_tool_runtime::impl_runtime_schema!(TaskOutputInput);
     type Output = Value;
@@ -1525,9 +1493,7 @@ impl Tool for TaskOutputTool {
         true
     }
 
-    /// Render the retrieval envelope as TS-shaped XML tags. TS parity:
-    /// `TaskOutputTool.tsx:283-308::mapToolResultToToolResultBlockParam`.
-    /// Format:
+    /// Render the retrieval envelope as XML tags. Format:
     /// ```text
     /// <retrieval_status>STATUS</retrieval_status>
     ///
@@ -1545,8 +1511,7 @@ impl Tool for TaskOutputTool {
     ///
     /// <error>...</error>            # only when present
     /// ```
-    /// Pieces are joined with `\n\n`. Missing fields are skipped (TS
-    /// `if (data.task.exitCode !== undefined && data.task.exitCode !== null)`).
+    /// Pieces are joined with `\n\n`. Missing fields are skipped.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let status = data
             .get("retrieval_status")
@@ -1626,10 +1591,9 @@ impl Tool for TaskOutputTool {
             });
         }
 
-        // TS `TaskOutputTool.tsx:53` — unknown IDs fall through to
-        // `{retrieval_status: 'not_ready', task: null}`. Plan items live
-        // in a disjoint namespace and are inspected via `TaskGet`; we do
-        // not read them here.
+        // Unknown IDs fall through to `{retrieval_status: 'not_ready', task: null}`.
+        // Plan items live in a disjoint namespace and are inspected via
+        // `TaskGet`; we do not read them here.
         Ok(ToolResult {
             data: serde_json::json!({
                 "retrieval_status": RetrievalStatus::NotReady.as_str(),
@@ -1651,10 +1615,7 @@ impl Tool for TaskOutputTool {
 ///
 /// Falls back to a one-shot `get_task_status` snapshot if no
 /// terminal subscription is available (test handles without watch
-/// wiring). TS parity for the blocking semantics at
-/// `TaskOutputTool.tsx:118-142` polling loop, but replaces 100 ms
-/// polling with O(1) await — Rust has primitives JS lacks, no
-/// reason to mirror its busy-wait.
+/// wiring). Uses O(1) await instead of polling — no reason to busy-wait.
 async fn wait_for_task_completion(
     handle: &dyn coco_tool_runtime::TaskHandle,
     task_id: &str,
@@ -1678,8 +1639,7 @@ async fn wait_for_task_completion(
 }
 
 /// Wire-string projection of [`coco_types::TaskStatus`] used in the
-/// `TaskOutput` envelope's `<status>` tag. TS parity with the lowercase
-/// strings emitted at `TaskOutputTool.tsx:99-101`.
+/// `TaskOutput` envelope's `<status>` tag. Returns lowercase strings.
 fn task_status_wire_string(status: coco_types::TaskStatus) -> &'static str {
     match status {
         coco_types::TaskStatus::Pending => "pending",
@@ -1692,11 +1652,10 @@ fn task_status_wire_string(status: coco_types::TaskStatus) -> &'static str {
 
 // ── TodoWriteTool ─────────────────────────────────────────────────────
 
-/// TS `TodoWriteTool/prompt.ts::DESCRIPTION`.
+/// Description for [`TodoWriteTool`].
 const TODO_WRITE_DESCRIPTION: &str = "Update the todo list for the current session. To be used proactively and often to track progress and pending tasks. Make sure that at least one task is in_progress at all times. Always provide both content (imperative) and activeForm (present continuous) for each task.";
 
-/// TS `TodoWriteTool/prompt.ts::PROMPT` (with `${FILE_EDIT_TOOL_NAME}`
-/// resolved to `Edit`).
+/// Prompt for [`TodoWriteTool`].
 const TODO_WRITE_PROMPT: &str = "Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
 It also helps the user understand the progress of the task and overall progress of their requests.
 
@@ -1878,13 +1837,11 @@ When in doubt, use this tool. Being proactive with task management demonstrates 
 ";
 
 /// Typed input for [`TodoWriteTool`]. Items deserialize directly into
-/// the existing `TodoRecord` type (already `Serialize +
-/// Deserialize`); we add a `JsonSchema` derive at its definition.
+/// the `TodoRecord` type; `JsonSchema` is derived at its definition.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct TodoWriteInput {
     /// The updated todo list. Pass the full list each call; the
-    /// prior list is replaced. TS `TodoWriteTool.ts:15` `todos` is a
-    /// required field (no `.optional()`/`.default()`).
+    /// prior list is replaced. `todos` is a required field.
     pub todos: Vec<TodoRecord>,
 }
 
@@ -1894,8 +1851,8 @@ pub struct TodoWriteTool;
 impl Tool for TodoWriteTool {
     type Input = TodoWriteInput;
     // `todos` items derive from `TodoRecord`, whose `#[schemars(...)]` attrs
-    // carry the `content`/`activeForm` `minLength:1` and the `status` enum
-    // (TS `TodoItemSchema`), so the derived schema is correct + auto-closed.
+    // carry the `content`/`activeForm` `minLength:1` and the `status` enum,
+    // so the derived schema is correct + auto-closed.
     coco_tool_runtime::impl_runtime_schema!(TodoWriteInput);
     type Output = Value;
 
@@ -1925,7 +1882,6 @@ impl Tool for TodoWriteTool {
         Some("write the per-agent todo checklist for tracking work")
     }
 
-    /// TS parity: `TodoWriteTool.ts::mapToolResultToToolResultBlockParam`.
     /// The model only needs the success message + optional verification
     /// nudge — `oldTodos`/`newTodos` arrays are TUI/state concerns, not
     /// model-visible content. JSON-stringifying them wastes tokens.
@@ -1984,7 +1940,7 @@ impl Tool for TodoWriteTool {
         let key = todo_key(ctx);
         let old_todos = ctx.todo_list.read(&key).await;
 
-        // `allDone → clear` (TS line 69-70).
+        // `allDone → clear`.
         let all_done = !incoming.is_empty() && incoming.iter().all(|t| t.status == "completed");
         let to_store = if all_done {
             Vec::new()

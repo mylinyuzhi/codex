@@ -15,8 +15,6 @@ pub enum PermissionBehavior {
 }
 
 /// Classifier behavior (same variants as `PermissionBehavior`).
-///
-/// TS: `ClassifierBehavior` in types/permissions.ts
 pub type ClassifierBehavior = PermissionBehavior;
 
 /// Which auto-mode classifier stages run. TS `TwoStageMode`
@@ -41,8 +39,6 @@ pub enum ClassifierMode {
 }
 
 /// Token usage from the classifier.
-///
-/// TS: `ClassifierUsage` in types/permissions.ts
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClassifierUsage {
@@ -57,8 +53,6 @@ pub struct ClassifierUsage {
 }
 
 /// Pending classifier check — captures context for deferred bash classification.
-///
-/// TS: `PendingClassifierCheck` in types/permissions.ts
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingClassifierCheck {
@@ -231,7 +225,7 @@ pub enum PermissionDecisionReason {
 /// Result of a tool's own permission opinion (the step-1c slot in
 /// the central evaluator pipeline).
 ///
-/// TS: `tool.checkPermissions()` returns
+/// `tool.checkPermissions()` returns
 /// `{ behavior: 'allow' | 'ask' | 'deny', updatedInput?, feedback? }`
 /// or is absent (== passthrough). `Passthrough` is the explicit
 /// "no opinion — defer to rule pipeline" signal. Tools that don't
@@ -263,7 +257,7 @@ pub enum ToolCheckResult {
     Ask {
         message: String,
         /// Permission updates the frontend may apply when the user picks
-        /// "always allow". Mirrors TS `PermissionDecision.suggestions`.
+        /// "always allow".
         suggestions: Vec<PermissionUpdate>,
         choices: Option<Vec<PermissionAskChoice>>,
     },
@@ -465,13 +459,9 @@ pub enum PermissionUpdateDestination {
 pub type PermissionRulesBySource = HashMap<PermissionRuleSource, Vec<PermissionRule>>;
 
 /// Source of a working directory addition.
-///
-/// TS: `WorkingDirectorySource` in types/permissions.ts
 pub type WorkingDirectorySource = PermissionUpdateDestination;
 
-/// Additional working directory info for permission evaluation.
-///
-/// TS: `AdditionalWorkingDirectory` in types/permissions.ts — tracks source origin.
+/// Additional working directory info for permission evaluation. Tracks source origin.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdditionalWorkingDir {
@@ -505,8 +495,6 @@ pub struct ToolPermissionContext {
     pub pre_plan_mode: Option<PermissionMode>,
     /// Rules stashed during auto-mode entry (dangerous classifier-bypass rules).
     /// Restored on auto-mode exit.
-    ///
-    /// TS: `strippedDangerousRules` field on ToolPermissionContext.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stripped_dangerous_rules: Option<PermissionRulesBySource>,
     /// Pre-resolved session plan file path — pushed in by the engine so

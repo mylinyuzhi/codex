@@ -1,36 +1,17 @@
 # coco-output-styles
 
 Output style catalog, dir/plugin loading, and active-style resolution.
-TS-mirror for `outputStyles/`, `constants/outputStyles.ts`, and
-`utils/plugins/loadPluginOutputStyles.ts`.
-
-## TS Source
-
-- `constants/outputStyles.ts` — `OutputStyleConfig`, `OUTPUT_STYLE_CONFIG`
-  (built-ins: `default` / `Explanatory` / `Learning`),
-  `getAllOutputStyles`, `getOutputStyleConfig`, `hasCustomOutputStyle`.
-- `outputStyles/loadOutputStylesDir.ts` — project + user
-  `.coco/output-styles/*.md` markdown discovery, frontmatter parsing
-  (`name`, `description`, `keep-coding-instructions`).
-- `utils/plugins/loadPluginOutputStyles.ts` — plugin output-styles
-  loader; namespace prefix `pluginName:baseName`; parses
-  `force-for-plugin`.
-- `constants/prompts.ts` — system-prompt injection
-  (`# Output Style: <name>\n<prompt>` block + intro-toggle +
-  `keepCodingInstructions` gate).
-- `utils/messages.ts:3797` + `utils/attachments.ts:1597` — per-turn
-  reminder template + main-thread, non-default gate (handled by
-  `core/system-reminder/generators/output_style.rs`, not here).
-- `commands/output-style/output-style.tsx` — deprecated CLI stub
-  (handled by `commands/`).
+Covers built-in styles (`default` / `Explanatory` / `Learning`), project +
+user `.coco/output-styles/*.md` discovery, plugin-sourced styles, system-prompt
+injection, and per-turn reminder generation.
 
 ## Key Types
 
 | Type | Purpose |
 |------|---------|
-| `OutputStyleConfig` | TS `OutputStyleConfig` mirror — `name`, `description`, `prompt`, `source`, `keep_coding_instructions`, `force_for_plugin` |
+| `OutputStyleConfig` | `name`, `description`, `prompt`, `source`, `keep_coding_instructions`, `force_for_plugin` |
 | `OutputStyleSource` | `BuiltIn` / `Plugin` / `UserSettings` / `ProjectSettings` / `PolicySettings`. `priority()` drives override ordering |
-| `Aggregated` | Name → config catalog produced by `aggregate(..)`. `default` sentinel intentionally absent — TS represents it as `null` |
+| `Aggregated` | Name → config catalog produced by `aggregate(..)`. `default` sentinel intentionally absent (mapped to `None`) |
 | `OutputStyleManager` | Resolved catalog + active config. Built once at session bootstrap, cheap to clone, threaded into prompt builder + SDK init + reminder pipeline |
 | `OutputStyleManagerBuilder` | Fluent builder used by the CLI — accepts settings name, user dir, project dirs, managed dir, plugin sources |
 | `PluginOutputStyleSource` | Minimal data per plugin (`plugin_name`, `default_dir`, `extra_paths`) so this crate doesn't depend on plugin lifecycle types |
@@ -53,34 +34,31 @@ src/
 ## Key Invariants
 
 - **Built-ins ship verbatim.** The Explanatory and Learning prompt
-  bodies are reproduced from TS character-for-character (Unicode `★`
-  and `●` substituted for `figures.star` / `figures.bullet`). Built-in
-  tests assert presence of every TS section header so a regression
-  rewrites the body intentionally, not by accident.
-- **`default` is `None`, not an entry.** TS stores
-  `OUTPUT_STYLE_CONFIG[default] = null`; we make `default` absent from
-  `Aggregated.by_name` and bake the `None` mapping into
+  bodies are reproduced character-for-character (Unicode `★` and `●`
+  substituted for the original `figures.star` / `figures.bullet`). Built-in
+  tests assert presence of every section header so a regression rewrites
+  the body intentionally, not by accident.
+- **`default` is `None`, not an entry.** `default` is absent from
+  `Aggregated.by_name` and the `None` mapping is baked into
   `Aggregated::get`. Callers that need the literal sentinel string
   (SDK init, picker default option) read `DEFAULT_OUTPUT_STYLE_NAME`.
-- **TS aggregation order**: `built-in < plugin < user < project < managed`.
+- **Aggregation order**: `built-in < plugin < user < project < managed`.
   Implemented numerically by `OutputStyleSource::priority()` with
   `>=` overwrite so a later layer with the same priority replaces an
   earlier one of the same priority.
-- **Plugin styles can't carry `keep-coding-instructions`.** TS plugin
-  loader doesn't read that field; we explicitly clear it after
-  parsing. Plugin authors who need that escape hatch should ship a
-  dir-style instead.
+- **Plugin styles can't carry `keep-coding-instructions`.** The field is
+  explicitly cleared after parsing. Plugin authors who need that escape hatch
+  should ship a dir-style instead.
 - **Force-for-plugin tie-break follows catalog order.** Multiple plugins
   all setting `force-for-plugin: true` is a misconfiguration; we log the
-  full list and pick the first loaded style, matching TS object-value
-  order.
+  full list and pick the first loaded style.
 
 ## What this crate does NOT own
 
 - **Per-turn `<system-reminder>` injection** — that's
   `core/system-reminder/generators/output_style.rs`. It reads the
   active style name from `OutputStyleSnapshot` (set on
-  `SessionBootstrap` by the CLI) and renders the TS template
+  `SessionBootstrap` by the CLI) and renders the reminder template
   (`{name} output style is active. Remember to...`).
 - **System prompt assembly** — the CLI passes the active
   `OutputStyleConfig` into `coco_context::build_system_prompt`, which

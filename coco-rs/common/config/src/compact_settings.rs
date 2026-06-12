@@ -23,10 +23,8 @@ const DEFAULT_STAGED_COMPACT_STAGE_PCT: f64 = 0.6;
 /// Default percentage of context window to commit staged collapse ranges.
 const DEFAULT_STAGED_COMPACT_COMMIT_PCT: f64 = 0.85;
 /// Default per-message aggregate char cap for Tool Result Budget Level 2.
-/// TS: `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` in `constants/toolLimits.ts`.
 const DEFAULT_TOOL_RESULT_BUDGET_PER_MESSAGE_CHARS: i64 = 200_000;
 /// Default number of recently read files restored after full compaction.
-/// TS: `POST_COMPACT_MAX_FILES_TO_RESTORE`.
 const DEFAULT_POST_COMPACT_MAX_FILES_TO_RESTORE: i32 = 5;
 
 // ── PartialCompactSettings (settings.json shape) ─────────────────────
@@ -140,8 +138,7 @@ pub struct PartialDisplayCollapseSettings {
 
 /// Tool Result Budget settings.
 ///
-/// Mirrors TS `tengu_hawthorn_steeple` (Level 2 enable) +
-/// `tengu_hawthorn_window` (per-message char cap). Level 1 (per-tool
+/// Level 2 enable + per-message char cap. Level 1 (per-tool
 /// `<persisted-output>` persistence) is driven by each tool's
 /// `max_result_size_bound()` declaration rather than this config. See
 /// [`docs/coco-rs/tool-result-budget-plan.md`].
@@ -396,7 +393,7 @@ impl Default for DisplayCollapseConfig {
 /// **Status**: config is live for the query-level aggregate budget. Level 1
 /// helpers live in `coco-tool-runtime::tool_result_storage` and are called by
 /// `coco-query`'s tool outcome builder when a tool opts in via
-/// `max_result_size_bound()`. Remaining TS-parity gaps are tracked in
+/// `max_result_size_bound()`. Remaining gaps are tracked in
 /// `docs/coco-rs/tool-result-budget-plan.md`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultBudgetConfig {

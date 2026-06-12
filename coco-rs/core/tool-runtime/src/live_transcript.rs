@@ -1,9 +1,6 @@
 //! Live, in-process view of a sub-agent's in-flight message history.
 //!
-//! TS: `services/AgentSummary/agentSummary.ts` reads a running agent's
-//! transcript each tick via `getAgentTranscript(agentId)`. coco-rs ships no
-//! global agent-transcript registry, so the coordinator threads a
-//! [`LiveTranscript`] handle into the spawn's
+//! The coordinator threads a [`LiveTranscript`] handle into the spawn's
 //! [`crate::AgentQueryConfig::live_transcript`]; the child engine publishes a
 //! post-turn snapshot into it and the periodic AgentSummary timer reads it.
 

@@ -40,20 +40,17 @@ pub(crate) struct RunningTurn {
     /// Wall-clock instant when the engine emitted `TurnStarted`.
     /// Anchor for [`UiEphemeralState::elapsed_ms`].
     pub(crate) started_at: Instant,
-    /// Whimsical present-participle verb sampled once at turn start
-    /// (TS `Spinner.tsx:166` `useState` initializer parity). Stable
-    /// for the lifetime of this turn.
+    /// Whimsical present-participle verb sampled once at turn start.
+    /// Stable for the lifetime of this turn.
     pub(crate) verb: &'static str,
     /// Accumulated milliseconds the status timer has spent paused
     /// since [`Self::started_at`]. Folded forward every time a
-    /// permission-prompt pause closes. TS `totalPausedMsRef`
-    /// (`REPL.tsx:2076-2088`).
+    /// permission-prompt pause closes.
     pub(crate) total_paused_ms: i64,
     /// `Some(instant)` while the status timer is currently paused.
     /// Set on the first paint that observes a blocking prompt;
     /// cleared (with the elapsed folded into
-    /// [`Self::total_paused_ms`]) when the prompt closes. TS:
-    /// `pauseStartTimeRef.current`.
+    /// [`Self::total_paused_ms`]) when the prompt closes.
     pub(crate) pause_started_at: Option<Instant>,
     /// Count of streamed assistant-text characters in this running
     /// turn. Converted to an approximate output-token count for the
@@ -74,15 +71,14 @@ pub(crate) struct UiEphemeralState {
     /// consistently. Reset on [`Self::start_turn`].
     pub(crate) last_total_paused_ms: i64,
     /// Unix-ms when each plan task transitioned to `Completed`.
-    /// Powers the TS `RECENT_COMPLETED_TTL_MS = 30_000` priority lift
-    /// in [`crate::widgets::todo_panel`]. Stamped at the diff point
-    /// in the `TaskPanelChanged` handler; GC'd on every snapshot.
+    /// Powers the 30s priority lift in [`crate::widgets::todo_panel`].
+    /// Stamped at the diff point in the `TaskPanelChanged` handler;
+    /// GC'd on every snapshot.
     pub(crate) task_completion_timestamps: HashMap<String, i64>,
     /// Unix-ms at which the *entire* plan task list first became all
-    /// completed (no Pending or InProgress remaining). Powers TS
-    /// `HIDE_DELAY_MS = 5_000` — the panel suppresses itself once
-    /// this stamp is ≥5s old. Cleared the moment any non-completed
-    /// task reappears.
+    /// completed (no Pending or InProgress remaining). The panel
+    /// suppresses itself once this stamp is ≥5s old. Cleared the
+    /// moment any non-completed task reappears.
     pub(crate) tasks_all_completed_since_ms: Option<i64>,
 }
 
@@ -93,8 +89,7 @@ impl UiEphemeralState {
 
     /// Start a new turn: anchor the start instant, sample the verb,
     /// and zero the pause accumulators. Idempotent — calling twice
-    /// in a row simply re-anchors (matches TS `loadingStartTimeRef`
-    /// behaviour on rapid resubmission).
+    /// in a row simply re-anchors (rapid resubmission).
     pub(crate) fn start_turn(&mut self, verb: &'static str, started_at: Instant) {
         self.turn = Some(RunningTurn {
             started_at,
@@ -117,9 +112,7 @@ impl UiEphemeralState {
     }
 
     /// Tick the status-indicator pause clock based on the current
-    /// `blocked` state. Call from each paint. TS parity:
-    /// `REPL.tsx:2076-2088` runs the equivalent logic inside a
-    /// `useEffect` that re-fires whenever `focusedInputDialog` flips.
+    /// `blocked` state. Call from each paint.
     ///
     /// Semantics:
     /// - No-op when no turn is running (anchor on the type, not on
@@ -166,8 +159,8 @@ impl UiEphemeralState {
     }
 
     /// Add streamed assistant text to the running-turn token estimate.
-    /// TS uses a character-count approximation while the turn is still
-    /// in flight; the exact API usage only arrives on `TurnCompleted`.
+    /// Character-count approximation while the turn is still in flight;
+    /// the exact API usage only arrives on `TurnCompleted`.
     pub(crate) fn add_output_delta(&mut self, delta: &str) {
         let Some(turn) = self.turn.as_mut() else {
             return;
@@ -178,8 +171,8 @@ impl UiEphemeralState {
     }
 
     /// Approximate live output tokens for the current running turn.
-    /// The divisor mirrors the common TS-side `chars / 4` estimate and
-    /// intentionally stays separate from completed `session.token_usage`.
+    /// Uses the common `chars / 4` estimate; intentionally stays
+    /// separate from completed `session.token_usage`.
     pub(crate) fn live_output_tokens(&self) -> i64 {
         self.turn
             .as_ref()

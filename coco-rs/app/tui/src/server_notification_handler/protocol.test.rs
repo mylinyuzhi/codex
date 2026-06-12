@@ -1,7 +1,7 @@
 //! Tests for `on_turn_interrupted_outcome` auto-restore decision matrix.
 //!
-//! Mirrors TS `REPL.tsx:3010-3022` (`signal.reason === 'user-cancel'`
-//! + idle guards + `messagesAfterAreOnlySynthetic`).
+//! Covers the `signal.reason === 'user-cancel'` path + idle guards +
+//! `messagesAfterAreOnlySynthetic` predicate.
 //!
 //! The auto-restore decision is now centralised on this event —
 //! removed from `on_turn_completed_outcome` and from

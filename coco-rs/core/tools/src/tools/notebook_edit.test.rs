@@ -7,7 +7,7 @@ use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
-// Auto-mode classifier projection (TS `NotebookEditTool.toAutoClassifierInput`)
+// Auto-mode classifier projection (`NotebookEditTool.toAutoClassifierInput`)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -45,13 +45,13 @@ fn test_notebook_edit_classifier_input_defaults_to_replace() {
 }
 
 // ---------------------------------------------------------------------------
-// generate_cell_id — TS 13-char base-36 format
+// generate_cell_id — 13-char base-36 format
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_generate_cell_id_length() {
     let id = generate_cell_id();
-    assert_eq!(id.len(), 13, "TS uses 13-char IDs: got {id}");
+    assert_eq!(id.len(), 13, "uses 13-char IDs: got {id}");
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn write_notebook(content: &serde_json::Value) -> tempfile::NamedTempFile {
 // replace mode
 // ---------------------------------------------------------------------------
 
-/// Replace by numeric cell index. TS allows `cell_id` to be an integer
+/// Replace by numeric cell index. allows `cell_id` to be an integer
 /// string as well as a cell UUID — our resolver handles both.
 #[tokio::test]
 async fn test_notebook_replace_by_index() {
@@ -179,7 +179,7 @@ async fn test_notebook_replace_by_cell_prefix() {
     assert!(source[0].as_str().unwrap().contains("Updated"));
 }
 
-/// Replace by actual cell UUID (the primary TS path).
+/// Replace by actual cell UUID (the primary path).
 #[tokio::test]
 async fn test_notebook_replace_by_uuid() {
     let mut notebook = minimal_notebook(5);
@@ -208,7 +208,7 @@ async fn test_notebook_replace_by_uuid() {
 // ---------------------------------------------------------------------------
 
 /// Inserting into a nbformat 4.5+ notebook must auto-generate a cell ID
-/// matching the TS format (13-char base-36).
+/// in 13-char base-36 format.
 #[tokio::test]
 async fn test_notebook_insert_auto_generates_id_on_45() {
     let notebook = minimal_notebook(5);
@@ -241,7 +241,7 @@ async fn test_notebook_insert_auto_generates_id_on_45() {
     );
 }
 
-/// Inserting into a pre-4.5 notebook must NOT add a cell ID (TS behavior).
+/// Inserting into a pre-4.5 notebook must NOT add a cell ID.
 #[tokio::test]
 async fn test_notebook_insert_no_id_on_pre_45() {
     let notebook = minimal_notebook(4); // nbformat_minor = 4
@@ -272,7 +272,7 @@ async fn test_notebook_insert_no_id_on_pre_45() {
 }
 
 /// Inserting a markdown cell must NOT include execution_count/outputs
-/// (those are code-cell only). TS: schema guard in the insert path.
+/// (those are code-cell only).
 #[tokio::test]
 async fn test_notebook_insert_markdown_has_no_execution_state() {
     let notebook = minimal_notebook(5);
@@ -464,10 +464,10 @@ async fn test_notebook_malformed_file() {
 }
 
 // ---------------------------------------------------------------------------
-// B3.3 / R4-T4: read-before-edit enforcement (matches TS `NotebookEditTool.ts:
-// 218-237`). Without this the model can silently overwrite notebooks it never
-// saw. We only enforce it when `file_read_state` is wired — the default test
-// context leaves it `None`, which is why the existing tests above still pass.
+// B3.3 / R4-T4: read-before-edit enforcement. Without this the model can
+// silently overwrite notebooks it never saw. We only enforce it when
+// `file_read_state` is wired — the default test context leaves it `None`,
+// which is why the existing tests above still pass.
 // ---------------------------------------------------------------------------
 
 use coco_context::FileReadEntry;
@@ -580,7 +580,7 @@ async fn test_notebook_insert_returns_new_cell_id() {
     .unwrap();
 
     let new_id = result.data["new_cell_id"].as_str().unwrap();
-    assert_eq!(new_id.len(), 13, "TS cell IDs are 13 chars: got {new_id}");
+    assert_eq!(new_id.len(), 13, "cell IDs are 13 chars: got {new_id}");
     // ID must consist of base-36 alphanumerics only.
     assert!(
         new_id
@@ -589,8 +589,8 @@ async fn test_notebook_insert_returns_new_cell_id() {
     );
 }
 
-/// Insert on a pre-4.5 notebook emits `new_cell_id: null` (TS omits ID
-/// generation for these notebooks).
+/// Insert on a pre-4.5 notebook emits `new_cell_id: null` (ID generation
+/// omitted for these notebooks).
 #[tokio::test]
 async fn test_notebook_insert_pre_45_emits_null_new_cell_id() {
     let notebook = minimal_notebook(0); // 4.0 → no IDs
@@ -615,8 +615,8 @@ async fn test_notebook_insert_pre_45_emits_null_new_cell_id() {
 }
 
 /// Replace mode echoes back the resolved `cell_id` string when the
-/// target cell has one. TS does the same — the model can reference
-/// cells by the ID it just wrote.
+/// target cell has one — the model can reference cells by the ID it
+/// just wrote.
 #[tokio::test]
 async fn test_notebook_replace_returns_cell_id() {
     let mut notebook = minimal_notebook(5);
@@ -668,7 +668,7 @@ async fn test_notebook_delete_returns_cell_id() {
 
 /// When `file_read_state` contains a stale entry whose `mtime_ms` does not
 /// match disk, the edit must be rejected to protect against external
-/// mutations — matches TS `NotebookEditTool.ts:230-237`.
+/// mutations.
 #[tokio::test]
 async fn test_notebook_rejects_edit_on_mtime_drift() {
     let notebook = minimal_notebook(5);
@@ -711,11 +711,10 @@ async fn test_notebook_rejects_edit_on_mtime_drift() {
     );
 }
 
-// ── render_for_model — TS parity for cell-edit confirmations ─────────
+// ── render_for_model — cell-edit confirmations ───────────────────────
 
 /// Replace on a 4.5+ notebook must surface the input `cell_id` in the
-/// model-visible message. TS `NotebookEditTool.ts:150`:
-/// `Updated cell ${cell_id} with ${new_source}`.
+/// model-visible message: `Updated cell ${cell_id} with ${new_source}`.
 #[tokio::test]
 async fn test_notebook_replace_message_uses_cell_id() {
     let mut notebook = minimal_notebook(5);
@@ -745,10 +744,9 @@ async fn test_notebook_replace_message_uses_cell_id() {
     assert_eq!(msg, "Updated cell abc-123 with new code");
 }
 
-/// Pre-4.5 notebooks have no cell IDs in the file format. TS surfaces
-/// `undefined` (template-literal stringification of an undefined
-/// JS value). coco-rs mirrors that with the literal string
-/// `"undefined"`.
+/// Pre-4.5 notebooks have no cell IDs in the file format. Mirrors the
+/// template-literal stringification of `undefined` with the literal
+/// string `"undefined"`.
 #[tokio::test]
 async fn test_notebook_replace_message_emits_undefined_on_pre_45() {
     let mut notebook = minimal_notebook(4);
@@ -777,8 +775,7 @@ async fn test_notebook_replace_message_emits_undefined_on_pre_45() {
     assert_eq!(msg, "Updated cell undefined with new");
 }
 
-/// Insert on a 4.5+ notebook must use the freshly-generated cell ID,
-/// matching TS `NotebookEditTool.ts:156`:
+/// Insert on a 4.5+ notebook must use the freshly-generated cell ID:
 /// `Inserted cell ${cell_id} with ${new_source}`.
 #[tokio::test]
 async fn test_notebook_insert_message_uses_generated_id() {
@@ -803,8 +800,8 @@ async fn test_notebook_insert_message_uses_generated_id() {
     assert_eq!(msg, format!("Inserted cell {new_id} with x = 1"));
 }
 
-/// Delete on a 4.5+ notebook must echo the input `cell_id`.
-/// TS `NotebookEditTool.ts:162`: `Deleted cell ${cell_id}`.
+/// Delete on a 4.5+ notebook must echo the input `cell_id`:
+/// `Deleted cell ${cell_id}`.
 #[tokio::test]
 async fn test_notebook_delete_message_uses_cell_id() {
     let mut notebook = minimal_notebook(5);
@@ -838,8 +835,8 @@ async fn test_notebook_delete_message_uses_cell_id() {
 // #19 — replace one-past-end → insert; cell_type switch on replace
 // ---------------------------------------------------------------------------
 
-/// TS `NotebookEditTool.ts:371-377`: replacing at index == cells.len()
-/// is an append-insert (cell_type defaults to code).
+/// Replacing at index == cells.len() is an append-insert
+/// (cell_type defaults to code).
 #[tokio::test]
 async fn test_notebook_replace_one_past_end_converts_to_insert() {
     let file = write_notebook(&minimal_notebook(5)); // 2 cells (idx 0,1)
@@ -867,8 +864,8 @@ async fn test_notebook_replace_one_past_end_converts_to_insert() {
     assert_eq!(cells[2]["source"], json!(["APPENDED"]));
 }
 
-/// TS `NotebookEditTool.ts:425-427`: a replace whose `cell_type` differs
-/// from the target cell switches the cell's type.
+/// A replace whose `cell_type` differs from the target cell switches the
+/// cell's type.
 #[tokio::test]
 async fn test_notebook_replace_applies_cell_type_switch() {
     let file = write_notebook(&minimal_notebook(5));

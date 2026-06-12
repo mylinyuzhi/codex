@@ -19,7 +19,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct WebFetchInput {
     /// The URL to fetch content from. Required — the runtime schema declares
-    /// `required: ["url", "prompt"]` (TS `z.strictObject`).
+    /// `required: ["url", "prompt"]`.
     pub url: String,
     /// The prompt to run on the fetched content. Required (see `url`).
     pub prompt: String,
@@ -52,17 +52,13 @@ pub struct WebSearchInput {
 
 /// Max width in columns for html2text's line wrapping.
 ///
-/// TS: `WebFetchTool/utils.ts:20` sets `maxLineWidth: 120`. Matches TS
-/// exactly so the extracted markdown renders consistently across both
-/// implementations.
+/// Set to 120 so the extracted markdown renders consistently.
 const HTML2TEXT_LINE_WIDTH: usize = 120;
 
 /// System prompt for the WebFetch extraction side-query.
 ///
-/// TS: `WebFetchTool/utils.ts:498-502`. The secondary model (Haiku in TS,
-/// whatever the user configured as side_query in coco-rs) receives the
-/// markdown body + user's question and extracts the relevant answer.
-/// Keeping this byte-compatible lets us produce similar output quality.
+/// The secondary model receives the markdown body + user's question and
+/// extracts the relevant answer.
 const WEB_FETCH_EXTRACT_SYSTEM: &str = "\
 You are a helpful assistant extracting answers from web page content. \
 The user will provide a web page (in markdown format) followed by a \
@@ -71,8 +67,7 @@ from the provided content. \
 If the content does not contain enough information to answer the prompt, \
 say so clearly rather than guessing. Be concise.";
 
-/// Model-facing WebFetch tool description body. Byte-aligned port of TS
-/// `WebFetchTool/prompt.ts:3-21` `DESCRIPTION`. Includes the MCP-
+/// Model-facing WebFetch tool description body. Includes the MCP-
 /// preference hint, the 15-minute cache note, and the cross-origin
 /// redirect handling guidance — all of which inform model behavior when
 /// the fetch encounters edge cases. Surfaced to the model via
@@ -100,7 +95,6 @@ Usage notes:
 /// Response guidelines appended to the extraction prompt, selected by
 /// whether the fetched URL is a preapproved documentation host.
 ///
-/// TS: `prompt.ts:26-34` `makeSecondaryModelPrompt(_, _, isPreapprovedDomain)`.
 /// Preapproved docs get relaxed guidance (include code examples /
 /// excerpts); everything else gets the strict copyright/quoting rules.
 fn extract_guidelines(is_preapproved: bool) -> &'static str {
@@ -119,24 +113,20 @@ fn extract_guidelines(is_preapproved: bool) -> &'static str {
     }
 }
 
-/// Max HTTP response body size. TS: `WebFetchTool/utils.ts:112`
-/// `MAX_HTTP_CONTENT_LENGTH = 10 * 1024 * 1024` (10 MB). Prevents a
-/// misbehaving server from flooding memory via a huge response.
+/// Max HTTP response body size: 10 MB. Prevents a misbehaving server
+/// from flooding memory via a huge response.
 const MAX_HTTP_CONTENT_LENGTH: u64 = 10 * 1024 * 1024;
 
-/// WebFetch URL cache TTL: 15 minutes. Matches TS
-/// `WebFetchTool/utils.ts:63` `CACHE_TTL_MS = 15 * 60 * 1000`.
+/// WebFetch URL cache TTL: 15 minutes.
 const WEB_FETCH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-/// WebFetch URL cache max entries. TS uses a 50MB size budget; we use
-/// a simpler entry count because Rust's approximation of JS heap
-/// accounting is non-trivial. 128 entries at up to 100K chars each
-/// gives ~12.8MB upper bound on cache content, well under TS's 50MB.
+/// WebFetch URL cache max entries. Uses entry count rather than byte
+/// budget: 128 entries at up to 100K chars each gives a ~12.8MB upper
+/// bound on cache content.
 const WEB_FETCH_CACHE_MAX_ENTRIES: usize = 128;
 
 /// Cached WebFetch entry. Stores the extracted markdown + its freshness
-/// timestamp. Shape matches the subset of TS `CacheEntry` that we
-/// actually use for the return value.
+/// timestamp.
 #[derive(Clone)]
 struct CachedWebFetch {
     /// Extracted markdown (after turndown conversion).
@@ -190,23 +180,18 @@ pub(super) fn clear_web_fetch_cache() {
 
 // Custom User-Agent header.
 //
-// TS: `utils/http.ts:56-58` `getWebFetchUserAgent()` returns
-// `` `Claude-User (${getClaudeCodeUserAgent()}; +https://support.anthropic.com/)` ``
-// where `getClaudeCodeUserAgent()` at `utils/userAgent.ts:9` returns
-// `` `claude-code/${MACRO.VERSION}` ``. The `Claude-User` prefix is
-// Anthropic's publicly documented agent for user-initiated fetches —
-// site operators match this in robots.txt to distinguish CLI traffic
-// from server-side automation.
+// The `Claude-User` prefix is Anthropic's publicly documented agent for
+// user-initiated fetches — site operators match this in robots.txt to
+// distinguish CLI traffic from server-side automation.
 //
 // User agent now lives on `WebFetchConfig::user_agent` (default matches
-// TS `Claude-User (...)`). Callers can override via settings.json when
-// they need a different robots.txt contract.
+// Callers can override via settings.json when they need a different
+// robots.txt contract.
 
 /// Preapproved hosts — URLs whose (hostname, pathname) match this list
-/// skip the optional permission gate. Byte-for-byte port of TS
-/// `tools/WebFetchTool/preapproved.ts:14-131`.
+/// skip the optional permission gate.
 ///
-/// **Matching semantics** (exactly TS, stricter than a suffix match):
+/// **Matching semantics** (stricter than a suffix match):
 ///
 /// - Entries without `/` are **exact hostname match only**. `docs.python.org`
 ///   does NOT match `subdomain.docs.python.org` — we only allow the entry
@@ -221,14 +206,12 @@ pub(super) fn clear_web_fetch_cache() {
 ///   `https://github.com/anthropics-evil/malware`. Segment boundary is
 ///   enforced (exact match or `prefix + /`).
 ///
-/// TS code comment at `preapproved.ts:1-12` explains the security tradeoff:
-/// these entries are for WebFetch GET only — the sandbox does NOT inherit
+/// These entries are for WebFetch GET only — the sandbox does NOT inherit
 /// this list for network restrictions.
 ///
 /// Consulted by [`WebFetchTool::check_permissions`] (approval bypass), the
 /// `execute` verbatim-passthrough branch, and the extraction-prompt
-/// guideline selector — mirroring TS `WebFetchTool.ts:104-121`,
-/// `:261-278`, and `prompt.ts:26-34`.
+/// guideline selector.
 const PREAPPROVED_WEB_HOSTS: &[&str] = &[
     // Anthropic (5)
     "platform.claude.com",
@@ -335,9 +318,8 @@ const PREAPPROVED_WEB_HOSTS: &[&str] = &[
 ];
 
 /// Check whether a `(hostname, pathname)` pair matches the preapproved
-/// list. Implements the exact TS `preapproved.ts:154-166`
-/// `isPreapprovedHost` semantics: exact hostname match via a set, plus
-/// path-prefix matching with segment boundary enforcement.
+/// list. Uses exact hostname match plus path-prefix matching with segment
+/// boundary enforcement.
 ///
 /// `hostname` should be the URL's host (lowercased), `pathname` should
 /// be the path portion starting with `/` (or empty for root).
@@ -388,8 +370,7 @@ fn web_fetch_tool_pattern(pattern: &str) -> bool {
 }
 
 /// Find a WebFetch rule that applies to `host`: a tool-wide `WebFetch` rule
-/// (no content) or one scoped to `domain:<host>`. Mirrors TS
-/// `getRuleByContentsForTool(.., WebFetchTool, ..)` plus tool-wide coverage.
+/// (no content) or one scoped to `domain:<host>`.
 fn matching_web_fetch_rule<'a>(
     rules: &'a coco_types::PermissionRulesBySource,
     host: &str,
@@ -404,8 +385,8 @@ fn matching_web_fetch_rule<'a>(
     })
 }
 
-/// "Always allow this domain" suggestion attached to a WebFetch `Ask`. TS:
-/// `buildSuggestions(ruleContent)` — an `addRules` allow for `domain:<host>`.
+/// "Always allow this domain" suggestion attached to a WebFetch `Ask`:
+/// an `addRules` allow for `domain:<host>`.
 fn web_fetch_domain_suggestions(host: &str) -> Vec<coco_types::PermissionUpdate> {
     vec![coco_types::PermissionUpdate::AddRules {
         rules: vec![coco_types::PermissionRule {
@@ -453,20 +434,15 @@ pub(super) enum RedirectDecision {
 }
 
 /// Decide whether a redirect from `from_url` to `to_url` is safe to
-/// auto-follow.
-///
-/// Byte-for-byte port of TS `WebFetchTool/utils.ts:212-243`
-/// `isPermittedRedirect`. A redirect is only permitted when ALL FOUR
-/// checks pass:
+/// auto-follow. A redirect is only permitted when ALL FOUR checks pass:
 ///
 /// 1. **Protocol match** — `https://...` → `http://...` is blocked.
 ///    Otherwise an attacker could downgrade a TLS-secured fetch to
 ///    plaintext and MITM it.
 ///
 /// 2. **Port match** — `example.com:443` → `example.com:9999` is blocked.
-///    This is the SSRF bug the round-2 verification caught: without this
-///    check, a malicious server could redirect to a non-default port on
-///    the same host and coco-rs would follow it blindly.
+///    Without this check, a malicious server could redirect to a non-default
+///    port on the same host and coco-rs would follow it blindly.
 ///
 /// 3. **No redirect userinfo** — `https://user:pass@example.com/`
 ///    shouldn't appear in a Location header; if it does, the server is
@@ -478,10 +454,8 @@ pub(super) enum RedirectDecision {
 ///
 /// Any violation returns `CrossOrigin { new_url }` so the tool surfaces
 /// a structured message asking the model to re-fetch with the new URL.
-///
-/// TS explicitly comments at `utils.ts:249-253`: "Do not automatically
-/// follow redirects because following redirects could allow for an
-/// attacker to exploit an open redirect vulnerability."
+/// Automatic redirect following is intentionally disabled to prevent
+/// open-redirect exploitation of the fetcher.
 pub(super) fn check_redirect(from_url: &str, to_url: &str) -> RedirectDecision {
     let reject = || RedirectDecision::CrossOrigin {
         new_url: to_url.to_string(),
@@ -630,9 +604,8 @@ pub(super) fn split_host_port(url: &str, scheme: &str) -> (String, Option<u16>) 
 }
 
 /// Check whether a URL contains a userinfo segment like `user:pass@`.
-///
-/// TS at `utils.ts:228-230` rejects redirects with userinfo to prevent
-/// credential-injection attacks via the Location header.
+/// Redirects with userinfo are rejected to prevent credential-injection
+/// attacks via the Location header.
 pub(super) fn has_userinfo(url: &str) -> bool {
     let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     // Userinfo, if present, comes before the first `@` and before the
@@ -663,7 +636,7 @@ impl Tool for WebFetchTool {
                     "url": {"type": "string", "description": "The URL to fetch content from"},
                     "prompt": {"type": "string", "description": "The prompt to run on the fetched content"}
                 },
-                // TS `z.strictObject({url, prompt})`: both keys are mandatory.
+                // Both keys are mandatory.
                 "required": ["url", "prompt"]
             }))
         })
@@ -674,9 +647,8 @@ impl Tool for WebFetchTool {
     type Output = serde_json::Value;
 
     fn to_auto_classifier_input(&self, input: &WebFetchInput) -> Option<String> {
-        // TS `WebFetchTool`: `prompt ? `${url}: ${prompt}` : url`. The fetch
-        // prompt can carry injected extraction instructions, so the gate sees
-        // it when present.
+        // The fetch prompt can carry injected extraction instructions, so the
+        // gate sees it when present.
         Some(if input.prompt.is_empty() {
             input.url.clone()
         } else {
@@ -693,9 +665,8 @@ impl Tool for WebFetchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebFetch)
     }
-    /// Short UI label. TS `WebFetchTool.ts:72-80` `async description(input)`
-    /// returns `Claude wants to fetch content from ${hostname}` (or a
-    /// generic fallback when the URL can't be parsed). The long model-
+    /// Short UI label: `Claude wants to fetch content from ${hostname}`, or
+    /// a generic fallback when the URL can't be parsed. The long model-
     /// facing guidance lives in [`Self::prompt`].
     fn description(&self, input: &WebFetchInput, _options: &DescriptionOptions) -> String {
         let host = extract_host(&input.url);
@@ -705,10 +676,9 @@ impl Tool for WebFetchTool {
             format!("Claude wants to fetch content from {host}")
         }
     }
-    /// Model-facing tool description. TS `WebFetchTool.ts:181-190`
-    /// `async prompt(_options)` always prepends the authenticated/private
-    /// URL warning to `DESCRIPTION` (kept unconditional in TS to avoid
-    /// prompt-cache invalidation from ToolSearch flicker).
+    /// Model-facing tool description. Always prepends the authenticated/private
+    /// URL warning to `DESCRIPTION` unconditionally to avoid prompt-cache
+    /// invalidation from ToolSearch flicker.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         format!(
             "IMPORTANT: WebFetch WILL FAIL for authenticated or private URLs. Before using this \
@@ -731,7 +701,7 @@ impl Tool for WebFetchTool {
     }
 
     /// Per-domain matcher so persisted `domain:<host>` rules apply to the
-    /// right host. TS: `webFetchToolInputToPermissionRuleContent`.
+    /// right host.
     fn prepare_permission_matcher(&self, input: &WebFetchInput) -> String {
         let host = extract_host(&input.url);
         if host.is_empty() {
@@ -741,13 +711,13 @@ impl Tool for WebFetchTool {
         }
     }
 
-    /// TS `WebFetchTool.ts:104-180` `checkPermissions`: preapproved
-    /// documentation hosts skip the dialog (`Allow`). Otherwise the request is
-    /// gated **per domain** — `deny` → `ask` → `allow` rules keyed on
-    /// `domain:<host>` (plus any tool-wide `WebFetch` rule), then a default
-    /// `Ask` carrying an "always allow this domain" suggestion so the user can
-    /// persist per-domain trust instead of an over-broad tool-wide allow. A
-    /// malformed URL (empty host) falls through to `Passthrough`.
+    /// Permission check: preapproved documentation hosts skip the dialog
+    /// (`Allow`). Otherwise the request is gated **per domain** — `deny` →
+    /// `ask` → `allow` rules keyed on `domain:<host>` (plus any tool-wide
+    /// `WebFetch` rule), then a default `Ask` carrying an "always allow this
+    /// domain" suggestion so the user can persist per-domain trust instead of
+    /// an over-broad tool-wide allow. A malformed URL (empty host) falls
+    /// through to `Passthrough`.
     async fn check_permissions(
         &self,
         input: &WebFetchInput,
@@ -809,9 +779,6 @@ impl Tool for WebFetchTool {
     ///   original markdown body
     /// - `message` (cross-origin redirect blocked): the SSRF guard
     ///   suggesting the model issue a fresh fetch with the new URL
-    /// TS parity: `WebFetchTool.ts::mapToolResultToToolResultBlockParam`
-    /// emits the `result` field; coco-rs splits this across three
-    /// fields depending on the execution path.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
         let text = data
             .get("extracted")
@@ -840,15 +807,10 @@ impl Tool for WebFetchTool {
             });
         }
 
-        // TS `WebFetchTool.ts:26` uses zod `.url()` which rejects malformed
-        // input before reaching the network. coco-rs previously only checked
-        // for emptiness, so a typo like "https//example.com" (missing the
-        // colon) would tunnel into reqwest and surface as a confusing
-        // `[NETWORK_ERROR]`. Validate up-front via reqwest's re-export of
-        // the `url` crate so the failure is clear and synchronous.
-        // Also enforces a scheme — `file://` and `data://` are caught here
-        // because they're not http/https; matches TS behavior of rejecting
-        // anything that doesn't look like a fetchable web URL.
+        // Validate up-front so a typo like "https//example.com" (missing the
+        // colon) fails clearly and synchronously rather than surfacing as a
+        // confusing `[NETWORK_ERROR]`. Also enforces a scheme — `file://` and
+        // `data://` are caught here because they're not http/https.
         let parsed = reqwest::Url::parse(url).map_err(|e| ToolError::InvalidInput {
             message: format!("invalid url '{url}': {e}"),
             error_code: None,
@@ -863,9 +825,8 @@ impl Tool for WebFetchTool {
             });
         }
 
-        // #55 / TS `WebFetchTool/utils.ts:376-378`: upgrade `http://` to
-        // `https://` before fetching (the description advertises this).
-        // The cache key and display still use the original `url`.
+        // Upgrade `http://` to `https://` before fetching (the description
+        // advertises this). The cache key and display still use the original `url`.
         let fetch_target: String = if parsed.scheme() == "http" {
             let mut upgraded = parsed.clone();
             let _ = upgraded.set_scheme("https");
@@ -888,14 +849,13 @@ impl Tool for WebFetchTool {
         let fetch_config = &ctx.web_fetch_config;
         let max_fetch_len = fetch_config.max_content_length.max(0) as usize;
 
-        // Stage 0: cache lookup. TS `WebFetchTool/utils.ts:356-366`
-        // checks `URL_CACHE.get(url)` first and short-circuits if a
-        // fresh entry exists. This prevents redundant network + LLM
-        // extraction work when the model re-fetches the same URL within
-        // 15 minutes (e.g. revisiting a docs page after a tool-use loop).
+        // Stage 0: cache lookup. Short-circuits if a fresh entry exists,
+        // preventing redundant network + LLM extraction work when the model
+        // re-fetches the same URL within 15 minutes (e.g. revisiting a docs
+        // page after a tool-use loop).
         //
         // Note: the cache key is the ORIGINAL url parameter, not the
-        // post-redirect URL, matching TS behavior at `utils.ts:469`.
+        // post-redirect URL.
         let (extraction_input, was_truncated, content_type, binary_note) = if let Some(cached) =
             web_fetch_cache_get(url)
         {
@@ -915,8 +875,7 @@ impl Tool for WebFetchTool {
             //   - `CrossOriginRedirect { new_url }` — the origin
             //     redirected somewhere outside the same-origin
             //     allowlist; we surface this to the model so it can
-            //     decide whether to fetch the new URL. Matches TS
-            //     `WebFetchTool.tsx:227-235` SSRF guard.
+            //     decide whether to fetch the new URL.
             let (body, content_type, binary_note) =
                 match fetch_url(&fetch_target, fetch_config).await {
                     Ok(FetchOutcome::Body {
@@ -953,12 +912,9 @@ impl Tool for WebFetchTool {
                     }
                 };
 
-            // Stage 2: HTML → markdown. TS `WebFetchTool/utils.ts:85-97,
-            // 456-457` lazy-loads `turndown` and reuses one shared
-            // instance. We use the Rust `html2text` crate which does
-            // the same HTML-to-wrapped-plain-text conversion. Plain-
-            // text bodies (JSON, text/plain, unknown) bypass the
-            // conversion and are passed through as-is.
+            // Stage 2: HTML → markdown via `html2text`. Plain-text bodies
+            // (JSON, text/plain, unknown) bypass the conversion and are
+            // passed through as-is.
             let markdown = if is_html_content_type(&content_type) {
                 html_to_markdown(&body)
             } else {
@@ -967,7 +923,6 @@ impl Tool for WebFetchTool {
 
             // Stage 3: truncate to the extraction budget (100K chars
             // by default; configurable via `web_fetch.max_content_length`).
-            // TS parity: `utils.ts:128 MAX_MARKDOWN_LENGTH = 100_000`.
             let (extraction_input, was_truncated) = if markdown.len() > max_fetch_len {
                 // char_indices-safe truncation to avoid splitting mid-UTF-8.
                 let cut = markdown
@@ -998,13 +953,12 @@ impl Tool for WebFetchTool {
             (extraction_input, was_truncated, content_type, binary_note)
         };
 
-        // TS `WebFetchTool.ts:261-278`: a preapproved docs host serving raw
-        // markdown that fits the budget is returned VERBATIM — the main
-        // model reads the real page instead of a lossy side-model summary.
-        // `!was_truncated` mirrors TS `content.length < MAX_MARKDOWN_LENGTH`
-        // (truncation uses the same budget threshold).
-        // #57: the binary-saved note is appended verbatim to whatever
-        // content the model ultimately receives.
+        // A preapproved docs host serving raw markdown that fits the budget
+        // is returned VERBATIM — the main model reads the real page instead
+        // of a lossy side-model summary. `!was_truncated` means content is
+        // within the budget threshold.
+        // The binary-saved note is appended verbatim to whatever content the
+        // model ultimately receives.
         let binary_note_str = binary_note.unwrap_or_default();
 
         let is_preapproved = is_preapproved_url(url);
@@ -1025,16 +979,13 @@ impl Tool for WebFetchTool {
             });
         }
 
-        // Stage 4: LLM extraction pass via side-query. TS `utils.ts:498-
-        // 514` calls `queryHaiku` with the user's prompt + truncated
-        // markdown, returning the extracted answer. In coco-rs we delegate
-        // to `ctx.side_query` (implemented by the inference layer) so the
-        // extraction works with whichever provider the user configured.
+        // Stage 4: LLM extraction pass via side-query. Delegates to
+        // `ctx.side_query` so the extraction works with whichever provider
+        // the user configured.
         //
         // When side_query is the `NoOpSideQuery` stub (e.g. unit tests),
         // the extraction call errors out. We fall back to returning the
-        // markdown directly with the user prompt attached — this matches
-        // the old pre-B2.5 behavior and keeps tests green.
+        // markdown directly with the user prompt attached to keep tests green.
         let user_message = format!(
             "{prompt}\n\n---\n\nWeb page content (markdown):\n\n{extraction_input}\n\n{guidelines}",
             guidelines = extract_guidelines(is_preapproved)
@@ -1089,9 +1040,7 @@ fn is_html_content_type(content_type: &str) -> bool {
 }
 
 /// Convert HTML to plain-text markdown via `html2text`. Wraps at 120
-/// columns to match TS `WebFetchTool/utils.ts:20` `maxLineWidth`.
-///
-/// Separated so it can be unit-tested against inline HTML fixtures.
+/// columns. Separated so it can be unit-tested against inline HTML fixtures.
 pub(super) fn html_to_markdown(html: &str) -> String {
     html2text::from_read(html.as_bytes(), HTML2TEXT_LINE_WIDTH).unwrap_or_else(|e| {
         tracing::debug!("html2text failed ({e}); falling back to tag-stripped text");
@@ -1108,10 +1057,9 @@ enum FetchOutcome {
     Body {
         body: String,
         content_type: String,
-        /// #57 / TS `WebFetchTool.ts:280-285`: when the body was binary,
-        /// the note "[Binary content (…) also saved to <path>]" appended
-        /// to the final result so the model knows the real bytes are on
-        /// disk. `None` for normal text responses.
+        /// When the body was binary, the note "[Binary content (…) also
+        /// saved to <path>]" is appended to the final result so the model
+        /// knows the real bytes are on disk. `None` for normal text responses.
         binary_note: Option<String>,
     },
     /// Cross-origin redirect was blocked. The caller should surface this
@@ -1120,13 +1068,13 @@ enum FetchOutcome {
 }
 
 /// Fetch URL content using reqwest. Applies:
-/// - `config.timeout_secs` (default 60s; TS `FETCH_TIMEOUT_MS`)
-/// - `config.user_agent` (default matches TS `getWebFetchUserAgent`)
-/// - Manual redirect policy (TS explicit SSRF guard — no auto-follow,
-///   same-origin allowed, cross-origin surfaces to the model)
-/// - 10MB Content-Length pre-check (TS `MAX_HTTP_CONTENT_LENGTH`)
-/// - Binary MIME rejection (TS keeps these and runs Haiku; we defer that
-///   to a follow-up and return a clear error instead)
+/// - `config.timeout_secs` (default 60s)
+/// - `config.user_agent`
+/// - Manual redirect policy (SSRF guard — no auto-follow, same-origin
+///   allowed, cross-origin surfaces to the model)
+/// - 10MB Content-Length pre-check
+/// - Binary MIME detection (note appended to result so model can reference
+///   the bytes on disk)
 async fn fetch_url(
     url: &str,
     config: &coco_config::WebFetchConfig,
@@ -1142,11 +1090,9 @@ async fn fetch_url(
         .build()
         .map_err(|e| format!("[NETWORK_ERROR] failed to build HTTP client: {e}"))?;
 
-    // Manual redirect loop. TS `WebFetchTool/utils.ts:125` sets
-    // `MAX_REDIRECTS = 10`. Most real-world chains are 1–2 hops, but
-    // a few legitimate cases (shortener → auth → final content) need
-    // 4–5 hops, so matching TS's cap of 10 avoids rejecting valid
-    // chains while still bounding the loop.
+    // Manual redirect loop. Max 10 hops: most real-world chains are 1–2,
+    // but some legitimate cases (shortener → auth → final content) need
+    // 4–5. A cap of 10 avoids rejecting valid chains while bounding the loop.
     let mut current_url = url.to_string();
     for _ in 0..10 {
         let response = client.get(&current_url).send().await.map_err(|e| {
@@ -1189,13 +1135,9 @@ async fn fetch_url(
             return Err(format!("[NETWORK_ERROR] HTTP {status}"));
         }
 
-        // Content-Length pre-check (fast path).
-        //
-        // TS `utils.ts:112, 277` passes `maxContentLength` to axios which
-        // enforces the cap both from the header AND during streaming.
-        // Our header check handles the optimistic case where the server
-        // advertises size up-front. The streaming check below handles
-        // chunked responses and servers that lie about Content-Length.
+        // Content-Length pre-check (fast path). Handles the optimistic case
+        // where the server advertises size up-front. The streaming check below
+        // handles chunked responses and servers that lie about Content-Length.
         if let Some(length) = response
             .headers()
             .get(reqwest::header::CONTENT_LENGTH)
@@ -1216,10 +1158,9 @@ async fn fetch_url(
             .unwrap_or("")
             .to_lowercase();
 
-        // #57 / TS `utils.ts:442-449`: binary bodies are persisted to
-        // disk (mime-derived extension) and still UTF-8 decoded + run
-        // through the pipeline, with a "[Binary content … also saved to
-        // <path>]" note appended to the result.
+        // Binary bodies are persisted to disk (mime-derived extension) and
+        // still UTF-8 decoded + run through the pipeline, with a
+        // "[Binary content … also saved to <path>]" note appended to the result.
         let is_binary = content_type.contains("image/")
             || content_type.contains("audio/")
             || content_type.contains("video/")
@@ -1284,8 +1225,7 @@ async fn fetch_url(
 }
 
 /// Persist a binary WebFetch body to a temp file with a mime-derived
-/// extension. TS `WebFetchTool/utils.ts:435-449 persistBinaryContent`.
-/// Returns `(absolute_path, byte_len)`.
+/// extension. Returns `(absolute_path, byte_len)`.
 fn persist_binary_content(bytes: &[u8], content_type: &str) -> std::io::Result<(String, usize)> {
     let ext = mime_to_extension(content_type);
     // A content-addressed name avoids `Math.random`/clock use (forbidden
@@ -1302,8 +1242,7 @@ fn persist_binary_content(bytes: &[u8], content_type: &str) -> std::io::Result<(
     Ok((path.to_string_lossy().into_owned(), bytes.len()))
 }
 
-/// Map a binary content-type to a file extension (TS
-/// `getExtensionFromMimeType`). Falls back to `bin`.
+/// Map a binary content-type to a file extension. Falls back to `bin`.
 fn mime_to_extension(content_type: &str) -> &'static str {
     let ct = content_type.split(';').next().unwrap_or("").trim();
     match ct {
@@ -1353,31 +1292,16 @@ pub(super) fn resolve_redirect_url(base: &str, location: &str) -> String {
 // WebSearchTool — third-party search backend
 // ---------------------------------------------------------------------------
 //
-// # Why this diverges from TS
-//
-// TS `WebSearchTool.tsx:76-84, 254-291` implements search as a passthrough to
-// the Anthropic `web_search_20250305` server-side tool — no local search
-// happens; the query is handed to Claude which runs it on Anthropic's
-// infrastructure. coco-rs has to support **every** provider (Anthropic,
-// OpenAI, Google, DeepSeek, xAI, etc.), and only Anthropic exposes a native
-// web-search tool through the messages API. If we used the TS passthrough
-// model, web search would silently fail for 80% of users.
-//
-// Our design: a **provider-agnostic** local backend. The default is
-// DuckDuckGo HTML scraping (no API key, no rate limits, no ToS surprises),
-// with a Tavily REST fallback for users who opt in via env vars. Both run
-// entirely on the client side so the tool works identically regardless of
-// which LLM provider the user selected.
-//
-// This follows cocode-rs's approach (`cocode-rs/core/tools/src/builtin/
-// web_search.rs:308-581`) because it's the only sensible shape in a
-// multi-provider Rust SDK.
+// Design: a **provider-agnostic** local backend. The default is DuckDuckGo
+// HTML scraping (no API key, no rate limits, no ToS surprises), with a
+// Tavily REST fallback for users who opt in via env vars. Both run entirely
+// on the client side so the tool works identically regardless of which LLM
+// provider the user selected.
 //
 // # Cache
 //
-// 15-min TTL in-process cache (matches TS `WebFetchTool.ts:62-69` cache
-// pattern for URL fetches). Prevents redundant DuckDuckGo traffic when the
-// model retries the same query within a turn. Session-scoped only.
+// 15-min TTL in-process cache. Prevents redundant DuckDuckGo traffic when
+// the model retries the same query within a turn. Session-scoped only.
 //
 // # Error classification
 //
@@ -1391,7 +1315,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
-/// Cache TTL for search results. TS uses 15min for URL cache; we match.
+/// Cache TTL for search results: 15 minutes.
 const SEARCH_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 
 /// Max cached entries before LRU eviction. Keeps memory bounded in long
@@ -1408,7 +1332,7 @@ const SEARCH_TIMEOUT_SECS: u64 = 15;
 /// candidates left after filtering even at the schema ceiling.
 const SEARCH_MAX_RESULTS_CEILING: usize = 20;
 
-/// Minimum query length to accept. TS: `WebSearchTool.ts:25-36`.
+/// Minimum query length to accept.
 const SEARCH_MIN_QUERY_LEN: usize = 2;
 
 /// Truncate DuckDuckGo response bodies before regex parsing. A normal
@@ -1551,10 +1475,8 @@ fn cache_set(
 
 /// Format the current local month and year as `"Month YYYY"`.
 ///
-/// TS `WebSearchTool/prompt.ts:31` injects this via `getLocalMonthYear()`
-/// so the model knows the actual current date when interpreting
-/// "latest", "recent", or "current" search queries. coco-rs computes
-/// the same string at request time using `chrono::Local::now()`.
+/// Injected into the search prompt so the model knows the actual current
+/// date when interpreting "latest", "recent", or "current" search queries.
 fn current_month_year_local() -> String {
     use chrono::Datelike;
     let now = chrono::Local::now();
@@ -1579,13 +1501,10 @@ fn current_month_year_local() -> String {
     format!("{month_name} {}", now.year())
 }
 
-/// Model-facing WebSearch tool description. Byte-aligned port of TS
-/// `WebSearchTool/prompt.ts:5-33` `getWebSearchPrompt()`. The CRITICAL
-/// REQUIREMENT block is mandatory — TS marks it as "MUST follow" and the
-/// model is expected to add a `Sources:` section to every response. The
+/// Model-facing WebSearch tool description. The CRITICAL REQUIREMENT block
+/// mandates that the model add a `Sources:` section to every response. The
 /// current month/year is injected at request time so the model uses the
-/// right year for recent-events queries. Surfaced to the model via
-/// [`WebSearchTool::prompt`].
+/// right year for recent-events queries. Surfaced via [`WebSearchTool::prompt`].
 fn web_search_prompt_text() -> String {
     let current_month_year = current_month_year_local();
     format!(
@@ -1664,11 +1583,8 @@ impl Tool for WebSearchTool {
                         "description": "Never include search results from these domains (post-filtered client-side)"
                     }
                 },
-                // TS `z.strictObject({ query: z.string().min(2), ... })`:
-                // `query` is the only non-optional field. `max_results` is a
-                // coco-rs client-side extension (TS has no such field) and
-                // stays optional. `allowed_domains`/`blocked_domains` are
-                // `.optional()` in TS.
+                // `query` is the only required field. `max_results` stays
+                // optional. `allowed_domains`/`blocked_domains` are optional.
                 "required": ["query"]
             }))
         })
@@ -1691,14 +1607,12 @@ impl Tool for WebSearchTool {
     fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::WebSearch)
     }
-    /// Short UI label. TS `WebSearchTool.ts:157-159` `async description(input)`
-    /// returns `Claude wants to search the web for: ${input.query}`. The
-    /// long model-facing guidance lives in [`Self::prompt`].
+    /// Short UI label: `Claude wants to search the web for: ${input.query}`.
+    /// The long model-facing guidance lives in [`Self::prompt`].
     fn description(&self, input: &WebSearchInput, _options: &DescriptionOptions) -> String {
         format!("Claude wants to search the web for: {}", input.query)
     }
-    /// Model-facing tool description. TS `WebSearchTool.ts:223-225`
-    /// `async prompt()` returns `getWebSearchPrompt()`.
+    /// Model-facing tool description.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         web_search_prompt_text()
     }
@@ -1725,10 +1639,9 @@ impl Tool for WebSearchTool {
                 "query must be at least 2 characters long",
             );
         }
-        // Mutual exclusivity: caller should not set both filters. TS accepts
-        // both but they're semantically ambiguous — if a domain is in both
-        // lists, which wins? We reject at validation time to force a clear
-        // policy. Cocode-rs enforces the same rule.
+        // Mutual exclusivity: caller should not set both filters. If a domain
+        // is in both lists, which wins? We reject at validation time to force
+        // a clear policy.
         let has_allowed = input
             .allowed_domains
             .as_ref()
@@ -1841,12 +1754,10 @@ impl Tool for WebSearchTool {
     }
 }
 
-/// OpenAI native search is not implemented — TS `WebSearchTool.ts:168-192`
-/// relies on the Anthropic native tool, which has no coco-rs passthrough.
-/// Fall back to DuckDuckGo so the tool stays functional, and warn once per
-/// session so the user knows the configured provider isn't being used.
-/// Resolving here (not in `search_by_provider`) keeps the cache key
-/// aligned with the backend that actually runs.
+/// OpenAI native search is not implemented — falls back to DuckDuckGo so
+/// the tool stays functional, with a one-time warning so the user knows the
+/// configured provider isn't being used. Resolving here (not in
+/// `search_by_provider`) keeps the cache key aligned with the actual backend.
 fn effective_search_provider(
     configured: coco_config::WebSearchProvider,
 ) -> coco_config::WebSearchProvider {

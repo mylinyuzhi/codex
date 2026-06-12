@@ -1,7 +1,6 @@
 //! HTTP push/pull pipeline for team memory sync.
 //!
-//! TS: `services/teamMemorySync/index.ts` (1256 LoC). Ports the core
-//! contract:
+//! Core contract:
 //!
 //! - `pull(state, repo, etag)` — `GET /api/claude_code/team_memory?repo=...`,
 //!   server wins per-key. Updates `state.last_known_checksum` from the
@@ -43,7 +42,7 @@ use super::types::TeamMemorySyncPushResult;
 use super::types::TeamMemoryTooManyEntries;
 
 /// Compute `sha256:<hex>` over the UTF-8 bytes of `content`. Format
-/// matches the server's `entryChecksums` (TS `hashContent`).
+/// matches the server's `entryChecksums`.
 pub fn compute_content_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
@@ -57,8 +56,7 @@ pub fn compute_content_hash(content: &str) -> String {
 }
 
 /// Build the team-memory sync endpoint URL. `base_url` is the
-/// Anthropic API base (e.g. `https://api.anthropic.com`); TS reads
-/// `process.env.TEAM_MEMORY_SYNC_URL ?? getOauthConfig().BASE_API_URL`.
+/// Anthropic API base (e.g. `https://api.anthropic.com`).
 pub fn endpoint(base_url: &str, repo_slug: &str) -> String {
     let encoded = urlencoding_encode(repo_slug);
     format!("{base_url}/api/claude_code/team_memory?repo={encoded}")
@@ -79,8 +77,8 @@ fn urlencoding_encode(input: &str) -> String {
     out
 }
 
-/// Pull team memory data from the server. Mirrors TS
-/// `fetchTeamMemoryOnce`. Updates `state.last_known_checksum` on
+/// Pull team memory data from the server. Updates
+/// `state.last_known_checksum` on
 /// success; resets it to `None` on 404. The caller is responsible for
 /// retry policy on `success: false` results.
 pub async fn pull(
@@ -192,7 +190,7 @@ pub struct PushEntry {
     pub content: String,
 }
 
-/// Push delta entries. Mirrors TS `pushTeamMemory` core path:
+/// Push delta entries. Core path:
 ///
 /// 1. Pre-scan each entry for secrets (skipped → `result.skipped_secrets`,
 ///    never sent) and per-entry size cap.
@@ -219,9 +217,9 @@ pub struct PushEntry {
 ///    - (g) On other failure: fail-out, partial-upload state preserved.
 ///
 /// Local-wins-on-conflict semantics: a teammate's same-key edit gets
-/// overwritten by the local push (mirrors TS — silently discarding a
-/// just-typed user edit is worse than losing a remote change the user
-/// can re-pull). The hash refresh in (e) drops only matching content.
+/// overwritten by the local push — silently discarding a just-typed
+/// user edit is worse than losing a remote change the user can
+/// re-pull. The hash refresh in (e) drops only matching content.
 pub async fn push(
     state: &mut SyncState,
     base_url: &str,
@@ -253,8 +251,7 @@ pub async fn push(
 
     // Step 2: server-cap truncation. Sort by path so the same N-of-M
     // subset is selected across pushes — without this, the dropped set
-    // could oscillate and serverChecksums would never converge. TS
-    // parity: `readLocalTeamMemory` sorts keys before truncating.
+    // could oscillate and serverChecksums would never converge.
     if let Some(cap) = state.server_max_entries
         && (clean.len() as i32) > cap
     {
@@ -399,8 +396,7 @@ pub async fn push(
 
 /// Split a delta into PUT-sized batches under [`MAX_PUT_BODY_BYTES`].
 /// Each batch carries a `HashMap<path, content>` ready to JSON-encode
-/// as `{ "entries": ... }`. Server upsert-merge across batches is
-/// safe — TS parity.
+/// as `{ "entries": ... }`. Server upsert-merge across batches is safe.
 fn batch_by_bytes(to_push: &[&PushEntry]) -> Vec<HashMap<String, String>> {
     let mut batches: Vec<HashMap<String, String>> = Vec::new();
     let mut current: HashMap<String, String> = HashMap::new();
@@ -523,7 +519,7 @@ async fn push_batches(
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.trim_matches('"').to_string());
                 // Body may carry a `checksum` field that takes priority
-                // over the ETag header (TS parity: `response.data?.checksum`).
+                // over the ETag header.
                 let resp_checksum = resp.json::<serde_json::Value>().await.ok().and_then(|v| {
                     v.get("checksum")
                         .and_then(|c| c.as_str().map(str::to_string))
@@ -548,8 +544,7 @@ async fn push_batches(
 
 /// `GET <endpoint>&view=hashes` — fetch per-key checksums + metadata
 /// without entry bodies. Used during 412 conflict resolution to
-/// cheaply refresh `state.server_checksums`. TS:
-/// `services/teamMemorySync/index.ts::fetchTeamMemoryHashes`.
+/// cheaply refresh `state.server_checksums`.
 ///
 /// Requires anthropic/anthropic#283027 (server-side `?view=hashes`
 /// support). When the server returns 200 without
@@ -624,11 +619,11 @@ pub fn scan_only(entries: &[PushEntry]) -> (Vec<&PushEntry>, Vec<SkippedSecretFi
 
 /// Apply pulled `TeamMemoryContent` to the local file tree under
 /// `dir`. Server wins per-key — every entry gets written verbatim.
-/// Existing local-only files are NOT removed (TS parity: deletions
-/// don't propagate). Errors during individual file writes are logged
-/// but don't abort the operation.
+/// Existing local-only files are NOT removed (deletions don't
+/// propagate). Errors during individual file writes are logged but
+/// don't abort the operation.
 ///
-/// Three guarantees per entry, mirroring TS `writeRemoteEntriesToLocal`:
+/// Three guarantees per entry:
 ///
 /// 1. **Path validation** via [`crate::path::team::validate_team_mem_key`]
 ///    — null bytes, UNC `\\` / `//`, drive-root, unexpanded tilde,

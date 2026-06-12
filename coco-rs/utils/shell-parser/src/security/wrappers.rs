@@ -2,7 +2,7 @@
 //!
 //! Safe wrapper commands (`time`, `nohup`, `timeout`, `nice`, `env`, `stdbuf`)
 //! are stripped before running security analyzers so that the *inner* command
-//! is what gets analyzed. This matches the TypeScript `stripSafeWrappers` logic.
+//! is what gets analyzed.
 //!
 //! All strippers are **fail-closed**: unknown flags or suspicious patterns cause
 //! the function to return `None`, which means the original command is analyzed

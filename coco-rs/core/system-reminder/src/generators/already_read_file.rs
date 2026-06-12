@@ -1,11 +1,9 @@
 //! Silent `already_read_file` generator.
 //!
 //! Emits a session-dedup marker listing paths the @-mention / memory
-//! pipelines have decided not to re-inject. Matches TS `already_read_file`
-//! (`utils/attachments.ts:324`), whose `normalizeAttachmentForAPI`
-//! (`utils/messages.ts:4252`) returns `[]` — zero API tokens. The payload
-//! survives on [`ReminderMetadata::AlreadyReadFile`] so UI / transcript
-//! layers can surface "already in context" hints.
+//! pipelines have decided not to re-inject. Produces zero API tokens; the
+//! payload survives on [`ReminderMetadata::AlreadyReadFile`] so UI /
+//! transcript layers can surface "already in context" hints.
 //!
 //! cocode-rs reference: `core/system-reminder/src/generators/` (the
 //! `SystemReminder::already_read_files(paths)` constructor produces the

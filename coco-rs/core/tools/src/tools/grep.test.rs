@@ -98,7 +98,6 @@ async fn test_grep_content_mode() {
 
     let t = text(&result);
     assert!(t.contains("fn hello()"), "should contain match: {t}");
-    // TS flat format: path:linenum:content
     assert!(t.contains(":2:"), "should have line number 2: {t}");
 }
 
@@ -538,7 +537,7 @@ async fn test_grep_offset() {
 // -----------------------------------------------------------------------
 
 // -----------------------------------------------------------------------
-// TS-exact output format verification
+// Output format verification
 // -----------------------------------------------------------------------
 
 /// files_with_matches: no pagination info in header when not truncated,
@@ -562,7 +561,6 @@ async fn test_grep_files_header_no_pagination_when_not_truncated() {
     .unwrap();
 
     let t = text(&result);
-    // TS format: "Found N files" with no pagination/offset info
     assert!(
         !t.contains("limit:") && !t.contains("offset:"),
         "should not include pagination info when not truncated: {t}"
@@ -574,7 +572,7 @@ async fn test_grep_files_header_no_pagination_when_not_truncated() {
 }
 
 /// files_with_matches: "limit: X" is appended on the SAME header line when
-/// truncated (matches TS format).
+/// truncated.
 #[tokio::test]
 async fn test_grep_files_header_has_pagination_when_truncated() {
     let dir = tempfile::tempdir().unwrap();
@@ -656,11 +654,11 @@ async fn test_grep_content_footer_format() {
     let t = text(&result);
     assert!(
         t.contains("[Showing results with pagination = limit: 2]"),
-        "should have TS-format footer: {t}"
+        "should have expected footer format: {t}"
     );
 }
 
-/// count mode: summary uses "N total occurrence(s)" phrasing per TS.
+/// count mode: summary uses "N total occurrence(s)" phrasing.
 #[tokio::test]
 async fn test_grep_count_summary_format() {
     let dir = tempfile::tempdir().unwrap();
@@ -681,7 +679,6 @@ async fn test_grep_count_summary_format() {
     .unwrap();
 
     let t = text(&result);
-    // TS: "Found N total occurrence(s) across M file(s)."
     assert!(
         t.contains("total occurrences across 2 files."),
         "should have plural summary: {t}"
@@ -854,11 +851,11 @@ async fn test_grep_respects_cancellation() {
 }
 
 // -----------------------------------------------------------------------
-// TS-exact empty-result format (count/content edge cases)
+// Empty-result format (count/content edge cases)
 // -----------------------------------------------------------------------
 
-/// Count mode with 0 matches must still emit the summary line, matching TS
-/// exactly: `"No matches found\n\nFound 0 total occurrences across 0 files."`
+/// Count mode with 0 matches must still emit the summary line:
+/// `"No matches found\n\nFound 0 total occurrences across 0 files."`
 #[tokio::test]
 async fn test_grep_count_empty_includes_summary() {
     let dir = tempfile::tempdir().unwrap();
@@ -939,7 +936,7 @@ async fn test_grep_content_empty_with_offset_keeps_pagination() {
 // -----------------------------------------------------------------------
 
 /// `glob: "*.js *.ts"` — whitespace-separated patterns. Both extensions
-/// should be matched per TS GrepTool.ts lines 391-409.
+/// should be matched.
 #[tokio::test]
 async fn test_grep_glob_filter_whitespace() {
     let dir = tempfile::tempdir().unwrap();
@@ -993,7 +990,7 @@ async fn test_grep_glob_filter_comma() {
     assert!(!t.contains("c.py"), "should NOT match .py: {t}");
 }
 
-/// `glob: "*.{js,ts}"` — brace-expansion pattern kept intact per TS.
+/// `glob: "*.{js,ts}"` — brace-expansion pattern kept intact.
 #[tokio::test]
 async fn test_grep_glob_filter_braces() {
     let dir = tempfile::tempdir().unwrap();
@@ -1020,10 +1017,9 @@ async fn test_grep_glob_filter_braces() {
     assert!(!t.contains("c.py"), "should NOT match .py: {t}");
 }
 
-/// R5-T13: `-n: false` suppresses line numbers in content-mode output.
-/// TS `GrepTool.ts:357-360` only appends `-n` to ripgrep args when
-/// `show_line_numbers` is true, so a model passing `-n: false` gets
-/// `path:content` instead of `path:linenum:content`.
+/// `-n: false` suppresses line numbers in content-mode output.
+/// A model passing `-n: false` gets `path:content` instead of
+/// `path:linenum:content`.
 #[tokio::test]
 async fn test_grep_line_numbers_suppressed() {
     let dir = tempfile::tempdir().unwrap();

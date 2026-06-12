@@ -115,11 +115,11 @@ pub(crate) fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitTooling
 
 /// Find the canonical git root for `start`, sharing one identity across worktrees.
 ///
-/// TS: `findCanonicalGitRoot` in `memdir/paths.ts`. Linked worktrees point their
-/// `.git` file at a sibling under the main repo's `.git/worktrees/<name>`; the
-/// `--git-common-dir` rev-parse returns that shared `.git`, whose parent is the
-/// canonical root every worktree of the repo agrees on. Returns `None` for
-/// paths outside any git work tree (or when git is unavailable).
+/// Linked worktrees point their `.git` file at a sibling under the main
+/// repo's `.git/worktrees/<name>`; the `--git-common-dir` rev-parse returns
+/// that shared `.git`, whose parent is the canonical root every worktree of
+/// the repo agrees on. Returns `None` for paths outside any git work tree
+/// (or when git is unavailable).
 pub fn find_canonical_git_root(start: &Path) -> Option<PathBuf> {
     let common_dir = run_git_for_stdout(
         start,
@@ -229,8 +229,7 @@ where
     })
 }
 
-/// Resolve the repository's default branch NAME (e.g. `"main"`), mirroring TS
-/// `computeDefaultBranch` (`utils/git/gitFilesystem.ts`): read the
+/// Resolve the repository's default branch NAME (e.g. `"main"`): read the
 /// `refs/remotes/origin/HEAD` symref, else fall back to a local `origin/main`
 /// / `origin/master`, else `"main"`. Network-free — the caller fetches if it
 /// needs the base SHA. Always returns a name (never errors).

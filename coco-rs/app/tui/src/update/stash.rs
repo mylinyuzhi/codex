@@ -1,7 +1,6 @@
 //! `chat:stash` handler — single-slot push/pop input draft.
 //!
-//! Mirrors TS `PromptInput.tsx::handleStash` (lines 1357-1382). One
-//! slot, three cases:
+//! One slot, three cases:
 //!
 //! * empty input + slot present → pop (restore stash to input + paste
 //!   state, clear the slot)
@@ -9,12 +8,10 @@
 //!   + paste entries, clear input + paste state)
 //! * empty input + empty slot → silent no-op
 //!
-//! TS uses `input.trim() === ''` to test emptiness, so whitespace-only
-//! input behaves like empty — this port matches.
+//! `input.trim() === ''` tests emptiness, so whitespace-only input
+//! behaves like empty.
 //!
-//! **TS-parity note**: TS stashes `{ text, cursorOffset, pastedContents }`.
-//! coco-rs's port stashes the corresponding triple
-//! `(text, cursor, paste_entries)`. Pill labels embedded in `text`
+//! Stashes `(text, cursor, paste_entries)`. Pill labels embedded in `text`
 //! (e.g. `[Pasted text #1]`) keep resolving after a pop because the
 //! paste-manager entries are restored alongside the text.
 

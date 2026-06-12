@@ -5,9 +5,8 @@
 //! thin adapter that wraps the service-layer manager and exposes the
 //! tool-runtime trait contract.
 //!
-//! TS parity: `LSPTool.ts` calls `getLspServerManager().sendRequest()`
-//! directly; Rust adds the trait indirection for testability and to
-//! keep `coco-tools` independent of `coco-lsp`.
+//! The trait indirection keeps `coco-tools` independent of `coco-lsp`
+//! and improves testability.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,18 +28,17 @@ use tracing::warn;
 /// `diagnostics` is the same `DiagnosticsStore` registered with the
 /// manager (see `LspServerManager::diagnostics()`). It is borrowed so
 /// `notify_save` can clear the cross-turn delivered-LRU for the saved
-/// file — TS does the same in `FileWriteTool` via
-/// `clearDeliveredDiagnosticsForFile()`.
+/// file before the LSP `didSave` notification.
 pub struct LspManagerAdapter {
     manager: Arc<LspServerManager>,
     diagnostics: Arc<DiagnosticsStore>,
     /// Tracks whether at least one configured server is in a non-failed
     /// state. Set to `true` at construction (lazy-spawn path: we trust
-    /// the config until proven otherwise — matches TS `isLspConnected`
-    /// which returns true for `stopped` / `starting` / `running`
-    /// states). Refined by [`Self::prewarm`] — after eager init we know
-    /// exactly how many servers actually started, so we clear the flag
-    /// if **every** spawn attempt failed.
+    /// the config until proven otherwise — `stopped` / `starting` /
+    /// `running` states are all considered active). Refined by
+    /// [`Self::prewarm`] — after eager init we know exactly how many
+    /// servers actually started, so we clear the flag if **every**
+    /// spawn attempt failed.
     has_active: Arc<AtomicBool>,
 }
 
@@ -56,9 +54,9 @@ impl LspManagerAdapter {
     }
 
     /// Eagerly spawn LSP servers for every configured extension, anchored
-    /// at `project_root`. TS parity: `manager.initialize()` runs at
-    /// session bootstrap so the `LSPTool.isEnabled()` gate reads accurate
-    /// running-state by the time the model emits its first turn.
+    /// at `project_root`. Runs at session bootstrap so the `LSPTool.isEnabled()`
+    /// gate reads accurate running-state by the time the model emits its
+    /// first turn.
     ///
     /// Without this, the lazy-spawn path defers the first connect to the
     /// first `LspTool` call — fine for correctness, but the tool would
@@ -165,8 +163,6 @@ impl LspHandle for LspManagerAdapter {
     async fn notify_save(&self, file_path: &Path) {
         // Clear cross-turn dedup *before* the notify so re-published
         // diagnostics for the saved file are not suppressed.
-        // TS: `FileWriteTool.ts` calls `clearDeliveredDiagnosticsForFile`
-        // BEFORE `lspManager.saveFile`.
         let path_buf: PathBuf = file_path.to_path_buf();
         self.diagnostics.clear_delivered_for_file(&path_buf).await;
 
@@ -194,8 +190,8 @@ impl LspHandle for LspManagerAdapter {
     }
 
     async fn reload(&self, project_root: &Path) {
-        // `/reload-plugins` parity (TS `reinitializeLspServerManager`): re-read
-        // the disk config + re-merge plugin LSP servers + re-prewarm.
+        // `/reload-plugins`: re-read the disk config + re-merge plugin
+        // LSP servers + re-prewarm.
         self.reload_and_prewarm(project_root).await;
     }
 }

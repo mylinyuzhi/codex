@@ -3,12 +3,12 @@ use std::time::Duration;
 use crate::errors::InferenceError;
 
 /// Max in-client retries for capacity/overload errors before letting the
-/// model-runtime fallback chain take over. TS `MAX_529_RETRIES`.
+/// model-runtime fallback chain take over.
 const MAX_CAPACITY_RETRIES: i32 = 3;
 
-/// Query sources that retry on a capacity cascade (503/529). Mirrors TS
-/// `FOREGROUND_529_RETRY_SOURCES`; every other tagged source is background and
-/// throws immediately so it doesn't amplify a saturated gateway.
+/// Query sources that retry on a capacity cascade (503/529). Every other tagged
+/// source is background and throws immediately so it doesn't amplify a saturated
+/// gateway.
 const FOREGROUND_529_RETRY_SOURCES: &[&str] = &[
     "repl_main_thread",
     "repl_main_thread:outputStyle:custom",
@@ -26,7 +26,7 @@ const FOREGROUND_529_RETRY_SOURCES: &[&str] = &[
     "auto_mode",
 ];
 
-/// TS `shouldRetry529`: an untagged (`None`) source is treated as foreground.
+/// An untagged (`None`) source is treated as foreground.
 fn is_foreground_source(query_source: Option<&str>) -> bool {
     match query_source {
         None => true,
@@ -49,14 +49,13 @@ pub struct RetryConfig {
 
 impl Default for RetryConfig {
     fn default() -> Self {
-        // Mirrors TS `withRetry.ts` (DEFAULT_MAX_RETRIES = 10, base 500ms).
+        // DEFAULT_MAX_RETRIES = 10, base 500ms, maxDelayMs = 32000.
         // The production `RetryConfig` is built from settings via the
         // `From<ApiRetryConfig>` impl below; this default backs direct
         // `RetryConfig::default()` callers and test fixtures.
         Self {
             max_retries: 10,
             base_delay_ms: 500,
-            // #134: TS `getRetryDelay` maxDelayMs default is 32000.
             max_delay_ms: 32_000,
             jitter_factor: 0.25,
         }
@@ -94,8 +93,7 @@ impl RetryConfig {
             .saturating_mul(2_i64.saturating_pow(attempt as u32));
         let delay = delay.min(self.max_delay_ms);
 
-        // #136 / TS `withRetry.ts:546` `Math.random() * 0.25 * baseDelay`:
-        // jitter is a UNIFORM random in [0, jitter_factor*delay] so
+        // #136: jitter is a UNIFORM random in [0, jitter_factor*delay] so
         // concurrent clients de-correlate their retries (thundering-herd
         // mitigation). The previous fixed +25% added the same delay to
         // every client.
@@ -110,10 +108,10 @@ impl RetryConfig {
     /// Only the overload cascade (503/529, [`InferenceError::Overloaded`]) is
     /// capped at [`MAX_CAPACITY_RETRIES`], so a saturated primary yields to the
     /// model-runtime fallback chain fast instead of burning the full budget
-    /// in-client (TS `MAX_529_RETRIES`). All OTHER retryable errors — rate
-    /// limits (429), network/timeout (408), lock/conflict (409), and generic
-    /// 5xx — get the full `max_retries`, matching TS `withRetry` (which retries
-    /// 429 and `status >= 500` up to `DEFAULT_MAX_RETRIES`).
+    /// in-client. All OTHER retryable errors — rate limits (429),
+    /// network/timeout (408), lock/conflict (409), and generic 5xx — get the
+    /// full `max_retries` (429 and `status >= 500` retry up to
+    /// `DEFAULT_MAX_RETRIES`).
     pub fn should_retry(&self, attempt: i32, error: &InferenceError) -> bool {
         if !error.is_retryable() {
             return false;
@@ -127,8 +125,8 @@ impl RetryConfig {
     }
 
     /// Like [`Self::should_retry`] but throws background sources immediately on
-    /// a capacity cascade (TS `shouldRetry529`): titles / suggestions /
-    /// summaries / memory forks must not amplify a saturated gateway 3-10x.
+    /// a capacity cascade: titles / suggestions / summaries / memory forks must
+    /// not amplify a saturated gateway 3-10x.
     /// Foreground sources (and untagged `None`) retry per [`Self::should_retry`].
     pub fn should_retry_with_source(
         &self,
@@ -144,14 +142,12 @@ impl RetryConfig {
 
     /// Overload-cascade errors (503/529) — bounded in-client so the fallback
     /// chain engages fast. Rate limits (429) are deliberately NOT capped here:
-    /// TS retries them up to the full budget honoring `retry-after`.
+    /// they retry up to the full budget honoring `retry-after`.
     fn is_capacity_error(error: &InferenceError) -> bool {
         matches!(error, InferenceError::Overloaded { .. })
     }
 
     /// Check if this error is an auth failure that needs credential refresh.
-    ///
-    /// TS: withRetry.ts — 401 errors trigger credential cache clearing.
     pub fn is_auth_error(error: &InferenceError) -> bool {
         matches!(
             error,
@@ -162,8 +158,6 @@ impl RetryConfig {
     }
 
     /// Check if this error is a rate limit that needs cooldown.
-    ///
-    /// TS: withRetry.ts — 429 errors trigger rate limit cooldown.
     pub fn is_rate_limit(error: &InferenceError) -> bool {
         matches!(error, InferenceError::RateLimited { .. })
     }

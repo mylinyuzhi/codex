@@ -312,7 +312,6 @@ async fn initialize_returns_capability_info() {
     match reply {
         JsonRpcMessage::Response(r) => {
             assert_eq!(r.request_id, RequestId::Integer(1));
-            // TS-required fields.
             assert!(r.result["models"].is_array());
             assert!(r.result["models"].as_array().unwrap().len() >= 2);
             assert!(r.result["pid"].is_number());
@@ -322,7 +321,7 @@ async fn initialize_returns_capability_info() {
             // coco-rs extension fields carried under `_cocoRs*` keys.
             assert_eq!(r.result["_cocoRsProtocolVersion"], "1.0");
             assert!(r.result["_cocoRsVersion"].is_string());
-            // Model shape uses TS wire keys (`value`, `displayName`).
+            // Model shape uses wire keys (`value`, `displayName`).
             let first_model = &r.result["models"][0];
             assert!(first_model["value"].is_string());
             assert!(first_model["displayName"].is_string());
@@ -368,15 +367,15 @@ async fn initialize_with_bootstrap_returns_real_commands() {
         JsonRpcMessage::Response(r) => {
             let commands = r.result["commands"].as_array().expect("commands array");
             assert_eq!(commands.len(), command_count);
-            // Every command has the three TS-required fields.
+            // Every command has the three required fields.
             for cmd in commands {
                 assert!(cmd["name"].is_string());
                 assert!(cmd["description"].is_string());
                 assert!(cmd["argumentHint"].is_string()); // camelCase on the wire
             }
             assert_eq!(r.result["output_style"], "Explanatory");
-            // Built-in output styles always present — TS canonical set
-            // is lowercase `default` + capitalized `Explanatory` / `Learning`.
+            // Built-in output styles always present: lowercase `default`
+            // + capitalized `Explanatory` / `Learning`.
             let styles = r.result["available_output_styles"]
                 .as_array()
                 .expect("available_output_styles array");
@@ -424,7 +423,7 @@ impl crate::sdk_server::InitializeBootstrap for MockFastModeBootstrap {
 #[tokio::test]
 async fn initialize_fast_mode_state_some_serializes_to_wire() {
     // Exercise each FastModeState variant to guarantee the serde
-    // rename emits the TS-canonical lowercase strings (`off` /
+    // rename emits the canonical lowercase strings (`off` /
     // `cooldown` / `on`) and that a non-None `fast_mode_state` field
     // actually reaches the wire.
     for (state, expected) in [
@@ -1181,10 +1180,9 @@ async fn set_permission_mode_updates_session_field() {
 
 #[tokio::test]
 async fn set_permission_mode_rejects_bypass_without_capability() {
-    // TS parity: cli/print.ts:4588-4600. An SDK client cannot
-    // escalate into `BypassPermissions` mid-session when the session
-    // was not launched with `--dangerously-skip-permissions` (or
-    // `--allow-dangerously-skip-permissions`). The server replies
+    // An SDK client cannot escalate into `BypassPermissions` mid-session
+    // when the session was not launched with `--dangerously-skip-permissions`
+    // (or `--allow-dangerously-skip-permissions`). The server replies
     // with `PERMISSION_DENIED` and leaves the session mode untouched.
     let (server_task, client, state) = spawn_server_with_state().await;
 
@@ -1308,9 +1306,7 @@ async fn set_permission_mode_allows_bypass_when_capability_on() {
 async fn set_permission_mode_auto_to_default_clears_stripped_rules() {
     // G3 regression guard: leaving Auto clears the
     // `stripped_dangerous_rules` stash on app_state so a later ctx
-    // rebuild doesn't carry it into a non-Auto mode. TS parity:
-    // `restoreDangerousPermissions` is called when leaving the
-    // classifier (permissionSetup.ts:627-637).
+    // rebuild doesn't carry it into a non-Auto mode.
     let (server_task, client, state) = spawn_server_with_state().await;
 
     start_session(&client).await;
@@ -2685,11 +2681,10 @@ async fn session_list_returns_persisted_sessions() {
 
 #[tokio::test]
 async fn session_start_returns_session_id_without_eager_persist() {
-    // TS parity: `session/start` returns a fresh id but does not
-    // create a transcript on disk — the JSONL is written lazily on
-    // the first message append. Pre-fix coco-rs eagerly wrote a
-    // `{id}.json` sidecar; this test now asserts the absence of
-    // that divergent behaviour.
+    // `session/start` returns a fresh id but does not create a
+    // transcript on disk — the JSONL is written lazily on the first
+    // message append. Pre-fix coco-rs eagerly wrote a `{id}.json`
+    // sidecar; this test asserts the absence of that behaviour.
     let (server_task, client, state, _tmp) = spawn_server_with_session_manager().await;
 
     client
@@ -2712,7 +2707,7 @@ async fn session_start_returns_session_id_without_eager_persist() {
     let manager = state.session_manager.read().await.clone().unwrap();
     assert!(
         manager.load(&session_id).is_err(),
-        "session/start must not eagerly create a transcript (TS parity)",
+        "session/start must not eagerly create a transcript",
     );
 
     drop(client);
@@ -2852,9 +2847,9 @@ async fn session_resume_unknown_id_errors() {
 async fn session_archive_deletes_persisted_session() {
     let (server_task, client, state, _tmp) = spawn_server_with_session_manager().await;
 
-    // session/start registers an in-memory session (TS parity: no
-    // eager transcript write); seed the JSONL after so
-    // session/archive has something to delete from disk.
+    // session/start registers an in-memory session (no eager transcript
+    // write); seed the JSONL after so session/archive has something to
+    // delete from disk.
     client
         .send(req(
             1,
@@ -3616,11 +3611,10 @@ async fn mcp_status_lists_registered_servers_after_set_servers() {
             let servers = r.result["mcpServers"].as_array().unwrap();
             assert_eq!(servers.len(), 1);
             assert_eq!(servers[0]["name"], "github");
-            // `register_server` seeds `Pending` state — matches TS
-            // semantics. The wire status is `pending` even though
-            // no `connect` was attempted yet; transitioning happens
-            // when something explicitly calls `mcp/reconnect` or
-            // `mcp/toggle`.
+            // `register_server` seeds `Pending` state. The wire status
+            // is `pending` even though no `connect` was attempted yet;
+            // transitioning happens when something explicitly calls
+            // `mcp/reconnect` or `mcp/toggle`.
             assert_eq!(servers[0]["status"], "pending");
             assert_eq!(servers[0]["tool_count"], 0);
         }

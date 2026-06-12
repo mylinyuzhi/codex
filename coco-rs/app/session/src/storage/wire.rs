@@ -19,14 +19,12 @@ pub struct TranscriptEntryOptions<'a> {
     pub is_sidechain: bool,
     pub agent_id: Option<&'a str>,
     /// Current git branch for `cwd`, captured once per chain by the
-    /// caller. TS-parity: `sessionStorage.ts:1013-1019,1062` calls
-    /// `getBranch()` once and stamps the value on every line of the
-    /// chain. `None` ⇒ field is omitted on serialize.
+    /// caller and stamped on every transcript line. `None` ⇒ field is
+    /// omitted on serialize.
     pub git_branch: Option<&'a str>,
 }
 
-/// Convert an internal message to one or more TS-compatible transcript
-/// message entries.
+/// Convert an internal message to one or more transcript message entries.
 pub fn transcript_entries_for_message(
     msg: &coco_messages::Message,
     options: TranscriptEntryOptions<'_>,
@@ -69,9 +67,7 @@ pub fn transcript_entries_for_message(
             // Serialise the whole AttachmentMessage so kind + body +
             // extras round-trip together. Earlier revisions persisted
             // only `att.body` and lost the `kind` discriminator on
-            // read. TS-parity (`utils/sessionStorage.ts:139-146`)
-            // explicitly includes `attachment` in
-            // `isTranscriptMessage`, so this entry MUST be readable.
+            // read. This entry MUST be readable.
             serde_json::to_value(att).ok(),
             None,
             None,

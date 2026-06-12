@@ -13,7 +13,7 @@ use super::types::MemoryFrontmatter;
 
 /// Serialize a memory entry as a markdown file with YAML frontmatter.
 ///
-/// Format mirrors TS `MEMORY_FRONTMATTER_EXAMPLE`:
+/// Format:
 ///
 /// ```markdown
 /// ---

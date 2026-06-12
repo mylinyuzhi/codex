@@ -1,21 +1,20 @@
 //! Client-side secret scanner for team memory.
 //!
-//! TS: `services/teamMemorySync/secretScanner.ts`. Wraps
-//! [`coco_secret_redact::scan_secrets`] to project the broader
+//! Wraps [`coco_secret_redact::scan_secrets`] to project the broader
 //! redaction taxonomy onto the team-memory-specific
 //! [`SkippedSecretFile`] payload. Catches the high-confidence
-//! prefix-based credentials TS curates (Anthropic / OpenAI /
-//! GitHub / Slack / AWS / generic Bearer / key-assignment).
+//! prefix-based credentials (Anthropic / OpenAI / GitHub / Slack /
+//! AWS / generic Bearer / key-assignment).
 //!
-//! TS uses gitleaks rule IDs verbatim; coco-rs maps the underlying
+//! Uses gitleaks rule IDs; coco-rs maps the underlying
 //! `coco_secret_redact::SecretMatch.rule_id` strings (`"anthropic"`,
-//! `"github-token"`, etc.) to TS-aligned IDs so the cross-language
+//! `"github-token"`, etc.) to canonical IDs so the cross-language
 //! analytics keys match.
 
 use super::types::SkippedSecretFile;
 
-/// Map a `coco_secret_redact` rule id to the TS gitleaks rule id.
-/// TS IDs are kebab-case and reused across the analytics surface;
+/// Map a `coco_secret_redact` rule id to the gitleaks rule id.
+/// IDs are kebab-case and reused across the analytics surface;
 /// keeping the mapping centralised here means the broader
 /// `coco_secret_redact` redaction tooling can grow new patterns
 /// without churn here.
@@ -48,8 +47,8 @@ fn label_from_rule(rule_id: &str) -> String {
 }
 
 /// Scan `content` for credentials. Returns the first matching
-/// `SkippedSecretFile` (TS behaviour: short-circuit on first detection
-/// since one secret is enough to skip the file).
+/// `SkippedSecretFile` (short-circuits on first detection since one
+/// secret is enough to skip the file).
 ///
 /// `path` is the relative path under the team memory dir, recorded
 /// on the `SkippedSecretFile` so the caller can report which file was

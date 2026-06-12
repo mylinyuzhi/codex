@@ -82,7 +82,7 @@ pub(crate) fn prefix_editing(
 /// The shell allow rule built from the edited prefix, if the prompt has a
 /// non-empty editable prefix that parses to a safe (Exact/Prefix) shell rule.
 /// `None` → no edited prefix in play; the caller falls back to the engine
-/// suggestion. An empty edited prefix also yields `None` (TS: empty → allow
+/// suggestion. An empty edited prefix also yields `None` (empty → allow
 /// once, no rule).
 fn edited_prefix_rule(
     p: &PermissionPromptState,
@@ -108,8 +108,8 @@ pub(crate) fn session_allow_updates(
     current_mode: coco_types::PermissionMode,
 ) -> Vec<coco_types::PermissionUpdate> {
     // Shell tools with an editable prefix: the edited value is authoritative
-    // (replaces the engine suggestion, mirroring TS's editable field). An empty
-    // / unsafe value yields no rule → commit allows once.
+    // (replaces the engine suggestion). An empty / unsafe value yields no
+    // rule → commit allows once.
     if p.prefix_input.is_some() {
         return edited_prefix_rule(p, coco_types::PermissionRuleSource::Session)
             .map(|rule| {
@@ -300,7 +300,7 @@ fn scoped_allow_rule_is_safe(rule: &coco_types::PermissionRule) -> bool {
 /// are scoped-to-a-directory-or-command or not offered at all — never widened
 /// to tool-wide when the path can't be derived (fail-closed). Every other tool
 /// (MCP `mcp__*`, …) has no narrower scope, so it falls back to an exact-tool-
-/// name allow (TS `FallbackPermissionRequest`).
+/// name allow.
 fn tool_requires_scoped_allow(tool_name: &str) -> bool {
     matches!(
         coco_types::ToolName::from_str(tool_name),

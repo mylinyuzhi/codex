@@ -1,5 +1,4 @@
-//! Tests for team-memory path combinators. TS parity:
-//! `memdir/teamMemPaths.test.ts`.
+//! Tests for team-memory path combinators.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -94,8 +93,8 @@ fn key_symlink_escape_rejected() {
 #[test]
 fn key_missing_team_dir_skips_realpath_check() {
     // When team_dir doesn't exist, a symlink escape is impossible
-    // (no symlink can have been planted). TS parity:
-    // `isRealPathWithinTeamDir` returns true on ENOENT.
+    // (no symlink can have been planted); realpath check returns
+    // true on ENOENT.
     let td = TempDir::new().unwrap();
     let team = td.path().join("missing").join("team");
     let resolved = validate_team_mem_key("notes.md", &team).unwrap();

@@ -4,8 +4,6 @@
 //! ```text
 //! Model (AppState) ← Update (handle_command) ← Events ← View (render)
 //! ```
-//!
-//! TS: components/ + screens/ + ink/ + outputStyles/ + services/notifier.ts
 
 // Load locale files at the crate root so the generated `_rust_i18n_t` symbol
 // is visible to every `t!()` call across the crate. See `i18n` module for the

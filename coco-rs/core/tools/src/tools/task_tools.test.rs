@@ -1,11 +1,11 @@
 //! Tests for task_tools.
 //!
-//! TS alignment contracts locked in here:
-//! - TaskStop operates on the running-task registry only (TS `TaskStopTool.ts:60-91`).
+//! Alignment contracts locked in here:
+//! - TaskStop operates on the running-task registry only.
 //!   Plan-item IDs must error; completing/deleting plan items uses `TaskUpdate`.
 //! - TaskOutput operates on the running-task registry only; unknown IDs
-//!   return `{retrieval_status: "not_ready", task: null}` (TS `TaskOutputTool.tsx:53`).
-//! - TaskCreate/Get/List/Update output shapes match TS byte-for-byte.
+//!   return `{retrieval_status: "not_ready", task: null}`.
+//! - TaskCreate/Get/List/Update output shapes are stable.
 
 use super::TaskCreateTool;
 use super::TaskStopTool;
@@ -20,7 +20,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 /// Test double that tracks `kill_task` / `get_task_status` calls and
-/// returns canned results. Exercises the TS-aligned TaskStop/TaskOutput
+/// returns canned results. Exercises the TaskStop/TaskOutput
 /// paths (which only operate on `appState.tasks`, i.e. the running-task
 /// registry).
 #[derive(Default)]
@@ -200,8 +200,8 @@ impl TaskHandle for RecordingTaskHandle {
 // ---------------------------------------------------------------------------
 
 /// TaskStop accepts `task_id` (canonical) and `shell_id` (deprecated
-/// KillShell alias) as equivalent parameter names (TS `z.strictObject`
-/// advertises exactly these two). Missing both is an InvalidInput error.
+/// KillShell alias) as equivalent parameter names. Missing both is an
+/// InvalidInput error.
 #[tokio::test]
 async fn test_task_stop_rejects_missing_id() {
     let ctx = ToolUseContext::test_default();
@@ -216,7 +216,7 @@ async fn test_task_stop_rejects_missing_id() {
 
 /// TaskStop must accept all three alias names when they resolve to a
 /// registered background task. Uses a `RecordingTaskHandle` to stand in
-/// for the running-task registry (TS `appState.tasks`).
+/// for the running-task registry (`appState.tasks`).
 #[tokio::test]
 async fn test_task_stop_accepts_task_id_for_background_task() {
     let handle = RecordingTaskHandle::new();
@@ -254,8 +254,7 @@ async fn test_task_stop_accepts_shell_id_alias() {
     );
 }
 
-/// TS-alignment contract: plan-item IDs (in `utils/tasks.ts` disk
-/// namespace) are NOT valid for TaskStop, which only operates on
+/// Plan-item IDs are NOT valid for TaskStop, which only operates on
 /// running tasks (`appState.tasks`). Must surface as an error so the
 /// model learns to use `TaskUpdate(status=completed|deleted)` instead.
 #[tokio::test]
@@ -286,10 +285,9 @@ async fn test_task_stop_rejects_plan_item_id() {
 /// should be an error JSON payload mentioning "not found".
 #[tokio::test]
 async fn test_task_stop_unknown_id_returns_error() {
-    // R3: unknown ID must surface as a tool error (TS throws Error),
-    // not as a successful ToolResult with an `error` field. The model
-    // perceives the two cases differently — errors trigger retry logic,
-    // successful tool results don't.
+    // R3: unknown ID must surface as a tool error, not as a successful
+    // ToolResult with an `error` field. The model perceives the two cases
+    // differently — errors trigger retry logic, successful results don't.
     let ctx = ToolUseContext::test_default();
     let result = <TaskStopTool as DynTool>::execute(
         &TaskStopTool,
@@ -311,10 +309,9 @@ async fn test_task_stop_unknown_id_returns_error() {
 
 use super::TaskOutputTool;
 
-/// TS-alignment contract: TaskOutput operates on the running-task
-/// registry only (`appState.tasks`). A plan-item id is unknown from
-/// that perspective and must return `{retrieval_status: "not_ready",
-/// task: null}` (TS `TaskOutputTool.tsx:53`).
+/// TaskOutput operates on the running-task registry only
+/// (`appState.tasks`). A plan-item id is unknown from that perspective
+/// and must return `{retrieval_status: "not_ready", task: null}`.
 #[tokio::test]
 async fn test_task_output_returns_null_for_plan_item_id() {
     let ctx = ToolUseContext::test_default();
@@ -336,8 +333,7 @@ async fn test_task_output_returns_null_for_plan_item_id() {
 }
 
 /// TaskOutput resolves output for a registered background task by its
-/// canonical `task_id` (TS `TaskOutputTool.tsx:31` — the only key; no
-/// camelCase alias).
+/// canonical `task_id` (the only key; no camelCase alias).
 #[tokio::test]
 async fn test_task_output_accepts_task_id() {
     let handle = RecordingTaskHandle::new();
@@ -357,7 +353,7 @@ async fn test_task_output_accepts_task_id() {
 }
 
 /// Unknown IDs return a structured error with `retrieval_status: "not_ready"`
-/// and `task: null`, matching TS `TaskOutputTool.tsx:53`.
+/// and `task: null`.
 #[tokio::test]
 async fn test_task_output_unknown_id_returns_error() {
     let ctx = ToolUseContext::test_default();
@@ -382,8 +378,8 @@ async fn test_task_output_rejects_missing_id() {
     assert!(result.is_err());
 }
 
-/// TS `TaskOutputTool.tsx:32` defaults `block: true`. Regression guard:
-/// if we ever flip the default back to false, this test catches it.
+/// `block` defaults to `true`. Regression guard: if we ever flip the
+/// default back to false, this test catches it.
 /// Note: the TODO-task fall-through in test_default always returns
 /// `blocked: false` because TODO tasks can't actually block (they're
 /// synchronous). The default only matters for background tasks via
@@ -400,17 +396,16 @@ fn test_task_output_schema_documents_block_default_true() {
     );
 }
 
-/// TS `TaskOutputTool.tsx:31-33`: `task_id` is required, `timeout` is
-/// `z.number().min(0).max(600000).default(30000)`. Lock the constraints
-/// into the model-facing schema.
+/// `task_id` is required, `timeout` is `0..=600000` defaulting to 30000.
+/// Lock the constraints into the model-facing schema.
 #[test]
 fn test_task_output_schema_required_id_and_timeout_bounds() {
     let schema = <TaskOutputTool as DynTool>::runtime_validation_schema(&TaskOutputTool);
     assert!(
         required_fields(schema.as_value()).contains(&"task_id"),
-        "task_id must be required (TS has no .optional())"
+        "task_id must be required"
     );
-    // No camelCase alias property (TS strictObject has only task_id).
+    // No camelCase alias property (strictObject has only task_id).
     assert!(
         schema.as_value()["properties"].get("taskId").is_none(),
         "TaskOutput must not advertise a taskId alias"
@@ -427,8 +422,8 @@ fn test_task_output_schema_required_id_and_timeout_bounds() {
     );
 }
 
-/// TS `TaskStopTool.ts:11-18` strictObject advertises only `task_id` and
-/// `shell_id` — no camelCase `taskId` alias.
+/// TaskStop advertises only `task_id` and `shell_id` — no camelCase
+/// `taskId` alias.
 #[test]
 fn test_task_stop_schema_has_no_taskid_alias() {
     let schema = <TaskStopTool as DynTool>::runtime_validation_schema(&TaskStopTool);
@@ -467,19 +462,18 @@ async fn test_task_stop_canonical_precedence() {
 }
 
 // ---------------------------------------------------------------------------
-// R4-T7: TodoWriteTool TS-alignment
+// TodoWriteTool
 // ---------------------------------------------------------------------------
 //
-// TS `tools/TodoWriteTool/TodoWriteTool.ts` uses replace-all semantics —
-// the model sends the complete list on every call, prior contents are
-// replaced, and the response returns `{oldTodos, newTodos,
-// verificationNudgeNeeded}`. Each `TodoItem` must have `content`,
+// Uses replace-all semantics — the model sends the complete list on every
+// call, prior contents are replaced, and the response returns `{oldTodos,
+// newTodos, verificationNudgeNeeded}`. Each `TodoItem` must have `content`,
 // `status`, and `activeForm` (min-length 1 each, no `id`). These tests
 // lock in the schema + output shape so regressions are caught early.
 
 use super::TodoWriteTool;
 
-/// Schema must match TS `utils/todo/types.ts::TodoItemSchema`:
+/// Schema requires:
 ///   - items have `content`, `status`, `activeForm` (all required)
 ///   - NO `id` field
 #[test]
@@ -498,9 +492,9 @@ fn test_todo_write_schema_matches_ts() {
     assert!(required_set.contains("content"));
     assert!(required_set.contains("status"));
     assert!(required_set.contains("activeForm"));
-    assert!(!required_set.contains("id"), "TS TodoItem has no id field");
+    assert!(!required_set.contains("id"), "TodoItem has no id field");
 
-    // Status enum matches TS.
+    // Status enum values.
     let status_enum = items["properties"]["status"]["enum"].as_array().unwrap();
     let enum_set: std::collections::HashSet<_> =
         status_enum.iter().filter_map(|v| v.as_str()).collect();
@@ -511,19 +505,19 @@ fn test_todo_write_schema_matches_ts() {
             .collect()
     );
 
-    // TS `TodoItemSchema`: content/activeForm carry `.min(1)`.
+    // content/activeForm carry `.min(1)`.
     assert_eq!(items["properties"]["content"]["minLength"], json!(1));
     assert_eq!(items["properties"]["activeForm"]["minLength"], json!(1));
 
-    // TS `todos` field is required (no `.optional()`/`.default()`).
+    // `todos` field is required.
     assert!(
         required_fields(schema).contains(&"todos"),
         "todos must be a required field"
     );
 }
 
-/// Round-trip: write a todo list, verify the output has TS-shaped
-/// `{oldTodos, newTodos, verificationNudgeNeeded}`.
+/// Round-trip: write a todo list, verify the output has the expected
+/// `{oldTodos, newTodos, verificationNudgeNeeded}` shape.
 #[tokio::test]
 async fn test_todo_write_output_shape_matches_ts() {
     let ctx = ToolUseContext::test_default();
@@ -549,7 +543,7 @@ async fn test_todo_write_output_shape_matches_ts() {
     .await
     .unwrap();
 
-    // TS output keys.
+    // Expected output keys.
     assert!(result.data["oldTodos"].is_array(), "oldTodos missing");
     assert!(result.data["newTodos"].is_array(), "newTodos missing");
     assert!(
@@ -563,11 +557,11 @@ async fn test_todo_write_output_shape_matches_ts() {
     assert_eq!(new_todos[0]["activeForm"], "Writing the tests");
     assert!(
         new_todos[0].get("id").is_none(),
-        "coco-rs must not emit an id field (TS doesn't)"
+        "must not emit an id field"
     );
 }
 
-/// Missing `activeForm` is rejected (TS `min(1)` constraint).
+/// Missing `activeForm` is rejected (`min(1)` constraint).
 #[tokio::test]
 async fn test_todo_write_rejects_missing_active_form() {
     let ctx = ToolUseContext::test_default();
@@ -619,12 +613,12 @@ async fn test_todo_write_rejects_bad_status() {
 }
 
 // ---------------------------------------------------------------------------
-// R5-T10: TS-shaped output schemas for TaskCreate/Get/List/Update/Output
+// Output schemas for TaskCreate/Get/List/Update/Output
 // ---------------------------------------------------------------------------
 //
-// TS task tools return minimal wrapped JSON (`{task: {...}}`,
+// Task tools return minimal wrapped JSON (`{task: {...}}`,
 // `{tasks: [...]}`) so internal fields like `output`, `active_form`,
-// `metadata` never leak to the model. These tests lock in each TS shape.
+// `metadata` never leak to the model. These tests lock in each shape.
 
 use super::TaskGetTool;
 use super::TaskListTool;
@@ -676,7 +670,7 @@ fn test_task_v2_input_schema_required_fields_and_strict_aliases() {
             .is_err(),
         "TaskUpdate taskId is required"
     );
-    // TS `TaskUpdateTool.ts:35` advertises status enum incl. `deleted`.
+    // Status enum includes `deleted`.
     let status_enum: std::collections::HashSet<&str> =
         update_schema.as_value()["properties"]["status"]["enum"]
             .as_array()
@@ -690,7 +684,7 @@ fn test_task_v2_input_schema_required_fields_and_strict_aliases() {
             .into_iter()
             .collect()
     );
-    // An out-of-enum status is rejected at validation (TS `z.enum`).
+    // An out-of-enum status is rejected at validation.
     assert!(
         update_schema
             .validate(&json!({"taskId": "1", "status": "bogus"}))
@@ -1018,8 +1012,8 @@ Set up task dependencies:
 ```
 ";
 
-/// TS `TaskCreateTool.ts:36-43` — output is `{task: {id, subject}}` only.
-/// No description, metadata, owner, etc.
+/// Output is `{task: {id, subject}}` only. No description, metadata,
+/// owner, etc.
 #[tokio::test]
 async fn test_task_create_output_shape_ts() {
     let ctx = ToolUseContext::test_default();
@@ -1054,8 +1048,8 @@ async fn test_task_create_output_shape_ts() {
     assert!(task.get("output").is_none(), "output must not leak");
 }
 
-/// TS `TaskGetTool.ts:20-32` — wrapped `{task: {id, subject, description,
-/// status, blocks, blockedBy} | null}`.
+/// Returns wrapped `{task: {id, subject, description, status, blocks,
+/// blockedBy} | null}`.
 #[tokio::test]
 async fn test_task_get_output_shape_ts() {
     let ctx = ToolUseContext::test_default();
@@ -1088,7 +1082,7 @@ async fn test_task_get_output_shape_ts() {
     assert!(task.get("active_form").is_none());
 }
 
-/// TS `TaskGetTool.ts` — unknown id returns `{task: null}`, not an error.
+/// Unknown id returns `{task: null}`, not an error.
 #[tokio::test]
 async fn test_task_get_unknown_returns_null() {
     let ctx = ToolUseContext::test_default();
@@ -1099,8 +1093,8 @@ async fn test_task_get_unknown_returns_null() {
     assert!(result.data["task"].is_null());
 }
 
-/// TS `TaskListTool.ts:16-28` — `{tasks: [...]}` with 5 fields per entry
-/// (id, subject, status, owner?, blockedBy).
+/// Returns `{tasks: [...]}` with 5 fields per entry (id, subject, status,
+/// owner?, blockedBy).
 #[tokio::test]
 async fn test_task_list_output_shape_ts() {
     let ctx = ToolUseContext::test_default();
@@ -1140,7 +1134,7 @@ async fn test_task_list_output_shape_ts() {
     assert!(ours.get("output").is_none());
 }
 
-/// TS `TaskListTool.ts:68-69` filters tasks whose metadata has `_internal`.
+/// Filters tasks whose metadata has `_internal`.
 #[tokio::test]
 async fn test_task_list_filters_internal_tasks() {
     let ctx = ToolUseContext::test_default();
@@ -1197,8 +1191,7 @@ async fn test_task_list_filters_internal_tasks() {
     );
 }
 
-/// TS `TaskUpdateTool.ts:69-83` — output is
-/// `{success, taskId, updatedFields, statusChange?}`.
+/// Output is `{success, taskId, updatedFields, statusChange?}`.
 #[tokio::test]
 async fn test_task_update_output_shape_ts() {
     let ctx = ToolUseContext::test_default();
@@ -1259,7 +1252,7 @@ async fn test_task_update_unknown_id_shape() {
 // ---------------------------------------------------------------------------
 
 /// TaskCreate returns an `app_state_patch` that fills `plan_tasks`,
-/// sets `expanded_view = Tasks`. Matches TS `TaskCreateTool.ts:116-119`.
+/// sets `expanded_view = Tasks`.
 #[tokio::test]
 async fn test_task_create_emits_snapshot_and_auto_expand() {
     let ctx = ToolUseContext::test_default();
@@ -1351,7 +1344,7 @@ async fn test_todo_write_emits_snapshot_keyed_by_agent() {
 }
 
 /// Plan-item completion is observed via `TaskGet`, not `TaskOutput`.
-/// This locks in the TS-aligned separation: TaskOutput doesn't know
+/// This locks in the separation: TaskOutput doesn't know
 /// about plan items.
 #[tokio::test]
 async fn test_task_get_surfaces_completed_plan_item() {
@@ -1380,7 +1373,7 @@ async fn test_task_get_surfaces_completed_plan_item() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5: TS parity behaviors — deleted status, auto-owner, blockedBy filter,
+// Phase 5: deleted status, auto-owner, blockedBy filter,
 // verification nudge, mailbox notify on owner change.
 // ---------------------------------------------------------------------------
 
@@ -1388,7 +1381,7 @@ use coco_tool_runtime::InboxMessage;
 use coco_tool_runtime::MailboxEnvelope;
 use coco_tool_runtime::MailboxHandle;
 
-/// `status=deleted` permanently removes the task. TS `TaskUpdateTool.ts:213-226`.
+/// `status=deleted` permanently removes the task.
 #[tokio::test]
 async fn test_task_update_delete_status_removes_task() {
     let ctx = ToolUseContext::test_default();
@@ -1419,7 +1412,7 @@ async fn test_task_update_delete_status_removes_task() {
 }
 
 /// TaskList filters resolved blockers from `blockedBy` so the model only
-/// sees currently-active dependencies. TS `TaskListTool.ts:72-83`.
+/// sees currently-active dependencies.
 #[tokio::test]
 async fn test_task_list_filters_resolved_blockers_from_blocked_by() {
     let ctx = ToolUseContext::test_default();
@@ -1491,7 +1484,7 @@ async fn test_task_list_filters_resolved_blockers_from_blocked_by() {
 }
 
 /// Verification nudge fires when main thread closes out 3+ tasks and
-/// none match /verif/i. TS `TaskUpdateTool.ts:334-349`.
+/// none match /verif/i.
 #[tokio::test]
 async fn test_task_update_verification_nudge_main_thread_all_done() {
     let mut ctx = ToolUseContext::test_default();
@@ -1657,7 +1650,7 @@ impl MailboxHandle for RecordingMailbox {
 }
 
 /// Setting an owner in a teammate context writes a `task_assignment`
-/// envelope to the new owner's mailbox. TS `TaskUpdateTool.ts:277-298`.
+/// envelope to the new owner's mailbox.
 #[tokio::test]
 async fn test_task_update_owner_change_writes_mailbox() {
     let mailbox = RecordingMailbox::new();
@@ -1695,8 +1688,7 @@ async fn test_task_update_owner_change_writes_mailbox() {
 }
 
 /// Auto-owner: when a teammate marks a task in_progress without an
-/// explicit owner and the task is unclaimed, the teammate auto-claims
-/// it. TS `TaskUpdateTool.ts:188-199`.
+/// explicit owner and the task is unclaimed, the teammate auto-claims it.
 #[tokio::test]
 async fn test_task_update_auto_owner_on_in_progress() {
     let mailbox = RecordingMailbox::new();
@@ -1774,7 +1766,7 @@ async fn test_task_update_auto_owner_skipped_outside_swarm() {
 }
 
 // ---------------------------------------------------------------------------
-// TodoWrite render_for_model — TS parity with TodoWriteTool.ts
+// TodoWrite render_for_model
 // ---------------------------------------------------------------------------
 
 mod todo_write_render_tests {
@@ -1836,7 +1828,6 @@ mod task_render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        // TS parity: `Task #${id} created successfully: ${subject}`.
         assert_eq!(text, "Task #t-1 created successfully: Investigate auth");
     }
 
@@ -1856,8 +1847,6 @@ mod task_render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        // TS parity: `Task #{id}: {subject}` + Status + Description +
-        // `Blocked by: #id1, #id2`.
         assert!(text.starts_with("Task #t-1: Refactor auth"), "got: {text}");
         assert!(text.contains("Status: in_progress"));
         assert!(text.contains("Description: Replace legacy middleware"));
@@ -1871,7 +1860,6 @@ mod task_render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        // TS: `Task not found` — no trailing period.
         assert_eq!(text, "Task not found");
     }
 
@@ -1882,7 +1870,6 @@ mod task_render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        // TS: `No tasks found`.
         assert_eq!(text, "No tasks found");
     }
 
@@ -1898,7 +1885,7 @@ mod task_render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        // TS shape: `#{id} [{status}] {subject}` per line.
+        // Shape: `#{id} [{status}] {subject}` per line.
         assert!(text.contains("#t-1 [pending] First"), "got: {text}");
         assert!(text.contains("#t-2 [in_progress] Second"), "got: {text}");
     }
@@ -1920,7 +1907,6 @@ mod task_render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        // TS: `#id [status] subject (owner) [blocked by #id1, #id2]`.
         assert_eq!(
             text,
             "#t-3 [pending] Pair task (alice) [blocked by #t-1, #t-2]"
@@ -1940,8 +1926,8 @@ mod task_render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        // TS shape: `Updated task #{id} {fields}` (no `Status: a → b` —
-        // TS doesn't include the status change in the render).
+        // Shape: `Updated task #{id} {fields}` (status change not included
+        // in the render).
         assert_eq!(text, "Updated task #t-1 status, owner");
     }
 
@@ -1965,9 +1951,9 @@ mod task_render_tests {
 
     #[test]
     fn task_update_render_appends_teammate_completed_nudge() {
-        // TS `TaskUpdateTool.ts:386-394`: when a swarm teammate
-        // transitions a task to completed, append the "Call TaskList
-        // now" nudge so the agent picks up downstream work.
+        // When a swarm teammate transitions a task to completed, append
+        // the "Call TaskList now" nudge so the agent picks up downstream
+        // work.
         let data = json!({
             "success": true,
             "taskId": "t-1",
@@ -1989,8 +1975,7 @@ mod task_render_tests {
     fn task_update_render_completed_then_verification_nudges_in_order() {
         // Both nudges fire when a teammate completes their 3rd+ task
         // without verification. Completed nudge precedes verification
-        // nudge in the render output (TS gates the verification
-        // append after the completion text in `TaskUpdateTool.ts:396`).
+        // nudge in the render output.
         let data = json!({
             "success": true,
             "taskId": "t-9",
@@ -2030,7 +2015,6 @@ mod task_render_tests {
 
     #[test]
     fn task_update_render_error_uses_error_field_directly() {
-        // TS: `error || \`Task #${taskId} not found\``.
         let data = json!({
             "success": false,
             "taskId": "t-99",
@@ -2056,8 +2040,8 @@ mod task_render_tests {
 
     #[test]
     fn task_stop_render_uses_default_json_impl() {
-        // TS `TaskStopTool.ts:98-103` emits `jsonStringify(output)` —
-        // matches the trait default exactly. No override.
+        // Emits the full envelope as JSON — matches the trait default
+        // exactly. No override.
         let data = json!({
             "message": "Successfully stopped task: bg-1",
             "task_id": "bg-1",
@@ -2113,13 +2097,12 @@ mod task_render_tests {
         };
         assert!(text.starts_with("<retrieval_status>not_ready</retrieval_status>"));
         assert!(text.contains("<task_id>bg-2</task_id>"));
-        // Empty output is suppressed (TS: `if (data.task.output?.trim())`).
+        // Empty output is suppressed (blank `output` field is not rendered).
         assert!(!text.contains("<output>"), "got: {text}");
     }
 
     #[test]
     fn task_output_render_skips_exit_code_when_absent() {
-        // TS: `exitCode !== undefined && exitCode !== null` gate.
         let data = json!({
             "retrieval_status": "success",
             "task": {
@@ -2140,12 +2123,12 @@ mod task_render_tests {
 
 // ── TaskV2 feature gate ───────────────────────────────────────────────
 //
-// V1/V2 mutual exclusion at tool level (TS `isTodoV2Enabled()` →
-// `isEnabled()` on each tool). When `Feature::TaskV2` is on (default),
-// V2 tools are exposed and TodoWrite is hidden; when off, the inverse.
-// `TaskOutput` and `TaskStop` operate on the background-task namespace
-// (Bash `run_in_background`, agent spawns) and stay enabled either way —
-// they're orthogonal to the V1/V2 plan-item dichotomy.
+// V1/V2 mutual exclusion at tool level. When `Feature::TaskV2` is on
+// (default), V2 tools are exposed and TodoWrite is hidden; when off,
+// the inverse. `TaskOutput` and `TaskStop` operate on the
+// background-task namespace (Bash `run_in_background`, agent spawns)
+// and stay enabled either way — they're orthogonal to the V1/V2
+// plan-item dichotomy.
 
 fn ctx_with_task_v2(enabled: bool) -> ToolUseContext {
     let mut features = coco_types::Features::with_defaults();

@@ -1,12 +1,7 @@
 //! Shared plugin install pipeline for both the slash-command path
 //! (`/plugin install`) and the CLI path (`coco plugin install`).
 //!
-//! TS parity:
-//! - `utils/plugins/pluginInstallationHelpers.ts::installResolvedPlugin`
-//!   — the structured-result core that both wrappers funnel through.
-//!
-//! The full TS pipeline runs **five** steps; this port runs all five so
-//! both Rust callers observe the same semantics as TS:
+//! Pipeline runs **five** steps:
 //!
 //! 1. **Policy guard** (root) — enterprise blocklist / allowlist.
 //! 2. **Dependency closure** — DFS via [`crate::dependency::resolve_dependency_closure`].
@@ -53,8 +48,7 @@ pub struct InstallOutcome {
     pub plugin_name: String,
     /// Closure resolved during install (always includes the root).
     pub closure: Vec<PluginId>,
-    /// Suffix string for install-success messages (`" (+ 2 dependencies)"`) —
-    /// TS `formatDependencyCountSuffix`.
+    /// Suffix string for install-success messages (`" (+ 2 dependencies)"`).
     pub dep_note: String,
 }
 
@@ -92,8 +86,7 @@ pub enum InstallError {
     },
 
     /// Dependency resolution failed (cycle / cross-marketplace / not
-    /// found). The string is shaped for direct user display — mirrors
-    /// TS `formatResolutionError`.
+    /// found). The string is shaped for direct user display.
     #[error("{0}")]
     ResolutionFailed(String),
 
@@ -108,9 +101,8 @@ pub enum InstallError {
 
 /// Parse `<name>[@<marketplace>]` into the pair the resolver expects.
 ///
-/// Mirrors TS `parsePluginIdentifier` for the install path. Trim is
-/// applied so users can paste copy-with-whitespace identifiers without
-/// surprises.
+/// Trim is applied so users can paste copy-with-whitespace identifiers
+/// without surprises.
 pub(crate) fn parse_install_target(target: &str) -> (String, Option<String>) {
     let trimmed = target.trim();
     match trimmed.split_once('@') {
@@ -121,7 +113,7 @@ pub(crate) fn parse_install_target(target: &str) -> (String, Option<String>) {
 
 /// Drive the shared install pipeline.
 ///
-/// Steps (TS parity: `installResolvedPlugin`):
+/// Steps:
 /// 1. Resolve `target` to `(marketplace_name, entry)`.
 /// 2. Check root against `policy`.
 /// 3. Resolve transitive dependency closure.
@@ -130,9 +122,7 @@ pub(crate) fn parse_install_target(target: &str) -> (String, Option<String>) {
 /// 6. Cache + register each closure member.
 ///
 /// `settings_dir` is the directory containing `settings.json` to update
-/// (typically `~/.coco`). When `None`, the settings write is skipped —
-/// this is the slash-command path during tests that don't want to
-/// touch real settings. TS always writes; we make it explicit.
+/// (typically `~/.coco`). When `None`, the settings write is skipped.
 pub async fn install_plugin_from_marketplace(
     plugins_dir: &Path,
     settings_dir: Option<&Path>,
@@ -281,8 +271,7 @@ pub async fn install_plugin_from_marketplace(
         }
     }
 
-    // TS `pluginInstallationHelpers.ts`: depNote = formatDependencyCountSuffix(
-    // closure.filter(id => id !== pluginId)).
+    // depNote = formatDependencyCountSuffix(closure excluding root).
     let installed_deps: Vec<PluginId> = closure
         .iter()
         .filter(|id| *id != &root_id)
@@ -413,8 +402,8 @@ pub fn read_plugin_enabled(settings_dir: &Path, plugin_id: &PluginId) -> Option<
 
 /// Set `enabled_plugins[<id>] = { "enabled": <enabled> }` in settings.json,
 /// preserving every other field. This is the single source of truth the loader
-/// and policy layer read (TS `setPluginEnabledOp`), so `/plugin enable|disable`
-/// and the install path write the same place.
+/// and policy layer read, so `/plugin enable|disable` and the install path
+/// write the same place.
 pub fn set_plugin_enabled(
     settings_dir: &Path,
     plugin_id: &PluginId,
@@ -463,7 +452,7 @@ fn policy_reason(verdict: &PolicyVerdict) -> String {
     }
 }
 
-/// TS `formatResolutionError`. Errors render in display-ready form.
+/// Format a resolution error for display.
 fn format_resolution(r: &ResolutionResult) -> String {
     match r {
         ResolutionResult::Cycle { chain } => format!(

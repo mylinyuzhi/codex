@@ -8,14 +8,6 @@
 //! duration of the body. The matching no-lock read used inside the
 //! critical section lives in [`read_messages_no_lock`].
 //!
-//! TS parity: `proper-lockfile` configured at `teammateMailbox.ts:36-41`
-//! with `minTimeout: 5, maxTimeout: 100` (exponential between the two).
-//! We use the same delay envelope with 30 attempts, matching this crate's
-//! documented mailbox invariant and giving native test/process bursts
-//! enough turns to drain. Jitter (`[0.5×, 1.5×)`) is added on each backoff
-//! to break thundering-herd wake-ups when many writers contend — TS's
-//! `proper-lockfile` does this internally via `randomize: true` (default).
-
 use super::io::TeammateMessage;
 
 /// Run `body` while holding an exclusive advisory lock on a sidecar

@@ -23,8 +23,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
-/// SDK hook callback output. Mirrors TS `hookJSONOutputSchema` —
-/// a flat object whose `async` field discriminates async-mode.
+/// SDK hook callback output — a flat object whose `async` field
+/// discriminates async-mode.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,9 +108,8 @@ pub enum ElicitationAction {
 
 /// Event-specific hook output. Tagged by `hookEventName`.
 ///
-/// Mirrors TS per-event `hookSpecificOutputSchema*`. Variants cover
-/// every TS `HOOK_EVENT` value that can carry structured fields back
-/// to the agent.
+/// Variants cover every `HOOK_EVENT` value that can carry structured
+/// fields back to the agent.
 ///
 /// Each variant carries `rename_all = "camelCase"` so its inner fields
 /// match the TS canonical wire shape (`permissionDecision`,

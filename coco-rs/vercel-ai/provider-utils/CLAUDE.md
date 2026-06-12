@@ -2,9 +2,9 @@
 
 Shared utilities for implementing AI SDK v4 providers. Depends only on `vercel-ai-provider` for types.
 
-## TS Source
+## SDK Spec
 
-Ports `@ai-sdk/provider-utils` v4 (not from `claude-code/src/`).
+Implements the `@ai-sdk/provider-utils` v4 specification.
 
 ## Key Types
 
@@ -30,14 +30,13 @@ IDs / timing / encoding: `generate_id`, `delay`, `parse_retry_after`, `convert_b
 - Errors propagate as `AISdkError` from provider crate.
 - Header handling canonicalizes keys via `normalize_headers` before combining.
 
-## Coco-rs-specific deviations from `@ai-sdk/provider-utils` TS spec
+## Coco-rs-specific deviations from the spec
 
 - **`json_repair` module** — `parse_with_repair` /
   `parse_tool_arguments_or_empty` wrapping the third-party `llm_json`
   crate (markdown fence stripping, single-quote → double-quote,
   trailing-comma fix, Python-literal mapping, truncation completion).
-  Not in the TS spec — TS Claude Code uses bare `JSON.parse` and
-  silently falls back to `{}` on failure. coco-rs adds aggressive
+  Not in the spec — coco-rs adds aggressive
   repair because it targets diverse OpenAI-compatible endpoints
   (GLM, Doubao, DeepSeek, Groq, xAI, Ollama) whose tool-call
   `arguments` strings are messier than first-party Anthropic /

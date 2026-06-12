@@ -1,17 +1,14 @@
 //! Parallel generator orchestration with per-generator timeout.
 //!
-//! Mirrors TS `getAttachments` (`attachments.ts:743-1003`): each generator is
-//! a candidate, filtered by tier + config + throttle, and all survivors run
-//! concurrently under a 1000ms AbortController (TS `attachments.ts:767`).
-//! Generators that time out or return `Err` contribute zero reminders; the
-//! turn always proceeds.
+//! Each generator is a candidate, filtered by tier + config + throttle, and
+//! all survivors run concurrently under a 1000ms batch timeout. Generators
+//! that time out or return `Err` contribute zero reminders; the turn always
+//! proceeds.
 //!
-//! TS uses a single shared AbortController for the whole batch — when 1000ms
-//! elapses, every still-running generator is aborted simultaneously. We mirror
-//! that with a top-level [`tokio::time::timeout`] around `join_all`. The
-//! per-generator timeout is kept as a 2x safety net so a hung generator
-//! cannot wedge the batch indefinitely if for some reason the join_all
-//! polling stalls.
+//! A top-level [`tokio::time::timeout`] around `join_all` aborts the whole
+//! batch simultaneously when the deadline elapses. The per-generator timeout
+//! is kept as a 2x safety net so a hung generator cannot wedge the batch
+//! indefinitely if the join_all polling stalls.
 //!
 //! Gate order (each must pass):
 //!
@@ -87,7 +84,7 @@ impl SystemReminderOrchestrator {
         self.generators.push(g);
     }
 
-    /// Register all built-in generators in TS return order:
+    /// Register all built-in generators in injection order:
     /// user-input batch, all-thread batch, then main-thread batch.
     ///
     /// Engine callers use this in preference to hand-wiring each generator.
@@ -116,18 +113,17 @@ impl SystemReminderOrchestrator {
             VerifyPlanReminderGenerator,
         };
 
-        // TS userInputAttachments (`attachments.ts:773-814`).
+        // UserInput batch.
         self.add_generator(Arc::new(AtMentionedFilesGenerator));
         self.add_generator(Arc::new(McpResourcesGenerator));
         self.add_generator(Arc::new(AgentMentionsGenerator));
         // Audit-add — UserPrompt tier.
         self.add_generator(Arc::new(SkillDiscoveryGenerator));
 
-        // TS allThreadAttachments (`attachments.ts:822-941`), plus
-        // relevant_memories which TS prefetches outside getAttachments but
-        // renders through the same reminder path.
+        // All-thread batch, plus relevant_memories which is prefetched
+        // outside the main attachment loop but renders through the same path.
         self.add_generator(Arc::new(DateChangeGenerator));
-        // TS `prependUserContext` baseline (currentDate); fires every turn.
+        // `prependUserContext` baseline (currentDate); fires every turn.
         self.add_generator(Arc::new(UserContextGenerator));
         self.add_generator(Arc::new(UltrathinkEffortGenerator));
         self.add_generator(Arc::new(DeferredToolsDeltaGenerator));
@@ -150,8 +146,8 @@ impl SystemReminderOrchestrator {
         self.add_generator(Arc::new(CriticalSystemReminderGenerator));
         self.add_generator(Arc::new(CompactionReminderGenerator));
 
-        // TS mainThreadAttachments (`attachments.ts:944-995`) plus hook
-        // attachments produced by hook executors and rendered here.
+        // Main-thread batch, plus hook attachments produced by hook executors
+        // and rendered here.
         self.add_generator(Arc::new(IdeSelectionGenerator));
         self.add_generator(Arc::new(IdeOpenedFileGenerator));
         self.add_generator(Arc::new(OutputStyleGenerator));
@@ -283,9 +279,8 @@ impl SystemReminderOrchestrator {
             .map(|g| run_one_generator(Arc::clone(g), per_generator_timeout, ctx_ref));
         let join = future::join_all(futures);
 
-        // Top-level batch timeout matching TS's single AbortController. When
-        // it fires, generators still in flight are dropped (and thus
-        // cancelled) and we return whatever finished in time.
+        // Top-level batch timeout. When it fires, generators still in flight
+        // are dropped (cancelled) and we return whatever finished in time.
         let results: Vec<Option<(crate::types::AttachmentType, SystemReminder)>> =
             match tokio::time::timeout(batch_timeout, join).await {
                 Ok(out) => out,

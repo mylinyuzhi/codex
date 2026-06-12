@@ -1,15 +1,13 @@
 //! Background AgentTool spawn resume.
 //!
-//! TS: `tools/AgentTool/resumeAgent.ts::resumeAgentBackground`.
 //! Reads the per-agent JSONL transcript + `meta.json` sidecar,
 //! reconstructs `fork_context_messages` from the persisted history,
 //! and dispatches a fresh background spawn that picks up where the
 //! original left off.
 //!
-//! TS doesn't recover the streaming connection either — only the
-//! conversation history, which IS recoverable. The resumed spawn gets a
-//! NEW `agent_id` / `task_id`; the model sees an `AsyncLaunched` response
-//! just like a fresh spawn.
+//! Only the conversation history is recoverable — not the streaming
+//! connection. The resumed spawn gets a NEW `agent_id` / `task_id`;
+//! the model sees an `AsyncLaunched` response just like a fresh spawn.
 
 use coco_tool_runtime::AgentSpawnRequest;
 use coco_tool_runtime::AgentSpawnResponse;
@@ -58,14 +56,13 @@ impl SwarmAgentHandle {
 
         // Strip unresolved tool uses + orphaned thinking + whitespace-only
         // assistant messages so the resumed spawn doesn't trip on a partial
-        // conversation. TS parity: `resumeAgent.ts:70-74` chains the same
-        // three filters. Storage now hands back typed `Arc<Message>`, so
+        // conversation. Storage now hands back typed `Arc<Message>`, so
         // the filter pass walks the same Arcs the engine will see — no
         // Value → Message round-trip at this seam.
         let filtered = coco_subagent::filter_transcript(&prior_messages);
 
         // If the worktree directory was removed out from under us, fall
-        // back to the parent's cwd. TS parity: `resumeAgent.ts:82-92`.
+        // back to the parent's cwd.
         let cwd_override = match meta.worktree_path.as_deref() {
             Some(path) if std::path::Path::new(path).is_dir() => {
                 Some(std::path::PathBuf::from(path))

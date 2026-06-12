@@ -4,7 +4,7 @@
 //! ## Why this module exists
 //!
 //! Two crates (`coco-messages` and `coco-compact`) need to chain
-//! TS-parity in-place mutating passes (filter / merge / strip etc.) over
+//! in-place mutating passes (filter / merge / strip etc.) over
 //! `Vec<Arc<Message>>` history snapshots. Without a canonical wrapper
 //! each call site reinvents the same `let owned = ...; mutate; re-wrap`
 //! boilerplate, plus an ad-hoc "would any pass mutate?" predicate to
@@ -34,13 +34,12 @@
 //! `apply`s in caller-specified order, and re-wraps into a fresh
 //! Arc-vec.
 //!
-//! ## TS parity
+//! ## Pipeline shape
 //!
-//! Mirrors TS `utils/messages.ts:2255-2343` (`normalizeMessagesForAPI`)
-//! and `services/compact/compact.ts:144` (`stripImagesFromMessages` →
-//! `stripReinjectedAttachments` chain). Each TS in-place pass maps 1:1
-//! to a Rust [`MessagePass`] impl; the explicit Rust pipeline mirrors
-//! the TS `array.filter().map()` chain shape.
+//! Each in-place pass maps 1:1 to a Rust [`MessagePass`] impl; the
+//! explicit pipeline mirrors the `array.filter().map()` chain shape of
+//! `normalizeMessagesForAPI` and the `stripImagesFromMessages` →
+//! `stripReinjectedAttachments` chain in compact.
 
 use std::sync::Arc;
 
@@ -81,8 +80,8 @@ pub trait MessagePass {
 /// refs and short-circuit cheaply.
 ///
 /// When `false`: returns `input.to_vec()` — N×`Arc::clone`, zero
-/// `Message::clone`. Mirrors TS's "shallow array copy of unchanged
-/// object refs".
+/// `Message::clone`. Equivalent to a shallow array copy of unchanged
+/// object refs.
 ///
 /// When `true`: materializes one owned `Vec<Message>`, hands it to
 /// `apply_all` (which calls each pass's `apply` in order), then

@@ -77,13 +77,13 @@ fn test_micro_compact_floors_keep_recent_to_one_and_clears_short_old_result() {
 }
 
 #[test]
-fn test_micro_compact_ignores_non_ts_compactable_custom_tools() {
+fn test_micro_compact_ignores_non_compactable_custom_tools() {
     let mut messages = vec![
         make_assistant_tool_call("custom_1", "CustomTool"),
         make_tool_result(
             "custom_1",
             ToolId::Custom("CustomTool".to_string()),
-            "custom output that TS would not microcompact",
+            "custom output that should not be microcompacted",
         ),
         make_assistant_tool_call("read_1", ToolName::Read.as_str()),
         make_tool_result(

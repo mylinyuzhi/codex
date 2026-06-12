@@ -44,9 +44,8 @@ impl fmt::Display for ShutdownReason {
 /// system rejects illegal combinations at compile time (e.g.
 /// `RestoreType` cannot leak into the `AutoRestore` path).
 ///
-/// TS parity: there is no single TS analogue; this consolidates the
-/// React-side `rewindConversationTo()` (explicit) and the cancel-on-
-/// empty-input auto-restore branch in `REPL.tsx:3010-3022`.
+/// Consolidates the explicit `rewindConversationTo()` flow and the
+/// cancel-on-empty-input auto-restore branch.
 #[derive(Debug, Clone)]
 pub enum RewindMode {
     /// Explicit `/rewind` flow from the picker. May restore files,
@@ -55,9 +54,8 @@ pub enum RewindMode {
     Explicit {
         restore_type: crate::state::rewind::RestoreType,
         /// 1-based turn number the user picked, for the protocol-level
-        /// `rewind/completed` notification. TS doesn't carry this
-        /// (renders on the React side); coco-rs threads it through so
-        /// SDK consumers see it without a second query.
+        /// `rewind/completed` notification. Threaded through so SDK
+        /// consumers see it without a second query.
         rewound_turn: i32,
     },
     /// TUI auto-restore on cancel-with-empty-input at a lossless tail
@@ -95,8 +93,8 @@ pub enum UserCommand {
     /// already stripped the leading `!`; the engine bridge in
     /// `tui_runner` runs the command via `coco_shell::ShellExecutor`
     /// and pushes a `SystemMessage::LocalCommand` (input + output) onto
-    /// the engine transcript via `history_push_and_emit`. TS parity:
-    /// `LocalShellTask.tsx` — bypasses the model loop entirely.
+    /// the engine transcript via `history_push_and_emit`. Bypasses the
+    /// model loop entirely.
     SubmitBash {
         /// User-message UUID minted at submit time so the BashInput
         /// and BashOutput messages can share a parent id for rewind.
@@ -146,9 +144,6 @@ pub enum UserCommand {
         /// picker selections, file-history snapshots, and the JSONL
         /// transcript line up.
         ///
-        /// TS parity: `screens/REPL.tsx`'s `onSubmit` mints
-        /// `randomUUID()` once via `createUserMessage()` before the
-        /// engine sees the message.
         user_message_id: String,
         /// Resolved text content (paste pills expanded, image pills removed).
         content: String,
@@ -166,8 +161,7 @@ pub enum UserCommand {
     /// existing `TaskCompleted` event then folds the row out of the UI.
     ///
     /// Wired from the `/agents` dialog's Running tab when the user
-    /// presses `X` on the highlighted row (TS parity: `V24.js:59-82` —
-    /// `X` triggers `V.abortController?.abort()`).
+    /// presses `X` on the highlighted row.
     CancelSubagent {
         /// `TaskStateBase.id` of the running subagent invocation.
         task_id: String,
@@ -200,15 +194,14 @@ pub enum UserCommand {
     /// bridge:
     ///   1. resolves the target directory (`~/.coco/agents` or
     ///      `<cwd>/.coco/agents`),
-    ///   2. writes a TS-aligned markdown template with the wizard
+    ///   2. writes a markdown template with the wizard
     ///      inputs in the frontmatter,
     ///   3. dispatches the existing `$EDITOR` flow on the new file so
     ///      the user can fine-tune body / tools / model / color,
     ///   4. on editor exit, reloads the agent catalog and refreshes
     ///      the dialog payload.
     ///
-    /// Mirrors TS `CreateAgentWizard` confirmation (`screens/agents/
-    /// new-agent-creation/ConfirmStepWrapper.tsx:140-160`).
+    /// Finalizes the new-agent creation wizard.
     CreateAgent {
         /// Canonical agent identifier (validated by
         /// `coco_tui::state::validate_agent_name`).
@@ -227,8 +220,8 @@ pub enum UserCommand {
     /// The CLI applies it to the live engine config, persists it to the
     /// destination settings file (User / Project / Local), then re-emits
     /// `OpenPermissionsEditor` so the open overlay refreshes in place.
-    /// Mirrors the `ApprovalResponse` "Always Allow" persist path, but
-    /// the editor lets the user pick any of the three writable scopes.
+    /// Like the "Always Allow" persist path, but the editor lets the
+    /// user pick any of the three writable scopes.
     ApplyPermissionUpdate { update: PermissionUpdate },
     /// Leader → teammate: set a teammate's permission mode from the teams
     /// roster picker (gap 8). Routed to `AgentHandle::set_teammate_mode`,
@@ -262,26 +255,19 @@ pub enum UserCommand {
         effort: Option<coco_types::ReasoningEffort>,
     },
     /// Respond to a permission prompt.
-    ///
-    /// TS: `onAllow(updatedInput, permissionUpdates, feedback, contentBlocks)`
-    /// and `onReject(feedback, contentBlocks)`.
     ApprovalResponse {
         request_id: String,
         approved: bool,
         always_allow: bool,
         /// User feedback explaining their decision (why they approved/denied).
-        /// TS: `acceptFeedback` / `rejectFeedback`
         feedback: Option<String>,
         /// Modified tool input (user edited the command/path before approving).
-        /// TS: `updatedInput`
         updated_input: Option<serde_json::Value>,
-        /// Permission rules to persist from this decision.
-        /// TS: `permissionUpdates` (suggestions the user accepted)
+        /// Permission rules to persist from this decision (suggestions the user accepted).
         permission_updates: Vec<PermissionUpdate>,
         /// Optional content blocks (image attachments etc.) the user
-        /// pasted alongside the answer. TS: `contentBlocks` — 4th arg
-        /// of `onAllow` / 2nd arg of `onReject`. Today no TUI gesture
-        /// emits this; SDK clients ship via `ApprovalResolveParams.content_blocks`.
+        /// pasted alongside the answer. Today no TUI gesture emits this;
+        /// SDK clients ship via `ApprovalResolveParams.content_blocks`.
         content_blocks: Option<Vec<serde_json::Value>>,
     },
     /// Execute a skill by name.
@@ -343,8 +329,7 @@ pub enum UserCommand {
     ToggleFastMode,
     /// Trigger manual compaction. Optional `custom_instructions` carry
     /// any text after `/compact` so the LLM summarizer prompt can honor
-    /// the user's focus directive. TS: `commands/compact/compact.ts:40`
-    /// passes `args.trim()` as `customInstructions`.
+    /// the user's focus directive.
     Compact { custom_instructions: Option<String> },
     /// Rewind to an earlier user message.
     ///
@@ -353,7 +338,6 @@ pub enum UserCommand {
     /// "auto-restore never touches files" invariant is enforced by
     /// the type system, not by separate command variants.
     ///
-    /// TS: rewindConversationTo() + fileHistoryRewind() in REPL.tsx.
     /// See `engine-tui-unified-transcript-plan.md` §4.2 / §7.4.
     Rewind {
         message_id: String,
@@ -362,24 +346,21 @@ pub enum UserCommand {
     /// Lazily fetch the LLM risk explanation for a permission prompt (the user
     /// toggled the Ctrl+E explainer panel). The runner runs the explainer via
     /// the session SideQuery handle and replies with
-    /// `TuiOnlyEvent::PermissionExplanationReady`. TS: `confirm:toggleExplanation`
-    /// → `generatePermissionExplanation`.
+    /// `TuiOnlyEvent::PermissionExplanationReady`.
     RequestPermissionExplanation {
         request_id: String,
         tool_name: String,
         tool_input: serde_json::Value,
     },
     /// Request selected-message restore diff stats.
-    /// TS: fileHistoryGetDiffStats() before showing restore options.
     RequestDiffStats { message_id: String },
     /// Request file-history availability for every real rewind row on
-    /// picker open. Keeps TS's per-candidate async load semantics
-    /// without dropping rows on the bounded command channel.
+    /// picker open. Keeps per-candidate async load semantics without
+    /// dropping rows on the bounded command channel.
     RequestDiffStatsBatch { message_ids: Vec<String> },
     /// Team lead responding to a teammate's plan-approval request.
     /// The engine routes this to the teammate's mailbox as a
-    /// `plan_approval_response` envelope. TS: the response side of
-    /// `ExitPlanModeV2Tool.ts:137-141` request flow.
+    /// `plan_approval_response` envelope.
     PlanApprovalResponse {
         request_id: String,
         /// Teammate agent name to address the response envelope to —
@@ -395,12 +376,10 @@ pub enum UserCommand {
     /// Shutdown the application.
     Shutdown { reason: ShutdownReason },
     /// Fire an `idle_prompt` Notification hook. The TUI emits this
-    /// once per turn-completion epoch when the user has been idle
-    /// past the configured threshold. TS parity:
-    /// `screens/REPL.tsx:3934-3937` (`sendNotification({
-    /// notificationType: 'idle_prompt' })`). The runtime translates
-    /// this into a `coco_hooks::orchestration::execute_notification`
-    /// call so registered `Notification` hooks can react.
+    /// once per turn-completion epoch when the user has been idle past
+    /// the configured threshold. The runtime translates this into a
+    /// `coco_hooks::orchestration::execute_notification` call so
+    /// registered `Notification` hooks can react.
     FireIdleNotification { message: String },
     /// Push a TUI-originated system message into engine `MessageHistory`.
     /// The engine handler constructs the matching
@@ -410,9 +389,9 @@ pub enum UserCommand {
     PushSystemMessage { kind: SystemPushKind },
     /// Push pre-built slash-command transcript messages (echo + result)
     /// into engine `MessageHistory`. Unlike [`Self::PushSystemMessage`],
-    /// these are `Message::User` envelopes carrying TS-faithful command
-    /// tags; they are `is_visible_in_transcript_only` (rendered `❯`/`⎿` but
-    /// not sent to the model — slash commands are user↔tool interactions).
+    /// these are `Message::User` envelopes with command tags; they are
+    /// `is_visible_in_transcript_only` (rendered `❯`/`⎿` but not sent
+    /// to the model — slash commands are user↔tool interactions).
     /// Built via `coco_messages::build_slash_command_messages` so the TUI
     /// owns the localized text while the engine stays the transcript authority.
     PushSlashResult {

@@ -82,13 +82,12 @@ async fn collect_emits_snapshot_post_compact_for_running() {
     );
 }
 
-/// TS parity (`compact.ts:1576-1583` `createAsyncAgentAttachmentsIfNeeded`):
-/// the post-compact reminder MUST include terminal LocalAgent tasks
+/// The post-compact reminder MUST include terminal LocalAgent tasks
 /// (Completed / Failed / Killed) whose `<task-notification>` envelope
 /// was wiped from the CommandQueue by compaction. The render path at
 /// `coco_system_reminder::generators::task_status::render_one` dispatches
 /// per-status — running, killed, completed/failed all produce model-
-/// visible text (`messages.ts:3954-4024`).
+/// visible text.
 #[tokio::test]
 async fn collect_includes_terminal_tasks_post_compact() {
     let mgr = TaskManager::new();
@@ -131,9 +130,8 @@ async fn collect_includes_terminal_tasks_post_compact() {
     ));
 }
 
-/// TS parity (`compact.ts:1579`): Pending tasks are filtered out —
-/// the model spawned them but they haven't started running yet, so
-/// there's nothing to report.
+/// Pending tasks are filtered out — the model spawned them but they
+/// haven't started running yet, so there's nothing to report.
 #[tokio::test]
 async fn collect_skips_pending_tasks_post_compact() {
     let mgr = TaskManager::new();
@@ -147,7 +145,7 @@ async fn collect_skips_pending_tasks_post_compact() {
 
 #[tokio::test]
 async fn status_mapping_collapses_5_to_4() {
-    // TS has 5 statuses (Task.ts:15-21); the reminder generator
+    // 5 statuses exist; the reminder generator
     // dispatches on 4 (Pending/Running both render as Running).
     assert!(matches!(
         map_status(coco_types::TaskStatus::Completed),

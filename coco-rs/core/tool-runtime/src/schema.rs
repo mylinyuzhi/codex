@@ -4,11 +4,10 @@
 //! (runtime validation via [`ToolInputSchema::validate`]), built ONCE at
 //! construction.
 //!
-//! TS parity: `services/tools/toolExecution.ts:614` validates model input
-//! against the tool's full Zod schema (`tool.inputSchema.safeParse`) — both on
+//! Validates model input against the tool's full schema — both on
 //! pre-execution validation AND on re-validation after a PreToolUse hook
 //! rewrites the input (`tool_call_preparer.rs`). [`ToolInputSchema::validate`]
-//! is the Rust equivalent: sync, lock-free, classification-identical.
+//! is sync, lock-free, and classification-identical.
 //!
 //! ## Construction
 //!
@@ -270,7 +269,7 @@ macro_rules! impl_runtime_schema {
 /// Structured form of a JSON Schema validation issue, captured at the
 /// `core/tool-runtime` boundary so higher layers
 /// (`app/query::tool_input_validate::format_schema_error`) can produce
-/// TS-parity error text without depending on `jsonschema` directly.
+/// the error text without depending on `jsonschema` directly.
 ///
 /// Each variant maps onto a `formatZodValidationError`
 /// (`utils/toolErrors.ts:66-130`) output line.
@@ -368,9 +367,9 @@ fn json_type_name(value: &Value) -> &'static str {
     }
 }
 
-/// Format a slice of [`SchemaIssue`]s into the TS-parity error body.
+/// Format a slice of [`SchemaIssue`]s into the error body.
 ///
-/// Mirrors `formatZodValidationError` (`utils/toolErrors.ts:66-130`):
+/// Mirrors the structure of `formatZodValidationError`:
 /// the body is `"{tool} failed due to the following {issue|issues}:\n{lines}"`,
 /// each line maps onto one of three patterns:
 ///
@@ -380,8 +379,7 @@ fn json_type_name(value: &Value) -> &'static str {
 /// - `Other` → falls through to the raw `jsonschema` message,
 ///   prefixed with the path when present.
 ///
-/// Plural / singular selection follows the TS code: ≥2 lines → `"issues"`,
-/// otherwise `"issue"`.
+/// Plural / singular selection: ≥2 lines → `"issues"`, otherwise `"issue"`.
 pub fn format_schema_error(tool_name: &str, issues: &[SchemaIssue]) -> String {
     if issues.is_empty() {
         return format!("{tool_name} failed schema validation");
@@ -426,8 +424,7 @@ pub fn format_schema_error(tool_name: &str, issues: &[SchemaIssue]) -> String {
 
 /// Stitch a parent path + field name into a single user-readable
 /// path. `jsonschema` returns paths as JSON Pointers (`/foo/0/bar`);
-/// we convert to dotted+bracket form (`foo[0].bar`) to match the TS
-/// `formatValidationPath` output.
+/// we convert to dotted+bracket form (`foo[0].bar`).
 fn join_path(parent: &str, field: &str) -> String {
     let parent = display_path(parent);
     if parent.is_empty() {

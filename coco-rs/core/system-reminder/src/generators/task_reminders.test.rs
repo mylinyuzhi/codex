@@ -11,7 +11,7 @@ fn cfg() -> SystemReminderConfig {
     SystemReminderConfig::default()
 }
 
-/// Default "tools" list used by the emit-path tests. Matches the TS gate:
+/// Default "tools" list used by the emit-path tests.
 /// TaskUpdate must be present, Brief must be absent.
 fn tools_with_task_update() -> Vec<String> {
     vec![ToolName::TaskUpdate.as_str().to_string()]
@@ -51,7 +51,7 @@ async fn skips_when_v2_disabled() {
 
 #[tokio::test]
 async fn skips_when_brief_tool_present() {
-    // TS parity: Brief tool is the primary I/O channel → suppress the nag.
+    // Brief tool is the primary I/O channel → suppress the nag.
     let c = cfg();
     let ctx = GeneratorContext::builder(&c)
         .tools(vec![
@@ -73,7 +73,7 @@ async fn skips_when_brief_tool_present() {
 
 #[tokio::test]
 async fn skips_when_task_update_tool_absent() {
-    // TS parity: `TASK_UPDATE_TOOL_NAME` must be in the registry.
+    // `TASK_UPDATE_TOOL_NAME` must be in the registry.
     let c = cfg();
     let ctx = GeneratorContext::builder(&c)
         .tools(vec![ToolName::Read.as_str().to_string()])
@@ -204,7 +204,7 @@ async fn non_empty_tasks_format_matches_ts_id_status_subject() {
         .unwrap()
         .unwrap();
     let text = r.content().unwrap();
-    // TS: "#${id}. [${status}] ${subject}" joined by newlines.
+    // Format: "#${id}. [${status}] ${subject}" joined by newlines.
     assert!(text.contains("#42. [in_progress] Fix auth"));
     assert!(text.contains("#43. [pending] Write tests"));
 }
@@ -216,7 +216,7 @@ async fn respects_config_flag() {
     assert!(!TaskRemindersGenerator.is_enabled(&c));
 }
 
-// ── Trailing-newline byte parity (TS messages.ts:3680-3690) ──
+// ── Trailing-newline ──
 
 #[test]
 fn empty_body_has_trailing_newline() {

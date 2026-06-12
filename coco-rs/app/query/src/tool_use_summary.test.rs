@@ -170,21 +170,19 @@ fn multi_tool_batch_separates_with_double_newline() {
 fn truncate_json_non_serializable_returns_placeholder() {
     // serde_json can serialize everything, but as a defense against
     // future Value types, the function returns a placeholder rather
-    // than panicking. Mirrors TS `catch { return '[unable to serialize]' }`.
-    // No direct way to construct a non-serializable Value, so we just
-    // assert the happy path for now and rely on the type system.
+    // than panicking. No direct way to construct a non-serializable
+    // Value, so we just assert the happy path for now and rely on the
+    // type system.
     let v = json!({"k": "v"});
     let s = truncate_json(&v, 300);
     assert!(s.contains('k'));
 }
 
 #[test]
-fn system_prompt_is_byte_for_byte_ts_port() {
-    // Lock the byte-for-byte port. TS source:
-    // services/toolUseSummary/toolUseSummaryGenerator.ts:15-24
-    // Any drift here would change Fast-tier model behavior across the
-    // TS↔Rust port — the test exists so that mismatch is caught at CI,
-    // not at runtime.
+fn system_prompt_is_stable() {
+    // Lock the system prompt content. Any drift would change Fast-tier
+    // model behavior — the test exists so that mismatch is caught at
+    // CI, not at runtime.
     assert!(
         TOOL_USE_SUMMARY_SYSTEM_PROMPT.starts_with(
             "Write a short summary label describing what these tool calls accomplished."
@@ -286,8 +284,7 @@ mod build_input_tests {
 
     #[test]
     fn last_text_block_wins_for_multi_text_assistant() {
-        // TS semantics: textBlocks.at(-1) — final text block is the
-        // "user intent" snippet for the summary prompt.
+        // Final text block is the "user intent" snippet for the summary prompt.
         let assistant = assistant_with(vec![
             AssistantContentPart::text("first thought"),
             AssistantContentPart::text("final commentary"),

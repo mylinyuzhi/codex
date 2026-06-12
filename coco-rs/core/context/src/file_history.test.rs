@@ -188,7 +188,7 @@ async fn test_get_diff_stats() {
 
 #[tokio::test]
 async fn test_get_diff_stats_between_two_snapshots() {
-    // TS parity: computeDiffStatsBetweenMessages reads structuredPatch
+    // computeDiffStatsBetweenMessages reads structuredPatch
     // off tool results; we read the snapshot-pair file contents.
     // Either source produces the same `+X -Y` for net edits.
     let (config_home, work_dir) = setup();
@@ -331,7 +331,7 @@ async fn test_copy_file_history_for_resume() {
     assert!(dst_dir.join("backup2").exists());
 }
 
-/// TS-parity: `copyFileHistoryForResume` replays the snapshot chain
+/// `copyFileHistoryForResume` replays the snapshot chain
 /// into the new session's transcript via `recordFileHistorySnapshot`.
 /// Verify that a sink passed in receives every snapshot.
 #[tokio::test]
@@ -523,7 +523,7 @@ fn test_file_history_snapshot_serializes_with_snake_case() {
     };
 
     let value = serde_json::to_value(snapshot).unwrap();
-    // Snake_case wire — coco-rs's own format, not TS byte-compatible.
+    // Snake_case wire — coco-rs's own format.
     assert!(value.get("message_id").is_some());
     assert!(value.get("tracked_file_backups").is_some());
     assert!(
@@ -539,8 +539,7 @@ fn test_file_history_snapshot_serializes_with_snake_case() {
     assert!(value.get("messageId").is_none());
     assert!(value.get("trackedFileBackups").is_none());
     // Time fields are `chrono::DateTime<Utc>` so they serialize to
-    // RFC 3339 strings, not numbers. Same semantic content as TS
-    // `Date` values but Rust-idiomatic typing.
+    // RFC 3339 strings, not numbers — Rust-idiomatic typing.
     let timestamp = value.get("timestamp").expect("timestamp present");
     assert!(
         timestamp.is_string(),

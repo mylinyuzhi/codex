@@ -1,6 +1,5 @@
 //! Hook system — pre/post event interception with scoped priority.
 //!
-//! TS: schemas/hooks.ts + utils/hooks/ (HookDefinition, HookExecutor, AsyncHookRegistry)
 
 pub mod async_registry;
 mod error;
@@ -46,8 +45,7 @@ pub struct SdkHookCallbackRequest {
 
 /// Callback returns the typed `SdkHookOutput` directly — no JSON
 /// round-trip. The orchestration layer applies the typed output to
-/// `AggregatedHookResult` via [`crate::orchestration::apply_sdk_hook_output`],
-/// preserving TS-canonical wire shape end-to-end.
+/// `AggregatedHookResult` via [`crate::orchestration::apply_sdk_hook_output`].
 pub type SdkHookCallbackFuture =
     Pin<Box<dyn Future<Output = Result<coco_types::SdkHookOutput>> + Send>>;
 pub type SdkHookCallback =
@@ -86,8 +84,7 @@ pub struct HookDefinition {
 
 /// How to handle a hook event.
 ///
-/// TS schema: `src/schemas/hooks.ts` — discriminated union on `type`
-/// (`command` / `prompt` / `http` / `agent`).
+/// Discriminated union on `type` (`command` / `prompt` / `http` / `agent`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HookHandler {
@@ -100,21 +97,20 @@ pub enum HookHandler {
         shell: Option<String>,
     },
     /// Evaluate the prompt with an LLM and parse `{ok, reason?}` JSON.
-    /// TS: `execPromptHook.ts`. Returns blocking when `ok=false`.
+    /// Returns blocking when `ok=false`.
     Prompt {
         prompt: String,
         /// Model to use (e.g. `"claude-sonnet-4-6"`). When `None` the
         /// runner falls back to the small/fast model.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
-        /// Timeout in milliseconds for this prompt evaluation. TS:
-        /// `PromptHookSchema.timeout` (seconds). The loader converts
-        /// the top-level `timeout` (sec) to ms when set here is None.
+        /// Timeout in milliseconds for this prompt evaluation. The
+        /// loader converts the top-level `timeout` (sec) to ms when
+        /// set here is None.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<i64>,
     },
-    /// POST hook input JSON to a URL (TS `execHttpHook.ts`). Method is
-    /// always POST — TS schema has no method field.
+    /// POST hook input JSON to a URL. Method is always POST.
     Http {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,19 +120,17 @@ pub enum HookHandler {
         /// Per-hook env-var allowlist. Only names present here are
         /// expanded in `headers` values; all other `$VAR` references
         /// resolve to the empty string. Required for env-var
-        /// interpolation to do anything (parity with TS:
-        /// `execHttpHook.ts:89-108`).
+        /// interpolation to do anything.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         allowed_env_vars: Vec<String>,
     },
     /// Spawn an agentic verifier to evaluate `prompt` and return
-    /// structured `{ok, reason?}`. TS: `execAgentHook.ts`.
+    /// structured `{ok, reason?}`.
     Agent {
         prompt: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
-        /// Timeout in milliseconds for the agent run. TS:
-        /// `AgentHookSchema.timeout` (seconds, default 60).
+        /// Timeout in milliseconds for the agent run (default 60 s).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<i64>,
     },
@@ -204,7 +198,7 @@ pub struct HooksSettings {
 
 /// Context for evaluating `if_condition` on hooks.
 ///
-/// TS: `prepareIfConditionMatcher()` — builds a matcher from tool name + input.
+/// Builds a matcher from tool name + input.
 #[derive(Debug, Clone)]
 pub struct IfConditionContext {
     /// The tool being called (e.g. `"Bash"`).
@@ -233,10 +227,10 @@ pub struct HookRegistry {
     /// cleared by `clear_agent_scope(agent_id)` at SubagentStop.
     /// `find_matching_for_agent(event, match_value, agent_id)`
     /// merges these with `hooks` for the duration of the spawn.
-    /// TS parity: `registerFrontmatterHooks(setAppState, agentId, ...)`
-    /// + `clearSessionHooks(setAppState, agentId)`.
+    /// Agent-scoped overlays: populated by `register_for_agent`
+    /// and cleared by `clear_agent_scope`.
     agent_scoped: std::sync::RwLock<std::collections::HashMap<String, Vec<HookDefinition>>>,
-    /// In-memory function hooks (`type: 'function'` in TS). Registered
+    /// In-memory function hooks. Registered
     /// at session bootstrap via [`Self::register_function_hook`] and
     /// dispatched by [`orchestration::execute_stop`] (and other events
     /// that thread message history) in parallel with settings hooks.
@@ -246,7 +240,6 @@ pub struct HookRegistry {
     /// `Serialize` / `Deserialize`'d — keeping them apart preserves
     /// the settings-hook round-trip invariant.
     ///
-    /// TS source: `AppState.sessionHooks` (`utils/hooks/sessionHooks.ts`).
     function_hooks: std::sync::RwLock<Vec<FunctionHook>>,
     /// Runtime-only callback used by SDK-supplied hooks. This is not part
     /// of settings serialization; `initialize.hooks` registers
@@ -307,9 +300,9 @@ impl HookRegistry {
     ///
     /// **Must be called at a turn boundary.** Calling mid-turn would
     /// risk `PreToolUse` and `PostToolUse` for the same call seeing
-    /// different hook sets — TS deliberately gates this through
-    /// `updateHooksConfigSnapshot()` only via `/hooks` UI, never
-    /// auto-reload. In the Rust port the dispatch loop in
+    /// different hook sets — calling mid-turn would risk
+    /// `PreToolUse` and `PostToolUse` seeing different configs. In the
+    /// Rust port the dispatch loop in
     /// `tui_runner` serialises turns via `drain_active_turn`, so
     /// slash-command handlers (which call this) only ever run between
     /// turns.
@@ -350,13 +343,12 @@ impl HookRegistry {
     /// Register hooks scoped to a specific spawned agent. Replaces
     /// any existing entry for `agent_id`. Use `&self` (interior
     /// mutability) so callers holding `Arc<HookRegistry>` can register
-    /// without re-building the Arc. TS parity:
-    /// `registerFrontmatterHooks(setAppState, agentId, definition.hooks)`.
+    /// without re-building the Arc.
     ///
     /// `is_agent`: when `true`, any `Stop`-event hook is rewritten to
     /// `SubagentStop` because subagent termination fires `SubagentStop`,
-    /// not `Stop` (TS `registerFrontmatterHooks.ts:38-45`). Skill
-    /// frontmatter passes `false`; agent frontmatter passes `true`.
+    /// not `Stop`. Skill frontmatter passes `false`; agent frontmatter
+    /// passes `true`.
     pub fn register_for_agent(&self, agent_id: String, hooks: Vec<HookDefinition>, is_agent: bool) {
         let rewritten: Vec<HookDefinition> = if is_agent {
             hooks
@@ -382,7 +374,7 @@ impl HookRegistry {
 
     /// Remove all hooks scoped to `agent_id`. Called at SubagentStop
     /// so the spawn's frontmatter hooks don't leak across spawns.
-    /// TS parity: `clearSessionHooks(setAppState, agentId)`.
+    /// Called at SubagentStop to prevent frontmatter hooks leaking across spawns.
     pub fn clear_agent_scope(&self, agent_id: &str) {
         if let Ok(mut map) = self.agent_scoped.write() {
             map.remove(agent_id);
@@ -406,12 +398,7 @@ impl HookRegistry {
     /// so the hook would persist but never fire.
     ///
     /// Returns the hook's id on success (same as the supplied id —
-    /// the return value exists for chaining and for parity with TS
-    /// `addFunctionHook(...).id`).
-    ///
-    /// TS parity: `addFunctionHook(setAppState, sessionId, event,
-    /// matcher, callback, errorMessage, options)` in
-    /// `utils/hooks/sessionHooks.ts:93`.
+    /// the return value exists for chaining.
     pub fn register_function_hook(
         &self,
         id: impl Into<String>,
@@ -452,10 +439,8 @@ impl HookRegistry {
     /// Remove a previously-registered function hook by `id`. Returns
     /// `true` when a hook was found and removed.
     ///
-    /// TS parity: `removeFunctionHook(setAppState, sessionId, event,
-    /// hookId)` in `utils/hooks/sessionHooks.ts:120`. The TS API
-    /// requires `event` because TS stores hooks in a nested map keyed
-    /// by event; coco-rs flattens them, so the id alone is enough.
+    /// The id alone suffices; coco-rs flattens function hooks
+    /// across events, unlike a nested event-keyed map.
     pub fn remove_function_hook(&self, id: &str) -> bool {
         if let Ok(mut hooks) = self.function_hooks.write() {
             let before = hooks.len();
@@ -542,13 +527,9 @@ impl HookRegistry {
             Err(_) => Vec::new(),
         };
 
-        // Merge in agent-scoped hooks. TS parity:
-        // `registerFrontmatterHooks` adds the agent's hooks to the
-        // shared session-state hooks list; they're visible to every
-        // event firing until `clearSessionHooks(agentId)` removes
-        // them at SubagentStop. We mirror that by flattening every
-        // bucket into the match list — identity is by agent_id key,
-        // not by hook instance.
+        // Merge in agent-scoped hooks. Visible to every event
+        // firing until `clear_agent_scope(agent_id)` removes them
+        // at SubagentStop.
         if let Ok(agent_scoped) = self.agent_scoped.read() {
             for hooks in agent_scoped.values() {
                 for h in hooks {
@@ -639,7 +620,7 @@ impl HookRegistry {
 
 /// Check whether a hook matcher pattern matches a given value.
 ///
-/// Matching cascade (TS parity — matchesPattern() in hooks.ts):
+/// Matching cascade:
 /// 1. `None` → matches everything
 /// 2. `"*"` → wildcard, matches if value is present
 /// 3. "Simple" pattern (only alphanumeric, `_`, `|`):
@@ -648,7 +629,7 @@ impl HookRegistry {
 /// 4. Regex pattern (anything with special chars)
 /// 5. Glob pattern fallback (if regex is invalid)
 ///
-/// TS uses `/^[a-zA-Z0-9_|]+$/` to distinguish simple from regex patterns.
+/// `/^[a-zA-Z0-9_|]+$/` distinguishes simple from regex patterns.
 fn matcher_matches(matcher: Option<&str>, value: Option<&str>) -> bool {
     match matcher {
         None => true,
@@ -656,14 +637,13 @@ fn matcher_matches(matcher: Option<&str>, value: Option<&str>) -> bool {
         Some(pattern) => match value {
             None => false,
             Some(raw_name) => {
-                // TS parity: `utils/hooks.ts:matchesPattern` normalizes
-                // the incoming match value AND every alternate in a
-                // pipe pattern through `normalizeLegacyToolName`, then
-                // additionally tries every legacy alias for the value
-                // when the regex path is taken (`getLegacyToolNames`).
+                // Normalize the incoming match value AND every alternate in
+                // a pipe pattern through `normalizeLegacyToolName`, then
+                // additionally try every legacy alias for the value
+                // when the regex path is taken.
                 let name = coco_types::normalize_legacy_tool_name(raw_name);
 
-                // TS: /^[a-zA-Z0-9_|]+$/ — only alphanumeric, underscore, pipe
+                // Simple: /^[a-zA-Z0-9_|]+$/ — only alphanumeric, underscore, pipe
                 let is_simple = pattern
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'|');
@@ -677,13 +657,13 @@ fn matcher_matches(matcher: Option<&str>, value: Option<&str>) -> bool {
                     return name == coco_types::normalize_legacy_tool_name(pattern);
                 }
 
-                // Otherwise treat as regex (TS: `new RegExp(matcher)`)
+                // Otherwise treat as regex
                 match regex::Regex::new(pattern) {
                     Ok(re) => {
                         if re.is_match(name) {
                             return true;
                         }
-                        // TS also tests every legacy alias for the value
+                        // Also test every legacy alias for the value
                         // so `^Task$` survives the rename to `Agent`.
                         coco_types::legacy_tool_name_aliases_of(name)
                             .iter()
@@ -718,8 +698,7 @@ fn matcher_matches(matcher: Option<&str>, value: Option<&str>) -> bool {
 
 /// Prompt request from a hook during execution.
 ///
-/// TS: promptRequestSchema — hooks can emit interactive prompts via stdout
-/// and receive responses via stdin.
+/// Hooks can emit interactive prompts via stdout and receive responses via stdin.
 ///
 /// A hook outputs: `{"prompt": "request-id", "message": "question?", "options": [...]}`
 /// The runner writes back: `{"prompt_response": "request-id", "selected": "key"}`
@@ -755,8 +734,6 @@ pub struct PromptResponse {
 }
 
 /// Hook execution event — emitted during hook lifecycle.
-///
-/// TS: hookEvents.ts — HookStartedEvent, HookProgressEvent, HookResponseEvent.
 #[derive(Debug, Clone)]
 pub enum HookExecutionEvent {
     Started {
@@ -785,9 +762,8 @@ pub enum HookExecutionEvent {
 
 /// Shell flavour selected by `HookHandler::Command::shell`.
 ///
-/// TS: `bash` (default) and `powershell` are the only accepted values
-/// per `schemas/hooks.ts:BashCommandHookSchema.shell`. Unknown values
-/// fall back to bash with a warning.
+/// `bash` (default) and `powershell` are the only accepted values.
+/// Unknown values fall back to bash with a warning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellKind {
     Bash,
@@ -809,9 +785,9 @@ impl ShellKind {
 
 /// Apply Windows-bash autoprefix: `command-with-foo.sh ...` → `bash command-with-foo.sh ...`.
 ///
-/// TS: `utils/hooks.ts:860-862`. On Windows, naked `.sh` script invocations
-/// would open in the OS file handler instead of executing — Git Bash needs
-/// the `bash ` prefix to actually run them.
+/// On Windows, naked `.sh` script invocations would open in the OS file
+/// handler instead of executing — Git Bash needs the `bash ` prefix to
+/// actually run them.
 #[allow(dead_code)]
 fn maybe_apply_sh_prefix(cmd: &str, shell_kind: ShellKind) -> String {
     #[cfg(target_os = "windows")]
@@ -847,9 +823,6 @@ fn maybe_apply_sh_prefix(cmd: &str, shell_kind: ShellKind) -> String {
 
 /// Apply `creation_flags(CREATE_NO_WINDOW)` on Windows to suppress the
 /// console flash that would otherwise appear for every spawned hook.
-///
-/// TS: `windowsHide: true` option on every `child_process.spawn` call
-/// (`utils/hooks.ts:967, 981`).
 #[allow(dead_code)]
 fn apply_windows_hide(cmd: &mut tokio::process::Command) {
     #[cfg(target_os = "windows")]
@@ -964,7 +937,7 @@ async fn execute_hook_inner(
             // production callers know the LLM path is missing.
             tracing::warn!(
                 "Prompt hook executed without HookLlmHandle — returning prompt text. \
-                 TS execPromptHook.ts evaluates with the LLM and parses {{ok, reason}}."
+                 Prompt hooks evaluate with the LLM and parse {{ok, reason}}."
             );
             Ok(HookExecutionResult::PromptText(prompt.clone()))
         }
@@ -997,20 +970,17 @@ async fn execute_hook_inner(
                 Ok(false) => {} // allowed
             }
 
-            // TS default: TOOL_HOOK_EXECUTION_TIMEOUT_MS = 10 minutes
-            // (`utils/hooks/execHttpHook.ts:12`). Rust used to default
-            // to 10 s, which would clip any HTTP hook doing real work.
+            // Default: 10 minutes. 10 s would clip HTTP hooks doing real work.
             let client = reqwest::Client::builder()
                 // SSRF guard, layer 2 — connect-time resolver. Drops blocked IPs
                 // so the validated IP IS the connected IP, closing the DNS-
-                // rebinding window the one-shot pre-flight leaves open. TS
-                // installs `ssrfGuardedLookup` as axios's per-request `lookup`.
+                // rebinding window the one-shot pre-flight leaves open.
                 .dns_resolver(std::sync::Arc::new(crate::ssrf::SsrfGuardedResolver))
                 // SSRF defense-in-depth: never follow redirects. The pre-flight
                 // `check_url_ssrf` only validates the *original* URL's host, so an
                 // allowlisted endpoint that 3xx-redirects to an internal/metadata
                 // address (e.g. 169.254.169.254) would otherwise bypass the guard.
-                // TS `execHttpHook.ts:206` sets `maxRedirects: 0`.
+                // Never follow redirects — guards against redirect-based SSRF bypass.
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_millis(
                     timeout_ms
@@ -1022,11 +992,11 @@ async fn execute_hook_inner(
                     message: format!("failed to create HTTP client: {e}"),
                 })?;
 
-            // TS hardcodes POST (`execHttpHook.ts:201`).
+            // HTTP hooks always use POST.
             let mut req = client.post(url);
 
             // Send the hook input JSON as the request body, always set
-            // Content-Type (TS unconditionally injects it at line 158).
+            // Content-Type.
             req = req.header("Content-Type", "application/json");
             if let Some(body) = stdin_input {
                 req = req.body(body.to_string());
@@ -1036,8 +1006,7 @@ async fn execute_hook_inner(
                 let allowed: HashSet<&str> = allowed_env_vars.iter().map(String::as_str).collect();
                 for (k, v) in hdrs {
                     // Per-hook allowlist gating: vars not in
-                    // `allowed_env_vars` resolve to "" — matches
-                    // `execHttpHook.ts:89-108` security boundary.
+                    // `allowed_env_vars` resolve to "".
                     let interpolated = interpolate_env_vars_allowlisted(v, &allowed, env_vars);
                     req = req.header(k, sanitize_header_value(&interpolated));
                 }
@@ -1066,11 +1035,10 @@ async fn execute_hook_inner(
         HookHandler::Agent { prompt, .. } => {
             // Agent hooks need an LLM + multi-turn agent runtime. Until
             // `HookLlmHandle` is wired (Phase 2), fall back to returning
-            // the prompt as text and log a warning. TS spawns
-            // `query()` with MAX_AGENT_TURNS=50 and StructuredOutputTool.
+            // the prompt as text and log a warning.
             tracing::warn!(
                 "Agent hook executed without HookLlmHandle — returning prompt text. \
-                 TS execAgentHook.ts spawns a multi-turn agent."
+                 Agent hooks spawn a multi-turn agent."
             );
             Ok(HookExecutionResult::PromptText(prompt.clone()))
         }
@@ -1335,17 +1303,14 @@ fn spawn_rewake_command(mut child: tokio::process::Child, options: AsyncCommandO
 
 /// Loader-level policy gates.
 ///
-/// TS: `shouldDisableAllHooksIncludingManaged()` /
-/// `shouldDisableAllNonManagedHooks()` from `utils/settings/`. These
-/// settings come from `policySettings` and apply at the load boundary
-/// — non-managed hooks aren't even registered when
-/// `allow_managed_hooks_only` is true.
+/// Settings from policy apply at the load boundary — non-managed hooks
+/// aren't even registered when `allow_managed_hooks_only` is true.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoaderPolicy {
-    /// Drop ALL hooks regardless of scope. TS: `disableAllHooks`.
+    /// Drop ALL hooks regardless of scope.
     pub disable_all_hooks: bool,
     /// Drop hooks unless they came from a managed (Policy) or
-    /// programmatic (Session) source. TS: `allowManagedHooksOnly`.
+    /// programmatic (Session) source.
     pub allow_managed_hooks_only: bool,
 }
 
@@ -1359,8 +1324,7 @@ pub struct LoaderPolicy {
 /// }
 /// ```
 ///
-/// Event type keys are PascalCase, matching the TS settings.json format
-/// (`HOOK_EVENTS` in `coreSchemas.ts:355-383`).
+/// Event type keys are PascalCase (e.g. `"PreToolUse"`).
 pub fn load_hooks_from_config(
     hooks_value: &serde_json::Value,
     scope: HookScope,
@@ -1371,8 +1335,7 @@ pub fn load_hooks_from_config(
 /// Same as [`load_hooks_from_config`] but applies enterprise-policy
 /// gates at load time — `disable_all_hooks` skips everything;
 /// `allow_managed_hooks_only` skips anything not in `Policy` or
-/// `Session` scope. TS parity:
-/// `hooksConfigManager.ts:getRegisteredHooks` filters per setting.
+/// `Session` scope.
 pub fn load_hooks_from_config_with_policy(
     hooks_value: &serde_json::Value,
     scope: HookScope,
@@ -1528,7 +1491,7 @@ fn parse_hook_handler(
                 })
             });
             let timeout_ms = obj.get("timeout_ms").and_then(serde_json::Value::as_i64);
-            // TS uses camelCase `allowedEnvVars`; accept both.
+            // Accept both snake_case and camelCase `allowedEnvVars`.
             let allowed_env_vars = obj
                 .get("allowed_env_vars")
                 .or_else(|| obj.get("allowedEnvVars"))
@@ -1570,7 +1533,7 @@ fn parse_hook_handler(
 
 /// Apply a top-level timeout (in seconds) to a handler that lacks its own timeout_ms.
 ///
-/// TS: every variant accepts `timeout: number` (seconds) — the loader
+/// Every variant accepts `timeout: number` (seconds) — the loader
 /// converts to ms here for any handler whose explicit `timeout_ms` is
 /// unset.
 fn apply_timeout_to_handler(handler: HookHandler, timeout_secs: Option<i64>) -> HookHandler {
@@ -1631,17 +1594,15 @@ fn apply_timeout_to_handler(handler: HookHandler, timeout_secs: Option<i64>) -> 
 /// Substitute `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PLUGIN_DATA}` /
 /// `${user_config.<key>}` tokens in a command body.
 ///
-/// TS: `utils/hooks.ts:execCommandHook` replaces these tokens against
-/// the resolved plugin context before the shell sees the command. The
-/// values are sourced from the env-var bag the orchestration layer
-/// builds via `build_hook_env_with_plugin` (`CLAUDE_PLUGIN_ROOT` /
-/// `CLAUDE_PLUGIN_DATA` / `CLAUDE_PLUGIN_OPTION_<KEY>`), so a single
-/// pass over `env_vars` is enough — no separate plugin-context arg.
+/// Replaces these tokens against the resolved plugin context before the
+/// shell sees the command. The values are sourced from the env-var bag
+/// the orchestration layer builds via `build_hook_env_with_plugin`
+/// (`CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` /
+/// `CLAUDE_PLUGIN_OPTION_<KEY>`), so a single pass over `env_vars` is
+/// enough — no separate plugin-context arg.
 ///
 /// `${user_config.foo-bar}` is converted to a sanitized env-key lookup
-/// (matches the TS sanitizer in `build_hook_env_with_plugin`); missing
-/// keys resolve to the empty string rather than failing the hook,
-/// because TS surfaces those as command-time bash errors anyway and
+/// Missing keys resolve to the empty string rather than failing the hook —
 /// preserving the unexpanded literal would mis-fire matchers.
 ///
 /// `shell_kind` controls path conversion for plugin-root tokens: bash
@@ -1695,17 +1656,16 @@ fn substitute_plugin_vars(
 
 /// Sanitize an HTTP header value by stripping CR, LF, and NUL bytes.
 ///
-/// TS: sanitizeHeaderValue() — prevents CRLF injection via header values.
+/// Prevents CRLF injection via header values.
 fn sanitize_header_value(value: &str) -> String {
     value.replace(['\r', '\n', '\0'], "")
 }
 
 /// Allowlist-gated env-var interpolation for HTTP hook headers.
 ///
-/// TS: `execHttpHook.ts:89-108` — references to vars not in
-/// `allowed` resolve to empty string to prevent project-configured
-/// hooks from exfiltrating arbitrary process environment values
-/// (e.g. `Authorization: Bearer $AWS_SECRET_ACCESS_KEY`).
+/// References to vars not in `allowed` resolve to empty string to
+/// prevent project-configured hooks from exfiltrating arbitrary process
+/// environment values (e.g. `Authorization: Bearer $AWS_SECRET_ACCESS_KEY`).
 fn interpolate_env_vars_allowlisted(
     value: &str,
     allowed: &HashSet<&str>,

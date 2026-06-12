@@ -4,12 +4,10 @@
 //! producing different artifacts for different consumers:
 //!
 //! - **Title** (`build_title_prompt` / `parse_title_response` /
-//!   `apply_title`): TS `src/utils/sessionTitle.ts`
-//!   (`generateSessionTitle`). Sentence case, 3-7 words. Persists as
+//!   `apply_title`): Sentence case, 3-7 words. Persists as
 //!   `MetadataEntry::AiTitle` so a user `/rename` always wins on read.
 //! - **Session name** (`build_session_name_prompt` /
-//!   `parse_session_name_response`): TS
-//!   `src/commands/rename/generateSessionName.ts`. Triggered by bare
+//!   `parse_session_name_response`): Triggered by bare
 //!   `/rename` and post-plan auto-name, kebab-case 2-4 words derived
 //!   from caller-provided context. Persists as
 //!   `MetadataEntry::CustomTitle` (it's user-initiated even though the
@@ -30,14 +28,12 @@ const MIN_TITLE_LEN: usize = 3;
 const MAX_TITLE_LEN: usize = 100;
 
 /// How much of the plan body to include in the title-generation prompt.
-/// TS: sessionTitle.ts passes up to 1000 chars. Same bound.
 const PLAN_CONTEXT_CHARS: usize = 1000;
 
-/// TS `extractConversationText` keeps the tail of the post-compact
-/// conversation so bare `/rename` follows the current topic.
+/// Keeps the tail of the post-compact conversation so bare `/rename` follows the current topic.
 const CONVERSATION_CONTEXT_CHARS: usize = 1_000;
 
-/// Forced-tool name used by TS `generateSessionName`.
+/// Forced-tool name used for session name generation.
 pub const SESSION_NAME_TOOL_NAME: &str = "generate_session_name";
 
 /// Build the system + user prompt pair for the title-generation call.
@@ -133,9 +129,7 @@ fn normalize_title(raw: &str) -> Option<String> {
 /// (`storage::read_transcript_metadata`) treats as a strict
 /// fallback for `CustomTitle`. A subsequent user `/rename` writes
 /// `CustomTitle` and wins automatically on the next read, regardless
-/// of file ordering — no overwrite guard is required here. TS parity:
-/// `sessionStorage.ts::saveAiGeneratedTitle` keyed on
-/// `type: 'ai-title'` for the same reason.
+/// of file ordering — no overwrite guard is required here.
 ///
 /// Returns `true` if the session did not already carry a title
 /// (user-set or AI-set) when this writer ran; `false` if a title was
@@ -154,7 +148,7 @@ pub fn apply_title(
 }
 
 /// Build the system + user prompt pair for a kebab-case session-name
-/// generation call (TS `generateSessionName`).
+/// generation call.
 ///
 /// `conversation_text` is the caller-formatted transcript snapshot
 /// from [`extract_conversation_text`].
@@ -225,7 +219,7 @@ fn clean_session_name(raw: &str) -> Option<String> {
     Some(out)
 }
 
-/// Extract TS-style conversation text for bare `/rename`.
+/// Extract conversation text for bare `/rename`.
 ///
 /// Uses messages after the latest compact boundary, keeps only
 /// user-input and assistant text blocks, skips meta/virtual/compact

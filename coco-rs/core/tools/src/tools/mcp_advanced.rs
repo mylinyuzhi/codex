@@ -1,6 +1,4 @@
-//! Enhanced MCP tool features ported from TS MCPTool/.
-//!
-//! TS: tools/MCPTool/MCPTool.ts, classifyForCollapse.ts, prompt.ts
+//! Enhanced MCP tool features ported from MCPTool/.
 //!
 //! Provides MCP tool call execution with result formatting, resource content
 //! fetching, tool schema discovery for deferred tools, and result truncation.
@@ -11,7 +9,7 @@ use std::collections::HashMap;
 
 use coco_types::{MCP_TOOL_PREFIX, MCP_TOOL_SEPARATOR};
 
-/// Maximum result size for MCP tool output (100K chars, matching TS).
+/// Maximum result size for MCP tool output (100K chars).
 pub const MAX_MCP_RESULT_SIZE_CHARS: usize = 100_000;
 
 /// Maximum number of content parts in a single MCP tool result.

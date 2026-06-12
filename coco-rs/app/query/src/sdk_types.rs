@@ -1,6 +1,5 @@
 //! SDK-compatible query types.
 //!
-//! TS: entrypoints/sdk/coreSchemas.ts (2.6K LOC)
 //! Types for the SDK query interface.
 
 use serde::Deserialize;

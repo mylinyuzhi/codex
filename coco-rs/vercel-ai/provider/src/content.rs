@@ -186,9 +186,7 @@ pub struct ToolCallPart {
     /// agent loop's next turn carries a structured error back to the
     /// main LLM for self-correction.
     ///
-    /// **TS parity**: mirrors `invalid: boolean` on the SDK-level
-    /// `TypedToolCall` in `@ai-sdk/ai`
-    /// (`packages/ai/src/generate-text/parse-tool-call.ts`).
+    /// When `true`, signals that the tool call is structurally invalid.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub invalid: bool,
     /// Structured reason accompanying [`Self::invalid`]. Set by
@@ -210,8 +208,7 @@ pub struct ToolCallPart {
 /// - [`Self::SchemaViolation`] → `<tool_use_error>InputValidationError: …</tool_use_error>`
 /// - [`Self::NoSuchTool`] → `<tool_use_error>No such tool available: …</tool_use_error>`
 ///
-/// Mirrors the three failure modes that TS Claude Code distinguishes
-/// in `services/tools/toolExecution.ts:337-411,614-680`.
+/// Structured cause for an invalid tool call — three failure modes.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -562,7 +559,6 @@ impl ToolResultContentPart {
 }
 
 /// Cross-provider file identifier mapping — `{provider_name: file_id}`.
-/// Mirrors TS `SharedV4ProviderReference`.
 pub type SharedV4ProviderReference = std::collections::HashMap<String, String>;
 
 /// User message content parts.

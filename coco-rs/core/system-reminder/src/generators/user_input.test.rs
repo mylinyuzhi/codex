@@ -90,7 +90,7 @@ async fn agent_mentions_emits_per_mention_text() {
         .to_string();
     assert!(text.contains("desire to invoke the agent \"explore\""));
     assert!(text.contains("desire to invoke the agent \"plan\""));
-    // TS `messages.ts:3949` keeps a trailing space after each "it." —
+    // Keep a trailing space after each "it." —
     // pin the byte-exact tail so a future refactor can't drop it again.
     assert!(text.contains("passing in the required context to it. "));
 }

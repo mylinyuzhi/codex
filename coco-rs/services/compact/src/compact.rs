@@ -1,7 +1,5 @@
 //! Full compaction: summarize conversation via LLM.
 //!
-//! TS: compact.ts — builds summary prompt, calls LLM, replaces old messages.
-//!
 //! Key features:
 //! - Image/document stripping before summarization
 //! - Prompt-too-long retry with head group truncation (MAX_PTL_RETRIES=3)
@@ -67,9 +65,8 @@ pub struct CompactRunOptions {
     pub context_window: i64,
     /// Number of recent rounds to preserve as original messages.
     ///
-    /// TS full compact has no `keepRecent` equivalent and keeps no
-    /// recent original rounds; non-zero values are for explicit
-    /// internal callers/tests only.
+    /// Full compact keeps no recent original rounds by default; non-zero
+    /// values are for explicit internal callers/tests only.
     pub keep_recent_rounds: usize,
     /// Custom compact prompt override (merged from PreCompact hooks +
     /// `/compact <instructions>`).
@@ -79,11 +76,9 @@ pub struct CompactRunOptions {
     /// How this compaction was triggered.
     pub trigger: CompactTrigger,
     /// Recompaction tracking — populated when this compaction follows a
-    /// previous one in the same conversation. TS:
-    /// `compact.ts:317 RecompactionInfo`. Drives `tengu_compact` analytics
-    /// (H1/H2/H3/H5 chain disambiguation). When `Some`, sets
-    /// `CompactResult.is_recompaction` to the embedded flag so consumers
-    /// downstream see the chain state.
+    /// previous one in the same conversation (H1/H2/H3/H5 chain
+    /// disambiguation). When `Some`, sets `CompactResult.is_recompaction`
+    /// to the embedded flag so downstream consumers see the chain state.
     pub recompaction_info: Option<crate::types::RecompactionInfo>,
 }
 
@@ -267,7 +262,6 @@ where
     );
 
     // Persist the discovered-tool set so post-compact ToolSearch state survives.
-    // TS: compact.ts:606-611 (`extractDiscoveredToolNames(messages)`).
     let discovered = extract_discovered_tool_names(messages);
     if !discovered.is_empty()
         && let Message::System(SystemMessage::CompactBoundary(ref mut b)) = boundary
@@ -276,9 +270,7 @@ where
     }
 
     // Annotate the boundary with the preserved-segment chain. The anchor
-    // for full compaction is the boundary marker itself (TS:
-    // `annotateBoundaryWithPreservedSegment(boundary, boundary.uuid, keep)`
-    // at compact.ts:1083 for the prefix-preserving case).
+    // for full compaction is the boundary marker itself.
     if !messages_to_keep.is_empty()
         && let Message::System(SystemMessage::CompactBoundary(b)) = &boundary
     {
@@ -316,15 +308,15 @@ where
 
 /// Partial compaction: summarize half of the conversation, keep the other.
 ///
-/// TS: `partialCompactConversation` (compact.ts:772-1106). Direction:
-/// - `Newest` (TS `'from'`): pivot+ summarized, prefix kept.
+/// Direction:
+/// - `Newest` (`'from'`): pivot+ summarized, prefix kept.
 ///   Anchor = boundary; cache for the kept prefix is preserved.
-/// - `Oldest` (TS `'up_to'`): prefix summarized, pivot+ kept.
+/// - `Oldest` (`'up_to'`): prefix summarized, pivot+ kept.
 ///   Anchor = last summary message; cache invalidated.
 ///
 /// Tool-pair safety: `messages_to_keep` is filtered against
 /// `is_compact_boundary_message` to avoid re-introducing stale
-/// boundaries after a re-compact (TS:798).
+/// boundaries after a re-compact.
 #[tracing::instrument(
     skip_all,
     name = "compaction",
@@ -388,7 +380,7 @@ where
 
     // Filter progress + (for Oldest) old compact boundaries / summary
     // messages from `to_keep_raw` so a stale boundary doesn't shadow the
-    // new one. TS: compact.ts:790-800. Arc-share for kept entries.
+    // new one. Arc-share for kept entries.
     let to_keep: Vec<Arc<Message>> = to_keep_raw
         .into_iter()
         .filter(|arc| match arc.as_ref() {
@@ -485,7 +477,7 @@ where
         preserved_segment: None,
     };
 
-    // Anchor differs by direction (TS compact.ts:1078-1082):
+    // Anchor differs by direction:
     //   Newest ('from')   → anchor = boundary
     //   Oldest ('up_to') → anchor = last summary
     let anchor = match direction {
@@ -519,7 +511,6 @@ where
 
 /// Annotate a compact boundary with `preserved_segment` metadata.
 ///
-/// TS: `annotateBoundaryWithPreservedSegment(boundary, anchorUuid, kept)`.
 /// `anchor_uuid` is the message that sits immediately before `kept[0]` in
 /// the desired chain — for prefix-preserving compactions (full / partial
 /// `Newest`), this is the boundary itself; for suffix-preserving
@@ -545,11 +536,10 @@ fn build_preserved_segment<M: std::borrow::Borrow<Message>>(
     })
 }
 
-/// Assemble the post-compact message chain in TS-canonical order.
+/// Assemble the post-compact message chain.
 ///
-/// TS: `buildPostCompactMessages(result)` in compact.ts:330. Order:
-/// boundary → summaries → kept → attachments → hook results. Caller wires
-/// this into the conversation history.
+/// Order: boundary → summaries → kept → attachments → hook results.
+/// Caller wires this into the conversation history.
 pub fn build_post_compact_messages(result: &CompactResult) -> Vec<Arc<Message>> {
     let mut out =
         Vec::with_capacity(2 + result.summary_messages.len() + result.messages_to_keep.len());
@@ -568,12 +558,12 @@ pub fn build_post_compact_messages(result: &CompactResult) -> Vec<Arc<Message>> 
     out
 }
 
-/// Assemble post-partial-compact messages in TS-canonical order.
+/// Assemble post-partial-compact messages.
 ///
-/// TS `partialCompactConversation` uses different placement for
-/// summarize-from (`Newest`) to preserve the existing cacheable prefix:
-/// boundary → kept prefix → summary → attachments → hook results.
-/// Summarize-up-to (`Oldest`) keeps the normal compact order.
+/// Summarize-from (`Newest`) uses different placement to preserve the
+/// existing cacheable prefix: boundary → kept prefix → summary →
+/// attachments → hook results. Summarize-up-to (`Oldest`) uses the
+/// normal compact order.
 pub fn build_partial_post_compact_messages(
     result: &CompactResult,
     direction: PartialCompactDirection,
@@ -605,8 +595,8 @@ pub fn build_partial_post_compact_messages(
 
 /// Merge user-supplied compact instructions with hook-provided ones.
 ///
-/// TS: `mergeHookInstructions`. User text comes first; hook output is
-/// appended after a blank line. Empty inputs collapse to `None`.
+/// User text comes first; hook output is appended after a blank line.
+/// Empty inputs collapse to `None`.
 #[must_use]
 pub fn merge_hook_instructions(
     user_instructions: Option<&str>,
@@ -630,13 +620,12 @@ pub fn merge_hook_instructions(
 
 /// Strip images and documents from messages to prevent prompt-too-long.
 ///
-/// TS: `stripImagesFromMessages()` (`compact.ts:145-200`) — replaces
-/// image/document content blocks with `[image]` / `[document]` text
-/// placeholders. **Includes images nested inside tool_result content arrays**
-/// (per TS lines 166-184) — Bash/MCP tool_results that carry image data
-/// (e.g. `cat image.png`) must be stripped before the compact summarizer
-/// runs or the summarization request itself trips prompt-too-long on the
-/// re-encoded base64.
+/// Replaces image/document content blocks with `[image]` / `[document]`
+/// text placeholders. **Includes images nested inside tool_result content
+/// arrays** — Bash/MCP tool_results that carry image data (e.g. `cat
+/// image.png`) must be stripped before the compact summarizer runs or the
+/// summarization request itself trips prompt-too-long on the re-encoded
+/// base64.
 pub fn strip_images_from_messages(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
@@ -689,12 +678,10 @@ fn strip_one_message_for_media_if_needed(msg: &Message) -> Option<Message> {
             };
             Some(Message::User(new_u))
         }
-        // TS-parity: tool_result content arrays may carry FileData
-        // (image/document) parts — those are common from BashTool when
-        // stdout is detected as binary image bytes (`bash.rs:isLikely
-        // ImageBytes` → `structuredContent`). Walk the inner
-        // `ToolResultContent::Content` and replace FileData parts with
-        // `[image]` / `[document]` Text parts.
+        // tool_result content arrays may carry FileData (image/document) parts
+        // — those are common from BashTool when stdout is detected as binary
+        // image bytes. Walk the inner `ToolResultContent::Content` and replace
+        // FileData parts with `[image]` / `[document]` Text parts.
         Message::ToolResult(tr) => {
             let coco_messages::LlmMessage::Tool {
                 content,
@@ -789,16 +776,9 @@ fn strip_images_from_tool_result_content(
 /// silent dedup markers are ephemeral, and file content re-injection is
 /// handled separately by [`create_post_compact_file_attachments`].
 ///
-/// **Intentional divergence from TS** (compact.ts:211-223). TS only
-/// filters `skill_discovery` / `skill_listing` and only when
-/// `feature('EXPERIMENTAL_SKILL_SEARCH')` is on (no-op otherwise). Rust
-/// uses the broader `AttachmentKind::survives_compaction()` predicate
-/// because the Rust `AttachmentKind` taxonomy (60 variants) is a superset
-/// of TS's, including reminders that didn't exist in TS at the time TS
-/// wrote its narrow filter. The predicate keeps the safe ones (audit /
-/// UI-visible) and drops the regenerable ones — equivalent intent, wider
-/// coverage. Tracked in audit-gaps.md Round 10 as P2 (intentional, no
-/// fix required).
+/// Uses the broader `AttachmentKind::survives_compaction()` predicate
+/// covering all 60+ `AttachmentKind` variants. The predicate keeps safe
+/// ones (audit / UI-visible) and drops regenerable ones.
 pub fn strip_reinjected_attachments(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
@@ -886,11 +866,10 @@ pub(crate) mod compact_passes {
 
 /// Truncate oldest message groups when prompt-too-long error occurs.
 ///
-/// TS: `truncateHeadForPTLRetry()` (compact.ts:243-291) — drops oldest
-/// API-round groups until enough tokens are freed. When `token_gap` is
-/// provided, drops groups whose accumulated estimated tokens cover the
-/// gap. Falls back to dropping `drop_fraction` (default 20%) of groups.
-/// Keeps at least one group so there's something to summarize.
+/// Drops oldest API-round groups until enough tokens are freed. When
+/// `token_gap` is provided, drops groups whose accumulated estimated tokens
+/// cover the gap. Falls back to dropping `drop_fraction` (default 20%) of
+/// groups. Keeps at least one group so there's something to summarize.
 ///
 /// **Strips a leading [`PTL_RETRY_MARKER`] user message** before grouping —
 /// otherwise the marker becomes its own group 0 on retries 2+, and the
@@ -905,7 +884,7 @@ pub fn truncate_head_for_ptl_retry(
     drop_fraction: f64,
 ) -> Option<Vec<Arc<Message>>> {
     // Strip our own marker from a previous retry so it doesn't become its
-    // own group 0 — TS: compact.ts:250-255.
+    // own group 0.
     let input: &[Arc<Message>] = match messages.first().map(Arc::as_ref) {
         Some(Message::User(u)) if user_message_text_equals(u, PTL_RETRY_MARKER) => &messages[1..],
         _ => messages,
@@ -1183,8 +1162,7 @@ fn is_image_media_type(file: &coco_llm_types::FilePart) -> bool {
 
 /// Parse the token gap from an Anthropic prompt-too-long error message.
 ///
-/// TS: `getPromptTooLongTokenGap` in `services/api/errors.ts` — extracts the
-/// numeric overflow from messages of the form
+/// Extracts the numeric overflow from messages of the form
 /// `"input length and \`max_tokens\` exceed context limit: 250000 + 8192 > 256000, decrease …"`.
 /// Returns `lhs - rhs` (the gap), or `None` if unparseable.
 fn parse_prompt_too_long_token_gap(message: &str) -> Option<i64> {

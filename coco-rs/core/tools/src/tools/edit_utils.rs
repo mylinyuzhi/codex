@@ -1,6 +1,4 @@
-//! Edit tool utilities ported from TS FileEditTool/utils.ts.
-//!
-//! TS: tools/FileEditTool/utils.ts, types.ts
+//! Edit tool utilities.
 //!
 //! Provides patch generation, quote style preservation, whitespace
 //! normalization for matching, input equivalence checking, and
@@ -319,8 +317,6 @@ impl coco_error::ErrorExt for EditError {
 // ── De-sanitization ──
 
 /// Sanitized tag mapping for reversing API-layer sanitization.
-///
-/// TS: DESANITIZATIONS in tools/FileEditTool/utils.ts
 fn desanitization_map() -> &'static HashMap<&'static str, &'static str> {
     use std::sync::LazyLock;
     static MAP: LazyLock<HashMap<&str, &str>> = LazyLock::new(|| {
@@ -356,8 +352,6 @@ fn desanitization_map() -> &'static HashMap<&'static str, &'static str> {
 ///
 /// Returns the (possibly desanitized) old/new strings and whether any
 /// replacements were applied.
-///
-/// TS: desanitizeMatchString() in tools/FileEditTool/utils.ts
 pub fn desanitize_for_edit(
     old_string: &str,
     new_string: &str,
@@ -388,10 +382,6 @@ pub fn desanitize_for_edit(
 }
 
 /// Input normalization for a single edit before matching.
-///
-/// TS: `FileEditTool/utils.ts:581-657` `normalizeFileEditInput`. The TS
-/// function takes a list of edits and a file path, reads the file, and
-/// for each edit:
 ///
 ///   1. Strip trailing whitespace from `new_string` UNLESS the file is
 ///      a Markdown file (`.md` / `.mdx`). Markdown uses two trailing
@@ -435,10 +425,9 @@ pub fn normalize_file_edit_input(
         return (old_string.to_string(), normalized_new);
     }
 
-    // Try desanitization. The helper already mirrors TS behavior:
-    // only returns `replaced = true` when the desanitized form
-    // actually matches in the file. On success, it has already
-    // applied the same replacements to new_string.
+    // Try desanitization. Only returns `replaced = true` when the
+    // desanitized form actually matches in the file. On success,
+    // it has already applied the same replacements to new_string.
     let (desanitized_old, desanitized_new, replaced) =
         desanitize_for_edit(old_string, &normalized_new, file_content);
     if replaced {
@@ -454,8 +443,7 @@ pub fn normalize_file_edit_input(
 
 /// Case-insensitive check for `.md` and `.mdx` file extensions.
 ///
-/// TS uses `/\.(md|mdx)$/i` (case-insensitive). We match that behavior
-/// so `Notes.MD` gets the same preservation as `notes.md`.
+/// Case-insensitive so `Notes.MD` gets the same preservation as `notes.md`.
 fn matches_markdown_extension(file_path: &str) -> bool {
     // Find the last `.` AFTER the last `/` (so we don't trip on
     // `.md` in a parent directory name).

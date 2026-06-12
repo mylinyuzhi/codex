@@ -66,7 +66,7 @@ fn manifest_formats_each_entry() {
     );
     let scanned = scan_memory_files(temp.path());
     let m = format_memory_manifest(&scanned);
-    // TS `formatMemoryManifest` line shape: `- [type] file (iso-ts): desc`
+    // Line shape: `- [type] file (iso-ts): desc`
     assert!(m.starts_with("- [project] x.md ("), "got: {m}");
     assert!(m.contains("short hook"));
     // ISO-8601 with millisecond precision and trailing Z.
@@ -76,9 +76,9 @@ fn manifest_formats_each_entry() {
 
 #[test]
 fn manifest_empty_input_returns_empty_string() {
-    // TS parity: an empty memory list yields `''` so the caller
-    // (extract prompt builder) drops the whole `## Existing memory
-    // files` section instead of rendering an empty stub.
+    // An empty memory list yields `''` so the caller (extract prompt
+    // builder) drops the whole `## Existing memory files` section
+    // instead of rendering an empty stub.
     assert_eq!(format_memory_manifest(&[]), "");
 }
 
@@ -116,7 +116,7 @@ fn freshness_text_fresh_returns_empty() {
 }
 
 #[test]
-fn freshness_text_stale_matches_ts_verbatim() {
+fn freshness_text_stale_exact_text() {
     let forty_seven_days = now_ms() - 47 * 24 * 60 * 60 * 1000;
     assert_eq!(
         memory_freshness_text(forty_seven_days),

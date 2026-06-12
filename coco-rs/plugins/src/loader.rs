@@ -1,7 +1,5 @@
 //! Plugin loading pipeline — discovery, validation, dependency resolution.
 //!
-//! TS: utils/plugins/pluginLoader.ts + dependencyResolver.ts +
-//! installedPluginsManager.ts
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -196,20 +194,18 @@ impl PluginLoader {
     }
 
     /// Load the complete active plugin set from every source — the production
-    /// orchestrator (TS `loadAllPlugins`).
+    /// orchestrator.
     ///
     /// Marketplace plugins load from the versioned cache layout
     /// (`cache/{mkt}/{plugin}/{version}`), enabled iff listed in `enabled_ids` (a
     /// marketplace plugin must be opted in to load at all). Inline (local)
     /// plugins under the standing dirs — each a `PLUGIN.toml`/`plugin.json`
     /// directory — get identity `name@inline`, enabled unless explicitly listed
-    /// in `disabled_ids`. Builtins are merged in by the caller (TS
-    /// `getBuiltinPlugins`).
+    /// in `disabled_ids`. Builtins are merged in by the caller.
     ///
-    /// Inline overrides a marketplace plugin of the same name (TS
-    /// `mergePluginSources`). Dependency-closure demotion (TS `verifyAndDemote`)
-    /// then flips any plugin whose declared `dependencies` aren't all enabled to
-    /// `enabled=false` — session-local, never written back to settings.
+    /// Inline overrides a marketplace plugin of the same name. Dependency-closure
+    /// demotion then flips any plugin whose declared `dependencies` aren't all
+    /// enabled to `enabled=false` — session-local, never written back to settings.
     pub fn load_all_plugins(
         &self,
         standing_plugin_dirs: &[PathBuf],
@@ -428,7 +424,7 @@ impl PluginLoader {
 }
 
 // ---------------------------------------------------------------------------
-// Dependency resolution (TS: dependencyResolver.ts)
+// Dependency resolution
 // ---------------------------------------------------------------------------
 
 /// Normalize a bare dependency name to "name@marketplace" if the declaring
@@ -518,7 +514,7 @@ pub fn verify_and_demote(plugins: &[LoadedPluginV2]) -> HashSet<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Installation tracking (TS: installedPluginsManager.ts)
+// Installation tracking
 // ---------------------------------------------------------------------------
 
 /// Manage the installed_plugins.json file on disk.

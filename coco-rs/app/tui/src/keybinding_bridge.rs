@@ -4,8 +4,6 @@
 //! key events to commands. Context priority:
 //!
 //!   state > autocomplete > global > input
-//!
-//! TS: src/keybindings/ + event/handler.rs in cocode-rs
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -89,9 +87,9 @@ pub fn active_context(state: &AppState) -> KeybindingContext {
             | ModalState::Doctor(_) => KeybindingContext::Scrollable,
             ModalState::Transcript(_) => KeybindingContext::Transcript,
 
-            // Tabbed settings state. The Display tab gets the TS
-            // ThemePicker context so `theme:toggleSyntaxHighlighting` (ctrl+t)
-            // toggles the syntax-highlighting row.
+            // Tabbed settings state. The Display tab gets the ThemePicker
+            // context so `theme:toggleSyntaxHighlighting` (ctrl+t) toggles
+            // the syntax-highlighting row.
             ModalState::Settings(s)
                 if s.active_tab == crate::widgets::settings_panel::SettingsTab::Display =>
             {
@@ -275,7 +273,7 @@ fn resolve_key(
         }
     }
 
-    // Layer 1: TS-defined bindings via the resolver.
+    // Layer 1: bindings from the resolver.
     match state.ui.kb_handle.resolve_key(key, ctx) {
         crate::keybinding_resolver::ResolverResult::Action(action) => {
             if let Some(cmd) = crate::keybinding_dispatch::dispatch_action(&action, state) {
@@ -452,9 +450,8 @@ fn map_input_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
         // keymap = "input:cursor_end" (alternate combo)
         KeyCode::End => Some(TuiCommand::CursorEnd),
 
-        // Emacs / readline (matches TS PromptInput.tsx + GNU readline
-        // conventions). Each arm is the canonical implementation of the
-        // `KeymapEntry` named in the comment above.
+        // Emacs / readline (GNU readline conventions). Each arm is the
+        // canonical implementation of the `KeymapEntry` named above.
         // keymap = "input:cursor_home"
         KeyCode::Char('a') if ctrl => Some(TuiCommand::CursorHome),
         // keymap = "input:cursor_end"

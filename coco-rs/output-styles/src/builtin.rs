@@ -1,27 +1,20 @@
-//! Built-in output style catalog — TS `OUTPUT_STYLE_CONFIG`.
+//! Built-in output style catalog.
 //!
-//! TS source: `constants/outputStyles.ts:39-135`. The prompt bodies here
-//! are reproduced verbatim from the TS literals so the rendered
-//! `# Output Style` system-prompt section matches across runtimes.
-//!
-//! TS embeds `figures.star` (★) and `figures.bullet` (•) at the call
-//! site; we hardcode the Unicode glyphs because coco-rs runs in
-//! Unicode-capable terminals (TUI uses ratatui).
+//! The prompt bodies here are reproduced verbatim from the source literals so
+//! the rendered `# Output Style` system-prompt section matches across
+//! runtimes. Unicode glyphs `★` and `●` are hardcoded (coco-rs runs in
+//! Unicode-capable terminals with ratatui).
 //!
 //! ## Sentinel `default`
 //!
-//! TS represents the default style as `OUTPUT_STYLE_CONFIG[default] = null`
-//! and `getOutputStyleConfig()` returns `null` when settings name resolves
-//! to `default`. We model the same shape: [`builtin_styles`] returns the
-//! two non-null built-ins, and `default` is handled at resolution time
-//! by mapping it to `None` (see [`crate::resolver::resolve_active_style`]).
+//! The default style maps to `null` / `None`. [`builtin_styles`] returns only
+//! the two non-null built-ins; `default` is handled at resolution time by
+//! mapping it to `None` (see [`crate::resolver::resolve_active_style`]).
 
 use crate::catalog::OutputStyleConfig;
 use crate::catalog::OutputStyleSource;
 
 /// Sentinel name for the default ("no extra style applied") style.
-///
-/// TS: `DEFAULT_OUTPUT_STYLE_NAME = 'default'`.
 pub const DEFAULT_OUTPUT_STYLE_NAME: &str = "default";
 
 /// Name of the built-in Explanatory style.
@@ -30,13 +23,12 @@ pub const EXPLANATORY_STYLE_NAME: &str = "Explanatory";
 /// Name of the built-in Learning style.
 pub const LEARNING_STYLE_NAME: &str = "Learning";
 
-/// Unicode star — TS `figures.star`.
+/// Unicode star (★).
 const STAR: &str = "★";
-/// Unicode bullet — TS `figures.bullet`.
+/// Unicode bullet (●).
 const BULLET: &str = "●";
 
 /// Shared `## Insights` block injected at the end of both built-ins.
-/// Verbatim from TS `EXPLANATORY_FEATURE_PROMPT` (constants/outputStyles.ts:30-37).
 fn explanatory_feature_prompt() -> String {
     format!(
         "\n## Insights\nIn order to encourage learning, before and after writing code, always provide brief educational explanations about implementation choices using (with backticks):\n\"`{STAR} Insight ─────────────────────────────────────`\n[2-3 key educational points]\n`─────────────────────────────────────────────────`\"\n\nThese insights should be included in the conversation, not in the codebase. You should generally focus on interesting insights that are specific to the codebase or the code you just wrote, rather than general programming concepts."
@@ -128,12 +120,11 @@ Share one insight connecting their code to broader patterns or system effects. A
     )
 }
 
-/// Return the non-null built-in styles in the order TS defines them.
+/// Return the non-null built-in styles.
 ///
-/// TS: the entries of `OUTPUT_STYLE_CONFIG` excluding the `default`
-/// sentinel. Both built-ins set `keepCodingInstructions: true` so the
-/// system-prompt assembler keeps the standard coding instructions on
-/// top of the style.
+/// Excludes the `default` sentinel. Both built-ins set
+/// `keepCodingInstructions: true` so the system-prompt assembler keeps
+/// the standard coding instructions on top of the style.
 pub fn builtin_styles() -> Vec<OutputStyleConfig> {
     vec![
         OutputStyleConfig {

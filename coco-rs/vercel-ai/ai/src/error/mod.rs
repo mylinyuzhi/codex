@@ -486,7 +486,7 @@ impl UnsupportedModelVersionError {
 }
 
 // ============================================================================
-// Detailed "no X generated" errors with metadata (aligning with TS SDK)
+// Detailed "no X generated" errors with metadata
 // ============================================================================
 
 /// Error thrown when no object was generated, with detailed metadata.

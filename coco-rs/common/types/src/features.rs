@@ -71,7 +71,6 @@ pub enum Feature {
     Mcp,
     /// Discover skills published by connected MCP servers and surface
     /// them through the SkillTool / slash-command registry.
-    /// TS: `feature('MCP_SKILLS')` in `services/mcp/client.ts:117`.
     /// Requires [`Self::Mcp`] — discovery is a no-op on disconnected servers.
     McpSkills,
     /// Expose the `notebook_edit` tool to the model.
@@ -81,7 +80,6 @@ pub enum Feature {
     /// `TaskStop` operate on the background-task namespace (Bash
     /// `run_in_background`, agent spawns) and stay enabled regardless of
     /// this gate.
-    /// TS: `isTodoV2Enabled()` in `utils/tasks.ts:133-139`.
     TaskV2,
     /// Lazy tool-schema loading via `ToolSearch`. When **on** (default),
     /// tools whose `Tool::should_defer() == true` are sent to the model
@@ -92,18 +90,11 @@ pub enum Feature {
     /// `Capability::ServerSideToolReference`). Saves a large chunk of
     /// the tools-array token budget on sessions with many MCP tools.
     ///
-    /// When **off** (the TS `'standard'` mode equivalent), the
-    /// `ToolSearch` tool is hidden from the model AND the deferral
-    /// filter is short-circuited: every enabled tool gets its full
+    /// When **off**, the `ToolSearch` tool is hidden from the model AND the
+    /// deferral filter is short-circuited: every enabled tool gets its full
     /// schema in every request. Choose this when token budget is
     /// not a concern and you'd rather avoid the round-trip cost of
     /// `ToolSearch`.
-    ///
-    /// TS: `getToolSearchMode()` in `utils/toolSearch.ts:172-198`.
-    /// coco-rs exposes only the binary `tst` / `standard` modes —
-    /// `tst-auto` (threshold-gated by deferred-tool token count) is
-    /// intentionally not ported; it depends on per-Provider token
-    /// counting that pollutes the inference seam.
     ToolSearch,
     /// Refresh the built-in model-card catalog from OpenRouter in a
     /// non-blocking startup task. The bundled snapshot remains the
@@ -126,30 +117,22 @@ pub enum Feature {
     /// LSP-backed code intelligence tool.
     Lsp,
     /// Autonomous/tick-driven assistant loop helpers.
-    /// TS: `feature('PROACTIVE') || feature('KAIROS')` for Sleep/tick pacing.
     Proactive,
 
-    // Skill / command feature gates (TS `feature(...)` calls).
+    // Skill / command feature gates.
     /// Brief user-message channel (`SendUserMessage`).
-    /// TS: `feature('KAIROS') || feature('KAIROS_BRIEF')` in `BriefTool.ts`.
     KairosBrief,
     /// `/loop` skill — recurring task scheduling.
-    /// TS: `feature('AGENT_TRIGGERS')` in `skills/bundled/index.ts:47`.
     AgentTriggers,
     /// `/schedule` skill — remote agent scheduling.
-    /// TS: `feature('AGENT_TRIGGERS_REMOTE')` in `skills/bundled/index.ts:56`.
     AgentTriggersRemote,
     /// `/claude-api` skill — Claude API/Anthropic SDK helper.
-    /// TS: `feature('BUILDING_CLAUDE_APPS')` in `skills/bundled/index.ts:64`.
     BuildingClaudeApps,
     /// `/dream` skill — KAIROS auto-dream memory consolidation.
-    /// TS: `feature('KAIROS') || feature('KAIROS_DREAM')` in `skills/bundled/index.ts:35`.
     KairosDream,
     /// `/hunter` skill — bug-finding review artifact.
-    /// TS: `feature('REVIEW_ARTIFACT')` in `skills/bundled/index.ts:41`.
     ReviewArtifact,
     /// `/run-skill-generator` skill.
-    /// TS: `feature('RUN_SKILL_GENERATOR')` in `skills/bundled/index.ts:73`.
     RunSkillGenerator,
     /// Tool-use-summary side-fork (`ModelRole::Fast`, ≤30-char "git
     /// commit subject" label emitted after each tool batch).
@@ -162,21 +145,14 @@ pub enum Feature {
     /// empty result. Users who want the mobile-row label opt in via
     /// `settings.json` `features.tool_use_summary = true` once their
     /// Fast role is wired to a non-reasoning model.
-    ///
-    /// TS: `config.gates.emitToolUseSummaries` in
-    /// `services/toolUseSummary/toolUseSummaryGenerator.ts`.
     ToolUseSummary,
     /// Auto-detect Claude in Chrome installation.
-    /// TS: `shouldAutoEnableClaudeInChrome()` in `skills/bundled/index.ts:70`.
     ClaudeInChrome,
     /// `/init` new 8-phase prompt (vs old single-prompt).
-    /// TS: `feature('NEW_INIT')` in `commands/init.ts:230`.
     NewInit,
     /// Reactive compaction strategy (vs traditional summarize-all).
-    /// TS: `feature('REACTIVE_COMPACT')` in `commands/compact/compact.ts:35`.
     ReactiveCompact,
     /// Prompt-cache break detection wiring during compaction.
-    /// TS: `feature('PROMPT_CACHE_BREAK_DETECTION')` in `commands/compact/compact.ts:67`.
     PromptCacheBreakDetection,
     /// Speculative pre-execution of accepted prompt suggestions.
     ///
@@ -184,10 +160,6 @@ pub enum Feature {
     /// 3-boundary canUseTool (Edit/Write rewrites to overlay; Bash
     /// via shell-parser read-only check; deny default), MAX_TURNS=20
     /// / MAX_MESSAGES=100, accept/abort lifecycle.
-    ///
-    /// TS: `services/PromptSuggestion/speculation.ts` (gated upstream
-    /// by `USER_TYPE='ant'`; coco-rs uses this Feature instead so
-    /// non-Anthropic users can opt in via settings.json).
     ///
     /// **Default false** — experimental; high implementation
     /// complexity (overlay COW, 3-boundary classification,

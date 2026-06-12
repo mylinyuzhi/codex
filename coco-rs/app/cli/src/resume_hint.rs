@@ -1,7 +1,6 @@
 //! Resume hint printed after the TUI exits.
 //!
-//! TS parity: `src/utils/gracefulShutdown.ts::printResumeHint`. After
-//! alt-screen exit, write a dim two-line nudge to stdout so the user
+//! After alt-screen exit, write a dim two-line nudge to stdout so the user
 //! sees how to pick the session back up:
 //!
 //! ```text
@@ -9,8 +8,8 @@
 //! coco --resume <session-id>
 //! ```
 //!
-//! Guards mirror TS: only emit when there is a session id AND a
-//! transcript file on disk. TTY / interactive checks are implicit —
+//! Only emit when there is a session id AND a transcript file on disk.
+//! TTY / interactive checks are implicit —
 //! `coco_tui::terminal::setup_terminal` refuses to start without a
 //! TTY, so any caller reaching this point already has both.
 //!
@@ -28,7 +27,7 @@ use coco_session::TranscriptStore;
 
 use crate::paths::project_paths;
 
-/// ANSI `dim` (`SGR 2`) wrapper used by TS via `chalk.dim`.
+/// ANSI `dim` (`SGR 2`) escape sequences.
 const DIM_ON: &str = "\x1b[2m";
 const DIM_OFF: &str = "\x1b[22m";
 
@@ -37,9 +36,7 @@ const DIM_OFF: &str = "\x1b[22m";
 /// out from [`print_resume_hint`] so the format is unit-testable
 /// without touching the filesystem or the global stdout.
 ///
-/// One outer SGR `dim` pair wraps the whole multi-line block — byte
-/// for byte the same shape as TS `chalk.dim(...)` of the same
-/// template (`gracefulShutdown.ts:175-177`).
+/// One outer SGR `dim` pair wraps the whole multi-line block.
 fn render(session_id: &str) -> String {
     format!("{DIM_ON}\nResume this session with:\ncoco --resume {session_id}\n{DIM_OFF}")
 }

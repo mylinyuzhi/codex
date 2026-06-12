@@ -13,7 +13,6 @@
 //! - Scaling to 57 variants would create a 1:1 copy, tripling maintenance
 //! - The TUI is not classical TEA; `TuiNotification` was a private
 //!   intermediate for one of two orthogonal dispatch paths
-//! - TS has no equivalent (direct dispatch via handleMessageFromStream)
 //!
 //! # Per-layer submodules
 //!

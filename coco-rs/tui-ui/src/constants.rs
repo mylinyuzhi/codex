@@ -105,13 +105,12 @@ pub const MAX_SEARCH_RESULTS: i32 = 50;
 /// shortcut (Ctrl+C / Ctrl+D exit, double-Esc rewind, …). Consumed by
 /// [`crate::double_press::DoublePressTracker`].
 ///
-/// TS: `DOUBLE_PRESS_TIMEOUT_MS = 800` in `src/hooks/useDoublePress.ts`.
+/// 800 ms matches the upstream `DOUBLE_PRESS_TIMEOUT_MS` constant.
 pub const DOUBLE_PRESS_TIMEOUT: Duration = Duration::from_millis(800);
 
 // ========== Rewind ==========
 
 /// Maximum visible messages in the rewind message selector.
-/// TS: MAX_VISIBLE_MESSAGES = 7 in MessageSelector.tsx
 pub const REWIND_MAX_VISIBLE: i32 = 7;
 
 /// Display-column budget for the per-row prompt label in the rewind

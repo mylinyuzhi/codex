@@ -40,10 +40,9 @@ async fn handler_picks_up_project_skill_md() {
     let cwd = tmp.path().join("project");
     let skill_dir = cwd.join(".coco").join("skills").join("foo");
     fs::create_dir_all(&skill_dir).unwrap();
-    // Strict TS-parity layout: frontmatter at the top of the file, no
+    // Layout: frontmatter at the top of the file, no
     // leading `# Name` heading. The skill name is taken from the parent
-    // directory (`foo`), never from a heading or the frontmatter `name`
-    // field — see TS `loadSkillsDir.ts:452 const skillName = entry.name`.
+    // directory (`foo`), never from a heading or the frontmatter `name` field.
     fs::write(
         skill_dir.join("SKILL.md"),
         "---\ndescription: a project skill\n---\n\nbody",
@@ -132,8 +131,8 @@ async fn paths_lists_bundled_first() {
 
 #[tokio::test]
 async fn list_includes_run_hint() {
-    // Listing must tell the user how to actually invoke a skill, since
-    // TS doesn't expose invoke-from-menu either — `/<name>` is the path.
+    // Listing must tell the user how to actually invoke a skill —
+    // `/<name>` is the path.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("p");
     fs::create_dir_all(&cwd).unwrap();
@@ -157,7 +156,7 @@ async fn list_includes_run_hint() {
 #[tokio::test]
 async fn name_shortcut_resolves_to_show() {
     // `/skills run-skill-generator` should behave like
-    // `/skills show run-skill-generator` — TS analogue of clicking the
+    // `/skills show run-skill-generator` — analogous to clicking the
     // skill in the menu. Bundled name `run-skill-generator` is stable.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("p");
@@ -250,7 +249,7 @@ async fn build_dialog_payload_groups_project_skills_under_project() {
         "expected project skill `foo` in payload, got: {project_names:?}"
     );
 
-    // 2.1.142 dialog ships a flat list (no per-source subtitles).
+    // The dialog ships a flat list (no per-source subtitles).
     // The renderer derives source labels inline from each entry's
     // `source` field, so we only assert the entry surfaced.
     assert!(payload.bytes_per_token > 0);
@@ -317,7 +316,7 @@ async fn skills_handler_no_args_opens_dialog() {
 
 #[tokio::test]
 async fn build_dialog_payload_includes_bundled_skills_as_built_in_source() {
-    // 2.1.142 parity: bundled skills surface in the dialog so users
+    // Bundled skills surface in the dialog so users
     // can toggle a noisy in-binary skill. Source is `BuiltIn`.
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("empty-project");

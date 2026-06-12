@@ -2,14 +2,12 @@ use super::*;
 use crate::types::AttachmentType;
 use pretty_assertions::assert_eq;
 
-// ── Preset constants must match TS verbatim ──
+// ── Preset constants ──
 
 #[test]
 fn plan_mode_preset_matches_ts_constants() {
     let c = ThrottleConfig::plan_mode();
-    // TS PLAN_MODE_ATTACHMENT_CONFIG.TURNS_BETWEEN_ATTACHMENTS = 5
     assert_eq!(c.min_turns_between, 5);
-    // TS PLAN_MODE_ATTACHMENT_CONFIG.FULL_REMINDER_EVERY_N_ATTACHMENTS = 5
     assert_eq!(c.full_content_every_n, Some(5));
     assert_eq!(c.max_per_session, None);
 }
@@ -96,7 +94,7 @@ fn clear_trigger_removes_cooldown() {
     assert!(m.should_generate(AttachmentType::PlanMode, &cfg, 12));
 }
 
-// ── Full/sparse cadence matches TS attachments.ts:1229 ──
+// ── Full/sparse cadence ──
 
 #[test]
 fn full_content_on_first_generation() {
@@ -107,7 +105,7 @@ fn full_content_on_first_generation() {
 
 #[test]
 fn full_sparse_cycle_matches_ts_1_6_11_pattern() {
-    // TS: attachmentCount % 5 === 1 is Full → attachments #1, #6, #11 are Full.
+    // attachmentCount % 5 === 1 is Full → attachments #1, #6, #11 are Full.
     // Our session_count increments AFTER generation, so we check
     // should_use_full_content BEFORE mark_generated each cycle.
     let m = ThrottleManager::new();

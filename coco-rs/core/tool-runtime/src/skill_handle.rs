@@ -52,7 +52,7 @@ pub struct SubagentInheritance {
 
 /// Per-invocation gate inputs for [`SkillHandle::invoke_skill`].
 ///
-/// Two pieces the runtime needs to enforce the TS 4-state Skill tool
+/// Two pieces the runtime needs to enforce the 4-state Skill tool
 /// gate (`cli_inner_pretty.js:353567-353590`):
 ///
 /// - [`Self::overrides`] — per-tier `skill_overrides` maps used by
@@ -84,8 +84,7 @@ pub struct SkillGateContext {
 /// Forked variant has no permission channel — fork-mode skills inject
 /// their rules at dispatch time via `AgentQueryConfig.extra_permission_rules`
 /// (Layer 4 inheritance), so by the time the subagent finishes there's
-/// nothing to thread back. TS parity: `SkillTool.ts:775` `contextModifier`
-/// for inline; `createGetAppStateWithAllowedTools` wrapping for fork.
+/// nothing to thread back.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SkillInvocationResult {
     /// Expand the skill's prompt inline as new user messages.
@@ -147,16 +146,14 @@ pub trait SkillHandle: Send + Sync {
     /// `AgentTool` to preload skills declared in agent frontmatter
     /// (`skills: [foo, bar]`) — the bodies are prepended to the
     /// spawned subagent's first user message so the child sees the
-    /// skill content from turn 1. TS parity:
-    /// `runAgent.ts:577-645` preloads frontmatter skills via
-    /// `getSkillToolCommands()` + `skill.getPromptForCommand('')`.
+    /// skill content from turn 1.
     ///
     /// **Skill-override gates apply.** Implementations must apply
     /// the same author / runtime gates as `invoke_skill` so a skill
     /// the user has hidden (`disable_model_invocation: true` or
     /// `skill_overrides == "off"`) cannot sneak into a subagent's
-    /// preloaded prompt. TS parity: the same `XG$` predicate that
-    /// gates the listing also gates `getSkillToolCommands()`.
+    /// preloaded prompt. The same predicate that gates the listing
+    /// also gates skill commands.
     ///
     /// Default implementation returns `None` — handles that don't
     /// support preload (test fixtures / minimal embeddings) leave
@@ -183,11 +180,11 @@ pub enum SkillInvocationError {
     #[error("skill is hidden from model: {name}")]
     HiddenFromModel { name: String },
     /// `skill_overrides` resolved to `off` — the model cannot invoke
-    /// this skill at all. TS errorCode 7 (off branch).
+    /// this skill at all. errorCode 7 (off branch).
     #[error("skill {name} is disabled for model invocation in skill_overrides settings")]
     OverrideOff { name: String },
     /// `skill_overrides` resolved to `user-invocable-only` and the
-    /// user did not type `/<name>` in the current turn. TS errorCode
+    /// user did not type `/<name>` in the current turn. errorCode
     /// 7 (user-invocable-only branch).
     #[error("skill {name} is user-invocable-only; type /{name} in the current turn to enable")]
     OverrideUserOnlyNoTrigger { name: String },

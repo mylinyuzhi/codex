@@ -1,8 +1,5 @@
 //! Team memory sync subsystem (HTTP-backed).
 //!
-//! TS: `services/teamMemorySync/{index,types,secretScanner,
-//! teamMemSecretGuard,watcher}.ts`.
-//!
 //! Round-9-deep-port skeleton: types are complete (`types.rs`); the
 //! HTTP push/pull pipeline + watcher live in this module's
 //! `service.rs` follow-up. Until the HTTP wiring lands, callers can

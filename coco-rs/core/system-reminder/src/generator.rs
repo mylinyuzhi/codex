@@ -9,10 +9,10 @@
 //! minimal (scalars a Phase B plan-mode migration requires). Phase C extends
 //! the struct when new generators need new inputs.
 //!
-//! Design choices (TS-first):
-//! - `has_user_input` (bool) mirrors TS `input != null` in `getAttachments`.
-//! - `is_main_agent` mirrors TS `isMainThread = !toolUseContext.agentId`.
-//! - `last_human_turn_uuid` is coco-rs only: the existing plan-mode reminder
+//! Design notes:
+//! - `has_user_input` (bool): true when the user submitted input this turn.
+//! - `is_main_agent`: true for the main thread, false for subagents.
+//! - `last_human_turn_uuid` is coco-rs specific: the plan-mode reminder
 //!   counts *human* turns (non-meta user messages), not LLM iterations, to
 //!   handle multi-tool-round turns correctly. See
 //!   `app/query/plan_mode_reminder.rs:384` for the precedent.
@@ -102,12 +102,10 @@ pub struct GeneratorContext<'a> {
     /// Current turn number (incremented by the engine on each LLM iteration).
     pub turn_number: i32,
 
-    /// True when this is the main thread. Mirrors TS
-    /// `isMainThread = !toolUseContext.agentId` (`attachments.ts:770`).
+    /// True when this is the main thread (`agent_id` is `None`).
     pub is_main_agent: bool,
 
-    /// True when the user submitted input this turn. Mirrors TS `input != null`
-    /// in the `userInputAttachments` gate (`attachments.ts:773`).
+    /// True when the user submitted input this turn.
     pub has_user_input: bool,
 
     // ── Permission-mode flags ──
@@ -115,7 +113,7 @@ pub struct GeneratorContext<'a> {
     pub is_plan_mode: bool,
 
     /// True on the first plan-mode turn after a prior exit in this session.
-    /// Drives the `plan_mode_reentry` variant (TS `messages.ts:3829`).
+    /// Drives the `plan_mode_reentry` variant.
     ///
     /// Source of truth: `ToolAppState::has_exited_plan_mode`, set by
     /// `ExitPlanModeTool` and cleared after Reentry emits. Engine forwards
@@ -146,7 +144,7 @@ pub struct GeneratorContext<'a> {
     pub agent_id: Option<String>,
 
     /// True when running as a sub-agent. Drives the simplified sub-agent
-    /// plan-mode prompt (TS `plan_mode` rendering path for sub-agents).
+    /// plan-mode prompt.
     pub is_sub_agent: bool,
 
     /// Plan-mode 5-phase workflow variant. Ignored for Sparse / Reentry /
@@ -177,14 +175,13 @@ pub struct GeneratorContext<'a> {
 
     // ── Phase C (todo / task / critical reminders) ──
     /// Snake / PascalCase names of tools available to the agent this turn.
-    /// Generators use this to gate reminders on tool presence (TS
-    /// `getTodoReminderAttachments` checks for `TodoWrite` / `Brief`).
+    /// Generators use this to gate reminders on tool presence (e.g.
+    /// todo reminders check for `TodoWrite` / `Brief`).
     pub tools: Vec<String>,
 
     /// Assistant turns since the agent last called `TodoWrite`, counting
-    /// from the end of history. Engine pre-computes by scanning the
-    /// message history (TS `getTodoReminderTurnCounts`,
-    /// `attachments.ts:3212`).
+    /// from the end of history. Engine pre-computes by scanning message
+    /// history.
     pub turns_since_last_todo_write: i32,
 
     /// Assistant turns since the last `todo_reminder` attachment was
@@ -192,8 +189,7 @@ pub struct GeneratorContext<'a> {
     pub turns_since_last_todo_reminder: i32,
 
     /// Assistant turns since the V2 task tools (`TaskCreate`, `TaskUpdate`
-    /// etc.) were last invoked. TS
-    /// `getTaskReminderTurnCounts` (`attachments.ts:3319`).
+    /// etc.) were last invoked.
     pub turns_since_last_task_tool: i32,
 
     /// Assistant turns since the last `task_reminder` attachment.
@@ -206,86 +202,74 @@ pub struct GeneratorContext<'a> {
     /// Snapshot of the V2 plan-task list for this session.
     pub plan_tasks: Vec<TaskRecord>,
 
-    /// True when the V2 task-list feature is active. TS `isTodoV2Enabled`.
+    /// True when the V2 task-list feature is active.
     pub is_task_v2_enabled: bool,
 
     // ── Phase C.2 (auto-mode / compaction / date-change) ──
     /// True when the engine is in auto mode, or in plan-mode with the
-    /// auto-mode classifier actively driving. Mirrors TS
-    /// `inAuto || inPlanWithAuto` (`attachments.ts:1341-1344`).
+    /// auto-mode classifier actively driving.
     pub is_auto_mode: bool,
 
-    /// True when auto-compaction is enabled (TS `isAutoCompactEnabled()`).
+    /// True when auto-compaction is enabled.
     pub is_auto_compact_enabled: bool,
 
-    /// Total context window for the active model, in tokens. TS reads
-    /// this via `getContextWindowForModel` (`attachments.ts:3943`).
+    /// Total context window for the active model, in tokens.
     pub context_window: i64,
 
-    /// Effective context window after reserving for output/ thinking
-    /// (TS `getEffectiveContextWindowSize`, `attachments.ts:3948`). The
-    /// compaction reminder compares usage against 25% of this.
+    /// Effective context window after reserving for output / thinking.
+    /// The compaction reminder compares usage against 25% of this.
     pub effective_context_window: i64,
 
-    /// Tokens currently in context (TS `tokenCountWithEstimation`).
+    /// Tokens currently in context (includes estimation).
     pub used_tokens: i64,
 
     /// `Some(date)` on the turn the local date changes relative to the
     /// last-emitted date; `None` otherwise. Engine pre-computes by
-    /// comparing today's local ISO date to its own "last emitted date"
-    /// latch. TS `getDateChangeAttachments` at `attachments.ts:1415`.
+    /// comparing today's local ISO date to its own "last emitted date" latch.
     pub new_date: Option<String>,
 
     /// `Some(iso_date)` = today's local ISO date, injected by the engine
     /// every turn so the [`UserContextGenerator`](crate::generators::UserContextGenerator)
-    /// can emit a baseline `Today's date is <date>.` reminder. Mirrors TS
-    /// `getUserContext().currentDate` (`context.ts:186`) prepended via
-    /// `prependUserContext` (`utils/api.ts:449`). `None` (the default,
-    /// e.g. in unit tests) suppresses the reminder.
+    /// can emit a baseline `Today's date is <date>.` reminder. `None` (the
+    /// default, e.g. in unit tests) suppresses the reminder.
     pub current_date: Option<String>,
 
     // ── Phase E (verify-plan reminder) ──
     /// True when `ExitPlanModeTool` has flipped
     /// [`ToolAppState::pending_plan_verification`] and a follow-up
-    /// `VerifyPlanExecution` call is still outstanding. TS: truthy
+    /// `VerifyPlanExecution` call is still outstanding. Set from
     /// `appState.pendingPlanVerification` minus the
     /// `verificationStarted` / `verificationCompleted` sub-flags
-    /// (collapsed in coco-rs — see the `pending_plan_verification`
-    /// field on `ToolAppState`).
+    /// (collapsed — see the `pending_plan_verification` field on
+    /// `ToolAppState`).
     pub has_pending_plan_verification: bool,
 
     /// Human turns elapsed since the last `plan_mode_exit` attachment.
-    /// TS: `getVerifyPlanReminderTurnCount` (`attachments.ts:3872`).
     pub turns_since_plan_exit: i32,
 
     // ── Phase 1 engine-local reminder inputs ──
-    /// Total cost in USD accumulated for the current session. TS reads
-    /// `getTotalCostUSD()`; coco-rs engine tracks this in
-    /// `CostTracker`/`total_usage`. Used by `budget_usd`.
+    /// Total cost in USD accumulated for the current session. Used by
+    /// `budget_usd`.
     pub total_cost_usd: f64,
 
     /// Optional per-session USD budget cap. `Some(n)` activates the
     /// `budget_usd` reminder; `None` suppresses it. Sourced from
-    /// `QueryEngineConfig::max_budget_usd`. TS
-    /// `getMaxBudgetUsdAttachment` (`attachments.ts:3846`).
+    /// `QueryEngineConfig::max_budget_usd`.
     pub max_budget_usd: Option<f64>,
 
-    /// Output tokens produced in the current turn. TS
-    /// `getTurnOutputTokens()` — zero at turn start, rises as the LLM
-    /// streams. Used by `output_token_usage`.
+    /// Output tokens produced in the current turn — zero at turn start,
+    /// rises as the LLM streams. Used by `output_token_usage`.
     pub output_tokens_turn: i64,
 
-    /// Output tokens for the full session. TS `getTotalOutputTokens()`.
+    /// Output tokens for the full session.
     pub output_tokens_session: i64,
 
     /// Optional per-turn output-token budget. `Some(n>0)` activates the
     /// `output_token_usage` reminder; `None` or `Some(0)` suppresses it.
-    /// TS `getCurrentTurnTokenBudget()` (`attachments.ts:3830`).
     pub output_token_budget: Option<i64>,
 
     /// Configured companion name (e.g. `"Pebble"`). `Some` activates the
-    /// `companion_intro` reminder once per session. TS reads this from
-    /// `getCompanion()` in `buddy/prompt.ts`.
+    /// `companion_intro` reminder once per session.
     pub companion_name: Option<String>,
 
     /// Configured companion species (e.g. `"rabbit"`). Must be set together
@@ -294,7 +278,7 @@ pub struct GeneratorContext<'a> {
 
     /// True when a `companion_intro` reminder with the current companion
     /// name has already been emitted in this session. Engine precomputes
-    /// by scanning history. TS `buddy/prompt.ts:23-27`.
+    /// by scanning history.
     pub has_prior_companion_intro: bool,
 
     // ── Phase 2 history-diff delta snapshots ──
@@ -389,7 +373,7 @@ pub struct GeneratorContext<'a> {
     /// change. Non-empty → generator emits silent attachment.
     pub edited_image_file_paths: Vec<PathBuf>,
 
-    // ── Audit-add (May 2026) — model-visible TS attachment.
+    // ── Audit-add (May 2026) — model-visible attachment.
     /// Skill-discovery suggestion from `coco-skills` (UserPrompt tier).
     pub skill_discovery: Option<SkillDiscoveryPayload>,
 
@@ -994,9 +978,8 @@ impl<'a> GeneratorContextBuilder<'a> {
     }
 }
 
-/// Deferred-tools delta snapshot — mirrors TS `DeferredToolsDelta` fields
-/// at `attachments.ts:1472`. `added_lines` entries are `"- ToolName: description"`
-/// ready for direct newline-join rendering.
+/// Deferred-tools delta snapshot. `added_lines` entries are
+/// `"- ToolName: description"` ready for direct newline-join rendering.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeferredToolsDeltaInfo {
     pub added_lines: Vec<String>,
@@ -1009,10 +992,9 @@ impl DeferredToolsDeltaInfo {
     }
 }
 
-/// Agent-listing delta snapshot — mirrors TS `agent_listing_delta` at
-/// `messages.ts:4194`. `is_initial` flips the added-header text; the
-/// optional concurrency note is appended when `show_concurrency_note`
-/// is true (TS: only on initial announcement).
+/// Agent-listing delta snapshot. `is_initial` flips the added-header text;
+/// the optional concurrency note is appended when `show_concurrency_note`
+/// is true.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentListingDeltaInfo {
     pub added_lines: Vec<String>,
@@ -1027,9 +1009,8 @@ impl AgentListingDeltaInfo {
     }
 }
 
-/// MCP instructions delta snapshot — mirrors TS `mcp_instructions_delta`
-/// at `messages.ts:4216`. `added_blocks` entries are full pre-formatted
-/// server blocks ready for `\n\n`-join rendering.
+/// MCP instructions delta snapshot. `added_blocks` entries are full
+/// pre-formatted server blocks ready for `\n\n`-join rendering.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct McpInstructionsDeltaInfo {
     pub added_blocks: Vec<String>,
@@ -1046,32 +1027,31 @@ impl McpInstructionsDeltaInfo {
 
 /// One hook event to be surfaced as a reminder this turn. Engine
 /// pre-computes a `Vec<HookEvent>` by draining the async hook registry;
-/// the 5 hook generators filter the vec for their variant. Text
-/// templates are rendered verbatim from TS `messages.ts:4090-4137`.
+/// the 5 hook generators filter the vec for their variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookEvent {
-    /// TS `hook_success`. Only SessionStart / UserPromptSubmit with
-    /// non-empty content produce text in TS.
+    /// `hook_success`. Only SessionStart / UserPromptSubmit with
+    /// non-empty content produce text.
     Success {
         hook_name: String,
         hook_event: HookEventKind,
         content: String,
     },
-    /// TS `hook_blocking_error`.
+    /// `hook_blocking_error`.
     BlockingError {
         hook_name: String,
         command: String,
         error: String,
     },
-    /// TS `hook_additional_context` — content is a list of lines
+    /// `hook_additional_context` — content is a list of lines
     /// joined by `\n` in the output text.
     AdditionalContext {
         hook_name: String,
         content: Vec<String>,
     },
-    /// TS `hook_stopped_continuation`.
+    /// `hook_stopped_continuation`.
     StoppedContinuation { hook_name: String, message: String },
-    /// TS `async_hook_response` — produces up to two messages (system
+    /// `async_hook_response` — produces up to two messages (system
     /// + additionalContext) inside one `<system-reminder>`.
     AsyncResponse {
         system_message: Option<String>,
@@ -1079,7 +1059,7 @@ pub enum HookEvent {
     },
 }
 
-/// Hook-event kind gate for `hook_success` — TS only emits the
+/// Hook-event kind gate for `hook_success` — only emits the
 /// reminder for SessionStart and UserPromptSubmit events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEventKind {
@@ -1088,9 +1068,8 @@ pub enum HookEventKind {
     Other,
 }
 
-/// Single diagnostic file entry (`attachment.files[i]` in TS).
-/// `formatted` is the TS-rendered per-file diagnostic block, already
-/// formatted by `DiagnosticTrackingService.formatDiagnosticsSummary`.
+/// Single diagnostic file entry. `formatted` is the pre-rendered per-file
+/// diagnostic block produced by `DiagnosticTrackingService.formatDiagnosticsSummary`.
 /// Engine owns the formatting since LSP/IDE providers differ.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiagnosticFileSummary {
@@ -1098,32 +1077,28 @@ pub struct DiagnosticFileSummary {
     pub formatted: String,
 }
 
-/// Output-style reinforcement snapshot. TS keys by `style` into
-/// `OUTPUT_STYLE_CONFIG` and returns `${name}` — coco-rs passes the
-/// display name directly.
+/// Output-style reinforcement snapshot. Contains the resolved display
+/// name for the active output style.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OutputStyleSnapshot {
     pub name: String,
 }
 
-/// Queued-command replay snapshot. TS reinjects drained queue items
-/// as `queued_command` attachments wrapped via `wrapCommandText`
-/// (`messages.ts:5496`) — each origin variant gets its own framing
-/// sentence so the model knows how urgently / trustingly to treat the
-/// interruption. When the queued item carried images (mid-turn paste of
-/// a screenshot, …), TS appends them after the wrapped text via
-/// `[{ type: 'text', text: textValue }, ...imageBlocks]`
-/// (`attachments.ts:1062-1075`); coco-rs mirrors that by emitting a
-/// `ReminderMessage` with text + image content blocks.
+/// Queued-command replay snapshot. Drained queue items are re-injected
+/// as `queued_command` attachments wrapped via `wrapCommandText` — each
+/// origin variant gets its own framing sentence so the model knows how
+/// urgently / trustingly to treat the interruption. When the queued item
+/// carried images (mid-turn paste of a screenshot, …), they are appended
+/// after the wrapped text via a `ReminderMessage` with text + image
+/// content blocks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct QueuedCommandInfo {
     pub content: String,
     /// Origin tag carried over from the queue. `None` is treated as
     /// `Human` by [`crate::wrap_command_text`].
     pub origin: Option<crate::queue_origin::QueueOrigin>,
-    /// Image attachments paired with the queued text. Mirrors TS
-    /// `imageBlocks` extracted from `attachment.prompt: ContentBlockParam[]`.
-    /// Empty for text-only queued commands, which is the common case.
+    /// Image attachments paired with the queued text. Empty for text-only
+    /// queued commands, which is the common case.
     pub images: Vec<QueuedCommandImage>,
 }
 
@@ -1138,8 +1113,8 @@ pub struct QueuedCommandImage {
     pub data_base64: String,
 }
 
-/// Background-task status snapshot — TS `task_status`. Rendered
-/// differently per status: `killed` emits a brief "stopped by user"
+/// Background-task status snapshot. Rendered differently per status:
+/// `killed` emits a brief "stopped by user"
 /// note; `running` warns against duplicate spawns with optional delta
 /// summary + output-file pointer; `completed` / `failed` surface the
 /// full delta with `(type: ...) (status: ...) (description: ...)`
@@ -1149,8 +1124,7 @@ pub struct TaskStatusSnapshot {
     pub task_id: String,
     pub description: String,
     pub status: TaskRunStatus,
-    /// TS `attachment.taskType` (`messages.ts:4000`). Used in the
-    /// `(type: ...)` metadata for completed / failed renderings.
+    /// Task type used in `(type: ...)` metadata for completed / failed renderings.
     pub task_type: String,
     pub delta_summary: Option<String>,
     pub output_file_path: Option<String>,
@@ -1164,7 +1138,7 @@ pub enum TaskRunStatus {
     Killed,
 }
 
-/// Skill record for `invoked_skills` — mirrors TS `attachment.skills[i]`.
+/// Skill record for `invoked_skills`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InvokedSkillEntry {
     pub name: String,
@@ -1173,16 +1147,14 @@ pub struct InvokedSkillEntry {
 }
 
 /// Teammate mailbox snapshot — a bundle of unread messages for the
-/// agent. TS renders `formatTeammateMessages(entries)` (not a simple
-/// template, so the engine / swarm layer pre-formats and passes the
-/// final string to the generator).
+/// agent. The engine / swarm layer pre-formats the entries and passes the
+/// final string to the generator.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TeammateMailboxInfo {
     pub formatted: String,
 }
 
 /// Team context for the first-turn team-coordination injection.
-/// Matches TS `team_context` fields at `messages.ts:3795-3804`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TeamContextSnapshot {
     pub agent_id: String,
@@ -1200,14 +1172,12 @@ pub struct AgentPendingMessage {
 }
 
 /// Default explore-agent count referenced in the 5-phase Full prompt.
-/// Matches TS default + existing `app/query/src/plan_mode_reminder.rs`.
 pub const DEFAULT_EXPLORE_AGENT_COUNT: i32 = 3;
 
 /// Default plan-agent count.
 pub const DEFAULT_PLAN_AGENT_COUNT: i32 = 1;
 
-/// Inclusive min/max clamps on agent counts; matches
-/// `app/query/src/plan_mode_reminder.rs` `AgentCount::new`.
+/// Inclusive min/max clamps on agent counts (see `AgentCount::new`).
 pub const MIN_AGENTS: i32 = 1;
 pub const MAX_AGENTS: i32 = 10;
 

@@ -2,9 +2,9 @@
 
 Google Generative AI (Gemini) provider for Vercel AI SDK v4. Supports language, embedding, image, and video generation.
 
-## TS Source
+## SDK Spec
 
-Ports `@ai-sdk/google` v4 (not from `claude-code/src/`).
+Implements the `@ai-sdk/google` v4 specification.
 
 ## Key Types
 

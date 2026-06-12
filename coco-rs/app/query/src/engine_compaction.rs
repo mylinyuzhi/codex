@@ -58,7 +58,7 @@ impl QueryEngine {
     /// Replace the authoritative in-memory history after compaction and keep
     /// the append-only transcript resumable.
     ///
-    /// TS records compact rewrites by appending the new boundary/summary
+    /// Records compact rewrites by appending the new boundary/summary
     /// chain, not by rewriting JSONL. When the boundary carries a preserved
     /// segment, the preserved tail must already exist on disk so resume can
     /// validate and relink it.
@@ -95,10 +95,10 @@ impl QueryEngine {
         event_tx: &Option<tokio::sync::mpsc::Sender<CoreEvent>>,
         request: ManualCompactRequest,
     ) -> coco_compact::CompactOutcome {
-        // #210 / TS commands/compact/index.ts:9: COCO_COMPACT_DISABLE
-        // removes /compact from the registry entirely, so the env disables
-        // BOTH auto and manual compaction. Honor the hard-kill here so the
-        // manual path (SDK / scripted / old transcript) can't bypass it.
+        // `COCO_COMPACT_DISABLE` removes /compact from the registry
+        // entirely, disabling BOTH auto and manual compaction. Honor the
+        // hard-kill here so the manual path (SDK / scripted / old
+        // transcript) can't bypass it.
         if self.config.compact.auto.disabled_by_env {
             append_manual_compact_notice(
                 history,
@@ -117,16 +117,15 @@ impl QueryEngine {
             return coco_compact::CompactOutcome::Skipped;
         }
 
-        // TS parity: non-empty manual `/compact` histories flow through
+        // Non-empty manual `/compact` histories flow through
         // session-memory / LLM compaction; the compact service decides
         // whether there is enough conversation to summarize.
 
-        // TS commands/compact/compact.ts:98 calls `microcompactMessages`
-        // before `compactConversation`, but that function is a no-op in
-        // external builds (only the `feature('CACHED_MICROCOMPACT')` /
-        // time-based paths mutate, and neither fires synchronously here).
-        // Opt-in via `compact.micro.count_based_enabled` (default off);
-        // when off, we behave like TS external — straight to SM/LLM.
+        // Micro-compact runs before `compactConversation` only when
+        // count-based mode is enabled (default off) — the time-based
+        // path does not fire synchronously here.
+        // Opt-in via `compact.micro.count_based_enabled`; when off,
+        // go straight to SM/LLM.
         let micro_keep = self.config.compact.micro.keep_recent.max(0) as usize;
         let will_try_sm =
             request.custom_instructions.is_none() && self.config.compact.session_memory.enabled;
@@ -141,9 +140,8 @@ impl QueryEngine {
 
         // SM-first short-circuit + LLM fallback are both centralized in
         // `try_full_compact` — manual path just passes the trigger and
-        // any custom instructions through. TS parity
-        // (commands/compact/compact.ts:55-62): when custom instructions
-        // are present we want the LLM path; `try_full_compact` already
+        // any custom instructions through. When custom instructions are
+        // present we want the LLM path; `try_full_compact` already
         // skips SM in that case (see its branch).
         self.try_full_compact_impl(
             history,
@@ -424,10 +422,9 @@ impl QueryEngine {
     /// produced a result and history was rewritten; `false` when the
     /// caller should fall through to LLM summarization.
     ///
-    /// TS: services/compact/sessionMemoryCompact.ts:514 `trySessionMemoryCompaction`.
-    /// The SM path bypasses PreCompact / PostCompact hooks (sessionMemoryCompact.ts:584
-    /// only fires sessionStart hooks) — context recovery is already in
-    /// the memory text itself.
+    /// The SM path bypasses PreCompact / PostCompact hooks (only
+    /// sessionStart hooks fire) — context recovery is already in the
+    /// memory text itself.
     pub(crate) async fn try_session_memory_compact(
         &self,
         history: &mut MessageHistory,
@@ -436,8 +433,7 @@ impl QueryEngine {
         manual_request: Option<&ManualCompactRequest>,
     ) -> bool {
         // Wait for any in-flight forked-agent extraction so we don't
-        // snapshot an about-to-be-overwritten memory file. TS:
-        // waitForSessionMemoryExtraction (sessionMemoryCompact.ts:527).
+        // snapshot an about-to-be-overwritten memory file.
         // Past `STALE_THRESHOLD` (60s) the call returns false and we
         // proceed — extraction is presumed crashed.
         if let Some(svc) = &self.session_memory_service {
@@ -481,11 +477,11 @@ impl QueryEngine {
             session_memory_path: path_str,
         };
 
-        // Read the boundary anchor (TS getLastSummarizedMessageId).
-        // Prefer the service's value when installed — the extractor
-        // writes it there on each successful extract. Fall back to the
-        // engine-local Mutex for tests / SDK paths that bypass the
-        // service. Sync the local cache so subsequent reads agree.
+        // Read the boundary anchor. Prefer the service's value when
+        // installed — the extractor writes it there on each successful
+        // extract. Fall back to the engine-local Mutex for tests / SDK
+        // paths that bypass the service. Sync the local cache so
+        // subsequent reads agree.
         let last_summarized = if let Some(svc) = &self.session_memory_service {
             let from_svc = svc.last_summarized_message_uuid().await;
             if let Some(uuid) = from_svc
@@ -546,8 +542,8 @@ impl QueryEngine {
 
         // Update lastSummarizedMessageId to the *new* boundary anchor —
         // the last kept assistant message's uuid (or None when no
-        // assistants survived). TS autoCompact.ts:296. Mirror to the
-        // service so the next extraction sees the same anchor.
+        // assistants survived). Mirror to the service so the next
+        // extraction sees the same anchor.
         let new_anchor = result
             .messages_to_keep
             .iter()
@@ -609,24 +605,19 @@ impl QueryEngine {
         self.compaction_observers
             .notify_post_compact(&new_messages)
             .await;
-        // TS sessionMemoryCompact.ts:65 `notifyCompaction()`: reset the
-        // cache-break baseline so the post-compact drop in cache_read
-        // tokens doesn't false-positive as a break.
+        // Reset the cache-break baseline so the post-compact drop in
+        // cache_read tokens doesn't false-positive as a break.
         let qs = self.query_source_label();
         self.notify_model_compaction(qs).await;
-        // Reset the memory recall state — TS gets this for free because
-        // `collectSurfacedMemories(messages)` re-derives the dedup set
-        // and 60 KB budget from message history each call, and compact
-        // strips the relevant-memory attachments. Rust persists the
-        // state on the runtime, so without this explicit reset the
-        // post-compact session would inherit a saturated byte budget
-        // and never re-surface memory.
+        // Reset the memory recall state. The dedup set and 60 KB
+        // budget are persisted on the runtime; without this explicit
+        // reset the post-compact session would inherit a saturated byte
+        // budget and never re-surface memory.
         //
         // Also clear SM's in-memory text cache so the next extract
-        // re-reads the file fresh — TS `clearAfterCompact` semantics
-        // (`sessionMemoryCompact.ts:65 notifyCompaction()`). Without
-        // this the SM-first compact short-circuit could serve a
-        // stale cached body to the next compaction.
+        // re-reads the file fresh. Without this the SM-first compact
+        // short-circuit could serve a stale cached body to the next
+        // compaction.
         if let Some(rt) = &self.memory_runtime {
             rt.reset_recall_state();
             rt.session_memory.clear_after_compact().await;
@@ -639,8 +630,7 @@ impl QueryEngine {
             }),
         )
         .await;
-        // Surface task_status reminders on the next turn (TS post-compact
-        // emission gate at `attachments.ts:962`).
+        // Surface task_status reminders on the next turn.
         self.pending_just_compacted
             .store(true, std::sync::atomic::Ordering::SeqCst);
         true
@@ -835,22 +825,18 @@ impl QueryEngine {
                 ModelRuntimeQueryOutcome::Success { result, .. } => {
                     let stop = result.stop_reason.as_ref();
                     let stop_abnormal = stop.is_some_and(coco_messages::FinishReason::is_abnormal);
-                    // TS parity (`services/compact/compact.ts:493-515`): a
-                    // truncated / content-filtered / refused summary is
+                    // A truncated / content-filtered / refused summary is
                     // unusable — it would silently contaminate every
-                    // subsequent turn with partial XML. Match TS's
-                    // `throw new Error('Failed to generate conversation
-                    // summary…')` by returning an `Err` whose message
-                    // carries the `compact_summary_aborted:` prefix; the
-                    // upper layer at `coco_compact::compact.rs:898-902`
-                    // routes this prefix into `CompactError::LlmCallFailed`,
-                    // which the user sees as "Error compacting conversation".
-                    // Multi-provider note: the Anthropic stream layer in TS
-                    // (`services/api/claude.ts:2266`) already converts
-                    // `max_tokens` into a synthetic API-error message —
-                    // coco-rs runs across providers that don't do that
-                    // transform, so the side-fork caller has to defend
-                    // itself by inspecting `stop_reason` directly here.
+                    // subsequent turn with partial XML. Return an `Err`
+                    // whose message carries the `compact_summary_aborted:`
+                    // prefix; the upper layer at
+                    // `coco_compact::compact.rs:898-902` routes this prefix
+                    // into `CompactError::LlmCallFailed`, which the user
+                    // sees as "Error compacting conversation".
+                    // Multi-provider note: some providers convert `max_tokens`
+                    // into a synthetic API-error message at the stream layer;
+                    // coco-rs does not, so the side-fork caller has to
+                    // inspect `stop_reason` directly here.
                     if stop_abnormal {
                         warn!(
                             stop_reason = ?stop,
@@ -1126,18 +1112,18 @@ impl QueryEngine {
 
     /// Attempt full LLM-summarized compaction.
     ///
-    /// TS: `compactConversation()` — snapshot readFileState, clear it, call LLM
-    /// to summarize old rounds, then re-inject recently read files.
+    /// Snapshots readFileState, clears it, calls the LLM to summarize
+    /// old rounds, then re-injects recently read files.
     ///
     /// Sequence:
     /// 1. SM-first short-circuit (Auto path only — manual handled in
     ///    `run_manual_compact`). Returns immediately if SM produced a result.
-    /// 2. PreCompact hooks (TS `executePreCompactHooks`) — collect any custom
-    ///    instructions and merge into the summary prompt.
+    /// 2. PreCompact hooks — collect any custom instructions and merge
+    ///    into the summary prompt.
     /// 3. Snapshot FileReadState; clear it only after summary success.
     /// 4. Call `compact_conversation` with the LLM summarizer.
-    /// 5. Notify CompactionObservers (TS `runPostCompactCleanup`).
-    /// 6. PostCompact hooks (TS `executePostCompactHooks`).
+    /// 5. Notify CompactionObservers.
+    /// 6. PostCompact hooks.
     #[tracing::instrument(
         skip_all,
         name = "compaction",
@@ -1176,20 +1162,20 @@ impl QueryEngine {
             coco_types::CompactTrigger::ContextCollapse => "context_collapse",
         };
         info!(trigger = trigger_label, "try_full_compact entered");
-        // TS hook schema's `trigger` is `enum('manual','auto')` — only
-        // those two values are valid on the wire. Coco-rs-only triggers
-        // (Reactive / TimeBased / SessionMemory / ContextCollapse) all
-        // map to `Auto` for the hook payload (they are autonomous
-        // compaction events from the agent's perspective).
+        // Hook wire trigger is `enum('manual','auto')`. Coco-rs-only
+        // triggers (Reactive / TimeBased / SessionMemory /
+        // ContextCollapse) all map to `Auto` for the hook payload —
+        // they are autonomous compaction events from the agent's
+        // perspective.
         let hook_trigger = match trigger {
             coco_types::CompactTrigger::Manual => coco_hooks::orchestration::CompactTrigger::Manual,
             _ => coco_hooks::orchestration::CompactTrigger::Auto,
         };
 
-        // 1. SM-first short-circuit. Auto always tries SM (autoCompact.ts:288);
-        //    Manual tries SM only when the user gave no custom instructions
-        //    (commands/compact/compact.ts:55-62) — with instructions the
-        //    user wants the LLM to honor them, and SM can't.
+        // 1. SM-first short-circuit. Auto always tries SM; Manual tries
+        //    SM only when the user gave no custom instructions — with
+        //    instructions the user wants the LLM to honor them, and SM
+        //    can't.
         let can_try_sm = match trigger {
             coco_types::CompactTrigger::Auto => true,
             coco_types::CompactTrigger::Manual => custom_instructions.is_none(),
@@ -1204,8 +1190,8 @@ impl QueryEngine {
             return coco_compact::CompactOutcome::Applied;
         }
 
-        // Emit phase: HooksStart{PreCompact}. TS REPL.tsx:2502 maps this
-        // to the "Running PreCompact hooks…" spinner.
+        // Emit phase: HooksStart{PreCompact} — drives the "Running
+        // PreCompact hooks…" spinner.
         let _ = emit_protocol(
             event_tx,
             ServerNotification::CompactionPhase(coco_types::CompactionPhaseParams {
@@ -1251,9 +1237,9 @@ impl QueryEngine {
         };
 
         // 2. Build the attachment callback that captures the snapshot.
-        // TS: createPostCompactFileAttachments + createPlanAttachmentIfNeeded
-        // + createPlanModeAttachmentIfNeeded + createAsyncAgentAttachmentsIfNeeded
-        // + getInvokedSkillsForAgent (in-band skill re-injection).
+        // Post-compact attachment assembly: file attachments, plan
+        // attachment, plan-mode attachment, async-agent attachments,
+        // and in-band skill re-injection.
         let cwd = std::env::current_dir().unwrap_or_default();
         let session_id = self.config.session_id.clone();
         let config_home = self.config_home.clone();
@@ -1264,8 +1250,7 @@ impl QueryEngine {
             .read()
             .map(|g| g.clone())
             .unwrap_or_default();
-        // Plan-mode snapshot for `createPlanModeAttachmentIfNeeded`.
-        // Read live permission mode from `ToolAppState` (Plan = in plan mode);
+        // Plan-mode snapshot: read live permission mode from `ToolAppState`;
         // workflow / phase4_variant / agent counts come from QueryEngineConfig.
         let agent_id_for_attachments = self.config.agent_id.clone();
         let captured_plan_mode_snapshot: Option<coco_compact::PlanModeAttachment> = {
@@ -1332,14 +1317,12 @@ impl QueryEngine {
                 })
             }
         };
-        // Async-agent snapshot for `createAsyncAgentAttachmentsIfNeeded`.
-        // Read running TaskManager state and filter for unretrieved
-        // local_agent tasks owned by another agent. TS: compact.ts:1568.
+        // Async-agent snapshot: read running TaskManager state and filter
+        // for unretrieved local_agent tasks owned by another agent.
         let captured_async_agents = self.snapshot_async_agents_for_post_compact().await;
         // Snapshot recently @mentioned paths for priority restoration.
         // The closure runs synchronously inside `compact_conversation`, so
-        // we read the lock now and move the resolved set in. Self-designed
-        // augmentation; TS has no mention-aware re-injection.
+        // we read the lock now and move the resolved set in.
         let prioritized_paths = self.recently_mentioned_paths_snapshot().await;
         let max_files_to_restore =
             self.config.compact.post_compact.max_files_to_restore.max(0) as usize;
@@ -1369,11 +1352,8 @@ impl QueryEngine {
                         max_files_to_restore,
                     );
 
-                // TS: `createPlanAttachmentIfNeeded()` (`compact.ts:1470`)
-                // — re-inject the plan file's content so it survives the
-                // compaction boundary. Body uses the verbatim
-                // `plan_file_reference` text template from
-                // `messages.ts:3636-3642`.
+                // Re-inject the plan file's content so it survives
+                // the compaction boundary.
                 if let Some(ref ch) = config_home {
                     let plans_dir = coco_context::resolve_plans_directory(
                         ch,
@@ -1395,20 +1375,17 @@ impl QueryEngine {
                     }
                 }
 
-                // In-band skill re-injection. TS compact.ts calls
-                // `getInvokedSkillsForAgent()` here so each invoked skill
-                // surfaces both as a post-compact attachment AND in the
-                // next-turn `<system-reminder>` (double-write for budget
-                // resilience).
+                // In-band skill re-injection: each invoked skill surfaces
+                // both as a post-compact attachment AND in the next-turn
+                // `<system-reminder>` (double-write for budget resilience).
                 atts.extend(coco_compact::create_post_compact_skill_attachments(
                     &captured_skills,
                 ));
 
-                // TS `createPlanModeAttachmentIfNeeded` (compact.ts:1542):
-                // when the session is in plan mode at compact time, re-emit
-                // `plan_mode` reminderType='full' so plan instructions land
-                // on the FIRST post-compact turn rather than waiting for
-                // the system-reminder cadence to next fire.
+                // When in plan mode at compact time, re-emit `plan_mode`
+                // reminderType='full' so plan instructions land on the
+                // FIRST post-compact turn rather than waiting for the
+                // system-reminder cadence to next fire.
                 if let Some(pm_attachment) = captured_plan_mode_snapshot.clone()
                     && let Some(att) = coco_compact::create_plan_mode_attachment_if_needed(
                         /*is_plan_mode*/ true,
@@ -1418,8 +1395,7 @@ impl QueryEngine {
                     atts.push(att);
                 }
 
-                // TS `createAsyncAgentAttachmentsIfNeeded` (compact.ts:1568):
-                // emit one `task_status` attachment per running
+                // Emit one `task_status` attachment per running
                 // background agent so the model doesn't spawn duplicates
                 // after compaction wipes the visible conversation.
                 atts.extend(coco_compact::create_async_agent_attachments(
@@ -1442,18 +1418,16 @@ impl QueryEngine {
         // 3. Build compact run-options. `custom_prompt` carries any
         //    instructions returned by PreCompact hooks merged with the
         //    user's `/compact <instructions>` argument.
-        // Derive RecompactionInfo from the last-compact tracker. TS:
-        // `compact.ts:317-323`. Auto-compact threshold mirrors the gate
-        // we already evaluated above, so we recompute it here for the
-        // analytics-aligned struct.
+        // Derive RecompactionInfo from the last-compact tracker.
+        // Auto-compact threshold mirrors the gate we already evaluated
+        // above, recomputed here for the analytics-aligned struct.
         let auto_threshold = coco_compact::auto_compact_threshold(
             self.config.context_window,
             self.config.max_output_tokens,
             &self.config.compact.auto,
         );
-        // TS parity: `RecompactionInfo.turns_since_previous` reads
-        // `tracking.turnCounter` directly — counter was reset to 0 on the
-        // previous compact and bumped per turn since.
+        // `RecompactionInfo.turns_since_previous`: counter was reset to
+        // 0 on the previous compact and bumped per turn since.
         let recompaction_info = self
             .last_compact_state
             .lock()
@@ -1524,8 +1498,8 @@ impl QueryEngine {
                     });
                 }
 
-                // PostCompact hooks. TS passes the raw LLM summary
-                // before it is wrapped in continuation boilerplate.
+                // PostCompact hooks receive the raw LLM summary before
+                // it is wrapped in continuation boilerplate.
                 let fallback_summary = result
                     .summary_messages
                     .iter()
@@ -1564,10 +1538,10 @@ impl QueryEngine {
                     }
                 }
 
-                // TS `compact.ts:592` calls `processSessionStartHooks('compact')`
-                // after the LLM-summarized path. We render those hook
-                // events into the rewritten history directly so they are
-                // not also emitted by the next-turn sync reminder buffer.
+                // Run SessionStart hooks after the LLM-summarized path.
+                // Render those hook events into the rewritten history
+                // directly so they are not also emitted by the next-turn
+                // sync reminder buffer.
                 if let Some(registry) = self.hooks.as_ref() {
                     let _ = emit_protocol(
                         event_tx,
@@ -1592,8 +1566,8 @@ impl QueryEngine {
                     .await;
                 result.attachments.extend(delta_attachments);
 
-                // TS-aligned order: boundary, summaryMessages, messagesToKeep,
-                // attachments, hookResults. Use the canonical helper.
+                // Canonical message order: boundary, summaryMessages,
+                // messagesToKeep, attachments, hookResults.
                 let summary_tokens = result.post_compact_tokens as i32;
                 let new_messages = coco_compact::build_post_compact_messages(&result);
                 let pre_len = history.len() as i32;
@@ -1614,11 +1588,8 @@ impl QueryEngine {
                 }
 
                 // Record the successful compaction for the next turn's
-                // `RecompactionInfo`. TS: `query.ts:521` resets
-                // `tracking.turnCounter = 0` and freshens `turnId` — Rust
-                // mirrors that exactly here. The tracing log at
-                // `coco_query::compact_track` is Rust's substitute for
-                // `tengu_post_autocompact_turn`.
+                // `RecompactionInfo`: reset `turn_counter = 0` and
+                // freshen the run_id.
                 let run_id = result.boundary_marker.uuid().copied().unwrap_or_default();
                 tracing::info!(
                     target: "coco_query::compact_track",
@@ -1633,10 +1604,10 @@ impl QueryEngine {
                     });
                 }
 
-                // TS `runPostCompactCleanup`: notify each registered observer
-                // so per-crate caches (file/memory/skill state) drop their
-                // pre-compact entries. `is_main_agent = agent_id.is_none()`:
-                // subagent compactions must not wipe main-thread state.
+                // Notify each registered observer so per-crate caches
+                // (file/memory/skill state) drop their pre-compact entries.
+                // `is_main_agent = agent_id.is_none()`: subagent
+                // compactions must not wipe main-thread state.
                 let is_main_agent = self.config.agent_id.is_none();
                 self.compaction_observers
                     .notify_all(&result, is_main_agent)
@@ -1644,11 +1615,9 @@ impl QueryEngine {
                 self.compaction_observers
                     .notify_post_compact(&new_messages)
                     .await;
-                // TS compact.ts:699 / commands/compact/compact.ts:68
-                // `notifyCompaction(query_source, agent_id)`. After full
-                // LLM compaction the message list is rewritten; the new
-                // baseline must not be compared against pre-compact
-                // cache_read tokens.
+                // After full LLM compaction the message list is rewritten;
+                // reset the cache-break baseline so the new baseline is
+                // not compared against pre-compact cache_read tokens.
                 let qs = self.query_source_label();
                 self.notify_model_compaction(qs).await;
                 // Full LLM-summarized compact path — same reasoning as
@@ -1682,8 +1651,7 @@ impl QueryEngine {
                     }),
                 )
                 .await;
-                // Surface task_status reminders on the next turn (TS
-                // post-compact emission gate at `attachments.ts:962`).
+                // Surface task_status reminders on the next turn.
                 self.pending_just_compacted
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 coco_compact::CompactOutcome::Applied

@@ -40,7 +40,7 @@ pub struct DueFire {
 }
 
 /// `true` when a recurring task is older than `max_age_ms` and not `permanent`.
-/// `max_age_ms == 0` means unlimited. Mirrors TS `isRecurringTaskAged`.
+/// `max_age_ms == 0` means unlimited.
 pub fn is_recurring_task_aged(t: &CronTiming<'_>, now_ms: i64, max_age_ms: i64) -> bool {
     if max_age_ms == 0 {
         return false;

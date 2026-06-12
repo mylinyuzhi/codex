@@ -1,10 +1,6 @@
-//! Keybinding resolver.
-//!
-//! TS source: `keybindings/resolver.ts:32-244` plus the chord-timeout
-//! state machine in `KeybindingProviderSetup.tsx:30,143-180`. Given a
-//! stack of active contexts and an incoming key combo, resolve to an
-//! action — possibly after holding state across multiple combos for
-//! chord progressions.
+//! Keybinding resolver. Given a stack of active contexts and an incoming key
+//! combo, resolve to an action — possibly after holding state across multiple
+//! combos for chord progressions.
 //!
 //! Outcomes:
 //!
@@ -14,8 +10,7 @@
 //!   action.
 //! * [`ResolveOutcome::Pending`] — a chord prefix matched; hold for
 //!   the next combo. The caller must consult [`ChordResolver::tick`]
-//!   periodically so the pending state times out (mirrors TS
-//!   `CHORD_TIMEOUT_MS = 1000`).
+//!   periodically so the pending state times out (1-second window).
 //! * [`ResolveOutcome::Unbound`] — the user explicitly null-bound this
 //!   chord; the caller should swallow the keystroke.
 //! * [`ResolveOutcome::ChordCancelled`] — a pending chord was cancelled
@@ -33,9 +28,6 @@ use crate::parser::KeyChord;
 use crate::parser::KeyCombo;
 
 /// How long a partial chord is allowed to wait for its next combo.
-///
-/// Mirrors TS `CHORD_TIMEOUT_MS = 1000` in
-/// `KeybindingProviderSetup.tsx:30`.
 pub const CHORD_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Result of feeding one combo into the resolver.
@@ -58,7 +50,7 @@ pub enum ResolveOutcome {
 /// Compiled keybinding map, indexed by context for cheap lookup.
 ///
 /// Each binding is stored as `(KeyChord, Option<KeybindingAction>)`; the
-/// `None` action represents a TS `null` unbind (`schema.ts:199`).
+/// `None` action represents a null unbind.
 #[derive(Debug)]
 pub struct ChordResolver {
     by_context: HashMap<KeybindingContext, Vec<(KeyChord, Option<KeybindingAction>)>>,
@@ -68,8 +60,7 @@ pub struct ChordResolver {
 
 impl ChordResolver {
     /// Build a resolver from a flat list of parsed bindings. Order is
-    /// preserved within each context — within `feed`, last-matching wins
-    /// (mirrors TS `findLast`).
+    /// preserved within each context — within `feed`, last-matching wins.
     pub fn new(bindings: &[Keybinding]) -> Self {
         let mut by_context: HashMap<KeybindingContext, Vec<(KeyChord, Option<KeybindingAction>)>> =
             HashMap::new();
@@ -103,7 +94,7 @@ impl ChordResolver {
         combo: &KeyCombo,
         context_stack: &[KeybindingContext],
     ) -> ResolveOutcome {
-        // Esc cancels a pending chord (mirrors `resolver.ts:174`).
+        // Esc cancels a pending chord.
         if !self.pending.is_empty() && is_escape(combo) {
             tracing::trace!(pending_steps = self.pending.len(), "chord cancelled by Esc",);
             self.clear_state();
@@ -153,8 +144,7 @@ impl ChordResolver {
 
         if prefix_match {
             // Refresh timeout deadline — every successful chord step
-            // resets the 1-second window (mirrors TS chord-timeout
-            // refresh in `KeybindingProviderSetup.tsx:165-180`).
+            // resets the 1-second window.
             self.chord_started_at = Some(Instant::now());
             tracing::trace!(
                 pending_steps = attempt.len(),
@@ -232,8 +222,7 @@ impl ChordResolver {
     }
 
     /// Look up the chord bound to `action` in the most-specific active
-    /// context. Mirrors TS `getBindingDisplayText` (`resolver.ts:67-77`).
-    /// Used for rendering shortcut hints in the status bar / help.
+    /// context. Used for rendering shortcut hints in the status bar / help.
     ///
     /// Returns `None` if the action isn't bound in any of the listed
     /// contexts.
@@ -245,8 +234,7 @@ impl ChordResolver {
     ) -> Option<String> {
         for ctx in context_stack {
             if let Some(bindings) = self.by_context.get(ctx) {
-                // Last-wins (mirrors TS `findLast`) so user overrides
-                // beat earlier defaults.
+                // Last-wins so user overrides beat earlier defaults.
                 for (chord, bound) in bindings.iter().rev() {
                     if bound.as_ref() == Some(action) {
                         return Some(crate::display::chord_to_display_string(chord, platform));

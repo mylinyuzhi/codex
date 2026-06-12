@@ -75,8 +75,7 @@ async fn confirm_memory_dialog_keeps_non_file_rows_open() {
 
 // ── Permission state: multi-choice commit path ──
 //
-// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` — the
-// user picks via arrows and Enter; the chosen `value` is spliced
+// The user picks via arrows and Enter; the chosen `value` is spliced
 // into `updated_input` and sent back as `ApprovalResponse`.
 
 fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
@@ -221,8 +220,7 @@ async fn approve_with_choice_takes_same_path_as_confirm() {
 
 #[tokio::test]
 async fn confirm_classic_yes_no_approves_selected_action() {
-    // No choices → Enter commits the focused classic action, matching
-    // TS PermissionPrompt / codex-rs list-selection behavior.
+    // No choices → Enter commits the focused classic action.
     use crate::state::PermissionDetail;
     use crate::state::PermissionPromptState;
     let mut s = AppState::new();
@@ -847,8 +845,8 @@ async fn digit_shortcut_focuses_free_text_without_committing_it() {
 
 #[test]
 fn multi_select_empty_submits_empty_answer_like_ts() {
-    // TS `SelectMulti` ships the selected array verbatim — an untouched
-    // multi-select question submits an empty answer, NOT the cursor option.
+    // An untouched multi-select question submits an empty answer (the
+    // selected array verbatim), NOT the cursor option.
     let q = crate::state::QuestionPromptState {
         request_id: "q1".into(),
         original_input: serde_json::json!({}),

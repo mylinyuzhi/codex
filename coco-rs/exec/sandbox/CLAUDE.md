@@ -1,8 +1,7 @@
 # coco-sandbox
 
-Sandbox runtime + Claude-specific adapter. Two-module split mirroring
-TS's `sandbox-adapter.ts` (Claude glue) over `@anthropic-ai/sandbox-runtime`
-(closed-source npm). Rust ships both halves in-tree.
+Sandbox runtime + adapter. Two-module split: adapter (policy → runtime config) over
+sandbox-runtime. Rust ships both halves in-tree.
 
 See [crate-coco-sandbox.md](../../../docs/coco-rs/crate-coco-sandbox.md)
 for the full architecture, including how `app/cli/session_runtime.rs`
@@ -36,7 +35,7 @@ bootstraps the state.
   results into `AdapterInputs`.
 - Bootstrap is fail-closed: when gates fail, `build_sandbox_state` returns
   `None` and commands run unsandboxed. The `fail_if_unavailable` setting
-  upgrades that to a hard error (TS parity, not yet wired into the CLI banner).
+  upgrades that to a hard error (not yet wired into the CLI banner).
 
 ## Tests
 

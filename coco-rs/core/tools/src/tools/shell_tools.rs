@@ -33,9 +33,7 @@ pub struct SleepOutput {
     pub seconds: f64,
 }
 
-/// Model-facing Sleep tool description. Byte-aligned port of TS
-/// `tools/SleepTool/prompt.ts:7-17` `SLEEP_TOOL_PROMPT` with `${TICK_TAG}`
-/// resolved to `tick` (TS `constants/xml.ts:25`). Surfaced to the model
+/// Model-facing Sleep tool description. Surfaced to the model
 /// via [`SleepTool::prompt`].
 const SLEEP_TOOL_PROMPT: &str = "Wait for a specified duration. The user can interrupt the sleep at any time.
 
@@ -63,13 +61,11 @@ impl Tool for SleepTool {
     fn name(&self) -> &str {
         ToolName::Sleep.as_str()
     }
-    /// Short UI label. TS `tools/SleepTool/prompt.ts:5` `DESCRIPTION`. The
-    /// long model-facing guidance lives in [`Self::prompt`].
+    /// Short UI label. The long model-facing guidance lives in [`Self::prompt`].
     fn description(&self, _input: &SleepInput, _options: &DescriptionOptions) -> String {
         "Wait for a specified duration".into()
     }
-    /// Model-facing tool description. TS `SleepTool` `prompt()` returns
-    /// `SLEEP_TOOL_PROMPT`.
+    /// Model-facing tool description.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         SLEEP_TOOL_PROMPT.into()
     }
@@ -228,13 +224,8 @@ impl Tool for ReplTool {
     fn description(&self, _input: &ReplInput, _options: &DescriptionOptions) -> String {
         "Start an interactive REPL session for a supported language.".into()
     }
-    /// Model-facing tool description. The TS REPL tool
-    /// (`tools/REPLTool/REPLTool.js`) is an ant-only build that is
-    /// dead-code-eliminated from the available source tree, so there is no
-    /// upstream `prompt()` text to port. Returning the short label keeps
-    /// the model's tool description non-empty instead of the trait default
-    /// empty string. Replace with the real TS guidance if/when the
-    /// `REPLTool` source becomes available.
+    /// Model-facing tool description. No upstream prompt text available;
+    /// returning the short label keeps the description non-empty.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         "Start an interactive REPL session for a supported language.".into()
     }

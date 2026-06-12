@@ -2,20 +2,6 @@
 
 41 statically-typed built-in tools (`type Input = SomeStruct`) plus two `type Input = Value` tools whose schema is runtime-supplied: `McpTool` (wire schema from MCP server / SDK in-process transport) and `StructuredOutputTool` (user JSON Schema via `--json-schema`). Each implements `coco_tool_runtime::Tool`; `coco-tool-runtime` defines the trait.
 
-## TS Source
-`tools/` (40 tool directories — one per tool, plus `shared/` and `testing/`). Notable:
-- **File I/O**: `FileReadTool/`, `FileWriteTool/`, `FileEditTool/`, `GlobTool/`, `GrepTool/`, `NotebookEditTool/`, `BashTool/`, `ApplyPatchTool/`
-- **Web**: `WebFetchTool/`, `WebSearchTool/`
-- **Agent / Team**: `AgentTool/`, `SkillTool/`, `SendMessageTool/`, `TeamCreateTool/`, `TeamDeleteTool/`
-- **Task**: `TaskCreateTool/`, `TaskGetTool/`, `TaskListTool/`, `TaskUpdateTool/`, `TaskStopTool/`, `TaskOutputTool/`, `TodoWriteTool/`
-- **Plan / Worktree**: `EnterPlanModeTool/`, `ExitPlanModeTool/`, `VerifyPlanExecutionTool/`, `EnterWorktreeTool/`, `ExitWorktreeTool/`
-- **Utility**: `AskUserQuestionTool/`, `ToolSearchTool/`, `ConfigTool/`, `BriefTool/`, `LSPTool/`
-- **MCP**: `MCPTool/`, `McpAuthTool/`, `ListMcpResourcesTool/`, `ReadMcpResourceTool/`
-- **Scheduling**: `ScheduleCronTool/` (Rust splits into CronCreate/CronDelete/CronList), `RemoteTriggerTool/`
-- **Shell variants**: `PowerShellTool/`, `REPLTool/`, `SleepTool/`, `SyntheticOutputTool/`
-
-Also: `tools/shared/`, `tools/utils.ts`, and supporting utils (`utils/worktree.ts`, `utils/editor.ts`, `utils/glob.ts`, `utils/path.ts`, `utils/platform.ts`, `utils/fsOperations.ts`, `utils/dxt/`).
-
 ## Key Types
 
 - `register_all_tools(&mut ToolRegistry)` — registers all 43 static tools
@@ -42,16 +28,15 @@ Also: `tools/shared/`, `tools/utils.ts`, and supporting utils (`utils/worktree.t
 - All file-mutation tools (Edit/Write/NotebookEdit/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
 - One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters that the tool consumes.)
 
-### LSP tool — TS-mirror dispatch
+### LSP tool dispatch
 
 `LspAction` (9 variants: `goToDefinition` / `findReferences` / `hover` /
 `documentSymbol` / `workspaceSymbol` / `goToImplementation` /
-`prepareCallHierarchy` / `incomingCalls` / `outgoingCalls`) mirrors TS
-`tools/LSPTool/schemas.ts` exactly. Wire format is **camelCase** so the
-model's tool calls validate identically across runtimes. Diagnostics are
-**not** an `LspAction` — they flow through the passive `system_reminder`
-pipeline (`coco-lsp::DiagnosticsStore` → `app/query::reminder_adapters`)
-exactly like TS `passiveFeedback.ts`.
+`prepareCallHierarchy` / `incomingCalls` / `outgoingCalls`). Wire format
+is **camelCase** so the model's tool calls validate identically across
+runtimes. Diagnostics are **not** an `LspAction` — they flow through the
+passive `system_reminder` pipeline (`coco-lsp::DiagnosticsStore` →
+`app/query::reminder_adapters`).
 
 `LspTool::is_enabled` is double-gated: `Feature::Lsp` enabled **and**
 `ctx.lsp.is_connected()` (adapter reports running state after
@@ -62,27 +47,25 @@ Dispatch flow:
 1. `LspTool::execute` parses input + resolves relative paths against
    `ctx.cwd_override` (worktree-aware) → fall back to process cwd.
 2. `validate_lsp_file` rejects UNC paths (`\\…` / `//…`) for Windows
-   NTLM safety (TS parity) and files larger than 10MB.
+   NTLM safety and files larger than 10MB.
 3. `build_params(action, uri, line, character)` produces 0-based LSP
    `Position` from 1-based input.
 4. `ctx.lsp.send_request(path, method, params)` → adapter
    (`coco_cli::lsp_handle_adapter::LspManagerAdapter`) routes via
    `LspServerManager::get_client(path)` which walks up to find
    `.git` / `Cargo.toml` — auto-routing per worktree.
-5. For `incomingCalls` / `outgoingCalls`, dispatch runs the TS
+5. For `incomingCalls` / `outgoingCalls`, dispatch runs the
    two-step pattern: `prepareCallHierarchy` → pick first item →
    `callHierarchy/{incomingCalls,outgoingCalls}`.
 6. Location-returning ops (`goToDefinition` / `findReferences` /
    `goToImplementation` / `workspaceSymbol`) are filtered through
-   `coco_file_ignore::PathChecker` — TS uses `git check-ignore`
-   subprocess; coco-rs uses the in-process unified path (see
-   user memory `feedback_unified_ignore_service`).
+   `coco_file_ignore::PathChecker` — uses the in-process unified path
+   (see user memory `feedback_unified_ignore_service`).
 7. Typed formatters in `tools::lsp::format_*` produce the
    markdown-ish `LspOutput` returned to the model.
 
 `Write` / `Edit` / `NotebookEdit` / `ApplyPatch` all call
-`ctx.lsp.notify_save(path)` after a successful write — TS parity
-(`FileWriteTool.ts` etc.). The adapter forwards to `client.notify_save`
+`ctx.lsp.notify_save(path)` after a successful write. The adapter forwards to `client.notify_save`
 (sends `textDocument/didSave` only if the file is already in the
 server's `opened` tracker) AND clears the file's entries from
 `DiagnosticsStore.delivered_for_file` so re-published diagnostics for
@@ -94,30 +77,29 @@ the edited file are not suppressed by cross-turn dedup.
 builder per Level 1 of the
 [Tool Result Budget plan](../../../docs/coco-rs/tool-result-budget-plan.md):
 
-| Tool | Value | TS source | Note |
-|---|---|---|---|
-| BashTool | 30_000 | `BashTool.tsx:424` | bursty shell output |
-| PowerShellTool | 30_000 | `PowerShellTool.tsx:275` | same as Bash |
-| GrepTool | 20_000 | `GrepTool.ts` | match dumps grow superlinearly |
-| GlobTool | 100_000 | `GlobTool.ts` | path lists tolerate larger windows |
-| FileReadTool | trait default `i64::MAX` | TS `Infinity` (opt-out) | aligned by sentinel |
-| Most other static tools | trait default `i64::MAX` ⚠️ | TS `100_000` (effectively clamped to `50_000`) | not yet mirrored |
+| Tool | Value | Note |
+|---|---|---|
+| BashTool | 30_000 | bursty shell output |
+| PowerShellTool | 30_000 | same as Bash |
+| GrepTool | 20_000 | match dumps grow superlinearly |
+| GlobTool | 100_000 | path lists tolerate larger windows |
+| FileReadTool | trait default `i64::MAX` | opt-out sentinel |
+| Most other static tools | trait default `i64::MAX` ⚠️ | upstream uses 100_000 (clamped to 50_000); not yet mirrored |
 
 `bash.rs::maybe_persist_oversized_output` is a stub of Level 1 (Bash-only,
 `temp_dir()` storage, parallel JSON fields instead of `<persisted-output>`
 content replacement before the query-level renderer turns it into an envelope).
 It should be replaced by the generic session-scoped persistence path.
 
-## Divergences from TS
+## Divergences from upstream behavior
 
 ### WebSearchTool — client-side backends instead of Anthropic server tool
 
-TS `WebSearchTool.ts:76-84,254-291` routes search as a passthrough to the
-Anthropic-only `web_search_20250305` server tool: the query is handed to
-Claude, which runs it on Anthropic infrastructure and returns
-`server_tool_use` + `web_search_tool_result` content blocks with inline
-citations. This is Anthropic-specific — no other provider exposes an
-equivalent.
+The upstream claude-code routes search as a passthrough to the Anthropic-only
+`web_search_20250305` server tool: the query is handed to Claude, which runs
+it on Anthropic infrastructure and returns `server_tool_use` +
+`web_search_tool_result` content blocks with inline citations. This is
+Anthropic-specific — no other provider exposes an equivalent.
 
 coco-rs must work against every provider (Anthropic, OpenAI, Google,
 DeepSeek, xAI, …), so we implement search **client-side** with a
@@ -134,9 +116,9 @@ pluggable backend selected via `WebSearchConfig.provider`
 - **OpenAI** variant currently falls back to DuckDuckGo (no native
   passthrough implemented — present for future expansion).
 
-Trade-offs vs TS passthrough:
+Trade-offs vs Anthropic passthrough:
 
-| Aspect | TS native tool | coco-rs client-side |
+| Aspect | Native server tool | coco-rs client-side |
 |--------|----------------|---------------------|
 | Citations in reply | Server-injected `citations` blocks | Model builds its own `Sources:` section (prompt requires it) |
 | Streaming progress | `server_tool_use` + `web_search_tool_result` deltas | Single blocking fetch |

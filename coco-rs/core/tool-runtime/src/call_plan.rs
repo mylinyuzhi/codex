@@ -1,7 +1,7 @@
 //! Scheduler DTOs for the `ToolCallRunner` / `StreamingToolExecutor`
 //! boundary.
 //!
-//! TS parity: I12 of `docs/coco-rs/agent-loop-refactor-plan.md`. The
+//! I12 of `docs/coco-rs/agent-loop-refactor-plan.md`. The
 //! runner returns an **unstamped** outcome carrying everything except
 //! `completion_seq`; the executor stamps the completion sequence at
 //! surface time — the moment the `run_one` future resolves for a
@@ -121,7 +121,7 @@ pub struct UnstampedToolCallOutcome {
     pub tool_use_id: String,
     pub tool_id: ToolId,
     pub model_index: usize,
-    /// Pre-flattened, TS-ordered message stream. The runner has
+    /// Pre-flattened message stream in model index order. The runner has
     /// already resolved the MCP / non-MCP + Success / Failure /
     /// EarlyReturn template while it still held the `Arc<dyn DynTool>`,
     /// so `QueryEngine` appends this verbatim.
@@ -134,19 +134,17 @@ pub struct UnstampedToolCallOutcome {
     /// Failure paths. `None` on Success.
     pub error_kind: Option<ToolCallErrorKind>,
     /// Populated on permission denial so `QueryResult.permission_denials`
-    /// accumulates TS-parity audit entries.
+    /// accumulates audit entries.
     pub permission_denial: Option<PermissionDenialInfo>,
-    /// Success-path `prevent_continuation` marker (TS
-    /// `toolExecution.ts:1572`). Always `None` on Failure / EarlyReturn
-    /// — the flatten template already rejects prevent attachments there.
+    /// Success-path `prevent_continuation` marker. Always `None` on
+    /// Failure / EarlyReturn — the flatten template already rejects
+    /// prevent attachments there.
     pub prevent_continuation: Option<String>,
     /// SDK-facing structured output, set when the tool returned
     /// `ToolResult::with_structured_output(...)`. Carries the typed
     /// payload back to `run_session_loop` so the SDK result branch in
     /// `make_query_result` can pick it up without scanning history
     /// (which is unsound under mid-query compaction).
-    /// TS parity: the `result.structured_output` side-channel surfaced
-    /// in `services/tools/toolExecution.ts:1272-1280`.
     pub structured_output: Option<serde_json::Value>,
     /// Scheduler-facing side-effects. Separated from the history-facing
     /// outcome body because `AppStatePatch` is a single owned `FnOnce`
@@ -167,13 +165,11 @@ pub struct ToolSideEffects {
     /// Mutation to apply to shared `ToolAppState`. Serial tools apply
     /// before the next tool's `ToolUseContext` is built; concurrent
     /// batches queue by `model_index` and apply post-batch under one
-    /// write lock (TS `toolOrchestration.ts:54-62` parity).
+    /// write lock (queued by `model_index`, applied post-batch).
     pub app_state_patch: Option<AppStatePatch>,
     /// Declarative permission-rule deltas to fold into the running
     /// session config. Applied via the executor's
     /// `PermissionRuleHandle` at the same point as `app_state_patch`.
-    /// TS parity: `contextModifier` wrapping `alwaysAllowRules` on
-    /// `getAppState`.
     pub permission_updates: Vec<PermissionUpdate>,
     // Future effects (pending cache invalidations, telemetry
     // side-channels, etc.) live here — they do NOT leak into the
@@ -279,7 +275,7 @@ impl ToolCallOutcome {
     pub fn completion_seq(&self) -> usize {
         self.completion_seq
     }
-    /// Pre-flattened, TS-ordered messages. The engine appends these
+    /// Pre-flattened messages in model index order. The engine appends these
     /// verbatim — it must not re-sort or re-resolve the tool.
     pub fn ordered_messages(&self) -> &[Message] {
         &self.ordered_messages
@@ -369,7 +365,6 @@ pub enum ToolMessagePath {
 ///
 /// Every model-visible error maps to exactly one variant so tests and
 /// telemetry can assert the lifecycle stage that produced the result.
-/// TS parity: maps directly onto `toolExecution.ts` error branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallErrorKind {
     UnknownTool,
@@ -387,12 +382,10 @@ pub enum ToolCallErrorKind {
     ExecutionFailed,
     /// Cancellation observed **before** `tool.execute()` started
     /// (during prepare / validation / hook / permission stages).
-    /// TS parity: `toolExecution.ts:413` — does NOT fire
-    /// PostToolUseFailure hooks.
+    /// Does NOT fire PostToolUseFailure hooks.
     PreExecutionCancelled,
     /// Cancellation observed **after** `tool.execute()` started.
-    /// TS parity: `toolExecution.ts:1696` — DOES fire
-    /// PostToolUseFailure hooks.
+    /// DOES fire PostToolUseFailure hooks.
     ExecutionCancelled,
     /// `tokio::JoinError`. Only reachable once the spawned future is
     /// in flight, so treated as execution-stage.
@@ -404,11 +397,10 @@ pub enum ToolCallErrorKind {
 impl ToolCallErrorKind {
     /// Whether this error path should fire PostToolUseFailure hooks.
     ///
-    /// Per I3 step 12 + TS `toolExecution.ts:1696` (execution-stage
-    /// fail runs failure hooks) vs `:413` (pre-execution abort does
-    /// NOT). The enum itself encodes the lifecycle stage, so this
-    /// match is exhaustive and no `execution_started: bool`
-    /// side-channel is needed.
+    /// Per I3 step 12: execution-stage fail runs failure hooks;
+    /// pre-execution abort does NOT. The enum itself encodes the
+    /// lifecycle stage, so this match is exhaustive and no
+    /// `execution_started: bool` side-channel is needed.
     pub fn runs_post_tool_use_failure(self) -> bool {
         match self {
             Self::ExecutionFailed | Self::ExecutionCancelled | Self::JoinFailed => true,

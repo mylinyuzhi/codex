@@ -17,9 +17,6 @@ use super::HandlerResult;
 /// project root. Returns the JSON-serialized merged view and a
 /// per-source map suitable for clients that want to display or
 /// override specific layers.
-///
-/// TS reference: `SDKControlGetSettingsRequestSchema` /
-/// `SDKControlGetSettingsResponseSchema` in `controlSchemas.ts`.
 pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
     // Resolve cwd — prefer active session's cwd, fall back to
     // process cwd. Project/local settings live under cwd, so this
@@ -96,9 +93,6 @@ pub(super) async fn handle_config_read(ctx: &HandlerContext) -> HandlerResult {
 /// Errors:
 /// - `INVALID_PARAMS` if scope is not one of user/project/local
 /// - `INTERNAL_ERROR` on filesystem or JSON serialization failure
-///
-/// TS reference: `SDKControlWriteSettingValueRequestSchema` in
-/// `controlSchemas.ts`.
 pub(super) async fn handle_config_write(
     params: coco_types::ConfigWriteParams,
     ctx: &HandlerContext,

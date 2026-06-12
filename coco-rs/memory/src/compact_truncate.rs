@@ -1,7 +1,5 @@
 //! Pure session-memory truncation called by the compact-side glue.
 //!
-//! TS: `services/SessionMemory/prompts.ts:truncateSessionMemoryForCompact`.
-//!
 //! Compact (L3) does not depend on memory (L4); the app/query layer
 //! owns the wiring and feeds the resulting string to compact as
 //! ordinary input. This module is just a stateless transform.

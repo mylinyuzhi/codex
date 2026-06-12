@@ -9,23 +9,17 @@
 //! tools call [`derive_input_schema_value`] and wrap the result in
 //! `from_value(json!({ ... }))`.
 //!
-//! ## TS parity
-//!
-//! TS uses `z.object({...})` as both the runtime validator AND the
-//! TypeScript type source (`z.infer<typeof inputSchema>`). The Rust
-//! mirror is `T: JsonSchema + Deserialize` — `T` provides the schema
-//! via the JsonSchema derive and the parsed type via the Deserialize
-//! derive.
+//! The Rust mirror uses `T: JsonSchema + Deserialize` — `T` provides the schema
+//! via the JsonSchema derive and the parsed type via the Deserialize derive.
 //!
 //! ## Subschema inlining
 //!
 //! Schemars' default behaviour is to extract reused types into a
-//! `$defs` table and reference them via `$ref: "#/$defs/Foo"`. TS zod
+//! `$defs` table and reference them via `$ref: "#/$defs/Foo"`. Some
 //! schemas instead expand inline; provider tool APIs (Anthropic,
 //! OpenAI, Gemini) all accept `$ref` but their handling differs in
-//! edge cases. For first-party parity with TS we set
-//! [`SchemaSettings::inline_subschemas`] = `true` so the generated
-//! schema is a single flat document.
+//! edge cases. We set [`SchemaSettings::inline_subschemas`] = `true`
+//! so the generated schema is a single flat document.
 
 use schemars::JsonSchema;
 use schemars::generate::SchemaSettings;

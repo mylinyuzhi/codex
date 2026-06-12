@@ -234,8 +234,8 @@ pub trait InitializeBootstrap: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Shared server state carried across ClientRequests within a single
-/// stdio session. Only one concurrent session per server — mirrors TS
-/// where `structuredIO.ts` holds a single `currentSession` slot.
+/// stdio session. Only one concurrent session per server — a single
+/// `currentSession` slot per server process.
 pub struct SdkServerState {
     /// Active session if any. Set by `session/start`, cleared by
     /// `session/archive` or when the transport closes.

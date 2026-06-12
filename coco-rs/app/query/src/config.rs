@@ -26,7 +26,7 @@ use coco_types::ToolOverrides;
 use std::sync::Arc;
 
 /// Hard cap on how many recovery cycles (post-escalation) we attempt before
-/// giving up. TS: `query.ts:164` `MAX_OUTPUT_TOKENS_RECOVERY_LIMIT = 3`.
+/// giving up.
 pub(crate) const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: i32 = 3;
 
 /// Default context window when no `ModelInfo` is wired (mocked clients,
@@ -37,9 +37,7 @@ pub(crate) const MAX_OUTPUT_TOKENS_RECOVERY_LIMIT: i32 = 3;
 pub(crate) const DEFAULT_CONTEXT_WINDOW: i64 = 200_000;
 
 /// Default cap on consecutive `StructuredOutput` retries. Overridable
-/// via [`coco_config::EnvKey::CocoMaxStructuredOutputRetries`]. TS
-/// parity: `QueryEngine.ts:1005-1047`'s `MAX_STRUCTURED_OUTPUT_RETRIES`
-/// constant (= `5`).
+/// via [`coco_config::EnvKey::CocoMaxStructuredOutputRetries`].
 pub(crate) const DEFAULT_MAX_STRUCTURED_OUTPUT_RETRIES: u32 = 5;
 
 /// Resolved retry cap: env override wins, otherwise
@@ -53,8 +51,8 @@ pub(crate) fn max_structured_output_retries() -> u32 {
 
 /// Why the loop is continuing instead of exiting.
 ///
-/// TS: Continue type union in query.ts — enables tests to verify recovery
-/// paths fired without inspecting message contents.
+/// Enables tests to verify recovery paths fired without inspecting
+/// message contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContinueReason {
     /// Normal tool-call loop: model returned tool calls, process and continue.
@@ -80,10 +78,8 @@ pub enum ContinueReason {
 #[derive(Debug, Clone)]
 pub struct QueryEngineConfig {
     /// Maximum agentic turns before stopping. `None` = unbounded (the model
-    /// loops until it naturally stops). TS parity: `maxTurns` is optional and
-    /// only set by `--print --max-turns`; the interactive REPL leaves it unset
-    /// so long autonomous tasks run to completion. Subagents/forks set an
-    /// explicit `Some(_)` cap.
+    /// loops until it naturally stops). Subagents/forks set an explicit
+    /// `Some(_)` cap.
     pub max_turns: Option<i32>,
     /// Session-level total token budget (input + output, accumulated
     /// across every API call in this loop invocation). Drives
@@ -118,9 +114,6 @@ pub struct QueryEngineConfig {
     /// `ToolPermissionContext.bypass_available` on every tool-context
     /// rebuild so the Plan-mode auto-allow + Shift+Tab cycle gate stay
     /// aligned.
-    ///
-    /// TS parity: `ToolPermissionContext.isBypassPermissionsModeAvailable`
-    /// from `permissionSetup.ts:939-943`.
     pub bypass_permissions_available: bool,
     /// Context window size in tokens (for compaction trigger).
     pub context_window: i64,
@@ -136,24 +129,21 @@ pub struct QueryEngineConfig {
     pub is_non_interactive: bool,
     /// Whether the session cannot show an interactive permission prompt, so a
     /// residual `Ask` must fail closed (Deny) instead of silently auto-allowing.
-    /// coco equivalent of TS `ToolPermissionContext.shouldAvoidPermissionPrompts`
-    /// (true for forked / async subagents and headless `-p`). Kept distinct
-    /// from `is_non_interactive`: TS top-level `-p` is non-interactive yet
-    /// still propagates `Ask` to an SDK `canUseTool` consumer, so the two
-    /// concepts must be independently settable.
+    /// True for forked / async subagents and headless `-p`. Kept distinct
+    /// from `is_non_interactive`: the top-level `-p` flag is non-interactive
+    /// yet still propagates `Ask` to an SDK `canUseTool` consumer, so the
+    /// two concepts must be independently settable.
     pub avoid_permission_prompts: bool,
-    /// Debug-logging surface for tools. Mirrors TS `toolUseContext.options.debug`
-    /// (CLI `--debug`) — visible on `ToolUseContext.debug`. Defaults to `false`.
+    /// Debug-logging surface for tools (CLI `--debug`). Visible on
+    /// `ToolUseContext.debug`. Defaults to `false`.
     pub debug: bool,
-    /// Verbose-logging surface for tools. Mirrors TS
-    /// `toolUseContext.options.verbose` (CLI `--verbose`) — visible on
+    /// Verbose-logging surface for tools (CLI `--verbose`). Visible on
     /// `ToolUseContext.verbose`. Defaults to `false`.
     pub verbose: bool,
     /// Thinking level applied to the main-loop model for this session.
     /// Surfaced on `ToolUseContext.thinking_level` so tools (and tool-
     /// spawned subqueries) see the same reasoning budget the engine is
-    /// currently driving the LLM with. TS: `queryConfig.thinkingLevel`
-    /// threaded through `toolUseContext.options.thinkingLevel`.
+    /// currently driving the LLM with.
     pub thinking_level: Option<ThinkingLevel>,
     /// Whether the main model call should request fast-mode behavior.
     pub fast_mode: bool,
@@ -165,8 +155,8 @@ pub struct QueryEngineConfig {
     /// (user / project / policy layers). Populated by the CLI
     /// layer at bootstrap; `ToolContextFactory` threads them into
     /// every `ToolUseContext.permission_context.{allow_rules,
-    /// deny_rules, ask_rules}` so the evaluator sees the same
-    /// rule set TS's `loadPermissionRules` would produce.
+    /// deny_rules, ask_rules}` so the evaluator sees the full
+    /// permission rule set.
     ///
     /// Default-empty maps preserve the pre-wiring behavior where
     /// mode-based auto-allow (Plan / Accept / Bypass) was the only
@@ -175,8 +165,7 @@ pub struct QueryEngineConfig {
     pub deny_rules: PermissionRulesBySource,
     pub ask_rules: PermissionRulesBySource,
     /// Optional live permission rules read on every tool-context build.
-    /// Agent teams use this to mirror TS's in-process runner: the
-    /// leader can send `team_permission_update` while a teammate is
+    /// The leader can send `team_permission_update` while a teammate is
     /// mid-turn, and the next tool permission check sees the new
     /// allow/deny/ask rule without restarting the teammate.
     pub live_permission_rules: Option<Arc<tokio::sync::RwLock<Vec<PermissionRule>>>>,
@@ -185,9 +174,7 @@ pub struct QueryEngineConfig {
     /// for sessions that do not own a full app-state handle.
     pub live_permission_mode: Option<Arc<tokio::sync::RwLock<PermissionMode>>>,
     /// Root directories used to resolve leading-`/` path permission
-    /// patterns per rule source. TS:
-    /// `settings.ts::getSettingsRootPathForSource` + filesystem
-    /// `rootPathForSource`; user settings resolve at config home,
+    /// patterns per rule source. User settings resolve at config home,
     /// flag settings at the flag file dirname, and project/local/policy
     /// at original cwd.
     pub permission_rule_source_roots:
@@ -197,8 +184,6 @@ pub struct QueryEngineConfig {
     /// runtime's `session_additional_dirs` and threaded into every
     /// `ToolUseContext.permission_context.additional_dirs` so file/shell
     /// tools see the wider scope without persisting to settings.json.
-    /// TS parity: `useWorkingDirectories` in REPL.tsx populates the
-    /// same map from `/add-dir` invocations.
     pub session_additional_dirs:
         std::collections::HashMap<String, coco_types::AdditionalWorkingDir>,
     /// Working directory override for this session's tool calls.
@@ -209,7 +194,7 @@ pub struct QueryEngineConfig {
     /// Bash, and future worktree-aware tools) resolve relative paths
     /// against it. Absolute-path tools (Read, Write, Edit,
     /// NotebookEdit) are unaffected by construction — they enforce
-    /// absolute paths in their schema, matching TS.
+    /// absolute paths in their schema.
     ///
     /// Phase 6 Workstream C: subagents launched with
     /// `isolation: "worktree"` receive a `cwd_override` pointing at
@@ -218,35 +203,32 @@ pub struct QueryEngineConfig {
     pub cwd_override: Option<std::path::PathBuf>,
     /// Optional override for the plans directory, relative to the
     /// project root. Empty = use the default `~/.coco/plans/`.
-    /// TS setting: `plansDirectory` in settings.json. Validated by
-    /// [`coco_context::resolve_plans_directory`] to stay within the
-    /// project root.
+    /// Validated by [`coco_context::resolve_plans_directory`] to stay
+    /// within the project root.
     pub plans_directory: Option<String>,
     /// Set when this engine runs AS a subagent — the agent's branded ID.
     /// Threads into `ToolUseContext::agent_id` + `session_plan_file` so
     /// the subagent auto-allow targets `{slug}-agent-{id}.md` instead of
     /// the main `{slug}.md`, and so the per-turn plan reminder picks the
-    /// SubAgent text variant (TS: `isSubAgent` in `messages.ts:3399`).
-    /// `None` = this engine IS the main session.
+    /// SubAgent text variant. `None` = this engine IS the main session.
     pub agent_id: Option<String>,
     /// Set when this engine runs AS a swarm teammate (spawned via
-    /// `TeamCreate` + in-process runner). TS: `isTeammate()` returns true
-    /// when `agent_id.is_some() && team_name.is_some()` in the dynamic
-    /// team context. We lift it to a config flag so `ToolUseContext.is_teammate`
-    /// is set correctly without reading task-local state at every tool call.
+    /// `TeamCreate` + in-process runner). Lifted to a config flag so
+    /// `ToolUseContext.is_teammate` is set correctly without reading
+    /// task-local state at every tool call.
     pub is_teammate: bool,
     /// True only for in-process swarm teammates. Pane teammates are
     /// separate CLI sessions and can manage background subagents.
     pub is_in_process_teammate: bool,
-    /// Per-role `plan_mode_required` flag for teammates. TS:
-    /// `isPlanModeRequired()` — read from the role definition in the
-    /// team file or `COCO_PLAN_MODE_REQUIRED`. When `true`, the
-    /// teammate's ExitPlanMode MUST request leader approval via mailbox.
+    /// Per-role `plan_mode_required` flag for teammates. Read from the
+    /// role definition in the team file or `COCO_PLAN_MODE_REQUIRED`.
+    /// When `true`, the teammate's ExitPlanMode MUST request leader
+    /// approval via mailbox.
     /// When `false`, teammates exit locally (voluntary plan mode).
     /// Only meaningful when `is_teammate == true`.
     pub plan_mode_required: bool,
     /// Plan-mode workflow + prompt settings. Drives which Full reminder
-    /// variant `PlanModeReminder` emits. TS: `planModeV2.ts`.
+    /// variant `PlanModeReminder` emits.
     pub plan_mode_settings: PlanModeSettings,
     /// Disable all hooks (from settings).
     pub disable_all_hooks: bool,
@@ -255,13 +237,11 @@ pub struct QueryEngineConfig {
     /// Enable token-budget-driven turn continuation: when a turn ends naturally
     /// (no tool calls, `end_turn` stop) but consumed tokens are below 90% of
     /// `max_tokens` budget, inject a nudge meta message and continue.
-    /// TS: `query.ts:1308-1340` feature('TOKEN_BUDGET').
     pub enable_token_budget_continuation: bool,
     /// Resolved compaction configuration (auto / micro / api-native /
     /// session-memory / experimental). Single source of truth — engine
-    /// reads only this, never env directly. TS env vars
-    /// (`DISABLE_COMPACT`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, …) are
-    /// folded in by `coco_config::CompactConfig::resolve` at startup.
+    /// reads only this, never env directly. Env vars are folded in by
+    /// `coco_config::CompactConfig::resolve` at startup.
     pub compact: coco_config::CompactConfig,
     /// Per-session raw-wire debug dumper. `Some` only when
     /// `diagnostics.wire_dump` is `error`/`all`; built by the bootstrap
@@ -297,14 +277,12 @@ pub struct QueryEngineConfig {
     pub shell_provider: Option<Arc<dyn coco_shell::ShellProvider>>,
     /// Frozen anchor — captured at session start. BashTool's
     /// `reset_cwd_if_outside_project` uses it to snap back when the
-    /// live cwd drifts out of the allowed working set. TS:
-    /// `bootstrap/state.ts::originalCwd`.
+    /// live cwd drifts out of the allowed working set.
     pub original_cwd: Option<std::path::PathBuf>,
     /// Mutable session CWD shared across all BashTool invocations.
     /// `cd /tmp` in turn N updates this; turn N+1 reads it as the
-    /// spawn cwd. TS parity: `bootstrap/state.ts::STATE.cwd` driven
-    /// by `utils/Shell.ts::setCwd`. `None` for tests / SDK paths;
-    /// BashTool falls back to `std::env::current_dir()`.
+    /// spawn cwd. `None` for tests / SDK paths; BashTool falls back
+    /// to `std::env::current_dir()`.
     pub session_cwd: Option<Arc<tokio::sync::RwLock<std::path::PathBuf>>>,
     /// Resolved web-fetch runtime configuration (WebFetchTool).
     pub web_fetch_config: WebFetchConfig,
@@ -335,31 +313,29 @@ pub struct QueryEngineConfig {
     /// Threaded onto every `ToolUseContext.allowed_write_roots`.
     pub allowed_write_roots: Vec<std::path::PathBuf>,
     /// Emit `HookExecutionEvent` (`Started`/`Progress`/`Response`) into
-    /// the SDK output stream. TS: `--include-hook-events` flag at
-    /// `entrypoints/cli.tsx`. When `false`, the engine bypasses the
-    /// hook-event forwarding channel so SDK clients don't receive
-    /// `SDKHookStarted`/etc. messages. Defaults to `false` to match
-    /// TS opt-in behaviour.
+    /// the SDK output stream (CLI `--include-hook-events`). When `false`,
+    /// the engine bypasses the hook-event forwarding channel so SDK
+    /// clients don't receive `SDKHookStarted`/etc. messages. Defaults
+    /// to `false`.
     pub include_hook_events: bool,
     /// Per-fork tool-execution gate. When `Some`, the engine threads
     /// the handle onto every `ToolUseContext` it builds, so the
     /// tool-call preparer runs the callback before the static
     /// permission evaluator. `None` preserves pre-canUseTool-wiring
-    /// behavior. TS: `utils/forkedAgent.ts::runForkedAgent({canUseTool})`.
+    /// behavior.
     pub can_use_tool: Option<coco_tool_runtime::CanUseToolHandleRef>,
 
     /// Override label returned by [`crate::engine_builder::query_source_label`].
     /// When `Some`, the engine reports this string instead of the
     /// agent_id / non-interactive / repl_main_thread default. Forks
     /// pass their `ForkedAgentOptions.query_source` through here so
-    /// telemetry can split traffic per-fork. TS:
-    /// `runForkedAgent({querySource})`.
+    /// telemetry can split traffic per-fork.
     pub query_source_override: Option<String>,
 
     /// Typed fork discriminator. Threaded into
     /// [`crate::engine_session::run_internal_with_messages`]'s session-loop
     /// `info!` macro so log lines self-identify which fork they belong
-    /// to. TS: `runForkedAgent({forkLabel})`.
+    /// to.
     pub fork_label: Option<coco_types::ForkLabel>,
 
     /// Sub-context isolation overrides. `Some` ⇒ the engine is
@@ -368,7 +344,6 @@ pub struct QueryEngineConfig {
     /// (auto agent_id, query_chain_id / query_depth bump,
     /// allowed_write_roots fence, isolated callback handles).
     /// `None` ⇒ standard parent-shared semantics (default).
-    /// TS parity: `forkedAgent.ts::createSubagentContext`.
     ///
     /// The `clone_file_read_state` flag inside is honored by the
     /// dispatcher at engine-build time (cloning is too expensive
@@ -467,10 +442,6 @@ impl QueryEngineConfig {
 /// Collected by the CLI layer at session start and handed to the engine so it
 /// can emit a single `CoreEvent::Protocol(ServerNotification::SessionStarted)`
 /// with full context before the first turn.
-///
-/// TS equivalent: `buildSystemInitMessage()` in
-/// `src/utils/messages/systemInit.ts`. Fields mirror
-/// `SDKSystemMessageSchema` init subtype (coreSchemas.ts:1457-1494).
 #[derive(Debug, Clone, Default)]
 pub struct SessionBootstrap {
     pub protocol_version: String,
@@ -516,7 +487,6 @@ pub struct QueryResult {
     /// Permission denials accumulated during the session. Populated on each
     /// `PermissionDecision::Deny` branch in the tool execution loop and
     /// flushed into `SessionResultParams` at session end.
-    /// Matches TS `SDKPermissionDenial` array (coreSchemas.ts:1399-1405).
     pub permission_denials: Vec<coco_types::PermissionDenialInfo>,
     /// Final message history at the end of the turn, including the
     /// user prompt, any tool calls + results, and the final assistant
@@ -530,7 +500,7 @@ pub struct QueryResult {
     /// Same final transcript as [`Self::final_messages`], preserving
     /// `MessageHistory` state such as the latest provider usage marker.
     pub final_history: MessageHistory,
-    /// Structured output captured from a TS `structured_output` attachment.
+    /// Structured output captured from a `structured_output` attachment.
     pub structured_output: Option<serde_json::Value>,
     /// Max-turn terminal signal captured from this engine invocation.
     pub max_turns_reached: Option<coco_types::MaxTurnsReachedPayload>,

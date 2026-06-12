@@ -1,13 +1,9 @@
 //! `@import` directive parsing for memory files.
 //!
-//! TS source: `claudemd.ts:451-685` — `extractIncludePathsFromTokens`,
-//! `processMemoryFile`, `MAX_INCLUDE_DEPTH = 5`,
-//! `TEXT_FILE_EXTENSIONS`.
-//!
 //! Memory files can include other files via `@path` syntax in text
 //! nodes. This module:
 //! - extracts `@path` references from a markdown body, skipping fenced
-//!   code blocks and inline code spans (TS skips code-type AST nodes);
+//!   code blocks and inline code spans (skips code-type AST nodes);
 //! - resolves the four syntax variants (`@./rel`, `@~/home`,
 //!   `@/abs`, `@bare/path` = relative);
 //! - recursively expands includes with [`MAX_INCLUDE_DEPTH`] depth
@@ -17,15 +13,14 @@
 //!
 //! ## Ordering
 //!
-//! TS pushes the **parent** first, then recurses into children:
-//! `result.push(memoryFile); for (...) result.push(...includedFiles)`
-//! (`claudemd.ts:664-682`). We mirror that — caller appends to a flat
-//! `Vec` so the natural `.extend` order matches.
+//! The **parent** is pushed first, then children are recursed into:
+//! caller appends to a flat `Vec` so the natural `.extend` order
+//! matches.
 //!
 //! ## What we don't (yet) implement
 //!
-//! - Symlink-target dedup parity with TS (we dedup by canonicalized
-//!   path which collapses symlinks the same way).
+//! - Symlink-target dedup (we dedup by canonicalized path which
+//!   collapses symlinks the same way).
 //! - `claudeMdExcludes` user-setting filter — that's a P3 follow-up
 //!   (settings plumb-through). Files that match the path pattern
 //!   simply load.
@@ -35,15 +30,12 @@ use std::path::Path;
 use std::path::PathBuf;
 
 /// Maximum recursion depth for `@import` expansion.
-///
-/// TS: `claudemd.ts:537` `const MAX_INCLUDE_DEPTH = 5`.
 pub const MAX_INCLUDE_DEPTH: u32 = 5;
 
 /// Extensions allowed for `@import` targets — prevents binary blobs
 /// (images, PDFs, archives) from being loaded into the system prompt.
 ///
-/// TS: `claudemd.ts:96-227` `TEXT_FILE_EXTENSIONS`. We carry a
-/// representative subset; missing entries can be added as needed.
+/// A representative subset; missing entries can be added as needed.
 /// All matches are case-insensitive on the extension only.
 pub const TEXT_FILE_EXTENSIONS: &[&str] = &[
     // Markdown / text
@@ -135,10 +127,9 @@ pub const TEXT_FILE_EXTENSIONS: &[&str] = &[
 /// Extract `@path` references from a memory-file body, ignoring
 /// fenced code blocks and inline code spans.
 ///
-/// TS: `extractIncludePathsFromTokens` (`claudemd.ts:451-535`) walks
-/// the marked AST and only inspects `text` nodes (skipping `code` /
-/// `codespan`). Our line/region scanner achieves the same skip
-/// without pulling in a markdown parser dep.
+/// Walks the body and only inspects text nodes (skipping code /
+/// codespan). The line/region scanner achieves this skip without
+/// pulling in a markdown parser dep.
 pub fn extract_include_paths(body: &str) -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
     let mut in_fence = false;
@@ -206,8 +197,7 @@ fn strip_inline_code(line: &str) -> String {
 }
 
 /// Find all `@path` substrings in `text`, returning each path string
-/// (without the leading `@`). Mirrors TS `extractIncludePathsFromTokens`
-/// validation (`claudemd.ts:475-489`):
+/// (without the leading `@`). Validated forms:
 /// - `./relative`
 /// - `~/home/path`
 /// - `/absolute/path` (single `/` rejected)
@@ -239,8 +229,8 @@ fn scan_at_paths(text: &str) -> Vec<String> {
             }
         }
         // Consume the path: any char until whitespace or terminating
-        // markdown punctuation. Mirrors TS regex permissive token
-        // shape — refined by the validator below.
+        // markdown punctuation. Permissive token shape — refined by the
+        // validator below.
         let start = i + 1;
         let mut end = start;
         while end < bytes.len() {
@@ -253,9 +243,8 @@ fn scan_at_paths(text: &str) -> Vec<String> {
             end += 1;
         }
         let path = &text[start..end];
-        // Strip a trailing `#fragment` (TS does this implicitly via the
-        // path validator — we strip explicitly so the file-resolver
-        // doesn't try to open `path#section`).
+        // Strip a trailing `#fragment` explicitly so the file-resolver
+        // doesn't try to open `path#section`.
         let path_clean = path.split('#').next().unwrap_or(path);
         if is_valid_at_path(path_clean) {
             out.push(path_clean.to_string());
@@ -265,7 +254,7 @@ fn scan_at_paths(text: &str) -> Vec<String> {
     out
 }
 
-/// Validation for an `@path` token (TS `claudemd.ts:475-489`).
+/// Validation for an `@path` token.
 fn is_valid_at_path(path: &str) -> bool {
     if path.is_empty() {
         return false;
@@ -312,11 +301,11 @@ pub fn resolve_at_path(token: &str, base_dir: &Path) -> Option<PathBuf> {
 
 /// True when `path`'s extension is in [`TEXT_FILE_EXTENSIONS`]
 /// (case-insensitive). Files with no extension are accepted (markdown
-/// `README` files etc. — TS includes the `.txt`-class names too).
+/// `README` files etc.).
 pub fn is_text_extension(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        // No extension → conservatively allow (TS does too, since the
-        // marked tokenizer doesn't gate on extension at all).
+        // No extension → conservatively allow (the tokenizer doesn't gate
+        // on extension at all).
         return true;
     };
     TEXT_FILE_EXTENSIONS
@@ -325,8 +314,8 @@ pub fn is_text_extension(path: &Path) -> bool {
 }
 
 /// Recursively expand a memory file's `@imports`, returning a flat
-/// list of `(path, content)` entries in TS-faithful order: parent
-/// first, then each include (recursively).
+/// list of `(path, content)` entries in parent-first order, then each
+/// include (recursively).
 ///
 /// `processed` carries the canonicalized paths visited so far; cycles
 /// are silently broken by skipping repeats. `depth` is checked against
@@ -347,8 +336,8 @@ pub fn expand_imports(
     }
 
     // Strip HTML comments so authorial `<!-- … -->` never reaches the model
-    // prompt (TS `stripHtmlComments`, claudemd.ts:292). @imports inside a
-    // comment are inactive because extraction runs on the stripped body.
+    // prompt. @imports inside a comment are inactive because extraction runs
+    // on the stripped body.
     let stripped = strip_html_comments(content);
     out.push((path.to_path_buf(), stripped.clone()));
 
@@ -368,8 +357,7 @@ pub fn expand_imports(
         // "external" — skip it unless the caller allows external includes
         // (only user-global memory does). Prevents an untrusted project
         // CLAUDE.md from pulling host files (SSH keys, cloud creds) into the
-        // prompt. TS: `isExternal = !pathInOriginalCwd(resolved); if
-        // (isExternal && !includeExternal) continue` (claudemd.ts:667-670).
+        // prompt.
         if !allow_external && !path_within(&resolved, cwd) {
             continue;
         }
@@ -392,9 +380,8 @@ pub fn expand_imports(
 /// Strip block-level HTML comments (`<!-- … -->`) from memory content,
 /// preserving fenced code blocks and leaving an unclosed `<!--` intact.
 ///
-/// TS: `stripHtmlComments` (claudemd.ts:292-334) — block-level only, skips
-/// fenced code, non-greedy, keeps a dangling `<!--` so a stray marker can't
-/// eat the rest of the file.
+/// Block-level only, skips fenced code, non-greedy, keeps a dangling
+/// `<!--` so a stray marker can't eat the rest of the file.
 pub fn strip_html_comments(content: &str) -> String {
     let mut out = String::with_capacity(content.len());
     let mut rest = content;
@@ -425,7 +412,7 @@ pub fn strip_html_comments(content: &str) -> String {
                     at_bol = false;
                     continue;
                 }
-                // Unclosed comment: leave the remainder verbatim (TS parity).
+                // Unclosed comment: leave the remainder verbatim.
                 None => {
                     out.push_str(rest);
                     break;
@@ -472,8 +459,7 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
     lexical
 }
 
-/// True when `path` resolves inside `root`'s subtree. Mirrors TS
-/// `pathInOriginalCwd` = `pathInWorkingPath(path, originalCwd)`.
+/// True when `path` resolves inside `root`'s subtree.
 fn path_within(path: &Path, root: &Path) -> bool {
     let root_n = root
         .canonicalize()

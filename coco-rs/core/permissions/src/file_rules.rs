@@ -1,9 +1,8 @@
-//! TS-style file permission rule matching.
+//! File permission rule matching.
 //!
-//! Mirrors `utils/permissions/filesystem.ts::patternWithRoot()` and
-//! `matchingRuleForInput()`: file rules are matched against paths relative to
-//! a source-specific root, with `//` meaning filesystem root, `~/` meaning
-//! home, `/` meaning the settings/source root, and `./` normalized away.
+//! File rules are matched against paths relative to a source-specific root,
+//! with `//` meaning filesystem root, `~/` meaning home, `/` meaning the
+//! settings/source root, and `./` normalized away.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

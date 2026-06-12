@@ -325,7 +325,7 @@ fn pipeline_layer2_tool_overrides_drop_excluded() {
     assert!(visible.contains(ToolName::Bash.as_str()));
 }
 
-/// Mirror TS: plan mode does NOT narrow the model's tool schema. Write
+/// Plan mode does NOT narrow the model's tool schema. Write
 /// tools stay visible (the schema is identical to Default mode); plan-mode
 /// read-only is enforced at call time by `coco_permissions`, not by
 /// removing tools here. Regression guard for the old layer-3 strip that
@@ -378,7 +378,7 @@ fn pipeline_agent_filter_narrows() {
 
 /// End-to-end design-doc §8 trace: gpt-5 + Plan mode.
 ///
-/// Mirror TS: plan mode no longer narrows the schema, so the visible set
+/// Plan mode no longer narrows the schema, so the visible set
 /// is exactly the gpt-5 tool universe — `Edit` and `Write` excluded,
 /// `apply_patch` added (it covers both edits and new files), `Bash`
 /// present. Plan-mode read-only is a call-time permission concern, not a
@@ -424,10 +424,9 @@ fn pipeline_design_doc_gpt5_plan_mode_trace() {
 }
 
 /// When `Feature::ToolSearch` is **off**, the deferral filter
-/// is bypassed entirely (TS `'standard'` mode): every deferred
-/// tool gets full schema on turn 1 and the deferred pool is empty.
-/// Mirrors the user-facing `settings.json` toggle
-/// `features.tool_search = false` that lets sessions with few
+/// is bypassed entirely: every deferred tool gets full schema on turn 1
+/// and the deferred pool is empty. Mirrors the user-facing `settings.json`
+/// toggle `features.tool_search = false` that lets sessions with few
 /// deferrable tools skip the lazy-loading round-trip.
 #[test]
 fn tool_search_disabled_loads_every_deferred_tool_eagerly() {
@@ -523,7 +522,7 @@ fn tool_search_inactive_when_model_lacks_capability() {
     );
 }
 
-/// `always_load` (TS `_meta["anthropic/alwaysLoad"]` opt-out) must
+/// `always_load` (`_meta["anthropic/alwaysLoad"]` opt-out) must
 /// surface the tool in `loaded_tools` on turn 1 even when
 /// `should_defer() == true`. Symmetric: `deferred_tools` must omit it.
 #[test]

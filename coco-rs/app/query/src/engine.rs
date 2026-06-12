@@ -1,7 +1,5 @@
 //! The agent loop — heart of the system.
 //!
-//! TS: QueryEngine.ts + query.ts
-//!
 //! State transitions tracked via ContinueReason to enable tests to verify
 //! recovery paths without inspecting message contents.
 
@@ -45,13 +43,11 @@ use crate::engine_result::make_query_result;
 /// Last-compact tracker for `RecompactionInfo` population. Set by
 /// `try_full_compact` after a successful compact and read by the next
 /// compaction to derive `is_recompaction` / `turns_since_previous`.
-/// TS parity: `services/compact/autoCompact.ts:51-60 AutoCompactTrackingState`
-/// + `query.ts:521 tracking = { compacted: true, turnId, turnCounter: 0 }`.
 ///
-/// Field-by-field mirror of TS — read directly, no subtraction needed:
-/// - `run_id` ≡ TS `turnId` (UUID, generated per compact).
-/// - `turn_counter` ≡ TS `turnCounter` (resets to 0 on each compact,
-///   bumped +1 per subsequent turn at `engine_finalize_turn.rs`).
+/// Read directly, no subtraction needed:
+/// - `run_id` — UUID generated per compact.
+/// - `turn_counter` — resets to 0 on each compact, bumped +1 per
+///   subsequent turn at `engine_finalize_turn.rs`.
 #[derive(Debug, Clone)]
 pub(crate) struct LastCompactState {
     /// Turns elapsed since the previous compact. `0` immediately after
@@ -97,7 +93,7 @@ pub struct QueryEngine {
     /// Awaited at the top of the *next* `run_session_loop` iteration
     /// so the summary surfaces to SDK consumers as a
     /// `ServerNotification::ToolUseSummary` just before the next API
-    /// call. TS parity: `query.ts:1055-1060`.
+    /// call.
     ///
     /// `Arc<Mutex>` (not session-loop local) because the spawn site
     /// (`finalize_turn_post_tools`) and await site (`run_session_loop`
@@ -116,7 +112,6 @@ pub struct QueryEngine {
     /// Session-level file read state for @mention dedup and changed-file detection.
     pub(crate) file_read_state: Option<Arc<RwLock<coco_context::FileReadState>>>,
     /// File history for checkpoint/rewind.
-    /// TS: fileHistoryState in AppState + callbacks in toolUseContext.
     pub(crate) file_history: Option<Arc<RwLock<FileHistoryState>>>,
     /// Config home directory for file history backup storage.
     pub(crate) config_home: Option<std::path::PathBuf>,
@@ -129,8 +124,7 @@ pub struct QueryEngine {
     /// Auto-mode state + rules for the 2-stage LLM classifier. When active,
     /// tool calls that return `PermissionDecision::Ask` are first run through
     /// `can_use_tool_in_auto_mode` — Allow/Deny short-circuits the permission
-    /// bridge; None falls through to interactive approval. TS: classifier flow
-    /// in `utils/permissions/classifierDecision.ts`.
+    /// bridge; None falls through to interactive approval.
     pub(crate) auto_mode_state: Option<Arc<coco_permissions::AutoModeState>>,
     pub(crate) denial_tracker: Option<Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>>,
     pub(crate) auto_mode_rules: coco_permissions::AutoModeRules,
@@ -162,26 +156,22 @@ pub struct QueryEngine {
     /// (`LSPTool`). `None` ⇒ `ToolContextFactory` substitutes
     /// `NoOpLspHandle`, which reports `is_connected() = false` so
     /// `LspTool::is_enabled` filters the tool out of the model's tool
-    /// list (TS parity:
-    /// `LSPTool.isEnabled() = isLspConnected()`). Wired by
-    /// `session_runtime` via [`Self::with_lsp_handle`].
+    /// list. Wired by `session_runtime` via [`Self::with_lsp_handle`].
     pub(crate) lsp_handle: Option<coco_tool_runtime::LspHandleRef>,
     /// Agent-runtime handle for `AgentTool` (subagent spawn / team
     /// management / background signalling). `None` resolves to
     /// `NoOpAgentHandle` in [`ToolContextFactory::build`]; the CLI /
     /// SDK / TUI runners install a real handle via
     /// [`Self::with_agent_handle`] so `AgentTool` calls reach the
-    /// swarm runtime. TS parity: `runAgent.ts` is reachable from any
-    /// model call; Rust sessions that skip installation intentionally
+    /// swarm runtime. Sessions that skip installation intentionally
     /// restrict Agent tools to model-visible errors.
     pub(crate) agent_handle: Option<coco_tool_runtime::AgentHandleRef>,
-    /// Tool-result budget replacement state (TS
-    /// `ContentReplacementState`). Threaded through every per-turn
-    /// `apply_tool_result_budget` call so seen_ids freeze across
-    /// turns (TS contract: a result, once seen, is never re-evaluated
-    /// for replacement). The `per_message_chars` field is overwritten
-    /// per call from the live `compact.tool_result_budget` so the
-    /// budget reflects hot-reloaded config.
+    /// Tool-result budget replacement state. Threaded through every
+    /// per-turn `apply_tool_result_budget` call so seen_ids freeze
+    /// across turns (a result, once seen, is never re-evaluated for
+    /// replacement). The `per_message_chars` field is overwritten per
+    /// call from the live `compact.tool_result_budget` so the budget
+    /// reflects hot-reloaded config.
     pub(crate) tool_result_replacement_state:
         coco_tool_runtime::tool_result_storage::ContentReplacementStateRef,
     /// Skill-runtime handle for `SkillTool`. Phase 7 routed skills
@@ -195,8 +185,10 @@ pub struct QueryEngine {
     /// engine instance**. Since `QueryEngine` is rebuilt fresh per user
     /// message (`SessionRuntime::build_engine` is called from every
     /// TUI / SDK / headless / fork driver), engine-scoped = user-msg-scoped.
-    /// This mirrors TS `query()`'s `getAppState` closure-captured
-    /// `appState.alwaysAllowRules.command`:
+    /// Scoped command-allow rules — engine-scoped = user-msg-scoped.
+    /// Every turn's `ToolContextFactory::build` reads this Arc and
+    /// merges contents into `ToolPermissionContext.allow_rules` under
+    /// [`coco_types::PermissionRuleSource::Command`]:
     ///
     /// - **Within one user message** — every turn's
     ///   `ToolContextFactory::build` reads this Arc and merges its
@@ -235,9 +227,8 @@ pub struct QueryEngine {
     /// via [`Self::last_cache_safe_params`]; cleared by
     /// [`Self::clear_cache_safe_params`] on `/clear` regen.
     ///
-    /// `Arc<RwLock<...>>` so observers (TUI status, transcript
-    /// recorder) can read the slot without contending with the
-    /// engine's writer side.
+    /// `Arc<RwLock<...>>` so observers (TUI status, transcript recorder)
+    /// can read the slot without contending with the engine's writer side.
     pub(crate) last_cache_safe_params:
         std::sync::Arc<tokio::sync::RwLock<Option<coco_types::CacheSafeParams>>>,
     /// Optional dispatcher for one-shot forked queries (D1/D2). When
@@ -249,11 +240,10 @@ pub struct QueryEngine {
     /// surfaced where appropriate; the parent loop continues).
     pub(crate) fork_dispatcher: Option<crate::forked_agent::ForkDispatcherRef>,
     /// Session-scoped abort slot for the in-flight prompt-suggestion
-    /// fork. TS parity: `services/PromptSuggestion/promptSuggestion.ts`
-    /// module-level `currentAbortController`. When the engine spawns
-    /// a new suggestion fork, it cancels the previous in-flight one
-    /// so rapid `/clear` cycles don't accumulate fork tasks burning
-    /// tokens. `None` ⇒ no abort slot wired (test contexts).
+    /// fork. When the engine spawns a new suggestion fork, it cancels
+    /// the previous in-flight one so rapid `/clear` cycles don't
+    /// accumulate fork tasks burning tokens. `None` ⇒ no abort slot
+    /// wired (test contexts).
     pub(crate) current_suggestion_abort:
         Option<std::sync::Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>>,
     /// Background task runtime — the [`TaskHandle`] consumed by
@@ -293,30 +283,27 @@ pub struct QueryEngine {
     /// Observers notified after each successful full compaction. Each
     /// crate that owns post-compact-invalidated state (file caches, skill
     /// state, memory caches) registers itself once at startup. Empty
-    /// default ⇒ no observers fire (TS parity for skipped subsystems).
-    /// Implements the TS `runPostCompactCleanup` god-function as a
-    /// pluggable registry.
+    /// default ⇒ no observers fire. Implements post-compact cleanup
+    /// as a pluggable registry.
     pub(crate) compaction_observers: Arc<coco_compact::CompactionObserverRegistry>,
     /// Wall-clock millis of the most recent assistant message. Drives
     /// `evaluate_time_based_trigger` so a long inactivity gap can clear
-    /// stale tool results before the next API call. TS parity:
-    /// `lastAssistantMessageTimestamp` in microCompact.ts.
+    /// stale tool results before the next API call.
     pub(crate) last_assistant_ms: Arc<std::sync::atomic::AtomicI64>,
     /// In-memory `lastSummarizedMessageId` carried by the session-memory
     /// path. Set after extraction completes; cleared after any compaction
     /// (the kept-tail UUIDs are no longer the same anchor).
-    /// TS: sessionMemoryUtils.ts module-level `let`.
     pub(crate) last_summarized_message_id: Arc<std::sync::Mutex<Option<uuid::Uuid>>>,
     /// Pre-extracted session memory summary text. Empty string disables
-    /// the SM-first compact path. TS: contents of `getSessionMemoryPath()`.
+    /// the SM-first compact path.
     pub(crate) session_memory_text: Arc<tokio::sync::RwLock<String>>,
     /// Optional handle to the consolidated session-memory service.
     /// When present, `try_session_memory_compact` reads its cached
     /// body and calls `wait_for_extraction()` to avoid racing the
-    /// in-flight forked-agent extractor. TS: waitForSessionMemoryExtraction.
-    /// This is the same `Arc` as `memory_runtime.session_memory`
-    /// when both are populated — wired by `SessionRuntime` for
-    /// direct access without an `Option<MemoryRuntime>` hop.
+    /// in-flight forked-agent extractor. This is the same `Arc` as
+    /// `memory_runtime.session_memory` when both are populated —
+    /// wired by `SessionRuntime` for direct access without an
+    /// `Option<MemoryRuntime>` hop.
     pub(crate) session_memory_service: Option<Arc<coco_memory::SessionMemoryService>>,
     /// Auto-memory runtime — extraction / dream / 9-section session
     /// memory / recall ranker. Distinct from
@@ -335,12 +322,10 @@ pub struct QueryEngine {
     pub(crate) auto_compact_state: Arc<tokio::sync::Mutex<coco_compact::ReactiveCompactState>>,
     /// Optional handle to the running-task manager — when present,
     /// `try_full_compact` snapshots running async agents and re-emits
-    /// them as post-compact `task_status` attachments (TS:
-    /// `createAsyncAgentAttachmentsIfNeeded`). `None` ⇒ no running-task
+    /// them as post-compact `task_status` attachments. `None` ⇒ no running-task
     /// awareness; the caller (CLI/SDK) wires this on construction.
     pub(crate) running_tasks: Option<Arc<coco_tasks::running::TaskManager>>,
-    /// Last-compact tracker — feeds `RecompactionInfo` (TS parity:
-    /// `query.ts:521 tracking = { compacted, turnId, turnCounter: 0 }`).
+    /// Last-compact tracker — feeds `RecompactionInfo`.
     /// `LastCompactState.turn_counter` resets to 0 each compact and bumps
     /// +1 per turn in `finalize_turn_post_tools` — read directly with no
     /// subtraction.
@@ -357,8 +342,7 @@ pub struct QueryEngine {
         Option<crate::session_start_hooks::SessionStartHookSideEffectSinkRef>,
     /// Staged context-collapse ledger. Pre-staged ranges drain into
     /// commits on PTL recovery so a 413 doesn't have to truncate the
-    /// head. `None` ⇒ feature disabled (default). TS:
-    /// `services/contextCollapse/index.ts` module-level state.
+    /// head. `None` ⇒ feature disabled (default).
     pub(crate) staged_ledger: Option<Arc<tokio::sync::Mutex<coco_compact::StagedCompactLedger>>>,
     /// Persistent session id used as the `sessionId` for any
     /// staged-collapse commit/snapshot entries. Lazily set when
@@ -382,9 +366,8 @@ pub struct QueryEngine {
     /// One-shot post-compaction signal. Set to `true` whenever
     /// `do_reactive_compact` / full-compaction / SM-compaction succeeds;
     /// consumed (swap-to-false) by the next `engine_turn_reminders` build.
-    /// Mirrors TS `getUnifiedTaskAttachments(ctx)` post-compact emission
-    /// surface — only the immediately-following turn surfaces background
-    /// task status reminders.
+    /// Only the immediately-following turn surfaces background task status
+    /// reminders.
     pub(crate) pending_just_compacted: Arc<std::sync::atomic::AtomicBool>,
     /// Transcript writer used for marble-origami persistence and the
     /// per-turn user/assistant JSONL append. `None` disables
@@ -407,8 +390,7 @@ pub struct QueryEngine {
     /// cloned into every per-turn engine via `with_transcript_dedup`
     /// so the same set survives across engine instances. `None`
     /// disables per-turn message persistence (only marble-origami
-    /// metadata is written). TS parity: `Project.recordTranscript`
-    /// dedups by uuid in `utils/sessionStorage.ts:1408`.
+    /// metadata is written).
     pub(crate) transcript_dedup:
         Option<Arc<tokio::sync::Mutex<std::collections::HashSet<uuid::Uuid>>>>,
     /// Live message-history sink read by the periodic AgentSummary timer.
@@ -429,11 +411,10 @@ pub struct QueryEngine {
     pub(crate) pending_nested_memory: std::sync::Arc<
         tokio::sync::Mutex<Vec<coco_system_reminder::generators::memory::NestedMemoryInfo>>,
     >,
-    /// Session-level dedup set for nested-memory paths. Mirrors TS
-    /// `loadedNestedMemoryPathsRef` (`REPL.tsx:1964-1967`) — once a
-    /// memory file is injected in this session, subsequent file reads
-    /// in the same subtree won't re-inject it. Cleared on conversation
-    /// reset via
+    /// Session-level dedup set for nested-memory paths — once a memory
+    /// file is injected in this session, subsequent file reads in the
+    /// same subtree won't re-inject it. Cleared on conversation reset
+    /// via
     /// [`crate::engine_attachments::QueryEngine::clear_loaded_nested_memory_paths`].
     pub(crate) loaded_nested_memory_paths:
         std::sync::Arc<tokio::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>>,
@@ -507,10 +488,9 @@ impl QueryEngine {
         cycle_turn_id: Option<coco_types::TurnId>,
         total_usage: &mut TokenUsage,
     ) -> Result<QueryResult, coco_error::BoxedError> {
-        // ── Loop state, grouped by lifecycle. Mirrors TS `query.ts:204-217`
-        //    `State` adapted to Rust's borrow model — see
-        //    `engine_loop_state.rs` for the field-by-field rationale and
-        //    `init_loop_state` for the bundled construction site.
+        // ── Loop state, grouped by lifecycle — see `engine_loop_state.rs`
+        //    for the field-by-field rationale and `init_loop_state` for
+        //    the bundled construction site.
         let (mut acc, mut turn_state, mut services, consts) = self
             .init_loop_state(turn_messages, &event_tx, history)
             .await;
@@ -551,12 +531,10 @@ impl QueryEngine {
                 ));
             }
 
-            // Drain the prior turn's tool-use-summary side-fork (TS
-            // `query.ts:1055-1060` — await `pendingToolUseSummary` at
-            // the top of the next iteration). 2s hard cap; never
-            // blocks the new turn for more than that. Silent no-op
-            // when no pending handle exists (first iteration, or
-            // previous turn had no tool batch).
+            // Drain the prior turn's tool-use-summary side-fork. 2s
+            // hard cap; never blocks the new turn for more than that.
+            // Silent no-op when no pending handle exists (first
+            // iteration, or previous turn had no tool batch).
             self.drain_pending_tool_use_summary(&event_tx).await;
 
             let next_iteration_counts_as_turn = turn_state.count_next_iteration_as_turn
@@ -1225,8 +1203,8 @@ async fn consume_pending_plan_mode_clear_context(
     // I-1 (Authority): every transcript mutation must emit so TUI's
     // TranscriptView + SDK NDJSON observers stay coherent. Plan-mode
     // exit doesn't rotate session_id, so `MessageTruncated { 0 }` is
-    // the right signal; the following user message mirrors TS
-    // `initialMessage.message.content`.
+    // the right signal; the following user message carries the
+    // implementation message content.
     crate::history_sync::history_clear_and_emit(history, event_tx).await;
     if let Some(message) = implementation_message {
         crate::history_sync::history_push_and_emit(
@@ -1256,8 +1234,6 @@ pub(crate) struct RunArtifacts {
     /// `COCO_MAX_STRUCTURED_OUTPUT_RETRIES` and to decide whether to
     /// re-inject the "you MUST call this tool" nudge when the model
     /// tries to end the turn without a successful structured response.
-    /// TS parity: `countToolCalls(messages, SYNTHETIC_OUTPUT_TOOL_NAME) - initialStructuredOutputCalls`
-    /// in `QueryEngine.ts:1004-1014`.
     pub structured_output_attempts: u32,
 }
 

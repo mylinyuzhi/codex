@@ -3,7 +3,7 @@
 //!
 //! Phase 4d-β rewires this to drive
 //! [`coco_tool_runtime::StreamingToolExecutor::execute_with`] so outcomes
-//! surface through `on_outcome` in TS-parity I12 order:
+//! surface through `on_outcome` in I12 order:
 //!
 //! - Concurrent-safe batches surface in completion order.
 //! - Serial unsafe tools surface in execution order.
@@ -231,8 +231,8 @@ impl<'a> ToolCallRunner<'a> {
                         call_ctx.abort = runtime.abort.clone();
                         call_ctx.progress_tx = runtime.progress_tx.clone();
 
-                        // Pre-execute abort guard (TS `toolExecution.ts:414`):
-                        // when the turn is already aborted before the tool runs,
+                        // Pre-execute abort guard: when the turn is already
+                        // aborted before the tool runs,
                         // emit a PreExecutionCancelled outcome (EarlyReturn path,
                         // no PostToolUseFailure hooks) carrying CANCEL_MESSAGE.
                         // Without this the `select!` below would resolve the

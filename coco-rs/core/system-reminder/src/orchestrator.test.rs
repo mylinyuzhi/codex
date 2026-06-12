@@ -332,7 +332,7 @@ async fn with_default_generators_registers_all_builtins() {
     );
 }
 
-/// TS parity guard: every system-reminder-owned `AttachmentType` variant
+/// Completeness guard: every system-reminder-owned `AttachmentType` variant
 /// must have a default generator registered, and no generator emits a
 /// variant outside the catalog. Typed API-hidden attachment events live in
 /// `coco_types::AttachmentKind`, not this reminder registry.
@@ -362,9 +362,9 @@ async fn all_attachment_type_variants_have_default_generator() {
     );
 }
 
-/// TS parity guard: registration order is injection order because generators
+/// Order guard: registration order is injection order because generators
 /// run concurrently but are collected with `join_all`, which preserves input
-/// order. Keep this list aligned with TS `getAttachments`.
+/// order.
 #[tokio::test]
 async fn default_registry_order_matches_ts_attachment_batches() {
     use AttachmentType::*;

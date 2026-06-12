@@ -236,8 +236,7 @@ pub(crate) async fn deny_permission(
 
 /// Handle `ApproveAll` (always-allow) for permission prompts.
 ///
-/// Builds a `LocalSettings`-scoped allow rule for the tool (mirrors TS
-/// `FallbackPermissionRequest` `destination:'localSettings'`). `tui_runner`
+/// Builds a `LocalSettings`-scoped allow rule for the tool. `tui_runner`
 /// both applies the update to the live `engine_config` via
 /// `coco_permissions::apply_permission_updates` (so subsequent same-tool
 /// calls in the session don't re-prompt) and persists it to
@@ -247,8 +246,7 @@ pub(crate) async fn deny_permission(
 /// edit team-shared (`ProjectSettings`) or global (`UserSettings`) config.
 ///
 /// Picking `Project` / `User` destinations lives in the dedicated
-/// `/permissions` rule-editor overlay (TS `AddPermissionRules`), not this
-/// inline popup.
+/// `/permissions` rule-editor overlay, not this inline popup.
 pub(crate) async fn approve_all(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
         return;
@@ -420,9 +418,7 @@ pub(crate) fn nav_permission(
 /// `user_choice` field and the original args. Returns `None` when the
 /// state has no choices or the cursor is out of range — caller falls
 /// back to `updated_input: None`.
-///
-/// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` — the
-/// option's `value` is merged into the original tool input on commit.
+/// The option's `value` is merged into the original tool input on commit.
 pub(crate) fn build_choice_payload(
     p: &crate::state::PermissionPromptState,
 ) -> Option<serde_json::Value> {

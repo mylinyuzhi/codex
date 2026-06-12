@@ -1,13 +1,8 @@
 //! djb2 hash + JS-equivalent base36 stringification.
 //!
-//! TS: `simpleHash` at `utils/sessionStoragePortable.ts:295-297`:
-//! ```text
-//! function simpleHash(str: string): string {
-//!   return Math.abs(djb2Hash(str)).toString(36)
-//! }
-//! ```
-//! and `djb2Hash` itself (canonical algorithm: `hash * 33 + ch` with
-//! `| 0` int32 truncation at each step).
+//! `simpleHash`: `Math.abs(djb2Hash(str)).toString(36)`.
+//! `djb2Hash` uses the canonical algorithm: `hash * 33 + ch` with
+//! `| 0` int32 truncation at each step.
 
 /// djb2 hash on UTF-16 code units, with i32 wrap-on-overflow
 /// matching JS `| 0` semantics.

@@ -13,8 +13,7 @@ use serde_json::json;
 #[tokio::test]
 async fn test_write_prompt_includes_read_before_write_warning() {
     use coco_tool_runtime::PromptOptions;
-    // The full guidance lives in the model-facing prompt() (TS
-    // `getWriteToolDescription()`); description() is the short label.
+    // The full guidance lives in the model-facing prompt(); description() is the short label.
     let desc = <WriteTool as DynTool>::prompt(&WriteTool, &PromptOptions::default()).await;
     assert!(
         desc.contains("MUST use the `Read` tool first"),
@@ -235,7 +234,7 @@ async fn test_write_new_file() {
     .await
     .unwrap();
 
-    // TS shape: `{type: "create", filePath: ...}`. render_for_model
+    // Shape: `{type: "create", filePath: ...}`. render_for_model
     // builds the human message from these fields.
     assert_eq!(result.data["type"], "create");
     assert_eq!(result.data["filePath"], file.to_str().unwrap());
@@ -270,7 +269,6 @@ async fn test_write_render_for_model_create_branch() {
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    // TS parity: `File created successfully at: /abs/new.txt`.
     assert_eq!(text, "File created successfully at: /abs/new.txt");
 }
 
@@ -282,7 +280,6 @@ async fn test_write_render_for_model_update_branch() {
     let ToolResultContentPart::Text { text, .. } = &parts[0] else {
         panic!("expected Text part");
     };
-    // TS parity: `The file /abs/existing.txt has been updated successfully.`
     assert_eq!(
         text,
         "The file /abs/existing.txt has been updated successfully."
@@ -322,8 +319,6 @@ async fn test_write_missing_content() {
 
 /// Overwriting a UTF-16LE file must preserve UTF-16LE encoding, not
 /// silently convert it to UTF-8 which would corrupt the file.
-/// TS: `FileWriteTool.ts:268-277, 297, 305` — `meta.encoding` is read
-/// from disk and passed back to `writeTextContent`.
 #[tokio::test]
 async fn test_write_preserves_utf16le_encoding() {
     let dir = tempfile::tempdir().unwrap();
@@ -372,9 +367,8 @@ fn ctx_with_file_state() -> ToolUseContext {
     ctx
 }
 
-/// Overwriting an existing file without a prior Read must fail. TS:
-/// `FileWriteTool.ts:198-206` — enforces read-before-write to prevent
-/// accidental data loss.
+/// Overwriting an existing file without a prior Read must fail — enforces
+/// read-before-write to prevent accidental data loss.
 #[tokio::test]
 async fn test_write_rejects_overwrite_without_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -457,7 +451,7 @@ async fn test_write_allows_overwrite_after_read() {
 
 /// Stale content in file_read_state (file was edited on disk since we
 /// read it) must be detected via the content-hash fallback, even if the
-/// mtime happens to match. TS: `FileWriteTool.ts:286-293`.
+/// mtime happens to match.
 #[tokio::test]
 async fn test_write_detects_content_drift() {
     let dir = tempfile::tempdir().unwrap();
@@ -519,11 +513,11 @@ async fn test_write_new_file_is_utf8() {
 
 // ── R7-T14: team-memory secret guard tests ──
 //
-// TS `FileWriteTool.ts:156-160` calls `checkTeamMemSecrets(filePath,
-// content)` before writing — if the path is in `.coco/memory/team/`
-// AND the content has secret-shaped tokens, the write is rejected.
-// coco-rs implements the same guard via `crate::check_team_mem_secret`.
-// These tests cover the path predicate and the secret detector.
+// `checkTeamMemSecrets(filePath, content)` is called before writing —
+// if the path is in `.coco/memory/team/` AND the content has
+// secret-shaped tokens, the write is rejected. Implemented via
+// `crate::check_team_mem_secret`. These tests cover the path predicate
+// and the secret detector.
 
 #[tokio::test]
 async fn test_write_rejects_secret_in_team_memory_path() {

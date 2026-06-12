@@ -1,7 +1,5 @@
 //! Persistent cross-session memory.
 //!
-//! Mirrors TS `src/memdir/` + `src/services/{extractMemories,SessionMemory,autoDream}/`.
-//!
 //! Structure:
 //! - [`store`] — pure data: entry, frontmatter, MEMORY.md index, format
 //! - [`path`] — git-canonical resolution, validation, scope, classify

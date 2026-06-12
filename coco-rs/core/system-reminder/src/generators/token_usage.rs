@@ -1,19 +1,15 @@
-//! TS `token_usage` generator.
+//! `token_usage` generator.
 //!
-//! Mirrors `getTokenUsageAttachment` (`attachments.ts:3807`) +
-//! `normalizeAttachmentForAPI` `case 'token_usage':` (`messages.ts:4058`).
 //! Main-thread-only per-turn usage report.
 //!
 //! Gate chain:
 //!
-//! 1. `ctx.config.attachments.token_usage` — opt-in (TS gates on the
-//!    `CLAUDE_CODE_ENABLE_TOKEN_USAGE_ATTACHMENT` env var; coco-rs
-//!    surfaces the same toggle via `settings.json`).
+//! 1. `ctx.config.attachments.token_usage` — opt-in (default off).
 //! 2. `ctx.effective_context_window > 0` — need a real window to
 //!    compute remaining; zero means the engine hasn't populated the
 //!    field yet (safe to skip).
 //!
-//! Content is the TS literal at `messages.ts:4062`.
+//! Content format: `Context window usage: N / M tokens`.
 
 use async_trait::async_trait;
 
@@ -42,7 +38,6 @@ impl AttachmentGenerator for TokenUsageGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        // TS uses `getEffectiveContextWindowSize(model)` as the total.
         // A zero window means the engine hasn't filled the field —
         // skip silently rather than emit a nonsense "used/0".
         let total = ctx.effective_context_window;

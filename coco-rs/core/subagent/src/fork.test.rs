@@ -127,24 +127,22 @@ fn test_build_fork_child_message_has_xml_tags() {
     assert!(msg.contains(&format!("</{FORK_BOILERPLATE_TAG}>")));
     assert!(msg.contains(FORK_DIRECTIVE_PREFIX));
     assert!(msg.contains("Find all TODO comments"));
-    // The actual TS rule-body header — verified byte-for-byte against
-    // `forkSubagent.ts:177`.
+    // Rule-body header — verified byte-for-byte against `forkSubagent.ts:177`.
     assert!(msg.contains("RULES (non-negotiable):"));
-    // Line that mentions "forked worker process" — also byte-for-byte.
+    // Line that mentions "forked worker process".
     assert!(msg.contains("forked worker process"));
 }
 
-/// Byte-level TS alignment: `FORK_DIRECTIVE_PREFIX` must be exactly
-/// `"Your directive: "` (trailing space, no newline) per
-/// `constants/xml.ts:66`. Regression guard against the previous
-/// `"Your task:\n"` bug.
+/// `FORK_DIRECTIVE_PREFIX` must be exactly `"Your directive: "` (trailing
+/// space, no newline) per `constants/xml.ts:66`. Regression guard against
+/// the previous `"Your task:\n"` bug.
 #[test]
 fn test_fork_directive_prefix_is_ts_aligned() {
     assert_eq!(FORK_DIRECTIVE_PREFIX, "Your directive: ");
 }
 
 /// The child message ends with `FORK_DIRECTIVE_PREFIX{directive}` and no
-/// trailing newline — TS `forkSubagent.ts:197` template literal stops
+/// trailing newline — `forkSubagent.ts:197` template literal stops
 /// at `${directive}`.
 #[test]
 fn test_build_fork_child_message_ends_with_directive() {
@@ -157,7 +155,7 @@ fn test_build_fork_child_message_ends_with_directive() {
 }
 
 /// Directive prefix appears after the closing tag, separated by exactly
-/// one blank line — TS template literal has `</fork-boilerplate>\n\n{prefix}`.
+/// one blank line — template literal has `</fork-boilerplate>\n\n{prefix}`.
 #[test]
 fn test_build_fork_child_message_blank_line_before_directive() {
     let msg = build_fork_child_message("x");
@@ -170,7 +168,7 @@ fn test_build_fork_child_message_blank_line_before_directive() {
 
 #[test]
 fn test_build_worktree_notice_ts_byte_faithful() {
-    // TS `forkSubagent.ts:205-210`. Lock the full text — the brevity
+    // `forkSubagent.ts:205-210`. Lock the full text — the brevity
     // of the old assertion let a 110-char rewrite slip through.
     let got = build_worktree_notice("/parent/dir", "/worktree/dir");
     let expected = "You've inherited the conversation context above from a parent agent working in /parent/dir. You are operating in an isolated git worktree at /worktree/dir \u{2014} same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files.";

@@ -1,16 +1,13 @@
 //! Shared suggestion popup widget for autocomplete + the slash command
 //! palette.
 //!
-//! Renders an inline, borderless list directly above the input area —
-//! mirrors the TS Claude Code style from
-//! `components/PromptInput/PromptInputFooterSuggestions.tsx`. Each row is
-//! a single text line: a leading kind icon (`▸` selected marker, `*` for
-//! agents, `+` for files / paths, `◇` for MCP resources, blank for slash
-//! commands), then a fixed-width name column, then a single-line
-//! description. Selected rows use the theme's primary color (bold);
-//! unselected rows are rendered with `text_dim`. Agent rows pick up the
-//! agent's configured color (Red/Blue/Green/…) when present, matching
-//! TS `PromptInputFooterSuggestions.tsx`.
+//! Renders an inline, borderless list directly above the input area.
+//! Each row is a single text line: a leading kind icon (`▸` selected
+//! marker, `*` for agents, `+` for files / paths, `◇` for MCP resources,
+//! blank for slash commands), then a fixed-width name column, then a
+//! single-line description. Selected rows use the theme's primary color
+//! (bold); unselected rows are rendered with `text_dim`. Agent rows pick
+//! up the agent's configured color (Red/Blue/Green/…) when present.
 
 use coco_types::AgentColorName;
 use ratatui::buffer::Buffer;
@@ -65,8 +62,7 @@ pub enum SuggestionMeta {
 }
 
 impl SuggestionMeta {
-    /// Single-character icon glyph rendered before the label. Mirrors
-    /// TS `PromptInputFooterSuggestions.tsx:getIcon` (24-29):
+    /// Single-character icon glyph rendered before the label:
     ///
     /// - agents      → `*`
     /// - mcp         → `◇`
@@ -99,11 +95,9 @@ pub struct SuggestionPopup<'a> {
 }
 
 impl<'a> SuggestionPopup<'a> {
-    /// Default cap on visible rows — matches TS `OVERLAY_MAX_ITEMS = 5`
-    /// doubled to allow more breathing room when chat is tall enough.
-    /// Callers that drive their own row reservation (e.g. the TUI's
-    /// vertical layout) should override via `max_visible` so the widget
-    /// can't overflow the slot.
+    /// Default cap on visible rows. Callers that drive their own row
+    /// reservation (e.g. the TUI's vertical layout) should override via
+    /// `max_visible` so the widget can't overflow the slot.
     pub const DEFAULT_MAX_VISIBLE: u16 = 10;
 
     pub fn new(items: &'a [SuggestionItem], styles: UiStyles<'a>) -> Self {
@@ -134,7 +128,6 @@ const MARKER_WIDTH: usize = 4;
 /// description never abuts the longest name in the list.
 const NAME_COLUMN_PADDING: usize = 2;
 /// Cap on the name column as a percentage of the popup's total width.
-/// Matches TS `maxNameWidth = Math.floor(columns * 0.4)`.
 const NAME_COLUMN_CAP_PCT: usize = 40;
 /// Floor on the name column when items are extremely short so the
 /// description still has a stable starting column.
@@ -265,10 +258,9 @@ fn build_row(
     Line::from(spans)
 }
 
-/// Map the validated TS palette names (`AgentColorName`) onto ratatui's
-/// indexed terminal colors. Indexed colors keep the agent badge readable
-/// across both light and dark themes; we deliberately avoid RGB so the
-/// user's terminal palette decides the exact shade.
+/// Map `AgentColorName` onto ratatui terminal colors. Indexed colors keep
+/// the agent badge readable across both light and dark themes; RGB is
+/// deliberately avoided so the user's terminal palette decides the shade.
 fn agent_color_to_ratatui(color: AgentColorName) -> Color {
     match color {
         AgentColorName::Red => Color::Red,
@@ -276,16 +268,12 @@ fn agent_color_to_ratatui(color: AgentColorName) -> Color {
         AgentColorName::Green => Color::Green,
         AgentColorName::Yellow => Color::Yellow,
         AgentColorName::Purple => Color::Magenta,
-        // ratatui has no `Orange`; map to ANSI 208 (xterm orange) via
-        // `Indexed` so themes that remap it stay consistent.
         // ratatui has no `Orange` / `Pink` ANSI named variants. Fall
         // back to the closest perceptual ANSI 16-color match
         // (LightRed and Magenta) so theme remapping behaves the same
-        // way as the other agent badges. The TS 2.1.142 palette uses
-        // xterm 256-color indices here; coco-rs deliberately diverges
-        // — `Color::Indexed` is blocked by the project's
-        // `disallowed_methods` lint (terminals with custom palettes
-        // render the indices unpredictably).
+        // way as the other agent badges. `Color::Indexed` is blocked
+        // by the project's `disallowed_methods` lint (terminals with
+        // custom palettes render the indices unpredictably).
         AgentColorName::Orange => Color::LightRed,
         AgentColorName::Pink => Color::Magenta,
         AgentColorName::Cyan => Color::Cyan,
@@ -293,8 +281,7 @@ fn agent_color_to_ratatui(color: AgentColorName) -> Color {
 }
 
 /// Collapse runs of whitespace in a description down to a single space
-/// — matches TS `description.replace(/\s+/g, " ")` so multi-line help
-/// text renders on one inline row.
+/// so multi-line help text renders on one inline row.
 fn normalize_whitespace(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_space = false;

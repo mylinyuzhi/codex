@@ -11,10 +11,8 @@
 //! same pattern: core crate defines the contract, upper crates
 //! implement.
 //!
-//! **TS parity**: these traits capture the per-subsystem read surface
-//! that TS's `getAttachments` accesses via `toolUseContext.options.*`
-//! or module-level singletons. Each method corresponds to a specific
-//! TS call site cited in its docstring.
+//! Each method corresponds to a specific per-subsystem read that
+//! the reminder orchestrator needs each turn.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -37,8 +35,7 @@ use crate::generators::user_input::McpResourceEntry;
 
 /// Source of completed / pending async-hook responses.
 ///
-/// TS: `getAsyncHookResponseAttachments()` (`attachments.ts:3464`).
-/// TS drains on read (marks delivered) — coco-rs impls should match:
+/// Drains on read (marks delivered) — implementations should match:
 /// `drain()` should NOT return the same event on a second call.
 #[async_trait]
 pub trait HookEventsSource: Send + Sync + Debug {
@@ -50,11 +47,8 @@ pub trait HookEventsSource: Send + Sync + Debug {
 
 /// Source of new-since-last-snapshot LSP/IDE diagnostic entries.
 ///
-/// TS: `getDiagnosticAttachments(ctx)` (`attachments.ts:955`) +
-/// `getLSPDiagnosticAttachments(ctx)` (`attachments.ts:958`). Both
-/// paths produce `Attachment.type === 'diagnostics'`; coco-rs
-/// collapses to one source that the impl may back with either
-/// IDE-reported or LSP-reported state.
+/// Both IDE-reported and LSP-reported paths produce `diagnostics`
+/// attachments; this single source collapses them.
 #[async_trait]
 pub trait DiagnosticsSource: Send + Sync + Debug {
     async fn snapshot(&self, agent_id: Option<&str>) -> Vec<DiagnosticFileSummary>;
@@ -62,10 +56,9 @@ pub trait DiagnosticsSource: Send + Sync + Debug {
 
 /// Source of background-task status updates.
 ///
-/// TS: `getUnifiedTaskAttachments(ctx)` (`attachments.ts:961`).
 /// Primary use: post-compaction spawn-duplicate warning. The
-/// `just_compacted` argument lets impls short-circuit unless we
-/// crossed a compaction boundary this turn.
+/// `just_compacted` argument lets impls short-circuit unless a
+/// compaction boundary was crossed this turn.
 #[async_trait]
 pub trait TaskStatusSource: Send + Sync + Debug {
     async fn collect(
@@ -77,8 +70,6 @@ pub trait TaskStatusSource: Send + Sync + Debug {
 
 /// Source of skill listing + invoked-skill content.
 ///
-/// TS: `getSkillListingAttachments(ctx)` (`attachments.ts:875`) +
-/// `getInvokedSkillsForAgent(agentId)` (`compact.ts:1497`).
 /// `listing()` returns a pre-formatted string ready for injection;
 /// `invoked()` returns per-skill content (name/path/body).
 #[async_trait]
@@ -114,11 +105,9 @@ pub trait SkillsSource: Send + Sync + Debug {
     /// any of the given files (cwd-relative gitignore semantics).
     /// Returns names of newly-activated skills so callers can log.
     ///
-    /// TS: `activateConditionalSkillsForPaths(filePaths, cwd)` in
-    /// `loadSkillsDir.ts:997`. No default impl — every implementor
-    /// must explicitly decide whether to support conditional
-    /// activation; silently returning `Vec::new()` from a forgotten
-    /// override would mask broken wiring.
+    /// No default impl — every implementor must explicitly decide whether to
+    /// support conditional activation; silently returning `Vec::new()` from a
+    /// forgotten override would mask broken wiring.
     async fn activate_skills_for_paths(
         &self,
         file_paths: &[std::path::PathBuf],
@@ -128,12 +117,9 @@ pub trait SkillsSource: Send + Sync + Debug {
 
 /// Source of MCP server state.
 ///
-/// TS: `getMcpInstructionsDeltaAttachment(clients, tools, model, msgs)`
-/// (`attachments.ts:854`) + `processMcpResourceAttachments(input, ctx)`
-/// (`attachments.ts:779`). `instructions()` returns the current
-/// per-server instruction text (engine diffs against app_state);
-/// `resolve_resources()` parses @-mentions for MCP resource refs and
-/// resolves them to typed entries.
+/// `instructions()` returns the current per-server instruction text
+/// (engine diffs against app_state); `resolve_resources()` parses
+/// @-mentions for MCP resource refs and resolves them to typed entries.
 #[async_trait]
 pub trait McpSource: Send + Sync + Debug {
     async fn instructions(&self, agent_id: Option<&str>) -> HashMap<String, String>;
@@ -142,10 +128,6 @@ pub trait McpSource: Send + Sync + Debug {
 }
 
 /// Source of swarm / team state.
-///
-/// TS: `getTeammateMailboxAttachments(ctx)` (`attachments.ts:907`) +
-/// `getTeamContextAttachment(messages)` (`attachments.ts:911`) +
-/// `getAgentPendingMessageAttachments(ctx)` (`attachments.ts:916`).
 ///
 /// Gate: only call when `agentSwarms` is active upstream — impls
 /// should also defensively return empty/None outside swarm sessions.
@@ -157,9 +139,6 @@ pub trait SwarmSource: Send + Sync + Debug {
 }
 
 /// Source of IDE bridge state (selection + opened file).
-///
-/// TS: `getSelectedLinesFromIDE(ideSelection, ctx)` (`attachments.ts:947`)
-/// + `getOpenedFileFromIDE(ideSelection, ctx)` (`attachments.ts:950`).
 #[async_trait]
 pub trait IdeBridgeSource: Send + Sync + Debug {
     async fn selection(&self, agent_id: Option<&str>) -> Option<IdeSelectionSnapshot>;
@@ -167,10 +146,6 @@ pub trait IdeBridgeSource: Send + Sync + Debug {
 }
 
 /// Source of memory-file reminder content.
-///
-/// TS: `getNestedMemoryAttachments(ctx)` (`attachments.ts:872`) +
-/// relevant-memories async prefetch (`query.ts startRelevantMemoryPrefetch`
-/// awaited in `getAttachmentMessages`).
 ///
 /// `nested_memories()` resolves nested-CLAUDE.md traversal from
 /// @-mention paths; `relevant_memories()` returns the ranked memory
@@ -190,10 +165,9 @@ pub trait MemorySource: Send + Sync + Debug {
     /// prompt text this turn). Empty input → typically empty result.
     ///
     /// `recent_tools` lists tool names the model has used since the
-    /// last user turn — TS `collectRecentSuccessfulTools`
-    /// (`utils/attachments.ts`) feeds this into the LLM ranker so it
-    /// can deprioritize tool reference docs the model is actively
-    /// exercising. Empty slice when the engine has no signal yet.
+    /// last user turn, fed into the LLM ranker so it can deprioritize
+    /// tool reference docs the model is actively exercising. Empty slice
+    /// when the engine has no signal yet.
     async fn relevant_memories(
         &self,
         agent_id: Option<&str>,
@@ -202,13 +176,11 @@ pub trait MemorySource: Send + Sync + Debug {
     ) -> Vec<RelevantMemoryInfo>;
 }
 
-/// Bundle of optional source trait objects — the Rust analog of
-/// TS's `toolUseContext.options` bag. `QueryEngine` holds one
-/// `ReminderSources` field; CLI constructs it once at session
-/// start by wiring each manager's trait impl.
+/// Bundle of optional source trait objects. `QueryEngine` holds one
+/// `ReminderSources` field; CLI constructs it once at session start
+/// by wiring each manager's trait impl.
 ///
-/// Missing (`None`) fields → the corresponding reminder silently
-/// skips (matches TS `if (!clients) return []` behavior).
+/// Missing (`None`) fields → the corresponding reminder silently skips.
 #[derive(Clone, Default)]
 pub struct ReminderSources {
     pub hook_events: Option<Arc<dyn HookEventsSource>>,

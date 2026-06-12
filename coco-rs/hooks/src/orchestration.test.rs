@@ -70,7 +70,7 @@ async fn sdk_callback_hook_routes_through_registered_runtime_callback() {
         assert_eq!(request.tool_use_id.as_deref(), Some("tool-1"));
         called_for_callback.store(true, Ordering::SeqCst);
         // Typed SdkHookOutput — no JSON round-trip. PreToolUse deny
-        // via hookSpecificOutput is the TS-canonical shape for "block
+        // via hookSpecificOutput is the canonical shape for "block
         // this tool with a reason".
         Box::pin(async {
             Ok(coco_types::SdkHookOutput {
@@ -176,7 +176,7 @@ fn test_parse_hook_output_valid_json_wrong_shape_is_validation_error() {
 #[test]
 fn test_aggregate_suppresses_validation_error_from_context() {
     // A hook whose stdout is valid-JSON-wrong-shape must not inject its raw
-    // text into additional_contexts (TS validationError path).
+    // text into additional_contexts (validation-error path).
     let result = SingleHookResult {
         command: "h".into(),
         succeeded: true,
@@ -329,7 +329,7 @@ fn test_aggregate_results_additional_context() {
 
 #[test]
 fn test_aggregate_results_failed_plaintext_not_injected() {
-    // TS: a failed (non-zero, non-2) hook's stderr is NOT injected as
+    // A failed (non-zero, non-2) hook's stderr is NOT injected as
     // model context — it surfaces only as a hook_non_blocking_error.
     let results = vec![SingleHookResult {
         command: "boom.sh".to_string(),
@@ -886,7 +886,7 @@ async fn execute_stop_function_hook_settings_takes_precedence_over_function() {
 
     // Settings hook signals prevent_continuation via JSON; aggregate
     // captures that. blocking_error is populated only when a hook
-    // sets `blocked = true` (TS parity); a `continue: false` without
+    // sets `blocked = true`; a `continue: false` without
     // a `decision: block` carries prevent_continuation instead. So we
     // assert: function hook STILL doesn't win the blocking_error slot
     // here — even when settings stays silent on blocking_error, the
@@ -1115,8 +1115,8 @@ async fn test_execute_file_changed_matches_basename() {
 #[tokio::test]
 async fn test_execute_task_event_helpers_dispatch_to_distinct_events() {
     // The TaskCreated / TaskCompleted / TeammateIdle helpers each
-    // build their own TS-aligned input struct and route through
-    // distinct HookEventType variants. A hook registered for one
+    // build their own input struct and route through distinct
+    // HookEventType variants. A hook registered for one
     // must not fire for the other two.
     let registry = make_registry(vec![HookDefinition {
         event: HookEventType::TaskCompleted,
@@ -1561,13 +1561,13 @@ fn test_format_stop_hook_message() {
 }
 
 // ---------------------------------------------------------------------------
-// resolve_timeout — handler-specific defaults (TS parity)
+// resolve_timeout — handler-specific defaults
 // ---------------------------------------------------------------------------
 
 #[test]
 fn resolve_timeout_agent_hook_defaults_to_60s() {
-    // TS execAgentHook.ts:75 — agent hooks default to 60s, independent
-    // of the generic 10-minute tool-hook timeout.
+    // Agent hooks default to 60s, independent of the generic
+    // 10-minute tool-hook timeout.
     let handler = HookHandler::Agent {
         prompt: "verify tests passed".into(),
         model: None,
@@ -1581,7 +1581,7 @@ fn resolve_timeout_agent_hook_defaults_to_60s() {
 
 #[test]
 fn resolve_timeout_prompt_hook_defaults_to_30s() {
-    // TS execPromptHook.ts:55 — prompt hooks default to 30s.
+    // Prompt hooks default to 30s.
     let handler = HookHandler::Prompt {
         prompt: "is this safe?".into(),
         model: None,

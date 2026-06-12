@@ -101,10 +101,10 @@ fn test_skill_lookup_by_alias() {
 #[test]
 fn test_load_from_markdown_basic() {
     // No frontmatter, no heading: file body is preserved verbatim and
-    // the skill name comes from the file stem (TS `getRegularCommandName`).
+    // the skill name comes from the file stem.
     // No frontmatter description → description is auto-extracted from the
     // first body line via `extractDescriptionFromMarkdown`, and
-    // `has_user_specified_description` is false (TS parity).
+    // `has_user_specified_description` is false.
     let content = "Run the deployment pipeline.\n";
     let skill = parse_skill_markdown(content, Path::new("/tmp/deploy.md")).unwrap();
 
@@ -176,7 +176,7 @@ fn test_load_from_markdown_empty_frontmatter() {
 
 #[test]
 fn test_load_from_markdown_no_frontmatter_loads_body_as_prompt() {
-    // TS parity: a file without frontmatter is not an error — the whole
+    // A file without frontmatter is not an error — the whole
     // file becomes the skill body and the name comes from the file stem.
     let content = "This has no frontmatter, just body text.\n";
     let skill = parse_skill_markdown(content, Path::new("/tmp/bare.md")).unwrap();
@@ -192,10 +192,9 @@ fn test_load_from_markdown_no_frontmatter_loads_body_as_prompt() {
 
 #[test]
 fn test_load_from_markdown_empty_loads_empty_skill() {
-    // TS parity: empty content yields an empty body, not an error. The
-    // name is still derived from the file path. Description falls back
-    // to the default label `'Skill'` (matches TS `extractDescriptionFromMarkdown`
-    // when content has no non-empty lines).
+    // Empty content yields an empty body, not an error. The name is still
+    // derived from the file path. Description falls back
+    // to the default label `'Skill'` (when content has no non-empty lines).
     let skill = parse_skill_markdown("", Path::new("/tmp/empty.md")).unwrap();
     assert_eq!(skill.name, "empty");
     assert!(skill.prompt.is_empty());
@@ -321,7 +320,7 @@ fn test_discover_skill_md_directory_format() {
 
     let skills = discover_skills(&[dir.path().to_path_buf()]);
     assert_eq!(skills.len(), 1);
-    // Name always comes from the directory (TS `getSkillCommandName`).
+    // Name always comes from the directory.
     assert_eq!(skills[0].name, "my-skill");
     assert_eq!(skills[0].description, "My skill");
 }
@@ -412,10 +411,9 @@ fn test_load_skill_from_file() {
 
 #[test]
 fn test_load_from_markdown_extended_frontmatter() {
-    // TS frontmatter `arguments` is whitespace-separated (mirrors
-    // `parseArgumentNames` from `utils/argumentSubstitution.ts:50`).
-    // Comma-separation is the legacy disk format; we keep the legacy
-    // alias keys but the TS-canonical key is `arguments`.
+    // Frontmatter `arguments` is whitespace-separated (see
+    // `parseArgumentNames`). Comma-separation is the legacy disk format;
+    // we keep the legacy alias keys but the canonical key is `arguments`.
     let content = "\
 ---
 description: Deploy to production
@@ -441,7 +439,7 @@ Run the deployment pipeline for the specified environment.
         Some("When the user asks to deploy")
     );
     assert_eq!(skill.argument_names, vec!["env", "region"]);
-    // TS strips trailing `/**` because the `ignore` library treats a bare
+    // Trailing `/**` is stripped because the `ignore` library treats a bare
     // path as matching both the path itself and its descendants.
     assert_eq!(skill.paths, vec!["src/**/*.rs", "deploy"]);
     assert_eq!(skill.effort, Some(coco_types::ReasoningEffort::High));
@@ -622,9 +620,9 @@ Test.
 
 // ── R7-T10: discover_skill_dirs_for_paths ──
 //
-// TS `loadSkillsDir.ts:861-915` walks up from each file path collecting
-// `<ancestor>/.coco/skills/` directories that exist. The walk stops
-// at (but excludes) cwd, since cwd-level skills are loaded at startup.
+// Walks up from each file path collecting `<ancestor>/.coco/skills/`
+// directories that exist. The walk stops at (but excludes) cwd, since
+// cwd-level skills are loaded at startup.
 // The tests below cover the core walk, the cwd boundary, deepest-first
 // ordering, and the missing-dir fast path.
 
@@ -766,12 +764,11 @@ fn test_discover_skill_dirs_dedupes_across_paths() {
     assert_eq!(result[0], project.join(".coco").join("skills"));
 }
 
-// ── TS-format SKILL.md compatibility ──
+// ── SKILL.md compatibility ──
 //
-// The reference TS loader (`claude-code-kim/src/skills/loadSkillsDir.ts`)
-// puts YAML frontmatter at the top of the file and takes the skill name
-// from the directory. These tests cover that layout end-to-end, plus the
-// real-YAML features it exercises (nested mappings, sequence syntax).
+// YAML frontmatter at the top of the file; skill name comes from the
+// directory. These tests cover that layout end-to-end, plus the
+// YAML features it exercises (nested mappings, sequence syntax).
 
 #[test]
 fn test_load_from_markdown_ts_format_frontmatter_first() {
@@ -794,8 +791,8 @@ Body content explaining the skill.
 
 #[test]
 fn test_load_from_markdown_ts_format_nested_metadata_ignored() {
-    // The TS spec doesn't define `metadata`, but a real YAML parser must
-    // tolerate (and silently drop) unknown nested shapes — the rest of
+    // The `metadata` field is not defined in the spec, but a real YAML parser
+    // must tolerate (and silently drop) unknown nested shapes — the rest of
     // the file should still load.
     let content = "\
 ---
@@ -852,15 +849,15 @@ paths:
 Body.
 ";
     let skill = parse_skill_markdown(content, Path::new("/tmp/rust.md")).unwrap();
-    // Trailing `/**` stripped per TS `parseSkillPaths`.
+    // Trailing `/**` stripped per `parseSkillPaths`.
     assert_eq!(skill.paths, vec!["src/**/*.rs", "tests"]);
 }
 
 #[test]
 fn test_discover_ts_format_skill_md_takes_name_from_directory() {
-    // The actual lark-base scenario: TS-format SKILL.md inside a named
-    // directory. Name should come from the directory, not the (absent)
-    // heading or the frontmatter `name` field.
+    // The actual lark-base scenario: SKILL.md inside a named directory.
+    // Name should come from the directory, not the (absent) heading or
+    // the frontmatter `name` field.
     let dir = tempfile::tempdir().unwrap();
     let skill_dir = dir.path().join("lark-base");
     std::fs::create_dir(&skill_dir).unwrap();
@@ -890,7 +887,7 @@ Body of the skill.\n",
 
 #[test]
 fn test_load_from_markdown_plain_prose_loads_as_body() {
-    // TS parity: plain prose is not an error — it becomes the skill body.
+    // Plain prose is not an error — it becomes the skill body.
     // The only way `parse_skill_markdown` returns Err is if the path has
     // no usable file name (covered by `derive_skill_name_from_path`).
     let content = "Just some plain text, not a skill at all.\n";
@@ -901,8 +898,7 @@ fn test_load_from_markdown_plain_prose_loads_as_body() {
 
 #[test]
 fn test_display_name_from_frontmatter_name() {
-    // TS: `displayName: frontmatter.name` (loadSkillsDir.ts:239). The
-    // path-derived name is unchanged; display_name overrides only the
+    // The path-derived name is unchanged; display_name overrides only the
     // user-facing surface.
     let content = "\
 ---
@@ -927,9 +923,8 @@ body
 
 #[test]
 fn test_user_facing_name_falls_back_to_name() {
-    // TS: `userFacingName(): displayName || skillName`. With no
-    // frontmatter `name`, display_name is None and the canonical name
-    // is used.
+    // With no frontmatter `name`, display_name is None and the canonical
+    // name is used.
     let content = "---\ndescription: A skill\n---\nbody\n";
     let skill = parse_skill_markdown(content, Path::new("/tmp/raw-name.md")).unwrap();
     assert!(skill.display_name.is_none());
@@ -974,7 +969,7 @@ fn test_has_user_specified_description_false_when_extracted_from_body() {
     // No frontmatter description → fallback to first non-empty body line.
     let content = "---\nname: foo\n---\n\n# My Skill Heading\nMore text.\n";
     let skill = parse_skill_markdown(content, Path::new("/tmp/x.md")).unwrap();
-    // TS strips leading `# ` before storing the description.
+    // Leading `# ` is stripped before storing the description.
     assert_eq!(skill.description, "My Skill Heading");
     assert!(!skill.has_user_specified_description);
 }
@@ -1000,7 +995,7 @@ fn test_progress_message_defaults_to_running() {
     assert_eq!(
         skill.progress_message.as_deref(),
         Some("running"),
-        "TS createSkillCommand hard-codes progressMessage = 'running'"
+        "progressMessage defaults to 'running'"
     );
 }
 
@@ -1064,8 +1059,8 @@ python3 financial-analyst/scripts/dcf_valuation.py --help
 ";
 
     // Discover via the SKILL.md-in-directory convention so the name comes
-    // from the directory (TS-strict; the frontmatter `name` field is
-    // ignored for skill identity).
+    // from the directory (the frontmatter `name` field is ignored for
+    // skill identity).
     let dir = tempfile::tempdir().unwrap();
     let skill_dir = dir.path().join("finance-skills");
     std::fs::create_dir(&skill_dir).unwrap();
@@ -1090,7 +1085,7 @@ python3 financial-analyst/scripts/dcf_valuation.py --help
 
     // Body fields the schema does not model are silently ignored — the
     // file still loads. Body is preserved verbatim including the heading
-    // `# Finance Skills` (TS does not strip Markdown headings from body).
+    // `# Finance Skills` (Markdown headings are not stripped from the body).
     assert!(s.prompt.starts_with("# Finance Skills"));
     assert!(s.prompt.contains("Quick Start"));
     assert!(s.prompt.contains("Python Tools"));
@@ -1105,11 +1100,9 @@ python3 financial-analyst/scripts/dcf_valuation.py --help
 
 // ── Conditional activation (paths frontmatter) ──
 //
-// TS source: `loadSkillsDir.ts:771-790` (split into conditional bucket
-// on register) + `loadSkillsDir.ts:997-1058`
-// (`activateConditionalSkillsForPaths`). Skills with non-empty `paths`
-// are hidden from `visible()` / `get()` / `listing()` until a file the
-// model touches matches one of their gitignore-style patterns.
+// Skills with non-empty `paths` are hidden from `visible()` / `get()` /
+// `listing()` until a file the model touches matches one of their
+// gitignore-style patterns.
 
 fn conditional_skill(name: &str, paths: Vec<&str>) -> SkillDefinition {
     let mut s = test_skill(
@@ -1215,9 +1208,8 @@ fn test_activation_idempotent_returns_only_new_names() {
 
 #[test]
 fn test_activation_persists_across_reload() {
-    // TS `loadSkillsDir.ts:810` parity — `activatedConditionalSkillNames`
-    // survives `clearSkillCaches`. On reload, an already-activated
-    // skill is re-categorized as unconditional.
+    // `activatedConditionalSkillNames` survives `clearSkillCaches`. On
+    // reload, an already-activated skill is re-categorized as unconditional.
     let mgr = SkillManager::new();
     mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
 
@@ -1233,8 +1225,8 @@ fn test_activation_persists_across_reload() {
 
 #[test]
 fn test_activation_skips_paths_outside_cwd() {
-    // TS lines 1014-1027: relative paths starting with `..` and
-    // absolute paths outside cwd are skipped silently.
+    // Relative paths starting with `..` and absolute paths outside cwd
+    // are skipped silently.
     let mgr = SkillManager::new();
     mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
 
@@ -1251,8 +1243,8 @@ fn test_activation_skips_paths_outside_cwd() {
 
 #[test]
 fn test_activation_relative_path_works() {
-    // Cwd-relative file paths are gitignore-matched as-is (TS uses the
-    // raw `relativePath` string when it's already relative).
+    // Cwd-relative file paths are gitignore-matched as-is using the
+    // raw `relativePath` string when it's already relative.
     let mgr = SkillManager::new();
     mgr.register(conditional_skill("rust-lint", vec!["src/**/*.rs"]));
 
@@ -1312,7 +1304,7 @@ fn test_listing_delta_surfaces_newly_activated_skill() {
 fn test_reset_announcements_reannounces_after_reload() {
     // skills-198: after a reload/clear, the announcement map is wiped so
     // every skill re-announces (an edited same-named skill must surface
-    // again). TS parity: `resetSentSkillNames()`.
+    // again).
     let mgr = SkillManager::new();
     let names: Vec<&str> = vec!["alpha", "beta"];
 
@@ -1334,9 +1326,8 @@ fn test_reset_announcements_reannounces_after_reload() {
 
 #[test]
 fn probe_bare_dir_pattern_matches_files_inside() {
-    // TS `ignore` library walks parents: `ignore().add(['build']).ignores('build/foo.rs')`
-    // returns true. This proves whether my Rust impl mirrors TS for the
-    // common `paths: build/**` → stripped to `build` case.
+    // The `ignore` library walks parents: `ignore().add(['build']).ignores('build/foo.rs')`
+    // returns true. Verifies the `paths: build/**` → stripped to `build` case.
     let mgr = SkillManager::new();
     let mut skill = conditional_skill("build-skill", vec![]);
     skill.paths = vec!["build".to_string()];
@@ -1544,7 +1535,7 @@ fn build_session_skill_manager_dedups_skill_and_legacy_command_by_realpath() {
 #[test]
 fn project_dirs_up_to_home_stops_at_git_root() {
     // Layout: a stray `<tmp>/outer/.coco/skills` OUTSIDE the repo, a repo at
-    // `<tmp>/outer/repo/.git`, and a nested cwd `<tmp>/outer/repo/sub`. TS
+    // `<tmp>/outer/repo/.git`, and a nested cwd `<tmp>/outer/repo/sub`.
     // `getProjectDirsUpToHome` stops at the git root so the parent dir's
     // skills never leak into the project scope.
     let tmp = tempfile::tempdir().unwrap();

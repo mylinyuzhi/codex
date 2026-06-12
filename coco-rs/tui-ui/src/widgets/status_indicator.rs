@@ -3,13 +3,8 @@
 //! Renders a single line: `{spinner} {verb}{effort?}… ({elapsed} · {tokens?})
 //! · esc to interrupt`. Visible only while a main turn is running.
 //!
-//! TS sources:
-//! - `Spinner.tsx` (verb + elapsed line)
-//! - `Spinner/SpinnerAnimationRow.tsx` (token display threshold +
-//!   effort-suffix width-degradation)
-//!
-//! codex-rs parity points (`status_indicator_widget.rs`):
-//! - `fmt_elapsed_compact` — verbatim
+//! Notable behaviors:
+//! - `fmt_elapsed_compact` — compact elapsed time formatting
 //! - Width-aware degradation: trim the interrupt hint first, then the
 //!   token block, then the effort suffix.
 
@@ -28,12 +23,11 @@ use crate::style::UiStyles;
 /// is hidden unless `force_show_tokens` (verbose) is set or a teammate
 /// is actively running.
 ///
-/// TS source: `SpinnerAnimationRow.tsx:19` `const SHOW_TOKENS_AFTER_MS = 30_000`.
+/// 30 seconds: short turns don't need the clutter.
 pub const SHOW_TOKENS_AFTER_MS: i64 = 30_000;
 
 /// Bidirectional braille spinner — 10 forward frames + 10 reverse so the
-/// glyph "bounces" instead of restarting each loop. TS parity
-/// (`SpinnerGlyph.tsx:14-17`: `[...DEFAULT_CHARACTERS, ...[...DEFAULT_CHARACTERS].reverse()]`).
+/// glyph "bounces" instead of restarting each loop.
 const SPINNER_FRAMES: &[&str] = &[
     "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠏", "⠇", "⠧", "⠦", "⠴", "⠼", "⠸", "⠹", "⠙",
     "⠋",

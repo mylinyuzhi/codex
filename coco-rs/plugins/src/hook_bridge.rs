@@ -3,8 +3,6 @@
 //! Converts plugin hook definitions (from manifest fields and `hooks/hooks.json`
 //! files) into `HookDefinition` instances with plugin attribution.
 //!
-//! TS: utils/plugins/loadPluginHooks.ts — loads hooks from plugin directories
-//! and registers them atomically (clear old + register new).
 
 use coco_hooks::HookDefinition;
 use coco_hooks::HookRegistry;

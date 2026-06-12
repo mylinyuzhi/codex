@@ -25,19 +25,8 @@
 //!   `NoOpNotificationSink` (default), production wires
 //!   [`crate::command_queue_sink::CommandQueueNotificationSink`].
 //! - Stall watchdog — [`stall::watchdog`] spawned per shell task (no
-//!   agent-task watchdog; TS has none).
+//!   agent-task watchdog).
 //! - Auto-background / auto-detach / progress timers — [`timers`].
-//!
-//! ## Module map (TS counterpart)
-//!
-//! | Submodule        | TS source                                                       |
-//! |------------------|-----------------------------------------------------------------|
-//! | [`agent`]        | `tasks/LocalAgentTask/LocalAgentTask.tsx`                       |
-//! | [`shell`]        | `tasks/LocalShellTask/LocalShellTask.tsx` + `killShellTasks.ts` |
-//! | [`reader`]       | `utils/task/framework.ts` (read side) + `diskOutput.ts`         |
-//! | [`controller`]   | `tasks/stopTask.ts` (kill) + `LocalAgentTask.tsx:617-650 backgroundAgentTask` + `utils/ShellCommand.ts:349-366` (detach) |
-//! | [`timers`]       | `LocalAgentTask.tsx:582-608` (autoBackgroundMs setTimeout)      |
-//! | [`stall`]        | `LocalShellTask.tsx:46-104` (startStallWatchdog)                |
 //!
 mod agent;
 mod controller;
@@ -99,8 +88,7 @@ impl TaskRuntime {
 
     /// Attach the notification sink. After this call, every terminal
     /// transition pushes a `<task-notification>` envelope through the
-    /// sink. TS parity: `enqueuePendingNotification({mode:
-    /// 'task-notification'})` (`utils/messageQueueManager.ts:142`).
+    /// sink.
     pub fn with_notification_sink(mut self, sink: NotificationSinkRef) -> Self {
         info!(
             target: "coco::task_runtime",

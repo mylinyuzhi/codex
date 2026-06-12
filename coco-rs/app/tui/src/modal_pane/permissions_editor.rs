@@ -1,6 +1,5 @@
 //! Key dispatch for the `/permissions` rule-editor overlay.
 //!
-//! TS parity: `components/permissions/rules/PermissionRuleList.tsx`.
 //! Three nested modes share the overlay:
 //!   - **list** — ←/→ switch tab, ↑/↓ select a row, Enter acts on the
 //!     focused row (open the add form / open a delete confirm), Esc closes.

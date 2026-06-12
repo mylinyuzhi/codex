@@ -1,8 +1,7 @@
 //! Telemetry dispatch utilities.
 //!
 //! Provides functions to notify both user callbacks and telemetry
-//! integrations for each lifecycle event. Errors are silently ignored,
-//! matching the TS SDK behavior.
+//! integrations for each lifecycle event. Errors are silently ignored.
 
 use std::sync::Arc;
 

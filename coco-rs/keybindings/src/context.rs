@@ -1,10 +1,8 @@
 //! Keybinding context — 18 user-rebindable + 2 internal contexts.
 //!
-//! TS sources:
-//! - `keybindings/schema.ts:12-32` — the 18 publicly-validated contexts.
-//! - `keybindings/defaultBindings.ts:196` (Scroll), `:271` (MessageActions)
-//!   — internal-only contexts referenced by defaults but absent from the
-//!   user-facing schema.
+//! The 18 publicly-validated contexts come from the user-facing schema.
+//! `Scroll` and `MessageActions` are internal-only contexts referenced by
+//! defaults but absent from the user-facing schema.
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -13,7 +11,7 @@ use std::str::FromStr;
 
 /// A keybinding context — determines which bindings are active.
 ///
-/// Wire format: PascalCase exactly as in TS (`Global`, `Chat`, …).
+/// Wire format: PascalCase (`Global`, `Chat`, …).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeybindingContext {
     Global,
@@ -35,16 +33,14 @@ pub enum KeybindingContext {
     Select,
     Plugin,
 
-    // Internal-only contexts — referenced by `defaultBindings.ts` but
-    // not in the user-facing schema. The validator rejects user
-    // bindings that target these.
+    // Internal-only contexts — not in the user-facing schema. The validator
+    // rejects user bindings that target these.
     Scroll,
     MessageActions,
 }
 
 impl KeybindingContext {
-    /// All 20 contexts (18 user + 2 internal). Iteration order matches
-    /// TS `KEYBINDING_CONTEXTS`, with internal contexts appended.
+    /// All 20 contexts (18 user + 2 internal), with internal contexts appended.
     pub const ALL: &'static [Self] = &[
         Self::Global,
         Self::Chat,
@@ -69,7 +65,6 @@ impl KeybindingContext {
     ];
 
     /// The 18 contexts users may target in `keybindings.json`.
-    /// Mirrors `KEYBINDING_CONTEXTS` from `keybindings/schema.ts:12-32`.
     pub const ALL_USER: &'static [Self] = &[
         Self::Global,
         Self::Chat,
@@ -117,8 +112,7 @@ impl KeybindingContext {
         }
     }
 
-    /// Human-readable description from `keybindings/schema.ts:37-58`.
-    /// Internal-only contexts get a Rust-side description.
+    /// Human-readable description. Internal-only contexts have a coco-rs description.
     pub fn description(self) -> &'static str {
         match self {
             Self::Global => "Active everywhere, regardless of focus",

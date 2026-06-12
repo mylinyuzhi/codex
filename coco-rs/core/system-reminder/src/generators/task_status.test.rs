@@ -64,7 +64,7 @@ async fn running_includes_anti_duplicate_warning() {
     assert!(text.contains("Progress: 10/100 files"));
     assert!(text.contains("Do NOT spawn a duplicate"));
     assert!(text.contains("/tmp/task-42.log"));
-    // TS `messages.ts:3982` includes the SendMessage tool ref so the
+    // Running agent status includes the SendMessage tool ref so the
     // model knows it can steer the running agent.
     assert!(text.contains("send it a message with SendMessage"));
 }
@@ -90,8 +90,7 @@ async fn running_without_output_file_includes_tool_refs() {
         .content()
         .unwrap()
         .to_string();
-    // TS `messages.ts:3986`: "check its progress with the {TaskOutput} tool
-    // or send it a message with {SendMessage}."
+    // No output path → must reference both TaskOutput and SendMessage tools.
     assert!(text.contains("check its progress with the TaskOutput tool"));
     assert!(text.contains("send it a message with SendMessage"));
 }
@@ -117,7 +116,7 @@ async fn completed_includes_delta_when_set() {
         .content()
         .unwrap()
         .to_string();
-    // TS `messages.ts:3998-4015` format: parts joined by space,
+    // Format: parts joined by space,
     // `(type: ...) (status: ...) (description: ...) Delta: ... <output-or-tool-ref>`.
     assert!(text.starts_with("Task x"));
     assert!(text.contains("(type: local_agent)"));

@@ -111,10 +111,9 @@ fn test_strip_handles_non_object_bash_input() {
 
 /// Pins the executor's strip-before-validate contract: internal `_`-prefixed
 /// Bash fields are stripped BEFORE `ValidatedInput` is constructed, so both
-/// `validate_input` and `execute` observe the same (stripped) value. This
-/// deliberately diverges from TS `toolExecution.ts:756-773` (which stripped
-/// after validation): the sealed `ValidatedInput` seam requires the validated
-/// value to be exactly the executed value.
+/// `validate_input` and `execute` observe the same (stripped) value. The
+/// sealed `ValidatedInput` seam requires the validated value to be exactly
+/// the executed value.
 struct StrippedEverywhereBashTool;
 
 #[async_trait::async_trait]
@@ -205,7 +204,7 @@ async fn test_execute_tool_call_strips_internal_fields_before_validation() {
 //
 // Each test installs a custom `CanUseToolHandle` on the
 // `ToolUseContext.can_use_tool` slot and asserts the executor honours
-// the decision per TS `services/tools/toolExecution.ts:706-748`.
+// the decision.
 
 /// Echo tool that records the input it receives at execute time so we
 /// can verify path-rewrite from `Allow{updated_input}` actually
@@ -214,7 +213,7 @@ async fn test_execute_tool_call_strips_internal_fields_before_validation() {
 struct EchoTool {
     /// When set, the tool's built-in `check_permissions` denies. Used
     /// to verify that `Allow` from canUseTool short-circuits the
-    /// built-in check (TS parity: callback is authoritative).
+    /// built-in check (callback is authoritative).
     deny_in_check: bool,
 }
 
@@ -406,7 +405,7 @@ async fn test_can_use_tool_allow_with_updated_input_rewrites() {
 async fn test_can_use_tool_allow_skips_builtin_check_permissions() {
     let tools = ToolRegistry::new();
     // Built-in opinion would Deny — but Allow from canUseTool MUST
-    // win (TS parity: callback is authoritative for the Allow path).
+    // win (callback is authoritative for the Allow path).
     tools.register(std::sync::Arc::new(EchoTool {
         deny_in_check: true,
     }));

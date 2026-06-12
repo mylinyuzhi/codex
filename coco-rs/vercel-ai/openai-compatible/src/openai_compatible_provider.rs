@@ -73,7 +73,7 @@ impl OpenAICompatibleProvider {
                 h.insert("Authorization".into(), format!("Bearer {key}"));
             }
 
-            // User-Agent suffix (matches TS: ai-sdk/openai-compatible/VERSION)
+            // User-Agent suffix: ai-sdk/openai-compatible/VERSION
             let version = env!("CARGO_PKG_VERSION");
             let ua = format!("ai-sdk/openai-compatible/{version}");
             h.entry("User-Agent".into())

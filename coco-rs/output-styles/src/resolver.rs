@@ -1,9 +1,6 @@
 //! Resolution: aggregate all sources, then pick the active style.
 //!
-//! TS source: `constants/outputStyles.ts:137-211`
-//! (`getAllOutputStyles` + `getOutputStyleConfig`).
-//!
-//! Resolution rules (verbatim TS parity):
+//! Resolution rules:
 //!
 //! 1. Start with built-in styles.
 //! 2. Layer plugin → user → project → managed groups on top, in that
@@ -27,22 +24,21 @@ use crate::catalog::OutputStyleSource;
 pub struct Aggregated {
     /// Name → resolved config. Includes built-ins and every loaded
     /// custom/plugin style. The sentinel `default` is intentionally
-    /// **absent** here — TS represents it as `null` and the lookup
-    /// `aggregated.get("default")` correctly returns `None`.
+    /// **absent** here — `aggregated.get("default")` correctly returns `None`.
     pub by_name: HashMap<String, OutputStyleConfig>,
     /// Catalog insertion order, matching JavaScript object key order.
     order: Vec<String>,
 }
 
 impl Aggregated {
-    /// Return all loaded names in TS object insertion order. Useful for
-    /// pickers and SDK `available_output_styles`.
+    /// Return all loaded names in insertion order. Useful for pickers and SDK
+    /// `available_output_styles`.
     pub fn names(&self) -> Vec<String> {
         self.order.clone()
     }
 
     /// Look up a single style by name. Returns `None` for the `default`
-    /// sentinel and for unknown names.
+    /// sentinel and unknown names.
     pub fn get(&self, name: &str) -> Option<&OutputStyleConfig> {
         if name == DEFAULT_OUTPUT_STYLE_NAME {
             return None;
@@ -76,7 +72,7 @@ pub fn aggregate(
         insert_with_priority(&mut aggregated, style);
     }
 
-    // Layer 1: plugin styles (TS adds these before user/project).
+    // Layer 1: plugin styles (before user/project).
     for style in plugin_styles {
         insert_with_priority(&mut aggregated, style.clone());
     }
@@ -126,8 +122,7 @@ pub enum ForceForPluginVerdict {
 /// (default `"default"`). Returns `None` when:
 ///
 /// - The resolved name is the `default` sentinel.
-/// - The resolved name doesn't exist in the catalog (TS: lookup falls
-///   through to `null`).
+/// - The resolved name doesn't exist in the catalog.
 ///
 /// The returned bool tuple component is `true` when the active style
 /// came from a plugin force-for-plugin, so the caller can log the

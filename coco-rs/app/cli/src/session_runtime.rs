@@ -9,7 +9,7 @@
 //!    history Mutex, …).
 //! 2. Per-turn, build a `QueryEngine` by chaining ~11 `.with_*` calls
 //!    that install those subsystems on the engine.
-//! 3. On `/clear`, perform a TS-aligned reset (SessionEnd hooks → drop
+//! 3. On `/clear`, perform a full reset (SessionEnd hooks → drop
 //!    caches → regen session id → SessionStart hooks).
 //!
 //! Before this module existed, both runners had their own copies of
@@ -201,13 +201,12 @@ impl FileHistorySnapshotSink for TranscriptFileHistorySink {
     }
 }
 
-/// Map a coco-config-reload [`TrackedKind`] to the TS-aligned
-/// `ConfigChangeSource` wire string consumed by the
-/// `ConfigChange` hook (TS `utils/hooks.ts:4194`). Catalog files
-/// (`providers.json`, `models.json`) live alongside the user
-/// settings in `~/.coco/`, so they share the `user_settings`
-/// source. `flag_settings` falls back to `user_settings` since the
-/// TS hook source enum doesn't have a flag-settings variant.
+/// Map a coco-config-reload [`TrackedKind`] to the `ConfigChangeSource`
+/// wire string consumed by the `ConfigChange` hook. Catalog files
+/// (`providers.json`, `models.json`) live alongside the user settings
+/// in `~/.coco/`, so they share the `user_settings` source.
+/// `flag_settings` falls back to `user_settings` since there is no
+/// flag-settings hook source variant.
 fn config_change_source_for_kind(
     kind: coco_config_reload::TrackedKind,
 ) -> coco_hooks::orchestration::ConfigChangeSource {
@@ -242,10 +241,7 @@ fn config_change_source_for_kind(
 /// Used both at session bootstrap (`SessionRuntime::new`) and at
 /// `/hooks reload` time (`SessionRuntime::reload_hooks`). Settings
 /// sources are loaded in lowest-precedence-first order so the registry
-/// vec mirrors TS settings layering for deterministic iteration. TS
-/// keys hook source per entry (`hooksSettings.ts:103-141`); collapsing
-/// to a single scope drops scope-precedence sorting in `find_matching`
-/// (`hooks/src/lib.rs:296-300`).
+/// vec uses deterministic iteration order.
 fn populate_hook_registry(
     registry: &HookRegistry,
     runtime_config: &coco_config::RuntimeConfig,
@@ -273,9 +269,8 @@ fn populate_hook_registry(
             coco_config::SettingSource::User => coco_types::HookScope::User,
             coco_config::SettingSource::Project => coco_types::HookScope::Project,
             coco_config::SettingSource::Local => coco_types::HookScope::Local,
-            // Flag is treated as Local — closest to user's
-            // explicit per-invocation override. TS lacks a
-            // distinct flag scope; this matches its precedence.
+            // Flag is treated as Local — closest to the user's
+            // explicit per-invocation override.
             coco_config::SettingSource::Flag => coco_types::HookScope::Local,
             coco_config::SettingSource::Policy => coco_types::HookScope::Policy,
             coco_config::SettingSource::Plugin => coco_types::HookScope::Plugin,
@@ -339,9 +334,8 @@ pub struct SessionRuntimeBuildOpts<'a> {
     pub skill_manager: Arc<coco_skills::SkillManager>,
     /// Where to look for markdown agent definitions. Threaded into the
     /// runtime's [`coco_subagent::AgentDefinitionStore`] so AgentTool's
-    /// dynamic prompt (TS `prompt.ts:getPrompt`) sees the same set the
-    /// SDK `initialize.agents` listing reports. Empty = no on-disk
-    /// agents (built-ins only).
+    /// dynamic prompt sees the same set the SDK `initialize.agents`
+    /// listing reports. Empty = no on-disk agents (built-ins only).
     pub agent_search_paths: coco_subagent::definition_store::AgentSearchPaths,
     /// Built-in catalog toggles. Defaults to [`coco_subagent::BuiltinAgentCatalog::interactive`]
     /// (CLI / TUI sessions); SDK noninteractive callers may pass
@@ -354,8 +348,8 @@ pub struct SessionRuntimeBuildOpts<'a> {
     /// keys off the SAME id the engine config uses.
     pub session_id_override: Option<String>,
     /// True for SDK / headless (print) sessions. File-history checkpointing
-    /// defaults OFF for these (TS `fileHistoryEnabledSdk`) and ON for the
-    /// interactive TUI, unless overridden by `COCO_FILE_CHECKPOINTING_*`.
+    /// defaults OFF for these and ON for the interactive TUI, unless
+    /// overridden by `COCO_FILE_CHECKPOINTING_*`.
     pub is_non_interactive: bool,
 }
 
@@ -455,15 +449,12 @@ pub struct SessionRuntime {
     /// `cd`'s away inside a Bash command. Used as the anchor for
     /// `reset_cwd_if_outside_project` (when bash drifts out of the
     /// allowed working directory set, we snap it back here) and for
-    /// "Shell cwd was reset to …" stderr annotations. TS:
-    /// `bootstrap/state.ts::originalCwd`.
+    /// "Shell cwd was reset to …" stderr annotations.
     pub original_cwd: PathBuf,
 
     // ── mutable per-session state (changes on /clear or mid-session) ──
     /// Currently active CWD. Updated **across BashTool calls** so the
     /// model's `cd /tmp` in one turn survives into the next turn.
-    /// TS parity: `bootstrap/state.ts::STATE.cwd` updated via
-    /// `utils/Shell.ts::setCwd` after every `pwd -P >| <file>` read.
     /// Threaded into every `ToolUseContext` via the engine config so
     /// BashTool can read it as the spawn cwd and write back from
     /// `CommandResult.new_cwd`.
@@ -532,10 +523,10 @@ pub struct SessionRuntime {
     pub(crate) hook_registry: Arc<HookRegistry>,
     /// LLM-driven hook handler — implements
     /// [`coco_hooks::HookLlmHandle`] for `Prompt` (full impl) and
-    /// `Agent` (stub returning Cancelled — TS-aligned silent fallback)
-    /// hook handlers. Threaded into every `OrchestrationContext` so
-    /// settings hooks of `type: "prompt"` / `type: "agent"` actually
-    /// reach an LLM instead of falling back to passthrough text.
+    /// `Agent` (stub returning Cancelled — silent fallback) hook
+    /// handlers. Threaded into every `OrchestrationContext` so settings
+    /// hooks of `type: "prompt"` / `type: "agent"` actually reach an
+    /// LLM instead of falling back to passthrough text.
     pub(crate) hook_llm_handle: Arc<coco_query::hook_llm::QueryHookLlm>,
     /// Shared sync-hook-event buffer. SessionStart and UserPromptSubmit
     /// orchestration calls push `HookEvent`s here; the
@@ -549,13 +540,11 @@ pub struct SessionRuntime {
     /// registers async hooks, but the slot is wired into the combined
     /// reminder source so when async hook execution lands it surfaces
     /// `async_hook_response` reminders without further plumbing.
-    /// TS parity: `AsyncHookRegistry`.
     pub(crate) async_hook_registry: Arc<coco_hooks::async_registry::AsyncHookRegistry>,
     /// FileChanged hook watcher. Populated when the runtime's hook
     /// registry has any handlers for the `FileChanged` event;
-    /// `None` otherwise. TS:
-    /// `utils/hooks/fileChangedWatcher.ts`. Paths are registered
-    /// lazily from `SessionStart` / `CwdChanged` hook output.
+    /// `None` otherwise. Paths are registered lazily from
+    /// `SessionStart` / `CwdChanged` hook output.
     pub(crate) file_changed_watcher:
         Arc<RwLock<Option<crate::file_changed_watcher::FileChangedHookWatcher>>>,
     /// Multi-turn agent transcript. Each turn snapshots, appends, and
@@ -584,11 +573,9 @@ pub struct SessionRuntime {
     /// `app/cli/src/fork_dispatcher.rs`.
     fork_dispatcher: Arc<RwLock<Option<coco_query::forked_agent::ForkDispatcherRef>>>,
     /// Session-scoped abort token for the in-flight prompt-suggestion
-    /// fork. TS parity: `services/PromptSuggestion/promptSuggestion.ts`
-    /// module-level `currentAbortController` singleton. When a new
-    /// suggestion fork starts, we cancel the previous one so users
-    /// rapidly cycling `/clear` don't accumulate fork tasks burning
-    /// tokens. `None` ⇒ no fork in flight.
+    /// fork. When a new suggestion fork starts, we cancel the previous
+    /// one so users rapidly cycling `/clear` don't accumulate fork tasks
+    /// burning tokens. `None` ⇒ no fork in flight.
     pub current_suggestion_abort:
         Arc<tokio::sync::Mutex<Option<tokio_util::sync::CancellationToken>>>,
     /// Background task runtime (TaskHandle implementation) — owns
@@ -611,11 +598,10 @@ pub struct SessionRuntime {
     /// Main-session transcript store. JSONL writes for the user /
     /// assistant / attachment / tool_result chain land here, keyed
     /// by the live session id (rotates on `/clear`). Cloned into
-    /// every per-turn engine via [`Self::wire_engine`]. TS parity:
-    /// `Project` from `utils/sessionStorage.ts`.
+    /// every per-turn engine via [`Self::wire_engine`].
     transcript_store: Arc<TranscriptStore>,
     /// When false, all transcript / usage / file-history persistence is
-    /// suppressed for this run (TS `shouldSkipPersistence`).
+    /// suppressed for this run.
     persist_session: bool,
     /// Shared cumulative token/cost tracker for the current session id.
     session_usage_tracker: Arc<tokio::sync::Mutex<CostTracker>>,
@@ -649,8 +635,8 @@ pub struct SessionRuntime {
     /// reload then no-ops. Set via [`Self::attach_mcp_manager`].
     mcp_manager: Arc<RwLock<Option<Arc<tokio::sync::Mutex<coco_mcp::McpConnectionManager>>>>>,
     /// Monotonic "the MCP server set changed" signal, bumped by
-    /// [`Self::reload_plugin_mcp_servers`]. Mirrors TS `mcp.pluginReconnectKey`
-    /// — consumers that own MCP reconnection re-run their effect when it moves.
+    /// [`Self::reload_plugin_mcp_servers`]. Consumers that own MCP
+    /// reconnection re-run their effect when it moves.
     mcp_reconnect_key: Arc<std::sync::atomic::AtomicU64>,
     /// Late-bind slot for the LSP handle. CLI / SDK installs a
     /// `LspManagerAdapter` here when `Feature::Lsp` is on and at
@@ -668,12 +654,11 @@ pub struct SessionRuntime {
     builtin_agent_catalog: coco_subagent::BuiltinAgentCatalog,
     /// Active per-session agent catalog snapshot. Installed on every
     /// per-turn engine via [`Self::wire_engine`] so `AgentTool::prompt`
-    /// renders the dynamic agent listing (TS `prompt.ts:getPrompt`).
-    /// Wrapped in `RwLock<Arc<...>>` so a future reload (file watcher
-    /// or `/agents reload`) can swap the inner `Arc` without
-    /// invalidating in-flight per-turn engines (each engine snapshots
-    /// the inner Arc at wire time). `Arc<AgentCatalogSnapshot>` is
-    /// cheap to clone.
+    /// renders the dynamic agent listing. Wrapped in `RwLock<Arc<...>>`
+    /// so a future reload (file watcher or `/agents reload`) can swap
+    /// the inner `Arc` without invalidating in-flight per-turn engines
+    /// (each engine snapshots the inner Arc at wire time).
+    /// `Arc<AgentCatalogSnapshot>` is cheap to clone.
     agent_catalog: Arc<RwLock<Arc<coco_subagent::AgentCatalogSnapshot>>>,
     /// SDK-supplied agent definitions to inject into every fresh
     /// `AgentDefinitionStore` build (initial load + every reload).
@@ -682,13 +667,6 @@ pub struct SessionRuntime {
     /// `initialize.agents` JSON map. Stays alive across `session/start`
     /// → `session/archive` cycles so a single SDK connection's
     /// `initialize` payload survives multiple session boundaries.
-    ///
-    /// TS parity: `cli/print.ts:4382` calls
-    /// `parseAgentsFromJson(_, 'flagSettings')` once and threads the
-    /// result into the agent catalog for every subsequent reload.
-    /// `loadAgentsDir.ts:296-393 getAgentDefinitionsWithOverrides`
-    /// re-applies SDK agents on every reload (they're a regular
-    /// `flagSettings` source).
     sdk_supplied_agents: Arc<RwLock<Vec<coco_types::AgentDefinition>>>,
     /// Session-scoped sandbox state. Built once at startup via
     /// [`build_sandbox_state`] and inherited by every per-turn engine
@@ -708,21 +686,18 @@ pub struct SessionRuntime {
     session_attachment_rx: Arc<
         tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<coco_messages::AttachmentMessage>>,
     >,
-    /// Session-scoped mid-turn command queue. The Rust analog of TS
-    /// `utils/messageQueueManager.ts` module-level singleton: producers
-    /// (the TUI-while-busy bridge in `tui_runner`, future task /
-    /// coordinator / hook forwarders) push `QueuedCommand`s here at any
-    /// time, and the per-turn `QueryEngine` consumes them via
-    /// [`Self::wire_engine`] which calls
-    /// [`QueryEngine::with_command_queue`]. Internally `Arc`-backed so
-    /// `Clone` is cheap — every engine instance shares the same backing
-    /// storage with the runtime and any other holder.
+    /// Session-scoped mid-turn command queue. Producers (the
+    /// TUI-while-busy bridge in `tui_runner`, future task / coordinator /
+    /// hook forwarders) push `QueuedCommand`s here at any time, and the
+    /// per-turn `QueryEngine` consumes them via [`Self::wire_engine`]
+    /// which calls [`QueryEngine::with_command_queue`]. Internally
+    /// `Arc`-backed so `Clone` is cheap — every engine instance shares
+    /// the same backing storage with the runtime and any other holder.
     ///
     /// Teammate messages and task notifications also flow through this
     /// queue (with `QueueOrigin::Coordinator` /
-    /// `QueueOrigin::TaskNotification`) — no separate `Inbox` type, TS
-    /// parity with `getAgentPendingMessageAttachments` which surfaces
-    /// coordinator messages as `queued_command` attachments.
+    /// `QueueOrigin::TaskNotification`) — no separate `Inbox` type;
+    /// coordinator messages surface as `queued_command` attachments.
     command_queue: CommandQueue,
     /// Concurrent-sessions PID registry guard. Wraps
     /// `<config_home>/sessions/{pid}.json`; the file is created at
@@ -731,15 +706,14 @@ pub struct SessionRuntime {
     /// the registration was skipped (subagent context per
     /// `COCO_AGENT_ID`) or the write failed (best-effort — we
     /// `tracing::warn` and proceed without a registry entry rather
-    /// than block session startup). TS parity:
-    /// `utils/concurrentSessions.ts::registerSession`.
+    /// than block session startup).
     _pid_registry: Option<coco_session::SessionRegistry>,
 }
 
-/// File-history checkpointing gate. TS `fileHistoryEnabled` (`fileHistory.ts:63-78`):
-/// interactive sessions default ON (settings flag, unless the disable env is
-/// set); non-interactive (SDK / headless) default OFF and require the SDK-enable
-/// env. The disable env always wins.
+/// File-history checkpointing gate. Interactive sessions default ON
+/// (settings flag, unless the disable env is set); non-interactive
+/// (SDK / headless) default OFF and require the SDK-enable env. The
+/// disable env always wins.
 fn file_checkpointing_enabled(settings_enabled: bool, is_non_interactive: bool) -> bool {
     if coco_config::env::is_env_truthy(coco_config::EnvKey::CocoFileCheckpointingDisable) {
         return false;
@@ -752,7 +726,7 @@ fn file_checkpointing_enabled(settings_enabled: bool, is_non_interactive: bool) 
 }
 
 impl SessionRuntime {
-    /// Build the full session runtime. Constructs every subsystem TS
+    /// Build the full session runtime. Constructs every subsystem
     /// `clearConversation` and the per-turn engine assembly need.
     pub async fn build(opts: SessionRuntimeBuildOpts<'_>) -> Result<Arc<Self>> {
         let SessionRuntimeBuildOpts {
@@ -779,24 +753,19 @@ impl SessionRuntime {
         let config_home = coco_config::global_config::config_home();
         let session_id = session_id_override.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         // Bare mode (`COCO_BARE_MODE` / `--bare`) skips session-start background
-        // housekeeping — the `!isBareMode()` gate TS applies to
-        // `startBackgroundHousekeeping` (`main.tsx:2816`). Recall /
-        // memory_runtime build / snapshot start stay on; only the fire-and-forget
-        // sweeps + the (coco-specific) SM warm-load are suppressed. Same env read
-        // as the per-turn gate in `engine_finalize_turn`.
+        // housekeeping. Recall / memory_runtime build / snapshot start stay on;
+        // only the fire-and-forget sweeps + SM warm-load are suppressed.
         let bare_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBareMode);
         // Session-persistence kill switch: `--no-session-persistence`
         // (print-mode-only, validated at startup) suppresses ALL transcript
         // JSONL + usage-snapshot + file-history + subagent-transcript writes
-        // for this run. TS: the flag feeds both `shouldSkipPersistence`
-        // (transcript/usage) and `persistSession` (file-history).
+        // for this run.
         let persist_session = !cli.no_session_persistence;
 
-        // Concurrent-sessions PID registry. Skipped for subagent
-        // contexts (TS `getAgentId() != null`), and best-effort: a
-        // write failure here is logged and ignored so a constrained
-        // FS doesn't block session startup. TS parity:
-        // `utils/concurrentSessions.ts::registerSession`.
+        // Concurrent-sessions PID registry. Skipped for subagent contexts
+        // (non-null `COCO_AGENT_ID`), and best-effort: a write failure here
+        // is logged and ignored so a constrained FS doesn't block session
+        // startup.
         let pid_registry = {
             let agent_id_env = coco_config::env::var(coco_config::env::EnvKey::CocoAgentId).ok();
             match coco_session::SessionRegistry::register(
@@ -856,10 +825,8 @@ impl SessionRuntime {
             let agent: coco_tool_runtime::AgentHandleRef =
                 Arc::new(coco_tool_runtime::NoOpAgentHandle);
             let mem_cfg = coco_memory::MemoryConfig::from(runtime_config.memory.clone());
-            // Transcript root for dream's grep examples / searching-
-            // past-context section. TS parity:
-            // `getProjectDir(getOriginalCwd())` lives at
-            // `<memory_base>/projects/<slug>/`.
+            // Transcript root for dream's grep examples / searching-past-context
+            // section. Lives at `<memory_base>/projects/<slug>/`.
             let transcript_root = project_paths.project_dir();
             // Wire the production tracing-backed telemetry emitter so
             // the ~17 MemoryEvent variants land in the global tracing
@@ -891,18 +858,14 @@ impl SessionRuntime {
                 "auto-memory runtime initialized"
             );
             let runtime_arc = Arc::new(runtime);
-            // Wire the session enumerator backed by `TranscriptStore`
-            // so per-turn `tick_dream` can list real prior sessions.
-            // TS parity (`autoDream.ts:155-165`):
-            // `listSessionsTouchedSince(lastAt)` reads the project's
-            // session store, filters by mtime > lastAt, drops the
-            // current session. The closure here mirrors that
-            // contract; it is invoked **only** after the time + scan
-            // throttle gates pass inside `DreamService` so cost is
-            // bounded.
             let enumerator_project_paths = project_paths.clone();
             let enumerator_session_id = session_id.clone();
             let enumerator_memory_dir = runtime_arc.personal_dir().to_path_buf();
+            // Wire the session enumerator backed by `TranscriptStore`
+            // so per-turn `tick_dream` can list real prior sessions.
+            // Lists sessions touched since `lastAt`, drops the current
+            // session. Invoked only after the time + scan throttle
+            // gates pass inside `DreamService` so cost is bounded.
             let enumerator: coco_memory::SessionEnumerator = Arc::new(move || {
                 let store = coco_session::TranscriptStore::new(enumerator_project_paths.clone());
                 let last_ms =
@@ -936,11 +899,8 @@ impl SessionRuntime {
         } else {
             // Feature gate off — emit MemdirDisabled so dashboards
             // can split sessions that never bootstrapped memory from
-            // those that did. TS parity: `memdir.ts:492-505`'s
-            // `tengu_memdir_disabled` fires from the equivalent gate
-            // check. We emit directly here instead of through
-            // `MemoryRuntime` because no runtime exists at this
-            // point.
+            // those that did. Emitted directly here instead of through
+            // `MemoryRuntime` because no runtime exists at this point.
             tracing::info!(
                 target: "coco_memory::telemetry",
                 event_type = "tengu_memdir_disabled",
@@ -972,9 +932,7 @@ impl SessionRuntime {
             // the task observes the just-installed real
             // `SwarmAgentHandle` — multi-threaded schedulers were
             // racing the NoOp slot and emitting spurious
-            // `AutoDreamFailed` events. TS parity: `initAutoDream`
-            // schedules on session start; per-turn ticks via
-            // `executeAutoDream` from stop hooks. Skipped in bare mode.
+            // `AutoDreamFailed` events. Skipped in bare mode.
             if !bare_mode {
                 let dream_clone = runtime.clone();
                 tokio::spawn(async move {
@@ -1057,8 +1015,7 @@ impl SessionRuntime {
         // Hook registry — settings hooks first, then plugin hooks
         // layered on top via the bridge so plugin manifests can
         // declare their own SessionStart / PreToolUse / PostCompact /
-        // etc. hooks. Same single-scope setup TS uses (see
-        // `plugins/loadPlugins`). The loaded plugin set is only needed
+        // etc. hooks. The loaded plugin set is only needed
         // for the duration of registration — `register_plugin_hooks_v2`
         // copies hook definitions into the registry, so dropping the
         // `Vec<LoadedPluginV2>` afterward is safe. If a future SDK
@@ -1089,11 +1046,10 @@ impl SessionRuntime {
         };
 
         // Bootstrap the sandbox runtime state from settings + permission
-        // rules. The adapter mirrors TS `convertToSandboxRuntimeConfig`;
-        // when sandbox isn't enabled or required dependencies are missing
-        // the bootstrap returns `None` (degrade to unsandboxed) — unless
-        // `sandbox.fail_if_unavailable` is set, in which case it returns
-        // an error and we exit before the REPL starts.
+        // rules. When sandbox isn't enabled or required dependencies are
+        // missing the bootstrap returns `None` (degrade to unsandboxed)
+        // — unless `sandbox.fail_if_unavailable` is set, in which case
+        // it returns an error and we exit before the REPL starts.
         let sandbox_state = build_sandbox_state(&runtime_config, &cwd).await?;
 
         // Session-scoped attachment channel. The engine drains the rx at
@@ -1106,9 +1062,8 @@ impl SessionRuntime {
             tokio::sync::mpsc::unbounded_channel::<coco_messages::AttachmentMessage>();
         let session_attachment_rx = Arc::new(tokio::sync::Mutex::new(session_attachment_rx));
 
-        // Bootstrap the per-source permission rule maps. Mirrors TS
-        // `loadPermissionRules()`: parses every settings.json layer
-        // (user/project/local/flag/policy) into typed
+        // Bootstrap the per-source permission rule maps. Parses every
+        // settings.json layer (user/project/local/flag/policy) into typed
         // `PermissionRulesBySource` keyed by `PermissionRuleSource`.
         // Default-empty maps before this wiring meant `permissions.allow`
         // / `deny` / `ask` from settings.json were loaded but never
@@ -1123,8 +1078,7 @@ impl SessionRuntime {
 
         // ── Session-scoped CWD state ──
         //
-        // Frozen anchor + live tracker, mirroring TS's
-        // `STATE.originalCwd` + `STATE.cwd`. The live tracker is
+        // Frozen anchor + live tracker. The live tracker is
         // threaded through every `ToolUseContext` so BashTool can
         // read it as the spawn cwd and write back `new_cwd` after
         // each command — `cd /tmp` in turn N survives into turn N+1.
@@ -1135,9 +1089,8 @@ impl SessionRuntime {
         //
         // Build once at session start so `BashProvider` keeps the same
         // snapshot watch + session-env reader + `/env` store across all
-        // BashTool invocations. TS parity: `bashProvider.ts:58-69` —
-        // snapshot promise resolves once for the lifetime of the
-        // shell provider singleton.
+        // BashTool invocations. The snapshot promise resolves once for
+        // the lifetime of the shell provider singleton.
         let shell_provider: Option<Arc<dyn coco_shell::ShellProvider>> = {
             let mut shell = coco_shell::shell_from_config(&runtime_config.shell);
             let snap_cfg = coco_shell::SnapshotConfig::new(&config_home);
@@ -1194,8 +1147,8 @@ impl SessionRuntime {
             permission_rule_source_roots,
             context_window: 200_000,
             max_output_tokens: 16_384,
-            // Interactive: unbounded unless the user set `loop.max_turns`
-            // (TS leaves the REPL uncapped; `--max-turns` is `--print`-only).
+            // Interactive: unbounded unless the user set `loop.max_turns`;
+            // `--max-turns` is `--print`-only.
             max_turns: runtime_config.loop_config.max_turns,
             total_token_budget: cli
                 .max_tokens
@@ -1251,7 +1204,7 @@ impl SessionRuntime {
             tool_overrides: runtime_config.tool_overrides.clone(),
             include_hook_events: cli.include_hook_events,
             // Seed --add-dir + settings additionalDirectories into the session
-            // working-dir allowlist (P17). TS initializeToolPermissionContext.
+            // working-dir allowlist.
             session_additional_dirs: crate::permission_rule_loader::seed_session_additional_dirs(
                 cli,
                 &runtime_config.settings,
@@ -1264,8 +1217,6 @@ impl SessionRuntime {
 
         // LLM-driven hook handler. It resolves HookAgent and per-hook
         // role overrides through the shared ModelRuntimeRegistry.
-        // TS parity: `execPromptHook` / `execAgentHook` with
-        // `hook.model` override.
         let hook_llm_handle =
             Arc::new(coco_query::hook_llm::QueryHookLlm::for_session(model_runtimes.clone()).await);
         // Main-session transcript store. Constructed once so the
@@ -1293,10 +1244,9 @@ impl SessionRuntime {
         // ── Agent definition catalog ──
         //
         // Build the per-session [`AgentDefinitionStore`] once at startup
-        // so AgentTool's dynamic prompt (TS `prompt.ts:getPrompt`) sees
-        // the same set the SDK `initialize.agents` listing returns. The
-        // snapshot inspector wires `pending_snapshot_update` per
-        // definition (TS `loadAgentsDir.ts:262-294`) so `/agents show`
+        // so AgentTool's dynamic prompt sees the same set the SDK
+        // `initialize.agents` listing returns. The snapshot inspector
+        // wires `pending_snapshot_update` per definition so `/agents show`
         // can flag drift without each consumer re-running the
         // `check_agent_memory_snapshot` IO.
         //
@@ -1332,10 +1282,9 @@ impl SessionRuntime {
                         home_for_inspector,
                     ),
                 ));
-                // TS parity: `loadAgentsDir.ts:455-467` auto-adds
-                // `Read`/`Edit`/`Write` to non-wildcard agent
-                // tool-lists when AutoMemory is on AND the agent
-                // declares a `memory` scope. Forward the live
+                // Auto-adds `Read`/`Edit`/`Write` to non-wildcard
+                // agent tool-lists when AutoMemory is on AND the
+                // agent declares a `memory` scope. Forward the live
                 // feature gate so the catalog the engine sees
                 // includes the injected tools.
                 store.set_auto_memory_enabled(auto_memory_enabled);
@@ -1365,8 +1314,7 @@ impl SessionRuntime {
             runtime_config,
             session_manager,
             fast_model_spec,
-            // Disk-backed so `durable` cron tasks survive restarts. coco uses
-            // the project-local `.coco/` convention (NOT TS's `.claude/`);
+            // Disk-backed so `durable` cron tasks survive restarts;
             // session tasks stay in-memory. The cron tick driver shares this store.
             schedule_store: Arc::new(coco_tool_runtime::DiskBackedScheduleStore::new(
                 cwd.join(".coco").join("scheduled_tasks.json"),
@@ -1451,16 +1399,14 @@ impl SessionRuntime {
     /// renderer) should re-call this for each fresh read rather than
     /// caching the result long-term.
     ///
-    /// TS parity: open-source TS caches via `memoize(getAgentDefinitionsWithOverrides)`;
-    /// coco-rs uses the `RwLock<Arc<...>>` pattern to make
-    /// `reload_agent_catalog` an atomic swap with no observer drift.
+    /// Uses the `RwLock<Arc<...>>` pattern to make `reload_agent_catalog`
+    /// an atomic swap with no observer drift.
     pub async fn agent_catalog_snapshot(&self) -> Arc<coco_subagent::AgentCatalogSnapshot> {
         self.agent_catalog.read().await.clone()
     }
 
     /// Triggered by `/agents reload`, `/reload-plugins`, and the
-    /// future agent-dir file watcher. TS parity:
-    /// `loadAgentsDir.ts::reloadAgents`.
+    /// future agent-dir file watcher.
     pub async fn reload_agent_catalog(&self) {
         let catalog = self.builtin_agent_catalog;
         let paths = self.agent_search_paths.clone();
@@ -1489,7 +1435,7 @@ impl SessionRuntime {
             // > ProjectSettings > UserSettings > Plugin > BuiltIn).
             // The store re-applies precedence on each `insert_definition`,
             // so an SDK agent with the same `agent_type` as a built-in
-            // overrides the built-in — same as TS.
+            // overrides the built-in.
             for def in sdk_agents {
                 store.insert_definition(def);
             }
@@ -1509,10 +1455,6 @@ impl SessionRuntime {
     /// Triggers an immediate `reload_agent_catalog()` so the new agents
     /// land in the active snapshot before the next `turn/start` (the
     /// engine snapshots the catalog when wiring per-turn).
-    ///
-    /// TS parity: `cli/print.ts:4382` parses + injects, then the
-    /// reload pipeline picks them up — coco-rs combines those into
-    /// one call.
     pub async fn set_sdk_supplied_agents(&self, agents: Vec<coco_types::AgentDefinition>) {
         let count = agents.len();
         {
@@ -1587,8 +1529,8 @@ impl SessionRuntime {
         *slot = Some(manager);
     }
 
-    /// Current MCP reconnect key (TS `mcp.pluginReconnectKey`). Increments each
-    /// time [`Self::reload_plugin_mcp_servers`] changes the registered set.
+    /// Current MCP reconnect key. Increments each time
+    /// [`Self::reload_plugin_mcp_servers`] changes the registered set.
     pub fn mcp_reconnect_key(&self) -> u64 {
         self.mcp_reconnect_key
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -1597,8 +1539,7 @@ impl SessionRuntime {
     /// Re-register plugin-contributed MCP servers with the attached
     /// `McpConnectionManager` and bump the reconnect key. Called from
     /// `/reload-plugins` (and after install / delisting) so a plugin
-    /// enable/disable flows into the MCP layer — TS `refreshActivePlugins` →
-    /// `loadPluginMcpServers` + `pluginReconnectKey + 1`.
+    /// enable/disable flows into the MCP layer.
     ///
     /// Reconciles the live MCP set against the currently-enabled plugins:
     /// servers from now-disabled/uninstalled plugins (the `plugin:` namespace)
@@ -1653,7 +1594,7 @@ impl SessionRuntime {
 
     /// Re-read the on-disk LSP config, re-merge plugin-contributed LSP servers,
     /// and re-prewarm via the attached LSP handle. No-op when no handle is
-    /// attached. Called from `/reload-plugins` (TS `reinitializeLspServerManager`).
+    /// attached. Called from `/reload-plugins`.
     pub async fn reload_lsp_servers(&self, cwd: &std::path::Path) {
         if let Some(handle) = self.current_lsp_handle().await {
             handle.reload(cwd).await;
@@ -1682,7 +1623,7 @@ impl SessionRuntime {
 
     /// Whether this run persists session artifacts (transcript / usage /
     /// file-history / subagent transcripts). False under
-    /// `--no-session-persistence` (TS `shouldSkipPersistence`).
+    /// `--no-session-persistence`.
     pub fn persist_session(&self) -> bool {
         self.persist_session
     }
@@ -1744,13 +1685,13 @@ impl SessionRuntime {
         self.side_query.clone()
     }
 
-    /// Generate the on-demand LLM risk explanation for a permission prompt
-    /// (TS `generatePermissionExplanation`). Runs the explainer via the session
-    /// `SideQuery` handle, gated on `permission_explainer_enabled` (default-on)
-    /// and bounded by a timeout. Graceful-degrades to `None` when the setting is
-    /// off, the side query errors, or the timeout elapses. The single home for
-    /// the explainer call — `TuiPermissionBridge::explain_risk` and the
-    /// tui_runner Ctrl+E path both delegate here.
+    /// Generate the on-demand LLM risk explanation for a permission prompt.
+    /// Runs the explainer via the session `SideQuery` handle, gated on
+    /// `permission_explainer_enabled` (default-on) and bounded by a timeout.
+    /// Graceful-degrades to `None` when the setting is off, the side query
+    /// errors, or the timeout elapses. The single home for the explainer call
+    /// — `TuiPermissionBridge::explain_risk` and the tui_runner Ctrl+E path
+    /// both delegate here.
     pub async fn explain_permission_risk(
         &self,
         params: coco_permissions::ExplainerParams<'_>,
@@ -1769,8 +1710,7 @@ impl SessionRuntime {
             coco_permissions::generate_permission_explanation(params, move |req| async move {
                 handle.query(req).await.map_err(|e| e.to_string())
             });
-        // TS relies on Haiku's speed with no explicit timeout; bound it in Rust
-        // so a slow/hung side query can't pin the explainer panel.
+        // Bound the timeout so a slow/hung side query can't pin the explainer panel.
         tokio::time::timeout(std::time::Duration::from_secs(8), fut)
             .await
             .unwrap_or_default()
@@ -1784,10 +1724,8 @@ impl SessionRuntime {
     /// session name into the `<config_home>/sessions/<pid>.json` file
     /// that `coco ps` reads. Silently no-ops when the session isn't
     /// registered (subagent context, FS-constrained startup, etc.)
-    /// because `_pid_registry` is `Option`. TS parity: `saveAgentName`
-    /// calls `updateSessionName(agentName)` after persisting the JSONL
-    /// entry; without this patch the live registry shows the stale
-    /// startup name forever.
+    /// because `_pid_registry` is `Option`. Without this patch the live
+    /// registry shows the stale startup name forever.
     pub fn update_session_registry_name(&self, name: &str) {
         if let Some(reg) = self._pid_registry.as_ref() {
             reg.update_session_name(name);
@@ -1822,8 +1760,6 @@ impl SessionRuntime {
     /// `agent_id: None` for a subagent resume would silently drop
     /// every Level-2 replacement and force the model to re-read the
     /// full tool result, breaking prompt-cache stability.
-    /// TS parity: `types/logs.ts:178-180` documents the agentId
-    /// presence-vs-absence routing.
     pub async fn seed_tool_result_replacement_state(
         &self,
         messages: &[Message],
@@ -1867,10 +1803,10 @@ impl SessionRuntime {
     }
 
     /// Resolve this session's team snapshot for the team-coordination
-    /// reminder (TS first-turn `team_context` injection). A teammate session
-    /// uses its own identity (env/context); a leader session uses the roster
-    /// active team. `None` when not in a team. Computed per-turn in
-    /// `wire_engine` so the app-query `SwarmAdapter` stays coordinator-free.
+    /// reminder. A teammate session uses its own identity (env/context);
+    /// a leader session uses the roster active team. `None` when not in a
+    /// team. Computed per-turn in `wire_engine` so the app-query
+    /// `SwarmAdapter` stays coordinator-free.
     async fn resolve_team_snapshot(&self) -> Option<coco_system_reminder::TeamContextSnapshot> {
         let (agent_id, agent_name, team_name) =
             if let Some(id) = coco_coordinator::identity::resolve_teammate_identity() {
@@ -2090,12 +2026,11 @@ impl SessionRuntime {
         // Bash tool with a per-command permission check. Refreshed on every
         // main-session engine build, so it also survives a `/reload-plugins`
         // registry swap (the new registry starts with an empty handle cell).
-        // TS: `executeShellCommandsInPrompt`.
         let base_ctx = engine.build_base_tool_context().await;
         let registry = self.command_registry.read().await.clone();
         crate::bash_tool_handle::inject_into_registry(&registry, base_ctx);
         // Late-bind the session id so user-typed skill slash commands can
-        // substitute `${CLAUDE_SESSION_ID}` (TS `getPromptForCommand`).
+        // substitute `${CLAUDE_SESSION_ID}`.
         registry.set_session_id(self.session_id.read().await.clone());
         engine
     }
@@ -2154,11 +2089,7 @@ impl SessionRuntime {
     /// they need an owned `Arc`-backed handle.
     ///
     /// Teammate messages and task notifications use the same queue
-    /// with `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`
-    /// — TS parity with `getAgentPendingMessageAttachments`.
-    ///
-    /// TS parity: `utils/messageQueueManager.ts::enqueue` (exported as a
-    /// free function reading the module-level singleton).
+    /// with `QueueOrigin::Coordinator` / `QueueOrigin::TaskNotification`.
     pub fn command_queue(&self) -> &CommandQueue {
         &self.command_queue
     }
@@ -2332,10 +2263,8 @@ impl SessionRuntime {
         // (auto-installed by `QueryEngine::new`) which writes into
         // `QueryEngine.live_command_rules` — a fresh Arc per engine
         // = per user message. No session-level handle install: that
-        // would leak rules across user messages. TS parity: `query()`
-        // closure-captures `appState.alwaysAllowRules.command` and
-        // drops it on return. See `engine_live_rules` for the
-        // lifecycle invariant.
+        // would leak rules across user messages. See `engine_live_rules`
+        // for the lifecycle invariant.
         // Session-scoped steering primitive. Without this, a fresh
         // `CommandQueue::new()` is constructed in `QueryEngine::new` and
         // dies with the per-turn engine, so any producer (TUI bridge,
@@ -2385,16 +2314,11 @@ impl SessionRuntime {
         }
         // Reminder sources — populated unconditionally so non-memory
         // sessions still get hook + skill reminders. Each slot is
-        // optional and silently skips if its data is empty (TS parity:
-        // `getAttachments` returns `[]` when the underlying source
-        // has nothing to surface).
+        // optional and silently skips if its data is empty.
         let team_snapshot = self.resolve_team_snapshot().await;
         let sources = coco_system_reminder::ReminderSources {
             // Combined hook source: async-hook registry drains first,
             // then the sync-hook buffer that orchestration just wrote.
-            // TS parity: `getAsyncHookResponseAttachments` +
-            // sync-hook attachments produced inline by
-            // `processSessionStartHooks` / `executeUserPromptSubmitHooks`.
             hook_events: Some(Arc::new(
                 coco_hooks::reminder_source::CombinedHookEventsSource::new(
                     self.async_hook_registry.clone(),
@@ -2454,8 +2378,7 @@ impl SessionRuntime {
             engine = engine.with_lsp_handle(lsp);
         }
         // Install the agent catalog snapshot so `AgentTool::prompt`
-        // renders the dynamic per-turn agent listing (TS parity:
-        // `tools/AgentTool/prompt.ts::getPrompt`). Without this the
+        // renders the dynamic per-turn agent listing. Without this the
         // engine falls back to `AgentTool`'s static description and
         // the model never sees the agents it can actually spawn.
         // Each engine instance captures the inner `Arc<...>` once at
@@ -2478,11 +2401,10 @@ impl SessionRuntime {
         // Main-session transcript persistence. Same `TranscriptStore`
         // instance feeds both the per-turn user / assistant JSONL
         // append in `engine_finalize_turn::record_transcript_tail`
-        // and the marble-origami metadata writes already wired
-        // there. The dedup set lives on `SessionRuntime` so a fresh
-        // per-turn engine doesn't re-write history each time.
-        // TS parity: `Project.recordTranscript` keys writes by
-        // session id and skips already-persisted uuids.
+        // and the metadata writes already wired there. The dedup set
+        // lives on `SessionRuntime` so a fresh per-turn engine doesn't
+        // re-write history each time; writes are keyed by session id and
+        // skip already-persisted uuids.
         if persistence == EnginePersistenceMode::MainSession && self.persist_session {
             let live_session_id = self.session_id.read().await.clone();
             engine = engine.with_transcript_store(self.transcript_store.clone(), live_session_id);
@@ -2505,10 +2427,9 @@ impl SessionRuntime {
         if let Some(dispatcher) = self.fork_dispatcher.read().await.clone() {
             engine = engine.with_fork_dispatcher(dispatcher);
         }
-        // Session-scoped prompt-suggestion abort slot (TS module-level
-        // `currentAbortController`). Sharing the same `Arc` across
-        // every per-turn engine lets a new spawn cancel the in-flight
-        // previous one.
+        // Session-scoped prompt-suggestion abort slot. Sharing the same
+        // `Arc` across every per-turn engine lets a new spawn cancel the
+        // in-flight previous one.
         engine = engine.with_current_suggestion_abort(self.current_suggestion_abort.clone());
         // Production task runtime — same `Arc` is shared with
         // `SwarmAgentHandle` so AgentTool background spawns and the
@@ -2674,16 +2595,16 @@ impl SessionRuntime {
     /// Fire SessionStart hooks with the given `source` string ("startup",
     /// "resume", "compact", "clear"). Output flows into the shared
     /// `sync_hook_buffer` so it surfaces as `hook_*` reminders on the
-    /// next turn — TS parity with `processSessionStartHooks(source)`.
+    /// Fire SessionStart hooks for the given source. The result is buffered
+    /// into `sync_hook_buffer` to surface as reminders on the next turn.
     ///
     /// Runners call this once at session bootstrap (TUI / SDK) so the
     /// first turn's reminder pass picks up the events. Failure is
     /// logged + tolerated; no panic on hook misconfig.
     pub async fn fire_session_start_hooks(&self, source: &str) {
-        // TS `SessionStartHookInputSchema.source` is the closed enum
-        // `('startup' | 'resume' | 'clear' | 'compact')`. Parse here so
-        // callers using bare strings still work, but log + skip if the
-        // string is unrecognised to avoid wiring an out-of-spec value.
+        // `source` is the closed enum `('startup' | 'resume' | 'clear' | 'compact')`.
+        // Parse here so callers using bare strings still work, but log + skip if
+        // the string is unrecognised to avoid wiring an out-of-spec value.
         let parsed_source = match source {
             "startup" => coco_hooks::orchestration::SessionStartSource::Startup,
             "resume" => coco_hooks::orchestration::SessionStartSource::Resume,
@@ -2734,11 +2655,10 @@ impl SessionRuntime {
         .await
         {
             Ok(agg) => {
-                // TS `SessionStartHookSpecificOutputSchema.watchPaths` —
-                // hook output may register paths the FileChanged watcher
-                // should monitor. We hand them off to the runtime's
-                // shared watcher so subsequent file events fire
-                // FileChanged hooks. Empty vec is a no-op.
+                // Hook output may register paths the FileChanged watcher
+                // should monitor. Hand them off to the runtime's shared
+                // watcher so subsequent file events fire FileChanged hooks.
+                // Empty vec is a no-op.
                 if !agg.watch_paths.is_empty() {
                     self.add_file_watch_paths(agg.watch_paths.clone()).await;
                 }
@@ -2749,12 +2669,10 @@ impl SessionRuntime {
         }
     }
 
-    /// Fire Setup hooks (TS `executeSetupHooks(trigger)`).
+    /// Fire Setup hooks (`Maintenance` at bootstrap, `Init` at `coco init`).
     ///
-    /// Called at session bootstrap with `Maintenance`, and at explicit
-    /// `coco init` entry with `Init`. Output is fire-and-forget — TS
-    /// treats Setup as observability-only (no blocking, no continuation
-    /// signals). Failure is logged.
+    /// Output is fire-and-forget — Setup is observability-only (no blocking,
+    /// no continuation signals). Failure is logged.
     pub async fn fire_setup_hooks(&self, trigger: coco_hooks::orchestration::SetupTrigger) {
         let cfg = self.current_engine_config().await;
         let session_id = self.current_session_id().await;
@@ -2789,9 +2707,7 @@ impl SessionRuntime {
     /// flows into the shared `sync_hook_buffer`. Returns the aggregated
     /// result so the caller can honour `blocking_error` (suppress the
     /// turn) and `prevent_continuation` (skip the turn but keep the
-    /// prompt) — TS parity with
-    /// `executeUserPromptSubmitHooks` consumed by
-    /// `processUserInput.ts:182-263`.
+    /// prompt).
     pub async fn fire_user_prompt_submit_hooks(
         &self,
         prompt: &str,
@@ -2833,14 +2749,12 @@ impl SessionRuntime {
         }
     }
 
-    /// Fire Notification hooks (TS `executeNotificationHooks(notif)`).
-    ///
-    /// Called from `TuiPermissionBridge` / `SdkPermissionBridge` when
-    /// the user is about to be asked for input (`permission_prompt`),
-    /// and from any future idle / elicitation prompts. Output is
-    /// fire-and-forget — TS `notifier.ts:25` awaits the hook only to
-    /// preserve ordering before the actual UI notification, never to
-    /// block the prompt itself.
+    /// Fire Notification hooks. Called from `TuiPermissionBridge` /
+    /// `SdkPermissionBridge` when the user is about to be asked for
+    /// input (`permission_prompt`), and from any future idle / elicitation
+    /// prompts. Output is fire-and-forget — awaited only to preserve
+    /// ordering before the actual UI notification, never to block the
+    /// prompt itself.
     pub async fn fire_notification_hooks(
         &self,
         notification_type: &str,
@@ -2900,9 +2814,7 @@ impl SessionRuntime {
     }
 
     /// Append paths to the `FileChanged` watcher, lazily constructing
-    /// it on first call. TS parity: `fileChangedWatcher.ts:add` lazily
-    /// boots the chokidar instance the first time a hook returns a
-    /// `watchPaths` array. Empty input is a no-op.
+    /// it on first call. Empty input is a no-op.
     pub async fn add_file_watch_paths(&self, paths: Vec<String>) {
         if paths.is_empty() {
             return;
@@ -2912,15 +2824,12 @@ impl SessionRuntime {
             .await;
     }
 
-    /// Fire CwdChanged hooks (TS `executeCwdChangedHooks(oldCwd, newCwd)`).
+    /// Fire CwdChanged hooks.
     ///
     /// Callers must capture the old cwd before mutating
-    /// `std::env::current_dir`. TS only fires this from
-    /// `fileChangedWatcher.ts:148` (chokidar-equivalent watcher); coco-rs
-    /// will gain that watcher as part of P4. In the meantime, surfacing
-    /// the helper lets ad-hoc cwd-mutating code paths (worktree exit,
-    /// SDK setCwd control) wire the hook without re-implementing the
-    /// orchestration context build.
+    /// `std::env::current_dir`. Surfacing the helper lets ad-hoc
+    /// cwd-mutating code paths (worktree exit, SDK setCwd control) wire
+    /// the hook without re-implementing the orchestration context build.
     pub async fn fire_cwd_changed_hooks(&self, old_cwd: &str, new_cwd: &str) {
         let cfg = self.current_engine_config().await;
         let session_id = self.current_session_id().await;
@@ -2953,8 +2862,7 @@ impl SessionRuntime {
         .await
         {
             Ok(agg) => {
-                // TS `CwdChangedHookSpecificOutputSchema.watchPaths` —
-                // the cwd swap is a natural moment for hooks to update
+                // The cwd swap is a natural moment for hooks to update
                 // the FileChanged watch list (e.g. add the new project's
                 // `.envrc`).
                 if !agg.watch_paths.is_empty() {
@@ -2967,7 +2875,7 @@ impl SessionRuntime {
         }
     }
 
-    /// Fire ConfigChange hooks (TS `executeConfigChangeHooks`).
+    /// Fire ConfigChange hooks.
     pub async fn run_config_change_hooks(
         &self,
         source: coco_hooks::orchestration::ConfigChangeSource,
@@ -3021,10 +2929,9 @@ impl SessionRuntime {
     }
 
     /// Spawn a tokio task that subscribes to a [`coco_config_reload::ConfigChange`]
-    /// stream and fires the corresponding TS-aligned `ConfigChange` hook
-    /// for each event. Returns the [`tokio::task::JoinHandle`] so the
-    /// caller can hold it for the session lifetime; dropping it aborts
-    /// the watcher.
+    /// stream and fires the corresponding `ConfigChange` hook for each event.
+    /// Returns the [`tokio::task::JoinHandle`] so the caller can hold it for
+    /// the session lifetime; dropping it aborts the watcher.
     ///
     /// `cancel` lets callers terminate the watcher proactively
     /// (typically the session-level [`Self::cancel`] token); when the
@@ -3063,7 +2970,7 @@ impl SessionRuntime {
     ///   process-level resources — these are correctly cross-session.
     ///
     /// Distinct from `clear_conversation`: that fires SessionEnd /
-    /// SessionStart hooks and runs through the TS-aligned `/clear` flow.
+    /// SessionStart hooks and performs the full `/clear` flow.
     /// This method skips both — SDK `session/archive` is the hook
     /// boundary on its own, not the new session's start.
     pub async fn start_new_session(&self, new_session_id: String) {
@@ -3171,9 +3078,7 @@ impl SessionRuntime {
         // Reload the LIVE skill manager (the one feeding the model catalog +
         // dispatch), not a throwaway. Build a fresh catalog off disk with the
         // resolved load gates, fold it into `self.skill_manager`, and clear the
-        // announcement map so edited skills re-announce. TS parity:
-        // `skillChangeDetector` re-emits the live catalog, it does not swap in
-        // a new manager instance.
+        // announcement map so edited skills re-announce.
         let gates = crate::session_bootstrap::resolve_skill_load_gates_with_add_dirs(
             runtime_config,
             cwd,
@@ -3195,8 +3100,8 @@ impl SessionRuntime {
         for skill in coco_plugins::skill_bridge::load_all_plugin_skills_v2(&plugin_refs) {
             self.skill_manager.register(skill);
         }
-        // Builtin plugin skills (TS `getBuiltinPluginSkillCommands`) — symmetric
-        // with bootstrap so a reload re-registers them too.
+        // Builtin plugin skills — symmetric with bootstrap so a reload
+        // re-registers them too.
         coco_plugins::builtins::init_builtin_plugins();
         for skill in coco_plugins::builtin_plugin_skills(&self.config_home) {
             self.skill_manager.register(skill);
@@ -3218,18 +3123,14 @@ impl SessionRuntime {
             *slot = new_registry;
         }
         // Re-register plugin MCP servers with the live manager (if attached) so a
-        // reload picks up newly enabled/disabled plugin MCP contributions
-        // (TS `refreshActivePlugins` → `loadPluginMcpServers`). No-op without a
-        // manager (e.g. the TUI today).
+        // reload picks up newly enabled/disabled plugin MCP contributions.
+        // No-op without a manager (e.g. the TUI today).
         let _ = self.reload_plugin_mcp_servers(cwd).await;
         count
     }
 
     /// Reload the live `HookRegistry` from the latest `RuntimeConfig`
     /// snapshot (settings + plugin hooks). Triggered by `/hooks reload`.
-    ///
-    /// TS parity: `updateHooksConfigSnapshot()`
-    /// (`utils/hooks/hooksConfigSnapshot.ts`).
     ///
     /// Atomic semantics:
     /// - Settings hooks (User/Project/Local/Flag/Policy scopes) and
@@ -3296,14 +3197,14 @@ impl SessionRuntime {
         Ok(self.hook_registry.len().max(settings_count))
     }
 
-    /// TS `clearConversation` (commands/clear/conversation.ts):
-    /// SessionEnd hooks → drop subsystem caches → regen session id →
-    /// SessionStart hooks (whose result messages seed the new transcript).
+    /// Full `/clear` reset: SessionEnd hooks → drop subsystem caches →
+    /// regen session id → SessionStart hooks (whose result messages seed
+    /// the new transcript).
     ///
     /// `/clear` has one behavior: full reset, regardless of arguments.
     pub async fn clear_conversation(&self) -> Result<()> {
-        // Step 1 (TS conversation.ts:69): SessionEnd hooks fire BEFORE
-        // the reset, with the bounded SESSION_END timeout (1.5s default;
+        // Step 1: SessionEnd hooks fire BEFORE the reset, with the bounded
+        // SESSION_END timeout (1.5s default;
         // `COCO_SESSIONEND_HOOKS_TIMEOUT_MS` overrides).
         let cur_session_id = self.current_session_id().await;
         let cfg = self.current_engine_config().await;
@@ -3319,8 +3220,7 @@ impl SessionRuntime {
             disable_all_hooks: cfg.disable_all_hooks,
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
-            // SessionEnd doesn't surface as a reminder in TS, so
-            // no sink needed here.
+            // SessionEnd doesn't surface as a reminder, so no sink needed here.
             sync_event_sink: None,
             http_url_allowlist: None,
             http_env_var_policy: None,
@@ -3339,24 +3239,20 @@ impl SessionRuntime {
             warn!(error = %e, "SessionEnd hook execution failed during /clear");
         }
 
-        // Step 2: reset state from TS `clearSessionCaches`.
+        // Step 2: reset session caches.
         *self.app_state.write().await = ToolAppState::default();
         self.reset_cache_break_detectors().await;
         // Clear the per-agent skill announcement map so every skill
         // re-announces in the post-clear transcript's first listing pass.
-        // TS parity: `clearSessionCaches` calls `resetSentSkillNames()`
-        // (`caches.ts:75-79`).
         self.skill_manager.reset_announcements();
 
         // Drop any queued steering messages — `/clear` semantically
         // says "fresh start", and a queued prompt from the pre-clear
         // session would otherwise surface as the first user input in
-        // the post-clear transcript. TS parity: `clearCommandQueue()`
-        // from `utils/messageQueueManager.ts` is invoked alongside the
-        // history reset in REPL.tsx's clear path.
+        // the post-clear transcript.
         self.command_queue.clear().await;
 
-        // Step 3: TS-aligned full reset.
+        // Step 3: full reset.
         let cur_session_id = self.current_session_id().await;
         coco_context::clear_plan_slug(&cur_session_id);
         {
@@ -3375,18 +3271,16 @@ impl SessionRuntime {
         // PrefetchState, extraction cursor + throttle counter, and the
         // session-memory init flag. The on-disk MEMORY.md and topic
         // files are deliberately left alone; they're cross-conversation
-        // memory that a /clear is not meant to wipe. TS parity:
-        // `MemoryRuntime::reset` mirrors the equivalent reset path in
-        // `clearConversation()` for forked-extraction state.
+        // memory that a /clear is not meant to wipe.
         if let Some(runtime) = &self.memory_runtime {
             runtime.reset().await;
         }
 
-        // Step 4 (TS conversation.ts:203): regenerate the session id and
-        // propagate it to every id-keyed subsystem. Without this, post-
-        // clear writes would land in the OLD session's directory and
-        // surface as "extra memory" / "phantom file-history snapshots"
-        // on the next `--resume` of the pre-clear session.
+        // Step 4: regenerate the session id and propagate it to every
+        // id-keyed subsystem. Without this, post-clear writes would land in
+        // the OLD session's directory and surface as "extra memory" /
+        // "phantom file-history snapshots" on the next `--resume` of the
+        // pre-clear session.
         self.flush_session_usage_snapshot().await;
         let new_session_id = uuid::Uuid::new_v4().to_string();
         self.adopt_session_id(&new_session_id).await;
@@ -3395,13 +3289,12 @@ impl SessionRuntime {
         // fresh JSONL from message #1 — without this, the post-clear
         // turn would skip persisting any UUID that happened to match
         // a pre-clear message (impossible in practice, but the empty
-        // set is the correct invariant per TS `clearSessionCaches`).
+        // set is the correct invariant).
         self.transcript_dedup.lock().await.clear();
         *self.tool_result_replacement_state.write().await =
             coco_tool_runtime::tool_result_storage::ContentReplacementState::new(i64::MAX);
 
-        // Step 5 (TS conversation.ts:245): SessionStart hooks. Result
-        // messages seed the post-clear transcript.
+        // Step 5: SessionStart hooks. Result messages seed the post-clear transcript.
         let cfg = self.current_engine_config().await;
         let post_ctx = coco_hooks::orchestration::OrchestrationContext {
             session_id: new_session_id,
@@ -3416,8 +3309,7 @@ impl SessionRuntime {
             allow_managed_hooks_only: cfg.allow_managed_hooks_only,
             attachment_emitter: coco_messages::AttachmentEmitter::noop(),
             // Surface SessionStart hook output as `hook_*` reminders on
-            // the next turn — TS parity with `processSessionStartHooks`
-            // emitting `createAttachmentMessage({ hookEvent:'SessionStart', ... })`.
+            // the next turn.
             sync_event_sink: Some(self.sync_hook_buffer.clone()),
             http_url_allowlist: None,
             http_env_var_policy: None,
@@ -3434,9 +3326,7 @@ impl SessionRuntime {
         // Clear the in-memory transcript before invoking SessionStart
         // hooks. The hook output flows into the sync hook buffer
         // (`post_ctx.sync_event_sink`) and surfaces as `hook_*`
-        // reminders on the next turn — TS parity with
-        // `processSessionStartHooks('clear')` returning attachment
-        // messages that the conversation engine appends post-clear.
+        // reminders on the next turn.
         {
             let mut h = self.history.lock().await;
             h.clear();
@@ -3458,9 +3348,7 @@ impl SessionRuntime {
 }
 
 /// Construct an `Arc<SandboxState>` for the active session, or return `None`
-/// when sandbox is disabled / unavailable. Drives TS-equivalent bootstrap
-/// (`SandboxManager.initialize`) without re-implementing the npm runtime —
-/// the heavy lifting lives in the `coco_sandbox` crate.
+/// when sandbox is disabled / unavailable.
 ///
 /// Returns `Ok(None)` when:
 /// - `Feature::Sandbox` is off, or
@@ -3469,9 +3357,8 @@ impl SessionRuntime {
 ///   (commands will run unsandboxed; user gets a startup banner).
 ///
 /// Returns `Err` when bootstrap gates fail AND
-/// `sandbox.fail_if_unavailable` is `true` — the caller propagates this so
-/// coco exits before the REPL starts, matching TS
-/// `sandbox.failIfUnavailable` (`entrypoints/sandboxTypes.ts:95`).
+/// `sandbox.fail_if_unavailable` is `true` — the caller propagates this
+/// so coco exits before the REPL starts.
 pub(crate) async fn build_sandbox_state(
     runtime_config: &RuntimeConfig,
     cwd: &std::path::Path,
@@ -3490,17 +3377,15 @@ pub(crate) async fn build_sandbox_state(
         return Ok(None);
     }
 
-    // `runtime_config.sandbox` is now the rich, TS-parity `SandboxSettings`
-    // type owned by coco-config — no manual bridging needed. We mark it
-    // `enabled = true` because reaching this point already implies the
+    // Mark `enabled = true` because reaching this point already implies the
     // feature gate passed and the user requested an enforcing mode.
     let mut sandbox_settings = runtime_config.sandbox.clone();
     sandbox_settings.enabled = true;
 
     let gate = coco_sandbox::check_enable_gates(&sandbox_settings);
     if !matches!(gate, coco_sandbox::EnableCheckResult::Enabled) {
-        // Surface a TS-parity startup banner via `sandbox_unavailable_reason`
-        // so the user understands *why* sandboxing is degraded. When
+        // Surface a startup banner via `sandbox_unavailable_reason` so the
+        // user understands *why* sandboxing is degraded. When
         // `fail_if_unavailable` is set, this is a hard error.
         let missing_deps: Vec<String> = match &gate {
             coco_sandbox::EnableCheckResult::DisabledByMissingDeps { missing } => missing.clone(),
@@ -3555,7 +3440,7 @@ pub(crate) async fn build_sandbox_state(
     // Per-source rule plumbing — drives the `allow_managed_*_only`
     // gates. The adapter needs source provenance because the merged
     // `SandboxSettings` collapses every layer; only allow rules need
-    // sourcing (TS always honors all-source denies).
+    // sourcing (deny rules apply uniformly regardless of source).
     // The sandbox adapter only consumes allow-source provenance today
     // (deny rules apply uniformly regardless of source). `_ask` is
     // ignored here; the ask map is consumed at the engine config layer
@@ -3565,9 +3450,8 @@ pub(crate) async fn build_sandbox_state(
     let sourced_fs_allow_read = runtime_config.settings.sourced_filesystem_allow_read();
 
     // Deny writes to every settings source so a sandboxed command can't edit
-    // its own permission rules (or disable the sandbox) — the self-permission
-    // escape TS blocks unconditionally — plus the `.coco/` command/agent
-    // definitions.
+    // its own permission rules (or disable the sandbox), plus the `.coco/`
+    // command/agent definitions.
     let settings_files = sandbox_settings_deny_paths(&settings_root);
 
     let inputs = AdapterInputs {
@@ -3644,8 +3528,7 @@ pub(crate) async fn build_sandbox_state(
 
 /// Settings / definition files denied write inside the sandbox, so a sandboxed
 /// command cannot rewrite its own permission rules, disable the sandbox, or
-/// inject agents. Mirrors TS `sandbox-adapter.ts:230-255` for settings files
-/// and managed drop-ins; `.coco/skills` is added by the adapter.
+/// inject agents.
 ///
 /// MUST be the single source for both the bootstrap (`build_sandbox_state`) and
 /// the hot-reload (`sandbox_reload::reapply_sandbox`) paths — passing `&[]` on
@@ -3663,7 +3546,7 @@ pub(crate) fn sandbox_settings_deny_paths(settings_root: &std::path::Path) -> Ve
         settings_root.join(".coco").join("agents"),
     ];
     // Managed drop-in directory (`managed-settings.d`) next to the managed
-    // settings file — TS denies the whole drop-in dir, not just the .json.
+    // settings file — deny the whole drop-in dir, not just the .json.
     if let Some(dir) = managed.parent() {
         paths.push(dir.join("managed-settings.d"));
     }

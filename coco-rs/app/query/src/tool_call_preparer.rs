@@ -232,11 +232,10 @@ pub(crate) async fn prepare_one_pending_tool_call(
     )
     .await;
 
-    // TS `toolExecution.ts:1075-1101`: when an auto-mode classifier
-    // denial lands, fire `PermissionDenied` hooks. If any hook returns
-    // `retry: true`, the model is hinted that it may retry. We extend
-    // the deny message in-place so the existing controller path stays
-    // unchanged.
+    // When an auto-mode classifier denial lands, fire `PermissionDenied`
+    // hooks. If any hook returns `retry: true`, the model is hinted that
+    // it may retry. We extend the deny message in-place so the existing
+    // controller path stays unchanged.
     let decision = maybe_fire_permission_denied_hook(
         &hook_controller,
         tc,
@@ -367,10 +366,8 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     let mut hook_permission_behavior = hook_permission_behavior;
 
     // Subagent/fork isolation: prefer `ctx.local_denial_tracking` over the
-    // engine-level session tracker. TS parity (`permissions.ts:553-558`):
-    //   `context.localDenialTracking ?? appState.denialTracking`.
-    // Without this, a fork's denials would bump the parent's
-    // consecutive-denial circuit breaker.
+    // engine-level session tracker. Without this, a fork's denials would bump
+    // the parent's consecutive-denial circuit breaker.
     let chosen_tracker: Option<Arc<tokio::sync::Mutex<coco_permissions::DenialTracker>>> = ctx
         .local_denial_tracking
         .clone()
@@ -382,8 +379,6 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
     {
         match gate {
             CanUseToolResolution::Decision(decision) => {
-                // TS records success on ANY auto-mode allow, regardless of which
-                // branch produced it (permissions.ts:486-499).
                 reset_consecutive_on_allow(&decision, auto_mode_state, chosen_tracker.as_ref())
                     .await;
                 return decision;
@@ -467,10 +462,10 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         }
     }
 
-    // TS records success on ANY auto-mode allow — rule-based, hook, allowlist,
-    // acceptEdits fast-path, or classifier — to break a consecutive-denial
-    // streak (permissions.ts:486-499). The classifier path resets internally;
-    // this covers the rule/hook/allowlist Allow branches that bypass it.
+    // Reset consecutive-denial counter on ANY auto-mode allow —
+    // rule-based, hook, allowlist, acceptEdits fast-path, or classifier.
+    // The classifier path resets internally; this covers the
+    // rule/hook/allowlist Allow branches that bypass it.
     reset_consecutive_on_allow(&decision, auto_mode_state, chosen_tracker.as_ref()).await;
 
     decision
@@ -582,18 +577,17 @@ fn can_use_tool_reason_label(reason: &DecisionReason) -> String {
 
 /// Run the central rule evaluator against a tool call.
 ///
-/// TS parity: `hasPermissionsToUseToolInner` in `permissions.ts`.
 /// The tool's own opinion (`Tool::check_permissions`) is captured
 /// once and supplied as the step-1c slot to
 /// [`coco_permissions::PermissionEvaluator::evaluate_with_tool_check`],
 /// so the same `ToolCheckResult` passes through deny rules → tool
 /// opinion → allow rules → ask rules → path safety → MCP server
-/// rules → mode fallthrough exactly as TS does.
+/// rules → mode fallthrough.
 ///
 /// Returning `Allow { updated_input: Some(_) }` from the tool's
-/// opinion survives an evaluator-side `Allow` decision — TS keeps
-/// `updatedInput` on downstream allows so a tool can normalize
-/// input even when a user-allow rule is present.
+/// opinion survives an evaluator-side `Allow` decision — `updatedInput`
+/// is preserved on downstream allows so a tool can normalize input
+/// even when a user-allow rule is present.
 async fn evaluate_with_rules(
     tool: &Arc<dyn DynTool>,
     effective_input: &Value,
@@ -626,9 +620,9 @@ async fn evaluate_with_rules(
     )
 }
 
-/// Mirror TS `canSandboxAutoAllow` (permissions.ts:1189-1193): true iff this is
-/// a Bash command that WILL be sandboxed AND `autoAllowBashIfSandboxed` is on.
-/// When true, the evaluator skips a tool-wide Bash ask rule and auto-allows.
+/// Returns true iff this is a Bash command that WILL be sandboxed AND
+/// `autoAllowBashIfSandboxed` is on. When true, the evaluator skips a
+/// tool-wide Bash ask rule and auto-allows.
 fn sandbox_auto_allow_bash(tool_id: &ToolId, input: &Value, ctx: &ToolUseContext) -> bool {
     if !matches!(tool_id, ToolId::Builtin(coco_types::ToolName::Bash)) {
         return false;
@@ -700,11 +694,11 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     prompt: prompt.clone(),
                     max_tokens: Some(req.max_tokens),
                     thinking_level: None,
-                    // The classifier runs on the shared Main runtime. TS sets
-                    // no priority flag here — stage-1 "fastness" comes purely
-                    // from the small token budget + `</block>` stop. Toggling
-                    // `fast_mode` per stage would only churn the Main runtime's
-                    // prompt-cache-break detector. Keep it off for both stages.
+                    // The classifier runs on the shared Main runtime. No
+                    // priority flag — stage-1 "fastness" comes purely from
+                    // the small token budget + `</block>` stop. Toggling
+                    // `fast_mode` per stage would only churn the Main
+                    // runtime's prompt-cache-break detector.
                     fast_mode: false,
                     tools: None,
                     tool_choice: None,
@@ -718,8 +712,7 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                     // Stage 1 in `both` mode passes ["</block>"] so the model
                     // terminates immediately after the verdict tag, saving
                     // tokens and latency. Stage 2 leaves this `None` so it can
-                    // emit `<thinking>` and `<reason>` freely. TS parity:
-                    // `yoloClassifier.ts:792`.
+                    // emit `<thinking>` and `<reason>` freely.
                     stop_sequences: req.stop_sequences.clone(),
                     response_format: None,
                     cancel: None,
@@ -750,10 +743,9 @@ async fn try_classify_in_auto_mode<M: std::borrow::Borrow<Message>>(
                             }
                         }
                         // Stage 1 uses `["</block>"]` as a stop sequence, so a
-                        // `stop_sequence` stop_reason is expected and stays
-                        // in the happy-path set of `is_abnormal_stop_reason`.
-                        // The danger is `length` (verdict truncated mid-XML)
-                        // or `content-filter` — both yield a structurally
+                        // `stop_sequence` stop_reason is expected. The danger
+                        // is `length` (verdict truncated mid-XML) or
+                        // `content-filter` — both yield a structurally
                         // incomplete classifier output that downstream
                         // permission parsing may silently mis-interpret as
                         // "allow". Warn so the permission misroute is
@@ -842,10 +834,9 @@ async fn resolve_effective_input_from_permission(
     }
 }
 
-/// TS `executePermissionDeniedHooks` wiring — only fires when the
-/// decision is a classifier-driven `Deny`. Returns the (possibly
-/// rewritten) decision; on `retry: true` we append a hint so the model
-/// learns the hook approved the retry.
+/// Only fires when the decision is a classifier-driven `Deny`. Returns
+/// the (possibly rewritten) decision; on `retry: true` we append a hint
+/// so the model learns the hook approved the retry.
 async fn maybe_fire_permission_denied_hook(
     hook_controller: &HookController<'_>,
     tool_call: &ToolCallPart,

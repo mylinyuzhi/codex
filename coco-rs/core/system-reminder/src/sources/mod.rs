@@ -4,24 +4,21 @@
 //! See `traits.rs` for the contract, `materialized.rs` for the
 //! transient I/O types, `noop.rs` for default test-friendly impls.
 //!
-//! **Why this module exists**: TS's `getAttachments(input, ctx, …)`
-//! reads state from ~10 sibling subsystems via a duck-typed
-//! `toolUseContext.options.*` bag + module-level singletons. The Rust
-//! analog is a bundle of trait objects: each subsystem (`hooks`,
-//! `services/lsp`, `tasks`, `skills`, `services/mcp`, swarm,
-//! `bridge`, `memory`) implements its category-specific `*Source`
-//! trait in its own crate. `QueryEngine` holds one `ReminderSources`
-//! field; CLI wires it up at session start.
+//! **Why this module exists**: reminder state is scattered across ~10 sibling
+//! subsystems. The Rust design is a bundle of trait objects: each subsystem
+//! (`hooks`, `services/lsp`, `tasks`, `skills`, `services/mcp`, swarm,
+//! `bridge`, `memory`) implements its category-specific `*Source` trait in
+//! its own crate. `QueryEngine` holds one `ReminderSources` field; CLI wires
+//! it up at session start.
 //!
 //! **Layering**: the trait defs live here (`core/system-reminder`);
-//! owning crates depend on this crate to `impl`. One-way edge, no
-//! cycles. Matches the established `core/tool-runtime::*Handle` pattern.
+//! owning crates depend on this crate to `impl`. One-way edge, no cycles.
+//! Matches the established `core/tool-runtime::*Handle` pattern.
 //!
-//! **Collection semantics**: [`ReminderSources::materialize`] fan-outs
-//! all source calls via `tokio::join!`, wraps each in a per-source
+//! **Collection semantics**: [`ReminderSources::materialize`] fan-outs all
+//! source calls via `tokio::join!`, wraps each in a per-source
 //! `tokio::time::timeout` (defaulting to `SystemReminderConfig::timeout_ms`),
-//! and degrades errors/timeouts to default values. Never poisons the
-//! turn. Matches TS `attachments.ts:767` `AbortController`.
+//! and degrades errors/timeouts to default values. Never poisons the turn.
 
 pub mod materialized;
 pub mod noop;
@@ -181,7 +178,7 @@ impl ReminderSources {
         );
 
         // MCP resources only resolves when the user actually submitted
-        // text this turn (TS UserPrompt tier gate).
+        // text this turn (UserPrompt tier gate).
         let mcp_resources_fut = {
             let s = self
                 .mcp

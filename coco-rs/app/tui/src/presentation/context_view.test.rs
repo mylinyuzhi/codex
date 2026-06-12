@@ -72,7 +72,7 @@ fn renders_headline_grid_legend_and_sections() {
     assert!(body.contains("Free space: "));
     // Source-affordance section headings.
     assert!(body.contains("Memory files · /memory"));
-    // Path is shown project-relative to cwd (TS `getDisplayPath` parity):
+    // Path is shown project-relative to cwd:
     // `/repo/CLAUDE.md` under `/repo` collapses to `CLAUDE.md`.
     assert!(body.contains("└ CLAUDE.md: 1.2k tok"));
     assert!(body.contains("Custom agents · /agents"));

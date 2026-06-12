@@ -1,7 +1,5 @@
 //! Permission update application — apply updates to a `ToolPermissionContext`.
 //!
-//! TS: utils/permissions/PermissionUpdate.ts
-//!
 //! `applyPermissionUpdate()` / `applyPermissionUpdates()` modify the in-memory
 //! context. Persistence to disk is a separate concern (handled by the settings layer).
 
@@ -42,8 +40,6 @@ fn rules_map_mut(
 }
 
 /// Apply a single permission update to the context and return the modified context.
-///
-/// TS: `applyPermissionUpdate()` in PermissionUpdate.ts
 pub fn apply_permission_update(
     mut context: ToolPermissionContext,
     update: &PermissionUpdate,
@@ -134,8 +130,6 @@ pub fn apply_permission_update(
 }
 
 /// Apply multiple permission updates sequentially.
-///
-/// TS: `applyPermissionUpdates()` in PermissionUpdate.ts
 pub fn apply_permission_updates(
     context: ToolPermissionContext,
     updates: &[PermissionUpdate],

@@ -8,11 +8,8 @@
 //!   sort, any other printable char drops into filter mode and
 //!   appends.
 //! - **Filter** — every printable char appends to the query (the
-//!   literal `/` is stripped on input — TS
-//!   `cli_inner_pretty.js:477038-477045`), `Backspace` pops,
+//!   literal `/` is stripped on input), `Backspace` pops,
 //!   `Enter`/`↓` exit filter focus, `Esc` clears query.
-//!
-//! TS source: `uJ4` key handler `cli_inner_pretty.js:477017-477047`.
 
 use tokio::sync::mpsc;
 
@@ -95,8 +92,7 @@ fn handle_char(state: &mut AppState, c: char) -> bool {
         }
         '\n' => false,
         _ => {
-            // Any other printable drops into filter mode and pushes
-            // the char — TS `cli_inner_pretty.js:477044-477046`.
+            // Any other printable drops into filter mode and pushes the char.
             dialog.filter_focused = true;
             dialog.apply_filter_char(c);
             true
@@ -109,9 +105,8 @@ fn handle_backspace(state: &mut AppState) -> bool {
     if dialog.filter_focused {
         return dialog.backspace_filter();
     }
-    // Select mode: TS swallows Backspace when no query exists
-    // (`cli_inner_pretty.js:477033-477036`). If the query is
-    // non-empty, refocus filter and pop one char.
+    // Select mode: swallow Backspace when no query exists.
+    // If the query is non-empty, refocus filter and pop one char.
     if !dialog.filter_query.is_empty() {
         dialog.filter_focused = true;
         return dialog.backspace_filter();
@@ -122,8 +117,7 @@ fn handle_backspace(state: &mut AppState) -> bool {
 async fn handle_submit(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     let dialog = dialog_mut(state);
     if dialog.filter_focused {
-        // Enter inside filter mode exits filter focus but keeps the
-        // query active — `cli_inner_pretty.js:477051-477053`.
+        // Enter inside filter mode exits filter focus but keeps the query active.
         dialog.filter_focused = false;
         return;
     }
@@ -154,9 +148,8 @@ async fn handle_submit(state: &mut AppState, command_tx: &mpsc::Sender<UserComma
 fn handle_cancel(state: &mut AppState) {
     let dialog = dialog_mut(state);
     if dialog.filter_focused || !dialog.filter_query.is_empty() {
-        // Esc inside filter mode clears the query + exits focus
-        // (`cli_inner_pretty.js:477054-477057`). The dialog stays
-        // open; the user can keep navigating.
+        // Esc inside filter mode clears the query + exits focus.
+        // The dialog stays open; the user can keep navigating.
         dialog.clear_filter();
         return;
     }
@@ -174,9 +167,8 @@ fn handle_arrow_up(state: &mut AppState) -> bool {
 fn handle_arrow_down(state: &mut AppState) -> bool {
     let dialog = dialog_mut(state);
     if dialog.filter_focused {
-        // ↓ from filter exits focus + keeps the query active
-        // (`cli_inner_pretty.js:477058`). The list cursor remains
-        // on the first filtered row.
+        // ↓ from filter exits focus + keeps the query active.
+        // The list cursor remains on the first filtered row.
         dialog.filter_focused = false;
         return true;
     }

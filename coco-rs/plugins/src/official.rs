@@ -1,10 +1,9 @@
 //! Official marketplace startup auto-install.
 //!
-//! TS: `utils/plugins/officialMarketplaceStartupCheck.ts`. Fetches the
-//! official `anthropics/claude-plugins-official` github marketplace once on
-//! startup, with a persisted exponential-backoff retry gate. The
-//! Anthropic-internal GCS accelerator (`officialMarketplaceGcs.ts`, `inc-5046`)
-//! is intentionally omitted — a plain github source is the portable behavior.
+//! Fetches the official `anthropics/claude-plugins-official` github marketplace
+//! once on startup, with a persisted exponential-backoff retry gate. The
+//! Anthropic-internal GCS accelerator is intentionally omitted — a plain github
+//! source is the portable behavior.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -18,9 +17,9 @@ use crate::marketplace::MarketplaceManager;
 use crate::marketplace::OFFICIAL_MARKETPLACE_NAME;
 use crate::marketplace::official_marketplace_source;
 
-/// Give up after this many failed attempts (TS `MAX_INSTALL_ATTEMPTS`).
+/// Give up after this many failed attempts.
 const MAX_ATTEMPTS: u32 = 10;
-/// First retry delay; doubles each attempt (TS 1h → 1week backoff).
+/// First retry delay; doubles each attempt (1h → 1week backoff).
 const BASE_BACKOFF_SECS: i64 = 3600;
 const MAX_BACKOFF_SECS: i64 = 7 * 24 * 3600;
 const STATE_FILE: &str = "official_marketplace_state.json";

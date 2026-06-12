@@ -1,6 +1,4 @@
-//! Plugin error taxonomy mirroring TS `types/plugin.ts` (20+ variants).
-//!
-//! TS source: `types/plugin.ts` discriminated union for `PluginError`.
+//! Plugin error taxonomy (20+ variants).
 //!
 //! Used by Layer-2/3 refresh, dependency resolver, manifest loader. Each
 //! variant carries structured fields so the UI can render specific error
@@ -46,8 +44,7 @@ impl ErrorSource {
 
 /// Unified plugin error.
 ///
-/// TS: 21 named variants in `types/plugin.ts PluginError`. Variants below
-/// cover the same surface; non-static fields use String for stability.
+/// Variants cover the full error surface; non-static fields use String for stability.
 #[derive(Debug, Clone, Error)]
 pub enum PluginError {
     #[error("git auth failed for {url}: {message}")]

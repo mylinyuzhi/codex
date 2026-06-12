@@ -2,7 +2,7 @@
 //!
 //! Fixture matrix is documented in the V2 plan
 //! (`/root/.coco/plans/v2-velvet-engelbart.md` §1.4). Each case
-//! pins TS-parity behavior for one combination of lock-source ×
+//! pins behavior for one combination of lock-source ×
 //! baseline-source × local-override × skill source.
 
 use super::*;
@@ -201,8 +201,7 @@ fn lock_mcp_skill_has_no_default_lock() {
     let s = mcp_skill("acme:resource");
     let tiers = TierBuilder::default().build();
     // MCP skills don't get a plugin-style "always on" lock —
-    // verified against TS `oT5` which only special-cases `source ===
-    // "plugin"`.
+    // only `source === "plugin"` is special-cased.
     assert_eq!(resolve_skill_override_lock(&s, &tiers), None);
 }
 
@@ -262,7 +261,7 @@ fn effective_defaults_to_on_when_no_layer_overrides() {
 fn effective_plugin_source_short_circuits_to_on_regardless_of_overrides() {
     let s = plugin_skill("foo");
     // Even if every tier says "off", a plugin skill stays "on" at
-    // runtime — TS `st` checks plugin source first.
+    // runtime — plugin source is checked first.
     let tiers = TierBuilder {
         policy: tier("foo", Off),
         flag: tier("foo", Off),
@@ -346,7 +345,7 @@ fn effective_precedence_policy_over_flag_over_local_over_project_over_user() {
 
 #[test]
 fn effective_does_not_check_disable_model_invocation() {
-    // TS `st` ignores DMI. The Skill tool runs a separate DMI gate;
+    // DMI is ignored. The Skill tool runs a separate DMI gate;
     // the listing budget applies XG$ separately. If this function
     // returned UserInvocableOnly for DMI skills with no override,
     // listing budget XG$ would incorrectly drop the row instead of

@@ -1,7 +1,5 @@
 //! Scheduling tools: CronCreate, CronDelete, CronList, RemoteTrigger.
 //!
-//! TS: tools/CronTool, tools/RemoteTriggerTool
-//!
 //! Uses `ctx.schedules` (ScheduleStore trait) for persistence.
 
 use coco_messages::ToolResult;
@@ -20,23 +18,18 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-/// Maximum simultaneous cron jobs allowed by `CronCreate`. TS
-/// `ScheduleCronTool/CronCreateTool.ts:25` `MAX_JOBS = 50`. Enforced
-/// in `validate_input` so the model gets a clear error before the
+/// Maximum simultaneous cron jobs allowed by `CronCreate`. `MAX_JOBS = 50`.
+/// Enforced in `validate_input` so the model gets a clear error before the
 /// store rejects.
 const MAX_CRON_JOBS: usize = 50;
 
-/// Recurring jobs auto-expire after this many days. TS
-/// `cronTasks.ts:354` `recurringMaxAgeMs = 7 * 24 * 60 * 60 * 1000`
-/// → `DEFAULT_MAX_AGE_DAYS = 7` (`prompt.ts:8-9`). Surfaced in the
-/// model-visible confirmation so the model can warn the user.
+/// Recurring jobs auto-expire after this many days. `DEFAULT_MAX_AGE_DAYS = 7`.
+/// Surfaced in the model-visible confirmation so the model can warn the user.
 const DEFAULT_MAX_AGE_DAYS: u32 = 7;
 
-/// Lightweight 5-field cron expression validator. TS uses
-/// `parseCronExpression()` from `utils/cron.ts` for full RFC parsing
-/// + next-run scheduling; coco-rs accepts the same syntax minus
-///   extension features (no L/W/# qualifiers) and rejects obviously
-///   malformed inputs at the tool boundary.
+/// Lightweight 5-field cron expression validator. Accepts standard cron
+/// syntax minus extension features (no L/W/# qualifiers) and rejects
+/// obviously malformed inputs at the tool boundary.
 ///
 /// Returns `true` if the expression is well-formed (5 fields, each
 /// matching the simple grammar). Returns `false` for any structural
@@ -49,14 +42,12 @@ const DEFAULT_MAX_AGE_DAYS: u32 = 7;
 ///   - `A-B` (range)
 ///   - `A,B,C` (list — each element follows the same rules above)
 ///
-/// TS `parseCronExpression` is more permissive (named days, step
-/// inside ranges, etc.) but the bulk of model traffic uses the
-/// simple form. We err on the side of accepting valid inputs and
-/// only catching obvious typos like `*/5/*/*` or 4-field expressions.
+/// Errs on the side of accepting valid inputs and only catching obvious
+/// typos like `*/5/*/*` or 4-field expressions.
 fn is_valid_cron_expression(expr: &str) -> bool {
-    // Faithful, range-aware parse via the shared `coco-cron` crate (TS
-    // `utils/cron.ts`). Stricter than the prior local validator — it also
-    // rejects out-of-range values (e.g. `60 * * * *`).
+    // Faithful, range-aware parse via the shared `coco-cron` crate.
+    // Stricter than the prior local validator — it also rejects
+    // out-of-range values (e.g. `60 * * * *`).
     coco_cron::is_valid_cron_expression(expr)
 }
 
@@ -76,12 +67,11 @@ pub struct CronCreateInput {
     /// DoW" (e.g. "*/5 * * * *" = every 5 minutes, "30 14 28 2 *" =
     /// Feb 28 at 2:30pm local once).
     ///
-    /// TS `CronCreateTool.ts:29-33` `z.string()` with no `.optional()`
-    /// / `.default()` — REQUIRED, no `default:""`.
+    /// REQUIRED — no `default:""`.
     pub cron: String,
     /// The prompt to enqueue at each fire time.
     ///
-    /// TS `CronCreateTool.ts:34` `z.string()` — REQUIRED.
+    /// REQUIRED.
     pub prompt: String,
     /// true (default) = fire on every cron match until deleted or
     /// auto-expired after 7 days. false = fire once at the next match,
@@ -107,7 +97,7 @@ pub struct CronCreateOutput {
     pub id: String,
     /// Human-readable cron schedule (currently echoes back the cron
     /// expression). Field name preserved as `humanSchedule` for
-    /// TS-parity (`CronCreateTool.ts`).
+    /// wire compatibility.
     #[serde(rename = "humanSchedule")]
     pub human_schedule: String,
     pub recurring: bool,
@@ -133,15 +123,13 @@ impl Tool for CronCreateTool {
     fn name(&self) -> &str {
         ToolName::CronCreate.as_str()
     }
-    /// TS `CronCreateTool.ts:67-69` `isEnabled() { return isKairosCronEnabled() }`.
     /// Hidden from the model unless the cron feature is on — without a real
     /// [`ScheduleStore`](coco_tool_runtime::ScheduleStore) the tool only
     /// fails, so advertising it would waste model turns.
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
-    /// TS `prompt.ts:68-72 buildCronCreateDescription` (durable branch —
-    /// coco-rs always exposes the durable path via `.coco/scheduled_tasks.json`).
+    /// Always exposes the durable path via `.coco/scheduled_tasks.json`.
     fn description(&self, _input: &CronCreateInput, _options: &DescriptionOptions) -> String {
         "Schedule a prompt to run at a future time — either recurring on a cron schedule, or once at a specific time. Pass durable: true to persist to .coco/scheduled_tasks.json; otherwise session-only.".into()
     }
@@ -152,8 +140,7 @@ impl Tool for CronCreateTool {
         Some("schedule a recurring or one-shot prompt")
     }
 
-    /// Full model-facing description. TS `prompt.ts:74-121
-    /// buildCronCreatePrompt` (durable branch). Engine builds the tool
+    /// Full model-facing description. Engine builds the tool
     /// def from `prompt()`, not `description()` (`engine_prompt.rs`), so
     /// this is what the model actually reads.
     async fn prompt(&self, _options: &PromptOptions) -> String {
@@ -197,14 +184,12 @@ Returns a job ID you can pass to CronDelete."
         )
     }
 
-    /// Render the create envelope as a single-line confirmation. TS
-    /// parity: `CronCreateTool.ts:143-154 mapToolResultToToolResultBlockParam`.
+    /// Render the create envelope as a single-line confirmation.
     fn render_for_model(&self, out: &CronCreateOutput) -> Vec<ToolResultContentPart> {
         let id = &out.id;
         let schedule = &out.human_schedule;
-        // TS `CronCreateTool.ts` mapToolResultToToolResultBlockParam. The
-        // scheduler (coco_cli::cron_tick) fires the prompt on schedule in the
-        // interactive session; durable=true also persists to
+        // The scheduler (coco_cli::cron_tick) fires the prompt on schedule in
+        // the interactive session; durable=true also persists to
         // .coco/scheduled_tasks.json so a later session picks it up.
         let where_str = if out.durable {
             "persisted to .coco/scheduled_tasks.json"
@@ -226,11 +211,10 @@ Returns a job ID you can pass to CronDelete."
         }]
     }
 
-    /// TS `CronCreateTool.ts:82-103` `validateInput`: pre-flight checks for
-    /// cron syntax, next-run reachability within the next year, and the global
-    /// MAX_JOBS cap. Syntax + reachability use the shared `coco-cron` parser
-    /// (`parse_cron_expression` / `next_cron_run_ms`); the MAX_JOBS check runs
-    /// in `execute` against the schedule store.
+    /// Pre-flight checks for cron syntax, next-run reachability within the
+    /// next year, and the global MAX_JOBS cap. Syntax + reachability use the
+    /// shared `coco-cron` parser (`parse_cron_expression` / `next_cron_run_ms`);
+    /// the MAX_JOBS check runs in `execute` against the schedule store.
     fn validate_input(&self, input: &CronCreateInput, ctx: &ToolUseContext) -> ValidationResult {
         if input.cron.is_empty() {
             return ValidationResult::invalid("cron parameter is required");
@@ -244,9 +228,9 @@ Returns a job ID you can pass to CronDelete."
                 cron = input.cron
             ));
         }
-        // Next-run reachability (TS `CronCreateTool.ts` nextCronRunMs check,
-        // errorCode 2): reject syntactically-valid but never-firing expressions
-        // like `30 14 30 2 *` (Feb 30) before any side effect.
+        // Next-run reachability check (errorCode 2): reject syntactically-valid
+        // but never-firing expressions like `30 14 30 2 *` (Feb 30) before any
+        // side effect.
         if coco_cron::next_cron_run_ms(&input.cron, now_epoch_ms()).is_none() {
             return ValidationResult::invalid(format!(
                 "Cron expression '{cron}' has no scheduled run within the next year.",
@@ -255,8 +239,8 @@ Returns a job ID you can pass to CronDelete."
         }
         // Durable crons persist to disk; an in-process teammate's agent id does
         // not survive the session, so a durable cron created by one would orphan.
-        // TS `CronCreateTool.ts` gates on `getTeammateContext()` (the in-process
-        // teammate store), not on `agent_id` (regular subagents have that set).
+        // Gates on `is_in_process_teammate`, not on `agent_id` (regular subagents
+        // have that set).
         if input.durable && ctx.is_in_process_teammate {
             return ValidationResult::invalid(
                 "durable crons are not supported for teammates (teammates do not persist across sessions)",
@@ -270,13 +254,11 @@ Returns a job ID you can pass to CronDelete."
         input: CronCreateInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<CronCreateOutput>, ToolError> {
-        // R7-T22: enforce the global cron-job cap. TS
-        // `CronCreateTool.ts:97-103` rejects when there are >= 50
-        // active jobs; coco-rs queries the schedule store for the
-        // current count. The check happens in execute (not
-        // validate_input) because it's an async DB hit, and
-        // validate_input is sync. Failing here surfaces as a tool
-        // error to the model.
+        // R7-T22: enforce the global cron-job cap. Rejects when there are
+        // >= 50 active jobs; queries the schedule store for the current count.
+        // The check happens in execute (not validate_input) because it's an
+        // async store hit, and validate_input is sync. Failing here surfaces
+        // as a tool error to the model.
         if let Ok(existing) = ctx.schedules.list_all_cron_tasks().await
             && existing.len() >= MAX_CRON_JOBS
         {
@@ -289,9 +271,9 @@ Returns a job ID you can pass to CronDelete."
             });
         }
 
-        // Persist via the store (TS `addCronTask`): durable → disk
-        // (.coco/scheduled_tasks.json), else session-only. The scheduler tick
-        // (coco_cli::cron_tick) picks it up and fires the prompt.
+        // Persist via the store: durable → disk (.coco/scheduled_tasks.json),
+        // else session-only. The scheduler tick (coco_cli::cron_tick) picks it
+        // up and fires the prompt.
         match ctx
             .schedules
             .add_cron_task(
@@ -299,9 +281,8 @@ Returns a job ID you can pass to CronDelete."
                 &input.prompt,
                 input.recurring,
                 input.durable,
-                // TS passes `getTeammateContext()?.agentId`: only an in-process
-                // teammate stamps its agent id. A regular subagent's session-only
-                // cron must not persist a stale agent id.
+                // Only an in-process teammate stamps its agent id. A regular
+                // subagent's session-only cron must not persist a stale agent id.
                 if ctx.is_in_process_teammate {
                     ctx.agent_id.as_ref().map(coco_types::AgentId::as_str)
                 } else {
@@ -337,9 +318,8 @@ Returns a job ID you can pass to CronDelete."
 pub struct CronDeleteInput {
     /// Job ID returned by CronCreate.
     ///
-    /// TS `CronDeleteTool.ts:22` field is `id` (`z.string()`, REQUIRED).
-    /// Wire/schema key is `id`; the Rust field stays `schedule_id` to
-    /// avoid colliding with the `id()` tool-name method.
+    /// Wire/schema key is `id` (REQUIRED); the Rust field stays `schedule_id`
+    /// to avoid colliding with the `id()` tool-name method.
     #[serde(rename = "id")]
     pub schedule_id: String,
 }
@@ -376,11 +356,9 @@ impl Tool for CronDeleteTool {
     fn name(&self) -> &str {
         ToolName::CronDelete.as_str()
     }
-    /// TS `CronDeleteTool.ts` `isEnabled() { return isKairosCronEnabled() }`.
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
-    /// TS `prompt.ts:123 CRON_DELETE_DESCRIPTION`.
     fn description(&self, _input: &CronDeleteInput, _options: &DescriptionOptions) -> String {
         "Cancel a scheduled cron job by ID".into()
     }
@@ -391,13 +369,10 @@ impl Tool for CronDeleteTool {
         Some("cancel a scheduled cron job")
     }
 
-    /// Full model-facing description. TS `prompt.ts:124-128
-    /// buildCronDeletePrompt` (durable branch).
     async fn prompt(&self, _options: &PromptOptions) -> String {
         "Cancel a cron job previously scheduled with CronCreate. Removes it from .coco/scheduled_tasks.json (durable jobs) or the in-memory session store (session-only jobs).".into()
     }
 
-    /// TS `CronDeleteTool.ts:86-92 mapToolResultToToolResultBlockParam`.
     fn render_for_model(&self, out: &CronDeleteOutput) -> Vec<ToolResultContentPart> {
         vec![ToolResultContentPart::Text {
             text: format!("Cancelled job {id}.", id = out.id),
@@ -445,8 +420,7 @@ pub struct CronListInput {}
 
 /// One scheduled job entry in [`CronListOutput`].
 ///
-/// TS `CronListTool.ts:20-33` outputSchema:
-///   `{ id, cron, humanSchedule, prompt, recurring?, durable? }`
+/// Output schema: `{ id, cron, humanSchedule, prompt, recurring?, durable? }`
 ///
 /// All fields marked `#[serde(default)]` so partial test fixtures /
 /// transcript replay deserializes successfully into a struct the
@@ -457,14 +431,12 @@ pub struct CronListJob {
     pub id: String,
     #[serde(default)]
     pub cron: String,
-    /// Field-renamed to `humanSchedule` for TS parity
-    /// (`CronListTool.ts`).
+    /// Wire key is `humanSchedule` for compatibility.
     #[serde(default, rename = "humanSchedule")]
     pub human_schedule: String,
     #[serde(default)]
     pub prompt: String,
-    /// TS uses spread-conditional `(t.recurring ? { recurring: true }
-    /// : {})` — omit when not set. `Option<bool>` lets us distinguish
+    /// Omitted when not set. `Option<bool>` lets us distinguish
     /// "explicitly false" from "absent" on the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recurring: Option<bool>,
@@ -492,17 +464,13 @@ impl Tool for CronListTool {
     fn name(&self) -> &str {
         ToolName::CronList.as_str()
     }
-    /// TS `CronListTool.ts:48-50` `isEnabled() { return isKairosCronEnabled() }`.
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggers)
     }
-    /// TS `prompt.ts:130 CRON_LIST_DESCRIPTION`.
     fn description(&self, _input: &CronListInput, _options: &DescriptionOptions) -> String {
         "List scheduled cron jobs".into()
     }
 
-    /// Full model-facing description. TS `prompt.ts:131-135
-    /// buildCronListPrompt` (durable branch).
     async fn prompt(&self, _options: &PromptOptions) -> String {
         "List all cron jobs scheduled via CronCreate, both durable (.coco/scheduled_tasks.json) and session-only.".into()
     }
@@ -512,8 +480,7 @@ impl Tool for CronListTool {
     fn is_always_read_only(&self) -> bool {
         true
     }
-    /// TS `CronListTool.ts`: `isConcurrencySafe() { return true }`. Listing
-    /// schedules is a pure read of the schedule store. CronCreate/Delete
+    /// Listing schedules is a pure read of the schedule store. CronCreate/Delete
     /// stay non-safe because they mutate the store.
     fn is_concurrency_safe(&self, _input: &CronListInput) -> bool {
         true
@@ -567,8 +534,8 @@ impl Tool for CronListTool {
                     .map(|t| CronListJob {
                         id: t.id.clone(),
                         cron: t.cron.clone(),
-                        // Human-readable schedule via the shared cron crate
-                        // (TS `cronToHuman`); falls back to the raw cron string.
+                        // Human-readable schedule via the shared cron crate;
+                        // falls back to the raw cron string.
                         human_schedule: coco_cron::cron_to_human(&t.cron),
                         prompt: t.prompt.clone(),
                         recurring: t.recurring,
@@ -621,18 +588,16 @@ impl RemoteTriggerAction {
 pub struct RemoteTriggerInput {
     /// The action to perform on triggers.
     ///
-    /// TS `RemoteTriggerTool.ts:20` `z.enum([...])` with no `.optional()`
-    /// / `.default()` — REQUIRED, no default emitted.
+    /// REQUIRED — no default emitted.
     pub action: RemoteTriggerAction,
     /// Required for get, update, and run.
     ///
-    /// TS `RemoteTriggerTool.ts:21-25` `z.string().regex(/^[\w-]+$/).optional()`.
+    /// Optional string matching `^[\w-]+$`.
     #[serde(default)]
     #[schemars(regex(pattern = "^[\\w-]+$"))]
     pub trigger_id: Option<String>,
-    /// JSON body for create and update. TS `RemoteTriggerTool.ts:26-29`
-    /// `z.record(z.string(), z.unknown()).optional()` — constrained to an
-    /// object (string keys → arbitrary values), not arbitrary JSON.
+    /// JSON body for create and update. Constrained to an object
+    /// (string keys → arbitrary values), not arbitrary JSON.
     #[serde(default)]
     pub body: Option<serde_json::Map<String, Value>>,
 }
@@ -642,12 +607,9 @@ pub struct RemoteTriggerInput {
 ///
 /// Unlike the local `Cron*` tools (which fire a prompt into *this* session),
 /// `RemoteTrigger` manages and runs agents on Anthropic's **CCR (Claude Code
-/// Remote)** backend. TS `RemoteTriggerTool.ts` does authenticated HTTP
-/// (`list`/`get`/`create`/`update`/`run`) against
-/// `{BASE_API_URL}/v1/code/triggers` using **claude.ai OAuth tokens**
-/// (`getClaudeAIOAuthTokens` + `checkAndRefreshOAuthTokenIfNeeded`), the org
-/// UUID, and the `ccr-triggers-2026-01-30` beta; it is gated on
-/// `isPolicyAllowed('allow_remote_sessions')` + a GrowthBook flag.
+/// Remote)** backend via authenticated HTTP (`list`/`get`/`create`/`update`/`run`)
+/// against `{BASE_API_URL}/v1/code/triggers` using **claude.ai OAuth tokens**,
+/// the org UUID, and the `ccr-triggers-2026-01-30` beta.
 ///
 /// coco-rs does NOT port the transport: it requires claude.ai OAuth and
 /// Anthropic-internal endpoints, which are explicit non-goals for the
@@ -675,16 +637,13 @@ impl Tool for RemoteTriggerTool {
     fn name(&self) -> &str {
         ToolName::RemoteTrigger.as_str()
     }
-    /// TS `RemoteTriggerTool.ts:57-62` gates `isEnabled()` on a growthbook
-    /// flag + `isPolicyAllowed('allow_remote_sessions')`. coco-rs collapses
-    /// that to the [`Feature::AgentTriggersRemote`] capability gate. The live
+    /// Gated on [`Feature::AgentTriggersRemote`] (default OFF). The live
     /// transport (claude.ai OAuth + Anthropic-internal endpoints) is an
     /// explicit non-goal, so the feature stays off by default and the tool
     /// is hidden rather than registered-and-failing.
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(Feature::AgentTriggersRemote)
     }
-    /// TS `RemoteTriggerTool/prompt.ts:3-4 DESCRIPTION`.
     fn description(&self, _input: &RemoteTriggerInput, _options: &DescriptionOptions) -> String {
         "Manage scheduled remote Claude Code agents (triggers) via the claude.ai CCR API. Auth is handled in-process — the token never reaches the shell.".into()
     }
@@ -692,7 +651,7 @@ impl Tool for RemoteTriggerTool {
         Some("manage scheduled remote agent triggers")
     }
 
-    /// Full model-facing description. TS `RemoteTriggerTool/prompt.ts:6-15 PROMPT`.
+    /// Full model-facing description.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         "Call the claude.ai remote-trigger API. Use this instead of curl — the OAuth token is added automatically in-process and never exposed.\n\
 \n\

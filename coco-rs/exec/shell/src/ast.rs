@@ -1,7 +1,5 @@
 //! Bash AST types and parser with proper tokenization.
 //!
-//! TS: utils/bash/ast.ts (2679 LOC) + bashParser.ts (4436 LOC)
-//!
 //! Represents a simplified bash command AST for security analysis.
 //! Uses the tokenizer for proper quote/escape handling.
 

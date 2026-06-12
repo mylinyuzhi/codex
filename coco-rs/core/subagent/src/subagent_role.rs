@@ -9,11 +9,9 @@
 //!    - `GeneralPurpose` / `StatusLine` / `CocoGuide` → `ModelRole::Subagent`
 //! 3. Custom agent (no built-in mapping) → `ModelRole::Subagent`
 //!
-//! No TS counterpart — TS historically used model alias strings directly
-//! without a role indirection. coco-rs adds role routing so
-//! `~/.coco/config.json` can map a role to whichever (provider, model)
-//! is currently best, and `.md` agents declare a role rather than a
-//! concrete model.
+//! coco-rs adds role routing so `~/.coco/config.json` can map a role to
+//! whichever (provider, model) is currently best, and `.md` agents declare
+//! a role rather than a concrete model.
 //!
 //! This module has no dependencies beyond `coco_types` and is safe to
 //! call from any layer. The companion `spawn_resolution` module in the

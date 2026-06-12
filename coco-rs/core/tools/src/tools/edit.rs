@@ -15,14 +15,11 @@ use std::path::Path;
 
 /// Long-form tool description shown to the model.
 ///
-/// TS: `tools/FileEditTool/prompt.ts:8-28` `getEditToolDescription()`
-/// → `getDefaultEditDescription()`. Byte-identical port. The line
-/// number prefix format reference defaults to "line number + tab"
-/// (TS `isCompactLinePrefixEnabled() = true`), which matches the
-/// `cat -n` style produced by the Rust Read tool.
+/// The line number prefix format defaults to "line number + tab",
+/// matching the `cat -n` style produced by the Rust Read tool.
 ///
-/// The `minimalUniquenessHint` (TS-only USER_TYPE='ant' branch) is
-/// omitted — coco-rs has no equivalent of TS's per-user feature flag.
+/// The `minimalUniquenessHint` ant-only branch is omitted — coco-rs
+/// has no per-user feature flag equivalent.
 const EDIT_TOOL_DESCRIPTION: &str = "Performs exact string replacements in files.
 
 Usage:
@@ -47,10 +44,9 @@ pub struct EditInput {
     pub replace_all: bool,
 }
 
-/// Typed output for [`EditTool`]. Field names preserve TS camelCase
-/// wire format (`FileEditTool.ts:567-568`); `userModified` is always
-/// `false` in coco-rs since there's no TUI accept-with-edits overlay
-/// equivalent of the TS feature.
+/// Typed output for [`EditTool`]. Field names are camelCase for JSON
+/// wire format. `userModified` is always `false` in coco-rs — there is
+/// no TUI accept-with-edits overlay.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EditOutput {
     #[serde(default, rename = "filePath")]
@@ -85,16 +81,13 @@ impl Tool for EditTool {
         ToolName::Edit.as_str()
     }
 
-    /// Short per-call UI label. TS `FileEditTool.ts:91-93`
-    /// `async description()` → `'A tool for editing files'`.
+    /// Short per-call UI label.
     fn description(&self, _input: &EditInput, _options: &DescriptionOptions) -> String {
         "A tool for editing files".into()
     }
 
-    /// Model-facing tool description (schema-listing time). TS
-    /// `FileEditTool.ts:94-96` `async prompt()` →
-    /// `getEditToolDescription()`; we hold the ported text in
-    /// [`EDIT_TOOL_DESCRIPTION`].
+    /// Model-facing tool description (schema-listing time).
+    /// Text is held in [`EDIT_TOOL_DESCRIPTION`].
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         EDIT_TOOL_DESCRIPTION.into()
     }
@@ -115,7 +108,7 @@ impl Tool for EditTool {
         if input.file_path.is_empty() {
             return ValidationResult::invalid("missing required field: file_path");
         }
-        // #26 / TS `FileEditTool.ts:266-273`: route notebooks to
+        // #26: route notebooks to
         // NotebookEdit (editing `.ipynb` JSON with Edit corrupts it).
         if input.file_path.to_lowercase().ends_with(".ipynb") {
             return ValidationResult::invalid_with_code(
@@ -145,10 +138,9 @@ impl Tool for EditTool {
         )
     }
 
-    /// Branch on `replace_all` to emit the TS-shaped confirmation. TS
-    /// parity: `FileEditTool.ts:575-595::mapToolResultToToolResultBlockParam`.
+    /// Branch on `replace_all` to emit the confirmation text.
     /// `user_modified` is always false in coco-rs (no TUI accept-with-edits
-    /// overlay) — the corresponding modifiedNote branch never fires.
+    /// overlay) — the modifiedNote branch never fires.
     fn render_for_model(&self, out: &EditOutput) -> Vec<ToolResultContentPart> {
         let file_path = out.file_path.as_str();
         let text = if out.replace_all {
@@ -180,7 +172,7 @@ impl Tool for EditTool {
         // so SDK consumers can intercept via the approval bridge.
         super::sandbox_preflight::preflight_path(ctx, path, /*write=*/ true).await?;
 
-        // #21 / TS `FileEditTool.ts:223-227`: an empty `old_string` on a
+        // #21: an empty `old_string` on a
         // nonexistent file is new-file creation — write `new_string` as
         // the whole file (creating parent dirs). The read-before-edit and
         // match logic below all assume an existing file, so this path
@@ -241,7 +233,7 @@ impl Tool for EditTool {
         }
 
         // Reject edits when the file changed externally since the cached
-        // Read. TS `FileEditTool.ts` — two-layer check:
+        // Read. Two-layer check:
         //   Layer 1: compare stored mtime to current disk mtime.
         //   Layer 2: for full-view reads, if mtime matches, compare stored
         //            content to current disk content as a fallback (mtime
@@ -258,7 +250,7 @@ impl Tool for EditTool {
                 let frs_read = frs.read().await;
                 frs_read.peek(&abs_path).cloned()
             };
-            // Read-before-edit guard (TS FileEditTool.ts:275-287, errorCode 6).
+            // Read-before-edit guard (errorCode 6).
             // `canonicalize` succeeded, so the file exists on disk — but it was
             // never read this session. Mirror Write/NotebookEdit and reject:
             // editing an unseen file is the data-loss class this guards against.
@@ -272,8 +264,7 @@ impl Tool for EditTool {
                 });
             };
 
-            // TS also rejects PARTIAL-view reads (FileEditTool.ts:275,
-            // `readTimestamp.isPartialView`): a Read with offset/limit only
+            // Also reject partial-view reads: a Read with offset/limit only
             // cached a slice, so the full file can't be validated against the
             // edit. Force a full Read first — same data-loss guard as the
             // never-read case above.
@@ -323,7 +314,7 @@ impl Tool for EditTool {
             }
         }
 
-        // Team-memory secret guard. TS `FileEditTool.ts` reuses the
+        // Team-memory secret guard. Reuses the
         // same `checkTeamMemSecrets` invariant as FileWriteTool — an
         // edit that introduces a secret to a synced team-memory path
         // is rejected before the new content hits disk. We check the
@@ -332,7 +323,6 @@ impl Tool for EditTool {
         // replacement string rather than the existing file.
 
         // Track file edit for checkpoint/rewind before modifying.
-        // TS: FileEditTool.ts line 435
         crate::track_file_edit(ctx, path).await;
 
         let content =
@@ -344,9 +334,8 @@ impl Tool for EditTool {
 
         // T2: Input normalization BEFORE matching.
         //
-        // TS `FileEditTool/utils.ts:581-657` `normalizeFileEditInput`
-        // runs two transformations on the (old_string, new_string) pair
-        // before the Edit tool's matching logic even sees them:
+        // Two transformations on (old_string, new_string) before the
+        // matching logic sees them:
         //
         //   1. Strip trailing whitespace from new_string (unless the
         //      file is Markdown, which uses trailing spaces as hard
@@ -355,15 +344,8 @@ impl Tool for EditTool {
         //      (e.g. `<fnr>` → `<function_results>`) — see
         //      `desanitization_map` in edit_utils.rs.
         //
-        // Normalize (old_string, new_string) before matching — TS
-        // `FileEditTool/utils.ts` runs two transforms first:
-        //   1. Strip trailing whitespace from new_string (except on
-        //      Markdown, where trailing spaces are hard line breaks).
-        //   2. Desanitize over-escaped model output (e.g. `<fnr>` →
-        //      `<function_results>`) via `desanitization_map` in
-        //      edit_utils.rs.
         // Without these, edits from models that over-escape JSON would
-        // fail literal matching here where TS succeeds.
+        // fail literal matching.
         let (normalized_old, normalized_new) = crate::tools::edit_utils::normalize_file_edit_input(
             file_path, &content, old_string, new_string,
         );
@@ -381,16 +363,15 @@ impl Tool for EditTool {
             }
             crate::tools::edit_utils::apply_edit_to_file(&content, old_string, new_string, true)
         } else if count == 0 {
-            // Matching fallback order (TS-aligned + coco-rs extension):
-            //   1. Quote-normalized match — TS `findActualString()` at
-            //      `FileEditTool/utils.ts:73-93`. Handles the common case
+            // Matching fallback order (coco-rs extension):
+            //   1. Quote-normalized match — handles the common case
             //      where the file uses curly quotes (""'') but the model
             //      emitted straight quotes ("'). When the match hits via
             //      quote normalization, `preserve_quote_style` re-applies
             //      the file's curly style to `new_string` so the round-trip
             //      doesn't silently downgrade.
             //   2. Whitespace-normalized match — coco-rs extension from
-            //      cocode-rs. Not in TS but useful for Python/YAML where
+            //      cocode-rs. Not in upstream but useful for Python/YAML where
             //      the model may emit slightly different indentation.
             //      Preserved because it's backwards-compatible with
             //      existing tests.
@@ -452,20 +433,17 @@ impl Tool for EditTool {
         })?;
 
         crate::record_file_edit(ctx, path, new_content).await;
-        // TS `FileEditTool.ts` mirrors `FileReadTool.ts:578-591` skill
-        // auto-discovery + conditional-skill activation — when an
-        // edit touches a path under a nested `.coco/skills/`
-        // ancestor or matches a `paths`-gated skill, the next batch
-        // boundary picks both up.
+        // Skill auto-discovery + conditional-skill activation — when an
+        // edit touches a path under a nested `.coco/skills/` ancestor or
+        // matches a `paths`-gated skill, the next batch boundary picks
+        // both up.
         crate::track_skill_triggers(ctx, path).await;
-        // TS `FileEditTool.ts` notifies the LSP server of the save so
-        // diagnostics refresh after every edit. Best-effort.
+        // Notify the LSP server of the save so diagnostics refresh after
+        // every edit. Best-effort.
         ctx.lsp.notify_save(path).await;
 
-        // TS `FileEditTool.ts:567-568` returns `{filePath, replaceAll, userModified}`
-        // and render_for_model branches on those flags. coco-rs doesn't
-        // currently track `userModified` (that's a TUI overlay state for
-        // a feature we don't have); always emit it as false.
+        // `render_for_model` branches on {filePath, replaceAll, userModified}.
+        // `userModified` is always false — no TUI accept-with-edits overlay.
         Ok(ToolResult {
             data: EditOutput {
                 file_path: file_path.to_string(),
@@ -483,7 +461,6 @@ impl Tool for EditTool {
 
 /// Try to find a fuzzy match for old_string in content.
 ///
-/// TS: findActualString() — tries whitespace-normalized matching.
 /// Strategy:
 /// 1. Normalize both strings (collapse whitespace) and search
 /// 2. Try trimming leading/trailing whitespace from each line

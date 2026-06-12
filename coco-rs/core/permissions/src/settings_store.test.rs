@@ -157,7 +157,7 @@ fn test_show_always_allow_options_default_true() {
 
 #[test]
 fn test_persist_add_directories_appends_without_duplicates() {
-    // TS `PermissionUpdate.ts:244-265`: append new dirs, drop existing.
+    // Append new dirs, drop existing.
     let (dir, settings_path) =
         setup_temp_settings(r#"{ "permissions": { "additionalDirectories": ["/already"] } }"#);
     let store = SettingsPermissionStore::new(dir.path());
@@ -180,8 +180,7 @@ fn test_persist_add_directories_appends_without_duplicates() {
 
 #[test]
 fn test_persist_remove_directories_filters_array() {
-    // TS `PermissionUpdate.ts:296-313`: filter out matching dirs from
-    // the existing additionalDirectories array.
+    // Filter out matching dirs from the existing additionalDirectories array.
     let (dir, settings_path) = setup_temp_settings(
         r#"{ "permissions": { "additionalDirectories": ["/a", "/b", "/c"] } }"#,
     );
@@ -204,8 +203,7 @@ fn test_persist_remove_directories_filters_array() {
 
 #[test]
 fn test_persist_replace_rules_overwrites_array_wholesale() {
-    // TS `PermissionUpdate.ts:329-340`: writes the rule list
-    // wholesale, replacing whatever was there for that behavior.
+    // Writes the rule list wholesale, replacing whatever was there for that behavior.
     let (dir, settings_path) =
         setup_temp_settings(r#"{ "permissions": { "allow": ["Read", "Write"] } }"#);
     let store = SettingsPermissionStore::new(dir.path());
@@ -234,10 +232,10 @@ fn test_persist_replace_rules_overwrites_array_wholesale() {
 
 #[test]
 fn test_persist_replace_rules_empty_is_noop() {
-    // coco-rs `PermissionUpdate::ReplaceRules` lacks the explicit
-    // `behavior` field TS carries, so an empty rules vec can't safely
-    // target a specific behavior list. Documented as a no-op rather
-    // than a guess (could otherwise silently clear the wrong list).
+    // `PermissionUpdate::ReplaceRules` lacks an explicit `behavior` field,
+    // so an empty rules vec can't safely target a specific behavior list.
+    // Documented as a no-op rather than a guess (could otherwise silently
+    // clear the wrong list).
     let (dir, settings_path) =
         setup_temp_settings(r#"{ "permissions": { "allow": ["Read"], "deny": ["Bash"] } }"#);
     let store = SettingsPermissionStore::new(dir.path());

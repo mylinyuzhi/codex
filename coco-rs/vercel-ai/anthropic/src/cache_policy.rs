@@ -1,7 +1,6 @@
 //! Cache policy: 1h-TTL eligibility latch + per-call allowlist match.
 //!
-//! Mirrors TS `should1hCacheTTL` (`promptCacheConfig.ts`). Two distinct
-//! latches:
+//! Two distinct latches:
 //!
 //! - **Eligibility (`OnceLock<bool>`):** session-stable. ApiKey accounts
 //!   are always eligible; subscriber accounts are eligible only when

@@ -1,8 +1,5 @@
 //! Dangerous rule stripping for auto-mode.
 //!
-//! TS: permissionSetup.ts — `stripDangerousPermissionsForAutoMode()` and
-//!     `restoreDangerousPermissions()`
-//!
 //! When entering auto-mode, certain user-configured allow rules that could
 //! bypass the classifier's safety checks are temporarily removed and stashed.
 //! They are restored when exiting auto-mode.
@@ -20,9 +17,7 @@ use crate::setup::is_dangerous_powershell_permission;
 /// `allow_rules` map (python:*, node:*, eval, ssh, curl, git, sudo, any Agent,
 /// …). Dangerous rules from non-restorable sources (Flag/Policy/Command) are
 /// still REMOVED (so they cannot bypass the classifier) but are NOT returned
-/// for stashing — they are never restored. Mirrors TS
-/// `stripDangerousPermissionsForAutoMode` + `removeDangerousPermissions`
-/// (permissionSetup.ts:481-553).
+/// for stashing — they are never restored.
 ///
 /// Returns `None` when nothing was stripped (caller leaves the stash untouched).
 pub fn strip_dangerous_allow_rules(
@@ -55,7 +50,7 @@ pub fn strip_dangerous_allow_rules(
         *rules = safe;
         // Only stash rules from restorable sources. Policy/flag/command rules
         // are removed but NOT restored on exit (restoring them would bypass
-        // enterprise controls). TS: isPermissionUpdateDestination().
+        // enterprise controls).
         if !dangerous.is_empty() && is_restorable_source(*source) {
             stripped.entry(*source).or_default().extend(dangerous);
         }
@@ -70,8 +65,6 @@ pub fn strip_dangerous_allow_rules(
 
 /// Strip dangerous classifier-bypassing rules from the permission context,
 /// stashing the removed (restorable) rules in `stripped_dangerous_rules`.
-///
-/// TS: `stripDangerousPermissionsForAutoMode(context)`
 pub fn strip_dangerous_rules(context: &mut ToolPermissionContext, is_ant_user: bool) {
     if let Some(stripped) = strip_dangerous_allow_rules(&mut context.allow_rules, is_ant_user) {
         context.stripped_dangerous_rules = Some(stripped);
@@ -82,8 +75,6 @@ pub fn strip_dangerous_rules(context: &mut ToolPermissionContext, is_ant_user: b
 ///
 /// Moves rules from `stripped_dangerous_rules` back into `allow_rules`.
 /// Clears the stash after restoration.
-///
-/// TS: `restoreDangerousPermissions(context)`
 pub fn restore_dangerous_rules(context: &mut ToolPermissionContext) {
     if let Some(stripped) = context.stripped_dangerous_rules.take() {
         for (source, rules) in stripped {
@@ -93,8 +84,6 @@ pub fn restore_dangerous_rules(context: &mut ToolPermissionContext) {
 }
 
 /// Any Agent allow rule bypasses the classifier's sub-agent evaluation.
-///
-/// TS: `isDangerousTaskPermission()` — returns true if tool is Agent.
 fn is_dangerous_agent_permission(tool_name: &str) -> bool {
     tool_name == ToolName::Agent.as_str()
 }
@@ -103,8 +92,6 @@ fn is_dangerous_agent_permission(tool_name: &str) -> bool {
 ///
 /// Policy/flag/command rules are removed but not stashed for restoration,
 /// since restoring them would bypass enterprise controls.
-///
-/// TS: `isPermissionUpdateDestination()` — filters to user/project/local/session/cliArg.
 fn is_restorable_source(source: PermissionRuleSource) -> bool {
     matches!(
         source,

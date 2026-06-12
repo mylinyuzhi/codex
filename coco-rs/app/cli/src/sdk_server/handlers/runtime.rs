@@ -46,18 +46,15 @@ pub(super) async fn handle_set_model(
 
 /// `control/setPermissionMode` — mutate the session's permission mode.
 ///
-/// TS parity: `cyclePermissionMode` → `setAppState(prev => ({ ...prev,
-/// toolPermissionContext: { ...preparedContext, mode: nextMode } }))`
-/// (`PromptInput.tsx:1537-1547`). Writes:
+/// Writes:
 /// 1. [`SessionHandle::permission_mode`] — session-scoped override read
 ///    by `sdk_runner::run_turn` as a fallback when the turn params
 ///    don't carry an explicit mode.
 /// 2. [`SessionHandle::app_state`] `permission_mode` — the engine's
 ///    live mode source of truth. Updating it mid-session propagates
-///    to any in-flight engine's next `create_tool_context` read,
-///    mirroring TS's `getAppState()` live-read semantics. Without
-///    this write, mid-session toggles are invisible to the plan-mode
-///    reminder + permission evaluator.
+///    to any in-flight engine's next `create_tool_context` read.
+///    Without this write, mid-session toggles are invisible to the
+///    plan-mode reminder + permission evaluator.
 /// 3. Applies the same plan/auto transition side effects as the TUI
 ///    path: entering Plan stashes `pre_plan_mode` and stamps
 ///    `plan_mode_entry_ms`; leaving Plan schedules the one-shot exit
@@ -66,11 +63,11 @@ pub(super) async fn handle_set_permission_mode(
     params: coco_types::SetPermissionModeParams,
     ctx: &HandlerContext,
 ) -> HandlerResult {
-    // Mid-session bypass guard — TS parity: cli/print.ts:4588-4600.
-    // Reject any attempt to escalate into `BypassPermissions` when the
-    // session was not launched with one of the authorization flags.
-    // Catches accidental SDK clients and closes the ungated-bypass
-    // surface exposed by the TUI plan-exit prompt before its fix.
+    // Mid-session bypass guard: reject any attempt to escalate into
+    // `BypassPermissions` when the session was not launched with one
+    // of the authorization flags. Catches accidental SDK clients and
+    // closes the ungated-bypass surface exposed by the TUI plan-exit
+    // prompt before its fix.
     if params.mode == coco_types::PermissionMode::BypassPermissions
         && !ctx
             .state
@@ -128,10 +125,9 @@ pub(super) async fn handle_set_permission_mode(
     drop(guard);
 
     // Broadcast the change to any attached client (TUI / SDK
-    // subscribers). TS parity: `notifyPermissionModeChanged` in
-    // `state/onChangeAppState.ts`. The `bypass_available` field is a
-    // snapshot of the (static) session capability — readers that rely
-    // on the gate stay consistent without needing a separate event.
+    // subscribers). The `bypass_available` field is a snapshot of the
+    // (static) session capability — readers that rely on the gate stay
+    // consistent without needing a separate event.
     let bypass_available = ctx
         .state
         .bypass_permissions_available
@@ -151,7 +147,7 @@ pub(super) async fn handle_set_permission_mode(
 /// `control/setThinking` — mutate the session's thinking level.
 ///
 /// `thinking_level = None` clears the override so turns fall back to
-/// the engine's default (matches TS `max_thinking_tokens: null`).
+/// the engine's default.
 pub(super) async fn handle_set_thinking(
     params: coco_types::SetThinkingParams,
     ctx: &HandlerContext,
@@ -253,9 +249,8 @@ pub(super) async fn handle_update_env(
 /// `agent/interruptCurrentWork` — abort one teammate's current turn
 /// without killing the teammate lifecycle.
 ///
-/// TS parity: Escape while viewing a teammate aborts
-/// `currentWorkAbortController`, whereas Ctrl+C still kills agents via
-/// the broader cancellation path.
+/// Escape while viewing a teammate aborts the current work controller,
+/// whereas Ctrl+C still kills agents via the broader cancellation path.
 pub(super) async fn handle_agent_interrupt_current_work(
     params: coco_types::AgentInterruptCurrentWorkParams,
     ctx: &HandlerContext,
@@ -328,8 +323,6 @@ pub(super) async fn handle_context_usage(ctx: &HandlerContext) -> HandlerResult 
 /// skills) → agent catalog → LSP servers → hooks, then report the live
 /// command/agent/plugin snapshots. When no `SessionRuntime` is wired (e.g.
 /// handler-level test harnesses), acks with an empty result.
-///
-/// TS reference: `refreshActivePlugins` / `SDKControlReloadPluginsResponseSchema`.
 pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult {
     let runtime_arc = {
         let slot = ctx.state.session_runtime.read().await;
@@ -397,8 +390,6 @@ pub(super) async fn handle_plugin_reload(ctx: &HandlerContext) -> HandlerResult 
 /// Currently logs the flags and acks. A follow-up could merge them into
 /// a runtime overrides map on `SdkServerState` so other handlers see
 /// the effective values.
-///
-/// TS reference: `SDKControlApplyFlagSettingsRequestSchema`.
 pub(super) async fn handle_config_apply_flags(
     params: coco_types::ConfigApplyFlagsParams,
     _ctx: &HandlerContext,

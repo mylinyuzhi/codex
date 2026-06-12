@@ -87,9 +87,8 @@ impl QueryEngine {
         )
     }
 
-    /// Terminal handler for an oversized image at the API boundary (TS
-    /// `validateImagesForAPI` throws). Mirrors `handle_blocking_limit_terminal`:
-    /// push a synthetic api_error assistant message, emit `TurnEnded(failed)`,
+    /// Terminal handler for an oversized image at the API boundary.
+    /// Push a synthetic api_error assistant message, emit `TurnEnded(failed)`,
     /// and end the turn without sending the request — the image can't be
     /// auto-shrunk here, so the user must resize and retry.
     #[allow(clippy::too_many_arguments)]

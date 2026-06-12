@@ -1,16 +1,16 @@
 //! Session-loop state, grouped by lifecycle.
 //!
-//! Mirrors TS `query.ts:204-217` `State` type, adapted to Rust:
-//! TS uses a single mutable `state` struct rewritten at every `continue`
-//! site. coco-rs splits it into four groups so helpers can take just the
-//! slice they need without grabbing the whole state by `&mut`:
+//! Adapted from the `query.ts` `State` type: a single mutable `state`
+//! struct rewritten at every `continue` site is split here into four
+//! groups so helpers can take just the slice they need without grabbing
+//! the whole state by `&mut`:
 //!
 //! - [`LoopAccumulator`] — cross-turn accumulators (usage / cost /
 //!   permission denials / artifacts). Read at terminal sites to build
 //!   [`crate::QueryResult`].
 //! - [`LoopTurnState`] — iteration state machine. Reset (or partially
 //!   reset) at `continue` sites; carries the `transition: Option<TurnTransition>`
-//!   that mirrors TS `state.transition`.
+//!   (the per-iteration transition reason).
 //! - [`LoopServices`] — long-lived owned objects (model runtime, progress
 //!   forwarder tx, plan-mode side-effect driver, system-reminder
 //!   orchestrator). Constructed once at session entry; not rebuilt at
@@ -46,11 +46,10 @@ use crate::engine_helpers::ProgressThrottle;
 use crate::engine_helpers::drain_one_progress;
 use crate::plan_mode_reminder::PlanModeReminder;
 
-/// Alias mirroring TS `Continue` type-union. The Rust enum carrying these
+/// Alias for the iteration-transition signal. The Rust enum carrying these
 /// variants is [`crate::config::ContinueReason`] — defined there so the
 /// public [`crate::QueryResult::last_continue_reason`] field type stays
-/// stable. New code referencing the iteration-transition signal should
-/// use this name to make the parity with TS `state.transition` explicit.
+/// stable. New code referencing this signal should use this name.
 pub(crate) type TurnTransition = ContinueReason;
 
 /// Cross-turn accumulators. Read once at every terminal site (clean
@@ -67,7 +66,7 @@ pub(crate) struct LoopAccumulator {
     pub(crate) cost_tracker: CostTracker,
     /// Every `PermissionDecision::Deny` outcome accumulates here and
     /// flushes into `SessionResultParams.permission_denials` at session
-    /// end. TS parity: `QueryEngine.ts:244-271` permissionDenials wrapper.
+    /// end.
     pub(crate) permission_denials: Vec<coco_types::PermissionDenialInfo>,
     /// Side-channel collectors filled at emission sites so finalize
     /// doesn't need to scan `history` (which mid-run compaction can
@@ -75,9 +74,8 @@ pub(crate) struct LoopAccumulator {
     pub(crate) run_artifacts: RunArtifacts,
 }
 
-/// Iteration state machine. Mirrors TS `State` (`query.ts:204-217`)
-/// modulo Rust-specific fields. Mutated at `continue` sites and at
-/// turn-start to record the per-iteration transition reason.
+/// Iteration state machine. Mutated at `continue` sites and at turn-start
+/// to record the per-iteration transition reason.
 ///
 /// Construct via [`Self::new`]; the `BudgetTracker` field requires
 /// config-derived arguments that no `Default` impl could supply.
@@ -93,21 +91,19 @@ pub(crate) struct LoopTurnState {
     /// Why the previous iteration `continue`d (or `None` on the first
     /// iteration / first error path). Surfaced in
     /// [`crate::QueryResult::last_continue_reason`] for SDK consumers
-    /// and test assertions. TS parity: `state.transition`.
+    /// and test assertions.
     pub(crate) transition: Option<TurnTransition>,
-    /// TS `stop_hook_active`: set to `true` once a Stop hook has
-    /// blocked the loop, so subsequent Stop firings can advertise the
-    /// re-entry to the hook.
+    /// Set to `true` once a Stop hook has blocked the loop, so
+    /// subsequent Stop firings can advertise the re-entry to the hook.
     pub(crate) stop_hook_active: bool,
     /// How many "inject resume nudge" recovery attempts have fired so
     /// far in this session. Capped at
     /// [`crate::config::MAX_OUTPUT_TOKENS_RECOVERY_LIMIT`].
     pub(crate) max_tokens_recovery_count: i32,
-    /// TS `input`-parameter parity: the UUID of the last user message
-    /// already handed to UserPrompt-tier reminders. Prevents duplicate
-    /// `at_mentioned_files` / `agent_mentions` / `ultrathink_effort`
-    /// emissions when the same human turn re-enters the loop on a
-    /// tool-result iteration.
+    /// UUID of the last user message already handed to UserPrompt-tier
+    /// reminders. Prevents duplicate `at_mentioned_files` /
+    /// `agent_mentions` / `ultrathink_effort` emissions when the same
+    /// human turn re-enters the loop on a tool-result iteration.
     pub(crate) reminder_last_user_input_uuid: Option<uuid::Uuid>,
     /// Token / turn / continuation budget gate.
     pub(crate) budget: BudgetTracker,
@@ -230,7 +226,7 @@ pub(crate) struct LoopConstants {
     /// dir). `None` when no `config_home` is wired (test paths).
     pub(crate) plans_dir: Option<PathBuf>,
     /// Todo-list lookup key: `agent_id` when this engine is a
-    /// subagent, otherwise `session_id`. TS parity: `agentId ?? sessionId`.
+    /// subagent, otherwise `session_id`.
     pub(crate) todo_key: String,
     /// Model context window in tokens (raw `ModelInfo.context_window`).
     pub(crate) context_window: i64,
@@ -306,8 +302,7 @@ impl QueryEngine {
 
         // Permission denials accumulate into `acc.permission_denials`
         // on each `PermissionDecision::Deny` branch and flush into
-        // `SessionResultParams.permission_denials` via `make_query_result`
-        // (TS parity: `QueryEngine.permissionDenials`, QueryEngine.ts:244-271).
+        // `SessionResultParams.permission_denials` via `make_query_result`.
         // Run-local artifacts captured at emission sites avoid scanning
         // `history` at finalize time — mid-run compaction replaces the
         // history Vec, so any index captured before then becomes stale.
@@ -337,11 +332,10 @@ impl QueryEngine {
         //      the TUI to render progress bars or byte counts.
         //
         //   2. `ServerNotification::ToolProgress(ToolProgressParams)` —
-        //      TS-parity wire event. Only emitted for
-        //      `bash_progress` / `powershell_progress` payload types
-        //      and throttled to ≤1 per 30 s per `parent_tool_use_id`
-        //      (or `tool_use_id` if the parent is absent), matching
-        //      `utils/queryHelpers.ts:99-189`.
+        //      wire event. Only emitted for `bash_progress` /
+        //      `powershell_progress` payload types and throttled to ≤1
+        //      per 30 s per `parent_tool_use_id` (or `tool_use_id` if
+        //      the parent is absent).
         //
         // Lifecycle: the tx is cloned into every `ToolUseContext`
         // built for this session. When the session loop exits, the
@@ -449,8 +443,6 @@ impl QueryEngine {
         // out before its first turn.
 
         // Create file history snapshot for this user message.
-        // TS: fileHistoryMakeSnapshot() in handlePromptSubmit.ts +
-        // QueryEngine.ts
         if let (Some(fh), Some(ch)) = (&self.file_history, &self.config_home) {
             let mut fh = fh.write().await;
             if let Err(e) = fh

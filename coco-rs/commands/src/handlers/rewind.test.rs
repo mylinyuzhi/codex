@@ -10,7 +10,7 @@ fn expect_message_selector(result: CommandResult) {
 
 #[tokio::test]
 async fn rewind_bare_opens_message_selector_without_preselect() {
-    // TS-aligned: bare `/rewind` ⇒ open picker on MessageSelect phase.
+    // bare `/rewind` ⇒ open picker on MessageSelect phase.
     // Mirrors `commands/rewind/rewind.ts:1-13`'s `_args`-unused handler
     // calling `context.openMessageSelector()`.
     let h = RewindHandler;

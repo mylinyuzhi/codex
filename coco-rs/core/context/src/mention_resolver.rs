@@ -1,8 +1,8 @@
 //! Mention → Attachment resolution with FileReadState deduplication.
 //!
-//! TS: `processAtMentionedFiles()` in attachments.ts (line 1894) — resolves
-//! @-mentioned files into Attachment objects, checking `readFileState` for
-//! dedup (returns `AlreadyReadFileAttachment` if unchanged).
+//! Resolves @-mentioned files into Attachment objects, checking
+//! `readFileState` for dedup (returns `AlreadyReadFileAttachment` if
+//! unchanged).
 
 use std::path::Path;
 
@@ -66,7 +66,6 @@ pub async fn resolve_mentions(
                 // caller has the client handle it can post-process this
                 // mention; here we just preserve the parse result so the
                 // caller can iterate `mentions` separately when needed.
-                // TS: `processAtMentionedFiles` calls a separate MCP path.
             }
             MentionType::Url | MentionType::Symbol => {
                 // URL and symbol mentions not resolved to attachments yet.
@@ -118,7 +117,6 @@ async fn resolve_file_mention(
 
     // Dedup check: if file is in FileReadState and mtime hasn't changed,
     // return AlreadyReadFileAttachment.
-    // TS: generateFileAttachment() line 3077-3115
     if let Some(entry) = file_read_state.peek(&key_path)
         && let Ok(disk_mtime) = file_mtime_ms(&key_path).await
         && entry.mtime_ms == disk_mtime

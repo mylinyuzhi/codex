@@ -2,9 +2,9 @@
 
 OpenAI provider for Vercel AI SDK v4. Covers Chat Completions, Responses, Completions, Embeddings, Images, Speech, Transcription APIs.
 
-## TS Source
+## SDK Spec
 
-Ports `@ai-sdk/openai` v4 (not from `claude-code/src/`).
+Implements the `@ai-sdk/openai` v4 specification.
 
 ## Key Types
 

@@ -200,9 +200,9 @@ pub fn build_runtime_config_for_cli(cli: &Cli, cwd: &Path) -> Result<coco_config
 /// Build a `RuntimeConfig` with a live `RuntimeReloader` so settings.json edits
 /// hot-reload (sandbox, …) on the SDK / headless paths too — not just the TUI.
 /// Falls back to a one-shot static build when the reloader can't spawn (e.g.
-/// outside a Tokio runtime). Mirrors `run_tui`'s reloader bootstrap. Callers
-/// must keep the returned reloader alive for the session and attach
-/// `sandbox_reload::spawn_sandbox_reload` after `SessionRuntime::build`.
+/// outside a Tokio runtime). Callers must keep the returned reloader alive for
+/// the session and attach `sandbox_reload::spawn_sandbox_reload` after
+/// `SessionRuntime::build`.
 pub fn build_runtime_config_with_reloader(
     cli: &Cli,
     cwd: &Path,
@@ -299,16 +299,16 @@ pub fn build_output_style_manager(
 // ─── System prompt assembly ──────────────────────────────────────────
 
 /// Convert a resolved [`OutputStyleConfig`] into the borrowed view the
-/// `coco-context` prompt builder accepts. Built-in styles set
-/// `keep_coding_instructions: Some(true)`; unset custom/plugin styles
-/// default to `false`, matching TS's strict
-/// `keepCodingInstructions === true` gate.
+/// `coco-context` prompt builder accepts.
 fn output_style_section(
     style: &coco_output_styles::OutputStyleConfig,
 ) -> coco_context::prompt::OutputStyleSection<'_> {
     coco_context::prompt::OutputStyleSection {
         name: &style.name,
         prompt: &style.prompt,
+        // Built-in styles set keep_coding_instructions: Some(true);
+        // unset custom/plugin styles default to false, matching the strict
+        // `keepCodingInstructions === true` gate.
         keep_coding_instructions: style.keep_coding_instructions.unwrap_or(false),
     }
 }
@@ -353,8 +353,8 @@ pub fn build_system_prompt_for_model(
     let base_instructions = resolved
         .as_ref()
         .and_then(|model| model.info.base_instructions.as_deref());
-    // TS `context.ts`: suppress the git-status block under COCO_REMOTE or a
-    // disabled `include_git_instructions` setting (COCO_DISABLE_GIT_INSTRUCTIONS
+    // Suppress the git-status block under COCO_REMOTE or a disabled
+    // `include_git_instructions` setting (COCO_DISABLE_GIT_INSTRUCTIONS
     // overrides the setting either way).
     let env = coco_config::EnvSnapshot::from_current_process();
     let include_git_status = !env.is_truthy(coco_config::EnvKey::CocoRemote)
@@ -430,8 +430,6 @@ pub fn resolve_startup_permission_state(
 /// `StructuredOutput` tool against `registry` + a matching Stop
 /// function hook on `hook_registry`.
 ///
-/// TS parity: `main.tsx:1879-1901` plus
-/// `registerStructuredOutputEnforcement` (`hookHelpers.ts:70-83`).
 /// Only the non-interactive bootstrap (headless print mode / SDK
 /// NDJSON) calls this; TUI must not, by design — the tool is excluded
 /// from `register_all_tools` and only installed through this helper.
@@ -444,10 +442,6 @@ pub fn resolve_startup_permission_state(
 ///   - the parsed value fails JSON-Schema meta-validation
 ///   - the Stop function hook fails to register (programmer error —
 ///     duplicate id, unsupported event)
-///
-/// TS logs `tengu_structured_output_failure` for the first two; coco-rs
-/// surfaces the failure to the operator instead of silently continuing
-/// without schema enforcement.
 pub fn inject_structured_output_tool_if_requested(
     cli: &Cli,
     registry: &ToolRegistry,
@@ -461,11 +455,10 @@ pub fn inject_structured_output_tool_if_requested(
     coco_tools::register_structured_output_tool(registry, schema)
         .map_err(|e| anyhow::anyhow!("--json-schema rejected: {e}"))?;
 
-    // TS parity: `registerStructuredOutputEnforcement`
-    // (`hookHelpers.ts:70-83`). Block the model from ending its turn
-    // until it has pushed at least one valid `StructuredOutput`
-    // attachment into history. Coco-rs uses the typed AttachmentKind
-    // directly instead of a fragile `hasSuccessfulToolCall(name)` scan.
+    // Block the model from ending its turn until it has pushed at least
+    // one valid `StructuredOutput` attachment into history. Uses the
+    // typed AttachmentKind directly instead of a fragile
+    // `hasSuccessfulToolCall(name)` scan.
     hook_registry
         .register_function_hook(
             format!("structured-output-enforcement-{}", uuid::Uuid::new_v4()),
@@ -504,11 +497,9 @@ fn enforce_dangerous_skip_safety(requesting_bypass: bool) -> Result<()> {
 }
 
 /// True when the process runs with effective root privileges (euid 0) — actual
-/// root or under `sudo`. Mirrors TS `setup.ts:402-414`
-/// (`process.getuid() === 0`); coco-rs checks the *effective* uid so `sudo coco`
-/// is also caught (the prior env-name heuristic — `SUDO_USER`/`USER == root` —
-/// was a fragile, spoofable proxy for this). Non-Unix has no uid → false
-/// (TS gates on `platform !== 'win32'`).
+/// root or under `sudo`. Checks the *effective* uid so `sudo coco` is also
+/// caught (the prior env-name heuristic — `SUDO_USER`/`USER == root` — was a
+/// fragile, spoofable proxy for this). Non-Unix has no uid → false.
 fn is_running_as_root() -> bool {
     #[cfg(unix)]
     {
@@ -644,7 +635,7 @@ pub async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome>
 
 /// Drive one headless agent run with explicit options.
 ///
-/// Mirrors `coco -p "<prompt>"` with the same flag plumbing the
+/// Equivalent to `coco -p "<prompt>"` with the same flag plumbing the
 /// binary uses, plus three test-friendly knobs:
 ///
 /// - `opts.cwd` — override `std::env::current_dir()` so parallel
@@ -686,8 +677,7 @@ pub async fn run_chat_with_options(
 
     let (sandbox_reloader, runtime_config) = build_runtime_config_with_reloader(cli, &cwd)?;
     crate::model_card_refresh::spawn_if_enabled(&runtime_config);
-    // Reconcile coordinator mode to a resumed session (TS `matchSessionMode`,
-    // wired into the print/headless resume path too). Flips the env flag
+    // Reconcile coordinator mode to a resumed session. Flips the env flag
     // before the engine assembles its system prompt below.
     if let Some(warning) = crate::coordinator_mode_resume::reconcile_on_resume(
         opts.stored_mode.as_deref(),
@@ -704,8 +694,7 @@ pub async fn run_chat_with_options(
     // user / project / managed dirs.
     let plugins = crate::session_bootstrap::load_session_plugins(&cwd);
     // Startup marketplace maintenance (seed/reconcile/delist) on the headless
-    // surface too — TS runs `installPluginsForHeadless` for `--print`/`chat`/
-    // `review`; background + non-fatal, mirroring the TUI.
+    // surface too; background + non-fatal, mirroring the TUI.
     crate::session_bootstrap::spawn_marketplace_startup(coco_config::global_config::config_home());
     let plugin_style_sources = crate::session_bootstrap::plugin_output_style_sources(&plugins);
     let output_style_manager =
@@ -768,8 +757,8 @@ pub async fn run_chat_with_options(
     // Build the one canonical SessionRuntime — same shape as TUI/SDK — so the
     // leader engine and every subagent share ONE config, ONE session id, and
     // ONE `wire_engine` install list (agent + task handles, memory_runtime,
-    // file_read_state, transcript/usage). TS parity: print mode forks
-    // subagents from a single context, not a second session container.
+    // file_read_state, transcript/usage). Print mode forks subagents from a
+    // single context, not a second session container.
     let config_home = coco_config::global_config::config_home();
     let (command_registry, skill_manager) =
         crate::session_bootstrap::build_session_command_registry(
@@ -818,9 +807,9 @@ pub async fn run_chat_with_options(
         _ => None,
     };
 
-    // `StructuredOutput` tool + Stop hook (TS `main.tsx:1879-1901`). The tool
-    // registers into the shared `tools` Arc; the Stop hook MUST target the
-    // runtime's hook registry — the one its engines dispatch from.
+    // `StructuredOutput` tool + Stop hook. The tool registers into the shared
+    // `tools` Arc; the Stop hook MUST target the runtime's hook registry —
+    // the one its engines dispatch from.
     inject_structured_output_tool_if_requested(cli, tools.as_ref(), &runtime.hook_registry())?;
 
     // Agent/task spawning infra (TaskRuntime + agent team + worktree manager +
@@ -834,14 +823,14 @@ pub async fn run_chat_with_options(
         tracing::warn!(error = %e, "agent/task infrastructure unavailable in headless; spawns degrade");
     }
     // Unified MCP bootstrap: load config-file + plugin MCP servers. Headless is
-    // single-turn, so await the connect batch (TS print parity) — MCP tools must
-    // be registered before the first (only) turn.
+    // single-turn, so await the connect batch — MCP tools must be registered
+    // before the first (only) turn.
     crate::session_bootstrap::bootstrap_session_mcp(
         &runtime, &cwd, None, /*await_connect*/ true,
     )
     .await;
 
-    // Leader-side teammate inbox consumption (R1): drives `ShutdownApproved`
+    // Leader-side teammate inbox consumption: drives `ShutdownApproved`
     // → teardown so a headless leader doesn't leak stale team membership /
     // orphaned tasks. No human UI ⇒ no permission bridge. Covers long-running
     // headless (stream-json input); a single-shot `-p` leader exits before the
@@ -867,9 +856,8 @@ pub async fn run_chat_with_options(
     }
 
     // Bootstrap the per-source permission rule maps; see
-    // `crate::permission_rule_loader` for the conversion path. Mirrors
-    // TS `loadPermissionRules()` so headless runs honor the same
-    // settings.json deny/allow/ask rules as the TUI.
+    // `crate::permission_rule_loader` for the conversion path. Headless runs
+    // honor the same settings.json deny/allow/ask rules as the TUI.
     let (allow_rules, deny_rules, ask_rules) =
         crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
     let permission_rule_source_roots =
@@ -885,12 +873,12 @@ pub async fn run_chat_with_options(
     // `is_non_interactive` drives the session-level side effects (self-fork
     // suppression, "sdk" label, prompt assembly) — TS `getIsNonInteractiveSession()`.
     config.is_non_interactive = true;
-    // `avoid_permission_prompts` is the separate permission concept (TS
-    // `shouldAvoidPermissionPrompts`): with no UI to prompt, the auto-mode
-    // classifier's `require_interactive_or_deny` and the permission
-    // controller's no-bridge fallback DENY rather than silently auto-allow.
-    // Kept distinct so a future consumer-backed print/SDK mode could stay
-    // non-interactive while still routing `Ask` to a `canUseTool` callback.
+    // `avoid_permission_prompts` is the separate permission concept: with no
+    // UI to prompt, the auto-mode classifier's `require_interactive_or_deny`
+    // and the permission controller's no-bridge fallback DENY rather than
+    // silently auto-allow. Kept distinct so a future consumer-backed
+    // print/SDK mode could stay non-interactive while still routing `Ask`
+    // to a `canUseTool` callback.
     config.avoid_permission_prompts = true;
     config.session_id = session_id.clone();
     config.permission_mode = permission_mode;
@@ -900,14 +888,14 @@ pub async fn run_chat_with_options(
     config.ask_rules = ask_rules;
     config.permission_rule_source_roots = permission_rule_source_roots;
     // Seed --add-dir + settings additionalDirectories into the session
-    // working-dir allowlist (P17). TS initializeToolPermissionContext.
+    // working-dir allowlist.
     config.session_additional_dirs = crate::permission_rule_loader::seed_session_additional_dirs(
         cli,
         &runtime_config.settings,
         &cwd,
     );
     // `--print`: honor `--max-turns` then `loop.max_turns`; unbounded when
-    // neither is set (TS `query.ts:1705` only caps when maxTurns is given).
+    // neither is set.
     config.max_turns = cli.max_turns.or(runtime_config.loop_config.max_turns);
     config.total_token_budget = cli
         .max_tokens
@@ -929,9 +917,8 @@ pub async fn run_chat_with_options(
     let engine = runtime.build_engine_from_config(config, cancel, None).await;
 
     // Resolve `@`-mentions in the prompt to file-content system-reminder
-    // messages. TS parity: `getAttachmentMessages` from
-    // `processUserInput.ts:504`. Both branches below now share one
-    // expansion pipeline so headless behaves like TUI / SDK.
+    // messages. Both branches below share one expansion pipeline so
+    // headless behaves like TUI / SDK.
     let inputs = crate::at_mention_turn::resolve_turn_inputs_text_only(
         prompt,
         &cwd,
@@ -966,11 +953,10 @@ pub async fn run_chat_with_options(
     drainer.abort();
 
     // Wait for any in-flight auto-memory extraction + session-memory
-    // fork to complete before we return so partial writes aren't
-    // dropped on process exit. TS parity: `print.ts` awaits
-    // `drainPendingExtraction(60_000)` here; we additionally cover SM
-    // via `waitForSessionMemoryExtraction(15_000)` so a half-written
-    // `summary.md` doesn't survive into the next `--resume`.
+    // fork to complete before we return so partial writes aren't dropped
+    // on process exit. Drains extraction (60 s) and session memory
+    // (15 s) so a half-written `summary.md` doesn't survive into the
+    // next `--resume`.
     if let Some(memory_runtime) = engine.memory_runtime() {
         let _ = memory_runtime
             .extract
@@ -983,7 +969,7 @@ pub async fn run_chat_with_options(
     }
 
     // Persist coordinator mode at end-of-run so a later `--resume` re-derives
-    // the role (R2). The headless leader path previously never wrote it.
+    // the role.
     {
         let session_id = runtime.current_session_id().await;
         crate::coordinator_mode_resume::persist_session_mode(

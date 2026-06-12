@@ -22,8 +22,7 @@ fn defaults_for_token_economy_gates() {
     assert!(f.enabled(Feature::Mcp));
     assert!(f.enabled(Feature::TaskV2));
     assert!(f.enabled(Feature::DynamicModelCard));
-    // ToolSearch defaults ON (TS parity: ENABLE_TOOL_SEARCH unset →
-    // `tst` mode). Sessions with few deferrable tools can opt out
+    // ToolSearch defaults ON. Sessions with few deferrable tools can opt out
     // via settings.json `features.tool_search = false`.
     assert!(f.enabled(Feature::ToolSearch));
 }

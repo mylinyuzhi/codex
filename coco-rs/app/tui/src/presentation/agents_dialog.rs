@@ -1,12 +1,8 @@
 //! Render the `/agents` 2-tab overlay (Running + Library) and its
 //! inline 4-step create wizard.
 //!
-//! TS parity: bundled-only `cli_unpack_pretty/decls/functions/E24.js`
-//! (tab shell `_G`) + `V24.js` (Running tab) + `bW4.js` (Library tab).
-//! The wizard mirrors `CreateAgentWizard` (name → description → source
-//! → confirm) with the per-A3 折中 reduction to three editable
-//! fields; tools / model / memory default in the template and live in
-//! `$EDITOR`.
+//! The wizard steps through name → description → source → confirm;
+//! tools / model / memory default in the template and live in `$EDITOR`.
 //!
 //! This module owns ONLY view-string composition; cursor / step
 //! mutation stays in `update/agents_dialog.rs` and state shapes in
@@ -36,7 +32,7 @@ const CARET_GLYPH: char = '▏';
 /// Render the `/agents` dialog. Title is always `"Agents"`; body
 /// includes the tab strip (`Running` / `Library`) followed by the
 /// content of the focused tab. Tab title shows live count for
-/// Running per TS `V24.js` (`Running (N)` when N > 0).
+/// Running (`Running (N)` when N > 0).
 pub(crate) fn agents_dialog_content(
     s: &AgentsDialogState,
     subagents: &[SubagentInstance],
@@ -129,8 +125,8 @@ fn render_running_tab(s: &AgentsDialogState, subagents: &[SubagentInstance]) -> 
         ));
     }
 
-    // Recently-completed section — last 5, newest first. Mirrors
-    // `V24.js:22` filtering on completed | failed | killed.
+    // Recently-completed section — last 5, newest first, filtering on
+    // completed | failed | killed.
     let recent: Vec<&SubagentInstance> = subagents
         .iter()
         .filter(|s| !matches!(s.status, SubagentStatus::Running))
@@ -177,7 +173,7 @@ fn render_library_tab(s: &AgentsDialogState) -> String {
                 running_count,
                 ..
             } => {
-                // TS Library row layout: `name · source · suffix · badge`.
+                // Library row layout: `name · source · suffix · badge`.
                 // The source label keeps each row self-explanatory
                 // even when group headers scroll off-screen.
                 let source_label = LibraryRow::short_source_label(*source);

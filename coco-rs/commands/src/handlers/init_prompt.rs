@@ -1,8 +1,6 @@
 //! `/init` command — return the codebase-init prompt body.
 //!
-//! TS source: `commands/init.ts:226-254`. Two prompt bodies, gated by
-//! `feature('NEW_INIT') && (USER_TYPE === 'ant' || CLAUDE_CODE_NEW_INIT)`.
-//!
+//! Two prompt bodies gated by feature flag:
 //! - Old: single instruction to generate CLAUDE.md.
 //! - New: 8-phase guided setup (Q&A, codebase survey, CLAUDE.md, skills, hooks).
 
@@ -25,8 +23,7 @@ pub struct InitPromptHandler {
     /// Project root, used by `maybe_mark_project_onboarding_complete` to
     /// flip the onboarding-completed flag in `~/.coco.json` when the
     /// project already has a `CLAUDE.md`. `None` falls back to the
-    /// process cwd at invocation time. TS:
-    /// `projectOnboardingState.ts::maybeMarkProjectOnboardingComplete`.
+    /// process cwd at invocation time.
     pub project_root: Option<PathBuf>,
 }
 
@@ -46,9 +43,7 @@ impl InitPromptHandler {
 #[async_trait]
 impl CommandHandler for InitPromptHandler {
     async fn execute_command(&self, _args: &str) -> crate::Result<CommandResult> {
-        // TS: `init.ts:240` calls `maybeMarkProjectOnboardingComplete()`
-        // before returning the prompt. The flag short-circuits future
-        // invocations and the (TS-only) onboarding banner; in coco-rs
+        // The flag short-circuits future invocations; in coco-rs
         // the call is opportunistic — failures are swallowed by the
         // helper itself.
         let cwd = self

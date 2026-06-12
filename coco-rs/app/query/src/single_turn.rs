@@ -1,7 +1,7 @@
 //! Single-turn query execution.
 //!
-//! TS: query.ts (1.7K LOC) — one-shot query without multi-turn loop.
-//! Used for compaction summaries, memory extraction, etc.
+//! One-shot query without multi-turn loop. Used for compaction summaries,
+//! memory extraction, etc.
 
 use coco_inference::ModelRuntimeQueryOutcome;
 use coco_inference::ModelRuntimeRegistry;
@@ -113,7 +113,7 @@ pub async fn single_turn_query(
 
 /// Execute a side query with a fast model (for classifiers, summaries).
 ///
-/// TS: sideQuery.ts — uses a smaller/faster model for non-critical queries.
+/// Uses a smaller/faster model for non-critical queries.
 pub async fn side_query(
     model_runtimes: &Arc<ModelRuntimeRegistry>,
     source: ModelRuntimeSource,

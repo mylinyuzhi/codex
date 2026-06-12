@@ -1,9 +1,9 @@
 //! Post-compact skill re-injection.
 //!
-//! TS: `compact.ts` calls `getInvokedSkillsForAgent()` + `createSkillAttachmentIfNeeded()`
-//! inline so skill content survives the boundary. The next-turn
-//! `InvokedSkillsGenerator` provides a second injection path for cases
-//! where the in-band attachment was budget-clipped.
+//! Re-injects invoked skill content at the compact boundary so it survives
+//! context compaction. The next-turn `InvokedSkillsGenerator` provides a
+//! second injection path for cases where the in-band attachment was
+//! budget-clipped.
 //!
 //! coco-rs deliberately keeps this module loose-coupled: the caller
 //! converts whatever skill-state representation it owns
@@ -11,7 +11,7 @@
 //! and passes a `&[PostCompactSkill]` slice. We never reach into the
 //! reminder crate to avoid a `compact → system_reminder` dep.
 //!
-//! Budgets (TS compact.ts:122-130):
+//! Budgets:
 //!   - `POST_COMPACT_MAX_TOKENS_PER_SKILL = 5_000`
 //!   - `POST_COMPACT_SKILLS_TOKEN_BUDGET = 25_000`
 
@@ -34,10 +34,9 @@ pub struct PostCompactSkill {
 
 /// Build skill attachments for the post-compact bundle.
 ///
-/// Iterates `skills` in order (caller pre-sorts by `invokedAt` if it
-/// wants TS parity), truncates each body at `POST_COMPACT_MAX_TOKENS_PER_SKILL`,
-/// and stops adding once the cumulative size hits
-/// `POST_COMPACT_SKILLS_TOKEN_BUDGET`.
+/// Iterates `skills` in order (caller pre-sorts by `invokedAt`), truncates
+/// each body at `POST_COMPACT_MAX_TOKENS_PER_SKILL`, and stops adding once
+/// the cumulative size hits `POST_COMPACT_SKILLS_TOKEN_BUDGET`.
 #[must_use]
 pub fn create_post_compact_skill_attachments(
     skills: &[PostCompactSkill],

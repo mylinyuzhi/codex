@@ -10,12 +10,6 @@ enum can carry typed `Message` payloads). This crate re-exports them
 at its crate root for backward compat with the established
 `coco_messages::Message` import path used across the ops layer.
 
-## TS Source
-- `utils/messages.ts` — the largest utility file (~193K). All creation/filter/predicate functions.
-- `utils/messages/mappers.ts`, `utils/messages/systemInit.ts` — mappers + system-init helpers
-- `history.ts` — session history persistence
-- `cost-tracker.ts` — token usage + cost tracking
-
 ## Key Types
 
 ### Re-exported from `coco-types::messages` (canonical home)
@@ -110,8 +104,8 @@ version-stripped `LlmMessage` alias so SDK upgrades stay scoped to
 ## Pipeline Architecture
 
 The `pipeline` module hosts the **single canonical bridge** between
-the in-memory `Vec<Arc<Message>>` form and the TS-parity in-place
-mutating algorithms that need `&mut Vec<Message>`. Used by both
+the in-memory `Vec<Arc<Message>>` form and the in-place mutating
+algorithms that need `&mut Vec<Message>`. Used by both
 `normalize_messages_for_api` (steps 8-13a) and the compact crate
 (`StripImages` / `StripReinjectedAttachments` passes).
 
@@ -153,9 +147,7 @@ Adding a pass requires editing both (caught at review, not compile).
 
 **Fast path** (no pass would mutate) → `input.to_vec()` (N×Arc::clone,
 zero Message::clone). **Slow path** → materialize once, run all
-passes in order, re-wrap. Mirrors TS `arr.filter().map()` composition
-shape; algorithm bodies stay byte-for-byte aligned with the TS
-in-place reducers.
+passes in order, re-wrap.
 
 ### Drift-detection invariant (tested)
 

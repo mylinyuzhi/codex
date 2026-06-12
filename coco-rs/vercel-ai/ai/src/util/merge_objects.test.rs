@@ -45,8 +45,8 @@ fn test_array_replacement() {
 
 #[test]
 fn test_null_in_overrides_kept() {
-    // In TypeScript, undefined is skipped. In JSON, null is a valid value
-    // that should override the base value
+    // In JSON, null is a valid value that should override the base value
+    // (unlike an absent/undefined key in other languages)
     let base = json!({"a": 1, "b": 2});
     let overrides = json!({"b": null, "c": 3});
     let result = merge_objects(Some(base), Some(overrides));

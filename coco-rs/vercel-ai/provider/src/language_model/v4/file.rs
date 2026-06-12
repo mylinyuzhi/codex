@@ -8,7 +8,7 @@ use serde::Serialize;
 /// Generated file data — either raw bytes/base64 or a URL.
 ///
 /// Matches the 2-arm `SharedV4FileDataData | SharedV4FileDataUrl` tagged union
-/// from the TypeScript v4 spec.
+/// from the v4 spec.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]

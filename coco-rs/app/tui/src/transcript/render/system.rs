@@ -79,7 +79,7 @@ pub(super) fn try_render(
         }
         CellKind::System(SystemCellKind::ContextUsage) => {
             // `/context` snapshot — paint the full colored grid + grouped
-            // detail block inline (TS `<ContextVisualization>` parity).
+            // detail block inline.
             let Message::System(SystemMessage::ContextUsage(m)) = cell.source.as_ref() else {
                 return Some(());
             };

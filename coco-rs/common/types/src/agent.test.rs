@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn test_subagent_type_canonical_case() {
-    // TS-parity: Explore/Plan are PascalCase; the rest are kebab-case lowercase.
+    // Explore/Plan are PascalCase; the rest are kebab-case lowercase.
     // Output side must always emit canonical case.
     assert_eq!(SubagentType::Explore.as_str(), "Explore");
     assert_eq!(SubagentType::Plan.as_str(), "Plan");

@@ -83,7 +83,6 @@ fn test_build_system_prompt_with_rules_and_xml_format() {
     assert!(prompt.contains("git status"));
     assert!(prompt.contains("rm -rf"));
     assert!(prompt.contains("Rust project"));
-    // TS-faithful output-format block.
     assert!(prompt.contains("## Output Format"));
     assert!(prompt.contains("<block>yes</block><reason>"));
     assert!(prompt.contains("<block>no</block>"));
@@ -129,8 +128,8 @@ async fn test_classify_stage1_allow_short_circuits() {
 #[tokio::test]
 async fn test_classify_empty_projection_fast_allows_without_llm() {
     // A non-safe tool whose projection encodes to "" declares no
-    // classifier-relevant input → allow without invoking the LLM (TS toCompact
-    // empty contract). The classify_fn must never run.
+    // classifier-relevant input → allow without invoking the LLM.
+    // The classify_fn must never run.
     let project = |_name: &str, _input: &serde_json::Value| Some(String::new());
     let projector: Option<InputProjector> = Some(&project);
     let result = classify_yolo_action(
@@ -353,8 +352,8 @@ async fn test_classify_thinking_mode_skips_stage1() {
 
 #[tokio::test]
 async fn test_classify_fast_mode_block_without_reason_uses_fallback() {
-    // Fast-mode block with no `<reason>` → TS `'Blocked by fast classifier'`,
-    // never an empty deny message.
+    // Fast-mode block with no `<reason>` → falls back to
+    // 'Blocked by fast classifier', never an empty deny message.
     let rules = AutoModeRules {
         classifier_mode: ClassifierMode::Fast,
         ..AutoModeRules::default()
@@ -375,8 +374,8 @@ async fn test_classify_fast_mode_block_without_reason_uses_fallback() {
 
 #[tokio::test]
 async fn test_classify_stage2_block_without_reason_uses_fallback() {
-    // Two-stage block reaching stage 2 with no `<reason>` → TS
-    // `'No reason provided'`, never an empty deny message.
+    // Two-stage block reaching stage 2 with no `<reason>` → falls back to
+    // 'No reason provided', never an empty deny message.
     let result = classify_yolo_action(
         EMPTY_MESSAGES,
         "Bash",

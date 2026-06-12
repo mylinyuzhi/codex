@@ -6,8 +6,6 @@
 //! `plugin:<plugin>:<server>`, scoped [`ConfigScope::Dynamic`], and tagged
 //! with `plugin_source`. Stdio servers get the plugin root injected into env.
 //!
-//! TS: `utils/plugins/mcpPluginIntegration.ts` —
-//! `loadPluginMcpServers` / `extractMcpServersFromPlugins`.
 
 use std::path::Path;
 
@@ -28,7 +26,7 @@ const PLUGIN_ROOT_ENV: [&str; 2] = ["COCO_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"];
 ///
 /// Each enabled plugin's servers (manifest `mcp_servers` + a `<root>/.mcp.json`)
 /// are keyed `plugin:<plugin>:<server>`, scoped `Dynamic`, and tagged with the
-/// plugin id. TS `extractMcpServersFromPlugins`.
+/// plugin id.
 pub fn extract_mcp_servers_from_plugins(plugins: &[&LoadedPluginV2]) -> Vec<ScopedMcpServerConfig> {
     plugins
         .iter()

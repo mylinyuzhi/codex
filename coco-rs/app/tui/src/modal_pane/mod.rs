@@ -164,8 +164,7 @@ pub(crate) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCom
     }
 }
 
-/// How a picker/dialog reports being closed with Esc. Mirrors TS local-jsx
-/// `onDone('... dismissed', { display: 'system' })` — every picker leaves a
+/// How a picker/dialog reports being closed with Esc. Every picker leaves a
 /// transcript trace of what closed.
 enum PickerDismiss {
     /// Picker opened by a slash command -> render `❯ /<name>` + `⎿ <message>`,
@@ -180,8 +179,8 @@ enum PickerDismiss {
 }
 
 /// Dismiss feedback for a modal closed via Esc. `None` for prompt-style and
-/// viewer modals that own their own decline UX. Wording mirrors TS where a
-/// counterpart exists (`Theme picker dismissed`, `Skills dialog dismissed`,
+/// viewer modals that own their own decline UX. Wording used for toast
+/// messages where a counterpart exists (`Theme picker dismissed`, `Skills dialog dismissed`,
 /// `Cancelled memory editing`, ...).
 fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
     use ModalState as M;
@@ -290,8 +289,8 @@ pub(crate) async fn close_modal_with_feedback(
             );
         }
     }
-    // Plugin-hint Esc dismissal is treated as "no" (TS auto-dismiss ->
-    // onResponse('no')): record show-once so the prompt never reappears.
+    // Plugin-hint Esc dismissal is treated as "no": record show-once
+    // so the prompt never reappears.
     if let Some(ModalState::PluginHint(ph)) = state.ui.modal.as_ref() {
         coco_plugins::mark_hint_plugin_shown(&ph.plugin_id);
     }

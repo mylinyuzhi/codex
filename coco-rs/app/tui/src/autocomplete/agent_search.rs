@@ -16,9 +16,8 @@ use crate::widgets::suggestion_popup::SuggestionMeta;
 
 /// A loaded agent definition projection used for `@` autocomplete.
 ///
-/// Fields mirror TS's `displayText` / `whenToUse` / `color` triad — the
-/// minimum the popup needs to render and the insertion path needs to
-/// emit a `(agent)` suffix splice. Full definitions stay in
+/// Carries the minimum the popup needs to render and the insertion path needs
+/// to emit a `(agent)` suffix splice. Full definitions stay in
 /// `coco_subagent::AgentDefinitionStore`; this is a UI-side cache.
 #[derive(Debug, Clone)]
 pub struct AgentInfo {

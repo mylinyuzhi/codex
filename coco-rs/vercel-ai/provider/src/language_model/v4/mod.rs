@@ -11,7 +11,7 @@ mod provider_tool;
 mod stream_result;
 pub mod tool;
 
-// New type modules matching TypeScript SDK structure
+// New type modules
 pub mod content;
 pub mod data_content;
 pub mod file;
@@ -65,7 +65,7 @@ pub use stream::StreamError;
 pub use wire_tap::WireTap;
 pub use wire_tap::WireTapHandle;
 
-// Re-export new content types (matching TS SDK naming)
+// Re-export new content types
 pub use content::LanguageModelV4Content;
 pub use data_content::LanguageModelV4DataContent;
 pub use file::LanguageModelV4File;

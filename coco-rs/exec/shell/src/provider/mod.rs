@@ -1,8 +1,5 @@
 //! Provider abstraction for shell-specific command building.
 //!
-//! TS source: `utils/shell/shellProvider.ts` (ShellProvider trait) +
-//! `utils/shell/bashProvider.ts` + `utils/shell/powershellProvider.ts`.
-//!
 //! The provider is the **only** thing that knows about per-shell quirks:
 //! snapshot sourcing, session-env injection, extglob disabling, alias
 //! expansion, `pwd -P` tracking, base64-encoded PowerShell commands,

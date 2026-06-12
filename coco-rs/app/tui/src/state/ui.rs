@@ -26,11 +26,10 @@ use crate::theme::ThemeSetting;
 use coco_tui_ui::constants;
 use coco_tui_ui::double_press::DoublePressTracker;
 
-/// Exit keys subject to double-press confirmation. Mirrors TS
-/// `ExitState::keyName` (`hooks/useExitOnCtrlCD.ts`).
+/// Exit keys subject to double-press confirmation.
 ///
-/// The variant labels (`"Ctrl-C"` / `"Ctrl-D"`) match the TS string
-/// values verbatim so footer copy and i18n substitution line up.
+/// The variant labels (`"Ctrl-C"` / `"Ctrl-D"`) match the string
+/// values used in footer copy and i18n substitution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitKey {
     /// Ctrl+C — interrupt the running task on the first press and exit
@@ -42,7 +41,6 @@ pub enum ExitKey {
 
 impl ExitKey {
     /// Human-readable label used in the "Press X again to exit" hint.
-    /// Matches the TS string values in `useExitOnCtrlCD.ts:8`.
     pub fn label(self) -> &'static str {
         match self {
             Self::CtrlC => "Ctrl-C",
@@ -96,8 +94,7 @@ pub struct UiState {
     /// dispatch lives here so the [`TuiOnlyEvent::SkillOverridesSaved`]
     /// handler can render the localized "Updated N override(s)"
     /// toast without the count crossing the wire. `None` when no
-    /// dialog save is pending. TS mirror: TS keeps the count in
-    /// React state on the same component for the same reason.
+    /// dialog save is pending.
     pub pending_skills_save_edits: Option<usize>,
     /// Status-bar warning for terminal compatibility downgrades.
     pub terminal_compatibility_warning: Option<String>,
@@ -110,19 +107,17 @@ pub struct UiState {
     pub(crate) terminal_size: Size,
     /// Double-press tracker for Ctrl+C → exit. Independent from
     /// [`ctrl_d_tracker`] so a "Ctrl+C, Ctrl+D, Ctrl+C" sequence within
-    /// the window still completes the Ctrl+C double-press — mirrors
-    /// TS `useExitOnCtrlCD.ts` (two parallel `useDoublePress` hooks).
+    /// the window still completes the Ctrl+C double-press.
     pub ctrl_c_tracker: DoublePressTracker<()>,
     /// Double-press tracker for Ctrl+D → exit. See [`ctrl_c_tracker`].
     pub ctrl_d_tracker: DoublePressTracker<()>,
     /// Double-press tracker for Esc → Rewind state. The Esc keystroke
     /// itself fires `TuiCommand::Cancel` on every press; this tracker
     /// only controls whether the second Esc opens the rewind picker.
-    /// TS: `useDoublePress` inside `PromptInput.tsx`.
     pub esc_tracker: DoublePressTracker<()>,
     /// Whether the terminal window currently has focus. Used to gate
     /// turn-complete notifications so they only fire when the user has
-    /// switched away — matches TS `ink::focus` semantics.
+    /// switched away.
     pub terminal_focused: bool,
     /// Last time the retained native surface was known to be visible.
     ///
@@ -155,8 +150,7 @@ pub struct UiState {
     /// `serial_test` guards.
     pub kb_handle: KeybindingHandle,
     /// Whether teammate spinner lines show recent message preview.
-    /// TS `AppStateStore.ts::showTeammateMessagePreview` (default
-    /// false). Toggled via `app:toggleTeammatePreview` (Ctrl+Shift+O).
+    /// Default false. Toggled via `app:toggleTeammatePreview` (Ctrl+Shift+O).
     pub show_teammate_message_preview: bool,
     /// Whether subagent activity renders the coordinator task view.
     /// Resolved by the CLI runner from runtime feature gates and env
@@ -164,8 +158,7 @@ pub struct UiState {
     pub coordinator_mode_active: bool,
     /// Stashed input draft from `chat:stash` (Ctrl+S in defaults).
     ///
-    /// Mirrors TS `PromptInput.tsx::handleStash` (single-slot push/pop
-    /// semantics). Three cases:
+    /// Single-slot push/pop semantics. Three cases:
     /// * empty input + stash present → pop stash into input
     /// * non-empty input → push to stash (overwriting any prior),
     ///   clear input
@@ -180,8 +173,7 @@ pub struct UiState {
     pub(crate) ephemeral: crate::state::ui_ephemeral::UiEphemeralState,
 }
 
-/// One slot of stashed input. Mirrors TS `StashedPrompt` shape
-/// (`PromptInput.tsx:1359-1365`): text + cursor + paste-manager state.
+/// One slot of stashed input: text + cursor + paste-manager state.
 #[derive(Debug, Clone)]
 pub struct StashedInput {
     /// Stashed text content.
@@ -190,10 +182,10 @@ pub struct StashedInput {
     /// In-memory only (no on-disk persistence), so the encoding change
     /// from char-index → byte-offset doesn't require migration.
     pub cursor_byte: usize,
-    /// Snapshot of paste-pill entries (TS `pastedContents`) at stash
-    /// time. Restored on pop so pill labels in the stashed `text`
-    /// (e.g. `[Pasted text #1]`) still resolve to the original
-    /// content. Empty `Vec` when the user hadn't pasted anything.
+    /// Snapshot of paste-pill entries at stash time. Restored on pop
+    /// so pill labels in the stashed `text` (e.g. `[Pasted text #1]`)
+    /// still resolve to the original content. Empty `Vec` when the
+    /// user hadn't pasted anything.
     pub paste_entries: Vec<coco_tui_ui::paste::PasteEntry>,
 }
 
@@ -487,8 +479,7 @@ impl UiState {
     /// Which exit key is currently armed for double-press confirmation.
     /// When both trackers are armed (uncommon but possible if the user
     /// alternates Ctrl+C/Ctrl+D), the most recently armed key wins so
-    /// the hint reflects the latest keystroke. Mirrors TS
-    /// `ExitState { pending, keyName }` — only one prompt visible.
+    /// the hint reflects the latest keystroke — only one prompt visible.
     pub fn pending_exit_hint(&self) -> Option<ExitKey> {
         match (
             self.ctrl_c_tracker.pending_until(),
@@ -532,10 +523,10 @@ pub enum FocusTarget {
 
 /// A single history entry with frecency metadata.
 ///
-/// TS: `frequencyMap` in PromptInput.tsx — each entry tracks how often it was
-/// used and when it was last entered. Navigation sorts by a frecency score
-/// (`ln(frequency) * recency_factor`) rather than raw insertion order, so a
-/// command typed ten times last week floats above a one-off from yesterday.
+/// Each entry tracks how often it was used and when it was last entered.
+/// Navigation sorts by a frecency score (`ln(frequency) * recency_factor`)
+/// rather than raw insertion order, so a command typed ten times last week
+/// floats above a one-off from yesterday.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub text: String,
@@ -557,8 +548,8 @@ impl HistoryEntry {
     ///
     /// Formula: `ln(frequency + 1) * recency_factor`, where
     /// `recency_factor = 1.0` for entries less than 24h old and decays
-    /// exponentially with 7-day half-life for older entries. This matches
-    /// the TS weighting and guards `ln(0)` by adding 1 to frequency.
+    /// exponentially with 7-day half-life for older entries. Guards
+    /// `ln(0)` by adding 1 to frequency.
     pub fn frecency(&self, now_secs: i64) -> f64 {
         let freq = ((self.frequency.max(0) + 1) as f64).ln();
         let age = (now_secs - self.last_used_secs).max(0) as f64;
@@ -575,12 +566,10 @@ impl HistoryEntry {
 
 /// Input prefix mode — derived from the leading character of [`InputState::text`].
 ///
-/// TS parity:
-/// * `Bash` mirrors TS `PromptInputMode = 'bash'` (typed `!` prefix in
-///   `components/PromptInput/inputModes.ts`). Submit bypasses the model
-///   loop and runs the shell directly, like TS's `LocalShellTask`.
+/// * `Bash` (`!` prefix): submit bypasses the model loop and runs the
+///   shell directly.
 /// * Memory capture uses the `/memory` slash command and file picker.
-///   Leading `#` is ordinary chat text, matching TS input-mode behavior.
+///   Leading `#` is ordinary chat text.
 ///
 /// The mode is computed on the fly so backspacing past the prefix
 /// character returns to `Normal` automatically — no separate state to
@@ -593,7 +582,7 @@ pub enum PromptMode {
     /// Standard chat input.
     #[default]
     Normal,
-    /// Leading `!` — submit runs as a shell command. TS: `LocalShellTask`.
+    /// Leading `!` — submit runs as a shell command.
     Bash,
 }
 
@@ -602,7 +591,7 @@ impl PromptMode {
     ///
     /// Returns `Normal` for empty input and for anything that doesn't
     /// match a known prefix. Whitespace before the prefix disqualifies
-    /// the mode (matches TS: `getModeFromInput` checks `startsWith`).
+    /// the mode.
     pub fn from_text(text: &str) -> Self {
         match text.as_bytes().first() {
             Some(b'!') => Self::Bash,
@@ -895,10 +884,9 @@ impl StreamingState {
     /// partial line has an unknown wrapped height, so revealing it would jitter
     /// the live region (and the viewport bottom) on every delta; gating on the
     /// newline keeps the live region's height changing only at line boundaries.
-    /// Mirrors claude-code-kim clipping the streaming preview to the last
-    /// newline. The final partial line never needs a reveal: at finalize the
-    /// streaming overlay is dropped (`MessageAppended`) and the committed cell
-    /// render shows the full canonical text.
+    /// The final partial line never needs a reveal: at finalize the streaming
+    /// overlay is dropped (`MessageAppended`) and the committed cell render
+    /// shows the full canonical text.
     pub fn advance_display(&mut self) -> bool {
         match self.content[self.display_cursor..].find('\n') {
             Some(idx) => {

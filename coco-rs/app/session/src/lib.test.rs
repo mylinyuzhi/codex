@@ -51,7 +51,7 @@ fn create_returns_in_memory_session_without_writing_disk() {
     let session = mgr.create("test-model", Path::new("/tmp")).unwrap();
     assert_eq!(session.model, "test-model");
     assert!(!session.id.is_empty());
-    // TS parity: `create` is in-memory only. Nothing on disk yet.
+    // `create` is in-memory only. Nothing on disk yet.
     assert!(mgr.load(&session.id).is_err());
 }
 
@@ -116,7 +116,7 @@ fn set_title_appends_custom_title_and_agent_name_metadata() {
     let loaded = mgr.load("sess-t").unwrap();
     assert_eq!(loaded.title.as_deref(), Some("my session"));
     let raw = std::fs::read_to_string(paths.transcript("sess-t")).unwrap();
-    // TS parity: rename writes BOTH `custom-title` (picker) AND
+    // rename writes BOTH `custom-title` (picker) AND
     // `agent-name` (prompt-bar banner) in the same transcript pass.
     assert!(
         raw.contains("\"custom-title\""),
@@ -135,8 +135,8 @@ fn save_mode_appends_mode_metadata_for_resume() {
     let paths = seed_transcript(dir.path(), "sess-mode");
     mgr.save_mode("sess-mode", "coordinator").unwrap();
     let raw = std::fs::read_to_string(paths.transcript("sess-mode")).unwrap();
-    // TS `saveMode` parity: a `mode` metadata entry records the session's
-    // coordinator state so `reconcile_on_resume` can re-derive it.
+    // A `mode` metadata entry records the session's coordinator state
+    // so `reconcile_on_resume` can re-derive it.
     assert!(
         raw.contains("\"mode\""),
         "expected mode metadata entry: {raw}",
@@ -265,7 +265,7 @@ fn re_append_session_metadata_noop_when_no_transcript() {
     let dir = tempfile::tempdir().unwrap();
     let mgr = SessionManager::new(dir.path().to_path_buf());
     // No `seed_transcript` — the session has no JSONL on disk yet.
-    // TS parity: `reAppendSessionMetadata` bails when sessionFile is null.
+    // re_append_session_metadata bails when no transcript exists.
     assert!(mgr.re_append_session_metadata("sess-missing").is_ok());
 }
 

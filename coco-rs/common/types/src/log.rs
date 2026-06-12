@@ -2,9 +2,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// User category used for ant-only feature gates.
-///
-/// TS: `process.env.USER_TYPE` checks throughout `skills/bundled/*.ts`,
-/// `commands/init.ts`, `commands/createMovedToPluginCommand.ts`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -12,7 +9,6 @@ pub enum UserType {
     Human,
     Api,
     /// Internal Anthropic user — unlocks experimental skills and prompts.
-    /// TS: `process.env.USER_TYPE === 'ant'`.
     Ant,
 }
 

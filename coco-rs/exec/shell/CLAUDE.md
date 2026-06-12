@@ -1,18 +1,6 @@
 # coco-shell
 
-Shell execution with security analysis, destructive-command warnings, sandbox decisions, read-only / mode validation, heredoc + sed-in-place handling, CWD tracking, snapshot capture, hook-emitted session env, and `/env` vars. Builds on `coco-shell-parser` (tree-sitter + tokenizer) for the AST and 23 security check IDs; layers TS-ported rules + provider-based command assembly on top.
-
-## TS Source
-
-- `utils/bash/` — parser + validators (~12K LOC)
-- `utils/Shell.ts` — shell execution + CWD tracking
-- `utils/shell/{shellProvider,bashProvider,powershellProvider}.ts` — provider trait + impls
-- `utils/sessionEnvironment.ts` — hook-emitted env script reader
-- `utils/sessionEnvVars.ts` — `/env` store
-- `utils/windowsPaths.ts` — POSIX↔Windows path mapping
-- `tools/BashTool/bashPermissions.ts`, `bashSecurity.ts`, `readOnlyValidation.ts`, `commandSemantics.ts`, `destructiveCommandWarning.ts`, `shouldUseSandbox.ts`, `modeValidation.ts`, `sedEditParser.ts`
-- `utils/powershell/` — PowerShell parsing
-
+Shell execution with security analysis, destructive-command warnings, sandbox decisions, read-only / mode validation, heredoc + sed-in-place handling, CWD tracking, snapshot capture, hook-emitted session env, and `/env` vars. Builds on `coco-shell-parser` (tree-sitter + tokenizer) for the AST and 23 security check IDs; layers read-only validation, destructive warnings, mode validation, and provider-based command assembly on top.
 
 ## Layering
 
@@ -20,7 +8,7 @@ Two layers, plus the parser crate underneath:
 
 - **Provider layer** (`provider::ShellProvider` + impls) — owns every per-shell quirk: snapshot sourcing, session-env injection, extglob disabling, `eval`-quoting (bash) / base64-encoded `-EncodedCommand` (pwsh), `pwd -P` / `(Get-Location).Path` cwd tracking, sandbox `TMPDIR` / `TMPPREFIX` overrides, `COCO_SHELL_PREFIX` wrapping. Adding a new shell = new `ShellProvider` impl, no executor changes.
 - **Executor layer** (`ShellExecutor`) — thin spawn / wait / cancel-token / timeout / sandbox-wrap loop on top of the provider's `BuiltCommand`. Holds the per-command `tempfile::TempDir` for sandbox isolation; reads back the cwd file after exec and applies the post-command bare-repo scrub.
-- **Parser + 24 security analyzers** live in `coco-shell-parser` (infrastructure). This crate layers the TS-sourced rules on top (read-only validation, destructive warnings, mode validation, sed edit detection, accept-edits auto-allow, sandbox decision).
+- **Parser + 24 security analyzers** live in `coco-shell-parser` (infrastructure). This crate layers read-only validation, destructive warnings, mode validation, sed edit detection, accept-edits auto-allow, and sandbox decision on top.
 
 ## Key Types
 

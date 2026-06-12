@@ -33,7 +33,7 @@
 /// Internally split into `mod.rs` (struct + trait impl + teammate
 /// dispatch), `spawn.rs` (subagent dispatch — sync + background),
 /// `handoff.rs` (post-spawn classifier + AgentSummary), `resume.rs`
-/// (TS-aligned background-spawn resume).
+/// (background-spawn resume).
 mod error;
 pub use error::CoordinatorError;
 pub use error::Result;

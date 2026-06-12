@@ -6,12 +6,6 @@ vercel-ai-free.** Provider DTOs reach this crate via `coco-llm-types`
 Upgrading the SDK only edits `common/llm-types` + `services/inference`;
 this crate stays unchanged. Guarded by `scripts/check-vercel-ai-seam.sh`.
 
-## TS Source
-- `types/` — `command.ts`, `hooks.ts`, `ids.ts`, `logs.ts`, `permissions.ts`, `plugin.ts`, `textInputTypes.ts`, `generated/` (build-time message types)
-- `Tool.ts` — foundational tool identity (`ToolName`, `ToolId`, `ToolProgress`). The runtime input schema is **not** here — `coco_tool_runtime::ToolInputSchema` (self-validating newtype) owns it (depends on `jsonschema`, an L3 concern).
-- `Task.ts` — task lifecycle (`TaskType`, `TaskStatus`, `TaskStateBase`)
-- Message family — types relocated into this crate (sub-module `messages`) so wire protocol envelopes can carry typed payloads.
-
 ## Key Types
 
 Tool / Agent identity: `ToolName` (43 builtin variants, Copy), `ToolId` (Builtin/Mcp/Custom, flat-string serde), `SubagentType` (7 builtin variants), `AgentTypeId`, `ToolProgress`.
@@ -32,7 +26,7 @@ Attachment taxonomy: `AttachmentKind` (60 variants), `AttachmentEvent`, `Coverag
 
 App-state: `ToolAppState`, `AppStatePatch`, `AppStateReadHandle` (typed cross-turn state).
 
-Extended (ported TS extensions): `AgentColorEntry`, `AttributionSnapshotEntry`, `CommandResultDisplay`, `PermissionExplanation`, `PromptRequest`, `RiskLevel`, `SessionMode`, `SummaryEntry`, etc.
+Extended types: `AgentColorEntry`, `AttributionSnapshotEntry`, `CommandResultDisplay`, `PermissionExplanation`, `PromptRequest`, `RiskLevel`, `SessionMode`, `SummaryEntry`, etc.
 
 ### Message family (in `messages/` submodule, flat re-exported at crate root)
 
@@ -76,5 +70,5 @@ direct vercel-ai dep by design:
 ## Conventions
 
 - `ToolId` / `AgentTypeId` serialize as flat strings via `Display` / `FromStr` (not tagged JSON). `"Read"` / `"mcp__slack__send"` / `"my_plugin_tool"`.
-- `PermissionMode` wire format is camelCase (matches TS `PermissionModeSchema`). Snake-case aliases accepted on deserialize for legacy transcripts.
+- `PermissionMode` wire format is camelCase. Snake-case aliases accepted on deserialize for legacy transcripts.
 - `side_query` module contains data types for the async `SideQuery` trait (trait itself lives in `coco-tool-runtime`).

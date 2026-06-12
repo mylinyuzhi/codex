@@ -1,8 +1,8 @@
 //! Validation diagnostics for agent definitions.
 //!
-//! TS: `tools/AgentTool/loadAgentsDir.ts` — failed-definitions reporting and
-//! `/agents validate` subcommand. Validation is structural only; it does not
-//! check that referenced tools exist (that needs a tool registry snapshot).
+//! Covers failed-definitions reporting and `/agents validate`. Validation is
+//! structural only; it does not check that referenced tools exist (that needs
+//! a tool registry snapshot).
 
 use std::path::PathBuf;
 

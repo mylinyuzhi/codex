@@ -1,31 +1,19 @@
 //! Cwd resolution + post-exec snap-back shared by `BashTool` and
 //! `PowerShellTool`.
 //!
-//! TS source:
-//!
-//! - `utils/Shell.ts` — `getCwd()` / `setCwd()` / `STATE.cwd` lifecycle
-//! - `tools/BashTool/utils.ts::resetCwdIfOutsideProject` + `stdErrAppendShellResetMessage`
-//! - `tools/BashTool/BashTool.tsx:702-707` and `tools/PowerShellTool/PowerShellTool.tsx:520-525`
-//!   for the call sites — both shells share this exact post-exec sequence.
-//! - `utils/permissions/filesystem.ts::pathInAllowedWorkingPath` /
-//!   `pathInWorkingPath` for the path comparison rules
-//!   (NFC normalize, macOS `/private/{var,tmp}` rewrites, lowercase compare).
-//! - `utils/envUtils.ts::shouldMaintainProjectWorkingDir` for the
-//!   `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` env knob.
-//!
-//! The TS sequence per command:
+//! The post-exec sequence per command:
 //!
 //! ```text
-//!  spawn at getCwd()                 — current STATE.cwd (no pre-reset)
+//!  spawn at getCwd()                 — current session cwd (no pre-reset)
 //!  → exec the shell command
-//!  → setCwd(new_cwd from pwd file)   — STATE.cwd = where the command ended
+//!  → setCwd(new_cwd from pwd file)   — session cwd = where the command ended
 //!  → resetCwdIfOutsideProject()      — if cwd drifted outside, snap back
 //!                                      to originalCwd, return true
 //!  → if reset fired, append "Shell cwd was reset to <orig>" to THIS
 //!    command's stderr (annotation lands on the offending call)
 //! ```
 //!
-//! We mirror that sequence with three calls:
+//! The sequence maps to three calls:
 //!
 //! ```text
 //!  before exec
@@ -39,8 +27,8 @@
 //!
 //! All helpers are no-ops when `ctx.cwd_override` is set (worktree-isolated
 //! subagents fence cwd via the override and don't share state with the
-//! parent session — TS `isMainThread` equivalent), and on the legacy /
-//! test path where `ctx.session_cwd` / `ctx.original_cwd` are absent.
+//! parent session), and on the legacy / test path where
+//! `ctx.session_cwd` / `ctx.original_cwd` are absent.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -68,22 +56,20 @@ pub async fn resolve_spawn_cwd(ctx: &ToolUseContext) -> PathBuf {
     }
 }
 
-/// Run the TS post-exec sequence: `setCwd(new_cwd)` then
-/// `resetCwdIfOutsideProject`.
+/// Run the post-exec cwd sequence: update `session_cwd` then snap back if
+/// the cwd drifted outside the project.
 ///
-/// 1. If `new_cwd` is `Some`, write it into `ctx.session_cwd` (TS
-///    `setCwd`).
+/// 1. If `new_cwd` is `Some`, write it into `ctx.session_cwd`.
 /// 2. Then check the just-updated session cwd against
 ///    `ctx.original_cwd ∪ permission_context.additional_dirs`. If
-///    `shell_config.maintain_project_working_dir` is true (TS
-///    `shouldMaintainProjectWorkingDir`) OR the cwd has drifted outside
-///    the allowed set, snap session_cwd back to `original_cwd`.
+///    `shell_config.maintain_project_working_dir` is true OR the cwd has
+///    drifted outside the allowed set, snap `session_cwd` back to
+///    `original_cwd`.
 /// 3. Return the user-visible `"Shell cwd was reset to …"` message
 ///    when a non-maintain reset fired, so the caller can append it via
 ///    [`annotate_stderr_with_reset`]. Returns `None` for the
 ///    silent-maintain reset (every command resets in maintain mode —
-///    TS doesn't annotate either, see `resetCwdIfOutsideProject`'s
-///    `if (!shouldMaintain)` guard at `BashTool/utils.ts:186-189`).
+///    no annotation emitted).
 ///
 /// Skips entirely when `cwd_override` is set or session/original cwd is
 /// unwired.
@@ -119,16 +105,13 @@ pub async fn finalize_cwd_post_exec(
     *session_cwd.write().await = original.clone();
 
     if should_maintain {
-        // TS: `resetCwdIfOutsideProject` returns false (no annotation)
-        // when shouldMaintain is true — every command would otherwise
-        // spam stderr with the reset notice.
+        // Every command resets in maintain mode — no stderr annotation.
         return None;
     }
     Some(format!("Shell cwd was reset to {}", original.display()))
 }
 
-/// Append `reset_message` (when present) to `stderr`. TS parity:
-/// `utils/BashTool::utils.ts::stdErrAppendShellResetMessage`:
+/// Append `reset_message` (when present) to `stderr`.
 ///
 /// ```ts
 /// `${stderr.trim()}\n${msg}`
@@ -144,7 +127,6 @@ pub fn annotate_stderr_with_reset(stderr: &mut String, reset_message: Option<Str
     *stderr = format!("{trimmed}\n{msg}");
 }
 
-/// TS parity: `utils/permissions/filesystem.ts::pathInAllowedWorkingPath`.
 /// `path` is allowed iff it lives inside `original_cwd` or any
 /// `permission_context.additional_dirs` entry (any-of).
 fn path_in_allowed_working_path(
@@ -163,7 +145,6 @@ fn path_in_allowed_working_path(
     false
 }
 
-/// TS parity: `utils/permissions/filesystem.ts::pathInWorkingPath`.
 /// Both paths are normalized (NFC + macOS `/private` rewrites +
 /// lowercase) before the prefix check. Same path or strict descendant
 /// → inside; sibling or disjoint root → outside.
@@ -182,15 +163,12 @@ fn path_in_working_path(path: &Path, working_path: &Path) -> bool {
     p.starts_with(&w_with_sep)
 }
 
-/// TS parity: `expandPath` (NFC normalize) + macOS `/private/{var,tmp}`
-/// rewrites + `normalizeCaseForComparison` (lowercase).
+/// NFC normalize + macOS `/private/{var,tmp}` rewrites + lowercase.
 ///
-/// We don't realpath / canonicalize here — TS's `expandPath` doesn't
-/// either, and the cwd we compare against comes from `pwd -P` which is
-/// already symlink-resolved by the kernel. Symlink-chain walking
-/// (TS `getPathsForPermissionCheck`) would only matter for
-/// `additional_dirs` entries that are themselves symlinks — out of
-/// scope here; lives in the broader path-permission port.
+/// We don't realpath / canonicalize here — the cwd from `pwd -P` is
+/// already symlink-resolved by the kernel. Symlink-chain walking would
+/// only matter for `additional_dirs` entries that are themselves
+/// symlinks — out of scope here.
 fn normalize_for_compare(path: &Path) -> String {
     let s: String = path.to_string_lossy().nfc().collect();
     let rewritten = if s == "/private/var" {

@@ -3,8 +3,6 @@
 //! Extracts and parses YAML frontmatter between `---` delimiters.
 //! Used by skills, commands, agents, memory files, and output styles.
 //!
-//! TS: `src/utils/frontmatterParser.ts` (370 LOC)
-//!
 //! Backed by [`serde_yml`] for full YAML compliance — supports nested
 //! mappings, sequences of mappings, multi-line strings, and the
 //! standard YAML scalar types. Earlier versions used a hand-written
@@ -35,10 +33,10 @@ pub enum FrontmatterValue {
     Int(i64),
     /// Floating-point value.
     Float(f64),
-    /// List of arbitrary values (TS-equivalent of `unknown[]`).
+    /// List of arbitrary values.
     /// String-only lists still pass through `as_string_list`.
     Sequence(Vec<FrontmatterValue>),
-    /// Nested object — TS YAML's `Record<string, unknown>`. Used for
+    /// Nested object (mapping of string keys to arbitrary values). Used for
     /// inline `mcpServers: {name: config}` and `hooks:` shapes.
     Mapping(BTreeMap<String, FrontmatterValue>),
     /// Null/empty value (key with no value, e.g., `key:`).
@@ -193,12 +191,10 @@ pub fn parse(input: &str) -> Frontmatter {
 /// Parse a YAML block via `serde_yml`. On parse failure, retries once
 /// after auto-quoting values that contain YAML special characters
 /// (e.g. globs like `*.{ts,tsx}`, where `*` is a YAML alias indicator
-/// and `{}` opens a flow mapping). Mirrors TS `quoteProblematicValues`
-/// in `claude-code-kim/src/utils/frontmatterParser.ts:85-121` so disk
-/// skills authored against the TS schema load identically.
+/// and `{}` opens a flow mapping).
 ///
-/// Falls through to an empty map when even the retry fails (matching TS
-/// lenient behaviour: malformed frontmatter doesn't poison the body).
+/// Falls through to an empty map when even the retry fails (malformed
+/// frontmatter doesn't poison the body).
 fn parse_yaml_block(yaml: &str) -> HashMap<String, FrontmatterValue> {
     let trimmed = yaml.trim();
     if trimmed.is_empty() {
@@ -230,8 +226,8 @@ fn parse_yaml_block(yaml: &str) -> HashMap<String, FrontmatterValue> {
 }
 
 /// Pre-process YAML text by wrapping values that contain YAML special
-/// characters in double quotes. Mirrors TS `quoteProblematicValues` —
-/// keeps glob patterns like `*.{ts,tsx}` from being interpreted as
+/// characters in double quotes, keeping glob patterns like `*.{ts,tsx}`
+/// from being interpreted as
 /// anchors or flow-mappings.
 ///
 /// Only top-level `key: value` lines are rewritten; indented lines,
@@ -294,9 +290,8 @@ fn is_simple_key_char(c: char) -> bool {
 }
 
 /// Returns true when the value contains characters that have special YAML
-/// meaning at the start of a scalar or anywhere in a flow context. Mirrors
-/// the TS `YAML_SPECIAL_CHARS` regex: `[{}[\]*&#!|>%@`]|: ` (`': '` flags
-/// nested mappings; bare `:` is fine for times like `12:34`).
+/// meaning at the start of a scalar or anywhere in a flow context.
+/// Flags `': '` (nested mappings); bare `:` is fine for times like `12:34`.
 fn needs_quoting(value: &str) -> bool {
     if value.contains(": ") {
         return true;

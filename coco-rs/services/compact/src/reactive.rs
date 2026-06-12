@@ -1,20 +1,15 @@
 //! Reactive compaction — mid-turn compaction when prompt is too long.
 //!
-//! TS: `services/compact/reactiveCompact.ts` (peel-from-tail loop driven
-//! by API `prompt_too_long` errors) + autoCompact.ts circuit breaker.
-//!
 //! Three routines live here:
 //! - [`should_reactive_compact`] / [`calculate_drop_target`] — the
 //!   threshold-based fallback that lets callers proactively decide to
 //!   compact when usage is near the limit (95% of effective window).
-//! - [`peel_head_for_ptl_retry`] — the **actual** TS reactive-compact
-//!   primitive: drops oldest API-round groups (head of the slice) until
-//!   enough tokens are freed. The caller can re-issue the API call with
-//!   the survivor list directly, no LLM summarization required. (TS
-//!   describes this as "peel from tail" in conversation-history terms;
-//!   this implementation peels from the array head, which is the
-//!   chronologically-oldest end.) For a true summarized recovery, use
-//!   [`crate::compact_conversation`] with the peeled message slice.
+//! - [`peel_head_for_ptl_retry`] — drops oldest API-round groups (head of
+//!   the slice) until enough tokens are freed. The caller can re-issue the
+//!   API call with the survivor list directly, no LLM summarization required.
+//!   Peels from the array head (chronologically oldest end). For a true
+//!   summarized recovery, use [`crate::compact_conversation`] with the
+//!   peeled message slice.
 //! - [`api_microcompact`] — light tool-result stripping for cases where
 //!   summarization is overkill.
 //!
@@ -172,10 +167,9 @@ pub fn calculate_drop_target(
 /// `None` when only one group (or fewer) survives — caller should escalate
 /// to full summarization.
 ///
-/// TS: reactiveCompact.ts peel-from-tail loop. Unlike
-/// [`crate::truncate_head_for_ptl_retry`] (which feeds the summarizer with
-/// the dropped portion), this returns the surviving slice **directly** so
-/// the caller can resend the API call without going through the LLM
+/// Unlike [`crate::truncate_head_for_ptl_retry`] (which feeds the summarizer
+/// with the dropped portion), this returns the surviving slice **directly**
+/// so the caller can resend the API call without going through the LLM
 /// summarizer.
 #[must_use]
 pub fn peel_head_for_ptl_retry(

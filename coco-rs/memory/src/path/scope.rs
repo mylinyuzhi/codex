@@ -1,8 +1,6 @@
 //! Memory file classification — scope (personal/team) + auto-managed
 //! detection used by the secret-guard, permission carve-outs, and the
 //! file-history skip list.
-//!
-//! TS: `utils/memoryFileDetection.ts`.
 
 use std::path::Path;
 
@@ -62,9 +60,7 @@ pub fn should_bypass_dangerous_dirs(
 /// Classification of a single tool-write path against the memory
 /// taxonomy. Used by `MemoryRuntime::finalize_turn`'s Gap 4 pass to
 /// decide whether a tool's `Edit` / `Write` / `NotebookEdit` should
-/// surface a `ManualEdit` notice. TS parity:
-/// `utils/memoryFileDetection.ts::detectSessionFileType` +
-/// `services/useMemoryUpdateNotification`.
+/// surface a `ManualEdit` notice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteClassification {
     /// Path is under `<memdir>/team/...` — the model edited a team
@@ -89,8 +85,8 @@ pub enum WriteClassification {
 /// Classify `path` against the memory taxonomy. Empty / unparseable
 /// paths return `Unrelated`. Ordering matters: TeamMem before AutoMem
 /// (team is a strict subdir of memdir); SessionMem matched by
-/// filename substring (TS `detectSessionFileType`); Claudemd is the
-/// fallback for any known curated-file basename.
+/// filename substring; Claudemd is the fallback for any known
+/// curated-file basename.
 pub fn classify_written_path(
     path: &Path,
     memory_dir: &Path,

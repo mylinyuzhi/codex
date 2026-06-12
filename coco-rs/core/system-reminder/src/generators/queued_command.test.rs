@@ -177,7 +177,7 @@ async fn each_queued_item_becomes_its_own_message() {
 
 #[tokio::test]
 async fn images_are_appended_after_text_block() {
-    // TS `attachments.ts:1067-1075`: queued items with image pastes emit
+    // Queued items with image pastes emit
     // `[{ type: 'text', text: textValue }, ...imageBlocks]` so both reach
     // the API.
     let c = SystemReminderConfig::default();

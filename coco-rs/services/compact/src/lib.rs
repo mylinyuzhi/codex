@@ -1,7 +1,5 @@
 //! Context compaction: full (LLM summarize), micro (tool result clearing),
 //! API-level clearing, reactive with circuit breaker, and auto-trigger.
-//!
-//! TS: services/compact/ (compact.ts, microCompact.ts, autoCompact.ts, apiMicrocompact.ts)
 
 pub mod api_compact;
 pub mod auto_trigger;
@@ -76,8 +74,7 @@ pub use post_compact_plan::create_plan_attachment_from_owned;
 pub use post_compact_plan::create_plan_attachment_if_needed;
 pub use post_compact_plan_mode::create_plan_mode_attachment_if_needed;
 // Re-export the plan-mode attachment shape so callers can build it
-// without depending directly on `coco-context`. TS callers populate it
-// inline at the compact site.
+// without depending directly on `coco-context`.
 pub use coco_context::PlanModeAttachment;
 pub use post_compact_skills::PostCompactSkill;
 pub use post_compact_skills::create_post_compact_skill_attachments;

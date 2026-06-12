@@ -2,8 +2,8 @@
 //!
 //! These don't assert the entire prompt verbatim (the strings are
 //! ~1-7 KB each); instead they pin signature phrases that drift would
-//! break, and the embedded-search variants where TS conditionally
-//! swaps tool names.
+//! break, and the embedded-search variants that conditionally swap tool
+//! names.
 //!
 //! Tool names go through [`coco_types::ToolName`] in both the prompt
 //! sources and these assertions — never hard-code a tool name string.
@@ -15,7 +15,7 @@ use super::*;
 
 #[test]
 fn general_purpose_prompt_includes_shared_prefix_and_guidelines() {
-    // TS `generalPurposeAgent.ts:3` SHARED_PREFIX text + line 7 guidelines header.
+    // `generalPurposeAgent.ts:3` SHARED_PREFIX text + line 7 guidelines header.
     let p = general_purpose_system_prompt();
     assert!(
         p.starts_with("You are an agent for Claude Code, Anthropic's official CLI for Claude.")
@@ -123,9 +123,9 @@ fn verification_prompt_includes_required_sections() {
     assert!(p.contains("VERDICT: PASS"));
     assert!(p.contains("VERDICT: FAIL"));
     assert!(p.contains("VERDICT: PARTIAL"));
-    // TS templates `${BASH_TOOL_NAME}` and `${WEB_FETCH_TOOL_NAME}` —
-    // verify the runtime substitution actually fired (no leftover
-    // `__BASH__` / `__WEB_FETCH__` sentinels).
+    // Verify the runtime substitution of `${BASH_TOOL_NAME}` and
+    // `${WEB_FETCH_TOOL_NAME}` actually fired (no leftover `__BASH__`
+    // / `__WEB_FETCH__` sentinels).
     assert!(p.contains(&format!("via {} redirection", ToolName::Bash.as_str())));
     assert!(p.contains(&format!(
         ", {}, or other MCP tools",

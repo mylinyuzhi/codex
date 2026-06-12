@@ -1,14 +1,11 @@
-//! `/commit` — TS-aligned prompt that bundles git context for the agent.
+//! `/commit` — prompt that bundles git context for the agent.
 //!
-//! TS source: `commands/commit.ts`. The TS implementation builds a prompt
-//! that interpolates `!\`git status\`` / `!\`git diff HEAD\`` /
-//! `!\`git log --oneline -10\`` / `!\`git branch --show-current\`` via
-//! `executeShellCommandsInPrompt` before pushing to the agent. coco-rs
-//! resolves the same shell substitutions inline here so the resulting
-//! `CommandResult::Prompt` carries concrete diff/status text.
+//! Builds a prompt that interpolates `!\`git status\`` / `!\`git diff HEAD\`` /
+//! `!\`git log --oneline -10\`` / `!\`git branch --show-current\`` so the
+//! resulting `CommandResult::Prompt` carries concrete diff/status text.
 //!
 //! Args after `/commit` are appended as additional guidance for the
-//! commit message (mirrors TS treatment of trailing user input).
+//! commit message.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -71,7 +68,7 @@ impl CommandHandler for CommitPromptHandler {
             .unwrap_or_default();
 
         // Inline-substitute the !`...` markers. Keep the rest of the
-        // prompt verbatim so commits/instructions stay TS-aligned.
+        // prompt verbatim so commits/instructions stay aligned.
         let mut body = PROMPT_TEMPLATE
             .replace("!`git status`", status.trim())
             .replace("!`git diff HEAD`", diff.trim())

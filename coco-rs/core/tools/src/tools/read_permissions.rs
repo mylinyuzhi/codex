@@ -1,10 +1,9 @@
 //! Shared file-read permission checking for Grep / Glob / Read tools.
 //!
-//! R6-T20. TS routes every file-read tool through
-//! `checkReadPermissionForTool()` (filesystem.ts:1030) which consults
-//! the session `toolPermissionContext` for deny rules and applies the
-//! resulting glob patterns as ripgrep `--glob '!...'` arguments plus
-//! hard-fails direct Read calls against blocked paths.
+//! R6-T20. Every file-read tool is routed through the permission check,
+//! which consults the session `toolPermissionContext` for deny rules and
+//! applies the resulting glob patterns as ripgrep `--glob '!...'` arguments
+//! plus hard-fails direct Read calls against blocked paths.
 //!
 //! coco-rs resolves the deny patterns ahead of time in
 //! `coco_config::ToolConfig::file_read_ignore_patterns` (JSON-first,
@@ -24,8 +23,7 @@
 //!   traversal via `is_read_ignored_with_matcher`.
 //! * `GlobTool::check_permissions` mirrors Grep.
 //!
-//! Not a security boundary. TS explicitly notes the same thing in
-//! `shouldUseSandbox.ts` — the ignore patterns are a convenience to
+//! Not a security boundary — the ignore patterns are a convenience to
 //! hide sensitive files from the model, not a guarantee.
 
 use coco_types::ToolCheckResult;
@@ -118,8 +116,7 @@ pub fn check_read_permission_with_matcher(
     check_read_permission_for_path(&path, ctx)
 }
 
-/// TS parity for `checkReadPermissionForTool()`:
-/// read deny/ask rules win, then working-directory/internal paths are
+/// Read deny/ask rules win, then working-directory/internal paths are
 /// allowed, then explicit read allow rules are honored, otherwise prompt.
 ///
 /// Permanent logging surface (enable with

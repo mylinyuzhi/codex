@@ -1,8 +1,5 @@
 //! Helpers for the `/copy` command: assistant-message lookback and
 //! fenced-code-block extraction.
-//!
-//! TS source: `src/commands/copy/copy.tsx`
-//! (`collectRecentAssistantTexts`, `extractCodeBlocks`, `fileExtension`).
 
 #[cfg(test)]
 #[path = "copy.test.rs"]
@@ -41,7 +38,7 @@ pub struct CodeBlock {
 /// distinct assistant message that produced visible text. Dedups by
 /// `message_uuid` (one Message → many cells), skips api-error turns
 /// and tool-only turns. Caps at `max`. Index 0 in the returned slice
-/// is the latest, mirroring TS `collectRecentAssistantTexts`.
+/// is the latest.
 pub fn collect_recent_assistant_texts(transcript: &TranscriptView, max: usize) -> Vec<String> {
     if max == 0 {
         return Vec::new();
@@ -81,13 +78,11 @@ pub fn collect_recent_assistant_texts(transcript: &TranscriptView, max: usize) -
 }
 
 /// Pull every fenced ```code``` block out of a markdown source after
-/// applying TS `stripPromptXMLTags`. TS uses `marked.lexer(...)` and
-/// keeps `code` tokens; this parser covers the same prompt-tag
-/// stripping and CommonMark-style fenced blocks without adding a
-/// Markdown-parser dependency to the TUI crate. An opened-but-
-/// unterminated block at EOF is closed implicitly — `marked.js`
-/// behaves the same way and we want the trailing block to still appear
-/// in the picker.
+/// stripping prompt XML tags. Covers prompt-tag stripping and
+/// CommonMark-style fenced blocks without adding a Markdown-parser
+/// dependency to the TUI crate. An opened-but-unterminated block at
+/// EOF is closed implicitly so the trailing block still appears in the
+/// picker.
 pub fn extract_code_blocks(markdown: &str) -> Vec<CodeBlock> {
     let mut blocks = Vec::new();
     let stripped = strip_prompt_xml_tags(markdown);
@@ -182,11 +177,11 @@ fn strip_prompt_xml_tags(content: &str) -> String {
     stripped.trim().to_string()
 }
 
-/// File-extension suffix for a code-block fence language tag. Mirrors
-/// TS `fileExtension`: alnum-only sanitization (defends against
-/// path-traversal in pathological fence labels like
-/// ```` ```../etc/passwd ````), empty / `plaintext` collapse to
-/// `.txt`. Returns `".txt"` when `lang` is `None`.
+/// File-extension suffix for a code-block fence language tag.
+/// Alnum-only sanitization (defends against path-traversal in
+/// pathological fence labels like ```` ```../etc/passwd ````),
+/// empty / `plaintext` collapse to `.txt`. Returns `".txt"` when
+/// `lang` is `None`.
 pub fn file_extension(lang: Option<&str>) -> String {
     let Some(lang) = lang else {
         return ".txt".to_string();
@@ -203,7 +198,6 @@ pub fn file_extension(lang: Option<&str>) -> String {
 /// transcript newest-first, decide between a direct clipboard write
 /// and mounting the [`ModalState::CopyPicker`] surface based on
 /// `copy_full_response` + presence of code blocks.
-/// TS parity: `commands/copy/copy.tsx::call`.
 pub(crate) fn handle_copy_command(state: &mut AppState, args: &str) -> Option<String> {
     let age = match parse_copy_arg(args) {
         Ok(age) => age,
@@ -267,8 +261,6 @@ fn parse_copy_arg(args: &str) -> Result<usize, String> {
 /// (OSC 52 isn't universally supported, and the user can `cat` the
 /// file when the terminal silently drops the escape), and surface a
 /// toast. Used by `/copy` (direct copy path) and the picker confirm.
-/// Mirrors TS `copyOrWriteToFile` + the lease/toast shape from
-/// `update::clipboard::copy_last_message_with`.
 pub(crate) fn copy_text_to_clipboard(state: &mut AppState, text: &str, filename: &str) -> String {
     copy_text_with(
         state,
@@ -331,7 +323,7 @@ pub(crate) fn copy_text_with(
 }
 
 /// Write `text` to `<tmpdir>/coco/<filename>`, creating the directory
-/// as needed. Mirrors TS `writeToFile` (`commands/copy/copy.tsx`).
+/// as needed.
 fn write_to_temp_file(text: &str, filename: &str) -> Result<PathBuf, std::io::Error> {
     let dir = std::env::temp_dir().join("coco");
     std::fs::create_dir_all(&dir)?;
@@ -343,7 +335,7 @@ fn write_to_temp_file(text: &str, filename: &str) -> Result<PathBuf, std::io::Er
 /// Apply the picker's confirmed selection: copy the right slice to the
 /// clipboard, and — for the `Always` arm — persist
 /// `copy_full_response: true` to user settings so the next `/copy`
-/// skips the picker entirely. Mirrors TS `CopyPicker.handleSelect`.
+/// skips the picker entirely.
 pub(crate) fn confirm_picker_selection(
     state: &mut AppState,
     cp: CopyPickerState,

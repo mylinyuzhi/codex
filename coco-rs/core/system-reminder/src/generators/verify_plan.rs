@@ -1,8 +1,4 @@
-//! TS `verify_plan_reminder` generator.
-//!
-//! Mirrors `getVerifyPlanReminderAttachment` (`attachments.ts:3894`) +
-//! `normalizeAttachmentForAPI` `case 'verify_plan_reminder':`
-//! (`messages.ts:4240`).
+//! `verify_plan_reminder` generator.
 //!
 //! Fires every 10 turns after `ExitPlanMode` while
 //! [`ToolAppState::pending_plan_verification`] remains set, nudging the
@@ -11,18 +7,12 @@
 //! **Tier**: [`ReminderTier::MainAgentOnly`] — sub-agents don't own the
 //! plan; the reminder would be wasted tokens.
 //!
-//! **Gate difference vs. TS**: TS gates and conditionally registers the
-//! tool on `USER_TYPE=='ant' && CLAUDE_CODE_VERIFY_PLAN=='true'`.
-//! coco-rs registers `VerifyPlanExecution` directly, so the reminder is
-//! user-configurable and defaults on.
-//!
 //! Gate chain (all must pass):
 //!
 //! 1. Config flag enabled (`config.attachments.verify_plan_reminder`).
 //! 2. Main-agent only (enforced by tier filter in the orchestrator).
 //! 3. `ctx.has_pending_plan_verification` (set by `ExitPlanModeTool`).
-//! 4. `ctx.turns_since_plan_exit > 0` and divisible by 10 — matching
-//!    TS `attachments.ts:3919-3922`, which skips `turnCount === 0`
+//! 4. `ctx.turns_since_plan_exit > 0` and divisible by 10 — skips turn 0
 //!    and fires at 10, 20, …
 
 use async_trait::async_trait;
@@ -36,8 +26,6 @@ use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 use coco_types::ToolName;
 
-/// TS `VERIFY_PLAN_REMINDER_CONFIG.TURNS_BETWEEN_REMINDERS = 10`
-/// (`attachments.ts:291`).
 const TURNS_BETWEEN_REMINDERS: i32 = 10;
 
 /// Verbatim body from `messages.ts:4247`.

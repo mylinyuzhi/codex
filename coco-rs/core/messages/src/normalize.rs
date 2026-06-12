@@ -1,9 +1,6 @@
 //! Message normalization for API consumption.
 //!
-//! TS: normalizeMessagesForAPI() — 10-step pipeline that transforms
-//! internal messages into the format expected by the LLM API.
-//!
-//! Port from cocode-rs: [`NormalizationOptions`] presets
+//! [`NormalizationOptions`] presets
 //! ([`for_api`](NormalizationOptions::for_api) /
 //! [`for_ui`](NormalizationOptions::for_ui) /
 //! [`for_persist`](NormalizationOptions::for_persist)) expose the same
@@ -22,14 +19,11 @@ use crate::predicates;
 /// `app/query::tool_input_normalizer::normalize_observable_tool_input`
 /// and stripped back out by [`strip_observable_tool_input_for_api`]
 /// before the assistant message is re-sent to the model.
-///
-/// TS parity: `normalizeToolInput` injects these, `normalizeToolInputForAPI`
-/// strips them (`utils/api.ts`).
 pub const EXIT_PLAN_MODE_INJECTED_PLAN_FIELD: &str = "plan";
 /// See [`EXIT_PLAN_MODE_INJECTED_PLAN_FIELD`].
 pub const EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD: &str = "planFilePath";
 
-/// [`MessagePass`] impls for the seven TS-parity normalize steps (8 / 9 /
+/// [`MessagePass`] impls for the seven normalize steps (8 / 9 /
 /// 10 / 11 / 12a-b / 13a / 13a'). Each pass is a unit struct so the
 /// pipeline runner uses zero-overhead static dispatch.
 ///
@@ -251,8 +245,7 @@ impl NormalizationOptions {
     }
 
     /// Preset for transcript persistence: keep everything the session
-    /// history carried, drop nothing — mirrors TS's unfiltered
-    /// `appendEntryToFile`.
+    /// history carried, drop nothing.
     pub const fn for_persist() -> Self {
         Self {
             require_api_visible: false,
@@ -307,7 +300,7 @@ pub fn filter_by_options(
 
 /// Normalize messages for API consumption.
 ///
-/// Pipeline (TS-aligned order from `utils/messages.ts:2255-2343`):
+/// Pipeline:
 /// 1. Filter out virtual messages (not sent to API)
 /// 2. Filter out tombstoned messages
 /// 3. Filter out progress messages (UI-only)
@@ -315,19 +308,18 @@ pub fn filter_by_options(
 /// 5. Filter out whitespace-only user messages
 /// 6. Ensure tool result pairing (orphaned results → remove)
 /// 7. Strip empty assistant messages
-/// 8. `filter_orphaned_thinking_only_messages` (TS-parity, P1).
-/// 9. `filter_trailing_thinking_from_last_assistant` (TS-parity, P1) —
-///    must run BEFORE the whitespace filter; reverse order has a known bug
-///    (TS comment line 2313).
-/// 10. `filter_whitespace_only_assistant_messages` (TS-parity, P1).
-/// 11. `ensure_non_empty_assistant_content` (TS-parity, P1).
+/// 8. `filter_orphaned_thinking_only_messages` (P1).
+/// 9. `filter_trailing_thinking_from_last_assistant` (P1) —
+///    must run BEFORE the whitespace filter; reverse order has a known bug.
+/// 10. `filter_whitespace_only_assistant_messages` (P1).
+/// 11. `ensure_non_empty_assistant_content` (P1).
 /// 12. Merge consecutive Users (unconditional) and consecutive Assistants
-///     **with matching `request_id`** (TS `messages.ts:2257-2261`).
+///     **with matching `request_id`**.
 /// 13. Extract LlmMessage from each surviving message.
-/// 14. `smoosh_system_reminder_into_tool_result` (TS-parity, P0) — runs
+/// 14. `smoosh_system_reminder_into_tool_result` (P0) — runs
 ///     after merge so SR-only User messages can be folded into prior Tool.
-/// 15. `sanitize_error_tool_result_content` (TS-parity, P0) — runs AFTER
-///     smoosh per TS so any text smooshed into is_error tool_results gets
+/// 15. `sanitize_error_tool_result_content` (P0) — runs AFTER
+///     smoosh so any text smooshed into is_error tool_results gets
 ///     the final text-only normalization.
 /// 16. Ensure conversation starts with user message.
 ///
@@ -390,7 +382,7 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
         _ => true,
     });
 
-    // Steps 8-13a: TS-parity assistant-content + tool_result fixups +
+    // Steps 8-13a: assistant-content + tool_result fixups +
     // role-merge + ExitPlanMode strip. Each pass is a [`MessagePass`]
     // impl that bundles its `would_mutate` predicate alongside `apply`,
     // so the per-pass trigger condition lives next to the algorithm —
@@ -399,9 +391,9 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
     // [`run_message_passes`] is the canonical "Arc → owned → mutate →
     // Arc" bridge: when ALL pass predicates report no work, it returns
     // `filtered.to_vec()` (refcount bumps only); otherwise materializes
-    // one `Vec<Message>`, applies the passes in TS order, then re-wraps.
+    // one `Vec<Message>`, applies the passes in order, then re-wraps.
     //
-    // Order matters (TS messages.ts:2313): trailing-thinking BEFORE
+    // Order matters: trailing-thinking BEFORE
     // whitespace; merge-by-id AFTER the content fixups so empty-content
     // siblings get a placeholder before merge tries to combine them.
     let refs = borrow_refs(&filtered);
@@ -440,14 +432,13 @@ pub fn normalize_messages_for_api(messages: &[std::sync::Arc<Message>]) -> Vec<L
     // `group_into_blocks` (vercel-ai-anthropic) merges User+Tool.
     smoosh_system_reminder_into_tool_result(&mut result);
 
-    // Step 15: sanitize is_error tool_results — runs AFTER smoosh per TS
+    // Step 15: sanitize is_error tool_results — runs AFTER smoosh
     // (smoosh may have appended text into a Content array; sanitize ensures
     // the final form is text-only when `is_error=true`). Operates at the
     // LlmMessage level since by this point the Message envelope is gone.
     sanitize_error_tool_result_in_llm_messages(&mut result);
 
-    // Step 15b: forward-direction `ensureToolResultPairing` (TS
-    // `messages.ts:5301-5326`). Synthesize an `is_error: true` placeholder
+    // Step 15b: forward-direction `ensureToolResultPairing`. Synthesize an `is_error: true` placeholder
     // tool_result for every assistant tool_use that lacks a matching
     // tool_result. Without this, a single race / panic / discard miss
     // produces the provider error `unexpected tool_use_id` and the next
@@ -584,8 +575,7 @@ fn is_document_media(file: &crate::FileContent) -> bool {
 /// [`EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD`]) before the assistant
 /// message is sent to the model.
 ///
-/// TS parity: `normalizeToolInputForAPI` (`utils/api.ts`). The
-/// `ExitPlanMode` wire schema is an empty object — the injected fields
+/// The `ExitPlanMode` wire schema is an empty object — the injected fields
 /// exist only so hooks / SDK / transcript consumers can observe the plan.
 /// Re-sending them would bloat every subsequent turn with a duplicate of
 /// the plan that already appears in the `ExitPlanMode` tool_result.
@@ -612,15 +602,12 @@ fn strip_observable_tool_input_for_api(messages: &mut [Message]) {
     }
 }
 
-/// Placeholder text shipped in the synthetic tool_result body. Literal
-/// match to TS `claude-code/src/utils/messages.ts:246-247` — exact wire
-/// format so transcripts produced by either runtime are interchangeable
-/// and so HFI / strict-pairing detectors that key off this exact string
-/// keep working.
+/// Placeholder text shipped in the synthetic tool_result body. Exact wire
+/// format so transcripts are interchangeable and HFI / strict-pairing
+/// detectors that key off this exact string keep working.
 const SYNTHETIC_TOOL_RESULT_PLACEHOLDER: &str = "[Tool result missing due to internal error]";
 
-/// TS-parity forward synthesis of missing tool_results
-/// (`utils/messages.ts::ensureToolResultPairing`, lines 5301-5326).
+/// Forward synthesis of missing tool_results.
 ///
 /// Walks `messages` and, for each `Assistant` whose `ToolCall` parts have
 /// no matching `ToolResult` anywhere in the transcript, inserts an
@@ -766,18 +753,15 @@ fn sanitize_error_tool_result_in_llm_messages(messages: &mut [LlmMessage]) {
 }
 
 /// Merge consecutive Assistant messages **only when their `request_id`
-/// matches**. TS: `messages.ts:2257-2261` — chunks with the same
-/// `message.id` get merged (typical for streaming), chunks with different
-/// `message.id` stay separate (typical for retry-after-partial-stream
-/// failure on resume). Without this guard, two distinct API responses
-/// landing back-to-back in the transcript get incorrectly stitched into
-/// one, producing an assistant message with mismatched thinking-block
-/// signatures that the API rejects with 400.
+/// matches**. Chunks with the same `request_id` get merged (typical for
+/// streaming), chunks with different `request_id` stay separate (typical
+/// for retry-after-partial-stream failure on resume). Without this guard,
+/// two distinct API responses landing back-to-back in the transcript get
+/// incorrectly stitched into one, producing an assistant message with
+/// mismatched thinking-block signatures that the API rejects with 400.
 ///
-/// Messages with `request_id == None` never merge with anything (matches
-/// TS `msg.message.id === normalizedMessage.message.id` — `undefined`
-/// never equals `undefined` in this comparison because TS uses strict
-/// equality on the field).
+/// Messages with `request_id == None` never merge with anything — `None`
+/// never equals `None` in this comparison.
 pub fn merge_consecutive_assistants_by_request_id(messages: &mut Vec<Message>) {
     if messages.len() <= 1 {
         return;
@@ -827,7 +811,7 @@ fn extract_llm_message(msg: &Message) -> Option<LlmMessage> {
         Message::Assistant(m) => Some(m.message.clone()),
         Message::Attachment(m) => m.as_api_message().cloned(),
         Message::ToolResult(m) => Some(m.message.clone()),
-        // #82 / TS messages.ts:2078-2092: local_command system messages
+        // #82: local_command system messages
         // become user messages so the model can reference previous command
         // output in later turns. Other system messages stay out of the API
         // prompt (handled by system-reminder injection, not normalization).
@@ -840,12 +824,12 @@ fn extract_llm_message(msg: &Message) -> Option<LlmMessage> {
 }
 
 // `merge_consecutive_same_role` (LlmMessage-level) was removed because it
-// merged consecutive assistant chunks unconditionally — incorrect per TS
-// (`messages.ts:2257-2261` only merges when message.id matches). The
-// request_id-aware Message-level merge runs in step 12 of
-// `normalize_messages_for_api`; this avoids losing the id through the
-// LlmMessage extraction. User+User merging is handled by
-// `merge_consecutive_user_messages` (Message-level, unconditional).
+// merged consecutive assistant chunks unconditionally — incorrect since only
+// chunks with matching `request_id` should merge. The request_id-aware
+// Message-level merge runs in step 12 of `normalize_messages_for_api`;
+// this avoids losing the id through the LlmMessage extraction. User+User
+// merging is handled by `merge_consecutive_user_messages` (Message-level,
+// unconditional).
 
 /// Merge consecutive User messages in-place.
 ///
@@ -877,8 +861,7 @@ pub fn merge_consecutive_user_messages(messages: &mut Vec<Message>) {
                     },
                 ) = (&mut dest.message, src.message)
             {
-                // #83 / TS joinTextAtSeam (messages.ts:2505-2515): the
-                // Anthropic API concatenates adjacent text parts with NO
+                // #83: the Anthropic API concatenates adjacent text parts with NO
                 // separator, so insert a newline at the seam when both the
                 // trailing dest part and leading src part are text
                 // (otherwise '2+2' + '3+3' would merge to '2+23+3').
@@ -1028,7 +1011,7 @@ fn placeholder_tombstone() -> Message {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// TS-parity normalization passes (audit-gaps.md Round 10)
+// Normalization passes (Round 10 deep-review)
 // ─────────────────────────────────────────────────────────────────────────
 
 /// API-rejection guard: when `is_error=true`, all `tool_result.content` parts
@@ -1036,10 +1019,10 @@ fn placeholder_tombstone() -> Message {
 /// text if is_error is true" when an image/document part is mixed with the
 /// error flag.
 ///
-/// TS: `messages.ts:1884 sanitizeErrorToolResultContent`. Read-side guard
-/// for transcripts persisted before the error-aware smoosh learned to
-/// filter on `is_error`. Without this, a resumed session containing an
-/// image-in-error tool_result 400s on every call and cannot be recovered.
+/// Read-side guard for transcripts persisted before the error-aware smoosh
+/// learned to filter on `is_error`. Without this, a resumed session
+/// containing an image-in-error tool_result 400s on every call and cannot
+/// be recovered.
 ///
 /// Walk every `Message::ToolResult`. If `is_error=true` AND output is
 /// `ToolResultContent::Content { value }`, drop non-Text parts and
@@ -1103,15 +1086,14 @@ pub fn sanitize_error_tool_result_content(messages: &mut [Message]) {
 /// API-rejection guard: smoosh `<system-reminder>`-prefixed user text into
 /// the tool_result content of the immediately preceding tool message.
 ///
-/// TS: `messages.ts:1835-1873 smooshSystemReminderSiblings`. The Anthropic
-/// provider groups consecutive User+Tool messages into a single
+/// The Anthropic provider groups consecutive User+Tool messages into a single
 /// `role: "user"` block on the wire (see `vercel-ai-anthropic`'s
 /// `convert_to_anthropic_messages::group_into_blocks` lines 46-89). When a
 /// `<system-reminder>`-wrapped attachment lands as a sibling **after** a
 /// tool_result inside that block, the wire renders as
 /// `</function_results>\n\nHuman:<sr>...` — capybara/older-Anthropic models
 /// learn to emit `\n\nHuman:` after tool results, leading to 3-token
-/// empty `end_turn` responses (TS issue #21049).
+/// empty `end_turn` responses.
 ///
 /// This pass scans `Vec<LlmMessage>` AFTER `merge_consecutive_same_role`
 /// and folds qualifying SR-text into the prior `LlmMessage::Tool`'s
@@ -1119,10 +1101,10 @@ pub fn sanitize_error_tool_result_content(messages: &mut [Message]) {
 /// when:
 /// - the tool_result output is not Text or Content (Json/ErrorJson/
 ///   ErrorText/ExecutionDenied — risky to mutate),
-/// - the tool_result has `is_error=true` (per TS `smooshIntoToolResult`,
-///   error tool_results must remain text-only and we'd be inserting
-///   text-only anyway, but the original SR text may itself be non-trivial
-///   to merge with prior text — keep behavior surgical for now),
+/// - the tool_result has `is_error=true` (error tool_results must remain
+///   text-only and we'd be inserting text-only anyway, but the original
+///   SR text may itself be non-trivial to merge with prior text — keep
+///   behavior surgical for now),
 /// - any block in the User content is a non-Text part (File etc. — those
 ///   cannot fold into tool_result.content).
 pub fn smoosh_system_reminder_into_tool_result(messages: &mut Vec<LlmMessage>) {
@@ -1168,12 +1150,12 @@ pub fn smoosh_system_reminder_into_tool_result(messages: &mut Vec<LlmMessage>) {
 /// Try to append `sr_texts` as text content to the last `ToolResultPart` of
 /// the given Tool LlmMessage. Returns `true` on successful fold.
 ///
-/// `is_error=true` tool_results: TS `smooshIntoToolResult` (`messages.ts:2545-2553`)
-/// proceeds with the smoosh but filters incoming blocks to text-only so the
-/// API's "is_error must be text-only" invariant is preserved. SR text is
-/// already text-only, so the smoosh is safe — bailing instead would leave
-/// the dangerous `text-after-tool_result` pattern intact, which is the
-/// exact `\n\nHuman:` issue smoosh exists to prevent.
+/// `is_error=true` tool_results: the smoosh proceeds but filters incoming
+/// blocks to text-only so the API's "is_error must be text-only" invariant
+/// is preserved. SR text is already text-only, so the smoosh is safe —
+/// bailing instead would leave the dangerous `text-after-tool_result`
+/// pattern intact, which is the exact `\n\nHuman:` issue smoosh exists
+/// to prevent.
 fn fold_text_into_last_tool_result(tool: &mut LlmMessage, sr_texts: &[String]) -> bool {
     let LlmMessage::Tool { content, .. } = tool else {
         return false;
@@ -1225,12 +1207,11 @@ fn fold_text_into_last_tool_result(tool: &mut LlmMessage, sr_texts: &[String]) -
 
 /// Strip trailing `Reasoning` parts from the last assistant message.
 ///
-/// TS: `messages.ts:4781 filterTrailingThinkingFromLastAssistant`. Trailing
-/// thinking-only blocks at the very end of the conversation (typical when
-/// a stream is cancelled mid-thinking) cause API "thinking blocks cannot
-/// be modified" errors on the next turn. Replace with a `[No message
-/// content]` placeholder when ALL blocks were thinking, otherwise just
-/// truncate the trailing run.
+/// Trailing thinking-only blocks at the very end of the conversation
+/// (typical when a stream is cancelled mid-thinking) cause API "thinking
+/// blocks cannot be modified" errors on the next turn. Replace with a
+/// `[No message content]` placeholder when ALL blocks were thinking,
+/// otherwise just truncate the trailing run.
 pub fn filter_trailing_thinking_from_last_assistant(messages: &mut [Message]) {
     let Some(last) = messages.last_mut() else {
         return;
@@ -1274,10 +1255,9 @@ pub fn filter_trailing_thinking_from_last_assistant(messages: &mut [Message]) {
 
 /// Drop assistant messages whose content is only whitespace-only Text parts.
 ///
-/// TS: `messages.ts:4869 filterWhitespaceOnlyAssistantMessages`. The API
-/// rejects "text content blocks must contain non-whitespace text". Happens
-/// when the model emits `\n\n` before a thinking block but the user
-/// cancels mid-stream, leaving only whitespace text.
+/// The API rejects "text content blocks must contain non-whitespace text".
+/// Happens when the model emits `\n\n` before a thinking block but the
+/// user cancels mid-stream, leaving only whitespace text.
 pub fn filter_whitespace_only_assistant_messages(messages: &mut Vec<Message>) {
     let original_len = messages.len();
     messages.retain(|m| {
@@ -1307,10 +1287,9 @@ pub fn filter_whitespace_only_assistant_messages(messages: &mut Vec<Message>) {
 /// Replace empty content arrays in non-final assistant messages with a
 /// `[No message content]` placeholder.
 ///
-/// TS: `messages.ts:4933 ensureNonEmptyAssistantContent`. The API requires
-/// "all messages must have non-empty content except for the optional final
-/// assistant message". The final message is left as-is so prefill paths
-/// keep working.
+/// The API requires "all messages must have non-empty content except for
+/// the optional final assistant message". The final message is left as-is
+/// so prefill paths keep working.
 pub fn ensure_non_empty_assistant_content(messages: &mut [Message]) {
     if messages.is_empty() {
         return;
@@ -1338,12 +1317,10 @@ pub fn ensure_non_empty_assistant_content(messages: &mut [Message]) {
 /// whose `request_id` is NOT shared by another assistant message that
 /// carries non-thinking content.
 ///
-/// TS: `messages.ts:4991 filterOrphanedThinkingOnlyMessages`. Streaming
-/// emits one assistant message per content_block_stop with a stable
-/// `message.id`; loaders that fail to merge those chunks (compaction
+/// Streaming emits one assistant message per content_block_stop with a
+/// stable `request_id`; loaders that fail to merge those chunks (compaction
 /// slicing, resume) leave orphaned thinking-only chunks behind. Sending
-/// them produces "thinking blocks cannot be modified" 400s. Rust uses
-/// `request_id` as the equivalent of TS `message.id`.
+/// them produces "thinking blocks cannot be modified" 400s.
 pub fn filter_orphaned_thinking_only_messages(messages: &mut Vec<Message>) {
     use std::collections::HashSet;
     let mut ids_with_non_thinking: HashSet<String> = HashSet::new();
@@ -1394,9 +1371,9 @@ pub fn filter_orphaned_thinking_only_messages(messages: &mut Vec<Message>) {
     });
 }
 
-/// One user-message image that exceeds the API base64 size cap (TS
-/// `ImageSizeError`). Carries the offending base64 length and the cap so the
-/// caller can surface a clear "please resize" error.
+/// One user-message image that exceeds the API base64 size cap. Carries the
+/// offending base64 length and the cap so the caller can surface a clear
+/// "please resize" error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageSizeError {
     /// Base64 length of the offending image.
@@ -1406,7 +1383,7 @@ pub struct ImageSizeError {
 }
 
 impl ImageSizeError {
-    /// User-facing message mirroring TS "Please resize the image before sending".
+    /// User-facing "please resize" error message.
     pub fn message(&self) -> String {
         format!(
             "An image in the conversation is too large to send to the API \
@@ -1417,11 +1394,10 @@ impl ImageSizeError {
 }
 
 /// Validate that no user-message image exceeds the API base64 size cap before
-/// it hits the wire — TS `validateImagesForAPI`, the final step of
-/// `normalizeMessagesForAPI` (`utils/messages.ts:2367`). `max_base64_len` is the
-/// provider cap (`coco_config::constants::API_IMAGE_MAX_BASE64_SIZE`). Returns
-/// the first offender so the caller can short-circuit the request with a clear
-/// error instead of letting the provider reject the whole prompt.
+/// it hits the wire. `max_base64_len` is the provider cap
+/// (`coco_config::constants::API_IMAGE_MAX_BASE64_SIZE`). Returns the first
+/// offender so the caller can short-circuit the request with a clear error
+/// instead of letting the provider reject the whole prompt.
 pub fn validate_images_for_api(
     prompt: &[LlmMessage],
     max_base64_len: usize,
@@ -1440,7 +1416,7 @@ pub fn validate_images_for_api(
             let Some(raw) = f.data.as_data() else {
                 continue;
             };
-            // Match TS `block.source.data.length` (base64 string length). For
+            // Match `block.source.data.length` (base64 string length). For
             // raw bytes the equivalent base64 length is 4 chars per 3 bytes.
             let base64_len = if let Some(s) = raw.as_base64() {
                 s.len()

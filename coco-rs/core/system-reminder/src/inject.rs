@@ -8,10 +8,9 @@
 //! 2. [`inject_reminders`] — engine-facing. Runs step 1, then maps each
 //!    [`InjectedMessage`] to a [`Message`] and appends to `history`.
 //!
-//! TS parity: the combined pipeline mirrors
+//! The combined pipeline covers
 //! `getAttachmentMessages` → `normalizeAttachmentForAPI` →
-//! `wrapMessagesInSystemReminder` (`attachments.ts:2937`, `messages.ts:3453`,
-//! `messages.ts:3101`).
+//! `wrapMessagesInSystemReminder`.
 //!
 //! Phase A handles [`ReminderOutput::Text`] — the 95 % case for reminders that
 //! produce a single user message. Multi-message reminders
@@ -124,9 +123,8 @@ impl NormalizedMessages {
 /// - `Text` → single `UserText` with the output wrapped by the reminder's
 ///   [`crate::AttachmentType::xml_tag`].
 /// - `Messages(vec)` → one `UserBlocks` / `AssistantBlocks` per entry; each
-///   text block is wrapped per the parent reminder's tag — matches TS
-///   `wrapMessagesInSystemReminder` which wraps every text block with
-///   `ensureSystemReminderWrap`.
+///   text block is wrapped per the parent reminder's tag (each text block
+///   is individually wrapped).
 /// - `ModelAttachment { payload }` → single `UserText` whose content is
 ///   the pretty-printed JSON, wrapped in the reminder's tag.
 pub fn create_injected_messages(reminders: Vec<SystemReminder>) -> Vec<InjectedMessage> {
@@ -175,8 +173,7 @@ pub fn normalize_injected_messages(reminders: Vec<SystemReminder>) -> Normalized
                         .into_iter()
                         .map(|b| match b {
                             ContentBlock::Text { text } => {
-                                // Wrap each text block per the parent reminder's
-                                // tag — matches TS per-block wrapping behavior.
+                                // Wrap each text block per the parent reminder's tag.
                                 InjectedBlock::Text(wrap_with_tag(&text, tag))
                             }
                             ContentBlock::Image {
@@ -357,9 +354,9 @@ fn user_llm_from_blocks(blocks: Vec<InjectedBlock>) -> LlmMessage {
                 media_type,
                 data_base64,
             } => {
-                // TS `attachments.ts:1067-1075` keeps queued-command image
-                // pastes alongside the wrapped text — vercel-ai-v4 carries
-                // them through `UserContentPart::File` with a base64 payload.
+                // Queued-command image pastes alongside the wrapped text —
+                // vercel-ai-v4 carries them through `UserContentPart::File`
+                // with a base64 payload.
                 content.push(UserContent::File(FileContent::from_base64(
                     data_base64,
                     media_type,

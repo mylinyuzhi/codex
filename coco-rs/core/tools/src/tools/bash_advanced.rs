@@ -1,7 +1,4 @@
-//! Advanced Bash tool features ported from TS BashTool/.
-//!
-//! TS: tools/BashTool/BashTool.tsx, bashCommandHelpers.ts,
-//! commandSemantics.ts, utils.ts
+//! Advanced Bash tool features.
 //!
 //! Provides output processing (truncation with intelligent boundaries),
 //! command classification (search/read/list/silent), progress tracking,
@@ -13,21 +10,18 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 /// Show progress spinner after this threshold.
-/// TS: PROGRESS_THRESHOLD_MS = 2000
 const PROGRESS_THRESHOLD_MS: u64 = 2000;
 
 /// Auto-background blocking commands after this budget in assistant mode.
-/// TS: ASSISTANT_BLOCKING_BUDGET_MS = 15_000
 pub(crate) const ASSISTANT_BLOCKING_BUDGET_MS: u64 = 15_000;
 
 /// Commands that must NOT be auto-backgrounded on timeout — they belong in the
-/// foreground unless the user explicitly backgrounds them. TS:
-/// `DISALLOWED_AUTO_BACKGROUND_COMMANDS = ['sleep']`.
+/// foreground unless the user explicitly backgrounds them.
 const DISALLOWED_AUTO_BACKGROUND_COMMANDS: &[&str] = &["sleep"];
 
 /// Whether `command` is eligible for automatic backgrounding on timeout.
-/// Mirrors TS `isAutobackgroundingAllowed`: take the base command (first
-/// token) and allow everything except the disallowed set.
+/// Take the base command (first token) and allow everything except the
+/// disallowed set.
 pub(crate) fn is_autobackgrounding_allowed(command: &str) -> bool {
     match command.split_whitespace().next() {
         Some(base) => !DISALLOWED_AUTO_BACKGROUND_COMMANDS.contains(&base),
@@ -39,7 +33,6 @@ pub(crate) fn is_autobackgrounding_allowed(command: &str) -> bool {
 const MAX_IMAGE_FILE_SIZE: usize = 20 * 1024 * 1024;
 
 // ── Command classification sets ──
-// TS: BASH_SEARCH_COMMANDS, BASH_READ_COMMANDS, BASH_LIST_COMMANDS, etc.
 
 static SEARCH_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
@@ -78,12 +71,10 @@ static SILENT_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 });
 
 /// Commands that should not be auto-backgrounded.
-/// TS: DISALLOWED_AUTO_BACKGROUND_COMMANDS
 static DISALLOWED_AUTO_BACKGROUND: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| ["sleep"].into_iter().collect());
 
 /// Common long-running commands (for analytics/classification).
-/// TS: COMMON_BACKGROUND_COMMANDS
 static COMMON_BACKGROUND_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "npm",
@@ -116,7 +107,6 @@ static COMMON_BACKGROUND_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::n
 // ── Command classification ──
 
 /// Result of classifying a command as search, read, or list.
-/// TS: isSearchOrReadBashCommand() return type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandClassification {
     pub is_search: bool,
@@ -135,8 +125,6 @@ impl CommandClassification {
 ///
 /// For pipelines, ALL non-neutral parts must be search/read/list for the
 /// whole command to be collapsible.
-///
-/// TS: isSearchOrReadBashCommand()
 pub fn classify_command(command: &str) -> CommandClassification {
     let parts = split_command_with_operators(command);
     if parts.is_empty() {
@@ -217,8 +205,6 @@ pub fn classify_command(command: &str) -> CommandClassification {
 }
 
 /// Check if a command is expected to produce no stdout on success.
-///
-/// TS: isSilentBashCommand()
 pub fn is_silent_command(command: &str) -> bool {
     let parts = split_command_with_operators(command);
     if parts.is_empty() {
@@ -269,8 +255,6 @@ pub fn is_silent_command(command: &str) -> bool {
 // ── Auto-backgrounding ──
 
 /// Whether a command is allowed to be automatically backgrounded.
-///
-/// TS: isAutobackgroundingAllowed()
 pub fn is_auto_backgrounding_allowed(command: &str) -> bool {
     let base = command.split_whitespace().next().unwrap_or("");
     !DISALLOWED_AUTO_BACKGROUND.contains(base)
@@ -279,8 +263,6 @@ pub fn is_auto_backgrounding_allowed(command: &str) -> bool {
 /// Detect standalone or leading `sleep N` patterns that should use Monitor.
 ///
 /// Returns a description of the blocked pattern, or `None` if allowed.
-///
-/// TS: detectBlockedSleepPattern()
 pub fn detect_blocked_sleep_pattern(command: &str) -> Option<String> {
     let parts = split_simple(command);
     if parts.is_empty() {
@@ -306,15 +288,12 @@ pub fn detect_blocked_sleep_pattern(command: &str) -> Option<String> {
 }
 
 // Command-semantics interpretation lives in the single canonical
-// `coco_shell::semantics::interpret_command_result` (mirrors TS
-// `commandSemantics.ts`). A duplicate implementation previously lived here and
-// was never wired — removed per the no-duplicate-helper rule.
+// `coco_shell::semantics::interpret_command_result`. A duplicate implementation
+// previously lived here and was never wired — removed per the no-duplicate-helper rule.
 
 // ── Output processing ──
 
 /// Truncate output with intelligent boundaries (line-aware).
-///
-/// TS: EndTruncatingAccumulator + stripEmptyLines + output truncation logic
 pub fn truncate_output_intelligent(output: &str, max_bytes: usize) -> (String, bool) {
     if output.len() <= max_bytes {
         return (strip_empty_lines(output), false);
@@ -334,8 +313,6 @@ pub fn truncate_output_intelligent(output: &str, max_bytes: usize) -> (String, b
 }
 
 /// Strip leading and trailing lines that contain only whitespace.
-///
-/// TS: stripEmptyLines()
 pub fn strip_empty_lines(content: &str) -> String {
     let lines: Vec<&str> = content.split('\n').collect();
 
@@ -359,8 +336,6 @@ pub fn strip_empty_lines(content: &str) -> String {
 // ── Image output detection ──
 
 /// Check if content is a base64-encoded image data URL.
-///
-/// TS: isImageOutput()
 pub fn is_image_output(content: &str) -> bool {
     // Match `data:image/<subtype>;base64,`
     content.len() < MAX_IMAGE_FILE_SIZE
@@ -369,8 +344,6 @@ pub fn is_image_output(content: &str) -> bool {
 }
 
 /// Parse a data-URI into media type and base64 payload.
-///
-/// TS: parseDataUri()
 pub fn parse_data_uri(s: &str) -> Option<(&str, &str)> {
     let s = s.trim();
     let rest = s.strip_prefix("data:")?;
@@ -384,8 +357,6 @@ pub fn parse_data_uri(s: &str) -> Option<(&str, &str)> {
 // ── Progress tracking ──
 
 /// Tracks progress for a running bash command.
-///
-/// TS: BashProgress + progress tracking in runShellCommand
 #[derive(Debug)]
 pub struct BashProgressTracker {
     start_time: Instant,
@@ -457,8 +428,6 @@ impl BashProgressTracker {
 }
 
 /// A progress snapshot for a running bash command.
-///
-/// TS: BashProgress
 #[derive(Debug, Clone)]
 pub struct BashProgress {
     pub output: String,
@@ -470,8 +439,6 @@ pub struct BashProgress {
 // ── CWD tracking ──
 
 /// Check if a command contains any `cd` subcommands.
-///
-/// TS: commandHasAnyCd()
 pub fn command_has_any_cd(command: &str) -> bool {
     split_simple(command).iter().any(|part| {
         let trimmed = part.trim();
@@ -482,8 +449,6 @@ pub fn command_has_any_cd(command: &str) -> bool {
 // ── Command type classification (analytics) ──
 
 /// Get the command type for logging/analytics.
-///
-/// TS: getCommandTypeForLogging()
 pub fn get_command_type_for_logging(command: &str) -> &'static str {
     for part in split_simple(command) {
         let base = part.split_whitespace().next().unwrap_or("");
@@ -495,8 +460,6 @@ pub fn get_command_type_for_logging(command: &str) -> &'static str {
 }
 
 /// Extract description from the tool input, falling back to command truncation.
-///
-/// TS: <BashTool as DynTool>::description(&BashTool, ) + getToolUseSummary() + getActivityDescription()
 pub fn extract_description(command: &str, description: Option<&str>) -> String {
     if let Some(desc) = description
         && !desc.is_empty()
@@ -554,8 +517,6 @@ fn split_simple(command: &str) -> Vec<String> {
 }
 
 /// Split command into parts preserving operators as separate tokens.
-///
-/// TS: splitCommandWithOperators() (simplified)
 fn split_command_with_operators(command: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();

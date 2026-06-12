@@ -1,8 +1,7 @@
 //! Basic micro-compaction: clear old tool results to free context.
 //!
-//! TS: microCompact.ts — replaces old tool result content with a placeholder.
-//! Preserves message structure (tool_use/tool_result pairing) — does NOT
-//! tombstone messages.
+//! Replaces old tool result content with a placeholder. Preserves message
+//! structure (tool_use/tool_result pairing) — does NOT tombstone messages.
 
 use coco_messages::AssistantContent;
 use coco_messages::LlmMessage;
@@ -13,7 +12,6 @@ use crate::types::CLEARED_TOOL_RESULT_MESSAGE;
 use crate::types::MicrocompactResult;
 
 /// Tools whose results can be cleared during micro-compaction.
-/// Matches TS `COMPACTABLE_TOOLS` set in microCompact.ts.
 /// Exactly: FileRead, ...SHELL_TOOL_NAMES, Grep, Glob, WebSearch, WebFetch,
 /// FileEdit, FileWrite.
 pub const COMPACTABLE_TOOLS: &[ToolName] = &[
@@ -29,7 +27,7 @@ pub const COMPACTABLE_TOOLS: &[ToolName] = &[
 ];
 
 /// Walk messages in encounter order and collect tool_use IDs whose tool name
-/// is compactable. TS: `collectCompactableToolIds` in microCompact.ts.
+/// is compactable.
 pub fn collect_compactable_tool_ids(messages: &[Message]) -> Vec<String> {
     let mut ids = Vec::new();
     for msg in messages {
@@ -56,11 +54,10 @@ pub fn collect_compactable_tool_ids(messages: &[Message]) -> Vec<String> {
 /// Replaces tool result content with `[Old tool result content cleared]` while
 /// preserving the message structure required by the API. Only clears results
 /// from `COMPACTABLE_TOOLS`. Keeps the **last `keep_recent` compactable
-/// tool_use_ids** intact (counts tool calls, not messages — matches TS
-/// `collectCompactableToolIds().slice(-keepRecent)`).
+/// tool_use_ids** intact (counts tool calls, not messages).
 pub fn micro_compact(messages: &mut [Message], keep_recent: usize) -> MicrocompactResult {
-    // Floor at 1: TS `Math.max(1, config.keepRecent)`. slice(-0) returns all,
-    // and clearing every result leaves the model with zero working context.
+    // Floor at 1: slice(-0) would return all, leaving the model with zero
+    // working context.
     let keep_recent = keep_recent.max(1);
     let compactable_ids = collect_compactable_tool_ids(messages);
     let total = compactable_ids.len();
@@ -134,9 +131,9 @@ fn tool_name_is_compactable(name: &str) -> bool {
 /// message exceeds the configured threshold, content-clear all but the most
 /// recent N compactable tool results.
 ///
-/// TS: `maybeTimeBasedMicrocompact` in microCompact.ts. Caller is
-/// responsible for evaluating [`crate::auto_trigger::evaluate_time_based_trigger`]
-/// first; this function performs the action when the trigger fires.
+/// Caller is responsible for evaluating
+/// [`crate::auto_trigger::evaluate_time_based_trigger`] first; this function
+/// performs the action when the trigger fires.
 ///
 /// Returns the [`MicrocompactResult`] with `was_time_triggered = true` when
 /// at least one tool result was cleared; otherwise `None` (no work to do).

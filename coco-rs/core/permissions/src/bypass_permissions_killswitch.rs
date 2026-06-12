@@ -1,7 +1,5 @@
 //! Bypass-permissions killswitch.
 //!
-//! TS: utils/permissions/bypassPermissionsKillswitch.ts
-//!
 //! An emergency override that forcibly disables `BypassPermissions` mode
 //! regardless of settings. Two activation vectors:
 //!
@@ -98,14 +96,13 @@ fn check_transition_with_env_truthy(
 
 /// Compute the session-wide "bypass permissions available" capability.
 ///
-/// TS parity (`permissionSetup.ts:939-943`):
 /// ```text
 /// isBypassPermissionsModeAvailable =
 ///   (permissionMode === 'bypassPermissions' || allowDangerouslySkipPermissions)
 ///   && !growthBookDisable && !settingsDisable
 /// ```
 ///
-/// Note that the TS check keys on the **resolved** permission mode
+/// Note that the check keys on the **resolved** permission mode
 /// (after CLI-flag + settings merge + killswitch downgrade), NOT on
 /// the raw `--dangerously-skip-permissions` CLI bool. That's why the
 /// first parameter here is `starts_in_bypass_mode`: callers resolve the
@@ -162,9 +159,7 @@ pub struct InitialPermissionMode {
 /// list of candidates and skipping `BypassPermissions` when the
 /// killswitch is engaged.
 ///
-/// TS parity: `initialPermissionModeFromCLI` in
-/// `src/utils/permissions/permissionSetup.ts:689-811`. The three
-/// candidate slots (in priority order) are:
+/// The three candidate slots (in priority order) are:
 ///  1. `--dangerously-skip-permissions` → `BypassPermissions`
 ///  2. `--permission-mode <mode>` → whatever the flag parses to
 ///  3. `settings.permissions.default_mode` → user-configured default
@@ -176,8 +171,7 @@ pub struct InitialPermissionMode {
 /// list is empty, the resolved mode is `Default`.
 ///
 /// The `notification` field surfaces any downgrade reason so the caller
-/// can print it to stderr — matches TS's `notification` field used by
-/// the TUI banner on startup.
+/// can print it to stderr — used by the TUI banner on startup.
 ///
 /// Note: `--allow-dangerously-skip-permissions` does NOT appear in the
 /// candidate list — it affects only the capability gate, not the
@@ -220,9 +214,9 @@ fn resolve_initial_permission_mode_with_env_truthy(
     let mut notification: Option<String> = None;
     for candidate in candidates {
         if candidate == PermissionMode::BypassPermissions && !killswitch.is_allowed() {
-            // TS sets the notification on the first skip and keeps
-            // walking. Subsequent skips of the same mode don't
-            // re-overwrite (the first reason is the most specific).
+            // Set the notification on the first skip and keep walking.
+            // Subsequent skips of the same mode don't re-overwrite
+            // (the first reason is the most specific).
             if notification.is_none()
                 && let Some(reason) = killswitch.reason()
             {

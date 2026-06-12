@@ -7,15 +7,11 @@
 //! so they live here, behind one tool-private module, instead of being
 //! re-imported across siblings as `super::bash::*`.
 //!
-//! TS source: helpers spread across `BashTool.tsx`,
-//! `PowerShellTool.tsx`, and `utils/toolResultStorage.ts`.
 
-/// Strip leading blank-only lines from `s`. Mirrors TS
-/// `stdout.replace(/^(\s*\n)+/, '')` from
-/// `BashTool.tsx::mapToolResultToToolResultBlockParam` — drops any
+/// Strip leading blank-only lines from `s` — drops any
 /// contiguous run of whitespace-only lines that includes a terminating
 /// newline. The final partial line (no trailing newline) is preserved
-/// even if blank, matching the TS regex semantics.
+/// even if blank.
 pub(super) fn strip_leading_blank_lines(s: &str) -> &str {
     let bytes = s.as_bytes();
     let mut idx = 0;
@@ -35,9 +31,7 @@ pub(super) fn strip_leading_blank_lines(s: &str) -> &str {
 
 /// Build the `<persisted-output>` envelope text that replaces stdout
 /// in the model-visible result when shell output overflowed the inline
-/// budget. TS parity:
-/// `utils/toolResultStorage.ts::buildLargeToolResultMessage` (constant
-/// `PREVIEW_SIZE_BYTES = 2000`).
+/// budget (`PREVIEW_SIZE_BYTES = 2000`).
 ///
 /// `preview_source` is the already-truncated inline `stdout` field; we
 /// take its first 2KB on a UTF-8 char boundary and append `\n...\n`
@@ -74,8 +68,7 @@ pub(super) fn build_persisted_output_message(
     buf
 }
 
-/// Format a byte count to a human-readable string, byte-identical to
-/// TS `utils/format.ts::formatFileSize`:
+/// Format a byte count to a human-readable string:
 /// - `< 1024`: `"X bytes"` (literal "bytes", no space)
 /// - `< 1MB`: `"X.YKB"` (1 decimal, strip trailing `.0`, no space)
 /// - `< 1GB`: `"X.YMB"`
@@ -97,8 +90,7 @@ pub(crate) fn format_byte_size(bytes: usize) -> String {
     format!("{}GB", trim_trailing_zero_decimal(gb))
 }
 
-/// Format a float with 1 decimal, then strip the trailing `.0` (matches
-/// TS `n.toFixed(1).replace(/\.0$/, '')`).
+/// Format a float with 1 decimal, then strip the trailing `.0`.
 #[cfg(test)]
 fn trim_trailing_zero_decimal(n: f64) -> String {
     let s = format!("{n:.1}");

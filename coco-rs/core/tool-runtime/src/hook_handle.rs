@@ -20,14 +20,7 @@
 //! 3. `StreamingToolExecutor` calls into the handle at the right lifecycle
 //!    points, without ever touching `coco-hooks` types.
 //!
-//! # TS Reference
-//!
-//! - `services/tools/toolExecution.ts:800-862` — hook invocation in tool pipeline
-//! - `services/tools/toolHooks.ts:39-191, 435-650` — PreToolUse + PostToolUse
-//! - `utils/hooks.ts:2820-2846` — permission aggregation (deny > ask > allow > passthrough)
-//! - `types/hooks.ts:49-176, 260-275` — `syncHookResponseSchema` + `HookResult`
-//!
-//! # Lifecycle order (matches TS)
+//! # Lifecycle order
 //!
 //! ```text
 //! validate_input → run_pre_tool_use (may override input/permission/reject)
@@ -43,7 +36,7 @@ use std::sync::Arc;
 /// Permission decision that a hook can emit to override the tool's own
 /// `check_permissions()` result.
 ///
-/// Aggregation rule (TS `hooks.ts:2820-2846`): most-restrictive-wins.
+/// Aggregation rule: most-restrictive-wins.
 /// `deny` always overrides `ask` which always overrides `allow`, which
 /// overrides `passthrough` (absence). Passthrough means "hook has no
 /// opinion, defer to the tool's own check".
@@ -59,14 +52,12 @@ pub enum HookPermission {
 
 /// Outcome of running all PreToolUse hooks for one tool call.
 ///
-/// Maps to a subset of TS `AggregatedHookResult` fields. Each field is the
-/// already-aggregated value across all matching hooks — callers don't see
-/// individual hook results.
+/// Each field is the already-aggregated value across all matching hooks —
+/// callers don't see individual hook results.
 #[derive(Debug, Clone, Default)]
 pub struct PreToolUseOutcome {
     /// Input was rewritten by a `ModifyInput` hook. If `Some`, the executor
     /// must pass this value (not the original) to `tool.execute()`.
-    /// TS: `hooks.ts` `updatedInput` field on HookResult.
     pub updated_input: Option<Value>,
 
     /// Aggregated permission override. `None` means no hook voiced an
@@ -76,30 +67,24 @@ pub struct PreToolUseOutcome {
 
     /// Hard block reason. Set when any hook returned `Reject` — tool must
     /// not execute and the error is reported to the model.
-    /// TS: `toolHooks.ts:77-86` `HookResult::Reject { reason }`.
     pub blocking_reason: Option<String>,
 
     /// Human-readable reason for the permission override (used for UI /
     /// telemetry). Independent from `blocking_reason`.
-    /// TS: `hookPermissionDecisionReason` field.
     pub permission_reason: Option<String>,
 
     /// Additional context lines to inject into the conversation before the
-    /// tool's output is shown. TS: `additionalContext` field.
+    /// tool's output is shown.
     pub additional_contexts: Vec<String>,
 
     /// Optional system message to surface to the user.
-    /// TS: `systemMessage` field.
     pub system_message: Option<String>,
 
     /// When `true`, the tool's rendered output is hidden from the
     /// user-facing transcript display. The tool result still goes into
     /// the conversation history (so the model sees it), but the UI
     /// layer suppresses the normal rendering.
-    ///
-    /// TS: `types/hooks.ts:56-59` `suppressOutput?: boolean` on the
-    /// sync hook response schema. Used for noisy or low-signal hooks
-    /// that shouldn't clutter the user's view.
+    /// Used for noisy or low-signal hooks that shouldn't clutter the user's view.
     pub suppress_output: bool,
 }
 
@@ -114,7 +99,7 @@ impl PreToolUseOutcome {
 /// Outcome of running all PostToolUse (or PostToolUseFailure) hooks for one
 /// tool call.
 ///
-/// Maps to a subset of TS `AggregatedHookResult`. The executor applies
+/// Maps to a subset of `AggregatedHookResult`. The executor applies
 /// `updated_output` by returning the replaced value in place of the original
 /// tool result, and surfaces `prevent_continuation` to the agent loop to
 /// optionally break out after this turn.
@@ -122,19 +107,16 @@ impl PreToolUseOutcome {
 pub struct PostToolUseOutcome {
     /// Tool output was rewritten by a `ModifyOutput` hook. If `Some`, the
     /// executor must return this in place of the original tool result's
-    /// data. TS: `updatedMCPToolOutput` field (both MCP and built-in tools
-    /// use the same channel in the newer hook spec).
+    /// data.
     pub updated_output: Option<Value>,
 
     /// The agent loop should stop after this tool call.
-    /// TS: `preventContinuation` field + `stopReason`.
     pub prevent_continuation: bool,
 
     /// Reason text for `prevent_continuation` or blocking error.
     pub stop_reason: Option<String>,
 
     /// Hard block reason (post-hook `Reject` — replaces output with error).
-    /// TS: `toolHooks.ts:237-244` PostToolUse Reject path.
     pub blocking_reason: Option<String>,
 
     /// Additional context to inject into the next user turn.
@@ -145,8 +127,6 @@ pub struct PostToolUseOutcome {
 
     /// When `true`, the tool's rendered output is hidden from the
     /// user-facing transcript display. See `PreToolUseOutcome::suppress_output`.
-    /// TS: `types/hooks.ts:56-59` — the same `suppressOutput` field is
-    /// valid on both PreToolUse and PostToolUse hook responses.
     pub suppress_output: bool,
 }
 
@@ -160,15 +140,13 @@ impl PostToolUseOutcome {
 /// Outcome of running task lifecycle hooks (`TaskCreated`, `TaskCompleted`).
 ///
 /// Mirrors the `AggregatedHookResult.blocking_error` semantic: a non-`None`
-/// `blocking_reason` means a hook returned `decision: 'block'` (TS exit
-/// code 2 / `ok: false`). The caller (TaskCreateTool / TaskUpdateTool)
-/// surfaces this to the model and rolls back the operation.
+/// `blocking_reason` means a hook returned `decision: 'block'`. The caller
+/// (TaskCreateTool / TaskUpdateTool) surfaces this to the model and rolls back
+/// the operation.
 #[derive(Debug, Clone, Default)]
 pub struct TaskHookOutcome {
     /// Hard block reason. When set, the task operation must NOT proceed
-    /// and the model must see the message. TS:
-    /// `getTaskCreatedHookMessage`/`getTaskCompletedHookMessage` format
-    /// the blocking error for model consumption.
+    /// and the model must see the message.
     pub blocking_reason: Option<String>,
 }
 
@@ -185,7 +163,7 @@ impl TaskHookOutcome {
 /// All methods are async and must be cancellation-aware — the executor
 /// passes `ctx.cancel_token()` transitively through its tool execution, and hook
 /// execution should honor cancellation for long-running external hook
-/// commands (TS default: 10 minute timeout per hook).
+/// commands (default: 10 minute timeout per hook).
 #[async_trait]
 pub trait HookHandle: Send + Sync {
     /// Run PreToolUse hooks and return the aggregated outcome.
@@ -219,9 +197,7 @@ pub trait HookHandle: Send + Sync {
     /// Run PostToolUseFailure hooks on a failed tool result.
     ///
     /// Called AFTER `tool.execute()` returns `Err`. Hooks can inject
-    /// recovery context or prevent loop continuation. TS splits success
-    /// and failure into two event types (`PostToolUse` vs.
-    /// `PostToolUseFailure`) so hooks can react differently.
+    /// recovery context or prevent loop continuation.
     async fn run_post_tool_use_failure(
         &self,
         tool_name: &str,
@@ -231,7 +207,6 @@ pub trait HookHandle: Send + Sync {
     ) -> PostToolUseOutcome;
 
     /// Run TaskCreated hooks before TaskCreateTool persists the task.
-    /// TS: `executeTaskCreatedHooks` (`utils/hooks.ts:3745`).
     ///
     /// Default impl is a no-op so existing test doubles don't need
     /// updating. The real `QueryHookHandle` overrides it.
@@ -247,7 +222,7 @@ pub trait HookHandle: Send + Sync {
     }
 
     /// Run TaskCompleted hooks before TaskUpdateTool flips status to
-    /// `completed`. TS: `executeTaskCompletedHooks` (`utils/hooks.ts:3789`).
+    /// `completed`.
     async fn run_task_completed(
         &self,
         _task_id: &str,

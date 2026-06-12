@@ -1,6 +1,5 @@
 //! Path validation for shell commands.
 //!
-//! TS: tools/BashTool/pathValidation.ts (2049 LOC)
 //! Checks file paths in commands for dangerous targets (/, /etc, /usr, etc.)
 
 /// Dangerous filesystem paths that always require approval for rm/rmdir.
@@ -48,8 +47,6 @@ pub fn check_dangerous_path(_command: &str, path: &str, cwd: &str) -> Option<Str
 }
 
 /// Extract file paths from command arguments based on command type.
-///
-/// TS: PATH_EXTRACTORS — per-command path extraction logic.
 pub fn extract_paths_from_command(command_name: &str, args: &[&str]) -> Vec<String> {
     match command_name {
         "cd" => {
@@ -72,9 +69,8 @@ pub fn extract_paths_from_command(command_name: &str, args: &[&str]) -> Vec<Stri
 
 /// Commands whose positional arguments WRITE or CREATE filesystem entries.
 /// A target outside the allowed working dirs is force-asked by the bash
-/// permission gate (TS `validateCommandPaths` for write/create operation
-/// types). Read commands (`cat`/`ls`/`grep`/`cd`/…) are intentionally NOT
-/// fenced here: gating routine out-of-cwd navigation/inspection (`ls ..`,
+/// permission gate. Read commands (`cat`/`ls`/`grep`/`cd`/…) are intentionally
+/// NOT fenced here: gating routine out-of-cwd navigation/inspection (`ls ..`,
 /// `cat ../x`) would be too noisy, and reads are non-destructive — they rely on
 /// the Read tool's own fence plus the kernel sandbox layer when enabled.
 const WRITE_PATH_COMMANDS: &[&str] = &["rm", "rmdir", "mv", "cp", "touch", "mkdir"];
@@ -106,10 +102,9 @@ pub fn extract_write_path_targets(command: &str) -> Vec<String> {
 // ── Force-ask gates (consumed by BashTool::check_permissions) ──
 //
 // These run BEFORE any allow rule / acceptEdits auto-allow, so a match returns
-// an Ask the model can't override (mirrors TS checkDangerousRemovalPaths /
-// checkReadOnlyConstraints git gates returning ask/passthrough). All pure
-// (plus an FS stat for the bare-repo probe) — no cross-crate dependency, so
-// they stay in `coco-shell` (avoids a coco-shell → coco-permissions cycle).
+// an Ask the model can't override. All pure (plus an FS stat for the bare-repo
+// probe) — no cross-crate dependency, so they stay in `coco-shell` (avoids a
+// coco-shell → coco-permissions cycle).
 
 const GIT_INTERNAL_SEGMENTS: &[&str] = &["HEAD", "objects", "refs", "hooks"];
 
@@ -126,8 +121,8 @@ fn subcommand_argv(sub: &str) -> Vec<String> {
 }
 
 /// Force-ask if a destructive removal/copy/move targets a critical system path
-/// (`rm -rf /`, `rm -rf ~`, `cp x /etc`, …). TS `checkDangerousRemovalPaths`:
-/// such a target "cannot be auto-allowed by permission rules".
+/// (`rm -rf /`, `rm -rf ~`, `cp x /etc`, …): such a target cannot be
+/// auto-allowed by permission rules.
 pub fn check_dangerous_removal(command: &str, cwd: &str) -> Option<String> {
     for sub in crate::bash_permissions::split_compound_command(command) {
         let base = crate::mode_validation::extract_base_executable(sub.trim());
@@ -151,7 +146,7 @@ pub fn check_dangerous_removal(command: &str, cwd: &str) -> Option<String> {
 /// Cheap (no-FS) git sandbox-escape detection: a compound `cd … && git …`, or a
 /// command that writes git-internal files (`HEAD`/`objects`/`refs`/`hooks`)
 /// then runs git. Used by `BashTool::is_read_only` so such commands are NOT
-/// auto-classified read-only (TS `checkReadOnlyConstraints` returns passthrough).
+/// auto-classified read-only.
 pub fn has_git_escape_pattern(command: &str) -> bool {
     let subs = crate::bash_permissions::split_compound_command(command);
     let mut has_cd = false;
@@ -218,9 +213,9 @@ fn command_writes_git_internal(subs: &[String]) -> bool {
     false
 }
 
-/// TS `isCurrentDirectoryBareGitRepo`: the cwd itself looks like a git dir
-/// (`HEAD` + `objects/` + `refs/`) but is NOT a normal working tree (`.git`
-/// absent) — a planted bare repo a `git` command could be tricked into using.
+/// Checks whether the cwd itself looks like a git dir (`HEAD` + `objects/` +
+/// `refs/`) but is NOT a normal working tree (`.git` absent) — a planted bare
+/// repo a `git` command could be tricked into using.
 fn is_current_dir_bare_git_repo(cwd: &str) -> bool {
     use std::path::Path;
     let dir = Path::new(cwd);

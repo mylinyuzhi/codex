@@ -19,8 +19,7 @@
 //! (TUI `UserCommand::SetPermissionMode`,
 //! SDK `handle_set_permission_mode`, and this bridge handler)
 //! enforces the same rule — reject `BypassPermissions` when the
-//! session's startup capability gate is off. Matches TS
-//! `cli/print.ts:4588-4600`.
+//! session's startup capability gate is off.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

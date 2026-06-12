@@ -1,11 +1,8 @@
 //! KAIROS daily log path + append semantics.
 //!
-//! TS:
-//! - Path: `memdir/paths.ts:246-251` `getAutoMemDailyLogPath` →
-//!   `<autoMemPath>/logs/YYYY/MM/YYYY-MM-DD.md`
-//! - Append protocol: `memdir.ts:327-348` `buildAssistantDailyLogPrompt`.
-//!   The contract is plain markdown append, one short timestamped
-//!   bullet per entry, no rewriting / no reorganisation.
+//! Path layout: `<autoMemPath>/logs/YYYY/MM/YYYY-MM-DD.md`.
+//! Append protocol: plain markdown append, one short timestamped
+//! bullet per entry, no rewriting / no reorganisation.
 //!
 //! The compose-rendering side (the prompt that instructs the agent
 //! to write a bullet) lives in [`crate::prompt`]. This module owns
@@ -53,8 +50,7 @@ pub fn daily_log_path_under(memory_dir: &Path, year: i32, month: u32, day: u32) 
 /// Holds a `&ProjectPaths` reference (so callers can keep a long-
 /// lived store without owning the paths themselves). On each append
 /// it recomputes the date-keyed path and creates parent directories
-/// lazily — matching TS `memdir.ts:342-348` "create the file (and
-/// parent directories) on first write".
+/// lazily — creates the file (and parent directories) on first write.
 pub struct DailyLogStore<'a> {
     project_paths: &'a ProjectPaths,
 }
@@ -65,8 +61,8 @@ impl<'a> DailyLogStore<'a> {
     }
 
     /// Append one line to today's log. The caller is responsible
-    /// for the leading timestamp marker — this matches the TS
-    /// prompt's "short timestamped bullet" instruction.
+    /// for the leading timestamp marker — per the prompt's "short
+    /// timestamped bullet" instruction.
     ///
     /// Adds a trailing newline if `line` doesn't already end with
     /// one so the next append starts on its own line. Async because

@@ -34,7 +34,7 @@ pub struct LanguageModelResponseMetadata {
     /// The response ID from the provider.
     pub id: Option<String>,
     /// The timestamp of the response.
-    /// Mirrors TS `LanguageModelV4ResponseMetadata.timestamp: Date`.
+    /// The timestamp of the response (spec: `LanguageModelV4ResponseMetadata.timestamp`).
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
     /// The model ID used for the request.
     pub model_id: Option<String>,

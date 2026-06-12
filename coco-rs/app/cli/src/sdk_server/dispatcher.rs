@@ -4,8 +4,7 @@
 //! dispatches them to per-method handlers, and writes responses +
 //! forwarded CoreEvent notifications back to the transport.
 //!
-//! TS reference: `src/cli/structuredIO.ts` + `src/cli/print.ts` — the
-//! `runHeadless` loop reads stdin, routes control requests, and enqueues
+//! The dispatch loop reads stdin, routes control requests, and enqueues
 //! messages to stdout.
 
 use std::sync::Arc;
@@ -57,8 +56,8 @@ pub struct SdkServer {
     /// (e.g. the plugin file watcher) that wants its events to land
     /// in the SDK NDJSON output alongside engine-emitted notifications.
     /// `Mutex` for `Take`-able interior mutability — run() drains it.
-    /// TS parity: TS hooks (`useManagePlugins`) push directly into the
-    /// notification system; we model that as merged channels.
+    /// Modeled as merged channels so external subsystems can push
+    /// events into the notification system.
     external_notifications: std::sync::Mutex<Vec<mpsc::Receiver<CoreEvent>>>,
 }
 
@@ -176,7 +175,7 @@ impl SdkServer {
     /// Install an [`InitializeBootstrap`] provider so `handle_initialize`
     /// returns real data (commands, agents, account, output styles) instead
     /// of empty / default values. Without this, `initialize` still succeeds
-    /// with a TS-conformant shape but empty lists.
+    /// with a conformant shape but empty lists.
     pub fn with_initialize_bootstrap(
         self,
         bootstrap: Arc<dyn crate::sdk_server::handlers::InitializeBootstrap>,
@@ -320,9 +319,6 @@ impl SdkServer {
                 // into semantic ServerNotification::ItemStarted/Updated/Completed
                 // + AgentMessageDelta/ReasoningDelta protocol events. Reset on
                 // each TurnStarted, flushed on TurnCompleted/Failed/Interrupted.
-                //
-                // TS: the SDK path uses normalizeMessage() + sdkEventQueue; we
-                // use the same StreamAccumulator that the design doc specifies.
                 let mut accumulator: Option<StreamAccumulator> = None;
                 // Buffer stream events that arrive before TurnStarted.
                 const PRE_TURN_BUFFER_CAP: usize = 64;

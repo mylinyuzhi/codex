@@ -1,10 +1,6 @@
 //! Autocomplete trigger detection and suggestion-state refresh.
 //!
-//! TS: `src/hooks/useTypeahead.ts` + `src/hooks/unifiedSuggestions.ts` —
-//! the hook that watches the input buffer for trigger patterns (`/`,
-//! `@query`, `@#symbol`) and populates the suggestion popup.
-//!
-//! The Rust port splits the same responsibilities:
+//! Responsibilities:
 //! - [`detect`] — pure function, `(text, cursor)` → `Option<Trigger>`.
 //! - [`refresh_suggestions`] — mutates `UiState::completion.active` based
 //!   on the current input. The unified `@` path seeds the popup with
@@ -12,10 +8,10 @@
 //!   async file-search manager fills in path matches as they arrive and
 //!   the merger interleaves them by score.
 //!
-//! Removed: the legacy `@agent-<name>` sub-prefix. TS has no such
-//! prefix — agents are pulled in by fuzzy-matching the bare `@query` —
-//! and `core/context::extract_mentions` accepts either `agent-` prefix or
-//! `(agent)` suffix on submit, so popup insertion uses the suffix form.
+//! Removed: the legacy `@agent-<name>` sub-prefix. Agents are pulled in
+//! by fuzzy-matching the bare `@query`; `core/context::extract_mentions`
+//! accepts either `agent-` prefix or `(agent)` suffix on submit, so popup
+//! insertion uses the suffix form.
 
 use crate::state::ActiveSuggestions;
 use crate::state::AppState;
@@ -36,7 +32,7 @@ pub struct Trigger {
 
 /// Scan `text` up to `cursor` (byte offset) for an active autocomplete trigger.
 ///
-/// Rules (match TS):
+/// Rules:
 /// - Leading `/` at position 0 with no space yet → `SlashCommand`. The
 ///   query is everything after the `/` up to cursor.
 /// - `@#word` → `Symbol` (LSP symbol search).
@@ -198,16 +194,14 @@ pub fn refresh_suggestions(state: &mut AppState) {
 /// Apply an async search result (from FileSearchManager or
 /// SymbolSearchManager) to the active suggestion popup.
 ///
-/// For the unified `@` popup, file results are merged with the seeded
-/// agent items via [`super::unified::merge_file_results`]: agents stay
-/// first (TS parity — `unifiedSuggestions.ts` weights `agentType` at
-/// fuse weight 3, dominating file scores), files appended after, cap 15.
+/// For the unified `@` popup, file results are merged with the seeded agent
+/// items via [`super::unified::merge_file_results`]: agents stay first,
+/// files appended after, cap 15.
 ///
-/// Returns `true` when the result was adopted. Drops stale results
-/// silently when the user has already moved to a different trigger kind,
-/// query, or dismissed the popup altogether — the manager's debounced
-/// cancel isn't instant, so this guards against a slow result clobbering
-/// a newer query.
+/// Returns `true` when the result was adopted. Drops stale results silently
+/// when the user has already moved to a different trigger kind, query, or
+/// dismissed the popup altogether — the manager's debounced cancel isn't
+/// instant, so this guards against a slow result clobbering a newer query.
 pub fn apply_async_result(
     state: &mut AppState,
     kind: SuggestionKind,
@@ -261,9 +255,8 @@ pub fn apply_async_result_for_key(
 }
 
 fn slash_items(state: &AppState, query: &str) -> Vec<SuggestionItem> {
-    // Delegate ranking to the dedicated module — see TS parity notes in
-    // `autocomplete/slash.rs`. Keeping the call shallow here lets the
-    // trigger module stay focused on detection vs. matching.
+    // Delegate ranking to the dedicated module; keeping the call shallow
+    // here lets the trigger module stay focused on detection vs. matching.
     super::slash::rank(query, &state.session.available_commands)
 }
 

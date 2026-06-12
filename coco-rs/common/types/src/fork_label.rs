@@ -1,7 +1,5 @@
-//! Typed discriminator for [`runForkedAgent`-equivalent](
-//! https://) callers — the framework-spawned, cache-shared,
-//! fire-and-forget side-channel queries that mirror TS
-//! `utils/forkedAgent.ts::runForkedAgent`.
+//! Typed discriminator for framework-spawned, cache-shared,
+//! fire-and-forget side-channel queries.
 //!
 //! Lives in `coco-types` (zero-dep) so logs, telemetry, transcripts,
 //! and structured tracing all share one canonical name set without
@@ -10,20 +8,18 @@
 //!
 //! ## Variants
 //!
-//! Each variant maps 1:1 to a TS caller of `runForkedAgent`:
-//!
-//! | Variant | TS source | canUseTool policy |
-//! |---|---|---|
-//! | `PromptSuggestion` | `services/PromptSuggestion/promptSuggestion.ts:319` | deny-all |
-//! | `SideQuestion` | `utils/sideQuestion.ts:80` | deny-all |
-//! | `Compact` | `services/compact/compact.ts:1188` | deny-all |
-//! | `ExtractMemories` | `services/extractMemories/extractMemories.ts:415` | auto-mem (Read/Glob/Grep + read-only Bash + Edit/Write within memory_dir) |
-//! | `SessionMemoryAuto` | `services/SessionMemory/sessionMemory.ts:318` | session-mem (Edit only on exact path, Read) |
-//! | `SessionMemoryManual` | `services/SessionMemory/sessionMemory.ts:420` | session-mem |
-//! | `AgentSummary` | `services/AgentSummary/agentSummary.ts:109` | deny-all (30s timer fork) |
-//! | `AutoDream` | `services/autoDream/autoDream.ts:224` | auto-mem with broader memory_root |
-//! | `Speculation` | `services/PromptSuggestion/speculation.ts:457` | 3-boundary (Edit/Write rewrites to overlay; Bash via shell-parser read-only check; deny default) |
-//! | `HookAgent` | `utils/hooks/execAgentHook.ts` | scoped StructuredOutput verifier |
+//! | Variant | canUseTool policy |
+//! |---|---|
+//! | `PromptSuggestion` | deny-all |
+//! | `SideQuestion` | deny-all |
+//! | `Compact` | deny-all |
+//! | `ExtractMemories` | auto-mem (Read/Glob/Grep + read-only Bash + Edit/Write within memory_dir) |
+//! | `SessionMemoryAuto` | session-mem (Edit only on exact path, Read) |
+//! | `SessionMemoryManual` | session-mem |
+//! | `AgentSummary` | deny-all (30s timer fork) |
+//! | `AutoDream` | auto-mem with broader memory_root |
+//! | `Speculation` | 3-boundary (Edit/Write rewrites to overlay; Bash via shell-parser read-only check; deny default) |
+//! | `HookAgent` | scoped StructuredOutput verifier |
 //!
 //! Order is deliberate: PromptSuggestion / SideQuestion / Compact are
 //! the simplest deny-all callers; the memory family follows; finally
@@ -34,8 +30,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Typed discriminator for one of the framework-spawned, cache-shared,
-/// fire-and-forget forks. See module docs for the per-variant
-/// canUseTool policy + TS source.
+/// fire-and-forget forks. See module docs for the per-variant canUseTool policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForkLabel {

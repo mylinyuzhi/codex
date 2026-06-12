@@ -1,8 +1,8 @@
 use super::*;
 use coco_config::AutoCompactConfig;
 
-// TS formula: effectiveWindow = contextWindow - min(maxOutput, 20K)
-//             threshold = effectiveWindow - 13K
+// Threshold formula: effectiveWindow = contextWindow - min(maxOutput, 20K)
+//                    threshold = effectiveWindow - 13K
 // For 200K window, 16K max output:
 //   effective = 200K - 16K = 184K
 //   threshold = 184K - 13K = 171K

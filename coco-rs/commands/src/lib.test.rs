@@ -87,8 +87,8 @@ fn test_register_builtins() {
     // Drift notes:
     // - /commit, /pr, /review were promoted out of register_builtins
     //   (/commit lives in register_ts_parity_handlers; /pr removed —
-    //   TS uses /commit-push-pr; /review is now a Prompt-type command
-    //   registered in implementations.rs to match TS).
+    //   upstream uses /commit-push-pr; /review is now a Prompt-type command
+    //   registered in implementations.rs).
     // - /bug, /ant-trace are deliberately not ported;
     //   see commands/CLAUDE.md "Deliberately Not Ported".
     // - /login + /logout are registered (multi-provider OAuth subscriptions);
@@ -121,15 +121,15 @@ fn test_lookup_by_alias() {
     assert!(by_alias.is_some());
     assert_eq!(by_alias.unwrap().base.name, "help");
 
-    // "bashes" is the only TS alias for "tasks"; "status" has none, and the
-    // coco-invented "st"/"todo" aliases were removed (TS parity).
+    // "bashes" is the only alias for "tasks"; "status" has none, and the
+    // coco-invented "st"/"todo" aliases were removed.
     let by_alias = registry.get("bashes");
     assert!(by_alias.is_some());
     assert_eq!(by_alias.unwrap().base.name, "tasks");
     assert!(registry.get("st").is_none());
     assert!(registry.get("todo").is_none());
 
-    // "settings" is alias for "config" (TS parity)
+    // "settings" is alias for "config"
     let by_alias = registry.get("settings");
     assert!(by_alias.is_some());
     assert_eq!(by_alias.unwrap().base.name, "config");

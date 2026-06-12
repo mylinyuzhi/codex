@@ -1,7 +1,5 @@
 //! Permission explainer — LLM-based risk assessment for tool actions.
 //!
-//! TS: utils/permissions/permissionExplainer.ts
-//!
 //! Generates human-readable explanations of what a tool action does,
 //! why it's being run, and what could go wrong. Uses forced tool-use
 //! for guaranteed structured output.

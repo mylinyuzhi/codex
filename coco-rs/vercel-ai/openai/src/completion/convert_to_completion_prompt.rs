@@ -13,7 +13,7 @@ pub struct CompletionPrompt {
 }
 
 /// Convert a `LanguageModelV4Prompt` to a role-prefixed text prompt for the legacy
-/// Completions API, matching the TypeScript `convertToOpenAICompletionPrompt`.
+/// Completions API.
 ///
 /// Format:
 ///   - System message (if first) is prepended as plain text

@@ -19,8 +19,7 @@ fn with_args() {
 
 #[test]
 fn with_complex_args() {
-    // TS uses lastIndexOf(' -'), so the LAST ` -` splits the prefix:
-    // "tmux exec -- bash" (exec) + "-lc" (args).
+    // rfind(' -') splits on the LAST ` -`: "tmux exec -- bash" (exec) + "-lc" (args).
     let out = format_shell_prefix_command("tmux exec -- bash -lc", "echo hi");
     assert_eq!(out, "'tmux exec -- bash' -lc 'echo hi'");
 }

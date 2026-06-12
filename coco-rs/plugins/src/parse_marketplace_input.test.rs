@@ -38,7 +38,7 @@ fn parses_github_shorthand_with_hash_ref() {
 
 #[test]
 fn parses_github_shorthand_with_at_ref() {
-    // TS accepts both `#ref` and `@ref` separators.
+    // Both `#ref` and `@ref` separators are accepted.
     let r = parse_marketplace_input("anthropics/claude-plugins@v1.2.3", no_home);
     assert_eq!(
         r,
@@ -158,7 +158,7 @@ fn parses_azure_devops_git_path_as_git_source() {
 #[test]
 fn parses_https_github_appends_dotgit() {
     let r = parse_marketplace_input("https://github.com/anthropics/claude-plugins", no_home);
-    // TS keeps the HTTPS shape and routes through `git` (cloning) but appends `.git`.
+    // Keeps the HTTPS shape and routes through `git` (cloning) but appends `.git`.
     assert_eq!(
         r,
         Ok(Some(MarketplaceSource::Git {

@@ -1,22 +1,20 @@
 //! Tool error types for generate_text.
 //!
 //! This module provides error types for tool execution failures,
-//! aligned with the TS SDK StaticToolError / DynamicToolError pattern.
+//! covering both static and dynamic tool error variants.
 
 use std::fmt;
 
 use vercel_ai_provider::ProviderMetadata;
 
 /// Error that occurred during tool execution.
-///
-/// Aligned with TS SDK `StaticToolError` / `DynamicToolError`.
 #[derive(Debug, Clone)]
 pub struct ToolError {
     /// The tool call ID that caused the error.
     pub tool_call_id: String,
     /// The tool name that caused the error.
     pub tool_name: String,
-    /// The error value (matches TS `error: unknown`).
+    /// The error value (opaque JSON).
     pub error: serde_json::Value,
     /// The tool input that was provided.
     pub input: serde_json::Value,

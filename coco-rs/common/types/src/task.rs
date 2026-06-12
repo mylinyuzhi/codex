@@ -2,9 +2,7 @@
 //! (backgrounded agents, shells, in-process teammates, future remote
 //! teammates, dream consolidation).
 //!
-//! TS source: `Task.ts`, `tasks/*Task/types.ts`.
-//!
-//! ## Variant renames vs TS
+//! ## Variant renames
 //!
 //! The refactor renamed TS's confusing names for Rust clarity. These
 //! are wire-breaking; old transcripts won't deserialize cleanly.
@@ -283,8 +281,7 @@ impl TaskStatus {
 
 // ─── Per-variant extras ────────────────────────────────────────────────
 
-/// Backgrounded subagent task sidecar. TS source:
-/// `tasks/LocalAgentTask/LocalAgentTask.tsx:128-148`.
+/// Backgrounded subagent task sidecar.
 ///
 /// Holds variant-owned `progress` and `is_backgrounded` (previously
 /// hoisted to the base, but sparse for shell / teammate / dream).
@@ -312,7 +309,7 @@ pub struct BgAgentExtras {
     pub error: Option<String>,
 }
 
-/// Shell task sidecar. TS source: `tasks/LocalShellTask`.
+/// Shell task sidecar.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellExtras {
     /// UI display variant — `bash` (default) or `monitor`.
@@ -341,8 +338,7 @@ pub struct ShellExtras {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DreamExtras {}
 
-/// Local in-process teammate sidecar. TS source:
-/// `tasks/InProcessTeammateTask/types.ts`.
+/// Local in-process teammate sidecar.
 ///
 /// `agent_ref` is the parsed `name@team` identity — replaces the old
 /// duplicate `agent_id` / `agent_name` / `team_name` fields. Progress

@@ -2,12 +2,6 @@
 
 Layered config resolution: settings files, model/provider selection, effort/thinking, fast mode, env overrides, runtime overrides.
 
-## TS Source
-- `utils/settings/` — `settings.ts`, `types.ts`, `managedPath.ts`, `mdm/`, `permissionValidation.ts`, `validation.ts`, `changeDetector.ts`, `settingsCache.ts`
-- `utils/model/` — `model.ts`, `configs.ts`, `aliases.ts`, `providers.ts`, `modelCapabilities.ts`, `agent.ts`, `antModels.ts`, `bedrock.ts`, `modelAllowlist.ts`, `modelSupportOverrides.ts`, `validateModel.ts`
-- `utils/effort.ts`, `utils/fastMode.ts`, `utils/thinking.ts`, `utils/envUtils.ts`, `utils/gitSettings.ts`, `utils/lockfile.ts`, `utils/config.ts` (GlobalConfig)
-- `constants/`, `migrations/`, `services/remoteManagedSettings/`, `services/settingsSync/`
-
 ## Key Types
 
 - `Settings`, `SettingsWithSource`, `SettingSource` (6 layers: Plugin < User < Project < Local < Flag < Policy)
@@ -31,4 +25,4 @@ Layered config resolution: settings files, model/provider selection, effort/thin
 - `Settings.hooks` is `serde_json::Value` (deserialized by `coco-hooks`) — avoids L1→L4 dependency on feature crates.
 - Per-setting source tracking via `SettingsWithSource` enforces security rules (e.g. project settings cannot set `api_key_helper`, auto-mode config, bypass mode).
 - Multi-provider API key resolution via `ProviderConfig.env_key` (each provider owns its env var); `EnvOnlyConfig` handles Anthropic-specific Bedrock/Vertex/Foundry routing only.
-- Env vars are a **separate override layer**, not merged into `Settings` (matches TS).
+- Env vars are a **separate override layer**, not merged into `Settings`.

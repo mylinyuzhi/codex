@@ -3408,7 +3408,7 @@ async fn test_session_events_fire_in_strict_order() {
     assert!(idle_idx.is_some(), "SessionStateChanged(Idle) missing");
     assert!(result_idx.is_some(), "SessionResult missing");
 
-    // TS-aligned ordering: init → running → ... → idle → result
+    // ordering: init → running → ... → idle → result
     assert!(started_idx < running_idx, "init must precede running");
     assert!(running_idx < idle_idx, "running must precede idle");
     assert!(idle_idx < result_idx, "idle must precede result");

@@ -36,7 +36,7 @@ fn attachment_to_messages_file_emits_two_system_reminders() {
     assert_eq!(
         msgs.len(),
         2,
-        "TS parity: createToolUseMessage + createToolResultMessage = 2 messages"
+        "createToolUseMessage + createToolResultMessage = 2 messages"
     );
 
     let call = extract_text_from_message(&msgs[0]);
@@ -96,7 +96,7 @@ fn attachment_to_messages_image_emits_text_then_image_message() {
     assert_eq!(
         msgs.len(),
         2,
-        "TS parity: tool_use text + tool_result image = 2 messages"
+        "tool_use text + tool_result image = 2 messages"
     );
 
     let call = extract_text_from_message(&msgs[0]);
@@ -184,7 +184,7 @@ async fn resolve_turn_inputs_loads_at_mentioned_file_content() {
     assert_eq!(
         inputs.attachment_messages.len(),
         2,
-        "single file mention -> tool_use + tool_result (TS parity)"
+        "single file mention -> tool_use + tool_result"
     );
     let call = extract_text_from_message(&inputs.attachment_messages[0]);
     assert!(call.contains(&format!("Called the {} tool", read_tool_name())));
@@ -245,7 +245,7 @@ async fn resolve_turn_inputs_emits_user_first_then_attachments() {
     let messages = build_messages_for_turn(&inputs);
     assert!(messages.len() >= 3);
     // First message must be the user prompt, then the two attachment
-    // messages (tool_use + tool_result, TS parity).
+    // messages (tool_use + tool_result).
     assert!(matches!(messages[0], Message::User(_)));
     assert!(matches!(messages[1], Message::Attachment(_)));
     assert!(matches!(messages[2], Message::Attachment(_)));

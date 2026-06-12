@@ -2,7 +2,7 @@
 //! messages so the model doesn't see orphaned `tool_use` blocks or empty
 //! assistant turns when picking up an interrupted session.
 //!
-//! TS: `tools/AgentTool/resumeAgent.ts` — `filterOrphanedThinkingOnlyMessages`
+//! `tools/AgentTool/resumeAgent.ts` — `filterOrphanedThinkingOnlyMessages`
 //! + `filterUnresolvedToolUses` + `filterWhitespaceOnlyAssistantMessages`.
 //!
 //! Pure logic over the typed message family — no tokio, no HTTP, no JSON
@@ -19,8 +19,6 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// State required to resume an agent.
-///
-/// TS: ResumeAgentConfig in resumeAgent.ts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentResumeState {
     /// The agent's ID to resume.
@@ -43,8 +41,7 @@ pub struct AgentResumeState {
 
 /// Filter out incomplete or corrupted messages from a transcript.
 ///
-/// Three filter passes (TS:
-/// `filterOrphanedThinkingOnlyMessages` +
+/// Three filter passes (`filterOrphanedThinkingOnlyMessages` +
 /// `filterUnresolvedToolUses` +
 /// `filterWhitespaceOnlyAssistantMessages`):
 ///
@@ -83,12 +80,12 @@ pub fn filter_transcript(messages: &[Arc<Message>]) -> Vec<Arc<Message>> {
 /// Assistant content is "whitespace-only" when it is non-empty and every
 /// part is a Text block whose `.trim()` is empty. ANY non-text block
 /// (Reasoning / ReasoningFile / ToolCall / File / Source / …) makes the
-/// message substantive and keeps it — mirroring TS
+/// message substantive and keeps it — mirrors
 /// `hasOnlyWhitespaceTextContent` (`utils/messages.ts:4835`), which
 /// returns `false` for any non-text block AND for empty content
 /// (`length === 0`). A message like `[Text("  "), Reasoning(..)]` (model
 /// emitted leading whitespace before a thinking block, then the turn was
-/// cancelled) therefore survives here, matching TS; pure-reasoning turns
+/// cancelled) therefore survives here; pure-reasoning turns
 /// (no Text) are dropped by [`is_thinking_only_assistant`] instead.
 fn is_whitespace_only_assistant(content: &[AssistantContentPart]) -> bool {
     !content.is_empty()
@@ -100,7 +97,7 @@ fn is_whitespace_only_assistant(content: &[AssistantContentPart]) -> bool {
 
 /// Assistant content is "thinking-only" when it contains zero Text and
 /// zero ToolCall parts (only Reasoning / ReasoningFile / Custom /
-/// Source / etc.). Mirrors TS `filterOrphanedThinkingOnlyMessages`.
+/// Source / etc.). Mirrors `filterOrphanedThinkingOnlyMessages`.
 fn is_thinking_only_assistant(content: &[AssistantContentPart]) -> bool {
     !content.iter().any(|part| {
         matches!(

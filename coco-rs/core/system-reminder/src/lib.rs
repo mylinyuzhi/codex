@@ -1,6 +1,6 @@
 //! coco-system-reminder — per-turn `<system-reminder>` injection.
 //!
-//! See `CLAUDE.md` for the full architecture and TS-source mapping.
+//! See `CLAUDE.md` for the full architecture.
 
 pub mod context_builder;
 pub mod error;

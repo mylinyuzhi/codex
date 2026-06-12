@@ -9,7 +9,7 @@ use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
 
 /// Unsafe CLM type reference must be blocked before pwsh is spawned.
-/// TS `powershellCommandIsSafe()` rejects types outside the allowlist.
+/// Rejects types outside the allowlist.
 #[tokio::test]
 async fn test_powershell_rejects_unsafe_clm_type() {
     let ctx = ToolUseContext::test_default();
@@ -28,7 +28,6 @@ async fn test_powershell_rejects_unsafe_clm_type() {
 }
 
 /// Writing to `.git/hooks/...` via a destructive cmdlet must be blocked.
-/// TS `hasDotGitInternalPath()` catches this pattern.
 #[tokio::test]
 async fn test_powershell_rejects_git_internal_write() {
     let ctx = ToolUseContext::test_default();
@@ -110,7 +109,7 @@ fn test_powershell_destructive_classification() {
     }
 }
 
-/// TS `PowerShellTool.tsx:275` sets `maxResultSizeChars: 30_000`.
+/// `maxResultSizeChars` is set to `30_000`.
 #[test]
 fn test_powershell_max_result_size_matches_ts() {
     assert_eq!(
@@ -171,7 +170,7 @@ async fn test_powershell_readonly_bypasses_clm_gate() {
     }
 }
 
-// ── render_for_model — TS parity for output envelopes ────────────────
+// ── render_for_model — output envelopes ────────────────
 
 mod render_tests {
     use super::PowerShellTool;
@@ -217,7 +216,7 @@ mod render_tests {
 
     #[test]
     fn interrupted_appends_abort_marker() {
-        // TS `PowerShellTool.tsx:415-418`: interrupted runs append the
+        // Interrupted runs append the
         // `<error>Command was aborted before completion</error>` marker
         // even when stderr is empty.
         let data = json!({
@@ -255,8 +254,8 @@ mod render_tests {
 
     #[test]
     fn assistant_auto_backgrounded_emits_budget_message() {
-        // TS `PowerShellTool.tsx:422-423`: assistant-mode auto-promotion
-        // names the budget so the model knows to delegate next time.
+        // Assistant-mode auto-promotion names the budget so the model
+        // knows to delegate next time.
         let data = json!({
             "stdout": "",
             "stderr": "",
@@ -275,7 +274,7 @@ mod render_tests {
 
     #[test]
     fn backgrounded_by_user_emits_manual_message() {
-        // TS `PowerShellTool.tsx:424-425`: Ctrl+B-style manual move.
+        // Ctrl+B-style manual move.
         let data = json!({
             "stdout": "",
             "stderr": "",
@@ -294,8 +293,8 @@ mod render_tests {
 
     #[test]
     fn default_background_task_emits_short_message() {
-        // TS `PowerShellTool.tsx:427`: plain `run_in_background:true`
-        // path gets the short "running in background" message.
+        // Plain `run_in_background:true` path gets the short
+        // "running in background" message.
         let data = json!({
             "stdout": "",
             "stderr": "",

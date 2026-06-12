@@ -1,4 +1,4 @@
-//! Standalone theme picker view (TS `components/ThemePicker.tsx`).
+//! Standalone theme picker view.
 //!
 //! Renders the styled body — title, subtitle, the reusable select list, a live
 //! diff preview in the focused theme, the syntax-highlight status line, and the
@@ -18,7 +18,7 @@ use coco_tui_ui::widgets::SelectListStyle;
 use coco_tui_ui::widgets::diff_display::render_diff_lines;
 use coco_tui_ui::widgets::render_select_list;
 
-/// The demo diff shown in the preview box (mirrors TS's `greet()` sample).
+/// The demo diff shown in the preview box.
 const DEMO_DIFF: &str = " function greet() {\n\
 -  console.log(\"Hello, World!\");\n\
 +  console.log(\"Hello, Claude!\");\n\
@@ -36,16 +36,16 @@ pub(crate) fn theme_picker_lines(
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Title — bold accent (TS `<Text bold color="permission">Theme`).
+    // Title — bold accent.
     lines.push(Line::from(Span::styled(
         t!("dialog.theme_title").to_string(),
         Style::default()
             .fg(styles.accent())
             .add_modifier(Modifier::BOLD),
     )));
-    // Blank line between title and subtitle (TS inner box `gap={1}`).
+    // Blank line between title and subtitle.
     lines.push(Line::default());
-    // Subtitle — bold, default color (TS `<Text bold>`).
+    // Subtitle — bold, default color.
     lines.push(Line::from(Span::styled(
         t!("dialog.theme_subtitle").to_string(),
         Style::default()
@@ -70,9 +70,8 @@ pub(crate) fn theme_picker_lines(
 
     lines.push(Line::default());
 
-    // Diff preview box — dashed top/bottom rules (TS borderStyle="dashed",
-    // borderColor="subtle"). Rendered with the live theme so it previews the
-    // focused palette's diff + syntax colors.
+    // Diff preview box — dashed top/bottom rules. Rendered with the live theme
+    // so it previews the focused palette's diff + syntax colors.
     let rule = "╌".repeat(width.max(1) as usize);
     let rule_style = Style::default().fg(styles.dim());
     lines.push(Line::from(Span::styled(rule.clone(), rule_style)));

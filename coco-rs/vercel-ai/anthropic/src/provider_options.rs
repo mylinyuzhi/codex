@@ -47,26 +47,20 @@ use serde_json::Value;
 /// - `experimental_betas` defaults `true` (so first-party-only betas
 ///   like `redact-thinking-2026-02-12`, `prompt-caching-scope-2026-01-05`
 ///   ship by default; setting `false` opts out).
-/// - The other three default `false` (TS env vars `DISABLE_*` /
-///   `getInitialSettings().showThinkingSummaries` /
-///   `getIsNonInteractiveSession()` are off by default).
+/// - The other three default `false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnthropicProviderOptionsConfig {
-    /// Mirrors TS `!DISABLE_EXPERIMENTAL_BETAS` (`betas.ts:215`).
-    /// Drives first-party-only beta inclusion (RedactThinking,
-    /// PromptCachingScope, ContextManagement). Default `true`.
+    /// Enable experimental betas. Drives first-party-only beta inclusion
+    /// (RedactThinking, PromptCachingScope, ContextManagement). Default `true`.
     pub experimental_betas_enabled: bool,
-    /// Mirrors TS `process.env.DISABLE_INTERLEAVED_THINKING`
-    /// (`betas.ts:258-262`). Suppresses `interleaved-thinking-2025-05-14`
-    /// even on capable models. Default `false`.
+    /// Suppress `interleaved-thinking-2025-05-14` even on capable models.
+    /// Default `false`.
     pub disable_interleaved_thinking: bool,
-    /// Mirrors TS `getInitialSettings().showThinkingSummaries`
-    /// (`betas.ts:268-275`). Suppresses `redact-thinking-2026-02-12`
+    /// Show thinking summaries — suppresses `redact-thinking-2026-02-12`
     /// when `true` (the UI renders raw thinking, redaction is
     /// counter-productive). Default `false`.
     pub show_thinking_summaries: bool,
-    /// Mirrors TS `getIsNonInteractiveSession()` (`betas.ts:268-275`).
-    /// Suppresses `redact-thinking-2026-02-12` for non-interactive runs
+    /// Non-interactive session — suppresses `redact-thinking-2026-02-12`
     /// (no human to consume thinking redaction). Default `false`.
     pub non_interactive: bool,
 }

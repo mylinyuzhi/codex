@@ -1,18 +1,10 @@
 //! `/model` — open the provider-grouped model picker (no args) or
 //! validate + persist a model id (with args).
 //!
-//! TS source: `commands/model/model.tsx:1-200`. TS opens `ModelPicker`
-//! when called without args and writes through `setGlobalConfig`
-//! when called with one. coco-rs mirrors the same two-mode shape but
-//! also extends it: the picker carries a role pill so any of the
-//! nine [`coco_types::ModelRole`] slots can be edited from the same
-//! surface.
-//!
-//! The args branch validates against the builtin
-//! [`coco_config::builtin_models_partial`] registry rather than a
-//! stale local list of ids — coco-rs supports Anthropic, OpenAI,
-//! Google, and DeepSeek out of the box, so a hardcoded list went
-//! out of date fast.
+//! Without args, opens the `ModelPicker` overlay (with a role pill so any of
+//! the nine [`coco_types::ModelRole`] slots can be edited). With args,
+//! validates and persists the given model id against the builtin
+//! [`coco_config::builtin_models_partial`] registry.
 
 use async_trait::async_trait;
 

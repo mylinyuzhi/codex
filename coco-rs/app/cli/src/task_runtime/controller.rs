@@ -1,8 +1,4 @@
 //! `TaskController` trait implementation — kill + detach.
-//!
-//! TS source: `tasks/stopTask.ts:38-100` (`stopTask`) +
-//! `tasks/LocalAgentTask/LocalAgentTask.tsx:617-650`
-//! (`backgroundAgentTask`).
 
 use coco_tool_runtime::DetachOutcome;
 use tracing::{debug, info, instrument};
@@ -13,8 +9,7 @@ impl TaskRuntime {
     /// W2: signal that a foreground awaiter should detach and let
     /// the task continue in the background. Idempotent — second and
     /// subsequent calls are no-ops (returns
-    /// [`DetachOutcome::AlreadyDetached`]). Mirrors TS
-    /// `backgroundAgentTask` / `shellCommand.background()`.
+    /// [`DetachOutcome::AlreadyDetached`]).
     ///
     /// Mechanics:
     /// 1. CAS the per-task `detached: AtomicBool` to true. If already

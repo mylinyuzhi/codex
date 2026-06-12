@@ -12,9 +12,6 @@
 //! - **Executor layer** ([`ShellExecutor`]) — spawn / wait / cancel /
 //!   timeout / sandbox-wrap loop on top of the provider's output.
 //!
-//! TS source: `utils/bash/` (~12K LOC), `utils/shell/` (~3K LOC),
-//! `utils/sessionEnvironment.ts`, `utils/sessionEnvVars.ts`,
-//! `utils/windowsPaths.ts`, `utils/Shell.ts`, `tools/BashTool/`.
 
 pub mod ast;
 pub mod bash_permissions;

@@ -1,10 +1,8 @@
 //! Render the `/permissions` rule-editor overlay (Allow / Ask / Deny /
 //! Workspace) plus its inline add form and delete confirmation.
 //!
-//! TS parity: `components/permissions/rules/PermissionRuleList.tsx` +
-//! `PermissionRuleInput.tsx` + `AddPermissionRules.tsx`. This module owns
-//! ONLY view-string composition; cursor / form mutation stays in
-//! `update/permissions_editor.rs` and state shapes in
+//! This module owns ONLY view-string composition; cursor / form mutation
+//! stays in `update/permissions_editor.rs` and state shapes in
 //! `state/permissions_editor.rs`.
 
 use ratatui::style::Color;

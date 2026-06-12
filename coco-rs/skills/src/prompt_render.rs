@@ -1,6 +1,4 @@
-//! Lazy skill prompt rendering with TS-mirroring semantics.
-//!
-//! TS: `Command.getPromptForCommand(args, ctx) -> Promise<ContentBlockParam[]>`.
+//! Lazy skill prompt rendering.
 //!
 //! Each invocation can:
 //! - Substitute named arguments (`$1`, `$2`, …, `$ARGUMENTS`).
@@ -9,9 +7,8 @@
 //! - Prepend `Base directory for this skill: <dir>` when bundled `files` are
 //!   extracted (handled by [`render_with_extraction`] below).
 //!
-//! Mirrors `skills/loadSkillsDir.ts:substituteArguments` +
-//! `utils/promptShellExecution.ts:executeShellCommandsInPrompt` +
-//! `skills/bundledSkills.ts:prependBaseDir`.
+//! Argument substitution, shell command execution within prompts, and
+//! base-directory prefix injection for bundled skills.
 
 use std::path::PathBuf;
 
@@ -21,8 +18,8 @@ use crate::shell_exec;
 
 /// One block of rendered prompt content.
 ///
-/// TS: `ContentBlockParam` from `@anthropic-ai/sdk`. We restrict to the two
-/// shapes a skill prompt actually produces today (text + arbitrary doc),
+/// Restricted to the two shapes a skill prompt actually produces today
+/// (text + arbitrary doc),
 /// mapped 1:1 to vercel-ai `TextPart` / `FilePart` at the message-build site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptPart {
@@ -34,7 +31,6 @@ pub enum PromptPart {
 #[derive(Debug, Clone, Default)]
 pub struct RenderContext {
     /// Whether shell expansion is allowed in this context.
-    /// TS: gated on `context.options.allowShellInPrompt` (defaults true).
     pub allow_shell: bool,
     /// Process environment passed through to shell commands.
     pub env: Vec<(String, String)>,
@@ -42,7 +38,7 @@ pub struct RenderContext {
 
 /// Render a skill's prompt for a given invocation.
 ///
-/// Pipeline (matching TS order):
+/// Pipeline:
 /// 1. **Argument substitution** — `$1..$N` and `$ARGUMENTS`.
 /// 2. **Shell expansion** — only when `ctx.allow_shell` is true.
 /// 3. **Base-directory prefix** — for bundled skills with `files`, the
@@ -64,8 +60,8 @@ pub async fn render_skill_prompt(
     );
 
     // shell_exec runs unconditionally and gates internally via the
-    // `skip_shell` parameter (matches TS `executeShellCommandsInPrompt`
-    // which is always called and uses `allow` flag).
+    // `skip_shell` parameter (always called; the `allow` flag controls
+    // whether expansion actually runs).
     text = shell_exec::execute_shell_in_prompt(&text, !ctx.allow_shell).await;
 
     let extracted_dir = if !skill.files.is_empty() {
@@ -108,9 +104,7 @@ pub async fn render_with_extraction(
 
 /// Substitute `$ARGUMENTS`, `$ARGUMENTS[N]`, `$N`, and named `$name` in a prompt.
 ///
-/// TS source: `utils/argumentSubstitution.ts substituteArguments` (verbatim port).
-///
-/// **Order matters** (matches TS exactly):
+/// **Order matters**:
 /// 1. Named tokens `$<name>` first, with word-boundary lookahead so
 ///    `$foo` doesn't match `$foobar` and `$foo[0]` is left for step 2.
 /// 2. `$ARGUMENTS[N]` (any digits) → parsed-args[N] or empty.
@@ -121,10 +115,8 @@ pub async fn render_with_extraction(
 ///    args is non-empty, append `\n\nARGUMENTS: <args>`.
 ///
 /// Argument splitting honors quoted strings (single/double quotes, backslash
-/// escapes) so `/foo "hello world"` parses as one arg, mirroring TS
-/// `parseArguments` which uses shell-quote.
-/// Substitute the skill-environment placeholders TS `getPromptForCommand`
-/// replaces on every invocation (loadSkillsDir.ts:356-369):
+/// escapes) so `/foo "hello world"` parses as one arg.
+/// Substitute the skill-environment placeholders replaced on every invocation:
 /// `${CLAUDE_SKILL_DIR}` → the skill's base dir (backslash-normalized to `/`)
 /// and `${CLAUDE_SESSION_ID}` → the current session id. A `None` value leaves
 /// its placeholder untouched (so tests / pre-bootstrap don't blank it out).
@@ -149,7 +141,6 @@ pub fn substitute_arguments(
     argument_names: &[String],
     append_if_no_placeholder: bool,
 ) -> String {
-    // TS: `args === undefined || args === null` → return content unchanged.
     let Some(args) = args else {
         return prompt.to_string();
     };
@@ -268,7 +259,7 @@ fn replace_dollar_n(haystack: &str, re: &regex::Regex, parsed: &[String]) -> Str
 }
 
 /// Validate an argument name: non-empty, non-numeric (numbers conflict with
-/// `$N` shorthand). Matches TS `isValidName`.
+/// `$N` shorthand).
 fn is_valid_arg_name(name: &str) -> bool {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -278,7 +269,7 @@ fn is_valid_arg_name(name: &str) -> bool {
 }
 
 /// Parse an arguments string honoring single/double quotes and backslash
-/// escapes. Matches TS `parseArguments` semantics (which uses shell-quote).
+/// escapes.
 ///
 /// Examples:
 /// - `foo bar baz` → `["foo", "bar", "baz"]`

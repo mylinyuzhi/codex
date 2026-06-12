@@ -1,7 +1,5 @@
 //! Settings validation — check for invalid combinations, validate permission
 //! rules, and verify known fields.
-//!
-//! TS: utils/settings/validation.ts, utils/settings/permissionValidation.ts
 
 use super::PermissionsConfig;
 use super::Settings;

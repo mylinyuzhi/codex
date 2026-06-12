@@ -1,6 +1,6 @@
 //! Enterprise/MDM policy settings loading.
 //!
-//! TS: "first source wins" — highest-priority source provides ALL policy settings.
+//! "First source wins" — highest-priority source provides ALL policy settings.
 //! Sources in order: remote > MDM/plist/HKLM > file > HKCU.
 
 use super::Settings;

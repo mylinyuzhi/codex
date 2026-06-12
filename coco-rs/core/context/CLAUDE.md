@@ -2,20 +2,6 @@
 
 System context assembly: environment info, memory-file discovery (`CLAUDE.md` / `AGENTS.md`), attachments, file history, plan mode, mentions, prompt building.
 
-## TS Source
-- `context.ts` — system/user context injection
-- `utils/claudemd.ts` (46K) — memory-file discovery, `@import` expansion, `.claude/rules/*.md`
-- `utils/attachments.ts` (4K) — file/PDF/memory/hook attachments + per-file `getNestedMemoryAttachmentsForFile`
-- `utils/frontmatterParser.ts` — YAML `paths:` parsing for conditional rules
-- `utils/cwd.ts` — working directory management
-- `utils/systemPromptType.ts` — system prompt building
-- `utils/fileHistory.ts` (~1110) — per-turn file edit tracking + content-addressed snapshots
-- `utils/toolResultStorage.ts` — ContentReplacementState
-- `utils/fileStateCache.ts` — LRU file read cache
-- `utils/pasteStore.ts`, `utils/filePersistence/`
-- `services/AgentSummary/` — agent activity summary
-- `services/awaySummary.ts` — away summary
-
 ## Key Types
 
 - **Environment**: `EnvironmentInfo`, `Platform`, `ShellKind`, `GitStatus`, `get_environment_info`
@@ -44,7 +30,7 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 ## Architecture
 
 - `Platform` + `ShellKind` enums owned here (cross-crate env types).
-- File history uses ordered `Vec` + content-addressed files on disk (TS-aligned; NOT HashMap). The `FileHistorySnapshot` JSON wire shape is snake_case (`message_id`, `tracked_file_backups`, `backup_file_name`, `backup_time`) and `DateTime<Utc>` for time fields (RFC 3339 strings) — content-equivalent to TS `FileHistorySnapshot` but Rust-native naming. See `coco-session` CLAUDE.md for the cross-crate wire policy.
+- File history uses ordered `Vec` + content-addressed files on disk (NOT HashMap). The `FileHistorySnapshot` JSON wire shape is snake_case (`message_id`, `tracked_file_backups`, `backup_file_name`, `backup_time`) and `DateTime<Utc>` for time fields (RFC 3339 strings). See `coco-session` CLAUDE.md for the cross-crate wire policy.
 - Plan mode scoped by session-local `plan_slug` for fork/resume isolation.
 - Phase-4 + Interview plan workflows exposed via `settings.json` (`plan_mode.phase4_variant`, `plan_mode.workflow`) — no GrowthBook / `USER_TYPE=ant` env vars. Ultraplan (CCR web UI) intentionally skipped.
 
@@ -52,7 +38,7 @@ System context assembly: environment info, memory-file discovery (`CLAUDE.md` / 
 
 Two-phase loading; the eager pass runs once at session start and the lazy pass fires per file-read trigger.
 
-1. **Eager** (`claudemd::discover_memory_files`, called from prompt build): walks `~/.coco/{CLAUDE,AGENTS}.md` then filesystem-root → CWD inclusive. In each dir loads `<dir>/.claude/CLAUDE.md`, `<dir>/{CLAUDE,AGENTS}.md`, `<dir>/{CLAUDE,AGENTS}.local.md` (case-insensitive). Each loaded file is fed through `claudemd_imports::expand_imports` so `@./other.md` and friends are recursively materialised in the same pass with cycle-break + `MAX_INCLUDE_DEPTH=5`. **Nested-worktree skip**: when CWD is a git worktree nested inside its main repo (coco agent worktrees live at `<main>/.claude/worktrees/<slug>`), `nested_worktree_roots` (via `get_git_root` + `coco_git::find_canonical_git_root`) detects the nesting and the walk skips the main repo's *checked-in* files (Project / ProjectConfig / unconditional rules) in dirs above the worktree — git already checks them out into the worktree, so loading both would duplicate the same content at distinct paths. `CLAUDE.local.md` (gitignored, main-repo-only) is still loaded. The lazy pass applies the same skip to Phase-4 cwd-level conditional rules. TS parity: `claudemd.ts:868-934`.
+1. **Eager** (`claudemd::discover_memory_files`, called from prompt build): walks `~/.coco/{CLAUDE,AGENTS}.md` then filesystem-root → CWD inclusive. In each dir loads `<dir>/.claude/CLAUDE.md`, `<dir>/{CLAUDE,AGENTS}.md`, `<dir>/{CLAUDE,AGENTS}.local.md` (case-insensitive). Each loaded file is fed through `claudemd_imports::expand_imports` so `@./other.md` and friends are recursively materialised in the same pass with cycle-break + `MAX_INCLUDE_DEPTH=5`. **Nested-worktree skip**: when CWD is a git worktree nested inside its main repo (coco agent worktrees live at `<main>/.claude/worktrees/<slug>`), `nested_worktree_roots` (via `get_git_root` + `coco_git::find_canonical_git_root`) detects the nesting and the walk skips the main repo's *checked-in* files (Project / ProjectConfig / unconditional rules) in dirs above the worktree — git already checks them out into the worktree, so loading both would duplicate the same content at distinct paths. `CLAUDE.local.md` (gitignored, main-repo-only) is still loaded. The lazy pass applies the same skip to Phase-4 cwd-level conditional rules.
 2. **Lazy** (`nested_memory::traverse_for_file`, called from `app/query::QueryEngine::drain_nested_memory_triggers` at end of every turn batch): four phases per trigger file `X` —
    - **Phase 1** managed (`/etc/coco/rules`) + user (`~/.coco/rules`) **conditional** rules whose `paths:` glob matches `X`.
    - **Phase 2** `directories_to_process(X, cwd)` splits the filesystem into `nested_dirs` (CWD-exclusive → file-parent-inclusive) and `cwd_level_dirs` (root → CWD inclusive).
@@ -63,4 +49,4 @@ Both phases share the same `expand_imports` machinery and a single `processed: H
 
 ### Filename matching divergence
 
-TS only matches `CLAUDE.md` and `CLAUDE.local.md` literally. coco-rs accepts both `CLAUDE.md` *and* `AGENTS.md` (Codex / Cursor convention) at every eager and lazy load position, matched case-insensitively via `memory_filenames::find_memory_files`. `.claude/CLAUDE.md` (config-dir convention) is the one position where we keep the literal name.
+The upstream implementation only matches `CLAUDE.md` and `CLAUDE.local.md` literally. coco-rs accepts both `CLAUDE.md` *and* `AGENTS.md` (Codex / Cursor convention) at every eager and lazy load position, matched case-insensitively via `memory_filenames::find_memory_files`. `.claude/CLAUDE.md` (config-dir convention) is the one position where we keep the literal name.

@@ -109,7 +109,7 @@ fn policy_strict_user_scope_forbids_user_install() {
 
 #[test]
 fn policy_blocks_specific_plugin_by_id() {
-    // TS `enabledPlugins["foo@m"] === false` → per-plugin force-disable,
+    // `enabledPlugins["foo@m"] === false` → per-plugin force-disable,
     // keyed by the `name@marketplace` display form.
     let p = EnterprisePolicy {
         blocked_plugins: ["foo@m".to_string()].into_iter().collect(),

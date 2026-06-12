@@ -9,7 +9,7 @@ use std::str::FromStr;
 use crate::ModelRole;
 use crate::ReasoningEffort;
 
-/// TS-parity built-in subagent types.
+/// Built-in subagent types.
 ///
 /// **Case is part of the contract.** TS treats `Explore` / `Plan` as PascalCase
 /// (consumed by the case-sensitive one-shot set in `constants.ts`, by user
@@ -146,9 +146,6 @@ impl From<SubagentType> for AgentTypeId {
 
 /// Where an agent definition came from. Drives precedence when the same
 /// `agent_type` is defined in multiple places: later source wins.
-///
-/// TS: source field on `BaseAgentDefinition` (`loadAgentsDir.ts:105-165`),
-/// resolution order in `getActiveAgentsFromList` (`loadAgentsDir.ts:193-221`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum AgentSource {
@@ -175,7 +172,7 @@ pub enum AgentSource {
 
 impl AgentSource {
     /// Priority for conflict resolution. Higher wins.
-    /// Mirrors TS `getActiveAgentsFromList` map-overwrite order.
+    /// Later-source definitions override earlier ones (map-overwrite order).
     pub const fn priority(self) -> u8 {
         match self {
             Self::BuiltIn => 0,
@@ -279,8 +276,6 @@ impl FromStr for AgentColorName {
 /// the worker's assigned per-teammate palette color (a coco-rs
 /// improvement over TS's hardcoded `cyan`); text-surface renderers show
 /// the name and carry the color for styled / SDK consumers.
-///
-/// TS: `WorkerBadgeProps` (`components/permissions/WorkerBadge.tsx:6`).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerBadge {
@@ -291,8 +286,6 @@ pub struct WorkerBadge {
 // ── Agent Isolation ──
 
 /// Isolation mode for a subagent's execution environment.
-///
-/// TS: AgentIsolation in loadAgentsDir.ts
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentIsolation {
@@ -338,7 +331,6 @@ impl FromStr for AgentIsolation {
 /// shape lives in `coco-mcp` (a higher layer that depends on
 /// `coco-types`); keeping it as opaque JSON avoids a back-edge.
 ///
-/// TS: `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -377,9 +369,7 @@ impl AgentMcpServerSpec {
 
 // ── Memory Scope ──
 
-/// Scope for agent memory persistence.
-///
-/// TS: MemoryScope — controls where MEMORY.md is stored/read.
+/// Scope for agent memory persistence. Controls where MEMORY.md is stored/read.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -493,7 +483,7 @@ pub struct ModelInheritance {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ToolAllowList {
     /// Every registered tool is visible (subject to deny-list +
-    /// parent filter). Mirrors TS `tools: undefined`.
+    /// parent filter).
     #[default]
     Wildcard,
     /// Only these tool names are visible.
@@ -578,9 +568,6 @@ impl<'de> Deserialize<'de> for ToolAllowList {
 // ── Agent Definition ──
 
 /// Complete agent definition — the declarative spec for a subagent.
-///
-/// TS: AgentDefinition in loadAgentsDir.ts (`BaseAgentDefinition` +
-/// `BuiltInAgentDefinition` / `CustomAgentDefinition` / `PluginAgentDefinition`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentDefinition {
     /// Agent type identity (TS `agentType`).
@@ -591,7 +578,6 @@ pub struct AgentDefinition {
     pub name: String,
 
     /// User-facing summary shown in the AgentTool prompt list.
-    /// TS: `whenToUse` in `BaseAgentDefinition`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
 
@@ -669,11 +655,9 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_scope: Option<MemoryScope>,
 
-    /// Per-agent MCP server specs to connect. TS: `mcpServers`. Each
-    /// entry is either a string-reference to an existing server name
-    /// or an inline `{name: config}` mapping that creates a fresh
-    /// dynamic server. TS source:
-    /// `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`.
+    /// Per-agent MCP server specs to connect. Each entry is either a
+    /// string-reference to an existing server name or an inline
+    /// `{name: config}` mapping that creates a fresh dynamic server.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<AgentMcpServerSpec>,
 
@@ -709,33 +693,27 @@ pub struct AgentDefinition {
     pub color: Option<AgentColorName>,
 
     /// Skill names to preload when this agent starts.
-    /// TS: `skills: string[]`
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
 
     /// Whether this agent always runs in the background.
-    /// TS: `background: boolean`
     #[serde(default)]
     pub background: bool,
 
     /// Permission mode override for this agent.
-    /// TS: `permissionMode: PermissionMode`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
 
     /// MCP server name patterns required (agent disabled if not configured).
     /// Separate from `mcp_servers` which are servers to connect.
-    /// TS: `requiredMcpServers: string[]`
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_mcp_servers: Vec<String>,
 
     /// Omit CLAUDE.md context for read-only agents.
-    /// TS: `omitClaudeMd: boolean`
     #[serde(default)]
     pub omit_claude_md: bool,
 
     /// Short reminder re-injected at every user turn.
-    /// TS: `criticalSystemReminder_EXPERIMENTAL`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub critical_system_reminder: Option<String>,
 

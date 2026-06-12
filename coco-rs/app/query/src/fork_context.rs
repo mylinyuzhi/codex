@@ -1,14 +1,12 @@
 //! Sub-context isolation primitives for fork-spawned engines.
 //!
-//! TS source: `utils/forkedAgent.ts::createSubagentContext`
-//! (`createSubagentContext(parentContext, overrides)` at lines
-//! 345-462). For every framework-spawned fork (promptSuggestion,
-//! sideQuestion, compact, extractMemories, sessionMemory{Auto,Manual},
-//! agentSummary, autoDream, speculation), the parent's mutable
-//! `toolUseContext` state is **cloned** (or fresh-started) so the
-//! child can't pollute the parent — `readFileState`,
-//! `denialTrackingState`, `setAppState` callbacks, the in-progress
-//! tool-use ID set, and the various trigger sets all isolate.
+//! For every framework-spawned fork (promptSuggestion, sideQuestion,
+//! compact, extractMemories, sessionMemory{Auto,Manual}, agentSummary,
+//! autoDream, speculation), the parent's mutable `toolUseContext` state
+//! is **cloned** (or fresh-started) so the child can't pollute the
+//! parent — `readFileState`, `denialTrackingState`, `setAppState`
+//! callbacks, the in-progress tool-use ID set, and the various trigger
+//! sets all isolate.
 //!
 //! ## Why cloning matters for cache parity
 //!
@@ -19,8 +17,6 @@
 //! `<file_unchanged>` decisions, diverging the wire prefix and
 //! breaking cache. A **clone** observes the same already-seen ids
 //! ⇒ identical decisions ⇒ identical bytes ⇒ cache hit.
-//!
-//! TS parity: `forkedAgent.ts:379-381` clones via `cloneFileStateCache`.
 //!
 //! ## NOT this module's job
 //!
@@ -55,14 +51,12 @@ pub struct ForkContextOverrides {
     /// via [`coco_query::forked_agent::ForkedAgentOptions::for_label`]).
     pub query_source: String,
     /// Per-fork agent id. `None` ⇒ auto-gen via [`auto_agent_id`].
-    /// TS: `createSubagentContext` always allocates a fresh
-    /// `agentId` unless the caller pre-supplies one.
+    /// A fresh id is always allocated unless the caller pre-supplies one.
     pub agent_id: Option<String>,
     /// When `false` (default), the fork's `setAppState` callbacks
     /// are no-ops — tool emissions inside the fork can't mutate
     /// parent UI state. Speculation flips this `true` for the
-    /// pipelined-suggestion case (TS:
-    /// `forkedAgent.ts::createSubagentContext::shareSetAppState`).
+    /// pipelined-suggestion case.
     pub share_set_app_state: bool,
     /// When `true` (default), clone the parent's `FileReadState` so
     /// the fork sees the same already-seen ids ⇒ identical
@@ -71,9 +65,8 @@ pub struct ForkContextOverrides {
     /// shouldn't see the parent's read history (rare).
     pub clone_file_read_state: bool,
     /// When `true` (default), clone parent's `ContentReplacementState`
-    /// so cache-shared forks make identical replacement decisions.
-    /// TS: `createSubagentContext` clones this for the same reason
-    /// as `readFileState`.
+    /// so cache-shared forks make identical replacement decisions
+    /// (same reason as `clone_file_read_state`).
     pub clone_content_replacement_state: bool,
     /// Per-fork canUseTool callback. Forwarded onto every
     /// `ToolUseContext.can_use_tool` so the tool-call preparer
@@ -86,17 +79,14 @@ pub struct ForkContextOverrides {
     pub require_can_use_tool: bool,
     /// Memdir-only write fence (memory extract / dream / session
     /// services use this so the fork can only mutate inside the
-    /// memdir). Empty = no fence. TS:
-    /// `extractMemories.ts::createAutoMemCanUseTool` enforces a
-    /// path prefix; coco-rs threads it onto
-    /// `ToolUseContext.allowed_write_roots` for the same effect.
+    /// memdir). Empty = no fence. Enforces a path prefix via
+    /// `ToolUseContext.allowed_write_roots`.
     pub allowed_write_roots: Vec<PathBuf>,
     /// Parent's query-tracking chain id, for telemetry grouping.
     /// `None` ⇒ root chain (the fork itself starts a new chain).
     pub parent_query_chain_id: Option<String>,
     /// Parent's query-tracking depth. The fork's own depth is
-    /// `parent_query_depth + 1`. TS: `queryTracking.depth`
-    /// increments through nested subagents.
+    /// `parent_query_depth + 1`; increments through nested subagents.
     pub parent_query_depth: i32,
 }
 
@@ -124,8 +114,7 @@ impl std::fmt::Debug for ForkContextOverrides {
 impl ForkContextOverrides {
     /// Build the conservative isolation shape for `label`.
     ///
-    /// Defaults match TS `createSubagentContext` for the
-    /// fire-and-forget side-channel case:
+    /// Defaults for the fire-and-forget side-channel case:
     /// - `share_set_app_state = false` (fork can't mutate parent UI)
     /// - `clone_file_read_state = true` (cache parity)
     /// - `clone_content_replacement_state = true` (cache parity)

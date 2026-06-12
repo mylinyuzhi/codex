@@ -26,18 +26,16 @@ pub struct SystemReminderConfig {
     pub enabled: bool,
 
     /// Per-generator timeout in milliseconds. Values `<= 0` fall back to
-    /// [`DEFAULT_TIMEOUT_MS`]. TS parity: `attachments.ts:767` sets a
-    /// 1000ms AbortController on each parallel batch; coco-rs applies the
-    /// same budget per generator.
+    /// [`DEFAULT_TIMEOUT_MS`]. Each parallel batch has this budget;
+    /// generators that exceed it are skipped.
     pub timeout_ms: i64,
 
     /// Per-reminder enable flags.
     pub attachments: AttachmentSettings,
 
     /// User-supplied content injected on every turn (subject to the
-    /// `CriticalSystemReminder` generator's own gating). Mirrors TS
-    /// `getCriticalSystemReminderAttachment` (`attachments.ts:1587`),
-    /// which reads from `toolUseContext.criticalSystemReminder_EXPERIMENTAL`.
+    /// `CriticalSystemReminder` generator's own gating). Reads from
+    /// `criticalSystemReminder_EXPERIMENTAL` in the tool use context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub critical_instruction: Option<String>,
 }

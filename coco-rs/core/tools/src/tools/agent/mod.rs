@@ -1,8 +1,6 @@
 //! Agent / Skill / SendMessage / TeamCreate / TeamDelete tools.
 //!
-//! TS: one directory per tool — `tools/AgentTool/`, `tools/SkillTool/`,
-//! `tools/SendMessageTool/`, `tools/TeamCreateTool/`, `tools/TeamDeleteTool/`.
-//! Rust mirrors that layout: one submodule per tool, all sitting under this
+//! One submodule per tool, all sitting under this
 //! `agent/` parent so the existing `pub mod agent;` re-export in
 //! `tools/mod.rs` keeps working.
 //!

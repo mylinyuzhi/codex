@@ -79,8 +79,8 @@ pub fn notify(title: &str, message: &str) {
 
 // ── OSC sequence builders ──
 
-/// iTerm2 OSC 9;1 notification.
-/// TS: `osc(OSC.ITERM2, \`\n\n${display}\`)` where OSC.ITERM2 == "9;1;".
+/// iTerm2 OSC 9;1 notification (`OSC.ITERM2 == "9;1;"`).
+/// Payload format: `\n\n{display}`.
 fn iterm2_osc(title: &str, message: &str) -> String {
     let display = if title.is_empty() {
         message.to_string()

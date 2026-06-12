@@ -60,14 +60,13 @@ async fn read_index_file(path: &std::path::Path) -> Option<String> {
 }
 
 /// Forced-tool name used to coerce the recall ranker into structured
-/// output. Mirrors TS `selectRelevantMemories`'s `tool_choice` shape.
+/// output.
 const RECALL_TOOL_NAME: &str = "select_memories";
 
 /// Lazy enumerator returning session IDs that have produced
 /// transcripts since the last consolidation. The auto-dream
 /// scheduler invokes the closure **only** after the time + scan
-/// throttle gates pass — TS parity with `listSessionsTouchedSince`,
-/// which TS calls only after the time gate (`autoDream.ts:155`).
+/// throttle gates pass.
 pub type SessionEnumerator = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
 /// Composed memory runtime — one per session.
@@ -77,10 +76,10 @@ pub struct MemoryRuntime {
     pub extract: Arc<ExtractService>,
     pub dream: Arc<DreamService>,
     pub session_memory: Arc<SessionMemoryService>,
-    /// Project session-transcript root — TS `getProjectDir(getOriginalCwd())`.
-    /// Substituted into the dream prompt's grep examples and the
-    /// optional searching-past-context section. `None` leaves the
-    /// `{TRANSCRIPT_DIR}` placeholder in prompt copy.
+    /// Project session-transcript root. Substituted into the dream
+    /// prompt's grep examples and the optional searching-past-context
+    /// section. `None` leaves the `{TRANSCRIPT_DIR}` placeholder in
+    /// prompt copy.
     transcript_dir: Option<PathBuf>,
     /// Cross-turn recall state. Encapsulated — external callers reach
     /// it through [`MemoryRuntime::recall`] and [`MemoryRuntime::reset`].
@@ -110,19 +109,16 @@ pub struct MemoryRuntime {
     /// Shared inbox for user-visible save notices. Extract / dream
     /// push into it on success; the engine drains it once per turn
     /// in `finalize_turn_post_tools` and injects a
-    /// `SystemMemorySavedMessage` into history. TS parity:
-    /// `appendSystemMessage(createMemorySavedMessage(...))`.
+    /// `SystemMemorySavedMessage` into history.
     notices: crate::notice::NoticeInbox,
     /// Telemetry emitter shared with the services. The runtime owns
     /// a clone so [`Self::render_system_prompt_section`] can fire
-    /// `MemdirLoaded` directly — TS `tengu_memdir_loaded`.
+    /// `MemdirLoaded` directly.
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
     /// Midnight-rollover latch for KAIROS mode. Inert outside KAIROS:
     /// `finalize_turn` only consults it when `config.kairos_mode` is
     /// set, so the watcher stays at its empty default and costs
-    /// nothing for sessions that don't opt in. TS parity: the KAIROS
-    /// arm of `getDateChangeAttachments`
-    /// (`utils/attachments.ts:1437-1441`).
+    /// nothing for sessions that don't opt in.
     kairos_rollover: crate::kairos::KairosRolloverWatcher,
 }
 
@@ -146,15 +142,13 @@ pub struct MemoryRuntimeBuilder {
     pub agent: AgentHandleRef,
     pub telemetry: Arc<dyn MemoryTelemetryEmitter>,
     pub side_query: Option<SideQueryHandle>,
-    /// Optional pre-resolved project transcript directory (TS
-    /// `getProjectDir(getOriginalCwd())`). Surfaces into the dream
-    /// prompt's grep example and the searching-past-context block.
+    /// Optional pre-resolved project transcript directory. Surfaces into
+    /// the dream prompt's grep example and the searching-past-context block.
     pub transcript_dir: Option<PathBuf>,
-    /// Whether auto-compact is active for this session — TS
-    /// `isAutoCompactEnabled()` (`compact/autoCompact.ts`). Only
-    /// affects telemetry: SM still constructs and the engine layer
-    /// gates its dispatch separately. Defaults to `true` so legacy
-    /// callers don't accidentally suppress the init event.
+    /// Whether auto-compact is active for this session. Only affects
+    /// telemetry: SM still constructs and the engine layer gates its
+    /// dispatch separately. Defaults to `true` so legacy callers don't
+    /// accidentally suppress the init event.
     pub auto_compact_enabled: bool,
     /// Optional pre-computed [`ProjectPaths`]. When `None`, [`Self::build`]
     /// derives one from `config_home + canonical(project_root)`. Callers
@@ -216,17 +210,16 @@ impl MemoryRuntimeBuilder {
         self
     }
 
-    /// Pre-resolve the project transcript directory (TS
-    /// `getProjectDir`). When unset the prompt copy keeps the
-    /// `{TRANSCRIPT_DIR}` placeholder for the model to fill.
+    /// Pre-resolve the project transcript directory. When unset the
+    /// prompt copy keeps the `{TRANSCRIPT_DIR}` placeholder for the
+    /// model to fill.
     pub fn with_transcript_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.transcript_dir = Some(dir.into());
         self
     }
 
     pub fn build(self) -> MemoryRuntime {
-        // TS `sessionMemory.ts:362-367 logEvent('tengu_session_memory_init', ...)`
-        // — fired once at registration time so dashboards can count
+        // Fired once at registration time so dashboards can count
         // SM-enabled sessions vs auto-compact-disabled ones.
         if self.config.session_memory_enabled {
             self.telemetry.emit(MemoryEvent::SessionMemoryInit {
@@ -234,25 +227,21 @@ impl MemoryRuntimeBuilder {
             });
         }
         // NOTE: `MemdirDisabled` is NOT emitted from this builder.
-        // TS `tengu_memdir_disabled` (`memdir.ts:492-505`) fires when
-        // the **memdir feature itself** is off — at which point this
-        // builder wouldn't run. The session-runtime layer emits the
+        // It fires when the memdir feature itself is off — at which point
+        // this builder wouldn't run. The session-runtime layer emits the
         // `FeatureGate` variant directly via tracing when
         // `Feature::AutoMemory` is off. Per-subsystem toggles
-        // (extraction / dream / session-memory) are a different
-        // semantic and do NOT trigger `tengu_memdir_disabled` in TS —
-        // their on/off state is visible from the absence/presence of
-        // the corresponding lifecycle events instead (e.g. no
-        // `tengu_extract_memories_extraction` ever firing in a
-        // session implies extraction was off).
+        // (extraction / dream / session-memory) are a different semantic
+        // and do not trigger `MemdirDisabled` — their on/off state is
+        // visible from the absence/presence of the corresponding lifecycle
+        // events instead.
         // `memory_base` is the root of the per-project memory layout
         // (`<base>/projects/<slug>/memory/`). `memory_base_override`
         // (from `COCO_REMOTE_MEMORY_DIR`) shifts it without touching
         // unrelated subsystems' paths — transcripts and the project
         // session dir still use the caller-supplied `project_paths`
         // unless this override is set, in which case we rebuild
-        // memory-scoped `ProjectPaths` on top of the new base. TS
-        // parity: `getMemoryBaseDir()` in `memdir/paths.ts:85-90`.
+        // memory-scoped `ProjectPaths` on top of the new base.
         let memory_base: PathBuf = self
             .config
             .memory_base_override
@@ -287,8 +276,7 @@ impl MemoryRuntimeBuilder {
         // Single shared notice inbox — `extract` and `dream` push
         // user-visible save notices here on success; the engine
         // drains via `MemoryRuntime::drain_user_notices()`. SM also
-        // shares the inbox even though TS doesn't push from it,
-        // keeping the API uniform if a future surface lands.
+        // shares the inbox for API uniformity if a future surface lands.
         let notices = crate::notice::NoticeInbox::default();
         let extract = Arc::new(ExtractService::with_shared_agent_and_notices(
             directories.personal.clone(),
@@ -378,9 +366,7 @@ impl MemoryRuntime {
     /// Drain user-visible memory save notices accumulated since the
     /// last call. The engine invokes this from
     /// `finalize_turn_post_tools` and injects a
-    /// `SystemMemorySavedMessage` into history for each entry. TS
-    /// parity: `appendSystemMessage(createMemorySavedMessage(paths))`
-    /// in `extractMemories.ts:495` and `autoDream.ts:243`.
+    /// `SystemMemorySavedMessage` into history for each entry.
     pub fn drain_user_notices(&self) -> Vec<crate::notice::MemoryUserNotice> {
         self.notices.drain()
     }
@@ -419,7 +405,6 @@ impl MemoryRuntime {
         // Fan-out — three forks in parallel. Each service gates
         // internally; the lazy `fork_messages` closure inside
         // `extract_input` is only invoked once all extract gates pass.
-        // TS parity: `stopHooks.ts` dispatches the three concurrently.
         let (sm_outcome, ex_outcome, dr_outcome) = tokio::join!(
             async {
                 if auto_compact_enabled {
@@ -443,9 +428,7 @@ impl MemoryRuntime {
         // through the `Edit`/`Write`/`NotebookEdit` tool) directly
         // wrote a memory-managed file this turn, surface a
         // `ManualEdit` notice. Dedup by path so a model that hits the
-        // same file 5 times only generates one toast. TS parity:
-        // `services/useMemoryUpdateNotification` +
-        // `utils/memoryFileDetection.ts::detectSessionFileType`.
+        // same file 5 times only generates one toast.
         let session_memory_file = self.session_memory.file_path();
         let mut dedup: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut manual_edit_paths: Vec<String> = Vec::new();
@@ -486,9 +469,7 @@ impl MemoryRuntime {
         // no benefit; the conditional keeps the watcher inert until
         // `kairos_mode` flips. Emit telemetry on rollover so dashboards
         // pick it up; the engine receives `Some(yesterday)` and can act
-        // (archive a session-transcript bucket, etc.) — TS-private
-        // `sessionTranscript.flushOnDateChange` lives downstream of
-        // this signal.
+        // (e.g. archive a session-transcript bucket).
         let kairos_rollover = if self.config.kairos_mode {
             let yesterday = self.kairos_rollover.tick(now_ms);
             if let Some(prev) = yesterday {
@@ -513,8 +494,7 @@ impl MemoryRuntime {
         }
     }
 
-    /// Per-turn auto-dream tick — TS parity with `executeAutoDream`
-    /// fired from `handleStopHooks`. Runs the three-gate scheduler
+    /// Per-turn auto-dream tick. Runs the three-gate scheduler
     /// (time → scan throttle → session); `enumerate_sessions` is the
     /// installed enumerator (see [`Self::install_session_enumerator`])
     /// and is invoked **only** when the gates require it. Without an
@@ -547,10 +527,8 @@ impl MemoryRuntime {
     /// `DreamService` is intentionally **not** reset: its 24h time
     /// gate + scan-throttle + PID lock are global-cadence concerns,
     /// not per-conversation state. A user running `/clear` shouldn't
-    /// re-pay the cost of a multi-minute consolidation, and TS's
-    /// `executeAutoDream` doesn't touch its scheduler state on
-    /// `clearConversation` either (`services/autoDream/autoDream.ts`
-    /// keeps state in module-scope closures across resets).
+    /// re-pay the cost of a multi-minute consolidation, and the
+    /// scheduler state persists across resets by design.
     pub async fn reset(&self) {
         self.recall_state.reset();
         self.extract.reset().await;
@@ -567,8 +545,7 @@ impl MemoryRuntime {
         &self.directories.team
     }
 
-    /// Project session-transcript directory (TS
-    /// `getProjectDir(getOriginalCwd())`). `None` when callers built
+    /// Project session-transcript directory. `None` when callers built
     /// the runtime without `with_transcript_dir(..)` — prompt copy
     /// then keeps the `{TRANSCRIPT_DIR}` placeholder.
     pub fn transcript_dir(&self) -> Option<&Path> {
@@ -595,12 +572,10 @@ impl MemoryRuntime {
             SystemPromptVariant::Auto
         };
 
-        // Truncate-and-keep-stats so we can emit `MemdirLoaded`. TS
-        // `tengu_memdir_loaded` fires every time the prompt section
-        // is built (`memdir.ts:298-305`) — without this dashboards
-        // can't measure how often / how large the memdir is per
-        // session, which is the load-bearing input for the recall
-        // budget heuristics.
+        // Truncate-and-keep-stats so we can emit `MemdirLoaded` every
+        // time the prompt section is built — dashboards use this to
+        // measure how often / how large the memdir is per session,
+        // which is the load-bearing input for the recall budget heuristics.
         let personal_trunc: Option<EntrypointTruncation> =
             read_index_file(&self.directories.personal_index())
                 .await
@@ -614,7 +589,7 @@ impl MemoryRuntime {
             None
         };
 
-        // Emit per-dir telemetry — TS fires twice in combined mode
+        // Emit per-dir telemetry — fires twice in combined mode
         // (once per dir). One event with `has_team=true` summarizes
         // the personal-side stats; team's stats ride on a second
         // event so both surfaces stay measurable.
@@ -665,17 +640,15 @@ impl MemoryRuntime {
     /// returns up to 5 filenames; the returned files are loaded with
     /// freshness headers and per-session byte-budget enforcement
     /// applied via [`PrefetchState`]. When no handle is present (or
-    /// the ranker errors) recall stays silent and returns empty — TS
-    /// parity (`findRelevantMemories.ts:131-140`). Surfacing
-    /// arbitrarily-recent memories would occupy attention budget and
-    /// the 60 KB session byte cap with no relevance signal.
+    /// the ranker errors) recall stays silent and returns empty —
+    /// surfacing arbitrarily-recent memories would occupy attention
+    /// budget and the 60 KB session byte cap with no relevance signal.
     ///
     /// `recent_tools` lets the ranker deprioritize reference docs for
-    /// tools the model is actively exercising — TS parity.
+    /// tools the model is actively exercising.
     pub async fn recall(&self, query: &str, recent_tools: &[String]) -> Vec<RelevantMemory> {
-        // Pre-call gates — TS `attachments.ts:2378-2386` rejects
-        // before paying the LLM cost. Two cheap filters that make
-        // recall pull its weight on a per-turn basis:
+        // Pre-call gates — two cheap filters that make recall pull its
+        // weight on a per-turn basis:
         //
         // 1. Empty / whitespace-only query.
         let trimmed = query.trim();
@@ -683,31 +656,28 @@ impl MemoryRuntime {
             return Vec::new();
         }
         // 2. Single-token query — anything without inner whitespace
-        //    isn't a meaningful semantic query. TS:
-        //    `if (!/\s/.test(input.trim())) return undefined`. Saves
-        //    a side-query per quick-prompt session ("hi", "go", "thanks").
+        //    isn't a meaningful semantic query. Saves a side-query per
+        //    quick-prompt session ("hi", "go", "thanks").
         if !trimmed.contains(char::is_whitespace) {
             return Vec::new();
         }
         // 3. Cumulative byte budget already saturated — every
         //    selected memory would be dropped by `load_relevant_memories`
-        //    anyway. TS `attachments.ts:2384-2386` gates upstream of
-        //    `selectRelevantMemories`.
+        //    anyway.
         if self.recall_state.is_budget_exhausted() {
             return Vec::new();
         }
         // Cold-start short-circuit: gate on the scan being empty, NOT
-        // on `MEMORY.md`'s presence. TS `findRelevantMemories.ts:46`
-        // short-circuits via `scanMemoryFiles(...).length === 0`. A
-        // user who has topic files but deleted (or never had) the
-        // `MEMORY.md` index still has memories worth surfacing.
+        // on `MEMORY.md`'s presence. A user who has topic files but
+        // deleted (or never had) the `MEMORY.md` index still has
+        // memories worth surfacing.
         let scanned = scan_memory_files(&self.directories.personal);
         if scanned.is_empty() {
             return Vec::new();
         }
 
         let Some(handle) = self.side_query.get().cloned() else {
-            // No LLM ranker — stay silent. TS contract preserved.
+            // No LLM ranker — stay silent.
             return Vec::new();
         };
 
@@ -765,9 +735,7 @@ impl MemoryRuntime {
             .with_schema_name(RECALL_TOOL_NAME)
             .with_schema_description("Up to 5 memory filenames most relevant to the user's query.")
             .with_model_role(ModelRole::Memory)
-            // TS `findRelevantMemories.ts:101`
-            // `skipSystemPromptPrefix: true` — ranker must not see
-            // the main agent's preamble.
+            // Ranker must not see the main agent's preamble.
             .with_skip_system_prefix(true);
             match handle.query(request).await {
                 Ok(resp) => match extract_recall_selection(&resp) {
@@ -796,8 +764,7 @@ impl MemoryRuntime {
             None => {
                 // Forced-tool fallback: synthetic `select_memories`
                 // tool with the recall schema as `input_schema` —
-                // every provider supports `tool_choice = { type:
-                // "tool", name: "select_memories" }`.
+                // every provider supports `tool_choice` to the named tool.
                 let tool = SideQueryToolDef {
                     name: RECALL_TOOL_NAME.into(),
                     description:
@@ -825,7 +792,7 @@ impl MemoryRuntime {
                         }
                     },
                     Err(err) => {
-                        // TS parity: stay silent on ranker failure rather than
+                        // Stay silent on ranker failure rather than
                         // surfacing arbitrary newest-first content.
                         tracing::debug!(
                             target: "coco_memory::recall",
@@ -861,12 +828,9 @@ impl MemoryRuntime {
     /// Reset the recall state (already-surfaced set + byte budget).
     /// Called from the compact post-step so a fresh, post-compact
     /// transcript can re-surface memory without the prior session's
-    /// dedup + 60 KB cap blocking everything.
-    ///
-    /// TS gets this for free because `collectSurfacedMemories(messages)`
-    /// re-derives the state from the current message list every call;
-    /// in Rust we hold the state on the runtime and clear it
-    /// explicitly here.
+    /// dedup + 60 KB cap blocking everything. The state is held on the
+    /// runtime and cleared explicitly here rather than being re-derived
+    /// from the message list on each call.
     pub fn reset_recall_state(&self) {
         self.recall_state.reset();
     }

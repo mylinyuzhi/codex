@@ -36,7 +36,7 @@ use crate::traits::ProgressSender;
 
 /// Context provided to every tool execution.
 ///
-/// Maps to TS ToolUseContext (40+ fields). Organized into logical groups.
+/// Organized into logical groups.
 /// Passed by reference to Tool::execute(); mutated via callback closures.
 #[derive(Clone)]
 pub struct ToolUseContext {
@@ -52,8 +52,7 @@ pub struct ToolUseContext {
     /// `avoid_permission_prompts` for those).
     pub is_non_interactive: bool,
     /// Whether a residual `Ask` must fail closed (Deny) because no interactive
-    /// prompt is reachable. coco equivalent of TS
-    /// `ToolPermissionContext.shouldAvoidPermissionPrompts`. Distinct from
+    /// prompt is reachable (`shouldAvoidPermissionPrompts`). Distinct from
     /// `is_non_interactive` so a future consumer-backed print/SDK mode can stay
     /// non-interactive while still routing `Ask` to its `canUseTool` callback.
     pub avoid_permission_prompts: bool,
@@ -150,8 +149,7 @@ pub struct ToolUseContext {
     /// sent on the next request.
     ///
     /// Empty default = pre-discovery state; deferred tools stay hidden
-    /// until the model finds them via `ToolSearch`. TS parity:
-    /// `extractDiscoveredToolNames(messages)` in `utils/toolSearch.ts:545`.
+    /// until the model finds them via `ToolSearch`.
     pub discovered_tool_names: Arc<HashSet<String>>,
 
     /// Whether the current model supports Anthropic's server-side
@@ -199,13 +197,11 @@ pub struct ToolUseContext {
     /// observes byte-identical history; inner `Arc<Message>` lets
     /// individual messages be shared with `MessageHistory` without
     /// deep clones. Immutable for the lifetime of the ctx — tools never
-    /// mutate it (TS `Tool.ts:250` + every reader in TS `src/` is
-    /// read-only).
+    /// mutate it — it is read-only for the lifetime of the ctx.
     ///
-    /// TS parity: `query.ts:548` sets `toolUseContext.messages =
-    /// messagesForQuery` after `applyToolResultBudget` /
-    /// `microcompact` / `applyCollapses` / `autocompact`. Empty `Vec`
-    /// when no history has been built yet (test stubs, pre-first-turn).
+    /// Set after `applyToolResultBudget` / `microcompact` /
+    /// `applyCollapses` / `autocompact`. Empty `Vec` when no history
+    /// has been built yet (test stubs, pre-first-turn).
     pub messages: Arc<Vec<Arc<Message>>>,
     /// Permission context (mode + rules).
     pub permission_context: ToolPermissionContext,
@@ -215,7 +211,6 @@ pub struct ToolUseContext {
     pub tool_use_id: Option<String>,
     /// UUID of the user message that triggered this turn.
     /// Used by file history to key snapshots to user messages (not tool calls).
-    /// TS: `parentMessage.uuid` passed to `fileHistoryTrackEdit()`.
     pub user_message_id: Option<String>,
     /// Agent running this tool.
     pub agent_id: Option<AgentId>,
@@ -257,12 +252,9 @@ pub struct ToolUseContext {
     // ── Tracking Sets (session-scoped dedup) ──
     /// Paths that triggered nested memory loading.
     ///
-    /// TS `FileReadTool.ts:848,870,1038`
-    /// `context.nestedMemoryAttachmentTriggers?.add(fullFilePath)` —
-    /// every successful Read pushes the path here so
-    /// `getNestedMemoryAttachments` (TS `utils/attachments.ts:2165`)
-    /// can load any nested CLAUDE.md / memory files in the file's
-    /// ancestry on the next turn boundary.
+    /// Every successful Read pushes the path here so
+    /// `getNestedMemoryAttachments` can load any nested CLAUDE.md /
+    /// memory files in the file's ancestry on the next turn boundary.
     ///
     /// Wrapped in `Arc<RwLock<>>` so concurrent-safe tools sharing a
     /// cloned context all push into the same set, mirroring the
@@ -272,8 +264,7 @@ pub struct ToolUseContext {
     pub loaded_nested_memory_paths: HashSet<String>,
     /// Directories that triggered dynamic skill discovery.
     ///
-    /// TS `FileReadTool.ts:583` `context.dynamicSkillDirTriggers?.add(dir)` —
-    /// when Read/Write/Edit touch a file, we walk up to find any
+    /// When Read/Write/Edit touch a file, we walk up to find any
     /// `.coco/skills/` ancestor dir and record it here. The app/query
     /// layer drains this set after the tool batch completes and asks the
     /// SkillManager to load any newly-discovered dirs.
@@ -284,8 +275,8 @@ pub struct ToolUseContext {
     pub dynamic_skill_dir_triggers: Arc<RwLock<HashSet<String>>>,
     /// Files that triggered a conditional-skill activation check.
     ///
-    /// TS `activateConditionalSkillsForPaths(filePaths, cwd)` runs
-    /// against every file touched by Read/Write/Edit/Bash. Path-gated
+    /// `activateConditionalSkillsForPaths(filePaths, cwd)` runs against
+    /// every file touched by Read/Write/Edit/Bash. Path-gated
     /// skills (`paths` frontmatter) whose patterns match get promoted
     /// into the visible pool. We collect the raw file paths here and
     /// let the app/query drain dispatch them to
@@ -305,8 +296,8 @@ pub struct ToolUseContext {
     // ── Flags ──
     /// Whether this context is running as a teammate in a swarm team.
     ///
-    /// TS: `isTeammate()` — NOT the same as `agent_id.is_some()`.
-    /// Regular subagents (Agent tool spawns) have `agent_id` set but are NOT
+    /// NOT the same as `agent_id.is_some()`. Regular subagents (Agent tool
+    /// spawns) have `agent_id` set but are NOT
     /// teammates. Teammates are swarm members that coordinate via mailbox.
     /// Set by the team spawner; tools check this for teammate-specific behavior
     /// (e.g., ExitPlanMode bypasses permission UI for teammates).
@@ -318,8 +309,8 @@ pub struct ToolUseContext {
     pub is_in_process_teammate: bool,
 
     /// When `true`, this teammate MUST request plan approval from the
-    /// team lead before exiting plan mode. TS: `isPlanModeRequired()` —
-    /// tied to the role definition in the team file or the
+    /// team lead before exiting plan mode. Tied to the role definition
+    /// in the team file or the
     /// `COCO_PLAN_MODE_REQUIRED` env var. When `false`,
     /// teammates in plan mode can exit "voluntarily" without leader
     /// approval (the tool skips the mailbox write and restores mode
@@ -331,12 +322,12 @@ pub struct ToolUseContext {
 
     /// This teammate's own agent name (swarm identity). Pre-resolved by
     /// the engine from its configured identity + env fallback so tools
-    /// don't each re-read process env. TS: `getAgentName()`.
+    /// don't each re-read process env.
     /// `None` in non-swarm sessions.
     pub agent_name: Option<String>,
 
     /// The team name this teammate belongs to. Same rationale as
-    /// [`Self::agent_name`]. TS: `getTeamName()`.
+    /// [`Self::agent_name`].
     pub team_name: Option<String>,
 
     /// When `true`, ExitPlanMode compares the plan-file mtime against
@@ -345,10 +336,9 @@ pub struct ToolUseContext {
     /// Enabled via `settings.plan_mode.verify_execution`.
     pub plan_verify_execution: bool,
     /// Plan-mode interview-phase flag — drives the `EnterPlanMode`
-    /// post-execute instruction text variant. TS parity:
-    /// `isPlanModeInterviewPhaseEnabled()`. In coco-rs the source is
+    /// post-execute instruction text variant. Source is
     /// `settings.plan_mode.workflow == Interview` only (no Growthbook,
-    /// no `USER_TYPE=ant`, no env var). Mirrors the same field on
+    /// no env var). Mirrors the same field on
     /// `coco_tool_runtime::PromptOptions` and the
     /// `is_plan_interview_phase` field on
     /// `coco_system_reminder::GeneratorContext`.
@@ -383,7 +373,7 @@ pub struct ToolUseContext {
     /// sessions without a configured language server — its
     /// `is_connected()` returns `false`, which combined with
     /// `LspTool::is_enabled` hides the tool from the model's tool list
-    /// entirely (TS parity: `LSPTool.isEnabled() = isLspConnected()`).
+    /// entirely.
     pub lsp: LspHandleRef,
 
     // ── Scheduling ──
@@ -415,8 +405,7 @@ pub struct ToolUseContext {
     pub mailbox: crate::MailboxHandleRef,
 
     // ── Pending-Message Queue ──
-    /// In-memory FIFO of pending messages per recipient agent. Mirrors
-    /// TS `LocalAgentTaskState.pendingMessages` — when a running agent
+    /// In-memory FIFO of pending messages per recipient agent. When a running agent
     /// receives a `SendMessage` from a peer, the message is queued here
     /// and surfaced via the `agent_pending_messages` system-reminder on
     /// the recipient's next turn. `NoOpPendingMessageStore` in non-swarm
@@ -425,7 +414,6 @@ pub struct ToolUseContext {
 
     // ── Working Directory Override ──
     /// CWD override for worktree-isolated agents.
-    /// TS: cwdOverridePath in AgentTool.tsx
     pub cwd_override: Option<PathBuf>,
 
     // ── Sandboxed-write fence ──
@@ -434,13 +422,11 @@ pub struct ToolUseContext {
     /// memory crate's forked extraction / auto-dream agents (and any
     /// future caller that needs a memdir-only fence). File-mutation
     /// tools must reject paths outside the fence before touching disk.
-    /// TS: `services/extractMemories/extractMemories.ts:createAutoMemCanUseTool`.
     pub allowed_write_roots: Vec<PathBuf>,
 
     // ── Permission Forwarding ──
     /// Bridge for forwarding permission requests from teammate agents.
     /// None for main agent (uses normal permission pipeline).
-    /// TS: createInProcessCanUseTool() in inProcessRunner.ts
     pub permission_bridge: Option<ToolPermissionBridgeRef>,
 
     // ── Per-Fork Tool Gate ──
@@ -457,20 +443,15 @@ pub struct ToolUseContext {
     /// `require_can_use_tool` (above) controls whether `Pre`-tool-use
     /// hook auto-approve can bypass this callback. When `true`,
     /// callback wins regardless of hook config.
-    ///
-    /// TS: `Tool.ts::CanUseToolFn`, dispatched at
-    /// `services/tools/toolExecution.ts:706-748`.
     pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
 
     // ── Progress Reporting ──
     /// Channel for tool progress updates. Tools send ToolProgress here;
     /// StreamingToolExecutor yields them immediately to the TUI.
-    /// TS: `onProgress` callback in `tool.call()`.
     pub progress_tx: Option<ProgressSender>,
 
     // ── Background Task Management ──
     /// Handle for background task operations (shell tasks, agent tasks).
-    /// TS: `spawnShellTask()`, `TaskOutput`, stall watchdog.
     pub task_handle: Option<BackgroundTaskHandleRef>,
 
     // ── Persistent Task List (V2) ──
@@ -478,7 +459,6 @@ pub struct ToolUseContext {
     /// `TaskList`/`TaskUpdate`/`TaskStop` (when operating on todo tasks)
     /// and `TaskOutput` (todo tasks). `NoOpTaskListHandle` in test
     /// contexts or sessions lacking a resolved config-home path.
-    /// TS: `utils/tasks.ts`.
     pub task_list: TaskListHandleRef,
     /// Router that can switch the active task list when a leader creates
     /// or deletes an agent team.
@@ -487,7 +467,7 @@ pub struct ToolUseContext {
     // ── Per-Agent TodoWrite (V1) ──
     /// In-memory per-agent checklist store used by `TodoWriteTool`.
     /// Keyed by `agent_id.unwrap_or(session_id)`. Lives for the
-    /// process lifetime — TS never persists this to disk.
+    /// process lifetime — never persisted to disk.
     pub todo_list: TodoListHandleRef,
 
     // ── Hook Pipeline ──
@@ -496,17 +476,14 @@ pub struct ToolUseContext {
     /// entirely. The higher-layer orchestrator (`app/query`) implements this
     /// trait by bridging to `coco_hooks::HookRegistry` + `execute_pre_tool_use()`
     /// / `execute_post_tool_use()`.
-    /// TS: `services/tools/toolExecution.ts:800-862` hook invocation.
     pub hook_handle: Option<HookHandleRef>,
 
     // ── File State ──
     /// Session-level file read state for @mention dedup, edit safety, changed-file detection.
-    /// TS: `readFileState` (FileStateCache) in toolUseContext.
     pub file_read_state: Option<Arc<RwLock<FileReadState>>>,
 
     // ── File History ──
     /// File history for checkpoint/rewind. Shared across concurrent tool calls.
-    /// TS: `updateFileHistoryState` callback in toolUseContext.
     pub file_history: Option<Arc<RwLock<FileHistoryState>>>,
     /// Config home directory for file history backup storage.
     pub config_home: Option<PathBuf>,
@@ -520,7 +497,6 @@ pub struct ToolUseContext {
     /// Resolved plans directory for plan-mode file I/O. Pre-computed by
     /// the engine from `config_home` + project root + `plansDirectory`
     /// setting, so tools can locate the plan file without re-deriving.
-    /// TS: `getPlanFilePath(agentId)` reads the session-level setting.
     pub plans_dir: Option<PathBuf>,
 
     // ── App State ──
@@ -532,12 +508,11 @@ pub struct ToolUseContext {
     /// **Write access is deliberately not exposed** — tools cannot
     /// call `.write()` on this handle. Mutations route through
     /// [`coco_messages::ToolResult::app_state_patch`], applied
-    /// post-execute by the executor. TS parity:
-    /// `orchestration.ts:queuedContextModifiers` — tools return a
-    /// `(ctx) => newCtx` modifier; the orchestrator applies them
-    /// after the concurrent batch finishes. Rust encodes the same
-    /// discipline in the type system so a tool that tries to
-    /// mutate shared state simply won't compile.
+    /// post-execute by the executor. Tools return an `AppStatePatch`
+    /// modifier; the orchestrator applies them after the concurrent
+    /// batch finishes. Rust encodes the same discipline in the type
+    /// system so a tool that tries to mutate shared state simply
+    /// won't compile.
     pub app_state: Option<coco_types::AppStateReadHandle>,
 
     // ── Denial Tracking ──
@@ -545,11 +520,11 @@ pub struct ToolUseContext {
     ///
     /// `Some(arc)` when this context is a **fork** — the fork holds an
     /// isolated tracker so its denial streak cannot poison the parent
-    /// session's circuit breaker (TS: `createSubagentContext` always
-    /// builds a fresh tracker). `None` on the main session context;
-    /// callers fall back to the engine-level session tracker.
+    /// session's circuit breaker — always a fresh tracker for forks.
+    /// `None` on the main session context; callers fall back to the
+    /// engine-level session tracker.
     ///
-    /// Read order at the classifier site (TS `permissions.ts:553-558`):
+    /// Read order at the classifier site:
     /// `ctx.local_denial_tracking` → engine-level session tracker.
     pub local_denial_tracking: Option<Arc<Mutex<DenialTracker>>>,
 
@@ -741,10 +716,9 @@ impl ToolUseContext {
     /// All `/<word>` tokens the user typed in the current turn —
     /// indexed for O(1) gate lookup against canonical skill names
     /// AND aliases. Lines like `/fix-issue 42` contribute
-    /// `"fix-issue"`; mid-line slashes are NOT counted (TS Am7 is
-    /// line-anchored).
+    /// `"fix-issue"`; mid-line slashes are NOT counted (line-anchored).
     ///
-    /// TS mirror: `Am7` (`isUserTypedSlashCommandInTurn`). Used by
+    /// Used by
     /// the Skill tool gate to bypass the
     /// `disable_model_invocation` and `skill_overrides ==
     /// user-invocable-only` blocks when the user explicitly
@@ -796,7 +770,7 @@ impl ToolUseContext {
     /// When `false`:
     ///   - [`crate::ToolRegistry::loaded_tools`] short-circuits the
     ///     deferral filter — every enabled tool's schema lands on
-    ///     turn 1 (TS `'standard'` mode equivalent).
+    ///     turn 1 (standard mode equivalent).
     ///   - [`crate::ToolRegistry::deferred_tools`] returns empty.
     ///   - `ToolSearchTool::is_enabled` returns `false`; the tool
     ///     is hidden from the model.
@@ -920,8 +894,7 @@ impl ToolUseContext {
 
 /// Extract every `/<word>` token that begins a line of any text
 /// content part of `msg`, normalised to the bare name (no leading
-/// `/`). Mid-line slashes are skipped to match TS Am7's
-/// line-anchored intent.
+/// `/`). Mid-line slashes are skipped (line-anchored).
 ///
 /// `<word>` extends until the first whitespace; the token can
 /// contain any non-whitespace character so kebab-case (`/fix-issue`),
@@ -1036,8 +1009,7 @@ mod user_typed_slash_tests {
             vec![make_user("please run the /foo command for me", uid)],
             Some(uid.to_string()),
         );
-        // Mid-line `/foo` is not a user-initiated invocation per TS Am7
-        // (anchored at line start).
+        // Mid-line `/foo` is not a user-initiated invocation (anchored at line start).
         assert!(!ctx.typed_slashes_in_turn().contains("foo"));
     }
 

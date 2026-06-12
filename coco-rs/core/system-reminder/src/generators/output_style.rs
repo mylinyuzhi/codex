@@ -1,8 +1,7 @@
-//! TS `output_style` generator.
+//! `output_style` generator.
 //!
-//! Mirrors `normalizeAttachmentForAPI` `case 'output_style':`
-//! (`messages.ts:3797`). Injects a reminder that the active output
-//! style's guidelines should be followed this turn.
+//! Injects a reminder that the active output style's guidelines should
+//! be followed this turn.
 
 use async_trait::async_trait;
 

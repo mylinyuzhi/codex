@@ -37,7 +37,7 @@ fn permission_prompt_pauses_clock() {
 
 #[test]
 fn sandbox_permission_prompt_pauses_clock() {
-    // TS-DIVERGE: TS has no SandboxPermission analog; we still pause
+    // DIVERGE: no SandboxPermission analog upstream; we still pause
     // because it shares the "tool blocked on user approval" semantic.
     let prompt = PanePromptState::SandboxPermission(SandboxPermissionPromptState {
         request_id: "sandbox-1".into(),
@@ -48,9 +48,8 @@ fn sandbox_permission_prompt_pauses_clock() {
 
 #[test]
 fn plan_entry_prompt_does_not_pause_clock() {
-    // TS only pauses on `focusedInputDialog === 'tool-permission'`
-    // (REPL.tsx:2076-2088). Plan-entry is a different dialog focus;
-    // the elapsed clock keeps ticking through it.
+    // Only tool-permission pauses the elapsed clock. Plan-entry is a
+    // different dialog focus; the elapsed clock keeps ticking through it.
     let prompt = PanePromptState::PlanEntry(PlanEntryPromptState {
         description: "Entering plan mode".into(),
     });

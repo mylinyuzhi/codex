@@ -15,8 +15,8 @@ use super::generated_file::GeneratedFile;
 
 /// Structured reasoning output from a model response.
 ///
-/// This type represents a single reasoning block, matching the TS SDK's
-/// reasoning output with `text`, `signature`, and `providerMetadata`.
+/// This type represents a single reasoning block with `text`, `signature`,
+/// and `providerMetadata`.
 #[derive(Debug, Clone)]
 pub struct ReasoningOutput {
     /// The reasoning text content.

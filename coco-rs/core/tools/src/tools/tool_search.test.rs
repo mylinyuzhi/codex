@@ -2,7 +2,7 @@
 //!
 //! Three test groups:
 //!   1. `parse_select_query` — the select-mode prefix parser.
-//!   2. `render_for_model` — TS-parity envelope rendering.
+//!   2. `render_for_model` — envelope rendering.
 //!   3. `execute` — end-to-end coverage of select + keyword modes,
 //!      weighted scoring, `+keyword` required terms, and the
 //!      `app_state_patch` promotion mechanism.
@@ -56,9 +56,8 @@ fn test_parse_select_query_empty_after_prefix() {
     assert_eq!(parse_select_query("select:"), Some(vec![]));
 }
 
-/// TS uses `/^select:(.+)$/i` — the `/i` makes the prefix match
-/// case-insensitive. `Select:`, `SELECT:`, `SeLeCt:` all trigger
-/// select mode.
+/// The prefix match is case-insensitive: `/^select:(.+)$/i`.
+/// `Select:`, `SELECT:`, `SeLeCt:` all trigger select mode.
 #[test]
 fn test_parse_select_query_case_insensitive_prefix() {
     assert_eq!(parse_select_query("Select:Read"), Some(vec!["Read".into()]));
@@ -70,8 +69,7 @@ fn test_parse_select_query_case_insensitive_prefix() {
 }
 
 /// The tool NAMES after the prefix are NOT lowercased — only the prefix
-/// itself is case-insensitive. This matches TS where the tool lookup
-/// uses `findToolByName` which does its own case-insensitive match.
+/// itself is case-insensitive. Tool lookup uses case-insensitive matching.
 #[test]
 fn test_parse_select_query_preserves_tool_name_case() {
     assert_eq!(
@@ -80,7 +78,7 @@ fn test_parse_select_query_preserves_tool_name_case() {
     );
 }
 
-// ── render_for_model — TS parity for ToolSearch envelopes ─────────────
+// ── render_for_model — ToolSearch envelopes ─────────────────────────────
 
 mod render_tests {
     use super::super::ToolSearchTool;
@@ -107,8 +105,7 @@ mod render_tests {
 
     #[test]
     fn empty_matches_without_pending_uses_bare_message() {
-        // TS `ToolSearchTool.ts:449`: `'No matching deferred tools found'`
-        // (no trailing period).
+        // Returns `'No matching deferred tools found'` (no trailing period).
         let data = json!({
             "matches": [],
             "query": "missing",
@@ -123,9 +120,9 @@ mod render_tests {
 
     #[test]
     fn empty_matches_with_pending_appends_retry_hint() {
-        // TS `ToolSearchTool.ts:454` appends a `. Some MCP servers ...`
-        // suffix when servers are still in handshake. The list is
-        // joined with `, ` and the suffix ends with a period.
+        // Appends a `. Some MCP servers ...` suffix when servers are still
+        // in handshake. The list is joined with `, ` and the suffix ends
+        // with a period.
         let data = json!({
             "matches": [],
             "query": "missing",
@@ -145,10 +142,6 @@ mod render_tests {
 
     #[test]
     fn matches_with_tool_reference_flag_emits_custom_parts() {
-        // TS parity: `ToolSearchTool.ts:462-469` returns
-        // `tool_reference` content blocks. coco-rs encodes them via
-        // `ToolResultContentPart::Custom` with `provider_options
-        // .anthropic = {type: "tool-reference", toolName: X}`.
         let data = json!({
             "matches": ["WebFetch", "WebSearch"],
             "query": "fetch",
@@ -368,9 +361,6 @@ mod execute_tests {
 
     #[tokio::test]
     async fn select_mode_falls_back_to_full_pool_when_already_loaded() {
-        // TS: "selecting an already-loaded tool is a harmless no-op
-        // that lets the model proceed without retry churn." — the
-        // matched name still ends up in `matches` and the patch.
         let ctx = ctx_with_tools(vec![eager("Read", "Read a file")]);
         let result = <ToolSearchTool as DynTool>::execute(
             &ToolSearchTool,
@@ -461,9 +451,8 @@ mod execute_tests {
 
     #[tokio::test]
     async fn keyword_exact_name_fast_path() {
-        // TS `ToolSearchTool.ts:199-204`: a bare tool name (no
-        // `select:` prefix) returns that tool directly. Useful for
-        // subagents that emit a name without the prefix.
+        // A bare tool name (no `select:` prefix) returns that tool directly.
+        // Useful for subagents that emit a name without the prefix.
         let ctx = ctx_with_tools(vec![
             deferred("WebFetch", "Fetch a URL", None),
             deferred("WebSearch", "Search the web", None),
@@ -486,8 +475,7 @@ mod execute_tests {
 
     #[tokio::test]
     async fn keyword_mcp_prefix_fast_path() {
-        // TS `ToolSearchTool.ts:208-216`: `mcp__server` prefix
-        // returns all matching MCP tools.
+        // `mcp__server` prefix returns all matching MCP tools.
         let ctx = ctx_with_tools(vec![
             deferred("mcp__slack__send_message", "Slack send", None),
             deferred("mcp__slack__list_channels", "Slack list", None),
@@ -579,8 +567,8 @@ mod execute_tests {
     async fn keyword_scoring_excludes_eager_tools() {
         // Eager tools (`should_defer() == false`) are NOT in the
         // scoring pool — the model already has their schema. Only
-        // the exact-name fast path falls back to the full pool (TS
-        // "harmless no-op" — see `keyword_exact_name_fast_path`).
+        // the exact-name fast path falls back to the full pool (harmless
+        // no-op — see `keyword_exact_name_fast_path`).
         //
         // Pick a non-exact-name query to exercise the scoring path
         // so eager tools never appear.
@@ -660,7 +648,7 @@ mod execute_tests {
         assert!(matches.is_empty());
     }
 
-    // ── ServerSideToolReference capability — TS-parity emission path ─
+    // ── ServerSideToolReference capability — emission path ─
 
     /// Server-side capable ctx (Anthropic Sonnet 4.5+/Opus 4+).
     /// `model_supports_client_side_tool_search` is also true because
@@ -686,7 +674,7 @@ mod execute_tests {
     /// envelope is tagged `render_as_tool_reference: true` and the
     /// promotion patch is **suppressed** — discovery state lives in
     /// the messages array (`tool_reference` blocks) rather than the
-    /// `ToolAppState`. TS parity: `ToolSearchTool.ts:444-470`.
+    /// `ToolAppState`.
     #[tokio::test]
     async fn capable_model_select_skips_patch_and_tags_envelope() {
         let ctx =
@@ -725,8 +713,7 @@ mod execute_tests {
         assert!(result.app_state_patch.is_none());
     }
 
-    /// `Feature::ToolSearch` is the user-facing on/off switch (TS
-    /// `getToolSearchMode()` standard vs tst). When the feature is
+    /// `Feature::ToolSearch` is the user-facing on/off switch. When the feature is
     /// disabled the tool must hide itself from the model — symmetric
     /// with `ToolRegistry::loaded_tools` short-circuiting the
     /// deferral filter so every tool's schema lands in turn 1.
@@ -792,7 +779,7 @@ mod execute_tests {
     }
 }
 
-// ── parse_tool_name — TS-parity decomposition ────────────────────────
+// ── parse_tool_name — decomposition ────────────────────────
 
 mod parse_name_tests {
     use super::super::parse_tool_name;

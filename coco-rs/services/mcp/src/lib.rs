@@ -1,10 +1,8 @@
 //! MCP server lifecycle, config, auth, transport channels.
 //!
-//! Uses `coco-rmcp-client` (copied from cocode-rs) for actual MCP protocol
-//! communication via the `rmcp` SDK. This crate adds coco-specific business
-//! logic: naming normalization, config scopes, discovery caching, file watching.
-//!
-//! TS: services/mcp/ (23 files, 12K LOC)
+//! Uses `coco-rmcp-client` for actual MCP protocol communication via the `rmcp`
+//! SDK. This crate adds coco-specific business logic: naming normalization,
+//! config scopes, discovery caching, file watching.
 
 pub mod auth;
 pub mod auth_cache;

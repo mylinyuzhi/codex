@@ -1,6 +1,6 @@
 //! Prompt cache break detection.
 //!
-//! TS: services/api/promptCacheBreakDetection.ts — two-phase detection:
+//! Two-phase detection:
 //!   Phase 1 (pre-call): `record_prompt_state()` snapshots system/tool hashes.
 //!   Phase 2 (post-call): `check_response_for_cache_break()` compares cache tokens.
 //!
@@ -52,8 +52,7 @@ pub enum CacheState {
 // ---------------------------------------------------------------------------
 
 /// Hashed snapshot of prompt state for cache break detection.
-///
-/// TS: PreviousState. We store hashes rather than full content to keep memory low.
+/// Stores hashes rather than full content to keep memory low.
 #[derive(Debug, Clone)]
 struct PromptSnapshot {
     /// Hash of the system prompt (with cache_control stripped).
@@ -298,7 +297,7 @@ fn is_excluded_model(model: &str) -> bool {
     model.contains("haiku")
 }
 
-/// Tracking key for a query source. Mirrors TS `getTrackingKey`:
+/// Tracking key for a query source.
 ///
 /// - `compact` shares `repl_main_thread`'s key.
 /// - `agent_id` (when supplied for a tracked prefix) takes precedence over
@@ -366,8 +365,7 @@ pub struct PromptStateInput {
 }
 
 /// Tracks prompt cache state across calls to detect cache breaks.
-///
-/// TS: promptCacheBreakDetection.ts — previousStateBySource map + two-phase API.
+/// Uses a per-source map with two-phase (pre-call / post-call) API.
 pub struct CacheBreakDetector {
     states: HashMap<String, PromptSnapshot>,
     pending_changes: HashMap<String, PendingChanges>,

@@ -1,18 +1,15 @@
-//! TS `mcp_instructions_delta` generator.
+//! `mcp_instructions_delta` generator.
 //!
-//! Mirrors `getMcpInstructionsDeltaAttachment` +
-//! `normalizeAttachmentForAPI` `case 'mcp_instructions_delta':`
-//! (`messages.ts:4216`). Fires when MCP server instructions are added
-//! or servers disconnect.
+//! Fires when MCP server instructions are added or servers disconnect.
 //!
 //! Gate chain:
 //!
 //! 1. `ctx.config.attachments.mcp_instructions_delta` — default on.
 //! 2. `ctx.mcp_instructions_delta.is_some()` with non-empty delta —
 //!    engine pre-computes by diffing current MCP server instructions
-//!    (from `services/mcp`) against prior announcements in history.
+//!    against prior announcements in history.
 //!
-//! Text template from TS `messages.ts:4216-4230`: two optional sections
+//! Output: two optional sections
 //! joined by `"\n\n"`.
 
 use async_trait::async_trait;

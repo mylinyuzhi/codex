@@ -64,7 +64,7 @@ async fn emits_with_ts_format_and_thousands_separator() {
         .expect("emits");
     assert_eq!(r.attachment_type, AttachmentType::OutputTokenUsage);
     let text = r.content().unwrap();
-    // TS template: `Output tokens — turn: 2,500 / 8,000 · session: 125,000`
+    // Expected format: `Output tokens — turn: 2,500 / 8,000 · session: 125,000`
     assert_eq!(
         text,
         "Output tokens \u{2014} turn: 2,500 / 8,000 \u{00b7} session: 125,000"

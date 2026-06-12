@@ -1,10 +1,8 @@
 //! `/rewind` command — opens the message-selector overlay.
 //!
-//! TS source: `commands/rewind/rewind.ts:1-13` (bare form). The TS handler
-//! ignores `args` entirely (`_args` unused, `argumentHint: ''`); the
-//! `messageSelectorPreselect` mechanism reaches the picker only through
-//! the message-actions edit keyboard gesture
-//! (`screens/REPL.tsx:3783-3784`).
+//! The handler ignores `args` entirely; the `messageSelectorPreselect`
+//! mechanism reaches the picker only through the message-actions edit
+//! keyboard gesture.
 //!
 
 use async_trait::async_trait;

@@ -174,7 +174,7 @@ async fn with_tool_deny_aborts_with_error() {
 #[tokio::test]
 async fn with_tool_failure_aborts_not_silent() {
     // A failing command must abort the whole expansion, not silently
-    // substitute empty output (TS MalformedCommandError throws).
+    // substitute empty output.
     let h = RecordingHandle::new(Behavior::Fail("exit 7".into()));
     let err = execute_shell_in_prompt_with_tool("x !`false` y", &h, &[])
         .await
@@ -198,7 +198,7 @@ async fn with_tool_deny_first_marker_stops_before_second() {
 #[tokio::test]
 async fn with_tool_multiple_markers_all_substituted() {
     // Each `!` is preceded by whitespace (or start), satisfying the
-    // TS `(?<=^|\s)` lookbehind.
+    // `(?<=^|\s)` lookbehind.
     let h = RecordingHandle::new(Behavior::Echo);
     let out = execute_shell_in_prompt_with_tool("!`a` and !`b`", &h, &[])
         .await
@@ -209,7 +209,7 @@ async fn with_tool_multiple_markers_all_substituted() {
 #[tokio::test]
 async fn with_tool_bracketed_inline_not_matched() {
     // `[!`a`]` — `!` preceded by `[` (not whitespace) → not a marker,
-    // mirroring the TS lookbehind. Left verbatim.
+    // mirroring the lookbehind. Left verbatim.
     let h = RecordingHandle::new(Behavior::Echo);
     let out = execute_shell_in_prompt_with_tool("[!`a`]", &h, &[])
         .await

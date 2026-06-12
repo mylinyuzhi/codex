@@ -2,12 +2,9 @@
 //! into a concrete `ResumePlan` (source session id, prior messages,
 //! and the live session id the new turn should write under).
 //!
-//! TS parity: `loadInitialMessages()` in `entrypoints/cli.tsx` calls
-//! `loadConversationForResume()` then `processResumedConversation()` —
-//! same shape, different file split. Keeping the flag-resolution
-//! logic in one place lets `main.rs`, `tui_runner.rs`, and
-//! `sdk_server::sdk_runner` all reuse it without duplicating the
-//! "id vs jsonl path vs --continue most-recent" rules.
+//! Keeping the flag-resolution logic in one place lets `main.rs`,
+//! `tui_runner.rs`, and `sdk_server::sdk_runner` all reuse it without
+//! duplicating the "id vs jsonl path vs --continue most-recent" rules.
 //!
 //! The resolver is filesystem-only; it never touches model runtimes,
 //! `SessionManager`, or runtime state. Callers thread the resulting
@@ -65,7 +62,7 @@ pub struct ResumePlan {
 /// callers fall through to fresh-session bootstrap. Returns an error
 /// when the requested source isn't on disk or the JSONL is unreadable.
 ///
-/// Resolution rules (TS-aligned):
+/// Resolution rules:
 /// - `--resume <id|path>`: load the named session by id, or treat
 ///   the argument as a path when it ends in `.jsonl`.
 /// - `--continue` / `--continue-session`: load the most recent
@@ -93,15 +90,13 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
                 None => {
                     // No prior sessions to continue. Treat as a no-op
                     // rather than an error so `coco -c` on a clean
-                    // install just starts a fresh chat. TS does the
-                    // same — falls through to the new-session path.
+                    // install just starts a fresh chat. Falls through
+                    // to the new-session path.
                     return Ok(None);
                 }
             }
         } else if cli.fork_session {
             // Fork without an explicit source: fork the most-recent.
-            // TS allows `--fork-session` standalone with the same
-            // implicit-most-recent behavior.
             match resolve_most_recent_across_projects(memory_base)? {
                 Some(s) => s,
                 None => {
@@ -162,8 +157,8 @@ pub fn resolve(cli: &Cli, memory_base: &Path, cwd: &Path) -> Result<Option<Resum
 /// `.jsonl` path. Returns `(session_id, transcript_path)`.
 ///
 /// For bare session ids we walk every project under
-/// `<memory_base>/projects/*/` (TS `resolveSessionFilePath` with no
-/// cwd hint), preferring the cwd-scoped project when present so
+/// `<memory_base>/projects/*/`, preferring the cwd-scoped project when
+/// present so
 /// `--resume <id>` from inside a repo lands on that repo's session
 /// even if the id exists in multiple projects.
 fn resolve_source_arg(
@@ -178,8 +173,7 @@ fn resolve_source_arg(
             path
         } else {
             // Relative .jsonl path is rooted in the cwd's project
-            // dir, matching TS `loadMessagesFromJsonlPath` (which
-            // resolves relative against the project's sessions dir).
+            // dir, resolving relative against the project's sessions dir.
             dest_store.project_paths().project_dir().join(&path)
         };
         let id = abs
@@ -191,11 +185,10 @@ fn resolve_source_arg(
     }
 
     // Bare id: look only under the current project (with sibling-
-    // worktree fallback). TS `sessionStoragePortable.ts:425-461` returns
-    // undefined when `dir` is set and the direct + worktree probes both
-    // miss — it does NOT cross over into other projects. A global scan
-    // here would silently open someone else's session and write follow-up
-    // turns into the wrong project dir, so we mirror TS and stop here.
+    // worktree fallback). When `dir` is set and the direct + worktree
+    // probes both miss, do NOT cross over into other projects. A global
+    // scan here would silently open someone else's session and write
+    // follow-up turns into the wrong project dir.
     if let Some(resolved) =
         coco_session::storage::resolve_session_file_path(memory_base, arg, Some(cwd))?
     {
@@ -208,8 +201,8 @@ fn resolve_source_arg(
 }
 
 /// Pick the newest non-sidechain session across **every** project.
-/// Mirrors TS `loadInitialMessages` for `--continue` (the resume
-/// picker walks all known projects, not just the current cwd).
+/// For `--continue`, the resume picker walks all known projects,
+/// not just the current cwd.
 fn resolve_most_recent_across_projects(memory_base: &Path) -> Result<Option<(String, PathBuf)>> {
     let mut sessions = coco_session::storage::list_all_sessions(memory_base)
         .map_err(|e| anyhow::anyhow!("listing sessions failed: {e}"))?;

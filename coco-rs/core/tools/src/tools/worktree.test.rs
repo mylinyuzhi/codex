@@ -191,7 +191,7 @@ async fn test_exit_worktree_keep_restores_cwd_and_clears_state() {
     assert!(app_state.read().await.active_worktree.is_none());
     assert_eq!(result.data["worktreePath"], worktree.display().to_string());
     assert_eq!(result.data["worktreeBranch"], "agent/task-test");
-    // TS-parity output fields.
+    // output fields.
     assert_eq!(result.data["action"], "keep");
     assert_eq!(result.data["originalCwd"], original.display().to_string());
     assert!(

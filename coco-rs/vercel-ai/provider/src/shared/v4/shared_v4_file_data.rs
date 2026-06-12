@@ -7,7 +7,7 @@ use serde::Serialize;
 
 /// Raw file data: either binary bytes or a base64-encoded string.
 ///
-/// Corresponds to `Uint8Array | string` in TypeScript.
+/// Either raw binary bytes or a base64-encoded string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileRawData {
     /// Raw binary bytes. Serialized as base64 in JSON.

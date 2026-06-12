@@ -1,41 +1,35 @@
-//! Disk-backed task output buffers — TS-aligned port of
-//! `utils/task/diskOutput.ts`.
+//! Disk-backed task output buffers.
 //!
 //! ## Why
 //!
 //! Background AgentTool spawns can run arbitrarily long. The
 //! original in-memory buffer (8 MiB cap, head-truncate) is fine for
 //! short spawns but loses early context on long-running coordinator
-//! workloads. This module mirrors TS's `DiskTaskOutput` so output
-//! is appended to disk asynchronously and reads return incremental
-//! ranges via `pread`.
+//! workloads. This module appends output to disk asynchronously and
+//! reads return incremental ranges via `pread`.
 //!
-//! ## TS-aligned semantics
+//! ## Semantics
 //!
-//! | TS (`utils/task/diskOutput.ts`) | coco-rs |
+//! | Concept | coco-rs |
 //! |---|---|
-//! | `getProjectTempDir()/{sessionId}/tasks/` | `coco_config::config_home().join("cache/tasks").join(session_id)` |
-//! | `{taskId}.output` filename | same |
-//! | `O_WRONLY \| O_APPEND \| O_CREAT \| O_NOFOLLOW` (Unix) | `OpenOptions().create(true).append(true)` + `custom_flags(O_NOFOLLOW)` (Unix); `OpenOptions().create(true).append(true)` (Windows) |
-//! | 5 GB disk cap with truncation marker | `MAX_TASK_OUTPUT_BYTES = 5 GB`; `[output truncated: exceeded 5GB disk cap]` marker |
-//! | Single drain loop processing `Vec<String>` queue | `tokio::sync::mpsc::UnboundedSender` + single drain task |
-//! | `flush()` returns Promise that resolves on queue empty | `flush()` returns `oneshot::Receiver<()>` resolved when the drain catches up |
-//! | `cancel()` clears queue without flushing | `cancel()` aborts the drain task |
-//! | `getTaskOutputDelta(id, fromOffset, maxBytes=8MB)` via `readFileRange` | `read_delta(from_offset, max_bytes)` via `tokio::fs::File::read_at` |
-//! | Per-session memoized dir (`/clear` doesn't re-resolve) | `DiskOutputs::new(session_dir)` captured at construction |
-//! | `_pendingOps` test-tracking set | `pending_ops: Arc<AtomicI64>` counter + `wait_quiescent` |
+//! | Session output dir | `coco_config::config_home().join("cache/tasks").join(session_id)` |
+//! | Per-task file | `{taskId}.output` |
+//! | Open flags (Unix) | `OpenOptions().create(true).append(true)` + `custom_flags(O_NOFOLLOW)` |
+//! | Disk cap | `MAX_TASK_OUTPUT_BYTES = 5 GB`; `[output truncated: exceeded 5GB disk cap]` marker |
+//! | Write queue | `tokio::sync::mpsc::UnboundedSender` + single drain task |
+//! | flush | `flush()` returns `oneshot::Receiver<()>` resolved when the drain catches up |
+//! | cancel | `cancel()` aborts the drain task |
+//! | incremental read | `read_delta(from_offset, max_bytes)` via `tokio::fs::File::read_at` |
+//! | Per-session registry | `DiskOutputs::new(session_dir)` captured at construction |
+//! | pending-ops counter | `pending_ops: Arc<AtomicI64>` counter + `wait_quiescent` |
 //!
-//! ## Differences from TS (deliberate)
+//! ## Intentional differences
 //!
-//! - **No symlink mode** (`initTaskOutputAsSymlink`). TS points the
-//!   output file at the agent's transcript path so `TaskOutput`
-//!   reads the live transcript directly. coco-rs's
-//!   `coco_session::TranscriptStore` uses a sharded JSONL layout
-//!   that can't be exposed as a single tail-able file. Future work
-//!   when the transcript layout stabilises.
-//! - **No Windows `wx`/`a` string-mode fallback.** Production runs
-//!   on Linux; OpenOptions is portable; we don't write the conditional
-//!   string-vs-numeric flag dance the TS code needs for libuv quirks.
+//! - **No symlink mode.** The `coco_session::TranscriptStore` uses a
+//!   sharded JSONL layout that can't be exposed as a single tail-able
+//!   file. Future work when the transcript layout stabilises.
+//! - **No Windows string-mode fallback.** Production runs on Linux;
+//!   OpenOptions is portable.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,12 +40,11 @@ use tokio::fs::{File, OpenOptions, create_dir_all, remove_file};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 
-/// 5 GB. Matches TS `MAX_TASK_OUTPUT_BYTES`. Past this, the writer
-/// drops chunks and appends a single truncation marker.
+/// 5 GB disk cap. Past this, the writer drops chunks and appends a
+/// single truncation marker.
 pub const MAX_TASK_OUTPUT_BYTES: i64 = 5 * 1024 * 1024 * 1024;
 
-/// Default per-call delta read cap. Matches TS
-/// `DEFAULT_MAX_READ_BYTES = 8 * 1024 * 1024`.
+/// Default per-call delta read cap (8 MiB).
 pub const DEFAULT_MAX_READ_BYTES: usize = 8 * 1024 * 1024;
 
 /// Truncation marker appended once when a task crosses the disk cap.
@@ -91,8 +84,7 @@ struct DiskTaskOutputInner {
 
 impl DiskTaskOutput {
     /// Construct and spawn the drain task. The file is created lazily
-    /// on first append (matches TS — `ensureOutputDir` + open inside
-    /// `#drainAllChunks`).
+    /// on first append.
     pub fn new(path: PathBuf) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let pending_ops = Arc::new(AtomicI64::new(0));
@@ -110,8 +102,7 @@ impl DiskTaskOutput {
     }
 
     /// Path to the on-disk output file. Useful for `TaskOutput` /
-    /// callers that want the path itself (TS surfaces this via
-    /// `getTaskOutputPath`).
+    /// callers that want the path itself.
     pub fn path(&self) -> &Path {
         &self.inner.path
     }
@@ -123,8 +114,7 @@ impl DiskTaskOutput {
         if self.inner.capped.load(Ordering::Acquire) {
             return;
         }
-        // TS uses content.length (UTF-16 code units) — undercounts UTF-8
-        // by ~3×. We use bytes; same coarse-guard role.
+        // Count in bytes (not UTF-16 code units) for the cap check.
         let added = chunk.len() as i64;
         let total = self.inner.bytes_written.fetch_add(added, Ordering::AcqRel) + added;
         if total > MAX_TASK_OUTPUT_BYTES {
@@ -156,8 +146,7 @@ impl DiskTaskOutput {
     }
 
     /// Read `[from_offset, from_offset + max_bytes)` of the output
-    /// file. Returns the read content + new offset. Mirrors TS
-    /// `getTaskOutputDelta`.
+    /// file. Returns the read content + new offset.
     pub async fn read_delta(
         &self,
         from_offset: i64,
@@ -175,14 +164,12 @@ impl DiskTaskOutput {
         let mut buf = vec![0u8; max_bytes];
         let n = file.read(&mut buf).await?;
         buf.truncate(n);
-        // Lossy because the buffer might cut a UTF-8 codepoint;
-        // matches TS readFileRange's encoding tolerance.
+        // Lossy because the buffer might cut a UTF-8 codepoint.
         let content = String::from_utf8_lossy(&buf).into_owned();
         Ok((content, from_offset + n as i64))
     }
 
-    /// Total size of the output file in bytes. Mirrors TS
-    /// `getTaskOutputSize`.
+    /// Total size of the output file in bytes.
     pub async fn size(&self) -> i64 {
         match tokio::fs::metadata(&self.inner.path).await {
             Ok(m) => m.len() as i64,
@@ -192,8 +179,7 @@ impl DiskTaskOutput {
 
     /// Read the **tail** of the output file (last `max_bytes`
     /// bytes), prepending an "[N KB earlier output omitted]\n"
-    /// header when the file exceeded `max_bytes`. Mirrors TS
-    /// `getTaskOutput` from `diskOutput.ts:336-357`.
+    /// header when the file exceeded `max_bytes`.
     ///
     /// This is the right shape for the periodic AgentSummary timer
     /// and for `TaskOutput` model-facing reads — model sees the
@@ -217,7 +203,7 @@ impl DiskTaskOutput {
         let content = String::from_utf8_lossy(&buf).into_owned();
         let omitted = total_u.saturating_sub(buf.len() as u64);
         if omitted > 0 {
-            // TS rounds to KB and uses Math.round; we mirror.
+            // Round to KB for the omitted-bytes header.
             let kb = ((omitted as f64) / 1024.0).round() as u64;
             Ok(format!("[{kb}KB of earlier output omitted]\n{content}"))
         } else {
@@ -299,11 +285,10 @@ async fn ensure_open(path: &Path, slot: &mut Option<File>) -> std::io::Result<()
     opts.create(true).append(true);
     #[cfg(unix)]
     {
-        // O_NOFOLLOW: SECURITY parity with TS — prevents a sandbox
-        // process from creating a symlink at the output path
-        // pointing at an arbitrary file we'd then write to.
-        // `tokio::fs::OpenOptions::custom_flags` is inherent on
-        // `cfg(unix)` so no trait import needed.
+        // O_NOFOLLOW: prevents a sandbox process from creating a
+        // symlink at the output path pointing at an arbitrary file
+        // we'd then write to. `tokio::fs::OpenOptions::custom_flags`
+        // is inherent on `cfg(unix)` so no trait import needed.
         opts.custom_flags(libc::O_NOFOLLOW);
     }
     let file = opts.open(path).await?;
@@ -311,13 +296,10 @@ async fn ensure_open(path: &Path, slot: &mut Option<File>) -> std::io::Result<()
     Ok(())
 }
 
-/// Per-session registry of disk task outputs. Mirrors TS's
-/// `outputs: Map<string, DiskTaskOutput>` module-level singleton —
-/// coco-rs makes it explicit and per-session so `/clear` regen
-/// doesn't conflate sessions.
+/// Per-session registry of disk task outputs. Explicit and per-session
+/// so `/clear` regen doesn't conflate sessions.
 pub struct DiskOutputs {
-    /// Resolved on construction; matches TS's memoized
-    /// `_taskOutputDir`. Captured early so subsequent `/clear`
+    /// Resolved on construction. Captured early so subsequent `/clear`
     /// session regen doesn't invalidate paths held by in-flight
     /// `DiskTaskOutput` instances.
     session_dir: PathBuf,
@@ -342,7 +324,7 @@ impl DiskOutputs {
 
     /// Get-or-create an entry for `task_id`. The init lock prevents
     /// two concurrent `get_or_create` calls from spawning two drain
-    /// loops for the same id (TS uses single-threaded JS).
+    /// loops for the same id.
     pub async fn get_or_create(&self, task_id: &str) -> DiskTaskOutput {
         if let Some(existing) = self.outputs.read().await.get(task_id) {
             return existing.clone();
@@ -366,8 +348,8 @@ impl DiskOutputs {
     }
 
     /// Evict the in-memory handle (cancels the drain) but leaves
-    /// the file on disk. Mirrors TS `evictTaskOutput`. Use when a
-    /// task completes and the output is no longer needed.
+    /// the file on disk. Use when a task completes and the output
+    /// is no longer needed.
     pub async fn evict(&self, task_id: &str) {
         let dto = self.outputs.write().await.remove(task_id);
         if let Some(dto) = dto {
@@ -377,7 +359,7 @@ impl DiskOutputs {
         }
     }
 
-    /// Evict + unlink the file. Mirrors TS `cleanupTaskOutput`.
+    /// Evict + unlink the file.
     pub async fn cleanup(&self, task_id: &str) -> std::io::Result<()> {
         let dto = self.outputs.write().await.remove(task_id);
         if let Some(dto) = dto {

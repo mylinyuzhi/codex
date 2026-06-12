@@ -1,30 +1,28 @@
-//! Byte-faithful system-prompt bodies for built-in agents.
+//! System-prompt bodies for built-in agents.
 //!
-//! Mirrors `tools/AgentTool/built-in/{generalPurposeAgent,statuslineSetup,
-//! exploreAgent,planAgent,verificationAgent,claudeCodeGuideAgent}.ts`. Each
-//! TS file has a `getSystemPrompt()` callback (or constant) returning the
-//! agent's role instructions; coco-rs encodes them here so spawned built-in
-//! agents receive the same operational text the model sees in TS.
+//! Each built-in agent has a `getSystemPrompt()` callback (or constant)
+//! returning its role instructions; coco-rs encodes them here so spawned
+//! built-in agents receive the correct operational text.
 //!
 //! ## Embedded-search variants
 //!
 //! Ant-native builds replace the dedicated `Glob` / `Grep` tools with
-//! embedded `bfs` / `ugrep` aliases under `Bash`. The TS prompts swap the
+//! embedded `bfs` / `ugrep` aliases under `Bash`. The prompts swap the
 //! search guidance accordingly via `hasEmbeddedSearchTools()`. coco-rs is a
 //! 3p build by default — `has_embedded_search_tools = false` selects the
 //! `Glob` / `Grep` wording.
 //!
 //! Tool name substitutions (`${BASH_TOOL_NAME}` etc.) come from
-//! [`coco_types::ToolName`] — TS uses the analogous `*_TOOL_NAME`
-//! constants. Never hard-code tool name strings here; always go through
+//! [`coco_types::ToolName`] — the analogous `*_TOOL_NAME` constants in
+//! the source. Never hard-code tool name strings here; always go through
 //! the enum so a future rename in `coco-types` flows through.
 
 use coco_types::ToolName;
 
-/// `tools/AgentTool/built-in/generalPurposeAgent.ts:3-23`. The TS file
-/// composes `SHARED_PREFIX + per-agent body + SHARED_GUIDELINES`; tool
-/// name references go through `ToolName` so a future rename in
-/// `coco-types` flows through.
+/// General-purpose agent system prompt. Composes
+/// `SHARED_PREFIX + per-agent body + SHARED_GUIDELINES`; tool name
+/// references go through `ToolName` so a future rename in `coco-types`
+/// flows through.
 pub fn general_purpose_system_prompt() -> String {
     let read = ToolName::Read.as_str();
     format!(
@@ -45,10 +43,9 @@ Guidelines:
     )
 }
 
-/// `tools/AgentTool/built-in/statuslineSetup.ts:3-132`. Constant in TS;
-/// produced verbatim here (escape sequences are literal `\n` / `\s+` etc.
-/// for the model to relay into the user's shell — Rust raw string keeps
-/// them intact).
+/// Status-line setup agent system prompt. Constant body — escape sequences
+/// are literal `\n` / `\s+` etc. for the model to relay into the user's
+/// shell; a Rust raw string keeps them intact.
 pub const STATUSLINE_SETUP_SYSTEM_PROMPT: &str = r#"You are a status line setup agent for Coco and Claude-compatible CLIs. Your job is to create or update the statusLine command in the user's Coco settings.
 
 When asked to convert the user's shell PS1 configuration, follow these steps:
@@ -158,9 +155,8 @@ Guidelines:
   Also ensure that the user is informed that they can ask Coco to continue to make changes to the status line.
 "#;
 
-/// `tools/AgentTool/built-in/exploreAgent.ts:13-57`. Two variants depending
-/// on `hasEmbeddedSearchTools()` — embedded host swaps `Glob`/`Grep` for
-/// `find`/`grep` via Bash.
+/// Explore agent system prompt. Two variants: the embedded host swaps
+/// `Glob`/`Grep` for `find`/`grep` via Bash.
 pub fn explore_system_prompt(has_embedded_search_tools: bool) -> String {
     let bash = ToolName::Bash.as_str();
     let read = ToolName::Read.as_str();
@@ -216,8 +212,8 @@ Complete the user's search request efficiently and report your findings clearly.
     )
 }
 
-/// `tools/AgentTool/built-in/planAgent.ts:14-71`. Same embedded-search
-/// branching as Explore.
+/// Plan agent system prompt. Same embedded-search branching as the Explore
+/// prompt.
 pub fn plan_system_prompt(has_embedded_search_tools: bool) -> String {
     let bash = ToolName::Bash.as_str();
     let read = ToolName::Read.as_str();
@@ -282,14 +278,13 @@ REMEMBER: You can ONLY explore and plan. You CANNOT and MUST NOT write, edit, or
     )
 }
 
-/// `tools/AgentTool/built-in/verificationAgent.ts:10-129`. TS templates
-/// `${BASH_TOOL_NAME}` (line 20) and `${WEB_FETCH_TOOL_NAME}` (line 22);
-/// coco-rs swaps in [`coco_types::ToolName`] at runtime so a future tool
-/// rename flows through. The body uses `__BASH__` / `__WEB_FETCH__`
-/// sentinels (rather than `format!{BASH}` placeholders) so the embedded
-/// JSON / shell examples don't collide with `{` / `}` escaping.
+/// Verification agent system prompt. The body uses `__BASH__` /
+/// `__WEB_FETCH__` sentinels (rather than `format!{BASH}` placeholders)
+/// so the embedded JSON / shell examples don't collide with `{` / `}`
+/// escaping; [`coco_types::ToolName`] values are substituted at runtime
+/// so a future tool rename flows through.
 ///
-/// The agent ships with a separate `criticalSystemReminder_EXPERIMENTAL`
+/// The agent ships with a separate critical system reminder
 /// (see [`VERIFICATION_CRITICAL_SYSTEM_REMINDER`]).
 pub fn verification_system_prompt() -> String {
     VERIFICATION_SYSTEM_PROMPT_TEMPLATE
@@ -418,16 +413,14 @@ Use the literal string `VERDICT: ` followed by exactly one of `PASS`, `FAIL`, `P
 - **FAIL**: include what failed, exact error output, reproduction steps.
 - **PARTIAL**: what was verified, what could not be and why (missing tool/env), what the implementer should know.";
 
-/// `tools/AgentTool/built-in/verificationAgent.ts:150-151`
-/// `criticalSystemReminder_EXPERIMENTAL`. Threaded through the
-/// per-turn `<system-reminder>` injector when the verification agent
-/// runs.
+/// Verification agent critical system reminder (`criticalSystemReminder_EXPERIMENTAL`).
+/// Threaded through the per-turn `<system-reminder>` injector when the
+/// verification agent runs.
 pub const VERIFICATION_CRITICAL_SYSTEM_REMINDER: &str = "CRITICAL: This is a VERIFICATION-ONLY task. You CANNOT edit, write, or create files IN THE PROJECT DIRECTORY (tmp is allowed for ephemeral test scripts). You MUST end with VERDICT: PASS, VERDICT: FAIL, or VERDICT: PARTIAL.";
 
 /// One entry of the "Available custom skills" / "Available plugin
-/// skills" sections of the coco-guide dynamic context block. TS source:
-/// the `commandList` / `pluginList` `.map(cmd => '- /${cmd.name}: ${cmd.description}')`
-/// shape at `claudeCodeGuideAgent.ts:131-132, 167-168`.
+/// skills" sections of the coco-guide dynamic context block.
+/// Shape: `- /${cmd.name}: ${cmd.description}` per row.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GuideCommandEntry {
     /// Slash name (without the leading `/`).
@@ -437,12 +430,11 @@ pub struct GuideCommandEntry {
 }
 
 /// One entry of the "Available custom agents configured" section of the
-/// coco-guide dynamic context block. TS source: the `agentList`
-/// `.map(a => '- ${a.agentType}: ${a.whenToUse}')` shape at
-/// `claudeCodeGuideAgent.ts:144-146`.
+/// coco-guide dynamic context block.
+/// Shape: `- ${a.agentType}: ${a.whenToUse}` per row.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GuideAgentEntry {
-    /// Agent type identifier (TS `a.agentType`).
+    /// Agent type identifier (`a.agentType` in the source).
     pub agent_type: String,
     /// `whenToUse` blurb from the agent's frontmatter / definition.
     pub when_to_use: String,
@@ -451,36 +443,29 @@ pub struct GuideAgentEntry {
 /// Owned snapshot of the runtime data the coco-guide dynamic block
 /// renders. Populated by the spawn-time prompt assembler from the
 /// CLI's CommandRegistry, AgentCatalogSnapshot, McpHandle, and
-/// settings.json. TS source: the `getSystemPrompt({toolUseContext})`
-/// closure at `claudeCodeGuideAgent.ts:121-203` reads the equivalent
-/// fields off `toolUseContext.options.{commands, agentDefinitions,
-/// mcpClients}` plus `getSettings_DEPRECATED()`.
+/// settings.json.
 ///
 /// Empty fields → that section is omitted from the rendered block
-/// (matches TS's `if (length > 0)` gates on each section).
+/// (matches the `if (length > 0)` gate on each section).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CocoGuideDynamicContext {
-    /// Custom (non-plugin, non-built-in) slash commands. TS filter:
-    /// `commands.filter(cmd => cmd.type === 'prompt')`.
+    /// Custom (non-plugin, non-built-in) slash commands (prompt type).
     pub custom_commands: Vec<GuideCommandEntry>,
-    /// Plugin-sourced slash commands. TS filter:
-    /// `commands.filter(cmd => cmd.type === 'prompt' && cmd.source === 'plugin')`.
+    /// Plugin-sourced slash commands (prompt type).
     pub plugin_commands: Vec<GuideCommandEntry>,
-    /// Non-built-in agent definitions. TS filter:
-    /// `activeAgents.filter(a => a.source !== 'built-in')`.
+    /// Non-built-in agent definitions.
     pub custom_agents: Vec<GuideAgentEntry>,
-    /// Configured MCP server names. TS: `mcpClients.map(c => c.name)`.
+    /// Configured MCP server names.
     pub mcp_servers: Vec<String>,
     /// Pretty-printed settings.json content. Empty string → omit
-    /// the section. TS uses `jsonStringify(settings, null, 2)` over
-    /// the whole settings object.
+    /// the section. Uses `jsonStringify(settings, null, 2)` over the
+    /// whole settings object.
     pub settings_json: String,
 }
 
 impl CocoGuideDynamicContext {
     /// True when every section is empty — caller can skip the
-    /// dynamic block entirely (matches TS's
-    /// `if (contextSections.length > 0)` gate at line 188).
+    /// dynamic block entirely.
     pub fn is_empty(&self) -> bool {
         self.custom_commands.is_empty()
             && self.plugin_commands.is_empty()
@@ -491,10 +476,9 @@ impl CocoGuideDynamicContext {
 }
 
 /// Render the dynamic "User's Current Configuration" block appended
-/// to the static coco-guide prompt. TS source:
-/// `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`.
+/// to the static coco-guide prompt.
 ///
-/// Section ordering and bullet shape are byte-faithful to TS:
+/// Section ordering and bullet shape:
 /// 1. **Available custom skills in this project** (custom_commands)
 /// 2. **Available custom agents configured** (custom_agents)
 /// 3. **Configured MCP servers** (mcp_servers)
@@ -502,7 +486,7 @@ impl CocoGuideDynamicContext {
 /// 5. **User's settings.json** (settings_json, fenced ```json block)
 ///
 /// Returns `None` when every section is empty — caller appends
-/// nothing and the static prompt stands alone (TS lines 200-202).
+/// nothing and the static prompt stands alone.
 pub fn coco_guide_dynamic_block(ctx: &CocoGuideDynamicContext) -> Option<String> {
     if ctx.is_empty() {
         return None;
@@ -552,33 +536,27 @@ pub fn coco_guide_dynamic_block(ctx: &CocoGuideDynamicContext) -> Option<String>
             ctx.settings_json
         ));
     }
-    // TS template at `claudeCodeGuideAgent.ts:189-199`: `---` rule,
-    // a section header, an intro line, the joined sections, and a
-    // closing instruction. Byte-faithful.
+    // `---` rule, a section header, an intro line, the joined sections,
+    // and a closing instruction.
     Some(format!(
         "\n\n---\n\n# User's Current Configuration\n\nThe user has the following custom setup in their environment:\n\n{}\n\nWhen answering questions, consider these configured features and proactively suggest them when relevant.",
         sections.join("\n\n")
     ))
 }
 
-/// `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:23-87` base prompt.
-/// Static body only — runtime context sections (custom skills /
-/// agents / MCP servers / plugin commands / settings.json) flow
-/// through [`coco_guide_dynamic_block`] and are appended at spawn
-/// time by the coordinator's prompt assembler.
+/// Coco-guide agent base system prompt. Static body only — runtime context
+/// sections (custom skills / agents / MCP servers / plugin commands /
+/// settings.json) flow through [`coco_guide_dynamic_block`] and are
+/// appended at spawn time by the coordinator's prompt assembler.
 ///
-/// **Coco-rs rename**: TS names the agent `claude-code-guide`; coco-rs
-/// uses `coco-guide`. The prompt body still references the Claude Code
-/// product (the agent's actual subject matter); only the agent
-/// identifier moves.
+/// **Coco-rs rename**: The upstream agent is named `claude-code-guide`;
+/// coco-rs uses `coco-guide`. The prompt body still references the
+/// Claude Code product (the agent's actual subject matter); only the
+/// agent identifier moves.
 ///
-/// **Feedback line**: TS branches between `/feedback` (1P Anthropic
-/// internal) and `MACRO.ISSUES_EXPLAINER` (3P services) per
-/// `claudeCodeGuideAgent.ts:89-95`. coco-rs is always multi-provider
-/// (no 1P/3P split per the port's design), so the line reduces to
-/// the 3P equivalent: a neutral "report it via the project's issue
-/// tracker" phrasing that doesn't depend on Anthropic-internal
-/// commands.
+/// **Feedback line**: coco-rs is always multi-provider, so the feedback
+/// line reduces to a neutral "report it via the project's issue tracker"
+/// phrasing that doesn't depend on Anthropic-internal commands.
 pub fn coco_guide_system_prompt(has_embedded_search_tools: bool) -> String {
     let read = ToolName::Read.as_str();
     let glob = ToolName::Glob.as_str();

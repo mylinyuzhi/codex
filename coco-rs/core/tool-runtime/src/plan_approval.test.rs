@@ -12,7 +12,7 @@ fn request_round_trips_camelcase() {
     };
     let serialized = serde_json::to_string(&PlanApprovalMessage::PlanApprovalRequest(req.clone()))
         .expect("serialize");
-    // Wire format is camelCase (matches TS).
+    // Wire format is camelCase.
     assert!(serialized.contains("\"planFilePath\""));
     assert!(serialized.contains("\"requestId\""));
     assert!(serialized.contains("\"planContent\""));

@@ -1,9 +1,5 @@
 //! `ServerRequest` — agent-to-SDK protocol requests requiring responses.
 //!
-//! TS source: `src/entrypoints/sdk/controlSchemas.ts` — these match the
-//! TS `SDKControl*Request` types that flow agent→SDK (the reverse direction
-//! of `ClientRequest`).
-//!
 //! See `event-system-design.md` §5.2.
 
 use serde::Deserialize;

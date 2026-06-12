@@ -79,15 +79,11 @@ pub fn array_output(element_schema: JSONSchema) -> Box<dyn OutputSpec> {
 }
 
 /// Create a choice output spec that validates output is one of the allowed values.
-///
-/// Matches the TS SDK's `choice({ options })` output type.
 pub fn choice_output(options: Vec<String>) -> Box<dyn OutputSpec> {
     Box::new(ChoiceOutputSpec { options })
 }
 
 /// Create a JSON output spec that accepts any valid JSON without schema.
-///
-/// Matches the TS SDK's `json()` output type.
 pub fn json_output() -> Box<dyn OutputSpec> {
     Box::new(JsonOutputSpec)
 }
@@ -123,7 +119,7 @@ pub struct JsonOutputOptions {
 /// Create an array output spec with name/description, using a wrapped object schema.
 ///
 /// Wraps the element schema in `{ type: object, properties: { elements: { type: array, items: schema } }, required: ["elements"] }`
-/// and unwraps `.elements` during parse, matching the TS SDK behavior.
+/// and unwraps `.elements` during parse.
 pub fn array_output_with(opts: ArrayOutputOptions) -> Box<dyn OutputSpec> {
     Box::new(WrappedArrayOutputSpec {
         element_schema: opts.element_schema,
@@ -135,7 +131,7 @@ pub fn array_output_with(opts: ArrayOutputOptions) -> Box<dyn OutputSpec> {
 /// Create a choice output spec with name/description, using a wrapped object schema.
 ///
 /// Wraps the choice in `{ type: object, properties: { result: { type: string, enum: options } }, required: ["result"] }`
-/// and unwraps `.result` during parse, matching the TS SDK behavior.
+/// and unwraps `.result` during parse.
 pub fn choice_output_with(opts: ChoiceOutputOptions) -> Box<dyn OutputSpec> {
     Box::new(WrappedChoiceOutputSpec {
         options: opts.options,
@@ -562,7 +558,7 @@ impl Output {
     }
 }
 
-/// Output mode enum matching the TS SDK's output strategy pattern.
+/// Output mode enum for the output strategy pattern.
 ///
 /// Supports different output modes: text (default), object with schema,
 /// and array with element schema.

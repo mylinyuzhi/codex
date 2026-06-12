@@ -176,14 +176,14 @@ fn test_enum_field_emits_enum_values_in_schema() {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Subschema inlining — the load-bearing TS-parity behaviour
+// Subschema inlining — the load-bearing behaviour
 // ──────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_nested_struct_is_inlined_not_referenced() {
     // The critical invariant: a nested type must NOT appear as
     // `$ref: "#/$defs/Nested"` — providers handle $ref inconsistently
-    // and TS zod schemas never produce one. We require the inner
+    // and schemas must not produce one. We require the inner
     // properties to be flattened into the parent.
     let value = derive_input_schema_value::<WithNested>();
 

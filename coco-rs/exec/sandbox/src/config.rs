@@ -3,8 +3,7 @@
 //! The user-facing settings type ([`SandboxSettings`]) and its inner config
 //! types ([`FilesystemConfig`], [`NetworkConfig`], [`SandboxBypass`], etc.)
 //! live in `coco-config` so settings.json deserialization and the sandbox
-//! runtime share a single source of truth (TS-parity with
-//! `entrypoints/sandboxTypes.ts`). This module re-exports them for ergonomic
+//! runtime share a single source of truth. This module re-exports them for ergonomic
 //! callsite access (`coco_sandbox::SandboxSettings`).
 //!
 //! What stays here is the **runtime/adapter output**:

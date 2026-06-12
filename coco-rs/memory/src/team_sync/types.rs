@@ -1,6 +1,5 @@
 //! Team Memory Sync data types.
 //!
-//! TS: `services/teamMemorySync/types.ts` — Zod schemas + types.
 //! API contract: anthropic/anthropic#250711, #283027, #293258.
 
 use std::collections::HashMap;
@@ -12,8 +11,6 @@ use serde::Serialize;
 /// Keys are file paths relative to the team memory dir
 /// (e.g. `"MEMORY.md"`, `"patterns.md"`). Values are UTF-8 string
 /// content (typically Markdown).
-///
-/// TS: `TeamMemoryContentSchema`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamMemoryContent {
     pub entries: HashMap<String, String>,
@@ -25,7 +22,6 @@ pub struct TeamMemoryContent {
 }
 
 /// Full response from `GET /api/claude_code/team_memory`.
-/// TS: `TeamMemoryDataSchema`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMemoryData {
     #[serde(rename = "organizationId")]
@@ -43,8 +39,6 @@ pub struct TeamMemoryData {
 /// A file skipped during push because it contains a detected secret.
 /// Path is relative to the team memory directory. Only the matched
 /// rule ID is recorded — never the secret value.
-///
-/// TS: `SkippedSecretFile`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkippedSecretFile {
     pub path: String,
@@ -56,7 +50,6 @@ pub struct SkippedSecretFile {
 }
 
 /// Result from a sync fetch (pull) operation.
-/// TS: `TeamMemorySyncFetchResult`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamMemorySyncFetchResult {
     pub success: bool,
@@ -68,7 +61,6 @@ pub struct TeamMemorySyncFetchResult {
 }
 
 /// Result from a sync push (delta upload) operation.
-/// TS: `TeamMemorySyncPushResult`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamMemorySyncPushResult {
     pub success: bool,
@@ -101,7 +93,6 @@ pub struct TeamMemorySyncPushResult {
 }
 
 /// Result from a low-level upload chunk.
-/// TS: `TeamMemorySyncUploadResult`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamMemorySyncUploadResult {
     pub success: bool,
@@ -110,7 +101,7 @@ pub struct TeamMemorySyncUploadResult {
 }
 
 /// Hashes-only response from `GET ?view=hashes` — metadata + per-key
-/// checksums without entry bodies. TS: `TeamMemoryHashesResult`.
+/// checksums without entry bodies.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamMemoryHashesResult {
     #[serde(rename = "organizationId")]
@@ -126,8 +117,8 @@ pub struct TeamMemoryHashesResult {
 
 /// Mutable per-session state threaded through every sync call.
 ///
-/// TS: `SyncState` from `index.ts:100-119`. Created once per session
-/// by the watcher and passed to all sync functions. Tests instantiate
+/// Created once per session by the watcher and passed to all sync
+/// functions. Tests instantiate
 /// fresh per-test for isolation.
 #[derive(Debug, Default)]
 pub struct SyncState {
@@ -147,20 +138,18 @@ pub struct SyncState {
     pub server_max_entries: Option<i32>,
 }
 
-/// Per-entry size cap (TS `MAX_FILE_SIZE_BYTES`).
+/// Per-entry size cap.
 pub const MAX_FILE_SIZE_BYTES: usize = 250_000;
 
-/// Gateway body-size cap (TS `MAX_PUT_BODY_BYTES`). Batches larger
-/// than this get split into sequential PUTs (server upsert-merge
-/// makes that safe).
+/// Gateway body-size cap. Batches larger than this get split into
+/// sequential PUTs (server upsert-merge makes that safe).
 pub const MAX_PUT_BODY_BYTES: usize = 200_000;
 
-/// Sync request timeout (TS `TEAM_MEMORY_SYNC_TIMEOUT_MS`).
+/// Sync request timeout.
 pub const SYNC_TIMEOUT_MS: u64 = 30_000;
 
 /// Max attempts at refreshing `server_checksums` via `?view=hashes`
-/// after a 412 conflict before giving up. TS:
-/// `services/teamMemorySync/index.ts:91 MAX_CONFLICT_RETRIES`.
+/// after a 412 conflict before giving up.
 pub const MAX_CONFLICT_RETRIES: i32 = 2;
 
 /// Structured 413 body (anthropic/anthropic#293258) — distinguished

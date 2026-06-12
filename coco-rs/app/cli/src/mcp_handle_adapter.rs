@@ -6,9 +6,7 @@
 //! aren't exposed because tools should never reconfigure MCP at
 //! runtime — only the supervisor / config watcher does that.
 //!
-//! TS parity — `MCPConnectionManager` is the single source of truth in
-//! TS too; tool layer reads via `services/mcp/client.ts` directly.
-//! Rust adds the trait indirection for testability.
+//! The trait indirection exists for testability.
 
 use std::sync::Arc;
 
@@ -33,8 +31,7 @@ pub struct McpManagerAdapter {
     manager: Arc<Mutex<McpConnectionManager>>,
     /// Optional hook registry for firing `Elicitation` /
     /// `ElicitationResult` hooks when an MCP server requests user
-    /// input. `None` keeps the legacy no-op behaviour. TS:
-    /// `services/mcp/elicitationHandler.ts`.
+    /// input. `None` keeps the legacy no-op behaviour.
     hook_registry: Option<Arc<coco_hooks::HookRegistry>>,
     /// Builder that produces an `OrchestrationContext` per elicitation
     /// firing — same shape used elsewhere when session state is needed
@@ -54,7 +51,6 @@ pub struct McpManagerAdapter {
     /// [`McpHandle::remove_dynamic_server`] clears them. Gated on
     /// `Feature::McpSkills` + the server's `resources` capability — the
     /// gating is enforced inside [`coco_mcp_skills::sync_one`].
-    /// TS parity: `services/mcp/client.ts::fetchMcpSkillsForClient`.
     skill_bridge: Option<SkillBridgeWiring>,
 }
 
@@ -64,8 +60,7 @@ struct SkillBridgeWiring {
     skills: Arc<SkillManager>,
     /// Shared discovery cache — owned by the bridge (caller-injected)
     /// so multiple adapters wrapping the same `SkillManager` can share
-    /// it. TS analogue: `fetchMcpSkillsForClient` uses an LRU keyed by
-    /// server name.
+    /// it.
     cache: Arc<RwLock<DiscoveryCache>>,
     /// Live `RuntimeConfig` reference so feature flips after session
     /// startup take effect immediately (no stale `Arc<Features>`
@@ -335,9 +330,7 @@ impl McpHandle for McpManagerAdapter {
         config: serde_json::Value,
     ) -> Result<(), coco_error::BoxedError> {
         // Deserialise the JSON body into the typed `McpServerConfig`
-        // discriminated union. TS validates with Zod
-        // (`McpServerConfigSchema`); coco-rs relies on serde's
-        // `#[serde(tag = "transport")]` to do the same.
+        // discriminated union via serde's `#[serde(tag = "transport")]`.
         let typed: coco_mcp::McpServerConfig = serde_json::from_value(config).map_err(|e| {
             Box::new(coco_error::PlainError::new(
                 format!("invalid inline MCP server config for '{name}': {e}"),
@@ -360,9 +353,7 @@ impl McpHandle for McpManagerAdapter {
         // a failed inline server logs a warning + skips the agent's
         // tools — we surface the error so the agent's spawn can
         // decide).
-        //
-        // TS parity: `services/mcp/elicitationHandler.ts:91-107` runs
-        // hooks before client routing when hook context is installed.
+        // Hooks run before client routing when hook context is installed.
         let send_elicitation = self.send_elicitation_for_server(name);
         manager.connect(name, send_elicitation).await.map_err(|e| {
             Box::new(coco_error::PlainError::new(

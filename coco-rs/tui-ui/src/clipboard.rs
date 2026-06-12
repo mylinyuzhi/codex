@@ -1,7 +1,6 @@
 //! Platform-specific clipboard image capture.
 //!
-//! TS: `imagePaste.ts` — NSPasteboard (macOS native), xclip/wl-paste (Linux),
-//! PowerShell (Windows).
+//! NSPasteboard (macOS native), xclip/wl-paste (Linux), PowerShell (Windows).
 
 use crate::paste::ImageData;
 

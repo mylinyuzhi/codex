@@ -12,7 +12,6 @@
 //!    Applied as `extra_env` on the spawn, so they're scoped to the child
 //!    process — not the coco REPL itself.
 //!
-//! TS source: `utils/sessionEnvironment.ts` + `utils/sessionEnvVars.ts`.
 
 mod hook_files;
 mod vars;

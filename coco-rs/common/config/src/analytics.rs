@@ -1,8 +1,6 @@
 //! Analytics pipeline: event buffering, flush, feature flags, metrics.
 //!
-//! TS: services/analytics/ (index.ts, sink.ts, growthbook.ts, metadata.ts).
-//!
-//! Design: events are queued until a sink is attached. The sink handles routing
+//! Events are queued until a sink is attached. The sink handles routing
 //! to backends (Datadog, 1P logging, etc.). This module has minimal deps to
 //! avoid import cycles.
 
@@ -23,7 +21,6 @@ use serde::Serialize;
 /// Metadata value for analytics events.
 ///
 /// Only primitives — never code snippets or file paths.
-/// TS: LogEventMetadata = { [key: string]: boolean | number | undefined }.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MetadataValue {
@@ -58,8 +55,6 @@ impl From<&str> for MetadataValue {
 pub type EventProperties = HashMap<String, MetadataValue>;
 
 /// An analytics event ready for dispatch.
-///
-/// TS: QueuedEvent in services/analytics/index.ts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalyticsEvent {
     /// Event name (e.g. "tengu_api_success", "tengu_api_error").
@@ -78,8 +73,6 @@ pub struct AnalyticsEvent {
 // ---------------------------------------------------------------------------
 
 /// Analytics backend that receives events.
-///
-/// TS: AnalyticsSink in services/analytics/index.ts.
 pub trait AnalyticsSink: Send + Sync {
     /// Log an event synchronously (fire-and-forget to backend).
     fn log_event(&self, event_name: &str, properties: &EventProperties);
@@ -93,8 +86,6 @@ pub trait AnalyticsSink: Send + Sync {
 ///
 /// Events logged before a sink is attached are queued and drained on attachment.
 /// Thread-safe via `Arc<Mutex<_>>` interior.
-///
-/// TS: index.ts — eventQueue + attachAnalyticsSink + logEvent.
 pub struct AnalyticsPipeline {
     inner: Arc<Mutex<PipelineInner>>,
 }
@@ -127,7 +118,6 @@ impl AnalyticsPipeline {
     /// Attach a sink. Queued events are drained immediately.
     ///
     /// Idempotent: if a sink is already attached, this is a no-op.
-    /// TS: attachAnalyticsSink.
     pub fn attach_sink(&self, sink: Arc<dyn AnalyticsSink>) {
         let mut inner = self
             .inner
@@ -149,8 +139,6 @@ impl AnalyticsPipeline {
     }
 
     /// Log an event. If no sink is attached, the event is queued.
-    ///
-    /// TS: logEvent in services/analytics/index.ts.
     pub fn log_event(&self, event_name: &str, properties: EventProperties) {
         let mut inner = self
             .inner
@@ -230,8 +218,7 @@ impl AnalyticsPipeline {
 
     /// Set feature flag values (typically loaded from GrowthBook or config).
     ///
-    /// TS: growthbook.ts — GrowthBook SDK wrapping. In Rust we provide a
-    /// simple key-value cache that can be populated from any source.
+    /// Provides a simple key-value cache that can be populated from any source.
     pub fn set_feature_flags(&self, flags: HashMap<String, serde_json::Value>) {
         self.inner
             .lock()
@@ -240,8 +227,6 @@ impl AnalyticsPipeline {
     }
 
     /// Get a feature flag value, returning the default if not set.
-    ///
-    /// TS: growthbook.ts — getFeatureValue_CACHED_MAY_BE_STALE.
     pub fn get_feature_value<T: serde::de::DeserializeOwned>(&self, key: &str, default: T) -> T {
         let inner = self
             .inner
@@ -309,8 +294,6 @@ impl Clone for AnalyticsPipeline {
 // ---------------------------------------------------------------------------
 
 /// A metric event compatible with Statsig's custom event format.
-///
-/// TS: Statsig logging in firstPartyEventLogger.ts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricEvent {
     /// Metric name.
@@ -325,8 +308,6 @@ pub struct MetricEvent {
 }
 
 /// Session-level analytics summary, emitted at session end.
-///
-/// TS: logSessionEnd in logging.ts / session analytics.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionAnalytics {
     /// Total API calls in this session.
@@ -427,8 +408,6 @@ impl SessionAnalytics {
 ///
 /// MCP tool names (`mcp__<server>__<tool>`) can reveal user-specific config.
 /// Built-in tool names are safe to log.
-///
-/// TS: metadata.ts — sanitizeToolNameForAnalytics.
 pub fn sanitize_tool_name(tool_name: &str) -> &str {
     if tool_name.starts_with(MCP_TOOL_PREFIX) {
         "mcp_tool"
@@ -438,8 +417,6 @@ pub fn sanitize_tool_name(tool_name: &str) -> &str {
 }
 
 /// Strip `_PROTO_*` keys from properties destined for general-access storage.
-///
-/// TS: index.ts — stripProtoFields.
 pub fn strip_proto_fields(properties: &EventProperties) -> EventProperties {
     properties
         .iter()

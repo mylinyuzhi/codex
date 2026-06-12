@@ -9,7 +9,7 @@ use std::path::Path;
 /// - [`Display`](fmt::Display) — human title-case (`macOS` / `Linux` /
 ///   `Windows`). Used for the os-version fallback string.
 /// - [`Self::ts_name`] — lowercase wire identifier (`darwin` / `linux` /
-///   `win32`) used in the system-prompt `<env>` block for TS parity.
+///   `win32`) used in the system-prompt `<env>` block.
 ///
 /// Kept as two methods because the two forms are semantically distinct
 /// (human display vs wire format), but `Display` is idiomatic Rust so
@@ -34,9 +34,8 @@ impl Platform {
         }
     }
 
-    /// Lowercase identifier matching TS `env.platform` value
-    /// (`darwin`/`linux`/`win32`). Used in the system-prompt env
-    /// block for byte-parity with `constants/prompts.ts::computeEnvInfo`.
+    /// Lowercase identifier for the system-prompt env block
+    /// (`darwin`/`linux`/`win32`).
     pub fn ts_name(&self) -> &'static str {
         match self {
             Self::Darwin => "darwin",
@@ -81,8 +80,7 @@ impl ShellKind {
         }
     }
 
-    /// Lowercase shell name matching TS `getShellInfoLine` output
-    /// (`bash`/`zsh`/`sh`/`powershell`).
+    /// Lowercase shell name (`bash`/`zsh`/`sh`/`powershell`).
     pub fn ts_name(&self) -> &'static str {
         match self {
             Self::Bash => "bash",
@@ -129,10 +127,9 @@ pub struct GitStatus {
 
 /// Build environment info for the given working directory.
 ///
-/// `include_git_status` gates the git-status snapshot (TS:
-/// `context.ts` suppresses `gitStatus` under `CLAUDE_CODE_REMOTE` or a
-/// disabled `includeGitInstructions`). `is_git_repo` is reported
-/// independently — TS keeps the `<env>` repo flag even when the status
+/// `include_git_status` gates the git-status snapshot (suppressed when
+/// git instructions are disabled). `is_git_repo` is reported
+/// independently — the `<env>` repo flag is kept even when the status
 /// block is suppressed.
 pub fn get_environment_info(cwd: &Path, model: &str, include_git_status: bool) -> EnvironmentInfo {
     let is_git_repo = cwd.join(".git").exists();

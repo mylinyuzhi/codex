@@ -8,13 +8,6 @@
 //! - self-terminates idempotently via the per-task `detached` /
 //!   terminal-state checks
 //!
-//! TS source:
-//! - `tools/BashTool/BashTool.tsx:1128-1140` — ~1s `progress` yield
-//!   cadence inside `runShellCommand`.
-//! - `ASSISTANT_BLOCKING_BUDGET_MS` (15 s) — assistant mode auto-detach
-//!   for fg shell tasks.
-//! - `tasks/LocalAgentTask/LocalAgentTask.tsx:582-608` —
-//!   `setTimeout(autoBackgroundMs)` block in `registerAgentForeground`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,9 +19,9 @@ use tracing::info;
 use crate::disk_task_output::DiskTaskOutput;
 
 /// W3: per-task progress emitter. Polls `dto.size()` every
-/// `throttle_ms`, builds a TS-aligned `bash_progress` payload, and
-/// sends through the caller's `ProgressSender`. Self-terminates when
-/// `drain_done` fires.
+/// `throttle_ms`, builds a `bash_progress` payload, and sends through
+/// the caller's `ProgressSender`. Self-terminates when `drain_done`
+/// fires.
 pub(super) fn spawn_progress_timer(
     task_id: String,
     tool_use_id: String,
@@ -40,10 +33,8 @@ pub(super) fn spawn_progress_timer(
     tokio::spawn(async move {
         let start = std::time::Instant::now();
         let mut ticker = tokio::time::interval(Duration::from_millis(throttle_ms));
-        // Skip the immediate first tick — TS only emits AFTER the
-        // first throttle interval has elapsed
-        // (`runShellCommand` waits on `Promise.race([resultPromise,
-        // progressSignal])`).
+        // Skip the immediate first tick — only emit AFTER the first
+        // throttle interval has elapsed.
         ticker.tick().await;
         loop {
             tokio::select! {
@@ -129,8 +120,8 @@ async fn fire_detach(
 }
 
 /// W3: per-task auto-detach timer. Fires after `auto_detach_ms` of
-/// execution. Mirrors TS `ASSISTANT_BLOCKING_BUDGET_MS` (15 s)
-/// auto-background for foreground shell tasks. Self-terminates on
+/// execution. Implements auto-background for foreground shell tasks
+/// after the blocking budget (15 s by default). Self-terminates on
 /// `drain_done` (the task already finished).
 pub(super) fn spawn_auto_detach_timer(
     task_id: String,
@@ -154,14 +145,10 @@ pub(super) fn spawn_auto_detach_timer(
     });
 }
 
-/// TS-parity auto-background timer for foreground AgentTool spawns.
-/// Fires after `auto_background_ms` of execution. Self-terminates on
-/// the task's cancel token.
-///
-/// TS source: the `setTimeout` block in `LocalAgentTask.tsx:582-608
-/// registerAgentForeground` resolves `backgroundSignalResolvers.get(agentId)`
-/// after the configured ms; coco-rs maps that to firing the per-task
-/// `Notify` so the fg `select!` arm wakes.
+/// Auto-background timer for foreground AgentTool spawns. Fires after
+/// `auto_background_ms` of execution. Resolves the background signal
+/// for the given agent after the configured ms so the fg `select!`
+/// arm wakes. Self-terminates on the task's cancel token.
 pub(super) fn spawn_agent_auto_background_timer(
     task_id: String,
     auto_background_ms: u64,

@@ -1,5 +1,4 @@
-//! User-input-tier reminder generators (5 variants, TS
-//! `userInputAttachments` at `attachments.ts:772-815`).
+//! User-input-tier reminder generators (5 variants).
 //!
 //! All five are `ReminderTier::UserPrompt` — they only run when the
 //! user submitted input this turn (`ctx.has_user_input == true`).
@@ -7,16 +6,14 @@
 //! and pre-formats IDE state through the `bridge` crate, then passes
 //! typed snapshots via `TurnReminderInput`.
 //!
-//! - `AtMentionedFilesGenerator` → TS `file` (`messages.ts:3545`),
-//!   simplified to a path listing + short note. Full file content is
-//!   loaded into context via `core/context::Attachment::File`.
-//! - `McpResourcesGenerator` → TS `mcp_resource` (`messages.ts:3877`),
-//!   simplified to a resource listing.
-//! - `AgentMentionsGenerator` → TS `agent_mention` (`messages.ts:3946`).
-//! - `IdeSelectionGenerator` → TS `selected_lines_in_ide`
-//!   (`messages.ts:3613`).
-//! - `IdeOpenedFileGenerator` → TS `opened_file_in_ide`
-//!   (`messages.ts:3628`).
+//! - `AtMentionedFilesGenerator` — `file` attachment, simplified to a
+//!   path listing + short note. Full file content is loaded into context
+//!   via `core/context::Attachment::File`.
+//! - `McpResourcesGenerator` — `mcp_resource` attachment, simplified to a
+//!   resource listing.
+//! - `AgentMentionsGenerator` — `agent_mention` attachment.
+//! - `IdeSelectionGenerator` — `selected_lines_in_ide` attachment.
+//! - `IdeOpenedFileGenerator` — `opened_file_in_ide` attachment.
 
 use async_trait::async_trait;
 
@@ -43,8 +40,7 @@ pub struct McpResourceEntry {
     pub uri: String,
 }
 
-/// Matches TS `agent_mention.agentType` — the agent kind the user
-/// referenced (e.g. `"explore"`, `"plan"`).
+/// The agent kind the user referenced (e.g. `"explore"`, `"plan"`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentMentionEntry {
     pub agent_type: String,
@@ -162,13 +158,13 @@ impl AttachmentGenerator for AgentMentionsGenerator {
         if ctx.agent_mentions.is_empty() {
             return Ok(None);
         }
-        // TS renders one reminder per mention; coco-rs joins with \n\n.
+        // One reminder per mention, joined with \n\n.
         let parts: Vec<String> = ctx
             .agent_mentions
             .iter()
             .map(|m| format!(
-                // TS `messages.ts:3949` ends with a trailing space — preserve
-                // it for byte-exact parity with the wrapped reminder body.
+                // Trailing space is load-bearing — preserve for byte-exact
+                // parity with the wrapped reminder body.
                 "The user has expressed a desire to invoke the agent \"{}\". Please invoke the agent appropriately, passing in the required context to it. ",
                 m.agent_type
             ))
@@ -204,7 +200,7 @@ impl AttachmentGenerator for IdeSelectionGenerator {
         if sel.filename.is_empty() {
             return Ok(None);
         }
-        // TS truncates at 2000 chars (`messages.ts:3614-3619`).
+        // Truncate at 2000 chars.
         const MAX_LEN: usize = 2000;
         let content = if sel.content.len() > MAX_LEN {
             let mut truncated = String::with_capacity(MAX_LEN + 20);

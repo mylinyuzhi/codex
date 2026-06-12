@@ -54,8 +54,8 @@ impl TuiSandboxApprovalBridge {
         }
     }
 
-    /// Human-readable prompt line for the overlay. Mirrors TS phrasing
-    /// (`createSandboxAskCallback` surfaces "Allow network connection to
+    /// Human-readable prompt line for the overlay. Phrasing mirrors
+    /// `createSandboxAskCallback` which surfaces "Allow network connection to
     /// {host}?"); path read/write are the coco-rs filesystem-sandbox extension.
     fn describe(request: &SandboxApprovalRequest) -> String {
         match request.operation {

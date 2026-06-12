@@ -1,13 +1,8 @@
-//! TS `auto_mode` steady-state generator.
+//! `auto_mode` steady-state generator.
 //!
 //! Full/Sparse cadence symmetric to [`PlanModeEnterGenerator`] but gated on
 //! `ctx.is_auto_mode` (engine flag covering both `mode == 'auto'` and
-//! `mode == 'plan'` with the auto-mode classifier active — TS
-//! `attachments.ts:1341-1344`).
-//!
-//! Text verbatim from TS:
-//! - Full:   `messages.ts:3428-3438` (the 6-point "Auto Mode Active" block)
-//! - Sparse: `messages.ts:3446` (the one-line "still active" reminder)
+//! `mode == 'plan'` with the auto-mode classifier active).
 //!
 //! Auto-mode exit is a separate one-shot generator
 //! ([`super::AutoModeExitGenerator`]); this file handles entry + steady-state
@@ -23,7 +18,7 @@ use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
-/// TS `messages.ts:3428-3438` — full auto-mode instructions.
+/// Full auto-mode instructions.
 const AUTO_MODE_FULL: &str = "## Auto Mode Active
 
 Auto mode is active. The user chose continuous, autonomous execution. You should:
@@ -35,7 +30,7 @@ Auto mode is active. The user chose continuous, autonomous execution. You should
 5. **Do not take overly destructive actions** — Auto mode is not a license to destroy. Anything that deletes data or modifies shared or production systems still needs explicit user confirmation. If you reach such a decision point, ask and wait, or course correct to a safer method instead.
 6. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.";
 
-/// TS `messages.ts:3446` — one-line sparse reminder.
+/// One-line sparse reminder.
 const AUTO_MODE_SPARSE: &str = "Auto mode still active (see full instructions earlier in conversation). Execute autonomously, minimize interruptions, prefer action over planning.";
 
 /// Steady-state "auto mode still active" reminder.

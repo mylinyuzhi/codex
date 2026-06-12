@@ -402,6 +402,6 @@ fn build_early_outcome_pre_execution_cancelled_skips_failure_hooks() {
     // Mid-execute cancel keeps the failure-hook-firing classification.
     assert!(
         coco_tool_runtime::ToolCallErrorKind::ExecutionCancelled.runs_post_tool_use_failure(),
-        "mid-execution cancel still fires PostToolUseFailure (TS parity)"
+        "mid-execution cancel still fires PostToolUseFailure"
     );
 }

@@ -1,7 +1,5 @@
 //! Plugin identifiers and parsing.
 //!
-//! TS source: `utils/plugins/pluginIdentifier.ts:123` + `utils/plugins/schemas.ts` (PluginId).
-//!
 //! Format: `name@marketplace`. The `@` separator distinguishes plugin name
 //! from its marketplace; both segments can contain alphanumerics, dashes,
 //! underscores. Bare names (no `@`) are valid in dependency declarations
@@ -12,11 +10,9 @@ use serde::Serialize;
 use std::fmt;
 
 /// Synthetic marketplace sentinel for `--plugin-dir` plugins.
-/// TS: `INLINE_MARKETPLACE = 'inline'`.
 pub const INLINE_MARKETPLACE: &str = "inline";
 
 /// Builtin marketplace sentinel for compiled-in plugins.
-/// TS: `BUILTIN_MARKETPLACE_NAME = 'builtin'` from `plugins/builtinPlugins.ts:23`.
 pub const BUILTIN_MARKETPLACE: &str = "builtin";
 
 /// Strongly-typed plugin identifier.
@@ -44,7 +40,6 @@ impl PluginId {
     }
 
     /// Parse `name@marketplace` form. Bare names map to `marketplace: None`.
-    /// TS: `parsePluginIdentifier(input)`.
     pub fn parse(input: &str) -> Self {
         if let Some((name, marketplace)) = input.rsplit_once('@') {
             Self {
@@ -95,8 +90,7 @@ impl<'de> Deserialize<'de> for PluginId {
 
 /// Plugin-scope ordering: priority high-to-low (Managed wins).
 ///
-/// TS: `installed_plugins.json` V2 `scope` field. Higher scope wins on
-/// name collisions; `Managed` cannot be disabled by users.
+/// Higher scope wins on name collisions; `Managed` cannot be disabled by users.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginScope {

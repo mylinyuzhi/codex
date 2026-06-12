@@ -1,6 +1,4 @@
 //! Git-instruction gating.
-//!
-//! TS source: `utils/gitSettings.ts::shouldIncludeGitInstructions`.
 
 use crate::env::EnvKey;
 use crate::env::EnvSnapshot;

@@ -1,8 +1,6 @@
 //! System context assembly: git status, cwd, env info, memory-file
 //! discovery (`CLAUDE.md` / `AGENTS.md`), file history, system prompt
 //! building.
-//!
-//! TS: context.ts, claudemd.ts (46K), attachments.ts (4K), cwd.ts, fileHistory.ts
 
 pub mod attachment;
 pub mod changed_files;

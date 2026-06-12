@@ -74,7 +74,7 @@ async fn none_when_effective_window_missing() {
 #[tokio::test]
 async fn emits_at_exactly_25_percent() {
     let c = SystemReminderConfig::default();
-    // 250k / 1M = 25% exactly — TS uses `>=` so must fire.
+    // 250k / 1M = 25% exactly — threshold uses `>=` so must fire.
     let ctx = ctx_with(&c, true, 1_000_000, 1_000_000, 250_000);
     let r = CompactionReminderGenerator
         .generate(&ctx)

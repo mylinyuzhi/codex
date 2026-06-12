@@ -149,8 +149,7 @@ pub struct ToolAppState {
     /// clear when starting a new session.
     pub pending_clear_message_history: bool,
 
-    /// User-role message appended after a plan-exit clear. Mirrors TS
-    /// `initialMessage.message.content = "Implement the following plan…"` so
+    /// User-role message appended after a plan-exit clear, so
     /// the fresh implementation turn still sees the approved plan.
     pub pending_plan_implementation_message: Option<String>,
 
@@ -356,8 +355,7 @@ pub struct ActiveWorktreeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_branch: Option<String>,
     /// SHA of the **resolved default branch** (e.g. `origin/main`) the worktree
-    /// was created from — NOT the repo's current HEAD. Mirrors TS
-    /// `ExitWorktreeTool` `originalHeadCommit`. Lets `ExitWorktree` report
+    /// was created from — NOT the repo's current HEAD. Lets `ExitWorktree` report
     /// `discardedCommits` = commits on the worktree branch ahead of that base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_head_commit: Option<String>,
@@ -429,13 +427,13 @@ pub struct PromptSuggestion {
     /// user's style.
     pub text: String,
     /// Stable id for telemetry. Generated when the suggestion is
-    /// written. Mirrors TS `promptId`.
+    /// written.
     pub prompt_id: String,
     /// Wall-clock timestamp the suggestion was shown to the user
     /// (RFC-3339). Lets analytics measure dwell-to-accept latency.
     pub shown_at: String,
     /// Set when the user explicitly accepted the suggestion. None
-    /// while pending. Mirrors TS `acceptedAt`.
+    /// while pending.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_at: Option<String>,
     /// Optional id of the parent turn that drove the suggestion.

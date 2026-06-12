@@ -1,25 +1,19 @@
-//! TS `task_reminder` generator (V2 task-list nudge).
+//! `task_reminder` generator (V2 task-list nudge).
 //!
-//! Mirrors `getTaskReminderAttachments` (`attachments.ts:3375`) +
-//! `normalizeAttachmentForAPI` `case 'task_reminder':` (`messages.ts:3680`) —
-//! emitted when the V2 task mutation tools (`TaskCreate` / `TaskUpdate`)
+//! Emitted when the V2 task mutation tools (`TaskCreate` / `TaskUpdate`)
 //! haven't been used recently and the V2 feature is active.
 //!
 //! Gate chain (all must pass, in order):
 //!
-//! 1. `ctx.is_task_v2_enabled` (TS `isTodoV2Enabled()`)
+//! 1. `ctx.is_task_v2_enabled`
 //! 2. `Brief` tool is **not** present — when Brief is the primary I/O
-//!    channel TaskUpdate becomes a side channel and nudging conflicts with
-//!    the brief workflow (TS `attachments.ts:3392-3397`, same pattern as
-//!    the TodoWrite gate in `todo_reminders.rs`).
-//! 3. `TaskUpdate` tool is present in `ctx.tools` — mirrors the TS
-//!    availability check at `attachments.ts:3399-3406`.
+//!    channel TaskUpdate becomes a side channel and nudging conflicts.
+//! 3. `TaskUpdate` tool is present in `ctx.tools`.
 //! 4. `turns_since_last_task_tool >= 10`
 //! 5. `turns_since_last_task_reminder >= 10`
 //!
-//! Content is the TS string literal from `messages.ts:3680-3691`, optionally
-//! followed by a newline-separated list of current tasks
-//! (`#{id}. [{status}] {subject}`).
+//! Content is the reminder body, optionally followed by a
+//! newline-separated list of current tasks (`#{id}. [{status}] {subject}`).
 
 use async_trait::async_trait;
 use coco_types::TaskRecord;
@@ -33,8 +27,7 @@ use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
-/// TS thresholds — same 10/10 pair as the V1 todo reminder (TS shares the
-/// `TODO_REMINDER_CONFIG` constants since V2 is strictly a superset).
+/// Same 10/10 pair as the V1 todo reminder (V2 is a strict superset).
 const TURNS_SINCE_TASK_TOOL: i32 = 10;
 const TURNS_BETWEEN_REMINDERS: i32 = 10;
 
@@ -43,10 +36,9 @@ const TURNS_BETWEEN_REMINDERS: i32 = 10;
 const REQUIRED_TOOL: ToolName = ToolName::TaskUpdate;
 const SUPPRESS_TOOL: ToolName = ToolName::SendUserMessage;
 
-/// Verbatim body from `messages.ts:3688` V2 `task_reminder` case, with TS
-/// `${TASK_CREATE_TOOL_NAME}` / `${TASK_UPDATE_TOOL_NAME}` substitutions
-/// resolved through the typed [`ToolName`] enum — no hand-written magic
-/// strings means a future rename flows through automatically.
+/// Reminder body — `${TASK_CREATE_TOOL_NAME}` / `${TASK_UPDATE_TOOL_NAME}`
+/// are resolved through the typed [`ToolName`] enum so a future rename
+/// flows through automatically.
 fn task_reminder_body() -> String {
     let task_create = ToolName::TaskCreate.as_str();
     let task_update = ToolName::TaskUpdate.as_str();
@@ -112,13 +104,13 @@ fn tools_contain(tools: &[String], builtin: ToolName) -> bool {
 }
 
 fn render_task_reminder_body(tasks: &[TaskRecord]) -> String {
-    // TS `messages.ts:3688` always terminates the base body with `\n`; the
-    // optional list suffix then adds `\n\n` (3 newlines total before "Here").
+    // Base body always ends with `\n`; the optional list suffix adds
+    // `\n\n` (3 newlines total before "Here").
     let mut out = format!("{}\n", task_reminder_body());
     if tasks.is_empty() {
         return out;
     }
-    // TS: `#${task.id}. [${task.status}] ${task.subject}` joined by `\n`.
+    // Format: `#${id}. [${status}] ${subject}` joined by `\n`.
     let items = tasks
         .iter()
         .map(|t| {

@@ -1,11 +1,9 @@
 //! `LSPTool` — code-intelligence queries (definitions, references, hover,
 //! symbols, implementations, call hierarchy).
 //!
-//! TS: `tools/LSPTool/LSPTool.ts` + `schemas.ts` + `formatters.ts`. Gated
-//! behind `Feature::Lsp` AND `ctx.lsp.is_connected()` — when no language
-//! server is configured for the current workspace, the tool is hidden
-//! from the model's tool list entirely (TS:
-//! `LSPTool.isEnabled() = isLspConnected()`).
+//! Gated behind `Feature::Lsp` AND `ctx.lsp.is_connected()` — when no
+//! language server is configured for the current workspace, the tool is
+//! hidden from the model's tool list entirely.
 //!
 //! Architecture:
 //!   - **DTOs + formatters**: [`crate::tools::lsp`] (shared with
@@ -53,11 +51,10 @@ use crate::tools::lsp::format_workspace_symbols;
 use crate::tools::lsp::path_to_file_uri;
 use crate::tools::lsp::validate_lsp_file;
 
-/// Model-facing tool description AND prompt — TS parity:
-/// `tools/LSPTool/prompt.ts::DESCRIPTION`. TS returns this same string from
-/// both `description()` and `prompt()`. Multi-line enumeration is what the
-/// model expects — single-line summaries hurt operation-name retrieval on
-/// small models.
+/// Model-facing tool description AND prompt, returned from both
+/// `description()` and `prompt()`. Multi-line enumeration is what the model
+/// expects — single-line summaries hurt operation-name retrieval on small
+/// models.
 const LSP_DESCRIPTION: &str = "Interact with Language Server Protocol (LSP) servers to get code intelligence features.
 
 Supported operations:
@@ -78,16 +75,14 @@ All operations require:
 
 Note: LSP servers must be configured for the file type. If no server is available, an error will be returned.";
 
-/// Typed tool input — mirrors TS `LSPTool` tool-facing `inputSchema`.
+/// Typed tool input matching the LSP tool-facing `inputSchema`.
 ///
-/// `line` / `character` are 1-based (user-facing) `int().positive()` and
-/// REQUIRED for every operation (TS parity: the tool-facing schema makes
-/// both mandatory). They are converted to LSP's 0-based positions in
+/// `line` / `character` are 1-based (user-facing) and REQUIRED for every
+/// operation. They are converted to LSP's 0-based positions in
 /// [`build_params`], which ignores them for the file-scoped
 /// (`DocumentSymbol`) and workspace-scoped (`WorkspaceSymbol`) operations.
 ///
-/// `filePath` (camelCase) preserved on the wire for TS parity
-/// (`tools/LSPTool/schemas.ts`).
+/// `filePath` is camelCase on the wire.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct LspInput {
     /// The LSP operation to perform
@@ -126,9 +121,6 @@ impl Tool for LspTool {
     fn description(&self, _input: &LspInput, _options: &DescriptionOptions) -> String {
         LSP_DESCRIPTION.into()
     }
-    /// TS parity: `LSPTool.ts::prompt()` returns the same `DESCRIPTION`
-    /// string as `description()`. The model's tool description is sourced
-    /// from `prompt()`, not the short `description()` UI label.
     async fn prompt(&self, _options: &PromptOptions) -> String {
         LSP_DESCRIPTION.to_string()
     }
@@ -163,10 +155,9 @@ impl Tool for LspTool {
         input: LspInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<LspOutput>, ToolError> {
-        // `line` / `character` are schema-required for every operation (TS
-        // parity: the tool-facing `inputSchema` makes both `int().positive()`
-        // mandatory; `build_params` simply ignores them for the file- and
-        // workspace-scoped operations that don't carry a position).
+        // `line` / `character` are schema-required for every operation;
+        // `build_params` ignores them for the file- and workspace-scoped
+        // operations that don't carry a position.
         //
         // Worktree-isolated subagents pass `cwd_override` so a
         // relative `filePath` resolves against the worktree, not the
@@ -223,7 +214,7 @@ impl Tool for LspTool {
 }
 
 /// Build the initial LSP request params for an operation. Positions are
-/// converted 1-based → 0-based. TS parity: `LSPTool.ts:getMethodAndParams`.
+/// converted 1-based → 0-based.
 fn build_params(op: LspAction, uri: &str, line: i32, character: i32) -> Value {
     if matches!(op, LspAction::WorkspaceSymbol) {
         return json!({ "query": "" });
@@ -248,9 +239,8 @@ fn build_params(op: LspAction, uri: &str, line: i32, character: i32) -> Value {
     })
 }
 
-/// Dispatch the request through `ctx.lsp`. For `WorkspaceSymbol` we use
-/// `send_workspace_request` (no file anchor). For
-/// `IncomingCalls` / `OutgoingCalls` we run TS's two-step pattern:
+/// Dispatch the request through `ctx.lsp`. For `IncomingCalls` /
+/// `OutgoingCalls` we run a two-step pattern:
 /// `prepareCallHierarchy` → pick the first item → second request.
 async fn dispatch(
     ctx: &ToolUseContext,
@@ -388,11 +378,9 @@ fn parse_or_default<T: serde::de::DeserializeOwned + Default>(raw: &Value) -> T 
     serde_json::from_value(raw.clone()).unwrap_or_default()
 }
 
-/// Drop locations that point at gitignored files. TS parity:
-/// `LSPTool.ts` shells out to `git check-ignore` for every URI; coco-rs
-/// uses the in-process [`coco_file_ignore::PathChecker`] (the same one
-/// `GrepTool` / `GlobTool` rely on) so we don't fork a subprocess per
-/// call.
+/// Drop locations that point at gitignored files. Uses the in-process
+/// [`coco_file_ignore::PathChecker`] (the same one `GrepTool` / `GlobTool`
+/// rely on) so we don't fork a subprocess per call.
 ///
 /// `cwd` is the workspace anchor — `None` (no override available) skips
 /// filtering entirely, since `PathChecker` needs a root to anchor

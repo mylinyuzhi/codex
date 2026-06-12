@@ -2,9 +2,6 @@
 //!
 //! Debounced async search backed by `coco_file_search::FileIndex` —
 //! nucleo fuzzy matching + git-aware discovery + 60s cache TTL.
-//!
-//! TS: `src/hooks/fileSuggestions.ts` (`generateFileSuggestions`,
-//! `fetchFileSuggestions`, `startBackgroundCacheRefresh`).
 
 use std::time::Duration;
 

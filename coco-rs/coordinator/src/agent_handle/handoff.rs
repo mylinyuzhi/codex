@@ -1,7 +1,7 @@
 //! Post-spawn handoff classifier.
 //!
-//! TS: `agentToolUtils.ts:classifyHandoffIfNeeded`. It fail-opens when
-//! the `SideQueryHandle` isn't installed.
+//! Runs after a subagent completes. Fail-opens when the `SideQueryHandle`
+//! isn't installed.
 //!
 //! **W6.2 full**: the underlying logic now lives in free async
 //! functions taking pre-cloned `Arc`s, so the detached engine task
@@ -10,8 +10,7 @@
 
 use super::SwarmAgentHandle;
 
-/// Prepend the classifier-unavailable warning to a sub-agent's output,
-/// mirroring TS `${handoffWarning}\n\n${finalMessage}` (AgentTool.tsx:972).
+/// Prepend the classifier-unavailable warning to a sub-agent's output.
 /// An empty body yields the warning alone.
 fn prepend_unavailable_warning(body: Option<&str>) -> String {
     match body.map(str::trim).filter(|b| !b.is_empty()) {
@@ -33,20 +32,18 @@ pub(crate) async fn classify_handoff_inline(
         return qr.response_text.clone();
     };
 
-    // TS `agentToolUtils.ts:404-405`: classification only runs in `auto`
-    // permission mode (`default` / `acceptEdits` already require user
-    // confirmation upstream; `bypassPermissions` opts out). coco-rs ships
-    // no `TRANSCRIPT_CLASSIFIER` kill-switch feature, so `feature_enabled`
-    // is always `true` and the gate reduces to the mode check. Without
-    // this the two-stage classifier LLM side-query fired after *every*
-    // subagent completion regardless of mode — extra cost plus spurious
-    // `SECURITY WARNING:` rewrites in non-auto modes.
+    // Classification only runs in `auto` permission mode (`default` /
+    // `acceptEdits` already require user confirmation upstream;
+    // `bypassPermissions` opts out). Without this gate the two-stage
+    // classifier LLM side-query fired after *every* subagent completion
+    // regardless of mode — extra cost plus spurious `SECURITY WARNING:`
+    // rewrites in non-auto modes.
     if !coco_subagent::handoff_classifier_active(permission_mode, /*feature_enabled=*/ true) {
         return qr.response_text.clone();
     }
 
-    // TS `agentToolUtils.ts:411-412`: build the transcript first, then
-    // skip when it is empty (no read-only / tool-count exemption).
+    // Build the transcript first, then skip when it is empty
+    // (no read-only / tool-count exemption).
     let transcript = coco_subagent::build_handoff_transcript_summary(&qr.messages);
     if !coco_subagent::should_classify(&transcript) {
         return qr.response_text.clone();
@@ -63,9 +60,8 @@ pub(crate) async fn classify_handoff_inline(
         .await
     {
         Ok(resp) => resp.text.unwrap_or_default(),
-        // Classifier unavailable (TS `classifierResult.unavailable`):
-        // fail-open but prepend the warning so the parent verifies the
-        // sub-agent's work (agentToolUtils.ts:464-469 + caller prepend).
+        // Classifier unavailable: fail-open but prepend the warning so
+        // the parent verifies the sub-agent's work.
         Err(_) => return Some(prepend_unavailable_warning(qr.response_text.as_deref())),
     };
 

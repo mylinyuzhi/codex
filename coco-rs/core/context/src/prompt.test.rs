@@ -73,7 +73,7 @@ fn git_status_empty_status_renders_clean() {
     assert!(text.contains("Status:\n(clean)"));
     // No user line when git user is absent.
     assert!(!text.contains("Git user:"));
-    // Main-branch line still present (matches TS empty-string behavior).
+    // Main-branch line still present even when the value is an empty string.
     assert!(text.contains("Main branch (you will usually use this for PRs): \n"));
 }
 
@@ -151,9 +151,8 @@ fn cache_breakpoint_falls_after_output_style() {
 }
 
 /// G6 regression: AGENT_NOTES (passed via `notes_after_env`) must render
-/// BEFORE the memory section, mirroring TS
-/// `enhanceSystemPromptWithEnvDetails` (where `notes` come bundled with
-/// the env block, not after memory).
+/// BEFORE the memory section (`enhanceSystemPromptWithEnvDetails` bundles
+/// `notes` with the env block, not after memory).
 #[test]
 fn notes_after_env_renders_before_memory() {
     let env = empty_env();
@@ -208,7 +207,7 @@ fn known_model_renders_knowledge_cutoff() {
 
 /// G9 snapshot test: full byte-level capture of a typical subagent
 /// system prompt with all sections present. Locks in the env block
-/// shape, AGENT_NOTES placement, and ordering vs TS.
+/// shape, AGENT_NOTES placement, and section ordering.
 #[test]
 fn snapshot_subagent_full_prompt() {
     let env = env_for_snapshot();
@@ -225,7 +224,7 @@ fn snapshot_subagent_full_prompt() {
     insta::assert_snapshot!(prompt.full_text());
 }
 
-/// Main-agent prompt (no AGENT_NOTES — TS parity).
+/// Main-agent prompt (no AGENT_NOTES).
 #[test]
 fn snapshot_main_agent_prompt() {
     let env = env_for_snapshot();

@@ -12,7 +12,7 @@
 //!   text as `{ok: bool, reason?: string}` JSON. Recursion-safe:
 //!   bypasses the `QueryEngine` turn loop entirely so
 //!   `UserPromptSubmit` hooks don't fire from within a hook
-//!   evaluation. Mirrors TS `execPromptHook.ts:21-211`.
+//!   evaluation.
 //!
 //! - **Agent path**: full hook verdict path via a late-bound runner
 //!   installed by `coco-cli::session_runtime`. The concrete runner
@@ -20,9 +20,8 @@
 //!   `StructuredOutputTool`, and a Stop enforcement function hook so
 //!   the child must produce `{ok, reason?}`. `{ok:false}` maps to a
 //!   blocking hook result (feedback prefixed `Agent hook condition was
-//!   not met: ` per TS `execAgentHook.ts:279`); max-turn/no-output
-//!   still maps to `Cancelled`, matching TS's fallback. The runner also
-//!   mirrors TS's verifier sandbox: `ALL_AGENT_DISALLOWED_TOOLS` are
+//!   not met: `); max-turn/no-output still maps to `Cancelled`. The
+//!   runner uses a verifier sandbox: `ALL_AGENT_DISALLOWED_TOOLS` are
 //!   withheld, a dedicated verifier system prompt replaces the main
 //!   one, thinking is disabled, and the default timeout is 60s. The
 //!   explicit `Read(/transcriptPath)` session grant is not separately
@@ -31,12 +30,10 @@
 //!
 //! # Model selection
 //!
-//! TS uses `getSmallFastModel()` (Haiku) by default; the per-hook
-//! `hook.model` field can override with either a literal model id
-//! or an alias. Coco-rs routes through `ModelRole::HookAgent`
-//! instead — bare model strings are deliberately rejected per the
-//! project rule "never bare model string; route via `ModelRole`"
-//! (see root `CLAUDE.md`).
+//! The per-hook `hook.model` field can override with either a literal
+//! model id or an alias. Coco-rs routes through `ModelRole::HookAgent`
+//! — bare model strings are deliberately rejected per the project rule
+//! "never bare model string; route via `ModelRole`" (see root `CLAUDE.md`).
 //!
 //! - **Default runtime** — [`QueryHookLlm::for_session`] snapshots
 //!   `ModelRole::HookAgent` from the shared
@@ -75,10 +72,9 @@ use serde::Deserialize;
 
 /// System prompt prepended to every Prompt hook evaluation.
 ///
-/// Verbatim from TS `execPromptHook.ts:65-70` so model behaviour stays
-/// stable across the TS↔Rust port. The schema constraint is enforced
-/// by JSON parse rather than a provider-level `output_format` (which
-/// is not yet wired in `coco-inference`).
+/// The schema constraint is enforced by JSON parse rather than a
+/// provider-level `output_format` (which is not yet wired in
+/// `coco-inference`).
 const HOOK_PROMPT_SYSTEM: &str = "You are evaluating a hook in Claude Code.
 
 Your response must be a JSON object matching one of the following schemas:
@@ -150,8 +146,7 @@ impl QueryHookLlm {
 
     /// Pick the runtime source for a single hook invocation.
     ///
-    /// Precedence (mirrors TS `hook.model` semantics, adapted to
-    /// coco-rs's `ModelRole` indirection):
+    /// Precedence (adapted to coco-rs's `ModelRole` indirection):
     /// 1. `model = Some(m)` and `m` parses as a `ModelRole` → resolve
     ///    that role via the shared cache (`Err` falls back to
     ///    `default_client` with a warn).
@@ -244,7 +239,7 @@ impl HookLlmHandle for QueryHookLlm {
         let result = tokio::time::timeout(timeout, result).await;
 
         match result {
-            // TS treats timeout as `cancelled` — silent, no UI error.
+            // Timeout maps to `cancelled` — silent, no UI error.
             Err(_elapsed) => HookEvaluationResult::Cancelled,
             Ok(Err(error)) => HookEvaluationResult::NonBlockingError { error },
             Ok(Ok(query_result)) => {
@@ -303,10 +298,9 @@ impl HookLlmHandle for QueryHookLlm {
 
 /// Build the message prompt for an LLM hook evaluation.
 ///
-/// Two-message shape: `System` carries the JSON-output instruction
-/// (verbatim from TS `execPromptHook.ts`); `User` carries the user's
-/// hook prompt with `$ARGUMENTS` already substituted upstream by
-/// `run_hook_via_handle_or_fallback`.
+/// Two-message shape: `System` carries the JSON-output instruction;
+/// `User` carries the user's hook prompt with `$ARGUMENTS` already
+/// substituted upstream by `run_hook_via_handle_or_fallback`.
 fn build_prompt(user_prompt: &str) -> Vec<LlmMessage> {
     vec![
         LlmMessage::System {

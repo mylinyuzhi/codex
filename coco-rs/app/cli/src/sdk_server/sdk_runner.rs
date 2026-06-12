@@ -16,9 +16,8 @@
 //!   server's `event_tx`. The server's notification forwarder then
 //!   translates protocol events into JSON-RPC notifications on the wire.
 //!
-//! TS reference: `src/cli/print.ts runHeadless()` — creates a single
-//! QueryEngine per headless invocation. coco-rs lets the SDK client
-//! drive the cadence via multiple `turn/start` calls per session.
+//! The SDK client drives the cadence via multiple `turn/start` calls
+//! per session.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -47,8 +46,8 @@ pub struct QueryEngineRunner {
     /// Max output tokens per turn. Pulled from CLI flags at startup.
     max_output_tokens: i64,
     /// Max internal agent turns (tool-use iterations) per SDK turn.
-    /// `None` = unbounded (TS leaves SDK turns uncapped unless `max_turns` is
-    /// supplied in the request or `loop.max_turns` in settings).
+    /// `None` = unbounded unless `max_turns` is supplied in the request
+    /// or `loop.max_turns` in settings.
     max_turns: Option<i32>,
     /// Optional system prompt. When None, the engine uses its default.
     system_prompt: Option<String>,
@@ -101,7 +100,7 @@ impl TurnRunner for QueryEngineRunner {
             );
 
             // Resolve the permission mode. Priority:
-            //   1. `params.permission_mode` (turn-scoped, TS parity).
+            //   1. `params.permission_mode` (turn-scoped).
             //   2. `handoff.permission_mode` (session-scoped, set by
             //      `control/setPermissionMode`).
             //   3. `PermissionMode::default()`.
@@ -118,8 +117,7 @@ impl TurnRunner for QueryEngineRunner {
             // every turn down by re-walking settings layers.
             let runtime_config = runtime.runtime_config.as_ref();
             // SDK turns honor the same settings-layered permission rules
-            // as TUI / headless. Mirrors TS `loadPermissionRules()`;
-            // before this wiring SDK turns ran with empty rule maps.
+            // as TUI / headless.
             let (allow_rules, deny_rules, ask_rules) =
                 crate::permission_rule_loader::typed_permission_rules(&runtime_config.settings);
             let permission_rule_source_roots =
@@ -137,7 +135,7 @@ impl TurnRunner for QueryEngineRunner {
                 permission_rule_source_roots,
                 max_output_tokens,
                 // Request `max_turns` wins, else settings `loop.max_turns`,
-                // else unbounded (TS parity).
+                // else unbounded.
                 max_turns: max_turns.or(runtime_config.loop_config.max_turns),
                 total_token_budget: runtime_config.loop_config.total_token_budget.map(i64::from),
                 prompt_cache: runtime
@@ -209,8 +207,6 @@ impl TurnRunner for QueryEngineRunner {
             // a sentinel-prefixed string (slash-command handler output),
             // run manual compaction directly rather than sending the
             // sentinel text to the LLM as a user message.
-            // TS parity: REPL.tsx command dispatcher routes /compact
-            // through `compactConversation` rather than chat input.
             if let Some(req) = coco_commands::handlers::compact::parse_compact_sentinel(&prompt) {
                 let combined: Vec<std::sync::Arc<coco_messages::Message>> = {
                     let h = history_handle.lock().await;
@@ -244,9 +240,8 @@ impl TurnRunner for QueryEngineRunner {
             // SDK-side `/dream` short-circuit — fire auto-memory
             // consolidation directly. When the engine has no
             // `MemoryRuntime` (Feature::AutoMemory off), we silently
-            // no-op. TS parity: `/dream` slash command. Uses `force`
-            // so the time / session / scan-throttle gates are
-            // bypassed; the lock is still acquired.
+            // no-op. Uses `force` so the time / session / scan-throttle
+            // gates are bypassed; the lock is still acquired.
             if coco_commands::handlers::dream::parse_dream_sentinel(&prompt).is_some() {
                 if let Some(runtime) = engine.memory_runtime() {
                     let transcript_dir = runtime
@@ -263,8 +258,7 @@ impl TurnRunner for QueryEngineRunner {
             // arrives as the slash handler's first line; we resolve
             // the name (LLM-generated when `Auto`) and persist via
             // the shared helpers, then return without sending the
-            // sentinel text to the LLM as a user message. TS parity:
-            // `commands/rename/rename.ts` runs entirely client-side.
+            // sentinel text to the LLM as a user message.
             if let Some(req) = coco_commands::parse_rename_sentinel(&prompt) {
                 // Teammates can't rename — silently no-op for SDK
                 // (no user-visible transcript) to mirror the TUI
@@ -310,8 +304,7 @@ impl TurnRunner for QueryEngineRunner {
                         h.clone()
                     };
                     let tokens = coco_messages::estimate_tokens_for_messages(&combined);
-                    // TS parity: walk history for the orphan-safe
-                    // cursor signals (`sessionMemory.ts:441-442`).
+                    // Walk history for the orphan-safe cursor signals.
                     let last_msg_id = combined
                         .last()
                         .and_then(|m| m.uuid())
@@ -359,11 +352,6 @@ impl TurnRunner for QueryEngineRunner {
             // engine. The dispatcher builds a *fresh* engine, runs a
             // single turn against it, and returns the response text;
             // the parent's history and cache slot are untouched.
-            //
-            // TS parity: `commands/btw.ts` calls `runForkedAgent`
-            // which constructs an `AgentQueryConfig` with
-            // `lastCacheSafeParams`, runs one turn, and surfaces the
-            // result as a meta message.
             if let Some(req) = coco_commands::handlers::btw::parse_btw_sentinel(&prompt) {
                 let cache = engine.last_cache_safe_params().await;
                 let response_text = match cache {
@@ -443,8 +431,7 @@ impl TurnRunner for QueryEngineRunner {
             // against the same TurnStarted.
             let cycle_turn_id = coco_types::TurnId::generate();
 
-            // TS parity (`processUserInput.ts:182-263`): fire
-            // UserPromptSubmit hooks BEFORE the LLM call. Output
+            // Fire UserPromptSubmit hooks BEFORE the LLM call. Output
             // surfaces as `hook_*` reminders on the next reminder pass;
             // a blocking_error suppresses the turn (warns instead);
             // prevent_continuation keeps the prompt but skips the
@@ -538,14 +525,12 @@ impl TurnRunner for QueryEngineRunner {
             }
 
             // Resolve `@`-mentions in the prompt to file-content
-            // system-reminder messages. TS parity:
-            // `getAttachmentMessages` from `processUserInput.ts:504` /
-            // `query.ts:1580`. Shared helper now drives TUI / headless / SDK
-            // identically — without this, headless and SDK clients
-            // sending `@path/to/file` got the literal string instead of
-            // the file's contents (the `at_mentioned_files` reminder
-            // body claims content is "loaded into context" — this is
-            // what makes that true).
+            // system-reminder messages. A shared helper drives TUI /
+            // headless / SDK identically — without this, headless and
+            // SDK clients sending `@path/to/file` got the literal string
+            // instead of the file's contents (the `at_mentioned_files`
+            // reminder body claims content is "loaded into context" —
+            // this is what makes that true).
             let cwd_path = std::path::Path::new(&handoff.cwd);
             let inputs = crate::at_mention_turn::resolve_turn_inputs_text_only(
                 &prompt,

@@ -7,7 +7,7 @@
 //! [`SessionRuntime::reload_hooks`], which rebuilds the live registry from
 //! the latest `RuntimeConfig` snapshot.
 //!
-//! TS parity: TS `/hooks` triggers `updateHooksConfigSnapshot()` whenever
+//! `/hooks` triggers a config snapshot update whenever
 //! the dialog mutates settings — same effect, different UI surface.
 
 use std::path::Path;

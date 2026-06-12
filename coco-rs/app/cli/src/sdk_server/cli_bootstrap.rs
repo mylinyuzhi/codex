@@ -35,11 +35,10 @@ use std::str::FromStr;
 
 use crate::sdk_server::handlers::InitializeBootstrap;
 
-/// Built-in output style names shipped with coco-rs. Matches TS
-/// `OUTPUT_STYLE_CONFIG` at `constants/outputStyles.ts:41-135` which uses
-/// a lowercase `"default"` sentinel plus capitalized `"Explanatory"` and
-/// `"Learning"`. Case matters: TS clients looking up a style by name do
-/// an exact-string match. Used as the fallback when no manager is wired.
+/// Built-in output style names shipped with coco-rs. Uses a lowercase
+/// `"default"` sentinel plus capitalized `"Explanatory"` and `"Learning"`.
+/// Case matters: clients looking up a style by name do an exact-string
+/// match. Used as the fallback when no manager is wired.
 pub const BUILTIN_OUTPUT_STYLES: &[&str] = &[
     coco_output_styles::DEFAULT_OUTPUT_STYLE_NAME,
     coco_output_styles::EXPLANATORY_STYLE_NAME,
@@ -102,8 +101,7 @@ impl CliInitializeBootstrap {
     /// Override the SDK-advertised output style name list. The CLI
     /// builds this from the resolved `OutputStyleManager` — the wire
     /// list includes built-ins (`Explanatory`, `Learning`) plus any
-    /// custom dir / plugin styles, with the `default` sentinel
-    /// prepended to match TS `available_output_styles` semantics.
+    /// custom dir / plugin styles, with the `default` sentinel prepended.
     pub fn with_available_output_styles(mut self, styles: Vec<String>) -> Self {
         self.available_styles = styles;
         self
@@ -140,9 +138,9 @@ impl InitializeBootstrap for CliInitializeBootstrap {
             .map(|cmd| SdkSlashCommand {
                 name: cmd.base.name.clone(),
                 description: cmd.base.description.clone(),
-                // TS `argumentHint` is REQUIRED (not optional). When
+                // `argumentHint` is REQUIRED (not optional). When
                 // coco-rs has no hint, we advertise an empty string so
-                // strict zod parsers accept the response.
+                // strict parsers accept the response.
                 argument_hint: cmd.base.argument_hint.clone().unwrap_or_default(),
             })
             .collect()
@@ -150,10 +148,9 @@ impl InitializeBootstrap for CliInitializeBootstrap {
 
     async fn agents(&self) -> Vec<SdkAgentInfo> {
         let paths = self.agent_search_paths.clone();
-        // TS parity: `loadAgentsDir.ts:262-294` — decorate every loaded
-        // definition with its `pendingSnapshotUpdate` timestamp so the
-        // SDK's `initialize.agents` listing surfaces drift to clients.
-        // The closure runs blocking IO inside the spawn_blocking
+        // Decorate every loaded definition with its `pendingSnapshotUpdate`
+        // timestamp so the SDK's `initialize.agents` listing surfaces drift
+        // to clients. The closure runs blocking IO inside the spawn_blocking
         // closure below, so its captured paths are owned `PathBuf`s.
         let cwd = std::env::current_dir().unwrap_or_default();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
@@ -210,9 +207,9 @@ impl InitializeBootstrap for CliInitializeBootstrap {
     }
 }
 
-/// Shared projection from a coco-rs [`AgentDefinition`] to the TS wire
-/// [`SdkAgentInfo`] shape. Missing descriptions become `""` to satisfy
-/// the TS `z.string()` (required) schema.
+/// Shared projection from a coco-rs [`AgentDefinition`] to the
+/// [`SdkAgentInfo`] wire shape. Missing descriptions become `""` to
+/// satisfy the required string field.
 fn def_to_sdk_agent_info(def: AgentDefinition) -> SdkAgentInfo {
     SdkAgentInfo {
         name: def.name,
@@ -221,31 +218,22 @@ fn def_to_sdk_agent_info(def: AgentDefinition) -> SdkAgentInfo {
     }
 }
 
-/// Map a resolved [`AuthMethod`] to the TS-aligned `SdkAccountInfo`.
+/// Map a resolved [`AuthMethod`] to the `SdkAccountInfo` wire shape.
 ///
-/// Wire semantics match TS `getAccountInformation()` in
-/// `src/utils/auth.ts:1863-1906`:
-///
-/// - **Third-party providers** (Bedrock / Vertex / Foundry): TS returns
-///   `undefined` from `getAccountInformation()` because those backends
-///   use external credentials. coco-rs returns [`SdkAccountInfo::default`]
-///   (all fields `None`) which serializes to `{}` on the wire — the
-///   closest analogue to TS `undefined` that the optional `account`
-///   field can carry.
+/// - **Third-party providers** (Bedrock / Vertex / Foundry): returns
+///   [`SdkAccountInfo::default`] (all fields `None`), serializing to
+///   `{}` on the wire to indicate no first-party account info.
 /// - **First-party OAuth**: `api_provider = FirstParty`,
 ///   `subscription_type` from the token, `organization` is the raw
-///   `org_uuid` (TS fetches the human-readable name via a separate API
-///   call we don't make yet). `token_source` is intentionally `None`
-///   because TS's canonical token-source strings don't map cleanly
-///   from the coco-rs `AuthMethod::OAuth` variant — sending an
-///   incompatible string would mislead TS SDK consumers that key on
-///   those values. `email` is always `None` (OAuth token doesn't embed
-///   it).
+///   `org_uuid` (human-readable name requires a separate API call we
+///   don't make yet). `token_source` is intentionally `None` — the
+///   canonical token-source strings don't map cleanly from the
+///   `AuthMethod::OAuth` variant and sending an incompatible string
+///   would mislead SDK consumers that key on those values. `email` is
+///   always `None` (OAuth token doesn't embed it).
 /// - **First-party API key**: `api_provider = FirstParty` only.
 ///   `api_key_source` stays `None` until coco-rs tracks the env var /
-///   helper origin — TS's canonical values are from
-///   `ApiKeySourceSchema` (`user` / `project` / `org` / `temporary` /
-///   `oauth`).
+///   helper origin (`user` / `project` / `org` / `temporary` / `oauth`).
 pub fn auth_method_to_account(auth: &AuthMethod) -> SdkAccountInfo {
     match auth {
         AuthMethod::OAuth(tokens) => SdkAccountInfo {
@@ -261,10 +249,10 @@ pub fn auth_method_to_account(auth: &AuthMethod) -> SdkAccountInfo {
             ..Default::default()
         },
         // Third-party provider paths: return a bare default so the wire
-        // shape matches TS's `undefined` semantics. TS SDK consumers
-        // that check `account.apiProvider === undefined` to detect 3P
-        // auth would otherwise see a populated apiProvider and treat
-        // the session as "logged in".
+        // shape signals no first-party account. SDK consumers that check
+        // `account.apiProvider === undefined` to detect 3P auth would
+        // otherwise see a populated apiProvider and treat the session as
+        // "logged in".
         AuthMethod::Bedrock { .. } | AuthMethod::Vertex { .. } | AuthMethod::Foundry { .. } => {
             SdkAccountInfo::default()
         }
@@ -272,25 +260,22 @@ pub fn auth_method_to_account(auth: &AuthMethod) -> SdkAccountInfo {
 }
 
 /// Parse the `agents` map from a `SDKControlInitializeRequest` into
-/// validated [`AgentDefinition`] entries. Mirrors TS
-/// `parseAgentsFromJson(agentsJson, 'flagSettings')` at
-/// `tools/AgentTool/loadAgentsDir.ts:521-536`.
+/// validated [`AgentDefinition`] entries.
 ///
 /// The map's keys ARE the agent type names (authoritative); each value
 /// is the agent's JSON shape. Per entry:
 ///
 /// 1. Deserialize the value as `AgentDefinition` (forgiving — missing
 ///    optional fields default).
-/// 2. Override `agent_type` with the map key (TS parity: the key wins
-///    over any name embedded in the value).
+/// 2. Override `agent_type` with the map key (the key wins over any
+///    name embedded in the value).
 /// 3. Stamp `source = AgentSource::FlagSettings`.
 /// 4. Run `AgentDefinitionValidator::check` — drop the entry on
 ///    semantic errors but keep going on the rest.
 ///
 /// Returns `(accepted, errors)`. Caller logs `errors` at warn level
-/// and proceeds with `accepted` — TS doesn't fail the initialize
-/// handshake on parse errors, just logs and continues with the
-/// successful subset (`logForDebugging` + `logError`).
+/// and proceeds with `accepted` — parse errors don't fail the
+/// initialize handshake.
 pub fn parse_sdk_agent_definitions(
     agents: &HashMap<String, SdkAgentDefinition>,
 ) -> (Vec<AgentDefinition>, Vec<String>) {
@@ -307,7 +292,7 @@ pub fn parse_sdk_agent_definitions(
             Ok(t) => t,
             Err(_) => AgentTypeId::Custom(name.clone()),
         };
-        // Step 3: SDK-supplied agents are FlagSettings source (TS parity).
+        // Step 3: SDK-supplied agents are FlagSettings source.
         def.source = AgentSource::FlagSettings;
         // Step 4: semantic validation.
         let semantic_errors = AgentDefinitionValidator::check(&def);

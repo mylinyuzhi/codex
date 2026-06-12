@@ -1,9 +1,7 @@
-//! TS `skill_listing` generator.
+//! `skill_listing` generator.
 //!
-//! Mirrors `normalizeAttachmentForAPI` `case 'skill_listing':`
-//! (`messages.ts:3728`). Engine pre-renders the full listing string
-//! (bundled + project + user skills, budget-clamped) and passes it via
-//! `ctx.skill_listing`.
+//! Engine pre-renders the full listing string (bundled + project + user
+//! skills, budget-clamped) and passes it via `ctx.skill_listing`.
 
 use async_trait::async_trait;
 

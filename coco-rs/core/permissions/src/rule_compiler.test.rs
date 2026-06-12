@@ -49,7 +49,7 @@ fn test_parse_tool_empty_parens_is_tool_wide() {
 #[test]
 fn test_parse_normalizes_legacy_tool_names() {
     // P9: legacy tool names normalize to canonical at parse time so the rules
-    // match the real tools (TS permissionRuleValueFromString).
+    // match the real tools.
     assert_eq!(parse_rule_string("Task").tool_pattern, "Agent");
     let agent_typed = parse_rule_string("Task(Explore)");
     assert_eq!(agent_typed.tool_pattern, "Agent");

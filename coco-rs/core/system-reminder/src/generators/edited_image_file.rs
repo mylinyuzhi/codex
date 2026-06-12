@@ -1,10 +1,8 @@
 //! Silent `edited_image_file` generator.
 //!
 //! Emits a marker listing image files whose mtime changed since the last
-//! observation. Matches TS `edited_image_file`
-//! (`utils/attachments.ts:457`) whose `normalizeAttachmentForAPI`
-//! (`utils/messages.ts:4254`) returns `[]` — image diffs can't be surfaced
-//! textually, so the model gets nothing. UI surfaces the change via
+//! observation. Image diffs can't be surfaced textually, so the model gets
+//! zero API tokens. UI surfaces the change via
 //! [`ReminderMetadata::EditedImageFile`].
 //!
 //! Sibling to `AlreadyReadFileGenerator` — both live in this crate because

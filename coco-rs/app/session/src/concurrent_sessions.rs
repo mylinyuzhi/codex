@@ -1,7 +1,5 @@
 //! Per-process PID-file registry under `<config_home>/sessions/pids/{pid}.json`.
 //!
-//! TS: `utils/concurrentSessions.ts`.
-//!
 //! Every top-level coco session (interactive CLI, SDK, bg/daemon spawn)
 //! writes a single small JSON file keyed by its OS pid so a cross-cutting
 //! `coco ps` view can enumerate live sessions, surface live activity
@@ -64,9 +62,9 @@ pub enum SessionKind {
 }
 
 impl SessionKind {
-    /// Parse the env-var value used by `COCO_SESSION_KIND`. Mirrors TS
-    /// `envSessionKind`: only `bg` / `daemon` / `daemon-worker` are
-    /// honored; anything else falls back to the caller's default.
+    /// Parse the env-var value used by `COCO_SESSION_KIND`. Only `bg` /
+    /// `daemon` / `daemon-worker` are honored; anything else falls back
+    /// to the caller's default.
     fn from_env_value(s: &str) -> Option<Self> {
         match s {
             "bg" => Some(Self::Bg),
@@ -89,8 +87,7 @@ pub enum SessionStatus {
 }
 
 /// Wire shape of a single `<pid>.json` file. Snake_case wire,
-/// `Option`s skipped when missing — same fields TS Claude Code tracks
-/// for `claude ps` but Rust-native naming. The file is coco-rs's own
+/// `Option`s skipped when missing. The file is coco-rs's own
 /// registry; no cross-implementation consumer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRegistration {
@@ -139,12 +136,9 @@ impl SessionRegistry {
     /// Write the initial PID file under `<config_home>/sessions/`.
     ///
     /// Returns `Ok(Some(guard))` when registered. Returns `Ok(None)`
-    /// when the caller is a subagent (TS: `getAgentId() != null`) —
-    /// counted as success because callers treat this as fire-and-
-    /// forget. Errors (mkdir / write / chmod) bubble up; the TS
-    /// version swallows them so it can never block startup, but the
-    /// Rust version surfaces them so the caller can `tracing::warn`
-    /// and proceed.
+    /// when the caller is a subagent — counted as success because
+    /// callers treat this as fire-and-forget. Errors (mkdir / write /
+    /// chmod) bubble up so the caller can `tracing::warn` and proceed.
     pub fn register(
         config_home: &Path,
         session_id: &str,
@@ -281,7 +275,7 @@ impl Drop for SessionRegistry {
 
 /// True when the current process is the child of a `coco --bg` (tmux)
 /// spawn. Exit paths (e.g. /exit, Ctrl-C) detach the attached client
-/// instead of killing the process. TS: `isBgSession`.
+/// instead of killing the process.
 pub fn is_bg_session() -> bool {
     env_session_kind() == Some(SessionKind::Bg)
 }
@@ -291,8 +285,7 @@ pub fn is_bg_session() -> bool {
 /// Sweeps PID files whose processes are no longer running, except on
 /// WSL where the `kill -0` probe can lie about Windows PIDs (silent
 /// data loss in a shared `~/.coco/sessions/` mount). The current
-/// process is always counted, even if its file hasn't been written
-/// yet — matches TS `countConcurrentSessions`.
+/// process is always counted, even if its file hasn't been written yet.
 ///
 /// Returns `0` on any directory-read error (conservative).
 pub fn count_concurrent_sessions(config_home: &Path) -> i64 {
@@ -308,12 +301,9 @@ pub fn count_concurrent_sessions(config_home: &Path) -> i64 {
     for entry in entries.flatten() {
         let name_os = entry.file_name();
         let name = name_os.to_string_lossy();
-        // Strict guard: only `<digits>.json` is a candidate. parseInt's
-        // lenient prefix-parsing in TS meant `2026-03-14_notes.md`
-        // would parse as PID 2026 and be swept — silent data loss.
-        // (TS regression: anthropics/claude-code#34210.) Rust's
-        // `str::parse` already rejects non-numeric prefixes, but we
-        // mirror the TS strict regex for clarity.
+        // Strict guard: only `<digits>.json` is a candidate.
+        // `str::parse` rejects non-numeric prefixes, but the explicit
+        // all-digits check makes the invariant clear.
         let Some(stem) = name.strip_suffix(".json") else {
             continue;
         };
@@ -403,7 +393,6 @@ fn update_pid_file(
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // File gone — session deregistered or never registered.
-            // Treat as silent no-op (matches TS).
             return Ok(());
         }
         Err(e) => return Err(e),

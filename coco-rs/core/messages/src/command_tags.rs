@@ -1,5 +1,5 @@
-//! Slash-command transcript messages — TS `createCommandInputMessage`
-//! parity (`utils/processUserInput/processSlashCommand.tsx`).
+//! Slash-command transcript messages — echo and result formatting
+//! for slash commands persisted in the transcript.
 //!
 //! A slash command's echo + result render tool-style (`❯ /cmd` + `⎿ output`).
 //! Both are carried on `Message::User` envelopes that are
@@ -7,22 +7,20 @@
 //! reach the model. Slash commands are user↔tool interactions, not
 //! conversation, so this is the only mode coco-rs produces here.
 //!
-//! ## Restoring TS's three display modes
+//! ## Display modes
 //!
-//! TS folds three behaviors into one `CommandResultDisplay` discriminator;
-//! coco-rs covers them through distinct, more orthogonal mechanisms (so a
-//! dedicated enum was unnecessary — see commit history). If you ever need
+//! Three display behaviors are available through distinct, orthogonal mechanisms
+//! (a dedicated enum was unnecessary — see commit history). If you ever need
 //! one, this is the map:
 //!
-//! | TS `display` | meaning                       | coco-rs mechanism |
-//! |--------------|-------------------------------|-------------------|
+//! | display mode | meaning                       | mechanism |
+//! |--------------|-------------------------------|-----------|
 //! | `'skip'`     | no transcript message         | return `CommandResult::Skip` (don't call this builder) |
 //! | `'system'`   | user-visible, model-invisible | **this builder** (the default) |
 //! | `'user'`     | also enters model context     | feed the model via `CommandResult::Prompt` / `InjectPrompt` (the prompt-expansion path); or, for a literal model-visible echo, call [`slash_user_message`] with `transcript_only = false` (exercised by `command_tags.test.rs`) |
 //!
-//! The content embeds the same XML tags TS uses (`constants/xml.ts`) so the
-//! model-visible form would be byte-faithful to TS and a single tag-aware
-//! renderer strips them back to `❯`/`⎿` rows.
+//! The content embeds the same XML tags (`<command-name>`, `<local-command-stdout>`,
+//! etc.) so a single tag-aware renderer strips them back to `❯`/`⎿` rows.
 
 use coco_types::messages::LlmMessage;
 use coco_types::messages::Message;
@@ -32,7 +30,7 @@ use coco_types::messages::SystemMessage;
 use coco_types::messages::UserMessage;
 use uuid::Uuid;
 
-/// `<command-name>` — wraps the slash name in the echo (TS `constants/xml.ts`).
+/// `<command-name>` — wraps the slash name in the echo.
 pub const COMMAND_NAME_TAG: &str = "command-name";
 /// `<command-message>` — the bare name, no leading slash.
 pub const COMMAND_MESSAGE_TAG: &str = "command-message";
@@ -42,12 +40,11 @@ pub const COMMAND_ARGS_TAG: &str = "command-args";
 pub const LOCAL_COMMAND_STDOUT_TAG: &str = "local-command-stdout";
 /// `<local-command-stderr>` — wraps a command's error text.
 pub const LOCAL_COMMAND_STDERR_TAG: &str = "local-command-stderr";
-/// Placeholder when a command produced no output (TS `constants/messages.ts`).
+/// Placeholder when a command produced no output.
 pub const NO_CONTENT_MESSAGE: &str = "(no content)";
 
-/// Build the command-input echo body. Mirrors TS `formatCommandInputTags`
-/// (the trailing indentation matches the TS template so persisted
-/// transcripts compare cleanly).
+/// Build the command-input echo body. The trailing indentation in the
+/// template keeps persisted transcripts consistent.
 pub fn format_command_input(name: &str, args: &str) -> String {
     format!(
         "<{COMMAND_NAME_TAG}>/{name}</{COMMAND_NAME_TAG}>\n            <{COMMAND_MESSAGE_TAG}>{name}</{COMMAND_MESSAGE_TAG}>\n            <{COMMAND_ARGS_TAG}>{args}</{COMMAND_ARGS_TAG}>"
@@ -65,7 +62,6 @@ pub fn format_local_command_stdout(value: &str) -> String {
 }
 
 /// Extract the inner (trimmed) text of the first `<tag>…</tag>` if present.
-/// Mirrors TS `extractTag`.
 pub fn extract_tag<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
@@ -90,7 +86,7 @@ pub fn is_local_command_output(content: &str) -> bool {
 /// Build the `❯ /cmd args` echo + `⎿ output` result for a slash command, as
 /// transcript-only `Message::User`s (rendered for the user, never sent to
 /// the model). This is coco-rs's only slash-feedback display mode — see the
-/// module docs for how to restore TS's `skip` / `user` modes if ever needed.
+/// module docs for how to restore the `skip` / `user` modes if ever needed.
 pub fn build_slash_command_messages(
     name: &str,
     args: &str,
@@ -112,9 +108,8 @@ pub fn build_slash_command_messages(
 /// Build the `❯ /context` echo + the inline context-usage snapshot for the
 /// `/context` slash command. The echo is a transcript-only `Message::User`
 /// (never reaches the model); the snapshot is a `Message::System` the TUI
-/// paints as a colored grid + grouped detail. Mirrors TS `/context`
-/// (`local-jsx` → `<ContextVisualization>` printed into the scrollback), not
-/// a modal. Both messages are model-invisible.
+/// paints as a colored grid + grouped detail (inline, not a modal). Both
+/// messages are model-invisible.
 pub fn build_context_usage_messages(
     args: &str,
     result: coco_types::ContextUsageResult,
@@ -131,7 +126,7 @@ pub fn build_context_usage_messages(
     ]
 }
 
-/// Redact args for sensitive commands (TS `command.isSensitive && args.trim()`).
+/// Redact args for sensitive commands.
 fn redact_args(args: &str, is_sensitive: bool) -> String {
     if is_sensitive && !args.trim().is_empty() {
         "***".to_string()
@@ -143,7 +138,7 @@ fn redact_args(args: &str, is_sensitive: bool) -> String {
 /// One `Message::User` carrying tag content, marked with
 /// `MessageOrigin::SlashCommand`. `transcript_only = true` keeps it out of
 /// the model's context (the slash-feedback default); pass `false` to make
-/// the echo/result model-visible — TS's `display: 'user'` equivalent (see
+/// the echo/result model-visible — the `display: 'user'` equivalent (see
 /// module docs).
 fn slash_user_message(content: &str, transcript_only: bool) -> Message {
     Message::User(UserMessage {

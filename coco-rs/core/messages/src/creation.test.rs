@@ -127,8 +127,7 @@ fn test_create_progress_message() {
 
 #[test]
 fn user_interruption_message_uses_canonical_text() {
-    // TS parity: `createUserInterruptionMessage` returns a user message
-    // whose text matches one of `INTERRUPT_MESSAGE` /
+    // The interruption message text must match one of `INTERRUPT_MESSAGE` /
     // `INTERRUPT_MESSAGE_FOR_TOOL_USE` byte-for-byte.
     let plain = create_user_interruption_message(/*for_tool_use*/ false);
     let Message::User(u) = &plain else {
@@ -192,15 +191,12 @@ fn test_create_assistant_error_message_without_request_id() {
     assert!(matches!(a.message, LlmMessage::Assistant { .. }));
 }
 
-/// Pin the legacy-text interrupt markers to the verbatim TS literals.
+/// Pin the legacy-text interrupt markers to their canonical literals.
 ///
 /// `last_message_is_user_interruption` (in `coco_query::history_sync`)
 /// dedups across the legacy-text form so older JSONL transcripts
-/// resume correctly. If these literals ever drift from the TS
-/// source, dedup silently breaks on imported transcripts.
-///
-/// TS source of truth: `utils/messages.ts:207-208` in
-/// claude-code-kim. Update both sides together if you change either.
+/// resume correctly. If these literals ever drift, dedup silently
+/// breaks on imported transcripts.
 #[test]
 fn interrupt_message_constants_match_ts_literals() {
     assert_eq!(INTERRUPT_MESSAGE, "[Request interrupted by user]");

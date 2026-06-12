@@ -1,8 +1,5 @@
 //! Filesystem permission checking.
 //!
-//! TS: utils/permissions/filesystem.ts (1.8K LOC)
-//!     utils/permissions/pathValidation.ts (16K LOC)
-//!
 //! Validates file paths against allowed directories, detects path traversal,
 //! dangerous files/directories, and suspicious Windows patterns.
 
@@ -12,8 +9,6 @@ use std::path::PathBuf;
 // ── Dangerous paths ──
 
 /// Files that should never be auto-edited (dotfiles, config).
-///
-/// TS: DANGEROUS_FILES in filesystem.ts
 const DANGEROUS_FILES: &[&str] = &[
     ".gitconfig",
     ".gitmodules",
@@ -29,10 +24,9 @@ const DANGEROUS_FILES: &[&str] = &[
 
 /// Directories whose contents should not be auto-edited.
 ///
-/// TS: DANGEROUS_DIRECTORIES in filesystem.ts. `.claude` and `.codex` are kept
-/// because coco reads those agents' config dirs for compat (see
+/// `.claude` and `.codex` are kept because coco reads those agents' config dirs for compat (see
 /// `is_protected_config`; Codex/AGENTS.md convention); `.coco` is coco's own
-/// config home and must be guarded the same way TS guards `.claude`. Coco-managed
+/// config home and must be guarded the same way. Coco-managed
 /// sub-paths the agent legitimately writes (the session plan file, agent memory)
 /// are carved out earlier in the write check via `is_editable_internal_path`,
 /// which runs before this safety gate.
@@ -47,7 +41,6 @@ const BLOCKED_SYSTEM_DIRS: &[&str] = &[
 
 /// Check if a path contains `..` traversal components.
 ///
-/// TS: `containsPathTraversal()` in path.ts
 /// Regex: `(?:^|[\\/])\.\.(?:[\\/]|$)`
 pub fn contains_path_traversal(path: &str) -> bool {
     for component in path.split(&['/', '\\']) {
@@ -61,8 +54,6 @@ pub fn contains_path_traversal(path: &str) -> bool {
 // ── Dangerous file/directory detection ──
 
 /// Check if a path targets a dangerous file (dotfiles, config files).
-///
-/// TS: `isDangerousFilePathToAutoEdit()` in filesystem.ts
 pub fn is_dangerous_file_path(path: &str) -> bool {
     let lower = path.to_lowercase();
 
@@ -75,11 +66,11 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
         }
     }
 
-    // Check if any path component is a dangerous directory. Mirror TS
-    // filesystem.ts:460-468, which inspects `pathSegments[i + 1]` — so the
-    // `.coco/worktrees/` exemption is anchored at a component boundary, not a
-    // position-agnostic substring. A nested `.coco` deeper in the path (e.g. a
-    // settings.json inside a worktree) is still evaluated and blocked.
+    // Check if any path component is a dangerous directory. The check
+    // inspects `pathSegments[i + 1]` — so the `.coco/worktrees/` exemption
+    // is anchored at a component boundary, not a position-agnostic substring.
+    // A nested `.coco` deeper in the path (e.g. a settings.json inside a
+    // worktree) is still evaluated and blocked.
     let segments: Vec<&str> = lower.split(['/', '\\']).collect();
     for i in 0..segments.len() {
         let component = segments[i];
@@ -112,11 +103,9 @@ pub fn is_dangerous_file_path(path: &str) -> bool {
 /// coco serves its config from `.coco/`: project `settings.json` /
 /// `settings.local.json`, `commands/`, `agents/`, and `skills/` all live
 /// under `<cwd>/.coco/`. Editing any of these is treated as a config edit
-/// requiring approval (TS analogue: `isClaudeConfigFilePath()`,
-/// filesystem.ts:225-242, which guarded the same set under `.claude`). The
-/// match is a path-substring over-approximation — coco threads no cwd
-/// through `check_path_safety_for_auto_edit`, and over-matching only
-/// over-prompts, which is safe for an approval gate.
+/// requiring approval. The match is a path-substring over-approximation —
+/// coco threads no cwd through `check_path_safety_for_auto_edit`, and
+/// over-matching only over-prompts, which is safe for an approval gate.
 pub fn is_coco_config_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/").to_lowercase();
     normalized.contains("/.coco/settings.json")
@@ -129,13 +118,10 @@ pub fn is_coco_config_path(path: &str) -> bool {
 // ── Suspicious Windows path patterns ──
 
 /// Check for suspicious Windows path patterns that could bypass security.
-///
-/// TS: `hasSuspiciousWindowsPathPattern()` in filesystem.ts
 pub fn has_suspicious_windows_pattern(path: &str) -> bool {
     // NTFS Alternate Data Streams: "file.txt::$DATA", "settings.json:stream".
     // Colons are valid filename characters on Linux/macOS, so this check is
-    // Windows-only — TS gates it on getPlatform() === 'windows' | 'wsl'
-    // (filesystem.ts:546-551). Without the guard a legitimate Unix path like
+    // Windows-only. Without the guard a legitimate Unix path like
     // `/tmp/log:2026-06-01.txt` is spuriously flagged. Skip the drive letter
     // at position 1 (e.g. C:).
     if cfg!(target_os = "windows") && path.len() > 2 && path[2..].contains(':') {
@@ -207,8 +193,6 @@ pub enum PathSafetyResult {
 
 /// Check path safety for auto-edit mode.
 ///
-/// TS: `checkPathSafetyForAutoEdit()` in filesystem.ts / pathValidation.ts.
-///
 /// Validation order:
 /// 1. Suspicious Windows patterns (NTFS ADS, 8.3, long-path, etc.)
 /// 2. Shell expansion patterns ($VAR, `cmd`, %VAR%)
@@ -272,7 +256,6 @@ pub fn check_path_safety_for_auto_edit(path: &str) -> PathSafetyResult {
 
 /// Check if a path is within the working directory (or allowed directories).
 ///
-/// TS: `pathInWorkingPath()` in filesystem.ts
 /// Handles macOS /private/ symlinks and case-insensitive comparison.
 pub fn path_in_working_path(path: &str, working_path: &str) -> bool {
     let abs_path = normalize_for_comparison(&resolve_path(path, working_path));
@@ -295,8 +278,8 @@ pub fn path_in_working_path(path: &str, working_path: &str) -> bool {
 
 /// Check if a path is within the allowed working directories.
 ///
-/// Mirrors TS `pathInAllowedWorkingPath` — cwd + `additionalWorkingDirectories`
-/// only. The coco-managed exemptions (session plan file, agent memory) live in
+/// Checks cwd + `additionalWorkingDirectories` only. The coco-managed
+/// exemptions (session plan file, agent memory) live in
 /// [`is_readable_internal_path`] / [`is_editable_internal_path`], NOT here:
 /// conflating them let an arbitrary out-of-tree write auto-pass the cwd gate.
 pub fn is_path_within_allowed_dirs(path: &str, cwd: &str, additional_dirs: &[String]) -> bool {
@@ -354,8 +337,7 @@ fn normalize_for_comparison(path: &str) -> String {
 
 /// Expand `~` to `$HOME`. Rejects dangerous tilde variants.
 ///
-/// TS: `pathValidation.ts` blocks `~user`, `~+`, `~-`, `=cmd` to prevent
-/// TOCTOU and shell expansion attacks.
+/// Blocks `~user`, `~+`, `~-`, `=cmd` to prevent TOCTOU and shell expansion attacks.
 fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
@@ -367,8 +349,7 @@ fn expand_tilde(path: &str) -> String {
 
 /// Check for dangerous tilde variants that could expand unexpectedly.
 ///
-/// TS: `pathValidation.ts` — blocks `~user`, `~+`, `~-` to prevent
-/// TOCTOU attacks where shell expands these at runtime.
+/// Blocks `~user`, `~+`, `~-` to prevent TOCTOU attacks where shell expands these at runtime.
 pub fn has_dangerous_tilde(path: &str) -> bool {
     if !path.starts_with('~') {
         return false;
@@ -383,8 +364,7 @@ pub fn has_dangerous_tilde(path: &str) -> bool {
 
 /// Check for shell variable expansion patterns that bypass path validation.
 ///
-/// TS: `pathValidation.ts` — blocks `$VAR`, `${VAR}`, `$(cmd)`, backticks,
-/// and Zsh `=cmd` expansion.
+/// Blocks `$VAR`, `${VAR}`, `$(cmd)`, backticks, and Zsh `=cmd` expansion.
 /// These are literals to the filesystem but shells expand them, creating a
 /// TOCTOU gap between validation and execution.
 pub fn has_shell_expansion(path: &str) -> bool {
@@ -397,7 +377,6 @@ pub fn has_shell_expansion(path: &str) -> bool {
         return true;
     }
     // Zsh equals expansion: =cmd expands to path of `cmd` binary
-    // TS: pathValidation.ts:426
     if path.starts_with('=') && path.len() > 1 && path.as_bytes()[1].is_ascii_alphabetic() {
         return true;
     }
@@ -453,8 +432,6 @@ pub fn validate_write_path(path: &str, cwd: &str, additional_dirs: &[String]) ->
 const MAX_SYMLINK_DEPTH: usize = 40;
 
 /// Collect all paths that must be checked for a single input path.
-///
-/// TS: `getPathsForPermissionCheck()` in fsOperations.ts
 ///
 /// Follows symlink chains (up to 40 hops), collecting every intermediate
 /// target. This prevents symlink bypass attacks where `./link → /etc/passwd`
@@ -534,8 +511,6 @@ pub fn get_paths_for_permission_check(path: &str, cwd: &str) -> Vec<String> {
 
 /// For a non-existent path, resolve the deepest existing ancestor to
 /// find where the file would actually be created after symlink resolution.
-///
-/// TS: `resolveDeepestExistingAncestorSync()` in fsOperations.ts
 fn resolve_deepest_existing_ancestor(path: &Path) -> Option<PathBuf> {
     let mut current = path.to_path_buf();
     let mut tail_segments: Vec<std::ffi::OsString> = Vec::new();
@@ -593,14 +568,10 @@ pub struct InternalPathContext<'a> {
     pub cwd: &'a str,
     /// Pre-resolved session plan file (`<plansDir>/<slug>.md`). Plan-file
     /// reads/writes are exempted when the target shares this prefix. The
-    /// engine resolves it once and threads it through the permission context
-    /// (TS resolves it on demand via module-global `getPlansDirectory()` +
-    /// `getPlanSlug()`).
+    /// engine resolves it once and threads it through the permission context.
     pub session_plan_file: Option<&'a Path>,
 }
 
-/// TS parity: `isSessionPlanFile` in `filesystem.ts:245`.
-///
 /// The plan file is `<plansDir>/<slug>.md`; subagent plans are
 /// `<slug>-agent-<id>.md`. Strip the `.md` suffix off the resolved session
 /// plan file to recover the `<plansDir>/<slug>` prefix so both forms match
@@ -622,13 +593,12 @@ fn is_session_plan_file(normalized: &str, session_plan_file: Option<&Path>) -> b
 
 /// Paths within the project memory directory that are auto-writable.
 ///
-/// TS: `checkEditableInternalPath()` in filesystem.ts
 /// Exemptions: plan files, scratchpad, agent memory, CLAUDE.md.
 pub fn is_editable_internal_path(path: &str, ctx: &InternalPathContext) -> bool {
     let normalized = normalize_for_comparison(&resolve_path(path, ctx.cwd));
 
     // Plan files: the session's own `<plansDir>/<slug>.md` (cocohome by
-    // default). Keyed on the resolved session plan file, NOT a path substring,
+    // default). Keyed on the resolved session plan file, not a path substring,
     // so it lands wherever `plansDirectory` actually resolves and stays scoped
     // to this session's slug.
     if is_session_plan_file(&normalized, ctx.session_plan_file) {
@@ -659,7 +629,6 @@ pub fn is_editable_internal_path(path: &str, ctx: &InternalPathContext) -> bool 
 
 /// Paths within internal directories that are auto-readable.
 ///
-/// TS: `checkReadableInternalPath()` in filesystem.ts
 /// Exemptions: session memory, project dir, plan files, tool results,
 /// scratchpad, project temp, agent memory.
 pub fn is_readable_internal_path(path: &str, ctx: &InternalPathContext) -> bool {
@@ -674,8 +643,7 @@ pub fn is_readable_internal_path(path: &str, ctx: &InternalPathContext) -> bool 
     }
 
     // Plan files (readable in all modes) — the session's own plan file. Same
-    // key as the write carve-out (TS: `checkReadableInternalPath` reuses
-    // `isSessionPlanFile`).
+    // key as the write carve-out.
     if is_session_plan_file(&normalized, ctx.session_plan_file) {
         return true;
     }
@@ -687,7 +655,6 @@ pub fn is_readable_internal_path(path: &str, ctx: &InternalPathContext) -> bool 
 
 /// Check if a path is dangerously broad for removal operations (rm, rmdir).
 ///
-/// TS: `isDangerousRemovalPath()` in pathValidation.ts
 /// Blocks: /, ~, /*, wildcards, drive roots, root children.
 pub fn is_dangerous_removal_path(path: &str) -> bool {
     let trimmed = path.trim();

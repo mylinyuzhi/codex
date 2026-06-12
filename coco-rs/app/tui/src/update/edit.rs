@@ -45,7 +45,7 @@ async fn submit_prefixed(
 
     // Record the *full* prefixed text in history so up-arrow recall
     // returns the user to the same mode without forcing them to retype
-    // the prefix character. TS parity: `prependModeCharacterToInput`.
+    // the prefix character.
     state.ui.input.add_to_history(text.to_string());
 
     let user_message_id = uuid::Uuid::new_v4().to_string();

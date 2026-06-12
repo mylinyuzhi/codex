@@ -11,7 +11,6 @@
 //! surface at most one prompt per session, so there's no reason to
 //! accumulate. The TUI polls the snapshot via [`pending_hint_snapshot`].
 //!
-//! TS: `utils/claudeCodeHints.ts`.
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -24,10 +23,10 @@ use serde::Serialize;
 /// Hint discriminator. v1 defines only `plugin`.
 pub const HINT_TYPE_PLUGIN: &str = "plugin";
 
-/// Spec versions this harness understands. TS: `SUPPORTED_VERSIONS`.
+/// Spec versions this harness understands.
 const SUPPORTED_VERSIONS: &[i64] = &[1];
 
-/// A parsed `<claude-code-hint />` tag. TS: `ClaudeCodeHint`.
+/// A parsed `<claude-code-hint />` tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaudeCodeHint {
     /// Spec version declared by the emitter. Unknown versions are dropped.
@@ -48,8 +47,6 @@ pub struct ClaudeCodeHint {
 /// hint marker buried in a larger line — e.g. a log statement quoting the
 /// tag — is ignored. Leading and trailing whitespace on the line is
 /// tolerated since some SDKs pad stderr.
-///
-/// TS: `HINT_TAG_RE = /^[ \t]*<claude-code-hint\s+([^>]*?)\s*\/>[ \t]*$/gm`.
 fn hint_tag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -62,8 +59,6 @@ fn hint_tag_re() -> &'static Regex {
 /// whitespace or `/>` closing sequence). Values containing whitespace or
 /// `"` must use the quoted form. The quoted form does not support escape
 /// sequences; raise the spec version if that becomes necessary.
-///
-/// TS: `ATTR_RE = /(\w+)=(?:"([^"]*)"|([^\s/>]+))/g`.
 fn attr_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -72,7 +67,7 @@ fn attr_re() -> &'static Regex {
     })
 }
 
-/// Collapse runs of 3+ newlines down to exactly 2. TS: `replace(/\n{3,}/g, '\n\n')`.
+/// Collapse runs of 3+ newlines down to exactly 2.
 fn collapse_blank_runs_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -88,8 +83,6 @@ fn collapse_blank_runs_re() -> &'static Regex {
 /// `output` is the raw command output (stdout with stderr interleaved).
 /// `command` is the command that produced it; its first
 /// whitespace-separated token is recorded as `source_command`.
-///
-/// TS: `extractClaudeCodeHints(output, command)`.
 pub fn extract_claude_code_hints(output: &str, command: &str) -> (Vec<ClaudeCodeHint>, String) {
     // Fast path: no tag open sequence → no work, no allocation.
     if !output.contains("<claude-code-hint") {
@@ -100,8 +93,7 @@ pub fn extract_claude_code_hints(output: &str, command: &str) -> (Vec<ClaudeCode
     let mut hints = Vec::new();
 
     // Replace every matched tag line with the empty string, accumulating
-    // valid hints. `regex::Regex::replace_all` with a closure mirrors the
-    // TS `String.replace(RE, fn)`.
+    // valid hints.
     let stripped = hint_tag_re().replace_all(output, |caps: &regex::Captures<'_>| {
         let body = caps.get(1).map_or("", |m| m.as_str());
         let attrs = parse_attrs(body);
@@ -152,7 +144,6 @@ pub fn extract_claude_code_hints(output: &str, command: &str) -> (Vec<ClaudeCode
 }
 
 /// Parse the attribute body of a tag into a key→value map.
-/// TS: `parseAttrs(tagBody)`.
 fn parse_attrs(tag_body: &str) -> std::collections::HashMap<String, String> {
     let mut attrs = std::collections::HashMap::new();
     for caps in attr_re().captures_iter(tag_body) {
@@ -167,7 +158,7 @@ fn parse_attrs(tag_body: &str) -> std::collections::HashMap<String, String> {
     attrs
 }
 
-/// First whitespace-separated token of a command. TS: `firstCommandToken`.
+/// First whitespace-separated token of a command.
 fn first_command_token(command: &str) -> String {
     command.split_whitespace().next().unwrap_or("").to_string()
 }
@@ -188,7 +179,7 @@ struct HintStore {
     pending: Option<ClaudeCodeHint>,
     shown_this_session: bool,
     /// Slugs already gated this session (bounds repeat lookups on the same
-    /// slug from a CLI that emits on every invocation). TS: `triedThisSession`.
+    /// slug from a CLI that emits on every invocation).
     tried_this_session: HashSet<String>,
 }
 
@@ -211,7 +202,7 @@ fn with_store<R>(f: impl FnOnce(&mut HintStore) -> R) -> R {
 }
 
 /// Raw store write. Callers should gate first (see module comment).
-/// No-op once a dialog has been shown this session. TS: `setPendingHint`.
+/// No-op once a dialog has been shown this session.
 pub fn set_pending_hint(hint: ClaudeCodeHint) {
     with_store(|s| {
         if s.shown_this_session {
@@ -222,30 +213,27 @@ pub fn set_pending_hint(hint: ClaudeCodeHint) {
 }
 
 /// Clear the slot without flipping the session flag — for rejected hints.
-/// TS: `clearPendingHint`.
 pub fn clear_pending_hint() {
     with_store(|s| s.pending = None);
 }
 
-/// Flip the once-per-session flag. Call only when a dialog is actually
-/// shown. TS: `markShownThisSession`.
+/// Flip the once-per-session flag. Call only when a dialog is actually shown.
 pub fn mark_shown_this_session() {
     with_store(|s| s.shown_this_session = true);
 }
 
-/// Snapshot the pending hint, if any. TS: `getPendingHintSnapshot`.
+/// Snapshot the pending hint, if any.
 pub fn pending_hint_snapshot() -> Option<ClaudeCodeHint> {
     with_store(|s| s.pending.clone())
 }
 
 /// Whether a dialog has already been shown this session.
-/// TS: `hasShownHintThisSession`.
 pub fn has_shown_hint_this_session() -> bool {
     with_store(|s| s.shown_this_session)
 }
 
 /// Record that this slug was gated; returns `false` if it was already
-/// recorded (the caller should drop the hint). TS: `triedThisSession`.
+/// recorded (the caller should drop the hint).
 pub(crate) fn record_tried(slug: &str) -> bool {
     with_store(|s| s.tried_this_session.insert(slug.to_string()))
 }

@@ -12,22 +12,20 @@ use crate::error::ToolError;
 use crate::validation::ValidationResult;
 
 /// Session context for [`Tool::tool_spec`]. Carries
-/// the per-session knobs that drive TS-parity dynamic schema omits
-/// (e.g. `AgentTool.tsx:110-125 lazySchema`'s
-/// `isBackgroundTasksDisabled || isForkSubagentEnabled()` gate).
+/// the per-session knobs that drive dynamic schema omits
+/// (e.g. the `isBackgroundTasksDisabled || isForkSubagentEnabled()` gate).
 ///
 /// Constructed at the model-facing schema seam
 /// (`engine_prompt::build_language_model_tools`) once per turn from
 /// runtime config + features; tools read the fields they care about.
 #[derive(Debug, Clone, Default)]
 pub struct SchemaContext {
-    /// True when `COCO_BACKGROUND_TASKS_DISABLE` env truthy. TS:
-    /// `isBackgroundTasksDisabled`. AgentTool drops `run_in_background`
-    /// from its schema when this is set.
+    /// True when `COCO_BACKGROUND_TASKS_DISABLE` env truthy.
+    /// AgentTool drops `run_in_background` from its schema when this is set.
     pub background_tasks_disabled: bool,
-    /// True when fork-subagent mode is active for this session. TS:
-    /// `isForkSubagentEnabled()`. AgentTool drops `run_in_background`
-    /// when set — fork spawns always go through the bg path.
+    /// True when fork-subagent mode is active for this session.
+    /// AgentTool drops `run_in_background` when set — fork spawns
+    /// always go through the bg path.
     pub fork_mode_active: bool,
     /// Snapshot of parent session features; tools that schema-gate
     /// on capability flags consult this. `None` when the seam can't
@@ -44,8 +42,6 @@ pub struct SchemaContext {
 }
 
 /// Info about whether a tool use is a search or read operation for UI collapse.
-///
-/// TS: `isSearchOrReadCommand?(input)` return type.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SearchReadInfo {
     /// True for search operations (grep, find, glob patterns).
@@ -67,8 +63,6 @@ pub enum InterruptBehavior {
 }
 
 /// Options for generating tool descriptions.
-///
-/// TS: `description(input, { isNonInteractiveSession, toolPermissionContext, tools })`
 #[derive(Debug, Clone, Default)]
 pub struct DescriptionOptions {
     /// Whether this is a non-interactive (SDK/headless) session.
@@ -76,14 +70,11 @@ pub struct DescriptionOptions {
     /// Names of all available tools (for cross-referencing in descriptions).
     pub tool_names: Vec<String>,
     /// Permission context for tailoring descriptions to the current mode.
-    /// TS: `toolPermissionContext` — tools may describe themselves differently
-    /// based on what permissions are available.
+    /// Tools may describe themselves differently based on what permissions are available.
     pub permission_context: Option<coco_types::ToolPermissionContext>,
 }
 
 /// Options for generating tool prompt text.
-///
-/// TS: `prompt({ getToolPermissionContext, tools, agents, allowedAgentTypes, skills })`
 #[derive(Debug, Clone, Default)]
 pub struct PromptOptions {
     /// Whether this is a non-interactive session.
@@ -103,21 +94,17 @@ pub struct PromptOptions {
     /// the reminder cadence skipped.
     pub skill_names: Vec<String>,
     /// Permission context for tailoring prompt to current mode.
-    /// TS: `getToolPermissionContext()` — async in TS, pre-resolved here.
     pub permission_context: Option<coco_types::ToolPermissionContext>,
     /// Full agent catalog snapshot. `AgentTool::prompt` consumes this
     /// to render the per-agent listing (`- {type}: {whenToUse} (Tools:
     /// ...)`) so the model sees the available subagent types and their
     /// tool surfaces. `None` ⇒ static fallback description (the
-    /// pre-Round-7 behaviour). TS parity: `AgentTool.tsx:218-225`
-    /// passes `filterAgentsByMcpRequirements(agents, mcpServersWithTools)`
-    /// to `getPrompt`.
+    /// pre-Round-7 behaviour).
     pub agent_catalog: Option<std::sync::Arc<coco_subagent::AgentCatalogSnapshot>>,
     /// Names of MCP servers ready (connected) this turn. The dynamic
     /// AgentTool prompt uses this to filter out agent definitions
     /// whose `required_mcp_servers` aren't all available — the model
-    /// then never sees an agent it can't actually call. TS parity:
-    /// `mcpServersWithTools` arg to `filterAgentsByMcpRequirements`.
+    /// then never sees an agent it can't actually call.
     ///
     /// `None` ⇒ no MCP layer wired; the renderer's behaviour is to
     /// hide MCP-required agents (fail-closed). `Some(list)` filters
@@ -125,25 +112,20 @@ pub struct PromptOptions {
     pub ready_mcp_servers: Option<Vec<String>>,
     /// Coordinator-mode flag — when true, `AgentTool::prompt` renders
     /// the slim coordinator description (no usage notes, no parallel-
-    /// spawn examples). TS parity: `isCoordinator` branch in
-    /// `getPrompt`.
+    /// spawn examples).
     pub coordinator_mode: bool,
     /// Fork-mode flag — when true, `AgentTool::prompt` adds the fork
-    /// guidance section. TS parity: `isForkSubagentEnabled()` gating
-    /// in `getPrompt`.
+    /// guidance section.
     pub fork_enabled: bool,
     /// Plan-mode interview-phase flag. When true, `EnterPlanModeTool::prompt`
     /// omits the `## What Happens in Plan Mode` section because the
     /// detailed iterative workflow already arrives via the plan-mode
-    /// attachment. TS parity: `isPlanModeInterviewPhaseEnabled()` —
-    /// in coco-rs the source is `settings.plan_mode.workflow ==
-    /// Interview` only (no Growthbook / no `USER_TYPE=ant` / no env
-    /// var; see `core/context/CLAUDE.md`).
+    /// attachment. Source is `settings.plan_mode.workflow == Interview`
+    /// only (no Growthbook / no env var; see `core/context/CLAUDE.md`).
     pub is_plan_interview_phase: bool,
     /// Host build embeds search tools (`bfs` / `ugrep`) inside the Bash
     /// tool. `AgentTool::prompt` swaps the "When NOT to use" section's
-    /// FileRead/Glob/Grep hints for `find` / `grep` via Bash. TS parity:
-    /// `hasEmbeddedSearchTools()` in `prompt.ts:222-231`.
+    /// FileRead/Glob/Grep hints for `find` / `grep` via Bash.
     pub has_embedded_search_tools: bool,
     /// Agent-team tools are available in this session. Task prompts use
     /// this to include teammate/owner coordination guidance only when
@@ -151,34 +133,27 @@ pub struct PromptOptions {
     pub agent_teams_available: bool,
     /// Parent session is itself an in-process teammate. Drops the
     /// run_in_background / name / team_name / mode bullets and adds the
-    /// "only synchronous subagents" notice in the AgentTool prompt. TS
-    /// parity: `isInProcessTeammate()` in `prompt.ts:277-279`.
+    /// "only synchronous subagents" notice in the AgentTool prompt.
     pub is_in_process_teammate: bool,
     /// Parent session is a (non in-process) teammate. Drops the name /
-    /// team_name / mode bullets in the AgentTool prompt. TS parity:
-    /// `isTeammate()` in `prompt.ts:280-282`.
+    /// team_name / mode bullets in the AgentTool prompt.
     pub is_teammate: bool,
     /// Inject the agent listing into a system-reminder attachment
     /// instead of inline in the tool description. Stabilises the
     /// tools-block prompt cache against MCP / plugin / permission
-    /// changes. TS parity: `shouldInjectAgentListInMessages()` in
-    /// `prompt.ts:59-64` (env `COCO_AGENT_LIST_IN_MESSAGES`).
+    /// changes (env `COCO_AGENT_LIST_IN_MESSAGES`).
     pub agent_list_via_attachment: bool,
     /// Pro subscriptions skip the inline "Launch multiple agents
     /// concurrently" usage-notes bullet because the same guidance is
-    /// shown by the agent_listing_delta attachment for them. TS parity:
-    /// `getSubscriptionType() !== 'pro'` in `prompt.ts:246`.
+    /// shown by the agent_listing_delta attachment for them.
     pub is_pro_subscription: bool,
     /// Host disabled background tasks via
     /// `COCO_BACKGROUND_TASKS_DISABLE`. Suppresses the run_in_background
-    /// paragraphs in AgentTool's prompt. TS parity:
-    /// `process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` in
-    /// `prompt.ts:259`.
+    /// paragraphs in AgentTool's prompt.
     pub background_tasks_disabled: bool,
     /// Internal-build flag enabling the `isolation: "remote"` bullet.
     /// 3p builds keep this off because coco-rs ships only the local
-    /// `worktree` isolation runtime. TS parity: `process.env.USER_TYPE
-    /// === 'ant'` in `prompt.ts:273`.
+    /// `worktree` isolation runtime. Only enabled on internal builds.
     pub ant_build: bool,
 }
 
@@ -194,8 +169,6 @@ impl PromptOptions {
 }
 
 /// MCP server tool metadata.
-///
-/// TS: `mcpInfo?: { serverName: string; toolName: string }`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolInfo {
     pub server_name: String,
@@ -205,8 +178,7 @@ pub struct McpToolInfo {
 impl McpToolInfo {
     /// MCP-qualified tool name: `mcp__<server>__<tool>`.
     ///
-    /// TS `toolExecution.ts:287-300` + `mcpStringUtils.ts`. This is the
-    /// canonical name registered in the `ToolRegistry` so that MCP tools
+    /// Canonical name registered in the `ToolRegistry` so that MCP tools
     /// cannot accidentally shadow built-in tools — a hostile or buggy
     /// MCP server advertising a tool named `Read` or `Bash` gets
     /// namespaced as `mcp__foo__Read` instead of overwriting the real
@@ -229,8 +201,7 @@ impl McpToolInfo {
 
 /// Progress update from a tool during execution.
 ///
-/// TS: `ToolProgress<P>` — yielded immediately via onProgress callback.
-/// In Rust, sent via `ctx.progress_tx` channel.
+/// Sent via `ctx.progress_tx` channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolProgress {
     pub tool_use_id: String,
@@ -265,10 +236,9 @@ pub type ProgressReceiver = tokio::sync::mpsc::UnboundedReceiver<ToolProgress>;
 //
 // ## Why two traits
 //
-// TS `Tool<Input, Output>` is generic but TypeScript structural
-// typing makes it free. Rust can't have `dyn DynTool` with associated
-// types, so we split the surface in two: typed (what tools
-// implement) and erased (what the registry stores).
+// Rust can't have `dyn DynTool` with associated types, so we split
+// the surface in two: typed (what tools implement) and erased
+// (what the registry stores).
 
 /// The dyn-safe erased view of [`Tool`]. Stored in `ToolRegistry` as
 /// `Arc<dyn DynTool>` and consumed by every executor / hook / schema
@@ -406,16 +376,14 @@ impl ToolSpec {
 }
 
 // =========================================================================
-// `Tool` — the typed contract every built-in implements (TS-mirror).
+// `Tool` — the typed contract every built-in implements.
 // =========================================================================
 //
-// TS: `Tool<Input extends AnyObject, Output, P extends ToolProgressData>`.
-// The Rust mirror replaces TS's structural generics with associated
-// types `Input` / `Output`. Method bodies see typed structs instead of
-// `serde_json::Value`; field renames are caught at `cargo check`, the
-// schema is auto-derived from `Self::Input` via the `JsonSchema`
-// impl, and `render_for_model(&Self::Output)` stops digging fields out
-// of a `Value`.
+// Associated types `Input` / `Output` replace structural generics.
+// Method bodies see typed structs instead of `serde_json::Value`;
+// field renames are caught at `cargo check`, the schema is auto-derived
+// from `Self::Input` via the `JsonSchema` impl, and
+// `render_for_model(&Self::Output)` stops digging fields out of a `Value`.
 //
 // Adding a new tool:
 //
@@ -541,7 +509,6 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Dynamic description that may vary based on input and context.
     ///
-    /// TS: `description(input, options)` — options provide session/tool context.
     /// Called at tool-call render time when input is fully streamed.
     /// For schema-listing time (no input yet), use [`Tool::prompt`].
     fn description(&self, input: &Self::Input, options: &DescriptionOptions) -> String;
@@ -557,7 +524,6 @@ pub trait Tool: Send + Sync + 'static {
     /// empty default would silently ship a tool the model knows nothing
     /// about, so the compiler (E0046) forces every tool to declare it.
     ///
-    /// TS: async `prompt(options)` — may read permission/agent context.
     async fn prompt(&self, options: &PromptOptions) -> String;
 
     // -- Capability Flags --
@@ -581,11 +547,10 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Whether this tool is **statically** read-only — known to be safe
     /// without inspecting input. A coarse, input-independent companion to
-    /// [`Tool::is_read_only`], mirroring TS `Tool.isReadOnly`-style static
-    /// metadata.
+    /// [`Tool::is_read_only`].
     ///
     /// **Not a security boundary, and no longer a schema filter.** Plan
-    /// mode does NOT narrow the model's tool schema (TS parity); plan-mode
+    /// mode does NOT narrow the model's tool schema; plan-mode
     /// read-only is enforced at *call time* by `coco_permissions` (see
     /// `core/permissions/src/evaluate.rs`), which keys off its own
     /// tool-name allow-list, not this method. Retained as a tool-level
@@ -611,14 +576,13 @@ pub trait Tool: Send + Sync + 'static {
     /// **Invariant**: tools returning `true` MUST NOT mutate
     /// `ctx.app_state` during `execute`. Concurrent tools share a
     /// single `Arc<RwLock<ToolAppState>>`; live writes would race
-    /// with sibling reads. TS parity: `orchestration.ts:30-62` runs
-    /// concurrent tools against a shared `currentContext` snapshot
-    /// and *queues* `setAppState` calls to apply after the batch.
-    /// Rust relies on convention (concurrent tools are read-only —
-    /// Read/Glob/Grep/LSP/etc.) instead of implementing the queue;
-    /// this comment is the contract. Serial unsafe tools
-    /// (`is_concurrency_safe == false`) are the only code path that
-    /// writes `ctx.app_state`.
+    /// with sibling reads. Concurrent tools run against a shared
+    /// `currentContext` snapshot and queue `setAppState` calls to
+    /// apply after the batch. Rust relies on convention (concurrent
+    /// tools are read-only — Read/Glob/Grep/LSP/etc.) instead of
+    /// implementing the queue; this comment is the contract. Serial
+    /// unsafe tools (`is_concurrency_safe == false`) are the only
+    /// code path that writes `ctx.app_state`.
     fn is_concurrency_safe(&self, _input: &Self::Input) -> bool {
         false
     }
@@ -659,24 +623,20 @@ pub trait Tool: Send + Sync + 'static {
     /// output is canonical (e.g. `Read` on a tracked file the model
     /// will read again) opt out so persistence isn't circular.
     ///
-    /// TS: `Tool.maxResultSizeChars` (default `100_000`, clamped by
-    /// `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`). Override per-tool to
-    /// declare opt-out ([`ResultSizeBound::Unbounded`]) or a tighter cap
-    /// ([`ResultSizeBound::Chars`]).
+    /// Default `100_000`, clamped by `DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000`.
+    /// Override per-tool to declare opt-out ([`ResultSizeBound::Unbounded`])
+    /// or a tighter cap ([`ResultSizeBound::Chars`]).
     fn max_result_size_bound(&self) -> crate::tool_result_storage::ResultSizeBound {
         crate::tool_result_storage::DEFAULT_TOOL_MAX_RESULT_SIZE_BOUND
     }
 
     /// MCP server/tool info (for MCP-wrapped tools).
-    ///
-    /// TS: `mcpInfo?: { serverName, toolName }` — identifies MCP origin.
     fn mcp_info(&self) -> Option<&McpToolInfo> {
         None
     }
 
     /// Whether this tool requires user interaction to complete.
     ///
-    /// TS: `requiresUserInteraction?()` — defaults to true.
     /// When false, permission prompts are auto-denied for headless/background agents.
     /// Used by ExitPlanMode (returns false for teammates so they send approval
     /// via mailbox instead of requiring a local permission dialog).
@@ -690,11 +650,6 @@ pub trait Tool: Send + Sync + 'static {
     /// metadata hint for UI rendering and telemetry; does NOT gate
     /// permissions or execution.
     ///
-    /// TS: `Tool.ts:434` `isOpenWorld?(input) -> boolean`. TS uses this
-    /// to tag MCP tools with an "[open-world]" label in the list view
-    /// (`components/mcp/MCPToolListView.tsx:63`) and to set a `openWorld`
-    /// field in `/print` CLI output (`cli/print.ts:1662`).
-    ///
     /// Default is `false` — tools are closed-world unless they opt in.
     /// Dynamic MCP wrappers (`core/tools/src/tools/mcp_tools.rs`) can
     /// override this to forward the annotation from the MCP server.
@@ -705,9 +660,8 @@ pub trait Tool: Send + Sync + 'static {
     /// Whether this tool is sourced from an MCP (Model Context Protocol)
     /// server rather than being a native built-in.
     ///
-    /// TS: `Tool.ts:436` `isMcp?: boolean`. Default derives from
-    /// `mcp_info()`: any tool that advertises `McpToolInfo` is an MCP
-    /// tool.
+    /// Default derives from `mcp_info()`: any tool that advertises
+    /// `McpToolInfo` is an MCP tool.
     fn is_mcp(&self) -> bool {
         self.mcp_info().is_some()
     }
@@ -715,14 +669,12 @@ pub trait Tool: Send + Sync + 'static {
     /// Returns information about whether this tool use is a search or read
     /// operation that should be collapsed into a condensed display in the UI.
     ///
-    /// TS: `isSearchOrReadCommand?(input)` — returns `{ isSearch, isRead, isList? }`.
     fn is_search_or_read_command(&self, _input: &Self::Input) -> Option<SearchReadInfo> {
         None
     }
 
     /// Returns a short string summary of this tool use for compact views.
     ///
-    /// TS: `getToolUseSummary?(input)` — used by background agent progress display.
     fn get_tool_use_summary(&self, _input: &Self::Input) -> Option<String> {
         None
     }
@@ -730,7 +682,6 @@ pub trait Tool: Send + Sync + 'static {
     /// Returns a human-readable present-tense activity description for spinner
     /// display (e.g., "Reading src/foo.ts", "Running bun test").
     ///
-    /// TS: `getActivityDescription?(input)` — falls back to tool name if None.
     fn get_activity_description(&self, _input: &Self::Input) -> Option<String> {
         None
     }
@@ -738,7 +689,6 @@ pub trait Tool: Send + Sync + 'static {
     /// Whether this tool is a transparent wrapper that delegates all rendering
     /// to its progress handler. The wrapper itself shows nothing in the UI.
     ///
-    /// TS: `isTransparentWrapper?()` — used by REPL tool.
     fn is_transparent_wrapper(&self) -> bool {
         false
     }
@@ -746,7 +696,6 @@ pub trait Tool: Send + Sync + 'static {
     /// Returns flattened text of what the tool result shows, for transcript
     /// search indexing.
     ///
-    /// TS: `extractSearchText?(output)` — optional, falls back to heuristic.
     fn extract_search_text(&self, _output: &Self::Output) -> Option<String> {
         None
     }
@@ -754,7 +703,6 @@ pub trait Tool: Send + Sync + 'static {
     /// Returns true when the non-verbose rendering of this output is truncated
     /// (i.e., expanding would reveal more content).
     ///
-    /// TS: `isResultTruncated?(output)` — gates click-to-expand in fullscreen.
     fn is_result_truncated(&self, _output: &Self::Output) -> bool {
         false
     }
@@ -769,7 +717,6 @@ pub trait Tool: Send + Sync + 'static {
     /// validation: cross-field constraints, stateful checks like
     /// read-before-write enforcement, runtime feature gating.
     ///
-    /// TS: `validateInput(input, context)`.
     fn validate_input(&self, _input: &Self::Input, _ctx: &ToolUseContext) -> ValidationResult {
         ValidationResult::Valid
     }
@@ -781,9 +728,9 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Backfill observable input fields for hooks/logging.
     ///
-    /// TS: `backfillObservableInput(input)` — normalizes input before
-    /// hooks see it (e.g., adds default field values, expands aliases).
-    /// Called on a shallow clone; the original input is unchanged.
+    /// Normalizes input before hooks see it (e.g., adds default field
+    /// values, expands aliases). Called on a shallow clone; the
+    /// original input is unchanged.
     ///
     /// **Stays `Value`-typed deliberately** — it operates on the wire
     /// shape (adding legacy field aliases that the typed struct may
@@ -795,14 +742,12 @@ pub trait Tool: Send + Sync + 'static {
 
     /// Tool's own opinion at the central evaluator's step-1c slot.
     ///
-    /// TS parity: `tool.checkPermissions(parsedInput, context)` in
-    /// `permissions.ts`. Tools that need content-specific safety
-    /// checks (Read/Grep/Glob path safety, Bash subcommand parsing,
-    /// Write path validation) override this to return `Deny`/`Ask`
-    /// for unsafe inputs and `Passthrough` otherwise. The default
-    /// `Passthrough` defers entirely to the rule pipeline; this
-    /// matches TS where tools without a `checkPermissions` impl
-    /// behave the same as `() => ({ behavior: 'passthrough' })`.
+    /// Tools that need content-specific safety checks (Read/Grep/Glob
+    /// path safety, Bash subcommand parsing, Write path validation)
+    /// override this to return `Deny`/`Ask` for unsafe inputs and
+    /// `Passthrough` otherwise. The default `Passthrough` defers
+    /// entirely to the rule pipeline; tools without a `check_permissions`
+    /// override behave as `() => Passthrough`.
     ///
     /// The result is consumed by
     /// `coco_permissions::PermissionEvaluator::evaluate_with_tool_check`
@@ -823,7 +768,7 @@ pub trait Tool: Send + Sync + 'static {
     }
 
     /// Project this tool's input down to the security-relevant fields the
-    /// auto-mode classifier should see (TS `Tool.toAutoClassifierInput`).
+    /// auto-mode classifier should see.
     ///
     /// `None` means "no classifier-relevant input" — the classifier then
     /// falls back to the raw input JSON. Security-relevant tools (anything
@@ -867,12 +812,10 @@ pub trait Tool: Send + Sync + 'static {
     /// parts (text + images + documents) that the model sees in the
     /// `tool_result` block.
     ///
-    /// TS parity: `mapToolResultToToolResultBlockParam(data, toolUseId)`
-    /// in every TS Tool. The Rust signature drops `tool_use_id`
-    /// because the executor wraps the parts at message-creation time,
-    /// not the tool. **The argument is `&Self::Output` (typed)** —
-    /// no more `data.get("xxx").and_then(...)` field-mining at the
-    /// call site.
+    /// The Rust signature drops `tool_use_id` because the executor wraps the
+    /// parts at message-creation time, not the tool.
+    /// **The argument is `&Self::Output` (typed)** —
+    /// no more `data.get("xxx").and_then(...)` field-mining at the call site.
     ///
     /// # Default behaviour
     ///
@@ -1116,8 +1059,7 @@ impl<T: Tool> DynTool for T {
             // Deserialization failure must NOT become `None`: `None` reads as
             // "no security relevance" downstream. A malformed input is exactly
             // what the gate must still inspect, so fall back to the raw JSON
-            // (fail toward classification). TS `toCompactBlock` does the same
-            // (`catch { encoded = input }`).
+            // (fail toward classification) — fall back to the raw JSON.
             Err(_) => Some(serde_json::to_string(input).unwrap_or_default()),
         }
     }
@@ -1171,9 +1113,9 @@ impl<T: Tool> DynTool for T {
 /// payload (when `data` is `Value::String`) or the JSON-stringified
 /// `data` for any other shape.
 ///
-/// This is what TS tools whose `mapToolResultToToolResultBlockParam`
-/// returns plain text do — the model sees the underlying message
-/// without a `"…"` JSON-quote wrapper.
+/// Tools whose `mapToolResultToToolResultBlockParam` returns plain text
+/// use this so the model sees the underlying message without a `"…"`
+/// JSON-quote wrapper.
 ///
 /// Most typed-output tools won't need this; it stays available for
 /// `Output = Value` cases (MCP, dynamic schema) and migrations in

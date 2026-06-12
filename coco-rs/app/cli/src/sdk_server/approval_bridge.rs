@@ -7,9 +7,8 @@
 //! [`SdkServerState::send_server_request`] and translates the client's
 //! `ApprovalResolveParams` reply back into [`ToolPermissionResolution`].
 //!
-//! TS reference: `canUseTool()` installed by `createStructuredIOQueryConfig`
-//! in `src/cli/structuredIO.ts` — the SDK client is the ultimate authority
-//! for any tool gated on `ask` semantics.
+//! The SDK client is the ultimate authority for any tool gated on
+//! `ask` semantics.
 //!
 //! See `event-system-design.md` §6.
 
@@ -103,11 +102,9 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             "SdkPermissionBridge: asking client for approval"
         );
 
-        // TS `useNotifyAfterTimeout('Claude Code is waiting for your input',
-        // 'permission_prompt')` (`PermissionRequest.tsx:190`): fire the
-        // Notification hook before blocking on the client's reply so the
-        // hook runs in lockstep with TS. Best-effort — a runtime not yet
-        // installed (e.g. tests) leaves the hook unfired.
+        // Fire the Notification hook before blocking on the client's reply.
+        // Best-effort — a runtime not yet installed (e.g. tests) leaves
+        // the hook unfired.
         if let Some(runtime) = self.state.session_runtime.read().await.clone() {
             let title = format!("Permission request: {}", request.tool_name);
             runtime
@@ -126,8 +123,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             .await
             .map_err(|e| format!("send_server_request failed: {e}"))?;
 
-        // Interpret the reply. TS clients reply with
-        // `ApprovalResolveParams`-shaped payloads; we parse that.
+        // Interpret the reply — parse the `ApprovalResolveParams` shape.
         match reply {
             JsonRpcMessage::Response(r) => {
                 let parsed: ApprovalResolveParams = serde_json::from_value(r.result)
@@ -146,16 +142,13 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                     // applies + persists the same shape, so wiring it
                     // here is a one-line addition.
                     applied_updates: Vec::new(),
-                    // TS parity: `permissionDecision.updatedInput` at
-                    // `services/tools/toolExecution.ts:1130-1131`. The
-                    // protocol carries it on `ApprovalResolveParams`
-                    // (`client_request.rs:226-228`); SDK clients ship
+                    // The protocol carries updated input on
+                    // `ApprovalResolveParams`; SDK clients ship
                     // `AskUserQuestion` answers (and any other pre-tool
                     // input rewrite) here.
                     updated_input: parsed.updated_input,
-                    // TS parity: `PermissionAllowDecision.contentBlocks`
-                    // (`types/permissions.ts:183`) — image attachments
-                    // pasted alongside the answer ride this slot.
+                    // Image attachments pasted alongside the answer ride
+                    // this slot.
                     content_blocks: parsed.content_blocks,
                 })
             }

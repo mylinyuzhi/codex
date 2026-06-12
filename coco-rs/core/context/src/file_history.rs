@@ -1,8 +1,6 @@
 //! File edit tracking with per-turn snapshots and content-addressed backups.
 //!
-//! TS: fileHistory.ts (~1110 LOC) — content-addressed backups, rewind, session resume.
-//!
-//! Three-phase async pattern (from TS):
+//! Three-phase async pattern:
 //! 1. Capture state (read current)
 //! 2. Async I/O (backup files outside state lock)
 //! 3. Commit (update state with fresh read)
@@ -28,9 +26,8 @@ const MAX_SNAPSHOTS: usize = 100;
 ///
 /// Called by `make_snapshot` after a fresh snapshot is committed,
 /// once per file whose backup name changed between the previous and
-/// new snapshot. Mirrors TS `notifyVscodeSnapshotFilesUpdated`
-/// (`fileHistory.ts:1054-1098`). The bridge implementation forwards
-/// these to the IDE-side MCP so the editor can refresh open buffers.
+/// new snapshot. The bridge implementation forwards these to the
+/// IDE-side MCP so the editor can refresh open buffers.
 #[async_trait]
 pub trait FileUpdateSink: Send + Sync {
     async fn notify(
@@ -50,9 +47,7 @@ pub trait FileUpdateSink: Send + Sync {
 /// entry to the JSONL transcript so that on resume, the state can
 /// be rebuilt by replaying the chain.
 ///
-/// TS: `recordFileHistorySnapshot` →
-/// `Project::insertFileHistorySnapshot` → JSONL append. We pass
-/// `serde_json::Value` instead of the typed snapshot to keep the
+/// We pass `serde_json::Value` instead of the typed snapshot to keep the
 /// dependency edge from coco-context up to coco-session, not the
 /// other way (coco-session would otherwise need to depend on
 /// coco-context just for the typed shape).
@@ -114,11 +109,8 @@ impl std::fmt::Debug for FileHistoryState {
 
 /// A snapshot of file states at a particular point in the conversation.
 ///
-/// Wire shape is snake_case JSON; semantic fields match TS
-/// `FileHistorySnapshot` (`fileHistory.ts:36`). Timestamps are
-/// `chrono::DateTime<Utc>` so they serialize to RFC 3339 strings —
-/// this is the Rust-idiomatic choice for date fields, and it's also
-/// what TS produces for `Date` values via `JSON.stringify`.
+/// Wire shape is snake_case JSON. Timestamps are `chrono::DateTime<Utc>`
+/// serialized to RFC 3339 strings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileHistorySnapshot {
     /// Message UUID that triggered this snapshot.
@@ -180,7 +172,6 @@ fn resolve_backup_path(config_home: &Path, session_id: &str, backup_name: &str) 
 
 /// Check if the origin file has changed compared to a backup.
 ///
-/// Mirrors TS `compareStatsAndContent` (`fileHistory.ts:640-672`):
 /// 1. Both missing → unchanged.
 /// 2. One missing → changed.
 /// 3. Different size → changed.
@@ -209,7 +200,7 @@ async fn origin_file_changed(origin: &Path, backup_path: &Path) -> Result<bool> 
         return Ok(true);
     }
 
-    // chmod-only diffs: TS compares `mode` to detect permission flips.
+    // chmod-only diffs: compare `mode` to detect permission flips.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -248,9 +239,8 @@ async fn read_backup_content(
 }
 
 /// Accumulate line-level diff stats for one file path into `stats`.
-/// Skips identical content. Line counting matches TS `diffLines`:
-/// count `\n` boundaries in each chunk, treating a trailing
-/// no-newline chunk as +1 line.
+/// Skips identical content. Line counting: count `\n` boundaries in each
+/// chunk, treating a trailing no-newline chunk as +1 line.
 fn accumulate_diff(
     stats: &mut DiffStats,
     file_path: &Path,
@@ -328,14 +318,12 @@ impl FileHistoryState {
     /// re-edits of the same file inside the same turn observe the
     /// file is already tracked and skip (Phase 1).
     ///
-    /// TS-parity: `fileHistory.ts:86-193 fileHistoryTrackEdit`:
-    /// - Phase 1 skip is `mostRecent.trackedFileBackups[path]` —
+    /// - Phase 1 skip is keyed on the most-recent snapshot's tracked files —
     ///   **independent of `messageId`**;
     /// - Phase 2 calls `createBackup(filePath, 1)` — version literal;
     /// - Phase 3 writes back the same `mostRecentSnapshot` with the
-    ///   new backup spliced in, and `recordFileHistorySnapshot(...,
-    ///   true)` — `isSnapshotUpdate = true`. The OUTER metadata-entry
-    ///   `messageId` is the `messageId` parameter (the message
+    ///   new backup spliced in (`isSnapshotUpdate = true`). The OUTER
+    ///   metadata-entry `messageId` is the `messageId` parameter (the message
     ///   currently being authored); the INNER `snapshot.messageId`
     ///   stays as the snapshot's own messageId (unchanged).
     pub async fn track_edit(
@@ -353,8 +341,8 @@ impl FileHistoryState {
         // {hash}@v1 backup on every repeat call.
         //
         // No snapshot yet → bootstrap an empty one for `message_id`
-        // and proceed. This is a small deviation from TS (which
-        // `logError`s and returns) but lets the typical turn
+        // and proceed (the original `logError`s and returns here, but
+        // this approach lets the typical turn
         // lifecycle (`make_snapshot` → tool → `track_edit`) and the
         // edge case (tool runs before the per-turn `make_snapshot`)
         // both work without callers having to know which path they're
@@ -391,7 +379,7 @@ impl FileHistoryState {
                         dest.display()
                     ))
                 })?;
-                // Preserve file permissions (TS: chmod(backupPath, srcStats.mode))
+                // Preserve file permissions (chmod backup to match source mode).
                 #[cfg(unix)]
                 if let Ok(meta) = fs::metadata(file_path).await {
                     let _ = fs::set_permissions(&dest, meta.permissions()).await;
@@ -424,8 +412,7 @@ impl FileHistoryState {
             return Ok(());
         };
         if snapshot.tracked_file_backups.contains_key(file_path) {
-            // Lost the race; the other writer won — leave its backup
-            // intact (matches TS no-op return in the racy branch).
+            // Lost the race; the other writer won — leave its backup intact.
             return Ok(());
         }
         snapshot
@@ -498,7 +485,7 @@ impl FileHistoryState {
                         ensure_parent_dir(&dest).await?;
                         let size = content.len() as u64;
                         fs::write(&dest, &content).await?;
-                        // Preserve file permissions (TS: chmod(backupPath, srcStats.mode))
+                        // Preserve file permissions (chmod backup to match source mode).
                         #[cfg(unix)]
                         if let Ok(meta) = fs::metadata(file_path).await {
                             let _ = fs::set_permissions(&dest, meta.permissions()).await;
@@ -533,13 +520,11 @@ impl FileHistoryState {
         };
         self.snapshots.push(new_snapshot.clone());
         self.enforce_cap();
-        // TS: tengu_file_history_snapshot_success
         coco_otel::events::emit_file_snapshot_success(
             self.tracked_files.len(),
             self.snapshots.len(),
         );
-        // TS: recordFileHistorySnapshot(messageId, snapshot, false)
-        // — `false` appends a fresh entry; resume rebuilds the chain
+        // `false` appends a fresh entry; resume rebuilds the chain
         // by reading these in order.
         if let Some(sink) = self.sink.clone()
             && let Ok(snap_json) = serde_json::to_value(&new_snapshot)
@@ -548,7 +533,6 @@ impl FileHistoryState {
         }
 
         // IDE-bridge: notify per-file content updates.
-        // TS: notifyVscodeSnapshotFilesUpdated (`fileHistory.ts:1054`).
         if let Some(file_sink) = self.file_update_sink.clone() {
             for (path, new_backup) in &new_snapshot.tracked_file_backups {
                 let old_backup = prior_snapshot
@@ -603,7 +587,6 @@ impl FileHistoryState {
                 return Err(e);
             }
         };
-        // TS: tengu_file_history_rewind_success
         coco_otel::events::emit_file_rewind_success(
             snapshot.tracked_file_backups.len(),
             changed.len(),
@@ -618,7 +601,6 @@ impl FileHistoryState {
     /// - `Some(None)` — file did not exist at v1 (delete it on rewind)
     /// - `None` — no v1 entry for this path; cannot resolve
     ///
-    /// TS: `getBackupFileNameFirstVersion` (`fileHistory.ts:847-862`).
     /// Used by `apply_snapshot` and `get_diff_stats` when the target
     /// snapshot has no entry for a file that became tracked later
     /// (e.g. file first edited in turn 5, rewinding to turn 7's
@@ -651,7 +633,7 @@ impl FileHistoryState {
         let mut stats = DiffStats::default();
         // Walk `tracked_files`, falling back to v1 backup for files
         // not in the target snapshot's map. Mirrors `apply_snapshot`'s
-        // coverage. TS: `fileHistoryGetDiffStats` (`fileHistory.ts:414`).
+        // coverage.
         for file_path in &self.tracked_files {
             let from_backup = match snapshot.tracked_file_backups.get(file_path) {
                 Some(b) => b.backup_file_name.clone(),
@@ -684,13 +666,6 @@ impl FileHistoryState {
     /// `from_message_id` must resolve to a snapshot — otherwise the
     /// caller has nothing to compare against and we return an error
     /// matching [`Self::get_diff_stats`]'s contract.
-    ///
-    /// TS: `MessageSelector.tsx:722-765`'s
-    /// `computeDiffStatsBetweenMessages` walks tool results' typed
-    /// `structuredPatch` to derive the same numbers. coco-rs reads
-    /// the file-history snapshot pair instead — same observable
-    /// row labels without depending on a typed tool-output side
-    /// channel that does not exist in coco_messages.
     pub async fn get_diff_stats_between(
         &self,
         from_message_id: &str,
@@ -753,7 +728,7 @@ impl FileHistoryState {
         let Some(snapshot) = self.snapshots.iter().rfind(|s| s.message_id == message_id) else {
             return false;
         };
-        // Walk tracked_files with v1 fallback (TS parity).
+        // Walk tracked_files with v1 fallback.
         for file_path in &self.tracked_files {
             let backup_file_name = match snapshot.tracked_file_backups.get(file_path) {
                 Some(b) => b.backup_file_name.clone(),
@@ -789,12 +764,9 @@ impl FileHistoryState {
     /// Rebuild state from persisted snapshots (session resume).
     ///
     /// `snapshot_sequence` is the **count of snapshots**, not the
-    /// maximum per-file version. TS-parity:
-    /// `fileHistory.ts:912-916` returns `snapshotSequence: snapshots.length`
-    /// — the UI's `useGitDiffStats` activity polling treats this as a
-    /// monotonic tick. Using max_version would let one heavily-edited
-    /// file inflate the counter independently of how many snapshots
-    /// actually exist.
+    /// maximum per-file version. The UI's activity polling treats this
+    /// as a monotonic tick; using max_version would let one heavily-edited
+    /// file inflate the counter independently of how many snapshots exist.
     pub fn restore_from_snapshots(snapshots: Vec<FileHistorySnapshot>) -> Self {
         let mut tracked_files = HashSet::new();
         for snapshot in &snapshots {
@@ -813,8 +785,7 @@ impl FileHistoryState {
 
     /// Install an IDE-bridge file-update sink. After each
     /// `make_snapshot`, files whose backup name changed will be
-    /// notified through this sink. Mirrors TS
-    /// `notifyVscodeSnapshotFilesUpdated`.
+    /// notified through this sink.
     pub fn set_file_update_sink(&mut self, sink: Arc<dyn FileUpdateSink>) {
         self.file_update_sink = Some(sink);
     }
@@ -833,8 +804,6 @@ async fn apply_snapshot(
     // backups). For files the snapshot has no entry for, fall back
     // to their first-version backup so files first edited mid-
     // conversation are restorable to any earlier rewind point.
-    // TS: `applySnapshot` walks `state.trackedFiles` and uses
-    // `getBackupFileNameFirstVersion` (`fileHistory.ts:537-559`).
     for file_path in &state.tracked_files {
         let backup_file_name = match snapshot.tracked_file_backups.get(file_path) {
             Some(backup) => backup.backup_file_name.clone(),
@@ -1000,16 +969,14 @@ async fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
 
 /// Copy file history backups for session resume (hard-link with copy fallback).
 ///
-/// **Replay step (`snapshots` + `sink`)**: TS-parity
-/// `copyFileHistoryForResume` (`utils/fileHistory.ts:922-1046`) does
-/// not stop at copying backup files — after each successful copy it
-/// calls `recordFileHistorySnapshot(messageId, snapshot, false)` so
-/// the resumed session's transcript contains the snapshot chain.
-/// Without that replay the new transcript has no
-/// `file-history-snapshot` entries and the rewind picker can't reach
-/// any pre-resume checkpoint. Pass the prior session's `snapshots` and
-/// a sink wired to the **new** session's JSONL to replicate the
-/// behavior. Callers that only want the file-copy half (e.g. tests)
+/// **Replay step (`snapshots` + `sink`)**: does not stop at copying backup
+/// files — after each successful copy it calls
+/// `recordFileHistorySnapshot(messageId, snapshot, false)` so the resumed
+/// session's transcript contains the snapshot chain. Without that replay
+/// the new transcript has no `file-history-snapshot` entries and the rewind
+/// picker can't reach any pre-resume checkpoint. Pass the prior session's
+/// `snapshots` and a sink wired to the **new** session's JSONL to replicate
+/// the behavior. Callers that only want the file-copy half (e.g. tests)
 /// can pass `(&[], None)`.
 pub async fn copy_file_history_for_resume(
     config_home: &Path,
@@ -1043,9 +1010,9 @@ pub async fn copy_file_history_for_resume(
         }
     }
 
-    // Replay snapshot chain into the new session's transcript. TS
-    // emits `isSnapshotUpdate: false` for every replayed snapshot,
-    // re-creating the chain rather than diff-overlaying.
+    // Replay snapshot chain into the new session's transcript.
+    // `isSnapshotUpdate: false` for every replayed snapshot re-creates
+    // the chain rather than diff-overlaying.
     if let Some(sink) = sink {
         for snapshot in snapshots {
             let Ok(snap_json) = serde_json::to_value(snapshot) else {

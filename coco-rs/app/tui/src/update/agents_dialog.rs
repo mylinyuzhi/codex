@@ -1,11 +1,8 @@
 //! Key dispatch for the `/agents` 2-tab dialog.
 //!
-//! TS parity:
-//! - Tab switch: `←` / `→` (`E24.js:261` footer hint, dispatched by
-//!   `_G.js:123-127`).
+//! - Tab switch: `←` / `→`.
 //! - List nav: `↑` / `↓` per tab.
-//! - Running tab `X` (case-insensitive): cancel highlighted task —
-//!   TS `V24.js:71-82` `V.abortController?.abort()`.
+//! - Running tab `X` (case-insensitive): cancel highlighted task.
 //! - Library tab `Enter` on an editable agent row → fork `$EDITOR`
 //!   against the markdown source; on `Create new` → open the inline
 //!   4-step wizard (name → description → source → confirm); on the
@@ -103,10 +100,8 @@ async fn on_submit(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>)
             on_library_submit(state, command_tx).await;
         }
         AgentsDialogTab::Running => {
-            // Running tab Enter currently no-ops. TS `V24.js:64-70`
-            // opens a task-detail submenu — coco-rs surfaces detail via
-            // `Ctrl+T` on the inline activity panel today, so the
-            // dialog leaves it unbound.
+            // Running tab Enter currently no-ops; detail is surfaced
+            // via `Ctrl+T` on the inline activity panel.
         }
     }
 }
@@ -257,10 +252,9 @@ fn wizard_input_char(state: &mut AppState, c: char) -> bool {
     };
     match step {
         CreateWizardStep::Name => {
-            // TS-aligned input filter: only accept characters legal
-            // in the final identifier. Whitespace / punctuation /
-            // non-ASCII letters get rejected immediately rather than
-            // bouncing off a deferred Enter-time validation.
+            // Only accept characters legal in the final identifier.
+            // Whitespace / punctuation / non-ASCII letters get rejected
+            // immediately rather than bouncing off a deferred validation.
             if !is_valid_name_char(c) {
                 return false;
             }
@@ -483,8 +477,7 @@ async fn wizard_advance(state: &mut AppState, command_tx: &mpsc::Sender<UserComm
         }
         CreateWizardStep::Source => {
             // Source → Confirm gives the user one last look before
-            // anything hits the filesystem. TS `CreateAgentWizard`
-            // has the same review screen.
+            // anything hits the filesystem.
             if let Some(w) = wizard_mut(state) {
                 w.step = CreateWizardStep::Confirm;
                 w.error = None;
@@ -648,8 +641,7 @@ fn focused_running_task_id(state: &AppState) -> Option<String> {
         .filter(|s| s.status == SubagentStatus::Running)
         .collect();
     let row = active.get(dialog.running_cursor)?;
-    // SubagentInstance.agent_id is the TS `Task.id` — TaskManager
-    // keys its registry on this same id (set during `Task::create`).
+    // SubagentInstance.agent_id is the TaskManager registry key.
     Some(row.agent_id.clone())
 }
 

@@ -62,10 +62,9 @@ fn freeform_provider_tool(ff: coco_tool_runtime::FreeformToolSpec) -> LanguageMo
 /// Per-turn prompt + the post-budget message snapshot the engine threads
 /// into every tool invocation's `ctx.messages`.
 ///
-/// TS parity: `query.ts:548` sets `toolUseContext.messages =
-/// messagesForQuery` after `applyToolResultBudget` runs. Coco-rs returns
-/// the snapshot here so the engine can hand the same `Arc<Vec<Arc<Message>>>`
-/// to `ToolContextFactory::build` for the same turn.
+/// The snapshot is returned here so the engine can hand the same
+/// `Arc<Vec<Arc<Message>>>` to `ToolContextFactory::build` for the same
+/// turn.
 pub(crate) struct BuiltPrompt {
     /// Normalized LLM messages — system prompt + per-turn working copy
     /// after `apply_tool_result_budget_to_prompt`, ready for the API.
@@ -79,7 +78,7 @@ impl QueryEngine {
     /// Build the LLM prompt + the post-budget message snapshot from
     /// history. The snapshot is shared (via `Arc`) with every per-turn
     /// `ToolUseContext.messages` so tools observe the same view the
-    /// model just received — TS parity `query.ts:548`.
+    /// model just received.
     pub(crate) async fn build_prompt(&self, history: &MessageHistory) -> BuiltPrompt {
         let mut prompt = Vec::new();
 
@@ -87,9 +86,8 @@ impl QueryEngine {
         //
         //   1. If `coco_subagent::is_coordinator_mode(features)` is on, the
         //      leader becomes a coordinator and uses the coordinator-mode
-        //      system prompt verbatim (TS `coordinatorMode.ts:110-300`).
-        //      The `simple_mode` toggle (TS `CLAUDE_CODE_SIMPLE`) maps to
-        //      `EnvKey::CocoSimple` and narrows the worker tool list.
+        //      system prompt verbatim. The `simple_mode` toggle
+        //      (`EnvKey::CocoSimple`) narrows the worker tool list.
         //   2. Otherwise: explicit config override > built-in default +
         //      CLAUDE.md discovery.
         let system_text = if coco_subagent::is_coordinator_mode(&self.config.features) {
@@ -110,14 +108,11 @@ impl QueryEngine {
 
         // Pre-build hook: apply staged-collapse commits so each
         // archived range is a single placeholder rather than full turns.
-        // TS: query.ts:441 `applyCollapsesIfNeeded()` runs before every
-        // prompt build. No-op when collapse is inactive.
+        // No-op when collapse is inactive.
         //
         // Default path (no collapse): `history.to_vec()` returns the
         // engine's `Vec<Arc<Message>>` — N atomic refcount increments,
-        // no deep `Message` clones. TS parity: `[...messagesAfterCompactBoundary]`
-        // is JS shallow array copy (pointer-only), which is exactly
-        // what an Arc-vec clone gives us.
+        // no deep `Message` clones (pointer-only shallow copy).
         let mut messages_for_api: Vec<Arc<Message>> = if self.is_collapse_active() {
             if let Some(ledger) = &self.staged_ledger {
                 let commits: Vec<_> = match ledger.try_lock() {
@@ -162,9 +157,8 @@ impl QueryEngine {
     /// replacements pay a deep `Message` clone + fresh `Arc::new`. The
     /// remaining N-K entries keep the parent Arc that
     /// `MessageHistory` still references — verbose bodies stay
-    /// available for transcript / resume reads. TS parity:
-    /// `replaceToolResultContents` in `toolResultStorage.ts:699-726`
-    /// passes unchanged messages through by reference.
+    /// available for transcript / resume reads. Unchanged messages
+    /// pass through by reference.
     async fn apply_tool_result_budget_to_prompt(&self, messages: &mut Vec<Arc<Message>>) {
         let budget = &self.config.compact.tool_result_budget;
         if !budget.enabled {
@@ -281,9 +275,9 @@ impl QueryEngine {
                 // provider_metadata) + the short replacement body.
                 // The original's verbose `output.value` (which can be
                 // megabytes for grep/find-style tools) is never
-                // memcopied — TS parity: `replaceToolResultContents`
-                // spreads `{...block, content: replacement}` without
-                // copying the discarded content string.
+                // memcopied — the rewrite spreads `{...block, content:
+                // replacement}` without copying the discarded content
+                // string.
                 let new_msg = match rewrite_tool_result_to_placeholder(orig, replacement) {
                     Some(rebuilt) => Message::ToolResult(rebuilt),
                     None => {
@@ -314,11 +308,10 @@ impl QueryEngine {
 
     /// Build tool definitions for the LLM (function tool schemas).
     ///
-    /// TS parity: each `Tool::prompt(&PromptOptions)` call returns the
-    /// description the model sees that turn. Agent/Skill tools use
-    /// this hook to inject live runtime state (current agent / skill
-    /// listings) into their description. For tools that don't
-    /// override `prompt`, the trait default delegates to
+    /// Each `Tool::prompt(&PromptOptions)` call returns the description the
+    /// model sees that turn. Agent/Skill tools use this hook to inject live
+    /// runtime state (current agent / skill listings) into their description.
+    /// For tools that don't override `prompt`, the trait default delegates to
     /// `description()`, preserving the legacy behavior.
     pub(crate) async fn build_tool_definitions(
         &self,
@@ -448,11 +441,9 @@ impl QueryEngine {
             session_plan_file: None,
             permission_rule_source_roots: self.config.permission_rule_source_roots.clone(),
         };
-        // Round 7: thread the agent catalog + connected MCP servers
-        // through to PromptOptions so AgentTool::prompt can render
-        // the dynamic per-agent listing with MCP-availability filter.
-        // TS parity: `AgentTool.tsx:218-225` filters agents by
-        // `mcpServersWithTools` before passing to `getPrompt`.
+        // Thread the agent catalog + connected MCP servers through to
+        // PromptOptions so AgentTool::prompt can render the dynamic
+        // per-agent listing with MCP-availability filter.
         let agent_catalog = self.agent_catalog.clone();
         // Read the MCP-ready set off the engine's installed handle
         // (`with_mcp_handle` at session bootstrap). When unset
@@ -466,18 +457,16 @@ impl QueryEngine {
             &self.config.features,
             self.config.is_non_interactive,
         );
-        // TS parity: `isPlanModeInterviewPhaseEnabled()` —
-        // settings-only in coco-rs (no Growthbook, no
-        // `USER_TYPE=ant`, no env var). See `core/context/CLAUDE.md`.
+        // `isPlanModeInterviewPhaseEnabled()` is settings-only
+        // (no Growthbook, no env var). See `core/context/CLAUDE.md`.
         let is_plan_interview_phase = matches!(
             self.config.plan_mode_settings.workflow,
             coco_config::PlanModeWorkflow::Interview
         );
 
-        // TS `prompt.ts:222-231,259-283` — these flags shape the
-        // model-visible AgentTool description. We resolve them from
-        // env / config / runtime state and let
-        // `AgentToolPromptRenderer` swap section bodies accordingly.
+        // These flags shape the model-visible AgentTool description.
+        // Resolved from env / config / runtime state and forwarded to
+        // `AgentToolPromptRenderer` to swap section bodies accordingly.
         let background_tasks_disabled =
             coco_config::env::is_env_truthy(coco_config::EnvKey::CocoBackgroundTasksDisable);
         let agent_list_via_attachment =
@@ -527,8 +516,7 @@ impl QueryEngine {
 
         // Session context for `Tool::tool_spec`. Lets AgentTool drop
         // `run_in_background` from its model-facing schema when the runtime
-        // would silently veto it. TS parity:
-        // `AgentTool.tsx:110-125 lazySchema().omit({...})`.
+        // would silently veto it.
         let schema_ctx = coco_tool_runtime::SchemaContext {
             background_tasks_disabled,
             fork_mode_active: fork_enabled,
@@ -900,9 +888,8 @@ fn replace_tool_result_content(tr: &mut ToolResultMessage, replacement: &str) ->
 /// immediately overwrite it with a ~200-byte `<persisted-output>`
 /// preview).
 ///
-/// Preserves TS-parity metadata (TS `replaceToolResultContents` spreads
-/// `{ ...block, content: replacement }`, keeping `tool_use_id` /
-/// `tool_name` / `cache_control` /etc.):
+/// Preserves metadata (`tool_use_id` / `tool_name` / `cache_control`
+/// /etc.):
 ///
 /// - `uuid` / `tool_use_id` / `tool_id` / `is_error` on the outer
 ///   `ToolResultMessage` are copied / cheaply cloned.

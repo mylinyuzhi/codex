@@ -174,13 +174,13 @@ async fn missing_argument_hint_becomes_empty_string() {
         .with_command_registry(Arc::new(tokio::sync::RwLock::new(Arc::new(registry))));
     let commands = boot.commands().await;
     assert_eq!(commands.len(), 1);
-    // TS `argumentHint` is REQUIRED; we default to empty string when None.
+    // `argumentHint` is REQUIRED on the wire; we default to empty string when None.
     assert_eq!(commands[0].argument_hint, "");
 }
 
 #[tokio::test]
 async fn output_style_round_trip() {
-    // TS-canonical built-in style names are `default`, `Explanatory`,
+    // Built-in style names are `default`, `Explanatory`,
     // `Learning` — verify round-trip preserves case.
     let boot = CliInitializeBootstrap::new("Explanatory".into());
     assert_eq!(boot.output_style().await, "Explanatory");
@@ -240,9 +240,8 @@ async fn account_api_key_maps_to_first_party() {
     });
     let account = boot.account().await;
     assert_eq!(account.api_provider, Some(SdkApiProvider::FirstParty));
-    // `token_source` is intentionally None — coco-rs doesn't track TS's
-    // canonical token-source strings, so we leave the field absent rather than send a string
-    // TS clients won't recognize.
+    // `token_source` is intentionally None — we leave the field absent
+    // rather than send a string clients won't recognize.
     assert!(account.token_source.is_none());
     assert!(account.email.is_none());
     // Key is NEVER exposed on the wire.
@@ -290,11 +289,10 @@ async fn account_oauth_does_not_leak_access_token() {
 }
 
 #[tokio::test]
-async fn account_third_party_providers_match_ts_undefined_semantics() {
-    // TS `getAccountInformation()` returns `undefined` for non-FirstParty
-    // providers (see TS `auth.ts:1866`). coco-rs returns a bare
-    // `SdkAccountInfo::default()` which serializes to `{}` — the closest
-    // analogue for an optional `account` field on the wire.
+async fn account_third_party_providers_return_empty_account() {
+    // Non-FirstParty providers return a bare `SdkAccountInfo::default()`
+    // which serializes to `{}` — the closest analogue for an optional
+    // `account` field on the wire.
     use coco_inference::auth::AuthMethod;
 
     for auth in [

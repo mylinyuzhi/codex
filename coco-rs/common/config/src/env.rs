@@ -39,20 +39,17 @@ pub enum EnvKey {
     /// Entrypoint label written to the concurrent-sessions PID registry
     /// (`<config_home>/sessions/{pid}.json`). Identifies *how* the
     /// session was started ("sdk-py", "tmux-bg", "cli-interactive", …)
-    /// so `claude ps` / `coco ps` can attribute live sessions. Optional;
-    /// missing means the field is omitted from the registry record.
-    /// TS parity: `CLAUDE_CODE_ENTRYPOINT` in `utils/concurrentSessions.ts`.
+    /// so `coco ps` can attribute live sessions. Optional; missing means
+    /// the field is omitted from the registry record.
     CocoEntrypoint,
     /// SessionKind override for the concurrent-sessions PID registry.
     /// Accepted values: `bg`, `daemon`, `daemon-worker`. Anything else
-    /// (or unset) means the session registers as `interactive`. TS
-    /// parity: `CLAUDE_CODE_SESSION_KIND` in `utils/concurrentSessions.ts`.
+    /// (or unset) means the session registers as `interactive`.
     CocoSessionKind,
     CocoBashAutoBackgroundOnTimeout,
-    /// Truthy ⇒ snap the bash cwd back to `originalCwd` after every
-    /// command, regardless of whether the cwd is inside the allowed
-    /// working set. TS parity: `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`
-    /// in `utils/envUtils.ts::shouldMaintainProjectWorkingDir`.
+    /// Truthy ⇒ snap the bash cwd back to the original working directory after
+    /// every command, regardless of whether the cwd is inside the allowed
+    /// working set.
     CocoBashMaintainProjectWorkingDir,
     CocoBubblewrap,
     CocoConfigDir,
@@ -64,13 +61,11 @@ pub enum EnvKey {
     /// (default 1 MiB). Overrides `diagnostics.wire_dump_max_body_bytes`.
     CocoDiagnosticsWireMaxBytes,
     /// Truthy ⇒ suppress the git-status block in the system prompt; defined-falsy
-    /// ⇒ force it on (overriding the `include_git_instructions` setting). TS
-    /// parity: `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` in `utils/gitSettings.ts`.
+    /// ⇒ force it on (overriding the `include_git_instructions` setting).
     CocoDisableGitInstructions,
     CocoDisableFastMode,
     /// Truthy ⇒ skip loading managed/policy-level skills from the platform
-    /// managed skills directory. TS parity:
-    /// `CLAUDE_CODE_DISABLE_POLICY_SKILLS` in `skills/loadSkillsDir.ts`.
+    /// managed skills directory.
     CocoDisablePolicySkills,
     CocoDisableShellSnapshot,
     CocoFileReadIgnorePatterns,
@@ -108,18 +103,14 @@ pub enum EnvKey {
     CocoMaxContextTokens,
     /// Hard cap on consecutive `StructuredOutput` retries before the
     /// engine surfaces `error_max_structured_output_retries` and ends
-    /// the turn. Replaces ad-hoc `std::env::var` reads in the engine
-    /// loop. TS parity: `QueryEngine.ts:1005-1047`'s
-    /// `MAX_STRUCTURED_OUTPUT_RETRIES` constant (default `5`).
+    /// the turn (default `5`).
     CocoMaxStructuredOutputRetries,
     CocoMaxToolUseConcurrency,
     /// Full-path override for the auto-memory directory. When set, replaces
     /// the computed `<config_home>/projects/<sanitized-canonical-git-root>/memory/`
-    /// path. Used by Cowork-style deployments where the per-session cwd
-    /// contains a process-name suffix and would otherwise produce a
-    /// different project key per session.
-    ///
-    /// TS source: `memdir/paths.ts:163` (operator override slot).
+    /// path. Used by deployments where the per-session cwd contains a
+    /// process-name suffix and would otherwise produce a different project
+    /// key per session.
     CocoMemoryPathOverride,
     /// Force-disable turn-end memory extraction. Wins over settings.
     CocoMemoryExtractionDisable,
@@ -130,14 +121,13 @@ pub enum EnvKey {
     /// Force-enable KAIROS daily-log mode (assistant-mode append-only logs).
     CocoMemoryKairos,
     /// Override the team-memory sync endpoint base URL. Defaults to the
-    /// Anthropic API base. TS: `process.env.TEAM_MEMORY_SYNC_URL`.
+    /// Anthropic API base.
     CocoTeamMemorySyncUrl,
     /// Free-form policy / guidance text injected verbatim into the
     /// auto-memory system-prompt section's "extra guidelines" slot.
-    /// Used by Cowork-style deployments to push operator-controlled
-    /// memory governance into the model's context without modifying
-    /// the crate-bundled prompt copy. TS source:
-    /// `memdir.ts:441-446` reads `CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES`.
+    /// Used by deployments to push operator-controlled memory governance
+    /// into the model's context without modifying the crate-bundled
+    /// prompt copy.
     CocoCoworkMemoryExtraGuidelines,
     CocoMcpToolTimeoutMs,
     CocoModel,
@@ -147,15 +137,12 @@ pub enum EnvKey {
     /// Override for the memory base directory (the parent of `projects/`).
     /// When set, replaces `<config_home>` as the root of the
     /// `<base>/projects/<sanitized>/memory/` resolution chain. Used by
-    /// CCR / swarm leaders that mount persistent memory from a network
-    /// volume separate from the session's config home.
-    ///
-    /// TS source: `memdir/paths.ts:86` (remote-memory-dir slot).
+    /// swarm leaders that mount persistent memory from a network volume
+    /// separate from the session's config home.
     CocoRemoteMemoryDir,
     CocoSandboxAllowNetwork,
     CocoSandboxExcludedCommands,
-    /// TS parity: `sandbox.failIfUnavailable`. Truthy values force a
-    /// hard error at startup if sandbox can't initialise.
+    /// Truthy values force a hard error at startup if sandbox can't initialise.
     CocoSandboxFailIfUnavailable,
     CocoSandboxMode,
     CocoSessionEndHooksTimeoutMs,
@@ -176,7 +163,7 @@ pub enum EnvKey {
     /// (default `~/.coco/teams`). Read by
     /// `coco_coordinator::team_file::teams_base_dir`; lets tests isolate the
     /// teams/mailbox tree (and a future swarm-leader relocate it, like
-    /// [`Self::CocoRemoteMemoryDir`] does for the memory base).
+    /// `CocoRemoteMemoryDir` does for the memory base).
     CocoTeamsDir,
     /// Tri-state override for the TUI's kitty keyboard-enhancement push
     /// (truthy ⇒ never push, falsy ⇒ push even where auto-detection would
@@ -185,11 +172,10 @@ pub enum EnvKey {
     CocoTuiKeyboardEnhancementDisable,
     CocoVerifyPlan,
     /// Opt non-interactive (SDK / headless) sessions INTO file-history
-    /// checkpointing. TS `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING` — those
-    /// sessions default OFF; interactive defaults ON.
+    /// checkpointing. SDK/headless sessions default OFF; interactive defaults ON.
     CocoFileCheckpointingSdkEnable,
     /// Disable file-history checkpointing for every session, overriding the
-    /// settings/interactive default. TS `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING`.
+    /// settings/interactive default.
     CocoFileCheckpointingDisable,
     /// Soft kill auto-compact only. Manual `/compact` keeps working.
     CocoCompactDisableAuto,
@@ -200,26 +186,19 @@ pub enum EnvKey {
     CocoCompactSessionMemoryEnable,
     /// Force-disable session-memory compact (wins over enable).
     CocoCompactSessionMemoryDisable,
-    /// Auto-compact context-window cap (replaces TS
-    /// `CLAUDE_CODE_AUTO_COMPACT_WINDOW`).
+    /// Auto-compact context-window cap.
     CocoCompactAutoWindow,
-    /// Auto-compact threshold percentage override (1-100). Replaces TS
-    /// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`.
+    /// Auto-compact threshold percentage override (1-100).
     CocoCompactAutoPctOverride,
-    /// Manual-compact blocking limit. Replaces TS
-    /// `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE`.
+    /// Manual-compact blocking limit.
     CocoCompactBlockingLimit,
     /// API-native context_management trigger threshold (input tokens).
-    /// Replaces TS `API_MAX_INPUT_TOKENS`.
     CocoCompactApiMaxInputTokens,
-    /// API-native context_management keep-target after clearing
-    /// (input tokens). Replaces TS `API_TARGET_INPUT_TOKENS`.
+    /// API-native context_management keep-target after clearing (input tokens).
     CocoCompactApiTargetInputTokens,
     /// Enable Anthropic `clear_tool_uses_20250919` for tool-result content.
-    /// Replaces TS `USE_API_CLEAR_TOOL_RESULTS`.
     CocoCompactApiClearToolResults,
     /// Enable Anthropic `clear_tool_uses_20250919` for entire tool_use blocks.
-    /// Replaces TS `USE_API_CLEAR_TOOL_USES`.
     CocoCompactApiClearToolUses,
     /// Override microcompact keep-recent count for compactable tool results.
     CocoCompactMicroKeepRecent,
@@ -228,91 +207,63 @@ pub enum EnvKey {
     /// Override the number of recently read files restored after full compact.
     CocoCompactPostCompactMaxFilesToRestore,
     /// Enable Tool Result Budget Level 2 (per-message aggregate cap).
-    /// TS feature gate: `tengu_hawthorn_steeple` (default off, matches
-    /// feature-stripped behavior). See `docs/coco-rs/tool-result-budget-plan.md`.
+    /// Default off. See `docs/coco-rs/tool-result-budget-plan.md`.
     CocoCompactToolResultBudgetEnable,
-    /// Per-message char cap for Tool Result Budget Level 2.
-    /// TS GrowthBook override: `tengu_hawthorn_window` (default 200_000).
+    /// Per-message char cap for Tool Result Budget Level 2 (default 200_000).
     CocoCompactToolResultBudgetPerMessageChars,
     /// 1h-TTL allowlist for prompt-cache (comma-separated `query_source`
-    /// patterns, exact match or `prefix*` glob). Mirrors TS
-    /// `tengu_prompt_cache_1h_config.allowlist` from GrowthBook.
+    /// patterns, exact match or `prefix*` glob).
     /// See `docs/coco-rs/prompt-cache-design.md` §16a.
     CocoPromptCacheAllowlist,
     /// Enable coordinator mode (system-prompt swap + worker pool +
-    /// `<task-notification>` XML routing). Replaces TS
-    /// `CLAUDE_CODE_COORDINATOR_MODE`. Requires `Feature::AgentTeams`.
+    /// `<task-notification>` XML routing). Requires `Feature::AgentTeams`.
     CocoCoordinatorMode,
     /// Enable fork-subagent path: omitting `subagent_type` on AgentTool
     /// triggers an implicit fork that inherits the parent's full
-    /// conversation context for prompt-cache sharing. Replaces TS
-    /// `FORK_SUBAGENT`. Mutually exclusive with coordinator mode.
+    /// conversation context for prompt-cache sharing. Mutually exclusive
+    /// with coordinator mode.
     CocoForkSubagent,
-    /// Disable the post-turn promptSuggestion service. When set
-    /// truthy, the engine skips spawning the side-channel fork that
-    /// computes "what should I ask next" placeholders. Replaces TS
-    /// `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` (TS uses an
-    /// enable-default-true flag; coco-rs flips to disable-by-env to
-    /// match the rest of the `COCO_*_DISABLE` family).
+    /// Disable the post-turn promptSuggestion service. When set truthy, the
+    /// engine skips spawning the side-channel fork that computes "what should
+    /// I ask next" placeholders.
     CocoPromptSuggestionDisable,
     /// `--bare` mode: skip ALL post-turn forks (promptSuggestion,
     /// extractMemories, autoDream). Used by SDK / scripted `-p`
     /// invocations that don't want background work after each turn.
-    /// TS: `query/stopHooks.ts:136` `isBareMode()` gate.
     CocoBareMode,
-    /// Disable AgentTool background-task registration. When set
-    /// truthy, `run_in_background: true` and
-    /// `AgentDefinition.background = true` are both ignored — every
-    /// spawn runs synchronously. Replaces TS
-    /// `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` (`AgentTool.tsx:65-73`)
-    /// and the `tengu_auto_background_agents` GrowthBook gate.
-    /// Useful for sandbox / CI environments that want deterministic
-    /// blocking behavior.
+    /// Disable AgentTool background-task registration. When set truthy,
+    /// `run_in_background: true` and `AgentDefinition.background = true` are
+    /// both ignored — every spawn runs synchronously. Useful for sandbox / CI
+    /// environments that want deterministic blocking behavior.
     CocoBackgroundTasksDisable,
     /// Override `api.retry.max_retries`. Applies after settings.json and is
     /// clamped by `ApiRetryConfig::finalize`.
     CocoApiMaxRetries,
     /// Disable the startup auto-install of the official plugin marketplace
     /// (`anthropics/claude-plugins-official`). When set truthy, coco does not
-    /// fetch/register the official marketplace on launch. Replaces TS
-    /// `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL`.
+    /// fetch/register the official marketplace on launch.
     CocoPluginsDisableOfficialMarketplace,
     /// Read-only plugin seed directories (PATH-delimited, precedence order).
     /// Customers bake a populated plugins dir into a container image and point
     /// this at it; seed marketplaces/plugin caches are used in place without
-    /// re-cloning. Replaces TS `CLAUDE_CODE_PLUGIN_SEED_DIR`.
+    /// re-cloning.
     CocoPluginSeedDir,
     /// Enable auto-detach of long-running foreground AgentTool spawns.
     /// When set to a positive integer (milliseconds), foreground sub-agents
     /// that haven't completed by this deadline fire `signal_detach` so the
     /// parent's awaiter unblocks with `AsyncLaunched` and the engine keeps
     /// running in the background. Setting truthy (`1` / `true` / `on`)
-    /// without a number uses the TS default `120_000` (2 minutes).
-    ///
-    /// TS parity: `AgentTool.tsx:72-77` `getAutoBackgroundMs()` returns
-    /// `120_000` when `CLAUDE_AUTO_BACKGROUND_TASKS` is truthy OR when
-    /// the `tengu_auto_background_agents` GrowthBook gate is on; otherwise
-    /// `0` (disabled). coco-rs has no GrowthBook shim — the env var is the
-    /// only opt-in.
+    /// without a number uses the default `120_000` (2 minutes).
     CocoAutoBackgroundTasks,
-    /// Enable periodic AgentSummary timers for TUI users. Default
-    /// off (TS parity — SDK clients opt-in via the
-    /// `agentProgressSummaries: true` control message; TUI users
-    /// don't have that protocol path so we expose an env opt-in
-    /// instead).
+    /// Enable periodic AgentSummary timers for TUI users. Default off.
+    /// SDK clients opt-in via the `agentProgressSummaries: true` control
+    /// message; TUI users use this env var instead.
     ///
-    /// Coordinator mode auto-enables periodic summaries regardless
-    /// of this flag (matches TS `AgentTool.tsx:750` ORing
-    /// `isCoordinator || getSdkAgentProgressSummariesEnabled`).
+    /// Coordinator mode auto-enables periodic summaries regardless of this flag.
     CocoAgentSummaryEnable,
     /// Inject the AgentTool agent listing into a `<system-reminder>`
-    /// attachment instead of inline in the tool description. TS
-    /// parity: `CLAUDE_CODE_AGENT_LIST_IN_MESSAGES` in
-    /// `tools/AgentTool/prompt.ts:60-63` plus the
-    /// `tengu_agent_list_attach` GrowthBook gate. coco-rs has no
-    /// GrowthBook shim; the env var is the only source. Off by default
-    /// (= keep the listing inline) so the model-visible AgentTool
-    /// description matches the TS 3p default.
+    /// attachment instead of inline in the tool description. Off by default
+    /// (keeps the listing inline in the tool description).
     CocoAgentListInMessages,
     /// Terminal-multiplexer detection (third-party env vars, not
     /// COCO-prefixed). Surfaced through `EnvKey` so pane backends
@@ -494,14 +445,14 @@ fn parse_truthy(raw: &str) -> Option<bool> {
     }
 }
 
-/// Returns true if the environment variable is set to a truthy value.
-/// TS: isEnvTruthy() — normalizes "1", "true", "yes", "on" to true.
+/// Returns true if the environment variable is set to a truthy value
+/// ("1", "true", "yes", "on").
 pub fn is_env_truthy<K: AsRef<OsStr>>(key: K) -> bool {
     var(key).ok().is_some_and(|v| is_truthy_value(&v))
 }
 
-/// Returns true if the environment variable is set to a falsy value.
-/// TS: isEnvDefinedFalsy() — normalizes "0", "false", "no", "off".
+/// Returns true if the environment variable is set to a falsy value
+/// ("0", "false", "no", "off").
 pub fn is_env_falsy<K: AsRef<OsStr>>(key: K) -> bool {
     var(key).ok().is_some_and(|v| is_falsy_value(&v))
 }

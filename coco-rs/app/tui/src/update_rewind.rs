@@ -1,7 +1,5 @@
 //! Rewind state update logic — extracted to stay under 800 LoC in update.rs.
 //!
-//! TS: MessageSelector.tsx state management + restore option handling.
-//!
 //! Per-row `+X -Y` summaries do NOT come from this module — they ride
 //! the [`coco_types::TuiOnlyEvent::RewindRowMetadataReady`] event
 //! emitted by the CLI driver, which computes them from
@@ -24,9 +22,8 @@ use crate::transcript::cells::CellKind;
 use crate::transcript::cells::RenderedCell;
 
 /// Format an epoch-ms timestamp as a relative-time English phrase
-/// against a reference `now` (also epoch-ms). Mirrors TS
-/// `formatRelativeTimeAgo` (`utils/format.ts`) coarsely — exact text
-/// is locale-resolved later via the `t!` macro on display.
+/// against a reference `now` (also epoch-ms). Exact text is
+/// locale-resolved later via the `t!` macro on display.
 pub fn format_relative_time_ago(now_ms: i64, then_ms: i64) -> String {
     let delta_secs = ((now_ms - then_ms).max(0) / 1000) as u64;
     if delta_secs < 60 {
@@ -57,11 +54,9 @@ pub fn format_relative_time_ago(now_ms: i64, then_ms: i64) -> String {
 }
 
 /// Synthetic XML-tag substrings that mark non-user-authored content.
-/// Mirrors `MessageSelector.tsx:788`'s `messageText.indexOf(`<TAG>`) !== -1`
-/// filter — tags may appear anywhere in the text, not just at the
-/// start, because user-visible messages can carry composed envelopes
-/// (e.g. queued-command attachments wrap original prompt + synthetic
-/// status frames).
+/// Tags may appear anywhere in the text, not just at the start, because
+/// user-visible messages can carry composed envelopes (e.g. queued-command
+/// attachments wrap original prompt + synthetic status frames).
 const SYNTHETIC_XML_FRAGMENTS: &[&str] = &[
     "<local-command-stdout>",
     "<local-command-stderr>",
@@ -77,12 +72,10 @@ const SYNTHETIC_XML_FRAGMENTS: &[&str] = &[
 // context, so `is_selectable_user_cell`'s `is_visible_in_transcript_only`
 // check already excludes them from the rewind picker — no tag entry needed.
 
-/// IDE-injected context tags stripped from restored input. Mirrors TS
-/// `stripIdeContextTags()` in `utils/displayTags.ts:49-51`.
+/// IDE-injected context tags stripped from restored input.
 const IDE_CONTEXT_TAG_NAMES: &[&str] = &["ide_opened_file", "ide_selection"];
 
-/// XML-tag-block prompt prefixes stripped from picker display text. TS
-/// `stripPromptXMLTags` (`utils/messages.ts:2761-2763`).
+/// XML-tag-block prompt prefixes stripped from picker display text.
 const PROMPT_XML_TAG_NAMES: &[&str] = &[
     "commit_analysis",
     "context",
@@ -95,7 +88,7 @@ const COMMAND_MESSAGE_TAG: &str = "command-message";
 const COMMAND_ARGS_TAG: &str = "command-args";
 const SKILL_FORMAT_TAG: &str = "skill-format";
 
-/// Strip prompt-only XML tag blocks. Mirrors TS `stripPromptXMLTags`.
+/// Strip prompt-only XML tag blocks.
 pub fn strip_prompt_xml_tags(text: &str) -> String {
     let mut out = text.to_string();
     for tag in PROMPT_XML_TAG_NAMES {
@@ -129,10 +122,8 @@ fn strip_xml_block(text: &str, tag: &str) -> String {
 ///
 /// Tag-name boundary is enforced: an `<{tag}>` or `<{tag} ` (followed
 /// by a whitespace + attributes) open is required, so looking up
-/// `bash-input` will not match `<bash-input-error>`. Mirrors TS
-/// `extractTag` regex `<${escapedTag}(?:\\s+[^>]*?)?>`
-/// (`utils/messages.ts:655`). Case-sensitive (TS uses `gi`, but every
-/// tag we look up is a hard-coded lowercase constant).
+/// `bash-input` will not match `<bash-input-error>`. Case-sensitive
+/// (every tag we look up is a hard-coded lowercase constant).
 fn extract_xml_block(text: &str, tag: &str) -> Option<String> {
     let close = format!("</{tag}>");
     let mut cursor = 0;
@@ -193,8 +184,7 @@ fn display_text_for_rewind_row(text: &str) -> String {
     stripped
 }
 
-/// Strip IDE-injected context tags from a string. TS `stripIdeContextTags`
-/// (`utils/displayTags.ts:49-51`). Used by `textForResubmit` so an UP-arrow
+/// Strip IDE-injected context tags from a string. Used so an UP-arrow
 /// resubmit keeps user-typed content while dropping IDE-injected noise.
 pub fn strip_ide_context_tags(text: &str) -> String {
     let mut out = text.to_string();
@@ -207,7 +197,6 @@ pub fn strip_ide_context_tags(text: &str) -> String {
 
 /// Check if a cell is a selectable user message for the rewind picker.
 ///
-/// TS: `selectableUserMessagesFilter()` in `MessageSelector.tsx:767-792`.
 /// Rejects tool results / synthetic messages / virtual user pushes /
 /// compact-summary / transcript-only rows, plus content beginning with
 /// the synthetic XML wrappers used for command output / teammate / task /
@@ -222,10 +211,9 @@ fn is_selectable_user_cell(cell: &RenderedCell) -> bool {
     if u.is_virtual || u.is_compact_summary || u.is_visible_in_transcript_only {
         return false;
     }
-    // TS `MessageSelector.tsx:787-790` uses `indexOf(...) !== -1` for
-    // each synthetic tag. The fragment may appear after user prose
-    // when frames have been composed together (e.g. queued-command
-    // attachments). `contains` matches that semantics.
+    // The fragment may appear after user prose when frames have been
+    // composed together (e.g. queued-command attachments). `contains`
+    // matches that semantics.
     for fragment in SYNTHETIC_XML_FRAGMENTS {
         if text.contains(fragment) {
             return false;
@@ -239,9 +227,8 @@ fn is_selectable_user_cell(cell: &RenderedCell) -> bool {
 ///
 /// When `target_uuid` matches a real (non-synthetic) row, the state
 /// opens directly in the `RestoreOptions` phase with that row selected
-/// and `preselected = true` (Esc / Nevermind dismiss fully). TS:
-/// `preselectedMessage` (`MessageSelector.tsx:42-44, 72-83`). Used by
-/// message-actions edit gesture (TS `screens/REPL.tsx:3783-3784`).
+/// and `preselected = true` (Esc / Nevermind dismiss fully). Used by
+/// the message-actions edit gesture.
 ///
 /// Miss path (`target_uuid` not present in any real cell): returns
 /// the bare picker state with `preselected = false`.
@@ -295,16 +282,12 @@ pub fn build_rewind_state_for_uuid(state: &AppState, target_uuid: uuid::Uuid) ->
 /// Build the initial RewindState from current session state.
 ///
 /// Sources from the engine-authoritative `transcript.cells()` so
-/// engine-pushed user messages — the entire live transcript after
-/// `engine-tui-unified-transcript-plan.md` Commit 2 — show up in the
-/// rewind picker.
-/// TS: MessageSelector receives `messages` prop filtered by selectableUserMessagesFilter.
+/// engine-pushed user messages show up in the rewind picker.
 pub fn build_rewind_state(state: &AppState) -> RewindState {
     build_rewind_state_internal(state)
 }
 
 fn build_rewind_state_internal(state: &AppState) -> RewindState {
-    // TS: tengu_message_selector_opened
     tracing::info!(target: "rewind", event = "selector_opened");
     let mut rewindable: Vec<RewindableMessage> = Vec::new();
     let now = std::time::SystemTime::now()
@@ -325,12 +308,9 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
             continue;
         };
 
-        // TS `MessageSelector.tsx:618-624` substitutes the localized
-        // `((empty message))` placeholder when `isEmptyMessageText`
-        // returns true. We strip the same XML-tag wrapper that TS does
-        // before deciding emptiness so a message containing only
-        // `<commit_analysis>...</commit_analysis>` still renders the
-        // placeholder.
+        // Strip the XML-tag wrapper before deciding emptiness so a message
+        // containing only `<commit_analysis>...</commit_analysis>` still
+        // renders the placeholder.
         let display_text = display_text_for_rewind_row(text);
 
         rewindable.push(RewindableMessage {
@@ -350,11 +330,9 @@ fn build_rewind_state_internal(state: &AppState) -> RewindState {
         });
     }
 
-    // TS `MessageSelector.tsx:60-66` appends a synthetic current-prompt
-    // entry: `[...realMessages, { ...createUserMessage({ content: '' }), uuid }]`.
-    // It anchors the default selection to "now" — the user must move up
-    // to indicate intent to rewind. Confirm on this row dispatches no
-    // rewind (TS line 165: `!messages.includes(message_0) -> onClose()`).
+    // Appends a synthetic current-prompt entry anchoring the default
+    // selection to "now" — the user must move up to indicate intent to
+    // rewind. Confirm on this row dispatches no rewind.
     rewindable.push(RewindableMessage {
         // `Uuid::nil()` is the canonical sentinel — `is_current_prompt`
         // is the gate that prevents this row from ever being matched
@@ -413,9 +391,8 @@ pub fn handle_rewind_nav(state: &mut RewindState, delta: i32) {
     }
 }
 
-/// Outcome of `handle_rewind_confirm`. TS encodes the same three
-/// outcomes implicitly: `restoreConversationDirectly` / option-screen
-/// transition / synthetic-row `onClose`.
+/// Outcome of `handle_rewind_confirm`. Three outcomes:
+/// dispatch rewind / option-screen transition / synthetic-row dismiss.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmOutcome {
     /// Dispatch the rewind to the engine with this message + restore type.
@@ -428,7 +405,6 @@ pub enum ConfirmOutcome {
     /// Diff stats are required before entering restore options.
     RequestDiffStats { message_id: String },
     /// Dismiss the state (synthetic current-prompt row, or cancel-on-confirm).
-    /// TS: `MessageSelector.tsx:165` — `if (!messages.includes(message_0)) onClose()`.
     Dismiss,
 }
 
@@ -436,8 +412,6 @@ pub enum ConfirmOutcome {
 ///
 /// Returns `ConfirmOutcome` so the dispatcher knows whether to send the
 /// rewind, keep the state open in a new phase, or dismiss it.
-///
-/// TS: MessageSelector onSelect -> onRestoreOptionSelect
 pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
     use crate::state::rewind::SummarizeDirection;
     match state.phase {
@@ -445,21 +419,18 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
             let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
-            // Synthetic `(current)` row — TS `MessageSelector.tsx:165`.
+            // Synthetic `(current)` row — confirm dismisses.
             if msg.is_current_prompt {
                 tracing::info!(target: "rewind", event = "selector_cancelled_via_current_row");
                 return ConfirmOutcome::Dismiss;
             }
-            // TS: tengu_message_selector_selected
             tracing::info!(
                 target: "rewind",
                 event = "message_selected",
                 index_from_end = state.messages.len() as i32 - state.selected - 1,
             );
-            // TS `MessageSelector.tsx:169-172`: when file history is
-            // disabled the selector skips the option screen entirely
-            // and dispatches `restoreConversationDirectly`. Mirror by
-            // returning ConversationOnly straight away.
+            // When file history is disabled the selector skips the option
+            // screen entirely and dispatches ConversationOnly straight away.
             if !state.file_history_enabled {
                 return ConfirmOutcome::Dispatch {
                     message_id: msg.message_id.to_string(),
@@ -511,7 +482,6 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
             else {
                 return ConfirmOutcome::Phase;
             };
-            // TS: tengu_message_selector_restore_option_selected
             tracing::info!(
                 target: "rewind",
                 event = "restore_option_selected",
@@ -531,10 +501,9 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
                     state.phase = RewindPhase::SummarizeFeedback;
                     ConfirmOutcome::Phase
                 }
-                // TS `MessageSelector.tsx:185-188`: Nevermind cancels
-                // the option pick. When launched preselected there is
-                // no message list to fall back to, so it dismisses
-                // (TS line 186: `if (preselectedMessage) onClose()`).
+                // Nevermind cancels the option pick. When launched
+                // preselected there is no message list to fall back to,
+                // so it dismisses.
                 RestoreType::Nevermind => {
                     if state.preselected {
                         ConfirmOutcome::Dismiss
@@ -557,8 +526,8 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
             let Some(msg) = state.messages.get(state.selected as usize) else {
                 return ConfirmOutcome::Phase;
             };
-            // TS `allowEmptySubmitToCancel: true` — empty submit cancels
-            // the summarize choice and returns to the option list.
+            // Empty submit cancels the summarize choice and returns to
+            // the option list.
             let fb = state.summarize_feedback.trim();
             if fb.is_empty() {
                 state.summarize_feedback.clear();
@@ -589,19 +558,16 @@ pub fn handle_rewind_confirm(state: &mut RewindState) -> ConfirmOutcome {
 ///
 /// Returns `true` if the state should be fully dismissed (was in MessageSelect).
 /// Returns `false` if it went back to a previous phase (RestoreOptions -> MessageSelect).
-///
-/// TS: Esc in restore options goes back to message list; Esc in message list closes.
+/// Esc in restore options goes back to message list; Esc in message list closes.
 pub fn handle_rewind_cancel(state: &mut RewindState) -> bool {
     match state.phase {
         RewindPhase::MessageSelect => {
-            // TS: tengu_message_selector_cancelled
             tracing::info!(target: "rewind", event = "selector_cancelled");
             true
         }
         RewindPhase::RestoreOptions => {
-            // TS `MessageSelector.tsx:248-253`: when launched preselected
-            // there is no message list to fall back to — Esc closes the
-            // state entirely.
+            // When launched preselected there is no message list to fall
+            // back to — Esc closes the state entirely.
             if state.preselected {
                 tracing::info!(target: "rewind", event = "selector_cancelled_preselected");
                 return true;
@@ -614,8 +580,7 @@ pub fn handle_rewind_cancel(state: &mut RewindState) -> bool {
         }
         RewindPhase::SummarizeFeedback => {
             // Esc in the feedback box goes back to the option list,
-            // discarding the typed feedback. TS: SummarizeOption's
-            // `allowEmptySubmitToCancel` plus Esc routing.
+            // discarding the typed feedback.
             state.summarize_feedback.clear();
             state.pending_summarize = None;
             state.phase = RewindPhase::RestoreOptions;
@@ -627,8 +592,7 @@ pub fn handle_rewind_cancel(state: &mut RewindState) -> bool {
 
 /// Check if all cells after `from_index` are synthetic/non-meaningful.
 ///
-/// TS: `messagesAfterAreOnlySynthetic` in `MessageSelector.tsx:799`.
-/// Cell-side predicates mirror the 2 "meaningful → return false" arms:
+/// Cell-side predicates cover the "meaningful → return false" arms:
 /// - any virtual user message is skipped (synthetic engine push)
 /// - tool results / system / attachment / progress rows are skipped
 /// - assistant text with non-empty body (and non-`[redacted]`) is meaningful
@@ -682,11 +646,9 @@ fn timestamp_to_ms(ts: &str) -> i64 {
     chrono_iso_to_ms(ts).unwrap_or(0)
 }
 
-/// Lightweight RFC 3339 → epoch-ms conversion. Mirrors what
-/// `chrono::DateTime::parse_from_rfc3339(...).timestamp_millis()` does
-/// without adding a `chrono` dependency: we accept a strict subset
-/// (`YYYY-MM-DDTHH:MM:SS[.frac][Z|±HH:MM]`). Returns `None` for
-/// anything else — callers fall back to 0.
+/// Lightweight RFC 3339 → epoch-ms conversion without a `chrono` dependency.
+/// Accepts a strict subset (`YYYY-MM-DDTHH:MM:SS[.frac][Z|±HH:MM]`). Returns
+/// `None` for anything else — callers fall back to 0.
 fn chrono_iso_to_ms(ts: &str) -> Option<i64> {
     let bytes = ts.as_bytes();
     if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {

@@ -1,6 +1,6 @@
 use super::*;
 
-// ───────── parse_arguments (TS shell-quote parity) ─────────
+// ───────── parse_arguments ─────────
 
 #[test]
 fn parse_arguments_simple_split() {
@@ -35,7 +35,7 @@ fn parse_arguments_empty() {
     assert_eq!(parse_arguments("   "), empty);
 }
 
-// ───────── substitute_arguments (TS verbatim parity) ─────────
+// ───────── substitute_arguments ─────────
 
 #[test]
 fn substitute_returns_unchanged_when_args_none() {
@@ -51,7 +51,6 @@ fn substitute_dollar_arguments_expands_to_full_string() {
 
 #[test]
 fn substitute_zero_indexed_positional() {
-    // TS: $0 = first arg, $1 = second arg.
     let out = substitute_arguments("first=$0 second=$1", Some("alpha beta"), &[], false);
     assert_eq!(out, "first=alpha second=beta");
 }
@@ -98,7 +97,7 @@ fn substitute_drops_unfilled_to_empty() {
 
 #[test]
 fn substitute_double_digit_index() {
-    // TS uses regex \d+ so $10 works.
+    // Uses regex \d+ so $10 works.
     let out = substitute_arguments("tenth=$9", Some("a b c d e f g h i j"), &[], false);
     assert_eq!(out, "tenth=j");
 }
@@ -210,7 +209,7 @@ fn test_substitute_skill_env_replaces_dir_and_session() {
 #[test]
 fn test_substitute_skill_env_normalizes_backslashes_and_keeps_unknown() {
     // Windows-style dir is normalized to forward slashes; a None session id
-    // leaves the placeholder untouched (TS getPromptForCommand).
+    // leaves the placeholder untouched.
     let out = substitute_skill_env(
         "${CLAUDE_SKILL_DIR} and ${CLAUDE_SESSION_ID}",
         Some(r"C:\skills\x"),

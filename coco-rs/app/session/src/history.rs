@@ -1,6 +1,6 @@
 //! Prompt history persistence via JSONL.
 //!
-//! TS: history.ts — JSONL append-only log at ~/.coco/history.jsonl.
+//! JSONL append-only log at `~/.coco/history.jsonl`.
 //! Entries are project-scoped, session-tagged, newest-first on read.
 
 use serde::Deserialize;
@@ -17,8 +17,7 @@ use std::sync::Mutex;
 
 const MAX_HISTORY_ITEMS: usize = 100;
 /// Pastes shorter than this are stored inline; longer ones go to the
-/// content-addressed paste store. TS: `MAX_PASTED_CONTENT_LENGTH`
-/// (`history.ts:20`).
+/// content-addressed paste store.
 const MAX_PASTED_CONTENT_LENGTH: usize = 1024;
 
 /// A single history log entry (serialized to JSONL).
@@ -61,8 +60,6 @@ pub struct HistoryEntry {
 /// A history entry that resolves paste content lazily on demand —
 /// used by the ctrl+r picker which renders display + timestamp eagerly
 /// but defers paste-store reads until the user accepts a row.
-///
-/// TS: `TimestampedHistoryEntry` from `history.ts:151-156`.
 pub struct TimestampedHistoryEntry {
     pub display: String,
     pub timestamp: i64,
@@ -81,8 +78,8 @@ pub struct PromptHistory {
     /// `remove_last_from_history` so an Esc-driven auto-restore can
     /// undo the just-flushed entry.
     last_added: Mutex<Option<i64>>,
-    /// Timestamps that should be skipped when reading. Mirrors TS
-    /// `skippedTimestamps` set (`history.ts:289`).
+    /// Timestamps that should be skipped when reading (in-memory
+    /// skip set for undo-on-interrupt).
     skipped: Mutex<HashSet<i64>>,
 }
 
@@ -107,7 +104,6 @@ impl PromptHistory {
     /// Add an entry with optional pasted content. Pastes longer than
     /// `MAX_PASTED_CONTENT_LENGTH` are stored externally and
     /// referenced by SHA-256 hash; shorter pastes are stored inline.
-    /// TS: `addToPromptHistory` (`history.ts:355-409`).
     pub fn add_with_pastes(
         &self,
         display: &str,
@@ -186,7 +182,7 @@ impl PromptHistory {
     /// Used by auto-restore-on-interrupt: an Esc immediately after a
     /// submit semantically undoes the prompt, so the JSONL entry
     /// should also be undone or the up-arrow shows the restored
-    /// text twice. TS: `removeLastFromHistory` (`history.ts:453-464`).
+    /// text twice.
     pub fn remove_last_from_history(&self) {
         let ts = match self.last_added.lock() {
             Ok(mut l) => l.take(),
@@ -242,8 +238,7 @@ impl PromptHistory {
     ///
     /// Yields (display, timestamp, lazy-resolver) triples newest-first
     /// deduped by display. The resolver fetches paste-store contents
-    /// only when invoked. TS: `getTimestampedHistory`
-    /// (`history.ts:162-180`).
+    /// only when invoked.
     pub fn get_timestamped_history(&self) -> Vec<TimestampedHistoryEntry> {
         let entries = match self.read_all_entries() {
             Ok(e) => e,
@@ -369,10 +364,9 @@ pub fn format_image_ref(id: i32) -> String {
 /// actual content from `pasted_contents`. Image refs are left alone
 /// — they become content blocks, not inlined text.
 ///
-/// TS: `expandPastedTextRefs` (`history.ts:81-100`). Splices at the
-/// regex match offsets so placeholder-like strings inside pasted
-/// content are never confused for real refs. Reverse order keeps
-/// earlier offsets valid after later replacements.
+/// Splices at the regex match offsets so placeholder-like strings
+/// inside pasted content are never confused for real refs. Reverse
+/// order keeps earlier offsets valid after later replacements.
 pub fn expand_pasted_text_refs(input: &str, pasted_contents: &HashMap<i32, String>) -> String {
     // Match `[Pasted text #N (+M lines)?]`. Image / truncated
     // variants are intentionally not expanded.

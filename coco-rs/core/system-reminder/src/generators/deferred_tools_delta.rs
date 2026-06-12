@@ -1,21 +1,17 @@
-//! TS `deferred_tools_delta` generator.
+//! `deferred_tools_delta` generator.
 //!
-//! Mirrors `getDeferredToolsDeltaAttachment` (`attachments.ts:1455`) +
-//! `normalizeAttachmentForAPI` `case 'deferred_tools_delta':`
-//! (`messages.ts:4178`). Announces tool-availability changes since the
-//! last emission (via ToolSearch).
+//! Announces tool-availability changes since the last emission (via
+//! ToolSearch).
 //!
 //! Gate chain:
 //!
 //! 1. `ctx.config.attachments.deferred_tools_delta` — default on.
 //! 2. `ctx.deferred_tools_delta.is_some()` with non-empty delta —
 //!    engine pre-computes by diffing `ctx.tools` against prior
-//!    `deferred_tools_delta` attachments in history (TS
-//!    `getDeferredToolsDelta` at `attachments.ts:1472`).
+//!    `deferred_tools_delta` attachments in history.
 //!
-//! Text template from TS `messages.ts:4179-4191`: two optional sections
-//! joined by `"\n\n"`, each a header line followed by newline-joined
-//! entries.
+//! Text format: two optional sections joined by `"\n\n"`, each a header
+//! line followed by newline-joined entries.
 
 use async_trait::async_trait;
 

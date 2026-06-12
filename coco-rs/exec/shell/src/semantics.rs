@@ -2,16 +2,13 @@
 //!
 //! Many commands use non-zero exit codes for expected outcomes (`grep` returns
 //! 1 for "no match", `diff` returns 1 for "files differ"). This interprets the
-//! exit code in the context of the command that produced it, mirroring TS
-//! `tools/BashTool/commandSemantics.ts`.
+//! exit code in the context of the command that produced it.
 
-/// Interpretation of a command's exit code — mirrors the TS `CommandSemantic`
-/// return shape `{ isError, message }`.
+/// Interpretation of a command's exit code.
 ///
 /// `is_error` drives the model-facing `Exit code N` annotation, which is
-/// appended ONLY when `is_error` is true (TS `BashTool.tsx:696-700`). `message`
-/// is the human-friendly explanation surfaced to the TUI only — never to the
-/// model (TS `returnCodeInterpretation`).
+/// appended ONLY when `is_error` is true. `message` is the human-friendly
+/// explanation surfaced to the TUI only — never to the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandResultInterpretation {
     pub is_error: bool,
@@ -20,9 +17,8 @@ pub struct CommandResultInterpretation {
 
 /// Interpret an exit code based on the command that produced it.
 ///
-/// TS `interpretCommandResult` (`commandSemantics.ts`). The base command is the
-/// first word of the LAST compound/pipeline segment — the segment that actually
-/// determines the exit code (`heuristicallyExtractBaseCommand`).
+/// The base command is the first word of the LAST compound/pipeline segment —
+/// the segment that actually determines the exit code.
 pub fn interpret_command_result(command: &str, exit_code: i32) -> CommandResultInterpretation {
     match heuristic_base_command(command).as_str() {
         // grep / rg: 0 = match, 1 = no match, 2+ = error.
@@ -33,7 +29,7 @@ pub fn interpret_command_result(command: &str, exit_code: i32) -> CommandResultI
         "diff" => expected_below_two(exit_code, "Files differ"),
         // test / [: 0 = true, 1 = false, 2+ = error.
         "test" | "[" => expected_below_two(exit_code, "Condition is false"),
-        // Default (TS DEFAULT_SEMANTIC): any non-zero exit is an error.
+        // Default: any non-zero exit is an error.
         _ => CommandResultInterpretation {
             is_error: exit_code != 0,
             message: (exit_code != 0).then(|| format!("Command failed with exit code {exit_code}")),
@@ -51,9 +47,9 @@ fn expected_below_two(exit_code: i32, explanation: &str) -> CommandResultInterpr
 }
 
 /// First word of the LAST compound/pipeline segment — the command that sets the
-/// overall exit code. TS `heuristicallyExtractBaseCommand`: `splitCommand` then
-/// the first whitespace token of the last segment. (Heuristic — never used for
-/// security decisions, only exit-code interpretation.)
+/// overall exit code. Splits on compound operators then takes the first
+/// whitespace token of the last segment. (Heuristic — never used for security
+/// decisions, only exit-code interpretation.)
 fn heuristic_base_command(command: &str) -> String {
     let segments = crate::bash_permissions::split_compound_command(command);
     let last = segments.last().map(String::as_str).unwrap_or(command);

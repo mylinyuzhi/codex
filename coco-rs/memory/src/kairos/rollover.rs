@@ -1,13 +1,10 @@
 //! KAIROS midnight-rollover detector.
 //!
-//! TS parity: `getDateChangeAttachments` + `sessionTranscript.flushOnDateChange`
-//! (`utils/attachments.ts:1415-1443`). TS holds a module-level
-//! "last emitted date" latch and compares against `getLocalISODate()`
-//! each turn; on flip it (a) emits a `date_change` attachment for the
-//! model (handled separately in coco-rs via
-//! [`core/system-reminder::DateChangeGenerator`]) and (b) under
-//! `feature('KAIROS')` invokes the private `sessionTranscript`
-//! module's per-day flush.
+//! Holds a "last emitted date" latch and compares against the local
+//! ISO date each turn; on flip it (a) emits a `date_change` attachment
+//! for the model (handled separately via
+//! [`core/system-reminder::DateChangeGenerator`]) and (b) under the
+//! KAIROS feature invokes the per-day flush.
 //!
 //! This watcher owns **only** the KAIROS-side latch. The generic
 //! `date_change` reminder has its own latch on the engine
@@ -85,8 +82,8 @@ impl KairosRolloverWatcher {
 }
 
 /// Convert a UTC millisecond timestamp into a local-calendar
-/// [`NaiveDate`]. Mirrors TS `getLocalISODate()` — the model sees the
-/// user's wall-clock date, not UTC. Returns `None` only on
+/// [`NaiveDate`]. The model sees the user's wall-clock date, not UTC.
+/// Returns `None` only on
 /// pathologically-large `now_ms` (>year 200,000) which can't occur in
 /// practice; callers treat `None` as "skip this tick" rather than
 /// panicking.

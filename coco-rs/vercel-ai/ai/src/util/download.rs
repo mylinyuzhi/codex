@@ -1,8 +1,7 @@
 //! Download functionality for fetching content from URLs.
 //!
 //! This module provides async download functionality with size limits and
-//! abort signal support, matching the TypeScript `@ai-sdk/provider-utils`
-//! download functionality.
+//! abort signal support.
 
 use reqwest::Client;
 use thiserror::Error;

@@ -72,8 +72,7 @@ async fn test_auto_mem_denies_mutating_bash() {
 
 #[tokio::test]
 async fn test_auto_mem_allows_safe_piped_bash() {
-    // TS `tool.isReadOnly` parses the pipeline and checks each
-    // stage. Pipes joining safe-command stages must pass.
+    // Pipes joining safe-command stages must pass.
     let h = create_auto_mem_handle(PathBuf::from("/memdir"));
     let cases = [
         json!({"command": "ls /tmp | head -10"}),

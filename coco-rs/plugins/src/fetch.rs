@@ -3,12 +3,10 @@
 //! Materializes remote **marketplace** sources (git clone/pull, HTTP
 //! download) and remote **plugin** sources (per-plugin git / npm / pip).
 //!
-//! TS: `utils/plugins/marketplaceManager.ts` (`gitClone` / `gitPull` /
-//! `cacheMarketplaceFromUrl`) + `pluginLoader.ts` (`installFromGit` /
-//! `installFromGitSubdir` / `installFromNpm`). git operations **shell out to
-//! the `git` binary** — matching both TS and the `coco-git` crate (no
-//! `git2`/`gix` dependency). HTTP downloads use `reqwest` behind the
-//! `coco-hooks` `SsrfGuardedResolver`, which TS lacks (a net hardening).
+//! git operations **shell out to
+//! the `git` binary** — matching the `coco-git` crate (no `git2`/`gix`
+//! dependency). HTTP downloads use `reqwest` behind the
+//! `coco-hooks` `SsrfGuardedResolver` (a net hardening).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,7 +21,7 @@ use crate::schemas::RemotePluginSource;
 
 type Result<T> = std::result::Result<T, PluginError>;
 
-/// HTTP fetch timeout for URL marketplaces (TS axios 10000ms).
+/// HTTP fetch timeout for URL marketplaces.
 const URL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Package-manager (npm/pip) timeout — heavier than a shallow git clone.
 const PKG_TIMEOUT: Duration = Duration::from_secs(300);
@@ -116,8 +114,6 @@ async fn fetch_marketplace_url(
 /// Materialize a remote plugin `source` into `dest` (the versioned plugin
 /// cache directory). `dest` is created fresh by the caller.
 ///
-/// TS: `pluginLoader.ts installFromGit / installFromGitSubdir /
-/// installFromNpm / installFromPip`.
 pub async fn fetch_plugin_source(source: &RemotePluginSource, dest: &Path) -> Result<()> {
     match source {
         RemotePluginSource::Github { repo, git_ref, sha } => {
@@ -187,7 +183,7 @@ async fn git_materialize(
             Ok(()) => return Ok(()),
             Err(e) => {
                 // Pull failed (history rewrite, corrupted clone) — discard and
-                // re-clone. Mirrors TS `cacheMarketplaceFromGit`.
+                // re-clone on pull failure (history rewrite, corrupted clone).
                 tracing::warn!(dir = %dir.display(), error = %e, "git pull failed; re-cloning");
                 let _ = std::fs::remove_dir_all(dir);
             }
@@ -220,8 +216,6 @@ async fn git_checkout_into(
 }
 
 /// Sparse-clone `url`, materialize only `subdir`, and move it to `dest`.
-///
-/// TS: `pluginLoader.ts installFromGitSubdir`.
 async fn git_subdir_into(
     url: &str,
     subdir: &str,

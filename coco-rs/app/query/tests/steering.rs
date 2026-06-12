@@ -432,7 +432,7 @@ async fn e2e_steering_drains_into_history_and_reaches_next_turn() {
 async fn e2e_steering_origin_framing_per_kind() {
     // Direct unit-style coverage of the drain shape per origin tag,
     // without the cost of running an LLM turn. Confirms each
-    // `QueueOrigin` variant gets its TS-faithful framing prose plus
+    // `QueueOrigin` variant gets its framing prose plus
     // the outer system-reminder wrap.
     use coco_messages::MessageHistory;
 

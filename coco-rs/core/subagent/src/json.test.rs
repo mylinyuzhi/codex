@@ -3,10 +3,9 @@ use coco_types::{AgentColorName, AgentSource};
 use pretty_assertions::assert_eq;
 
 /// Helper that synthesises a minimal valid JSON entry. Both
-/// `description` and `prompt` are required by TS
-/// `AgentJsonSchema`, so test cases that don't care about either
-/// can build through this and override only the fields they
-/// exercise.
+/// `description` and `prompt` are required by `AgentJsonSchema`,
+/// so test cases that don't care about either can build through
+/// this and override only the fields they exercise.
 fn entry_with(extra: serde_json::Value) -> serde_json::Value {
     let mut base = serde_json::json!({
         "description": "test agent",
@@ -69,7 +68,7 @@ fn parse_arrays_and_csv_for_tools() {
 
 #[test]
 fn parse_wildcard_tools_collapses_to_default() {
-    // TS `parseAgentToolsFromFrontmatter`: ['*'] → undefined (use default
+    // `parseAgentToolsFromFrontmatter`: ['*'] → undefined (use default
     // allow set). JSON path inherits the same behaviour via the shared
     // markdown parser.
     let entry = entry_with(serde_json::json!({ "tools": ["*"] }));
@@ -118,7 +117,7 @@ fn parse_valid_color_round_trips() {
 
 #[test]
 fn parse_missing_description_errors() {
-    // TS `AgentJsonSchema`: `description: z.string().min(1)`.
+    // `AgentJsonSchema`: `description: z.string().min(1)`.
     let entry = serde_json::json!({
         "prompt": "no description here",
     });
@@ -128,7 +127,7 @@ fn parse_missing_description_errors() {
 
 #[test]
 fn parse_empty_description_errors() {
-    // TS `z.string().min(1, 'Description cannot be empty')` — empty string
+    // `z.string().min(1, 'Description cannot be empty')` — empty string
     // fails Zod parse with the same message; Rust mirrors via the same
     // `MissingDescription` variant.
     let entry = serde_json::json!({
@@ -141,7 +140,7 @@ fn parse_empty_description_errors() {
 
 #[test]
 fn parse_missing_prompt_errors() {
-    // TS `AgentJsonSchema`: `prompt: z.string().min(1, 'Prompt cannot be empty')`.
+    // `AgentJsonSchema`: `prompt: z.string().min(1, 'Prompt cannot be empty')`.
     // Rust mirrors as `InvalidValue { field: "prompt", message: ... }`.
     let entry = serde_json::json!({
         "description": "no prompt here",

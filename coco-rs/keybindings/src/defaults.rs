@@ -1,16 +1,14 @@
-//! Default keybindings — TS port of `keybindings/defaultBindings.ts`.
+//! Default keybindings.
 //!
-//! Block-for-block mirror with two exceptions:
+//! Block-for-block with two exceptions:
 //!
 //! * Platform-conditional keys (`IMAGE_PASTE_KEY`, `MODE_CYCLE_KEY`) use
-//!   `cfg!(target_os = ...)` instead of TS runtime detection.
-//! * Feature-gated TS blocks (`KAIROS`, `QUICK_SEARCH`, `TERMINAL_PANEL`,
+//!   `cfg!(target_os = ...)` instead of runtime detection.
+//! * Feature-gated blocks (`KAIROS`, `QUICK_SEARCH`, `TERMINAL_PANEL`,
 //!   `MESSAGE_ACTIONS`, `VOICE_MODE`) are intentionally skipped — they
 //!   depend on Anthropic-internal infrastructure (GrowthBook, etc.) that
 //!   coco-rs doesn't ship. Re-add behind a Cargo feature when the
 //!   underlying capability lands.
-//!
-//! TS source: `keybindings/defaultBindings.ts:32-340`.
 
 use std::collections::BTreeMap;
 
@@ -19,8 +17,7 @@ use crate::KeybindingBlock;
 use crate::KeybindingContext;
 use crate::KeybindingsConfig;
 
-/// Image-paste shortcut. TS: `defaultBindings.ts:15` —
-/// Windows uses `alt+v` because `ctrl+v` is system paste.
+/// Image-paste shortcut. Windows uses `alt+v` because `ctrl+v` is system paste.
 #[cfg(target_os = "windows")]
 const IMAGE_PASTE_KEY: &str = "alt+v";
 #[cfg(not(target_os = "windows"))]
@@ -34,10 +31,10 @@ const IMAGE_PASTE_KEY_ALT: &str = "ctrl+v";
 #[cfg(not(target_os = "windows"))]
 const IMAGE_PASTE_KEY_ALT: &str = "alt+v";
 
-/// Permission-mode cycle shortcut. TS: `defaultBindings.ts:30` — falls
-/// back to `meta+m` on Windows without VT mode (we always use
-/// `shift+tab` on non-Windows; on Windows we conservatively assume VT
-/// mode is available because Node ≥22.17 / Bun ≥1.2.23 enable it).
+/// Permission-mode cycle shortcut. Falls back to `meta+m` on Windows without
+/// VT mode (we always use `shift+tab` on non-Windows; on Windows we
+/// conservatively assume VT mode is available because Node ≥22.17 / Bun
+/// ≥1.2.23 enable it).
 const MODE_CYCLE_KEY: &str = "shift+tab";
 
 fn make_block<const N: usize>(
@@ -53,8 +50,6 @@ fn make_block<const N: usize>(
 
 /// Return the full default `KeybindingsConfig`. Hot-load merge order:
 /// defaults first, user bindings later (last-wins).
-///
-/// Mirrors `DEFAULT_BINDINGS` (`defaultBindings.ts:32-340`).
 pub fn default_config() -> KeybindingsConfig {
     KeybindingsConfig {
         schema: None,
@@ -65,11 +60,11 @@ pub fn default_config() -> KeybindingsConfig {
 
 /// Return the default blocks as a `Vec<KeybindingBlock>`.
 ///
-/// Block order matches TS so user expectations (e.g. iteration in
-/// `/help`) match.
+/// Block order is stable so user expectations (e.g. iteration in `/help`)
+/// are consistent.
 pub fn default_blocks() -> Vec<KeybindingBlock> {
     vec![
-        // ── Global — defaultBindings.ts:33-62 ─────────────────────────
+        // ── Global ────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Global,
             [
@@ -83,27 +78,25 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+t", KeybindingAction::AppToggleTodos),
                 ("ctrl+o", KeybindingAction::AppToggleTranscript),
                 ("ctrl+shift+o", KeybindingAction::AppToggleTeammatePreview),
-                // coco-rs-only affordance (no TS source — TS opens the teams
-                // dialog via the footer indicator). Sibling of `ctrl+t`; only
-                // active when the session has teammates (gated in dispatch).
+                // coco-rs-only affordance. Sibling of `ctrl+t`; only active
+                // when the session has teammates (gated in dispatch).
                 ("ctrl+shift+t", KeybindingAction::AppToggleTeamRoster),
                 ("ctrl+r", KeybindingAction::HistorySearch),
-                // TS gates these on QUICK_SEARCH; coco-rs doesn't gate
-                // (the surfaces are part of the base TUI), so they ship
-                // unconditionally. Mirrors TS bindings.
+                // coco-rs doesn't gate on QUICK_SEARCH (the surfaces are
+                // part of the base TUI), so these ship unconditionally.
                 ("ctrl+shift+f", KeybindingAction::AppGlobalSearch),
                 ("ctrl+shift+p", KeybindingAction::AppQuickOpen),
-                // coco-rs extensions (no TS source) — folded from the old
-                // hardcoded TUI cascade so they are user-rebindable.
-                // `app:forceQuit` skips the `app:exit` double-press
-                // confirmation; `app:help` is the F1 entry (the `?`
-                // shortcut on an empty composer stays hardcoded in the
-                // TUI because it must fall through to typing otherwise).
+                // coco-rs extensions — folded from the old hardcoded TUI
+                // cascade so they are user-rebindable. `app:forceQuit`
+                // skips the `app:exit` double-press confirmation;
+                // `app:help` is the F1 entry (the `?` shortcut on an
+                // empty composer stays hardcoded in the TUI because it
+                // must fall through to typing otherwise).
                 ("ctrl+q", KeybindingAction::AppForceQuit),
                 ("f1", KeybindingAction::AppHelp),
             ],
         ),
-        // ── Chat — defaultBindings.ts:63-98 ───────────────────────────
+        // ── Chat ──────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Chat,
             [
@@ -118,8 +111,8 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 // unless users opt into "Option as Meta". F2 avoids
                 // readline editing keys and does not insert text.
                 ("f2", KeybindingAction::ChatThinkingToggle),
-                // coco-rs extension (no TS counterpart): Ctrl+Y in the
-                // Chat context cycles the Main role's thinking effort
+                // coco-rs extension: Ctrl+Y in the Chat context cycles
+                // the Main role's thinking effort
                 // forward through the active model's
                 // `supported_thinking_levels`. Ctrl+T is reserved for the
                 // global `app:toggleTodos` view cycle (Chat → Tasks →
@@ -130,16 +123,15 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("enter", KeybindingAction::ChatSubmit),
                 ("up", KeybindingAction::HistoryPrevious),
                 ("down", KeybindingAction::HistoryNext),
-                // Undo: dual binding for legacy + kitty-keyboard
-                // protocol terminals (defaultBindings.ts:80-81).
+                // Undo: dual binding for legacy + kitty-keyboard protocol terminals.
                 ("ctrl+_", KeybindingAction::ChatUndo),
                 ("ctrl+shift+-", KeybindingAction::ChatUndo),
                 ("ctrl+x ctrl+e", KeybindingAction::ChatExternalEditor),
                 ("ctrl+g", KeybindingAction::ChatExternalEditor),
                 ("ctrl+s", KeybindingAction::ChatStash),
                 (IMAGE_PASTE_KEY, KeybindingAction::ChatImagePaste),
-                // coco-rs extensions (no TS source) — folded from the old
-                // hardcoded TUI cascade so they are user-rebindable.
+                // coco-rs extensions — folded from the old hardcoded TUI
+                // cascade so they are user-rebindable.
                 (IMAGE_PASTE_KEY_ALT, KeybindingAction::ChatImagePaste),
                 ("ctrl+f", KeybindingAction::ChatKillAgents),
                 ("ctrl+m", KeybindingAction::ChatModelPicker),
@@ -153,7 +145,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("tab", KeybindingAction::ChatTogglePlanMode),
             ],
         ),
-        // ── Autocomplete — defaultBindings.ts:99-107 ──────────────────
+        // ── Autocomplete ──────────────────────────────────────────────
         make_block(
             KeybindingContext::Autocomplete,
             [
@@ -163,7 +155,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("down", KeybindingAction::AutocompleteNext),
             ],
         ),
-        // ── Settings — defaultBindings.ts:108-129 ─────────────────────
+        // ── Settings ──────────────────────────────────────────────────
         make_block(
             KeybindingContext::Settings,
             [
@@ -180,7 +172,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("r", KeybindingAction::SettingsRetry),
             ],
         ),
-        // ── Confirmation — defaultBindings.ts:130-149 ─────────────────
+        // ── Confirmation ──────────────────────────────────────────────
         make_block(
             KeybindingContext::Confirmation,
             [
@@ -197,7 +189,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("ctrl+d", KeybindingAction::PermissionToggleDebug),
             ],
         ),
-        // ── Tabs — defaultBindings.ts:150-159 ─────────────────────────
+        // ── Tabs ──────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Tabs,
             [
@@ -207,7 +199,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("left", KeybindingAction::TabsPrevious),
             ],
         ),
-        // ── Transcript — defaultBindings.ts:160-170 ───────────────────
+        // ── Transcript ────────────────────────────────────────────────
         make_block(
             KeybindingContext::Transcript,
             [
@@ -216,7 +208,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("q", KeybindingAction::TranscriptExit),
             ],
         ),
-        // ── HistorySearch — defaultBindings.ts:171-180 ────────────────
+        // ── HistorySearch ─────────────────────────────────────────────
         make_block(
             KeybindingContext::HistorySearch,
             [
@@ -227,37 +219,36 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("enter", KeybindingAction::HistorySearchExecute),
             ],
         ),
-        // ── Task — defaultBindings.ts:181-188 ─────────────────────────
+        // ── Task ──────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Task,
             [("ctrl+b", KeybindingAction::TaskBackground)],
         ),
-        // ── ThemePicker — defaultBindings.ts:189-194 ──────────────────
+        // ── ThemePicker ───────────────────────────────────────────────
         make_block(
             KeybindingContext::ThemePicker,
             [("ctrl+t", KeybindingAction::ThemeToggleSyntaxHighlighting)],
         ),
-        // ── Scroll (internal) — defaultBindings.ts:195-213 ────────────
+        // ── Scroll (internal) ─────────────────────────────────────────
         make_block(
             KeybindingContext::Scroll,
             [
                 ("pageup", KeybindingAction::ScrollPageUp),
                 ("pagedown", KeybindingAction::ScrollPageDown),
                 // wheelup/wheeldown have no crossterm equivalent at the
-                // KeyEvent layer; they ship as TS aliases for line scroll
-                // here for completeness.
+                // KeyEvent layer; included here for completeness.
                 ("ctrl+home", KeybindingAction::ScrollTop),
                 ("ctrl+end", KeybindingAction::ScrollBottom),
                 ("ctrl+shift+c", KeybindingAction::SelectionCopy),
                 ("cmd+c", KeybindingAction::SelectionCopy),
             ],
         ),
-        // ── Help — defaultBindings.ts:214-219 ─────────────────────────
+        // ── Help ──────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Help,
             [("escape", KeybindingAction::HelpDismiss)],
         ),
-        // ── Attachments — defaultBindings.ts:220-231 ──────────────────
+        // ── Attachments ───────────────────────────────────────────────
         make_block(
             KeybindingContext::Attachments,
             [
@@ -269,7 +260,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("escape", KeybindingAction::AttachmentsExit),
             ],
         ),
-        // ── Footer — defaultBindings.ts:232-245 ───────────────────────
+        // ── Footer ────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Footer,
             [
@@ -283,7 +274,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("escape", KeybindingAction::FooterClearSelection),
             ],
         ),
-        // ── MessageSelector — defaultBindings.ts:246-265 ──────────────
+        // ── MessageSelector ───────────────────────────────────────────
         make_block(
             KeybindingContext::MessageSelector,
             [
@@ -304,7 +295,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("enter", KeybindingAction::MessageSelectorSelect),
             ],
         ),
-        // ── DiffDialog — defaultBindings.ts:296-308 ───────────────────
+        // ── DiffDialog ────────────────────────────────────────────────
         make_block(
             KeybindingContext::DiffDialog,
             [
@@ -316,7 +307,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("enter", KeybindingAction::DiffViewDetails),
             ],
         ),
-        // ── ModelPicker — defaultBindings.ts:309-316 ──────────────────
+        // ── ModelPicker ───────────────────────────────────────────────
         make_block(
             KeybindingContext::ModelPicker,
             [
@@ -324,7 +315,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("right", KeybindingAction::ModelPickerIncreaseEffort),
             ],
         ),
-        // ── Select — defaultBindings.ts:317-330 ───────────────────────
+        // ── Select ────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Select,
             [
@@ -338,7 +329,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
                 ("escape", KeybindingAction::SelectCancel),
             ],
         ),
-        // ── Plugin — defaultBindings.ts:331-339 ───────────────────────
+        // ── Plugin ────────────────────────────────────────────────────
         make_block(
             KeybindingContext::Plugin,
             [

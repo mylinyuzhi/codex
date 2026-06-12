@@ -5,8 +5,6 @@
 //! seam). Server names are namespaced `plugin:<plugin>:<server>` and each
 //! server's environment gets `COCO_PLUGIN_ROOT` injected.
 //!
-//! TS: `utils/plugins/lspPluginIntegration.ts` —
-//! `loadPluginLspServers` / `extractLspServersFromPlugins`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -18,8 +16,8 @@ use serde_json::Value;
 use crate::loader::LoadedPluginV2;
 
 /// The env var a plugin's LSP server process can reference to locate its
-/// install root. Mirrors TS `CLAUDE_PLUGIN_ROOT`; `${CLAUDE_PLUGIN_ROOT}` /
-/// `${COCO_PLUGIN_ROOT}` tokens in `command`/`args` are also substituted.
+/// install root. `${CLAUDE_PLUGIN_ROOT}` / `${COCO_PLUGIN_ROOT}` tokens in
+/// `command`/`args` are also substituted.
 const PLUGIN_ROOT_ENV: &str = "COCO_PLUGIN_ROOT";
 
 /// Collect the namespaced LSP servers contributed by every plugin in `plugins`.
@@ -27,7 +25,7 @@ const PLUGIN_ROOT_ENV: &str = "COCO_PLUGIN_ROOT";
 /// Each enabled plugin's servers (from `<root>/.lsp.json` + manifest
 /// `lsp_servers`) are keyed `plugin:<plugin>:<server>` and merged into one
 /// config. Later plugins win on key collision (the namespace makes collisions
-/// rare). TS `extractLspServersFromPlugins`.
+/// rare).
 pub fn extract_lsp_servers_from_plugins(plugins: &[&LoadedPluginV2]) -> LspServersConfig {
     let mut merged = LspServersConfig::default();
     for plugin in plugins {
@@ -111,7 +109,7 @@ fn merge_record_file(path: &Path, out: &mut HashMap<String, LspServerConfig>) {
 }
 
 /// Merge a `{ server: entry }` JSON object into `out`, accepting both the
-/// native coco-lsp field shape and the TS `extensionToLanguage` map.
+/// native coco-lsp field shape and the `extensionToLanguage` map.
 fn merge_record_value(value: &Value, out: &mut HashMap<String, LspServerConfig>) {
     let Some(map) = value.as_object() else {
         return;
@@ -124,8 +122,8 @@ fn merge_record_value(value: &Value, out: &mut HashMap<String, LspServerConfig>)
 }
 
 /// Convert one server entry into an [`LspServerConfig`]. Native fields
-/// (`file_extensions` / `languages`) deserialize directly; the TS
-/// `extensionToLanguage` map is folded into both vecs.
+/// (`file_extensions` / `languages`) deserialize directly; an
+/// `extensionToLanguage` map (if present) is folded into both vecs.
 fn parse_server_entry(entry: &Value) -> Option<LspServerConfig> {
     let mut config: LspServerConfig = serde_json::from_value(entry.clone())
         .map_err(|e| tracing::warn!("invalid plugin LSP server entry: {e}"))
@@ -147,8 +145,7 @@ fn parse_server_entry(entry: &Value) -> Option<LspServerConfig> {
 }
 
 /// Inject `COCO_PLUGIN_ROOT` and substitute the plugin-root token in
-/// `command` / `args`. Mirrors TS `resolvePluginLspEnvironment` (scoped to the
-/// plugin-root var; `${user_config.X}` substitution is not ported).
+/// `command` / `args` (`${user_config.X}` substitution is not supported).
 fn resolve_env(config: &mut LspServerConfig, plugin_root: &Path) {
     let root = plugin_root.display().to_string();
     config
@@ -169,8 +166,7 @@ fn substitute_root(s: &str, root: &str) -> String {
 }
 
 /// Resolve `rel` against `plugin_root`, rejecting paths that escape the plugin
-/// directory (TS `validatePathWithinPlugin`). Returns `None` if the resolved
-/// path is missing or outside the root.
+/// directory. Returns `None` if the resolved path is missing or outside the root.
 fn resolve_within(plugin_root: &Path, rel: &str) -> Option<std::path::PathBuf> {
     let candidate = plugin_root.join(rel);
     let canonical = candidate.canonicalize().ok()?;

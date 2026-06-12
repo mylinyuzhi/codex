@@ -1,6 +1,4 @@
 //! Prompt suggestions — context-aware suggestions for user input.
-//!
-//! TS: services/PromptSuggestion/ (1.5K LOC)
 
 /// A prompt suggestion shown to the user.
 #[derive(Debug, Clone)]
@@ -37,8 +35,8 @@ pub struct SuggestionContext {
 
 /// Generate suggestions based on current context.
 ///
-/// TS: PromptSuggestion service generates context-aware suggestions
-/// based on cwd, git state, recent files, and session history.
+/// Context-aware suggestions based on cwd, git state, recent files,
+/// and session history.
 pub fn generate_suggestions(ctx: &SuggestionContext) -> Vec<PromptSuggestion> {
     let mut suggestions = Vec::new();
 

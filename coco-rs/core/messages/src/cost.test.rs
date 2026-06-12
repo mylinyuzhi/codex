@@ -142,7 +142,7 @@ fn snapshot_totals_include_web_search_requests_from_loaded_entries() {
 
 #[test]
 fn format_cost_threshold_at_half_dollar() {
-    // TS parity (cost-tracker.ts:177): strict `> 0.5` => 2 decimals, else 4.
+    // Strict `> 0.5` => 2 decimals, else 4.
     assert_eq!(format_cost(1.23), "$1.23");
     assert_eq!(format_cost(0.6), "$0.60");
     assert_eq!(format_cost(0.51), "$0.51");
@@ -198,7 +198,7 @@ fn format_session_cost_renders_per_model_and_total() {
     assert!(out.contains("openai / gpt-5"));
     assert!(out.contains("local / mystery"));
     // Priced model shows its cost; unpriced model is flagged, not mispriced.
-    // 0.30 <= 0.5 => 4-decimal branch (TS parity).
+    // 0.30 <= 0.5 => 4-decimal branch.
     assert!(out.contains("$0.3000"));
     assert!(out.contains("unpriced model"));
     // Thousands grouping + total (0.42 <= 0.5 => 4 decimals).

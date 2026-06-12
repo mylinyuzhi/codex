@@ -2,8 +2,7 @@
 //! modal. Rendering lives in [`crate::presentation::settings`]; this
 //! module owns only the typed state + helper methods.
 //!
-//! TS: src/components/Settings/ (4 files, 2.5K LOC). The Rust port
-//! splits state/render across crate modules so the same state can be
+//! State/render are split across crate modules so the same state can be
 //! rendered into both the modal surface and the embedded surface
 //! content path without duplicating the widget.
 

@@ -6,8 +6,6 @@
 //! envelopes (idle, permission, plan approval, shutdown, mode change)
 //! discriminated by a JSON `type` tag.
 //!
-//! TS: `utils/teammateMailbox.ts`.
-//!
 //! # Module split
 //!
 //! | Submodule | Responsibility |
@@ -46,8 +44,6 @@ pub use protocol::{
 // ── Leader/Worker Identity Helpers ──
 
 /// Check if the current agent is the team leader.
-///
-/// TS: `isTeamLeader(teamName?)`
 pub fn is_team_leader(team_name: &str) -> bool {
     let agent_name = crate::identity::get_agent_name();
     agent_name.as_deref() == Some(crate::constants::TEAM_LEAD_NAME)
@@ -61,25 +57,19 @@ pub fn is_team_leader(team_name: &str) -> bool {
 }
 
 /// Check if the current agent is a swarm worker.
-///
-/// TS: `isSwarmWorker()`
 pub fn is_swarm_worker() -> bool {
     crate::identity::is_teammate()
 }
 
 /// Get the leader's agent name from the team file.
-///
-/// TS: `getLeaderName(teamName?)`
 pub fn get_leader_name(_team_name: &str) -> String {
     crate::constants::TEAM_LEAD_NAME.to_string()
 }
 
-// ── Protocol-message helpers (TS parity) ──
+// ── Protocol-message helpers ──
 
 /// Generate a deterministic-by-agent-identity-but-unique-per-call
 /// request ID for plan_approval.
-///
-/// TS: `generateRequestId('plan_approval', formatAgentId(agentName, teamName))`
 pub fn generate_plan_approval_request_id(agent_name: &str, team_name: &str) -> String {
     // Short random suffix — collisions within a session are astronomically
     // unlikely and the correlation is handled by the leader matching on

@@ -174,7 +174,7 @@ fn test_failure_order_pre_result_posthook_failure_only() {
     let buckets = ToolMessageBuckets {
         pre_hook: vec![user_marker("pre-1")],
         tool_result: Some(tool_result_marker("tu-1", "boom", true)),
-        new_messages: vec![], // TS failure path never emits tool.new_messages
+        new_messages: vec![], // failure path never emits tool.new_messages
         post_hook: vec![user_marker("failure-hook-1")],
         prevent_continuation_attachment: None, // Success-block prevent is bypassed
         path: ToolMessagePath::Failure,

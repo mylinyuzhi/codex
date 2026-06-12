@@ -1,5 +1,4 @@
-//! Coordinator mode — pure-logic helpers mirroring TS
-//! `src/coordinator/coordinatorMode.ts`.
+//! Coordinator mode — pure-logic helpers.
 //!
 //! Coordinator mode flips the assistant from a chat participant into an
 //! orchestrator: the system prompt teaches it to delegate to async workers,
@@ -25,8 +24,7 @@ use crate::filter::ASYNC_AGENT_ALLOWED_TOOLS;
 use crate::fork;
 
 /// Tools that workers must NOT see even though they're in the
-/// async-allowed pool. Mirrors TS `INTERNAL_WORKER_TOOLS` in
-/// `coordinatorMode.ts:30-35`.
+/// async-allowed pool.
 const INTERNAL_WORKER_TOOLS: &[&str] = &[
     ToolName::TeamCreate.as_str(),
     ToolName::TeamDelete.as_str(),
@@ -43,16 +41,14 @@ pub fn is_coordinator_mode_env() -> bool {
 }
 
 /// Composed gate: coordinator mode is active iff agent-teams is enabled
-/// AND the env var is truthy. TS: `isCoordinatorMode()` in
-/// `coordinatorMode.ts:36-41` (`feature('COORDINATOR_MODE')` + env var).
+/// AND the env var is truthy.
 pub fn is_coordinator_mode(features: &Features) -> bool {
     features.enabled(Feature::AgentTeams) && is_coordinator_mode_env()
 }
 
-/// Composed gate for the fork-subagent path. TS
-/// `forkSubagent.ts:isForkSubagentEnabled` short-circuits to `false` when
-/// coordinator mode is on or the session is non-interactive — both are
-/// orthogonal exclusions, so callers compose them with the env-only
+/// Composed gate for the fork-subagent path. Short-circuits to `false`
+/// when coordinator mode is on or the session is non-interactive — both
+/// are orthogonal exclusions, so callers compose them with the env-only
 /// [`fork::is_fork_enabled`].
 ///
 /// `is_non_interactive_session` is supplied by the caller because
@@ -70,9 +66,7 @@ pub fn is_fork_subagent_active(features: &Features, is_non_interactive_session: 
     true
 }
 
-/// Mode value persisted in session-resume metadata. TS:
-/// `sessionMode: 'coordinator' | 'normal' | undefined` parameter on
-/// `matchSessionMode`.
+/// Mode value persisted in session-resume metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SessionMode {
@@ -94,9 +88,9 @@ impl SessionMode {
     }
 }
 
-/// Action a caller should take after [`session_mode_switch_action`]. The
-/// runtime in TS mutates `process.env`; in Rust we surface intent and let
-/// the bootstrap layer (which already owns env composition) flip the var.
+/// Action a caller should take after [`session_mode_switch_action`]. Intent
+/// is surfaced here; the bootstrap layer (which already owns env composition)
+/// flips the var.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SessionModeSwitch {
@@ -109,8 +103,7 @@ pub enum SessionModeSwitch {
 }
 
 impl SessionModeSwitch {
-    /// User-facing warning string mirroring TS
-    /// `coordinatorMode.ts:75-77`.
+    /// User-facing warning string for this switch action.
     pub fn warning(self) -> Option<&'static str> {
         match self {
             Self::NoOp => None,
@@ -121,9 +114,8 @@ impl SessionModeSwitch {
 }
 
 /// Pure decision: given the session's stored mode and the *current*
-/// env-derived state, what should bootstrap do? Mirrors
-/// `matchSessionMode` from `coordinatorMode.ts:48-79` minus the env
-/// mutation (caller responsibility).
+/// env-derived state, what should bootstrap do? Env mutation is the
+/// caller's responsibility.
 pub fn session_mode_switch_action(
     stored: Option<SessionMode>,
     current_is_coordinator: bool,
@@ -143,12 +135,11 @@ pub fn session_mode_switch_action(
 }
 
 /// Tool-pool override applied to subagents spawned by the AgentTool when
-/// the coordinator is active. Mirrors TS `coordinatorMode.ts:88-93`.
+/// the coordinator is active.
 ///
 /// Returns the **deduplicated, sorted** allowed list — mostly the
 /// [`ASYNC_AGENT_ALLOWED_TOOLS`] set minus [`INTERNAL_WORKER_TOOLS`]. When
-/// `simple_mode` is true (TS `CLAUDE_CODE_SIMPLE`), narrows further to
-/// the Bash / Read / Edit triplet.
+/// `simple_mode` is true, narrows further to the Bash / Read / Edit triplet.
 pub fn worker_tool_pool(simple_mode: bool) -> Vec<&'static str> {
     if simple_mode {
         let mut out: Vec<&'static str> = vec![
@@ -171,16 +162,14 @@ pub fn worker_tool_pool(simple_mode: bool) -> Vec<&'static str> {
 }
 
 /// Builds the user-context map injected into worker-spawning prompts.
-/// Mirrors TS `getCoordinatorUserContext` in `coordinatorMode.ts:81-108`.
 ///
 /// - `mcp_server_names` → the `Workers also have access to MCP tools …`
 ///   sentence appended when non-empty.
 /// - `scratchpad_dir` → the scratchpad section appended when both `Some`
-///   and `scratchpad_gate_enabled`. TS gates on `tengu_scratch`; Rust
-///   surfaces this as a caller-supplied bool so we don't reach into a
-///   GrowthBook shim that doesn't exist.
+///   and `scratchpad_gate_enabled`. Surfaced as a caller-supplied bool so
+///   we don't reach into a GrowthBook shim that doesn't exist.
 ///
-/// Returned map key matches TS: `"workerToolsContext"`.
+/// Returned map key: `"workerToolsContext"`.
 pub fn coordinator_user_context(
     features: &Features,
     mcp_server_names: &[&str],
@@ -221,11 +210,10 @@ pub fn coordinator_user_context(
     out
 }
 
-/// The full coordinator system prompt. Mirrors TS
-/// `getCoordinatorSystemPrompt` in `coordinatorMode.ts:111-369`
-/// (verbatim modulo tool-name interpolation + the simple-mode toggle).
+/// The full coordinator system prompt.
+///
 /// Tool names come from [`ToolName`] so the schema and prompt can never
-/// drift; the prose is byte-faithful to the TS template.
+/// drift.
 pub fn coordinator_system_prompt(simple_mode: bool) -> String {
     let agent = ToolName::Agent.as_str();
     let send_message = ToolName::SendMessage.as_str();
@@ -494,9 +482,9 @@ You:\n\
     )
 }
 
-/// XML payload format for coordinator notifications. Caller (the runner)
-/// wraps this in a user-role message; the assistant detects coordinator
-/// notifications by the `<task-notification>` opening tag.
+/// XML payload for coordinator notifications. Caller (the runner) wraps this
+/// in a user-role message; the assistant detects coordinator notifications
+/// by the `<task-notification>` opening tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskNotification<'a> {
     pub task_id: &'a str,
@@ -556,11 +544,8 @@ pub fn looks_like_task_notification(text: &str) -> bool {
 /// Inverse of [`render_task_notification`]. Returns `None` if the text
 /// is not a task-notification or any required tag is missing.
 ///
-/// Matches the format documented in TS `coordinatorMode.ts:142-167`:
-/// `<task-notification>...<task-id>X</task-id>...<status>X</status>...`
-/// `<summary>X</summary>...[<result>X</result>]...[<usage>...</usage>]...`
-/// `</task-notification>`. The XML is hand-rolled (not full XML) so the
-/// parser uses tag-bracket scanning rather than an XML library.
+/// The XML is hand-rolled (not full XML) so the parser uses tag-bracket
+/// scanning rather than an XML library.
 pub fn parse_task_notification(text: &str) -> Option<ParsedTaskNotification> {
     if !looks_like_task_notification(text) {
         return None;
@@ -602,9 +587,8 @@ fn extract_tag<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
     Some(&text[start..end])
 }
 
-/// Render a [`TaskNotification`] in TS-parity XML. Whitespace and tag
-/// order match `coordinatorMode.ts:154-167` so the assistant's pattern
-/// match against the documented format succeeds.
+/// Render a [`TaskNotification`] as XML. Whitespace and tag order match
+/// the documented format so the assistant's pattern match succeeds.
 pub fn render_task_notification(n: &TaskNotification<'_>) -> String {
     let mut out = String::new();
     out.push_str("<task-notification>\n");

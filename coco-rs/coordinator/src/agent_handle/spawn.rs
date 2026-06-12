@@ -34,8 +34,7 @@ pub(super) fn hook_ctx_for_cwd(cwd: &str) -> coco_hooks::orchestration::Orchestr
 
 /// Variant that stamps `agent_id` / `agent_type` onto the
 /// [`coco_hooks::orchestration::OrchestrationContext`] so every fired
-/// hook's `BaseHookInput` carries the subagent identity (TS parity:
-/// `createBaseHookInput()` in `utils/hooks.ts:301-328`).
+/// hook's `BaseHookInput` carries the subagent identity.
 pub(super) fn hook_ctx_for_subagent(
     cwd: &str,
     agent_id: Option<&str>,
@@ -66,8 +65,7 @@ pub(super) fn hook_ctx_for_subagent(
     }
 }
 
-/// Free-function helper for `WorktreeCreate` (TS
-/// `executeWorktreeCreateHook(slug)` at `worktree.ts:716/913/1262`).
+/// Free-function helper for `WorktreeCreate`.
 /// Coco-rs does git creation directly (`AgentWorktreeManager::create_for`),
 /// so the hook is observe-only — non-zero exit codes are logged but
 /// don't roll back the worktree.
@@ -84,11 +82,10 @@ pub(super) async fn fire_worktree_create_hook(
     }
 }
 
-/// Free-function helper for `WorktreeRemove` (TS
-/// `executeWorktreeRemoveHook(path)` at `worktree.ts:827/968`). Fired
-/// only when `cleanup_if_unchanged` actually removed the worktree;
-/// `Kept` outcomes preserve the user's work so the remove notification
-/// is suppressed (TS parity).
+/// Free-function helper for `WorktreeRemove`. Fired only when
+/// `cleanup_if_unchanged` actually removed the worktree; `Kept`
+/// outcomes preserve the user's work so the remove notification is
+/// suppressed.
 pub(super) async fn fire_worktree_remove_hook(
     registry: Option<Arc<coco_hooks::HookRegistry>>,
     cwd: &str,
@@ -233,14 +230,12 @@ impl SwarmAgentHandle {
     /// Register frontmatter hooks scoped to this spawn's agent_id.
     /// Returns `true` if any hooks were registered (caller should
     /// arrange `clear_frontmatter_hooks(agent_id)` at SubagentStop).
-    /// TS parity: `runAgent.ts:564-575`
-    /// `registerFrontmatterHooks(setAppState, agentId, definition.hooks, ...)`.
     ///
-    /// The `def.hooks` field is `serde_json::Value` because TS's
-    /// shape is an event-keyed map of arrays — same as
-    /// `Settings.hooks`. We parse via `coco_hooks::load_hooks_from_config`
-    /// and stamp `HookScope::Session` (TS treats agent-scoped hooks
-    /// as session-priority because they're programmatic, not config).
+    /// The `def.hooks` field is `serde_json::Value` because the hooks
+    /// shape is an event-keyed map of arrays — same as `Settings.hooks`.
+    /// We parse via `coco_hooks::load_hooks_from_config` and stamp
+    /// `HookScope::Session` (agent-scoped hooks are session-priority
+    /// because they're programmatic, not config).
     pub(super) fn register_frontmatter_hooks(
         &self,
         agent_id: &str,
@@ -288,7 +283,6 @@ impl SwarmAgentHandle {
     }
 
     /// Symmetrical cleanup: drop the per-agent hook bucket.
-    /// TS parity: `clearSessionHooks(setAppState, agentId)`.
     ///
     /// **W6.2 full**: kept (rather than deleted as "dead code")
     /// because the bg path's `tokio::spawn` closure uses
@@ -311,13 +305,12 @@ impl SwarmAgentHandle {
     ///   tools through the inherited `McpHandle`.
     /// - `Inline(config)`: call `add_dynamic_server(name, config)` on
     ///   the handle. Track the new name under `agent_id` so
-    ///   `cleanup_per_agent_mcp` removes only the newly-created
-    ///   ones. TS parity: `runAgent.ts:135-191` distinguishes
-    ///   `isNewlyCreated` so cleanup doesn't touch shared servers.
+    ///   `cleanup_per_agent_mcp` removes only the newly-created ones.
+    ///   Cleanup skips string-ref entries (they point at parent-shared
+    ///   connections that must not be torn down).
     ///
-    /// Any inline-add failure logs at warn and continues — TS
-    /// behaviour: a failed server logs and the agent runs without
-    /// that one.
+    /// Any inline-add failure logs at warn and continues — a failed
+    /// server logs and the agent runs without that one.
     pub(super) async fn initialize_per_agent_mcp(
         &self,
         agent_id: &str,
@@ -413,8 +406,7 @@ impl SwarmAgentHandle {
     ///
     /// `read_skill_body` enforces the author / runtime gates so
     /// `disable_model_invocation: true` skills and `off`-overridden
-    /// skills are filtered out automatically. TS parity:
-    /// `runAgent.ts:577-645` runs the same `XG$` predicate.
+    /// skills are filtered out automatically.
     pub(super) async fn preload_frontmatter_skills(
         &self,
         definition: Option<&coco_types::AgentDefinition>,
@@ -459,8 +451,8 @@ impl SwarmAgentHandle {
     }
 
     /// Fire SubagentStop hooks. Errors are logged and swallowed — a
-    /// failed stop hook must not gate the spawn's response. TS parity:
-    /// stop hooks run for completion / failure / cancel.
+    /// failed stop hook must not gate the spawn's response. Stop hooks
+    /// run for completion / failure / cancel.
     ///
     /// **W6.2 full**: see `clear_frontmatter_hooks` — both detached
     /// spawn paths now invoke `fire_subagent_stop_for_task` directly.
@@ -507,12 +499,8 @@ impl SwarmAgentHandle {
 /// is always sent on; `Err(RecvError)` is now exclusively a panic
 /// signal.
 ///
-/// TS source-of-truth: `tools/AgentTool/AgentTool.tsx:886-892` uses
-/// `Promise.race([iterator.next(), backgroundSignal])` where both
-/// Promises remain observable after the race. The tagged enum is the
-/// Rust equivalent — Tokio's oneshot semantics force us to model the
-/// "engine completed but caller already moved on" case explicitly
-/// rather than relying on Promise object lifetime.
+/// Tokio's oneshot semantics force us to model the "engine completed
+/// but caller already moved on" case explicitly.
 #[derive(Debug)]
 enum EngineOutcome {
     /// Engine ran inline; the awaiter wins the race and returns this
@@ -586,7 +574,7 @@ fn spawn_task_event_drain(
     mut event_rx: tokio::sync::mpsc::Receiver<coco_types::CoreEvent>,
 ) {
     tokio::spawn(async move {
-        // TS parity: ProgressTracker increments on every ToolUseStarted,
+        // ProgressTracker increments on every ToolUseStarted,
         // while TextDelta is appended so TaskOutput can read mid-flight
         // output.
         let mut tracker = coco_types::TaskProgress::default();
@@ -604,9 +592,8 @@ fn spawn_task_event_drain(
                 }) => {
                     tracker.tool_use_count = tracker.tool_use_count.saturating_add(1);
                     tracker.last_tool_name = Some(name.clone());
-                    // Maintain a cap-5 ring buffer of recent activities.
-                    // TS parity: `tasks/LocalAgentTask/LocalAgentTask.tsx:40`
-                    // `MAX_RECENT_ACTIVITIES = 5`. Newest at the end;
+                    // Maintain a cap-5 ring buffer of recent activities
+                    // (MAX_RECENT_ACTIVITIES = 5). Newest at the end;
                     // renderers consume in insertion order.
                     const RECENT_ACTIVITIES_CAP: usize = 5;
                     if tracker.recent_activities.len() >= RECENT_ACTIVITIES_CAP {
@@ -665,16 +652,15 @@ fn spawn_agent_summary_timer(timer: AgentSummaryTimer) {
             if registry.is_terminal(&task_id).await {
                 break;
             }
-            // Read the engine's live message history (TS `agentSummary.ts`
-            // `getAgentTranscript`). Skip the tick when the transcript is too
-            // short to be worth a fork — TS gates on
-            // `transcript.messages.length < 3`.
+            // Read the engine's live message history. Skip the tick when
+            // the transcript is too short to be worth a fork (fewer than
+            // 3 messages).
             let messages = live_transcript.snapshot();
             if !coco_subagent::should_summarize(messages.len()) {
                 continue;
             }
             // Drop orphaned `tool_use` blocks / whitespace- and thinking-only
-            // turns before rendering (TS `filterIncompleteToolCalls`).
+            // turns before rendering.
             let cleaned = coco_subagent::filter_transcript(&messages);
             let transcript = coco_subagent::render_transcript_tail(&cleaned, MAX_TRANSCRIPT_CHARS);
             if transcript.trim().is_empty() {
@@ -783,11 +769,10 @@ impl SwarmAgentHandle {
                     );
                     match m.create_for(&slug) {
                         Ok(s) => {
-                            // TS `executeWorktreeCreateHook(slug)` fires
-                            // here so user hooks can react to (or override
-                            // future creations of) per-agent worktrees.
+                            // Fire WorktreeCreate hook so user hooks can
+                            // react to per-agent worktree creation.
                             // Coco-rs always uses git internally — the
-                            // hook is observe-only for now (`worktree.ts:716`).
+                            // hook is observe-only.
                             fire_worktree_create_hook(
                                 self.hook_registry().cloned(),
                                 &self.cwd,
@@ -881,7 +866,7 @@ impl SwarmAgentHandle {
         // `Explore` spawns render in the same color regardless of how many
         // copies are running. Consumed by `presentation::activity` and
         // `CoordinatorPanel`. Teammates use a separate per-`name@team`
-        // cache. TS: `tools/AgentTool/agentColorManager.ts:setAgentColor`.
+        // cache.
         if let Some(id) = agent_type_id.as_ref() {
             let _ = crate::pane::layout::assign_agent_type_color(id);
         }
@@ -890,9 +875,7 @@ impl SwarmAgentHandle {
         // requested spawn mode:
         //
         // - Fresh     → no history; system prompt seeded from
-        //               `definition.system_prompt` (TS-parity
-        //               `runAgent.ts:906-932 getAgentSystemPrompt` →
-        //               `getSystemPrompt({...})`). Built-ins populate
+        //               `definition.system_prompt`. Built-ins populate
         //               this via [`coco_subagent::builtin_prompts`];
         //               markdown agents via the body of their `.md`
         //               file. Without this, the child would fall
@@ -901,10 +884,9 @@ impl SwarmAgentHandle {
         // - Fork      → parent's pre-rendered system-prompt bytes
         //               verbatim (cache parity), parent history with
         //               `tool_result` blocks rewritten to
-        //               `FORK_PLACEHOLDER` (TS `forkSubagent.ts`).
+        //               `FORK_PLACEHOLDER`.
         // - Resume    → seed from `definition.system_prompt` like
-        //               Fresh (TS `resumeAgent.ts` rebuilds from the
-        //               definition); prior history kept verbatim (NO
+        //               Fresh; prior history kept verbatim (NO
         //               placeholder rewrite — the child needs real
         //               tool outputs to continue).
         //
@@ -955,10 +937,8 @@ impl SwarmAgentHandle {
         // Local scopes are per-repo and ignore `config_home`.
         let config_home = coco_config::global_config::config_home();
 
-        // Per-agent memory block (TS parity:
-        // `tools/AgentTool/loadAgentsDir.ts:484,728` + `loadPluginAgents.ts:207`).
-        // Fork inherits parent's rendered prompt verbatim so memory
-        // injection is skipped there.
+        // Per-agent memory block. Fork inherits parent's rendered prompt
+        // verbatim so memory injection is skipped there.
         let inject_memory = !matches!(
             request.spawn_mode,
             coco_tool_runtime::SpawnMode::Fork { .. }
@@ -985,17 +965,13 @@ impl SwarmAgentHandle {
         //   - CLAUDE.md discovery (gated by `def.omit_claude_md`)
         //   - Memory block (appended at the correct cache-broken
         //     position)
-        // TS parity: `AgentTool.tsx:534`
-        // `enhanceSystemPromptWithEnvDetails([agentPrompt], model, …)`.
         //
         // For `coco-guide` specifically: the agent's static identity is
         // augmented with a per-spawn dynamic context block listing the
         // user's custom skills / agents / MCP servers / plugin commands /
-        // settings.json snapshot. TS source:
-        // `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`'s
-        // `getSystemPrompt({toolUseContext})` callback. The builder
-        // closure is installed by the CLI bootstrap; absent installation
-        // the spawn falls back to the static base only.
+        // settings.json snapshot. The builder closure is installed by
+        // the CLI bootstrap; absent installation the spawn falls back to
+        // the static base only.
         let coco_guide_context_builder = self.coco_guide_context_builder().cloned();
         let build_fresh_prompt = || -> String {
             let def = request.definition.as_deref();
@@ -1008,8 +984,7 @@ impl SwarmAgentHandle {
             // installed. Owned `String` so the assembler below can
             // borrow with `&str` like the static path. Empty result
             // (every section omitted) is treated identically to
-            // "no builder installed" — TS parity for the
-            // `if (contextSections.length > 0)` gate.
+            // "no builder installed".
             let identity_owned: Option<String> =
                 if agent_type == coco_types::SubagentType::CocoGuide.as_str() {
                     coco_guide_context_builder.as_ref().and_then(|build| {
@@ -1027,8 +1002,8 @@ impl SwarmAgentHandle {
                 } else {
                     coco_context::discover_memory_files(&cwd_for_prompt)
                 };
-            // TS `context.ts`: suppress git status under COCO_REMOTE or a
-            // disabled `include_git_instructions` setting.
+            // Suppress git status under COCO_REMOTE or a disabled
+            // `include_git_instructions` setting.
             let git_env = coco_config::EnvSnapshot::from_current_process();
             let include_git_status = !git_env.is_truthy(coco_config::EnvKey::CocoRemote)
                 && coco_config::gitsettings::should_include_git_instructions(
@@ -1054,13 +1029,11 @@ impl SwarmAgentHandle {
                 /*skill_listing=*/
                 None,
                 memory_block.as_deref(),
-                // AGENT_NOTES via `notes_after_env` — TS subagent path
-                // (`AgentTool.tsx:534 enhanceSystemPromptWithEnvDetails`)
+                // AGENT_NOTES via `notes_after_env` — the subagent path
                 // bundles `notes` with the env block. By passing them
-                // through this slot they render BEFORE memory (matching
-                // TS), not after. Main agent path passes `None` because
-                // TS `getSystemPrompt` has richer per-section rules
-                // instead of these 4 condensed bullets.
+                // through this slot they render BEFORE memory, not after.
+                // Main agent path passes `None` because it uses richer
+                // per-section rules instead of these 4 condensed bullets.
                 Some(coco_context::prompt::AGENT_NOTES),
                 /*output_style=*/ None,
                 /*additional_working_directories=*/ &[],
@@ -1176,12 +1149,11 @@ impl SwarmAgentHandle {
             // threaded through as the child engine's `ToolFilter`
             // allow-list — resolved against the real registry in
             // `agent_adapter` and narrowed by the parent filter.
-            // `Wildcard` (TS `tools: undefined` / `['*']`) stays empty =
+            // `Wildcard` (`tools: undefined` / `['*']`) stays empty =
             // permissive; an `Explicit` list restricts. Threading it here
             // is load-bearing: leaving it empty silently dropped the
             // allow-list so a restricted custom agent ran with the
-            // parent's full tool surface. TS parity:
-            // `agentToolUtils.ts::resolveAgentTools`.
+            // parent's full tool surface.
             allowed_tools: if request
                 .features
                 .as_deref()
@@ -1207,9 +1179,8 @@ impl SwarmAgentHandle {
                 }
             },
             // `disallowed_tools` = the agent's own deny-list (frontmatter)
-            // PLUS the universal subagent block (TS `filterToolsForAgent`
-            // `ALL_AGENT_DISALLOWED_TOOLS`, applied before the allow-list):
-            // Agent / AskUserQuestion / TaskOutput / TaskStop /
+            // PLUS the universal subagent block (applied before the
+            // allow-list): Agent / AskUserQuestion / TaskOutput / TaskStop /
             // Enter+ExitPlanMode are denied for every spawned subagent
             // regardless of its `tools:` — otherwise a wildcard (default) or
             // self-listing subagent could spawn nested agents, prompt the
@@ -1262,15 +1233,13 @@ impl SwarmAgentHandle {
                 .map(|c| c.allowed_write_roots.clone())
                 .unwrap_or_default(),
             // P1-6 fix — plan-mode children route through ModelRole::Plan
-            // regardless of the agent's declared role. TS parity: in
-            // plan mode the leader's main client swap promotes to the
-            // plan model (`engine.rs:1056-1087`); for custom agents
-            // spawned with `mode: "plan"` we replicate that promotion
-            // at the role level so the inference layer's role-resolver
-            // routes to the plan client. Without this, a custom agent
-            // declaring `model_role: subagent` and called with
-            // `mode: plan` ran on the cheaper Subagent model — silently
-            // worse for plan-mode reasoning quality.
+            // regardless of the agent's declared role. Custom agents
+            // spawned with `mode: "plan"` get this promotion at the role
+            // level so the inference layer's role-resolver routes to the
+            // plan client. Without this, a custom agent declaring
+            // `model_role: subagent` and called with `mode: plan` ran on
+            // the cheaper Subagent model — silently worse for plan-mode
+            // reasoning quality.
             model_role: Some(
                 if request.mode.as_deref() == Some("plan")
                     && !matches!(
@@ -1350,7 +1319,7 @@ impl SwarmAgentHandle {
                 .await;
         }
 
-        // ── Frontmatter hooks registration (TS parity: runAgent.ts:564-575) ──
+        // ── Frontmatter hooks registration ──
         //
         // Register `def.hooks` under the spawn's agent_id so they're
         // visible to every event firing during this spawn. Cleared at
@@ -1359,7 +1328,7 @@ impl SwarmAgentHandle {
         let registered_frontmatter_hooks =
             self.register_frontmatter_hooks(&agent_id, request.definition.as_deref());
 
-        // ── Per-agent MCP servers (TS parity: runAgent.ts:95-218 initializeAgentMcpServers) ──
+        // ── Per-agent MCP servers ──
         //
         // String-ref entries piggyback on the parent's pre-existing
         // connections; inline `{name: config}` entries get registered
@@ -1367,7 +1336,7 @@ impl SwarmAgentHandle {
         self.initialize_per_agent_mcp(&agent_id, request.definition.as_deref())
             .await;
 
-        // ── Frontmatter skills preload (TS parity: runAgent.ts:577-645) ──
+        // ── Frontmatter skills preload ──
         //
         // When `def.skills` is non-empty, resolve each skill's body
         // via the installed `SkillHandle` and prepend the loaded
@@ -1378,24 +1347,22 @@ impl SwarmAgentHandle {
             .preload_frontmatter_skills(request.definition.as_deref(), &request.prompt)
             .await;
 
-        // ── SubagentStart hook firing (TS parity: runAgent.ts:530-555) ──
+        // ── SubagentStart hook firing ──
         //
         // Fire user-defined SubagentStart hooks and inject their
         // `additional_contexts` into the child's prompt as a leading
-        // system-reminder block. Pre-fix: SubagentStart was defined in
-        // the hook event taxonomy but no caller ever fired it for
-        // subagent spawns.
+        // system-reminder block.
         let (decorated_prompt, _start_result) = self
             .fire_subagent_start_hook(&agent_id, agent_type, &prompt_with_skills)
             .await;
 
-        // Fork mode: wrap the decorated directive in the TS-parity
+        // Fork mode: wrap the decorated directive in the
         // `<fork-boilerplate>...</fork-boilerplate>` envelope so:
         //   - the worker receives its rules (no-converse, scope-bound,
-        //     report-format) — TS `forkSubagent.ts:173-194`.
+        //     report-format).
         //   - the conversation contains the boilerplate tag so a future
         //     `is_in_fork_child(parent_messages)` scan blocks recursive
-        //     forking — `forkSubagent.ts::isInForkChild`.
+        //     forking.
         let effective_prompt = if is_fork {
             coco_subagent::build_fork_child_message(&decorated_prompt)
         } else {
@@ -1403,8 +1370,7 @@ impl SwarmAgentHandle {
         };
 
         // W4 (B1 fix): register the sync agent in TaskRuntime when
-        // a registry is wired. TS parity: sync agents go through
-        // `registerAgentForeground` which populates `appState.tasks`
+        // a registry is wired. Sync agents populate `appState.tasks`
         // so the UI panel + TaskList tool see them as Running.
         // Without this, sync agents were invisible — only background
         // agents were tracked.
@@ -1413,13 +1379,11 @@ impl SwarmAgentHandle {
         // `AutoDream` fork label, register as `TaskType::Dream`
         // instead of `LocalAgent` so the TUI panel + `TaskList` tool
         // can differentiate auto-memory consolidation from
-        // user-spawned subagents. TS parity:
-        // `tasks/DreamTask/DreamTask.ts:72` `registerTask({type:
-        // 'dream'})`. Other framework-spawned forks (extract /
+        // user-spawned subagents. Other framework-spawned forks (extract /
         // session-memory / prompt-suggestion / side-question /
         // compact / agent-summary / speculation) are
         // service-internal and don't surface as user-visible
-        // tasks — TS doesn't register them either.
+        // tasks — not registered as user-visible tasks.
         //
         // The cancel token from `register_*_task` lets `kill_task`
         // propagate into the engine via the `tokio::select!` race
@@ -1437,8 +1401,7 @@ impl SwarmAgentHandle {
                     .register_dream_task(&description, task_cancel.clone())
                     .await
             } else {
-                // TS parity (`AgentTool.tsx:826`): foreground spawns
-                // (run_in_background=false) optionally arm the
+                // Foreground spawns (run_in_background=false) optionally arm the
                 // auto-detach timer. Background spawns ignore the
                 // field — they detach immediately by definition.
                 let registration = match request
@@ -1478,7 +1441,7 @@ impl SwarmAgentHandle {
         //   returns `AsyncLaunched` immediately. Engine task keeps
         //   running, eventually calls `mark_completed`/`mark_failed`
         //   on its own (pushes `<task-notification>` envelope).
-        //   This is the TS-parity "detach but keep running" behavior.
+        //   This is the "detach but keep running" behavior.
         // - **External cancel** (`kill_task(tid)`): engine task's
         //   inner select observes the cancel and exits with an Err
         //   QueryResult. Cleanup still runs in the engine task; the
@@ -1690,19 +1653,16 @@ impl SwarmAgentHandle {
             // send via the oneshot. The channel is **never dropped
             // without sending**, so the inline awaiter's `Err(RecvError)`
             // path now only fires on a true panic — not on a
-            // bg-handoff-after-engine-completion race. TS parity:
-            // `Promise.race([engine.next(), backgroundSignal])` keeps
-            // both Promises observable; we model that with a typed
-            // outcome on a single channel.
+            // bg-handoff-after-engine-completion race. Both completion
+            // and detach paths remain observable via a typed outcome on
+            // a single channel.
             let was_detached = detached_flag_for_engine.load(std::sync::atomic::Ordering::SeqCst);
             let outcome = if was_detached {
                 // Inline awaiter has likely already returned AsyncLaunched
                 // via `detach.notified()`. Push the `<task-notification>`
                 // envelope so the model rediscovers the result through the
                 // bg path (same envelope `register_background_agent_task`
-                // spawns produce). TS parity: `AgentTool.tsx:978-1029` —
-                // when `wasBackgrounded` is true, the iterator continuation
-                // calls `enqueueAgentNotification`.
+                // spawns produce).
                 if let Some(tid) = task_id_for_engine.as_deref() {
                     match response.status {
                         AgentSpawnStatus::Completed => {
@@ -1745,9 +1705,7 @@ impl SwarmAgentHandle {
                 // Inline caller is still alive. Silent terminal — the
                 // response carries the outcome inline; no notification
                 // envelope (would be redundant with the tool result the
-                // model sees). TS parity: `AgentTool.tsx:957
-                // completeAgentTask` writes state but doesn't call
-                // `enqueueAgentNotification` for the sync return path.
+                // model sees).
                 if let Some(tid) = task_id_for_engine.as_deref() {
                     task_registry_for_engine
                         .complete_silent(
@@ -1772,9 +1730,8 @@ impl SwarmAgentHandle {
         // | `Err(RecvError)`                    | true panic in engine task               |
         // | `detach.notified()` wins            | external Ctrl+B → AsyncLaunched         |
         //
-        // The `Err` arm now only fires on a real panic — TS-parity with
-        // `Promise.race` where neither Promise is "dropped"; both stay
-        // observable.
+        // The `Err` arm now only fires on a real panic — both completion
+        // and detach paths stay observable.
         let task_id_for_async_response = sync_task.as_ref().map(|(id, _)| id.clone());
 
         if let Some(detach) = detach_handle_for_inline {
@@ -1850,13 +1807,11 @@ impl SwarmAgentHandle {
         // `Agent(...)` tool_use_id and the *invoker* agent_id
         // (the agent that called AgentTool, not the new
         // subagent's id) so completion notifications route
-        // correctly. TS parity: `AgentTool.tsx` passes both into
-        // `registerAsyncAgent`.
+        // correctly.
         //
         // PR 1 / W1: bg path uses `AgentRegistration::Background` so
         // the task entry's `is_backgrounded` flag initializes to
-        // `true` from creation — matches TS `registerAsyncAgent`'s
-        // `isBackgrounded: true` literal (`LocalAgentTask.tsx:499`).
+        // `true` from creation.
         let task_id = task_registry
             .register_agent_task_with_id(
                 agent_id.clone(),
@@ -1868,8 +1823,7 @@ impl SwarmAgentHandle {
             )
             .await;
 
-        // Per-agent metadata sidecar (TS `writeAgentMetadata` at
-        // `utils/sessionStorage.ts:283`). Persisted at registration so
+        // Per-agent metadata sidecar. Persisted at registration so
         // resume can route the rehydrated spawn to the right `agent_type`
         // and (if worktree-isolated) restore cwd_override.
         let session_id = request.session_id.clone();
@@ -1899,14 +1853,12 @@ impl SwarmAgentHandle {
         query_config.event_tx = Some(event_tx);
         spawn_task_event_drain(task_registry.clone(), task_id.clone(), event_rx);
 
-        // Periodic AgentSummary timer (TS parity gate `AgentTool.tsx:750-852`):
-        // only run when the spawn requested it via `enable_summarization`.
-        // AgentTool resolves the flag at the boundary as
-        // `is_coordinator || is_fork_subagent || sdk_opt_in`. Default-off
-        // keeps a saturated coordinator (16 spawns × 30 s = 32 LLM calls/min)
-        // off the user's hot path unless they explicitly opted in. The reader
-        // half of the engine's snapshot sink rides on `query_config`
-        // (`Some` iff `enable_summarization`).
+        // Periodic AgentSummary timer: only run when the spawn requested it
+        // via `enable_summarization`. Default-off keeps a saturated coordinator
+        // (16 spawns × 30 s = 32 LLM calls/min) off the user's hot path
+        // unless they explicitly opted in. The reader half of the engine's
+        // snapshot sink rides on `query_config` (`Some` iff
+        // `enable_summarization`).
         match query_config.live_transcript.clone() {
             Some(live) => spawn_agent_summary_timer(AgentSummaryTimer {
                 registry: task_registry.clone(),
@@ -1932,10 +1884,9 @@ impl SwarmAgentHandle {
         let hook_registry_for_task = self.hook_registry().cloned();
         let cwd_for_task = self.cwd.clone();
         let agent_type_for_task = agent_type.to_string();
-        // Bg-path handoff classifier: TS `AgentTool.tsx:961-973` runs the
-        // classifier for background spawns too (auto mode only). Clone the
-        // side-query handle + permission mode so the detached task can gate
-        // and run it after completion.
+        // Bg-path handoff classifier: runs for background spawns too (auto
+        // mode only). Clone the side-query handle + permission mode so the
+        // detached task can gate and run it after completion.
         let side_query_for_task = self.side_query().cloned();
         let mode_for_task = request
             .mode
@@ -1967,9 +1918,8 @@ impl SwarmAgentHandle {
         let bg_start = std::time::Instant::now();
         tokio::spawn(async move {
             // Fire SubagentStart hooks before kicking off execution and
-            // prepend any returned context blocks to the prompt. TS
-            // parity: `runAgent.ts:530-555`. Bg path mirrors the sync
-            // path's behaviour (added in this fix round).
+            // prepend any returned context blocks to the prompt. Bg path
+            // mirrors the sync path's behaviour.
             let decorated_prompt = fire_subagent_start_for_task(
                 hook_registry_for_task.clone(),
                 &cwd_for_task,
@@ -1979,10 +1929,10 @@ impl SwarmAgentHandle {
             )
             .await;
 
-            // Fork mode: wrap the decorated directive in the TS-parity
+            // Fork mode: wrap the decorated directive in the
             // `<fork-boilerplate>...</fork-boilerplate>` envelope. See
             // sync-path comment above for the rationale (recursion
-            // guard + worker rules). Mirrors `forkSubagent.ts::buildChildMessage`.
+            // guard + worker rules).
             let effective_prompt = if is_fork {
                 coco_subagent::build_fork_child_message(&decorated_prompt)
             } else {
@@ -2003,9 +1953,9 @@ impl SwarmAgentHandle {
             };
 
             // Fire SubagentStop AFTER execution completes (success,
-            // failure, or cancel — TS parity). Transcript path is
-            // populated when the per-agent JSONL store is wired and a
-            // session-id is available.
+            // failure, or cancel). Transcript path is populated when
+            // the per-agent JSONL store is wired and a session-id is
+            // available.
             let transcript_path = transcript_store_for_task
                 .as_ref()
                 .filter(|_| !session_id_for_task.is_empty())
@@ -2020,15 +1970,13 @@ impl SwarmAgentHandle {
             .await;
 
             // Cleanup per-agent hook bucket. Mirrors sync path's
-            // `clear_frontmatter_hooks(&agent_id)`. TS parity:
-            // `runAgent.ts` finally `clearSessionHooks(...)`.
+            // `clear_frontmatter_hooks(&agent_id)`.
             if registered_frontmatter_hooks && let Some(reg) = hook_registry_for_task.as_ref() {
                 reg.clear_agent_scope(&agent_id_for_task);
             }
 
-            // Tear down dynamically-added MCP servers. TS parity:
-            // `runAgent.ts:197-210 mcpCleanup`. Pull names from the
-            // shared map (same write lock the sync path uses) and
+            // Tear down dynamically-added MCP servers. Pull names from
+            // the shared map (same write lock the sync path uses) and
             // call `remove_dynamic_server` per entry.
             let dynamic_names = dynamic_mcp_servers_for_task
                 .write()
@@ -2082,17 +2030,16 @@ impl SwarmAgentHandle {
             }
             match outcome {
                 Ok(qr) => {
-                    // TS `LocalAgentTask.tsx:249-251` — the
-                    // completion notification carries the final assistant
+                    // The completion notification carries the final assistant
                     // text, usage stats, and worktree info so the model
                     // sees a rich `<result>` / `<usage>` / `<worktree>`
                     // envelope on the next turn.
                     let duration_ms = bg_start.elapsed().as_millis() as i64;
-                    // TS `AgentTool.tsx:961-973` — run the handoff classifier
-                    // on the background result too (auto mode only). It
-                    // returns the (possibly safety-prefixed) response text;
-                    // fall back to the last assistant message when the
-                    // classifier passes through with no `response_text`.
+                    // Run the handoff classifier on the background result too
+                    // (auto mode only). It returns the (possibly
+                    // safety-prefixed) response text; fall back to the last
+                    // assistant message when the classifier passes through
+                    // with no `response_text`.
                     let result = super::handoff::classify_handoff_inline(
                         &agent_type_for_task,
                         &qr,
@@ -2179,8 +2126,7 @@ fn count_tool_uses_in_messages(
 
 /// Concatenate every assistant text part in the most recent
 /// assistant message. Used for the `<result>` section of the
-/// background-agent completion notification. TS:
-/// `LocalAgentTask.tsx:249` `finalMessage`. Returns `None` when the
+/// background-agent completion notification. Returns `None` when the
 /// log has no assistant message or the last one is text-empty
 /// (tool-only turn).
 fn last_assistant_text(messages: &[std::sync::Arc<coco_messages::Message>]) -> Option<String> {

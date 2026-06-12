@@ -67,7 +67,7 @@ fn test_bg_agent_task_started_bridges_into_subagents() {
 fn test_shell_task_started_does_not_create_subagent() {
     // Only `local_agent` / `in_process_teammate` task_types bridge into
     // `session.subagents`; `local_bash` (and `dream`) stay in
-    // `active_tasks` only — they're not "subagents" in the TS sense.
+    // `active_tasks` only — they're not subagents.
     let mut state = AppState::new();
 
     handle_core_event(
@@ -94,10 +94,9 @@ fn test_shell_task_started_does_not_create_subagent() {
 
 #[test]
 fn test_in_process_teammate_task_started_creates_teammate_kind_row() {
-    // TS-aligned spawn: coordinator emits `task/started` with
-    // `task_type == "in_process_teammate"` and the optional teammate
-    // metadata populated. coco-rs projects that into a SubagentInstance
-    // with kind=Teammate, team_name set, tool_use_id None.
+    // Coordinator emits `task/started` with `task_type == "in_process_teammate"`
+    // and the optional teammate metadata populated. coco-rs projects that into
+    // a SubagentInstance with kind=Teammate, team_name set, tool_use_id None.
     let mut state = AppState::new();
 
     handle_core_event(
@@ -158,8 +157,7 @@ fn test_teammate_task_started_dedupes_on_task_id() {
         &mut state,
         CoreEvent::Protocol(ServerNotification::TaskStarted(params)),
     );
-    // active_tasks accumulates (TS does the same — the dedup is only
-    // for the subagent projection).
+    // active_tasks accumulates — the dedup is only for the subagent projection.
     assert_eq!(state.session.subagents.len(), 1);
 }
 

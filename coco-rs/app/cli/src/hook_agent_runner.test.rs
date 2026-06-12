@@ -11,8 +11,7 @@ fn parse_structured_output_ok_false_blocks_with_prefix() {
     let result =
         parse_structured_output(Some(serde_json::json!({"ok": false, "reason": "bad"}))).unwrap();
     match result {
-        // TS parity: blocking feedback carries the
-        // `Agent hook condition was not met: ` prefix (execAgentHook.ts:279).
+        // Blocking feedback carries the `Agent hook condition was not met: ` prefix.
         HookEvaluationResult::Blocking { reason } => {
             assert_eq!(reason, "Agent hook condition was not met: bad");
         }
@@ -39,7 +38,7 @@ fn parse_structured_output_missing_output_cancels() {
 
 #[test]
 fn agent_hook_disallowed_tools_match_ts_set() {
-    // Mirrors TS `ALL_AGENT_DISALLOWED_TOOLS` (constants/tools.ts:36-46).
+    // Verify the disallowed-tools set for agent hooks.
     for name in [
         ToolName::TaskOutput,
         ToolName::ExitPlanMode,

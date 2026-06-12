@@ -1,8 +1,7 @@
 //! Auto-mode classification for permission decisions.
 //!
 //! Determines whether a tool can be used without prompting in auto mode.
-//! Heuristic-based classifier matching TS yoloClassifier.ts safe-tool allowlist.
-//! Future: two-stage LLM classifier with XML parsing.
+//! Heuristic-based classifier with a safe-tool allowlist.
 
 use coco_types::MCP_TOOL_PREFIX;
 use coco_types::ToolName;

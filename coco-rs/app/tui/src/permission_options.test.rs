@@ -587,8 +587,8 @@ fn edit_path_allow_update_none_for_underivable_write_input() {
 fn mcp_tool_without_suggestions_offers_exact_name_always_allow() {
     // MCP tools reach the prompt with no engine suggestion and no derivable
     // path. They have no narrower scope, so both the session and local rows
-    // fall back to an exact-tool-name allow (TS `FallbackPermissionRequest`),
-    // restoring the "don't ask again" affordance the refactor had dropped.
+    // fall back to an exact-tool-name allow, restoring the "don't ask again"
+    // affordance the refactor had dropped.
     let p = prompt(
         "mcp__github__search_issues",
         Some(json!({"q": "bug"})),

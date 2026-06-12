@@ -275,7 +275,7 @@ fn test_is_agent_slug_narrow_shape() {
 /// Push `repo`'s current HEAD to a fresh bare remote so its commits are
 /// remote-reachable — required for the stale sweep to consider a clean,
 /// commit-free agent worktree removable (the unpushed-commit guard otherwise
-/// keeps everything in a remote-less repo, mirroring TS).
+/// keeps everything in a remote-less repo).
 fn add_remote_and_push(repo: &Path, remote: &Path) {
     Command::new("git")
         .args(["init", "--bare"])
@@ -315,7 +315,7 @@ fn test_cleanup_stale_removes_old_agent_worktree_without_changes() {
     let remote = TempDir::new().unwrap();
     init_repo(tmp.path());
     // The base commits must be on a remote, else the unpushed-commit guard
-    // (TS-faithful, fail-closed) keeps the worktree.
+    // (fail-closed) keeps the worktree.
     add_remote_and_push(tmp.path(), remote.path());
 
     let manager = AgentWorktreeManager::discover_from_cwd(tmp.path()).unwrap();
@@ -498,8 +498,7 @@ fn test_has_worktree_create_hook_returns_true_when_hook_registered() {
 #[test]
 fn test_discover_canonical_root_from_inside_worktree() {
     // Ensures nested spawns (from within a worktree) still resolve
-    // to the main repo, not the worktree itself. TS
-    // `findCanonicalGitRoot` parity.
+    // to the main repo, not the worktree itself.
     if !git_available() {
         return;
     }

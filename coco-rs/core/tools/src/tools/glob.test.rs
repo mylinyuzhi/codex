@@ -139,7 +139,7 @@ async fn test_glob_invalid_pattern() {
 }
 
 // -----------------------------------------------------------------------
-// TS behavioral alignment
+// Behavioral tests
 // -----------------------------------------------------------------------
 
 #[tokio::test]
@@ -198,8 +198,8 @@ async fn test_glob_no_gitignore_by_default() {
 
 #[tokio::test]
 async fn test_glob_mtime_sorting_matches_ts() {
-    // TS GlobTool uses `rg --files --sort=modified` which sorts ASCENDING by
-    // mtime (oldest first). This test verifies coco-rs matches that ordering.
+    // GlobTool sorts files ASCENDING by mtime (oldest first).
+    // This test verifies that ordering.
     let dir = tempfile::tempdir().unwrap();
 
     std::fs::write(dir.path().join("old.txt"), "old").unwrap();

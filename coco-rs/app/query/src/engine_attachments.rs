@@ -1,7 +1,5 @@
 //! End-of-batch nested-memory attachment drain.
 //!
-//! TS: `utils/attachments.ts:2167-2194` (`getNestedMemoryAttachments`).
-//!
 //! When a tool batch finishes, this drains
 //! [`coco_tool_runtime::ToolUseContext::nested_memory_attachment_triggers`]
 //! (the Set populated by `Read`/`NotebookEdit`/etc. via
@@ -23,8 +21,7 @@
 //! Session-level dedup uses
 //! [`QueryEngine::loaded_nested_memory_paths`] — once a memory file is
 //! injected this session, subsequent reads of files in the same subtree
-//! won't re-inject it. Mirrors TS `loadedNestedMemoryPathsRef`
-//! (`REPL.tsx:1964-1967`).
+//! won't re-inject it.
 
 use std::path::PathBuf;
 
@@ -52,8 +49,7 @@ impl QueryEngine {
             if triggers.is_empty() {
                 return;
             }
-            // `drain` empties the Set in place — TS clear-after-process
-            // semantics. The local Vec is cheap (Strings move, no copy).
+            // `drain` empties the Set in place; the local Vec is cheap (Strings move, no copy).
             triggers.drain().map(PathBuf::from).collect()
         };
 
@@ -74,8 +70,7 @@ impl QueryEngine {
         // Instruction-injection guard: only traverse nested memory for trigger
         // files inside an allowed working root (cwd or an additional dir). A
         // file the model Read elsewhere on disk must not pull in arbitrary
-        // CLAUDE.md. TS `getNestedMemoryAttachmentsForFile` early-returns on
-        // `!pathInAllowedWorkingPath`.
+        // CLAUDE.md.
         let cwd_str = cwd.to_string_lossy().into_owned();
         let allowed_dirs: Vec<String> = ctx
             .permission_context
@@ -114,11 +109,10 @@ impl QueryEngine {
         drop(loaded);
 
         // Record injected memory files in FileReadState so `detect_changed_files`
-        // surfaces mid-session edits to auto-injected CLAUDE.md/AGENTS.md. TS
-        // `memoryFilesToAttachments` calls `readFileState.set` for every injected
-        // file (offset/limit undefined). Skip files a prior tool read already
-        // tracks so we don't clobber a partial-view entry. mtimes are computed
-        // outside the lock so we never await while holding the write guard.
+        // surfaces mid-session edits to auto-injected CLAUDE.md/AGENTS.md.
+        // Skip files a prior tool read already tracks so we don't clobber
+        // a partial-view entry. mtimes are computed outside the lock so we
+        // never await while holding the write guard.
         if let Some(frs_arc) = self.file_read_state.as_ref() {
             let mut to_set: Vec<(PathBuf, String, i64)> = Vec::with_capacity(frs_records.len());
             for (path, content) in frs_records {
@@ -143,10 +137,8 @@ impl QueryEngine {
         }
 
         // Fire `InstructionsLoaded` for each newly-loaded memory file.
-        // TS: `executeInstructionsLoadedHooks` invoked per-file in
-        // `claudemd.ts` after each load. Reason `nested_traversal`
-        // matches the lazy traversal path here; the eager pass at
-        // session start fires with `session_start`.
+        // Reason `nested_traversal` matches the lazy traversal path here;
+        // the eager pass at session start fires with `session_start`.
         if let Some(registry) = self.hooks.as_ref() {
             let ctx = self.orchestration_ctx();
             if !ctx.disable_all_hooks {
@@ -225,7 +217,7 @@ impl QueryEngine {
 
         // (1) Nested-dir discovery: each new `.coco/skills/` dir
         // surfaces a model-visible dynamic_skill attachment listing
-        // the newly-loaded skill names. TS `addSkillDirectories`.
+        // the newly-loaded skill names.
         for dir in triggered_dirs {
             if let Some(payload) = source.load_dynamic_skill_dir(&dir, &cwd).await {
                 crate::history_sync::history_push_and_emit(
@@ -239,11 +231,9 @@ impl QueryEngine {
 
         // (2) Conditional-skill activation: promote any path-gated
         // skills whose `paths` patterns match a file the batch touched.
-        // TS `activateConditionalSkillsForPaths`. Promotion alone is
-        // enough — the next `skill_listing` reminder turn will surface
-        // newly-visible names via `take_unannounced_skills` delta, so
-        // we don't emit a separate attachment here (TS only logs an
-        // analytics event at activation time, not a model message).
+        // Promotion alone is enough — the next `skill_listing` reminder
+        // turn will surface newly-visible names via `take_unannounced_skills`
+        // delta, so we don't emit a separate attachment here.
         if !triggered_paths.is_empty() {
             let activated = source
                 .activate_skills_for_paths(&triggered_paths, &cwd)
@@ -271,9 +261,7 @@ impl QueryEngine {
 
     /// Reset the session-level dedup set. Wired to `/clear` /
     /// conversation-reset paths so a fresh conversation re-injects
-    /// memory files even if their content is unchanged. Mirrors TS
-    /// `loadedNestedMemoryPathsRef.current.clear()` in REPL's
-    /// `clearConversation`.
+    /// memory files even if their content is unchanged.
     #[allow(dead_code)] // wired by /clear paths added in a follow-up
     pub(crate) async fn clear_loaded_nested_memory_paths(&self) {
         self.loaded_nested_memory_paths.lock().await.clear();

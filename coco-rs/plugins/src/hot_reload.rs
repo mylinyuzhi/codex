@@ -1,8 +1,4 @@
 //! Plugin hot-reload -- watches for settings changes and reloads plugin hooks.
-//!
-//! TS: setupPluginHookHotReload() in loadPluginHooks.ts -- subscribes to
-//! policySettings changes and reloads plugin hooks when plugin-affecting
-//! settings change.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -10,10 +6,9 @@ use std::sync::atomic::Ordering;
 
 /// Tracks whether the plugin settings have changed since last load.
 ///
-/// This is a simplified version of the TS hot-reload system. The full TS
-/// implementation watches for policySettings changes and compares snapshots
-/// of enabledPlugins, strictKnownMarketplaces, blockedMarketplaces, and
-/// extraKnownMarketplaces. Here we provide the building blocks.
+/// Watches for plugin-affecting settings changes by comparing snapshots of
+/// enabledPlugins, strictKnownMarketplaces, blockedMarketplaces, and
+/// extraKnownMarketplaces.
 pub struct PluginReloadTracker {
     /// Whether a reload has been requested.
     needs_reload: Arc<AtomicBool>,
@@ -40,9 +35,6 @@ impl PluginReloadTracker {
     }
 
     /// Update the settings snapshot and return whether it changed.
-    ///
-    /// TS: getPluginAffectingSettingsSnapshot() -- builds a deterministic
-    /// string from enabledPlugins + extraKnownMarketplaces + policy fields.
     pub fn update_snapshot(&self, new_snapshot: &str) -> bool {
         let mut guard = self
             .last_snapshot

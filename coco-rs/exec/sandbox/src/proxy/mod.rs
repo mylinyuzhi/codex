@@ -24,8 +24,7 @@ pub use server::ProxyServer;
 /// the installed [`bridge::SandboxApprovalBridge`] only when one is present, so
 /// the unbridged path stays fail-closed.
 ///
-/// Mirrors TS `createSandboxAskCallback` (`cli/structuredIO.ts`) which surfaces
-/// "Allow network connection to {host}?" on a denied CONNECT. Host-only payload
-/// matches the TS `SandboxNetworkAccess` tool input `{ host }`.
+/// Surfaces "Allow network connection to {host}?" on a denied CONNECT.
+/// Host-only payload matches `SandboxNetworkAccess` tool input `{ host }`.
 pub type NetworkAskCallback =
     Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;

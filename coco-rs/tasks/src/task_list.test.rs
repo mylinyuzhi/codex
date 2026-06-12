@@ -9,7 +9,7 @@ fn fresh_store() -> (TempDir, Arc<TaskListStore>) {
 
 #[tokio::test]
 async fn test_open_does_not_create_dir() {
-    // Lazy contract (TS `ensureTasksDir` is writer-only): opening must NOT
+    // Lazy contract (writer-only): opening must NOT
     // create the on-disk dir, so a session that never writes a task leaves no
     // empty `tasks/<id>/` behind.
     let dir = TempDir::new().unwrap();

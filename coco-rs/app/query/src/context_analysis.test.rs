@@ -115,7 +115,7 @@ fn format_markdown_renders_block_grid_and_token_units() {
     // Block grid (free + used glyphs present).
     assert!(md.contains(GLYPH_FREE));
     assert!(md.contains(GLYPH_USED));
-    // TS-style labels + `tok`/`k` units.
+    // Category labels + `tok`/`k` units.
     assert!(md.contains("System tools: 14k tok"));
     assert!(md.contains("Messages: 13.9k tok"));
     assert!(md.contains("Free space:"));

@@ -3,7 +3,7 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn sanitize_replaces_non_alnum_with_dash() {
-    // TS: `/Users/foo/project`.replace(/[^a-zA-Z0-9]/g,'-')
+    // `/Users/foo/project`.replace(/[^a-zA-Z0-9]/g,'-')
     //   → `-Users-foo-project`
     assert_eq!(sanitize_path("/Users/foo/project"), "-Users-foo-project");
 }

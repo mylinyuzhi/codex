@@ -86,12 +86,9 @@ pub enum ToolName {
     /// Synthetic tool that captures the model's structured JSON
     /// response and forwards it to the SDK result side-channel.
     ///
-    /// TS parity: `SYNTHETIC_OUTPUT_TOOL_NAME = 'StructuredOutput'`
-    /// (`tools/SyntheticOutputTool/SyntheticOutputTool.ts:20`).
     /// The wire name is `"StructuredOutput"` — matches what the model
-    /// and TS SDK consumers see — even though the TS source file is
-    /// named `SyntheticOutputTool`. Only injected in non-interactive
-    /// sessions when `--json-schema` is supplied; never visible in TUI.
+    /// sees. Only injected in non-interactive sessions when `--json-schema`
+    /// is supplied; never visible in TUI.
     StructuredOutput,
 }
 

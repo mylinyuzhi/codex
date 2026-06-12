@@ -1,14 +1,12 @@
 //! IdP login orchestration for XAA.
 //!
-//! TS: `services/mcp/xaaIdpLogin.ts` — discovers the IdP via OIDC
-//! well-known, fetches `token_endpoint`, and (when a fresh id_token is
-//! required) walks the ROPC / client-credentials flow.
+//! Discovers the IdP via OIDC well-known, fetches `token_endpoint`, and (when a
+//! fresh id_token is required) walks the ROPC / client-credentials flow.
 //!
-//! This module implements the **discovery** pieces and the cached
-//! id_token refresh. It does NOT run a browser-based flow; the user is
-//! expected to have a pre-provisioned `id_token` (via `claude login`,
-//! `gcloud auth print-identity-token`, etc.) that this module validates
-//! + renews against the IdP.
+//! Implements the **discovery** pieces and the cached id_token refresh. Does NOT
+//! run a browser-based flow; the user is expected to have a pre-provisioned
+//! `id_token` (via `claude login`, `gcloud auth print-identity-token`, etc.)
+//! that this module validates + renews against the IdP.
 
 use std::time::Duration;
 
@@ -171,11 +169,10 @@ pub async fn discover_prm(
 /// Fetch Authorization-Server Metadata (RFC 8414) for an AS issuer URL.
 ///
 /// Tries the RFC 8414 `oauth-authorization-server` well-known first, then
-/// falls back to the OIDC `openid-configuration` document (same JSON shape) —
-/// mirroring the SDK's `discoverAuthorizationServerMetadata`. Enforces the
-/// RFC 8414 §3.3 issuer-mismatch check and refuses a non-HTTPS token endpoint
-/// (mix-up protection — a PRM-advertised plaintext AS must not receive the
-/// id_token).
+/// falls back to the OIDC `openid-configuration` document (same JSON shape).
+/// Enforces the RFC 8414 §3.3 issuer-mismatch check and refuses a non-HTTPS
+/// token endpoint (mix-up protection — a PRM-advertised plaintext AS must not
+/// receive the id_token).
 pub async fn discover_authorization_server(
     client: &Client,
     as_url: &str,

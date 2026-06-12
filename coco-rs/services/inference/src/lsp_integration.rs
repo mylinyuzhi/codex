@@ -1,6 +1,4 @@
 //! LSP integration for tool context.
-//!
-//! TS: services/lsp/ (2.5K LOC) — language server protocol client.
 
 /// LSP diagnostic severity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

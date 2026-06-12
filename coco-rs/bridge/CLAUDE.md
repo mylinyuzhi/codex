@@ -7,16 +7,6 @@ subsystems:
 2. **IDE bridge** — permission relay + message pump for VS Code / JetBrains
    (detected via MCP lockfiles in TS; coco-rs ships the skeleton for parity).
 
-## TS Source
-
-- `bridge/replBridge.ts`, `replBridgeHandle.ts`, `replBridgeTransport.ts` — REPL bridge core
-- `bridge/bridgeApi.ts`, `bridgeConfig.ts`, `bridgeMain.ts`, `bridgeMessaging.ts`, `bridgeUI.ts` — CCR daemon wiring
-- `bridge/bridgePermissionCallbacks.ts`, `inboundMessages.ts`, `inboundAttachments.ts` — permission relay + attachment ingest
-- `bridge/jwtUtils.ts`, `workSecret.ts`, `trustedDevice.ts` — session auth + device trust
-- `bridge/sessionRunner.ts`, `createSession.ts`, `codeSessionApi.ts` — session lifecycle
-- `bridge/capacityWake.ts`, `flushGate.ts`, `pollConfig.ts` — backpressure / polling
-- `bridge/sessionIdCompat.ts`, `remoteBridgeCore.ts`, `envLessBridgeConfig.ts`, `bridgePointer.ts` — transport compat
-
 ## Key Types
 
 | Module | Types |
@@ -42,17 +32,17 @@ SDK / IDE ─► BridgeInMessage ─► dispatch_control / ControlRequestHandler
 QueryEngine ─► CoreEvent ─► BridgeOutMessage ─► transport (NDJSON/WS/SSE)
 ```
 
-The IDE bridge in TS is NOT a direct IDE↔agent WebSocket relay. IDEs connect as
-MCP servers (not through this crate). This crate owns the REPL bridge (stdio
-NDJSON) and permission-relay primitives. The CCR daemon spawn modes
-(SingleSession / Worktree / SameDir) are documented in
-`docs/coco-rs/crate-coco-bridge.md` and wired from `coco-cli` (`Commands::RemoteControl`).
+The IDE bridge is NOT a direct IDE↔agent WebSocket relay. IDEs connect as MCP
+servers (not through this crate). This crate owns the REPL bridge (stdio NDJSON)
+and permission-relay primitives. The CCR daemon spawn modes (SingleSession /
+Worktree / SameDir) are documented in `docs/coco-rs/crate-coco-bridge.md` and
+wired from `coco-cli` (`Commands::RemoteControl`).
 
-## Deliberately Not Ported
+## Deliberately Not Implemented
 
-| TS API | TS file | Reason |
-|---|---|---|
-| `updateBridgeSessionTitle(sessionId, title)` | `bridge/createSession.ts:327` | Anthropic-cloud-only: PATCHes `BASE_API_URL/v1/sessions/{cse_*}` with `getClaudeAIOAuthTokens()` + `anthropic-beta: ccr-byoc-2025-07-29` + `x-organization-uuid`. The `cse_*` session ID namespace, claude.ai OAuth flow, and CCR-BYOC beta header all belong to claude.ai/code's CCR backend. Parallel to the `/ultraplan`, `/ultrareview`, `/passes` skips in `commands/CLAUDE.md` — that backend is not a coco-rs target. The `/rename` runner intentionally does not call any equivalent; users on claude.ai/code who need title sync continue using TS Claude Code. |
-| `fetchSession`, `archiveSession`, `createBridgeSession` (export shape) | `bridge/createSession.ts:191,264,…` | Same CCR-backend-only rationale. The `coco-bridge::repl` types model the local REPL transport, not remote session lifecycle. |
+| API | Reason |
+|---|---|
+| `updateBridgeSessionTitle(sessionId, title)` | Anthropic-cloud-only: PATCHes `BASE_API_URL/v1/sessions/{cse_*}` with Claude AI OAuth + `anthropic-beta: ccr-byoc-2025-07-29` + `x-organization-uuid`. The `cse_*` session ID namespace, claude.ai OAuth flow, and CCR-BYOC beta header all belong to claude.ai/code's CCR backend. Parallel to the `/ultraplan`, `/ultrareview`, `/passes` skips in `commands/CLAUDE.md` — that backend is not a coco-rs target. The `/rename` runner intentionally does not call any equivalent. |
+| `fetchSession`, `archiveSession`, `createBridgeSession` | Same CCR-backend-only rationale. The `coco-bridge::repl` types model the local REPL transport, not remote session lifecycle. |
 
 If a coco-rs deployment ever targets the CCR backend, the right architectural answer is a **separate** `coco-cloud` (or `coco-ccr`) crate that owns the Anthropic OAuth + cse-id translation; do NOT add provider-specific cloud calls to this crate or to `coco_cli::session_rename`.

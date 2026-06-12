@@ -109,7 +109,7 @@ fn test_overload_cascade_capped_but_others_get_full_budget() {
     );
 
     // Rate limit (429) and generic network/5xx — NOT capacity-capped: full
-    // budget (TS retries 429 / status>=500 up to DEFAULT_MAX_RETRIES).
+    // budget (429 / status>=500 up to DEFAULT_MAX_RETRIES).
     let rate_limited = crate::errors::RateLimitedSnafu {
         retry_after_ms: None,
         message: "slow down".to_string(),
@@ -119,8 +119,8 @@ fn test_overload_cascade_capped_but_others_get_full_budget() {
         message: "5xx".to_string(),
     }
     .build();
-    // Background sources throw immediately on a capacity cascade (TS
-    // shouldRetry529); foreground / untagged sources still retry.
+    // Background sources throw immediately on a capacity cascade;
+    // foreground / untagged sources still retry.
     assert!(
         !config.should_retry_with_source(0, &overloaded, Some("prompt_suggestion")),
         "background source must not retry on 529"

@@ -20,9 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Shared verification-nudge gate used by both V1 `TodoWrite` and V2
-/// `TaskUpdate`. TS source:
-/// - V1 `TodoWriteTool.ts:77-85` — runs against `TodoItem.content`
-/// - V2 `TaskUpdateTool.ts:334-349` — runs against `Task.subject`
+/// `TaskUpdate`.
 ///
 /// Returns `true` when the model should be nudged to spawn a
 /// verification agent: ≥3 items, all supposedly finished, none matches
@@ -41,8 +39,7 @@ pub fn check_verification_nudge(items: &[&str]) -> bool {
 ///
 /// **Single store per session**, shared across tools + subagents +
 /// teammates. Implementations serialize cross-thread access via file
-/// locks (`.lock` + per-task lock), matching TS `proper-lockfile`
-/// semantics in `utils/tasks.ts`.
+/// locks (`.lock` + per-task lock) using `proper-lockfile` semantics.
 #[async_trait::async_trait]
 pub trait TaskListHandle: Send + Sync {
     async fn create_task(
@@ -83,17 +80,14 @@ pub trait TaskListHandle: Send + Sync {
     /// Default no-op for in-memory / no-op stores; the disk-backed store
     /// overrides it to emit its change broadcast. Used by team teardown,
     /// which removes the whole task-list directory out-of-band (so no
-    /// task op runs to fire the usual notification). TS parity: the
-    /// `notifyTasksUpdated()` call inside `cleanupTeamDirectories`
-    /// (`teamHelpers.ts:677`).
+    /// task op runs to fire the usual notification).
     async fn notify_change(&self) {}
 
     /// Clear ownership of every task owned by a stopping teammate,
     /// resetting each to its pending state so another teammate can
     /// claim it. Returns the `(task_id, subject)` pairs that were
     /// unassigned. Default no-op for in-memory / no-op stores; the
-    /// disk-backed store overrides it. TS: `unassignTeammateTasks`
-    /// (`utils/tasks.ts:818`), invoked from the leader's
+    /// disk-backed store overrides it. Invoked from the leader's
     /// `ShutdownApproved` inbox handler.
     async fn unassign_teammate_tasks(
         &self,
@@ -469,7 +463,7 @@ impl TaskListHandle for NoOpTaskListHandle {
 /// Access to the per-agent ephemeral todo store (V1).
 ///
 /// Key convention: `agent_id.clone().unwrap_or_else(|| session_id)`.
-/// Matches TS `appState.todos[context.agentId ?? getSessionId()]`.
+/// Key convention: `agent_id.clone().unwrap_or_else(|| session_id)`.
 #[async_trait::async_trait]
 pub trait TodoListHandle: Send + Sync {
     async fn read(&self, key: &str) -> Vec<TodoRecord>;
@@ -480,7 +474,7 @@ pub type TodoListHandleRef = Arc<dyn TodoListHandle>;
 
 /// Default in-memory implementation. Suitable for the main process —
 /// teammate processes get their own instance; the V1 todo store is
-/// per-process (TS `AppState.todos`).
+/// per-process.
 pub struct InMemoryTodoListHandle {
     inner: std::sync::Mutex<HashMap<String, Vec<TodoRecord>>>,
 }

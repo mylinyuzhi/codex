@@ -1,17 +1,14 @@
 //! Spinner verb lexicon — the random "Working / Pondering / Honking…"
 //! word that appears next to the running-turn spinner.
 //!
-//! TS source: `src/constants/spinnerVerbs.ts` (186 verbs). The verb is
-//! stable for the lifetime of a single turn — callers pass a per-turn
-//! seed to [`pick_verb`] so the rendered word doesn't flicker across
-//! redraws within the same turn but still varies between turns.
+//! 186 verbs. The verb is stable for the lifetime of a single turn —
+//! callers pass a per-turn seed to [`pick_verb`] so the rendered word
+//! doesn't flicker across redraws within the same turn but still varies
+//! between turns.
 //!
-//! TS-DIVERGE: TS exposes `getSpinnerVerbs()` which merges
-//! settings.json overrides on top of the static list — users can
-//! extend or replace the pool without recompiling. coco-rs has no
-//! equivalent yet; once the settings schema grows a
+//! The verb pool is static. Once the settings schema grows a
 //! `ui.spinner.verbs` field, swap the `SPINNER_VERBS` constant for a
-//! function that consults `RuntimeConfig`.
+//! function that consults `RuntimeConfig` to support user overrides.
 
 /// 186 whimsical present-participle verbs, byte-faithful with
 /// `spinnerVerbs.ts:SPINNER_VERBS`.
@@ -216,9 +213,8 @@ pub fn pick_verb(seed: u64) -> &'static str {
     SPINNER_VERBS[idx]
 }
 
-/// Sample a verb using wall-clock nanoseconds as entropy. Mirrors TS
-/// `Spinner.tsx:166` `useState(() => sample(getSpinnerVerbs()))` —
-/// every fresh turn gets an independently random verb. Sufficient
+/// Sample a verb using wall-clock nanoseconds as entropy.
+/// Every fresh turn gets an independently random verb. Sufficient
 /// entropy for visual variety; not cryptographic.
 pub fn pick_verb_random() -> &'static str {
     let seed = std::time::SystemTime::now()

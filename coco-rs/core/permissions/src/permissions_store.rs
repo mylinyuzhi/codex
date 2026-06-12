@@ -1,7 +1,5 @@
 //! Permission store trait — abstraction for loading/saving permission rules.
 //!
-//! TS: utils/permissions/permissionsLoader.ts
-//!
 //! **Architecture**: This module defines a `PermissionStore` trait that
 //! the settings layer (`coco-config`) implements. `coco-permissions` never
 //! touches the filesystem directly — it only knows how to evaluate and

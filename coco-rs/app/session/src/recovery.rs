@@ -1,11 +1,11 @@
 //! Conversation recovery for session resume/fork.
 //!
-//! TS: utils/conversationRecovery.ts — reload conversation from
-//! transcript JSONL, build the message chain by walking parent_uuid
-//! from the newest non-sidechain leaf back to the root, then
-//! reconstruct typed `coco_messages::Message` values preserving
-//! `tool_use` / `tool_result` content blocks so the resumed model
-//! sees the same DAG it left.
+//! Reloads a conversation from the transcript JSONL, builds the
+//! message chain by walking parent_uuid from the newest non-sidechain
+//! leaf back to the root, then reconstructs typed
+//! `coco_messages::Message` values preserving `tool_use` /
+//! `tool_result` content blocks so the resumed model sees the same
+//! DAG it left.
 
 use crate::storage::ContentReplacementRecord;
 use crate::storage::Entry;
@@ -66,10 +66,6 @@ pub struct SessionResumeState {
 /// list in chronological order. Falls back to top-to-bottom read order
 /// when no parent_uuid links are present (transcripts written by
 /// older builds, fixture data).
-///
-/// TS parity: `loadConversationForResume` →
-/// `loadTranscriptFile` → `buildConversationChain`
-/// (`utils/conversationRecovery.ts`).
 pub fn load_conversation_for_resume(
     transcript_path: &Path,
 ) -> crate::Result<ConversationForResume> {
@@ -134,16 +130,14 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         };
         entries.push(te);
     }
-    // TS-parity: `sessionStorage.ts:3654-3657` — a compact_boundary entry
-    // keeps every pre-boundary message in the `messages` map and only
-    // resets marble-origami state; the boundary message itself stamps
-    // `parentUuid: null` / `logicalParentUuid: prev` so the chain walk
-    // naturally terminates without us dropping data. Truncating the
-    // entries Vec here would break `applyPreservedSegmentRelinks`
-    // (`sessionStorage.ts:1855-1865`) which still resolves UUIDs from
-    // the pre-boundary range. microcompact_boundary is NOT a chain
-    // break in TS (see `messages.ts:4608-4612`); it's a plain system
-    // message that stays inline.
+    // A compact_boundary entry keeps every pre-boundary message in the
+    // `messages` map and only resets marble-origami state; the boundary
+    // message itself stamps `parent_uuid: null` / `logical_parent_uuid: prev`
+    // so the chain walk naturally terminates without dropping data.
+    // Truncating the entries Vec here would break
+    // `apply_preserved_segment_relinks` which still resolves UUIDs from
+    // the pre-boundary range. microcompact_boundary is NOT a chain break;
+    // it's a plain system message that stays inline.
     apply_preserved_segment_relinks(&mut entries);
 
     // Pass 2: build a uuid → entry index and the set of parent uuids
@@ -163,14 +157,13 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         }
     }
 
-    // Find leaves the way TS does (`sessionStorage.ts:3768-3784`):
+    // Find leaves:
     // 1) terminal = entries whose uuid is no one's parent;
     // 2) for each terminal, walk back via parent_uuid to its nearest
     //    user/assistant ancestor — attachments / system / progress are
     //    skipped because they can't anchor a turn;
     // 3) among the resulting set of valid leaf uuids, pick the latest
-    //    by timestamp using strict `>` (TS `findLatestMessage`,
-    //    `sessionStorage.ts:2046-2060`, is first-wins on tie).
+    //    by timestamp using strict `>` (first-wins on tie).
     //
     // No-parent-links fixture: fall back to disk order so every
     // persisted message round-trips.
@@ -204,7 +197,7 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
             }
         }
         // First-wins tie-break: keep the first index whose timestamp
-        // strictly exceeds the running max. Mirrors TS `t > maxTime`.
+        // strictly exceeds the running max (`t > maxTime`).
         let leaf_idx = leaf_idxs
             .into_iter()
             .fold(None::<usize>, |best, idx| match best {
@@ -239,8 +232,8 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
     };
 
     // Pass 3: reconstruct typed messages, aggregating model + token +
-    // turn counters along the way. `latest_model` mirrors TS's "newest
-    // assistant model wins" rule used by the resume picker.
+    // turn counters along the way. `latest_model` uses "newest
+    // assistant model wins" — the rule used by the resume picker.
     let mut messages: Vec<Message> = Vec::with_capacity(chain_indices.len());
     let mut selected_chain_uuids: HashSet<String> = HashSet::new();
     let mut latest_model = String::new();
@@ -288,9 +281,8 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
                 .to_string()
         });
     let content_replacements = content_replacements_for_chain(&metadata_entries, &session_id, None);
-    // TS-parity: `sessionStorage.ts:3682-3693` routes content-replacement
-    // records by `agentId` presence — no per-message-uuid scope. Records
-    // are keyed by `tool_use_id` (TS `toolResultStorage.ts:475-479`),
+    // Content-replacement records are routed by `agent_id` presence —
+    // no per-message-uuid scope. Records are keyed by `tool_use_id`,
     // which is globally unique within a session.
     let mut agent_content_replacements: HashMap<String, Vec<ContentReplacementRecord>> =
         HashMap::new();
@@ -314,10 +306,8 @@ pub fn load_session_state_for_resume(transcript_path: &Path) -> crate::Result<Se
         }
     }
     // Build the conversation-ordered chain of message UUIDs for the
-    // file-history replay. TS `buildFileHistorySnapshotChain`
-    // (`utils/sessionStorage.ts:2248-2272`) walks the resolved
-    // conversation chain; without that order, isSnapshotUpdate
-    // overwrites can hit the wrong index.
+    // file-history replay. The chain walk order is load-bearing —
+    // without it, is_snapshot_update overwrites can hit the wrong index.
     let chain_message_uuids: Vec<String> = messages
         .iter()
         .filter_map(|m| m.uuid().map(std::string::ToString::to_string))

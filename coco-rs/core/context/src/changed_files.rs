@@ -1,8 +1,7 @@
 //! Changed file detection via FileReadState mtime comparison.
 //!
-//! TS: `getChangedFiles()` in attachments.ts — iterates all files in
-//! readFileState, compares cached mtime vs disk mtime, creates diff
-//! attachments for externally modified files.
+//! Iterates all files in readFileState, compares cached mtime vs disk
+//! mtime, creates diff attachments for externally modified files.
 
 use crate::attachment::Attachment;
 use crate::attachment::FileAttachment;

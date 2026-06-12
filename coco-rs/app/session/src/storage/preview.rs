@@ -30,8 +30,7 @@ pub(super) fn extract_text_content(entry: &TranscriptEntry) -> String {
 }
 
 /// Returns true if the candidate text should be skipped when picking
-/// the resume-picker's "first prompt" preview. Mirrors TS
-/// `sessionStorage.ts:125` `SKIP_FIRST_PROMPT_PATTERN`.
+/// the resume-picker's "first prompt" preview.
 pub(super) fn is_synthetic_first_prompt_candidate(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed == coco_messages::INTERRUPT_MESSAGE
@@ -39,7 +38,7 @@ pub(super) fn is_synthetic_first_prompt_candidate(text: &str) -> bool {
         || trimmed.starts_with("[Request interrupted by user")
 }
 
-/// Truncate a prompt string for display (matching TS 200-char limit).
+/// Truncate a prompt string for display (200-char limit).
 pub(super) fn truncate_prompt(text: &str) -> String {
     let flat = text.replace('\n', " ");
     let trimmed = flat.trim();

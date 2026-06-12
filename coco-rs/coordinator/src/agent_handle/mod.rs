@@ -1,11 +1,9 @@
 //! `AgentHandle` implementation bridging the tool layer → coordinator
 //! orchestration.
 //!
-//! TS: `AgentTool.call()` dispatches to `spawnMultiAgent` / `runAgent` /
-//! `forkSubagent` based on input parameters. This module provides the
-//! Rust equivalent by implementing
-//! [`coco_tool_runtime::AgentHandle`] atop the coordinator's runner +
-//! mailbox + team-file modules.
+//! Dispatches to `spawnMultiAgent` / `runAgent` / `forkSubagent` based on
+//! input parameters, implementing [`coco_tool_runtime::AgentHandle`] atop
+//! the coordinator's runner + mailbox + team-file modules.
 //!
 //! Module layout (split from a single 854-LoC file):
 //! - `mod.rs` (this file) — struct, accessors, setters, AgentHandle trait
@@ -14,8 +12,8 @@
 //!   isolation + `AgentQueryConfig` construction.
 //! - `handoff.rs` — 2-stage handoff safety classifier and post-spawn
 //!   AgentSummary.
-//! - `resume.rs` — TS-aligned background-spawn resume from JSONL
-//!   transcript + sidecar metadata.
+//! - `resume.rs` — background-spawn resume from JSONL transcript + sidecar
+//!   metadata.
 
 mod handoff;
 mod resume;
@@ -115,19 +113,16 @@ pub struct SwarmAgentHandle {
     /// Base system prompt (the main agent's full system prompt) used
     /// as the teammate's base in `build_teammate_system_prompt`. The
     /// runner-loop appends `TEAMMATE_PROMPT_ADDENDUM` to whatever this
-    /// holds. `None` ⇒ teammates see only the addendum (TS parity gap
-    /// fixed by [`Self::set_teammate_base_system_prompt`]). TS:
-    /// `inProcessRunner.ts` builds the teammate's prompt by composing
-    /// the main `getSystemPrompt(...)` with the team addendum; the
-    /// CLI mirrors that by passing `runtime.current_engine_config()
-    /// .system_prompt` here at bootstrap.
+    /// holds. `None` ⇒ teammates see only the addendum (fixed by
+    /// [`Self::set_teammate_base_system_prompt`]). The CLI wires this by
+    /// passing `runtime.current_engine_config().system_prompt` here at
+    /// bootstrap.
     teammate_base_system_prompt: Arc<tokio::sync::RwLock<Option<String>>>,
     /// Hook registry used to fire `SubagentStart` / `SubagentStop`
     /// around subagent execution. `None` ⇒ hooks don't fire (the
-    /// pre-fix behaviour). TS parity: `runAgent.ts:530-555` collects
-    /// `SubagentStart.additionalContexts` and injects them as a
-    /// hook_additional_context attachment into the child's first
-    /// user message; the stop hook fires at completion / error /
+    /// pre-fix behaviour). `SubagentStart.additionalContexts` are
+    /// injected as hook_additional_context attachments into the child's
+    /// first user message; the stop hook fires at completion / error /
     /// cancel.
     hook_registry: Option<Arc<coco_hooks::HookRegistry>>,
     /// Skill handle used to preload skill bodies declared in agent
@@ -135,7 +130,7 @@ pub struct SwarmAgentHandle {
     /// `read_skill_body(name)` is called for each entry and the
     /// concatenated bodies are prepended to the child's first user
     /// message. `None` ⇒ frontmatter skills are silently ignored
-    /// (logged at debug). TS parity: `runAgent.ts:577-645`.
+    /// (logged at debug).
     skill_handle: Option<coco_tool_runtime::SkillHandleRef>,
     /// MCP handle used to register agent-specific MCP servers
     /// declared in frontmatter (`mcpServers: [github, {slack: {...}}]`).
@@ -143,19 +138,16 @@ pub struct SwarmAgentHandle {
     /// they're `remove_dynamic_server`'d. String-ref entries are
     /// pre-registered on the handle (no spawn-time mutation). `None`
     /// ⇒ inline entries are silently dropped (logged at debug).
-    /// TS parity: `runAgent.ts:95-218 initializeAgentMcpServers`.
     mcp_handle: Option<coco_tool_runtime::McpHandleRef>,
     /// Per-agent dynamic MCP server tracking. Populated when an
     /// inline server gets stood up at spawn time; consulted at
     /// SubagentStop to teardown only the agent's own servers
     /// (string-ref entries point at parent-shared connections that
-    /// must NOT be torn down — TS `newlyCreatedClients` guard).
+    /// must NOT be torn down).
     dynamic_mcp_servers: Arc<tokio::sync::RwLock<std::collections::HashMap<String, Vec<String>>>>,
     /// Builder closure invoked at spawn time when the target subagent
     /// is `coco-guide` to populate the dynamic context block (custom
     /// skills / agents / MCP servers / plugin commands / settings.json).
-    /// Mirrors TS `claudeCodeGuideAgent.ts:121-200`'s `getSystemPrompt`
-    /// callback which reads runtime context off `toolUseContext.options`.
     ///
     /// `None` ⇒ no dynamic block is appended (static base prompt only).
     /// The CLI bootstrap wires this from `CommandRegistry` +
@@ -208,8 +200,7 @@ impl SwarmAgentHandle {
         }
     }
 
-    /// Install the coco-guide dynamic context builder. TS source:
-    /// `tools/AgentTool/built-in/claudeCodeGuideAgent.ts:121-200`.
+    /// Install the coco-guide dynamic context builder.
     /// Without this hook, spawned `coco-guide` agents see only the
     /// static base prompt — losing visibility into the user's custom
     /// skills / agents / MCP servers / settings, matching the
@@ -267,7 +258,7 @@ impl SwarmAgentHandle {
     /// Install the hook registry used to fire `SubagentStart` /
     /// `SubagentStop` around subagent execution. Without this,
     /// user-defined hooks for those events silently never run for
-    /// spawned subagents (a TS parity gap pre-fix).
+    /// spawned subagents.
     pub fn set_hook_registry(&mut self, registry: Arc<coco_hooks::HookRegistry>) {
         self.hook_registry = Some(registry);
     }
@@ -305,10 +296,9 @@ impl SwarmAgentHandle {
     }
 
     /// Interrupt an in-process teammate's active turn without killing
-    /// the teammate lifecycle. Mirrors TS `currentWorkAbortController`:
-    /// Escape in a teammate transcript aborts the current runAgent()
-    /// iteration, then the teammate returns to idle and can receive more
-    /// prompts.
+    /// the teammate lifecycle. Escape in a teammate transcript aborts
+    /// the current iteration; the teammate returns to idle and can
+    /// receive more prompts.
     pub async fn interrupt_teammate_current_work(&self, agent_id: &str) -> Result<bool, String> {
         self.task_registry
             .interrupt_teammate_current_work(agent_id)
@@ -426,8 +416,7 @@ impl SwarmAgentHandle {
         // CLAUDE.md + env-context + memory blocks the leader does. The
         // runner-loop then composes this with `TEAMMATE_PROMPT_ADDENDUM`.
         // Pre-fix: teammates ran with ONLY the addendum (the leader's
-        // system prompt was discarded), which is a TS parity gap with
-        // `inProcessRunner.ts`.
+        // system prompt was discarded).
         // `initial_prompt` flows from `AgentDefinition.initial_prompt`
         // (frontmatter). Top-level `request.initial_prompt` was a dead
         // slot and is gone.
@@ -441,8 +430,7 @@ impl SwarmAgentHandle {
         };
 
         // Persistent round-robin assignment so the same teammate gets
-        // the same color across spawns within a session (TS
-        // `teammateLayoutManager.ts:assignTeammateColor`). The agent_id
+        // the same color across spawns within a session. The agent_id
         // namespacing keeps the assignment scoped per teammate identity.
         let reservation = self
             .roster_store
@@ -684,9 +672,7 @@ impl SwarmAgentHandle {
         //
         // Pre-fix: production code stopped at `register_agent`; the
         // teammate sat in the runner's `agents` map forever and never
-        // ran a single turn (TS `InProcessBackend.spawn` calls
-        // `startInProcessTeammate` after `spawnInProcessTeammate`
-        // succeeds — `utils/swarm/backends/InProcessBackend.ts:99-129`).
+        // ran a single turn.
         //
         // Now: when a teammate execution engine is installed, build the
         // runner config + task-state mirror, kick off the runner_loop
@@ -943,15 +929,12 @@ impl AgentHandle for SwarmAgentHandle {
     }
 
     async fn delete_team(&self) -> Result<String, String> {
-        // TS `TeamDeleteTool.ts:74` reads `appState.teamContext?.teamName`
-        // — when no team is active it returns success with a "nothing to
-        // clean up" message. Mirror that idempotency.
-        // Pass the session task-list handle so the roster store can fire a
-        // "tasks changed" notification on the success path (TS
-        // `cleanupTeamDirectories` → `notifyTasksUpdated()`). At this point
-        // the route still points at the team list; the notification reaches
-        // its subscribers before `clear_team_task_list_route` restores the
-        // session list below.
+        // When no team is active, return success with a "nothing to clean
+        // up" message (idempotent). Pass the session task-list handle so
+        // the roster store can fire a "tasks changed" notification on the
+        // success path. At this point the route still points at the team
+        // list; the notification reaches its subscribers before
+        // `clear_team_task_list_route` restores the session list below.
         let result = self
             .roster_store
             .delete_team(DeleteTeamRequest, self.task_list.as_deref())
@@ -968,7 +951,7 @@ impl AgentHandle for SwarmAgentHandle {
             return Ok("No team name found, nothing to clean up".into());
         };
 
-        // TS parity gap: `clearLeaderTeamName()` and the app-state reset
+        // Implementation gap: `clearLeaderTeamName()` and the app-state reset
         // (`teamContext: undefined`, `inbox.messages: []`) live outside the
         // coordinator crate. The CLI / state owner observes deletion via
         // the returned message and performs those resets. Tracked in
@@ -1181,8 +1164,7 @@ impl AgentHandle for SwarmAgentHandle {
             // Kill on the backend the teammate was actually created on. A
             // session hosts a single pane backend today so this normally
             // matches; guard defensively so a future mixed tmux/iTerm2 team
-            // never kills the wrong server's pane. TS:
-            // `getBackendByType(backendType).killPane(...)`.
+            // never kills the wrong server's pane.
             let registered = backend.backend_type().as_str();
             if backend_type.is_some_and(|bt| bt != registered) {
                 tracing::warn!(agent_id, pane_id = pane, msg_backend = ?backend_type,
@@ -1205,10 +1187,9 @@ impl AgentHandle for SwarmAgentHandle {
 
         // 3. Unassign its in-flight tasks so peers can reclaim them, and
         //    notify the leader which tasks reopened so its model can
-        //    reassign them. TS: `useInboxPoller.ts:733-788` pushes a
-        //    `teammate_terminated` message built from the unassigned list —
-        //    coco-rs routes the same content through the leader's own inbox
-        //    (the poller re-injects it as a coordinator turn).
+        //    reassign them. Pushes a `teammate_terminated` message built
+        //    from the unassigned list; the poller re-injects it as a
+        //    coordinator turn.
         if let Some(task_list) = &self.task_list {
             match task_list.unassign_teammate_tasks(agent_id, name).await {
                 Ok(reopened) if !reopened.is_empty() => {
@@ -1245,8 +1226,7 @@ impl AgentHandle for SwarmAgentHandle {
         //    teammates already get this from their runner wrapper
         //    (`complete_teammate_task` on loop exit); pane teammates have no
         //    such runner, so the row would otherwise linger `Running` forever.
-        //    Idempotent — no-ops on an already-terminal row. TS:
-        //    `useInboxPoller.ts:749-765`.
+        //    Idempotent — no-ops on an already-terminal row.
         if !is_in_process {
             self.task_registry
                 .complete_teammate_task(agent_id, coco_types::TaskStatus::Completed, None, None)
@@ -1300,7 +1280,7 @@ impl AgentHandle for SwarmAgentHandle {
             .set_member_modes(&team_name, &updates)
             .await?;
         // 2. Notify every targeted teammate via a `ModeSetRequest` so its live
-        //    permission context updates. TS mails ALL teammates in the batch,
+        //    permission context updates. Mails ALL teammates in the batch,
         //    not only the ones whose stored mode changed.
         for (name, mode) in &updates {
             let message = TeammateMessage {
@@ -1326,8 +1306,7 @@ impl AgentHandle for SwarmAgentHandle {
 /// Read a worker's own `(pane_id, backend_type)` from its team.json
 /// member entry. Returns `(None, None)` when the file or member is
 /// missing. The pane id is normalised to `None` when empty (the
-/// in-process case). TS: the `selfMember` lookup in
-/// `SendMessageTool.ts:323-328` `handleShutdownApproval`.
+/// in-process case).
 fn self_pane_coords(team_name: &str, agent_id: &str) -> (Option<String>, Option<String>) {
     match crate::team_file::read_team_file(team_name) {
         Ok(Some(tf)) => tf

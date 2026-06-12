@@ -119,7 +119,7 @@ async fn team_context_renders_full_ts_template() {
     assert!(text.contains("```json"));
     assert!(text.contains("\"to\": \"team-lead\""));
     assert!(text.contains("\"summary\": \"Brief 5-10 word preview\""));
-    // Per TS, agent_id is NOT surfaced in the body — only agent_name.
+    // agent_id is NOT surfaced in the body — only agent_name.
     assert!(
         !text.contains("worker-1"),
         "agent_id leaked into body: {text}"

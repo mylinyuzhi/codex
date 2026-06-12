@@ -1,6 +1,4 @@
 //! LRU file read cache for repeated reads in the same turn.
-//!
-//! TS: utils/fileStateCache.ts — LRU cache by workdir (max 16 entries).
 
 use std::collections::HashMap;
 use std::path::PathBuf;

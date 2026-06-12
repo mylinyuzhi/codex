@@ -79,7 +79,7 @@ fn rejects_unknown_action() {
 
 #[test]
 fn rejects_invalid_command_name() {
-    // Empty after `command:` (TS regex requires `+`).
+    // Empty after `command:` is invalid per the regex.
     assert_eq!(
         "command:".parse::<KeybindingAction>().unwrap_err().reason,
         UnknownActionReason::InvalidCommandName,

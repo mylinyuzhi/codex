@@ -1,16 +1,12 @@
-//! TS `compaction_reminder` generator.
+//! `compaction_reminder` generator.
 //!
 //! Reassures the model that auto-compaction will handle growing context —
 //! so it doesn't start rushing or truncating work when the window fills.
-//! TS source: `getCompactionReminderAttachment` (`attachments.ts:3931`) +
-//! `normalizeAttachmentForAPI` `case 'compaction_reminder':` (`messages.ts:4139`).
 //!
 //! Gate (all must hold):
 //!
-//! 1. `config.attachments.compaction_reminder` (coco-rs config flag;
-//!    replaces TS `tengu_marble_fox` feature gate — CLAUDE.md instructs us
-//!    to use settings.json rather than GrowthBook/Statsig).
-//! 2. `ctx.is_auto_compact_enabled` (TS `isAutoCompactEnabled()`).
+//! 1. `config.attachments.compaction_reminder` (settings.json flag).
+//! 2. `ctx.is_auto_compact_enabled`.
 //! 3. `ctx.context_window >= 1_000_000`.
 //! 4. `ctx.used_tokens >= 0.25 * ctx.effective_context_window`.
 
@@ -24,12 +20,11 @@ use crate::types::AttachmentType;
 use crate::types::SystemReminder;
 use coco_config::SystemReminderConfig;
 
-/// Threshold below which the reminder does not fire
-/// (TS `attachments.ts:3944`).
+/// Threshold below which the reminder does not fire.
 const MIN_CONTEXT_WINDOW: i64 = 1_000_000;
 
 /// Usage ratio at which the reminder begins firing
-/// (TS `attachments.ts:3950`: `usedTokens < effectiveWindow * 0.25`).
+/// (`usedTokens >= effectiveWindow * 0.25`).
 const USAGE_NUMERATOR: i64 = 1;
 const USAGE_DENOMINATOR: i64 = 4;
 
@@ -66,8 +61,7 @@ impl AttachmentGenerator for CompactionReminderGenerator {
             return Ok(None);
         }
         // `used >= effective * 0.25` without float math: rearrange to
-        // `used * 4 >= effective`. Effective of 0 disables the gate — TS
-        // has the same "missing window" short-circuit via NaN propagation.
+        // `used * 4 >= effective`. Effective of 0 disables the gate.
         if ctx.effective_context_window <= 0 {
             return Ok(None);
         }

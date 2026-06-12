@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn should_classify_gates_only_on_nonempty_transcript() {
-    // TS parity: read-only agents and zero-tool turns are NOT exempt —
+    // Read-only agents and zero-tool turns are NOT exempt —
     // classification runs whenever the transcript is non-empty.
     assert!(!should_classify(""));
     assert!(!should_classify("   \n  "));
@@ -13,8 +13,8 @@ fn should_classify_gates_only_on_nonempty_transcript() {
 fn stage1_prompts_include_handoff_review_text_and_metadata() {
     let (sys, user) = stage1_prompts("worker", "[user] hello\n[assistant] hi", 3);
     assert!(sys.contains("hand-off"));
-    // TS-faithful hand-off review framing must appear verbatim — the
-    // classifier's training surface anchors on this exact phrasing
+    // Hand-off review framing must appear verbatim — the classifier's
+    // training surface anchors on this exact phrasing
     // (`agentToolUtils.ts:417`).
     assert!(user.contains(HANDOFF_REVIEW_USER_PROMPT));
     assert!(user.contains("Sub-agent type: worker"));
@@ -94,7 +94,7 @@ fn render_block_message_uses_ts_warning_format() {
         reason: "deleted prod credentials".to_string(),
     });
     let msg = m.expect("Some for blocked");
-    // TS-faithful prefix from `agentToolUtils.ts:476`.
+    // Prefix from `agentToolUtils.ts:476`.
     assert!(msg.starts_with("SECURITY WARNING:"));
     assert!(msg.contains("violate security policy"));
     assert!(msg.contains("Reason: deleted prod credentials"));

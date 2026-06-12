@@ -19,7 +19,6 @@ use crate::transcript::derive::test_helpers;
 
 // ── Permission-mode cycling ──
 
-/// Shift+Tab cycle must match TS `getNextPermissionMode()`.
 /// With neither bypass nor auto available, the cycle is
 /// `Default → AcceptEdits → Plan → Default`.
 #[test]
@@ -455,10 +454,9 @@ fn test_ui_animation_idle_while_turn_paused_on_blocking_prompt() {
     assert_eq!(state.ui_animation(), UiAnimation::Idle);
 }
 
-/// TS-parity guard: a *non-pausing* prompt (PlanEntry/Question/…) leaves
-/// the status indicator visible with a running clock, so the spinner must
-/// stay armed — the TS REPL keeps the elapsed clock live through these
-/// dialogs. Over-suppressing here would freeze a visibly-ticking spinner.
+/// A *non-pausing* prompt (PlanEntry/Question/…) leaves the status
+/// indicator visible with a running clock, so the spinner must stay
+/// armed. Over-suppressing here would freeze a visibly-ticking spinner.
 #[test]
 fn test_ui_animation_spinner_during_non_pausing_prompt() {
     let mut state = AppState::new();

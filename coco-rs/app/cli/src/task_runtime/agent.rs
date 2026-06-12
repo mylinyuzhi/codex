@@ -1,16 +1,5 @@
 //! Agent task lifecycle — registration, output drain, terminal
 //! transitions, completion notifications.
-//!
-//! TS source:
-//! - `tasks/LocalAgentTask/LocalAgentTask.tsx` (lifecycle + state).
-//! - `tasks/DreamTask/DreamTask.ts` (dream task variant).
-//! - `LocalAgentTask.tsx:197-262 enqueueAgentNotification`
-//!   (terminal `<task-notification>` envelope with `<result>` /
-//!   `<usage>` / `<worktree>` sections).
-//! - `LocalAgentTask.tsx:466-515 registerAsyncAgent`
-//!   (fire-and-forget bg spawn).
-//! - `LocalAgentTask.tsx:526-614 registerAgentForeground`
-//!   (sync spawn with optional autoBackgroundMs timer).
 
 use std::sync::Arc;
 
@@ -53,8 +42,6 @@ impl TaskRuntime {
     /// token + watch + invoking agent id). On
     /// `ForegroundWithAutoDetach`, spawns the per-task auto-detach
     /// timer in `timers::spawn_agent_auto_background_timer`.
-    ///
-    /// TS-parity mapping documented on [`AgentRegistration`].
     #[instrument(
         level = "info",
         skip(self, cancel),
@@ -134,18 +121,14 @@ impl TaskRuntime {
             })
             .await;
         debug_assert_eq!(assigned, task_id);
-        // NOTE: no agent stall watchdog. TS has none for agent tasks
-        // (`LocalAgentTask.tsx` has no stall/interval logic) — agents have no
-        // stdin and never emit interactive prompts, so a silence-based stall
-        // notice (the old `agent_watchdog`) only ever misfired the shell-shaped
-        // "waiting for interactive input / re-run with piped input" advice. The
-        // shell stall watchdog (`stall::watchdog`) remains, as it faithfully
-        // ports `LocalShellTask.tsx`.
-        // TS parity (`LocalAgentTask.tsx:582-608`): when `autoBackgroundMs`
-        // is set, the foreground sub-agent auto-detaches after that
-        // many ms of execution. The fg awaiter (`tool.execute`'s
-        // `select!` arm) gets the detach signal and unblocks with
-        // `AsyncLaunched`; the engine keeps running detached.
+        // NOTE: no agent stall watchdog. Agents have no stdin and never emit
+        // interactive prompts, so a silence-based stall notice only ever
+        // misfired the shell-shaped "waiting for interactive input / re-run
+        // with piped input" advice. The shell stall watchdog remains.
+        // When `autoBackgroundMs` is set, the foreground sub-agent
+        // auto-detaches after that many ms of execution. The fg awaiter
+        // (`tool.execute`'s `select!` arm) gets the detach signal and
+        // unblocks with `AsyncLaunched`; the engine keeps running detached.
         if let Some(ms) = auto_background_ms.filter(|v| *v > 0) {
             spawn_agent_auto_background_timer(task_id.clone(), ms, self.manager.clone(), cancel);
         }
@@ -163,7 +146,7 @@ impl TaskRuntime {
     /// Append text to a task's on-disk output file. Returns
     /// immediately — the actual fs write runs on the per-task drain
     /// task. Past the 5 GB cap, drops chunks and appends a single
-    /// truncation marker (TS-aligned).
+    /// truncation marker.
     pub async fn append_output(&self, task_id: &str, chunk: &str) {
         let dto = self.disk.get_or_create(task_id).await;
         dto.append(chunk);
@@ -179,8 +162,6 @@ impl TaskRuntime {
     /// periodic timers exit immediately, broadcasts the terminal
     /// status, and pushes a rich `<task-notification>` with optional
     /// `<result>` / `<usage>` / `<worktree>` sections.
-    ///
-    /// TS parity: `LocalAgentTask.tsx:197-262` `enqueueAgentNotification`.
     #[instrument(
         level = "info",
         skip(self, payload),
@@ -202,8 +183,6 @@ impl TaskRuntime {
     /// Mark an agent task failed. Appends the error to the output
     /// buffer, flips status to `Failed`, fires the watch, and pushes
     /// a notification carrying the error in the summary.
-    ///
-    /// TS parity: `LocalAgentTask.tsx:197-262` failure branch.
     #[instrument(
         level = "info",
         skip(self, error),
@@ -213,9 +192,7 @@ impl TaskRuntime {
         self.append_output(task_id, error).await;
         // Record the error text on the sidecar so the post-compact
         // `task_status` reminder can surface it as `delta_summary` for
-        // failed terminal tasks. TS parity:
-        // `compact.ts:1591-1594` reads `agent.error` for terminal-status
-        // tasks; `messages.ts:4005-4006` renders `"Delta: <error>"`.
+        // failed terminal tasks.
         self.manager.set_error(task_id, error.to_string()).await;
         self.transition_terminal(task_id, TaskStatus::Failed).await;
         self.push_agent_notification(
@@ -406,11 +383,10 @@ impl TaskHandle for TaskRuntime {
         } else {
             TaskStatus::Failed
         };
-        // TS parity: sync agent path writes terminal state but does
-        // NOT delete the row — the panel-grace eviction sweep
-        // (`framework.ts:evictTerminalTask`) decides when the row
-        // goes away. Coco-rs's previous behavior was to eagerly remove
-        // here, which dropped the row before the 30s panel grace.
+        // Sync agent path writes terminal state but does NOT delete the
+        // row — the panel-grace eviction sweep decides when the row goes
+        // away. The previous behavior was to eagerly remove here, which
+        // dropped the row before the 30s panel grace.
         let _ = self.manager.transition_terminal(task_id, status).await;
         info!(
             target: "coco::task_runtime",

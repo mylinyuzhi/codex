@@ -46,6 +46,3 @@ fn plan_approval_preserves_from_field_for_response_routing() {
 }
 
 // === AskUserQuestion footer feedback synthesizers ===
-// Pin the exact TS prose at
-// `claude-code/src/components/permissions/AskUserQuestionPermissionRequest/AskUserQuestionPermissionRequest.tsx:300-378`.
-// Drift = transcript-interchangeability break.

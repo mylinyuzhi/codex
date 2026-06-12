@@ -1,8 +1,7 @@
 //! `ClientRequest` — SDK-to-agent protocol requests.
 //!
-//! TS source: `src/entrypoints/sdk/controlSchemas.ts`. coco-rs ships
-//! 29 variants: TS-aligned session / turn / runtime / config / MCP /
-//! plugin / approval / elicitation primitives.
+//! Session / turn / runtime / config / MCP / plugin / approval /
+//! elicitation primitives.
 //!
 //! Hook and MCP-route SDK-side responses ride the **synchronous
 //! JSON-RPC reply** to the corresponding `hook/callback` /
@@ -33,7 +32,7 @@ Bidirectional control protocol — client-initiated requests.\n\n\
 Each variant carries a unique `method` string used on the wire. \
 The method is the discriminator; params are the variant-specific payload.\n\n\
 See `event-system-design.md` §5.1 for the 22 base variants and §5.4 for \
-the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
+the 8 gap additions. 31 total.",
     variants = {
         // === Session lifecycle (6) ===
         "initialize" => Initialize(InitializeParams),
@@ -53,9 +52,7 @@ the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
         /// Resolve a pending MCP elicitation request. Counterpart to the
         /// `ServerRequest` the agent sends when an MCP server needs
         /// structured user input (form values, OAuth tokens, etc.).
-        ///
-        /// TS: `SDKControlElicitationRequestSchema` — documented as a
-        /// planned addition in `event-system-design.md` §5.4.
+        /// See `event-system-design.md` §5.4.
         "elicitation/resolve" => ElicitationResolve(ElicitationResolveParams),
 
         // === Runtime control (9) ===
@@ -75,27 +72,20 @@ the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
         "config/read" => ConfigRead,
         "config/value/write" => ConfigWrite(ConfigWriteParams),
 
-        // === TS P1 gap additions (7) — event-system-design §5.4 ===
+        // === P1 gap additions (7) — event-system-design §5.4 ===
         /// Query MCP server connection status.
-        /// TS: `SDKControlMcpStatusRequestSchema`
         "mcp/status" => McpStatus,
         /// Get context window usage breakdown.
-        /// TS: `SDKControlGetContextUsageRequestSchema`
         "context/usage" => ContextUsage,
         /// Hot-reload MCP server configurations.
-        /// TS: `SDKControlMcpSetServersRequestSchema`
         "mcp/setServers" => McpSetServers(McpSetServersParams),
         /// Reconnect a specific MCP server.
-        /// TS: `SDKControlMcpReconnectRequestSchema`
         "mcp/reconnect" => McpReconnect(McpReconnectParams),
         /// Enable/disable a specific MCP server.
-        /// TS: `SDKControlMcpToggleRequestSchema`
         "mcp/toggle" => McpToggle(McpToggleParams),
         /// Reload all plugins from disk.
-        /// TS: `SDKControlReloadPluginsRequestSchema`
         "plugin/reload" => PluginReload,
         /// Apply feature flag settings at runtime.
-        /// TS: `SDKControlApplyFlagSettingsRequestSchema`
         "config/applyFlags" => ConfigApplyFlags(ConfigApplyFlagsParams),
     }
 }
@@ -104,8 +94,6 @@ the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
 // Param structs (alphabetized by variant)
 // ---------------------------------------------------------------------------
 
-/// Matches TS `SDKControlInitializeRequestSchema` (controlSchemas.ts:57-71).
-///
 /// Sent once at session start for capability negotiation. Carries hooks,
 /// SDK MCP servers, output format, system prompt, and agent definitions
 /// so the agent can construct its registries before the first turn.
@@ -138,7 +126,7 @@ pub struct InitializeParams {
     pub agent_progress_summaries: Option<bool>,
 }
 
-/// Matches TS `SDKHookCallbackMatcherSchema` (controlSchemas.ts:43-51).
+/// Hook callback matcher with optional tool-name filter and callback IDs.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookCallbackMatcher {
@@ -151,10 +139,9 @@ pub struct HookCallbackMatcher {
 
 /// SDK-supplied custom subagent spec carried on `InitializeParams.agents`.
 ///
-/// Mirrors TS `AgentDefinitionSchema` (`entrypoints/sdk/coreSchemas.ts:1110-1183`).
-/// **Distinct** from the internal [`crate::AgentDefinition`] which is the
-/// resolved post-load representation merged from markdown / plugin /
-/// SDK sources. This type is the wire-level DTO only.
+/// Wire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]
+/// which is the resolved post-load representation merged from markdown /
+/// plugin / SDK sources.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SdkAgentDefinition {
@@ -162,7 +149,7 @@ pub struct SdkAgentDefinition {
     pub description: String,
     /// Agent system prompt body.
     pub prompt: String,
-    /// Allowed tool names. `None` inherits all parent tools (TS `tools: undefined`).
+    /// Allowed tool names. `None` inherits all parent tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<String>>,
     /// Explicit tool deny-list.
@@ -175,7 +162,7 @@ pub struct SdkAgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<crate::AgentMcpServerSpec>>,
     /// Experimental critical system reminder appended to the system prompt.
-    /// Wire field is `criticalSystemReminder_EXPERIMENTAL` per TS.
+    /// Wire field name: `criticalSystemReminder_EXPERIMENTAL`.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -267,9 +254,7 @@ pub struct TurnStartParams {
     pub thinking_level: Option<ThinkingLevel>,
 }
 
-/// Matches TS `SDKControlPermissionRequestSchema` response shape flipped —
-/// here the SDK is *resolving* an approval request, so it's sent
-/// client→server.
+/// The SDK is *resolving* a pending approval request, sent client→server.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApprovalResolveParams {
@@ -287,25 +272,21 @@ pub struct ApprovalResolveParams {
     /// `AskUserQuestion` to ship user-selected `answers` (and optional
     /// `annotations`) back into the tool's data envelope.
     ///
-    /// Protocol mirror of `coco_tool_runtime::ToolPermissionResolution.updated_input`
-    /// (the in-process equivalent for TUI mode). TS parity:
-    /// `permissionDecision.updatedInput` at `services/tools/toolExecution.ts:1130-1131`.
-    /// Consumed by `app/cli/src/sdk_server/approval_bridge.rs`.
+    /// In-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`
+    /// (TUI mode). Consumed by `app/cli/src/sdk_server/approval_bridge.rs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_input: Option<serde_json::Value>,
-    /// Optional content blocks (typically image attachments) the SDK
-    /// client wants attached to the next user message. Mirrors TS
-    /// `contentBlocks?: ContentBlockParam[]` on `PermissionAllowDecision`
-    /// (`types/permissions.ts:183`) — paste-image-during-AskUserQuestion
-    /// or attachments alongside `MCPTool` answers ride this slot.
-    /// Carried verbatim as `serde_json::Value` because the underlying
-    /// `ContentBlockParam` is Anthropic-shaped; consumers translate
-    /// per provider.
+    /// Optional content blocks (typically image attachments) the SDK client
+    /// wants attached to the next user message. Paste-image-during-
+    /// AskUserQuestion or attachments alongside `MCPTool` answers ride this
+    /// slot. Carried verbatim as `serde_json::Value` because the underlying
+    /// content block shape is provider-specific; consumers translate per
+    /// provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_blocks: Option<Vec<serde_json::Value>>,
 }
 
-/// TS uses `allow` / `deny` / `ask` for the canUseTool response flow.
+/// Permission approval decision.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -330,11 +311,6 @@ pub struct UserInputResolveParams {
 /// server (form values, OAuth tokens, etc.). The client populates
 /// `values` with the user's input and sets `approved=true`, or sets
 /// `approved=false` to reject the elicitation.
-///
-/// TS reference: `SDKControlElicitationRequestSchema` (controlSchemas.ts)
-/// — TS uses a single bidirectional message that carries both request
-/// and response shapes; coco-rs splits them into a `ServerRequest` for
-/// the ask and this params struct for the reply.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElicitationResolveParams {
@@ -353,7 +329,7 @@ pub struct ElicitationResolveParams {
     pub values: std::collections::HashMap<String, serde_json::Value>,
 }
 
-/// Matches TS `SDKControlSetModelRequestSchema` (controlSchemas.ts:140-143).
+/// Params for `control/setModel`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SetModelParams {
@@ -362,22 +338,18 @@ pub struct SetModelParams {
     pub model: Option<String>,
 }
 
-/// Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).
+/// Params for `control/setPermissionMode`.
 ///
-/// TS carries an additional `ultraplan: boolean` field for the CCR web-UI
-/// refinement flow. coco-rs intentionally skips Ultraplan (see CLAUDE.md
-/// "Plan Mode — Skip Ultraplan (CCR Web UI) Only"), so that field is
-/// omitted here — SDK clients targeting coco-rs should not send it.
+/// The `ultraplan` field (CCR web-UI refinement flow) is intentionally
+/// omitted — see CLAUDE.md "Plan Mode — Skip Ultraplan Only".
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetPermissionModeParams {
     pub mode: PermissionMode,
 }
 
-/// Matches TS `SDKControlSetMaxThinkingTokensRequestSchema` + ThinkingConfig.
-/// TS only carries `max_thinking_tokens: number | null`; coco-rs uses the
-/// richer `ThinkingLevel` from coco-types which includes effort level and
-/// per-provider options.
+/// Params for `control/setThinking`.
+/// Uses `ThinkingLevel` which includes effort level and per-provider options.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetThinkingParams {
@@ -385,14 +357,14 @@ pub struct SetThinkingParams {
     pub thinking_level: Option<ThinkingLevel>,
 }
 
-/// Matches TS `SDKControlStopTaskRequestSchema` (controlSchemas.ts:458-461).
+/// Params for `control/stopTask`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StopTaskParams {
     pub task_id: String,
 }
 
-/// Matches TS `SDKControlRewindFilesRequestSchema` (controlSchemas.ts:311-315).
+/// Params for `control/rewindFiles`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewindFilesParams {
@@ -419,9 +391,8 @@ pub struct CancelRequestParams {
 
 /// Params for `agent/interruptCurrentWork`.
 ///
-/// Mirrors TS's teammate Escape path: abort the target teammate's
-/// current model/tool turn while keeping the teammate process alive for
-/// later messages.
+/// Aborts the target teammate's current model/tool turn while keeping the
+/// teammate process alive for later messages.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInterruptCurrentWorkParams {
@@ -439,9 +410,9 @@ pub struct ConfigWriteParams {
     pub scope: Option<String>,
 }
 
-// --- TS gap additions (7) ---
+// --- Gap additions (7) ---
 
-/// Matches TS `SDKControlMcpSetServersRequestSchema` (controlSchemas.ts:387-390).
+/// Params for `mcp/setServers`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpSetServersParams {
@@ -449,14 +420,14 @@ pub struct McpSetServersParams {
     pub servers: HashMap<String, serde_json::Value>,
 }
 
-/// Matches TS `SDKControlMcpReconnectRequestSchema` (controlSchemas.ts:438-441).
+/// Params for `mcp/reconnect`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpReconnectParams {
     pub server_name: String,
 }
 
-/// Matches TS `SDKControlMcpToggleRequestSchema` (controlSchemas.ts:447-451).
+/// Params for `mcp/toggle`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToggleParams {
@@ -464,7 +435,7 @@ pub struct McpToggleParams {
     pub enabled: bool,
 }
 
-/// Matches TS `SDKControlApplyFlagSettingsRequestSchema` (controlSchemas.ts:467-472).
+/// Params for `config/applyFlags`.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigApplyFlagsParams {

@@ -1,6 +1,4 @@
-//! Enhanced skill tool features ported from TS SkillTool/.
-//!
-//! TS: tools/SkillTool/SkillTool.ts, prompt.ts, constants.ts
+//! Enhanced skill tool features.
 //!
 //! Provides skill invocation with argument substitution, prompt expansion,
 //! context fork vs inline execution, and skill validation.
@@ -99,28 +97,19 @@ pub struct ExpandOptions<'a> {
     /// Arguments provided by the user (e.g., `/skill arg1 arg2`).
     pub args: &'a str,
     /// Named argument names from the skill definition (e.g., `["env", "region"]`).
-    ///
-    /// TS: `argumentNames` — enables `$env`, `$region` placeholders.
     pub argument_names: &'a [String],
     /// The skill's source directory path (for `${CLAUDE_SKILL_DIR}`).
     pub skill_dir: Option<&'a str>,
     /// The current session ID (for `${CLAUDE_SESSION_ID}`).
     pub session_id: Option<&'a str>,
     /// Base directory to prepend (for `"Base directory for this skill: ..."` line).
-    ///
-    /// TS: `prependBaseDir()` in `loadSkillsDir.ts`.
     pub base_dir: Option<&'a str>,
     /// Plugin root directory (for `${CLAUDE_PLUGIN_ROOT}`).
-    ///
-    /// TS: `substitutePluginVariables()` in `loadPluginCommands.ts`.
     pub plugin_root: Option<&'a str>,
     /// Plugin persistent data directory (for `${CLAUDE_PLUGIN_DATA}`).
-    ///
-    /// TS: `substitutePluginVariables()` — separate from plugin root.
     pub plugin_data_dir: Option<&'a str>,
     /// User config values for `${user_config.KEY}` substitution.
     ///
-    /// TS: `substituteUserConfigInContent()` in `pluginOptionsStorage.ts`.
     /// Keys are option names, values are (value, sensitive) pairs.
     /// Sensitive keys resolve to a placeholder instead of the actual value.
     pub user_config: Option<&'a [(&'a str, &'a str, bool)]>,
@@ -128,7 +117,7 @@ pub struct ExpandOptions<'a> {
 
 /// Expand placeholders in a skill prompt template.
 ///
-/// Supports (in substitution order matching TS `substituteArguments()`):
+/// Supports (in substitution order):
 /// 1. Named args: `$env`, `$region` — from `argument_names`
 /// 2. Indexed: `$ARGUMENTS[0]`, `$ARGUMENTS[1]`
 /// 3. Positional shorthand: `$0`, `$1`, `${1}` — word-boundary safe
@@ -140,14 +129,11 @@ pub struct ExpandOptions<'a> {
 /// 9. `${user_config.KEY}` — replaced with user config values (sensitive masked)
 ///
 /// If no argument placeholders are found, appends `ARGUMENTS: {args}` to the prompt.
-///
-/// TS: `substituteArguments()` + `substitutePluginVariables()` +
-/// `substituteUserConfigInContent()` in `loadPluginCommands.ts`.
 pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
     let trimmed_args = opts.args.trim();
     let parts: Vec<&str> = trimmed_args.split_whitespace().collect();
 
-    // Prepend base directory if provided (TS: prependBaseDir)
+    // Prepend base directory if provided
     let mut result = match opts.base_dir {
         Some(dir) if !dir.is_empty() => {
             format!("Base directory for this skill: {dir}\n\n{template}")
@@ -166,7 +152,6 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
     }
 
     // Replace ${CLAUDE_PLUGIN_ROOT} with plugin root directory
-    // TS: substitutePluginVariables() in loadPluginCommands.ts
     if let Some(plugin_root) = opts.plugin_root {
         result = result.replace("${CLAUDE_PLUGIN_ROOT}", plugin_root);
     }
@@ -177,9 +162,8 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
     }
 
     // Replace ${user_config.KEY} with user config values
-    // TS: substituteUserConfigInContent() — sensitive keys resolve to a
-    // descriptive placeholder instead of the actual value to prevent secrets
-    // from leaking into model prompts.
+    // Sensitive keys resolve to a descriptive placeholder instead of the
+    // actual value to prevent secrets from leaking into model prompts.
     if let Some(config_entries) = opts.user_config {
         for &(key, value, sensitive) in config_entries {
             let placeholder = format!("${{user_config.{key}}}");
@@ -197,7 +181,7 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
     // Track whether any argument placeholder was found
     let mut found_placeholder = false;
 
-    // 1. Named args: $env, $region (TS: substituteArguments named args)
+    // 1. Named args: $env, $region
     for (i, name) in opts.argument_names.iter().enumerate() {
         if name.is_empty() {
             continue;
@@ -210,7 +194,7 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
         }
     }
 
-    // 2. Indexed: $ARGUMENTS[0], $ARGUMENTS[1] (TS: $ARGUMENTS[N])
+    // 2. Indexed: $ARGUMENTS[0], $ARGUMENTS[1]
     for i in 0..20 {
         let placeholder = format!("$ARGUMENTS[{i}]");
         if result.contains(&placeholder) {
@@ -220,11 +204,10 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
         }
     }
 
-    // 3. Positional shorthand: $0, $1, ${0}, ${1} (TS: shorthand $N).
-    //    Per TS `argumentSubstitution.ts:7` the shorthand is a
-    //    zero-indexed alias for `$ARGUMENTS[N]`: `$0` = first arg,
-    //    `$1` = second arg. This mirrors JS array indexing rather
-    //    than shell positional parameters — deliberate TS choice
+    // 3. Positional shorthand: $0, $1, ${0}, ${1}.
+    //    The shorthand is a zero-indexed alias for `$ARGUMENTS[N]`:
+    //    `$0` = first arg, `$1` = second arg. This mirrors JS array
+    //    indexing rather than shell positional parameters
     //    (see doc comment on `substituteArguments`).
     let has_positional = (0..=20)
         .any(|i| result.contains(&format!("${i}")) || result.contains(&format!("${{{i}}}")));
@@ -248,7 +231,7 @@ pub fn expand_skill_prompt(template: &str, opts: &ExpandOptions<'_>) -> String {
         found_placeholder = true;
     }
 
-    // If no placeholders found, append args with "ARGUMENTS:" prefix (TS behavior)
+    // If no placeholders found, append args with "ARGUMENTS:" prefix
     if !found_placeholder && !trimmed_args.is_empty() {
         result = format!("{result}\n\nARGUMENTS: {trimmed_args}");
     }

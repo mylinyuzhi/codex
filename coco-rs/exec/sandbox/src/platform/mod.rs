@@ -36,8 +36,7 @@ pub trait SandboxPlatform: Send + Sync {
     /// bind-mounted writable inside the sandbox. The shell executor
     /// passes a freshly-allocated tmpdir (`/tmp/coco-sbx-<rand>`) here
     /// so the inner command can write the cwd-tracking file there and
-    /// the parent process can read it after exec. TS source:
-    /// `bashProvider.ts:235-247` (sandboxTmpDir).
+    /// the parent process can read it after exec.
     fn wrap_command(
         &self,
         config: &SandboxConfig,

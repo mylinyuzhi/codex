@@ -1,9 +1,8 @@
 //! Single-row indicator shown beneath the input while a draft is stashed.
 //!
-//! TS parity: `components/PromptInput/PromptInputStashNotice.tsx`. Renders
-//! a subtle dim line with the first ~40 characters of the stashed text so
-//! the user remembers what they pushed and can pop it back with the same
-//! keybinding (`chat:stash`, Ctrl+S by default).
+//! Renders a subtle dim line with the first ~40 characters of the stashed
+//! text so the user remembers what they pushed and can pop it back with the
+//! same keybinding (`chat:stash`, Ctrl+S by default).
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

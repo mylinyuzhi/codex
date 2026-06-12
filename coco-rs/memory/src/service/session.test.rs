@@ -112,13 +112,13 @@ async fn fires_at_init_with_template_seeded() {
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains("# Session Title"));
     assert!(content.contains("# Worklog"));
-    // Path layout mirrors TS: `<projectDir>/<sid>/session-memory/summary.md`.
+    // Path layout: `<projectDir>/<sid>/session-memory/summary.md`.
     assert!(
         path.ends_with("session-memory/summary.md"),
         "expected TS summary.md filename, got: {}",
         path.display()
     );
-    // Cursor advanced — TS parity with `lastMemoryMessageUuid`.
+    // Cursor advanced — mirrors `lastMemoryMessageUuid`.
     assert_eq!(
         svc.last_extraction_message_id().await.as_deref(),
         Some("u1")
@@ -167,11 +167,11 @@ async fn natural_break_fires_when_no_tool_calls_last_turn() {
 
 #[tokio::test]
 async fn cumulative_tool_gate_skips_when_below_threshold() {
-    // TS parity (`sessionMemory.ts:150-156`): cumulative tool-call count
-    // since last extraction, NOT just the most-recent turn. With the
-    // default threshold of 3, a turn that brings the cumulative to 2 (2
-    // calls in last turn after a 0-call last extraction baseline) should
-    // be gated unless natural-break also fires.
+    // Cumulative tool-call count since last extraction, NOT just the
+    // most-recent turn. With the default threshold of 3, a turn that
+    // brings the cumulative to 2 (2 calls in last turn after a 0-call
+    // last extraction baseline) should be gated unless natural-break
+    // also fires.
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
     let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
@@ -189,8 +189,7 @@ async fn cumulative_tool_gate_skips_when_below_threshold() {
 
 #[tokio::test]
 async fn init_skips_when_neither_tool_calls_nor_break() {
-    // TS parity (`sessionMemory.ts:138-181` shouldExtractMemory): the
-    // tool-call / natural-break disjunction gates the INIT extraction
+    // The tool-call / natural-break disjunction gates the INIT extraction
     // too, not just updates. Init-token threshold met but cumulative
     // tool calls < threshold AND the last turn HAD tool calls → both
     // gate arms fail, so extraction must be skipped and the init flag
@@ -215,11 +214,11 @@ async fn init_skips_when_neither_tool_calls_nor_break() {
 
 #[tokio::test]
 async fn init_flips_initialized_at_gate_pass_even_when_fork_fails() {
-    // TS parity (`sessionMemory.ts:142` markSessionMemoryInitialized):
-    // the init flag flips synchronously at gate-pass, independent of
-    // the fork outcome. With a fork that always errors, the extraction
-    // reports Failed but the service must NOT re-arm the init-token
-    // gate on the next call — it transitions to the UPDATE path.
+    // The init flag flips synchronously at gate-pass
+    // (`markSessionMemoryInitialized`), independent of the fork outcome.
+    // With a fork that always errors, the extraction reports Failed but
+    // the service must NOT re-arm the init-token gate on the next call
+    // — it transitions to the UPDATE path.
     let temp = tempdir().unwrap();
     let handle = Arc::new(FailingHandle);
     let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle);
@@ -258,11 +257,10 @@ async fn current_content_returns_none_before_seed() {
 
 #[tokio::test]
 async fn summarized_cursor_only_advances_when_prior_turn_has_no_tool_calls() {
-    // TS parity (`sessionMemory.ts:488-494
-    // updateLastSummarizedMessageIdIfSafe`): the safely-summarized
-    // cursor should NOT advance when the last assistant turn used
-    // tools — preserving compact's ability to orphan-safely splice
-    // SM into a downstream summary.
+    // The safely-summarized cursor (`updateLastSummarizedMessageIdIfSafe`)
+    // should NOT advance when the last assistant turn used tools —
+    // preserving compact's ability to orphan-safely splice SM into a
+    // downstream summary.
     let temp = tempdir().unwrap();
     let handle = Arc::new(RecordingHandle::default());
     let svc = SessionMemoryService::new(pp(temp.path()), "s1".into(), cfg(), handle.clone());
@@ -297,10 +295,10 @@ async fn summarized_cursor_only_advances_when_prior_turn_has_no_tool_calls() {
 
 #[tokio::test]
 async fn is_empty_true_until_real_content_written() {
-    // TS `isSessionMemoryEmpty` (`prompts.ts:220-224`): returns true
-    // when the file matches the seed template byte-for-byte (after
-    // trim). compact uses this to fall back to LLM summarization when
-    // the SM file hasn't accumulated real content yet.
+    // `isSessionMemoryEmpty`: returns true when the file matches the
+    // seed template byte-for-byte (after trim). compact uses this to
+    // fall back to LLM summarization when the SM file hasn't
+    // accumulated real content yet.
     let temp = tempdir().unwrap();
     let svc = SessionMemoryService::new(
         pp(temp.path()),

@@ -1,7 +1,7 @@
 //! Schedule store — cron-task + remote-trigger persistence.
 //!
-//! Faithful port of TS `utils/cronTasks.ts` (`CronTask` + add/remove/list/
-//! markFired) and the trigger surface used by `RemoteTriggerTool`. Injected
+//! Cron-task (`CronTask` + add/remove/list/markFired) and the trigger surface
+//! used by `RemoteTriggerTool`. Injected
 //! into tools via `ToolUseContext.schedules`, same pattern as `SideQuery` /
 //! `McpHandle`. The disk-backed implementation lives in
 //! [`crate::disk_backed_schedule_store`].
@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// A scheduled prompt. Mirrors TS `CronTask` (`utils/cronTasks.ts`). The on-disk
+/// A scheduled prompt. The on-disk
 /// JSON uses camelCase (`createdAt`, `lastFiredAt`); the runtime-only `durable`
 /// and `agent_id` fields are never serialized.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct CronTask {
 }
 
 impl CronTask {
-    /// `true` when the task reschedules after firing (TS: missing/false = one-shot).
+    /// `true` when the task reschedules after firing (missing/false = one-shot).
     pub fn is_recurring(&self) -> bool {
         self.recurring.unwrap_or(false)
     }
@@ -68,7 +68,7 @@ pub(crate) fn now_epoch_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// 8-hex-char id (mirrors TS `randomUUID().slice(0, 8)`).
+/// 8-hex-char id derived from the first 8 chars of a `randomUUID()`.
 pub(crate) fn short_task_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
 }
@@ -95,12 +95,11 @@ pub(crate) fn new_cron_task(
     }
 }
 
-/// Cron-task + trigger CRUD. Mirrors TS `utils/cronTasks.ts` + the trigger
-/// surface. The scheduler tick driver and the `Cron*` / `RemoteTrigger` tools
+/// Cron-task + trigger CRUD. The scheduler tick driver and the `Cron*` / `RemoteTrigger` tools
 /// share one injected store.
 #[async_trait::async_trait]
 pub trait ScheduleStore: Send + Sync {
-    // ── Cron tasks (TS cronTasks.ts) ──
+    // ── Cron tasks ──
     /// Append a task; returns the created record. `durable=false` → session
     /// (in-memory) only; `durable=true` → persisted to disk.
     async fn add_cron_task(

@@ -1,10 +1,8 @@
 //! `coco plugin <action>` — plugin install/uninstall/list/validate.
 //!
-//! TS: `src/cli/handlers/plugins.ts` — full handler is ~878 lines covering
-//! marketplace integration, scopes, lockfiles. Rust implements list,
-//! install-from-path, install-from-marketplace (via the shared
-//! `coco_plugins::marketplace::MarketplaceManager`), uninstall, validate.
-//! Scopes and lockfiles are a follow-up.
+//! Implements list, install-from-path, install-from-marketplace (via the
+//! shared `coco_plugins::marketplace::MarketplaceManager`), uninstall,
+//! validate. Scopes and lockfiles are a follow-up.
 
 use anyhow::Result;
 
@@ -185,10 +183,9 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()
 
 /// Install a plugin from a known marketplace.
 ///
-/// Mirrors the `/plugin install <name>[@<marketplace>]` slash command;
-/// both paths now funnel through
-/// [`coco_plugins::install::install_plugin_from_marketplace`] so accepted
-/// syntax and error semantics stay in lock-step.
+/// Both the CLI and the `/plugin install <name>[@<marketplace>]` slash command
+/// funnel through [`coco_plugins::install::install_plugin_from_marketplace`]
+/// so accepted syntax and error semantics stay in lock-step.
 async fn install_from_marketplace(target: &str, config_home: &std::path::Path) -> Result<()> {
     let plugins_dir = config_home.join("plugins");
     let policy = coco_plugins::security::EnterprisePolicy::from_managed_settings();

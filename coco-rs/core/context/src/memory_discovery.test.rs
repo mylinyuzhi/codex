@@ -105,10 +105,10 @@ fn empty_dir_has_no_project_files() {
 
 #[test]
 fn does_not_load_immediate_children_anymore() {
-    // Phase 5a regression test: TS only walks root→CWD inclusive in the
-    // eager phase. Children of CWD must NOT be eager-loaded; they're the
-    // job of the per-file trigger pipeline (Phase 2). Without this guard,
-    // we'd double-load every CLAUDE.md the trigger pipeline finds.
+    // Phase 5a regression test: the eager phase walks root→CWD inclusive
+    // only. Children of CWD must NOT be eager-loaded; they're the job of
+    // the per-file trigger pipeline (Phase 2). Without this guard, we'd
+    // double-load every CLAUDE.md the trigger pipeline finds.
     let dir = tempfile::tempdir().unwrap();
     let child = dir.path().join("subproject");
     std::fs::create_dir_all(&child).unwrap();
@@ -142,7 +142,7 @@ fn walks_root_to_cwd() {
         .map(|f| f.path.clone())
         .collect();
     // Both should appear, with the deeper one (CWD) loaded after the
-    // ancestor — TS "later = higher attention priority" semantics.
+    // ancestor — "later = higher attention priority" semantics.
     let proj_idx = project_paths
         .iter()
         .position(|p| p == &proj.join("CLAUDE.md"));

@@ -931,7 +931,6 @@ impl LspServerManager {
         // Parallel spawn — `initialize` round-trip dominates per-server
         // latency (rust-analyzer can take ~1s of indexing prep), so
         // doing them concurrently cuts bootstrap from O(N×t) to O(t).
-        // TS parity: `LSPServerManager.initialize` uses `Promise.all`.
         let project_root = project_root.to_path_buf();
         let futures = unique_servers.into_iter().map(|server_info| {
             let project_root = project_root.clone();

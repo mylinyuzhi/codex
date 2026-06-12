@@ -43,7 +43,7 @@ fn test_classify_400_normal() {
 #[test]
 fn test_classify_retryable_status_buckets() {
     // Overload cascade (503/529): the capacity bucket, capped in-client to
-    // engage fallback fast (TS MAX_529_RETRIES). Retryable.
+    // engage fallback fast. Retryable.
     for status in [503, 529] {
         let err = InferenceError::from_http_status(status, "overloaded", None);
         assert!(
@@ -59,7 +59,7 @@ fn test_classify_retryable_status_buckets() {
     }
 
     // Generic 5xx (500/502/504) + 408/409: transient, retryable with the FULL
-    // backoff budget (TS retries status >= 500 / 408 / 409 up to max_retries).
+    // backoff budget (status >= 500 / 408 / 409 up to max_retries).
     for status in [500, 502, 504, 408, 409] {
         let err = InferenceError::from_http_status(status, "server error", None);
         assert!(
@@ -74,8 +74,8 @@ fn test_classify_retryable_status_buckets() {
         );
     }
 
-    // 429: rate-limited, retryable, NOT capacity-capped (TS retries 429 to the
-    // full budget honoring retry-after).
+    // 429: rate-limited, retryable, NOT capacity-capped (full budget,
+    // honoring retry-after).
     let rate = InferenceError::from_http_status(429, "slow down", None);
     assert!(matches!(rate, InferenceError::RateLimited { .. }));
     assert!(rate.is_retryable());

@@ -95,8 +95,7 @@ fn test_build_inherited_env_vars() {
     assert!(env.contains("COCO_FEATURE_AGENT_TEAMS=1"));
     assert!(env.contains("COCO_AGENT_COLOR=red"));
     assert!(env.contains("COCO_PLAN_MODE_REQUIRED=1"));
-    // T10: worker identity must be in env (mirrors TS AsyncLocalStorage
-    // context). Without these the child can't read its own identity
+    // Worker identity must be in env so the child can read its own identity
     // when callers go through `crate::identity::*` helpers.
     assert!(env.contains("COCO_AGENT_ID=worker@t"));
     assert!(env.contains("COCO_AGENT_NAME=worker"));

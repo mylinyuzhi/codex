@@ -4,10 +4,9 @@
 //! remote servers are configured but unauthenticated (each probe is a network
 //! round-trip the batch would otherwise await every launch).
 //!
-//! TS: `services/mcp/client.ts` `mcp-needs-auth-cache.json` +
-//! `MCP_AUTH_CACHE_TTL_MS` (15 min). Keyed by the raw server name with a
+//! Stored in `mcp-needs-auth-cache.json`. Keyed by the raw server name with a
 //! millisecond timestamp; writes are serialized so a batched multi-server 401
-//! storm can't corrupt the file (TS uses a module-level `writeChain`).
+//! storm can't corrupt the file.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,7 +19,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-/// 15 minutes, matching TS `MCP_AUTH_CACHE_TTL_MS`.
+/// 15-minute TTL window.
 const TTL_MS: i64 = 15 * 60 * 1000;
 
 const CACHE_FILE: &str = "mcp-needs-auth-cache.json";
@@ -110,7 +109,7 @@ impl McpNeedsAuthCache {
 
     /// Evict `server`'s marker — after a successful (re)connect, or before a
     /// post-OAuth reconnect so the attempt isn't itself skipped. Per-server
-    /// (TS wipes the whole file; surgical eviction is equivalent + safer).
+    /// surgical eviction rather than wiping the whole file.
     pub async fn clear(&self, server: &str) {
         let _guard = self.write_lock.lock().await;
         let mut file = self.read().await;

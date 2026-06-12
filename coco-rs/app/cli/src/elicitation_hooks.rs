@@ -1,7 +1,6 @@
 //! Elicitation/ElicitationResult hook wrappers around `SendElicitation`.
 //!
-//! TS parity: `services/mcp/elicitationHandler.ts:runElicitationHooks` +
-//! `runElicitationResultHooks`. The TS handler:
+//! The flow:
 //!
 //! 1. Receives an MCP `elicit/create` request.
 //! 2. Fires `executeElicitationHooks` BEFORE showing the dialog. If the
@@ -32,8 +31,8 @@ use coco_types::ElicitationGuard;
 /// `ElicitationResult` hooks around the supplied `inner` fallback.
 ///
 /// `inner` is invoked only when the `Elicitation` hook does NOT return
-/// a decision — matching TS, where the dialog only renders when no hook
-/// short-circuits. Failures in `inner` propagate as elicitation errors.
+/// a decision (i.e., the dialog only renders when no hook short-circuits).
+/// Failures in `inner` propagate as elicitation errors.
 ///
 /// `ctx_factory` produces an `OrchestrationContext` per fire. Each call
 /// captures session_id / cwd at the time of firing rather than at
@@ -91,7 +90,7 @@ pub fn wrap_send_elicitation_with_hooks(
                     }
                 };
 
-                // Pre-dialog hook (TS `runElicitationHooks`).
+                // Pre-dialog hook.
                 let ctx = (ctx_factory)();
                 if !ctx.disable_all_hooks {
                     match coco_hooks::orchestration::execute_elicitation(
@@ -107,7 +106,7 @@ pub fn wrap_send_elicitation_with_hooks(
                     .await
                     {
                         Ok(agg) => {
-                            // TS: `blockingError` ⇒ decline.
+                            // `blockingError` ⇒ decline.
                             if agg.is_blocked() {
                                 tracing::debug!(
                                     %server_name,
@@ -126,7 +125,7 @@ pub fn wrap_send_elicitation_with_hooks(
                                 )
                                 .await;
                             }
-                            // TS: hook returned `action` ⇒ use it as the response.
+                            // Hook returned `action` ⇒ use it as the response.
                             if let Some(resp) = agg.elicitation_response {
                                 let response =
                                     build_elicitation_response(resp.action, resp.content);
@@ -154,7 +153,7 @@ pub fn wrap_send_elicitation_with_hooks(
                     (guard)(request_id, elicitation).await
                 }?;
 
-                // Post-dialog hook (TS `runElicitationResultHooks`).
+                // Post-dialog hook.
                 run_result_hook_and(
                     &registry,
                     &ctx_factory,
@@ -173,7 +172,7 @@ pub fn wrap_send_elicitation_with_hooks(
 ///
 /// `hook_overrode` is `true` when the response came from the
 /// `Elicitation` hook itself (so the result hook still fires for
-/// observability, matching TS `runElicitationResultHooks`).
+/// observability).
 async fn run_result_hook_and(
     registry: &Arc<HookRegistry>,
     ctx_factory: &Arc<dyn Fn() -> OrchestrationContext + Send + Sync>,
@@ -213,8 +212,7 @@ async fn run_result_hook_and(
                     response
                 };
 
-                // TS fires `elicitation_response` Notification at the end
-                // (elicitationHandler.ts:283-286 / 297-301). Mirror that.
+                // Fire `elicitation_response` Notification at the end.
                 let final_action = format!("{:?}", final_response.action).to_lowercase();
                 let _ = coco_hooks::orchestration::execute_notification(
                     registry,

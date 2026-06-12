@@ -252,9 +252,8 @@ fn render_live_viewport(
             0
         };
     // Background pills bar — shown when any subagent is backgrounded.
-    // TS keeps the row populated for the lifetime of the backgrounded
-    // task (completed teammates render with `is_idle = true`); we
-    // mirror that — no completion-flash window.
+    // The row stays populated for the lifetime of the backgrounded task
+    // (completed teammates render with `is_idle = true`); no completion-flash window.
     let pills_view = crate::widgets::build_background_pills_view(state);
     let background_pills_rows: u16 = if pills_view.is_empty() { 0 } else { 1 };
     let other_fixed_rows = status_indicator_rows
@@ -318,11 +317,8 @@ fn render_live_viewport(
             let elapsed_ms = state.ui.ephemeral.elapsed_ms(std::time::Instant::now());
             let effort = state.session.thinking_effort;
             let effort_level = effort.is_explicit_level().then(|| effort.as_str());
-            // TS `hasRunningTeammates` derives from
-            // `tasks.some(t => isInProcessTeammateTask(t) && !t.isIdle)`. In
-            // coco-rs an "in-process teammate" maps to
-            // `SubagentKind::Teammate` and the closest "not idle" predicate
-            // is `status == Running`.
+            // An "in-process teammate" maps to `SubagentKind::Teammate` and
+            // the "not idle" predicate is `status == Running`.
             let has_running_teammates = state.session.subagents.iter().any(|a| {
                 matches!(a.kind, crate::state::SubagentKind::Teammate)
                     && matches!(a.status, crate::state::session::SubagentStatus::Running)
@@ -575,8 +571,8 @@ fn render_interaction_prompt(
         return;
     };
     // AskUserQuestion renders through the dedicated area-based widget, pinned to
-    // the lower-left above the composer (mirrors TS/codex bottom-pane) instead
-    // of horizontally centered like the modal text prompts below.
+    // the lower-left above the composer instead of horizontally centered like
+    // the modal text prompts below.
     if let PanePromptState::Question(q) = prompt {
         let view = crate::presentation::request::project_question(q);
         frame.render_widget(Clear, area);

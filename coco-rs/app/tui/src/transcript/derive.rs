@@ -530,7 +530,7 @@ pub(crate) mod test_helpers {
 
     /// Push an assistant tool-call invocation. `input_preview` is
     /// encoded as a JSON string so [`tool_call_header_preview`] renders it
-    /// unwrapped (matches what TS-side fixtures expect).
+    /// unwrapped.
     #[allow(dead_code)]
     pub fn push_tool_use(
         state: &mut SessionState,

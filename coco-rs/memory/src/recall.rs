@@ -1,10 +1,9 @@
 //! Relevant-memory selection (LLM side-query + heuristic fallback).
 //!
-//! TS: `memdir/findRelevantMemories.ts`. Sends the manifest and the
-//! current user query to a fast model; receives a JSON list of up to
-//! five filenames the model thinks are most relevant. We track which
-//! files have already been surfaced this session so the recall doesn't
-//! re-inject the same memory turn after turn.
+//! Sends the manifest and the current user query to a fast model;
+//! receives a JSON list of up to five filenames the model thinks are
+//! most relevant. We track which files have already been surfaced this
+//! session so the recall doesn't re-inject the same memory turn after turn.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,8 +21,7 @@ use crate::scan::memory_freshness_text;
 pub const MAX_RELEVANT: usize = 5;
 
 /// Per-memory body cap when injecting content into the recall prompt or
-/// the user-context attachment. Mirrors TS `MAX_MEMORY_BYTES` used by
-/// `readMemoriesForSurfacing` (`attachments.ts:277, 2298`).
+/// the user-context attachment.
 pub const MAX_BODY_BYTES: usize = 4_096;
 
 /// Cumulative cap on bytes injected per session so a single chatty
@@ -99,7 +97,6 @@ impl PrefetchState {
 
 /// System prompt for the relevance-ranker side-query.
 ///
-/// TS: `findRelevantMemories.ts:SELECT_MEMORIES_SYSTEM_PROMPT`.
 /// Multi-LLM neutral wording (no "Claude Code" reference); the
 /// `with_skip_system_prefix(true)` on the request keeps the agent's
 /// preamble out of the ranker so this stays the only system context.
@@ -118,7 +115,7 @@ issues about those tools — active use is exactly when those matter.";
 
 /// Build the user-side prompt for the recall ranker.
 ///
-/// Layout (TS `findRelevantMemories.ts:105`):
+/// Layout:
 ///
 /// ```text
 /// Query: <query>
@@ -131,8 +128,8 @@ issues about those tools — active use is exactly when those matter.";
 /// ```
 ///
 /// Uses [`format_memory_manifest`] for the bullet body so the manifest
-/// stays byte-equivalent with what TS sends — calibration of the
-/// ranker depends on this exact format. Already-surfaced files are
+/// format stays stable — calibration of the ranker depends on this.
+/// Already-surfaced files are
 /// filtered before formatting (the ranker wastes turns if it returns
 /// names the loader will then drop).
 pub fn build_selection_prompt(
@@ -196,8 +193,8 @@ pub enum RecallSelection {
 ///    parseable (e.g. `{"reason": "no matches"}`) — treated as
 ///    `Parsed(vec![])` so a model that legitimately answered "nothing
 ///    relevant" in free-form JSON does not trigger a fallback retry.
-/// 3. Bare `[...]` array somewhere in the response — TS legacy
-///    fallback for markdown-wrapped responses (`\`\`\`json\n[...]\n\`\`\``).
+/// 3. Bare `[...]` array somewhere in the response — legacy fallback
+///    for markdown-wrapped responses (`\`\`\`json\n[...]\n\`\`\``).
 ///
 /// Anything else — truncated, non-JSON, or no recognisable container —
 /// returns [`RecallSelection::Malformed`].
@@ -273,9 +270,9 @@ fn extract_from_json_value(v: serde_json::Value) -> RecallSelection {
 /// Honors both wire shapes the ranker can emit:
 ///
 /// 1. **`tool_uses[0].input`** — populated by the forced-tool path
-///    (TS parity) and by the Anthropic adapter's synthetic-json-tool
-///    fallback when its per-model capability table doesn't know about
-///    a newer Claude. Tool inputs are already typed JSON, so the only
+///    and by the Anthropic adapter's synthetic-json-tool fallback
+///    when its per-model capability table doesn't know about a newer
+///    Claude. Tool inputs are already typed JSON, so the only
 ///    way to "fail" here is for the provider to return tool_uses
 ///    without a usable `selected_memories` field — which we treat as
 ///    a legitimate empty verdict (`Parsed(vec![])`).
@@ -364,15 +361,14 @@ pub fn load_relevant_memories(
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        // Freshness caveat (TS `memoryAge.ts:memoryFreshnessText`) is
-        // prepended for memories older than one day so the model
-        // doesn't blindly trust stale file/line references.
+        // Freshness caveat is prepended for memories older than one day
+        // so the model doesn't blindly trust stale file/line references.
         let freshness = memory_freshness_text(mtime_ms);
         let header = if freshness.is_empty() {
             format!("[{age}] {filename}")
         } else {
-            // TS `memoryHeader` inserts the blank line between the staleness
-            // caveat and the entry (spacing owned by the caller, not the text).
+            // Blank line between staleness caveat and entry
+            // (spacing owned by the caller, not the text).
             format!("{freshness}\n\n[{age}] {filename}")
         };
         let bytes = truncated.len() as i64;
@@ -388,12 +384,11 @@ pub fn load_relevant_memories(
 }
 
 // Note: a previous `select_heuristic` fallback was deliberately
-// removed to mirror TS `findRelevantMemories.ts:131-140`. When the
-// ranker errors or no LLM handle is installed, recall stays silent
-// (returns empty) — surfacing arbitrarily-recent memories that
-// occupy attention budget and the 60 KB session byte cap is worse
-// than surfacing none. The runtime treats "ranker unavailable" the
-// same as "ranker returned no matches."
+// removed. When the ranker errors or no LLM handle is installed,
+// recall stays silent (returns empty) — surfacing arbitrarily-recent
+// memories that occupy attention budget and the 60 KB session byte
+// cap is worse than surfacing none. The runtime treats "ranker
+// unavailable" the same as "ranker returned no matches."
 
 #[cfg(test)]
 #[path = "recall.test.rs"]

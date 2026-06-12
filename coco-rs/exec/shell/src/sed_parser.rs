@@ -1,6 +1,5 @@
 //! Sed in-place edit command parser.
 //!
-//! TS: tools/BashTool/sedEditParser.ts (9.4K LOC)
 //! Parses `sed -i 's/pattern/replacement/flags' file` commands.
 
 /// Parsed sed edit information.
@@ -156,8 +155,8 @@ fn parse_substitution(expr: &str) -> Option<(String, String, String)> {
 /// **write/read** (`w`/`W`/`r`/`R` command, `s///w` flag), the latter only when
 /// `allow_file_writes` is false (in acceptEdits, in-place edits are expected).
 ///
-/// Conservative superset of TS `sedValidation.ts` — it may over-prompt on
-/// exotic scripts but never under-approves a dangerous one.
+/// Conservative superset — may over-prompt on exotic scripts but never
+/// under-approves a dangerous one.
 pub fn has_dangerous_sed(command: &str, allow_file_writes: bool) -> bool {
     for sub in crate::bash_permissions::split_compound_command(command) {
         let trimmed = sub.trim();

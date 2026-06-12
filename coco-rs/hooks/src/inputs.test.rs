@@ -1,8 +1,8 @@
 //! Wire-format parity tests for hook input structs.
 //!
-//! These tests pin the JSON shape of every event-specific input
-//! against TS `coreSchemas.ts` so a future refactor that drops or
-//! renames a field surfaces the regression here, not in production.
+//! These tests pin the JSON shape of every event-specific input so
+//! a future refactor that drops or renames a field surfaces the
+//! regression here, not in production.
 
 use super::*;
 use serde_json::Value;
@@ -19,7 +19,7 @@ fn base() -> BaseHookInput {
     }
 }
 
-/// `transcript_path` is required in TS — emit it even when empty.
+/// `transcript_path` is required — emit it even when empty.
 #[test]
 fn base_hook_input_emits_transcript_path_when_empty() {
     let mut b = base();
@@ -27,7 +27,7 @@ fn base_hook_input_emits_transcript_path_when_empty() {
     let v = serde_json::to_value(&b).unwrap();
     assert!(
         v.get("transcript_path").is_some(),
-        "transcript_path must appear on the wire (TS marks it required)"
+        "transcript_path must appear on the wire (required field)"
     );
     assert_eq!(v["transcript_path"], "");
 }
@@ -115,10 +115,10 @@ fn permission_request_omits_tool_use_id_and_carries_suggestions() {
         permission_suggestions: Some(json!([{"behavior": "allow"}])),
     };
     let v = serde_json::to_value(&input).unwrap();
-    // TS schema does NOT include tool_use_id on this event.
+    // `tool_use_id` is not part of this event's schema.
     assert!(
         v.get("tool_use_id").is_none(),
-        "PermissionRequest must not emit tool_use_id (TS schema omits it)"
+        "PermissionRequest must not emit tool_use_id"
     );
     assert_eq!(v["permission_suggestions"], json!([{"behavior": "allow"}]));
 }
@@ -169,9 +169,9 @@ fn subagent_stop_emits_stop_hook_active_and_required_transcript() {
 
 #[test]
 fn pre_compact_emits_null_for_missing_custom_instructions() {
-    // TS `PreCompactHookInputSchema.custom_instructions: z.string().nullable()`
-    // — the field MUST appear on the wire, with `null` when absent. Hooks
-    // checking `input.custom_instructions === null` rely on this shape.
+    // `custom_instructions` MUST appear on the wire, with `null` when
+    // absent. Hooks checking `input.custom_instructions === null` rely
+    // on this shape.
     let input = PreCompactInput {
         base: base(),
         trigger: CompactTrigger::Auto,
@@ -276,8 +276,8 @@ fn teammate_idle_carries_teammate_and_team_names() {
 }
 
 #[test]
-fn enum_typed_fields_serialize_to_ts_wire_strings() {
-    // Spot-check every typed-enum field renders its TS literal value.
+fn enum_typed_fields_serialize_to_wire_strings() {
+    // Spot-check every typed-enum field renders its expected wire value.
     assert_eq!(
         serde_json::to_value(SessionStartSource::Startup).unwrap(),
         "startup"
@@ -317,8 +317,8 @@ fn enum_typed_fields_serialize_to_ts_wire_strings() {
         serde_json::to_value(ConfigChangeSource::PolicySettings).unwrap(),
         "policy_settings"
     );
-    // PascalCase variant: TS uses 'User'/'Project'/'Local'/'Managed'
-    // for memory_type — Rust default serde rename keeps PascalCase.
+    // PascalCase variant: memory_type uses 'User'/'Project'/'Local'/'Managed'
+    // — Rust default serde rename keeps PascalCase.
     assert_eq!(
         serde_json::to_value(MemoryType::Project).unwrap(),
         "Project"

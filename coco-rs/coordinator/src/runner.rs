@@ -1,7 +1,5 @@
 //! In-process agent runner for teammate spawning and lifecycle management.
 //!
-//! TS: utils/swarm/inProcessRunner.ts, utils/swarm/spawnInProcess.ts
-//!
 //! Provides `InProcessAgentRunner` which creates isolated agent contexts,
 //! runs queries, and manages completion/cancellation.
 //!
@@ -30,8 +28,7 @@ use tokio::sync::oneshot;
 /// Isolated context for an in-process agent.
 ///
 /// Each spawned agent gets its own context with an independent cancellation
-/// signal and working directory. Mirrors TS `TeammateContext` from
-/// `utils/teammateContext.ts`.
+/// signal and working directory.
 #[derive(Debug, Clone)]
 pub struct AgentContext {
     /// Unique identifier for this agent (format: "name@team").
@@ -88,8 +85,6 @@ impl AgentContext {
 // ── Spawn Configuration ──
 
 /// Configuration for spawning an in-process teammate.
-///
-/// TS: InProcessSpawnConfig in spawnInProcess.ts
 #[derive(Debug, Clone)]
 pub struct SpawnConfig {
     /// Display name for the teammate.
@@ -131,8 +126,6 @@ pub struct SpawnConfig {
 // ── Spawn Result ──
 
 /// Result from spawning an in-process teammate.
-///
-/// TS: InProcessSpawnOutput in spawnInProcess.ts
 #[derive(Debug)]
 pub struct SpawnResult {
     /// Whether spawn was successful.
@@ -146,8 +139,6 @@ pub struct SpawnResult {
 // ── Runner Result ──
 
 /// Result from running an in-process teammate to completion.
-///
-/// TS: InProcessRunnerResult in inProcessRunner.ts
 #[derive(Debug, Clone)]
 pub struct RunnerResult {
     /// Whether the run completed successfully.
@@ -176,8 +167,6 @@ struct AgentEntry {
 /// Unlike process-based teammates (tmux/iTerm2), in-process teammates share
 /// the same Tokio runtime but use independent cancellation flags and contexts
 /// for isolation.
-///
-/// TS: combines logic from inProcessRunner.ts and spawnInProcess.ts
 pub struct InProcessAgentRunner {
     /// Active agents keyed by agent_id.
     agents: Arc<RwLock<HashMap<String, AgentEntry>>>,
@@ -209,8 +198,7 @@ impl InProcessAgentRunner {
     /// or failure.
     ///
     /// **Registration only** — execution must be started separately via
-    /// [`Self::start_agent`]. TS parity: TS has no two-phase split
-    /// (async generator spawn), but Rust's tokio-spawn pattern needs an
+    /// [`Self::start_agent`]. Rust's tokio-spawn pattern needs an
     /// explicit registration step so the runner can wire a result
     /// channel before the execution task starts emitting output. Per
     /// the agent-loop refactor plan Phase 6, the old `spawn_agent`
@@ -370,7 +358,7 @@ impl InProcessAgentRunner {
     ///   agent and forget to wire the channel — `wait_for_completion`
     ///   would then silently return `None`. By taking the `JoinHandle`
     ///   directly, this method makes it a compile-time error to skip
-    ///   the execution step. TS parity: not applicable (Rust-internal API).
+    ///   the execution step.
     pub async fn start_agent(
         &self,
         agent_id: &str,

@@ -4,8 +4,6 @@
 //! text objects, counts, find, and dot-repeat. All positions are UTF-8
 //! byte offsets into `TextArea`; the state machine operates directly on
 //! `TextArea` via `wiring::dispatch_vim_key`.
-//!
-//! TS: src/vim/ (5 files, 1513 LOC)
 
 mod motions;
 mod operators;

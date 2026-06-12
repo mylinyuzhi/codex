@@ -1,4 +1,4 @@
-//! Cron tick driver — the timer + fire half of TS `utils/cronScheduler.ts`,
+//! Cron tick driver — the timer + fire half of the cron scheduler,
 //! wired into the interactive session.
 //!
 //! Every second it reads the schedule store, asks the pure
@@ -10,12 +10,11 @@
 //! drains at the next turn boundary. Recurring tasks are rescheduled (and their
 //! `last_fired_at` persisted); one-shot / aged tasks are removed.
 //!
-//! Deferred vs TS (documented, behavior parity on the fire path is preserved):
-//! cross-process lease lock (`cronTasksLock.ts`), the chokidar file-watcher
+//! Deferred: cross-process lease lock, the chokidar file-watcher
 //! (the 1s tick re-reads the file every pass, so external edits are picked up
-//! within ≤1s), jitter (`cronJitterConfig.ts`), and the missed-task
-//! AskUserQuestion variant (missed one-shots are surfaced as a batched
-//! notification — see [`build_missed_notification`]).
+//! within ≤1s), jitter, and the missed-task AskUserQuestion variant
+//! (missed one-shots are surfaced as a batched notification — see
+//! [`build_missed_notification`]).
 //!
 //! TUI-only: the headless (`coco -p`) and SDK paths are one-shot / have no
 //! queue-drain pump, so a fired prompt would have nobody to run it. Durable
@@ -67,8 +66,8 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut state = CronTickState::new();
 
-        // Startup: surface missed one-shot tasks (TS findMissed) as one batched
-        // notification, then remove them so the tick doesn't fire them directly.
+        // Startup: surface missed one-shot tasks as one batched notification,
+        // then remove them so the tick doesn't fire them directly.
         // Recurring tasks that came due while down fire on the first tick below.
         let initial = store.list_all_cron_tasks().await.unwrap_or_default();
         let now0 = now_ms();
@@ -135,10 +134,9 @@ pub fn spawn(runtime: Arc<SessionRuntime>) -> JoinHandle<()> {
     })
 }
 
-/// Batched "missed while not running" notification (TS
-/// `buildMissedTaskNotification`). Guidance precedes the task list; each prompt
-/// is wrapped in a backtick fence one longer than any run inside it so a prompt
-/// containing ``` can't break out (prompt-injection guard).
+/// Batched "missed while not running" notification. Guidance precedes the task
+/// list; each prompt is wrapped in a backtick fence one longer than any run
+/// inside it so a prompt containing ``` can't break out (prompt-injection guard).
 pub fn build_missed_notification(missed: &[&CronTask]) -> String {
     let plural = missed.len() > 1;
     let (were, they, them, these) = if plural {

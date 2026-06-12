@@ -1,4 +1,4 @@
-//! TS-parity tests for the concurrent-sessions PID registry.
+//! Tests for the concurrent-sessions PID registry.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -147,8 +147,7 @@ fn count_includes_self_even_without_file() {
     let cfg = TempDir::new().unwrap();
     let n = count_concurrent_sessions(cfg.path());
     // Sessions dir doesn't exist yet — count is 0; the "self counted"
-    // promise only holds when there's a file. (TS countConcurrentSessions
-    // returns 0 on readdir-failure too.)
+    // promise only holds when there's a file.
     assert_eq!(n, 0);
 }
 

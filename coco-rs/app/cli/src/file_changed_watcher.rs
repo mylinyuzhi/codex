@@ -1,13 +1,11 @@
 //! `FileChanged` hook watcher.
 //!
-//! TS: `utils/hooks/fileChangedWatcher.ts` — runs a `chokidar` watcher
-//! over paths registered by hook `hookSpecificOutput.watchPaths` from
-//! `SessionStart` / `CwdChanged` and fires `executeFileChangedHooks`
-//! per file event.
+//! Runs a filesystem watcher over paths registered by hook
+//! `hookSpecificOutput.watchPaths` from `SessionStart` / `CwdChanged`
+//! and fires `executeFileChangedHooks` per file event.
 //!
-//! Coco-rs uses `coco_file_watch::FileWatcher` (notify crate) instead
-//! of chokidar, mapped to the same three TS event types
-//! (`change` / `add` / `unlink`).
+//! Uses `coco_file_watch::FileWatcher` (notify crate), mapped to
+//! three event types: `change` / `add` / `unlink`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,10 +19,10 @@ use coco_hooks::HookRegistry;
 use coco_hooks::orchestration::FileChangeEvent;
 use coco_hooks::orchestration::OrchestrationContext;
 
-/// Throttle window matching TS `chokidar` default debounce.
+/// Throttle window matching the chokidar default debounce.
 const FILE_CHANGED_THROTTLE_MS: u64 = 250;
 
-/// One filesystem event mapped to the TS-aligned `FileChanged` shape.
+/// One filesystem event mapped to the `FileChanged` shape.
 #[derive(Debug, Clone)]
 struct FileChangedEvent {
     path: PathBuf,
@@ -55,7 +53,7 @@ impl FileChangedHookWatcher {
 
         // The classify closure maps notify events into our domain enum.
         // notify's `EventKind` covers Create / Modify / Remove with finer
-        // sub-variants; we collapse to the TS-aligned 3-state enum.
+        // sub-variants; we collapse to the 3-state enum.
         let watcher = builder
             .build(
                 |event| {
@@ -75,8 +73,7 @@ impl FileChangedHookWatcher {
                 // by replacing. The throttle window in `FileWatcher`
                 // already collapses bursts, so `merge` only needs to
                 // pick a winner when two events of different kinds
-                // collide. Last-write-wins is closest to TS chokidar's
-                // emission order.
+                // collide. Last-write-wins.
                 |_old, new| new,
             )
             .ok()?;
@@ -108,18 +105,17 @@ impl FileChangedHookWatcher {
         Some(Self { watcher })
     }
 
-    /// Register one or more absolute paths to watch. TS:
+    /// Register one or more absolute paths to watch.
     /// `hookSpecificOutput.watchPaths` from `SessionStart` /
     /// `CwdChanged` aggregates onto the active watcher's path set.
-    /// Non-existent paths are silently skipped (matches TS).
+    /// Non-existent paths are silently skipped.
     pub fn add_paths(&self, paths: impl IntoIterator<Item = PathBuf>) {
         for path in paths {
             if !path.exists() {
                 continue;
             }
             // Files watch as `NonRecursive`; directories use Recursive
-            // so all descendants emit. TS chokidar default is recursive
-            // for directories.
+            // so all descendants emit.
             let mode = if path.is_dir() {
                 RecursiveMode::Recursive
             } else {

@@ -24,8 +24,7 @@ use crate::types::LanguageModelResponseMetadata;
 
 /// Result of a single step in multi-step generation.
 ///
-/// Also serves as `OnStepFinishEvent` (type alias in callback module),
-/// matching the TS SDK pattern where step finish events ARE StepResults.
+/// Also serves as `OnStepFinishEvent` (type alias in callback module).
 #[derive(Debug, Clone)]
 pub struct StepResult {
     /// The step number (0-indexed).

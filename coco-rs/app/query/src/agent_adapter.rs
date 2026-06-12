@@ -1,8 +1,7 @@
 //! Agent query adapter — bridges QueryEngine to AgentQueryEngine trait.
 //!
-//! TS: runAgent() in tools/AgentTool/runAgent.ts drives the query loop
-//! for subagents. This module adapts the existing QueryEngine to provide
-//! the same capability via the AgentQueryEngine trait.
+//! Adapts the existing QueryEngine to provide subagent query execution
+//! via the AgentQueryEngine trait.
 //!
 //! **Dependency flow**:
 //! ```text
@@ -30,11 +29,10 @@ use crate::engine::QueryEngineConfig;
 
 /// Factory function type for creating QueryEngine instances.
 ///
-/// Each agent query gets a fresh engine with its own config plus an
+/// Each agent query gets a fresh engine with its own config plus a
 /// typed model selection that the factory uses to select the right
 /// runtime source. `InheritMain` defaults to the parent session's model
-/// (TS parity: `runAgent.ts` inherits the parent client unless the agent
-/// definition specifies a model).
+/// unless the agent definition specifies a model.
 ///
 /// The factory is async because production implementations (see
 /// `app/cli/src/agent_handle_factory.rs`) need to call into the
@@ -75,8 +73,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
         config: AgentQueryConfig,
     ) -> Result<AgentQueryResult, coco_error::BoxedError> {
         // Resolve the subagent's permission mode. Parent is expected to
-        // have applied the TS inheritance rule before calling; we just
-        // parse/fall back. TS: runAgent.ts:412-434.
+        // have applied the inheritance rule before calling; we just
+        // parse/fall back.
         let permission_mode = config
             .permission_mode
             .as_deref()
@@ -91,7 +89,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
         let initial_rule_maps = build_initial_rule_maps(&config.extra_permission_rules);
 
         let engine_config = QueryEngineConfig {
-            // Mirror TS: a subagent uses its own configured turn cap, or runs
+            // A subagent uses its own configured turn cap, or runs
             // unbounded (None) when unset — same as the main loop. The shared
             // token-budget / continuation cap / interrupt still bound it.
             max_turns: config.max_turns,
@@ -101,9 +99,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
             append_system_prompt: None,
             model_id: engine_model_id,
             permission_mode,
-            // Inherit the parent session's bypass capability. TS
-            // parity: `spawnUtils.ts:53` / `spawnMultiAgent.ts:223`
-            // forward `--dangerously-skip-permissions` to spawned
+            // Inherit the parent session's bypass capability.
+            // `--dangerously-skip-permissions` is forwarded to spawned
             // child processes; the in-process analog is this field.
             bypass_permissions_available: config.bypass_permissions_available,
             context_window: config
@@ -115,31 +112,27 @@ impl AgentQueryEngine for QueryEngineAdapter {
             is_non_interactive: true,
             // Hardcoded for ALL subagents: a residual `Ask` fails closed
             // (deny) since coco has no parent-terminal prompt routing for
-            // child engines. TS sets `shouldAvoidPermissionPrompts` only for
-            // async subagents (`runAgent.ts:438-449`); `bubble`-mode
-            // subagents instead bubble the prompt to the parent terminal.
-            // Coco defines `PermissionMode::Bubble` but does not yet route
-            // subagent prompts upward, so unconditional fail-closed is the
-            // correct (fail-safe) choice. Make this conditional on
-            // `permission_mode != Bubble` only once that routing lands —
-            // doing so earlier would turn a clean deny into a dangling Ask.
+            // child engines. `bubble`-mode subagents bubble the prompt to
+            // the parent terminal; `avoid_permission_prompts` is only set
+            // for async subagents. Coco defines `PermissionMode::Bubble`
+            // but does not yet route subagent prompts upward, so
+            // unconditional fail-closed is the correct (fail-safe) choice.
+            // Make this conditional on `permission_mode != Bubble` only
+            // once that routing lands — doing so earlier would turn a clean
+            // deny into a dangling Ask.
             avoid_permission_prompts: true,
             // Subagents inherit the parent's debug/verbose surface only
             // when the parent piped that into `AgentQueryConfig`; today
-            // we don't propagate, so default to `false`. TS parity:
-            // `toolUseContext.options.{debug,verbose}` is set per-process.
+            // we don't propagate, so default to `false`.
             debug: false,
             verbose: false,
-            // Subagent reasoning-effort override (TS parity:
-            // `AgentTool.tsx:154-159`). The resolver in
-            // `core/subagent/src/spawn_resolution.rs` carries the
-            // effort string forward; here we parse it into a
-            // `ThinkingLevel` so the engine threads it into
-            // `QueryParams.thinking_level` → `PerCallOverrides`. An
-            // unrecognized string degrades to `None` (the model's
-            // `default_thinking_level` from `ModelInfo` then applies)
-            // rather than failing the spawn — surface as a warning
-            // path later if it becomes useful.
+            // Subagent reasoning-effort override. The resolver in
+            // `core/subagent/src/spawn_resolution.rs` carries the effort
+            // string forward; here we parse it into a `ThinkingLevel` so
+            // the engine threads it into `QueryParams.thinking_level` →
+            // `PerCallOverrides`. An unrecognized string degrades to `None`
+            // (the model's `default_thinking_level` from `ModelInfo` then
+            // applies) rather than failing the spawn.
             // `config.effort` is the typed `ReasoningEffort` discriminator
             // selecting one entry from the resolved model's
             // `supported_thinking_levels`. The build path lives at
@@ -161,9 +154,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // `extra_permission_rules` the caller (today: fork-mode
             // `SkillTool` forwarding skill frontmatter `allowed-tools`,
             // plus teammate control updates) wants pre-populated.
-            // TS parity: `createGetAppStateWithAllowedTools`
-            // (`forkedAgent.ts:147-171`) wraps `getAppState` to inject
-            // the same rules into the subagent's evaluation context.
             allow_rules: initial_rule_maps.allow_rules,
             deny_rules: initial_rule_maps.deny_rules,
             ask_rules: initial_rule_maps.ask_rules,
@@ -278,8 +268,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // query_chain_id / query_depth bump, and write fence.
             // User-invoked AgentTool spawns leave `fork_label = None`
             // and skip isolation (they inherit the parent context).
-            // TS parity: `forkedAgent.ts::createSubagentContext` runs
-            // for every framework-spawned fork.
             fork_isolation: config.fork_label.map(|label| {
                 let mut iso = crate::fork_context::ForkContextOverrides::for_label(label);
                 iso.can_use_tool = config.can_use_tool.clone();
@@ -316,9 +304,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
 
         // Fork mode: if the parent surfaced context messages, use
         // `run_with_messages` so the child's first turn sees the
-        // parent's history prepended. TS parity:
-        // `AgentTool.tsx:627-630` passes `forkContextMessages:
-        // toolUseContext.messages` for `isForkPath`.
+        // parent's history prepended.
         //
         // Caller-supplied `event_tx` lets bg AgentTool spawns
         // observe live `Stream::TextDelta` events (TaskOutput live
@@ -363,9 +349,8 @@ impl AgentQueryEngine for QueryEngineAdapter {
         };
 
         // Count ToolResult messages as a proxy for tool_use_count —
-        // every committed tool_use produces exactly one tool_result
-        // per I1, so this tracks TS `runAgent.ts`'s
-        // `toolUseCount` increment on each assistant tool_use block.
+        // every committed tool_use produces exactly one tool_result,
+        // so this tracks the actual tool_use count.
         let tool_use_count = result
             .final_messages
             .iter()

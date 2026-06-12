@@ -1,7 +1,6 @@
 //! Debounced file watcher → push trigger.
 //!
-//! TS: `services/teamMemorySync/watcher.ts` (387 LoC). Watches the
-//! local team memory directory and triggers a debounced
+//! Watches the local team memory directory and triggers a debounced
 //! [`super::service::push`] when files change. Initial pull is the
 //! caller's responsibility (one-shot at session bootstrap).
 //!
@@ -11,8 +10,8 @@
 //! - During push → mid-flight events set `pending=true`; the
 //!   post-push tail re-arms the timer once.
 //! - On permanent failure (4xx except 409/429, no_oauth, no_repo) →
-//!   `suppressed=true` until session restart (TS parity: prevents
-//!   the 167K-events-per-2.5-day BQ incident).
+//!   `suppressed=true` until session restart (prevents the
+//!   167K-events-per-2.5-day BQ incident).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,13 +25,12 @@ use super::service::push as push_service;
 use super::types::SyncState;
 
 /// Debounce window between the last fs event and the actual push
-/// (TS: `DEBOUNCE_MS = 2000`).
+/// (2000 ms).
 pub const DEBOUNCE_MS: u64 = 2_000;
 
 /// Configuration handed to [`run_watch_loop`]. Borrowed across the
 /// loop's lifetime so callers can rotate auth tokens via the
-/// `bearer_token_provider` callback (TS handles this via
-/// `checkAndRefreshOAuthTokenIfNeeded` per call).
+/// `bearer_token_provider` callback (called once per push attempt).
 pub struct WatcherConfig {
     /// Local team memory directory (recursively watched).
     pub watch_dir: PathBuf,
@@ -134,7 +132,7 @@ pub async fn run_watch_loop(config: WatcherConfig, state: Arc<Mutex<SyncState>>)
             if let Some(err) = &result.error {
                 tracing::warn!(error = %err, "team-memory-watcher: push failed");
                 // Permanent-failure heuristic: 4xx except 409/429
-                // get suppressed (TS `isPermanentFailure`).
+                // get suppressed.
                 if let Some(status) = parse_http_status(err)
                     && (400..500).contains(&status)
                     && status != 409

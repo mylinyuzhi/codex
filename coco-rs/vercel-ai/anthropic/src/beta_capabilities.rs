@@ -11,17 +11,16 @@
 //! place. The adapter is the only crate that knows the exact header
 //! string Anthropic expects.
 //!
-//! Design §10.4. TS source: `betas.ts:106-180` (`getModelDependentBetas`)
-//! + `betas.ts:181-263` (`getBetas` baseline list).
+//! Design §10.4.
 
 use crate::messages::anthropic_messages_options::AdapterBetaCapability;
 
 /// Map a typed beta capability to its Anthropic header string.
 ///
-/// Returned strings match `betas.ts` literal constants exactly so a
-/// future version-bump (`context-1m-2026-XX-YY`) is a one-line edit
-/// here. `None` for capabilities that have no header (i.e. that are
-/// purely typed signaling — none today; reserved for future).
+/// Returned strings are literal header constants; a version-bump
+/// (`context-1m-2026-XX-YY`) is a one-line edit here. `None` for
+/// capabilities that have no header (i.e. purely typed signaling —
+/// none today; reserved for future).
 pub fn map_capability(cap: AdapterBetaCapability) -> Option<&'static str> {
     Some(match cap {
         AdapterBetaCapability::Context1m => "context-1m-2025-08-07",
@@ -38,9 +37,8 @@ pub fn map_capability(cap: AdapterBetaCapability) -> Option<&'static str> {
 }
 
 /// Baseline beta header sent on every Anthropic request the adapter
-/// produces. Mirrors the TS `claude-code-20250219` baseline. Returned
-/// only when `agentic_query` is true; helper calls (compaction, title
-/// generation) skip it (TS parity — `betas.ts:189-204`).
+/// produces. Returned only when `agentic_query` is true; helper calls
+/// (compaction, title generation) skip it.
 pub const CLAUDE_CODE_BASELINE: &str = "claude-code-20250219";
 
 #[cfg(test)]

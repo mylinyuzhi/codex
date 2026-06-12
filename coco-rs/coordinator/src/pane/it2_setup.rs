@@ -1,13 +1,9 @@
 //! iTerm2 CLI (it2) setup utilities.
 //!
-//! TS: utils/swarm/backends/it2Setup.ts
-//!
 //! Detects Python package managers, installs the `it2` CLI tool,
 //! verifies the Python API is enabled, and persists setup state.
 
 /// Python package manager for it2 installation.
-///
-/// TS: `PythonPackageManager = 'uvx' | 'pipx' | 'pip'`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PythonPackageManager {
     Uvx,
@@ -53,8 +49,6 @@ pub struct It2VerifyResult {
 
 /// Detect the best available Python package manager.
 ///
-/// TS: `detectPythonPackageManager()`
-///
 /// Checks in order: uv → pipx → pip → pip3.
 pub async fn detect_python_package_manager() -> Option<PythonPackageManager> {
     // Check uv (preferred — globally isolated)
@@ -77,8 +71,6 @@ pub async fn detect_python_package_manager() -> Option<PythonPackageManager> {
 }
 
 /// Install the it2 CLI using the given package manager.
-///
-/// TS: `installIt2(packageManager)`
 pub async fn install_it2(pm: PythonPackageManager) -> It2InstallResult {
     let cmd = pm.install_command();
     let Some((program, args)) = cmd.split_first() else {
@@ -133,8 +125,6 @@ pub async fn install_it2(pm: PythonPackageManager) -> It2InstallResult {
 }
 
 /// Verify that it2 is installed and the Python API is enabled.
-///
-/// TS: `verifyIt2Setup()`
 pub async fn verify_it2_setup() -> It2VerifyResult {
     // Check if it2 is installed
     if !is_command_available("it2").await {
@@ -178,8 +168,6 @@ pub async fn verify_it2_setup() -> It2VerifyResult {
 }
 
 /// Get instructions for enabling the Python API in iTerm2.
-///
-/// TS: `getPythonApiInstructions()`
 pub fn get_python_api_instructions() -> Vec<&'static str> {
     vec![
         "Almost done! Enable the Python API in iTerm2:",
@@ -191,8 +179,6 @@ pub fn get_python_api_instructions() -> Vec<&'static str> {
 }
 
 /// Mark it2 setup as complete in global config.
-///
-/// TS: `markIt2SetupComplete()`
 pub fn mark_it2_setup_complete() {
     let path = it2_setup_state_path();
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
@@ -205,8 +191,6 @@ pub fn is_it2_setup_complete() -> bool {
 }
 
 /// Set preference: use tmux over iTerm2.
-///
-/// TS: `setPreferTmuxOverIterm2(prefer)`
 pub fn set_prefer_tmux_over_iterm2(prefer: bool) {
     let path = tmux_preference_path();
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
@@ -214,8 +198,6 @@ pub fn set_prefer_tmux_over_iterm2(prefer: bool) {
 }
 
 /// Get preference: use tmux over iTerm2.
-///
-/// TS: `getPreferTmuxOverIterm2()`
 pub fn get_prefer_tmux_over_iterm2() -> bool {
     std::fs::read_to_string(tmux_preference_path())
         .ok()

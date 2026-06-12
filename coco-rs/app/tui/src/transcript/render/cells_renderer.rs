@@ -543,8 +543,7 @@ fn meta_category(kind: &CellKind) -> &'static str {
 /// First meaningful line of a renderable attachment's body, for a one-line
 /// transcript content row (shared by the chat widget and the Ctrl+O modal).
 /// `None` when the attachment carries no displayable text (silent / structured
-/// payloads). Mirrors TS `AttachmentMessage` rendering the body, not a `[meta]`
-/// collapse.
+/// payloads). Renders the body, not a `[meta]` collapse.
 pub(crate) fn attachment_summary_text(source: &coco_messages::Message) -> Option<String> {
     let coco_messages::Message::Attachment(att) = source else {
         return None;
@@ -558,9 +557,9 @@ pub(crate) fn attachment_summary_text(source: &coco_messages::Message) -> Option
 }
 
 /// Path for a post-compact file-reference chip, or `None` for other
-/// attachments. This mirrors TS `AttachmentMessage` rendering
-/// `compact_file_reference` as `Referenced file <displayPath>` while keeping
-/// the model-visible restore reminder out of the chat surface.
+/// attachments. Renders `compact_file_reference` as `Referenced file
+/// <displayPath>` while keeping the model-visible restore reminder out of the
+/// chat surface.
 pub(crate) fn compact_file_reference_chip_path(
     source: &coco_messages::Message,
     cwd: Option<&str>,

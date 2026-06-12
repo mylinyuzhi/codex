@@ -328,7 +328,7 @@ async fn reentry_skipped_for_sub_agent() {
             .await
             .unwrap()
             .is_none(),
-        "TS attachments.ts:1216 gates sub-agents out of Reentry"
+        "sub-agents must be gated out of Reentry"
     );
 }
 

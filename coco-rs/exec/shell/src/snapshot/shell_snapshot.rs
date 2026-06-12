@@ -29,10 +29,7 @@ const DEFAULT_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default retention period for snapshot files (7 days).
 const DEFAULT_SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 7);
 
-/// Default directory name for shell snapshots.
-///
-/// Matches the TS layout `shell-snapshots/` (hyphenated) so a coco install
-/// can co-exist with a claude-code install under the same `$CONFIG_HOME`.
+/// Default directory name for shell snapshots (hyphenated).
 const DEFAULT_SNAPSHOT_DIR: &str = "shell-snapshots";
 
 /// Configuration for shell snapshotting.
@@ -121,9 +118,8 @@ impl ShellSnapshot {
     /// Returns `None` if creation fails (unsupported shell, timeout, validation
     /// failure, etc.). Commands will fall back to login shell mode.
     ///
-    /// Naming mirrors TS `ShellSnapshot.ts:438-444`:
-    /// `snapshot-<shell>-<ts>-<rand6>.sh` — unique across sessions and shells
-    /// so re-shell within a session doesn't clobber the previous file.
+    /// Naming: `snapshot-<shell>-<ts>-<rand6>.sh` — unique across sessions and
+    /// shells so re-shell within a session doesn't clobber the previous file.
     pub async fn try_new(config: &SnapshotConfig, session_id: &str, shell: &Shell) -> Option<Self> {
         let extension = match shell.shell_type() {
             ShellType::PowerShell => "ps1",
@@ -251,7 +247,7 @@ pub(crate) async fn validate_snapshot(
 
 /// Runs a shell script with a timeout, returning stdout on success.
 ///
-/// Sets environment variables matching the TS implementation:
+/// Sets environment variables:
 /// - `GIT_EDITOR=true`: prevents git from blocking with an editor
 /// - `COCO=1`: signals to user config scripts that this is a coco subprocess
 /// - `SHELL`: set to the shell binary path for correct shell detection
@@ -268,7 +264,6 @@ async fn run_script_with_timeout(
     handler.args(&args[1..]);
     handler.kill_on_drop(true);
 
-    // TS: sets GIT_EDITOR='true', CLAUDECODE='1', SHELL=binShell
     handler.env("GIT_EDITOR", "true");
     handler.env("COCO", "1");
     handler.env("SHELL", shell.shell_path().as_os_str());

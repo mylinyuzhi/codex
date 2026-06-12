@@ -1,8 +1,7 @@
 //! Recursively add `additionalProperties: false` to a JSON schema.
 //!
-//! Mirrors TS `add-additional-properties-to-json-schema.ts`. Required by some
-//! providers (e.g. OpenAI strict-mode) that reject schemas with implicit
-//! `additionalProperties: true`.
+//! Required by some providers (e.g. OpenAI strict-mode) that reject schemas
+//! with implicit `additionalProperties: true`.
 
 use serde_json::Value;
 use serde_json::json;

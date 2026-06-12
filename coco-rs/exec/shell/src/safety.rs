@@ -19,7 +19,7 @@ impl SafetyResult {
     }
 }
 
-/// Security check identifiers (23 check types from TS).
+/// Security check identifiers (23 check types).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SecurityCheckId(pub i32);
 

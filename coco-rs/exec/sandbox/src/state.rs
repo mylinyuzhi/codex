@@ -902,7 +902,6 @@ impl SandboxState {
     ///
     /// Returns `None` if `tempfile::tempdir()` fails (extremely
     /// unlikely — would require `/tmp` itself being un-writable).
-    /// TS source: `bashProvider.ts:235-247` (sandboxTmpDir).
     pub fn allocate_command_tmp_dir() -> Option<tempfile::TempDir> {
         tempfile::Builder::new()
             .prefix("coco-sbx-")

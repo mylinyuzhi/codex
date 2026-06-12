@@ -1,6 +1,4 @@
 //! Telemetry and analytics event system.
-//!
-//! TS: utils/telemetry/ (4K) + services/analytics/ (4K)
 
 use serde::Deserialize;
 use serde::Serialize;

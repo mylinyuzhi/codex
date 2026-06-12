@@ -1,8 +1,7 @@
 //! Unit tests for the budget CoW helper —
 //! `rewrite_tool_result_to_placeholder`. The function is the
 //! hot-path optimization that avoids cloning a huge tool result
-//! body just to immediately overwrite it. TS parity:
-//! `replaceToolResultContents` (`toolResultStorage.ts:699-726`).
+//! body just to immediately overwrite it.
 
 use std::sync::Arc;
 use uuid::Uuid;

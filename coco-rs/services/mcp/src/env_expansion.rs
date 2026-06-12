@@ -1,12 +1,10 @@
 //! Expand `${VAR}` / `${VAR:-default}` references in MCP server config.
 //!
-//! TS: `services/mcp/envExpansion.ts` + `config.ts::expandEnvVars`. Applied at
-//! parse time over stdio `command` / `args` / `env` and remote `url` /
-//! `headers`, before the [`crate::types::McpServerConfig`] is constructed, so
-//! the launch / transport layer only ever sees resolved values. Unknown
-//! variables with no default are left as the literal `${VAR}` token (aids
-//! debugging) and collected so the loader can emit a single warning — mirroring
-//! TS, which surfaces them as a validation warning.
+//! Applied at parse time over stdio `command` / `args` / `env` and remote
+//! `url` / `headers`, before the [`crate::types::McpServerConfig`] is
+//! constructed, so the launch / transport layer only ever sees resolved values.
+//! Unknown variables with no default are left as the literal `${VAR}` token
+//! (aids debugging) and collected so the loader can emit a single warning.
 //!
 //! These are arbitrary *user-supplied* variable names from a `.mcp.json`
 //! (`${HOME}`, `${MY_TOKEN}`, …), not coco-owned config knobs, so they are read
@@ -38,10 +36,9 @@ impl EnvLookup for HashMap<String, String> {
     }
 }
 
-/// Expand `${VAR}` / `${VAR:-default}` in `value`. Equivalent to the TS
-/// `/\$\{([^}]+)\}/g` replace: a placeholder must hold at least one non-`}`
-/// char (so `${}` is left literal). Unknown vars with no default are left
-/// verbatim and pushed onto `missing`.
+/// Expand `${VAR}` / `${VAR:-default}` in `value`. A placeholder must hold at
+/// least one non-`}` char (so `${}` is left literal). Unknown vars with no
+/// default are left verbatim and pushed onto `missing`.
 pub(crate) fn expand_str(
     value: &str,
     lookup: &impl EnvLookup,
@@ -56,8 +53,8 @@ pub(crate) fn expand_str(
         match after.find('}') {
             Some(end) if end > 0 => {
                 let content = &after[..end];
-                // Split on the first `:-` so a default may itself contain `:-`
-                // (TS documents this intent; we honor it via `split_once`).
+                // Split on the first `:-` so a default may itself contain `:-`.
+                // `split_once` finds the first occurrence only.
                 let (name, default) = match content.split_once(":-") {
                     Some((n, d)) => (n, Some(d)),
                     None => (content, None),
@@ -97,10 +94,10 @@ pub(crate) fn expand_map(
         .collect()
 }
 
-/// Expand env references across a parsed config, mirroring TS `expandEnvVars`:
-/// stdio `command`/`args`/`env` and remote `url`/`headers`. `sdk` and
-/// `claudeai_proxy` are left untouched (TS does the same). Returns the
-/// deduplicated list of referenced-but-unset variables (no default supplied).
+/// Expand env references across a parsed config: stdio `command`/`args`/`env`
+/// and remote `url`/`headers`. `sdk` and `claudeai_proxy` are left untouched.
+/// Returns the deduplicated list of referenced-but-unset variables (no default
+/// supplied).
 pub(crate) fn expand_config(config: &mut McpServerConfig, lookup: &impl EnvLookup) -> Vec<String> {
     let mut missing = Vec::new();
     match config {

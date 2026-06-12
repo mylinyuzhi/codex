@@ -4,7 +4,6 @@ use super::build_persisted_output_message;
 use super::format_byte_size;
 use super::strip_leading_blank_lines;
 
-/// Byte-identity contract with TS `utils/format.ts::formatFileSize`.
 /// Locks in the no-space, 1-decimal, strip-trailing-`.0` rules so any
 /// drift surfaces as a test failure rather than divergent
 /// `<persisted-output>` envelope text.
@@ -26,7 +25,7 @@ fn format_byte_size_matches_ts_format_file_size() {
 }
 
 /// Drop a contiguous run of blank-only lines at the head, preserve
-/// the first non-blank line. TS regex `^(\s*\n)+` semantics.
+/// the first non-blank line.
 #[test]
 fn strip_leading_blank_lines_drops_full_blank_prefix() {
     assert_eq!(
@@ -35,7 +34,7 @@ fn strip_leading_blank_lines_drops_full_blank_prefix() {
     );
     assert_eq!(strip_leading_blank_lines("hello"), "hello");
     assert_eq!(strip_leading_blank_lines(""), "");
-    // A blank trailing line (no newline) is preserved — matches TS regex.
+    // A blank trailing line (no newline) is preserved.
     assert_eq!(strip_leading_blank_lines("\n   "), "   ");
 }
 

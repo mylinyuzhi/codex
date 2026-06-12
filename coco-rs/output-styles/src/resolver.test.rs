@@ -20,7 +20,7 @@ fn aggregate_includes_builtins_by_default() {
     let agg = aggregate(&[], &[]);
     assert!(agg.by_name.contains_key(EXPLANATORY_STYLE_NAME));
     assert!(agg.by_name.contains_key("Learning"));
-    // `default` is intentionally NOT in the map — TS keeps it as null.
+    // `default` is intentionally NOT in the map — it maps to None.
     assert!(!agg.by_name.contains_key("default"));
 }
 

@@ -1,6 +1,4 @@
 //! Spawn utilities — CLI flag building and env var inheritance for teammates.
-//!
-//! TS: utils/swarm/spawnUtils.ts
 
 use coco_config::EnvKey;
 use coco_config::env;
@@ -14,7 +12,7 @@ use crate::pane::TeammateSpawnConfig;
 
 /// Get the command used to spawn teammates.
 ///
-/// TS: `getTeammateCommand()` — TEAMMATE_COMMAND env var or process executable.
+/// Returns the `TEAMMATE_COMMAND` env var if set, otherwise the current process executable.
 pub fn get_teammate_command() -> String {
     env::var(crate::constants::TEAMMATE_COMMAND_ENV_VAR).unwrap_or_else(|_| {
         std::env::current_exe()
@@ -24,9 +22,6 @@ pub fn get_teammate_command() -> String {
 }
 
 /// Build the full CLI command to spawn a pane-based teammate.
-///
-/// TS: `PaneBackendExecutor.spawn()` builds the command string with identity
-/// flags + inherited flags + env vars.
 pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
     let command = get_teammate_command();
 
@@ -59,8 +54,6 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
 
 /// Build env vars to inherit into teammate processes.
 ///
-/// TS: `buildInheritedEnvVars()` (`utils/swarm/spawnUtils.ts:96-146`).
-///
 /// Three categories:
 /// 1. **Worker identity** — agent_id / agent_name / team_name / color /
 ///    plan-mode flag. Identity is also passed as CLI flags (so the
@@ -76,10 +69,6 @@ pub fn build_inherited_env_vars(config: &TeammateSpawnConfig) -> String {
     let mut vars = Vec::new();
 
     // ── 1. Worker identity ──
-    //
-    // Mirrors TS `inProcessRunner.ts` AsyncLocalStorage context which
-    // exposes `CLAUDE_CODE_AGENT_ID/NAME/COLOR` and `CLAUDE_CODE_TEAM_NAME`
-    // — coco-rs uses the `COCO_*` prefix per the env-naming rule.
     let agent_id = format!("{}@{}", config.name, config.team_name);
     vars.push(format!("{AGENT_ID_ENV_VAR}={agent_id}"));
     vars.push(format!("{AGENT_NAME_ENV_VAR}={}", config.name));

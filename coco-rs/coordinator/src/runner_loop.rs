@@ -1,7 +1,5 @@
 //! In-process teammate execution loop.
 //!
-//! TS: utils/swarm/inProcessRunner.ts (1552 lines)
-//!
 //! Manages the multi-turn agent loop for in-process teammates:
 //! prompt → run query → idle → wait for next prompt → loop.
 //!
@@ -70,9 +68,6 @@ pub struct AgentQueryConfig {
     /// Parent session's bypass-permissions capability. Forwarded to the
     /// teammate's `ToolPermissionContext.bypass_available` so in-process
     /// teammates observe the same cycle + plan-exit gate as the leader.
-    /// TS parity: `spawnUtils.ts:53` forwards
-    /// `--dangerously-skip-permissions` to spawned children; the
-    /// in-process analog is this field.
     pub bypass_permissions_available: bool,
     /// Parent session's resolved Layer 1 features. The engine bridge
     /// must thread this into `coco_tool_runtime::AgentQueryConfig.features`
@@ -148,9 +143,6 @@ pub trait AgentExecutionEngine: Send + Sync {
     ///
     /// Called by [`run_in_process_teammate`] at the tail of each turn
     /// when token usage exceeds [`InProcessRunnerConfig::auto_compact_threshold`].
-    /// TS parity: `inProcessRunner.ts` runs `compactConversation` here
-    /// rather than the sliding-window stopgap that lived in coco-rs
-    /// before D1.
     async fn compact_messages(
         &self,
         messages: Vec<Arc<Message>>,
@@ -164,8 +156,6 @@ pub trait AgentExecutionEngine: Send + Sync {
 // ── Runner Config & Result ──
 
 /// Configuration for running an in-process teammate.
-///
-/// TS: `InProcessRunnerConfig` in inProcessRunner.ts
 #[derive(Clone)]
 pub struct InProcessRunnerConfig {
     /// Teammate identity.
@@ -218,13 +208,11 @@ pub struct InProcessRunnerConfig {
     /// [`mailbox::ProtocolMessage::PlanApprovalResponse`] arrives. On
     /// rejection the loop continues with the leader's feedback as the
     /// next prompt; on approval the gate drops permanently for the
-    /// remainder of the session. TS parity: `inProcessRunner.ts`
-    /// plan-mode-entry hook.
+    /// remainder of the session.
     pub plan_mode_required: bool,
     /// Optional hook registry + orchestration context for firing the
-    /// `TeammateIdle` event when the teammate transitions to idle. TS:
-    /// `executeTeammateIdleHooks` (`utils/hooks.ts:3709`). When the
-    /// hook returns blocking, the teammate stays in working state and
+    /// `TeammateIdle` event when the teammate transitions to idle.
+    /// When the hook returns blocking, the teammate stays in working state and
     /// receives the hook's feedback as the next prompt instead of
     /// going idle. `None` means no hook firing (legacy / tests).
     pub hooks: Option<std::sync::Arc<coco_hooks::HookRegistry>>,
@@ -240,8 +228,6 @@ pub(crate) struct TeammateControlState {
 }
 
 /// Result from running an in-process teammate to completion.
-///
-/// TS: `InProcessRunnerResult`
 #[derive(Debug, Clone)]
 pub struct InProcessRunnerResult {
     pub success: bool,
@@ -255,8 +241,6 @@ pub struct InProcessRunnerResult {
 // ── Wait Result ──
 
 /// Result from waiting for the next prompt or shutdown.
-///
-/// TS: `WaitResult` in waitForNextPromptOrShutdown()
 #[derive(Debug, Clone)]
 pub enum WaitResult {
     /// Shutdown requested by leader.
@@ -275,8 +259,6 @@ pub enum WaitResult {
 // ── Main Execution Loop ──
 
 /// Run an in-process teammate to completion.
-///
-/// TS: `runInProcessTeammate(config)` — the main 500-line loop.
 ///
 /// Flow:
 /// 1. Build system prompt (base + addendum per mode)
@@ -334,10 +316,7 @@ pub async fn run_in_process_teammate(
     let mut total_output_tokens = 0i64;
     let mut total_tool_use_count: i32 = 0;
     // Cap-3 ring buffer of recent tool names for the teammate spinner
-    // tree preview (TS parity: `inProcessRunner.ts:1224` calls
-    // `updateProgressFromMessage` per message, which appends to
-    // `tracker.recentActivities` and shifts when over MAX). We keep
-    // the same cap so the renderer's 3-line preview is byte-faithful.
+    // tree preview. Capped at the same limit as the renderer's preview.
     let mut recent_activities: std::collections::VecDeque<coco_types::TaskActivity> =
         std::collections::VecDeque::with_capacity(3);
     let mut last_tool_name: Option<String> = None;
@@ -352,18 +331,15 @@ pub async fn run_in_process_teammate(
     // exits only if the model APPROVES — its `shutdown_response` tool call
     // runs `signal_self_stop`, flipping `config.cancelled` so the
     // `config.cancelled` check below breaks. A rejection leaves the flag
-    // clear and the teammate keeps working. TS parity:
-    // `inProcessRunner.ts` "Does NOT auto-approve shutdown" +
-    // `SendMessageTool.ts` `handleShutdownApproval` → `abortController.abort()`.
+    // clear and the teammate keeps working.
     // Plan-approval gate — initially open iff the spawn did NOT request
     // plan-mode. When `true`, the runner suspends after each model turn
     // and pushes a `PlanApprovalRequest` to the leader, then awaits the
     // matching response via `wait_for_plan_approval` before continuing.
     // Once approved (or once the spawn never asked for plan-mode) the
-    // flag stays `false` for the rest of the session. TS parity:
-    // `inProcessRunner.ts` only gates between the plan-write turn and
-    // the first implementation turn — so we drop the flag on the first
-    // approval rather than re-arming.
+    // flag stays `false` for the rest of the session. Only gates between
+    // the plan-write turn and the first implementation turn — the flag is
+    // dropped on the first approval rather than re-arming.
     let mut plan_approval_pending = config.plan_mode_required;
 
     // Main loop
@@ -429,9 +405,7 @@ pub async fn run_in_process_teammate(
         // no dynamic context) and the approval fails closed. Unsafe tools
         // run serially inline on THIS task (`commit_flush`), so the
         // task-local reaches their execution; safe (read-only) tools spawn
-        // on a JoinSet and never need identity. TS parity:
-        // `inProcessRunner.ts` runs the whole turn inside
-        // `runWithTeammateContext`.
+        // on a JoinSet and never need identity.
         let query_result_result = {
             let prompt_for_query = current_prompt.clone();
             let mut control_poll_interval =
@@ -448,7 +422,7 @@ pub async fn run_in_process_teammate(
                 // Share THIS teammate's cancel flag so an approved
                 // `shutdown_response` (via `signal_self_stop`) breaks the loop
                 // on the next `config.cancelled` check below. A rejection
-                // never sets it, so the teammate keeps working — TS parity.
+                // never sets it, so the teammate keeps working.
                 self_stop_signal: Some(config.cancelled.clone()),
             };
             let query_future = crate::identity::run_with_teammate_context(
@@ -490,11 +464,9 @@ pub async fn run_in_process_teammate(
         total_output_tokens += query_result.output_tokens;
         total_tool_use_count = total_tool_use_count.saturating_add(query_result.tool_use_count);
         // Extract tool names from this query's assistant messages and
-        // push them into the cap-3 ring buffer. Mirror of the
-        // BgAgent path in `agent_handle/spawn.rs` but driven
-        // post-query rather than per-stream-event because the
-        // teammate runner doesn't expose a `ToolUseStarted` callback.
-        // TS parity: `LocalAgentTask.tsx:40` `MAX_RECENT_ACTIVITIES = 5`.
+        // push them into the activity ring buffer. Driven post-query
+        // rather than per-stream-event because the teammate runner
+        // doesn't expose a `ToolUseStarted` callback.
         const RECENT_ACTIVITIES_CAP: usize = 5;
         for msg in &query_result.messages {
             let coco_types::Message::Assistant(assistant) = msg.as_ref() else {
@@ -583,11 +555,9 @@ pub async fn run_in_process_teammate(
             current_turn_cancel.cancel();
         }
 
-        // Compaction check (D1) — runs at tail-of-turn, before idle
+        // Compaction check — runs at tail-of-turn, before idle
         // notification + wait_for_next_prompt, so the worker doesn't
-        // sit idle holding a stale, oversized history (TS parity:
-        // `inProcessRunner.ts:1072-1126` runs `compactConversation`
-        // here as part of the post-tool tail).
+        // sit idle holding a stale, oversized history.
         let total_tokens = total_input_tokens + total_output_tokens;
         if total_tokens > config.auto_compact_threshold && !all_messages.is_empty() {
             match engine
@@ -613,7 +583,6 @@ pub async fn run_in_process_teammate(
         // first implementation turn. The model just produced its plan
         // (now in `query_result.response_text`); send it to the leader
         // and block until a matching `PlanApprovalResponse` arrives.
-        // TS parity: `inProcessRunner.ts` plan-mode-entry hook.
         if plan_approval_pending {
             let plan_content = query_result.response_text.clone().unwrap_or_default();
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -672,8 +641,8 @@ pub async fn run_in_process_teammate(
 
         // Transition to idle
         if !was_idle {
-            // TeammateIdle hook: TS `executeTeammateIdleHooks`
-            // (`utils/hooks.ts:3709`). A blocking hook prevents idle —
+            // TeammateIdle hook: fires the idle event, then checks for a
+            // blocking result. A blocking hook prevents idle —
             // the teammate continues working with the hook's feedback
             // injected as the next prompt.
             if let (Some(registry), Some(ctx)) =
@@ -856,9 +825,9 @@ pub async fn run_in_process_teammate(
     // Coordinator-mode notification: when the leader is operating as a
     // coordinator (`COCO_COORDINATOR_MODE=1` + `Feature::AgentTeams`),
     // push a `<task-notification>` XML envelope to the leader's mailbox
-    // so the model receives the structured worker-termination signal
-    // (TS `coordinatorMode.ts:130-152`). Status reflects the actual
-    // outcome — `Completed` on clean exit, `Failed` on query error.
+    // so the model receives the structured worker-termination signal.
+    // Status reflects the actual outcome — `Completed` on clean exit,
+    // `Failed` on query error.
     if let Some(features) = config.features.as_deref()
         && coco_subagent::is_coordinator_mode(features)
     {
@@ -977,13 +946,9 @@ async fn set_teammate_current_work_cancel(
 // ── Wait For Next Prompt ──
 
 /// Poll interval for mailbox scanning (ms).
-///
-/// TS: 500ms in waitForNextPromptOrShutdown()
 const POLL_INTERVAL_MS: u64 = 500;
 
 /// Wait for the next prompt, shutdown request, or abort.
-///
-/// TS: `waitForNextPromptOrShutdown()` in inProcessRunner.ts
 ///
 /// Priority order:
 /// 1. Abort signal check.
@@ -993,11 +958,11 @@ const POLL_INTERVAL_MS: u64 = 500;
 ///    c. Peer messages (FIFO, third).
 /// 3. Unclaimed tasks from task list (lowest).
 ///
-/// **TS-parity gap, intentional**: TS additionally drains
-/// `task.pendingUserMessages` (`inProcessRunner.ts:705-739`) — messages
-/// the user typed into the teammate's transcript-view UI. coco-rs has
-/// no transcript-view UI yet, so the queue's only producer doesn't
-/// exist. When the TUI lands, the right port is an
+/// **Implementation gap, intentional**: additionally draining
+/// `pendingUserMessages` — messages the user typed into the teammate's
+/// transcript-view UI — is not yet implemented. coco-rs has no
+/// transcript-view UI yet, so the queue's only producer doesn't exist.
+/// When the TUI lands, the right port is an
 /// `mpsc::UnboundedReceiver<String>` registered per-`agent_id` on
 /// `InProcessAgentRunner`, drained at the top of this loop above the
 /// abort check.
@@ -1320,11 +1285,10 @@ fn permission_rule(
     }
 }
 
-/// Send a message to the team leader's mailbox.
-///
 /// Fire-and-forget entry point for starting a teammate.
 ///
-/// TS: `startInProcessTeammate(config)` — calls runInProcessTeammate in background.
+/// Spawns [`run_in_process_teammate`] on the Tokio runtime and returns
+/// the join handle.
 pub fn start_in_process_teammate(
     config: InProcessRunnerConfig,
     engine: std::sync::Arc<dyn AgentExecutionEngine>,

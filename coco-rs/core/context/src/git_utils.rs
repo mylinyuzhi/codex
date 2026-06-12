@@ -1,6 +1,4 @@
 //! Git utility functions for context assembly.
-//!
-//! TS: utils/git/ (1K LOC) — git operations for context.
 
 use std::path::Path;
 use std::process::Command;
@@ -101,8 +99,6 @@ pub fn has_uncommitted_changes(cwd: &Path) -> bool {
 }
 
 /// Create a git worktree for agent isolation.
-///
-/// TS: utils/worktree.ts — creates isolated worktrees.
 pub fn create_worktree(cwd: &Path, branch: &str, path: &Path) -> crate::Result<()> {
     let output = Command::new("git")
         .args(["worktree", "add", "-b", branch, &path.to_string_lossy()])

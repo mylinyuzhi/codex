@@ -1,7 +1,7 @@
 //! Unified `@` suggestion ranking and merging.
 //!
-//! TS: `src/hooks/unifiedSuggestions.ts`. Produces a single ranked list
-//! (cap 15) combining agents, file paths, and MCP resources. Per TS:
+//! Produces a single ranked list (cap 15) combining agents, file paths,
+//! and MCP resources:
 //!   - agents are scored by Fuse.js with weight 3 on `agentType`, weight 2
 //!     on `displayText` — fuse scores are typically < 0.5 for decent
 //!     matches, so agents dominate the top of the list versus the file
@@ -10,11 +10,10 @@
 //!   - MCP resources rank with the agent pool and keep at least one visible
 //!     row when they match but agents fill the cap
 //!
-//! Rust port simplification: rather than re-implement Fuse weighted
-//! scoring, we keep provider-local ordering and merge through one cap
-//! layer. Agent rows still rank first, but typed provider rows such as MCP
-//! resources are reserved space instead of being dropped solely because the
-//! agent pool filled the cap.
+//! Rather than re-implement Fuse weighted scoring, we keep provider-local
+//! ordering and merge through one cap layer. Agent rows still rank first,
+//! but typed provider rows such as MCP resources are reserved space instead
+//! of being dropped solely because the agent pool filled the cap.
 
 use super::agent_search::AgentInfo;
 use crate::completion::McpResourceCompletion;

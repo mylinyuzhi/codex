@@ -1,11 +1,8 @@
 //! `/agents` — open the agents overlay, or run a text sub-command.
 //!
-//! TS: `commands/agents/{index.ts,agents.tsx}` is a pure picker — `call(onDone,
-//! context)` takes no args and always renders `<AgentsMenu>` (no `argumentHint`).
-//! coco-rs mirrors that no-arg picker and **additionally** exposes text
-//! sub-commands (`list` / `show <name>` / `paths` / `validate` / `reload`) as a
-//! coco-only extension for SDK / headless / scripted callers that can't open a
-//! TUI overlay. This is a deliberate superset of TS, not a TS-parity claim.
+//! coco-rs exposes text sub-commands (`list` / `show <name>` / `paths` /
+//! `validate` / `reload`) as a coco-only extension for SDK / headless /
+//! scripted callers that can't open a TUI overlay.
 //!
 //! Backed by the `coco-subagent` catalog: built-ins from
 //! [`coco_subagent::BuiltinAgentCatalog::interactive`] plus markdown agents
@@ -123,9 +120,7 @@ fn render(args: &str, paths: AgentSearchPaths) -> crate::Result<String> {
         "paths" => render_paths(&paths),
         "validate" => render_validate(report),
         "reload" => render_reload(&snapshot),
-        // `/agents <name>` is the TS-aligned shortcut: in TS the user
-        // selects an agent from `<AgentsMenu>` to enter the per-agent
-        // submenu (View/Edit/Delete). The flat-text equivalent is to
+        // `/agents <name>` is the shortcut: the flat-text equivalent is to
         // surface that agent's detail page directly.
         other if snapshot.find_active(other).is_some() => render_show(&snapshot, other),
         other => format!(
@@ -150,8 +145,8 @@ fn render_list(snapshot: &coco_subagent::AgentCatalogSnapshot) -> String {
         out.push_str(&format!("  {}  [{source} · {model}]\n", def.name));
         out.push_str(&format!("    {desc}\n"));
     }
-    // TS opens an interactive 2-level menu (`<AgentsMenu>`: list →
-    // View/Edit/Delete submenu). Flat text equivalents — keeps SDK + TUI
+    // Opens an interactive 2-level menu (list →
+    // View/Edit/Delete submenu) in the TUI. Flat text equivalents — keeps SDK + TUI
     // text-mode honest until a real overlay lands.
     out.push_str(
         "\nDetails: /agents show <name>  (or just /agents <name>)\n\
@@ -186,9 +181,8 @@ fn render_show(snapshot: &coco_subagent::AgentCatalogSnapshot, name: &str) -> St
     }
     match &def.allowed_tools {
         coco_types::ToolAllowList::Wildcard => {
-            // Wildcard = "all tools". Match TS slash-command output by
-            // omitting the line (TS only emits when an explicit list
-            // is set).
+            // Wildcard = "all tools". Omit the line (only emit when an explicit
+            // list is set).
         }
         coco_types::ToolAllowList::Explicit(list) if !list.is_empty() => {
             out.push_str(&format!("Tools:         {}\n", list.join(", ")));
@@ -218,8 +212,6 @@ fn render_show(snapshot: &coco_subagent::AgentCatalogSnapshot, name: &str) -> St
         out.push_str(&format!("MCP servers:   {formatted}\n"));
     }
     if let Some(ts) = &def.pending_snapshot_update {
-        // TS parity: `loadAgentsDir.ts:262-294` — surface drift
-        // between project snapshot and synced local memory dir.
         // The CLI bootstrap (app/cli) wires the inspector that
         // populates this field; the slash command displays it when
         // present. `None` when no inspector is wired or the local
@@ -241,9 +233,9 @@ fn render_show(snapshot: &coco_subagent::AgentCatalogSnapshot, name: &str) -> St
 /// session startup. The snapshot we just rendered reflects current disk
 /// truth; mid-session edits affect the next session.
 ///
-/// TS opens an interactive `<AgentsMenu>` that reloads against the live
-/// registry — Rust doesn't expose a thread-safe handle to the live store
-/// yet, so we surface the deferral instead of pretending.
+/// The interactive overlay reloads against the live registry — Rust doesn't
+/// expose a thread-safe handle to the live store yet, so we surface the
+/// deferral instead of pretending.
 fn render_reload(snapshot: &coco_subagent::AgentCatalogSnapshot) -> String {
     let mut out = String::from(
         "Re-scanned agent definition directories. \

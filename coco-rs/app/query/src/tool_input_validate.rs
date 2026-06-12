@@ -1,25 +1,20 @@
-//! schema validation: tool input normalization + schema validation.
+//! Tool input normalization + schema validation.
 //!
 //! Sits between the provider-adapter-driven wire parsing (which parses raw
 //! `arguments` strings into [`coco_llm_types::ToolCallPart::input`]
 //! values, falling back to `{}` on parse failure) and the per-tool
 //! execution gate in [`tool_call_preparer`].
 //!
-//! Mirrors TS Claude Code:
-//! - [`normalize_value_string`] → `utils/messages.ts:2676-2697`
-//!   (recursive `Value::String` parse for providers that occasionally
-//!   nest stringified JSON inside the tool-call `input` field).
-//! - [`validate_tool_call`] → `services/tools/toolExecution.ts:614-680`
-//!   (Zod schema check + NoSuchTool fallback) but **without** the
-//!   schema-not-sent hint — the deferred-tool registry isn't ported
-//!   yet.
-//! - [`format_schema_error`] → `utils/toolErrors.ts:66-130`
-//!   (`formatZodValidationError`).
+//! - [`normalize_value_string`] — recursive `Value::String` parse for
+//!   providers that occasionally nest stringified JSON inside the tool-call
+//!   `input` field.
+//! - [`validate_tool_call`] — schema check + NoSuchTool fallback, without
+//!   the schema-not-sent hint (deferred-tool registry not yet ported).
+//! - [`format_schema_error`] — human-readable schema error formatting.
 //!
-//! Failure paths populate
-//! [`coco_llm_types::ToolInputInvalidReason`] so error wrap
-//! ([`tool_call_preparer::prepare_one_pending_tool_call`]) can pick
-//! the right `<tool_use_error>` wrap prefix without string-matching.
+//! Failure paths populate [`coco_llm_types::ToolInputInvalidReason`] so error
+//! wrap ([`tool_call_preparer::prepare_one_pending_tool_call`]) can pick the
+//! right `<tool_use_error>` wrap prefix without string-matching.
 
 use std::sync::Arc;
 
@@ -35,8 +30,7 @@ use serde_json::Value;
 use crate::tool_input_parse::parse_tool_arguments_or_empty;
 
 /// Recover stringified JSON nested inside what the schema expects to
-/// be an object/array. Mirrors TS Claude Code's `safeParseJSON`
-/// branch in `normalizeContentFromAPI`.
+/// be an object/array.
 ///
 /// - `Value::String(s)` → try [`parse_tool_arguments_or_empty`];
 ///   when it produces an `Object`/`Array`, overwrite `input` with the

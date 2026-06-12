@@ -21,26 +21,25 @@ const DREAM_GUIDANCE: &str = include_str!("text/dream.md");
 const SESSION_TEMPLATE: &str = include_str!("text/session_template.md");
 const SEARCHING_PAST_CONTEXT: &str = include_str!("text/searching_past_context.md");
 
-/// TS `MAX_ENTRYPOINT_LINES` — surfaced into prompt copy via the
+/// `MAX_ENTRYPOINT_LINES` — surfaced into prompt copy via the
 /// `{MAX_ENTRYPOINT_LINES}` placeholder.
 const MAX_ENTRYPOINT_LINES: i32 = 200;
 
 /// Combined-mode "must avoid sensitive data in team" addendum to the
-/// shared `WHAT_NOT_TO_SAVE` block. Mirrors the TS line appended only
-/// when team memory is on. (`memdir/teamMemPrompts.ts:78-79`,
-/// `services/extractMemories/prompts.ts:150`)
+/// shared `WHAT_NOT_TO_SAVE` block. Appended only when team memory is
+/// on.
 const COMBINED_TEAM_SECRET_ADDENDUM: &str = "- You MUST avoid saving sensitive data within shared team memories. For example, never save API keys or user credentials.";
 
-/// Memory-and-other-forms-of-persistence block. Embedded verbatim from
-/// TS so `Plan` / `Tasks` distinctions stay calibrated. Used by every
-/// system-prompt variant (auto / combined / kairos).
+/// Memory-and-other-forms-of-persistence block. Used by every
+/// system-prompt variant (auto / combined / kairos) so `Plan` / `Tasks`
+/// distinctions stay calibrated.
 const PERSISTENCE_GUIDANCE: &str = "## Memory and other forms of persistence\n\
 Memory is one of several persistence mechanisms available to you as you assist the user in a given conversation. The distinction is often that memory can be recalled in future conversations and should not be used for persisting information that is only useful within the scope of the current conversation.\n\
 - When to use or update a plan instead of memory: If you are about to start a non-trivial implementation task and would like to reach alignment with the user on your approach you should use a Plan rather than saving this information to memory. Similarly, if you already have a plan within the conversation and you have changed your approach persist that change by updating the plan rather than saving a memory.\n\
 - When to use or update tasks instead of memory: When you need to break your work in current conversation into discrete steps or keep track of your progress use tasks instead of saving to memory. Tasks are great for persisting information about the work that needs to be done in the current conversation, but memory should be reserved for information that will be useful in future conversations.";
 
-/// Shared opener for all variants — TS `buildMemoryLines` /
-/// `buildCombinedMemoryPrompt` "build up this memory system" lines.
+/// Shared opener for all variants — "build up this memory system"
+/// lines.
 const BEHAVIOR_GUIDANCE: &str = "You should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.\n\nIf the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.";
 
 /// Which system-prompt variant to render.
@@ -57,11 +56,10 @@ pub enum SystemPromptVariant {
 /// Build the `# auto memory` system-prompt block.
 ///
 /// `index_content` is the truncated `MEMORY.md` body (or `None` when
-/// the file is missing / empty). `skip_index` corresponds to TS feature
-/// `tengu_moth_copse` — when set, the model is told to write topic
-/// files only (no two-step indexing). `searching_past_context` mirrors
-/// TS `tengu_coral_fern` (`buildSearchingPastContextSection`); when set,
-/// the model is shown grep examples for memory and transcript search.
+/// the file is missing / empty). `skip_index` — when set, the model is
+/// told to write topic files only (no two-step indexing).
+/// `searching_past_context` — when set, the model is shown grep
+/// examples for memory and transcript search (`buildSearchingPastContextSection`).
 /// `transcript_dir` is the project's session-transcript root used to
 /// substitute `{TRANSCRIPT_DIR}` in the searching-past-context block;
 /// `None` leaves the placeholder for the model to fill.
@@ -124,8 +122,8 @@ pub fn build_system_prompt_section(
 
     let mut what_not = WHAT_NOT_TO_SAVE.to_string();
     if combined {
-        // TS `teamMemPrompts.ts:78-79` appends the secrets bullet as
-        // part of the WHAT_NOT_TO_SAVE block in combined mode.
+        // Appends the secrets bullet as part of the WHAT_NOT_TO_SAVE
+        // block in combined mode.
         what_not.push('\n');
         what_not.push_str(COMBINED_TEAM_SECRET_ADDENDUM);
     }
@@ -192,9 +190,8 @@ pub fn build_system_prompt_section(
 
 /// Build the KAIROS daily-log prompt — used when `kairos_mode` is set.
 ///
-/// TS: `memdir/memdir.ts::buildAssistantDailyLogPrompt`. Honors
-/// `skip_index` (drops the `## MEMORY.md` orientation block) and
-/// appends the searching-past-context block when enabled.
+/// Honors `skip_index` (drops the `## MEMORY.md` orientation block)
+/// and appends the searching-past-context block when enabled.
 pub fn build_kairos_prompt(
     memory_dir: &Path,
     skip_index: bool,
@@ -245,8 +242,7 @@ fn render_searching_past_context(memory_dir: &Path, transcript_dir: Option<&Path
         .replace("{TRANSCRIPT_DIR}", &trans)
 }
 
-/// Combined-variant "How to save" copy — TS
-/// `memdir/teamMemPrompts.ts::buildCombinedMemoryPrompt`'s `howToSave`.
+/// Combined-variant "How to save" copy.
 fn combined_how_to_save() -> String {
     let example = memory_frontmatter_example();
     format!(
@@ -271,11 +267,9 @@ fn memory_frontmatter_example() -> String {
 
 /// Build the extraction-agent system prompt.
 ///
-/// TS: `services/extractMemories/prompts.ts::buildExtractAutoOnlyPrompt`
-/// (or `buildExtractCombinedPrompt` when team memory is on). The
-/// `manifest` block is rendered by `scan::format_memory_manifest` and
-/// pre-injected so the agent doesn't spend a turn on `ls`. `combined`
-/// switches to the team-aware copy.
+/// The `manifest` block is rendered by `scan::format_memory_manifest`
+/// and pre-injected so the agent doesn't spend a turn on `ls`.
+/// `combined` switches to the team-aware copy.
 pub fn build_extract_prompt(
     message_count: i32,
     manifest: &str,
@@ -306,16 +300,13 @@ pub fn build_extract_prompt(
         TYPES_INDIVIDUAL
     };
     let count = message_count;
-    // Substitute the message-count placeholder in the verbatim
-    // template so the opener matches TS `opener(newMessageCount, …)`
-    // — TS surfaces the count twice (opener + budget reminder) and we
-    // mirror that without paying a second `format!` per slot.
+    // Substitute the message-count placeholder — the count appears
+    // twice (opener + budget reminder).
     let guidance = EXTRACT_GUIDANCE.replace("{MESSAGE_COUNT}", &count.to_string());
-    // TS parity (`extractMemories/prompts.ts:30-33`): wrap the
-    // manifest with the `## Existing memory files` header + the
-    // "Check this list before writing" trailing nudge, only when
+    // Wrap the manifest with the `## Existing memory files` header +
+    // the "Check this list before writing" trailing nudge, only when
     // there's actual content. An empty manifest drops the section
-    // entirely (TS ternary returns `''`).
+    // entirely.
     let manifest_block = if manifest.trim().is_empty() {
         String::new()
     } else {
@@ -328,16 +319,14 @@ pub fn build_extract_prompt(
 
 /// Build the auto-dream consolidation agent prompt.
 ///
-/// Mirrors TS `services/autoDream/consolidationPrompt.ts:buildConsolidationPrompt`
-/// with the same 4-phase structure (Orient / Gather / Consolidate / Prune).
+/// 4-phase structure: Orient / Gather / Consolidate / Prune.
 /// Placeholders `{MEMORY_ROOT}` and `{TRANSCRIPT_DIR}` in the verbatim
 /// template are substituted at build time so the model sees concrete paths.
 ///
-/// The `## Additional context` block reproduces TS's `extra` block
-/// (`autoDream.ts:216-221`) — the bash read-only constraint reminder
-/// + sessions-since-last list. The constraint reminder is appended
-///   even when `sessions_since_last` is empty so a forced /dream call
-///   still gets the heads-up.
+/// The `## Additional context` block carries the bash read-only
+/// constraint reminder + sessions-since-last list. The constraint
+/// reminder is appended even when `sessions_since_last` is empty so a
+/// forced /dream call still gets the heads-up.
 pub fn build_dream_prompt(
     memory_dir: &Path,
     transcript_dir: &Path,
@@ -364,18 +353,14 @@ pub fn build_dream_prompt(
     }
 }
 
-/// The verbatim 9-section session-memory template (TS:
-/// `services/SessionMemory/prompts.ts:DEFAULT_SESSION_MEMORY_TEMPLATE`).
+/// The verbatim 9-section session-memory template.
 pub fn build_session_memory_template() -> &'static str {
     SESSION_TEMPLATE
 }
 
-/// Rough token estimator — `Math.round(len / 4)`. TS
-/// `services/tokenEstimation.ts::roughTokenCountEstimation` rounds
-/// half-up (default `Math.round` semantics for non-negative inputs),
-/// not floor. The difference is at most one token but matters when
-/// a section is right at the budget boundary and the warning text
-/// otherwise drifts vs. TS.
+/// Rough token estimator — `Math.round(len / 4)`, rounded half-up
+/// (not floor). The difference is at most one token but matters when
+/// a section is right at the budget boundary.
 pub fn rough_token_estimate(s: &str) -> i64 {
     let len = s.len() as i64;
     // For len ≥ 0, `(len + 2) / 4` (integer division) is equivalent
@@ -386,8 +371,7 @@ pub fn rough_token_estimate(s: &str) -> i64 {
 /// Walk a 9-section session-memory document and return
 /// `(section_header, token_estimate)` for every `# Section`. Used by
 /// [`generate_section_reminders`] to decide which sections need
-/// condensing. TS parity: `services/SessionMemory/prompts.ts:134-159
-/// analyzeSectionSizes`.
+/// condensing.
 pub fn analyze_section_sizes(content: &str) -> Vec<(String, i64)> {
     let mut sections: Vec<(String, i64)> = Vec::new();
     let mut current_header: String = String::new();
@@ -412,11 +396,9 @@ pub fn analyze_section_sizes(content: &str) -> Vec<(String, i64)> {
 }
 
 /// Build the per-section + total-budget reminder block appended to
-/// `build_session_memory_update_prompt`. Mirrors TS
-/// `services/SessionMemory/prompts.ts:164-196 generateSectionReminders`
-/// — without this the model has no signal that sections are
-/// over-budget and will keep growing the file until compact-time
-/// truncation fires.
+/// `build_session_memory_update_prompt` — without this the model has
+/// no signal that sections are over-budget and will keep growing the
+/// file until compact-time truncation fires.
 ///
 /// Returns an empty string when nothing's over-budget.
 pub fn generate_section_reminders(
@@ -457,11 +439,10 @@ pub fn generate_section_reminders(
     parts.join("")
 }
 
-/// Substitute `{{var}}` placeholders in a template — TS
-/// `services/SessionMemory/prompts.ts:201-213 substituteVariables`.
-/// Single-pass replacement so user content containing `{{varName}}`
-/// can't trigger second-round substitution. Variables not present
-/// in the map are left as-is.
+/// Substitute `{{var}}` placeholders in a template — single-pass
+/// replacement so user content containing `{{varName}}` can't trigger
+/// second-round substitution. Variables not present in the map are
+/// left as-is.
 pub fn substitute_variables(template: &str, variables: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let bytes = template.as_bytes();
@@ -497,18 +478,17 @@ pub fn substitute_variables(template: &str, variables: &[(&str, &str)]) -> Strin
     out
 }
 
-/// Build the session-memory update prompt — TS
-/// `services/SessionMemory/prompts.ts::buildSessionMemoryUpdatePrompt`.
+/// Build the session-memory update prompt.
 ///
-/// Mirrors the TS template's emphasis on structure preservation: the
-/// model must `Edit` only and never delete/modify section headers or the
-/// italic `_section descriptions_`.
+/// Emphasizes structure preservation: the model must `Edit` only and
+/// never delete/modify section headers or the italic
+/// `_section descriptions_`.
 ///
 /// The optional `custom_template` overrides the static default — the
 /// caller (SessionMemoryService) reads
 /// `<config_home>/session-memory/config/prompt.md` if it exists and
 /// passes the contents here. `{{currentNotes}}` and `{{notesPath}}`
-/// are the TS-supported placeholders (single-pass `\{\{(\w+)\}\}` regex).
+/// are the supported placeholders (single-pass `\{\{(\w+)\}\}` regex).
 ///
 /// `max_section_tokens` and `max_total_tokens` drive the appended
 /// section-reminder block — see [`generate_section_reminders`].

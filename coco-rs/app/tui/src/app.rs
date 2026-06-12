@@ -50,10 +50,7 @@ use crate::server_notification_handler;
 
 /// Idle threshold for the `idle_prompt` notification.
 ///
-/// TS `messageIdleNotifThresholdMs` defaults to 60_000 ms
-/// (`utils/config.ts:612`). Configurable in the TS REPL via global
-/// config; coco-rs hardcodes the default — wire to `settings.json`
-/// later if the cadence proves wrong.
+/// Default: 60 s. Wire to `settings.json` later if the cadence proves wrong.
 const IDLE_PROMPT_THRESHOLD: Duration = Duration::from_secs(60);
 const DEFERRED_CORE_EVENT_LIMIT: usize = 256;
 
@@ -141,7 +138,6 @@ impl App {
         let index = create_shared_index(cwd.clone());
         // Pre-warm the file index so the first `@` keystroke gets results
         // without waiting for the initial git ls-files / ripgrep walk.
-        // TS: `startBackgroundCacheRefresh` (`fileSuggestions.ts:636`).
         FileIndex::refresh_background(index.clone());
         // Watch `.git/index` mtime — invalidates the cache when the user
         // commits or checks out a different branch.
@@ -461,7 +457,7 @@ impl App {
 
         // Drive the pause clock from the actual paint instant so the
         // displayed elapsed value subtracts time spent in tool-permission
-        // prompts (`REPL.tsx:2076-2088` parity).
+        // prompts.
         let blocked = self
             .state
             .ui
@@ -751,10 +747,9 @@ impl App {
                 // (The old "write last_esc_time before dispatch" path
                 // was removed — see `update::exit` + `state.ui.*_tracker`
                 // for the new double-press machine.)
-                // TS App.tsx:452 — every Ink input event bumps the
-                // last-interaction timestamp so the idle-prompt timer
-                // restarts from "now" rather than firing while the
-                // user is actively typing.
+                // Every input event bumps the last-interaction timestamp
+                // so the idle-prompt timer restarts from "now" rather
+                // than firing while the user is actively typing.
                 let now = self.state.clock.now();
                 self.state.session.last_user_interaction_at = now;
                 if self.tui.retained_surface_visible() {
@@ -778,14 +773,12 @@ impl App {
                 let plugin_hint_shown = self.maybe_surface_plugin_hint();
                 // Drive the chord-timeout from the tick so a pending
                 // chord auto-cancels after the 1 s window without
-                // requiring another keypress (mirrors TS
-                // CHORD_TIMEOUT_MS in `KeybindingProviderSetup.tsx:30`).
+                // requiring another keypress.
                 let chord_cancelled = self.state.ui.kb_handle.tick(now);
                 // Expire any armed double-press hint (Ctrl+C / Ctrl+D
                 // exit prompt, double-Esc rewind) so the footer text
                 // disappears after `DOUBLE_PRESS_TIMEOUT` even if the
-                // user never presses another key. TS:
-                // `useDoublePress.ts:48-57` setTimeout.
+                // user never presses another key.
                 let pending_exit_before = self.state.ui.pending_exit_hint();
                 let double_press_expired = self.state.ui.tick_double_press(now);
                 if double_press_expired
@@ -921,11 +914,8 @@ impl App {
     /// Fire the `idle_prompt` notification once per turn-completion if
     /// the user has been idle past `IDLE_PROMPT_THRESHOLD`.
     ///
-    /// TS `REPL.tsx:3920-3939` runs this check inside a `setTimeout`
-    /// scheduled when `lastQueryCompletionTime` updates. Coco-rs
-    /// instead polls on the existing 250 ms tick — same outcome,
-    /// avoids spawning extra timer tasks. Skips when an state is
-    /// open (TS `focusedInputDialogRef.current === undefined`) or
+    /// Polls on the existing 250 ms tick — same outcome as a dedicated
+    /// timer task, avoids extra spawns. Skips when a modal is open or
     /// the agent is busy.
     /// Does the next `TICK_INTERVAL` tick have anything to do?
     ///
@@ -987,11 +977,10 @@ impl App {
     /// and no blocking interaction is active, resolve it against the
     /// marketplace cache and surface the plugin-recommendation modal.
     ///
-    /// Mirrors TS `useClaudeCodeHintRecommendation`: resolve async, mark
-    /// shown-this-session on success, then clear the slot. The pre-store
-    /// gate (`maybe_record_plugin_hint`) already dropped installed/shown/
-    /// capped/policy-blocked hints, so anything that reaches here is worth
-    /// surfacing if it resolves against the cache.
+    /// Marks shown-this-session on success, then clears the slot. The
+    /// pre-store gate (`maybe_record_plugin_hint`) already dropped
+    /// installed/shown/capped/policy-blocked hints, so anything that reaches
+    /// here is worth surfacing if it resolves against the cache.
     fn maybe_surface_plugin_hint(&mut self) -> bool {
         // Single-slot: nothing pending → nothing to do.
         let Some(hint) = coco_plugins::pending_hint_snapshot() else {
@@ -1031,8 +1020,7 @@ impl App {
 /// Resolve a pending hint against the on-disk marketplace cache. Builds a
 /// short-lived [`coco_plugins::marketplace::MarketplaceManager`] rooted at
 /// the user plugins dir, loads the hint's marketplace from disk, and looks
-/// up the plugin entry. Returns `None` if the marketplace or plugin isn't
-/// cached. TS: `resolvePluginHint` (the async `getPluginById` half).
+/// up the plugin entry. Returns `None` if the marketplace or plugin isn't cached.
 fn resolve_pending_plugin_hint(
     hint: &coco_plugins::ClaudeCodeHint,
 ) -> Option<coco_plugins::PluginRecommendation> {

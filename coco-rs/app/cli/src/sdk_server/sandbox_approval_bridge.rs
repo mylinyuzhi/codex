@@ -1,8 +1,7 @@
 //! `SandboxApprovalBridge` impl that routes through the SDK control
 //! channel.
 //!
-//! TS parity — `cli/structuredIO.ts:723-751` (`createSandboxAskCallback`).
-//! TS surfaces sandbox network approvals as a synthetic tool named
+//! Sandbox network approvals are surfaced as a synthetic tool named
 //! `SandboxNetworkAccess` so SDK clients see one uniform permission
 //! protocol for both regular tools and sandbox-level operations. This
 //! crate's [`coco_sandbox::SandboxApprovalBridge`] is the producer-side
@@ -34,15 +33,13 @@ use crate::sdk_server::handlers::SdkServerState;
 
 /// Synthetic tool name surfaced to SDK clients so sandbox approvals
 /// reuse the regular tool-permission UI / handlers without a separate
-/// message type. TS: `cli/structuredIO.ts:62`
-/// `SANDBOX_NETWORK_ACCESS_TOOL_NAME = "SandboxNetworkAccess"`.
+/// message type.
 pub const SANDBOX_NETWORK_ACCESS_TOOL_NAME: &str = "SandboxNetworkAccess";
 
 /// Synthetic tool name for filesystem-level sandbox approvals
-/// (path read / write). TS doesn't ship a file-write counterpart
-/// today (its sandbox is network-only); coco-rs has a stricter
-/// filesystem sandbox and surfaces denied paths through the same
-/// channel so SDK clients can prompt with one consistent dialog.
+/// (path read / write). coco-rs has a stricter filesystem sandbox
+/// and surfaces denied paths through the same channel so SDK clients
+/// can prompt with one consistent dialog.
 pub const SANDBOX_PATH_ACCESS_TOOL_NAME: &str = "SandboxPathAccess";
 
 /// SDK-backed sandbox approval bridge.
@@ -139,8 +136,7 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
             }
         };
 
-        // TS `permission_prompt` notification (`PermissionRequest.tsx:190`):
-        // fire the Notification hook before blocking on the SDK client so
+        // Fire the Notification hook before blocking on the SDK client so
         // the same hook fires regardless of whether the prompt comes from
         // a regular tool or a sandbox-level deny. Best-effort — runtime
         // not yet installed (e.g. tests) leaves the hook unfired.

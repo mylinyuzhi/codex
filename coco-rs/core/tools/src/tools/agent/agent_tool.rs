@@ -1,6 +1,4 @@
 //! `AgentTool` — launch a specialized agent for complex, multi-step tasks.
-//!
-//! TS: `tools/AgentTool/AgentTool.tsx` + `tools/AgentTool/runAgent.ts`.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::AgentSpawnRequest;
@@ -16,19 +14,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Default `auto_background_ms` when `COCO_AUTO_BACKGROUND_TASKS` is
-/// truthy but doesn't carry a numeric value. Matches TS
-/// `getAutoBackgroundMs() = 120_000` (`AgentTool.tsx:74`).
+/// truthy but doesn't carry a numeric value (120 000 ms).
 pub const DEFAULT_AUTO_BACKGROUND_MS: u64 = 120_000;
 
 /// Typed input for [`AgentTool`].
 ///
 /// The model-facing schema is built by the manual
-/// [`AgentTool::input_schema`] override (TS-mirror with precise
-/// descriptions and enum lists). This struct only owns the runtime
-/// shape used by [`AgentTool::execute`] — adding fields here without
-/// adding them to `input_schema()` keeps them as
-/// internal-passthrough (e.g. `mcp_servers` is set by permission /
-/// hook rewrites, never by the model).
+/// [`AgentTool::input_schema`] override (precise descriptions and enum
+/// lists). This struct only owns the runtime shape used by
+/// [`AgentTool::execute`] — adding fields here without adding them to
+/// `input_schema()` keeps them as internal-passthrough (e.g.
+/// `mcp_servers` is set by permission / hook rewrites, never by the
+/// model).
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct AgentInput {
     /// The task for the agent to perform
@@ -74,8 +71,7 @@ pub struct AgentInput {
 /// Typed envelope returned by [`AgentTool::execute`] and consumed by
 /// [`AgentTool::render_for_model`]. Replaces the previous untyped
 /// `serde_json::Value` round-trip — both producer and consumer live in
-/// this crate, so a discriminated union is strictly type-safer and
-/// matches TS's tagged union (`AgentToolToolResultParam`).
+/// this crate, so a discriminated union is strictly type-safer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AgentSpawnRenderResult {
@@ -176,10 +172,9 @@ impl Tool for AgentTool {
                     // Why neither is LLM-pickable: `model` requires knowing the
                     // operator's `provider/model_id` config (multi-LLM ⇒ no closed
                     // enum to choose from); `model_role` requires knowing the
-                    // operator's `settings.models.<role>` mappings. The catalog-only
-                    // principle (matching TS) says static config is the source of
-                    // truth, the LLM picks an agent by `subagent_type`, and the
-                    // operator owns model selection. See root CLAUDE.md
+                    // operator's `settings.models.<role>` mappings. Static config is
+                    // the source of truth: the LLM picks an agent by `subagent_type`,
+                    // and the operator owns model selection. See root CLAUDE.md
                     // "Multi-Provider Boundaries".
                     "run_in_background": {
                         "type": "boolean",
@@ -202,13 +197,12 @@ impl Tool for AgentTool {
                         "type": "string",
                         // The `PermissionMode` wire values (camelCase) — these are
                         // the modes that round-trip through
-                        // `serde_json::from_value::<PermissionMode>`. Mirrors TS
-                        // `permissionModeSchema()` = `z.enum(PERMISSION_MODES)` (the
-                        // INTERNAL set: the 5 external modes + `bubble`, plus `auto`
-                        // under a feature gate). `ask`/`deny` are NOT modes — they
-                        // are `PermissionBehavior` values and must not appear here
-                        // (they fail to parse and are silently dropped to the parent
-                        // mode by `resolve_subagent_mode`).
+                        // `serde_json::from_value::<PermissionMode>`.
+                        // The INTERNAL set: the 5 external modes + `bubble`, plus
+                        // `auto` under a feature gate. `ask`/`deny` are NOT modes —
+                        // they are `PermissionBehavior` values and must not appear
+                        // here (they fail to parse and are silently dropped to the
+                        // parent mode by `resolve_subagent_mode`).
                         "enum": [
                             "default", "plan", "dontAsk", "acceptEdits", "bubble",
                             "bypassPermissions", "auto"
@@ -226,8 +220,7 @@ impl Tool for AgentTool {
                         "description": "(internal) permission/hook-injected MCP server allowlist"
                     }
                 },
-                // TS zod requires `description` and `prompt` (`AgentTool.tsx:82-88`):
-                // `z.string()` without `.optional()`. All other fields are optional.
+                // `description` and `prompt` are required strings. All other fields are optional.
                 "required": ["description", "prompt"]
             }))
         })
@@ -239,7 +232,7 @@ impl Tool for AgentTool {
         prompt_opts: &coco_tool_runtime::PromptOptions,
     ) -> coco_tool_runtime::ToolSpec {
         // Always hide `mcp_servers`; hide `run_in_background` when the runtime
-        // would veto it (background disabled / fork mode) — TS lazySchema().omit().
+        // would veto it (background disabled / fork mode).
         let mut drop = vec!["mcp_servers"];
         if ctx.background_tasks_disabled || ctx.fork_mode_active {
             drop.push("run_in_background");
@@ -256,9 +249,9 @@ impl Tool for AgentTool {
     }
 
     fn to_auto_classifier_input(&self, input: &AgentInput) -> Option<String> {
-        // Mirror TS `AgentTool.toAutoClassifierInput`: the gate must see the
-        // security-relevant spawn parameters — which agent type runs and at
-        // what permission mode — not the cosmetic 3-5 word `description`.
+        // The gate must see the security-relevant spawn parameters — which agent
+        // type runs and at what permission mode — not the cosmetic 3-5 word
+        // `description`.
         let mut tags: Vec<String> = Vec::new();
         if let Some(subagent_type) = input.subagent_type.as_deref().filter(|s| !s.is_empty()) {
             tags.push(subagent_type.to_string());
@@ -290,9 +283,8 @@ impl Tool for AgentTool {
     fn description(&self, _input: &AgentInput, _options: &DescriptionOptions) -> String {
         // Static fallback when prompt() isn't called (e.g. tools that
         // route through `description` directly). The dynamic agent
-        // listing — TS parity for `getPrompt(filteredAgents, ...)` —
-        // lives in `prompt()` below where we have access to the full
-        // catalog snapshot via `PromptOptions`.
+        // listing lives in `prompt()` below where we have access to the
+        // full catalog snapshot via `PromptOptions`.
         "Launch a new agent to handle complex, multi-step tasks autonomously.\n\n\
          The Agent tool launches specialized agents (subprocesses) that \
          autonomously handle complex tasks. Each agent type has specific \
@@ -301,8 +293,7 @@ impl Tool for AgentTool {
     }
 
     /// Render the dynamic AgentTool description with the per-agent
-    /// listing. TS parity: `AgentTool.tsx:218-225` →
-    /// `getPrompt(filteredAgents, isCoordinator, allowedAgentTypes)`.
+    /// listing.
     ///
     /// Filtering applied (in order):
     /// 1. `allowed_agent_types` from `Agent(...)` permission rule
@@ -338,22 +329,18 @@ impl Tool for AgentTool {
         };
         renderer.full_prompt(&render_opts)
     }
-    /// TS `AgentTool.tsx`: `isConcurrencySafe() { return true }`. Multiple
-    /// agent spawns issued in the same turn are independent — each runs in
-    /// its own context (and optionally its own worktree) — so the executor
-    /// can batch them into a single `ConcurrentSafe` partition. Without
-    /// this override they were forced into per-call `SingleUnsafe` batches,
-    /// serializing parallel exploration workflows like
+    /// Multiple agent spawns issued in the same turn are independent — each
+    /// runs in its own context (and optionally its own worktree) — so the
+    /// executor can batch them into a single `ConcurrentSafe` partition.
+    /// Without this override they were forced into per-call `SingleUnsafe`
+    /// batches, serializing parallel exploration workflows like
     /// `Agent(...) Agent(...) Agent(...)` and multiplying latency by N.
     fn is_concurrency_safe(&self, _input: &AgentInput) -> bool {
         true
     }
 
-    /// Render the spawn-result envelope into model-visible text. TS
-    /// parity: `AgentTool.tsx::mapToolResultToToolResultBlockParam`
-    /// (4 branches: teammate_spawned / async_launched / completed /
-    /// failed). `remote_launched` is CCR-specific with no coco-rs
-    /// producer.
+    /// Render the spawn-result envelope into model-visible text.
+    /// 4 branches: teammate_spawned / async_launched / completed / failed.
     fn render_for_model(&self, envelope: &AgentSpawnRenderResult) -> Vec<ToolResultContentPart> {
         let text = match envelope.clone() {
             AgentSpawnRenderResult::TeammateSpawned {
@@ -361,10 +348,9 @@ impl Tool for AgentTool {
                 name,
                 team_name,
             } => {
-                // TS `AgentTool.tsx:1308-1312`. `name` and `team_name`
-                // come from the spawn input (not from the response) and
-                // are emitted as separate lines so the parent can grep
-                // by either.
+                // `name` and `team_name` come from the spawn input (not
+                // from the response) and are emitted as separate lines so
+                // the parent can grep by either.
                 format!(
                     "Spawned successfully.\nagent_id: {}\nname: {}\nteam_name: {}\nThe agent is now running and will receive instructions via mailbox.",
                     agent_id.as_deref().unwrap_or(""),
@@ -403,8 +389,7 @@ impl Tool for AgentTool {
                 let has_worktree = worktree_path.is_some();
                 // One-shot built-ins (Explore, Plan): drop the agentId
                 // trailer + <usage> block when there's no worktree info,
-                // since they cannot be re-addressed via SendMessage. TS
-                // `AgentTool.tsx:1355-1361`.
+                // since they cannot be re-addressed via SendMessage.
                 if one_shot && !has_worktree {
                     return vec![ToolResultContentPart::Text {
                         text: content,
@@ -438,7 +423,6 @@ impl Tool for AgentTool {
     ) -> Result<ToolResult<AgentSpawnRenderResult>, ToolError> {
         // Snapshot every `ctx.app_state` field we'll need into locals at
         // entry so subsequent awaits can't observe a torn read.
-        // TS runs single-threaded; Rust must capture once.
         let summaries_via_app_state = if let Some(handle) = ctx.app_state.as_ref() {
             handle.read().await.agent_progress_summaries_enabled
         } else {
@@ -454,10 +438,9 @@ impl Tool for AgentTool {
             });
         }
 
-        // TS `AgentTool.tsx:83` — `description: z.string()` (required, not
-        // `.optional()`). Already enforced by `AgentInput` at deserialise
-        // time; defensive empty-string guard catches the model literally
-        // sending `""`.
+        // `description` is required (not optional). Already enforced by
+        // `AgentInput` at deserialise time; defensive empty-string guard
+        // catches the model literally sending `""`.
         if input.description.is_empty() {
             return Err(ToolError::InvalidInput {
                 message: "description is required and must be non-empty (3-5 word summary)".into(),
@@ -465,11 +448,9 @@ impl Tool for AgentTool {
             });
         }
 
-        // TS `AgentTool.tsx:375-391` polls for pending MCP servers with a
-        // 30 s deadline before tool-availability check. coco-rs settles
-        // the MCP lifecycle at session start (see `app/cli` bootstrap), so
-        // by the time AgentTool runs the boot race window is closed —
-        // any server still missing here is a user error (typo /
+        // coco-rs settles the MCP lifecycle at session start (see `app/cli`
+        // bootstrap), so by the time AgentTool runs the boot race window is
+        // closed — any server still missing here is a user error (typo /
         // mis-configured server). Fail-fast lets the model retry with a
         // corrected `mcp_servers` argument instead of blocking the turn.
         if let Some(arr) = input.mcp_servers.as_ref()
@@ -509,9 +490,9 @@ impl Tool for AgentTool {
         // `oneShot` flag on `ONE_SHOT_BUILTIN_AGENT_TYPES`.
         let subagent_type_for_render = explicit_subagent_type.clone();
 
-        // Fork-mode dispatch (TS `forkSubagent.ts`): when the env gate
-        // is on, agent-teams is enabled, the session is interactive,
-        // and the caller omitted `subagent_type`, the child inherits
+        // Fork-mode dispatch: when the env gate is on, agent-teams is
+        // enabled, the session is interactive, and the caller omitted
+        // `subagent_type`, the child inherits
         // the parent's pre-rendered system prompt + full message
         // history (with `tool_result` blocks replaced by
         // `coco_subagent::FORK_PLACEHOLDER` for cache-identical
@@ -558,20 +539,14 @@ impl Tool for AgentTool {
             // bumps. Downstream `build_fork_context` then only allocates
             // fresh messages for the tool-result FORK_PLACEHOLDER
             // rewrite; everything else stays shared.
-            //
-            // TS parity: `AgentTool.tsx:630` passes
-            // `toolUseContext.messages` verbatim as
-            // `forkContextMessages` and `AgentTool.tsx:332` reads the
-            // same array for the `isInForkChild` recursion guard.
             let parent_messages: Vec<std::sync::Arc<coco_messages::Message>> =
                 ctx.messages.iter().cloned().collect();
-            // Recursive-fork guard: TS `isInForkChild` rejects the fork
-            // path when the parent's history already contains the
-            // boilerplate tag.
+            // Recursive-fork guard: rejects the fork path when the
+            // parent's history already contains the boilerplate tag.
             if coco_subagent::is_in_fork_child(&parent_messages) {
                 return Err(ToolError::ExecutionFailed {
                     message: "Fork mode requested from inside a forked child — recursive \
-                              forking is forbidden (TS `isInForkChild` guard)."
+                              forking is forbidden."
                         .into(),
                     display_data: None,
                     source: None,
@@ -617,7 +592,7 @@ impl Tool for AgentTool {
         // - Fork mode (`subagent_type` omitted + fork gate on) — child
         //   inherits parent's prompt, no AgentDefinition needed.
         // - Team spawn without type (`name + team_name + no subagent_type`)
-        //   — TS allows generic teammates.
+        //   — generic teammates are allowed.
         // - Test context (`ctx.agent_catalog` is `None`) — can't validate
         //   without a catalog handle.
         if let (Some(catalog), Some(explicit_name)) = (
@@ -644,12 +619,11 @@ impl Tool for AgentTool {
             });
         }
 
-        // Per-agentType deny enforcement (TS `AgentTool.tsx:337-355`
-        // `filterDeniedAgents` + the call-body throw). The central permission
-        // evaluator defers `Agent(<type>)` content denies to the tool (see
+        // Per-agentType deny enforcement. The central permission evaluator
+        // defers `Agent(<type>)` content denies to the tool (see
         // core/permissions `central_rule_applies`), so the agentType scoping
-        // MUST happen here or denied agents leak through. Skipped for pure forks
-        // (no model-chosen agentType — TS skips filterDeniedAgents there).
+        // MUST happen here or denied agents leak through. Skipped for pure
+        // forks (no model-chosen agentType).
         if !is_fork
             && let Some(denied) =
                 find_agent_deny_rule(&ctx.permission_context, &effective_subagent_type)
@@ -686,11 +660,10 @@ impl Tool for AgentTool {
         }
 
         // Effective isolation: the explicit tool param overrides, else the
-        // agent definition's frontmatter isolation. TS `AgentTool.tsx:431`
-        // `effectiveIsolation = isolation ?? selectedAgent.isolation` — a
-        // definition declaring `isolation: worktree` isolates even when the
-        // model omits the param. `AgentIsolation::None` maps to `None` so the
-        // spawn-side `Some("worktree")` gate stays correct.
+        // agent definition's frontmatter isolation. A definition declaring
+        // `isolation: worktree` isolates even when the model omits the param.
+        // `AgentIsolation::None` maps to `None` so the spawn-side
+        // `Some("worktree")` gate stays correct.
         let effective_isolation: Option<String> = input.isolation.clone().or_else(|| {
             resolved_definition
                 .as_ref()
@@ -700,11 +673,8 @@ impl Tool for AgentTool {
                 })
         });
 
-        // Remote isolation is unsupported in this build (TS forwards ant
-        // builds to CCR; the 3p Rust agent returns a clean model-visible
-        // error). Gate on the EFFECTIVE value so a definition-declared
-        // `isolation: remote` is rejected too — TS gates on effectiveIsolation
-        // (`AgentTool.tsx:435`).
+        // Remote isolation is unsupported in this build. Gate on the EFFECTIVE
+        // value so a definition-declared `isolation: remote` is rejected too.
         if effective_isolation.as_deref() == Some("remote") {
             return Err(ToolError::ExecutionFailed {
                 message: "Isolation mode 'remote' is not supported in this build. \
@@ -716,9 +686,9 @@ impl Tool for AgentTool {
             });
         }
 
-        // TS `AgentTool.tsx:100`: `cwd` is "Mutually exclusive with
-        // isolation: 'worktree'". Reject the conflict upfront — the
-        // worktree's CWD is the worktree dir, can't override.
+        // `cwd` is mutually exclusive with `isolation: 'worktree'`. Reject
+        // the conflict upfront — the worktree's CWD is the worktree dir,
+        // can't override.
         let requested_cwd = input
             .cwd
             .as_deref()
@@ -735,12 +705,13 @@ impl Tool for AgentTool {
             });
         }
 
-        // D5 / P1' parity with TS `AgentTool.tsx:567 shouldRunAsync`:
-        //   shouldRunAsync = (run_in_background
-        //                     || selectedAgent.background
-        //                     || isCoordinator
-        //                     || forceAsync)
-        //                    && !isBackgroundTasksDisabled
+        // Run async when any flag requests it, unless background tasks are
+        // disabled:
+        //   run_in_background = (run_in_background
+        //                        || selectedAgent.background
+        //                        || isCoordinator
+        //                        || forceAsync)
+        //                       && !isBackgroundTasksDisabled
         let run_in_background_input = input.run_in_background;
         let definition_forces_background = resolved_definition
             .as_ref()
@@ -756,10 +727,7 @@ impl Tool for AgentTool {
                 || coordinator_forces_background
                 || matches!(spawn_mode, coco_tool_runtime::SpawnMode::Fork { .. }));
 
-        // TS `AgentTool.tsx:826` passes `autoBackgroundMs:
-        // getAutoBackgroundMs() || undefined` into
-        // `registerAgentForeground`. coco-rs reads the env var directly
-        // (no GrowthBook shim). Two accepted forms:
+        // Reads `COCO_AUTO_BACKGROUND_TASKS` env var. Two accepted forms:
         //   - bare truthy (`1` / `true` / `yes`) → DEFAULT_AUTO_BACKGROUND_MS
         //   - numeric (`90000`) → that many ms
         // Falsy / unset → `None` (no auto-detach).
@@ -771,9 +739,9 @@ impl Tool for AgentTool {
             resolve_auto_background_ms()
         };
 
-        // TS `AgentTool.tsx:278,361`: in-process teammates can't spawn
-        // background sub-agents — their lifecycle is parent-bound and
-        // a background child would outlive its supervisor. Both the
+        // In-process teammates can't spawn background sub-agents — their
+        // lifecycle is parent-bound and a background child would outlive
+        // its supervisor. Both the
         // request flag AND the definition flag trigger the guard.
         let is_in_process_teammate = ctx.is_in_process_teammate;
         if is_in_process_teammate && (run_in_background_input || definition_forces_background) {
@@ -789,8 +757,6 @@ impl Tool for AgentTool {
             });
         }
 
-        // TS parity: `AgentTool.tsx:750` `enableSummarization` =
-        // `isCoordinator || isForkSubagentEnabled || getSdkAgentProgressSummariesEnabled`.
         // `summaries_via_app_state` was snapshotted at function entry to avoid
         // mid-execute torn reads against `ctx.app_state`.
         let enable_summarization = coordinator_forces_background
@@ -836,7 +802,7 @@ impl Tool for AgentTool {
             name: requested_name,
             team_name: resolved_team_name.clone(),
             mode: effective_mode_str,
-            // `cwd` is read from the tool input (TS `AgentTool.tsx:100`).
+            // `cwd` is read from the tool input.
             // Mutually-exclusive-with-worktree validation runs above.
             //
             // The previous five "internal-only knobs" (`effort`,
@@ -883,15 +849,12 @@ impl Tool for AgentTool {
             require_can_use_tool: false,
             fork_label: None,
             is_non_interactive: ctx.is_non_interactive,
-            // D3 / D4 (PR-1 W1): thread the parent's tool_use_id and
-            // invoker agent_id through to the background task
-            // registration so the `<task-notification>` envelope
-            // carries the right routing tags. Without these, completion
-            // notifications were routed to the main thread regardless
-            // of which agent spawned them, and the `<tool-use-id>` tag
-            // was missing. TS parity: `AgentTool.tsx` passes both
-            // `toolUseContext.toolUseId` and `toolUseContext.agentId`
-            // into `registerAgentForeground` / `registerAsyncAgent`.
+            // Thread the parent's tool_use_id and invoker agent_id through to
+            // the background task registration so the `<task-notification>`
+            // envelope carries the right routing tags. Without these,
+            // completion notifications were routed to the main thread
+            // regardless of which agent spawned them, and the
+            // `<tool-use-id>` tag was missing.
             tool_use_id: ctx.tool_use_id.clone(),
             invoking_agent_id: ctx.agent_id.as_ref().map(|a| a.as_str().to_string()),
         };
@@ -912,10 +875,9 @@ impl Tool for AgentTool {
 
         let envelope = match response.status {
             AgentSpawnStatus::Completed => {
-                // TS `AgentTool.tsx:1347-1350` — when the subagent
-                // produced no text, surface the canonical empty marker
-                // so the model can distinguish "ran successfully but
-                // intentionally silent" from "no output yet".
+                // When the subagent produced no text, surface the canonical
+                // empty marker so the model can distinguish "ran successfully
+                // but intentionally silent" from "no output yet".
                 let raw_content = response.result.unwrap_or_default();
                 let content = if raw_content.is_empty() {
                     coco_subagent::EMPTY_AGENT_OUTPUT_MARKER.to_string()
@@ -923,10 +885,9 @@ impl Tool for AgentTool {
                     raw_content
                 };
 
-                // TS `constants.ts:9-12` (`ONE_SHOT_BUILTIN_AGENT_TYPES`)
-                // — `Explore` and `Plan` can't be re-addressed via
-                // `SendMessage`. Forward the flag so consumers can
-                // suppress the "follow up via SendMessage" trailer.
+                // `Explore` and `Plan` can't be re-addressed via
+                // `SendMessage`. Forward the flag so consumers can suppress
+                // the "follow up via SendMessage" trailer.
                 let one_shot = subagent_type_for_render
                     .as_deref()
                     .is_some_and(|t| coco_subagent::ONE_SHOT_BUILTIN_AGENT_TYPES.contains(&t));
@@ -987,14 +948,13 @@ impl Tool for AgentTool {
 }
 
 /// Resolve the `COCO_AUTO_BACKGROUND_TASKS` env var into the
-/// `auto_background_ms` value to thread onto `AgentSpawnRequest`. TS:
-/// `AgentTool.tsx:72-77 getAutoBackgroundMs`.
+/// `auto_background_ms` value to thread onto `AgentSpawnRequest`.
 ///
 /// Acceptance rules:
 /// - Unset / empty → `None`.
 /// - Numeric (`"90000"`) → `Some(parsed_u64)` — caller-specified ms.
 /// - Truthy non-numeric (`"1"`, `"true"`, `"yes"`, `"on"`) →
-///   `Some(DEFAULT_AUTO_BACKGROUND_MS)` (TS default of 120 000 ms).
+///   `Some(DEFAULT_AUTO_BACKGROUND_MS)` (120 000 ms).
 /// - Falsy (`"0"`, `"false"`, `"no"`, `"off"`) → `None`.
 fn resolve_auto_background_ms() -> Option<u64> {
     let raw = match std::env::var(coco_config::EnvKey::CocoAutoBackgroundTasks.as_str()) {
@@ -1062,8 +1022,7 @@ async fn mcp_servers_with_tools(ctx: &ToolUseContext) -> Vec<String> {
     servers
 }
 
-/// Find an `Agent(<agent_type>)` deny rule. TS `getDenyRuleForAgent`
-/// (utils/permissions/permissions.ts:308-320): matches deny rules whose
+/// Find an `Agent(<agent_type>)` deny rule: matches deny rules whose
 /// `tool_pattern == Agent` and `rule_content == agent_type`. The central
 /// evaluator defers these content denies to the tool, so `execute` enforces them.
 fn find_agent_deny_rule<'a>(

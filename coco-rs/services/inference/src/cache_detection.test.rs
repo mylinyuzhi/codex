@@ -445,18 +445,9 @@ fn test_excluded_model_skipped_in_phase1() {
     );
 }
 
-/// TS-parity locks (design §3.6 / Round 7).
-///
-/// `MIN_CACHE_MISS_TOKENS` MUST match
-/// `claude-code/src/services/api/promptCacheBreakDetection.ts:120`
-/// exactly so coco-rs and TS agree on which token-drops constitute a
-/// cache break vs. acceptable noise. Drift here would cause the OTel
-/// `cache_break` event volume to diverge between the two clients.
+/// `MIN_CACHE_MISS_TOKENS` must stay at 2_000 — the threshold below which a
+/// token drop is treated as acceptable noise rather than a cache break.
 #[test]
-fn ts_parity_min_cache_miss_tokens_locked_at_2000() {
-    assert_eq!(
-        super::MIN_CACHE_MISS_TOKENS,
-        2_000,
-        "TS source: MIN_CACHE_MISS_TOKENS = 2_000 — bump TS first if changing"
-    );
+fn min_cache_miss_tokens_locked_at_2000() {
+    assert_eq!(super::MIN_CACHE_MISS_TOKENS, 2_000);
 }

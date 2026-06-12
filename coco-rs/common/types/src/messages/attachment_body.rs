@@ -1,7 +1,7 @@
 //! Typed payload carrier for [`AttachmentMessage`](super::AttachmentMessage).
 //!
 //! Pairs with [`AttachmentKind`](crate::AttachmentKind) (the 60-variant
-//! TS-parity discriminant): `kind` classifies per TS `Attachment.type`,
+//! discriminant): `kind` classifies the `Attachment.type`,
 //! `body` carries the data. `AttachmentBody` variants cover only kinds
 //! coco-rs actually produces, so `FeatureGated` / `RuntimeBookkeeping`
 //! kinds don't pollute the payload surface.

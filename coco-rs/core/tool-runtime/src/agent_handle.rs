@@ -1,7 +1,5 @@
 //! Agent handle trait — async agent operations abstraction for tools.
 //!
-//! TS: tools/AgentTool/AgentTool.tsx (spawn), tools/shared/spawnMultiAgent.ts (team)
-//!
 //! **Split design** (same pattern as SideQuery):
 //! - Async trait (`AgentHandle`) -> here in `coco-tool`
 //! - Implementations -> app/state or executor layer
@@ -41,10 +39,6 @@ use crate::task_list_handle::TeamTaskListRouterRef;
 /// child — turn caps and write-path whitelists for sandboxed subagents
 /// (e.g. memory extraction, auto-dream consolidation). Optional on
 /// `AgentSpawnRequest`; absent = inherit parent's defaults.
-///
-/// TS: `services/extractMemories/extractMemories.ts:createAutoMemCanUseTool`
-/// (path whitelist) + `MAX_TURNS = 5` (hard cap) — the two safety knobs
-/// the extraction agent installs. Auto-dream uses the same shape.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSpawnConstraints {
     /// Hard cap on agent turn count. Forked memory extraction uses 5.
@@ -60,13 +54,12 @@ pub struct AgentSpawnConstraints {
 
 /// How the runner should construct the child agent's initial state.
 ///
-/// TS parity: `forkSubagent.ts:isForkSubagentEnabled` — when fork is on
-/// AND `subagent_type` is omitted, the runner switches from a fresh
-/// child to a fork that inherits the parent's full conversation context
+/// When fork is on AND `subagent_type` is omitted, the runner switches from a
+/// fresh child to a fork that inherits the parent's full conversation context
 /// for prompt-cache sharing. The decision is taken by
-/// [`coco_subagent::is_fork_subagent_active`] at the call site (which
-/// also enforces coordinator-mode and non-interactive-session
-/// short-circuits) and serialised into this enum.
+/// [`coco_subagent::is_fork_subagent_active`] at the call site (which also
+/// enforces coordinator-mode and non-interactive-session short-circuits) and
+/// serialised into this enum.
 ///
 /// Default is [`SpawnMode::Fresh`] so callers that don't opt in get the
 /// unchanged spawn path.
@@ -102,8 +95,7 @@ pub enum SpawnMode {
     /// [`coco_subagent::build_fork_context`].
     ///
     /// Tool-pool inheritance is decided by
-    /// [`AgentSpawnRequest::use_exact_tools`] (TS
-    /// `runAgent.ts:624 cacheIdenticalTools`); fork mode does NOT
+    /// [`AgentSpawnRequest::use_exact_tools`]; fork mode does NOT
     /// carry its own toggle.
     Fork {
         /// Parent's already-rendered system prompt — threaded through
@@ -135,9 +127,7 @@ pub enum SpawnMode {
     /// fresh from the agent definition (no parent prompt to inherit), and
     /// `tool_result` blocks in the prior history are kept verbatim
     /// (NO `FORK_PLACEHOLDER` rewriting — the child needs the real tool
-    /// outputs to continue the conversation). TS:
-    /// `tools/AgentTool/resumeAgent.ts::resumeAgentBackground` for
-    /// non-fork agent types.
+    /// outputs to continue the conversation).
     Resume {
         /// Filtered prior message history. Caller (typically
         /// `SwarmAgentHandle::resume_agent`) is expected to have already
@@ -149,8 +139,6 @@ pub enum SpawnMode {
 
 /// Request to spawn a subagent.
 ///
-/// TS: AgentToolInput in AgentTool.tsx
-///
 /// **Deferred refactor — split into 4 sub-structs**: the type
 /// currently carries 27 fields covering four distinct concerns
 /// (model-visible input, spawn-mode identity, policy/inheritance,
@@ -160,7 +148,7 @@ pub enum SpawnMode {
 /// 27-field flat literal. Deferred because the cascade touches
 /// every `request.X` read across `coordinator/agent_handle/*` and
 /// `memory/service/{extract,dream,session}.rs` (≥ 50 sites), and the
-/// refactor is pure code-quality with no TS-behavior delta — best
+/// refactor is pure code-quality — best
 /// landed as its own focused PR. Tracked in
 /// `core/tool-runtime/CLAUDE.md` "Deferred refactors".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -196,19 +184,11 @@ pub struct AgentSpawnRequest {
     /// foreground execution; the parent's awaiter unblocks with
     /// `AsyncLaunched` and the engine keeps running detached.
     ///
-    /// TS parity: `AgentTool.tsx:826` passes `autoBackgroundMs:
-    /// getAutoBackgroundMs() || undefined` into
-    /// `registerAgentForeground`. `getAutoBackgroundMs` returns
-    /// `120_000` ms when `CLAUDE_AUTO_BACKGROUND_TASKS` env or the
-    /// `tengu_auto_background_agents` GrowthBook flag is on, else `0`
-    /// (disabled).
-    ///
     /// `None` = no auto-detach (the default; only explicit user-initiated
     /// `signal_detach` will background the task).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_background_ms: Option<u64>,
-    /// Whether the spawn should run periodic AgentSummary timers
-    /// (TS parity: `AgentTool.tsx:750`'s `enableSummarization`).
+    /// Whether the spawn should run periodic AgentSummary timers.
     /// Computed at the AgentTool boundary as `is_coordinator_mode
     /// || is_fork_subagent_active || ctx.app_state.agent_progress_summaries_enabled`
     /// so the coordinator (which doesn't see `ctx.app_state`) can
@@ -240,8 +220,8 @@ pub struct AgentSpawnRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
     // Note: the following fields are NOT on `AgentSpawnRequest`. They
-    // were dead pass-through slots — TS doesn't expose them in the
-    // AgentTool input schema, and no Rust caller ever set them; the
+    // were dead pass-through slots — not in the AgentTool input schema
+    // and no Rust caller ever set them; the
     // coordinator now reads them directly from `AgentDefinition` via
     // `request.definition` when building RunnerConfig / QueryConfig.
     // Single source of truth, no shadowing.
@@ -290,15 +270,13 @@ pub struct AgentSpawnRequest {
     /// Parent conversation slice prepended to the child's first turn
     /// when `isolation == Some("fork")`. Shared via `Arc<Message>`
     /// — in-process spawns reuse parent allocations; remote transports
-    /// serialize once at the wire boundary. TS: `AgentTool.tsx:622-632`
-    /// `forkContextMessages`.
+    /// serialize once at the wire boundary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fork_context_messages: Vec<Arc<Message>>,
     /// How to construct the child's initial state. Defaults to
     /// [`SpawnMode::Fresh`]; switched to [`SpawnMode::Fork`] by the
     /// AgentTool callsite when `coco_subagent::is_fork_subagent_active`
-    /// returns true and `subagent_type` is omitted (TS parity with
-    /// `forkSubagent.ts`).
+    /// returns true and `subagent_type` is omitted.
     ///
     /// **Skipped at the JSON boundary** because the runtime form holds
     /// `Arc<SubagentRuntimeSnapshot>` inside `Fork`, which is
@@ -319,11 +297,9 @@ pub struct AgentSpawnRequest {
     #[serde(skip)]
     pub definition: Option<Arc<AgentDefinition>>,
     /// Suppress per-message transcript persistence for this spawn.
-    /// TS parity (`utils/forkedAgent.ts` `runForkedAgent({skipTranscript:
-    /// true})` — used by extract/auto-dream/session-memory forks so
-    /// the background subagent's tool-uses don't pollute the user's
-    /// main JSONL transcript and don't race the main thread's
-    /// transcript writer.
+    /// Used by extract/auto-dream/session-memory forks so the background
+    /// subagent's tool-uses don't pollute the user's main JSONL transcript
+    /// and don't race the main thread's transcript writer.
     #[serde(default)]
     pub skip_transcript: bool,
 
@@ -332,22 +308,18 @@ pub struct AgentSpawnRequest {
     /// enforces the policy before static permission evaluation.
     /// Skipped at the JSON boundary — callbacks aren't portable across
     /// runners.
-    /// TS parity: `utils/forkedAgent.ts` `runForkedAgent({canUseTool})`.
     #[serde(skip)]
     pub can_use_tool: Option<crate::can_use_tool::CanUseToolHandleRef>,
 
     /// When `true`, hook auto-approve cannot bypass the
     /// [`Self::can_use_tool`] callback — speculation needs this so
-    /// overlay path-rewrites always run. TS: `requireCanUseTool` on
-    /// the subagent context.
+    /// overlay path-rewrites always run.
     #[serde(default)]
     pub require_can_use_tool: bool,
 
-    /// Typed discriminator for telemetry / logs (`tengu_fork_agent_query`
-    /// `forkLabel`). When set, the engine's `query_source_label()`
-    /// returns this string so log readers can tell apart the 9 fork
-    /// variants without grepping callsites. TS:
-    /// `utils/forkedAgent.ts` `runForkedAgent({forkLabel})`.
+    /// Typed discriminator for telemetry / logs. When set, the engine's
+    /// `query_source_label()` returns this string so log readers can tell
+    /// apart the 9 fork variants without grepping callsites.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_label: Option<coco_types::ForkLabel>,
     /// Whether the parent session is non-interactive/headless. Team
@@ -357,9 +329,7 @@ pub struct AgentSpawnRequest {
     /// `tool_use_id` of the `Agent(...)` invocation that produced this
     /// spawn. Threaded into the background task's `<tool-use-id>` tag
     /// so the model correlates completion notifications back to the
-    /// original AgentTool call. TS parity: `AgentTool.tsx` passes
-    /// `toolUseContext.toolUseId` into `registerAgentForeground` /
-    /// `registerAsyncAgent`. Filled at the `AgentTool::execute`
+    /// original AgentTool call. Filled at the `AgentTool::execute`
     /// boundary from `ctx.tool_use_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
@@ -367,16 +337,13 @@ pub struct AgentSpawnRequest {
     /// **not** the newly-spawned subagent. Used as the `agent_id`
     /// filter on the `CommandQueue` so a teammate only receives
     /// completion notifications for tasks it itself spawned. `None`
-    /// for main-thread spawns. TS parity: `AgentTool.tsx` /
-    /// `BashTool.tsx:910` pass `toolUseContext.agentId`. Filled at the
-    /// `AgentTool::execute` boundary from `ctx.agent_id`.
+    /// for main-thread spawns. Filled at the `AgentTool::execute`
+    /// boundary from `ctx.agent_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invoking_agent_id: Option<String>,
 }
 
 /// Response from spawning a subagent.
-///
-/// TS: AgentTool call result variants
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentSpawnResponse {
     /// Outcome of the spawn.
@@ -409,14 +376,14 @@ pub struct AgentSpawnResponse {
     /// extraction agent without re-parsing the agent's transcript.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub tool_use_counts: std::collections::HashMap<String, i64>,
-    /// Cache-read tokens (TS `cache_read_input_tokens`) — the portion
+    /// Cache-read tokens (`cache_read_input_tokens`) — the portion
     /// of the input that hit the prompt cache. Memory's extract / dream
     /// telemetry surfaces this as the cache hit-rate metric so we can
     /// measure whether forked-agent prompt-cache sharing is working.
     /// `0` when the underlying engine doesn't report it.
     #[serde(default)]
     pub cache_read_tokens: i64,
-    /// Cache-creation tokens (TS `cache_creation_input_tokens`) — the
+    /// Cache-creation tokens (`cache_creation_input_tokens`) — the
     /// portion of the input that wrote into the prompt cache. Memory
     /// telemetry pairs this with `cache_read_tokens` for hit-rate.
     #[serde(default)]
@@ -425,9 +392,7 @@ pub struct AgentSpawnResponse {
     /// order. Populated by the spawn driver from observed
     /// `Write` / `Edit` / `NotebookEdit` tool_use blocks. Memory
     /// telemetry filters this to exclude the `MEMORY.md` index when
-    /// reporting `files_written` (TS parity:
-    /// `extractMemories.ts:465-467` — `writtenPaths.filter(p =>
-    /// basename(p) !== ENTRYPOINT_NAME)`).
+    /// reporting `files_written`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths_written: Vec<PathBuf>,
     /// Duration in milliseconds.
@@ -440,11 +405,9 @@ pub struct AgentSpawnResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_branch: Option<String>,
     /// Output file path for background agents.
-    /// TS: getTaskOutputPath(agentId) — returned in async_launched responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_file: Option<PathBuf>,
     /// The original prompt (echoed back in response).
-    /// TS: AgentTool output includes prompt field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
 }
@@ -496,8 +459,6 @@ pub struct CreateTeamResult {
 }
 
 /// Outcome of a spawn request.
-///
-/// TS: AgentTool return status variants
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSpawnStatus {
@@ -520,8 +481,6 @@ pub enum AgentSpawnStatus {
 #[async_trait::async_trait]
 pub trait AgentHandle: Send + Sync {
     /// Spawn a subagent (sync or async).
-    ///
-    /// TS: AgentTool.call() in AgentTool.tsx
     async fn spawn_agent(&self, request: AgentSpawnRequest) -> Result<AgentSpawnResponse, String>;
 
     /// Send a message to another agent by name or ID.
@@ -529,30 +488,23 @@ pub trait AgentHandle: Send + Sync {
     ///
     /// Content may be a plain text string or a serialized structured
     /// message (shutdown_request, shutdown_response, plan_approval_response).
-    ///
-    /// TS: SendMessageTool routing via agent_name_registry
     async fn send_message(&self, to: &str, content: &str) -> Result<String, String>;
 
     /// Create a new team with optional description and lead agent type.
-    ///
-    /// TS: TeamCreateTool → TeamFile creation + AppState update
     async fn create_team(&self, request: CreateTeamRequest) -> Result<CreateTeamResult, String>;
 
     /// Delete the active team (read from session context) and release
     /// resources. Fails if non-lead members are still active.
     ///
-    /// TS parity: `TeamDeleteTool.ts:21` declares `z.strictObject({})`
-    /// — the team name is taken from `appState.teamContext?.teamName`,
+    /// The team name is taken from `appState.teamContext?.teamName`,
     /// not tool input. Implementations should read their own session
     /// state to resolve the team. Returns a human-readable message.
-    ///
-    /// TS: TeamDeleteTool → cleanup + AppState clear
     async fn delete_team(&self) -> Result<String, String>;
 
     /// Resume a previously-completed background AgentTool spawn from
     /// its persisted transcript + metadata sidecar. Triggered by
-    /// [`SendMessageTool`] when the target is a stopped task (TS
-    /// parity: `SendMessageTool.ts:822-844`'s auto-resume path).
+    /// [`SendMessageTool`] when the target is a stopped task
+    /// (auto-resume path).
     ///
     /// `session_id` scopes the per-agent transcript / metadata
     /// lookup. `prompt` becomes the new user message that drives
@@ -572,31 +524,23 @@ pub trait AgentHandle: Send + Sync {
     /// Query the status of a background agent.
     ///
     /// Returns the agent's current status and result if completed.
-    /// TS: checkAgentStatus() in LocalAgentTask
     async fn query_agent_status(&self, agent_id: &str) -> Result<AgentSpawnResponse, String>;
 
     /// Get the output of a completed background agent.
-    ///
-    /// TS: getAgentOutput() — reads the output file from a completed agent.
     async fn get_agent_output(&self, agent_id: &str) -> Result<String, String>;
 
     /// Interrupt an in-process teammate's current turn without stopping
     /// the teammate lifecycle.
-    ///
-    /// TS: `currentWorkAbortController` in `inProcessRunner.ts` plus
-    /// Escape handling in `useBackgroundTaskNavigation.ts`.
     async fn interrupt_agent_current_work(&self, _agent_id: &str) -> Result<bool, String> {
         Err("AgentHandle::interrupt_agent_current_work not supported in this context".into())
     }
 
     /// Name of this session's active team, if any (`None` outside team
     /// mode). The cross-process leader inbox poller uses it to locate the
-    /// `team-lead` inbox to scan. This is the runtime-reachable equivalent
-    /// of TS `appState.teamContext?.teamName` (`useInboxPoller.ts:149`) —
-    /// in coco-rs the authoritative live source is the coordinator roster,
-    /// since `team_context` lives on the TUI-only `AppState`, not the
-    /// engine/tool-shared `ToolAppState`. Default `None` for non-swarm
-    /// handles.
+    /// `team-lead` inbox to scan. In coco-rs the authoritative live source
+    /// is the coordinator roster, since `team_context` lives on the
+    /// TUI-only `AppState`, not the engine/tool-shared `ToolAppState`.
+    /// Default `None` for non-swarm handles.
     async fn active_team_name(&self) -> Option<String> {
         None
     }
@@ -606,9 +550,6 @@ pub trait AgentHandle: Send + Sync {
     /// runner-loop delivers it as a turn and the model replies by
     /// calling [`Self::respond_to_shutdown`]. Returns a confirmation
     /// string for the model. Default `Err` for non-swarm handles.
-    ///
-    /// TS: `SendMessageTool.ts` `handleShutdownRequest` →
-    /// `sendShutdownRequestToMailbox`.
     async fn request_shutdown(
         &self,
         _target: &str,
@@ -623,9 +564,6 @@ pub trait AgentHandle: Send + Sync {
     /// pane, writes a `ShutdownApproved` / `ShutdownRejected` to the
     /// `team-lead` mailbox, and returns a confirmation string. Default
     /// `Err` for non-swarm handles.
-    ///
-    /// TS: `SendMessageTool.ts` `handleShutdownApproval` /
-    /// `handleShutdownRejection`.
     async fn respond_to_shutdown(
         &self,
         _request_id: &str,
@@ -639,8 +577,6 @@ pub trait AgentHandle: Send + Sync {
     /// request. The tool layer passes the leader's current permission
     /// mode so the coordinator can include the mode the teammate should
     /// inherit after approval. Default `Err` for non-swarm handles.
-    ///
-    /// TS: `SendMessageTool.ts` `plan_approval_response` branch.
     async fn respond_to_plan_approval(
         &self,
         _target: &str,
@@ -657,9 +593,6 @@ pub trait AgentHandle: Send + Sync {
     /// pane-based teammate), remove its team-file membership, and
     /// unassign its in-flight tasks. Driven by the leader inbox poller.
     /// Default `Err` for non-swarm handles.
-    ///
-    /// TS: `useInboxPoller.ts:687-741` (`killPane` +
-    /// `removeTeammateFromTeamFile` + `unassignTeammateTasks`).
     async fn teardown_teammate(
         &self,
         _agent_id: &str,
@@ -676,9 +609,6 @@ pub trait AgentHandle: Send + Sync {
     /// runner via `drain_control_messages`, the cross-process pump via
     /// `UserCommand::SetPermissionMode`). Returns a confirmation string.
     /// Default `Err` for non-swarm handles.
-    ///
-    /// TS: `TeamsDialog.tsx` `sendModeChangeToTeammate` (`setMemberMode`
-    /// + `createModeSetRequestMessage` + `writeToMailbox`).
     async fn set_teammate_mode(
         &self,
         _name: &str,
@@ -691,9 +621,6 @@ pub trait AgentHandle: Send + Sync {
     /// write, then notify each via mailbox. Batch analog of
     /// [`Self::set_teammate_mode`] used by the roster "cycle all" action.
     /// Default `Err` for non-swarm handles.
-    ///
-    /// TS: `TeamsDialog.tsx` `cycleAllTeammateModes` → `setMultipleMemberModes`
-    /// + per-teammate `createModeSetRequestMessage` / `writeToMailbox`.
     async fn set_teammate_modes(
         &self,
         _updates: Vec<(String, coco_types::PermissionMode)>,

@@ -35,7 +35,7 @@ async fn skips_when_no_pending_verification() {
 
 #[tokio::test]
 async fn skips_on_turn_count_zero() {
-    // TS attachments.ts:3919-3922 explicitly skips `turnCount === 0`.
+    // Turn count of 0 is explicitly skipped.
     let c = cfg();
     let ctx = GeneratorContext::builder(&c)
         .has_pending_plan_verification(true)

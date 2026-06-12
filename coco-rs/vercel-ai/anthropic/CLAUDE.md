@@ -2,9 +2,9 @@
 
 Anthropic (Claude) provider for Vercel AI SDK v4 — Messages API.
 
-## TS Source
+## SDK Spec
 
-Ports `@ai-sdk/anthropic` v4 (not from `claude-code/src/`). All Anthropic-specific SDK concerns (prompt caching, beta headers, OAuth, policy limits, 529 retry, cache breakpoint detection) belong in **this crate**, not in `coco-inference` — see the "Multi-Provider SDK" design decision in the workspace `CLAUDE.md`.
+Implements the `@ai-sdk/anthropic` v4 specification. All Anthropic-specific SDK concerns (prompt caching, beta headers, OAuth, policy limits, 529 retry, cache breakpoint detection) belong in **this crate**, not in `coco-inference` — see the "Multi-Provider SDK" design decision in the workspace `CLAUDE.md`.
 
 ## Key Types
 
@@ -30,7 +30,7 @@ Ports `@ai-sdk/anthropic` v4 (not from `claude-code/src/`). All Anthropic-specif
 - `tool` — Anthropic-specific tool types (computer_use, bash, text_editor, web_search, web_fetch, code_execution, etc.)
 - `cache_control` — breakpoint validator
 - `provider_options` — adapter-owned schema for `ProviderConfig.provider_options`; parses the per-instance opaque knob map into `AnthropicProviderOptionsConfig`
-- `cache_policy` — TS `should1hCacheTTL` mirror; eligibility latch + per-call allowlist match
+- `cache_policy` — 1h-TTL eligibility latch + per-call allowlist match
 - `cache_placement` — auto-marker placement on last user content block (design §10.3)
 - `beta_resolver` — capability + topology + knob → wire header set; central source of truth (R3-F2)
 - `beta_capabilities` — typed enum ↔ Anthropic kebab-case header string
@@ -46,4 +46,4 @@ Ports `@ai-sdk/anthropic` v4 (not from `claude-code/src/`). All Anthropic-specif
 - **Internal-only signals never reach the wire:** the four internal signals (`cacheStrategy` / `requestedBetas` / `agenticQuery` / `querySource`) are typed fields on `AnthropicProviderOptions`, so they're consumed by the typed parse and `#[serde(flatten)] extra` captures only unrecognized keys. Previously a hardcoded `INTERNAL_ANTHROPIC_OPTION_KEYS` blacklist stripped them — `#[serde(flatten)]` is the structural replacement. Extras now deep-merge onto the wire body via `merge_json_value`, so callers control nesting end-to-end.
 - **`extra_body` deep-merge escape hatch (F1 doctrine).** `provider_options["anthropic"]` (canonical) + `provider_options[<custom-prefix>]` (custom for renamed instances like `"my-proxy"`) extras deep-merge over typed body writes via `merge_json_value`; extras win at final-merge priority. `#[serde(flatten)] extra` on `AnthropicProviderOptions` implements `ExtractExtras`, parsed via shared `extract_namespaced(po, "anthropic", provider_prefix)`. `null` in extras is a no-op (skips, does NOT unset). The previous hand-written per-`Option<T>` `.or()` chain in `merge_anthropic_options` is gone — per-key deep merge handles nested-struct fields more correctly (e.g. `cache_strategy.ttl` from custom can override canonical's `cache_strategy.mode` independently). Single source of truth: `services/inference/CLAUDE.md` "Design Notes".
 - **Deterministic beta header:** `betas` is a sorted `BTreeSet` in `ResolvedBetas`; the wire header is `sort_unstable + join(',')` so output is byte-stable across runs (Finding 7).
-- **Per-instance behavior knobs live under `ProviderConfig.provider_options`** (opaque `BTreeMap<String, Value>`), not in `coco-config`. Schema is owned here in `provider_options.rs` (`deny_unknown_fields`, defaults match TS `betas.ts`). Settings.json shape: `providers.anthropic.provider_options.{experimental_betas, disable_interleaved_thinking, show_thinking_summaries, non_interactive}`. `services/inference::model_factory::build_anthropic` calls `parse_provider_options` and threads the four typed bools into `AnthropicProviderSettings`. There are intentionally **no `COCO_ANTHROPIC_*` env vars** — settings.json is canonical.
+- **Per-instance behavior knobs live under `ProviderConfig.provider_options`** (opaque `BTreeMap<String, Value>`), not in `coco-config`. Schema is owned here in `provider_options.rs` (`deny_unknown_fields`). Settings.json shape: `providers.anthropic.provider_options.{experimental_betas, disable_interleaved_thinking, show_thinking_summaries, non_interactive}`. `services/inference::model_factory::build_anthropic` calls `parse_provider_options` and threads the four typed bools into `AnthropicProviderSettings`. There are intentionally **no `COCO_ANTHROPIC_*` env vars** — settings.json is canonical.

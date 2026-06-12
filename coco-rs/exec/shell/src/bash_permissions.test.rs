@@ -72,9 +72,9 @@ fn test_get_command_prefix_requires_subcommand_shape() {
     assert_eq!(get_command_prefix("make"), None);
 }
 
-/// Strict TS parity: `getSimpleCommandPrefix` has NO bare-shell guard — a
-/// wrapper/privilege command with a subcommand-shaped second token yields a
-/// two-word prefix. The bare-shell guard lives in `get_first_word_prefix`.
+/// `get_command_prefix` has NO bare-shell guard — a wrapper/privilege command
+/// with a subcommand-shaped second token yields a two-word prefix. The
+/// bare-shell guard lives in `get_first_word_prefix`.
 #[test]
 fn test_get_command_prefix_no_bare_guard() {
     assert_eq!(get_command_prefix("sudo rm -rf /"), Some("sudo rm".into()));

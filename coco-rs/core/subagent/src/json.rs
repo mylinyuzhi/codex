@@ -1,20 +1,16 @@
 //! In-process JSON agent definitions.
 //!
-//! TS source: `loadAgentsDir.ts:445-536` — `parseAgentFromJson` and
-//! `parseAgentsFromJson`. JSON agents arrive via two channels:
+//! JSON agents arrive via two channels:
 //!
-//! - CLI flag `--agents '<json>'` (TS `main.tsx:2039`) — coco-rs
-//!   equivalent maps to `--agents` plumbed by the CLI.
-//! - SDK `initialize.agents` (TS `cli/print.ts:4382`) — coco-rs SDK
-//!   bootstrap calls into [`parse_agents_json`] before installing the
-//!   resulting definitions on the [`crate::AgentDefinitionStore`] via
-//!   `insert_definition`.
+//! - CLI flag `--agents '<json>'` — plumbed by the CLI.
+//! - SDK `initialize.agents` — SDK bootstrap calls into
+//!   [`parse_agents_json`] before installing the resulting definitions
+//!   on the [`crate::AgentDefinitionStore`] via `insert_definition`.
 //!
 //! Field set matches the markdown frontmatter parser exactly — JSON
 //! agents and markdown agents land in the same `AgentDefinition`
 //! shape. The JSON top-level key becomes the `agentType` and the
-//! `prompt` field becomes the system prompt body, mirroring TS
-//! `parseAgentFromJson:476-489`.
+//! `prompt` field becomes the system prompt body.
 //!
 //! This module deliberately re-uses [`crate::frontmatter::parse_agent_markdown`]
 //! by translating each JSON entry into the same frontmatter map shape
@@ -42,8 +38,7 @@ use crate::validation::ValidationError;
 /// hard failures (missing `description`, malformed JSON shape) — those
 /// callers should surface as `failed` diagnostics.
 ///
-/// Source defaults to [`AgentSource::FlagSettings`] to match TS
-/// `parseAgentFromJson(name, definition, source = 'flagSettings')`.
+/// Source defaults to [`AgentSource::FlagSettings`].
 pub fn parse_agent_json(
     name: &str,
     definition: &Value,
@@ -59,12 +54,10 @@ pub fn parse_agent_json(
         });
     };
 
-    // Extract `prompt` as the body — TS `parsed.prompt` becomes
-    // `getSystemPrompt`. TS `AgentJsonSchema` declares
-    // `prompt: z.string().min(1, 'Prompt cannot be empty')`, so a
-    // missing-or-empty `prompt` rejects the whole entry. Built-ins
-    // ship dynamic prompts, but they don't go through this JSON path —
-    // built-ins live in `crate::builtins` and are constructed in-process.
+    // Extract `prompt` as the body. A missing-or-empty `prompt`
+    // rejects the whole entry. Built-ins ship dynamic prompts and
+    // don't go through this JSON path — they live in `crate::builtins`
+    // and are constructed in-process.
     let body = match map.get("prompt").and_then(Value::as_str) {
         Some(s) if !s.trim().is_empty() => s.to_owned(),
         _ => {
@@ -105,9 +98,8 @@ pub fn parse_agent_json(
 }
 
 /// Parse a top-level JSON map of `{ name: definition }` agent entries.
-/// Per-entry parse failures are skipped (not propagated) — TS
-/// `parseAgentsFromJson:530-535` swallows individual errors and
-/// continues, returning whatever entries parsed cleanly.
+/// Per-entry parse failures are skipped (not propagated) — individual
+/// errors are swallowed and whatever entries parsed cleanly are returned.
 ///
 /// Use [`parse_agent_json`] directly when you need per-entry error
 /// handling (e.g. surfacing failed entries to the user).
@@ -142,9 +134,9 @@ fn describe_json_kind(v: &Value) -> &'static str {
     }
 }
 
-/// Translate `serde_json::Value` to `FrontmatterValue`. Mappings
-/// preserve TS shape so the markdown parser's per-field validators
-/// see the same payload they would for a YAML-frontmatter agent.
+/// Translate `serde_json::Value` to `FrontmatterValue`. Mappings are
+/// equivalent to the YAML-frontmatter representation so the markdown
+/// parser's per-field validators see the same payload.
 fn json_to_frontmatter(v: &Value) -> FrontmatterValue {
     match v {
         Value::Null => FrontmatterValue::Null,

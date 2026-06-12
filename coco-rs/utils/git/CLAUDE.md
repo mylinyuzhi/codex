@@ -10,6 +10,6 @@ Git operations wrapper for commits, patches, ghost snapshots, and worktrees.
 | `apply` | `apply_git_patch`, `ApplyGitRequest` / `Result`, `stage_paths`, `extract_paths_from_patch`, `parse_git_apply_output` |
 | `branch` | `merge_base_with_head` |
 | `ghost_commits` | `create_ghost_commit` / `restore_ghost_commit` / `restore_to_commit`, `GhostSnapshotConfig` / `Report`, `IgnoredUntrackedFile`, `LargeUntrackedDir` |
-| `worktree` | `cleanup_orphaned_worktrees`, `worktree_paths` (NFC-normalized list with 5s timeout — TS `getWorktreePathsPortable`), `parse_worktree_output` (pure parser exposed for tests) |
+| `worktree` | `cleanup_orphaned_worktrees`, `worktree_paths` (NFC-normalized list with 5s timeout), `parse_worktree_output` (pure parser exposed for tests) |
 | `platform` | `create_symlink` |
 | top-level | `GhostCommit` (TS-exportable via `ts_rs` + `JsonSchema`), `GitToolingError` |

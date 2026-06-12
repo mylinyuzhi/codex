@@ -42,9 +42,9 @@ pub(crate) fn permission_content(
         None => String::new(),
     };
     // Cross-process teammate requests carry a worker badge — suffix the
-    // title with `· @name` so the leader sees who is asking (TS
-    // `PermissionRequestTitle.tsx:32`). The text surface is monochrome;
-    // the badge color is carried on the event for styled / SDK consumers.
+    // title with `· @name` so the leader sees who is asking. The text
+    // surface is monochrome; the badge color is carried on the event for
+    // styled / SDK consumers.
     let worker_suffix = p
         .worker_badge
         .as_ref()
@@ -82,9 +82,8 @@ pub(crate) fn permission_content(
         classic_permission_actions(p, current_mode)
     };
 
-    // Lazy Ctrl+E risk-explainer panel (TS `PermissionExplanation.tsx`): only
-    // rendered when toggled open, so the default prompt body is unchanged. Risk
-    // is shown here, not in the title — TS shows it only in this panel.
+    // Lazy Ctrl+E risk-explainer panel: only rendered when toggled open, so
+    // the default prompt body is unchanged. Risk is shown here, not in the title.
     let explainer_panel = if p.explanation_visible {
         match &p.explanation {
             ExplainerFetch::Loading => format!("\n\n{}", t!("dialog.explainer_loading")),
@@ -165,7 +164,7 @@ pub(crate) fn permission_styled_content(
 /// Rich, styled rendering of the `ExitPlanMode` approval prompt — the
 /// interactive "Ready to code?" panel. The plan is rendered as **markdown**
 /// (via `coco_tui_markdown`) inside a dashed frame, then the structured choice
-/// list, mirroring claude-code's `ExitPlanModePermissionRequest.tsx`.
+/// list.
 ///
 /// Returns `(title, styled lines, border_color)` for the bordered prompt box.
 /// The trailing block (prompt + choices + hints) is laid out *after* the last
@@ -519,8 +518,8 @@ pub(crate) fn project_question(q: &QuestionPromptState) -> QuestionView {
 }
 
 /// Read-only "Review your answers" body shown above the Submit/Cancel list when
-/// the Submit tab is focused. Mirrors the TS review screen (warning when not all
-/// answered, `● question → answer` per row, then the "Ready to submit?" prompt).
+/// the Submit tab is focused. Shows a warning when not all questions are
+/// answered, then `● question → answer` per row, then the "Ready to submit?" prompt.
 fn submit_review_text(q: &QuestionPromptState) -> String {
     let mut out = String::from("Review your answers");
     if !q.all_answered() {
@@ -713,8 +712,7 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
     out
 }
 
-/// Max display width of a question's `header` chip. Mirrors the tool schema's
-/// `header` description and TS `ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12`.
+/// Max display width of a question's `header` chip: 12 characters.
 const CHIP_MAX_CHARS: usize = 12;
 
 fn chip(s: &str) -> String {

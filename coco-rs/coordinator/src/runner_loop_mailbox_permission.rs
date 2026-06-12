@@ -8,8 +8,6 @@
 //! into the team-lead inbox, then poll their own inbox for the
 //! matching [`mailbox::ProtocolMessage::PermissionResponse`].
 //!
-//! TS reference: `permissionSync.ts:676-722`.
-//!
 //! In-process teammates take the faster path of inheriting the
 //! leader's bridge through `wire_engine`; this module is reserved
 //! for the cross-process case.

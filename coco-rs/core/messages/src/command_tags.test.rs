@@ -100,7 +100,7 @@ fn test_sensitive_args_redacted() {
 
 #[test]
 fn test_slash_user_message_can_be_model_visible() {
-    // Documents the escape hatch for TS's `display: 'user'`: flip
+    // Documents the escape hatch for the `display: 'user'` flag: flip
     // `transcript_only` to false to make a slash echo/result model-visible.
     let hidden = slash_user_message("x", /*transcript_only*/ true);
     let visible = slash_user_message("x", /*transcript_only*/ false);

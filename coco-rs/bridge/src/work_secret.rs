@@ -1,9 +1,9 @@
 //! Workspace-scoped shared secret.
 //!
-//! TS: `bridge/workSecret.ts`. The secret is generated once per
-//! workspace (keyed by the absolute path) and stored in the user's
-//! keychain; it's what the IDE and CLI exchange to prove they belong
-//! to the same trust domain. The JWT layer uses it as the HS256 key.
+//! The secret is generated once per workspace (keyed by the absolute
+//! path) and stored in the user's keychain; it's what the IDE and CLI
+//! exchange to prove they belong to the same trust domain. The JWT
+//! layer uses it as the HS256 key.
 //!
 //! This module owns just the **derivation** of the secret — the actual
 //! keychain persistence is delegated to `coco-keyring-store`, which is
@@ -20,7 +20,6 @@ use sha2::Sha256;
 pub const SECRET_BYTES: usize = 32;
 
 /// Keychain service name the bridge uses to store per-workspace secrets.
-/// TS: `'claude-code-bridge'`.
 pub const KEYRING_SERVICE: &str = "coco-bridge";
 
 /// Keychain account suffix used as the key in `{service, account}` pairs.

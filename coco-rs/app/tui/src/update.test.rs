@@ -241,8 +241,8 @@ async fn autocomplete_enter_completes_arg_slash_command_without_submitting() {
 async fn autocomplete_enter_submits_overlay_command_despite_optional_arg_hint() {
     // Regression: `/model` (a `local-jsx` overlay opener) advertises an optional
     // `[model]` hint but must still run on bare Enter so the picker opens —
-    // mirroring TS, where accepting `/model` and pressing Enter renders
-    // <ModelPicker>. Previously the mere presence of an arg hint forced
+    // accepting `/model` and pressing Enter must open the picker.
+    // Previously the mere presence of an arg hint forced
     // completion-only mode, parking the input at `/model ` with no overlay.
     let mut state = AppState::new();
     state.session.available_commands = vec![SlashCommandInfo {
@@ -1423,13 +1423,12 @@ async fn toggle_plan_mode_changes_mode() {
     assert_eq!(state.session.permission_mode, PermissionMode::Default);
 }
 
-// ─────────────────── TS-behavior tests: Ctrl+C / ESC / Ctrl+E ──────────────────
+// ─────────────────── Behavior tests: Ctrl+C / ESC / Ctrl+E ──────────────────
 
 #[tokio::test]
 async fn ctrl_c_with_text_clears_input_and_saves_to_history() {
-    // Mirrors TS `useTextInput.ts:108-120` third callback: Ctrl+C with
-    // text present clears the input AND records it into history so the
-    // user can recover it with Up. Per `update/exit.rs::on_interrupt`,
+    // Ctrl+C with text present clears the input AND records it into history
+    // so the user can recover it with Up. Per `update/exit.rs::on_interrupt`,
     // the exit hint is still pre-armed so a second Ctrl+C exits.
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("draft text");
@@ -1454,8 +1453,8 @@ async fn ctrl_c_with_text_clears_input_and_saves_to_history() {
 
 #[tokio::test]
 async fn ctrl_c_idle_empty_arms_exit_then_quits() {
-    // Mirrors TS `useExitOnCtrlCD`: with empty input the first Ctrl+C
-    // only arms a hint; a second within the window exits.
+    // With empty input the first Ctrl+C only arms a hint; a second
+    // within the window exits.
     let mut state = AppState::new();
     let (tx, _rx) = drained_channel();
 
@@ -1470,8 +1469,7 @@ async fn ctrl_c_idle_empty_arms_exit_then_quits() {
 
 #[tokio::test]
 async fn esc_with_text_first_press_shows_toast() {
-    // TS `useTextInput.ts:126-153` first callback: when input is
-    // non-empty, single Esc shows a toast and arms the double-press.
+    // When input is non-empty, single Esc shows a toast and arms the double-press.
     let mut state = AppState::new();
     state.ui.input.textarea.set_text("draft");
     let (tx, _rx) = drained_channel();
@@ -1555,8 +1553,8 @@ async fn esc_on_memory_dialog_records_transcript_result() {
     handle_command(&mut state, TuiCommand::Cancel, &tx).await;
 
     assert!(!state.ui.has_active_surface(), "memory dialog dismissed");
-    // Mirrors TS `commands/memory/memory.tsx::onCancel` → a transcript system
-    // line (`❯ /memory` + `⎿ Cancelled memory editing`), not a toast.
+    // Dismiss emits a transcript system line (`❯ /memory` + `⎿ Cancelled memory editing`),
+    // not a toast.
     match rx.try_recv() {
         Ok(UserCommand::PushSlashResult { messages }) => assert!(
             format!("{messages:?}").contains("Cancelled memory editing"),
@@ -1568,7 +1566,7 @@ async fn esc_on_memory_dialog_records_transcript_result() {
 
 #[tokio::test]
 async fn esc_on_theme_picker_emits_dismiss_slash_result() {
-    // Mirrors TS `commands/theme/theme.tsx::onCancel` → "Theme picker dismissed".
+    // Esc on the theme picker emits "Theme picker dismissed".
     // The theme picker reuses the Settings keybinding context, whose Esc maps to
     // `Deny` (not `Cancel`) — the dismiss feedback must fire on that route too.
     let mut state = AppState::new();

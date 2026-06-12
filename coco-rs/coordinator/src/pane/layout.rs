@@ -1,7 +1,5 @@
 //! Teammate color assignment and layout management.
 //!
-//! TS: utils/swarm/teammateLayoutManager.ts
-//!
 //! Assigns colors in round-robin from a fixed palette. Tracks assignments
 //! per-session in a global map.
 
@@ -11,8 +9,6 @@ use std::sync::RwLock;
 use crate::constants::AgentColorName;
 
 /// Color palette for teammate assignment (round-robin order).
-///
-/// TS: `AGENT_COLORS` array in teammateLayoutManager.ts
 const AGENT_COLORS: &[AgentColorName] = &[
     AgentColorName::Blue,
     AgentColorName::Green,
@@ -48,8 +44,6 @@ where
 
 /// Assign a color to a teammate (round-robin from palette).
 ///
-/// TS: `assignTeammateColor(teammateId)`
-///
 /// Returns the assigned color. If already assigned, returns the existing one.
 pub fn assign_teammate_color(teammate_id: &str) -> AgentColorName {
     with_state(|state| {
@@ -64,8 +58,6 @@ pub fn assign_teammate_color(teammate_id: &str) -> AgentColorName {
 }
 
 /// Get the color assigned to a teammate (if any).
-///
-/// TS: `getTeammateColor(teammateId?)`
 pub fn get_teammate_color(teammate_id: &str) -> Option<AgentColorName> {
     let guard = COLOR_STATE
         .read()
@@ -76,8 +68,6 @@ pub fn get_teammate_color(teammate_id: &str) -> Option<AgentColorName> {
 }
 
 /// Clear all color assignments (for testing or session reset).
-///
-/// TS: `clearTeammateColors()`
 pub fn clear_teammate_colors() {
     let mut guard = COLOR_STATE
         .write()
@@ -89,9 +79,9 @@ pub fn clear_teammate_colors() {
     *agent_guard = None;
 }
 
-/// Per-`AgentTypeId` color cache. TS: `tools/AgentTool/agentColorManager.ts`
-/// keeps this stable across spawns so the `Explore` agent always renders
-/// in the same color regardless of how many copies are running.
+/// Per-`AgentTypeId` color cache — kept stable across spawns so the
+/// `Explore` agent always renders in the same color regardless of how
+/// many copies are running.
 ///
 /// Distinct from the per-teammate cache above (`COLOR_STATE`), which keys
 /// on `name@team` for long-lived teammates spawned via `TeamCreate`.
@@ -99,9 +89,8 @@ static AGENT_TYPE_COLORS: RwLock<Option<HashMap<coco_types::AgentTypeId, AgentCo
     RwLock::new(None);
 
 /// Assign a color to an agent type, reusing the prior assignment when one
-/// exists. Mirrors TS `setAgentColor` / `getAgentColor`. The first spawn
-/// of `AgentTypeId::Builtin(SubagentType::Explore)` rotates a fresh color
-/// off the palette; subsequent spawns hit the cache.
+/// exists. The first spawn of `AgentTypeId::Builtin(SubagentType::Explore)`
+/// rotates a fresh color off the palette; subsequent spawns hit the cache.
 pub fn assign_agent_type_color(agent_type: &coco_types::AgentTypeId) -> AgentColorName {
     let mut guard = AGENT_TYPE_COLORS
         .write()

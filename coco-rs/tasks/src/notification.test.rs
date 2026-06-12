@@ -69,8 +69,7 @@ fn shell_terminal_killed_omits_exit_code() {
 
 #[test]
 fn agent_terminal_completed_includes_result_usage_worktree() {
-    // TS LocalAgentTask.tsx:252-257 — full envelope with all three
-    // optional sections.
+    // Full envelope with all three optional sections.
     let n = TaskNotification {
         task_id: "ta01".into(),
         tool_use_id: Some("toolu_a".into()),
@@ -106,9 +105,8 @@ fn agent_terminal_completed_includes_result_usage_worktree() {
 
 #[test]
 fn agent_terminal_optional_sections_omitted_when_none() {
-    // TS template uses `${...Section}` which evaluates to '' when
-    // the input is undefined — sections are omitted from the wire,
-    // not emitted as empty tags.
+    // Template evaluates to '' when the input is undefined — sections are
+    // omitted from the wire, not emitted as empty tags.
     let n = TaskNotification {
         task_id: "ta02".into(),
         tool_use_id: None,
@@ -177,7 +175,7 @@ fn agent_worktree_branch_optional() {
 
 #[test]
 fn stall_omits_status_tag() {
-    // TS LocalShellTask.tsx:76-79: stall must NOT carry <status>.
+    // Stall must NOT carry <status>.
     let n = TaskNotification {
         task_id: "tb04".into(),
         tool_use_id: None,

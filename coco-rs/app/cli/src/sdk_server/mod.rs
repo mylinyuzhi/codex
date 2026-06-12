@@ -25,8 +25,6 @@
 //! └───────────────────────────────┘
 //! ```
 //!
-//! TS reference: `src/cli/structuredIO.ts` (`StructuredIO` class — NDJSON
-//! I/O over stdin/stdout in headless mode).
 //!
 //! See `event-system-design.md` §5 for the control protocol catalog and
 //! `coco-types/src/{jsonrpc,client_request,server_request}.rs` for the

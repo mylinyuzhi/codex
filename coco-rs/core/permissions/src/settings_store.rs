@@ -1,7 +1,5 @@
 //! Concrete `PermissionStore` implementation backed by settings files on disk.
 //!
-//! TS: utils/permissions/permissionsLoader.ts
-//!
 //! Reads permission rules from settings files (user, project, local, policy)
 //! and persists "always allow" / "always deny" updates back to disk.
 
@@ -33,7 +31,7 @@ use crate::rule_compiler;
 /// Writes rules back to the corresponding file when persisting updates.
 pub struct SettingsPermissionStore {
     cwd: PathBuf,
-    /// Optional path from `--settings` CLI flag (TS: flagSettings).
+    /// Optional path from `--settings` CLI flag.
     flag_settings_path: Option<PathBuf>,
 }
 
@@ -46,8 +44,6 @@ impl SettingsPermissionStore {
     }
 
     /// Create a store with a flag settings path from `--settings` CLI flag.
-    ///
-    /// TS: `flagSettings` source loaded from `getFlagSettingsPath()`.
     pub fn with_flag_settings(mut self, path: impl Into<PathBuf>) -> Self {
         self.flag_settings_path = Some(path.into());
         self
@@ -96,8 +92,7 @@ impl SettingsPermissionStore {
 
     /// All sources with their file paths.
     ///
-    /// TS: `SETTING_SOURCES` order: user → project → local → flag → policy.
-    /// Later sources override earlier ones.
+    /// Order: user → project → local → flag → policy. Later sources override earlier ones.
     fn source_paths(&self) -> Vec<(PermissionRuleSource, PathBuf)> {
         let mut sources = vec![
             (
@@ -174,9 +169,6 @@ impl SettingsPermissionStore {
     /// editor's Workspace tab. Sources are read in the same priority order
     /// as [`Self::source_paths`]; duplicates across layers are preserved so
     /// the editor can show (and remove from) each layer independently.
-    ///
-    /// TS: `getAdditionalWorkingDirectories()` reading
-    /// `permissions.additionalDirectories` per settings source.
     pub fn load_additional_directories(&self) -> Vec<(PermissionRuleSource, String)> {
         let mut dirs = Vec::new();
         if self.is_managed_only() {
@@ -202,8 +194,6 @@ impl SettingsPermissionStore {
     }
 
     /// Persist added rules to a settings file.
-    ///
-    /// TS: `addPermissionRulesToSettings()` in permissionsLoader.ts
     fn persist_add_rules(
         &self,
         rules: &[PermissionRule],
@@ -277,17 +267,14 @@ impl SettingsPermissionStore {
 
     /// Replace the entire `[behavior]` rule array on a settings file.
     ///
-    /// TS: `persistPermissionUpdate(replaceRules)` in `PermissionUpdate.ts:329-340`.
-    /// Unlike `persist_add_rules`, this overwrites the array
-    /// wholesale — used by the rules editor UI when a user reorders
-    /// or wholesale-edits permissions for a single source.
+    /// Unlike `persist_add_rules`, this overwrites the array wholesale —
+    /// used by the rules editor UI when a user reorders or wholesale-edits
+    /// permissions for a single source.
     ///
-    /// Empty `rules` is a no-op: TS carries `behavior` on the update
-    /// envelope itself, but `PermissionUpdate::ReplaceRules` derives
-    /// behavior from the first rule. With no rules there's nothing
-    /// to anchor the target key, so we can't faithfully clear a
-    /// specific behavior list. Matches `permission_updates.rs:78-81`'s
-    /// in-memory variant of the same operation.
+    /// Empty `rules` is a no-op: `PermissionUpdate::ReplaceRules` derives
+    /// behavior from the first rule. With no rules there's nothing to anchor
+    /// the target key, so we can't faithfully clear a specific behavior list.
+    /// Matches `permission_updates.rs:78-81`'s in-memory variant of the same operation.
     fn persist_replace_rules(
         &self,
         rules: &[PermissionRule],
@@ -342,9 +329,8 @@ impl SettingsPermissionStore {
 
     /// Persist `additionalDirectories` additions to a settings file.
     ///
-    /// TS: `persistPermissionUpdate(addDirectories)` in `PermissionUpdate.ts:244-265`.
-    /// Reads the existing list, appends new dirs while preserving
-    /// order and dropping duplicates, then rewrites the file.
+    /// Reads the existing list, appends new dirs while preserving order and
+    /// dropping duplicates, then rewrites the file.
     fn persist_add_directories(
         &self,
         directories: &[String],
@@ -407,8 +393,6 @@ impl SettingsPermissionStore {
     }
 
     /// Persist `additionalDirectories` removals to a settings file.
-    ///
-    /// TS: `persistPermissionUpdate(removeDirectories)` in `PermissionUpdate.ts:296-313`.
     fn persist_remove_directories(
         &self,
         directories: &[String],
@@ -456,7 +440,6 @@ impl SettingsPermissionStore {
 
     /// Persist rule removal to a settings file.
     ///
-    /// TS: `deletePermissionRuleFromSettings()` in permissionsLoader.ts
     /// Normalizes entries via roundtrip parse→serialize so legacy names match.
     fn persist_remove_rules(
         &self,

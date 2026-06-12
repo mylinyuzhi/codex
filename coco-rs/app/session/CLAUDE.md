@@ -4,16 +4,16 @@ JSONL-canonical session persistence, transcript history, cost recovery, title
 generation, and per-process concurrent-session registry. No `<session-id>.json`
 sidecar — every session-level fact (title, tags, model, created/updated_at,
 message counts) is derived from the transcript's first entry plus trailing
-metadata. Same semantic shape as TS Claude Code (transcript-as-truth removes
-state-drift between sidecar and transcript), but the wire **field names** are
-Rust-idiomatic snake_case, not TS camelCase.
+metadata. Transcript-as-truth removes state-drift between sidecar and
+transcript. Wire **field names** are Rust-idiomatic snake_case rather than
+camelCase.
 
 ## Wire-format policy
 
-**Content-equivalent to TS, not byte-compatible.** Every fact a TS Claude Code
-session carries (chain UUIDs, timestamps, tool_use_ids, file-history snapshot
-chain, content-replacement records, marble-origami staged ranges) is preserved
-with the same semantics and the same algorithm. But:
+**Content-equivalent to the original claude-code format, not byte-compatible.**
+Every fact a session carries (chain UUIDs, timestamps, tool_use_ids,
+file-history snapshot chain, content-replacement records, marble-origami staged
+ranges) is preserved with the same semantics and the same algorithm. But:
 
 - Field names on disk are **snake_case** (`parent_uuid`, `session_id`,
   `is_sidechain`, `tool_use_id`, `message_id`, …). No `serde(rename_all =
@@ -23,10 +23,10 @@ with the same semantics and the same algorithm. But:
   (kebab-case values for the semantic taxonomy — `custom-title`,
   `file-history-snapshot`, …); `SystemMessage` and other tagged enums use
   `kind:` matching the rest of coco-rs.
-- TS-written JSONL is **not** read directly. Sessions migrating from TS
-  Claude Code must go through `coco_session::import_ts` (TODO — single
-  importer module, one-time migration). Cross-implementation runtime
-  interop is **not** a goal — the two tools are alternatives, not peers.
+- Claude Code (TypeScript) JSONL is **not** read directly. Sessions migrating
+  from it must go through `coco_session::import_ts` (TODO — single importer
+  module, one-time migration). Cross-implementation runtime interop is **not**
+  a goal — the two tools are alternatives, not peers.
 - Inner `message.content` blocks keep their Anthropic API field names
   (`tool_use_id`, `tool_name`, `is_error`, …) because those ARE the wire
   format we pass to/from the LLM. This boundary is independent of the
@@ -38,20 +38,6 @@ lookups; both sides use snake_case keys now. Cross-language hub clients
 (the embedded web UI) continue to receive camelCase via the `hub/server/src/
 store/mod.rs` HTTP DTOs — that boundary is separate from disk wire.
 
-## TS Source
-
-- `history.ts` — PromptHistory (user-typed prompt ring)
-- `utils/cleanup.ts` — terminal teardown, autosave on exit
-- `bootstrap/state.ts` — session identity (id, cwd, model)
-- `setup.ts` — TS setup flow (trust / onboarding / migrations); Rust equivalent
-  lives in `coco-cli` + `coco-memory`
-- `utils/sessionStorage.ts` — JSONL transcript IO (readFileTail, append, list,
-  delete, lite metadata)
-- `utils/sessionStoragePortable.ts` — `resolveSessionFilePath`, cross-project
-  enumeration, worktree fallback
-- `utils/concurrentSessions.ts` — per-PID registry for `claude ps`
-- `services/sessionTitle.ts` — Haiku-based auto-title
-
 ## Key Types
 
 | Type | Purpose |
@@ -60,7 +46,7 @@ store/mod.rs` HTTP DTOs — that boundary is separate from disk wire.
 | `SessionManager` | `create` (in-memory only) / `save` (no-op shim) / `load` / `resume` / `list` / `delete` / `most_recent` / `cleanup(keep_count)` / `cleanup_older_than` |
 | `TranscriptStore`, `TranscriptEntry`, `TranscriptMetadata`, `TranscriptUsage` | Append-only JSONL transcript with per-entry usage. Path layout via `Arc<ProjectPaths>` |
 | `Entry`, `MetadataEntry` | Tagged union: transcript message vs metadata entry (custom-title, tag, last-prompt, summary, file-history-snapshot, marble-origami-{commit,snapshot}, content-replacement, …) |
-| `ModelCostEntry` | Per-model cost row inside a `CostSummary` metadata entry. Resume-side cost replay is not yet wired (`coco-messages::CostTracker::start_with_recovery` consumes the in-memory tracker only); the typed entry stays so write-path emission keeps the TS-compatible shape. |
+| `ModelCostEntry` | Per-model cost row inside a `CostSummary` metadata entry. Resume-side cost replay is not yet wired (`coco-messages::CostTracker::start_with_recovery` consumes the in-memory tracker only); the typed entry stays so write-path emission keeps a stable shape. |
 | `PromptHistory`, `HistoryEntry` | Ring of user-typed prompts (for up-arrow recall) |
 | `AgentMetadata` | Sidecar for AgentTool spawns at `<sid>/subagents/agent-<id>.meta.json` |
 | `recovery::*` | Crash recovery — partial transcript repair + last-good-state detection |

@@ -3,24 +3,11 @@
 Top-level CLI: clap parser, binary entry, SDK (NDJSON over stdio), subcommand dispatch.
 Depends on everything — wires registries, builds model runtime registry, starts TUI or SDK server.
 
-## TS Source
-
-- `entrypoints/cli.tsx` — two-tier dispatch (fast-path branches before Commander)
-- `entrypoints/sdk/{coreSchemas.ts,controlSchemas.ts,coreTypes.ts}` — SDK protocol
-- `cli/structuredIO.ts` — NDJSON control loop (request/response subtypes)
-- `cli/transports/{WebSocket,SSE,Hybrid}Transport.ts` + `ccrClient.ts`
-- `cli/handlers/{agents.ts,auth.ts,autoMode.ts,mcp.tsx,plugins.ts,util.tsx}` — subcommand handlers
-- `cli/{print,exit,update,remoteIO}.ts`
-- `entrypoints/{init.ts,mcp.ts,agentSdkTypes.ts,sandboxTypes.ts}` — subcommand entries + SDK types
-- `utils/releaseNotes.ts` — release-notes subcommand data source
-- `server/{createDirectConnectSession,directConnectManager}.ts` — DirectConnect HTTP+WS
-- `main.tsx` — Commander construction (preAction: init/migrations/policyLimits)
-
 ## Key Types
 
 | Type | Purpose |
 |------|---------|
-| `Cli` (clap `Parser`) | Binary name `coco`; TS-parity flags (see `lib.rs`) |
+| `Cli` (clap `Parser`) | Binary name `coco`; see `lib.rs` for flags |
 | `Commands` | Subcommands: Chat, Config, Resume, Sessions, Status, Doctor, Login, Mcp, Plugin, Daemon, Ps/Logs/Attach/Kill, RemoteControl, Sdk, ReleaseNotes, Upgrade, Agents, AutoMode |
 | `{Config,Mcp,Plugin}Action` | Subcommand action enums |
 | `sdk_server::SdkServer` | NDJSON control server (Commands::Sdk) |
@@ -41,7 +28,7 @@ Depends on everything — wires registries, builds model runtime registry, start
 5. `--non-interactive` (print mode) → single `QueryEngine::run` + `output::*` formatter
 6. Interactive → `tui_runner::run` (launches `coco-tui`)
 
-## Flag Highlights (TS parity)
+## Flag Highlights
 
 Session: `--prompt`, `--output-format`, `--input-format`, `--json-schema`, `--max-turns`, `--max-budget-usd`
 Resume: `--continue`, `--resume`, `--fork-session`, `--session-id`, `--name`
@@ -54,8 +41,7 @@ SDK: `--replay-user-messages`, `--include-hook-events`, `--include-partial-messa
 
 ## Stop Hooks Dispatch Order
 
-Post-turn hooks fire from `coco_query::engine_finalize_turn` in
-TS-parity order (`query/stopHooks.ts:133-157`):
+Post-turn hooks fire from `coco_query::engine_finalize_turn` in this order:
 
 1. **bareMode gate** — `--bare` mode skips all post-turn forks (no
    prompt suggestion, no memory extraction, no auto-dream). Used
@@ -73,8 +59,7 @@ TS-parity order (`query/stopHooks.ts:133-157`):
 
 Each fork dispatches via `coco_query::forked_agent::ForkDispatcher`
 (installed by `fork_dispatcher::install` at session bootstrap).
-The dispatcher threads the parent's `CacheSafeParams` so the
-child's API request prefix matches byte-for-byte — TS parity
-`runForkedAgent`. Per-fork `canUseTool` policies live in
+The dispatcher threads the parent's `CacheSafeParams` so the child's API
+request prefix matches byte-for-byte. Per-fork `canUseTool` policies live in
 `coco-memory::can_use_tool` (auto-mem + session-mem); promptSuggestion
 + side_question + agent_summary use `deny_all_handle`.

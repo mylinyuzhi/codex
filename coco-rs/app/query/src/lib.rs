@@ -1,7 +1,5 @@
 //! Query engine — the multi-turn agent loop.
 //!
-//! TS: QueryEngine.ts (46.6K) + query.ts (68.7K)
-//!
 //! The core cycle:
 //! 1. Build system prompt (context)
 //! 2. Normalize messages for API

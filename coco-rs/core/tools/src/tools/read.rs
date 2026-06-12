@@ -17,15 +17,13 @@ use std::path::Path;
 /// Default number of lines to read if no limit specified.
 const DEFAULT_LINE_LIMIT: usize = 2000;
 
-/// Short per-call UI label. TS `tools/FileReadTool/prompt.ts:11`
-/// `DESCRIPTION`, returned by `async description()`.
+/// Short per-call UI label, returned by `async description()`.
 const READ_TOOL_SHORT_DESCRIPTION: &str = "Read a file from the local filesystem.";
 
 /// Long-form tool description shown to the model.
 ///
-/// TS: `tools/FileReadTool/prompt.ts:27-49` `renderPromptTemplate()`.
 /// Byte-identical port for the default template (no `maxSizeInstruction`
-/// runtime override; the offset instruction follows TS's
+/// runtime override; the offset instruction follows the
 /// `OFFSET_INSTRUCTION_TARGETED` form). The PDF support note is
 /// included unconditionally because coco-rs's pdf-extract dep makes
 /// it always available.
@@ -44,22 +42,19 @@ Usage:
 - You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.";
 
-/// Maximum total file size for a FULL read (no `limit`). TS
-/// `MAX_OUTPUT_SIZE = 0.25 * 1024 * 1024` (`utils/file.ts:48`). A full
+/// Maximum total file size for a FULL read (no `limit`). A full
 /// read of a larger file throws `FileTooLargeError` rather than
-/// truncating — TS deliberately reverted truncation (limits.ts) because
+/// truncating — truncation was deliberately reverted because
 /// a ~100-byte error beats ~256KB of truncated content. Partial reads
 /// (explicit `limit`) skip this check and rely on the token cap below.
 const MAX_READ_OUTPUT_BYTES: usize = 256 * 1024;
 
-/// Default output token budget for a read slice. TS
-/// `DEFAULT_MAX_OUTPUT_TOKENS = 25000` (`tools/FileReadTool/limits.ts`).
+/// Default output token budget for a read slice.
 /// Any read whose slice exceeds this estimate throws
-/// `MaxFileReadTokenExceededError` (mirrors `validateContentTokens`).
+/// `MaxFileReadTokenExceededError`.
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 25_000;
 
-/// TS `bytesPerTokenForFileType` (`services/tokenEstimation.ts`): JSON
-/// family packs ~2 bytes/token, everything else ~4. Used for the rough
+/// JSON family packs ~2 bytes/token, everything else ~4. Used for the rough
 /// pre-API token estimate.
 fn bytes_per_token_for_ext(file_path: &str) -> usize {
     let ext = Path::new(file_path)
@@ -78,8 +73,7 @@ fn bytes_per_token_for_ext(file_path: &str) -> usize {
 /// This is a safety valve for catastrophically large files (e.g. a 500MB
 /// "image" that's actually a typo for a database dump). The image crate
 /// itself would handle the decode, but pulling half a gig into memory
-/// before recognizing it's not useful is wasteful. TS
-/// `FileReadTool.ts:1097-1183` similarly rejects obviously-oversized
+/// before recognizing it's not useful is wasteful. Rejects obviously-oversized
 /// files before invoking the compression pipeline.
 ///
 /// 32MB is big enough for typical high-resolution photos (e.g. a 24MP
@@ -87,14 +81,12 @@ fn bytes_per_token_for_ext(file_path: &str) -> usize {
 const MAX_IMAGE_DECODE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Image media-type table for formats we can actually decode, resize,
-/// and send as multimodal content. TS-aligned exactly:
-/// `FileReadTool.ts:188` `IMAGE_EXTENSIONS = Set(['png','jpg','jpeg',
-/// 'gif','webp'])`. Order matters — first match wins.
+/// and send as multimodal content: `['png','jpg','jpeg','gif','webp']`.
+/// Order matters — first match wins.
 ///
-/// SVG is intentionally NOT in this list: (a) TS doesn't support SVG
-/// in the image set, (b) the Anthropic multimodal API doesn't accept
-/// `image/svg+xml`, and (c) the `image` crate is raster-only and cannot
-/// decode SVG. SVG files fall through to the placeholder path below.
+/// SVG is intentionally NOT in this list: (a) the Anthropic multimodal API
+/// doesn't accept `image/svg+xml`, and (b) the `image` crate is raster-only
+/// and cannot decode SVG. SVG files fall through to the placeholder path below.
 const IMAGE_MEDIA_TYPES: &[(&str, &str)] = &[
     ("png", "image/png"),
     ("jpg", "image/jpeg"),
@@ -116,9 +108,8 @@ const BINARY_EXTENSIONS: &[&str] = &[
     "woff", "woff2", "eot", "sqlite", "db",
 ];
 
-/// Device files that must never be read. TS: `FileReadTool.ts:97-114`
-/// `BLOCKED_DEVICE_PATHS`. Reading these would hang (stdin/tty) or spew
-/// infinite output (/dev/zero, /dev/random, /dev/urandom).
+/// Device files that must never be read. Reading these would hang (stdin/tty)
+/// or spew infinite output (/dev/zero, /dev/random, /dev/urandom).
 ///
 /// NOTE: `/dev/null` is intentionally NOT blocked — it's a common sink and
 /// reading from it returns EOF immediately, which is harmless and useful.
@@ -142,8 +133,8 @@ const BLOCKED_DEVICE_PATHS: &[&str] = &[
 pub struct ReadInput {
     /// The absolute path to the file to read
     pub file_path: String,
-    // 1-based — TS converts via `offset === 0 ? 0 : offset - 1`, so both 0
-    // and 1 mean "start from the first line".
+    // 1-based — `offset === 0 ? 0 : offset - 1`, so both 0 and 1 mean
+    // "start from the first line".
     /// The line number to start reading from. Only provide if the file is too large to read at once
     #[serde(default)]
     pub offset: Option<i64>,
@@ -169,7 +160,7 @@ impl Tool for ReadTool {
     /// {base64, type}}`, `{type: "pdf", ...}`, `{type: "notebook",
     /// file: {cells: [...]}}` and `{type: "file_unchanged"}`. Modeling
     /// as a tagged enum would mean a big follow-up refactor of the
-    /// renderer; deferred to a TS-parity output-typing pass.
+    /// renderer; deferred to an output-typing pass.
     type Output = Value;
 
     fn to_auto_classifier_input(&self, input: &ReadInput) -> Option<String> {
@@ -186,8 +177,7 @@ impl Tool for ReadTool {
 
     fn max_result_size_bound(&self) -> coco_tool_runtime::ResultSizeBound {
         // `Read` is the canonical view of a tracked file the model will
-        // read again — persistence here would be circular. TS opt-out
-        // via `Infinity`.
+        // read again — persistence here would be circular.
         coco_tool_runtime::ResultSizeBound::Unbounded
     }
 
@@ -195,10 +185,7 @@ impl Tool for ReadTool {
         READ_TOOL_SHORT_DESCRIPTION.into()
     }
 
-    /// Model-facing tool description (schema-listing time). TS
-    /// `tools/FileReadTool/FileReadTool.ts:347` `async prompt()` →
-    /// `renderPromptTemplate(...)`; we hold the ported text in
-    /// [`READ_TOOL_DESCRIPTION`].
+    /// Model-facing tool description (schema-listing time).
     async fn prompt(&self, _options: &coco_tool_runtime::PromptOptions) -> String {
         READ_TOOL_DESCRIPTION.into()
     }
@@ -236,9 +223,8 @@ impl Tool for ReadTool {
         }
     }
 
-    /// R6-T20: file-read permission gate. TS routes every Read through
-    /// `checkReadPermissionForTool`; coco-rs matches by consulting the
-    /// resolved `ctx.tool_config.file_read_ignore_patterns` matcher
+    /// R6-T20: file-read permission gate. Routes every Read through
+    /// the resolved `ctx.tool_config.file_read_ignore_patterns` matcher
     /// (JSON-first, env override via `COCO_FILE_READ_IGNORE_PATTERNS`).
     /// Paths matching any deny glob are denied at the central
     /// evaluator's step-1c slot; everything else passes through to
@@ -275,10 +261,9 @@ impl Tool for ReadTool {
         {
             return ValidationResult::invalid("limit must be positive");
         }
-        // #24 / TS `FileReadTool.ts:418-440`: validate the PDF `pages`
-        // param up-front (pure string parsing, no I/O). Malformed → 7;
-        // a range wider than PDF_MAX_PAGES_PER_READ (incl. the open-ended
-        // `"N-"` form, which is unbounded) → 8.
+        // #24: validate the PDF `pages` param up-front (pure string parsing, no I/O).
+        // Malformed → 7; a range wider than PDF_MAX_PAGES_PER_READ (incl.
+        // the open-ended `"N-"` form, which is unbounded) → 8.
         if let Some(pages) = input.pages.as_deref() {
             match parse_pdf_page_range_spec(pages) {
                 None => {
@@ -329,7 +314,7 @@ impl Tool for ReadTool {
         // Device file blocklist — reject `/dev/zero`, `/dev/stdin`, etc.
         // BEFORE the existence check because some of these (/dev/stdin)
         // exist but would hang the tool indefinitely. `/dev/null` is OK
-        // and falls through. TS: `FileReadTool.ts:486-492`.
+        // and falls through.
         if BLOCKED_DEVICE_PATHS.contains(&file_path) {
             return Err(ToolError::InvalidInput {
                 message: format!(
@@ -368,14 +353,13 @@ impl Tool for ReadTool {
 
         // ── R7-T9: file_unchanged dedup ──
         //
-        // TS `FileReadTool.ts:523-573`: when the model issues a Read for a
-        // file we've already returned in this session, with the same
-        // offset/limit and an unchanged disk mtime, return a stub instead
-        // of resending the full content. BQ telemetry shows ~18% of Read
-        // calls are same-file collisions; the stub saves the cache_creation
-        // tokens for the second copy.
+        // When the model issues a Read for a file we've already returned in
+        // this session, with the same offset/limit and an unchanged disk mtime,
+        // return a stub instead of resending the full content. BQ telemetry
+        // shows ~18% of Read calls are same-file collisions; the stub saves
+        // the cache_creation tokens for the second copy.
         //
-        // Gating (matches TS `FileReadTool.ts:540-547`):
+        // Gating:
         //   1. The cache has an entry for this path.
         //   2. The entry was inserted via the Read tool (not Edit/Write).
         //      Without this gate, an Edit-then-Read sequence would dedup
@@ -424,8 +408,7 @@ impl Tool for ReadTool {
                 && let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
                 && entry.mtime_ms == disk_mtime
             {
-                // Cache hit — return the TS-shaped `file_unchanged` stub.
-                // The wrapper object matches TS `FileReadTool.ts:563-567`:
+                // Cache hit — return the `file_unchanged` stub:
                 //   { type: 'file_unchanged', file: { filePath } }
                 tracing::debug!(
                     "Read dedup hit for {} (offset={:?}, limit={:?})",
@@ -451,8 +434,7 @@ impl Tool for ReadTool {
             let ext_lower = ext.to_lowercase();
 
             // Image files that map to a supported multimodal media type get
-            // returned as base64-encoded bytes. TS: `FileReadTool.ts:1097-1183`
-            // + `FileReadTool.ts:396-397` (base64 encode step).
+            // returned as base64-encoded bytes.
             if let Some(media_type) = IMAGE_MEDIA_TYPES
                 .iter()
                 .find_map(|(e, mt)| (*e == ext_lower).then_some(*mt))
@@ -468,9 +450,9 @@ impl Tool for ReadTool {
                 crate::record_file_read(ctx, path, String::new(), None, None, None, None).await;
                 crate::track_nested_memory_attachment(ctx, path).await;
                 return Ok(ToolResult {
-                    // TS-shaped `text` envelope for the placeholder
-                    // message — `numLines`/`totalLines` set to 1 since
-                    // the placeholder is one synthetic line.
+                    // `text` envelope for the placeholder message —
+                    // `numLines`/`totalLines` set to 1 since the placeholder
+                    // is one synthetic line.
                     data: text_output(
                         file_path,
                         &format!(
@@ -489,8 +471,8 @@ impl Tool for ReadTool {
             }
 
             if ext_lower == "ipynb" {
-                // TS `FileReadTool.ts:848` adds the notebook path to the
-                // nested-memory triggers from inside the notebook code path.
+                // Add the notebook path to the nested-memory triggers from
+                // inside the notebook code path.
                 crate::track_nested_memory_attachment(ctx, path).await;
                 return read_notebook(file_path);
             }
@@ -514,24 +496,22 @@ impl Tool for ReadTool {
             }
         }
 
-        // Read file bytes, then detect encoding and decode. TS:
-        // `utils/fileRead.ts:20-98` `readFileSyncWithMetadata` does UTF-16LE
-        // BOM detection + UTF-8 default. We delegate to `coco-file-encoding`
-        // which supports UTF-8, UTF-8-with-BOM, UTF-16LE, and UTF-16BE.
+        // Read file bytes, then detect encoding and decode. Delegates to
+        // `coco-file-encoding` which supports UTF-8, UTF-8-with-BOM,
+        // UTF-16LE, and UTF-16BE.
         //
         // Reading as bytes first means UTF-16 files no longer fail with
-        // "invalid UTF-8" — a regression vs. TS if we'd stayed on
-        // `fs::read_to_string`.
+        // "invalid UTF-8".
         let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
             message: format!("failed to read {file_path}: {e}"),
             display_data: None,
             source: None,
         })?;
 
-        // #25 / TS `readFileInRange`: a FULL read (no `limit`) of a file
-        // larger than MAX_READ_OUTPUT_BYTES throws instead of truncating —
-        // the model must narrow with offset/limit. Partial reads pass
-        // through to the line + token caps.
+        // #25: a FULL read (no `limit`) of a file larger than
+        // MAX_READ_OUTPUT_BYTES throws instead of truncating — the model must
+        // narrow with offset/limit. Partial reads pass through to the line +
+        // token caps.
         if input.limit.is_none() && raw_bytes.len() > MAX_READ_OUTPUT_BYTES {
             return Err(ToolError::InvalidInput {
                 message: format!(
@@ -553,11 +533,10 @@ impl Tool for ReadTool {
                 source: None,
             })?;
 
-        // TS: `FileReadTool.ts:497` — default `offset = 1` (1-based).
         // `validate_input` already rejected negative `offset` / non-positive
         // `limit`, so casting to `usize` here is safe. Both `0` and `1`
-        // are treated as "start from the first line" (TS: `const
-        // lineOffset = offset === 0 ? 0 : offset - 1`).
+        // are treated as "start from the first line"
+        // (`lineOffset = offset === 0 ? 0 : offset - 1`).
         let offset = input
             .offset
             .filter(|n| *n >= 0)
@@ -569,10 +548,10 @@ impl Tool for ReadTool {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_LINE_LIMIT);
 
-        // Empty file. TS `readFileInRangeFast('')` yields one empty selected
-        // line → `totalLines = 1`, so this routes to the offset warning in
-        // `render_for_model` (`content` empty, `startLine` = the effective
-        // offset). The warning string itself is emitted at render time.
+        // Empty file. Yields one empty selected line → `totalLines = 1`, so
+        // this routes to the offset warning in `render_for_model`
+        // (`content` empty, `startLine` = the effective offset). The warning
+        // string itself is emitted at render time.
         if content.is_empty() {
             return Ok(ToolResult {
                 data: text_output(file_path, "", 0, offset, 1),
@@ -587,14 +566,13 @@ impl Tool for ReadTool {
         let total_lines = lines.len();
 
         // Convert user-facing 1-based offset → internal 0-based start index.
-        // Matches TS `FileReadTool.ts:1020`: `offset === 0 ? 0 : offset - 1`.
+        // `offset === 0 ? 0 : offset - 1`.
         let start = if offset == 0 { 0 } else { offset - 1 };
 
-        // Offset-beyond-file. TS: `FileReadTool.ts:707` emits a
-        // `<system-reminder>` when the requested 1-based offset exceeds the
-        // total line count. The content is left empty here; the warning string
-        // (with the effective offset + total line count) is produced in
-        // `render_for_model` exactly as TS does at the map layer.
+        // Offset-beyond-file: emits a `<system-reminder>` when the requested
+        // 1-based offset exceeds the total line count. The content is left
+        // empty here; the warning string (with the effective offset + total
+        // line count) is produced in `render_for_model` at the map layer.
         if start >= total_lines && total_lines > 0 {
             return Ok(ToolResult {
                 data: text_output(file_path, "", 0, offset, total_lines),
@@ -607,13 +585,10 @@ impl Tool for ReadTool {
 
         let line_end = (start + limit).min(total_lines);
 
-        // #17 / TS `validateContentTokens`: reject a slice whose rough
-        // token estimate exceeds the budget (default 25000) so a single
-        // Read can't blow the context. Estimate on the slice content (not
-        // the line-number prefixes) to match TS, using the file-type
-        // bytes/token ratio. The early `estimate <= max/4` skip in TS is
-        // an API-call optimization; with no API counting we compare the
-        // estimate directly.
+        // #17: reject a slice whose rough token estimate exceeds the budget
+        // (default 25000) so a single Read can't blow the context. Estimate
+        // on the slice content (not the line-number prefixes), using the
+        // file-type bytes/token ratio.
         let slice_bytes: usize = lines[start..line_end].iter().map(|l| l.len() + 1).sum();
         let token_estimate = slice_bytes / bytes_per_token_for_ext(file_path);
         if token_estimate > DEFAULT_MAX_OUTPUT_TOKENS {
@@ -630,7 +605,7 @@ impl Tool for ReadTool {
 
         // Format as cat -n (1-indexed line numbers). The displayed line
         // number is `start + i + 1`, which evaluates to `offset + i` when
-        // offset ≥ 1 and to `i + 1` when offset == 0 — matching TS.
+        // offset ≥ 1 and to `i + 1` when offset == 0.
         let mut output = String::new();
         for (i, line) in lines[start..line_end].iter().enumerate() {
             let line_num = start + i + 1;
@@ -638,7 +613,7 @@ impl Tool for ReadTool {
         }
         let end = line_end;
 
-        // Line-cap footer (TS): more lines exist beyond the emitted slice.
+        // Line-cap footer: more lines exist beyond the emitted slice.
         if end < total_lines {
             output.push_str(&format!(
                 "\n... ({} more lines not shown. Use offset/limit to read more.)",
@@ -662,8 +637,6 @@ impl Tool for ReadTool {
         } else {
             None
         };
-        // ── R7-T13: TS-shaped output ──
-        //
         // Capture the projected metadata BEFORE handing `content` to
         // `record_file_read` (which moves the String). `numLines` is the
         // count of source lines actually emitted into `output`; `startLine`
@@ -682,22 +655,18 @@ impl Tool for ReadTool {
             dedup_limit,
         )
         .await;
-        // Fire-and-forget skill discovery: walk up from the file path to
-        // Walk up to the cwd boundary and queue any `.coco/skills/`
-        // ancestor dirs for the app/query layer to load; also queue
-        // the file path for conditional-skill activation. TS
-        // `FileReadTool.ts:578-591` does both on every successful Read.
+        // Fire-and-forget skill discovery: walk up to the cwd boundary and
+        // queue any `.coco/skills/` ancestor dirs for the app/query layer to
+        // load; also queue the file path for conditional-skill activation.
         crate::track_skill_triggers(ctx, path).await;
-        // TS `FileReadTool.ts:848,870,1038`: every successful Read
-        // pushes the path into nestedMemoryAttachmentTriggers so the
-        // next-turn message builder can attach any nested CLAUDE.md
-        // memories from the file's ancestry.
+        // Every successful Read pushes the path into
+        // nestedMemoryAttachmentTriggers so the next-turn message builder can
+        // attach any nested CLAUDE.md memories from the file's ancestry.
         crate::track_nested_memory_attachment(ctx, path).await;
 
         Ok(ToolResult {
-            // TS `FileReadTool.ts:258-269` discriminated-union `text`
-            // variant with `file: { filePath, content, numLines,
-            // startLine, totalLines }`.
+            // Discriminated-union `text` variant with
+            // `file: { filePath, content, numLines, startLine, totalLines }`.
             data: text_output(file_path, &output, num_lines, start_line, total_lines),
             new_messages: vec![],
             app_state_patch: None,
@@ -709,8 +678,7 @@ impl Tool for ReadTool {
     /// Project the structured read output into model-facing content
     /// parts.
     ///
-    /// TS parity: `FileReadTool.ts::mapToolResultToToolResultBlockParam`
-    /// — a `switch (data.type)` over the discriminated union. Each
+    /// A `switch (data.type)` over the discriminated union. Each
     /// branch picks the most natural wire shape:
     ///
     ///   - **`image`** → multimodal [`ToolResultContentPart::FileData`].
@@ -724,13 +692,13 @@ impl Tool for ReadTool {
     ///     a 5–15% token saving on large files.
     ///   - **`pdf`** → page-headed extracted text (already formatted in
     ///     `read_pdf`).
-    ///   - **`file_unchanged`** → TS `FILE_UNCHANGED_STUB` system-reminder.
+    ///   - **`file_unchanged`** → `FILE_UNCHANGED_STUB` system-reminder.
     ///   - **`notebook`** → a single Text part rendering of cells
     ///     (per-cell `--- Cell N (type) ---` header + source + outputs).
     ///     Image outputs in notebook cells are NOT promoted to
-    ///     ImageBlocks at the renderer layer in this Phase — TS does
-    ///     image-aware merging via `mapNotebookCellsToToolResult`;
-    ///     porting that is a follow-up. Most notebook cells are text.
+    ///     ImageBlocks at the renderer layer in this Phase —
+    ///     image-aware merging via `mapNotebookCellsToToolResult` is a
+    ///     follow-up. Most notebook cells are text.
     ///
     /// Anything else (synthetic `file_unchanged` / placeholder
     /// branches that already produce a `text` envelope) falls through
@@ -761,8 +729,7 @@ impl Tool for ReadTool {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                // TS `mapToolResultToToolResultBlockParam` 'text' branch: when
-                // `data.file.content` is empty, emit a `<system-reminder>`
+                // When `data.file.content` is empty, emit a `<system-reminder>`
                 // warning instead of empty text (only for `text`, not `pdf`).
                 let text = if content.is_empty() && kind == "text" {
                     let total_lines = file
@@ -789,8 +756,8 @@ impl Tool for ReadTool {
                 }]
             }
             "file_unchanged" => {
-                // TS `FileReadTool/prompt.ts::FILE_UNCHANGED_STUB`. Bare
-                // text — TS does NOT wrap in `<system-reminder>`.
+                // `FILE_UNCHANGED_STUB` — bare text, NOT wrapped in
+                // `<system-reminder>`.
                 vec![ToolResultContentPart::Text {
                     text: "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.".to_string(),
                     provider_options: None,
@@ -805,8 +772,7 @@ impl Tool for ReadTool {
     }
 }
 
-/// Render notebook cells as TS-shaped multi-block content. TS
-/// `notebook.ts::cellContentToToolResult` + `cellOutputToToolResult`:
+/// Render notebook cells as multi-block content.
 ///
 /// - Cell content: `<cell id="X">[<cell_type>Y</cell_type>][<language>Z</language>]source</cell id="X">`
 ///   (cell_type tag only when `!= 'code'`; language tag only when code
@@ -817,8 +783,7 @@ impl Tool for ReadTool {
 ///     that support it; degraded with marker by OpenAI Chat / Compat)
 ///
 /// Final pass folds adjacent Text parts into one (joined with `'\n'`)
-/// to mirror TS `notebook.ts:198-213` `allResults.reduce` — keeps the
-/// wire payload tight and matches the TS shape that providers expect.
+/// via `allResults.reduce` — keeps the wire payload tight.
 /// Image parts break the chain.
 fn render_notebook_cells(data: &Value, file: Option<&Value>) -> Vec<ToolResultContentPart> {
     let Some(cells) = file.and_then(|f| f.get("cells")).and_then(Value::as_array) else {
@@ -886,8 +851,7 @@ fn render_notebook_cells(data: &Value, file: Option<&Value>) -> Vec<ToolResultCo
 }
 
 /// Fold runs of adjacent [`ToolResultContentPart::Text`] entries into a
-/// single Text part joined by `'\n'`. Mirrors TS `notebook.ts:198-213`
-/// `allResults.reduce(...)` — image parts break the chain so the
+/// single Text part joined by `'\n'`. Image parts break the chain so the
 /// caller-provided ordering is preserved.
 fn merge_adjacent_text_parts(parts: Vec<ToolResultContentPart>) -> Vec<ToolResultContentPart> {
     let mut out: Vec<ToolResultContentPart> = Vec::with_capacity(parts.len());
@@ -910,17 +874,16 @@ fn merge_adjacent_text_parts(parts: Vec<ToolResultContentPart>) -> Vec<ToolResul
     out
 }
 
-/// Build the TS-shaped `text` discriminated-union variant for Read
-/// output. TS `FileReadTool.ts:258-269`:
+/// Build the `text` discriminated-union variant for Read output:
 ///
 /// ```js
 /// { type: 'text', file: { filePath, content, numLines, startLine, totalLines } }
 /// ```
 ///
-/// All Read code paths that previously returned a JSON `String` now
-/// route through this helper so the model sees a consistent envelope.
-/// The `numLines` field counts emitted lines (post-truncation); the
-/// `totalLines` field reflects the full file's line count.
+/// All Read code paths route through this helper so the model sees a
+/// consistent envelope. The `numLines` field counts emitted lines
+/// (post-truncation); the `totalLines` field reflects the full file's
+/// line count.
 fn text_output(
     file_path: &str,
     content: &str,
@@ -941,12 +904,7 @@ fn text_output(
 }
 
 /// Read a Jupyter notebook (.ipynb) and project each cell into the
-/// TS-shaped structured cell array.
-///
-/// TS: `utils/notebook.ts:163-183` `readNotebook` + `processCell` returns
-/// `NotebookCellSource[]`, which the discriminated-union output schema
-/// at `FileReadTool.ts:299-305` wraps as
-/// `{ type: 'notebook', file: { filePath, cells: NotebookCellSource[] } }`.
+/// structured cell array.
 ///
 /// Each cell in the array has:
 ///
@@ -962,8 +920,8 @@ fn text_output(
 /// ```
 ///
 /// The notebook's top-level `metadata.language_info.name` is used as
-/// the language for code cells (defaults to `"python"` per TS). For
-/// missing `cell_id` we synthesize `cell-N` to match TS at line 89.
+/// the language for code cells (defaults to `"python"`). For missing
+/// `cell_id` we synthesize `cell-N`.
 fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
     let content = std::fs::read_to_string(file_path).map_err(|e| ToolError::ExecutionFailed {
         message: format!("failed to read notebook: {e}"),
@@ -978,7 +936,7 @@ fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
             source: None,
         })?;
 
-    // TS `notebook.metadata.language_info?.name ?? 'python'`.
+    // `notebook.metadata.language_info?.name ?? 'python'`.
     let language = notebook
         .get("metadata")
         .and_then(|m| m.get("language_info"))
@@ -1017,8 +975,8 @@ fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
     })
 }
 
-/// Project one notebook cell into the TS `NotebookCellSource` shape.
-/// TS `utils/notebook.ts:83-117` `processCell`. Field semantics:
+/// Project one notebook cell into the `NotebookCellSource` shape.
+/// Field semantics:
 ///
 ///  - `cellType` carries the cell's type (`code` / `markdown` / `raw`).
 ///  - `source` is the joined source string (notebook source can be a
@@ -1029,10 +987,10 @@ fn read_notebook(file_path: &str) -> Result<ToolResult<Value>, ToolError> {
 ///  - `outputs` only appears for `code` cells with a non-empty
 ///    `outputs` array.
 ///
-/// TS truncates oversized outputs (`LARGE_OUTPUT_THRESHOLD = 10_000`),
-/// substituting a stream cell with a "use Bash + jq" hint. coco-rs
-/// applies the same threshold per-cell so transcripts don't blow up
-/// on notebooks with embedded base64 plots.
+/// Oversized outputs (`LARGE_OUTPUT_THRESHOLD = 10_000`) are truncated,
+/// substituting a stream cell with a "use Bash + jq" hint. Applied
+/// per-cell so transcripts don't blow up on notebooks with embedded
+/// base64 plots.
 fn project_notebook_cell(cell: &Value, index: usize, code_language: &str) -> Value {
     let cell_type = cell
         .get("cell_type")
@@ -1055,8 +1013,7 @@ fn project_notebook_cell(cell: &Value, index: usize, code_language: &str) -> Val
 
     if cell_type == "code" {
         // execution_count is `null` for unexecuted cells in nbformat;
-        // TS converts to `undefined` (which omits the field). We omit
-        // it when null/missing to match.
+        // omit the field when null/missing.
         if let Some(count) = cell
             .get("execution_count")
             .and_then(serde_json::Value::as_i64)
@@ -1079,9 +1036,8 @@ fn project_notebook_cell(cell: &Value, index: usize, code_language: &str) -> Val
                                 .map_or(0, str::len)
                     })
                     .sum();
-                // TS `LARGE_OUTPUT_THRESHOLD = 10000` substitutes a
-                // hint when the combined output payload exceeds the
-                // budget. Matches `notebook.ts:104-113`.
+                // `LARGE_OUTPUT_THRESHOLD = 10000` substitutes a hint when
+                // the combined output payload exceeds the budget.
                 const LARGE_OUTPUT_THRESHOLD: usize = 10_000;
                 if total_size > LARGE_OUTPUT_THRESHOLD {
                     obj.insert(
@@ -1104,12 +1060,11 @@ fn project_notebook_cell(cell: &Value, index: usize, code_language: &str) -> Val
     Value::Object(obj)
 }
 
-/// Project one cell `outputs[i]` entry into the TS
-/// `NotebookCellSourceOutput` shape. Returns `None` for unrecognized
-/// `output_type` values so noise from custom kernels doesn't pollute
-/// the cell array.
+/// Project one cell `outputs[i]` entry into the `NotebookCellSourceOutput`
+/// shape. Returns `None` for unrecognized `output_type` values so noise
+/// from custom kernels doesn't pollute the cell array.
 ///
-/// TS `notebook.ts:59-81` `processOutput`. Switches on `output_type`:
+/// Switches on `output_type`:
 ///  - `stream`           → `{ output_type, text }`
 ///  - `execute_result` /
 ///    `display_data`     → `{ output_type, text, image? }`
@@ -1162,8 +1117,8 @@ fn project_notebook_output(output: &Value) -> Option<Value> {
 }
 
 /// Extract a `{ image_data, media_type }` payload from a notebook
-/// output's `data` map. TS `notebook.ts:41-57` `extractImage`.
-/// Recognizes PNG and JPEG (the only formats nbformat guarantees).
+/// output's `data` map. Recognizes PNG and JPEG (the only formats
+/// nbformat guarantees).
 fn extract_notebook_image(data: &Value) -> Option<Value> {
     if let Some(png) = data.get("image/png").and_then(|v| v.as_str()) {
         return Some(serde_json::json!({
@@ -1182,9 +1137,8 @@ fn extract_notebook_image(data: &Value) -> Option<Value> {
 
 /// Join a notebook source field, which may be a string or an array of
 /// strings per the nbformat spec. Both shapes are valid in `.ipynb`
-/// files, depending on which Jupyter front-end wrote them. TS
-/// `notebook.ts:92` mirrors this: `Array.isArray(cell.source) ?
-/// cell.source.join('') : cell.source`.
+/// files, depending on which Jupyter front-end wrote them:
+/// `Array.isArray(cell.source) ? cell.source.join('') : cell.source`.
 fn join_cell_source(source: Option<&Value>) -> String {
     match source {
         Some(Value::String(s)) => s.clone(),
@@ -1200,7 +1154,7 @@ fn join_cell_source(source: Option<&Value>) -> String {
 /// Read an image file and return it as base64-encoded data with its
 /// media type, running it through the resize-and-re-encode pipeline.
 ///
-/// Pipeline (TS-aligned at the behavior level, not byte-for-byte):
+/// Pipeline (at the behavior level, not byte-for-byte):
 ///
 /// 1. Read raw bytes from disk via `spawn_blocking`.
 /// 2. Safety cap at [`MAX_IMAGE_DECODE_BYTES`] (32MB) — catches obvious
@@ -1214,13 +1168,12 @@ fn join_cell_source(source: Option<&Value>) -> String {
 ///      source format (with PNG fallback for formats we can't round-trip)
 /// 4. Base64-encode the post-processing bytes.
 ///
-/// TS `FileReadTool.ts:1097-1183` (`readImageWithTokenBudget`) has a
-/// genuinely two-stage pipeline: standard resize, then aggressive JPEG
-/// re-encoding if still over the token budget. Our single-stage resize
-/// is close enough for the common case — a typical 24MP photo shrinks
-/// from ~24MB to ~500KB at 2048×768, well under any reasonable token
-/// budget. The aggressive JPEG stage is a follow-up if we hit real
-/// budget issues.
+/// `readImageWithTokenBudget` has a genuinely two-stage pipeline: standard
+/// resize, then aggressive JPEG re-encoding if still over the token budget.
+/// Our single-stage resize is close enough for the common case — a typical
+/// 24MP photo shrinks from ~24MB to ~500KB at 2048×768, well under any
+/// reasonable token budget. The aggressive JPEG stage is a follow-up if we
+/// hit real budget issues.
 ///
 /// Result payload shape matches the format used by coco-rs elsewhere for
 /// multimodal content: a JSON object with `type: "image"`, `source.type:
@@ -1304,18 +1257,16 @@ async fn read_image_as_base64(
         );
     }
 
-    // TS `FileReadTool.ts:270-298` shapes the image discriminated-
-    // union variant as:
+    // Image discriminated-union variant shape:
     //   { type: 'image', file: { base64, type, originalSize,
     //                            dimensions?: { originalWidth,
     //                                           originalHeight,
     //                                           displayWidth,
     //                                           displayHeight } } }
     //
-    // R7-T20: dimensions are now plumbed from
-    // `coco_utils_image::EncodedImage` so the model can convert click
-    // coordinates between the resized display image and the source
-    // image's coordinate space.
+    // R7-T20: dimensions are plumbed from `coco_utils_image::EncodedImage`
+    // so the model can convert click coordinates between the resized display
+    // image and the source image's coordinate space.
     Ok(ToolResult {
         data: serde_json::json!({
             "type": "image",
@@ -1338,23 +1289,19 @@ async fn read_image_as_base64(
     })
 }
 
-/// Maximum number of pages to extract per read. TS
-/// `PDF_MAX_PAGES_PER_READ` (`constants/apiLimits.ts`) defaults to 20;
-/// we match that upper bound.
+/// Maximum number of pages to extract per read. Defaults to 20.
 const PDF_MAX_PAGES_PER_READ: usize = 20;
 
 /// Read a PDF file and return its text content.
 ///
 /// R6-T16: real PDF parsing via the `pdf-extract` crate (pure Rust,
-/// no C dependencies). TS `FileReadTool.ts:987` uses `readPDF()` which
-/// wraps `pdf-parse`; both produce a plain-text dump of the document
-/// with page breaks. We match the TS output shape by separating pages
-/// with a `\n--- Page N ---\n` header and honouring the optional
-/// `pages` range param (`"1-5"`, `"3"`, `"10-20"`).
+/// no C dependencies). Produces a plain-text dump of the document with
+/// page breaks, separating pages with a `\n--- Page N ---\n` header
+/// and honouring the optional `pages` range param
+/// (`"1-5"`, `"3"`, `"10-20"`).
 ///
 /// # Range syntax
 ///
-/// Matches TS `parsePDFPageRange()` in `utils/pdfUtils.ts`:
 /// - `"3"`     → page 3 only
 /// - `"1-5"`   → pages 1 through 5 inclusive (1-based)
 /// - missing   → all pages, capped at [`PDF_MAX_PAGES_PER_READ`]
@@ -1421,8 +1368,7 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
             display_data: None,
         });
     }
-    // Enforce the per-read page cap even when the user passes a bigger
-    // range — TS does the same at `PDF_MAX_PAGES_PER_READ`.
+    // Enforce the per-read page cap even when the user passes a bigger range.
     let effective_end = end_idx.min(start_idx + PDF_MAX_PAGES_PER_READ - 1);
 
     // Build the output. Page headers (`--- Page N ---`) give the model
@@ -1451,14 +1397,12 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
         ));
     }
 
-    // TS `FileReadTool.ts:306-323` shapes the `pdf` discriminated-
-    // union variant as `{ type: 'pdf', file: { filePath, base64,
-    // originalSize } }` — TS sends the raw PDF as base64 and lets
-    // Anthropic's API parse it natively. coco-rs currently extracts
-    // text via `pdf-extract` and surfaces it as `content` instead;
-    // the envelope still uses the `pdf` discriminator so model-side
-    // pattern-matching works. Sending the raw PDF base64 + Anthropic-
-    // native PDF block is a follow-up that depends on plumbing
+    // The `pdf` discriminated-union variant shape:
+    // `{ type: 'pdf', file: { filePath, base64, originalSize } }`.
+    // coco-rs currently extracts text via `pdf-extract` and surfaces it
+    // as `content` instead; the envelope still uses the `pdf` discriminator
+    // so model-side pattern-matching works. Sending the raw PDF base64 +
+    // Anthropic-native PDF block is a follow-up that depends on plumbing
     // multimodal PDF blocks through the message layer.
     Ok(ToolResult {
         data: serde_json::json!({
@@ -1479,9 +1423,7 @@ fn read_pdf(file_path: &str, pages: Option<&str>) -> Result<ToolResult<Value>, T
 /// Parse a `pages` spec like `"3"` or `"1-5"` into a 1-based
 /// `(start, end)` range. Returns `None` on parse error.
 ///
-/// TS: `utils/pdfUtils.ts::parsePDFPageRange`.
-/// Pure parse of the PDF `pages` spec (no I/O, no `total`), mirroring TS
-/// `parsePDFPageRange` (`utils/pdfUtils.ts`). Returns `(first, last)`
+/// Pure parse of the PDF `pages` spec (no I/O, no `total`). Returns `(first, last)`
 /// where `last` is `None` for the open-ended `"N-"` form, and `None` for
 /// a malformed spec. Used by `validate_input` for the up-front 7/8
 /// error-code checks.

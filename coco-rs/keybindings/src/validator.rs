@@ -1,15 +1,12 @@
 //! Keybinding list validator.
 //!
-//! TS source: `keybindings/validate.ts`. The TS validator emits typed
-//! warnings with severity (`error` / `warning`) across five categories:
-//! `parse_error`, `duplicate`, `reserved`, `invalid_context`,
-//! `invalid_action`. This Rust port mirrors that taxonomy. Reserved-
-//! shortcut detection lands with the `reserved` module (P5).
+//! Emits typed warnings with severity (`error` / `warning`) across five
+//! categories: `parse_error`, `duplicate`, `reserved`, `invalid_context`,
+//! `invalid_action`.
 //!
-//! The validator works against the JSON shape ([`KeybindingsConfig`])
-//! rather than parsed [`Keybinding`]s — that's the layer where users
-//! make mistakes (typos in chord strings, wrong-context bindings, etc.)
-//! and the layer where TS validation runs.
+//! Works against the JSON shape ([`KeybindingsConfig`]) rather than parsed
+//! [`Keybinding`]s — that's the layer where users make mistakes (typos in
+//! chord strings, wrong-context bindings, etc.).
 
 use std::collections::HashMap;
 
@@ -21,9 +18,7 @@ use crate::parser::KeyChord;
 use crate::reserved::lookup_reserved;
 
 /// A warning or error about a keybinding configuration issue.
-///
-/// Mirrors TS `KeybindingWarning` (`validate.ts:26-34`) — `severity`
-/// distinguishes "won't load" from "will load but might surprise".
+/// `severity` distinguishes "won't load" from "will load but might surprise".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationIssue {
     pub kind: ValidationKind,
@@ -37,8 +32,6 @@ pub struct ValidationIssue {
 }
 
 /// Severity of a [`ValidationIssue`].
-///
-/// Mirrors TS `severity: 'error' | 'warning'` (`validate.ts:30`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
     /// Hard failure: the binding (or the entire config) won't load.
@@ -49,8 +42,6 @@ pub enum Severity {
 }
 
 /// Category of a [`ValidationIssue`].
-///
-/// Mirrors TS `KeybindingWarningType` (`validate.ts:18-22`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationKind {
     /// Chord string failed to parse, JSON shape was wrong, etc.
@@ -80,7 +71,7 @@ pub fn validate(config: &KeybindingsConfig) -> Vec<ValidationIssue> {
 
     for block in &config.bindings {
         // Reject blocks targeting internal-only contexts when they
-        // come from user config (mirrors TS `validate.ts:156-166`).
+        // come from user config.
         if !block.context.is_user_rebindable() {
             issues.push(ValidationIssue {
                 kind: ValidationKind::InvalidContext,
@@ -122,15 +113,15 @@ pub fn validate(config: &KeybindingsConfig) -> Vec<ValidationIssue> {
                 }
             };
 
-            // Action-shape checks (mirrors TS `validate.ts:196-243`).
+            // Action-shape checks.
             if let Some(action) = action.as_ref()
                 && let Some(issue) = check_action_shape(action, chord_str, block.context, &chord)
             {
                 issues.push(issue);
             }
 
-            // Reserved-shortcut checks — mirrors `validate.ts:373-399`.
-            // Only flag user-bound chords; `null` unbinds are fine.
+            // Reserved-shortcut checks — only flag user-bound chords;
+            // `null` unbinds are fine.
             if action.is_some()
                 && let Some(reserved) = lookup_reserved(chord_str)
             {
@@ -145,8 +136,8 @@ pub fn validate(config: &KeybindingsConfig) -> Vec<ValidationIssue> {
             }
 
             // Duplicate detection — `(context, canonical_chord) →
-            // action`. Different action under the same key is the
-            // silent-override bug TS warns about.
+            // action`. Different action under the same key is a silent-
+            // override that should be flagged.
             let canonical = canonical_chord(&chord);
             let key = (block.context, canonical);
             if let Some(prior) = seen.get(&key)
@@ -175,12 +166,10 @@ pub fn validate(config: &KeybindingsConfig) -> Vec<ValidationIssue> {
     issues
 }
 
-/// Action-shape checks not covered by the type system itself.
-///
-/// Currently mirrors:
-/// * `validate.ts:209-218` — `command:foo` must be in `Chat`.
-/// * `validate.ts:220-243` — `voice:pushToTalk` bound to a bare letter
-///   triggers the warm-up-types-into-input footgun.
+/// Action-shape checks not covered by the type system itself:
+/// * `command:foo` must be in `Chat`.
+/// * `voice:pushToTalk` bound to a bare letter triggers the
+///   warm-up-types-into-input footgun.
 fn check_action_shape(
     action: &KeybindingAction,
     chord_str: &str,
@@ -207,8 +196,7 @@ fn check_action_shape(
         && chord.0.len() == 1
     {
         // Single-key, no modifiers, lowercase ASCII letter → warn.
-        // Mirrors TS regex `/^[a-z]$/` in `validate.ts:232`. Parser
-        // lowercases at parse time, so an uppercase user-entry has
+        // Parser lowercases at parse time, so an uppercase user-entry has
         // already been normalized.
         let bare_letter = !combo.ctrl
             && !combo.alt
@@ -266,7 +254,7 @@ fn canonical_chord(chord: &KeyChord) -> String {
         .join(",")
 }
 
-/// Format an issue for terminal display (mirrors `validate.ts:455-465`).
+/// Format an issue for terminal display.
 ///
 /// Returns multi-line output: the first line is the headline, the
 /// (optional) second line is the suggestion. Use [`format_issue_oneline`]

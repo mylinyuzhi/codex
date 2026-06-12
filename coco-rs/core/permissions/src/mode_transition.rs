@@ -1,9 +1,6 @@
 //! Permission mode transitions — cycling modes via Shift+Tab.
 //!
-//! TS: utils/permissions/getNextPermissionMode.ts
-//!
 //! Mode cycle: default → acceptEdits → plan → [bypass] → [auto] → default
-//! Internal users skip acceptEdits and plan.
 
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
@@ -41,8 +38,6 @@ pub fn resolve_predefined_mode(
 
 /// Compute a subagent's effective permission mode from the parent's mode
 /// and the agent-definition-level request.
-///
-/// TS parity: `runAgent.ts:412-434` `agentGetAppState` override logic.
 ///
 /// Rules:
 /// - If the parent is in a **trust mode** (`BypassPermissions`,
@@ -101,9 +96,6 @@ pub fn transition_context(
 /// `allow_rules`); the evaluator-facing strip is applied at
 /// `ToolContextFactory::build` keyed on live mode==Auto.
 ///
-/// TS parity: `permissionSetup.ts:627-637` — this is the app_state-
-/// shaped slice of `transitionPermissionMode`.
-///
 /// Returns `true` if the stash was modified (useful for logging /
 /// regression tests).
 pub fn apply_auto_transition_to_app_state(
@@ -122,9 +114,9 @@ pub fn apply_auto_transition_to_app_state(
 
 /// Apply a full permission-mode transition to shared app state.
 ///
-/// This is the app-state-shaped equivalent of TS
-/// `transitionPermissionMode()` plus the plan-mode entry timestamp used
-/// by the optional `ExitPlanMode` stale-plan advisory.
+/// This is the app-state-shaped equivalent of the permission mode transition
+/// function, plus the plan-mode entry timestamp used by the optional
+/// `ExitPlanMode` stale-plan advisory.
 ///
 /// Call this from external mode switchers (TUI Shift+Tab, SDK control,
 /// bridge control, `/plan`) and model-driven plan entry. It centralizes
@@ -143,11 +135,9 @@ pub fn apply_auto_transition_to_app_state(
 /// - Auto → non-Auto clears `stripped_dangerous_rules` via the existing
 ///   auto-boundary helper.
 ///
-/// **"Plan had Auto active" proxy.** TS `transitionPermissionMode` reads
-/// `isAutoModeActive()` as the authoritative signal because TS can
-/// deactivate Auto mid-plan (`transitionPlanAutoMode`), which leaves
-/// `prePlanMode`/`strippedDangerousRules` stale. coco-rs has no mid-plan
-/// Auto-deactivation path, so `pre_plan_mode == Some(Auto) ||
+/// **"Plan had Auto active" proxy.** coco-rs has no mid-plan
+/// Auto-deactivation path (no mid-plan Auto deactivation), so
+/// `pre_plan_mode == Some(Auto) ||
 /// stripped_dangerous_rules.is_some()` is a faithful proxy here — and it
 /// is the *same* proxy `ExitPlanModeTool::execute` uses, keeping the
 /// external and tool-driven exit paths consistent. If a
@@ -190,13 +180,11 @@ pub fn apply_permission_mode_transition_to_app_state(
         }
     }
 
-    // Auto entry: snapshot + strip dangerous allow rules into the stash. TS
-    // parity: transitionPermissionMode (permissionSetup.ts:627-632) calls
-    // stripDangerousPermissionsForAutoMode on Auto entry. The evaluator-facing
-    // strip happens at context-build time (ToolContextFactory::build keyed on
-    // live mode == Auto); this stash exists for restore provenance + the
-    // `## Exited Auto Mode` banner proxy. `is_ant_user=false` mirrors the
-    // non-ant external-user path.
+    // Auto entry: snapshot + strip dangerous allow rules into the stash.
+    // The evaluator-facing strip happens at context-build time
+    // (ToolContextFactory::build keyed on live mode == Auto); this stash
+    // exists for restore provenance + the `## Exited Auto Mode` banner proxy.
+    // `is_ant_user=false` is the external-user path.
     if to == PermissionMode::Auto
         && from != PermissionMode::Auto
         && guard.stripped_dangerous_rules.is_none()
@@ -235,7 +223,6 @@ fn current_epoch_ms() -> i64 {
 /// Handles dangerous rule stripping on auto-mode entry and restoration on exit.
 /// Also manages the `AutoModeState.active` flag.
 ///
-/// Mirrors TS `transitionPermissionMode()` in permissionSetup.ts:
 /// - Computes `from_uses_classifier` and `to_uses_classifier` as unified booleans
 /// - Entering classifier: activate auto + strip dangerous rules
 /// - Leaving classifier: deactivate auto + restore dangerous rules
@@ -258,7 +245,7 @@ pub fn transition_context_with_auto(
         context.pre_plan_mode = Some(from);
     }
 
-    // ── Classifier transition (TS: lines 621-637) ──
+    // ── Classifier transition ──
     // "Uses classifier" means: auto mode, OR plan mode with auto active.
     let from_uses_classifier =
         from == PermissionMode::Auto || (from == PermissionMode::Plan && auto_state.is_active());

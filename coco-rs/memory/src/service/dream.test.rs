@@ -44,7 +44,7 @@ async fn skips_on_session_gate() {
         std::sync::Arc::new(RecordingHandle::default()),
     );
     // No prior consolidation → time gate passes (no last mtime).
-    // Closure invoked only after time gate, mirrors TS lazy enumerate.
+    // Closure invoked only after time gate (lazy enumerate).
     let outcome = svc
         .maybe_consolidate(temp.path(), || vec!["s1".into(), "s2".into()], 0)
         .await;
@@ -80,10 +80,9 @@ async fn fires_with_dream_constraints() {
     let calls = handle.calls();
     assert_eq!(calls.len(), 1);
     let constraints = calls[0].constraints.as_ref().expect("constraints");
-    // TS `autoDream.ts:230` does NOT set `maxTurns` on the fork —
-    // the consolidation agent stops naturally when it has nothing
-    // left to merge. The previous `Some(20)` cap silently truncated
-    // long consolidations; we now mirror TS by leaving the cap off.
+    // Does NOT set `maxTurns` on the fork — the consolidation agent
+    // stops naturally when it has nothing left to merge. The previous
+    // `Some(20)` cap silently truncated long consolidations.
     assert_eq!(constraints.max_turns, None);
     assert_eq!(
         constraints.allowed_write_roots,
@@ -93,12 +92,11 @@ async fn fires_with_dream_constraints() {
 
 #[tokio::test]
 async fn second_call_within_time_window_skips_on_time_gate() {
-    // TS parity (`autoDream.ts:140`): time gate is checked **before**
-    // scan throttle and session enumeration. The first call stamps the
-    // lock mtime at "now"; the second call's `hours_since` is 0, which
-    // fails the time gate before scan throttle can fire. Pre-refactor
-    // this test asserted ScanThrottled because gates were checked in
-    // the wrong order.
+    // Time gate is checked **before** scan throttle and session
+    // enumeration. The first call stamps the lock mtime at "now"; the
+    // second call's `hours_since` is 0, which fails the time gate before
+    // scan throttle can fire. Pre-refactor this test asserted
+    // ScanThrottled because gates were checked in the wrong order.
     let temp = tempdir().unwrap();
     let handle = std::sync::Arc::new(RecordingHandle::default());
     let svc = DreamService::new(temp.path().into(), MemoryConfig::default(), handle.clone());

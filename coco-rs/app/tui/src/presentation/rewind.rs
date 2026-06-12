@@ -75,8 +75,7 @@ fn message_select(state: &RewindState, styles: UiStyles<'_>) -> (String, String,
     );
     // Reserve column budget for "> " marker (2 cols), " (relative_time)"
     // suffix, and ratatui modal chrome (border + side padding ≈ 6 cols).
-    // TS uses `truncate(messageText, columns - paddingRight, true)` with
-    // paddingRight=10 at `MessageSelector.tsx:374`.
+    // paddingRight=10 is reserved for the marker and time suffix.
     let display_budget = constants::REWIND_DISPLAY_WIDTH_BUDGET;
     let items: Vec<String> = state.messages[visible.clone()]
         .iter()

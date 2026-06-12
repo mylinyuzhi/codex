@@ -217,9 +217,8 @@ pub fn calculate_cost_usd(provider: Option<&str>, model_id: &str, usage: &TokenU
 
 /// Format cost as a human-readable string.
 ///
-/// Mirrors TS `cost-tracker.ts::formatCost`: costs above $0.50 render with 2
-/// decimals, otherwise 4 decimals. The `> 0.5` boundary is strict, so $0.50
-/// itself takes the 4-decimal branch.
+/// Costs above $0.50 render with 2 decimals, otherwise 4 decimals.
+/// The `> 0.5` boundary is strict, so $0.50 itself takes the 4-decimal branch.
 pub fn format_cost(cost_usd: f64) -> String {
     if cost_usd > 0.5 {
         format!("${cost_usd:.2}")

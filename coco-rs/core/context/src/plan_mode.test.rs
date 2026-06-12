@@ -180,9 +180,8 @@ fn test_recover_plan_from_exit_tool_input() {
 
 #[test]
 fn test_recover_plan_prefers_file_snapshot_over_newer_tool_input() {
-    // TS parity: copyPlanForResume() checks findFileSnapshotEntry()
-    // before recoverPlanFromMessages(), so the most recent plan
-    // snapshot globally wins over tool inputs.
+    // File snapshot check runs before message recovery, so the most recent
+    // plan snapshot globally wins over tool inputs.
     let dir = tempfile::tempdir().unwrap();
     let plans_dir = dir.path().join("plans");
     let sid = "recover-snapshot-priority";
@@ -297,7 +296,7 @@ fn test_copy_plan_for_fork() {
     clear_plan_slug(dst_sid);
 }
 
-// ── Reminder rendering (TS parity) ──
+// ── Reminder rendering ──
 
 fn att(rt: ReminderType, is_sub: bool, path: &str, exists: bool) -> PlanModeAttachment {
     PlanModeAttachment {
@@ -532,9 +531,8 @@ fn verify_not_edited_when_entry_later_than_mtime() {
 
 #[test]
 fn verify_returns_none_when_no_entry_ms() {
-    // TS-style caller-context: without an entry timestamp there's no
-    // baseline, so the function returns `None` (the caller treats
-    // "skipped" as absence of an outcome).
+    // Without an entry timestamp there's no baseline, so the function returns
+    // `None` (the caller treats "skipped" as absence of an outcome).
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("plan.md");
     std::fs::write(&path, "content").unwrap();

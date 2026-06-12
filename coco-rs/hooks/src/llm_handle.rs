@@ -6,11 +6,6 @@
 //! / `coco-query`) implement [`HookLlmHandle`] over model runtimes
 //! and install it on [`crate::orchestration::OrchestrationContext`].
 //!
-//! TS source:
-//! - `utils/hooks/execPromptHook.ts:21-211` — single-turn `queryModelWithoutStreaming`
-//! - `utils/hooks/execAgentHook.ts:36-339` — multi-turn `query()` with
-//!   `MAX_AGENT_TURNS=50` and `StructuredOutputTool` enforcement.
-//!
 //! The trait deliberately does not return `Vec<Message>` or other
 //! provider-shaped data — hooks only care about the `{ok, reason}`
 //! structured output produced by both code paths.
@@ -34,8 +29,7 @@ use std::time::Duration;
 
 /// Outcome of evaluating a `Prompt` or `Agent` hook through an LLM.
 ///
-/// Maps onto the `{ok: bool, reason?: string}` schema in
-/// `hookHelpers.ts:hookResponseSchema`.
+/// Maps onto the `{ok: bool, reason?: string}` structured output schema.
 #[derive(Debug, Clone)]
 pub enum HookEvaluationResult {
     /// `ok: true` — condition met. Treated as `HookOutcome::Success`.
@@ -45,8 +39,7 @@ pub enum HookEvaluationResult {
     /// model.
     Blocking { reason: String },
     /// Hit `MAX_AGENT_TURNS` (agent only) or finished without
-    /// `StructuredOutputTool`. TS treats this as `'cancelled'` —
-    /// silent, no UI message.
+    /// `StructuredOutputTool`. Treated as cancelled — silent, no UI message.
     Cancelled,
     /// LLM call failed, schema validation failed, JSON parse failed,
     /// or the timeout fired. Becomes a `hook_non_blocking_error`
@@ -60,7 +53,7 @@ pub enum HookEvaluationResult {
 /// [`crate::orchestration::OrchestrationContext::llm_handle`].
 #[async_trait::async_trait]
 pub trait HookLlmHandle: Send + Sync + std::fmt::Debug {
-    /// One-shot model evaluation matching TS `execPromptHook`.
+    /// One-shot model evaluation (Prompt hook).
     ///
     /// `prompt`: the hook's prompt text with `$ARGUMENTS` already
     /// substituted by the caller.
@@ -75,11 +68,10 @@ pub trait HookLlmHandle: Send + Sync + std::fmt::Debug {
         timeout: Duration,
     ) -> HookEvaluationResult;
 
-    /// Multi-turn agent evaluation matching TS `execAgentHook`. The
-    /// implementation is expected to register a session-level
-    /// `StructuredOutputTool` enforcement hook so the agent must call
-    /// the tool exactly once before returning. `MAX_AGENT_TURNS=50`
-    /// is the TS default; implementations may relax that bound.
+    /// Multi-turn agent evaluation (Agent hook). The implementation
+    /// is expected to register a session-level `StructuredOutputTool`
+    /// enforcement hook so the agent must call the tool exactly once
+    /// before returning. Implementations may bound the turn count.
     async fn evaluate_agent(
         &self,
         prompt: &str,

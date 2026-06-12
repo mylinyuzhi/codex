@@ -26,11 +26,11 @@ fn test_basic_safe_commands() {
     }
 }
 
-// ── Commands TS deliberately excludes from read-only (P6/P7/P11) ──
+// ── Commands deliberately excluded from read-only ──
 
 #[test]
 fn test_env_printenv_no_longer_read_only() {
-    // TS removed env/printenv: env exposes secrets and `env FOO=1 sh -c` execs.
+    // env/printenv are excluded: env exposes secrets and `env FOO=1 sh -c` execs.
     for cmd in &["env", "env FOO=1 sh -c id", "printenv", "printenv HOME"] {
         assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
     }
@@ -38,7 +38,7 @@ fn test_env_printenv_no_longer_read_only() {
 
 #[test]
 fn test_pagers_and_top_not_read_only() {
-    // Pagers (`!cmd`) and top (`!`/shell-escape) are absent from TS read-only.
+    // Pagers (`!cmd`) and top (`!`/shell-escape) are absent from the read-only allowlist.
     for cmd in &["less file", "more file", "top", "top -b -n1"] {
         assert!(!is_read_only_command(cmd), "expected NOT safe: {cmd}");
     }
@@ -201,8 +201,7 @@ fn test_find_safe() {
     assert!(is_read_only_command("find /tmp -type f"));
     // Quoted glob is literal — safe (no runtime expansion).
     assert!(is_read_only_command("find . -name '*.rs'"));
-    // Unquoted glob expands at runtime (could yield a dangerous flag) — TS
-    // `containsUnquotedExpansion` rejects it, so it must NOT be read-only.
+    // Unquoted glob expands at runtime (could yield a dangerous flag) — must NOT be read-only.
     assert!(!is_read_only_command("find . -name *.rs"));
 }
 
@@ -282,8 +281,7 @@ fn test_curl_unsafe() {
 #[test]
 fn test_cargo_not_read_only() {
     // cargo runs build.rs + tests = arbitrary code, so it is NOT auto-approvable
-    // read-only. Mirrors TS (no cargo in the allowlist) and the cocode-rs
-    // is_safe_command reference (`!is_known_safe_command(["cargo","check"])`).
+    // read-only (cargo is not in the allowlist).
     assert!(!is_read_only_command("cargo check"));
     assert!(!is_read_only_command("cargo test"));
     assert!(!is_read_only_command("cargo clippy"));
@@ -350,15 +348,14 @@ fn test_toolchains_not_read_only() {
     assert!(is_read_only_command("python --version"));
     assert!(is_read_only_command("node -v"));
     // Trailing args past the version probe must NOT auto-approve: node runs
-    // `--run` before `-v`, so this executes a package script. TS anchors `^node -v$`.
+    // `--run` before `-v`, so this executes a package script.
     assert!(!is_read_only_command("node -v --run build"));
     assert!(!is_read_only_command("python --version; rm -rf /"));
 }
 
 #[test]
 fn test_globs_and_grouping_not_read_only() {
-    // Unquoted globs can expand to a dangerous flag at runtime (TS
-    // containsUnquotedExpansion rejects `*?[]`).
+    // Unquoted globs can expand to a dangerous flag at runtime (`*?[]` rejected).
     assert!(!is_read_only_command("find . -de?ete"));
     assert!(!is_read_only_command("ls *.rs"));
     assert!(!is_read_only_command("cat fo[o]"));
@@ -372,8 +369,8 @@ fn test_globs_and_grouping_not_read_only() {
 
 #[test]
 fn test_backslash_escape_does_not_falsely_reject() {
-    // A backslash-escaped `$` is literal (no expansion) — TS containsUnquotedExpansion
-    // tracks escapes, so this must stay read-only rather than over-prompt.
+    // A backslash-escaped `$` is literal (no expansion) — must stay read-only
+    // rather than over-prompt.
     assert!(is_read_only_command("grep \\$HOME file"));
     // But `\` inside single quotes is literal, so the `$` still expands.
     assert!(!is_read_only_command("grep '\\' $HOME"));

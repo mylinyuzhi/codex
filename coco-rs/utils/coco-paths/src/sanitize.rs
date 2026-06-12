@@ -1,13 +1,12 @@
-//! Path-segment sanitization helpers — TS-exact parity.
+//! Path-segment sanitization helpers.
 //!
-//! TS source:
-//! - `utils/sessionStoragePortable.ts:311-319` `sanitizePath` — the
-//!   general-purpose sanitizer used for project paths, memory base, and
-//!   any other arbitrary string used as a directory name.
-//! - `tools/AgentTool/agentMemory.ts` `sanitizeAgentTypeForPath` — only
-//!   the `:` separator (used by plugin-namespaced agent ids like
-//!   `my-plugin:my-agent`) is replaced; the rest of the agent type is
-//!   already constrained upstream and passes through untouched.
+//! Two sanitizers:
+//! - `sanitize_path` — general-purpose sanitizer used for project paths,
+//!   memory base, and any other arbitrary string used as a directory name.
+//! - `sanitize_agent_type_for_path` — only the `:` separator (used by
+//!   plugin-namespaced agent ids like `my-plugin:my-agent`) is replaced;
+//!   the rest of the agent type is already constrained upstream and passes
+//!   through untouched.
 
 use crate::djb2::simple_hash;
 

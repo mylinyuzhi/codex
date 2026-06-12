@@ -134,7 +134,7 @@ async fn body_matches_ts_string_exactly() {
         .unwrap()
         .unwrap();
     let text = r.content().unwrap();
-    // The TS literal starts with this phrase; assert a few distinctive markers.
+    // Assert a few distinctive markers.
     assert!(text.contains("The TodoWrite tool hasn't been used recently."));
     assert!(text.contains("NEVER mention this reminder to the user"));
 }
@@ -156,7 +156,7 @@ async fn empty_todos_omits_bracket_list() {
 }
 
 #[tokio::test]
-async fn non_empty_todos_append_bracket_list_with_ts_format() {
+async fn non_empty_todos_append_bracket_list() {
     let c = cfg();
     let todos = vec![
         todo("Finish auth", "in_progress"),
@@ -174,7 +174,7 @@ async fn non_empty_todos_append_bracket_list_with_ts_format() {
         .unwrap()
         .unwrap();
     let text = r.content().unwrap();
-    // TS format: "[1. [in_progress] Finish auth\n2. [pending] Write tests]"
+    // Format: "[1. [in_progress] Finish auth\n2. [pending] Write tests]"
     assert!(text.contains("[1. [in_progress] Finish auth"));
     assert!(text.contains("2. [pending] Write tests]"));
     assert!(text.ends_with(']'));
@@ -195,11 +195,11 @@ async fn uses_todo_reminder_throttle() {
     assert_eq!(t.min_turns_between, 10);
 }
 
-// ── Trailing-newline byte parity (TS messages.ts:3663-3671) ──
+// ── Trailing-newline ──
 
 #[test]
 fn empty_body_has_trailing_newline() {
-    // TS base body always ends with `\n` even when the list is empty.
+    // Base body always ends with `\n` even when the list is empty.
     assert_eq!(
         render_todo_reminder_body(&[]),
         format!("{TODO_REMINDER_BODY}\n")

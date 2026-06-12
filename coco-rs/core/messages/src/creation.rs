@@ -28,8 +28,7 @@ pub fn create_user_message(text: &str) -> Message {
 ///
 /// Used by the TUI submit path so the UUID minted at user-input time is the
 /// same one the engine, file-history snapshots, JSONL transcript, and rewind
-/// picker see. TS REPL does the equivalent via `createUserMessage` on the
-/// React side before passing into QueryEngine.
+/// picker see.
 pub fn create_user_message_with_uuid(uuid: Uuid, text: &str) -> Message {
     Message::User(UserMessage {
         message: LlmMessage::user_text(text),
@@ -185,8 +184,7 @@ pub fn create_error_tool_result(
 /// differs (`Text` / `ErrorText` vs `Content`).
 ///
 /// `is_error` rides on the outer `ToolResultPart.is_error` flag (the
-/// `Content` enum variant has no explicit error form, matching TS
-/// `mapToolResultToToolResultBlockParam` shape).
+/// `Content` enum variant has no explicit error form).
 pub fn create_tool_result_message_with_parts(
     tool_call_id: &str,
     tool_name: &str,
@@ -241,22 +239,17 @@ pub fn create_progress_message(tool_use_id: &str, data: serde_json::Value) -> Me
 /// Literal text content for a Ctrl+C cancellation marker that lives in
 /// the message history.
 ///
-/// TS: `utils/messages.ts:207` — `INTERRUPT_MESSAGE = '[Request interrupted by user]'`.
-/// Rendered specially by `UserTextMessage.tsx:83` as the dim
-/// "Interrupted · What should Claude do instead?" row.
+/// Rendered specially as the dim "Interrupted · What should Claude do instead?" row.
 pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
 
 /// Variant of [`INTERRUPT_MESSAGE`] used when the cancel happened while a
 /// tool was running. Carries slightly different model-facing context so
 /// the model knows the prior turn's tool calls were interrupted, not
 /// "the user typed a question and then cancelled".
-///
-/// TS: `utils/messages.ts:208`.
 pub const INTERRUPT_MESSAGE_FOR_TOOL_USE: &str = "[Request interrupted by user for tool use]";
 
 /// Tool-result content for a tool whose turn was already aborted *before*
-/// execution started. TS `utils/messages.ts:210` — yielded by
-/// `createToolResultStopMessage` on the pre-execute abort path (with
+/// execution started. Yielded on the pre-execute abort path (with
 /// `is_error: true`), distinct from the mid-execution interrupt messages.
 pub const CANCEL_MESSAGE: &str = "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed.";
 
@@ -278,8 +271,6 @@ pub fn create_user_interruption_system_message(for_tool_use: bool) -> Message {
 /// `INTERRUPT_MESSAGE*` text). Retained for backward read-compat with
 /// older JSONL transcripts; new engine writes use
 /// [`create_user_interruption_system_message`].
-///
-/// TS parity: `createUserInterruptionMessage` in `utils/messages.ts:545`.
 pub fn create_user_interruption_message(for_tool_use: bool) -> Message {
     let text = if for_tool_use {
         INTERRUPT_MESSAGE_FOR_TOOL_USE
@@ -311,11 +302,11 @@ pub fn create_permission_denied_message(tool_name: &str, reason: &str) -> Messag
 
 /// Create an assistant error message with an attached API error.
 ///
-/// `error_type` is the TS-parity short code (`max_output_tokens`,
+/// `error_type` is the short error code (`max_output_tokens`,
 /// `prompt_too_long`, `content_filter`, `blocking_limit`, …) used by
 /// hook matchers and the C3 death-spiral guard. Pass `None` only when
 /// no canonical code applies — the StopFailure hook will then default
-/// to `unknown` per TS `executeStopFailureHooks` parity.
+/// to `unknown`.
 pub fn create_assistant_error_message(
     error: &str,
     request_id: Option<&str>,

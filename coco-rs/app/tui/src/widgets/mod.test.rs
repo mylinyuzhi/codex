@@ -553,7 +553,7 @@ fn test_exit_prompt_replaces_status_bar() {
 
     let output = render_to_string(&state, 80, 24);
     // Status bar lives in the row right under the input — content-flow
-    // layout matching TS/codex-rs, not at the terminal's last row.
+    // layout, not at the terminal's last row.
     let status_line = output
         .lines()
         .find(|line| line.contains("Press Ctrl-C again to exit"))
@@ -791,10 +791,9 @@ fn test_snapshot_autocomplete_popup() {
 
 #[test]
 fn test_snapshot_command_palette_inline_popup() {
-    // Spec: TS `PromptInputFooterSuggestions` — Ctrl+P opens the command
-    // palette as a borderless list floated above the input. Typed chars
-    // route to `cp.filter` and the input bar mirrors `/<filter>` so the
-    // user can see what they typed.
+    // Spec: Ctrl+P opens the command palette as a borderless list floated
+    // above the input. Typed chars route to `cp.filter` and the input bar
+    // mirrors `/<filter>` so the user can see what they typed.
     let mut state = AppState::new();
     state.session.model = "opus-4".to_string();
     state.ui.input.textarea.set_text("/c");

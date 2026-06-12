@@ -414,11 +414,11 @@ fn title_gen_exhaustive_truth_table() {
     }
 }
 
-// ── /plan dispatch parity (G5.2) ──
+// ── /plan dispatch ──
 //
 // `dispatch_plan` itself talks to a `SessionRuntime` and is exercised
-// by integration tests. The TS-parity rule "fire a query if and only
-// if `args` is non-empty AND not 'open'" is encoded in
+// by integration tests. The rule "fire a query if and only if `args`
+// is non-empty AND not 'open'" is encoded in
 // `plan_command_query_after_flip` as a pure helper so we cover that
 // regression-prone branch without spinning up the runtime.
 
@@ -442,16 +442,16 @@ fn plan_query_after_flip_trims_whitespace() {
 
 #[test]
 fn plan_query_after_flip_skips_bare_plan() {
-    // TS `commands/plan/plan.tsx:84-89`: bare `/plan` (empty args)
-    // calls `onDone('Enabled plan mode')` WITHOUT `shouldQuery`.
+    // Bare `/plan` (empty args) calls `onDone('Enabled plan mode')`
+    // WITHOUT `shouldQuery`.
     assert_eq!(plan_command_query_after_flip(""), None);
     assert_eq!(plan_command_query_after_flip("   "), None);
 }
 
 #[test]
 fn plan_query_after_flip_skips_open_subcommand() {
-    // TS `commands/plan/plan.tsx:84`: `description !== 'open'` filter
-    // — `/plan open` opens an editor, never fires a query.
+    // `description !== 'open'` filter — `/plan open` opens an editor,
+    // never fires a query.
     assert_eq!(plan_command_query_after_flip("open"), None);
     assert_eq!(plan_command_query_after_flip("  open  "), None);
 }

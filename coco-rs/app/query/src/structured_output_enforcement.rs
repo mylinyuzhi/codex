@@ -1,6 +1,6 @@
 use coco_hooks::FunctionHookPredicate;
 
-/// TS-parity Stop enforcement predicate for StructuredOutput.
+/// Stop enforcement predicate for StructuredOutput.
 ///
 /// Returns true once history contains a schema-valid StructuredOutput
 /// silent attachment. The tool only emits that attachment after runtime

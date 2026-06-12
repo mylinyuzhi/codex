@@ -1,6 +1,6 @@
 //! Token usage types for model responses.
 //!
-//! Matches the TS v4 `LanguageModelV4Usage` type with nested
+//! Matches the v4 `LanguageModelV4Usage` type with nested
 //! `inputTokens` and `outputTokens` structures.
 
 use serde::Deserialize;
@@ -10,8 +10,7 @@ use crate::json_value::JSONObject;
 
 /// Token usage information for a model response.
 ///
-/// Matches the TypeScript `LanguageModelV4Usage` type with nested
-/// `inputTokens` and `outputTokens` structures.
+/// Token usage information for a model response.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
