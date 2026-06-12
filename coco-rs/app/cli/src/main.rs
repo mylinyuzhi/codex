@@ -1,3 +1,21 @@
+// Use jemalloc as the global allocator in release/distribution builds, tuned
+// for a long-running TUI / server process. jemalloc's stock defaults retain
+// freed pages and over-provision per-thread arenas, which inflates idle RSS.
+//
+// The tuning (dirty/muzzy page decay + arena cap) is baked into the jemalloc
+// build via `JEMALLOC_SYS_WITH_MALLOC_CONF` in .cargo/config.toml. That is
+// platform-independent: an exported `malloc_conf` symbol is only honored on
+// unprefixed (Linux) jemalloc builds — on macOS the `_rjem_` prefix stays and
+// such a symbol is silently ignored — whereas the build-time conf is compiled
+// into the library on every target.
+//
+// Opt-in via the `jemalloc` feature; never active on Windows (jemalloc-sys has
+// no MSVC build). Off for ordinary `cargo build`/`cargo run` so dev builds stay
+// fast and platform-portable.
+#[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::sync::Arc;
 
 use anyhow::Result;

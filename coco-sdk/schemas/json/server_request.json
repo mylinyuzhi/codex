@@ -123,6 +123,13 @@
             "null"
           ]
         },
+        "cwd": {
+          "description": "Tool execution cwd. Relative paths in `input` resolve against this so\nan SDK client can derive correctly-scoped grants (mirrors the TUI path).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "decision_reason": {
           "type": [
             "string",

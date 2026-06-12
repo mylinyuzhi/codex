@@ -16,6 +16,13 @@
             "$ref": "#/$defs/PermissionAskChoice"
           }
         },
+        "cwd": {
+          "description": "Tool execution cwd used to resolve relative paths in\n`original_input` for scoped permission grants.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },

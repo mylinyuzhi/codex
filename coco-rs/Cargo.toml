@@ -119,7 +119,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 
@@ -267,6 +267,11 @@ llm_json = "1.0.3"
 keyring = "3"
 lazy_static = "1"
 libc = "0.2"
+# Optional global allocator for release builds — tuned for a long-running TUI /
+# server process. Unprefixed so the `malloc_conf` startup symbol applies. Only
+# linked when the `jemalloc` feature is enabled on the `coco` binary (not on
+# Windows, where jemalloc-sys does not build). See app/cli/src/main.rs.
+tikv-jemallocator = { version = "0.6", features = ["unprefixed_malloc_on_supported_platforms"] }
 # `event` feature gates `rustix::event::poll`, used for the bounded OSC 11
 # terminal-background read (`auto` theme). Pinned to the version crossterm
 # already resolves so no extra crate version enters the tree.
@@ -496,6 +501,105 @@ split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
 opt-level = 1
+
+# Keep the hot, rarely-recompiled third-party runtime crates optimized even in
+# dev/test builds. Syntax highlighting (syntect + its regex engines), image
+# decode, and font shaping are 10-40x slower at low opt levels, which reads as
+# TUI input lag while scrolling highlighted / image-heavy transcripts. These are
+# stable deps that almost never rebuild, so opt-level=3 is a one-time cost reused
+# across every iterative rebuild of our own crates — it does NOT slow those down.
+[profile.dev.package.syntect]
+opt-level = 3
+[profile.dev.package.onig]
+opt-level = 3
+[profile.dev.package.fancy-regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.two-face]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.fontdb]
+opt-level = 3
+[profile.dev.package.ttf-parser]
+opt-level = 3
+
+# Search / text / decode compute primitives: SIMD scanning (memchr backs
+# serde_json, regex, bstr, ignore, nucleo), the regex stack, the fuzzy
+# file-search matcher, unicode layout tables, and the pure-Rust DEFLATE backend.
+# All hot at runtime, all stable third-party leaves.
+[profile.dev.package.memchr]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.nucleo]
+opt-level = 3
+[profile.dev.package.nucleo-matcher]
+opt-level = 3
+[profile.dev.package.unicode-width]
+opt-level = 3
+[profile.dev.package.unicode-segmentation]
+opt-level = 3
+[profile.dev.package.unicode-linebreak]
+opt-level = 3
+[profile.dev.package.bstr]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+# Same set for the test profile (its deps otherwise default to opt-level=0,
+# making highlight/render-exercising tests sluggish).
+[profile.test.package.syntect]
+opt-level = 3
+[profile.test.package.onig]
+opt-level = 3
+[profile.test.package.fancy-regex]
+opt-level = 3
+[profile.test.package.regex-automata]
+opt-level = 3
+[profile.test.package.two-face]
+opt-level = 3
+[profile.test.package.image]
+opt-level = 3
+[profile.test.package.png]
+opt-level = 3
+[profile.test.package.zune-jpeg]
+opt-level = 3
+[profile.test.package.fontdb]
+opt-level = 3
+[profile.test.package.ttf-parser]
+opt-level = 3
+[profile.test.package.memchr]
+opt-level = 3
+[profile.test.package.aho-corasick]
+opt-level = 3
+[profile.test.package.regex]
+opt-level = 3
+[profile.test.package.nucleo]
+opt-level = 3
+[profile.test.package.nucleo-matcher]
+opt-level = 3
+[profile.test.package.unicode-width]
+opt-level = 3
+[profile.test.package.unicode-segmentation]
+opt-level = 3
+[profile.test.package.unicode-linebreak]
+opt-level = 3
+[profile.test.package.bstr]
+opt-level = 3
+[profile.test.package.flate2]
+opt-level = 3
+[profile.test.package.miniz_oxide]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

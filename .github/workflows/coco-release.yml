@@ -100,15 +100,20 @@ jobs:
           name: openrouter-models
           path: coco-rs/common/model-card/data
 
+      # `--features jemalloc` ships the tuned long-running-process allocator
+      # (see app/cli/src/main.rs). NOTE: the musl path builds jemalloc-sys (C)
+      # under cargo-zigbuild cross-compile — confirm the first release run is
+      # green; if zig mis-probes jemalloc's configure, drop the flag here and
+      # keep it only on the native target.
       - name: Build (musl)
         if: contains(matrix.target, 'linux-musl')
         shell: bash
-        run: cargo zigbuild --release --target ${{ matrix.target }} -p coco-cli --bin coco
+        run: cargo zigbuild --release --target ${{ matrix.target }} -p coco-cli --bin coco --features jemalloc
 
       - name: Build (native)
         if: ${{ !contains(matrix.target, 'linux-musl') }}
         shell: bash
-        run: cargo build --release --target ${{ matrix.target }} -p coco-cli --bin coco
+        run: cargo build --release --target ${{ matrix.target }} -p coco-cli --bin coco --features jemalloc
 
       - name: Install zstd (macOS)
         if: runner.os == 'macOS'

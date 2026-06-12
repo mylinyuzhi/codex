@@ -605,6 +605,13 @@
             "null"
           ]
         },
+        "cwd": {
+          "description": "Tool execution cwd. Relative paths in `input` resolve against this so\nan SDK client can derive correctly-scoped grants (mirrors the TUI path).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "decision_reason": {
           "type": [
             "string",
@@ -2593,6 +2600,36 @@
       "required": [
         "message",
         "code"
+      ],
+      "type": "object"
+    },
+    "ExitPlanModeResult": {
+      "description": "UI-only data needed to render an ExitPlanMode result without reading private\ntool input/output wire fields.",
+      "properties": {
+        "awaitingLeaderApproval": {
+          "type": "boolean"
+        },
+        "filePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "isAgent": {
+          "type": "boolean"
+        },
+        "plan": {
+          "type": "string"
+        },
+        "planWasEdited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "plan",
+        "awaitingLeaderApproval",
+        "isAgent",
+        "planWasEdited"
       ],
       "type": "object"
     },
@@ -11377,6 +11414,23 @@
             "data"
           ],
           "type": "object"
+        },
+        {
+          "description": "Structured UI payload for ExitPlanMode result rendering. The model still\nsees the prose rendered from the tool result data.",
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/ExitPlanModeResult"
+            },
+            "kind": {
+              "const": "exit_plan_mode_result",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -11961,6 +12015,13 @@
               },
               "type": [
                 "array",
+                "null"
+              ]
+            },
+            "cwd": {
+              "description": "Tool execution cwd used to resolve relative paths in\n`original_input` for scoped permission grants.",
+              "type": [
+                "string",
                 "null"
               ]
             },

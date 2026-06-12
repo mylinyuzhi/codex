@@ -46,9 +46,24 @@ pub mod tui_permission_bridge;
 use clap::Parser;
 use clap::Subcommand;
 
+/// Multi-line `--version` text: semver + commit hash/date/subject + build time.
+/// The `COCO_BUILD_*` components are emitted by build.rs; `concat!` over `env!`
+/// keeps it a compile-time `&'static str` (clap needs a const version).
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\ncommit: ",
+    env!("COCO_BUILD_GIT_HASH"),
+    " (",
+    env!("COCO_BUILD_GIT_DATE"),
+    ") ",
+    env!("COCO_BUILD_GIT_SUBJECT"),
+    "\nbuilt:  ",
+    env!("COCO_BUILD_TIME"),
+);
+
 /// The coco CLI.
 #[derive(Clone, Parser)]
-#[command(name = "coco", about = "AI coding agent", version)]
+#[command(name = "coco", about = "AI coding agent", version = LONG_VERSION)]
 pub struct Cli {
     /// Prompt to send (non-interactive mode).
     #[arg(short, long)]

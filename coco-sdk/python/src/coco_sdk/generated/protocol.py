@@ -1551,8 +1551,13 @@ class ToolDisplayDataAskUserQuestionResult(BaseModel):
     kind: Literal['ask_user_question_result'] = Field(default='ask_user_question_result', alias='kind')
     data: AskUserQuestionResult
 
+class ToolDisplayDataExitPlanModeResult(BaseModel):
+    model_config = {"populate_by_name": True}
+    kind: Literal['exit_plan_mode_result'] = Field(default='exit_plan_mode_result', alias='kind')
+    data: ExitPlanModeResult
+
 ToolDisplayData = Annotated[
-    Union[ToolDisplayDataApplyPatchPreview, ToolDisplayDataAskUserQuestionResult],
+    Union[ToolDisplayDataApplyPatchPreview, ToolDisplayDataAskUserQuestionResult, ToolDisplayDataExitPlanModeResult],
     Field(discriminator='kind'),
 ]
 
@@ -1663,6 +1668,7 @@ class TuiOnlyEventApprovalRequired(BaseModel):
     request_id: str
     tool_name: str
     choices: list[PermissionAskChoice] | None = None
+    cwd: str | None = None
     original_input: dict[str, Any] | None = None
     permission_suggestions: list[PermissionUpdate] | None = None
     show_always_allow: bool = False
@@ -2475,6 +2481,7 @@ class AskForApprovalParams(BaseModel):
     tool_use_id: str
     agent_id: str | None = None
     blocked_path: str | None = None
+    cwd: str | None = None
     decision_reason: str | None = None
     description: str | None = None
     display_name: str | None = None
@@ -3193,6 +3200,13 @@ class ElicitationResultInput(BaseModel):
 class ErrorPayload(BaseModel):
     code: ErrorCode
     message: str
+
+class ExitPlanModeResult(BaseModel):
+    awaiting_leader_approval: bool = Field(alias='awaitingLeaderApproval')
+    is_agent: bool = Field(alias='isAgent')
+    plan: str
+    plan_was_edited: bool = Field(alias='planWasEdited')
+    file_path: str | None = Field(default=None, alias='filePath')
 
 class FailedOutcome(BaseModel):
     error: ErrorPayload
