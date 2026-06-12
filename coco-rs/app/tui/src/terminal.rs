@@ -750,16 +750,17 @@ where
     B: SurfaceBackend,
 {
     fn drop(&mut self) {
-        // Teardown order is load-bearing. `LeaveAlternateScreen` is `CSI ?1049l`,
-        // which performs a DECRC cursor restore *even when no alt buffer was ever
-        // entered* — coco keeps the transcript in the main buffer, so the last
-        // DECSC saved by a history insert (`\x1b7`/`\x1b8`) sits up in finalized
-        // history. Placing the shell prompt before that restore lets the DECRC
-        // yank the cursor back into history, so whatever prints next (the resume
-        // hint) overprints transcript text. So: leave the alt-screen and restore
-        // terminal modes FIRST, then place the prompt as the final cursor word.
-        // TS parity: `gracefulShutdown.ts` exits the alt screen before
-        // `printResumeHint`.
+        // Teardown leaves a modal alt-screen ONLY if one is active, then
+        // disables the TUI input modes, then parks the shell prompt. The
+        // main session never enters the alt screen (native scrollback lives
+        // in the primary buffer), so `leave_terminal_modes` deliberately does
+        // NOT emit `LeaveAlternateScreen` (`CSI ?1049l`): an unpaired one
+        // performs a DECRC onto the stale `\x1b7` save the last history
+        // insert left up in finalized history, yanking the cursor into the
+        // transcript so the resume hint printed next overprints it. codex's
+        // `restore_common` omits the alt-screen leave for the same reason;
+        // the modal case is handled by `leave_modal_alt_screen` below, which
+        // only fires when a modal alt-screen is actually active.
         //
         // The mode-restore *escapes* go through the surface backend
         // (`leave_terminal_modes`) instead of a free `execute!(io::stdout())`, so

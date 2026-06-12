@@ -54,17 +54,25 @@ pub trait SurfaceBackend: Backend {
     }
 
     /// Emit the terminal-mode-restore escapes (disable alternate scroll,
-    /// leave the alternate screen, disable bracketed paste and focus
-    /// reporting) through this backend's sink.
+    /// bracketed paste, and focus reporting) through this backend's sink.
+    ///
+    /// Does NOT leave the alternate screen. coco keeps the main session in
+    /// the primary buffer (native scrollback) and never enters the alt
+    /// screen for it, so a `CSI ?1049l` here would be unpaired: on a real
+    /// terminal it performs a DECRC onto the stale `\x1b7` save the last
+    /// history insert left up in finalized history, yanking the cursor into
+    /// the transcript so whatever prints next (the resume hint) overprints
+    /// it. codex's `restore_common` omits the alt-screen leave for exactly
+    /// this reason. Leaving a modal alt-screen is the caller's job
+    /// (`leave_modal_alt_screen`), emitted only when actually in it.
     ///
     /// Routing teardown escapes through the owned backend — rather than a
     /// free `execute!(io::stdout(), …)` — keeps the exit byte order
     /// observable and deterministically interleaved with the prompt-cursor
-    /// placement that must follow the alt-screen leave (`CSI ?1049l` does a
-    /// DECRC). The shell's panic / external-process path emits the same set
-    /// to global stdout, where no backend is reachable (`coco_tui`'s
-    /// `leave_tui_modes`). Default no-op for backends that do not model
-    /// terminal modes.
+    /// placement that follows. The shell's panic / external-process path
+    /// emits its own reset to global stdout, where no backend is reachable
+    /// (`coco_tui`'s `leave_tui_modes`). Default no-op for backends that do
+    /// not model terminal modes.
     fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -122,13 +130,13 @@ where
     }
 
     fn leave_terminal_modes(&mut self) -> Result<(), Self::Error> {
+        // Disable alternate scroll + bracketed paste + focus reporting. The
+        // alternate screen is intentionally NOT left here (see the trait
+        // doc): the main session never enters it, so an unpaired `?1049l`
+        // would DECRC the cursor into finalized history and the resume hint
+        // would overprint the transcript.
         write!(self, "\x1b[?1007l")?;
-        queue!(
-            self,
-            LeaveAlternateScreen,
-            DisableBracketedPaste,
-            DisableFocusChange
-        )?;
+        queue!(self, DisableBracketedPaste, DisableFocusChange)?;
         Write::flush(self)
     }
 
