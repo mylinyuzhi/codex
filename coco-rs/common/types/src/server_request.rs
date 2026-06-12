@@ -81,6 +81,10 @@ pub struct AskForApprovalParams {
     pub decision_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Tool execution cwd. Relative paths in `input` resolve against this so
+    /// an SDK client can derive correctly-scoped grants (mirrors the TUI path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     /// Suggested permission updates the SDK can present to the user.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_suggestions: Vec<serde_json::Value>,

@@ -16,6 +16,7 @@ fn ask_for_approval_wire_method() {
         blocked_path: None,
         decision_reason: None,
         agent_id: None,
+        cwd: None,
         permission_suggestions: vec![],
     });
     let j = serde_json::to_value(&req).unwrap();

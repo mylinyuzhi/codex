@@ -135,7 +135,9 @@ pub(crate) fn surface_content(
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     match content {
-        TextSurfaceContent::Permission(p) => permission::permission_content(p, styles),
+        TextSurfaceContent::Permission(p) => {
+            permission::permission_content(p, state.session.permission_mode, styles)
+        }
         TextSurfaceContent::Help => help::help_content(state, styles),
         TextSurfaceContent::Error(msg) => (
             t!("dialog.title_error").to_string(),

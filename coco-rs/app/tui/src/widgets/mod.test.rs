@@ -458,6 +458,7 @@ fn test_snapshot_with_permission_prompt() {
                     "rm -rf /tmp/test".into(),
                 ),
                 original_input: None,
+                cwd: None,
                 permission_suggestions: vec![],
                 worker_badge: None,
                 explanation_visible: false,

@@ -375,6 +375,7 @@ fn test_permission_prompt() {
             selected_choice: 0,
             display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
             original_input: None,
+            cwd: None,
             permission_suggestions: vec![],
             worker_badge: None,
             explanation_visible: false,

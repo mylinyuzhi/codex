@@ -287,7 +287,7 @@ fn resolve_key(
     // Layer 2: per-surface navigation maps. Bottom-pane prompt surfaces own
     // their key maps (`crate::bottom_pane`); modal surface maps live below.
     let cmd = match ctx {
-        KeybindingContext::Confirmation => crate::bottom_pane::confirmation_map_key(key),
+        KeybindingContext::Confirmation => crate::bottom_pane::confirmation_map_key(state, key),
         KeybindingContext::Question => crate::bottom_pane::question::map_key(key),
         KeybindingContext::ModelPicker => crate::modal_pane::model_picker::map_key(key),
         KeybindingContext::TeamRoster => crate::modal_pane::team_roster::map_key(key),

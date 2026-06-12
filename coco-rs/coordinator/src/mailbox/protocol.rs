@@ -463,6 +463,11 @@ pub enum ProtocolMessage {
         description: String,
         #[serde(default)]
         input: serde_json::Value,
+        /// Worker's tool execution cwd, so the leader resolves the worker's
+        /// relative paths against the worker's directory (not the leader's)
+        /// when deriving scoped grants.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
         /// TS: `permission_suggestions: unknown[]`
         #[serde(default)]
         permission_suggestions: Vec<serde_json::Value>,
@@ -798,6 +803,7 @@ pub fn send_permission_request_via_mailbox(
         tool_use_id: request.tool_use_id.clone(),
         description: request.description.clone(),
         input: request.input.clone(),
+        cwd: request.cwd.clone(),
         permission_suggestions: Vec::new(),
     })?;
     let message = TeammateMessage {
@@ -918,6 +924,7 @@ pub fn create_permission_request_message(
     tool_use_id: &str,
     description: &str,
     input: &serde_json::Value,
+    cwd: Option<&str>,
 ) -> String {
     let msg = ProtocolMessage::PermissionRequest {
         request_id: request_id.to_string(),
@@ -926,6 +933,7 @@ pub fn create_permission_request_message(
         tool_use_id: tool_use_id.to_string(),
         description: description.to_string(),
         input: input.clone(),
+        cwd: cwd.map(str::to_owned),
         permission_suggestions: Vec::new(),
     };
     serde_json::to_string(&msg).unwrap_or_default()

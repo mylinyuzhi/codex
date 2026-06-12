@@ -1,6 +1,8 @@
 use super::*;
 use coco_types::PermissionAskChoice;
 use pretty_assertions::assert_eq;
+use ratatui::style::Modifier;
+use ratatui::text::Line;
 use serde_json::json;
 
 use crate::i18n::locale_test_guard;
@@ -14,6 +16,10 @@ use crate::state::SubmitAction;
 use crate::theme::Theme;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::widgets::QuestionRow;
+
+fn line_text(line: &Line<'_>) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
 
 fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
     let display_input = match &detail {
@@ -35,11 +41,104 @@ fn permission_prompt(detail: PermissionDetail) -> PermissionPromptState {
         selected_choice: 0,
         display_input,
         original_input: None,
+        cwd: None,
         permission_suggestions: vec![],
         worker_badge: None,
         explanation_visible: false,
         explanation: crate::state::ExplainerFetch::NotFetched,
     }
+}
+
+#[test]
+fn permission_styled_content_highlights_selected_action() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "Read file".to_string(),
+    });
+    state.tool_name = "Read".to_string();
+    state.show_always_allow = true;
+    state.selected_choice = 2;
+    state.original_input = Some(json!({"file_path": "/tmp/proj/notes.md"}));
+
+    let (_, lines, _) = permission_styled_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+    let selected = lines
+        .iter()
+        .find(|line| line_text(line).contains("always allow Read locally"))
+        .expect("selected row");
+    let style = selected.spans.first().expect("row span").style;
+
+    assert_eq!(style.fg, Some(theme.selection_fg));
+    assert_eq!(style.bg, Some(theme.selection_bg));
+    assert!(style.add_modifier.contains(Modifier::BOLD));
+    assert!(line_text(selected).starts_with("▸ "));
+    assert!(line_text(selected).ends_with(" ◂"));
+}
+
+#[test]
+fn permission_content_hints_approve_deny_only_shortcuts() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "Run tool".to_string(),
+    });
+
+    let (_, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+
+    assert!(body.contains("1-2 or Y/N shortcuts"), "body: {body}");
+}
+
+#[test]
+fn permission_content_hints_session_only_shortcuts() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "Add directory".to_string(),
+    });
+    state.show_always_allow = true;
+    state.permission_suggestions = vec![coco_types::PermissionUpdate::AddDirectories {
+        directories: vec!["/tmp/project".into()],
+        destination: coco_types::PermissionUpdateDestination::Session,
+    }];
+
+    let (_, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+
+    assert!(body.contains("2/a · Yes, allow Edit for this session"));
+    assert!(body.contains("1-3 or Y/A/N shortcuts"), "body: {body}");
+}
+
+#[test]
+fn permission_content_hints_session_and_local_shortcuts() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::Generic {
+        input_preview: "Read file".to_string(),
+    });
+    state.tool_name = "Read".to_string();
+    state.show_always_allow = true;
+    state.original_input = Some(json!({"file_path": "/tmp/project/notes.md"}));
+
+    let (_, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+
+    assert!(body.contains("2/s · Yes, allow Read for this session"));
+    assert!(body.contains("3/a · Yes, always allow Read locally"));
+    assert!(body.contains("1-4 or Y/S/A/N shortcuts"), "body: {body}");
 }
 
 #[test]
@@ -53,7 +152,11 @@ fn permission_content_title_includes_worker_badge() {
         name: "researcher".to_string(),
         color: coco_types::AgentColorName::Cyan,
     });
-    let (title, _body, _border) = permission_content(&state, UiStyles::new(&theme));
+    let (title, _body, _border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
     // The worker name is surfaced in the title so the leader sees who is
     // asking (gap 12). TS `PermissionRequestTitle.tsx:32`.
     assert!(title.contains("· @researcher"), "got title: {title}");
@@ -66,7 +169,11 @@ fn permission_content_omits_badge_without_worker() {
     let state = permission_prompt(PermissionDetail::Generic {
         input_preview: "ls".to_string(),
     });
-    let (title, _body, _border) = permission_content(&state, UiStyles::new(&theme));
+    let (title, _body, _border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
     assert!(!title.contains('@'), "no badge expected: {title}");
 }
 
@@ -81,15 +188,20 @@ fn permission_content_uses_high_risk_border() {
     });
     state.risk_level = Some(RiskLevel::High);
     state.show_always_allow = true;
+    state.original_input = Some(json!({"file_path": "/tmp/proj/src/main.rs"}));
 
-    let (title, body, border) = permission_content(&state, UiStyles::new(&theme));
+    let (title, body, border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
 
     assert_eq!(border, theme.error);
     assert!(title.contains("Edit"));
     assert!(body.contains("rm -rf target/tmp"));
     assert!(body.contains("/repo"));
     assert!(body.contains("Deletes files"));
-    assert!(body.contains("don't ask again for Edit"));
+    assert!(body.contains("always allow Edit locally"));
 }
 
 #[test]
@@ -114,7 +226,11 @@ fn permission_content_renders_choices_instead_of_default_actions() {
         },
     ]);
 
-    let (_, body, _) = permission_content(&state, UiStyles::new(&theme));
+    let (_, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
 
     assert!(body.contains("  Keep context"));
     assert!(body.contains("▸ Clear context"));
@@ -151,7 +267,11 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
         },
     ]);
 
-    let (title, body, _) = permission_content(&state, UiStyles::new(&theme));
+    let (title, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
 
     assert!(title.contains("Ready to code?"));
     assert!(body.contains("Here is Claude's plan:"));
@@ -176,7 +296,11 @@ fn generic_permission_content_uses_display_input_not_raw_original_input() {
     state.original_input = Some(json!({"secret": "raw value"}));
     state.display_input = coco_types::PermissionDisplayInput::Json("{\"safe\":true}".to_string());
 
-    let (_, body, _) = permission_content(&state, UiStyles::new(&theme));
+    let (_, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
 
     assert!(body.contains("{\"safe\":true}"));
     assert!(!body.contains("raw value"));
@@ -192,7 +316,11 @@ fn permission_content_truncates_unicode_file_edit_preview() {
         diff,
     });
 
-    let (_, body, _) = permission_content(&state, UiStyles::new(&theme));
+    let (_, body, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
 
     assert!(body.contains("File: src/lib.rs"));
     assert!(body.contains(&format!("{}...", "切".repeat(500))));
@@ -734,7 +862,11 @@ fn permission_content_explainer_panel_visible_high_risk() {
         risk: "data loss".to_string(),
     });
 
-    let (_title, body, border) = permission_content(&state, UiStyles::new(&theme));
+    let (_title, body, border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
     assert!(body.contains("Risk: HIGH"), "body: {body}");
     assert!(
         body.contains("Deletes the production database."),
@@ -759,7 +891,11 @@ fn permission_content_explainer_hidden_when_collapsed() {
         reasoning: String::new(),
         risk: String::new(),
     });
-    let (_title, body, _border) = permission_content(&state, UiStyles::new(&theme));
+    let (_title, body, _border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
     assert!(!body.contains("Risk:"), "collapsed body leaked: {body}");
     assert!(
         !body.contains("secret-detail"),
@@ -776,7 +912,11 @@ fn permission_content_explainer_loading_line() {
     });
     state.explanation_visible = true;
     state.explanation = crate::state::ExplainerFetch::Loading;
-    let (_title, body, _border) = permission_content(&state, UiStyles::new(&theme));
+    let (_title, body, _border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
     assert!(body.contains("Analyzing risk"), "body: {body}");
 }
 
@@ -797,6 +937,10 @@ fn permission_content_explainer_panel_snapshot() {
         reasoning: "rm -rf is destructive".to_string(),
         risk: "data loss".to_string(),
     });
-    let (_title, body, _border) = permission_content(&state, UiStyles::new(&theme));
+    let (_title, body, _border) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
     insta::assert_snapshot!(body);
 }

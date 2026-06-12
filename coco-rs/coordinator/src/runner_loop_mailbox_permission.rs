@@ -49,20 +49,19 @@ pub struct MailboxPermissionOutcome {
 pub async fn request_permission_via_mailbox(
     identity: &TeammateIdentity,
     cancelled: &AtomicBool,
-    request_id: &str,
-    tool_name: &str,
-    tool_use_id: &str,
-    description: &str,
-    input: &serde_json::Value,
+    request: &coco_tool_runtime::ToolPermissionRequest,
 ) -> Option<MailboxPermissionOutcome> {
+    let request_id = request.id.as_str();
+    let tool_name = request.tool_name.as_str();
     let agent_id = format!("{}@{}", identity.agent_name, identity.team_name);
     let envelope = mailbox::create_permission_request_message(
         request_id,
         &agent_id,
         tool_name,
-        tool_use_id,
-        description,
-        input,
+        &request.tool_use_id,
+        &request.description,
+        &request.input,
+        request.cwd.as_deref(),
     );
     let message = mailbox::TeammateMessage {
         from: identity.agent_name.clone(),
@@ -152,16 +151,8 @@ impl coco_tool_runtime::ToolPermissionBridge for MailboxPermissionBridge {
         &self,
         request: coco_tool_runtime::ToolPermissionRequest,
     ) -> Result<coco_tool_runtime::ToolPermissionResolution, String> {
-        let outcome = request_permission_via_mailbox(
-            &self.identity,
-            &self.cancelled,
-            &request.id,
-            &request.tool_name,
-            &request.tool_use_id,
-            &request.description,
-            &request.input,
-        )
-        .await;
+        let outcome =
+            request_permission_via_mailbox(&self.identity, &self.cancelled, &request).await;
         match outcome {
             Some(outcome) if outcome.approved => Ok(coco_tool_runtime::ToolPermissionResolution {
                 decision: coco_tool_runtime::ToolPermissionDecision::Approved,

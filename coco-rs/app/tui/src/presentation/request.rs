@@ -1,8 +1,13 @@
 //! Presentation for request-style prompts.
 
 use ratatui::prelude::Color;
+use ratatui::prelude::Line;
+use ratatui::prelude::Modifier;
+use ratatui::prelude::Span;
+use ratatui::prelude::Style;
 
 use crate::i18n::t;
+use crate::permission_options::PermissionAction;
 use crate::state::ExplainerFetch;
 use crate::state::PermissionDetail;
 use crate::state::PermissionPromptState;
@@ -12,7 +17,6 @@ use crate::state::QuestionPage;
 use crate::state::QuestionPromptState;
 use crate::state::RiskLevel;
 use crate::state::SubmitAction;
-use crate::state::surface_payloads::PermissionAction;
 use coco_tui_ui::style::UiStyles;
 use coco_tui_ui::widgets::ActionRow;
 use coco_tui_ui::widgets::ChoiceRow;
@@ -27,6 +31,7 @@ use coco_tui_ui::widgets::SubmitNavTab;
 
 pub(crate) fn permission_content(
     p: &PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
     let detail = permission_detail_for_prompt(p);
@@ -74,7 +79,7 @@ pub(crate) fn permission_content(
         lines.push_str(t!("dialog.hints_nav_select").as_ref());
         lines
     } else {
-        classic_permission_actions(p)
+        classic_permission_actions(p, current_mode)
     };
 
     // Lazy Ctrl+E risk-explainer panel (TS `PermissionExplanation.tsx`): only
@@ -125,29 +130,78 @@ pub(crate) fn permission_content(
     (title, body, border)
 }
 
-fn classic_permission_actions(p: &PermissionPromptState) -> String {
-    let selected = p
-        .selected_choice
-        .min(p.classic_action_count().saturating_sub(1));
+pub(crate) fn permission_styled_content(
+    p: &PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
+    styles: UiStyles<'_>,
+) -> (String, Vec<Line<'static>>, Color) {
+    let (title, body, border) = permission_content(p, current_mode, styles);
+    let selected_style = Style::default()
+        .fg(styles.selection_fg())
+        .bg(styles.selection_bg())
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(styles.text());
+    let dim_style = Style::default().fg(styles.dim());
+    let lines = body
+        .lines()
+        .map(|line| {
+            // Style off our own rendered markers, never substrings that could
+            // appear in tool input: `▸ ` flags the selected row, a 4-space
+            // indent flags choice descriptions, and the `↑/↓` glyph flags the
+            // nav/shortcut hint line (a path like `v1-api` must not dim).
+            let style = if line.starts_with("▸ ") {
+                selected_style
+            } else if line.starts_with("    ") || line.contains("↑/↓") {
+                dim_style
+            } else {
+                text_style
+            };
+            Line::from(Span::styled(line.to_string(), style))
+        })
+        .collect();
+    (title, lines, border)
+}
+
+fn classic_permission_actions(
+    p: &PermissionPromptState,
+    current_mode: coco_types::PermissionMode,
+) -> String {
+    let actions = crate::permission_options::classic_actions(p, current_mode);
+    let selected = p.selected_choice.min(actions.len().saturating_sub(1));
     let mut lines = format!("{}:\n", t!("dialog.actions_heading"));
-    for idx in 0..p.classic_action_count() {
+    let has_local = actions.contains(&PermissionAction::AllowLocal);
+    let mut shortcut_letters = Vec::new();
+    for (idx, action) in actions.iter().copied().enumerate() {
         let marker = if idx == selected { "▸ " } else { "  " };
+        let suffix = if idx == selected { " ◂" } else { "" };
         // Every row shows its direct-commit hotkeys (digit + letter) so the
         // mapping is visible: `y`/`a`/`n` commit their OWN row, not the
         // highlighted one (Enter commits the highlight).
-        let (letter, label) = match p.classic_action_at(idx) {
+        let (letter, label) = match action {
             PermissionAction::ApproveOnce => ("y", t!("dialog.action_approve_once").to_string()),
-            PermissionAction::AlwaysAllow => (
+            PermissionAction::AllowSession => (
+                if has_local { "s" } else { "a" },
+                t!("dialog.action_allow_session", tool = p.tool_name.as_str()).to_string(),
+            ),
+            PermissionAction::AllowLocal => (
                 "a",
-                t!("dialog.action_always_allow", tool = p.tool_name.as_str()).to_string(),
+                t!("dialog.action_allow_local", tool = p.tool_name.as_str()).to_string(),
             ),
             PermissionAction::Deny => ("n", t!("dialog.action_deny").to_string()),
         };
-        lines.push_str(&format!("{marker}{}/{letter} · {label}\n", idx + 1));
+        shortcut_letters.push(letter.to_ascii_uppercase());
+        lines.push_str(&format!("{marker}{}/{letter} · {label}{suffix}\n", idx + 1));
     }
     lines.push_str(t!("dialog.hints_nav_select").as_ref());
     lines.push_str("  ");
-    lines.push_str(t!("dialog.hints_permission_shortcuts").as_ref());
+    lines.push_str(
+        t!(
+            "dialog.hints_permission_shortcuts",
+            count = actions.len().to_string(),
+            shortcuts = shortcut_letters.join("/")
+        )
+        .as_ref(),
+    );
     lines
 }
 

@@ -282,6 +282,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 // choices splice `user_choice`; classic read permissions
                 // derive TS-style path-scoped "always allow" updates.
                 original_input: Some(request.input.clone()),
+                cwd: request.cwd.clone(),
                 worker_badge: request.worker_badge.clone(),
             })
         };

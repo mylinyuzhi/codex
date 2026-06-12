@@ -186,7 +186,7 @@ pub fn default_blocks() -> Vec<KeybindingBlock> {
             [
                 ("y", KeybindingAction::ConfirmYes),
                 ("n", KeybindingAction::ConfirmNo),
-                ("enter", KeybindingAction::ConfirmYes),
+                ("enter", KeybindingAction::ConfirmToggle),
                 ("escape", KeybindingAction::ConfirmNo),
                 ("up", KeybindingAction::ConfirmPrevious),
                 ("down", KeybindingAction::ConfirmNext),

@@ -34,6 +34,7 @@ pub(crate) mod keyboard_modes;
 pub(crate) mod keymap;
 pub(crate) mod modal_pane;
 mod perf;
+pub(crate) mod permission_options;
 mod presentation;
 pub mod server_notification_handler;
 pub mod state;

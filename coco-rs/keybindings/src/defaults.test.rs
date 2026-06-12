@@ -84,6 +84,19 @@ fn chat_block_includes_single_key_thinking_toggle() {
 }
 
 #[test]
+fn confirmation_enter_selects_focused_action() {
+    let blocks = default_blocks();
+    let confirmation = blocks
+        .iter()
+        .find(|b| b.context == KeybindingContext::Confirmation)
+        .expect("Confirmation block present");
+    assert_eq!(
+        confirmation.bindings.get("enter").and_then(Option::as_ref),
+        Some(&KeybindingAction::ConfirmToggle),
+    );
+}
+
+#[test]
 fn image_paste_key_is_platform_appropriate() {
     let blocks = default_blocks();
     let chat = blocks

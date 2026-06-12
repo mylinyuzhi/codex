@@ -2368,6 +2368,7 @@ dependencies = [
  "coco-git",
  "coco-keybindings",
  "coco-messages",
+ "coco-permissions",
  "coco-plugins",
  "coco-subagent",
  "coco-tui",

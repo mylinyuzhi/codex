@@ -29,11 +29,25 @@ use crate::state::PanePromptState;
 /// Keys for the confirmation-class prompts (permission / sandbox / MCP
 /// approval / plan entry / plan exit) — shared across the family, so the
 /// map lives on the routing layer rather than one surface.
-pub(crate) fn confirmation_map_key(key: KeyEvent) -> Option<TuiCommand> {
+pub(crate) fn confirmation_map_key(state: &AppState, key: KeyEvent) -> Option<TuiCommand> {
     match key.code {
         KeyCode::Char('y' | 'Y') => Some(TuiCommand::Approve),
         KeyCode::Char('n' | 'N') => Some(TuiCommand::Deny),
-        KeyCode::Char('a' | 'A') => Some(TuiCommand::ApproveAll),
+        KeyCode::Char('a' | 'A')
+            if current_permission_actions(state).is_some_and(|actions| {
+                actions.contains(&crate::permission_options::PermissionAction::AllowLocal)
+                    || actions.contains(&crate::permission_options::PermissionAction::AllowSession)
+            }) =>
+        {
+            Some(TuiCommand::ApproveAll)
+        }
+        KeyCode::Char('s' | 'S')
+            if current_permission_actions(state).is_some_and(|actions| {
+                actions.contains(&crate::permission_options::PermissionAction::AllowSession)
+            }) =>
+        {
+            Some(TuiCommand::ApproveSession)
+        }
         // Digit shortcuts commit the numbered classic-permission row
         // directly; non-permission confirmation prompts ignore them.
         KeyCode::Char(c @ '1'..='9') => Some(TuiCommand::PermissionDigit(
@@ -55,6 +69,21 @@ pub(crate) fn confirmation_map_key(key: KeyEvent) -> Option<TuiCommand> {
     }
 }
 
+fn current_permission_actions(
+    state: &AppState,
+) -> Option<Vec<crate::permission_options::PermissionAction>> {
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_ref() else {
+        return None;
+    };
+    if p.choices.is_some() {
+        return None;
+    }
+    Some(crate::permission_options::classic_actions(
+        p,
+        state.session.permission_mode,
+    ))
+}
+
 /// Route `Approve` to the focused prompt. Returns `true` when the keystroke was
 /// consumed by a focused prompt; `false` means the caller should try the modal
 /// surfaces. A modal renders on top of any prompt and owns the keys, so an
@@ -68,12 +97,13 @@ pub(crate) async fn route_approve(
     if state.ui.modal.is_some() {
         return false;
     }
+    let permission_mode = state.session.permission_mode;
     let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
         return false;
     };
     let resolved = match prompt {
         PanePromptState::Permission(p) => {
-            permission::approve_permission(p, command_tx).await;
+            permission::approve_permission(p, permission_mode, command_tx).await;
             true
         }
         PanePromptState::SandboxPermission(s) => {
@@ -117,12 +147,13 @@ pub(crate) async fn route_deny(
     if state.ui.modal.is_some() {
         return false;
     }
+    let permission_mode = state.session.permission_mode;
     let Some(prompt) = state.ui.interaction.active_prompt.as_ref() else {
         return false;
     };
     let resolved = match prompt {
         PanePromptState::Permission(p) => {
-            permission::deny_permission(p, command_tx).await;
+            permission::deny_permission(p, permission_mode, command_tx).await;
             true
         }
         PanePromptState::SandboxPermission(s) => {
@@ -173,16 +204,23 @@ pub(crate) async fn route_confirm(
             state.ui.finish_taken_prompt();
         }
         PanePromptState::Permission(ref p) => {
-            permission::confirm_permission(p, command_tx).await;
+            permission::confirm_permission(p, state.session.permission_mode, command_tx).await;
+            state.ui.finish_taken_prompt();
+        }
+        // Plan entry is a benign confirmation (not a privilege escalation), so
+        // Enter commits it exactly like `y` — leaving it on the restore branch
+        // made Enter a silent no-op on the "Enter plan mode?" prompt.
+        PanePromptState::PlanEntry(_) => {
+            plan::approve_plan_entry(state, command_tx).await;
             state.ui.finish_taken_prompt();
         }
         // Enter is not a decision key for these binary approvals — restore the
         // prompt so the pending engine/teammate request is answered by an
         // explicit y/n rather than silently dropped (which hung the request),
         // and without auto-approving a sandbox/MCP escalation on Enter.
+        // CostWarning answers via its own keys.
         PanePromptState::SandboxPermission(_)
         | PanePromptState::CostWarning(_)
-        | PanePromptState::PlanEntry(_)
         | PanePromptState::McpServerApproval(_) => {
             state.ui.restore_prompt(prompt);
         }
@@ -205,7 +243,8 @@ pub(crate) async fn route_permission_digit(
     };
     let resolved = match prompt {
         PanePromptState::Permission(p) => {
-            permission::commit_permission_digit(p, digit, command_tx).await
+            permission::commit_permission_digit(p, digit, state.session.permission_mode, command_tx)
+                .await
         }
         _ => false,
     };
@@ -223,13 +262,14 @@ pub(crate) fn route_nav(state: &mut AppState, delta: i32) -> bool {
         return false;
     }
     let bypass_available = state.session.bypass_permissions_available;
+    let permission_mode = state.session.permission_mode;
     let Some(prompt) = state.ui.interaction.active_prompt.as_mut() else {
         return false;
     };
     match prompt {
         PanePromptState::Question(q) => question::question_nav(q, delta),
         PanePromptState::PlanExit(p) => plan::nav_plan_exit(p, bypass_available, delta),
-        PanePromptState::Permission(p) => permission::nav_permission(p, delta),
+        PanePromptState::Permission(p) => permission::nav_permission(p, permission_mode, delta),
         PanePromptState::PlanApproval(p) => {
             if delta != 0 {
                 p.toggle_focus();

@@ -128,6 +128,7 @@ impl SandboxApprovalBridge for SdkSandboxApprovalBridge {
             },
             decision_reason: Some(request.reason.clone()),
             agent_id: None,
+            cwd: None,
             permission_suggestions: Vec::new(),
         };
         let params = match serde_json::to_value(&params) {

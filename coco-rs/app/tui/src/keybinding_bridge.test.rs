@@ -119,6 +119,7 @@ fn install_permission_prompt(state: &mut AppState) {
             selected_choice: 0,
             display_input: coco_types::PermissionDisplayInput::Command("ls".into()),
             original_input: None,
+            cwd: None,
             permission_suggestions: vec![],
             worker_badge: None,
             explanation_visible: false,
@@ -264,6 +265,52 @@ fn test_permission_prompt_context() {
     let mut state = AppState::new();
     install_permission_prompt(&mut state);
     assert_eq!(active_context(&state), KeybindingContext::Confirmation);
+}
+
+#[test]
+fn test_permission_prompt_allow_shortcuts_match_available_actions() {
+    let mut state = AppState::new();
+    install_permission_prompt(&mut state);
+    let Some(PanePromptState::Permission(p)) = state.ui.interaction.active_prompt.as_mut() else {
+        panic!("expected permission prompt");
+    };
+    p.tool_name = "Read".into();
+    p.original_input = Some(serde_json::json!({"file_path": "/tmp/project/notes.md"}));
+
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('a'))),
+        Some(TuiCommand::ApproveAll)
+    ));
+    assert!(matches!(
+        map_key(&state, press(KeyCode::Char('s'))),
+        Some(TuiCommand::ApproveSession)
+    ));
+}
+
+#[test]
+fn test_permission_session_shortcut_requires_session_action() {
+    let mut state = AppState::new();
+    install_permission_prompt(&mut state);
+
+    assert!(
+        map_key(&state, press(KeyCode::Char('s'))).is_none(),
+        "s is active only when the current permission prompt has AllowSession"
+    );
+}
+
+#[test]
+fn test_s_is_not_consumed_by_non_permission_confirmation_prompts() {
+    let mut state = AppState::new();
+    state.ui.push_prompt(PanePromptState::PlanEntry(
+        crate::state::PlanEntryPromptState {
+            description: "Enter plan mode?".into(),
+        },
+    ));
+
+    assert!(
+        map_key(&state, press(KeyCode::Char('s'))).is_none(),
+        "shared confirmation prompts must not consume s as session allow"
+    );
 }
 
 #[test]
@@ -527,6 +574,14 @@ fn test_prompt_y_approves() {
     install_permission_prompt(&mut state);
     let cmd = map_key(&state, press(KeyCode::Char('y')));
     assert!(matches!(cmd, Some(TuiCommand::Approve)));
+}
+
+#[test]
+fn test_prompt_enter_selects_focused_action() {
+    let mut state = AppState::new();
+    install_permission_prompt(&mut state);
+    let cmd = map_key(&state, press(KeyCode::Enter));
+    assert!(matches!(cmd, Some(TuiCommand::SurfaceConfirm)));
 }
 
 #[test]

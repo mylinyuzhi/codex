@@ -87,6 +87,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
             blocked_path: None,
             decision_reason: None,
             agent_id: Some(request.agent_id.clone()),
+            cwd: request.cwd.clone(),
             permission_suggestions: request
                 .suggestions
                 .iter()
