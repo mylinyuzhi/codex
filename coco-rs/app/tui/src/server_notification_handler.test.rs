@@ -56,7 +56,6 @@ fn test_bg_agent_task_started_bridges_into_subagents() {
     assert_eq!(state.session.subagents.len(), 1);
     let agent = &state.session.subagents[0];
     assert_eq!(agent.agent_id, "agent-bg-1");
-    assert_eq!(agent.tool_use_id.as_deref(), Some("tu-42"));
     assert_eq!(agent.description, "Investigate auth flow");
     assert_eq!(agent.status, crate::state::session::SubagentStatus::Running);
     // active_tasks projection still works.
@@ -126,8 +125,7 @@ fn test_in_process_teammate_task_started_creates_teammate_kind_row() {
     ));
     assert_eq!(agent.agent_type, "researcher");
     assert_eq!(agent.team_name.as_deref(), Some("my-team"));
-    assert_eq!(agent.tool_use_id, None);
-    assert_eq!(agent.color.as_deref(), Some("blue"));
+    assert_eq!(agent.color, Some(coco_types::AgentColorName::Blue));
     // active_tasks projection works in parallel.
     assert_eq!(state.session.active_tasks.len(), 1);
 }
@@ -816,7 +814,6 @@ fn subagent(
         status,
         color: None,
         team_name: None,
-        tool_use_id: None,
         started_at_ms: Some(0),
         last_tool_name: None,
         tool_count: 0,

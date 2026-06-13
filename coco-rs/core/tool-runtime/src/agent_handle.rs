@@ -26,6 +26,7 @@ use serde::Serialize;
 
 use coco_messages::Message;
 use coco_types::AgentDefinition;
+use coco_types::BackendType;
 use coco_types::Features;
 use coco_types::SubagentRuntimeSnapshot;
 use coco_types::ToolFilter;
@@ -81,18 +82,17 @@ pub enum SpawnMode {
     #[default]
     Fresh,
     /// Fork mode — child inherits the parent's pre-rendered system
-    /// prompt, parent message history, and parent tool pool.
-    /// `tool_result` blocks in the inherited history are replaced with
-    /// [`coco_subagent::FORK_PLACEHOLDER`] so all fork children produce a
-    /// byte-identical API request prefix (prompt-cache sharing).
+    /// prompt, parent message history (with **real** tool results
+    /// intact), and parent tool pool, so the child's API request prefix
+    /// is byte-identical to the parent's (prompt-cache hit).
     ///
     /// Runner: [`coco_coordinator::agent_handle::spawn::spawn_subagent`]
     /// matches on this variant and threads `rendered_system_prompt`
-    /// into `AgentQueryConfig.system_prompt` verbatim, wraps
+    /// into `AgentQueryConfig.system_prompt` verbatim, threads
+    /// `parent_messages` through unmodified (the pre-response snapshot
+    /// has only complete tool_use/result pairs), and wraps
     /// `request.prompt` with [`coco_subagent::build_fork_child_message`]
-    /// for `<fork-boilerplate>` recursion-detection, and rewrites the
-    /// `parent_messages` `tool_result` blocks via
-    /// [`coco_subagent::build_fork_context`].
+    /// for `<fork-boilerplate>` recursion-detection.
     ///
     /// Tool-pool inheritance is decided by
     /// [`AgentSpawnRequest::use_exact_tools`]; fork mode does NOT
@@ -104,10 +104,9 @@ pub enum SpawnMode {
         /// would only invite a fallible roundtrip that hides
         /// corruption behind `unwrap_or_default`.
         rendered_system_prompt: String,
-        /// Parent message history. Shared via `Arc<Message>` so the
-        /// fork-context build only rewrites tool-result bodies; the
-        /// rest of the slice is a cheap Arc clone of the parent's
-        /// authoritative history.
+        /// Parent message history, threaded into the child verbatim
+        /// (real tool results preserved). Shared via `Arc<Message>` so
+        /// it's a cheap atomic ref-count bump per entry, no deep copy.
         parent_messages: Vec<Arc<Message>>,
         /// Parent's resolved provider+model identity at the moment of
         /// fork. **Non-optional by design** — fork mode's entire
@@ -125,9 +124,8 @@ pub enum SpawnMode {
     /// Resume — child rehydrates a previously-completed background spawn
     /// from its persisted JSONL transcript. The system prompt is built
     /// fresh from the agent definition (no parent prompt to inherit), and
-    /// `tool_result` blocks in the prior history are kept verbatim
-    /// (NO `FORK_PLACEHOLDER` rewriting — the child needs the real tool
-    /// outputs to continue the conversation).
+    /// `tool_result` blocks in the prior history are kept verbatim — the
+    /// child needs the real tool outputs to continue the conversation.
     Resume {
         /// Filtered prior message history. Caller (typically
         /// `SwarmAgentHandle::resume_agent`) is expected to have already
@@ -204,18 +202,24 @@ pub struct AgentSpawnRequest {
     /// is then a no-op.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session_id: String,
-    /// Isolation mode ("worktree" or "remote").
+    /// Isolation mode. Typed [`coco_types::AgentIsolation`]
+    /// (`Worktree` / `Remote`); the `AgentTool` boundary parses the
+    /// model's wire string and the definition's frontmatter into the enum.
+    /// `None` means no isolation (shares the parent cwd).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub isolation: Option<String>,
+    pub isolation: Option<coco_types::AgentIsolation>,
     /// Agent name (for multi-agent teams).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Team name (triggers teammate spawn).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_name: Option<String>,
-    /// Permission mode override (e.g., "plan").
+    /// Permission mode override (e.g., `PermissionMode::Plan`). Typed —
+    /// the `AgentTool` boundary resolves the effective mode via
+    /// `resolve_subagent_mode` and threads the enum through verbatim;
+    /// serialises to its camelCase wire string for cross-process spawns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
+    pub mode: Option<coco_types::PermissionMode>,
     /// Working directory override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
@@ -598,7 +602,7 @@ pub trait AgentHandle: Send + Sync {
         _agent_id: &str,
         _name: &str,
         _pane_id: Option<&str>,
-        _backend_type: Option<&str>,
+        _backend_type: Option<BackendType>,
     ) -> Result<(), String> {
         Err("AgentHandle::teardown_teammate not supported in this context".into())
     }

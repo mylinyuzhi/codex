@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ClientRequest",
-  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 8 gap additions (`elicitation/resolve` is TS-aligned). 31 total.",
+  "description": "Bidirectional control protocol — client-initiated requests.\n\nEach variant carries a unique `method` string used on the wire. The method is the discriminator; params are the variant-specific payload.\n\nSee `event-system-design.md` §5.1 for the 22 base variants and §5.4 for the 8 gap additions. 31 total.",
   "oneOf": [
     {
       "type": "object",
@@ -156,7 +156,7 @@
       ]
     },
     {
-      "description": "Resolve a pending MCP elicitation request. Counterpart to the\n`ServerRequest` the agent sends when an MCP server needs\nstructured user input (form values, OAuth tokens, etc.).\n\nTS: `SDKControlElicitationRequestSchema` — documented as a\nplanned addition in `event-system-design.md` §5.4.",
+      "description": "Resolve a pending MCP elicitation request. Counterpart to the\n`ServerRequest` the agent sends when an MCP server needs\nstructured user input (form values, OAuth tokens, etc.).\nSee `event-system-design.md` §5.4.",
       "type": "object",
       "properties": {
         "method": {
@@ -342,7 +342,7 @@
       ]
     },
     {
-      "description": "Query MCP server connection status.\nTS: `SDKControlMcpStatusRequestSchema`",
+      "description": "Query MCP server connection status.",
       "type": "object",
       "properties": {
         "method": {
@@ -355,7 +355,7 @@
       ]
     },
     {
-      "description": "Get context window usage breakdown.\nTS: `SDKControlGetContextUsageRequestSchema`",
+      "description": "Get context window usage breakdown.",
       "type": "object",
       "properties": {
         "method": {
@@ -368,7 +368,7 @@
       ]
     },
     {
-      "description": "Hot-reload MCP server configurations.\nTS: `SDKControlMcpSetServersRequestSchema`",
+      "description": "Hot-reload MCP server configurations.",
       "type": "object",
       "properties": {
         "method": {
@@ -385,7 +385,7 @@
       ]
     },
     {
-      "description": "Reconnect a specific MCP server.\nTS: `SDKControlMcpReconnectRequestSchema`",
+      "description": "Reconnect a specific MCP server.",
       "type": "object",
       "properties": {
         "method": {
@@ -402,7 +402,7 @@
       ]
     },
     {
-      "description": "Enable/disable a specific MCP server.\nTS: `SDKControlMcpToggleRequestSchema`",
+      "description": "Enable/disable a specific MCP server.",
       "type": "object",
       "properties": {
         "method": {
@@ -419,7 +419,7 @@
       ]
     },
     {
-      "description": "Reload all plugins from disk.\nTS: `SDKControlReloadPluginsRequestSchema`",
+      "description": "Reload all plugins from disk.",
       "type": "object",
       "properties": {
         "method": {
@@ -432,7 +432,7 @@
       ]
     },
     {
-      "description": "Apply feature flag settings at runtime.\nTS: `SDKControlApplyFlagSettingsRequestSchema`",
+      "description": "Apply feature flag settings at runtime.",
       "type": "object",
       "properties": {
         "method": {
@@ -451,7 +451,7 @@
   ],
   "$defs": {
     "AgentInterruptCurrentWorkParams": {
-      "description": "Params for `agent/interruptCurrentWork`.\n\nMirrors TS's teammate Escape path: abort the target teammate's\ncurrent model/tool turn while keeping the teammate process alive for\nlater messages.",
+      "description": "Params for `agent/interruptCurrentWork`.\n\nAborts the target teammate's current model/tool turn while keeping the\nteammate process alive for later messages.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -463,7 +463,7 @@
       ]
     },
     "AgentMcpServerSpec": {
-      "description": "One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge.\n\nTS: `tools/AgentTool/loadAgentsDir.ts:58 AgentMcpServerSpec`.",
+      "description": "One entry in `AgentDefinition.mcp_servers`. Mirrors the TS union:\neither a `string` (reference to an existing MCP server config) or\nan inline `{name: config}` mapping that stands up a dynamic\nserver scoped to this agent. Inline configs are stored as\n`serde_json::Value` because the underlying `McpServerConfig`\nshape lives in `coco-mcp` (a higher layer that depends on\n`coco-types`); keeping it as opaque JSON avoids a back-edge.",
       "anyOf": [
         {
           "description": "Reference an existing MCP server by name (TS `string` arm).",
@@ -477,7 +477,7 @@
       ]
     },
     "ApprovalDecision": {
-      "description": "TS uses `allow` / `deny` / `ask` for the canUseTool response flow.",
+      "description": "Permission approval decision.",
       "type": "string",
       "enum": [
         "allow",
@@ -485,11 +485,11 @@
       ]
     },
     "ApprovalResolveParams": {
-      "description": "Matches TS `SDKControlPermissionRequestSchema` response shape flipped —\nhere the SDK is *resolving* an approval request, so it's sent\nclient→server.",
+      "description": "The SDK is *resolving* a pending approval request, sent client→server.",
       "type": "object",
       "properties": {
         "content_blocks": {
-          "description": "Optional content blocks (typically image attachments) the SDK\nclient wants attached to the next user message. Mirrors TS\n`contentBlocks?: ContentBlockParam[]` on `PermissionAllowDecision`\n(`types/permissions.ts:183`) — paste-image-during-AskUserQuestion\nor attachments alongside `MCPTool` answers ride this slot.\nCarried verbatim as `serde_json::Value` because the underlying\n`ContentBlockParam` is Anthropic-shaped; consumers translate\nper provider.",
+          "description": "Optional content blocks (typically image attachments) the SDK client\nwants attached to the next user message. Paste-image-during-\nAskUserQuestion or attachments alongside `MCPTool` answers ride this\nslot. Carried verbatim as `serde_json::Value` because the underlying\ncontent block shape is provider-specific; consumers translate per\nprovider.",
           "type": [
             "array",
             "null"
@@ -521,7 +521,7 @@
           "type": "string"
         },
         "updated_input": {
-          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nProtocol mirror of `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(the in-process equivalent for TUI mode). TS parity:\n`permissionDecision.updatedInput` at `services/tools/toolExecution.ts:1130-1131`.\nConsumed by `app/cli/src/sdk_server/approval_bridge.rs`."
+          "description": "Optional rewritten tool input the SDK client supplies at\napproval time. When `Some`, the engine substitutes this for the\nmodel-emitted input before invoking the tool. Used by\n`AskUserQuestion` to ship user-selected `answers` (and optional\n`annotations`) back into the tool's data envelope.\n\nIn-process equivalent is `coco_tool_runtime::ToolPermissionResolution.updated_input`\n(TUI mode). Consumed by `app/cli/src/sdk_server/approval_bridge.rs`."
         }
       },
       "required": [
@@ -548,7 +548,7 @@
       ]
     },
     "ConfigApplyFlagsParams": {
-      "description": "Matches TS `SDKControlApplyFlagSettingsRequestSchema` (controlSchemas.ts:467-472).",
+      "description": "Params for `config/applyFlags`.",
       "type": "object",
       "properties": {
         "settings": {
@@ -582,7 +582,7 @@
       ]
     },
     "ElicitationResolveParams": {
-      "description": "Params for `elicitation/resolve`.\n\nSent client→server in response to a prior `ServerRequest` that\nasked the client to collect structured input on behalf of an MCP\nserver (form values, OAuth tokens, etc.). The client populates\n`values` with the user's input and sets `approved=true`, or sets\n`approved=false` to reject the elicitation.\n\nTS reference: `SDKControlElicitationRequestSchema` (controlSchemas.ts)\n— TS uses a single bidirectional message that carries both request\nand response shapes; coco-rs splits them into a `ServerRequest` for\nthe ask and this params struct for the reply.",
+      "description": "Params for `elicitation/resolve`.\n\nSent client→server in response to a prior `ServerRequest` that\nasked the client to collect structured input on behalf of an MCP\nserver (form values, OAuth tokens, etc.). The client populates\n`values` with the user's input and sets `approved=true`, or sets\n`approved=false` to reject the elicitation.",
       "type": "object",
       "properties": {
         "approved": {
@@ -611,7 +611,7 @@
       ]
     },
     "HookCallbackMatcher": {
-      "description": "Matches TS `SDKHookCallbackMatcherSchema` (controlSchemas.ts:43-51).",
+      "description": "Hook callback matcher with optional tool-name filter and callback IDs.",
       "type": "object",
       "properties": {
         "hook_callback_ids": {
@@ -639,7 +639,7 @@
       ]
     },
     "InitializeParams": {
-      "description": "Matches TS `SDKControlInitializeRequestSchema` (controlSchemas.ts:57-71).\n\nSent once at session start for capability negotiation. Carries hooks,\nSDK MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
+      "description": "Sent once at session start for capability negotiation. Carries hooks,\nSDK MCP servers, output format, system prompt, and agent definitions\nso the agent can construct its registries before the first turn.",
       "type": "object",
       "properties": {
         "agent_progress_summaries": {
@@ -868,7 +868,7 @@
       }
     },
     "McpReconnectParams": {
-      "description": "Matches TS `SDKControlMcpReconnectRequestSchema` (controlSchemas.ts:438-441).",
+      "description": "Params for `mcp/reconnect`.",
       "type": "object",
       "properties": {
         "server_name": {
@@ -880,7 +880,7 @@
       ]
     },
     "McpSetServersParams": {
-      "description": "Matches TS `SDKControlMcpSetServersRequestSchema` (controlSchemas.ts:387-390).",
+      "description": "Params for `mcp/setServers`.",
       "type": "object",
       "properties": {
         "servers": {
@@ -894,7 +894,7 @@
       ]
     },
     "McpToggleParams": {
-      "description": "Matches TS `SDKControlMcpToggleRequestSchema` (controlSchemas.ts:447-451).",
+      "description": "Params for `mcp/toggle`.",
       "type": "object",
       "properties": {
         "enabled": {
@@ -910,7 +910,7 @@
       ]
     },
     "MemoryScope": {
-      "description": "Scope for agent memory persistence.\n\nTS: MemoryScope — controls where MEMORY.md is stored/read.",
+      "description": "Scope for agent memory persistence. Controls where MEMORY.md is stored/read.",
       "oneOf": [
         {
           "description": "User-global memory (~/.coco/MEMORY.md).",
@@ -1198,7 +1198,7 @@
       ]
     },
     "RewindFilesParams": {
-      "description": "Matches TS `SDKControlRewindFilesRequestSchema` (controlSchemas.ts:311-315).",
+      "description": "Params for `control/rewindFiles`.",
       "type": "object",
       "properties": {
         "dry_run": {
@@ -1214,7 +1214,7 @@
       ]
     },
     "SdkAgentDefinition": {
-      "description": "SDK-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nMirrors TS `AgentDefinitionSchema` (`entrypoints/sdk/coreSchemas.ts:1110-1183`).\n**Distinct** from the internal [`crate::AgentDefinition`] which is the\nresolved post-load representation merged from markdown / plugin /\nSDK sources. This type is the wire-level DTO only.",
+      "description": "SDK-supplied custom subagent spec carried on `InitializeParams.agents`.\n\nWire-level DTO. **Distinct** from the internal [`crate::AgentDefinition`]\nwhich is the resolved post-load representation merged from markdown /\nplugin / SDK sources.",
       "type": "object",
       "properties": {
         "background": {
@@ -1225,7 +1225,7 @@
           ]
         },
         "criticalSystemReminder_EXPERIMENTAL": {
-          "description": "Experimental critical system reminder appended to the system prompt.\nWire field is `criticalSystemReminder_EXPERIMENTAL` per TS.",
+          "description": "Experimental critical system reminder appended to the system prompt.\nWire field name: `criticalSystemReminder_EXPERIMENTAL`.",
           "type": [
             "string",
             "null"
@@ -1325,7 +1325,7 @@
           }
         },
         "tools": {
-          "description": "Allowed tool names. `None` inherits all parent tools (TS `tools: undefined`).",
+          "description": "Allowed tool names. `None` inherits all parent tools.",
           "type": [
             "array",
             "null"
@@ -1452,7 +1452,7 @@
       }
     },
     "SetModelParams": {
-      "description": "Matches TS `SDKControlSetModelRequestSchema` (controlSchemas.ts:140-143).",
+      "description": "Params for `control/setModel`.",
       "type": "object",
       "properties": {
         "model": {
@@ -1465,7 +1465,7 @@
       }
     },
     "SetPermissionModeParams": {
-      "description": "Matches TS `SDKControlSetPermissionModeRequestSchema` (controlSchemas.ts:127-134).\n\nTS carries an additional `ultraplan: boolean` field for the CCR web-UI\nrefinement flow. coco-rs intentionally skips Ultraplan (see CLAUDE.md\n\"Plan Mode — Skip Ultraplan (CCR Web UI) Only\"), so that field is\nomitted here — SDK clients targeting coco-rs should not send it.",
+      "description": "Params for `control/setPermissionMode`.\n\nThe `ultraplan` field (CCR web-UI refinement flow) is intentionally\nomitted — see CLAUDE.md \"Plan Mode — Skip Ultraplan Only\".",
       "type": "object",
       "properties": {
         "mode": {
@@ -1477,7 +1477,7 @@
       ]
     },
     "SetThinkingParams": {
-      "description": "Matches TS `SDKControlSetMaxThinkingTokensRequestSchema` + ThinkingConfig.\nTS only carries `max_thinking_tokens: number | null`; coco-rs uses the\nricher `ThinkingLevel` from coco-types which includes effort level and\nper-provider options.",
+      "description": "Params for `control/setThinking`.\nUses `ThinkingLevel` which includes effort level and per-provider options.",
       "type": "object",
       "properties": {
         "thinking_level": {
@@ -1493,7 +1493,7 @@
       }
     },
     "StopTaskParams": {
-      "description": "Matches TS `SDKControlStopTaskRequestSchema` (controlSchemas.ts:458-461).",
+      "description": "Params for `control/stopTask`.",
       "type": "object",
       "properties": {
         "task_id": {

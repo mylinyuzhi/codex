@@ -62,7 +62,7 @@ impl Widget for ActivityPanel<'_> {
 }
 
 fn render_span<'a>(span: &'a ActivitySpan, styles: UiStyles<'_>) -> Span<'a> {
-    let color = match span.tone {
+    let tone_color = match span.tone {
         ActivityTone::Text => styles.text(),
         ActivityTone::Dim => styles.dim(),
         ActivityTone::Accent => styles.accent(),
@@ -71,6 +71,12 @@ fn render_span<'a>(span: &'a ActivitySpan, styles: UiStyles<'_>) -> Span<'a> {
         ActivityTone::Error => styles.tool_error(),
         ActivityTone::Warning => styles.warning(),
     };
+    // A per-agent badge color overrides the tone foreground (TS
+    // `AgentProgressLine` parity).
+    let color = span
+        .color
+        .map(crate::widgets::suggestion_popup::agent_color_to_ratatui)
+        .unwrap_or(tone_color);
     // `Span::raw` accepts `Into<Cow<'a, str>>`; passing `&span.text`
     // lets the borrow flow through without copying the underlying
     // `Cow<'static, str>` storage.

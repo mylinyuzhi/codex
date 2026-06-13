@@ -668,7 +668,7 @@ fn exit_plan_mode_detail(
     let plan = plan
         .filter(|p| !p.trim().is_empty())
         .unwrap_or("No plan found. Please write your plan to the plan file first.");
-    let mut out = format!("Here is Claude's plan:\n\n{plan}");
+    let mut out = format!("Here is proposed plan:\n\n{plan}");
     if let Some(path) = plan_file_path.filter(|p| !p.trim().is_empty()) {
         out.push_str(&format!("\n\nPlan file: {path}"));
     }
@@ -679,7 +679,7 @@ fn exit_plan_mode_detail(
         }
     }
     out.push_str(
-        "\n\nClaude has written up a plan and is ready to execute. Would you like to proceed?",
+        "\n\nThe plan has been written up and is ready to execute. Would you like to proceed?",
     );
     out
 }

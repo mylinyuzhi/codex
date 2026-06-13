@@ -18,7 +18,7 @@ pub struct ModelHandler;
 impl CommandHandler for ModelHandler {
     /// No args → open the picker overlay. Args → resolve `args` against
     /// the builtin registry, persist to
-    /// `~/.coco/settings.json::model_roles.main`, and report inline.
+    /// `~/.coco/settings.json::models.main`, and report inline.
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         let requested = args.trim();
         if requested.is_empty() {
@@ -33,18 +33,16 @@ impl CommandHandler for ModelHandler {
 }
 
 /// Resolve `requested` against the builtin registry, persist to
-/// `model_roles.main`, and return a user-facing summary line. Pure
+/// `models.main`, and return a user-facing summary line. Pure
 /// (no overlay side effects) so the typed-arg path stays inline.
 fn handle_with_args(requested: &str) -> String {
     match resolve_model(requested) {
         Some(resolved) => {
-            let payload = serde_json::json!({
-                "primary": {
-                    "provider": resolved.provider,
-                    "model_id": resolved.model_id,
-                }
-            });
-            match coco_config::global_config::write_user_setting("model_roles.main", payload) {
+            let selection = format!("{}/{}", resolved.provider, resolved.model_id);
+            match coco_config::global_config::write_user_setting(
+                "models.main",
+                serde_json::Value::String(selection),
+            ) {
                 Ok(path) => format!(
                     "Set Main → {}/{} (persisted to {})\n  {}",
                     resolved.provider,

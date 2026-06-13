@@ -1076,28 +1076,23 @@ mod render_for_model_tests {
     use serde_json::json;
 
     #[test]
-    fn user_backgrounded_path_emits_message_text_only() {
-        // The user-backgrounded path returns a different shape entirely
-        // (`{task_id, status: "background", message}`) — render_for_model
-        // must detect it and emit the prebuilt message rather than fall
-        // through to the structured stdout/stderr branch.
+    fn explicit_background_emits_task_id_and_output_path() {
+        // Explicit `run_in_background: true` returns `{backgroundTaskId,
+        // outputPath}` (no stdout). render_for_model must name both the task
+        // id and the output path so the model can `Read` the file directly
+        // (mirrors TS BashTool — replaces the deprecated TaskOutput tool).
         let data = json!({
-            "task_id": "task-42",
-            "status": "background",
-            "message": "Command is running in the background. Task ID: task-42.",
+            "backgroundTaskId": "task-42",
+            "outputPath": "/cfg/cache/tasks/sess/task-42.output",
         });
         let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         assert_eq!(parts.len(), 1);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part, got {:?}", parts[0]);
         };
-        assert!(
-            text.contains("task-42"),
-            "expected message to contain task id, got: {text}"
-        );
-        assert!(
-            !text.contains("status"),
-            "should not leak JSON, got: {text}"
+        assert_eq!(
+            text,
+            "Command running in background with ID: task-42. Output is being written to: /cfg/cache/tasks/sess/task-42.output"
         );
     }
 
@@ -1222,6 +1217,7 @@ mod render_for_model_tests {
             "exitCode": -1,
             "interrupted": true,
             "backgroundTaskId": "task-99",
+            "outputPath": "/cfg/cache/tasks/sess/task-99.output",
             "assistantAutoBackgrounded": true,
         });
         let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
@@ -1234,6 +1230,10 @@ mod render_for_model_tests {
             "got: {text}"
         );
         assert!(text.contains("task-99"), "got: {text}");
+        assert!(
+            text.contains("Output is being written to: /cfg/cache/tasks/sess/task-99.output"),
+            "got: {text}"
+        );
         assert!(text.contains("delegate long-running work"), "got: {text}");
     }
 
@@ -1248,6 +1248,7 @@ mod render_for_model_tests {
             "exitCode": 0,
             "interrupted": false,
             "backgroundTaskId": "task-7",
+            "outputPath": "/cfg/cache/tasks/sess/task-7.output",
             "backgroundedByUser": true,
         });
         let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
@@ -1255,7 +1256,9 @@ mod render_for_model_tests {
             panic!("expected Text part");
         };
         assert!(
-            text.contains("Command was manually backgrounded by user with ID: task-7"),
+            text.contains(
+                "Command was manually backgrounded by user with ID: task-7. Output is being written to: /cfg/cache/tasks/sess/task-7.output"
+            ),
             "got: {text}"
         );
     }
@@ -1270,13 +1273,16 @@ mod render_for_model_tests {
             "exitCode": 0,
             "interrupted": false,
             "backgroundTaskId": "task-3",
+            "outputPath": "/cfg/cache/tasks/sess/task-3.output",
         });
         let parts = <BashTool as DynTool>::render_for_model(&BashTool, &data);
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
         assert!(
-            text.contains("Command running in background with ID: task-3"),
+            text.contains(
+                "Command running in background with ID: task-3. Output is being written to: /cfg/cache/tasks/sess/task-3.output"
+            ),
             "got: {text}"
         );
         assert!(

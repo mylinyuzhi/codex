@@ -25,7 +25,7 @@ async fn spawn_isolated(home: &std::path::Path) -> RuntimeReloader {
 /// `models.json`.
 fn test_env_with_main_model() -> EnvSnapshot {
     EnvSnapshot::from_pairs(std::iter::once((
-        coco_config::EnvKey::CocoModel,
+        coco_config::EnvKey::CocoModelMain,
         "anthropic/claude-sonnet-4-6",
     )))
 }

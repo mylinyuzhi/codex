@@ -11,7 +11,7 @@ fn per_source_with(source: SettingSource, value: Value) -> HashMap<SettingSource
 
 #[test]
 fn from_per_source_empty_when_no_tier_has_skill_overrides_key() {
-    let per_source = per_source_with(SettingSource::User, json!({ "model": "claude-haiku" }));
+    let per_source = per_source_with(SettingSource::User, json!({ "language": "en" }));
     let tiers = SkillOverrideTiers::from_per_source(&per_source);
     assert!(tiers.is_empty());
 }

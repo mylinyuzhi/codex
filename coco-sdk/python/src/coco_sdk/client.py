@@ -134,7 +134,7 @@ class CocoClient:
     On ``start()`` the client sends an ``initialize`` request to the
     Rust ``coco sdk`` process (registering hooks / agents / SDK-hosted
     MCP servers) and then a ``session/start`` request that carries the
-    initial prompt and the per-session knobs (model, max turns, budget,
+    initial prompt and the per-session knobs (models_main, max turns, budget,
     permission mode, system prompts).
 
     Example::
@@ -143,7 +143,7 @@ class CocoClient:
         from coco_sdk.types import DEEPSEEK
 
         async with CocoClient(prompt="Fix the bug in main.rs",
-                              model=DEEPSEEK.flash_openai) as client:
+                              models_main=DEEPSEEK.flash_openai) as client:
             async for event in client.events():
                 print(event.method, event.params)
     """
@@ -153,7 +153,7 @@ class CocoClient:
         prompt: str,
         *,
         # Model selection
-        model: str | ModelSpec | None = None,
+        models_main: str | ModelSpec | None = None,
         # Per-session knobs (mapped to SessionStartParams)
         max_turns: int | None = None,
         max_budget_usd: float | None = None,
@@ -183,7 +183,7 @@ class CocoClient:
         transport: Transport | None = None,
     ):
         self._initial_prompt = prompt
-        self._model = str(model) if model is not None else None
+        self._models_main = str(models_main) if models_main is not None else None
         self._max_turns = max_turns
         self._max_budget_usd = max_budget_usd
         self._cwd = cwd
@@ -202,11 +202,11 @@ class CocoClient:
         self._agent_progress_summaries = agent_progress_summaries
         self._prompt_suggestions = prompt_suggestions
         # `coco sdk` rejects the legacy default model at startup, so
-        # `--model provider/model_id` must be set BEFORE the subcommand
+        # `--models.main provider/model_id` must be set BEFORE the subcommand
         # rather than only sent on the wire via `session/start.model`.
         cli_args: list[str] = []
-        if self._model:
-            cli_args += ["--model", self._model]
+        if self._models_main:
+            cli_args += ["--models.main", self._models_main]
         self._transport = transport or SubprocessCLITransport(
             binary_path=binary_path,
             cwd=cwd,
@@ -344,7 +344,7 @@ class CocoClient:
         # auto-run a turn (verified empirically against `coco sdk`).
         # The actual prompt goes through `_send_turn_start`.
         params = SessionStartRequest.SessionStartRequestParams(
-            model=self._model,
+            model=self._models_main,
             max_turns=self._max_turns,
             max_budget_usd=self._max_budget_usd,
             cwd=self._cwd,
@@ -498,10 +498,10 @@ class CocoClient:
         )
         await self._notify(request)
 
-    async def set_model(self, model: str | ModelSpec) -> None:
-        """Change the model for subsequent turns."""
+    async def set_models_main(self, models_main: str | ModelSpec) -> None:
+        """Change the main model for subsequent turns."""
         request = SetModelRequest(
-            params=SetModelRequest.SetModelRequestParams(model=str(model))
+            params=SetModelRequest.SetModelRequestParams(model=str(models_main))
         )
         await self._notify(request)
 

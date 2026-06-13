@@ -1,10 +1,13 @@
 //! Tool filtering and nested-agent restriction parsing.
 //!
-//! Pure logic: takes (parent tool catalog, agent definition, runtime flags)
-//! and returns a `ToolFilterPlan`. The plan is then applied to the child
-//! `ToolRegistry` by `app/state` — this crate never touches the registry.
+//! Pure logic: the universal subagent deny-list ([`subagent_disallowed_tools`]),
+//! allow-list normalisation ([`parse_tool_allow_list`]), and `Agent(...)` /
+//! `Task(...)` permission-entry parsing ([`parse_allowed_agent_types`]). The
+//! coordinator spawn path consumes these to build the child `ToolFilter`; this
+//! crate never touches the registry.
 
-use coco_types::{AgentDefinition, MCP_TOOL_PREFIX, ToolName};
+use coco_types::ToolName;
+use strum::IntoEnumIterator;
 
 /// Tools blocked for every spawned agent.
 ///
@@ -19,9 +22,6 @@ pub const ALL_AGENT_DISALLOWED_TOOLS: &[&str] = &[
     ToolName::AskUserQuestion.as_str(),
     ToolName::TaskStop.as_str(),
 ];
-
-/// Custom agents inherit the universal block-list with no extras.
-pub const CUSTOM_AGENT_DISALLOWED_TOOLS: &[&str] = ALL_AGENT_DISALLOWED_TOOLS;
 
 /// Tools that are safe inside a background (async) agent.
 ///
@@ -47,37 +47,16 @@ pub const ASYNC_AGENT_ALLOWED_TOOLS: &[&str] = &[
     ToolName::ExitWorktree.as_str(),
 ];
 
-/// Tools allowed only for in-process teammates (in addition to
-/// [`ASYNC_AGENT_ALLOWED_TOOLS`]).
-///
-/// In-process teammates need these to coordinate via the shared task
-/// list and inter-teammate mailbox. The `AGENT_TRIGGERS`-gated cron
-/// tools (`CronCreate` / `CronDelete` / `CronList`) are included
-/// unconditionally here — the feature gate is enforced upstream by
-/// `Tool::is_enabled` so listing them costs nothing when the gate is
-/// off.
-pub const IN_PROCESS_TEAMMATE_ALLOWED_TOOLS: &[&str] = &[
-    ToolName::TaskCreate.as_str(),
-    ToolName::TaskGet.as_str(),
-    ToolName::TaskList.as_str(),
-    ToolName::TaskUpdate.as_str(),
-    ToolName::SendMessage.as_str(),
-    ToolName::CronCreate.as_str(),
-    ToolName::CronDelete.as_str(),
-    ToolName::CronList.as_str(),
-];
-
 /// The universal subagent tool block as deny-list names — the tools every
-/// spawned subagent is denied regardless of its allow-list. Applied
-/// *before* the allow-list intersection. `ExitPlanMode` is re-admitted
-/// when `plan_mode` so a plan-mode subagent can still exit the plan.
+/// spawned subagent is denied regardless of its allow-list. `ExitPlanMode`
+/// is re-admitted when `plan_mode` so a plan-mode subagent can still exit
+/// the plan.
 ///
 /// coco-rs enforces tool visibility per-id via
 /// [`coco_types::ToolFilter::allows`] (`tool-runtime/registry.rs`), so a
 /// deny entry simply drops that tool from the model's list — no
-/// `available_tools` snapshot is required (unlike the concrete-list
-/// [`AgentToolFilter::plan`]). The caller merges these into the child
-/// `ToolFilter`'s disallowed set.
+/// `available_tools` snapshot is required. The caller (coordinator spawn
+/// path) merges these into the child `ToolFilter`'s disallowed set.
 pub fn subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
     let exit_plan_mode = ToolName::ExitPlanMode.as_str();
     ALL_AGENT_DISALLOWED_TOOLS
@@ -87,149 +66,27 @@ pub fn subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
         .collect()
 }
 
-/// Inputs that drive `AgentToolFilter::plan`.
-#[derive(Debug, Clone)]
-pub struct ToolFilterContext<'a> {
-    pub available_tools: &'a [String],
-    pub is_builtin: bool,
-    pub is_async: bool,
-    pub plan_mode: bool,
-    /// coco-rs extension: caller-supplied extra allow-list, e.g. a slash
-    /// command's `allowed_tools`. Intersected on top of the agent's own
-    /// allow-list. Used by the slash command runtime to over-restrict an
-    /// agent for a specific invocation. Set to `None` for default behavior.
-    pub extra_allow_list: Option<&'a [String]>,
-    /// True when the spawn target is an in-process teammate AND
-    /// agent-teams (`Feature::AgentTeams`) is on. When set, the async
-    /// filter re-admits `Agent` plus [`IN_PROCESS_TEAMMATE_ALLOWED_TOOLS`]
-    /// (Task* + SendMessage + Cron*) so teammates can coordinate via the
-    /// shared task list and mailbox.
-    pub is_in_process_teammate: bool,
-}
-
-/// Output of the filter plan: ready to feed into a child `ToolRegistry`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolFilterPlan {
-    /// Tools that the child registry should expose. Order is stable (input
-    /// order from `available_tools`).
-    pub allowed_tools: Vec<String>,
-    /// Tools the agent listed but that did not match anything available.
-    pub unknown_tools: Vec<String>,
-    /// True when the agent supplied no allow-list, i.e. "all tools default".
-    pub uses_default_allow_list: bool,
-}
-
-pub struct AgentToolFilter;
-
-impl AgentToolFilter {
-    /// Compute the effective tool list for a child agent.
-    ///
-    /// Applied per candidate (short-circuit on first match):
-    /// 1. MCP tools (`mcp__*`) — always allowed.
-    /// 2. `ExitPlanMode` in `plan_mode` — bypasses both universal block
-    ///    and async filter (sync OR async).
-    /// 3. `ALL_AGENT_DISALLOWED_TOOLS` — universal block.
-    /// 4. `CUSTOM_AGENT_DISALLOWED_TOOLS` — block for non-built-in agents.
-    /// 5. Async agents: keep only `ASYNC_AGENT_ALLOWED_TOOLS`.
-    ///
-    /// Then the definition allow-list / deny-list are applied on the
-    /// surviving set, and the optional `extra_allow_list` (coco-rs
-    /// extension) intersects further.
-    pub fn plan(def: &AgentDefinition, ctx: ToolFilterContext<'_>) -> ToolFilterPlan {
-        let exit_plan_mode = ToolName::ExitPlanMode.as_str();
-        let agent_tool = ToolName::Agent.as_str();
-        let allowed_by_first_pass = |name: &&str| -> bool {
-            // 1. MCP tools always pass.
-            if name.starts_with(MCP_TOOL_PREFIX) {
-                return true;
-            }
-            // 2. Plan-mode bypass for ExitPlanMode.
-            if ctx.plan_mode && *name == exit_plan_mode {
-                return true;
-            }
-            // 3. Universal block.
-            if ALL_AGENT_DISALLOWED_TOOLS.contains(name) {
-                // In-process teammates re-admit `Agent` so they can
-                // spawn synchronous subagents (validated upstream by
-                // `AgentTool::execute` to prevent background / teammate
-                // spawning). The teammate MUST itself be running async
-                // — sync teammates don't trigger this exception.
-                if ctx.is_async && ctx.is_in_process_teammate && *name == agent_tool {
-                    return true;
-                }
-                return false;
-            }
-            // 4. Custom agent extras.
-            if !ctx.is_builtin && CUSTOM_AGENT_DISALLOWED_TOOLS.contains(name) {
-                if ctx.is_async && ctx.is_in_process_teammate && *name == agent_tool {
-                    return true;
-                }
-                return false;
-            }
-            // 5. Async allow-list.
-            if ctx.is_async && !ASYNC_AGENT_ALLOWED_TOOLS.contains(name) {
-                // In-process teammates also keep the
-                // IN_PROCESS_TEAMMATE_ALLOWED_TOOLS set
-                // (TaskCreate/Get/List/Update + SendMessage + Cron*)
-                // so teammates can coordinate via the shared task list
-                // and the inter-teammate mailbox.
-                if ctx.is_in_process_teammate
-                    && (*name == agent_tool || IN_PROCESS_TEAMMATE_ALLOWED_TOOLS.contains(name))
-                {
-                    return true;
-                }
-                return false;
-            }
-            true
-        };
-        let mut candidates: Vec<&str> = ctx
-            .available_tools
-            .iter()
-            .map(String::as_str)
-            .filter(allowed_by_first_pass)
-            .collect();
-
-        // Apply def.disallowed_tools BEFORE the def.allowed_tools intersection.
-        // `allowedAvailableTools = filteredAvailableTools - disallowedToolSet`
-        // is the catalog the allow-list is matched against — so a tool listed
-        // in BOTH allow and deny is reported as `invalidTools`.
-        if !def.disallowed_tools.is_empty() {
-            let denied: Vec<&str> = def.disallowed_tools.iter().map(String::as_str).collect();
-            candidates.retain(|name| !denied.contains(name));
-        }
-
-        // Agent's allow-list intersection. `Wildcard` = keep everything.
-        // MCP tools do NOT bypass the allow-list — they are only
-        // auto-included when the agent gave no allow-list at all.
-        let uses_default_allow_list = def.allowed_tools.is_wildcard();
-        let mut unknown_tools: Vec<String> = Vec::new();
-        if let Some(explicit) = def.allowed_tools.as_explicit() {
-            let allowed = parse_tool_allow_list(explicit);
-            unknown_tools = allowed
-                .iter()
-                .filter(|name| !candidates.contains(*name))
-                .map(|s| (*s).to_owned())
-                .collect();
-            candidates.retain(|name| allowed.contains(name));
-        }
-
-        // coco-rs extension: caller-supplied extra allow-list (e.g. slash
-        // command `allowed_tools`). Same intersection semantics — no MCP
-        // bypass, since callers pass an explicit set.
-        if let Some(extra) = ctx.extra_allow_list
-            && !extra.is_empty()
-        {
-            let extra_allowed: Vec<&str> = extra.iter().map(String::as_str).collect();
-            candidates.retain(|name| extra_allowed.contains(name));
-        }
-
-        let allowed_tools: Vec<String> = candidates.into_iter().map(str::to_owned).collect();
-        ToolFilterPlan {
-            allowed_tools,
-            unknown_tools,
-            uses_default_allow_list,
-        }
-    }
+/// Deny-list that clamps a background (async) subagent to the async-safe
+/// tool set — every built-in tool NOT in [`ASYNC_AGENT_ALLOWED_TOOLS`].
+///
+/// TS parity: `filterToolsForAgent` (`agentToolUtils.ts`) strips every
+/// tool outside the async-safe set when `isAsync`
+/// (`run_in_background || agent.background`). REPL and other long-lived
+/// stateful tools the runtime can't safely background are excluded.
+///
+/// MCP tools (`mcp__*`) are NOT [`ToolName`] variants, so they never
+/// appear here and pass through — mirroring TS, where MCP bypasses the
+/// async clamp. `ExitPlanMode` is re-admitted in plan mode so a
+/// plan-mode background spawn can still exit the plan. The caller merges
+/// these into the child `ToolFilter`'s disallowed set (deny wins over the
+/// definition's own allow-list, exactly like the universal block).
+pub fn async_subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
+    let exit_plan_mode = ToolName::ExitPlanMode.as_str();
+    ToolName::iter()
+        .map(|t| t.as_str())
+        .filter(|name| !ASYNC_AGENT_ALLOWED_TOOLS.contains(name))
+        .filter(|name| !(plan_mode && *name == exit_plan_mode))
+        .collect()
 }
 
 /// Strip parenthesized arguments from allow-list entries: `Bash(*)` ↦ `Bash`.

@@ -176,11 +176,34 @@ fn find_syntax<'s>(ss: &'s SyntaxSet, lang: &str) -> Option<&'s SyntaxReference>
 /// background thread at startup: it warms the same process-global `SyntaxSet`,
 /// so every later caller parses against compiled regexes. Skipping it only
 /// costs first-use latency, never correctness.
+///
+/// **Why just `diff` + `bash`.** The compiled fancy-regex DFA — not the bundled
+/// grammar count — is what costs resident memory: an untouched grammar stays a
+/// compact `serialized_lazy_contexts` blob and never expands. Measured peak-RSS
+/// deltas for prewarming one grammar (`examples/measure_grammar.rs`):
+/// TypeScript ~60 MB, Markdown ~22 MB, JavaScript ~21 MB, bash ~12 MB,
+/// Rust/Python ~10 MB, Go ~9 MB, and the cheap ones Diff/JSON/YAML/TOML
+/// ~1–3 MB each. The old 11-grammar list (incl. TypeScript) cost ~90–100 MB
+/// resident just to warm.
+///
+/// Two grammars earn their warm slot:
+/// - `diff` (~2.5 MB) — rendered on nearly every Edit/apply-patch, cheap, and
+///   diffs arrive in large multi-line bursts where lazy-compile jank is most
+///   visible.
+/// - `bash` (~12 MB) — every Bash/Shell tool call highlights its command
+///   preview through this grammar (`tool_display.rs`), so it is touched on
+///   essentially the first tool call of a session and constantly after; warming
+///   it keeps that first shell command smooth.
+///
+/// Everything else (TypeScript/Markdown/JavaScript/Go/Python/…) stays lazy: it
+/// still highlights correctly, just paying a one-time tens-of-ms compile on the
+/// first frame that renders it — the same tradeoff codex-rs makes for *every*
+/// grammar (it prewarms none).
 pub fn prewarm_highlighting() {
+    // Keep this snippet in sync with `examples/measure_grammar.rs` so the tool's
+    // memory numbers reflect the real prewarm cost.
     const SNIPPET: &str = "# t *m* `c` fn x() { let y: i32 = 1; } [l](u)\n";
-    const LANGS: &[&str] = &[
-        "md", "rs", "sh", "json", "toml", "py", "ts", "js", "yaml", "diff", "go",
-    ];
+    const LANGS: &[&str] = &["diff", "bash"];
     let started = std::time::Instant::now();
     let ss = syntax_set();
     let mut warmed = 0usize;

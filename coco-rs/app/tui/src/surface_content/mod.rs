@@ -167,9 +167,12 @@ pub(crate) fn surface_content(
         TextSurfaceContent::PlanApproval(p) => confirm::plan_approval_content(p, styles),
         TextSurfaceContent::SkillsDialog(s) => pickers::skills_dialog_content(s, styles),
         TextSurfaceContent::PluginDialog(p) => pickers::plugin_dialog_content(p, styles),
-        TextSurfaceContent::AgentsDialog(a) => {
-            pickers::agents_dialog_content(a, &state.session.subagents, styles)
-        }
+        TextSurfaceContent::AgentsDialog(a) => pickers::agents_dialog_content(
+            a,
+            &state.session.subagents,
+            styles,
+            state.clock.now_ms(),
+        ),
         TextSurfaceContent::PermissionsEditor(p) => pickers::permissions_editor_content(p, styles),
     }
 }

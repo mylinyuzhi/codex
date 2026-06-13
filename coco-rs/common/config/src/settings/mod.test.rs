@@ -21,6 +21,22 @@ fn test_parse_settings_accepts_jsonc_comments_and_trailing_commas() {
 }
 
 #[test]
+fn test_parse_settings_rejects_top_level_model() {
+    let err = parse_settings(r#"{ "model": "openai/gpt-5-5" }"#)
+        .expect_err("top-level model is not supported");
+
+    assert!(err.to_string().contains("models.main"), "got: {err}");
+}
+
+#[test]
+fn test_parse_settings_rejects_unknown_top_level_key() {
+    let err = parse_settings(r#"{ "not_a_real_setting": true }"#)
+        .expect_err("unknown top-level key is not supported");
+
+    assert!(err.to_string().contains("not_a_real_setting"), "got: {err}");
+}
+
+#[test]
 fn test_parse_settings_accepts_ts_permission_policy_key() {
     let settings = parse_settings(
         r#"{

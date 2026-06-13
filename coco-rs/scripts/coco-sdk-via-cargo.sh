@@ -19,7 +19,7 @@
 #
 # Translates the binary's CLI shape:
 #
-#     coco --model <provider>/<model_id> sdk [other flags]
+#     coco --models.main <provider>/<model_id> sdk [other flags]
 #
 # into:
 #
@@ -28,7 +28,7 @@
 #
 # Caveats
 # -------
-# * Only the `--model provider/model_id` flag and the `sdk` subcommand
+# * Only the `--models.main provider/model_id` flag and the `sdk` subcommand
 #   are honored — other binary flags are silently dropped. The Python
 #   transport doesn't pass anything else today, but if you add `--cwd`
 #   or `--max-turns` etc. you'll need to extend this.
@@ -39,12 +39,12 @@ MODEL=""
 SAW_SDK=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --model)
+        --models.main)
             MODEL="${2:-}"
-            shift 2 || { echo "[coco-sdk-via-cargo] --model requires a value" >&2; exit 64; }
+            shift 2 || { echo "[coco-sdk-via-cargo] --models.main requires a value" >&2; exit 64; }
             ;;
-        --model=*)
-            MODEL="${1#--model=}"
+        --models.main=*)
+            MODEL="${1#--models.main=}"
             shift
             ;;
         sdk)
@@ -68,7 +68,7 @@ if [[ "$SAW_SDK" != "true" ]]; then
     exit 64
 fi
 if [[ -z "$MODEL" || "$MODEL" != */* ]]; then
-    echo "[coco-sdk-via-cargo] expected --model provider/model_id, got: '$MODEL'" >&2
+    echo "[coco-sdk-via-cargo] expected --models.main provider/model_id, got: '$MODEL'" >&2
     exit 64
 fi
 

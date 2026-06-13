@@ -55,6 +55,10 @@ pub(crate) struct ActivitySpan {
     pub(crate) text: Cow<'static, str>,
     pub(crate) tone: ActivityTone,
     pub(crate) bold: bool,
+    /// Per-agent badge color. When `Some`, the renderer tints this span
+    /// with the agent's assigned color instead of the `tone` foreground
+    /// (TS `AgentProgressLine` parity). `None` ⇒ plain `tone` styling.
+    pub(crate) color: Option<coco_types::AgentColorName>,
 }
 
 impl ActivitySpan {
@@ -63,6 +67,7 @@ impl ActivitySpan {
             text: text.into(),
             tone: ActivityTone::Text,
             bold: false,
+            color: None,
         }
     }
 
@@ -71,6 +76,7 @@ impl ActivitySpan {
             text: text.into(),
             tone,
             bold: false,
+            color: None,
         }
     }
 
@@ -79,7 +85,14 @@ impl ActivitySpan {
             text: text.into(),
             tone,
             bold: true,
+            color: None,
         }
+    }
+
+    /// Set the per-agent badge color (builder).
+    pub(crate) fn with_color(mut self, color: Option<coco_types::AgentColorName>) -> Self {
+        self.color = color;
+        self
     }
 }
 
@@ -360,10 +373,12 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             ActivitySpan::tone(row_prefix, ActivityTone::Dim),
             ActivitySpan::tone(format!("{icon} "), tone),
             ActivitySpan::raw(agent.description.clone()),
-            ActivitySpan::tone(format!(" ({label})"), ActivityTone::Dim),
+            // Tint the agent badge with its assigned color (TS
+            // `AgentProgressLine` parity); falls back to Dim when unset.
+            ActivitySpan::tone(format!(" ({label})"), ActivityTone::Dim).with_color(agent.color),
         ];
         if let Some(started_ms) = agent.started_at_ms {
-            let elapsed_ms = (crate::state::session::now_ms() - started_ms).max(0);
+            let elapsed_ms = (state.clock.now_ms() - started_ms).max(0);
             spans.push(ActivitySpan::tone(
                 format!(" {}", format_short_elapsed(elapsed_ms)),
                 ActivityTone::Dim,
@@ -407,7 +422,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         ) {
             let elapsed_ms = agent
                 .started_at_ms
-                .map(|s| (crate::state::session::now_ms() - s).max(0));
+                .map(|s| (state.clock.now_ms() - s).max(0));
             let duration = elapsed_ms
                 .map(|ms| format!(" · {}", format_short_elapsed(ms)))
                 .unwrap_or_default();

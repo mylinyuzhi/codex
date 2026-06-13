@@ -121,7 +121,7 @@ fn drops_plugin_sourced_rules() {
 
 #[test]
 fn handles_missing_permissions_block_gracefully() {
-    let raw = serde_json::json!({ "model": "claude-haiku-4-5-20251001" });
+    let raw = serde_json::json!({ "language": "en" });
     let mut per = HashMap::new();
     per.insert(SettingSource::User, raw);
     let s = settings_with(per);

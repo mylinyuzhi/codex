@@ -8,15 +8,27 @@ use walkdir::WalkDir;
 
 use crate::config::IgnoreConfig;
 
-/// Ignore file names (ripgrep native support + agent-specific overrides).
+/// Agent-level ignore filename.
 ///
 /// `.agentignore` uses the same gitignore syntax as `.ignore`, but is the
 /// agreed name for **AI-agent-only** exclusions — checked-in files the
 /// user wants hidden from Claude / coco-rs (secrets, fixtures, generated
-/// artifacts) without affecting the rest of git tooling. Treated
-/// identically to `.ignore` at the matcher level; the filename split
-/// just makes intent explicit.
-pub const IGNORE_FILES: &[&str] = &[".ignore", ".agentignore"];
+/// artifacts) without affecting the rest of git tooling.
+///
+/// It is wired into the walker via [`ignore::WalkBuilder::add_custom_ignore_filename`],
+/// which the `ignore` crate honors **independently** of the `.gitignore` /
+/// `.ignore` toggles — so `.agentignore` stays in force even in the Glob
+/// tool's `--no-ignore` discovery mode. That is the deliberate split from
+/// `.ignore`: same syntax, stronger (agent-scoped, always-on) intent.
+pub const AGENT_IGNORE_FILE: &str = ".agentignore";
+
+/// Standard ripgrep `.ignore` filename (handled natively by the `ignore`
+/// crate's `.ignore(bool)` toggle).
+pub const IGNORE_FILE: &str = ".ignore";
+
+/// Ignore file names discovered by [`find_ignore_files`] (both the native
+/// `.ignore` and the agent-level `.agentignore`).
+pub const IGNORE_FILES: &[&str] = &[IGNORE_FILE, AGENT_IGNORE_FILE];
 use crate::patterns::BINARY_FILE_PATTERNS;
 use crate::patterns::COMMON_DIRECTORY_EXCLUDES;
 use crate::patterns::COMMON_IGNORE_PATTERNS;
@@ -59,6 +71,7 @@ impl IgnoreService {
     /// Defaults:
     /// - Respects `.gitignore` files
     /// - Respects `.ignore` files (ripgrep native support)
+    /// - Respects `.agentignore` files (agent-level exclusions)
     /// - Excludes hidden files
     /// - Does not follow symlinks
     pub fn with_defaults() -> Self {
@@ -84,18 +97,24 @@ impl IgnoreService {
         let mut builder = WalkBuilder::new(root);
 
         // Configure gitignore handling
-        if self.config.respect_gitignore {
-            builder.git_ignore(true).git_global(true).git_exclude(true);
-        } else {
-            builder
-                .git_ignore(false)
-                .git_global(false)
-                .git_exclude(false);
-        }
+        builder
+            .git_ignore(self.config.respect_gitignore)
+            .git_global(self.config.respect_gitignore)
+            .git_exclude(self.config.respect_gitignore);
 
-        // Configure .ignore files (ripgrep native support)
-        if self.config.respect_ignore {
-            builder.add_custom_ignore_filename(".ignore");
+        // Configure native `.ignore` (and `.rgignore`) handling. This is the
+        // `ignore` crate's own toggle — driving it directly (rather than the
+        // old `add_custom_ignore_filename(".ignore")`, which double-registered
+        // a file the crate already reads natively and left the toggle a no-op)
+        // means `respect_ignore = false` actually disables `.ignore`.
+        builder.ignore(self.config.respect_ignore);
+
+        // Configure `.agentignore`. Registered as a custom ignore filename,
+        // which the `ignore` crate applies regardless of the git/ignore
+        // toggles above — so agent-hidden files stay hidden even when a caller
+        // (e.g. Glob discovery) turns gitignore and `.ignore` off.
+        if self.config.respect_agentignore {
+            builder.add_custom_ignore_filename(AGENT_IGNORE_FILE);
         }
 
         // Configure hidden files and symlinks

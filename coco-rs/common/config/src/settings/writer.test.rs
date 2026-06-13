@@ -26,10 +26,10 @@ fn deletion_of_last_key_prunes_empty_parent() {
 
 #[test]
 fn non_null_overlay_overwrites_leaf() {
-    let mut base = json!({ "model": "claude-haiku" });
-    let overlay = json!({ "model": "claude-opus" });
+    let mut base = json!({ "language": "en" });
+    let overlay = json!({ "language": "zh" });
     deep_merge_with_deletions(&mut base, &overlay);
-    assert_eq!(base, json!({ "model": "claude-opus" }));
+    assert_eq!(base, json!({ "language": "zh" }));
 }
 
 #[test]

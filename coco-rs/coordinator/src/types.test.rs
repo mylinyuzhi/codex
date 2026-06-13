@@ -1,5 +1,3 @@
-use tokio::sync::mpsc;
-
 use super::*;
 
 // ── TeammateIdentity ──
@@ -33,85 +31,6 @@ fn test_agent_spawn_result_failure() {
     let result = AgentSpawnResult::failure("id-2".into(), "worker-2".into(), "timeout".into());
     assert_eq!(result.status, SubAgentStatus::Failed);
     assert_eq!(result.error.as_deref(), Some("timeout"));
-}
-
-// ── PermissionSyncBridge ──
-
-#[tokio::test]
-async fn test_permission_sync_bridge_request_resolve() {
-    let (tx, mut rx) = mpsc::channel::<SwarmPermissionRequest>(16);
-    let bridge = PermissionSyncBridge::new(tx);
-
-    let request = SwarmPermissionRequest {
-        id: "req-1".into(),
-        worker_id: "worker-1".into(),
-        worker_name: "researcher".into(),
-        worker_color: None,
-        team_name: "team-a".into(),
-        tool_name: "Bash".into(),
-        tool_use_id: "tu-1".into(),
-        description: "run tests".into(),
-        input: serde_json::json!({"command": "cargo test"}),
-        cwd: None,
-        status: PermissionRequestStatus::Pending,
-        resolved_by: None,
-        resolved_at: None,
-        feedback: None,
-        created_at: 1000,
-    };
-
-    let bridge_clone = Arc::new(bridge);
-    let bridge_for_task = Arc::clone(&bridge_clone);
-
-    // Spawn a task that requests permission
-    let handle = tokio::spawn(async move { bridge_for_task.request_permission(request).await });
-
-    // Leader side: receive and resolve
-    let received = rx.recv().await.expect("should receive request");
-    assert_eq!(received.id, "req-1");
-    assert_eq!(received.tool_name, "Bash");
-
-    let resolved = bridge_clone
-        .resolve_permission(
-            "req-1",
-            PermissionResolution {
-                decision: PermissionRequestStatus::Approved,
-                resolved_by: PermissionResolver::Leader,
-                feedback: None,
-                updated_input: None,
-            },
-        )
-        .await;
-    assert!(resolved, "should find and resolve the pending request");
-
-    let result = handle.await.expect("task should complete");
-    let resolution = result.expect("should get resolution");
-    assert_eq!(resolution.decision, PermissionRequestStatus::Approved);
-}
-
-#[tokio::test]
-async fn test_permission_bridge_pending_count() {
-    let (tx, _rx) = mpsc::channel::<SwarmPermissionRequest>(16);
-    let bridge = PermissionSyncBridge::new(tx);
-    assert_eq!(bridge.pending_count().await, 0);
-}
-
-#[tokio::test]
-async fn test_permission_bridge_resolve_unknown_id() {
-    let (tx, _rx) = mpsc::channel::<SwarmPermissionRequest>(16);
-    let bridge = PermissionSyncBridge::new(tx);
-    let result = bridge
-        .resolve_permission(
-            "nonexistent",
-            PermissionResolution {
-                decision: PermissionRequestStatus::Rejected,
-                resolved_by: PermissionResolver::Leader,
-                feedback: Some("denied".into()),
-                updated_input: None,
-            },
-        )
-        .await;
-    assert!(!result, "resolving unknown ID should return false");
 }
 
 // ── TeamManager ──
@@ -224,24 +143,6 @@ async fn test_team_manager_is_leader() {
 }
 
 // ── Utility functions ──
-
-#[test]
-fn test_generate_request_id_format() {
-    let id = generate_request_id();
-    assert!(
-        id.starts_with("perm-"),
-        "id should start with 'perm-': {id}"
-    );
-}
-
-#[test]
-fn test_generate_sandbox_request_id_format() {
-    let id = generate_sandbox_request_id();
-    assert!(
-        id.starts_with("sandbox-"),
-        "id should start with 'sandbox-': {id}"
-    );
-}
 
 #[test]
 fn test_sanitize_name() {

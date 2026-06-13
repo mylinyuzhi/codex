@@ -261,7 +261,7 @@ fn build_row(
 /// Map `AgentColorName` onto ratatui terminal colors. Indexed colors keep
 /// the agent badge readable across both light and dark themes; RGB is
 /// deliberately avoided so the user's terminal palette decides the shade.
-fn agent_color_to_ratatui(color: AgentColorName) -> Color {
+pub(crate) fn agent_color_to_ratatui(color: AgentColorName) -> Color {
     match color {
         AgentColorName::Red => Color::Red,
         AgentColorName::Blue => Color::Blue,

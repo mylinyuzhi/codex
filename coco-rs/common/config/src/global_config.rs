@@ -168,11 +168,11 @@ pub fn local_settings_path(cwd: &Path) -> PathBuf {
     cwd.join(".coco/settings.local.json")
 }
 
-/// Set `key` to `value` in `~/.coco/settings.json` (creating the file
-/// + parent dir as needed). Used by slash-command handlers that need
-///   to persist a single top-level setting (e.g. `theme`, `effort`,
-///   `output_style`, `color_mode`) without round-tripping through the
-///   full `Settings` deserialize/serialize cycle.
+/// Set `key` to `value` in `~/.coco/settings.json`.
+///
+/// Creates the file and parent directory as needed. Used by slash-command
+/// handlers that need to persist a single setting without round-tripping
+/// through the full `Settings` deserialize/serialize cycle.
 ///
 /// `key` may be dotted (`sandbox.mode`) — intermediate objects are
 /// created if absent. Existing siblings are preserved. Returns the
@@ -212,6 +212,7 @@ fn write_user_setting_at_path(
         String::new()
     };
     let updated = crate::jsonc::set_dotted_value_preserving_format(&contents, key, value)?;
+    crate::settings::parse_settings(&updated)?;
     std::fs::write(path, updated)?;
     Ok(())
 }

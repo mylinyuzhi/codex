@@ -53,21 +53,14 @@ pub struct ForkContextOverrides {
     /// Per-fork agent id. `None` ⇒ auto-gen via [`auto_agent_id`].
     /// A fresh id is always allocated unless the caller pre-supplies one.
     pub agent_id: Option<String>,
-    /// When `false` (default), the fork's `setAppState` callbacks
-    /// are no-ops — tool emissions inside the fork can't mutate
-    /// parent UI state. Speculation flips this `true` for the
-    /// pipelined-suggestion case.
-    pub share_set_app_state: bool,
-    /// When `true` (default), clone the parent's `FileReadState` so
-    /// the fork sees the same already-seen ids ⇒ identical
-    /// `<file_unchanged>` decisions ⇒ cache hit. Setting this `false`
-    /// breaks cache parity — only use for forks that genuinely
-    /// shouldn't see the parent's read history (rare).
+    /// When `true` (default), the fork engine is built with a *deep clone*
+    /// of the parent's `FileReadState` (see
+    /// `SessionRuntime::build_engine_from_config_with_persistence`): the
+    /// fork sees the parent's already-seen ids ⇒ identical
+    /// `<file_unchanged>` decisions ⇒ cache parity, while its own
+    /// reads/edits can't pollute the parent's dedup cache. Setting this
+    /// `false` shares the parent's `Arc` (rare; breaks isolation).
     pub clone_file_read_state: bool,
-    /// When `true` (default), clone parent's `ContentReplacementState`
-    /// so cache-shared forks make identical replacement decisions
-    /// (same reason as `clone_file_read_state`).
-    pub clone_content_replacement_state: bool,
     /// Per-fork canUseTool callback. Forwarded onto every
     /// `ToolUseContext.can_use_tool` so the tool-call preparer
     /// enforces the per-policy gate before static permission
@@ -82,9 +75,6 @@ pub struct ForkContextOverrides {
     /// memdir). Empty = no fence. Enforces a path prefix via
     /// `ToolUseContext.allowed_write_roots`.
     pub allowed_write_roots: Vec<PathBuf>,
-    /// Parent's query-tracking chain id, for telemetry grouping.
-    /// `None` ⇒ root chain (the fork itself starts a new chain).
-    pub parent_query_chain_id: Option<String>,
     /// Parent's query-tracking depth. The fork's own depth is
     /// `parent_query_depth + 1`; increments through nested subagents.
     pub parent_query_depth: i32,
@@ -96,16 +86,10 @@ impl std::fmt::Debug for ForkContextOverrides {
             .field("fork_label", &self.fork_label)
             .field("query_source", &self.query_source)
             .field("agent_id", &self.agent_id)
-            .field("share_set_app_state", &self.share_set_app_state)
             .field("clone_file_read_state", &self.clone_file_read_state)
-            .field(
-                "clone_content_replacement_state",
-                &self.clone_content_replacement_state,
-            )
             .field("can_use_tool_set", &self.can_use_tool.is_some())
             .field("require_can_use_tool", &self.require_can_use_tool)
             .field("allowed_write_roots", &self.allowed_write_roots)
-            .field("parent_query_chain_id", &self.parent_query_chain_id)
             .field("parent_query_depth", &self.parent_query_depth)
             .finish()
     }
@@ -115,9 +99,7 @@ impl ForkContextOverrides {
     /// Build the conservative isolation shape for `label`.
     ///
     /// Defaults for the fire-and-forget side-channel case:
-    /// - `share_set_app_state = false` (fork can't mutate parent UI)
-    /// - `clone_file_read_state = true` (cache parity)
-    /// - `clone_content_replacement_state = true` (cache parity)
+    /// - `clone_file_read_state = true` (per-fork dedup-cache isolation)
     /// - `agent_id = None` (auto-gen)
     /// - `require_can_use_tool = false` (auto-approve hooks
     ///   bypass; speculation overrides to `true`)
@@ -131,13 +113,10 @@ impl ForkContextOverrides {
             query_source: label.as_str().to_string(),
             fork_label: label,
             agent_id: None,
-            share_set_app_state: false,
             clone_file_read_state: true,
-            clone_content_replacement_state: true,
             can_use_tool: None,
             require_can_use_tool: false,
             allowed_write_roots: Vec::new(),
-            parent_query_chain_id: None,
             parent_query_depth: 0,
         }
     }

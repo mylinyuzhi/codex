@@ -207,9 +207,9 @@ fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> crate::Result<Mcp
 
 /// Validate user-provided values against the manifest's JSONSchema-style
 /// `user_config` map: required-field presence + per-field type (`string`,
-/// `string[]` when `multiple`, `number`, `boolean`, `file`/`directory` path)
-/// + numeric `min`/`max`. Error labels prefer the schema's `title`, falling
-/// back to the key. Empty result = valid.
+/// `string[]` when `multiple`, `number`, `boolean`, `file`/`directory` path),
+/// plus numeric `min`/`max`. Error labels prefer the schema's `title`,
+/// falling back to the key. Empty result = valid.
 fn validate_config(
     schema: &HashMap<String, serde_json::Value>,
     user_config: &HashMap<String, serde_json::Value>,

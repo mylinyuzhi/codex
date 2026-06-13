@@ -1,4 +1,6 @@
-use super::bash_advanced::ASSISTANT_BLOCKING_BUDGET_MS;
+use super::background_task::BackgroundKind;
+use super::background_task::background_output_path;
+use super::background_task::format_background_notice;
 use super::shell_render::strip_leading_blank_lines;
 use coco_messages::ToolResult;
 use coco_permissions::InternalPathContext;
@@ -583,36 +585,19 @@ impl Tool for BashTool {
     /// Render the structured `data` envelope into model-visible content parts.
     ///
     /// Branches:
-    /// 1. **User-backgrounded** (`task_id` + `status: "background"`): emit
-    ///    the prebuilt `message` field as a single Text part — that path
-    ///    has no stdout/stderr and the message is already user-facing.
-    /// 2. **structuredContent present** (image stdout): decode each block
+    /// 1. **structuredContent present** (image stdout): decode each block
     ///    into a `FileData` (image) part. This is what enables Anthropic /
     ///    Gemini 3+ to actually see image bytes captured by `cat foo.png`.
-    /// 3. **Normal foreground**: build a single Text part by joining
-    ///    `[processedStdout, errorMessage, backgroundInfo]` with `\n`,
-    ///    skipping empty pieces. `processedStdout` strips leading
-    ///    blank-only lines + trims trailing whitespace. Oversized
-    ///    text output is persisted by the query-level generic Level 1
-    ///    tool-result pipeline, not by Bash itself.
+    /// 2. **Text path**: build a single Text part by joining
+    ///    `[processedStdout, errorMessage, exitTail, backgroundInfo]` with
+    ///    `\n`, skipping empty pieces. `processedStdout` strips leading
+    ///    blank-only lines + trims trailing whitespace. A backgrounded
+    ///    command carries `backgroundTaskId` + `outputPath`, so the
+    ///    `backgroundInfo` line names both — matching TS so the model can
+    ///    `Read` the output file. Oversized text output is persisted by the
+    ///    query-level generic Level 1 tool-result pipeline, not by Bash.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        // Branch 1: user-backgrounded path (different shape entirely).
-        if data
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|s| s == "background")
-        {
-            let msg = data
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Command is running in the background.");
-            return vec![ToolResultContentPart::Text {
-                text: msg.to_string(),
-                provider_options: None,
-            }];
-        }
-
-        // Branch 2: image stdout — decode the structuredContent envelope
+        // Branch 1: image stdout — decode the structuredContent envelope
         // into FileData parts so multimodal-capable providers see the
         // raw image bytes.
         if let Some(arr) = data.get("structuredContent").and_then(Value::as_array) {
@@ -648,7 +633,7 @@ impl Tool for BashTool {
             }
         }
 
-        // Branch 3: text path.
+        // Branch 2: text path.
         let stdout = data.get("stdout").and_then(Value::as_str).unwrap_or("");
         let stderr = data.get("stderr").and_then(Value::as_str).unwrap_or("");
         let interrupted = data
@@ -666,41 +651,16 @@ impl Tool for BashTool {
             error_message.push_str("<error>Command was aborted before completion</error>");
         }
 
-        // Background-info text. Three branches:
-        //   1. `assistantAutoBackgrounded` — fg→bg auto-promotion fired
-        //      because the command exceeded the assistant blocking
-        //      budget. Verbose message names the budget so the model
-        //      knows to delegate next time.
-        //   2. `backgroundedByUser` — Ctrl+B path, not yet wired in
-        //      coco-rs (no TUI keystroke path); kept for future-proofing
-        //      so adding the keybinding is a one-line data-side change.
-        //   3. Default `run_in_background: true` — short message.
+        // Background-info text: a backgrounded command carries
+        // `backgroundTaskId` + `outputPath`. The notice names both so the
+        // model can `Read` the output file directly. The `assistantAuto` /
+        // `user` / `explicit` variant is decided by the flags in `data`.
         let background_info = data
             .get("backgroundTaskId")
             .and_then(Value::as_str)
             .map(|task_id| {
-                let auto = data
-                    .get("assistantAutoBackgrounded")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let by_user = data
-                    .get("backgroundedByUser")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if auto {
-                    let budget_seconds = ASSISTANT_BLOCKING_BUDGET_MS / 1000;
-                    format!(
-                        "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to the task output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
-                    )
-                } else if by_user {
-                    format!(
-                        "Command was manually backgrounded by user with ID: {task_id}. Output is being written to the task output."
-                    )
-                } else {
-                    format!(
-                        "Command running in background with ID: {task_id}. Output is being written to the task output."
-                    )
-                }
+                let output_path = data.get("outputPath").and_then(Value::as_str).unwrap_or("");
+                format_background_notice(BackgroundKind::from_result(data), task_id, output_path)
             })
             .unwrap_or_default();
 
@@ -871,10 +831,10 @@ impl Tool for BashTool {
 
         // W3: unified fg/bg execution via TaskRuntime when available.
         // - Always spawn through `spawn_shell_task`.
-        // - `run_in_background: true` → return `{task_id, status}` now.
+        // - `run_in_background: true` → return `{backgroundTaskId, outputPath}`.
         // - Otherwise → race terminal/detach/cancel/auto-detach inside
         //   `tool.execute`, compose either fg-shape `{stdout, exitCode,
-        //   interrupted}` or bg-shape `{task_id, status, ...}`.
+        //   interrupted}` or bg-shape `{backgroundTaskId, outputPath, ...}`.
         //
         // Tests / minimal embeddings without a TaskRuntime fall back
         // to the legacy ShellExecutor path (`execute_foreground`).
@@ -913,8 +873,8 @@ impl Tool for BashTool {
 /// used). The fg/bg distinction is purely about which `tool.execute`
 /// arm wins the `select!`:
 ///
-/// - `run_in_background: true` → return `{task_id, status: "background"}`
-///   immediately. No await.
+/// - `run_in_background: true` → return `{backgroundTaskId, outputPath}`
+///   immediately (one `output_file_path` await, no command await).
 /// - `run_in_background: false` → race four signals:
 ///   1. `ctx.abort.cancelled()` (Ctrl+C / explicit kill) → return
 ///      `ToolError::Cancelled`.
@@ -1014,16 +974,15 @@ async fn execute_via_task_runtime(
             })?;
 
     // Bg path: return now. The task runs detached, will push a
-    // `<task-notification>` envelope on terminal.
+    // `<task-notification>` envelope on terminal. The result carries the
+    // task id + the on-disk output path so the model can `Read` the file
+    // directly (mirrors TS BashTool).
     if run_in_background {
+        let output_path = background_output_path(task_handle, &task_id).await;
         return Ok(ToolResult {
             data: serde_json::json!({
-                "task_id": task_id,
-                "status": "background",
-                "message": format!(
-                    "Command is running in the background. Task ID: {task_id}. \
-                     You will be notified when it completes."
-                ),
+                "backgroundTaskId": task_id,
+                "outputPath": output_path,
             }),
             new_messages: vec![],
             app_state_patch: None,
@@ -1139,15 +1098,12 @@ async fn execute_via_task_runtime(
             // interactive case; auto-detach will surface a follow-up
             // path in a later refactor.
             let _ = by_user;
+            let output_path = background_output_path(task_handle, &task_id).await;
             Ok(ToolResult {
                 data: serde_json::json!({
-                    "task_id": task_id,
-                    "status": "background",
+                    "backgroundTaskId": task_id,
+                    "outputPath": output_path,
                     "backgroundedByUser": true,
-                    "message": format!(
-                        "Command moved to background. Task ID: {task_id}. \
-                         You will be notified when it completes."
-                    ),
                 }),
                 new_messages: vec![],
                 app_state_patch: None,
