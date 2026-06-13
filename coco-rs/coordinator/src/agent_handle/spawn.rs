@@ -882,9 +882,8 @@ impl SwarmAgentHandle {
         //               through to the engine's generic default
         //               instead of receiving its role instructions.
         // - Fork      → parent's pre-rendered system-prompt bytes
-        //               verbatim (cache parity), parent history with
-        //               `tool_result` blocks rewritten to
-        //               `FORK_PLACEHOLDER`.
+        //               verbatim (cache parity), parent history threaded
+        //               through with real `tool_result` bodies intact.
         // - Resume    → seed from `definition.system_prompt` like
         //               Fresh; prior history kept verbatim (NO
         //               placeholder rewrite — the child needs real
@@ -1075,11 +1074,20 @@ impl SwarmAgentHandle {
                     parent_messages,
                     parent_snapshot: _,
                 } => {
-                    // Fork MUST use parent's pre-rendered prompt verbatim
-                    // for prompt-cache parity. Memory was already
-                    // captured by the parent's own assembly.
-                    let ctx = coco_subagent::build_fork_context(parent_messages);
-                    (rendered_system_prompt.clone(), ctx.messages, true, true)
+                    // Fork MUST use the parent's pre-rendered prompt verbatim
+                    // AND its conversation history with real tool results
+                    // intact, so the child's request prefix is byte-identical
+                    // to the parent's (prompt-cache hit) and the child sees
+                    // the output the parent gathered. `preserve_tool_use_results
+                    // = true` keeps the results through compaction. The
+                    // parent's pre-response snapshot has only complete
+                    // tool_use/result pairs, so no rewrite/filter is needed.
+                    (
+                        rendered_system_prompt.clone(),
+                        parent_messages.clone(),
+                        true,
+                        true,
+                    )
                 }
                 coco_tool_runtime::SpawnMode::Resume { parent_messages } => {
                     (build_fresh_prompt(), parent_messages.clone(), true, false)

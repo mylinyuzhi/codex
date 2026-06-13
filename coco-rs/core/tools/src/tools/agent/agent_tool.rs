@@ -489,13 +489,12 @@ impl Tool for AgentTool {
 
         // Fork-mode dispatch: when the env gate is on, agent-teams is
         // enabled, the session is interactive, and the caller omitted
-        // `subagent_type`, the child inherits
-        // the parent's pre-rendered system prompt + full message
-        // history (with `tool_result` blocks replaced by
-        // `coco_subagent::FORK_PLACEHOLDER` for cache-identical
-        // request prefixes). The coordinator wraps the user-facing
-        // directive in `<fork-boilerplate>` so the worker receives
-        // its rules and a downstream recursion guard
+        // `subagent_type`, the child inherits the parent's pre-rendered
+        // system prompt + full message history (with real `tool_result`
+        // bodies intact) so its request prefix is byte-identical to the
+        // parent's (prompt-cache hit). The coordinator wraps the
+        // user-facing directive in `<fork-boilerplate>` so the worker
+        // receives its rules and a downstream recursion guard
         // (`is_in_fork_child`) can detect fork-of-fork.
         //
         // Team spawns (`name` + `team_name`) are NOT fork-eligible even
@@ -537,12 +536,12 @@ impl Tool for AgentTool {
             };
             // Snapshot the parent's history into shared `Arc<Message>`
             // entries. `ctx.messages` is the immutable post-budget
-            // snapshot the engine threaded onto this turn's ctx —
-            // each entry is already `Arc<Message>`, so `.iter().cloned()`
+            // snapshot the engine threaded onto this turn's ctx (the
+            // pre-response view — every tool_use already has its
+            // tool_result, and the in-flight assistant turn is excluded).
+            // Each entry is already `Arc<Message>`, so `.iter().cloned()`
             // gives a `Vec<Arc<Message>>` via cheap atomic ref-count
-            // bumps. Downstream `build_fork_context` then only allocates
-            // fresh messages for the tool-result FORK_PLACEHOLDER
-            // rewrite; everything else stays shared.
+            // bumps — the coordinator threads it through verbatim.
             let parent_messages: Vec<std::sync::Arc<coco_messages::Message>> =
                 ctx.messages.iter().cloned().collect();
             // Recursive-fork guard: rejects the fork path when the

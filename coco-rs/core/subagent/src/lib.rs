@@ -44,9 +44,8 @@ pub use filter::{
     parse_tool_allow_list, subagent_disallowed_tools,
 };
 pub use fork::{
-    FORK_BOILERPLATE_TAG, FORK_DIRECTIVE_PREFIX, FORK_PLACEHOLDER, ForkContext,
-    build_fork_child_message, build_fork_child_rules, build_fork_context, is_fork_enabled,
-    is_in_fork_child,
+    FORK_BOILERPLATE_TAG, FORK_DIRECTIVE_PREFIX, build_fork_child_message, build_fork_child_rules,
+    is_fork_enabled, is_in_fork_child,
 };
 pub use frontmatter::{
     FrontmatterParseError, parse_agent_markdown, parse_color_value, parse_isolation_value,
