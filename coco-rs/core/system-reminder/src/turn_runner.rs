@@ -122,6 +122,12 @@ pub struct TurnReminderInput<'a> {
     /// `Some` on the live engine path; `None` in tests suppresses it.
     pub current_date: Option<String>,
 
+    /// Coordinator (leader) worker-tools context: the worker tool pool +
+    /// connected MCP servers, rendered as the `# workerToolsContext` block in
+    /// the same per-turn `user_context` reminder. `Some` only on the main
+    /// agent when coordinator mode is active; `None` otherwise.
+    pub coordinator_worker_context: Option<String>,
+
     // ── Verify-plan reminder ──
     /// True when `ToolAppState::pending_plan_verification` is set.
     pub has_pending_plan_verification: bool,
@@ -239,6 +245,7 @@ pub async fn run_turn_reminders(
         used_tokens,
         new_date,
         current_date,
+        coordinator_worker_context,
         has_pending_plan_verification,
         total_cost_usd,
         max_budget_usd,
@@ -320,6 +327,7 @@ pub async fn run_turn_reminders(
         .used_tokens(used_tokens)
         .new_date(new_date)
         .current_date(current_date)
+        .coordinator_worker_context(coordinator_worker_context)
         .has_pending_plan_verification(has_pending_plan_verification)
         .turns_since_plan_exit(turns_since_plan_exit)
         .total_cost_usd(total_cost_usd)
