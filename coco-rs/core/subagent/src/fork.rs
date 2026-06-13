@@ -34,18 +34,11 @@ pub const FORK_DIRECTIVE_PREFIX: &str = "Your directive: ";
 /// prompt-cache invariant — every fork child must produce the same prefix.
 pub const FORK_PLACEHOLDER: &str = "Fork started \u{2014} processing in background";
 
-/// Fork subagent context — carries inherited state from parent.
-///
-/// Caller is expected to:
-/// 1. Thread [`ForkContext::messages`] into the child's prior history.
-/// 2. Wrap the directive with [`build_fork_child_message`] and use it
-///    as the body of the new user turn (so the `<fork-boilerplate>`
-///    XML lands in the conversation; recursion detection
-///    ([`is_in_fork_child`]) depends on this).
-///
-/// Tool-pool inheritance is NOT carried on this struct — the AgentTool
-/// boundary owns that decision via
-/// [`coco_tool_runtime::AgentSpawnRequest::use_exact_tools`].
+/// Fork subagent context — carries the parent's conversation history,
+/// ready to thread into the child's prior history. The directive itself
+/// is wrapped separately by [`build_fork_child_message`] at the spawn
+/// site (so the caller can decorate it with skill-preload / hook context
+/// first), so it is NOT carried on this struct.
 #[derive(Debug, Clone)]
 pub struct ForkContext {
     /// Parent's conversation messages (with `tool_result` content
@@ -54,11 +47,6 @@ pub struct ForkContext {
     /// allocates fresh messages for the tool-result variant; every
     /// other entry is a cheap Arc-clone of the parent's history.
     pub messages: Vec<Arc<Message>>,
-    /// Directive captured from the AgentTool input. Use
-    /// [`build_fork_child_message`] to wrap it into the boilerplate
-    /// form before sending — this struct doesn't pre-wrap so the
-    /// caller can decorate (e.g. skill preload, hook context) first.
-    pub directive: String,
 }
 
 /// Build a fork context from the parent's conversation history.
@@ -68,7 +56,7 @@ pub struct ForkContext {
 /// (prompt-cache sharing). Non-tool-result messages share the parent's
 /// `Arc<Message>` allocation directly; only the rewritten entries
 /// allocate.
-pub fn build_fork_context(parent_messages: &[Arc<Message>], directive: &str) -> ForkContext {
+pub fn build_fork_context(parent_messages: &[Arc<Message>]) -> ForkContext {
     let mut forked: Vec<Arc<Message>> = Vec::with_capacity(parent_messages.len());
 
     for arc in parent_messages {
@@ -88,10 +76,7 @@ pub fn build_fork_context(parent_messages: &[Arc<Message>], directive: &str) -> 
         }
     }
 
-    ForkContext {
-        messages: forked,
-        directive: directive.to_string(),
-    }
+    ForkContext { messages: forked }
 }
 
 /// Build the full child message with XML-wrapped rules + directive.
@@ -137,16 +122,6 @@ pub fn build_fork_child_rules() -> String {
     .to_string()
 }
 
-/// Build a worktree notice for forked agents in isolated worktrees.
-///
-/// Em-dash is U+2014. Produces a single line with no embedded newlines —
-/// the caller appends it to the inherited context.
-pub fn build_worktree_notice(parent_cwd: &str, worktree_cwd: &str) -> String {
-    format!(
-        "You've inherited the conversation context above from a parent agent working in {parent_cwd}. You are operating in an isolated git worktree at {worktree_cwd} \u{2014} same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files."
-    )
-}
-
 /// Check if we are inside a fork child (prevents recursive forking).
 ///
 /// Scans user-role messages for the [`FORK_BOILERPLATE_TAG`] inside
@@ -179,18 +154,6 @@ pub fn is_in_fork_child(messages: &[Arc<Message>]) -> bool {
 /// which composes this check with the coordinator/interactivity guards.
 pub fn is_fork_enabled() -> bool {
     coco_config::env::is_env_truthy(coco_config::EnvKey::CocoForkSubagent)
-}
-
-/// Check if a fork is allowed for this context.
-///
-/// Fork requires: feature enabled, depth 0, no explicit `subagent_type`,
-/// and not already inside a fork child.
-pub fn is_fork_allowed(
-    query_depth: i32,
-    subagent_type: Option<&str>,
-    messages: &[Arc<Message>],
-) -> bool {
-    is_fork_enabled() && query_depth == 0 && subagent_type.is_none() && !is_in_fork_child(messages)
 }
 
 #[cfg(test)]

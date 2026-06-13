@@ -1057,7 +1057,7 @@ impl SwarmAgentHandle {
                     // Fork MUST use parent's pre-rendered prompt verbatim
                     // for prompt-cache parity. Memory was already
                     // captured by the parent's own assembly.
-                    let ctx = coco_subagent::build_fork_context(parent_messages, &request.prompt);
+                    let ctx = coco_subagent::build_fork_context(parent_messages);
                     (rendered_system_prompt.clone(), ctx.messages, true, true)
                 }
                 coco_tool_runtime::SpawnMode::Resume { parent_messages } => {

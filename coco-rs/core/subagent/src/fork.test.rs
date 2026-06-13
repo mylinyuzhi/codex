@@ -94,9 +94,8 @@ fn test_build_fork_context_replaces_tool_results() {
         user_text("Do this task"),
     ];
 
-    let ctx = build_fork_context(&messages, "Research the codebase");
+    let ctx = build_fork_context(&messages);
     assert_eq!(ctx.messages.len(), 3);
-    assert_eq!(ctx.directive, "Research the codebase");
 
     // The tool-result body must be replaced with FORK_PLACEHOLDER.
     assert_eq!(extract_tool_result_text(&ctx.messages[1]), FORK_PLACEHOLDER);
@@ -115,7 +114,7 @@ fn test_build_fork_context_preserves_assistant() {
         "Read",
     )];
 
-    let ctx = build_fork_context(&messages, "Continue");
+    let ctx = build_fork_context(&messages);
     assert_eq!(ctx.messages.len(), 1);
     assert!(Arc::ptr_eq(&ctx.messages[0], &messages[0]));
 }
@@ -167,15 +166,6 @@ fn test_build_fork_child_message_blank_line_before_directive() {
 }
 
 #[test]
-fn test_build_worktree_notice_ts_byte_faithful() {
-    // `forkSubagent.ts:205-210`. Lock the full text — the brevity
-    // of the old assertion let a 110-char rewrite slip through.
-    let got = build_worktree_notice("/parent/dir", "/worktree/dir");
-    let expected = "You've inherited the conversation context above from a parent agent working in /parent/dir. You are operating in an isolated git worktree at /worktree/dir \u{2014} same repository, same relative file structure, separate working copy. Paths in the inherited context refer to the parent's working directory; translate them to your worktree root. Re-read files before editing if the parent may have modified them since they appear in the context. Your changes stay in this worktree and will not affect the parent's files.";
-    assert_eq!(got, expected);
-}
-
-#[test]
 fn test_is_in_fork_child_detects_tag() {
     let messages = vec![user_text(&format!(
         "<{FORK_BOILERPLATE_TAG}>\nrules\n</{FORK_BOILERPLATE_TAG}>"
@@ -210,23 +200,15 @@ fn test_is_in_fork_child_assistant_messages_ignored() {
 }
 
 #[test]
-fn test_is_fork_allowed_guards() {
-    // Fork disabled by default (env var not set)
-    assert!(!is_fork_allowed(0, None, &[]));
-    assert!(!is_fork_allowed(1, None, &[]));
-    assert!(!is_fork_allowed(0, Some("Explore"), &[]));
-}
-
-#[test]
 fn test_build_fork_context_empty_messages() {
-    let ctx = build_fork_context(&[], "directive");
+    let ctx = build_fork_context(&[]);
     assert!(ctx.messages.is_empty());
 }
 
 #[test]
 fn test_build_fork_context_plain_user_passes_through() {
     let messages = vec![user_text("plain text")];
-    let ctx = build_fork_context(&messages, "test");
+    let ctx = build_fork_context(&messages);
     assert_eq!(ctx.messages.len(), 1);
     // Plain user message shares Arc with input — no allocation, no rewrite.
     assert!(Arc::ptr_eq(&ctx.messages[0], &messages[0]));

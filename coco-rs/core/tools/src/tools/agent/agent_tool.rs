@@ -500,7 +500,14 @@ impl Tool for AgentTool {
         // directive in `<fork-boilerplate>` so the worker receives
         // its rules and a downstream recursion guard
         // (`is_in_fork_child`) can detect fork-of-fork.
+        //
+        // Team spawns (`name` + `team_name`) are NOT fork-eligible even
+        // when `subagent_type` is omitted: a teammate is a distinct,
+        // addressable agent, not a cache-shared fork. TS routes the team
+        // branch before fork (`AgentTool.tsx:284-316`); mirror that here
+        // so a `Fork{..} + team_name` shape can never be constructed.
         let spawn_mode = if explicit_subagent_type.is_none()
+            && !is_team_spawn
             && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive)
         {
             let Some(rendered_system_prompt) = ctx.rendered_system_prompt.clone() else {
@@ -623,8 +630,14 @@ impl Tool for AgentTool {
         // defers `Agent(<type>)` content denies to the tool (see
         // core/permissions `central_rule_applies`), so the agentType scoping
         // MUST happen here or denied agents leak through. Skipped for pure
-        // forks (no model-chosen agentType).
+        // forks (no model-chosen agentType) AND for team spawns: an untyped
+        // team spawn defaults `effective_subagent_type` to `general-purpose`,
+        // so without the `!is_team_spawn` guard an `Agent(general-purpose)`
+        // deny rule (meant to curb ad-hoc subagents) would wrongly reject
+        // every untyped teammate. TS scopes the scan to the non-team branch
+        // (`AgentTool.tsx:342-353`, after the team early-return).
         if !is_fork
+            && !is_team_spawn
             && let Some(denied) =
                 find_agent_deny_rule(&ctx.permission_context, &effective_subagent_type)
         {
