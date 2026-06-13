@@ -35,7 +35,6 @@ fn teammate_row(name: &str, team: &str, agent_type: &str) -> crate::state::Subag
         status: crate::state::SubagentStatus::Running,
         color: None,
         team_name: Some(team.into()),
-        tool_use_id: None,
         started_at_ms: None,
         last_tool_name: None,
         tool_count: 0,

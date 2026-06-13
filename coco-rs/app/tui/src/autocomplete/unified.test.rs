@@ -6,7 +6,6 @@ use pretty_assertions::assert_eq;
 fn agent(name: &str, color: Option<AgentColorName>) -> AgentInfo {
     AgentInfo {
         name: name.into(),
-        agent_type: name.into(),
         description: Some(format!("{name} description")),
         color,
     }

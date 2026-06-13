@@ -18,12 +18,9 @@ use coco_types::AgentDefinition;
 /// `coco_subagent::AgentDefinitionStore`; this is a UI-side cache.
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
-    /// User-facing agent name (`agentType`). Also embedded in the
+    /// User-facing agent name (= TS `agentType`). Embedded in the
     /// `"<name> (agent)"` label by [`super::unified::seed_agent_items`].
     pub name: String,
-    /// Original `agentType` identifier — kept distinct from `name` for
-    /// future cases where they diverge (display alias vs. type id).
-    pub agent_type: String,
     /// Single-line `whenToUse` description.
     pub description: Option<String>,
     /// Optional badge color picked from the eight-color palette.
@@ -37,7 +34,6 @@ impl AgentInfo {
     pub fn from_definition(def: &AgentDefinition) -> Self {
         Self {
             name: def.name.clone(),
-            agent_type: def.name.clone(),
             description: def.description.clone(),
             color: def.color,
         }

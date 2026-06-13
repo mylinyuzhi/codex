@@ -378,7 +378,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
             ActivitySpan::tone(format!(" ({label})"), ActivityTone::Dim).with_color(agent.color),
         ];
         if let Some(started_ms) = agent.started_at_ms {
-            let elapsed_ms = (crate::state::session::now_ms() - started_ms).max(0);
+            let elapsed_ms = (state.clock.now_ms() - started_ms).max(0);
             spans.push(ActivitySpan::tone(
                 format!(" {}", format_short_elapsed(elapsed_ms)),
                 ActivityTone::Dim,
@@ -422,7 +422,7 @@ fn append_subagent_lines(state: &AppState, lines: &mut Vec<ActivityLine>) {
         ) {
             let elapsed_ms = agent
                 .started_at_ms
-                .map(|s| (crate::state::session::now_ms() - s).max(0));
+                .map(|s| (state.clock.now_ms() - s).max(0));
             let duration = elapsed_ms
                 .map(|ms| format!(" · {}", format_short_elapsed(ms)))
                 .unwrap_or_default();
