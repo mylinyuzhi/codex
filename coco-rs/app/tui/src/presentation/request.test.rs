@@ -316,7 +316,7 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
     );
 
     assert!(title.contains("Ready to code?"));
-    assert!(body.contains("Here is Claude's plan:"));
+    assert!(body.contains("Here is proposed plan:"));
     assert!(body.contains("- Update code"));
     assert!(body.contains("Plan file: /tmp/plan.md"));
     assert!(!body.contains("Requested permissions:"));
@@ -372,7 +372,7 @@ fn exit_plan_approval_panel_renders_markdown_choices_and_teal_border() {
     assert_eq!(border, theme.plan_mode);
     assert!(title.contains("Ready to code?"), "title: {title}");
     // The plan renders as markdown — body text survives, syntax markers consumed.
-    assert!(joined.contains("Here is Claude's plan:"), "{joined}");
+    assert!(joined.contains("Here is proposed plan:"), "{joined}");
     assert!(joined.contains("Goal"), "heading text: {joined}");
     assert!(
         joined.contains("Step one") && joined.contains("Step two"),

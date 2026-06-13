@@ -295,7 +295,7 @@ dialog.plan_approval_hints: "[←/→] 切换  [Enter] 确认  [Esc] 取消"
 # 正文标签 / 前缀
 # ExitPlanMode “准备好编码了吗？”审批面板
 dialog.ready_to_code: "准备好开始编码了吗？"
-dialog.plan_heading: "这是 Claude 的计划："
+dialog.plan_heading: "这是建议的计划："
 dialog.plan_missing: "未找到计划。请先把计划写入计划文件。"
 dialog.plan_file: "计划文件：%{path}"
 dialog.plan_requested_permissions: "请求的权限："

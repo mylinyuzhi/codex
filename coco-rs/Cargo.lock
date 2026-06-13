@@ -2409,6 +2409,7 @@ version = "0.1.0"
 dependencies = [
  "coco-tui-mermaid",
  "coco-tui-ui",
+ "libc",
  "pretty_assertions",
  "pulldown-cmark",
  "ratatui",

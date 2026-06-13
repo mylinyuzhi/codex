@@ -15,6 +15,7 @@ use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::QueryEngineConfig;
@@ -193,6 +194,65 @@ async fn drain_dedupes_via_session_loaded_set() {
         third.len(),
         1,
         "after clear_loaded_nested_memory_paths, should re-inject"
+    );
+}
+
+#[tokio::test]
+async fn drain_dedupes_via_file_read_state() {
+    // A CLAUDE.md already tracked in the session-persistent FileReadState
+    // (a prior tool Read, or an injection from an earlier prompt cycle whose
+    // per-cycle `loaded_nested_memory_paths` was since reset) must NOT be
+    // re-injected. Mirrors the TS `readFileState.has()` gate in
+    // `memoryFilesToAttachments` (the cross-cycle dedup the loaded-set alone
+    // cannot provide, since the engine rebuilds it every user prompt).
+    let root = tempdir().unwrap();
+    let proj = root.path().join("proj");
+    let sub = proj.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("CLAUDE.md"), "# sub").unwrap();
+    let trigger = sub.join("a.rs");
+    fs::write(&trigger, "").unwrap();
+    let trigger_key = trigger.canonicalize().unwrap().display().to_string();
+
+    // Control: no FileReadState → CLAUDE.md injects. Capture its exact
+    // emitted path so the gate test keys FileReadState identically (avoids
+    // guessing how traversal canonicalizes the path).
+    let injected_path = {
+        let engine = make_test_engine();
+        let ctx = make_test_ctx_with_cwd(proj.clone());
+        ctx.nested_memory_attachment_triggers
+            .write()
+            .await
+            .insert(trigger_key.clone());
+        engine.drain_nested_memory_triggers(&ctx).await;
+        let pending = engine.take_pending_nested_memory().await;
+        assert_eq!(pending.len(), 1, "control: CLAUDE.md should inject");
+        pending[0].path.clone()
+    };
+
+    // Gate: same trigger, but FileReadState already holds the CLAUDE.md.
+    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    frs.write().await.set(
+        std::path::PathBuf::from(&injected_path),
+        coco_context::FileReadEntry {
+            content: "# sub".into(),
+            mtime_ms: 0,
+            offset: None,
+            limit: None,
+        },
+    );
+    let engine = make_test_engine().with_file_read_state(frs);
+    let ctx = make_test_ctx_with_cwd(proj.clone());
+    ctx.nested_memory_attachment_triggers
+        .write()
+        .await
+        .insert(trigger_key);
+
+    engine.drain_nested_memory_triggers(&ctx).await;
+    let pending = engine.take_pending_nested_memory().await;
+    assert!(
+        pending.is_empty(),
+        "CLAUDE.md already in FileReadState must not be re-injected, got {pending:?}"
     );
 }
 

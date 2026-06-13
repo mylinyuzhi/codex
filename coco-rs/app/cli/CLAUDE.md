@@ -63,3 +63,29 @@ The dispatcher threads the parent's `CacheSafeParams` so the child's API
 request prefix matches byte-for-byte. Per-fork `canUseTool` policies live in
 `coco-memory::can_use_tool` (auto-mem + session-mem); promptSuggestion
 + side_question + agent_summary use `deny_all_handle`.
+
+## Allocator (jemalloc)
+
+jemalloc is the global allocator for release/distribution builds, installed via
+`#[global_allocator]` in `src/main.rs` — opt-in behind the `jemalloc` Cargo
+feature, never on Windows (no jemalloc-sys MSVC build). Tuning
+(`dirty_decay_ms` / `muzzy_decay_ms` / `narenas`) is **baked into libjemalloc at
+build time** via `JEMALLOC_SYS_WITH_MALLOC_CONF` in `.cargo/config.toml`
+(`--with-malloc-conf`), which is why it applies on **both Linux and macOS** —
+the exported `malloc_conf` symbol form would be ignored on macOS's `_rjem_`-
+prefixed build. Per-knob meanings and defaults are documented inline in `.cargo/config.toml`.
+Three ways to set the tuning, by when it binds:
+
+- **Build-time baseline** (current). Edit the `JEMALLOC_SYS_WITH_MALLOC_CONF`
+  string and rebuild. Setting that env at launch does nothing — it is consumed
+  only by the jemalloc-sys build script.
+- **Startup override, no rebuild.** jemalloc reads its own env at init (a later
+  conf source, so it overrides the baked baseline — including `narenas`): set
+  `MALLOC_CONF` on Linux, `_RJEM_MALLOC_CONF` on macOS (the `_rjem_`-prefixed
+  build). Caveat: init runs before `main` (on the first allocation), so it must
+  be present in the environment **before exec** — `coco` cannot set it for
+  itself, and settings.json (parsed post-init) cannot drive it.
+- **Live, in-process.** Only the decay knobs (`arena.<i>.dirty_decay_ms` /
+  `muzzy_decay_ms`, both `rw` mallctl) are mutable after init, and only via a
+  `tikv-jemalloc-ctl` dep that is **not currently wired**. `narenas` is never
+  runtime-mutable post-init.

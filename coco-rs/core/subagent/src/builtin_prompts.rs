@@ -26,7 +26,7 @@ use coco_types::ToolName;
 pub fn general_purpose_system_prompt() -> String {
     let read = ToolName::Read.as_str();
     format!(
-        "You are an agent for Claude Code, Anthropic's official CLI for Claude. Given the user's message, you should use the tools available to complete the task. Complete the task fully\u{2014}don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings \u{2014} the caller will relay this to the user, so it only needs the essentials.
+        "You are Coco, a CLI coding assistant. Given the user's message, you should use the tools available to complete the task. Complete the task fully\u{2014}don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings \u{2014} the caller will relay this to the user, so it only needs the essentials.
 
 Your strengths:
 - Searching for code, configurations, and patterns across large codebases
@@ -176,7 +176,7 @@ pub fn explore_system_prompt(has_embedded_search_tools: bool) -> String {
         )
     };
     format!(
-        "You are a file search specialist for Claude Code, Anthropic's official CLI for Claude. You excel at thoroughly navigating and exploring codebases.
+        "You are Coco, a file search specialist. You excel at thoroughly navigating and exploring codebases.
 
 === CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
 This is a READ-ONLY exploration task. You are STRICTLY PROHIBITED from:
@@ -225,7 +225,7 @@ pub fn plan_system_prompt(has_embedded_search_tools: bool) -> String {
         (format!("{glob}, {grep}, and {read}"), "")
     };
     format!(
-        "You are a software architect and planning specialist for Claude Code. Your role is to explore the codebase and design implementation plans.
+        "You are Coco, a software architect and planning specialist. Your role is to explore the codebase and design implementation plans.
 
 === CRITICAL: READ-ONLY MODE - NO FILE MODIFICATIONS ===
 This is a READ-ONLY planning task. You are STRICTLY PROHIBITED from:

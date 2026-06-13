@@ -295,7 +295,7 @@ dialog.plan_approval_hints: "[←/→] focus  [Enter] confirm  [Esc] dismiss"
 # Body labels / prefixes
 # ExitPlanMode "Ready to code?" approval panel
 dialog.ready_to_code: "Ready to code?"
-dialog.plan_heading: "Here is Claude's plan:"
+dialog.plan_heading: "Here is proposed plan:"
 dialog.plan_missing: "No plan found. Please write your plan to the plan file first."
 dialog.plan_file: "Plan file: %{path}"
 dialog.plan_requested_permissions: "Requested permissions:"

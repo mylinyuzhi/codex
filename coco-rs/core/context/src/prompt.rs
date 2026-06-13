@@ -32,8 +32,8 @@ pub const AGENT_NOTES: &str = include_str!("agent_notes.md");
 /// empty `system_prompt` body (edge case: missing catalog entry,
 /// malformed `.md`). The main agent uses
 /// `DEFAULT_SYSTEM_PROMPT_IDENTITY` from `app/cli/src/headless.rs`,
-/// which is a different string ("You are Claude Code, …").
-pub const DEFAULT_AGENT_IDENTITY: &str = "You are an agent for Claude Code, Anthropic's official CLI for Claude. Given the user's message, you should use the tools available to complete the task. Complete the task fully—don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.";
+/// which is the full base instructions ("You are an interactive agent …").
+pub const DEFAULT_AGENT_IDENTITY: &str = "You are Coco, a CLI coding assistant. Given the user's message, you should use the tools available to complete the task. Complete the task fully—don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.";
 
 /// A compiled system prompt with cache breakpoints.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

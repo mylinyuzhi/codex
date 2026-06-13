@@ -39,7 +39,7 @@ fn build_system_prompt_uses_model_instructions_when_present() {
         build_system_prompt_for_model(cwd.path(), &runtime, "openai", "gpt-5-4", None, &[]);
 
     assert!(
-        prompt.starts_with("You are Codex, a coding agent based on GPT-5."),
+        prompt.starts_with("You are Coco, a coding agent based on GPT-5."),
         "shared headless/SDK/TUI prompt builder should use model instructions"
     );
     assert!(prompt.contains("# Personality"));

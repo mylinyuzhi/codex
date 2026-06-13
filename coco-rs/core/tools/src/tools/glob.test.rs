@@ -261,6 +261,155 @@ async fn test_glob_truncation_message() {
 }
 
 // -----------------------------------------------------------------------
+// rg --glob parity: slash-less patterns match the basename at any depth
+// -----------------------------------------------------------------------
+
+/// Regression for the "No files found" bug: a bare filename pattern like
+/// `Cargo.toml` (no `/`, no wildcard) must match every `Cargo.toml` in the
+/// tree, matching `rg --files --glob Cargo.toml`. The old globset full-path
+/// matcher only matched a file literally named `Cargo.toml` at the root.
+#[tokio::test]
+async fn test_glob_bare_basename_matches_at_any_depth() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = dir.path().join("app/cli");
+    let core = dir.path().join("core/tools");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::create_dir_all(&core).unwrap();
+    // NOTE: deliberately NO Cargo.toml at the root — only nested ones, which
+    // is exactly the shape that produced "No files found".
+    std::fs::write(app.join("Cargo.toml"), "[package]").unwrap();
+    std::fs::write(core.join("Cargo.toml"), "[package]").unwrap();
+    std::fs::write(dir.path().join("README.md"), "readme").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({"pattern": "Cargo.toml", "path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(
+        t.contains("app/cli/Cargo.toml"),
+        "should find nested app: {t}"
+    );
+    assert!(
+        t.contains("core/tools/Cargo.toml"),
+        "should find nested core: {t}"
+    );
+    assert!(!t.contains("README.md"), "should not match README: {t}");
+}
+
+/// A path-segment glob (`subdir/*.rs`) is matched relative to the search
+/// root, like ripgrep's `--glob`.
+#[tokio::test]
+async fn test_glob_path_segment_pattern() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("subdir");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("a.rs"), "").unwrap();
+    std::fs::write(dir.path().join("root.rs"), "").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({"pattern": "subdir/*.rs", "path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("subdir/a.rs"), "should match subdir file: {t}");
+    assert!(!t.contains("root.rs"), "should not match root file: {t}");
+}
+
+/// Brace alternation (`*.{rs,txt}`) works like rg `--glob '*.{rs,txt}'`.
+#[tokio::test]
+async fn test_glob_brace_expansion() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.rs"), "").unwrap();
+    std::fs::write(dir.path().join("b.txt"), "").unwrap();
+    std::fs::write(dir.path().join("c.md"), "").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({"pattern": "*.{rs,txt}", "path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("a.rs"), "should match .rs: {t}");
+    assert!(t.contains("b.txt"), "should match .txt: {t}");
+    assert!(!t.contains("c.md"), "should not match .md: {t}");
+}
+
+// -----------------------------------------------------------------------
+// .agentignore + read-ignore folded into the single walk
+// -----------------------------------------------------------------------
+
+/// `.agentignore` excludes files from Glob even though Glob runs in
+/// `--no-ignore` mode (gitignore/.ignore off).
+#[tokio::test]
+async fn test_glob_agentignore_excludes_in_no_ignore_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(".gitignore"), "*.log\n").unwrap();
+    std::fs::write(dir.path().join("build.log"), "").unwrap(); // gitignored
+    std::fs::write(dir.path().join("fixture.json"), "").unwrap(); // agentignored
+    std::fs::write(dir.path().join("real.json"), "").unwrap();
+    std::fs::write(dir.path().join(".agentignore"), "fixture.json\n").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({"pattern": "*", "path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("build.log"), "gitignore is off in Glob: {t}");
+    assert!(t.contains("real.json"), "non-ignored file present: {t}");
+    assert!(
+        !t.contains("fixture.json"),
+        ".agentignore must hide the fixture even in --no-ignore mode: {t}"
+    );
+}
+
+/// file_read_ignore_patterns are folded into the walk as `!` negatives.
+#[tokio::test]
+async fn test_glob_read_ignore_patterns_exclude() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("app.rs"), "").unwrap();
+    std::fs::write(dir.path().join("secret.env"), "").unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.tool_config.file_read_ignore_patterns = vec!["*.env".to_string()];
+
+    let result = <GlobTool as DynTool>::execute(
+        &GlobTool,
+        json!({"pattern": "*", "path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("app.rs"), "normal file present: {t}");
+    assert!(
+        !t.contains("secret.env"),
+        "read-ignore pattern should exclude: {t}"
+    );
+}
+
+// -----------------------------------------------------------------------
 // max_result_size_bound
 // -----------------------------------------------------------------------
 

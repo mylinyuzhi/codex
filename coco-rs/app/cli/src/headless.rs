@@ -353,6 +353,25 @@ pub fn build_system_prompt_for_model(
     let base_instructions = resolved
         .as_ref()
         .and_then(|model| model.info.base_instructions.as_deref());
+    // Point the "Break down and manage your work with the <X> tool" nudge at
+    // whichever task tool is actually live. The two are mutually exclusive:
+    // TaskV2 on → TaskCreate, off → TodoWrite (see `task_tools.rs::is_enabled`).
+    // The default prompt names TaskCreate, so only V1 needs a rewrite. Mirrors
+    // TS `getUsingYourToolsSection`'s `taskToolName = [TaskCreate, TodoWrite]
+    // .find(enabled)`; `replace` is a no-op for prompts without the bullet.
+    let base_instructions: Option<String> = base_instructions.map(|base| {
+        if runtime_config.features.enabled(coco_types::Feature::TaskV2) {
+            base.to_string()
+        } else {
+            base.replace(
+                &format!(
+                    "with the {} tool",
+                    coco_types::ToolName::TaskCreate.as_str()
+                ),
+                &format!("with the {} tool", coco_types::ToolName::TodoWrite.as_str()),
+            )
+        }
+    });
     // Suppress the git-status block under COCO_REMOTE or a disabled
     // `include_git_instructions` setting (COCO_DISABLE_GIT_INSTRUCTIONS
     // overrides the setting either way).
@@ -365,7 +384,7 @@ pub fn build_system_prompt_for_model(
     build_system_prompt(
         cwd,
         model_id,
-        base_instructions,
+        base_instructions.as_deref(),
         output_style,
         additional_working_directories,
         include_git_status,

@@ -2,11 +2,105 @@ use super::*;
 use std::fs;
 use tempfile::tempdir;
 
+/// Collect the file basenames yielded by walking `dir` with `service`.
+fn walk_filenames(service: &IgnoreService, dir: &std::path::Path) -> Vec<String> {
+    service
+        .create_walk_builder(dir)
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect()
+}
+
 #[test]
 fn test_with_defaults() {
     let service = IgnoreService::with_defaults();
     assert!(service.config().respect_gitignore);
     assert!(service.config().respect_ignore);
+    assert!(service.config().respect_agentignore);
+}
+
+// -----------------------------------------------------------------------
+// .agentignore — agent-level exclusions
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_respects_agentignore_by_default() {
+    let temp = tempdir().expect("create temp dir");
+    let dir = temp.path();
+    fs::write(dir.join("keep.rs"), "code").expect("write");
+    fs::write(dir.join("hidden_from_ai.txt"), "fixture").expect("write");
+    fs::write(dir.join(".agentignore"), "hidden_from_ai.txt\n").expect("write");
+
+    let files = walk_filenames(&IgnoreService::with_defaults(), dir);
+    assert!(files.contains(&"keep.rs".to_string()));
+    assert!(
+        !files.contains(&"hidden_from_ai.txt".to_string()),
+        ".agentignore should hide the file: {files:?}"
+    );
+}
+
+/// The defining property of `.agentignore`: it is honored even when
+/// `.gitignore` and `.ignore` are both disabled (the Glob tool's
+/// `--no-ignore` discovery mode).
+#[test]
+fn test_agentignore_honored_in_no_ignore_mode() {
+    let temp = tempdir().expect("create temp dir");
+    let dir = temp.path();
+    fs::create_dir_all(dir.join(".git")).expect("git dir");
+    fs::write(dir.join(".gitignore"), "*.log\n").expect("write");
+    fs::write(dir.join("build.log"), "log").expect("write"); // gitignored
+    fs::write(dir.join("secret.txt"), "secret").expect("write"); // agentignored
+    fs::write(dir.join(".agentignore"), "secret.txt\n").expect("write");
+
+    let config = IgnoreConfig::for_glob_discovery();
+    let files = walk_filenames(&IgnoreService::new(config), dir);
+
+    // gitignore is OFF in discovery mode → gitignored file shows up.
+    assert!(
+        files.contains(&"build.log".to_string()),
+        "gitignore should be off in discovery mode: {files:?}"
+    );
+    // .agentignore is still ON → agent-hidden file stays hidden.
+    assert!(
+        !files.contains(&"secret.txt".to_string()),
+        ".agentignore must survive --no-ignore mode: {files:?}"
+    );
+}
+
+#[test]
+fn test_agentignore_can_be_disabled() {
+    let temp = tempdir().expect("create temp dir");
+    let dir = temp.path();
+    fs::write(dir.join("secret.txt"), "secret").expect("write");
+    fs::write(dir.join(".agentignore"), "secret.txt\n").expect("write");
+
+    let config = IgnoreConfig::default().with_agentignore(false);
+    let files = walk_filenames(&IgnoreService::new(config), dir);
+    assert!(
+        files.contains(&"secret.txt".to_string()),
+        "respect_agentignore=false should disable .agentignore: {files:?}"
+    );
+}
+
+/// Regression: `respect_ignore = false` must actually disable native
+/// `.ignore` (previously it only skipped a redundant custom registration
+/// and left ripgrep's native `.ignore` reading on, making the toggle a
+/// no-op).
+#[test]
+fn test_respect_ignore_false_disables_dot_ignore() {
+    let temp = tempdir().expect("create temp dir");
+    let dir = temp.path();
+    fs::write(dir.join("secret.env"), "secrets").expect("write");
+    fs::write(dir.join(".ignore"), "*.env\n").expect("write");
+
+    let config = IgnoreConfig::default().with_ignore(false);
+    let files = walk_filenames(&IgnoreService::new(config), dir);
+    assert!(
+        files.contains(&"secret.env".to_string()),
+        "respect_ignore=false should disable .ignore: {files:?}"
+    );
 }
 
 #[test]

@@ -17,9 +17,7 @@ use super::*;
 fn general_purpose_prompt_includes_shared_prefix_and_guidelines() {
     // `generalPurposeAgent.ts:3` SHARED_PREFIX text + line 7 guidelines header.
     let p = general_purpose_system_prompt();
-    assert!(
-        p.starts_with("You are an agent for Claude Code, Anthropic's official CLI for Claude.")
-    );
+    assert!(p.starts_with("You are Coco, a CLI coding assistant."));
     assert!(p.contains("Complete the task fully\u{2014}don't gold-plate"));
     assert!(p.contains("Your strengths:"));
     assert!(p.contains("Guidelines:"));
