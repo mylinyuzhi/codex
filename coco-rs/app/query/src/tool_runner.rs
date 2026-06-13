@@ -4,6 +4,7 @@ use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolCallErrorKind;
+use coco_tool_runtime::ToolLookup;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
@@ -66,30 +67,60 @@ pub(crate) async fn prepare_committed_tool_call(
     )
     .await;
 
-    let Some(tool) = tools.get(&tool_id) else {
-        warn!(tool = tool_call.tool_name, "tool not found in registry");
-        // Mirror error wrap's `<tool_use_error>No such tool available: ...>`
-        // wrap so the model sees the same format whether the
-        // unknown-tool branch fires here (registry miss) or in
-        // `tool_call_preparer` (schema validation catch for hallucinated names
-        // not in the per-call tools list).
-        let output = format!(
-            "<tool_use_error>No such tool available: {}</tool_use_error>",
-            tool_call.tool_name
-        );
-        complete_tool_call_with_error_mode(
-            event_tx,
-            history,
-            &tool_call.tool_call_id,
-            &tool_call.tool_name,
-            &tool_id,
-            &output,
-            ToolCallErrorKind::UnknownTool,
-            completion_event_mode,
-            deferred_tool_completions.take(),
-        )
-        .await;
-        return None;
+    let tool = match tools.lookup_loaded(&tool_id, ctx) {
+        ToolLookup::Loaded(tool) => tool,
+        ToolLookup::Deferred { name } => {
+            warn!(
+                tool = tool_call.tool_name,
+                resolved_tool = name,
+                "deferred tool called before ToolSearch discovery"
+            );
+            let output = format!(
+                "<tool_use_error>No such tool available: {}. It is a deferred tool that has not been loaded yet; use ToolSearch with query \"select:{}\" first.</tool_use_error>",
+                tool_call.tool_name, name
+            );
+            complete_tool_call_with_error_mode(
+                event_tx,
+                history,
+                &tool_call.tool_call_id,
+                &tool_call.tool_name,
+                &tool_id,
+                &output,
+                ToolCallErrorKind::UnknownTool,
+                completion_event_mode,
+                deferred_tool_completions.take(),
+            )
+            .await;
+            return None;
+        }
+        ToolLookup::Unavailable => {
+            warn!(
+                tool = tool_call.tool_name,
+                "tool not available in current context"
+            );
+            // Mirror error wrap's `<tool_use_error>No such tool available: ...>`
+            // wrap so the model sees the same format whether the
+            // unknown-tool branch fires here (registry miss) or in
+            // `tool_call_preparer` (schema validation catch for hallucinated names
+            // not in the per-call tools list).
+            let output = format!(
+                "<tool_use_error>No such tool available: {}</tool_use_error>",
+                tool_call.tool_name
+            );
+            complete_tool_call_with_error_mode(
+                event_tx,
+                history,
+                &tool_call.tool_call_id,
+                &tool_call.tool_name,
+                &tool_id,
+                &output,
+                ToolCallErrorKind::UnknownTool,
+                completion_event_mode,
+                deferred_tool_completions.take(),
+            )
+            .await;
+            return None;
+        }
     };
 
     // wire parsing + schema validation short-circuit. The provider adapter (wire parsing)

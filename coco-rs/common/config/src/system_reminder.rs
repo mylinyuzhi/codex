@@ -82,9 +82,9 @@ pub struct AttachmentSettings {
     /// `utils/api.ts:449`). Injects `Today's date is <local ISO>.` every
     /// turn so the model always has the date. On by default.
     pub user_context: bool,
-    /// Verify-plan reminder (TS `verify_plan_reminder`). TS gates on
-    /// `USER_TYPE=ant && CLAUDE_CODE_VERIFY_PLAN=true`; coco-rs ships
-    /// `VerifyPlanExecution` directly, so this defaults on.
+    /// Verify-plan reminder (TS `verify_plan_reminder`). Defaults on, but
+    /// the generator only emits when `VerifyPlanExecution` is visible in
+    /// the active tool list.
     pub verify_plan_reminder: bool,
 
     /// Ultrathink reasoning-effort nudge (TS `ultrathink_effort`). **Opt-in**

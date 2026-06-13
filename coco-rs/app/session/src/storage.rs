@@ -1557,13 +1557,11 @@ pub struct ResolvedSessionFile {
 /// Locate the transcript file for `session_id`.
 ///
 /// Resolution order:
-/// 1. **Direct project lookup**: if `cwd_hint` is `Some`, compute the
-///    `ProjectPaths` for that cwd and check `<project_dir>/<sid>.jsonl`.
+/// 1. **Direct project lookup**: if `cwd_hint` is `Some`, compute
+///    `ProjectPaths` from that exact cwd and check `<project_dir>/<sid>.jsonl`.
 /// 2. **Worktree fallback**: if step 1 missed, shell out to
 ///    `git worktree list --porcelain` from `cwd_hint`, slug each
-///    sibling worktree, and probe each one. Worktrees of the same
-///    repo can land under different slugs when the cwd path is long
-///    enough to trip the djb2 suffix.
+///    sibling worktree, and probe each one.
 /// 3. **Global scan**: when `cwd_hint` is `None`, walk
 ///    `<memory_base>/projects/*/` and return the first project that
 ///    contains the transcript. Used by SDK callers without a cwd.
@@ -1580,20 +1578,19 @@ pub fn resolve_session_file_path(
 
     if let Some(cwd) = cwd_hint {
         // 1. Direct lookup at the slug for this cwd.
-        let canonical = canonical_root_or_self(cwd);
-        let paths = ProjectPaths::new(memory_base.to_path_buf(), &canonical);
+        let paths = ProjectPaths::new(memory_base.to_path_buf(), cwd);
         let candidate = paths.project_dir().join(&filename);
         if has_nonzero_file(&candidate) {
             return Ok(Some(ResolvedSessionFile {
                 file_path: candidate,
-                project_path: Some(canonical),
+                project_path: Some(cwd.to_path_buf()),
             }));
         }
 
         // 2. Worktree fallback — only fires when (a) direct miss
         //    and (b) git knows about other worktrees.
         for wt in coco_git::worktree_paths(cwd) {
-            if wt == canonical {
+            if wt == cwd {
                 continue;
             }
             let wt_paths = ProjectPaths::new(memory_base.to_path_buf(), &wt);
@@ -1661,18 +1658,6 @@ pub fn list_all_sessions(memory_base: &Path) -> crate::Result<Vec<TranscriptMeta
         b_ms.cmp(&a_ms)
     });
     Ok(results)
-}
-
-/// Canonical git root (so linked worktrees share one slug), falling
-/// back to `cwd` when not inside a git repo.
-///
-/// MUST match `coco_memory::path::resolve::MemoryDir::resolve`'s
-/// anchor choice — both call `coco_git::find_canonical_git_root` —
-/// otherwise memory and transcript paths under the same `cwd` would
-/// diverge by `<slug>`, and a session's memory dir would be invisible
-/// to that session's transcript lookup.
-fn canonical_root_or_self(cwd: &Path) -> PathBuf {
-    coco_git::find_canonical_git_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
 fn has_nonzero_file(path: &Path) -> bool {

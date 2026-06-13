@@ -1,15 +1,15 @@
 # coco-tools
 
-41 statically-typed built-in tools (`type Input = SomeStruct`) plus two `type Input = Value` tools whose schema is runtime-supplied: `McpTool` (wire schema from MCP server / SDK in-process transport) and `StructuredOutputTool` (user JSON Schema via `--json-schema`). Each implements `coco_tool_runtime::Tool`; `coco-tool-runtime` defines the trait.
+40 default-registered statically-typed built-in tools (`type Input = SomeStruct`) plus two `type Input = Value` tools whose schema is runtime-supplied: `McpTool` (wire schema from MCP server / SDK in-process transport) and `StructuredOutputTool` (user JSON Schema via `--json-schema`). Each implements `coco_tool_runtime::Tool`; `coco-tool-runtime` defines the trait.
 
 ## Key Types
 
-- `register_all_tools(&mut ToolRegistry)` — registers all 43 static tools
+- `register_all_tools(&mut ToolRegistry)` — registers the default static tools
 - `register_core_tools(&mut ToolRegistry)` — Bash/Read/Write/Edit/Glob/Grep only (lightweight)
 - `register_mcp_tools(registry, server_name, tools)` — dynamic registration after MCP server connects (idempotent, deregisters prior tools from the same server first)
 - `deregister_mcp_server(registry, server_name)` — on disconnect
 - Tool input enums (owned here): `GrepOutputMode`, `ConfigAction`, `LspAction`
-- Per-tool structs (`BashTool`, `ReadTool`, `WriteTool`, `EditTool`, `GlobTool`, `GrepTool`, `NotebookEditTool`, `WebFetchTool`, `WebSearchTool`, `AgentTool`, `SkillTool`, `SendMessageTool`, `TeamCreateTool`, `TeamDeleteTool`, `TaskCreateTool`, `TaskGetTool`, `TaskListTool`, `TaskUpdateTool`, `TaskStopTool`, `TaskOutputTool`, `TodoWriteTool`, `EnterPlanModeTool`, `ExitPlanModeTool`, `VerifyPlanExecutionTool`, `EnterWorktreeTool`, `ExitWorktreeTool`, `AskUserQuestionTool`, `ToolSearchTool`, `ConfigTool`, `BriefTool`, `LspTool`, `McpAuthTool`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `CronCreateTool`, `CronDeleteTool`, `CronListTool`, `RemoteTriggerTool`, `PowerShellTool`, `ReplTool`, `SleepTool`, `SyntheticOutputTool`, `McpTool`)
+- Per-tool structs (`BashTool`, `ReadTool`, `WriteTool`, `EditTool`, `GlobTool`, `GrepTool`, `NotebookEditTool`, `WebFetchTool`, `WebSearchTool`, `AgentTool`, `SkillTool`, `SendMessageTool`, `TeamCreateTool`, `TeamDeleteTool`, `TaskCreateTool`, `TaskGetTool`, `TaskListTool`, `TaskUpdateTool`, `TaskStopTool`, `TaskOutputTool`, `TodoWriteTool`, `EnterPlanModeTool`, `ExitPlanModeTool`, `VerifyPlanExecutionTool` [implemented but not default-registered], `EnterWorktreeTool`, `ExitWorktreeTool`, `AskUserQuestionTool`, `ToolSearchTool`, `ConfigTool`, `BriefTool`, `LspTool`, `McpAuthTool`, `ListMcpResourcesTool`, `ReadMcpResourceTool`, `CronCreateTool`, `CronDeleteTool`, `CronListTool`, `RemoteTriggerTool`, `PowerShellTool`, `ReplTool`, `SleepTool`, `SyntheticOutputTool`, `McpTool`)
 
 ## Cross-Cutting Helpers (crate-private)
 

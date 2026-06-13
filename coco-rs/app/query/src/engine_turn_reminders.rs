@@ -29,6 +29,7 @@ use coco_system_reminder::inject_reminders;
 use coco_system_reminder::run_turn_reminders;
 use coco_types::Feature;
 use coco_types::PermissionMode;
+use coco_types::SubagentType;
 use coco_types::TokenUsage;
 use coco_types::ToolAppState;
 use coco_types::ToolName;
@@ -180,6 +181,19 @@ impl QueryEngine {
         // `reminder_tools` is the model-visible (loaded) tool list —
         // used by `TurnReminderInput::tools` and unchanged consumers below.
         let reminder_tools = reminder_loaded_tools.clone();
+        let reminder_explore_plan_agents_available = reminder_tools
+            .iter()
+            .any(|name| name == ToolName::Agent.as_str())
+            && self.session_bootstrap.as_ref().is_some_and(|bootstrap| {
+                bootstrap
+                    .agents
+                    .iter()
+                    .any(|name| name == SubagentType::Explore.as_str())
+                    && bootstrap
+                        .agents
+                        .iter()
+                        .any(|name| name == SubagentType::Plan.as_str())
+            });
         let reminder_skill_listing_enabled = reminder_loaded_tools
             .iter()
             .any(|name| name == ToolName::Skill.as_str());
@@ -491,6 +505,7 @@ impl QueryEngine {
             phase4_variant: phase4_rm,
             explore_agent_count: pm_settings.explore_agent_count,
             plan_agent_count: pm_settings.plan_agent_count,
+            explore_plan_agents_available: reminder_explore_plan_agents_available,
             is_plan_interview_phase: false,
             app_state: &app_state_snapshot,
             fallback_permission_mode: self.config.permission_mode,
@@ -505,7 +520,10 @@ impl QueryEngine {
             used_tokens: total_usage.input_tokens.total,
             new_date: reminder_new_date,
             current_date: reminder_current_date,
-            has_pending_plan_verification: app_state_snapshot.pending_plan_verification,
+            has_pending_plan_verification: app_state_snapshot
+                .pending_plan_verification
+                .as_ref()
+                .is_some_and(|pending| pending.needs_reminder()),
             // Phase 1 engine-local inputs.
             total_cost_usd: cost_tracker.total_cost_usd(),
             max_budget_usd: self.config.max_budget_usd,

@@ -174,6 +174,12 @@ fn ctx_with_agent(handle: impl AgentHandle + 'static) -> ToolUseContext {
     ctx
 }
 
+fn enable_agent_teams(ctx: &mut ToolUseContext) {
+    let mut features = (*ctx.features).clone();
+    features.enable(coco_types::Feature::AgentTeams);
+    ctx.features = Arc::new(features);
+}
+
 /// Capturing variant — records the most recent `AgentSpawnRequest` so
 /// tests can assert on what AgentTool actually built. Returns a
 /// no-content completed response so AgentTool's render branch is
@@ -407,6 +413,16 @@ fn test_agent_spawn_request_inheritance_fields_are_serde_skip() {
 // ── AgentTool tests ──
 
 #[test]
+fn test_agent_tool_enabled_without_agent_teams_feature() {
+    let mut ctx = ToolUseContext::test_default();
+    let mut features = (*ctx.features).clone();
+    features.disable(coco_types::Feature::AgentTeams);
+    ctx.features = Arc::new(features);
+
+    assert!(<AgentTool as DynTool>::is_enabled(&AgentTool, &ctx));
+}
+
+#[test]
 fn test_agent_classifier_input_surfaces_subagent_type_and_mode() {
     // The gate sees which agent type runs and at what permission mode —
     // `(subagent_type, mode=…): prompt` — NOT the cosmetic `description`.
@@ -613,7 +629,8 @@ async fn test_agent_tool_teammate_spawned() {
         prompt: None,
         ..Default::default()
     };
-    let ctx = ctx_with_agent(MockAgentHandle::with_spawn(Ok(response)));
+    let mut ctx = ctx_with_agent(MockAgentHandle::with_spawn(Ok(response)));
+    enable_agent_teams(&mut ctx);
     let result = <AgentTool as DynTool>::execute(
         &AgentTool,
         serde_json::json!({
@@ -661,6 +678,7 @@ async fn test_agent_tool_omitted_subagent_type_for_team_spawn_stays_untyped() {
     let handle = Arc::new(CapturingAgentHandle::default());
     let mut ctx = ToolUseContext::test_default();
     ctx.agent = handle.clone();
+    enable_agent_teams(&mut ctx);
 
     let result = <AgentTool as DynTool>::execute(
         &AgentTool,
@@ -694,6 +712,7 @@ async fn test_agent_tool_uses_active_team_when_team_name_omitted() {
         ..Default::default()
     };
     let mut ctx = ctx_with_agent(MockAgentHandle::with_spawn(Ok(response)));
+    enable_agent_teams(&mut ctx);
     ctx.team_name = Some("active-team".into());
     let result = <AgentTool as DynTool>::execute(
         &AgentTool,
@@ -712,8 +731,31 @@ async fn test_agent_tool_uses_active_team_when_team_name_omitted() {
 }
 
 #[tokio::test]
+async fn test_agent_tool_rejects_team_spawn_when_agent_teams_disabled() {
+    let mut ctx = ToolUseContext::test_default();
+    ctx.team_name = Some("active-team".into());
+
+    let result = <AgentTool as DynTool>::execute(
+        &AgentTool,
+        serde_json::json!({
+            "prompt": "Help me",
+            "description": "help",
+            "name": "helper",
+        }),
+        &ctx,
+    )
+    .await;
+    let err = result.expect_err("agent teams gate must reject teammate spawn");
+    assert!(
+        format!("{err}").contains("Agent Teams is not available"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
 async fn test_agent_tool_teammate_cannot_spawn_teammate() {
     let mut ctx = ToolUseContext::test_default();
+    enable_agent_teams(&mut ctx);
     ctx.is_teammate = true;
     ctx.team_name = Some("active-team".into());
 

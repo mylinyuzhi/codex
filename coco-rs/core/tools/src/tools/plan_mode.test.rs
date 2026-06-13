@@ -589,8 +589,8 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
 
 #[tokio::test]
 async fn enter_plan_mode_execute_records_entry_timestamp() {
-    // EnterPlanModeTool.execute must write `plan_mode_entry_ms` so the
-    // ExitPlanMode stale-plan advisory can compare mtime on exit.
+    // EnterPlanModeTool.execute records the plan entry point for plan-mode
+    // lifecycle consumers.
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
@@ -950,7 +950,7 @@ async fn voluntary_teammate_exits_locally_without_mailbox_write() {
 }
 
 #[tokio::test]
-async fn verify_execution_disabled_by_default_skips_verification() {
+async fn verify_execution_disabled_skips_pending_verification() {
     use tempfile::tempdir;
     let tmp = tempdir().unwrap();
     let config_home = tmp.path().to_path_buf();
@@ -961,11 +961,8 @@ async fn verify_execution_disabled_by_default_skips_verification() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    // Fake an entry timestamp AFTER the plan's mtime so verification
-    // *would* flag "not edited" if it ran — which it mustn't.
     ctx.app_state = Some(
         Arc::new(tokio::sync::RwLock::new(ToolAppState {
-            plan_mode_entry_ms: Some(i64::MAX),
             ..Default::default()
         }))
         .into(),
@@ -975,15 +972,19 @@ async fn verify_execution_disabled_by_default_skips_verification() {
     let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
         .await
         .unwrap();
-    assert_eq!(
-        result.data.get("planVerification").and_then(Value::as_str),
-        None,
-        "verification must not run when plan_verify_execution=false"
-    );
+    assert!(result.app_state_patch.is_some());
+    let app_state = ctx.app_state.as_ref().unwrap().clone();
+    let mut result = result;
+    let patch = result.app_state_patch.take().unwrap();
+    {
+        let mut guard = app_state.write().await;
+        patch(&mut guard);
+        assert!(guard.pending_plan_verification.is_none());
+    }
 }
 
 #[tokio::test]
-async fn verify_execution_enabled_flags_stale_plan() {
+async fn verify_execution_enabled_records_pending_verification() {
     use tempfile::tempdir;
     let tmp = tempdir().unwrap();
     let config_home = tmp.path().to_path_buf();
@@ -994,23 +995,29 @@ async fn verify_execution_enabled_flags_stale_plan() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(
-        Arc::new(tokio::sync::RwLock::new(ToolAppState {
-            plan_mode_entry_ms: Some(i64::MAX),
-            ..Default::default()
-        }))
-        .into(),
-    );
+    ctx.app_state = Some(Arc::new(tokio::sync::RwLock::new(ToolAppState::default())).into());
     ctx.plan_verify_execution = true;
 
-    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
+    let mut result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
         .await
         .unwrap();
-    assert_eq!(
-        result.data.get("planVerification").and_then(Value::as_str),
-        Some("not_edited"),
-        "verification runs when enabled and flags stale plan file"
+    assert!(
+        result.data.get("planVerification").is_none(),
+        "ExitPlanMode no longer emits the old mtime advisory"
     );
+    let patch = result.app_state_patch.take().unwrap();
+    let app_state = ctx.app_state.as_ref().unwrap().clone();
+    {
+        let mut guard = app_state.write().await;
+        patch(&mut guard);
+        let pending = guard
+            .pending_plan_verification
+            .as_ref()
+            .expect("verification flow stores TS-shaped pending state");
+        assert_eq!(pending.plan, "# plan");
+        assert!(!pending.verification_started);
+        assert!(!pending.verification_completed);
+    }
 }
 
 #[test]

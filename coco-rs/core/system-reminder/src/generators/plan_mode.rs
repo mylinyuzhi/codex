@@ -200,6 +200,7 @@ fn build_plan_mode_attachment(
         phase4_variant: ctx.phase4_variant,
         explore_agent_count: ctx.explore_agent_count,
         plan_agent_count: ctx.plan_agent_count,
+        explore_plan_agents_available: ctx.explore_plan_agents_available,
         is_sub_agent: ctx.is_sub_agent,
         plan_file_path: plan_file_path_string(ctx),
         plan_exists: ctx.plan_exists,

@@ -27,6 +27,28 @@ use std::sync::atomic::Ordering;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+/// TS-shaped pending plan verification state.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PendingPlanVerificationState {
+    pub plan: String,
+    pub verification_started: bool,
+    pub verification_completed: bool,
+}
+
+impl PendingPlanVerificationState {
+    pub fn new(plan: String) -> Self {
+        Self {
+            plan,
+            verification_started: false,
+            verification_completed: false,
+        }
+    }
+
+    pub fn needs_reminder(&self) -> bool {
+        !self.verification_started && !self.verification_completed
+    }
+}
+
 /// Cross-turn shared state carried on `ToolUseContext.app_state`.
 ///
 /// Grouped by lifecycle:
@@ -125,9 +147,7 @@ pub struct ToolAppState {
     /// teammate plan approval to restore the leader's override.
     pub last_permission_mode: Option<PermissionMode>,
 
-    /// UNIX-ms timestamp written by `EnterPlanModeTool`. `ExitPlanModeTool`
-    /// compares the plan file's mtime against this to gate the
-    /// `verify_plan_execution` warning.
+    /// UNIX-ms timestamp written by `EnterPlanModeTool`.
     pub plan_mode_entry_ms: Option<i64>,
 
     /// `true` while a leader is awaiting an approval reply from a teammate.
@@ -193,14 +213,11 @@ pub struct ToolAppState {
 
     // ── Plan verification ────────────────────────────────────────────
     /// Tracks a plan exit that has not yet been verified via
-    /// `VerifyPlanExecution`. Set by `ExitPlanModeTool`; cleared when the
-    /// verification tool completes. TS parity: simplified projection of
-    /// `appState.pendingPlanVerification` (we collapse the nested
-    /// `verificationStarted`/`Completed` fields into a single
-    /// pending-or-not bool — coco-rs doesn't expose mid-tool progress
-    /// state on app_state, so the two-bit TS encoding degenerates to
-    /// one bit for reminder-gating purposes).
-    pub pending_plan_verification: bool,
+    /// `VerifyPlanExecution`. Set by `ExitPlanModeTool`; completed by the
+    /// verification tool. TS parity:
+    /// `appState.pendingPlanVerification.{plan, verificationStarted,
+    /// verificationCompleted}`.
+    pub pending_plan_verification: Option<PendingPlanVerificationState>,
 
     // ── Worktree session state ───────────────────────────────────────
     /// Active foreground worktree entered by `EnterWorktree`.

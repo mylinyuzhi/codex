@@ -61,7 +61,7 @@ All session artifacts live under `<memory_base>/projects/<slug>/` (resolved via
 `coco_paths::ProjectPaths`). `memory_base` defaults to
 `coco_config::config_home()` and is overridable via `COCO_REMOTE_MEMORY_DIR`
 (CCR / swarm leader). The slug is the `[a-zA-Z0-9]→-` sanitized + NFC-
-normalised canonical git root of the cwd, with a djb2 suffix for paths over
+normalised session cwd / worktree path, with a djb2 suffix for paths over
 200 bytes — see `coco-paths::ProjectSlug`.
 
 ```
@@ -87,14 +87,13 @@ normalised canonical git root of the cwd, with a djb2 suffix for paths over
 `<memory_base>/projects/...` — it's user-typed input recall, not session
 state.
 
-## Canonical-path invariant
+## Worktree path invariant
 
-`storage::resolve_session_file_path` and `coco_memory::path::MemoryDir::resolve`
-both anchor on `coco_git::find_canonical_git_root(cwd)`. This is **load-bearing**:
-if the two diverge (e.g. one passes a worktree path), the session transcript
-and its memory dir land under different `<slug>`s and the session's memory is
-invisible to the session. Any new caller computing a project root MUST go
-through `coco_git::find_canonical_git_root`.
+Session transcripts are keyed by the exact session cwd / worktree path,
+mirroring the TS runtime. Do not collapse transcript paths through
+`coco_git::find_canonical_git_root`. The memory subsystem owns its own
+canonical-git-root path resolution so linked worktrees can share memories while
+keeping transcripts separate.
 
 ## Concurrent session registry
 

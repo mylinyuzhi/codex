@@ -1,12 +1,13 @@
 //! VerifyPlanExecutionTool — record a post-plan verification checkpoint.
 //!
-//! Ships a small built-in tool so `verify_plan_reminder` always points at a
-//! callable tool instead of a dangling name.
-//!
 //! **Scope.** This tool does **not** verify anything itself — the model is
-//! expected to inspect files and run checks first; calling the tool only
-//! *records the checkpoint* and clears `pending_plan_verification` so the
+//! expected to inspect files and run checks first. Calling the tool marks the
+//! TS-shaped `pending_plan_verification` state as started and completed so the
 //! `verify_plan_reminder` nudge stops firing.
+//!
+//! The tool is intentionally not registered in the default tool registry while
+//! the mirrored TS project conditionally imports it behind
+//! `CLAUDE_CODE_VERIFY_PLAN`.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
@@ -44,8 +45,7 @@ pub enum VerifyPlanExecutionStatus {
     NoPendingVerification,
 }
 
-/// Typed output. Wire fields use snake_case; legacy `planFilePath` (camelCase)
-/// is dropped per the "disregard backward compatibility" directive.
+/// Typed output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VerifyPlanExecutionOutput {
@@ -95,7 +95,8 @@ impl Tool for VerifyPlanExecutionTool {
     fn is_read_only(&self, _input: &VerifyPlanExecutionInput) -> bool {
         true
     }
-    /// Record-only checkpoint with no input dependency — Plan mode keeps it visible.
+
+    /// Record-only checkpoint with no input dependency — Plan mode can keep it visible.
     fn is_always_read_only(&self) -> bool {
         true
     }
@@ -140,8 +141,13 @@ impl Tool for VerifyPlanExecutionTool {
         input: VerifyPlanExecutionInput,
         ctx: &ToolUseContext,
     ) -> Result<ToolResult<VerifyPlanExecutionOutput>, ToolError> {
-        let pending = match ctx.app_state.as_ref() {
-            Some(state) => state.read().await.pending_plan_verification,
+        let has_open_pending = match ctx.app_state.as_ref() {
+            Some(state) => state
+                .read()
+                .await
+                .pending_plan_verification
+                .as_ref()
+                .is_some_and(|pending| !pending.verification_completed),
             None => false,
         };
 
@@ -156,14 +162,17 @@ impl Tool for VerifyPlanExecutionTool {
             _ => None,
         };
 
-        let status = if pending {
+        let status = if has_open_pending {
             VerifyPlanExecutionStatus::Verified
         } else {
             VerifyPlanExecutionStatus::NoPendingVerification
         };
 
         let patch: coco_types::AppStatePatch = Box::new(|state| {
-            state.pending_plan_verification = false;
+            if let Some(pending) = state.pending_plan_verification.as_mut() {
+                pending.verification_started = true;
+                pending.verification_completed = true;
+            }
         });
 
         Ok(ToolResult::data(VerifyPlanExecutionOutput {

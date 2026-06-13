@@ -1,6 +1,7 @@
 use super::*;
 use serde_json::json;
 use std::path::Path as StdPath;
+use std::process::Command;
 
 /// Build a [`TranscriptStore`] rooted at a fresh tempdir, returning
 /// the tempdir guard (so it survives the test) and the resolved
@@ -18,6 +19,15 @@ fn test_store() -> (tempfile::TempDir, TranscriptStore, PathBuf) {
     let project_dir = paths.project_dir();
     let store = TranscriptStore::new(paths);
     (dir, store, project_dir)
+}
+
+fn run_git(dir: &StdPath, args: &[&str]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
 }
 
 #[test]
@@ -58,6 +68,68 @@ fn usage_snapshot_writes_under_session_artifact_dir() {
         .expect("usage snapshot should load")
         .expect("usage snapshot should exist");
     assert_eq!(loaded, snapshot);
+}
+
+#[test]
+fn resolve_session_prefers_exact_worktree_slug_over_canonical_repo() {
+    let repo = tempfile::tempdir().unwrap();
+    let memory = tempfile::tempdir().unwrap();
+    let worktree_parent = tempfile::tempdir().unwrap();
+    if !run_git(repo.path(), &["init"]) {
+        return;
+    }
+    if !run_git(repo.path(), &["config", "user.email", "test@example.com"]) {
+        return;
+    }
+    if !run_git(repo.path(), &["config", "user.name", "Test User"]) {
+        return;
+    }
+    std::fs::write(repo.path().join("README.md"), "x").unwrap();
+    if !run_git(repo.path(), &["add", "README.md"]) {
+        return;
+    }
+    if !run_git(repo.path(), &["commit", "-m", "init"]) {
+        return;
+    }
+
+    let worktree = worktree_parent.path().join("linked-worktree");
+    if !run_git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            worktree.to_str().unwrap(),
+            "-b",
+            "linked",
+        ],
+    ) {
+        return;
+    }
+
+    let sid = "same-session";
+    let repo_paths = ProjectPaths::new(memory.path().to_path_buf(), repo.path());
+    let worktree_paths = ProjectPaths::new(memory.path().to_path_buf(), &worktree);
+    std::fs::create_dir_all(repo_paths.project_dir()).unwrap();
+    std::fs::create_dir_all(worktree_paths.project_dir()).unwrap();
+    std::fs::write(
+        repo_paths.project_dir().join(format!("{sid}.jsonl")),
+        "repo\n",
+    )
+    .unwrap();
+    std::fs::write(
+        worktree_paths.project_dir().join(format!("{sid}.jsonl")),
+        "worktree\n",
+    )
+    .unwrap();
+
+    let resolved = resolve_session_file_path(memory.path(), sid, Some(&worktree))
+        .unwrap()
+        .expect("worktree transcript should resolve");
+    assert_eq!(
+        resolved.file_path,
+        worktree_paths.project_dir().join(format!("{sid}.jsonl"))
+    );
+    assert_eq!(resolved.project_path.as_deref(), Some(worktree.as_path()));
 }
 
 #[test]

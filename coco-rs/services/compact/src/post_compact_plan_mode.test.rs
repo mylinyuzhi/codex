@@ -9,6 +9,7 @@ fn fresh_attachment() -> PlanModeAttachment {
         phase4_variant: Phase4Variant::Standard,
         explore_agent_count: 3,
         plan_agent_count: 1,
+        explore_plan_agents_available: true,
         is_sub_agent: false,
         plan_file_path: "/tmp/plan.md".to_string(),
         plan_exists: false,

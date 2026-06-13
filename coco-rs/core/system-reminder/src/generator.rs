@@ -162,6 +162,9 @@ pub struct GeneratorContext<'a> {
     /// Range [1, 10]; clamped when building the attachment.
     pub plan_agent_count: i32,
 
+    /// True when Agent plus the built-in Explore/Plan definitions are visible.
+    pub explore_plan_agents_available: bool,
+
     /// UUID of the most recent non-meta user message in history.
     ///
     /// coco-rs plan-mode specific: the throttle counter advances only when
@@ -235,13 +238,11 @@ pub struct GeneratorContext<'a> {
     pub current_date: Option<String>,
 
     // ── Phase E (verify-plan reminder) ──
-    /// True when `ExitPlanModeTool` has flipped
-    /// [`ToolAppState::pending_plan_verification`] and a follow-up
-    /// `VerifyPlanExecution` call is still outstanding. Set from
-    /// `appState.pendingPlanVerification` minus the
-    /// `verificationStarted` / `verificationCompleted` sub-flags
-    /// (collapsed — see the `pending_plan_verification` field on
-    /// `ToolAppState`).
+    /// True when `ExitPlanModeTool` has recorded pending plan
+    /// verification and a follow-up `VerifyPlanExecution` call is still
+    /// outstanding. Set from TS-shaped
+    /// `appState.pendingPlanVerification` by requiring pending exists and
+    /// neither `verificationStarted` nor `verificationCompleted` is set.
     pub has_pending_plan_verification: bool,
 
     /// Human turns elapsed since the last `plan_mode_exit` attachment.
@@ -423,6 +424,7 @@ pub struct GeneratorContextBuilder<'a> {
     phase4_variant: Phase4Variant,
     explore_agent_count: i32,
     plan_agent_count: i32,
+    explore_plan_agents_available: bool,
     last_human_turn_uuid: Option<Uuid>,
     user_input: Option<String>,
     tools: Vec<String>,
@@ -496,6 +498,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             phase4_variant: Phase4Variant::default(),
             explore_agent_count: DEFAULT_EXPLORE_AGENT_COUNT,
             plan_agent_count: DEFAULT_PLAN_AGENT_COUNT,
+            explore_plan_agents_available: false,
             last_human_turn_uuid: None,
             user_input: None,
             tools: Vec::new(),
@@ -624,6 +627,11 @@ impl<'a> GeneratorContextBuilder<'a> {
     pub fn agent_counts(mut self, explore: i32, plan: i32) -> Self {
         self.explore_agent_count = explore;
         self.plan_agent_count = plan;
+        self
+    }
+
+    pub fn explore_plan_agents_available(mut self, available: bool) -> Self {
+        self.explore_plan_agents_available = available;
         self
     }
 
@@ -923,6 +931,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             phase4_variant: self.phase4_variant,
             explore_agent_count: clamp_agents(self.explore_agent_count),
             plan_agent_count: clamp_agents(self.plan_agent_count),
+            explore_plan_agents_available: self.explore_plan_agents_available,
             last_human_turn_uuid: self.last_human_turn_uuid,
             user_input: self.user_input,
             tools: self.tools,

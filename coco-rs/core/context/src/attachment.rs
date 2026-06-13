@@ -313,6 +313,11 @@ pub struct PlanModeAttachment {
     /// Default 1. Ignored for non-5phase.
     #[serde(default = "default_plan_count")]
     pub plan_agent_count: i32,
+    /// True when the current turn actually exposes the Agent tool and the
+    /// built-in Explore/Plan agent definitions. When false, plan-mode
+    /// reminders must not instruct the model to launch those agents.
+    #[serde(default)]
+    pub explore_plan_agents_available: bool,
     #[serde(default)]
     pub is_sub_agent: bool,
     pub plan_file_path: String,

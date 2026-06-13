@@ -330,9 +330,9 @@ pub struct ToolUseContext {
     /// [`Self::agent_name`].
     pub team_name: Option<String>,
 
-    /// When `true`, ExitPlanMode compares the plan-file mtime against
-    /// `plan_mode_entry_ms` and appends a soft advisory note if the
-    /// model called Exit without actually editing the plan file.
+    /// When `true`, ExitPlanMode records TS-shaped pending verification
+    /// state so the main-agent reminder can request a later
+    /// `VerifyPlanExecution` call.
     /// Enabled via `settings.plan_mode.verify_execution`.
     pub plan_verify_execution: bool,
     /// Plan-mode interview-phase flag — drives the `EnterPlanMode`

@@ -18,6 +18,7 @@ use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ExitPlanChoice;
 use coco_types::ExitPlanModeResult;
+use coco_types::PendingPlanVerificationState;
 use coco_types::PermissionMode;
 use coco_types::ToolDisplayData;
 use coco_types::ToolId;
@@ -53,9 +54,6 @@ struct ExitPlanModeOutput {
     /// True when the CCR UI edited the plan via `input.plan` before exit.
     #[serde(skip_serializing_if = "Option::is_none")]
     plan_was_edited: Option<bool>,
-    /// ExitPlanMode stale-plan advisory outcome (None when disabled).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    plan_verification: Option<coco_context::PlanVerificationOutcome>,
     /// Teammate-awaiting-approval branch: the teammate's tool call
     /// submitted the plan to the lead and must stay in plan mode until
     /// the response arrives.
@@ -436,9 +434,8 @@ fn parse_exit_plan_choice(raw: Option<&str>) -> Result<Option<ExitPlanChoice>, T
 impl Tool for ExitPlanModeTool {
     type Input = ExitPlanModeInput;
     coco_tool_runtime::impl_runtime_schema!(ExitPlanModeInput);
-    /// Output is `Value` — `ExitPlanModeOutput` is rich (multiple
-    /// flags + nested `PlanVerificationOutcome` from coco-context that
-    /// lacks JsonSchema). Renderer continues reading positional fields.
+    /// Output is `Value` — `ExitPlanModeOutput` is rich and serializes
+    /// cleanly for the model render path.
     type Output = Value;
 
     fn id(&self) -> ToolId {
@@ -605,27 +602,6 @@ impl Tool for ExitPlanModeTool {
             .tools
             .get_by_name(ToolName::Agent.as_str())
             .is_some_and(|t| t.is_enabled(ctx));
-
-        // ── Plan verification (best-effort soft check) ──
-        //
-        // Off unless the user opted in via
-        // `settings.plan_mode.verify_execution` (flag threaded through
-        // `ToolUseContext::plan_verify_execution`). When enabled, reads
-        // `plan_mode_entry_ms` from app_state (set by EnterPlanMode) and
-        // compares against the plan file's mtime. Surfaces the outcome
-        // as a `planVerification` field on the result data;
-        // `build_instructions` appends an advisory note if the outcome
-        // is `NotEdited` or `Missing`.
-        let plan_verification = if !ctx.plan_verify_execution {
-            None
-        } else if let Some(state) = &ctx.app_state {
-            let entry_ms = state.read().await.plan_mode_entry_ms.unwrap_or(0);
-            file_path.as_deref().and_then(|fp| {
-                coco_context::verify_plan_was_edited(std::path::Path::new(fp), entry_ms)
-            })
-        } else {
-            None
-        };
 
         // ── Teammate branch — write plan_approval_request to leader inbox ──
         //
@@ -809,6 +785,11 @@ impl Tool for ExitPlanModeTool {
                 plan.as_deref().unwrap_or_default()
             )
         });
+        let pending_verification_plan = if ctx.plan_verify_execution {
+            plan.as_ref().filter(|p| !p.trim().is_empty()).cloned()
+        } else {
+            None
+        };
 
         // Queue the full ExitPlanMode transition.
         let patch: coco_types::AppStatePatch = Box::new(move |state| {
@@ -816,13 +797,9 @@ impl Tool for ExitPlanModeTool {
             state.pre_plan_mode = None;
             state.has_exited_plan_mode = true;
             state.needs_plan_mode_exit_attachment = true;
-            // Mark the plan as awaiting `VerifyPlanExecution`. Cleared
-            // when that tool runs or the user resets it.
-            // Drives the `verify_plan_reminder` system reminder — so a
-            // plan exit always leaves a durable signal behind, not just
-            // the one-shot `needs_plan_mode_exit_attachment` that the
-            // reminder subsystem consumes on the next turn.
-            state.pending_plan_verification = true;
+            state.pending_plan_verification = pending_verification_plan
+                .clone()
+                .map(PendingPlanVerificationState::new);
             if needs_auto_exit {
                 state.needs_auto_mode_exit_attachment = true;
             }
@@ -846,7 +823,6 @@ impl Tool for ExitPlanModeTool {
             file_path,
             has_task_tool: if has_agent_tool { Some(true) } else { None },
             plan_was_edited: if input_plan_is_edit { Some(true) } else { None },
-            plan_verification,
             ..Default::default()
         };
         let display_data = exit_plan_mode_display_data(&out);
@@ -913,19 +889,6 @@ impl ExitPlanModeTool {
             return "User has approved exiting plan mode. You can now proceed.".to_string();
         }
 
-        // Optional stale-plan advisory. Never blocks, just appends a note.
-        let verification_note = match out.plan_verification {
-            Some(coco_context::PlanVerificationOutcome::NotEdited) => {
-                "\n\n**Heads up:** the plan file mtime suggests you \
-                didn't edit it during plan mode. Review the plan before proceeding \
-                — it may not reflect your intended approach."
-            }
-            Some(coco_context::PlanVerificationOutcome::Missing) => {
-                "\n\n**Heads up:** the plan file is missing. Review \
-                your implementation approach before proceeding."
-            }
-            _ => "",
-        };
         let team_hint = if out.has_task_tool.unwrap_or(false) {
             "\n\nIf this plan can be broken down into multiple independent tasks, \
              consider using the TeamCreate tool to create a team and parallelize \
@@ -952,7 +915,7 @@ impl ExitPlanModeTool {
         format!(
             "User has approved your plan. You can now start coding. \
              Start with updating your todo list if applicable\n\
-             {path_note}{team_hint}{verification_note}\n\n\
+             {path_note}{team_hint}\n\n\
              ## {plan_label}:\n{plan_text}"
         )
     }

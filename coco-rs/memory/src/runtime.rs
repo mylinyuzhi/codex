@@ -150,12 +150,6 @@ pub struct MemoryRuntimeBuilder {
     /// dispatch separately. Defaults to `true` so legacy callers don't
     /// accidentally suppress the init event.
     pub auto_compact_enabled: bool,
-    /// Optional pre-computed [`ProjectPaths`]. When `None`, [`Self::build`]
-    /// derives one from `config_home + canonical(project_root)`. Callers
-    /// that already hold an `Arc<ProjectPaths>` (e.g. `app-cli`'s
-    /// `paths::project_paths`) supply it here so we don't re-do the
-    /// canonical-git-root + slug walk a second time.
-    pub project_paths: Option<Arc<ProjectPaths>>,
 }
 
 impl MemoryRuntimeBuilder {
@@ -176,16 +170,15 @@ impl MemoryRuntimeBuilder {
             side_query: None,
             transcript_dir: None,
             auto_compact_enabled: true,
-            project_paths: None,
         }
     }
 
-    /// Reuse a pre-computed [`ProjectPaths`] instead of building a
-    /// fresh one in [`Self::build`]. Saves the canonical-git-root
-    /// walk + slug NFC pass when the caller already holds a shared
-    /// instance.
-    pub fn with_project_paths(mut self, project_paths: Arc<ProjectPaths>) -> Self {
-        self.project_paths = Some(project_paths);
+    /// Accept a caller's transcript-scoped [`ProjectPaths`] without using it.
+    ///
+    /// Memory paths are intentionally canonical-git-root scoped so linked
+    /// worktrees share memories. Transcript paths are worktree-scoped and must
+    /// not be reused here.
+    pub fn with_project_paths(self, _project_paths: Arc<ProjectPaths>) -> Self {
         self
     }
 
@@ -236,12 +229,9 @@ impl MemoryRuntimeBuilder {
         // visible from the absence/presence of the corresponding lifecycle
         // events instead.
         // `memory_base` is the root of the per-project memory layout
-        // (`<base>/projects/<slug>/memory/`). `memory_base_override`
-        // (from `COCO_REMOTE_MEMORY_DIR`) shifts it without touching
-        // unrelated subsystems' paths — transcripts and the project
-        // session dir still use the caller-supplied `project_paths`
-        // unless this override is set, in which case we rebuild
-        // memory-scoped `ProjectPaths` on top of the new base.
+        // (`<base>/projects/<slug>/memory/`). Memory intentionally anchors
+        // to the canonical git root so linked worktrees share memory, while
+        // transcript/session paths keep their exact worktree cwd.
         let memory_base: PathBuf = self
             .config
             .memory_base_override
@@ -252,23 +242,9 @@ impl MemoryRuntimeBuilder {
             &self.project_root,
             self.config.directory.as_deref(),
         );
-        // When `memory_base_override` is set, the caller's
-        // `project_paths` (computed from the default `config_home`)
-        // would point session-memory + dream-lock to the wrong base.
-        // Rebuild a memory-scoped `ProjectPaths` against the override
-        // so the SM file lives at `<override>/projects/<slug>/<sid>/
-        // session-memory/summary.md`.
-        let project_paths = if self.config.memory_base_override.is_some() {
-            let canonical = coco_git::find_canonical_git_root(&self.project_root)
-                .unwrap_or_else(|| self.project_root.clone());
-            Arc::new(ProjectPaths::new(memory_base, &canonical))
-        } else {
-            self.project_paths.unwrap_or_else(|| {
-                let canonical = coco_git::find_canonical_git_root(&self.project_root)
-                    .unwrap_or_else(|| self.project_root.clone());
-                Arc::new(ProjectPaths::new(self.config_home.clone(), &canonical))
-            })
-        };
+        let canonical = coco_git::find_canonical_git_root(&self.project_root)
+            .unwrap_or_else(|| self.project_root.clone());
+        let project_paths = Arc::new(ProjectPaths::new(memory_base, &canonical));
         // Master swappable cell — every service sees the same handle
         // and observes any later `install_agent` swap.
         let agent_slot: crate::service::extract::AgentSlot =
