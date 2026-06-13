@@ -10,16 +10,13 @@ fn test_for_label_conservative_defaults() {
     assert_eq!(o.fork_label, ForkLabel::PromptSuggestion);
     assert_eq!(o.query_source, "prompt_suggestion");
     assert!(o.agent_id.is_none());
-    assert!(!o.share_set_app_state, "fork must not mutate parent UI");
-    assert!(o.clone_file_read_state, "default clone for cache parity");
     assert!(
-        o.clone_content_replacement_state,
-        "default clone for cache parity"
+        o.clone_file_read_state,
+        "default deep-clone of FileReadState for per-fork dedup-cache isolation"
     );
     assert!(o.can_use_tool.is_none());
     assert!(!o.require_can_use_tool);
     assert!(o.allowed_write_roots.is_empty());
-    assert!(o.parent_query_chain_id.is_none());
     assert_eq!(o.parent_query_depth, 0);
 }
 

@@ -8,8 +8,6 @@ use coco_types::PermissionMode;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
 use coco_types::SubAgentState;
 use coco_types::SubAgentStatus;
@@ -132,66 +130,6 @@ pub struct SwarmPermissionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<String>,
     pub created_at: i64,
-}
-
-/// Resolution of a swarm permission request.
-#[derive(Debug, Clone)]
-pub struct PermissionResolution {
-    pub decision: PermissionRequestStatus,
-    pub resolved_by: PermissionResolver,
-    pub feedback: Option<String>,
-    pub updated_input: Option<serde_json::Value>,
-}
-
-/// Bridge for synchronizing permission requests between workers and the leader.
-///
-/// Workers call `request_permission()` which blocks until the leader resolves.
-pub struct PermissionSyncBridge {
-    leader_tx: mpsc::Sender<SwarmPermissionRequest>,
-    pending: Arc<RwLock<HashMap<String, oneshot::Sender<PermissionResolution>>>>,
-}
-
-impl PermissionSyncBridge {
-    pub fn new(leader_tx: mpsc::Sender<SwarmPermissionRequest>) -> Self {
-        Self {
-            leader_tx,
-            pending: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
-    /// Send a permission request and wait for the leader's resolution.
-    pub async fn request_permission(
-        &self,
-        request: SwarmPermissionRequest,
-    ) -> Result<PermissionResolution, String> {
-        let (tx, rx) = oneshot::channel();
-        self.pending.write().await.insert(request.id.clone(), tx);
-
-        self.leader_tx
-            .send(request)
-            .await
-            .map_err(|e| format!("Failed to send permission request: {e}"))?;
-
-        rx.await
-            .map_err(|_| "Permission response channel closed".to_string())
-    }
-
-    /// Resolve a pending permission request (called by the leader).
-    pub async fn resolve_permission(
-        &self,
-        request_id: &str,
-        resolution: PermissionResolution,
-    ) -> bool {
-        if let Some(tx) = self.pending.write().await.remove(request_id) {
-            tx.send(resolution).is_ok()
-        } else {
-            false
-        }
-    }
-
-    pub async fn pending_count(&self) -> usize {
-        self.pending.read().await.len()
-    }
 }
 
 // ── Team File Types ──
@@ -410,14 +348,6 @@ impl TeamManager {
 }
 
 // ── Utility Functions ──
-
-pub fn generate_request_id() -> String {
-    format!("perm-{}", uuid::Uuid::new_v4())
-}
-
-pub fn generate_sandbox_request_id() -> String {
-    format!("sandbox-{}", uuid::Uuid::new_v4())
-}
 
 /// Sanitize a name for use as a file/directory name.
 pub fn sanitize_name(name: &str) -> String {

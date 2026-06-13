@@ -475,6 +475,12 @@ pub struct AgentsDialogState {
     /// Inline create wizard. `Some` ⇒ the Library tab renders the
     /// wizard instead of the list. `None` ⇒ list view.
     pub wizard: Option<CreateWizardState>,
+    /// Pending delete confirmation. `Some(path)` ⇒ the Library tab
+    /// renders a `Delete <name>? (y/n)` prompt and swallows nav until
+    /// the user confirms (`y`/Enter → dispatch) or cancels (`n`/Esc).
+    /// Guards the destructive `DeleteAgentFile` command behind explicit
+    /// confirmation (TS parity: `AgentsMenu` `delete-confirm` mode).
+    pub pending_delete: Option<PathBuf>,
 }
 
 impl AgentsDialogState {
@@ -486,6 +492,7 @@ impl AgentsDialogState {
             library,
             used_this_session: BTreeSet::new(),
             wizard: None,
+            pending_delete: None,
         };
         // Snap the cursor onto the first selectable row (skip past
         // any leading header). Defensive: even with `CreateNew` first

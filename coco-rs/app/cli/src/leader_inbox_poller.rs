@@ -174,7 +174,7 @@ async fn poll_once(runtime: &SessionRuntime, dispatched: &mut HashSet<String>) {
                 // remove its team-file membership, and unassign its tasks.
                 let agent_id = format!("{from}@{team}");
                 if let Err(e) = handle
-                    .teardown_teammate(&agent_id, from, pane_id.as_deref(), backend_type.as_deref())
+                    .teardown_teammate(&agent_id, from, pane_id.as_deref(), *backend_type)
                     .await
                 {
                     tracing::warn!(agent_id, error = %e, "leader shutdown teardown failed");

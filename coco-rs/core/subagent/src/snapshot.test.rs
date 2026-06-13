@@ -40,18 +40,3 @@ fn test_has_required_mcp_servers_case_insensitive_substring() {
     let def_substr = def_with_required_mcp("agent", &["lack"]);
     assert!(has_required_mcp_servers(&def_substr, &["slack".into()]));
 }
-
-#[test]
-fn test_filter_agents_by_mcp_requirements_drops_unmet() {
-    let a = def_with_required_mcp("a", &[]);
-    let b = def_with_required_mcp("b", &["github"]);
-    let c = def_with_required_mcp("c", &["missing"]);
-
-    let agents = vec![&a, &b, &c];
-    let filtered = filter_agents_by_mcp_requirements(agents, &["github".into()]);
-    assert_eq!(filtered.len(), 2);
-    let names: Vec<_> = filtered.iter().map(|d| d.name.as_str()).collect();
-    assert!(names.contains(&"a"));
-    assert!(names.contains(&"b"));
-    assert!(!names.contains(&"c"));
-}

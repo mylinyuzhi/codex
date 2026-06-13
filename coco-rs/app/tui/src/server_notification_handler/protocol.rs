@@ -1065,18 +1065,13 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
     {
         return;
     }
-    let (agent_type, color, team_name, tool_use_id) = match kind {
+    let (agent_type, color, team_name) = match kind {
         SubagentKind::Subagent => {
             // `TaskStartedParams` doesn't yet surface the BgAgent's
             // declared agent_type (Explore / Plan / Review / …). Until
             // a `SubagentTypeAttachment` event lands, fall back to the
             // wire literal so the badge is at least non-empty.
-            (
-                task_type_wire::LOCAL_AGENT.to_string(),
-                None,
-                None,
-                p.tool_use_id.clone(),
-            )
+            (task_type_wire::LOCAL_AGENT.to_string(), None, None)
         }
         SubagentKind::Teammate => {
             // `agent_name` is the bare name; fall back to the
@@ -1084,10 +1079,10 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
             // populate it.
             (
                 p.agent_name.clone().unwrap_or_else(|| p.task_id.clone()),
-                p.color.clone(),
+                // Parse the wire color string into the typed enum at the
+                // protocol boundary (unknown values collapse to `None`).
+                p.color.as_deref().and_then(|c| c.parse().ok()),
                 p.team_name.clone().filter(|s| !s.is_empty()),
-                // Teammates have no originating Agent-tool call.
-                None,
             )
         }
     };
@@ -1100,7 +1095,6 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
         status: SubagentStatus::Running,
         color,
         team_name,
-        tool_use_id,
         started_at_ms: Some(started_at_ms),
         last_tool_name: None,
         tool_count: 0,

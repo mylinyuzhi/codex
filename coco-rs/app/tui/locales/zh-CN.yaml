@@ -180,6 +180,7 @@ dialog.agents_builtin_readonly: "内置 agent 不可编辑。在 ~/.coco/agents/
 dialog.agents_no_file: "该 agent 没有对应的 markdown 文件。"
 dialog.agents_create_hint: "在 ~/.coco/agents/<name>.md（用户）或 .claude/agents/<name>.md（项目）创建文件后运行 /agents reload。"
 dialog.agents_deleted_toast: "已删除 %{path} — 正在重新加载 agent 目录。"
+dialog.agents_delete_confirm: "删除 agent“%{name}”？y 确认 · n/Esc 取消"
 dialog.agents_wizard_hint: "Enter 下一步 · Esc 返回 · ←/→/Home/End 移动光标 · ↑/↓ 切换来源"
 dialog.agents_create_step_header: "第 %{step} 步 / 共 %{total} 步 — %{label}"
 dialog.agents_create_step_name: "名称"

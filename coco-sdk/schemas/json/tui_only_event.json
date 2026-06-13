@@ -52,7 +52,7 @@
           "const": "approval_required"
         },
         "worker_badge": {
-          "description": "Identity badge of the requesting cross-process teammate, if\nany — rendered in the prompt so the leader sees who is asking.\nTS: `workerBadge` on `PermissionRequest.tsx:89`.",
+          "description": "Identity badge of the requesting cross-process teammate, if\nany — rendered in the prompt so the leader sees who is asking.",
           "anyOf": [
             {
               "$ref": "#/$defs/WorkerBadge"
@@ -324,7 +324,7 @@
       ]
     },
     {
-      "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) — the\npicker renders \"⚠ No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed — picker renders \"No code changes\".\n\nTS: the per-row `Promise.all(messageOptions.map(...))` walk in\n`MessageSelector.tsx:285-312`. Bundled here so the bounded\nTUI command channel does not drop individual row events on\ntranscripts with many user messages.",
+      "description": "Rewind picker per-row metadata, emitted once on picker mount.\n\nOne entry per real (non-synthetic) picker row, derived from\nthe file-history snapshot pair `(this_user_message,\nnext_user_message_or_now)`. `metadata == None` means\n`fileHistoryCanRestore(...)` was false (no snapshot) — the\npicker renders \"⚠ No code restore\" for that row.\n`metadata == Some { file_paths: [], .. }` means the snapshot\nexists but nothing changed — picker renders \"No code changes\".\n\nBundled here so the bounded TUI command channel does not drop individual\nrow events on transcripts with many user messages.",
       "type": "object",
       "properties": {
         "rows": {
@@ -344,7 +344,7 @@
       ]
     },
     {
-      "description": "Rewind restore-preview diff stats for the selected message,\nemitted after the user confirms a checkpoint pick. `stats ==\nNone` means `fileHistoryCanRestore(...)` was false — the\noption screen suppresses code-restore choices and shows the\nconversation-only path.\n\nTS: the single `await fileHistoryGetDiffStats(...)` call at\n`MessageSelector.tsx:173`.",
+      "description": "Rewind restore-preview diff stats for the selected message,\nemitted after the user confirms a checkpoint pick. `stats ==\nNone` means `fileHistoryCanRestore(...)` was false — the\noption screen suppresses code-restore choices and shows the\nconversation-only path.",
       "type": "object",
       "properties": {
         "message_id": {
@@ -1056,7 +1056,7 @@
       ]
     },
     "AgentSource": {
-      "description": "Where an agent definition came from. Drives precedence when the same\n`agent_type` is defined in multiple places: later source wins.\n\nTS: source field on `BaseAgentDefinition` (`loadAgentsDir.ts:105-165`),\nresolution order in `getActiveAgentsFromList` (`loadAgentsDir.ts:193-221`).",
+      "description": "Where an agent definition came from. Drives precedence when the same\n`agent_type` is defined in multiple places: later source wins.",
       "oneOf": [
         {
           "description": "Bundled built-in agents.",
@@ -1198,10 +1198,10 @@
       ]
     },
     "CommandSource": {
-      "description": "How a command was loaded.\n\nTS: `Command.source` field union (`SettingSource | 'plugin' | 'mcp'`).\nRust port tags the payload-carrying variants (`Plugin { name }`,\n`Mcp { server_name }`) so the source and its attribution can never\ndisagree. This replaces the older `loaded_from + plugin_name` dual-\nfield layout, which allowed nonsensical states (e.g. `loaded_from =\nBuiltin` paired with `plugin_name = Some(...)`).",
+      "description": "How a command was loaded.\n\nPayload-carrying variants (`Plugin { name }`, `Mcp { server_name }`)\nensure source and attribution can never disagree. This replaces the\nolder `loaded_from + plugin_name` dual-field layout, which allowed\nnonsensical states (e.g. `loaded_from = Builtin` paired with\n`plugin_name = Some(...)`).",
       "oneOf": [
         {
-          "description": "Hardcoded built-in slash command (e.g. `/help`, `/clear`).\nTS: `source: 'builtin'`.",
+          "description": "Hardcoded built-in slash command (e.g. `/help`, `/clear`).",
           "type": "object",
           "properties": {
             "kind": {
@@ -1227,7 +1227,7 @@
           ]
         },
         {
-          "description": "User-scope on-disk skill (`~/.coco/skills/`). TS: `userSettings`.",
+          "description": "User-scope on-disk skill (`~/.coco/skills/`).",
           "type": "object",
           "properties": {
             "kind": {
@@ -1253,7 +1253,7 @@
           ]
         },
         {
-          "description": "Enterprise/policy-managed skill. TS: `policySettings`.",
+          "description": "Enterprise/policy-managed skill.",
           "type": "object",
           "properties": {
             "kind": {
@@ -1266,7 +1266,7 @@
           ]
         },
         {
-          "description": "On-disk skill directory (general SKILL.md catch-all). TS: `skills`.",
+          "description": "On-disk skill directory (general SKILL.md catch-all).",
           "type": "object",
           "properties": {
             "kind": {
@@ -1328,20 +1328,20 @@
       ]
     },
     "CommandTypeTag": {
-      "description": "Tag-only projection of [`CommandType`]. Implements [`Copy`] so the\nUI snapshot ([`SlashCommandInfo`]) and the autocomplete ranker can\npass it around without cloning. Mirrors TS `Command.type`.",
+      "description": "Tag-only projection of [`CommandType`]. Implements [`Copy`] so the\nUI snapshot ([`SlashCommandInfo`]) and the autocomplete ranker can\npass it around without cloning.",
       "oneOf": [
         {
-          "description": "Expands into a model prompt. TS `type: 'prompt'`.",
+          "description": "Expands into a model prompt.",
           "type": "string",
           "const": "prompt"
         },
         {
-          "description": "Executes locally and returns text. TS `type: 'local'`.",
+          "description": "Executes locally and returns text.",
           "type": "string",
           "const": "local"
         },
         {
-          "description": "Opens a TUI overlay. TS `type: 'local-jsx'`.",
+          "description": "Opens a TUI overlay.",
           "type": "string",
           "const": "local_overlay"
         }
@@ -1446,7 +1446,7 @@
       ]
     },
     "ContextSuggestion": {
-      "description": "An actionable suggestion shown under the `/context` view. Mirrors TS\n`ContextSuggestion` (`utils/contextSuggestions.ts`).",
+      "description": "An actionable suggestion shown under the `/context` view.",
       "type": "object",
       "properties": {
         "detail": {
@@ -2469,7 +2469,7 @@
       ]
     },
     "RewindDiffStatsPayload": {
-      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\nTS: `DiffStats` from `utils/fileHistory.ts:55-61`. `file_paths`\nmatches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels at\n`MessageSelector.tsx:481-523`.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  to mirror TS `computeDiffStatsBetweenMessages`\n  (`MessageSelector.tsx:722-765`), which counts `+` lines from\n  `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] to mirror TS\n  `computeDiffStatsForFile` (`fileHistory.ts:705`)'s\n  `diffLines(originalContent, backupContent)` direction.\n\nTS itself returns the same `DiffStats` shape from both call sites\nand lets context disambiguate — Rust matches that contract.",
+      "description": "Diff stats payload shared by per-row metadata and the selected\nrestore preview event. `file_paths.is_empty()` means \"snapshot\nexists but nothing changed\".\n\n`file_paths` matches `DiffStats.filesChanged: string[]` and is used by the\nconfirm screen to assemble single / two / many-file labels.\n\n# Two semantics, one wire type\n\n`insertions` / `deletions` interpretation depends on which event\ncarries this payload:\n\n- [`TuiOnlyEvent::RewindRowMetadataReady`] — **forward-time**.\n  `insertions` = lines added between two adjacent user-message\n  checkpoints. Computed via [`FileHistoryState::get_diff_stats_between`]\n  to mirror TS `computeDiffStatsBetweenMessages`\n  (`MessageSelector.tsx:722-765`), which counts `+` lines from\n  `structuredPatch`.\n- [`TuiOnlyEvent::RewindRestorePreviewReady`] — **rewind-direction**.\n  `insertions` = lines that rewind would add back; `deletions` =\n  lines that rewind would remove. Computed via\n  [`FileHistoryState::get_diff_stats`] to mirror TS\n  `computeDiffStatsForFile` (`fileHistory.ts:705`)'s\n  `diffLines(originalContent, backupContent)` direction.\n\nTS itself returns the same `DiffStats` shape from both call sites\nand lets context disambiguate — Rust matches that contract.",
       "type": "object",
       "properties": {
         "deletions": {
@@ -2494,7 +2494,7 @@
       ]
     },
     "RewindRowMetadata": {
-      "description": "Per-row metadata for a single rewind picker row.\n\nTS: one entry of the `fileHistoryMetadata: Record<number,\nDiffStats>` map in `MessageSelector.tsx:285-312`.\n`metadata == None` corresponds to `canRestore = false` (no\nsnapshot — picker shows \"⚠ No code restore\").",
+      "description": "Per-row metadata for a single rewind picker row.\n`metadata == None` corresponds to `canRestore = false` (no\nsnapshot — picker shows \"⚠ No code restore\").",
       "type": "object",
       "properties": {
         "message_id": {
@@ -2612,7 +2612,7 @@
       ]
     },
     "SkillOverrideState": {
-      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Mirrors TS `skillOverrides` values\n(`cli_inner_pretty.js:477208-477214` `kB6 = [\"on\",\"name-only\",\n\"user-invocable-only\",\"off\"]`). Drives the `/skills` 4-state\neditor ladder.\n\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) — exact match to TS so JSON\nsettings files round-trip without translation.",
+      "description": "Per-skill override state stored under `skill_overrides` in any\nsettings tier. Drives the `/skills` 4-state editor ladder.\n\nWire format is kebab-case (`\"on\"`, `\"name-only\"`,\n`\"user-invocable-only\"`, `\"off\"`) — JSON settings files round-trip\nwithout translation.",
       "oneOf": [
         {
           "description": "Default — full description in model listing, both user `/` and\nmodel Skill-tool invocation allowed.",
@@ -2701,7 +2701,7 @@
       ]
     },
     "SkillsDialogEntry": {
-      "description": "One row in the `/skills` dialog. Mirrors the per-row payload\nshape consumed by TS `uJ4` (the 2.1.142 `<SkillsDialog>` editor)\n— every field is required so the dialog never has to fabricate\ndefaults for `baseline` / `lock` / etc.",
+      "description": "One row in the `/skills` dialog. Every field is required so the dialog\nnever has to fabricate defaults for `baseline` / `lock` / etc.",
       "type": "object",
       "properties": {
         "baseline": {
@@ -2740,7 +2740,7 @@
           ]
         },
         "name": {
-          "description": "Canonical skill name — what `/<name>` invokes. TS\n`getCommandName(skill)`.",
+          "description": "Canonical skill name — what `/<name>` invokes.",
           "type": "string"
         },
         "plugin_name": {
@@ -2768,7 +2768,7 @@
       "type": "object",
       "properties": {
         "bytes_per_token": {
-          "description": "Bytes per token for the current main-role model. The TUI\ndivides [`SkillsDialogEntry::frontmatter_bytes`] by this to\nrender the `~N tok` column. Set to 4 when the host cannot\nresolve a more accurate value — `bytes/token ≈ 4` is the\nEnglish-text rule-of-thumb the TS dialog falls back to.\n\nTS: `bytesPerToken = sG(ctx.options.mainLoopModel)` passed\nto the dialog and re-used by `ZP$(skill, bytesPerToken)`.",
+          "description": "Bytes per token for the current main-role model. The TUI\ndivides [`SkillsDialogEntry::frontmatter_bytes`] by this to\nrender the `~N tok` column. Set to 4 when the host cannot\nresolve a more accurate value — `bytes/token ≈ 4` is the\nEnglish-text rule-of-thumb fallback.",
           "type": "integer",
           "format": "int64"
         },
@@ -2786,7 +2786,7 @@
       ]
     },
     "SkillsDialogSource": {
-      "description": "Source group for a skill dialog entry. Mirrors TS `SkillSource`\nunion (`SettingSource | 'plugin' | 'mcp'`) collapsed to a closed\nenum so the wire shape is statically typed.\n\n**2.1.142 parity**: TS `xJ4` (`cli_inner_pretty.js:476897-476907`)\nnormalises `bundled`/`builtin` → display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
+      "description": "Source group for a skill dialog entry. Collapsed from\n`SettingSource | 'plugin' | 'mcp'` to a closed enum so the wire shape is statically typed.\n\nThe dialog normalises `bundled`/`builtin` → display label `\"built-in\"`; the\ndialog filter matches against that lowercased label.",
       "oneOf": [
         {
           "description": "Compiled-in bundled skill catalog. TS `bundled` / `builtin`\ncollapsed to a single label (display: `built-in`).",
@@ -2851,7 +2851,7 @@
           ]
         },
         "kind": {
-          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section — builtin local commands always sit in\nthe builtin bucket. Mirrors TS `cmd.type === 'prompt'` filtering\nin `commandSuggestions.ts`.\n\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift.",
+          "description": "Execution kind. The empty-query ranker treats only\n[`CommandTypeTag::Prompt`] entries as skills eligible for the\n\"recently used\" section — builtin local commands always sit in\nthe builtin bucket (`cmd.type === 'prompt'` filtering).\n\nDerived from the source [`CommandType`] via\n[`CommandType::tag`] at snapshot time; the projection is\ncentralised there so the enum can't drift.",
           "$ref": "#/$defs/CommandTypeTag",
           "default": "local"
         },
@@ -2860,7 +2860,7 @@
           "type": "string"
         },
         "source": {
-          "description": "Where this command came from. Drives empty-query source grouping\nin the `/` popup and the `(user)` / `(project)` / `(plugin)`\nsuffix on descriptions. Mirrors TS `Command.source` consumed by\n`formatDescriptionWithSource` and the empty-input grouping in\n`generateCommandSuggestions`. Plugin / MCP attribution rides on\nthe `Plugin { name }` / `Mcp { server_name }` variants.",
+          "description": "Where this command came from. Drives empty-query source grouping\nin the `/` popup and the `(user)` / `(project)` / `(plugin)`\nsuffix on descriptions (`formatDescriptionWithSource`, empty-input\ngrouping in `generateCommandSuggestions`). Plugin / MCP attribution\nrides on the `Plugin { name }` / `Mcp { server_name }` variants.",
           "anyOf": [
             {
               "$ref": "#/$defs/CommandSource"
@@ -3088,7 +3088,7 @@
       ]
     },
     "WorkerBadge": {
-      "description": "Identity badge for a teammate whose tool needs the leader's approval.\nSurfaced in the leader's permission prompt so a human reviewing a\ncross-process worker's request can see WHO is asking. The `color` is\nthe worker's assigned per-teammate palette color (a coco-rs\nimprovement over TS's hardcoded `cyan`); text-surface renderers show\nthe name and carry the color for styled / SDK consumers.\n\nTS: `WorkerBadgeProps` (`components/permissions/WorkerBadge.tsx:6`).",
+      "description": "Identity badge for a teammate whose tool needs the leader's approval.\nSurfaced in the leader's permission prompt so a human reviewing a\ncross-process worker's request can see WHO is asking. The `color` is\nthe worker's assigned per-teammate palette color (a coco-rs\nimprovement over TS's hardcoded `cyan`); text-surface renderers show\nthe name and carry the color for styled / SDK consumers.",
       "type": "object",
       "properties": {
         "color": {

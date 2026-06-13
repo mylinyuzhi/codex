@@ -65,6 +65,16 @@ pub(super) async fn intercept(
         return intercept_wizard(state, cmd, command_tx).await;
     }
 
+    // A pending delete confirmation captures all keys until the user
+    // confirms or cancels — nav/tab-switch must not slip through.
+    let in_delete_confirm = match state.ui.modal.as_ref() {
+        Some(ModalState::AgentsDialog(d)) => d.pending_delete.is_some(),
+        _ => false,
+    };
+    if in_delete_confirm {
+        return intercept_delete_confirm(state, cmd, command_tx).await;
+    }
+
     match cmd {
         TuiCommand::CursorLeft => Handled::Yes(cycle_tab(state, -1)),
         TuiCommand::CursorRight => Handled::Yes(cycle_tab(state, 1)),
@@ -83,7 +93,7 @@ pub(super) async fn intercept(
             Handled::Yes(true)
         }
         TuiCommand::InsertChar(c) if c.eq_ignore_ascii_case(&'d') => {
-            delete_focused_library_agent(state, command_tx).await;
+            arm_delete_focused_library_agent(state);
             Handled::Yes(true)
         }
         _ => Handled::No,
@@ -166,10 +176,7 @@ fn render_library_toast(kind: LibraryToastKind) -> String {
     }
 }
 
-async fn delete_focused_library_agent(
-    state: &mut AppState,
-    command_tx: &mpsc::Sender<UserCommand>,
-) {
+fn arm_delete_focused_library_agent(state: &mut AppState) {
     let path_to_delete = {
         let dialog = match state.ui.modal.as_ref() {
             Some(ModalState::AgentsDialog(d)) => d,
@@ -187,18 +194,48 @@ async fn delete_focused_library_agent(
             _ => None,
         }
     };
-    if let Some(path) = path_to_delete {
-        // TODO: route through a confirm overlay before emitting the
-        // destructive command. For now the toast serves as the
-        // visible breadcrumb.
-        state.ui.add_toast(crate::state::ui::Toast::info(
-            crate::i18n::t!(
-                "dialog.agents_deleted_toast",
-                path = path.display().to_string().as_str()
-            )
-            .to_string(),
-        ));
-        let _ = command_tx.send(UserCommand::DeleteAgentFile { path }).await;
+    if let Some(path) = path_to_delete
+        && let Some(ModalState::AgentsDialog(dialog)) = state.ui.modal.as_mut()
+    {
+        // Arm the confirmation prompt; the actual `DeleteAgentFile`
+        // dispatch happens only after the user confirms in
+        // `intercept_delete_confirm`.
+        dialog.pending_delete = Some(path);
+    }
+}
+
+/// Handle keys while a delete confirmation is armed: `y` / Enter
+/// dispatches the destructive command, `n` / Esc cancels. All other
+/// keys are swallowed (no nav leakage) without a redraw.
+async fn intercept_delete_confirm(
+    state: &mut AppState,
+    cmd: &TuiCommand,
+    command_tx: &mpsc::Sender<UserCommand>,
+) -> Handled {
+    let confirm = matches!(cmd, TuiCommand::SubmitInput)
+        || matches!(cmd, TuiCommand::InsertChar(c) if c.eq_ignore_ascii_case(&'y'));
+    let cancel = matches!(cmd, TuiCommand::Cancel)
+        || matches!(cmd, TuiCommand::InsertChar(c) if c.eq_ignore_ascii_case(&'n'));
+
+    let pending = match state.ui.modal.as_mut() {
+        Some(ModalState::AgentsDialog(d)) => d.pending_delete.take_if(|_| confirm || cancel),
+        _ => return Handled::No,
+    };
+
+    match pending {
+        Some(path) if confirm => {
+            state.ui.add_toast(crate::state::ui::Toast::info(
+                crate::i18n::t!(
+                    "dialog.agents_deleted_toast",
+                    path = path.display().to_string().as_str()
+                )
+                .to_string(),
+            ));
+            let _ = command_tx.send(UserCommand::DeleteAgentFile { path }).await;
+            Handled::Yes(true)
+        }
+        // cancel (pending was taken and dropped) or a swallowed key.
+        _ => Handled::Yes(confirm || cancel),
     }
 }
 

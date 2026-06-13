@@ -441,17 +441,14 @@ impl SwarmAgentHandle {
                 model: Some(resolved_model.model.clone()),
                 prompt: request.prompt.clone(),
                 color: None,
-                plan_mode_required: request.mode.as_deref().is_some_and(|m| m == "plan"),
+                plan_mode_required: request.mode == Some(coco_types::PermissionMode::Plan),
                 cwd: request
                     .cwd
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| self.cwd.clone()),
                 worktree_path: None,
-                mode: request
-                    .mode
-                    .as_deref()
-                    .and_then(|m| serde_json::from_value(serde_json::json!(m)).ok()),
+                mode: request.mode,
             })
             .await?;
         let name = reservation.name.as_str();
@@ -467,7 +464,7 @@ impl SwarmAgentHandle {
             team_name: team_name.to_string(),
             prompt: request.prompt.clone(),
             color: Some(color.as_str().to_string()),
-            plan_mode_required: request.mode.as_deref().is_some_and(|m| m == "plan"),
+            plan_mode_required: request.mode == Some(coco_types::PermissionMode::Plan),
             model: Some(resolved_model.model.clone()),
             working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
             system_prompt: teammate_system_prompt,
@@ -1035,7 +1032,7 @@ impl AgentHandle for SwarmAgentHandle {
                 request_id,
                 &from,
                 pane_id.as_deref(),
-                backend_type.as_deref(),
+                backend_type,
             )
         } else {
             crate::mailbox::create_shutdown_rejected_message(
@@ -1146,7 +1143,7 @@ impl AgentHandle for SwarmAgentHandle {
         agent_id: &str,
         name: &str,
         pane_id: Option<&str>,
-        backend_type: Option<&str>,
+        backend_type: Option<crate::types::BackendType>,
     ) -> Result<(), String> {
         let Some(team_name) = self.roster_store.active_team_name().await else {
             return Err("no active team — cannot tear down teammate".into());
@@ -1155,7 +1152,7 @@ impl AgentHandle for SwarmAgentHandle {
         // 1. Kill the pane for pane-based teammates. In-process teammates
         //    have no pane id (and an InProcess backend) and exit via their
         //    own runner-loop break, so kill_pane is skipped.
-        let is_in_process = backend_type == Some(crate::types::BackendType::InProcess.as_str());
+        let is_in_process = backend_type == Some(crate::types::BackendType::InProcess);
         if let Some(pane) = pane_id.filter(|p| !p.is_empty())
             && !is_in_process
             && let Some(registry) = &self.backend_registry
@@ -1165,10 +1162,10 @@ impl AgentHandle for SwarmAgentHandle {
             // session hosts a single pane backend today so this normally
             // matches; guard defensively so a future mixed tmux/iTerm2 team
             // never kills the wrong server's pane.
-            let registered = backend.backend_type().as_str();
+            let registered = backend.backend_type();
             if backend_type.is_some_and(|bt| bt != registered) {
                 tracing::warn!(agent_id, pane_id = pane, msg_backend = ?backend_type,
-                    registered, "shutdown teardown: backend_type mismatch — skipping kill_pane");
+                    registered = registered.as_str(), "shutdown teardown: backend_type mismatch — skipping kill_pane");
             } else if let Err(e) = backend.kill_pane(&pane.to_string()).await {
                 tracing::warn!(agent_id, pane_id = pane, error = %e,
                     "shutdown teardown: kill_pane failed (continuing)");
@@ -1307,7 +1304,10 @@ impl AgentHandle for SwarmAgentHandle {
 /// member entry. Returns `(None, None)` when the file or member is
 /// missing. The pane id is normalised to `None` when empty (the
 /// in-process case).
-fn self_pane_coords(team_name: &str, agent_id: &str) -> (Option<String>, Option<String>) {
+fn self_pane_coords(
+    team_name: &str,
+    agent_id: &str,
+) -> (Option<String>, Option<crate::types::BackendType>) {
     match crate::team_file::read_team_file(team_name) {
         Ok(Some(tf)) => tf
             .members
@@ -1315,8 +1315,7 @@ fn self_pane_coords(team_name: &str, agent_id: &str) -> (Option<String>, Option<
             .find(|m| m.agent_id == agent_id)
             .map(|m| {
                 let pane = (!m.tmux_pane_id.is_empty()).then_some(m.tmux_pane_id);
-                let backend = m.backend_type.map(|b| b.as_str().to_string());
-                (pane, backend)
+                (pane, m.backend_type)
             })
             .unwrap_or((None, None)),
         _ => (None, None),

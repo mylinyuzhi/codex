@@ -341,14 +341,14 @@ pub struct QueryEngineConfig {
     /// Sub-context isolation overrides. `Some` ⇒ the engine is
     /// fork-spawned and the per-call `ToolUseContext` builder
     /// applies the [`ForkContextOverrides`] field-by-field
-    /// (auto agent_id, query_chain_id / query_depth bump,
-    /// allowed_write_roots fence, isolated callback handles).
-    /// `None` ⇒ standard parent-shared semantics (default).
+    /// (auto agent_id, query_depth bump, allowed_write_roots fence,
+    /// isolated callback handles). `None` ⇒ standard parent-shared
+    /// semantics (default).
     ///
-    /// The `clone_file_read_state` flag inside is honored by the
-    /// dispatcher at engine-build time (cloning is too expensive
-    /// to repeat per-call); other flags apply at per-call
-    /// `ToolUseContext` construction.
+    /// The `clone_file_read_state` flag is honored at engine-build time
+    /// (`SessionRuntime::build_engine_from_config_with_persistence` installs
+    /// a deep-cloned `FileReadState` so the clone isn't repeated per-call);
+    /// the remaining fields apply at per-call `ToolUseContext` construction.
     ///
     /// Stored as `Arc` so threading it onto every per-call
     /// `ToolUseContext` is a cheap pointer-copy.

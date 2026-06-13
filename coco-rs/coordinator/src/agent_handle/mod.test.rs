@@ -1033,7 +1033,7 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
     let request = AgentSpawnRequest {
         prompt: "do work".into(),
         subagent_type: Some("general-purpose".into()),
-        mode: Some("default".into()),
+        mode: Some(coco_types::PermissionMode::Default),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1130,7 +1130,7 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
     let handle = create_test_handle();
     let request = AgentSpawnRequest {
         prompt: "isolated work".into(),
-        isolation: Some("worktree".into()),
+        isolation: Some(coco_types::AgentIsolation::Worktree),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1762,7 +1762,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def),
-            mode: Some("plan".into()),
+            mode: Some(coco_types::PermissionMode::Plan),
             ..Default::default()
         })
         .await
@@ -2212,7 +2212,7 @@ async fn test_spawn_subagent_validation_failure_does_not_leak_state() {
     let request = AgentSpawnRequest {
         prompt: "isolated work".into(),
         // Worktree without a manager — first gate fails.
-        isolation: Some("worktree".into()),
+        isolation: Some(coco_types::AgentIsolation::Worktree),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -2431,10 +2431,6 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
         serialized.contains("REAL TOOL OUTPUT - must survive"),
         "Resume must preserve tool_result content verbatim; got {serialized}",
     );
-    assert!(
-        !serialized.contains(coco_subagent::FORK_PLACEHOLDER),
-        "Resume must NOT rewrite tool_results to FORK_PLACEHOLDER; got {serialized}",
-    );
 }
 
 /// G1 regression: fork-mode user turn must be wrapped in
@@ -2555,17 +2551,15 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
         "is_in_fork_child must detect the wrapped directive — without this, fork-of-fork is silently allowed",
     );
 
-    // Inherited history's `tool_result` blocks were rewritten to
-    // FORK_PLACEHOLDER (build_fork_context contract).
+    // Inherited history keeps the parent's REAL tool_result content
+    // verbatim — no placeholder rewrite — so the fork's request prefix
+    // is byte-identical to the parent's (prompt-cache hit) and the child
+    // sees the output the parent gathered.
     let observed_messages = captured.captured_messages.lock().await.clone().unwrap();
     let serialized = serde_json::to_string(&observed_messages).unwrap();
     assert!(
-        serialized.contains(coco_subagent::FORK_PLACEHOLDER),
-        "Fork must rewrite parent tool_results to FORK_PLACEHOLDER; got: {serialized}",
-    );
-    assert!(
-        !serialized.contains("noisy parent output"),
-        "Fork must scrub the original tool_result content; got: {serialized}",
+        serialized.contains("noisy parent output"),
+        "Fork must preserve the parent's real tool_result content; got: {serialized}",
     );
 
     // Pinned system prompt — verbatim from the snapshot.

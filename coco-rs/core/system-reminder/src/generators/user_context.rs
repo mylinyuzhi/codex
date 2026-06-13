@@ -43,24 +43,39 @@ impl AttachmentGenerator for UserContextGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
-        let Some(date) = ctx.current_date.as_deref() else {
-            return Ok(None);
-        };
-        if date.is_empty() {
+        // `prependUserContext` body, minus the outer `<system-reminder>`
+        // tags which the injection pipeline re-applies via `wrap_with_tag`.
+        // TS sends ONE user-context message carrying one-or-more
+        // `# key\nvalue` blocks; coco threads `currentDate` (always, off the
+        // engine clock) and — in coordinator mode — `workerToolsContext`
+        // (worker tool pool + connected MCP servers, so the leader knows
+        // what its spawned workers can do). `claudeMd` lives in the system
+        // prompt instead.
+        let date = ctx.current_date.as_deref().filter(|d| !d.is_empty());
+        let worker = ctx
+            .coordinator_worker_context
+            .as_deref()
+            .filter(|w| !w.is_empty());
+        if date.is_none() && worker.is_none() {
             return Ok(None);
         }
-        // `prependUserContext` body, minus the outer `<system-reminder>` tags
-        // which the injection pipeline re-applies via `wrap_with_tag`. The
-        // context map carries only `currentDate` (claudeMd lives in the system
-        // prompt). The six-space indent before IMPORTANT is a template-literal
+
+        let mut blocks: Vec<String> = Vec::new();
+        if let Some(date) = date {
+            blocks.push(format!("# currentDate\nToday's date is {date}."));
+        }
+        if let Some(worker) = worker {
+            blocks.push(format!("# workerToolsContext\n{worker}"));
+        }
+        // The six-space indent before IMPORTANT is a template-literal
         // artifact preserved for model compatibility.
         let content = format!(
             "As you answer the user's questions, you can use the following context:\n\
-             # currentDate\n\
-             Today's date is {date}.\n\
+             {}\n\
              \n      \
              IMPORTANT: this context may or may not be relevant to your tasks. \
-             You should not respond to this context unless it is highly relevant to your task."
+             You should not respond to this context unless it is highly relevant to your task.",
+            blocks.join("\n"),
         );
         Ok(Some(SystemReminder::new(
             AttachmentType::UserContext,

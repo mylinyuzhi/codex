@@ -136,19 +136,6 @@ fn compute_load_order(
     order
 }
 
-/// Standalone-helper variant of `AgentCatalogSnapshot::active_with_mcp`.
-/// Useful when callers already hold a `Vec<&AgentDefinition>` and just
-/// need to filter it.
-pub fn filter_agents_by_mcp_requirements<'a>(
-    agents: impl IntoIterator<Item = &'a AgentDefinition>,
-    connected_servers: &[String],
-) -> Vec<&'a AgentDefinition> {
-    agents
-        .into_iter()
-        .filter(|def| has_required_mcp_servers(def, connected_servers))
-        .collect()
-}
-
 /// Pure predicate — `true` when every entry in
 /// `def.required_mcp_servers` matches at least one connected server
 /// (case-insensitive substring).
