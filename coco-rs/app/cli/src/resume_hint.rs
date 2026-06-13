@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! Resume this session with:
-//! coco --resume <session-id>
+//! coco-cli --resume <session-id>
 //! ```
 //!
 //! Only emit when there is a session id AND a transcript file on disk.
@@ -38,10 +38,10 @@ const DIM_OFF: &str = "\x1b[22m";
 ///
 /// One outer SGR `dim` pair wraps the whole multi-line block.
 fn render(session_id: &str) -> String {
-    format!("{DIM_ON}\nResume this session with:\ncoco --resume {session_id}\n{DIM_OFF}")
+    format!("{DIM_ON}\nResume this session with:\ncoco-cli --resume {session_id}\n{DIM_OFF}")
 }
 
-/// Print the "Resume this session with: coco --resume <id>" hint.
+/// Print the "Resume this session with: coco-cli --resume <id>" hint.
 ///
 /// No-op when `session_id` is `None` (the user quit before
 /// `ServerNotification::SessionStarted` reached the TUI) or when the

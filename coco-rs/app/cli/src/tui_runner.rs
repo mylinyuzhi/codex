@@ -1635,24 +1635,16 @@ async fn run_agent_driver(
                     );
                     continue;
                 }
-                let cfg_mode = cfg.permission_mode;
-                runtime
-                    .update_engine_config(|cfg| cfg.permission_mode = mode)
-                    .await;
-                let prev_mode;
-                {
-                    let mut guard = runtime.app_state.write().await;
-                    prev_mode = guard.permission_mode.unwrap_or(cfg_mode);
-                    coco_permissions::apply_permission_mode_transition_to_app_state(
-                        &mut guard,
-                        prev_mode,
-                        mode,
-                        &cfg.allow_rules,
-                    );
-                }
+                let change = coco_cli::live_permission_mode::apply_to_runtime(
+                    &runtime,
+                    mode,
+                    &event_tx,
+                    cfg.bypass_permissions_available,
+                )
+                .await;
                 info!(
                     session_id = %cur_session_id,
-                    from = ?prev_mode,
+                    from = ?change.previous,
                     to = ?mode,
                     "TUI SetPermissionMode propagated to engine_config + app_state",
                 );
@@ -3482,17 +3474,17 @@ async fn dispatch_plan(
     // mode — bare `/plan`, `/plan open`, and `/plan <description>` all
     // consent to plan mode equally.
     if !was_in_plan {
-        runtime
-            .update_engine_config(|cfg| cfg.permission_mode = coco_types::PermissionMode::Plan)
-            .await;
-        let patch = coco_tools::build_enter_plan_mode_patch(prev_mode);
-        {
-            let mut guard = runtime.app_state.write().await;
-            patch(&mut guard);
-        }
+        let cfg = runtime.current_engine_config().await;
+        let change = coco_cli::live_permission_mode::apply_to_runtime(
+            runtime,
+            coco_types::PermissionMode::Plan,
+            event_tx,
+            cfg.bypass_permissions_available,
+        )
+        .await;
         info!(
             session_id = %session_id,
-            from = ?prev_mode,
+            from = ?change.previous,
             to = ?coco_types::PermissionMode::Plan,
             "TUI /plan: direct-toggle to Plan mode",
         );

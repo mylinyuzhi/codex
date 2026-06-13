@@ -15,6 +15,7 @@ pub mod headless;
 pub mod hook_agent_runner;
 pub mod leader_inbox_poller;
 pub mod leader_permission;
+pub mod live_permission_mode;
 pub mod lsp_handle_adapter;
 pub mod mcp_handle_adapter;
 pub mod model_card_refresh;

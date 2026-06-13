@@ -3,10 +3,14 @@ use std::sync::atomic::Ordering;
 
 use coco_bridge::ControlRequest;
 use coco_bridge::ControlRequestHandler;
+use coco_types::CoreEvent;
+use coco_types::ServerNotification;
+use tokio::sync::mpsc;
 
 use super::SdkBridgeControlHandler;
 use crate::sdk_server::handlers::SdkServerState;
 use crate::sdk_server::handlers::SessionHandle;
+use crate::sdk_server::outbound::OutboundMessage;
 
 fn state_with_session() -> Arc<SdkServerState> {
     let state = Arc::new(SdkServerState::default());
@@ -134,6 +138,36 @@ async fn bridge_handler_enter_plan_applies_plan_transition_state() {
     );
     assert!(app_state.plan_mode_entry_ms.is_some());
     assert!(!app_state.needs_plan_mode_exit_attachment);
+}
+
+#[tokio::test]
+async fn bridge_handler_enter_plan_publishes_permission_mode_changed() {
+    let state = state_with_session();
+    let (tx, mut rx) = mpsc::channel(4);
+    {
+        let mut outbox = state.outbound_tx.write().await;
+        *outbox = Some(tx);
+    }
+
+    let handler = SdkBridgeControlHandler::new(state);
+    handler
+        .handle(ControlRequest::SetPermissionMode {
+            mode: coco_types::PermissionMode::Plan,
+        })
+        .await
+        .unwrap();
+
+    let msg = rx.recv().await.expect("permission mode notification");
+    match msg {
+        OutboundMessage::CoreEvent(event) => match *event {
+            CoreEvent::Protocol(ServerNotification::PermissionModeChanged(params)) => {
+                assert_eq!(params.mode, coco_types::PermissionMode::Plan);
+                assert!(!params.bypass_available);
+            }
+            other => panic!("expected PermissionModeChanged, got {other:?}"),
+        },
+        other => panic!("expected CoreEvent outbound, got {other:?}"),
+    }
 }
 
 #[tokio::test]

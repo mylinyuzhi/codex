@@ -563,6 +563,13 @@ pub async fn run_plan_mode_turn(
     model: Arc<dyn LanguageModel>,
     params: PlanModeTurnParams,
 ) -> QueryResult {
+    run_plan_mode_turn_with_events(model, params).await.0
+}
+
+pub async fn run_plan_mode_turn_with_events(
+    model: Arc<dyn LanguageModel>,
+    params: PlanModeTurnParams,
+) -> (QueryResult, Vec<coco_types::CoreEvent>) {
     let cancel = CancellationToken::new();
     let config = QueryEngineConfig {
         model_id: "scripted-mock".into(),
@@ -588,20 +595,32 @@ pub async fn run_plan_mode_turn(
         // script the model flow, not user interaction.
         .with_permission_bridge(allow_all_bridge());
 
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let collector = tokio::spawn(async move {
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        events
+    });
+
     if params.messages.is_empty() {
-        engine
-            .run(&params.prompt_if_empty)
+        let result = engine
+            .run_with_events(&params.prompt_if_empty, tx, coco_types::TurnId::generate())
             .await
-            .expect("mock engine run failed")
+            .expect("mock engine run failed");
+        let events = collector.await.expect("event collector should join");
+        (result, events)
     } else {
         // `run_with_messages` requires at least one `user` message at
         // the tail; callers that want a fresh turn should use
         // `next_turn()` which pushes one before handing off.
-        let (tx, _rx) = tokio::sync::mpsc::channel(16);
-        engine
+        let result = engine
             .run_with_messages(params.messages, tx, coco_types::TurnId::generate())
             .await
-            .expect("mock engine run_with_messages failed")
+            .expect("mock engine run_with_messages failed");
+        let events = collector.await.expect("event collector should join");
+        (result, events)
     }
 }
 

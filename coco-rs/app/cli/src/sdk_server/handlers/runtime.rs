@@ -7,7 +7,6 @@ use tracing::info;
 use super::DEFAULT_SDK_MODEL;
 use super::HandlerContext;
 use super::HandlerResult;
-use crate::sdk_server::outbound::OutboundMessage;
 
 /// `control/setModel` — mutate the active session's model.
 ///
@@ -100,46 +99,26 @@ pub(super) async fn handle_set_permission_mode(
     );
     session.permission_mode = Some(params.mode);
 
-    // Propagate to app_state so the engine sees the new mode live.
     let app_state = session.app_state.clone();
     // Drop the session write lock before taking app_state's lock to
     // keep lock order consistent (session → app_state never inverted).
     drop(slot);
-    // Live allow rules for the Auto-entry dangerous-rule snapshot. The
-    // evaluator-facing strip runs per-batch in ToolContextFactory::build, so an
-    // empty map here only weakens the exit-banner provenance, never the guard.
-    let live_allow_rules = match ctx.state.session_runtime.read().await.as_ref() {
-        Some(rt) => rt.current_engine_config().await.allow_rules.clone(),
-        None => coco_types::PermissionRulesBySource::new(),
-    };
-    let mut guard = app_state.write().await;
-    let prev_mode = guard
-        .permission_mode
-        .unwrap_or(coco_types::PermissionMode::Default);
-    coco_permissions::apply_permission_mode_transition_to_app_state(
-        &mut guard,
-        prev_mode,
+    let live_allow_rules =
+        crate::live_permission_mode::live_allow_rules_from_sdk_state(&ctx.state).await;
+    let change = crate::live_permission_mode::apply_to_app_state(
+        &app_state,
+        coco_types::PermissionMode::Default,
         params.mode,
         &live_allow_rules,
-    );
-    drop(guard);
-
-    // Broadcast the change to any attached client (TUI / SDK
-    // subscribers). The `bypass_available` field is a snapshot of the
-    // (static) session capability — readers that rely on the gate stay
-    // consistent without needing a separate event.
-    let bypass_available = ctx
-        .state
-        .bypass_permissions_available
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let event =
-        coco_query::CoreEvent::Protocol(coco_types::ServerNotification::PermissionModeChanged(
-            coco_types::PermissionModeChangedParams {
-                mode: params.mode,
-                bypass_available,
-            },
-        ));
-    let _ = ctx.notif_tx.send(OutboundMessage::core_event(event)).await;
+    )
+    .await;
+    crate::live_permission_mode::publish_outbound_if_changed(
+        &ctx.notif_tx,
+        params.mode,
+        crate::live_permission_mode::sdk_bypass_available(&ctx.state),
+        change.changed,
+    )
+    .await;
 
     HandlerResult::ok_empty()
 }
