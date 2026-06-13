@@ -78,23 +78,21 @@ impl SdkBridgeControlHandler {
         // lock order consistent with the SDK handler.
         let app_state = session.app_state.clone();
         drop(slot);
-        // Live allow rules for the Auto-entry dangerous-rule snapshot (the
-        // evaluator strip runs per-batch in build(); empty here only weakens
-        // exit-banner provenance).
-        let live_allow_rules = match self.state.session_runtime.read().await.as_ref() {
-            Some(rt) => rt.current_engine_config().await.allow_rules.clone(),
-            None => coco_types::PermissionRulesBySource::new(),
-        };
-        let mut guard = app_state.write().await;
-        let prev_mode = guard
-            .permission_mode
-            .unwrap_or(coco_types::PermissionMode::Default);
-        coco_permissions::apply_permission_mode_transition_to_app_state(
-            &mut guard,
-            prev_mode,
+        let live_allow_rules =
+            crate::live_permission_mode::live_allow_rules_from_sdk_state(&self.state).await;
+        let change = crate::live_permission_mode::apply_to_app_state(
+            &app_state,
+            coco_types::PermissionMode::Default,
             mode,
             &live_allow_rules,
-        );
+        )
+        .await;
+        crate::live_permission_mode::publish_sdk_state_outbound_if_changed(
+            &self.state,
+            mode,
+            change.changed,
+        )
+        .await;
 
         Ok(serde_json::Value::Null)
     }

@@ -1,6 +1,6 @@
 //! Protocol-layer handler.
 //!
-//! Handles all 62 [`ServerNotification`] variants. The TUI matches
+//! Handles all [`ServerNotification`] variants. The TUI matches
 //! exhaustively — adding a new variant in `coco-types` fails compilation
 //! here until a TUI behavior is chosen (even if that behavior is an
 //! explicit `false` no-op with a comment).
@@ -597,22 +597,6 @@ pub(super) fn handle(
         }
         ServerNotification::IdeDiagnosticsUpdated(p) => {
             state.session.ide_diagnostics = Some(p);
-            true
-        }
-
-        // === Plan ===
-        // Plan-mode status is derived from `session.permission_mode`.
-        // A dedicated PlanModeChanged notification flips the mode
-        // directly; if the notification path is still carrying the
-        // `entered` flag separately, translate to permission_mode here.
-        ServerNotification::PlanModeChanged(p) => {
-            state.session.permission_mode = if p.entered {
-                coco_types::PermissionMode::Plan
-            } else if state.session.permission_mode == coco_types::PermissionMode::Plan {
-                coco_types::PermissionMode::Default
-            } else {
-                state.session.permission_mode
-            };
             true
         }
 

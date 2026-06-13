@@ -9,6 +9,7 @@ use coco_types::TokenUsage;
 
 use crate::ContinueReason;
 use crate::QueryResult;
+use crate::emit::emit_protocol;
 use crate::engine::QueryEngine;
 use crate::engine_finalize_turn::TurnContinuation;
 use crate::engine_loop_state::LoopAccumulator;
@@ -56,6 +57,23 @@ impl QueryEngine {
         streaming_control_prevent: Option<String>,
     ) -> ToolExecutionBranch {
         if streaming_executed {
+            if let (Some(state), Some(ctx)) = (self.app_state.as_ref(), streaming_ctx.as_ref()) {
+                let permission_mode_after_tools = state.read().await.permission_mode;
+                if permission_mode_after_tools != Some(ctx.permission_context.mode)
+                    && let Some(mode) = permission_mode_after_tools
+                {
+                    let _delivered = emit_protocol(
+                        event_tx,
+                        coco_types::ServerNotification::PermissionModeChanged(
+                            coco_types::PermissionModeChangedParams {
+                                mode,
+                                bypass_available: ctx.permission_context.bypass_available,
+                            },
+                        ),
+                    )
+                    .await;
+                }
+            }
             if let Some(ref c) = streaming_ctx {
                 self.drain_nested_memory_triggers(c).await;
             }
@@ -132,6 +150,11 @@ impl QueryEngine {
             })
             .await;
 
+        let permission_mode_before_tools = match self.app_state.as_ref() {
+            Some(state) => state.read().await.permission_mode,
+            None => None,
+        };
+
         let tool_run_outcome = ToolCallRunner {
             event_tx,
             history: &mut *history,
@@ -156,6 +179,24 @@ impl QueryEngine {
         }
         .run()
         .await;
+
+        if let Some(state) = self.app_state.as_ref() {
+            let permission_mode_after_tools = state.read().await.permission_mode;
+            if permission_mode_after_tools != permission_mode_before_tools
+                && let Some(mode) = permission_mode_after_tools
+            {
+                let _delivered = emit_protocol(
+                    event_tx,
+                    coco_types::ServerNotification::PermissionModeChanged(
+                        coco_types::PermissionModeChangedParams {
+                            mode,
+                            bypass_available: self.config.bypass_permissions_available,
+                        },
+                    ),
+                )
+                .await;
+            }
+        }
 
         self.drain_nested_memory_triggers(&ctx).await;
         if let Some(data) = tool_run_outcome.structured_output.clone() {

@@ -9,7 +9,7 @@ fn render_matches_ts_format() {
     let out = render("f7a376f4-02f4-4773-b7f3-4100e5e76642");
     assert_eq!(
         out,
-        "\x1b[2m\nResume this session with:\ncoco --resume f7a376f4-02f4-4773-b7f3-4100e5e76642\n\x1b[22m"
+        "\x1b[2m\nResume this session with:\ncoco-cli --resume f7a376f4-02f4-4773-b7f3-4100e5e76642\n\x1b[22m"
     );
 }
 
@@ -19,5 +19,5 @@ fn render_includes_session_id_verbatim() {
     // the caller is responsible for quoting policy. A raw uuid is the
     // only currently legal input.
     let out = render("session-with-dashes_and_underscores");
-    assert!(out.contains("coco --resume session-with-dashes_and_underscores"));
+    assert!(out.contains("coco-cli --resume session-with-dashes_and_underscores"));
 }

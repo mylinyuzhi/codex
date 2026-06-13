@@ -166,7 +166,6 @@ pub use event::PermissionsEditorRule;
 pub use event::PersistedFileError;
 pub use event::PersistedFileInfo;
 pub use event::PlanApprovalRequestedParams;
-pub use event::PlanModeChangedParams;
 pub use event::PluginDialogAction;
 pub use event::PluginDialogErrorRow;
 pub use event::PluginDialogInstalledRow;

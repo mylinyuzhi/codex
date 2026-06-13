@@ -407,34 +407,37 @@ fn test_session_ended_quits() {
 }
 
 #[test]
-fn test_plan_mode_changed() {
+fn test_permission_mode_changed_covers_plan_entry_and_exit() {
     let mut state = AppState::new();
     assert!(!state.is_plan_mode());
 
     handle_core_event(
         &mut state,
-        CoreEvent::Protocol(ServerNotification::PlanModeChanged(
-            coco_types::PlanModeChangedParams {
-                entered: true,
-                plan_file: None,
-                approved: None,
+        CoreEvent::Protocol(ServerNotification::PermissionModeChanged(
+            coco_types::PermissionModeChangedParams {
+                mode: coco_types::PermissionMode::Plan,
+                bypass_available: true,
             },
         )),
     );
     assert!(state.is_plan_mode());
+    assert!(state.session.bypass_permissions_available);
 
-    // Exit path: entered=false flips Plan back to Default.
     handle_core_event(
         &mut state,
-        CoreEvent::Protocol(ServerNotification::PlanModeChanged(
-            coco_types::PlanModeChangedParams {
-                entered: false,
-                plan_file: None,
-                approved: None,
+        CoreEvent::Protocol(ServerNotification::PermissionModeChanged(
+            coco_types::PermissionModeChangedParams {
+                mode: coco_types::PermissionMode::AcceptEdits,
+                bypass_available: false,
             },
         )),
     );
     assert!(!state.is_plan_mode());
+    assert_eq!(
+        state.session.permission_mode,
+        coco_types::PermissionMode::AcceptEdits
+    );
+    assert!(!state.session.bypass_permissions_available);
 }
 
 #[test]

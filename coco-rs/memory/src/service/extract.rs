@@ -142,7 +142,6 @@ pub struct ExtractService {
     /// clear it without `.await`. A cancelled `maybe_extract` future
     /// gets cleaned up by the guard's `Drop`.
     in_progress: Arc<AtomicBool>,
-    in_progress: Arc<AtomicBool>,
     /// Watch channel carrying the current `in_progress` value. Eliminates
     /// the notify-after-check race in the polling `drain` path:
     /// `Receiver::changed()` is edge-triggered AND remembers the latest

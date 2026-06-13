@@ -32,12 +32,15 @@ mod harness;
 use std::sync::Arc;
 
 use coco_messages::Message;
+use coco_types::CoreEvent;
 use coco_types::PermissionMode;
+use coco_types::ServerNotification;
 use coco_types::ToolAppState;
 use harness::MockModelBuilder;
 use harness::MockResponse;
 use harness::PlanModeTurnParams;
 use harness::run_plan_mode_turn;
+use harness::run_plan_mode_turn_with_events;
 use harness::tools_with_plan_mode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -76,6 +79,18 @@ fn count_attachments_containing<M: std::borrow::Borrow<Message>>(
         })
         .filter(|text| text.contains(needle))
         .count()
+}
+
+fn permission_mode_changes(events: &[CoreEvent]) -> Vec<PermissionMode> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            CoreEvent::Protocol(ServerNotification::PermissionModeChanged(params)) => {
+                Some(params.mode)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -453,8 +468,9 @@ async fn model_driven_enter_plan_mode_flips_reminder_on_next_turn() {
         "let's plan",
     )
     .with_permission_mode(PermissionMode::Default);
-    let result = run_plan_mode_turn(model, params).await;
+    let (result, events) = run_plan_mode_turn_with_events(model, params).await;
     assert_eq!(result.response_text, "exploring");
+    assert_eq!(permission_mode_changes(&events), vec![PermissionMode::Plan]);
 
     // Evidence: the Full plan reminder (with its workflow heading)
     // must be in final_messages. Before the fix, this would be 0.
@@ -556,8 +572,12 @@ async fn model_driven_exit_plan_mode_stops_reminder_on_next_turn() {
         tools_with_plan_mode(),
         "finish and code",
     );
-    let result = run_plan_mode_turn(model, params).await;
+    let (result, events) = run_plan_mode_turn_with_events(model, params).await;
     assert_eq!(result.response_text, "done");
+    assert_eq!(
+        permission_mode_changes(&events),
+        vec![PermissionMode::Default]
+    );
 
     // Exit banner must have fired ONCE (one-shot semantics).
     let exit_banner_hits =

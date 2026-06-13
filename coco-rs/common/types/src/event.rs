@@ -552,11 +552,6 @@ matching `NotificationMethod` discriminant.",
     /// IDE diagnostics updated.
     "ide/diagnosticsUpdated" => IdeDiagnosticsUpdated(IdeDiagnosticsUpdatedParams),
 
-    // === Plan (1) ===
-
-    /// Plan mode changed.
-    "plan/modeChanged" => PlanModeChanged(PlanModeChangedParams),
-
     // === Queue (3) ===
 
     /// Command queue state changed.
@@ -1538,16 +1533,6 @@ pub struct IdeDiagnosticsUpdatedParams {
     pub new_count: i32,
     #[serde(default)]
     pub diagnostics: Vec<serde_json::Value>,
-}
-
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanModeChangedParams {
-    pub entered: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan_file: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approved: Option<bool>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
