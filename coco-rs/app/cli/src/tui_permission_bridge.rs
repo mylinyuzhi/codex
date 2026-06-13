@@ -255,7 +255,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
             let is_exit_plan_mode =
                 request.tool_name == coco_types::ToolName::ExitPlanMode.as_str();
             let choices = if is_exit_plan_mode {
-                Some(self.exit_plan_mode_choices().await)
+                Some(self.exit_plan_mode_choices(&request.input).await)
             } else {
                 request.choices.clone()
             };
@@ -306,7 +306,18 @@ impl ToolPermissionBridge for TuiPermissionBridge {
 }
 
 impl TuiPermissionBridge {
-    async fn exit_plan_mode_choices(&self) -> Vec<coco_types::PermissionAskChoice> {
+    async fn exit_plan_mode_choices(
+        &self,
+        input: &serde_json::Value,
+    ) -> Vec<coco_types::PermissionAskChoice> {
+        let outcome = input
+            .get("outcome")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or(coco_types::ExitPlanModeOutcome::ImplementationPlan);
+        if outcome == coco_types::ExitPlanModeOutcome::NoImplementationPlan {
+            return build_exit_plan_mode_no_plan_choices();
+        }
+
         let runtime = self
             .notification_runtime
             .read()
@@ -324,6 +335,22 @@ impl TuiPermissionBridge {
         };
         build_exit_plan_mode_choices(show_clear_context, bypass_available)
     }
+}
+
+fn build_exit_plan_mode_no_plan_choices() -> Vec<coco_types::PermissionAskChoice> {
+    use coco_types::ExitPlanChoice;
+    vec![
+        coco_types::PermissionAskChoice {
+            value: ExitPlanChoice::KeepDefault.as_str().into(),
+            label: "Yes, exit plan mode".into(),
+            description: None,
+        },
+        coco_types::PermissionAskChoice {
+            value: ExitPlanChoice::No.as_str().into(),
+            label: "No, keep planning".into(),
+            description: None,
+        },
+    ]
 }
 
 fn build_exit_plan_mode_choices(

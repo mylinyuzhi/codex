@@ -92,6 +92,8 @@ pub(super) fn handle(
         } => {
             let detail =
                 permission_detail_for_approval(&tool_name, &display_input, original_input.as_ref());
+            let choices =
+                normalize_permission_choices(&tool_name, original_input.as_ref(), choices);
             let prefix_input = (choices.is_none() && show_always_allow)
                 .then(|| seed_prefix_input(&tool_name, original_input.as_ref()))
                 .flatten();
@@ -669,6 +671,10 @@ fn permission_detail_for_approval(
     original_input: Option<&serde_json::Value>,
 ) -> crate::state::PermissionDetail {
     if tool_name == coco_types::ToolName::ExitPlanMode.as_str() {
+        let outcome = original_input
+            .and_then(|input| input.get("outcome"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or(coco_types::ExitPlanModeOutcome::ImplementationPlan);
         let plan = original_input
             .and_then(|input| input.get("plan"))
             .and_then(serde_json::Value::as_str)
@@ -678,6 +684,7 @@ fn permission_detail_for_approval(
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
         return crate::state::PermissionDetail::ExitPlanMode {
+            outcome,
             plan,
             plan_file_path,
             // The prompt-rule classifier surface is not yet shipped,
@@ -688,6 +695,35 @@ fn permission_detail_for_approval(
     crate::state::PermissionDetail::Generic {
         input_preview: display_input.as_display_str().to_string(),
     }
+}
+
+fn normalize_permission_choices(
+    tool_name: &str,
+    original_input: Option<&serde_json::Value>,
+    choices: Option<Vec<coco_types::PermissionAskChoice>>,
+) -> Option<Vec<coco_types::PermissionAskChoice>> {
+    if tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+        return choices;
+    }
+    let outcome = original_input
+        .and_then(|input| input.get("outcome"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or(coco_types::ExitPlanModeOutcome::ImplementationPlan);
+    if outcome != coco_types::ExitPlanModeOutcome::NoImplementationPlan {
+        return choices;
+    }
+    Some(vec![
+        coco_types::PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::KeepDefault.as_str().into(),
+            label: "Yes, exit plan mode".into(),
+            description: None,
+        },
+        coco_types::PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::No.as_str().into(),
+            label: "No, keep planning".into(),
+            description: None,
+        },
+    ])
 }
 
 fn append_queued_edit_images(

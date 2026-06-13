@@ -573,6 +573,7 @@ fn exit_reminder_with_existing_plan_includes_reference() {
     let att = PlanModeExitAttachment {
         plan_file_path: "/tmp/plans/foo.md".into(),
         plan_exists: true,
+        outcome: Some(coco_types::ExitPlanModeOutcome::ImplementationPlan),
     };
     let out = render_plan_mode_exit_reminder(&att);
     assert!(out.contains("## Exited Plan Mode"));
@@ -585,10 +586,24 @@ fn exit_reminder_without_plan_omits_reference() {
     let att = PlanModeExitAttachment {
         plan_file_path: "/tmp/plans/foo.md".into(),
         plan_exists: false,
+        outcome: None,
     };
     let out = render_plan_mode_exit_reminder(&att);
     assert!(out.contains("## Exited Plan Mode"));
     assert!(!out.contains("/tmp/plans/foo.md"));
+}
+
+#[test]
+fn exit_reminder_no_implementation_plan_omits_stale_reference() {
+    let att = PlanModeExitAttachment {
+        plan_file_path: "/tmp/plans/old.md".into(),
+        plan_exists: true,
+        outcome: Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan),
+    };
+    let out = render_plan_mode_exit_reminder(&att);
+    assert!(out.contains("without an implementation plan"));
+    assert!(!out.contains("/tmp/plans/old.md"));
+    assert!(!out.contains("can now make edits"));
 }
 
 // ── Full-text snapshot pinning (Phase-4 + workflow matrix) ──

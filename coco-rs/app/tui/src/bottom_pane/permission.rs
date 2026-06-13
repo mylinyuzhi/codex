@@ -169,8 +169,20 @@ fn rejection_feedback(
     p: &crate::state::PermissionPromptState,
     chosen_is_no: bool,
 ) -> Option<String> {
-    (chosen_is_no && p.tool_name == coco_types::ToolName::ExitPlanMode.as_str())
-        .then(|| "User rejected the plan. Stay in plan mode and continue planning.".to_string())
+    if !chosen_is_no || p.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+        return None;
+    }
+    if matches!(
+        p.detail,
+        crate::state::PermissionDetail::ExitPlanMode {
+            outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+            ..
+        }
+    ) {
+        Some("User declined to exit plan mode. Stay in plan mode.".to_string())
+    } else {
+        Some("User rejected the plan. Stay in plan mode and continue planning.".to_string())
+    }
 }
 
 /// Approve/deny a sandbox-permission prompt.

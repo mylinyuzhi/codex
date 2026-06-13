@@ -285,6 +285,7 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
         plan: Some("# Plan\n\n- Update code".to_string()),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
@@ -316,9 +317,12 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
     );
 
     assert!(title.contains("Ready to code?"));
-    assert!(body.contains("Here is Claude's plan:"));
-    assert!(body.contains("- Update code"));
-    assert!(body.contains("Plan file: /tmp/plan.md"));
+    assert!(
+        !body.contains("Here is plan:"),
+        "generic permission body must not render ExitPlanMode plan text: {body}"
+    );
+    assert!(!body.contains("- Update code"), "{body}");
+    assert!(!body.contains("Plan file: /tmp/plan.md"), "{body}");
     assert!(!body.contains("Requested permissions:"));
     assert!(!body.contains("Bash(prompt: cargo test)"));
     assert!(body.contains("Yes, manually approve edits"));
@@ -329,15 +333,36 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
 }
 
 #[test]
-fn exit_plan_approval_panel_renders_markdown_choices_and_teal_border() {
+fn permission_content_uses_no_plan_title_for_exit_plan_without_plan() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let state = permission_prompt(PermissionDetail::ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+        plan: Some("User asked for a read-only explanation.".to_string()),
+        plan_file_path: None,
+        allowed_prompts: vec![],
+    });
+
+    let (title, _, _) = permission_content(
+        &state,
+        coco_types::PermissionMode::Default,
+        UiStyles::new(&theme),
+    );
+
+    assert!(title.contains("Exit plan mode?"), "{title}");
+    assert!(!title.contains("Ready to code?"), "{title}");
+}
+
+#[test]
+fn exit_plan_prompt_lines_render_only_decision_rows() {
     let _locale = locale_test_guard("en");
     let theme = Theme::default();
     let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
-        plan: Some("# Goal\n\n- Step one\n- Step two".to_string()),
+        outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+        plan: Some("# Goal\n\n- Step one".to_string()),
         plan_file_path: Some("/tmp/plan.md".to_string()),
         allowed_prompts: vec![],
     });
-    state.tool_name = coco_types::ToolName::ExitPlanMode.as_str().to_string();
     state.selected_choice = 1;
     state.choices = Some(vec![
         PermissionAskChoice {
@@ -345,7 +370,7 @@ fn exit_plan_approval_panel_renders_markdown_choices_and_teal_border() {
                 .as_str()
                 .to_string(),
             label: "Yes, auto-accept edits".to_string(),
-            description: Some("Keep going with elevated approval.".to_string()),
+            description: None,
         },
         PermissionAskChoice {
             value: coco_types::ExitPlanChoice::KeepDefault.as_str().to_string(),
@@ -359,37 +384,115 @@ fn exit_plan_approval_panel_renders_markdown_choices_and_teal_border() {
         },
     ]);
 
-    let (title, lines, border) = exit_plan_approval_styled_content(
+    let lines = exit_plan_prompt_lines(&state, UiStyles::new(&theme), 8);
+    let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+    assert!(joined.contains("Ready to code?"), "{joined}");
+    assert!(joined.contains("Yes, manually approve edits"), "{joined}");
+    assert!(joined.contains("Ask before each edit."), "{joined}");
+    assert!(!joined.contains("Step one"), "{joined}");
+    assert!(!joined.contains("Plan file:"), "{joined}");
+}
+
+#[test]
+fn exit_plan_prompt_lines_use_no_plan_copy_without_plan() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+        plan: Some("This was a read-only question.".to_string()),
+        plan_file_path: None,
+        allowed_prompts: vec![],
+    });
+    state.choices = Some(vec![
+        PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::KeepDefault.as_str().to_string(),
+            label: "Yes, exit plan mode".to_string(),
+            description: None,
+        },
+        PermissionAskChoice {
+            value: coco_types::ExitPlanChoice::No.as_str().to_string(),
+            label: "No, keep planning".to_string(),
+            description: None,
+        },
+    ]);
+
+    let lines = exit_plan_prompt_lines(&state, UiStyles::new(&theme), 8);
+    let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+    assert!(joined.contains("Exit plan mode?"), "{joined}");
+    assert!(
+        joined.contains("without an implementation plan"),
+        "{joined}"
+    );
+    assert!(joined.contains("Yes, exit plan mode"), "{joined}");
+    assert!(joined.contains("No, keep planning"), "{joined}");
+    assert!(!joined.contains("auto-accept"), "{joined}");
+    assert!(!joined.contains("manually approve edits"), "{joined}");
+    assert!(!joined.contains("Ready to code?"), "{joined}");
+    assert!(
+        lines.iter().any(|line| line_text(line).is_empty()),
+        "prompt should leave space before choices: {joined}"
+    );
+}
+
+#[test]
+fn exit_plan_pending_history_lines_render_plan_without_choices() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let mut state = permission_prompt(PermissionDetail::ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+        plan: Some("# Goal\n\n- Step one".to_string()),
+        plan_file_path: Some("/tmp/plan.md".to_string()),
+        allowed_prompts: vec![],
+    });
+    state.choices = Some(vec![PermissionAskChoice {
+        value: coco_types::ExitPlanChoice::KeepDefault.as_str().to_string(),
+        label: "Yes, manually approve edits".to_string(),
+        description: None,
+    }]);
+
+    let lines = exit_plan_pending_history_lines(
         &state,
         /*width*/ 80,
         coco_tui_ui::display::SyntaxHighlighting::Disabled,
         UiStyles::new(&theme),
     );
-    let body: Vec<String> = lines.iter().map(line_text).collect();
-    let joined = body.join("\n");
+    let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-    // Plan-mode teal border + "Ready to code?" title.
-    assert_eq!(border, theme.plan_mode);
-    assert!(title.contains("Ready to code?"), "title: {title}");
-    // The plan renders as markdown — body text survives, syntax markers consumed.
-    assert!(joined.contains("Here is Claude's plan:"), "{joined}");
-    assert!(joined.contains("Goal"), "heading text: {joined}");
-    assert!(
-        joined.contains("Step one") && joined.contains("Step two"),
-        "list body: {joined}"
-    );
+    assert!(joined.contains("Here is plan:"), "{joined}");
+    assert!(joined.contains("Goal"), "{joined}");
+    assert!(joined.contains("Step one"), "{joined}");
     assert!(joined.contains("Plan file: /tmp/plan.md"), "{joined}");
-    // The focused (selected) choice carries the ❯ pointer + ✓ check + description.
-    let focused = body
-        .iter()
-        .find(|t| t.contains("manually approve"))
-        .expect("focused choice row");
-    assert!(focused.starts_with("❯ ✓ "), "focused row: {focused}");
-    assert!(
-        body.iter().any(|t| t.contains("Ask before each edit.")),
-        "choice description missing: {joined}"
+    assert!(!joined.contains("manually approve"), "{joined}");
+}
+
+#[test]
+fn exit_plan_pending_history_lines_render_no_plan_notice_without_file() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let state = permission_prompt(PermissionDetail::ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+        plan: Some("User asked for a read-only explanation.".to_string()),
+        plan_file_path: Some("/tmp/plan.md".to_string()),
+        allowed_prompts: vec![],
+    });
+
+    let lines = exit_plan_pending_history_lines(
+        &state,
+        /*width*/ 80,
+        coco_tui_ui::display::SyntaxHighlighting::Disabled,
+        UiStyles::new(&theme),
     );
-    assert!(body.iter().any(|t| t.contains("No, keep planning")));
+    let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+    assert!(
+        joined.contains("No implementation plan needed."),
+        "{joined}"
+    );
+    assert!(!joined.contains("Here is plan:"), "{joined}");
+    assert!(!joined.contains("Plan file:"), "{joined}");
+    assert!(!joined.contains("read-only explanation"), "{joined}");
 }
 
 #[test]

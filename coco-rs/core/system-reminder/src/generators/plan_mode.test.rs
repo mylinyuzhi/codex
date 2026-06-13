@@ -255,6 +255,31 @@ async fn exit_omits_plan_reference_when_no_file() {
 }
 
 #[tokio::test]
+async fn exit_no_implementation_plan_omits_stale_plan_reference() {
+    let c = cfg();
+    let ctx = GeneratorContext::builder(&c)
+        .needs_plan_mode_exit_attachment(true)
+        .pending_plan_mode_exit_outcome(Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan))
+        .plan_file_path(Some(PathBuf::from("/tmp/old-plan.md")))
+        .plan_exists(true)
+        .build();
+    let r = PlanModeExitGenerator
+        .generate(&ctx)
+        .await
+        .unwrap()
+        .expect("emits");
+    let text = r.content().expect("text");
+    assert!(
+        text.contains("without an implementation plan"),
+        "no-plan exit should have typed copy: {text}"
+    );
+    assert!(
+        !text.contains("/tmp/old-plan.md"),
+        "no-plan exit must not reference stale plan file: {text}"
+    );
+}
+
+#[tokio::test]
 async fn exit_has_no_throttle() {
     assert_eq!(PlanModeExitGenerator.throttle_config().min_turns_between, 0);
 }

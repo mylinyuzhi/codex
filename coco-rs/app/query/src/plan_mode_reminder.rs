@@ -218,9 +218,13 @@ impl PlanModeReminder {
         if let Some(prev) = last_mode {
             if prev == PermissionMode::Plan && current != PermissionMode::Plan {
                 guard.has_exited_plan_mode = true;
+                if !guard.needs_plan_mode_exit_attachment {
+                    guard.pending_plan_mode_exit_outcome = None;
+                }
                 guard.needs_plan_mode_exit_attachment = true;
             } else if current == PermissionMode::Plan && prev != PermissionMode::Plan {
                 guard.needs_plan_mode_exit_attachment = false;
+                guard.pending_plan_mode_exit_outcome = None;
             }
             if prev == PermissionMode::Auto && current != PermissionMode::Auto {
                 guard.needs_auto_mode_exit_attachment = true;

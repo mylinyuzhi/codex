@@ -129,6 +129,10 @@ pub struct GeneratorContext<'a> {
     /// the `PlanModeExit` reminder. Engine forwards + clears post-emit.
     pub needs_plan_mode_exit_attachment: bool,
 
+    /// Outcome paired with a tool-driven plan-mode exit. `None` is used for
+    /// inferred transitions where the engine cannot know the exit type.
+    pub pending_plan_mode_exit_outcome: Option<coco_types::ExitPlanModeOutcome>,
+
     /// One-shot: set by the engine when leaving Auto mode. Drives the
     /// `AutoModeExit` reminder.
     pub needs_auto_mode_exit_attachment: bool,
@@ -415,6 +419,7 @@ pub struct GeneratorContextBuilder<'a> {
     is_plan_reentry: bool,
     is_plan_interview_phase: bool,
     needs_plan_mode_exit_attachment: bool,
+    pending_plan_mode_exit_outcome: Option<coco_types::ExitPlanModeOutcome>,
     needs_auto_mode_exit_attachment: bool,
     plan_file_path: Option<PathBuf>,
     plan_exists: bool,
@@ -489,6 +494,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             is_plan_reentry: false,
             is_plan_interview_phase: false,
             needs_plan_mode_exit_attachment: false,
+            pending_plan_mode_exit_outcome: None,
             needs_auto_mode_exit_attachment: false,
             plan_file_path: None,
             plan_exists: false,
@@ -585,6 +591,14 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn needs_plan_mode_exit_attachment(mut self, b: bool) -> Self {
         self.needs_plan_mode_exit_attachment = b;
+        self
+    }
+
+    pub fn pending_plan_mode_exit_outcome(
+        mut self,
+        outcome: Option<coco_types::ExitPlanModeOutcome>,
+    ) -> Self {
+        self.pending_plan_mode_exit_outcome = outcome;
         self
     }
 
@@ -922,6 +936,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             is_plan_reentry: self.is_plan_reentry,
             is_plan_interview_phase: self.is_plan_interview_phase,
             needs_plan_mode_exit_attachment: self.needs_plan_mode_exit_attachment,
+            pending_plan_mode_exit_outcome: self.pending_plan_mode_exit_outcome,
             needs_auto_mode_exit_attachment: self.needs_auto_mode_exit_attachment,
             plan_file_path: self.plan_file_path,
             plan_exists: self.plan_exists,

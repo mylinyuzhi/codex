@@ -19,6 +19,10 @@ fn ctx_with_mode(mode: PermissionMode) -> ToolUseContext {
     ctx
 }
 
+fn implementation_plan_input() -> Value {
+    json!({"outcome": "implementation_plan"})
+}
+
 /// Drive a tool's `execute` + apply its `app_state_patch` — the
 /// unit-test equivalent of what the real executor does. Needed
 /// because the shared `ToolAppState` lives behind
@@ -123,7 +127,8 @@ fn enter_plan_mode_schema_has_no_parameters() {
 #[test]
 fn exit_plan_mode_rejects_when_not_in_plan_mode() {
     let ctx = ctx_with_mode(PermissionMode::Default);
-    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &json!({}), &ctx);
+    let input = implementation_plan_input();
+    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &input, &ctx);
     match vr {
         ValidationResult::Invalid {
             message,
@@ -139,7 +144,8 @@ fn exit_plan_mode_rejects_when_not_in_plan_mode() {
 #[test]
 fn exit_plan_mode_allows_when_in_plan_mode() {
     let ctx = ctx_with_mode(PermissionMode::Plan);
-    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &json!({}), &ctx);
+    let input = implementation_plan_input();
+    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &input, &ctx);
     assert!(matches!(vr, ValidationResult::Valid));
 }
 
@@ -147,7 +153,8 @@ fn exit_plan_mode_allows_when_in_plan_mode() {
 fn exit_plan_mode_teammate_bypasses_validation() {
     let mut ctx = ctx_with_mode(PermissionMode::Default);
     ctx.is_teammate = true;
-    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &json!({}), &ctx);
+    let input = implementation_plan_input();
+    let vr = <ExitPlanModeTool as DynTool>::validate_input(&ExitPlanModeTool, &input, &ctx);
     assert!(matches!(vr, ValidationResult::Valid));
 }
 
@@ -155,8 +162,12 @@ fn exit_plan_mode_teammate_bypasses_validation() {
 async fn exit_plan_mode_teammate_bypasses_permission_prompt() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.is_teammate = true;
-    let decision =
-        <ExitPlanModeTool as DynTool>::check_permissions(&ExitPlanModeTool, &json!({}), &ctx).await;
+    let decision = <ExitPlanModeTool as DynTool>::check_permissions(
+        &ExitPlanModeTool,
+        &implementation_plan_input(),
+        &ctx,
+    )
+    .await;
     assert!(matches!(
         decision,
         coco_types::ToolCheckResult::Allow { .. }
@@ -166,8 +177,12 @@ async fn exit_plan_mode_teammate_bypasses_permission_prompt() {
 #[tokio::test]
 async fn exit_plan_mode_non_teammate_asks_for_confirmation() {
     let ctx = ctx_with_mode(PermissionMode::Plan);
-    let decision =
-        <ExitPlanModeTool as DynTool>::check_permissions(&ExitPlanModeTool, &json!({}), &ctx).await;
+    let decision = <ExitPlanModeTool as DynTool>::check_permissions(
+        &ExitPlanModeTool,
+        &implementation_plan_input(),
+        &ctx,
+    )
+    .await;
     match decision {
         coco_types::ToolCheckResult::Ask {
             message, choices, ..
@@ -184,8 +199,12 @@ async fn exit_plan_mode_tool_does_not_embed_tui_choices() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.plan_mode_settings.show_clear_context_on_exit = true;
 
-    let decision =
-        <ExitPlanModeTool as DynTool>::check_permissions(&ExitPlanModeTool, &json!({}), &ctx).await;
+    let decision = <ExitPlanModeTool as DynTool>::check_permissions(
+        &ExitPlanModeTool,
+        &implementation_plan_input(),
+        &ctx,
+    )
+    .await;
     match decision {
         coco_types::ToolCheckResult::Ask { choices, .. } => {
             assert!(choices.is_none(), "TUI owns ExitPlanMode choices");
@@ -209,7 +228,7 @@ async fn exit_plan_mode_clear_context_choice_sets_pending_flag() {
     ctx.app_state = Some(app_state.clone().into());
 
     // Simulate the TUI rewriting input with the picked choice value.
-    let input = json!({"user_choice": "yes-accept-edits"});
+    let input = json!({"outcome": "implementation_plan", "user_choice": "yes-accept-edits"});
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
@@ -238,7 +257,8 @@ async fn exit_plan_mode_keep_context_choice_does_not_set_pending_flag() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let input = json!({"user_choice": "yes-default-keep-context"});
+    let input =
+        json!({"outcome": "implementation_plan", "user_choice": "yes-default-keep-context"});
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
@@ -266,7 +286,7 @@ async fn exit_plan_mode_rejects_legacy_choice_values() {
 
     let err = execute_and_apply_patch(
         &ExitPlanModeTool,
-        json!({"user_choice": "yes-clear-context"}),
+        json!({"outcome": "implementation_plan", "user_choice": "yes-clear-context"}),
         &ctx,
         &app_state,
     )
@@ -292,7 +312,8 @@ async fn exit_plan_mode_ts_manual_choice_sets_default_mode() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let input = json!({"user_choice": "yes-default-keep-context"});
+    let input =
+        json!({"outcome": "implementation_plan", "user_choice": "yes-default-keep-context"});
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
@@ -316,7 +337,10 @@ async fn exit_plan_mode_ts_elevated_choice_accepts_edits_without_bypass_gate() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let input = json!({"user_choice": "yes-accept-edits-keep-context"});
+    let input = json!({
+        "outcome": "implementation_plan",
+        "user_choice": "yes-accept-edits-keep-context"
+    });
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
@@ -340,7 +364,10 @@ async fn exit_plan_mode_ts_elevated_choice_uses_bypass_when_available() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let input = json!({"user_choice": "yes-accept-edits-keep-context"});
+    let input = json!({
+        "outcome": "implementation_plan",
+        "user_choice": "yes-accept-edits-keep-context"
+    });
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
@@ -366,7 +393,7 @@ async fn exit_plan_mode_ts_clear_context_choice_sets_mode_and_pending_flag() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let input = json!({"user_choice": "yes-accept-edits"});
+    let input = json!({"outcome": "implementation_plan", "user_choice": "yes-accept-edits"});
     let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
         .await
         .unwrap();
@@ -404,9 +431,14 @@ async fn exit_plan_mode_restores_previous_mode() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, json!({}), &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
     assert_eq!(guard.pre_plan_mode, None);
@@ -426,9 +458,14 @@ async fn exit_plan_mode_restores_default_when_no_stash() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, json!({}), &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         app_state.read().await.permission_mode,
         Some(PermissionMode::Default)
@@ -464,9 +501,14 @@ async fn exit_plan_mode_restoring_to_auto_strips_dangerous_rules() {
     );
     ctx.app_state = Some(app_state.clone().into());
 
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, json!({}), &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert_eq!(guard.permission_mode, Some(PermissionMode::Auto));
     assert!(
@@ -507,9 +549,14 @@ async fn exit_plan_mode_restoring_to_default_clears_stripped_rules() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, json!({}), &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
     assert!(
@@ -539,9 +586,14 @@ async fn exit_plan_mode_execute_sets_exit_flags_on_app_state() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(app_state.clone().into());
 
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, json!({}), &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
 
     let guard = app_state.read().await;
     assert!(guard.has_exited_plan_mode);
@@ -575,9 +627,14 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(app_state.clone().into());
 
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, json!({}), &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
 
     let guard = app_state.read().await;
     assert!(
@@ -635,14 +692,22 @@ async fn exit_plan_mode_reads_plan_from_disk() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
 
-    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
-        .await
-        .unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .unwrap();
     let plan = result
         .data
         .get("plan")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    assert_eq!(
+        result.data.get("outcome").and_then(Value::as_str),
+        Some("implementation_plan")
+    );
     assert!(
         plan.contains("step 1"),
         "plan should be read from disk: {plan}"
@@ -666,6 +731,10 @@ async fn exit_plan_mode_reads_plan_from_disk() {
     assert!(!display.awaiting_leader_approval);
     assert!(!display.is_agent);
     assert!(!display.plan_was_edited);
+    assert_eq!(
+        display.outcome,
+        coco_types::ExitPlanModeOutcome::ImplementationPlan
+    );
 }
 
 #[tokio::test]
@@ -687,7 +756,7 @@ async fn exit_plan_mode_input_plan_wins_over_disk() {
 
     let result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
-        json!({"plan": "edited plan from CCR"}),
+        json!({"outcome": "implementation_plan", "plan": "edited plan from CCR"}),
         &ctx,
     )
     .await
@@ -710,6 +779,98 @@ async fn exit_plan_mode_input_plan_wins_over_disk() {
 }
 
 #[tokio::test]
+async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    let tmp = tempdir().unwrap();
+    let config_home = tmp.path().to_path_buf();
+    let session_id = "test-session-no-plan";
+    let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
+    let plan_path = coco_context::get_plan_file_path(session_id, &plans_dir, None);
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(config_home);
+    ctx.session_id_for_history = Some(session_id.to_string());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let result = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        json!({
+            "outcome": "no_implementation_plan",
+            "plan": "User asked for a read-only explanation.",
+            "user_choice": coco_types::ExitPlanChoice::ClearAcceptEdits.as_str(),
+        }),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        result.data.get("filePath").is_none(),
+        "no-plan result must not claim a saved plan path: {:?}",
+        result.data
+    );
+    assert_eq!(
+        result.data.get("outcome").and_then(Value::as_str),
+        Some("no_implementation_plan")
+    );
+    assert!(
+        !plan_path.exists(),
+        "no-plan notice must not be persisted to {}",
+        plan_path.display()
+    );
+    let Some(ToolDisplayData::ExitPlanModeResult(display)) = result.display_data else {
+        panic!("ExitPlanMode should attach typed display data");
+    };
+    assert_eq!(
+        display.outcome,
+        coco_types::ExitPlanModeOutcome::NoImplementationPlan
+    );
+    assert!(!display.has_implementation_plan());
+    assert_eq!(display.file_path, None);
+
+    let guard = app_state.read().await;
+    assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
+    assert!(!guard.pending_clear_message_history);
+    assert_eq!(guard.pending_plan_implementation_message, None);
+    assert!(!guard.pending_plan_verification);
+    assert_eq!(
+        guard.pending_plan_mode_exit_outcome,
+        Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan)
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_implementation_plan_requires_plan_content() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    let tmp = tempdir().unwrap();
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some("test-session-missing-plan".to_string());
+    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await;
+
+    let err = result.expect_err("implementation-plan exit must require plan content");
+    assert!(
+        err.to_string().contains("No implementation plan found"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
 async fn exit_plan_mode_injected_disk_plan_not_marked_as_user_edit() {
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -728,7 +889,7 @@ async fn exit_plan_mode_injected_disk_plan_not_marked_as_user_edit() {
 
     let result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
-        json!({"plan": "on-disk plan"}),
+        json!({"outcome": "implementation_plan", "plan": "on-disk plan"}),
         &ctx,
     )
     .await
@@ -742,6 +903,14 @@ fn exit_plan_mode_schema_exposes_allowed_prompts() {
     let schema =
         <ExitPlanModeTool as DynTool>::runtime_validation_schema(&ExitPlanModeTool).as_value();
     assert!(schema["properties"].get("allowedPrompts").is_some());
+    assert!(schema["properties"].get("outcome").is_some());
+    let required = schema["required"].as_array().expect("required fields");
+    assert!(
+        required
+            .iter()
+            .any(|field| field.as_str() == Some("outcome")),
+        "outcome must be required: {required:?}"
+    );
 }
 
 #[test]
@@ -826,9 +995,13 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
     // (`env::set_var` is unsafe in newer Rust + banned by CLAUDE.md).
     ctx.agent_id = Some(coco_types::AgentId::new("alice"));
 
-    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
-        .await
-        .unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // Result shape signals "awaiting leader approval".
     assert_eq!(
@@ -849,6 +1022,10 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
         panic!("ExitPlanMode should attach typed display data");
     };
     assert_eq!(display.plan, "# plan body");
+    assert_eq!(
+        display.outcome,
+        coco_types::ExitPlanModeOutcome::ImplementationPlan
+    );
     assert!(display.awaiting_leader_approval);
     assert!(display.is_agent);
 
@@ -902,13 +1079,18 @@ async fn teammate_exit_plan_with_empty_plan_errors() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.mailbox = Arc::new(CapturingMailbox::default());
 
-    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx).await;
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await;
     assert!(result.is_err());
     assert!(
         result
             .unwrap_err()
             .to_string()
-            .contains("No plan file found")
+            .contains("No implementation plan found")
     );
 }
 
@@ -930,9 +1112,13 @@ async fn voluntary_teammate_exits_locally_without_mailbox_write() {
     ctx.app_state = Some(Arc::new(tokio::sync::RwLock::new(ToolAppState::default())).into());
     ctx.mailbox = capture.clone();
 
-    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
-        .await
-        .unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .unwrap();
 
     // No awaiting flag — normal exit semantics.
     assert_eq!(
@@ -969,9 +1155,18 @@ async fn verify_execution_disabled_skips_pending_verification() {
     );
     ctx.plan_verify_execution = false;
 
-    let result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
-        .await
-        .unwrap();
+    let result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.data.get("planVerification").and_then(Value::as_str),
+        None,
+        "ExitPlanMode no longer emits the old mtime advisory"
+    );
     assert!(result.app_state_patch.is_some());
     let app_state = ctx.app_state.as_ref().unwrap().clone();
     let mut result = result;
@@ -998,9 +1193,13 @@ async fn verify_execution_enabled_records_pending_verification() {
     ctx.app_state = Some(Arc::new(tokio::sync::RwLock::new(ToolAppState::default())).into());
     ctx.plan_verify_execution = true;
 
-    let mut result = <ExitPlanModeTool as DynTool>::execute(&ExitPlanModeTool, json!({}), &ctx)
-        .await
-        .unwrap();
+    let mut result = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .unwrap();
     assert!(
         result.data.get("planVerification").is_none(),
         "ExitPlanMode no longer emits the old mtime advisory"
@@ -1037,19 +1236,39 @@ fn build_instructions_awaiting_leader_approval_variant() {
 
 #[test]
 fn build_instructions_agent_variant() {
-    let out = ExitPlanModeTool::build_instructions(&json!({"isAgent": true, "plan": "x"}));
+    let out = ExitPlanModeTool::build_instructions(&json!({
+        "outcome": "implementation_plan",
+        "isAgent": true,
+        "plan": "x"
+    }));
     assert!(out.contains("respond with"));
 }
 
 #[test]
 fn build_instructions_empty_plan() {
-    let out = ExitPlanModeTool::build_instructions(&json!({"plan": "   "}));
-    assert!(out.contains("You can now proceed"));
+    let out = ExitPlanModeTool::build_instructions(&json!({
+        "outcome": "no_implementation_plan",
+        "plan": "   "
+    }));
+    assert!(out.contains("no implementation plan"));
+}
+
+#[test]
+fn build_instructions_no_plan_notice() {
+    let out = ExitPlanModeTool::build_instructions(&json!({
+        "outcome": "no_implementation_plan",
+        "plan": "User asked for a read-only explanation.",
+        "filePath": "/tmp/plan.md",
+    }));
+    assert!(out.contains("no implementation plan"));
+    assert!(!out.contains("/tmp/plan.md"));
+    assert!(!out.contains("Approved Plan"));
 }
 
 #[test]
 fn build_instructions_with_plan_and_edited_flag() {
     let out = ExitPlanModeTool::build_instructions(&json!({
+        "outcome": "implementation_plan",
         "plan": "step 1",
         "filePath": "/tmp/plan.md",
         "planWasEdited": true,
@@ -1072,7 +1291,21 @@ async fn exit_plan_mode_tool_spec_hides_internal_fields_and_tightens_allowed_pro
     };
     let schema = spec.parameters;
     let props = schema["properties"].as_object().expect("object schema");
+    let required: Vec<&str> = schema["required"]
+        .as_array()
+        .expect("ExitPlanMode schema must declare required fields")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        required.contains(&"outcome"),
+        "model schema must require outcome; got {required:?}"
+    );
     // Internal splice fields must be hidden from the model.
+    assert!(
+        props.contains_key("outcome"),
+        "outcome missing from model schema"
+    );
     assert!(!props.contains_key("plan"), "plan leaked into model schema");
     assert!(
         !props.contains_key("planFilePath"),
@@ -1085,15 +1318,15 @@ async fn exit_plan_mode_tool_spec_hides_internal_fields_and_tightens_allowed_pro
     // `allowedPrompts` stays — its item shape:
     // `{ tool: enum["Bash"], prompt }` with both required.
     let items = &schema["properties"]["allowedPrompts"]["items"];
-    let required: Vec<&str> = items["required"]
+    let item_required: Vec<&str> = items["required"]
         .as_array()
         .expect("allowedPrompts item must declare `required`")
         .iter()
         .filter_map(Value::as_str)
         .collect();
     assert!(
-        required.contains(&"tool") && required.contains(&"prompt"),
-        "allowedPrompts item must require tool+prompt; got {required:?}"
+        item_required.contains(&"tool") && item_required.contains(&"prompt"),
+        "allowedPrompts item must require tool+prompt; got {item_required:?}"
     );
     assert_eq!(
         items["properties"]["tool"]["enum"],
@@ -1243,7 +1476,8 @@ const TS_EXIT_PLAN_MODE_PROMPT: &str =
 ## How This Tool Works
 - You should have already written your plan to the plan file specified in the plan mode system message
 - This tool does NOT take the plan content as a parameter - it will read the plan from the file you wrote
-- This tool simply signals that you're done planning and ready for the user to review and approve
+- Set outcome to `implementation_plan` when you have a plan for code changes; set outcome to `no_implementation_plan` when plan mode should end without implementation work
+- This tool simply signals that you're done planning and ready for the user to review and approve, or that no implementation plan is needed
 - The user will see the contents of your plan file when they review it
 
 ## When to Use This Tool
@@ -1367,6 +1601,7 @@ fn exit_plan_mode_render_for_model_routes_through_build_instructions() {
     // through `build_instructions` — the executor's `tool_outcome_builder`
     // calls this method, no longer JSON-stringifies.
     let data = json!({
+        "outcome": "implementation_plan",
         "plan": "step 1",
         "filePath": "/tmp/plan.md",
         "planWasEdited": true,

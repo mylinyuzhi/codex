@@ -220,6 +220,7 @@ pub enum PermissionDetail {
     ComputerUse { action: String, description: String },
     /// ExitPlanMode approval — show the plan and response choices.
     ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome,
         plan: Option<String>,
         plan_file_path: Option<String>,
         allowed_prompts: Vec<String>,

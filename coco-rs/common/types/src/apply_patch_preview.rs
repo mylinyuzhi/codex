@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::ExitPlanModeOutcome;
+
 /// UI-only side channel for bounded display data produced by tools.
 ///
 /// This data is for transcript/rendering surfaces only. Provider history and
@@ -47,12 +49,19 @@ pub struct AskUserQuestionAnswered {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExitPlanModeResult {
+    pub outcome: ExitPlanModeOutcome,
     pub plan: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
     pub awaiting_leader_approval: bool,
     pub is_agent: bool,
     pub plan_was_edited: bool,
+}
+
+impl ExitPlanModeResult {
+    pub fn has_implementation_plan(&self) -> bool {
+        self.outcome.has_implementation_plan()
+    }
 }
 
 /// Bounded, structured preview of an `apply_patch` body for UI rendering.

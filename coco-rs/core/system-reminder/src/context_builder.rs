@@ -58,6 +58,7 @@ pub fn apply_app_state<'a>(
         .is_auto_mode(in_auto || in_plan_with_auto)
         .is_plan_reentry(app_state.has_exited_plan_mode)
         .needs_plan_mode_exit_attachment(app_state.needs_plan_mode_exit_attachment)
+        .pending_plan_mode_exit_outcome(app_state.pending_plan_mode_exit_outcome)
         .needs_auto_mode_exit_attachment(app_state.needs_auto_mode_exit_attachment);
     builder = builder.plan_tasks(app_state.plan_tasks.clone());
     builder

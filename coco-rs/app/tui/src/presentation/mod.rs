@@ -19,6 +19,7 @@ pub(crate) mod pager;
 pub(crate) mod permissions_editor;
 pub(crate) mod picker;
 pub(crate) mod picker_styled;
+pub(crate) mod plan;
 pub(crate) mod request;
 pub(crate) mod rewind;
 pub(crate) mod settings;

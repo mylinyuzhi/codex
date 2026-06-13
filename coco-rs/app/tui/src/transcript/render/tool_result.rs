@@ -84,6 +84,8 @@ pub(crate) struct ToolResultRenderCtx<'a> {
     pub(crate) styles: UiStyles<'a>,
     pub(crate) width: u16,
     pub(crate) syntax_highlighting: SyntaxHighlighting,
+    /// Shortcut hint for reopening the saved plan in the editor.
+    pub(crate) plan_editor_hint: String,
     /// Appended to a "… +N lines" truncation row (e.g. `(ctrl+o to expand)`).
     /// Empty when the surface is itself the full-detail view (the reader).
     pub(crate) expand_hint: String,
@@ -378,13 +380,13 @@ fn render_exit_plan_mode(
             /*first*/ true,
         ));
         if let Some(path) = result.file_path.as_ref().filter(|p| !p.trim().is_empty()) {
-            push_exit_plan_file_path(cx, path, lines);
+            push_exit_plan_file_path(cx, path, None, lines);
         }
         push_exit_plan_preview(cx, result, lines);
         return;
     }
 
-    if result.plan.trim().is_empty() {
+    if !result.has_implementation_plan() {
         lines.push(output_result_line(
             t!("chat.plan_exited").to_string(),
             cx.styles.plan(),
@@ -399,7 +401,7 @@ fn render_exit_plan_mode(
         /*first*/ true,
     ));
     if let Some(path) = result.file_path.as_ref().filter(|p| !p.trim().is_empty()) {
-        push_exit_plan_file_path(cx, path, lines);
+        push_exit_plan_file_path(cx, path, Some(cx.plan_editor_hint.as_str()), lines);
     }
     push_exit_plan_preview(cx, result, lines);
 }
@@ -407,16 +409,16 @@ fn render_exit_plan_mode(
 fn push_exit_plan_file_path(
     cx: &ToolResultRenderCtx<'_>,
     path: &str,
+    edit_hint: Option<&str>,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let label = t!("chat.plan_file", path = path);
-    push_wrapped_prefixed_row(
-        cx,
-        "    ".to_string(),
-        label.as_ref(),
-        cx.styles.dim(),
-        lines,
-    );
+    let label = match edit_hint {
+        Some(hint) if !hint.trim().is_empty() => {
+            format!("{} · {hint}", t!("chat.plan_file", path = path))
+        }
+        _ => t!("chat.plan_file", path = path).to_string(),
+    };
+    push_wrapped_prefixed_row(cx, "    ".to_string(), &label, cx.styles.dim(), lines);
 }
 
 /// Render the approved plan as full markdown, indented under the result header.
@@ -434,13 +436,12 @@ fn push_exit_plan_preview(
     if plan.is_empty() {
         return;
     }
-    // `indent2` adds a 2-col margin on top of the markdown's own `body_indent`,
-    // landing the body under the `  └ ` header gutter; width budgets for it.
-    let width = cx.width.saturating_sub(4).max(1);
-    let opts = coco_tui_markdown::MarkdownOptions::new(cx.styles, width, cx.syntax_highlighting);
-    lines.extend(indent2(coco_tui_markdown::render_markdown(
-        plan, opts, None,
-    )));
+    lines.extend(crate::presentation::plan::render_plan_markdown(
+        plan,
+        cx.styles,
+        cx.width,
+        cx.syntax_highlighting,
+    ));
 }
 
 fn apply_patch_preview(display_data: Option<&ToolDisplayData>) -> Option<&ApplyPatchPreview> {
