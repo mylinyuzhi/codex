@@ -24,7 +24,7 @@ fn test_normalize_observable_tool_input_exit_injects_plan_and_path() {
 
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::ExitPlanMode.as_str(),
-        json!({"allowedPrompts": []}),
+        json!({"outcome": "implementation_plan", "allowedPrompts": []}),
         ToolInputNormalizationContext {
             session_id: Some(session_id),
             plans_dir: Some(&plans_dir),
@@ -51,7 +51,11 @@ fn test_normalize_observable_tool_input_exit_overrides_stale_plan() {
 
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::ExitPlanMode.as_str(),
-        json!({"plan": "stale", "planFilePath": "/tmp/stale.md"}),
+        json!({
+            "outcome": "implementation_plan",
+            "plan": "stale",
+            "planFilePath": "/tmp/stale.md"
+        }),
         ToolInputNormalizationContext {
             session_id: Some(session_id),
             plans_dir: Some(&plans_dir),
@@ -72,13 +76,35 @@ fn test_normalize_observable_tool_input_exit_overrides_stale_plan() {
 fn test_normalize_observable_tool_input_exit_without_plan_unchanged() {
     let tmp = tempdir().unwrap();
     let plans_dir = tmp.path().join("plans");
-    let input = json!({"allowedPrompts": []});
+    let input = json!({"outcome": "implementation_plan", "allowedPrompts": []});
 
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::ExitPlanMode.as_str(),
         input.clone(),
         ToolInputNormalizationContext {
             session_id: Some("missing-plan"),
+            plans_dir: Some(&plans_dir),
+            agent_id: None,
+            cwd: None,
+        },
+    );
+
+    assert_eq!(normalized, input);
+}
+
+#[test]
+fn test_normalize_observable_tool_input_exit_no_plan_skips_stale_disk_plan() {
+    let tmp = tempdir().unwrap();
+    let plans_dir = tmp.path().join("plans");
+    let session_id = "session-no-plan-outcome";
+    coco_context::write_plan(session_id, &plans_dir, "old plan", None).unwrap();
+    let input = json!({"outcome": "no_implementation_plan"});
+
+    let normalized = normalize_observable_tool_input(
+        coco_types::ToolName::ExitPlanMode.as_str(),
+        input.clone(),
+        ToolInputNormalizationContext {
+            session_id: Some(session_id),
             plans_dir: Some(&plans_dir),
             agent_id: None,
             cwd: None,

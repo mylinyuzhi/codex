@@ -320,6 +320,7 @@ fn test_exit_plan_mode_permission_uses_dedicated_detail() {
             }]),
             permission_suggestions: vec![],
             original_input: Some(serde_json::json!({
+                "outcome": "implementation_plan",
                 "plan": "# Plan",
                 "planFilePath": "/tmp/plan.md",
                 "allowedPrompts": [{"tool": "Bash", "prompt": "cargo test"}]
@@ -343,6 +344,65 @@ fn test_exit_plan_mode_permission_uses_dedicated_detail() {
         }
         other => panic!("expected permission state, got {other:?}"),
     }
+}
+
+#[test]
+fn test_exit_plan_mode_no_plan_permission_uses_yes_no_choices() {
+    let mut state = AppState::new();
+    let ready_at = Instant::now() + Duration::from_secs(2);
+
+    handle_core_event(
+        &mut state,
+        CoreEvent::Tui(coco_types::TuiOnlyEvent::ApprovalRequired {
+            request_id: "req-plan-no-plan".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            show_always_allow: true,
+            choices: Some(vec![
+                coco_types::PermissionAskChoice {
+                    value: "yes-accept-edits".into(),
+                    label: "Yes, auto-accept edits".into(),
+                    description: Some("Allow file edits during implementation.".into()),
+                },
+                coco_types::PermissionAskChoice {
+                    value: "no".into(),
+                    label: "No, keep planning".into(),
+                    description: None,
+                },
+            ]),
+            permission_suggestions: vec![],
+            original_input: Some(serde_json::json!({
+                "outcome": "no_implementation_plan",
+                "planFilePath": "/tmp/stale-plan.md"
+            })),
+            cwd: None,
+            worker_badge: None,
+        }),
+    );
+    assert!(state.ui.flush_delayed_permissions(ready_at));
+
+    let Some(crate::state::PanePromptState::Permission(prompt)) =
+        state.ui.interaction.active_prompt.as_ref()
+    else {
+        panic!("expected permission state")
+    };
+    let labels: Vec<&str> = prompt
+        .choices
+        .as_ref()
+        .expect("choices")
+        .iter()
+        .map(|choice| choice.label.as_str())
+        .collect();
+    assert_eq!(labels, vec!["Yes, exit plan mode", "No, keep planning"]);
+    assert!(!prompt.choices.as_ref().unwrap().iter().any(|choice| {
+        choice.label.contains("edit")
+            || choice
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .contains("implementation")
+    }));
 }
 
 #[test]

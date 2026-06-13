@@ -1,5 +1,8 @@
 use super::*;
 use crate::state::AppState;
+use crate::state::PanePromptState;
+use crate::state::PermissionDetail;
+use crate::state::PermissionPromptState;
 use crate::state::ui::StreamingState;
 use crate::surface::modal::HistorySurfaceMode;
 
@@ -199,6 +202,49 @@ fn transient_streaming_gap_does_not_re_emit_committed_rows() {
 }
 
 #[test]
+fn no_stream_frame_projects_pending_exit_plan_without_stream_append() {
+    let state = exit_plan_prompt_state(12);
+    let mut driver = SurfaceStreamDriver::default();
+
+    let prepared = driver.prepare(&state, /*width*/ 64, native_plan());
+    let text = plain_lines(&prepared.lines).join("\n");
+
+    assert!(prepared.stream_append.is_none());
+    assert!(!prepared.commit_invalidated);
+    assert!(text.contains("Here is plan:"), "{text}");
+    assert!(text.contains("step 12"), "{text}");
+    assert!(text.contains("Plan file: /tmp/session-plan.md"), "{text}");
+    assert!(!text.contains("manually approve edits"), "{text}");
+}
+
+#[test]
+fn pending_exit_plan_disappears_after_prompt_closes() {
+    let mut state = exit_plan_prompt_state(3);
+    let mut driver = SurfaceStreamDriver::default();
+
+    let pending = driver.prepare(&state, /*width*/ 64, native_plan());
+    assert!(
+        plain_lines(&pending.lines)
+            .join("\n")
+            .contains("Here is plan:")
+    );
+    assert!(
+        driver.pending_plan.is_some(),
+        "pending projection should be cached while prompt is active"
+    );
+
+    state.ui.interaction.active_prompt = None;
+    let closed = driver.prepare(&state, /*width*/ 64, native_plan());
+
+    assert!(closed.lines.is_empty(), "{:?}", plain_lines(&closed.lines));
+    assert!(closed.stream_append.is_none());
+    assert!(
+        driver.pending_plan.is_none(),
+        "pending projection cache must clear when prompt closes"
+    );
+}
+
+#[test]
 fn invalidated_commit_re_emits_full_stable_prefix() {
     // The loss root cause, opposite sign: when a replay clears owned scrollback
     // the controller calls `invalidate_commit`, after which the next prepare
@@ -274,4 +320,53 @@ fn history_rows_text(rows: &coco_tui_ui::engine::history_insert::HistoryRows) ->
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn exit_plan_prompt_state(step_count: usize) -> AppState {
+    let mut state = AppState::new();
+    let plan: String = (1..=step_count).map(|i| format!("- step {i}\n")).collect();
+    state
+        .ui
+        .push_prompt(PanePromptState::Permission(PermissionPromptState {
+            request_id: "req-1".into(),
+            tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+            description: "Exit plan mode?".into(),
+            detail: PermissionDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                plan: Some(plan),
+                plan_file_path: Some("/tmp/session-plan.md".into()),
+                allowed_prompts: vec![],
+            },
+            risk_level: None,
+            show_always_allow: false,
+            classifier_checking: false,
+            classifier_auto_approved: None,
+            choices: Some(vec![
+                coco_types::PermissionAskChoice {
+                    value: coco_types::ExitPlanChoice::ClearAcceptEdits.as_str().into(),
+                    label: "Yes, clear context and auto-accept edits".into(),
+                    description: None,
+                },
+                coco_types::PermissionAskChoice {
+                    value: coco_types::ExitPlanChoice::KeepDefault.as_str().into(),
+                    label: "Yes, manually approve edits".into(),
+                    description: None,
+                },
+                coco_types::PermissionAskChoice {
+                    value: coco_types::ExitPlanChoice::No.as_str().into(),
+                    label: "No, keep planning".into(),
+                    description: None,
+                },
+            ]),
+            selected_choice: 0,
+            display_input: coco_types::PermissionDisplayInput::Empty,
+            original_input: None,
+            cwd: None,
+            permission_suggestions: vec![],
+            worker_badge: None,
+            explanation_visible: false,
+            explanation: crate::state::ExplainerFetch::NotFetched,
+            prefix_input: None,
+        }));
+    state
 }

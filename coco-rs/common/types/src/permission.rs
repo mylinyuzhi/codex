@@ -353,6 +353,31 @@ impl ExitPlanChoice {
     }
 }
 
+/// First-class outcome of an `ExitPlanMode` tool call.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitPlanModeOutcome {
+    /// A concrete implementation plan was produced and approved for execution.
+    #[default]
+    ImplementationPlan,
+    /// Plan mode ended for a request that does not have implementation work.
+    NoImplementationPlan,
+}
+
+impl ExitPlanModeOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ImplementationPlan => "implementation_plan",
+            Self::NoImplementationPlan => "no_implementation_plan",
+        }
+    }
+
+    pub const fn has_implementation_plan(self) -> bool {
+        matches!(self, Self::ImplementationPlan)
+    }
+}
+
 /// The result of a permission check.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]

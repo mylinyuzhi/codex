@@ -63,6 +63,7 @@ fn render_ex_width_with_display(
         styles: UiStyles::new(&theme),
         width,
         syntax_highlighting: SyntaxHighlighting::Enabled,
+        plan_editor_hint: "ctrl+g to edit".to_string(),
         expand_hint: "(ctrl+o to expand)".to_string(),
         expanded,
     };
@@ -94,11 +95,13 @@ fn apply_patch_display_data(rows: Vec<ApplyPatchPreviewRow>) -> ToolDisplayData 
 }
 
 fn exit_plan_display_data(
+    outcome: coco_types::ExitPlanModeOutcome,
     plan: &str,
     file_path: Option<&str>,
     awaiting_leader_approval: bool,
 ) -> ToolDisplayData {
     ToolDisplayData::ExitPlanModeResult(ExitPlanModeResult {
+        outcome,
         plan: plan.to_string(),
         file_path: file_path.map(str::to_string),
         awaiting_leader_approval,
@@ -329,7 +332,12 @@ fn structured_default_pretty_prints_json() {
 
 #[test]
 fn exit_plan_mode_empty_plan_renders_inline_exit_notice_from_display_data() {
-    let display = exit_plan_display_data("", None, false);
+    let display = exit_plan_display_data(
+        coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+        "",
+        None,
+        false,
+    );
     let out = text_of(&render_ex_width_with_display(
         "ExitPlanMode",
         None,
@@ -345,8 +353,34 @@ fn exit_plan_mode_empty_plan_renders_inline_exit_notice_from_display_data() {
 }
 
 #[test]
+fn exit_plan_mode_no_plan_notice_does_not_render_saved_path() {
+    let display = exit_plan_display_data(
+        coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+        "User asked for a read-only explanation.",
+        Some("/tmp/session-plan.md"),
+        false,
+    );
+    let out = text_of(&render_ex_width_with_display(
+        "ExitPlanMode",
+        None,
+        "model-facing instructions are ignored",
+        Some(&display),
+        /*is_error*/ false,
+        /*expanded*/ false,
+        /*width*/ 96,
+    ));
+
+    assert!(out.contains("Exited plan mode"), "{out}");
+    assert!(!out.contains("User approved plan"), "{out}");
+    assert!(!out.contains("Plan saved to:"), "{out}");
+    assert!(!out.contains("to edit"), "{out}");
+    assert!(!out.contains("read-only explanation"), "{out}");
+}
+
+#[test]
 fn exit_plan_mode_with_plan_renders_approval_and_plan_from_display_data() {
     let display = exit_plan_display_data(
+        coco_types::ExitPlanModeOutcome::ImplementationPlan,
         "# Plan\n- Edit the renderer\n- Add tests",
         Some("/tmp/session-plan.md"),
         false,
@@ -361,8 +395,11 @@ fn exit_plan_mode_with_plan_renders_approval_and_plan_from_display_data() {
         /*width*/ 96,
     ));
 
-    assert!(out.contains("User approved Claude's plan"), "{out}");
-    assert!(out.contains("Plan saved to: /tmp/session-plan.md"), "{out}");
+    assert!(out.contains("User approved plan"), "{out}");
+    assert!(
+        out.contains("Plan saved to: /tmp/session-plan.md · ctrl+g to edit"),
+        "{out}"
+    );
     // The plan is rendered as markdown, so the body text survives (the `#` /
     // `-` syntax markers are consumed by the renderer).
     assert!(out.contains("Edit the renderer"), "{out}");
@@ -378,7 +415,12 @@ fn exit_plan_mode_renders_full_plan_without_row_cap() {
     // The approved plan is the durable record — it must NOT be truncated to the
     // structured-preview row cap the ephemeral approval panel uses.
     let plan: String = (1..=40).map(|i| format!("- step {i}\n")).collect();
-    let display = exit_plan_display_data(&plan, None, false);
+    let display = exit_plan_display_data(
+        coco_types::ExitPlanModeOutcome::ImplementationPlan,
+        &plan,
+        None,
+        false,
+    );
     let out = text_of(&render_ex_width_with_display(
         "ExitPlanMode",
         None,
@@ -402,8 +444,12 @@ fn exit_plan_mode_renders_full_plan_without_row_cap() {
 
 #[test]
 fn exit_plan_mode_awaiting_leader_approval_renders_pending_notice() {
-    let display =
-        exit_plan_display_data("# Plan\n- Wait for lead", Some("/tmp/agent-plan.md"), true);
+    let display = exit_plan_display_data(
+        coco_types::ExitPlanModeOutcome::ImplementationPlan,
+        "# Plan\n- Wait for lead",
+        Some("/tmp/agent-plan.md"),
+        true,
+    );
     let out = text_of(&render_ex_width_with_display(
         "ExitPlanMode",
         None,
@@ -419,6 +465,10 @@ fn exit_plan_mode_awaiting_leader_approval_renders_pending_notice() {
         "{out}"
     );
     assert!(out.contains("Plan saved to: /tmp/agent-plan.md"), "{out}");
+    assert!(
+        !out.contains("to edit"),
+        "teammate approval pending must not show local edit hint: {out}"
+    );
     assert!(out.contains("Wait for lead"), "{out}");
     assert!(
         !out.contains("model-facing instructions"),

@@ -17,9 +17,12 @@ use crate::presentation::activity::inline_activity_height;
 use crate::presentation::activity::turn_activity_view;
 use crate::presentation::input::InlinePopupView;
 use crate::presentation::input::inline_popup_view;
+use crate::presentation::layout::text_width;
 use crate::state::AppState;
 use crate::state::FocusTarget;
 use crate::state::PanePromptState;
+use crate::state::PermissionDetail;
+use crate::state::PermissionPromptState;
 use crate::surface::modal::SurfaceFramePlan;
 use crate::surface::modal::render_modal_surface;
 use crate::surface::modal::required_text_surface_height_for_box;
@@ -454,7 +457,21 @@ pub(crate) fn build_live_tail_lines(
     if !state.ui.collapsed_tools.is_empty() {
         chat = chat.collapsed_tools(&state.ui.collapsed_tools);
     }
-    chat.build_lines_owned()
+    let mut lines = chat.build_lines_owned();
+    if let Some(prompt) = active_exit_plan_prompt(state) {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(
+            crate::presentation::request::exit_plan_pending_history_lines(
+                prompt,
+                width,
+                state.ui.display_settings.syntax_highlighting,
+                styles,
+            ),
+        );
+    }
+    lines
 }
 
 fn render_live_tail_lines(
@@ -519,6 +536,15 @@ fn interaction_prompt_height(state: &AppState, width: u16, max_height: u16) -> u
             .min(max_height.saturating_sub(4))
             .max(3);
     }
+    if let PanePromptState::Permission(p) = prompt
+        && is_exit_plan_prompt(p)
+    {
+        let list_budget = p.choices.as_ref().map(Vec::len).unwrap_or(1);
+        let lines = crate::presentation::request::exit_plan_prompt_lines(p, styles, list_budget);
+        return wrapped_lines_height(&lines, width)
+            .min(max_height.saturating_sub(4))
+            .max(3);
+    }
     let box_width = interaction_prompt_box_width(width);
     let Some(text_surface) = crate::surface_content::prompt_text_surface(prompt) else {
         return 0;
@@ -558,6 +584,33 @@ fn question_prompt_max_height(
     max_height
 }
 
+pub(crate) fn active_exit_plan_prompt(state: &AppState) -> Option<&PermissionPromptState> {
+    match state.ui.interaction.active_prompt.as_ref() {
+        Some(PanePromptState::Permission(p)) if is_exit_plan_prompt(p) => Some(p),
+        _ => None,
+    }
+}
+
+fn is_exit_plan_prompt(p: &PermissionPromptState) -> bool {
+    matches!(p.detail, PermissionDetail::ExitPlanMode { .. })
+}
+
+fn wrapped_lines_height(lines: &[Line<'static>], width: u16) -> u16 {
+    let width = width.max(1) as usize;
+    lines
+        .iter()
+        .map(|line| {
+            let line_width: usize = line
+                .spans
+                .iter()
+                .map(|span| text_width(span.content.as_ref()))
+                .sum();
+            line_width.saturating_add(width - 1) / width
+        })
+        .map(|rows| rows.max(1))
+        .sum::<usize>() as u16
+}
+
 fn render_interaction_prompt(
     frame: &mut SurfaceFrame<'_>,
     area: Rect,
@@ -583,27 +636,23 @@ fn render_interaction_prompt(
         return;
     }
 
+    if let PanePromptState::Permission(p) = prompt
+        && is_exit_plan_prompt(p)
+    {
+        let list_budget = p.choices.as_ref().map(Vec::len).unwrap_or(1);
+        let lines = crate::presentation::request::exit_plan_prompt_lines(p, styles, list_budget);
+        frame.render_widget(Clear, area);
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+        return;
+    }
+
     let box_area = center_horizontally(area, interaction_prompt_box_width(area.width));
     if let PanePromptState::Permission(p) = prompt {
-        // ExitPlanMode gets the dedicated "Ready to code?" panel — markdown
-        // plan + structured choices — instead of the flat permission body.
-        let (title, lines, border_color) = if matches!(
-            p.detail,
-            crate::state::PermissionDetail::ExitPlanMode { .. }
-        ) {
-            crate::presentation::request::exit_plan_approval_styled_content(
-                p,
-                box_area.width.saturating_sub(2),
-                state.ui.display_settings.syntax_highlighting,
-                styles,
-            )
-        } else {
-            crate::presentation::request::permission_styled_content(
-                p,
-                state.session.permission_mode,
-                styles,
-            )
-        };
+        let (title, lines, border_color) = crate::presentation::request::permission_styled_content(
+            p,
+            state.session.permission_mode,
+            styles,
+        );
         let lines = compact_prompt_lines(lines, area.height.saturating_sub(2) as usize);
         frame.render_widget(Clear, box_area);
         frame.render_widget(

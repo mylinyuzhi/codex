@@ -654,12 +654,14 @@ impl QueryEngine {
                 // for a later, unrelated turn.
                 if stale_plan_exit_flag {
                     guard.needs_plan_mode_exit_attachment = false;
+                    guard.pending_plan_mode_exit_outcome = None;
                 }
                 if stale_auto_exit_flag {
                     guard.needs_auto_mode_exit_attachment = false;
                 }
                 if fired_types.contains(&ReminderAttachmentType::PlanModeExit) {
                     guard.needs_plan_mode_exit_attachment = false;
+                    guard.pending_plan_mode_exit_outcome = None;
                     // Exit resets the plan-mode cadence cycle.
                     guard.plan_mode_attachment_count = 0;
                     guard.plan_mode_turns_since_last_attachment = 0;

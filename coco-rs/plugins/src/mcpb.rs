@@ -209,7 +209,7 @@ fn extract_archive(archive_bytes: &[u8], target_dir: &Path) -> crate::Result<Mcp
 /// `user_config` map: required-field presence + per-field type (`string`,
 /// `string[]` when `multiple`, `number`, `boolean`, `file`/`directory` path)
 /// + numeric `min`/`max`. Error labels prefer the schema's `title`, falling
-/// back to the key. Empty result = valid.
+///   back to the key. Empty result = valid.
 fn validate_config(
     schema: &HashMap<String, serde_json::Value>,
     user_config: &HashMap<String, serde_json::Value>,

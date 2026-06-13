@@ -392,6 +392,8 @@ pub enum ReminderType {
 pub struct PlanModeExitAttachment {
     pub plan_file_path: String,
     pub plan_exists: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<coco_types::ExitPlanModeOutcome>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

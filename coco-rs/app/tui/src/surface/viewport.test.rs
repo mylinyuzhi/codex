@@ -75,6 +75,41 @@ fn interactive_viewport_popup_height_is_capped_by_terminal_height() {
 }
 
 #[test]
+fn exit_plan_prompt_height_is_independent_of_plan_length() {
+    let state = exit_plan_prompt_state(80);
+
+    let height = interaction_prompt_height(&state, 96, 40);
+
+    assert!(
+        height <= 7,
+        "prompt should reserve only decision rows, got {height}"
+    );
+}
+
+#[test]
+fn exit_plan_pending_plan_renders_in_live_tail() {
+    let state = exit_plan_prompt_state(40);
+    let styles = UiStyles::new(&state.ui.theme);
+
+    let lines = build_live_tail_lines(&state, styles, 96, native_plan());
+    let text = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(text.contains("Here is plan:"), "{text}");
+    assert!(text.contains("step 40"), "{text}");
+    assert!(text.contains("Plan file: /tmp/plan.md"), "{text}");
+    assert!(!text.contains("clear context"), "{text}");
+}
+
+#[test]
 fn interactive_viewport_does_not_render_finalized_messages() {
     let backend = TestBackend::new(48, 8);
     let mut terminal = SurfaceTerminal::new(backend).expect("terminal");
@@ -261,6 +296,57 @@ Actions:
   No, deny
 ↑/↓ Navigate  Enter Select  Y/N/A shortcuts"
     );
+}
+
+fn exit_plan_prompt_state(step_count: usize) -> AppState {
+    let mut state = AppState::new();
+    let plan: String = (1..=step_count).map(|i| format!("- step {i}\n")).collect();
+    state
+        .ui
+        .push_prompt(crate::state::PanePromptState::Permission(
+            crate::state::PermissionPromptState {
+                request_id: "req-1".into(),
+                tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+                description: "Exit plan mode?".into(),
+                detail: crate::state::PermissionDetail::ExitPlanMode {
+                    outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                    plan: Some(plan),
+                    plan_file_path: Some("/tmp/plan.md".into()),
+                    allowed_prompts: vec![],
+                },
+                risk_level: None,
+                show_always_allow: false,
+                classifier_checking: false,
+                classifier_auto_approved: None,
+                choices: Some(vec![
+                    coco_types::PermissionAskChoice {
+                        value: coco_types::ExitPlanChoice::ClearAcceptEdits.as_str().into(),
+                        label: "Yes, clear context and auto-accept edits".into(),
+                        description: None,
+                    },
+                    coco_types::PermissionAskChoice {
+                        value: coco_types::ExitPlanChoice::KeepDefault.as_str().into(),
+                        label: "Yes, manually approve edits".into(),
+                        description: None,
+                    },
+                    coco_types::PermissionAskChoice {
+                        value: coco_types::ExitPlanChoice::No.as_str().into(),
+                        label: "No, keep planning".into(),
+                        description: None,
+                    },
+                ]),
+                selected_choice: 0,
+                display_input: coco_types::PermissionDisplayInput::Empty,
+                original_input: None,
+                cwd: None,
+                permission_suggestions: vec![],
+                worker_badge: None,
+                explanation_visible: false,
+                explanation: crate::state::ExplainerFetch::NotFetched,
+                prefix_input: None,
+            },
+        ));
+    state
 }
 
 fn native_plan() -> SurfaceFramePlan {

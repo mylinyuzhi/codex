@@ -81,6 +81,24 @@ fn count_attachments_containing<M: std::borrow::Borrow<Message>>(
         .count()
 }
 
+fn attachment_texts<M: std::borrow::Borrow<Message>>(messages: &[M]) -> Vec<String> {
+    messages
+        .iter()
+        .filter_map(|m| match m.borrow() {
+            Message::Attachment(a) => match a.as_api_message() {
+                Some(coco_messages::LlmMessage::User { content, .. }) => {
+                    content.iter().find_map(|c| match c {
+                        coco_messages::UserContent::Text(t) => Some(t.text.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 fn permission_mode_changes(events: &[CoreEvent]) -> Vec<PermissionMode> {
     events
         .iter()
@@ -119,7 +137,9 @@ async fn end_to_end_single_run() {
     std::fs::write(&path, "# test plan\n").unwrap();
 
     let model = MockModelBuilder::new()
-        .on_call(0, |_| MockResponse::tool_call("ExitPlanMode", json!({})))
+        .on_call(0, |_| {
+            MockResponse::tool_call("ExitPlanMode", json!({"outcome": "implementation_plan"}))
+        })
         .on_call(1, |_| MockResponse::text("done"))
         .build();
 
@@ -169,6 +189,52 @@ async fn end_to_end_single_run() {
         Some(PermissionMode::Default),
         "ExitPlanMode.execute must write restore_mode to \
          app_state.permission_mode — TS parity with setAppState"
+    );
+}
+
+#[tokio::test]
+async fn no_plan_exit_does_not_reference_stale_plan_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_id = "integ-no-plan-exit";
+    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+
+    let path = plan_file_path(tmp.path(), session_id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "# stale implementation plan\n").unwrap();
+
+    let model = MockModelBuilder::new()
+        .on_call(0, |_| {
+            MockResponse::tool_call("ExitPlanMode", json!({"outcome": "no_implementation_plan"}))
+        })
+        .on_call(1, |_| MockResponse::text("answered"))
+        .build();
+
+    let params = PlanModeTurnParams::plan_turn(
+        session_id,
+        tmp.path().to_path_buf(),
+        app_state.clone(),
+        tools_with_plan_mode(),
+        "explain where routing lives",
+    );
+    let result = run_plan_mode_turn(model, params).await;
+
+    assert_eq!(result.response_text, "answered");
+    let exit_text = attachment_texts(&result.final_messages)
+        .into_iter()
+        .find(|text| text.contains("## Exited Plan Mode"))
+        .expect("exit banner");
+    assert!(
+        exit_text.contains("without an implementation plan"),
+        "{exit_text}"
+    );
+    assert!(
+        !exit_text.contains(path.to_string_lossy().as_ref()),
+        "no-plan exit must not reference stale plan file: {exit_text}"
+    );
+    let guard = app_state.read().await;
+    assert_eq!(
+        guard.pending_plan_mode_exit_outcome, None,
+        "exit reminder should consume the pending no-plan outcome"
     );
 }
 
@@ -558,7 +624,9 @@ async fn model_driven_exit_plan_mode_stops_reminder_on_next_turn() {
     // loop, turn_start runs multiple times so we can observe the
     // plan-reminder-stops behavior).
     let model = MockModelBuilder::new()
-        .on_call(0, |_| MockResponse::tool_call("ExitPlanMode", json!({})))
+        .on_call(0, |_| {
+            MockResponse::tool_call("ExitPlanMode", json!({"outcome": "implementation_plan"}))
+        })
         .on_call(1, |_| {
             MockResponse::tool_call("Read", json!({"file_path": "/dev/null"}))
         })

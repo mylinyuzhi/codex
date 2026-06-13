@@ -53,6 +53,13 @@ pub(crate) fn normalize_observable_tool_input(
 }
 
 fn normalize_exit_plan_mode(input: Value, ctx: ToolInputNormalizationContext<'_>) -> Value {
+    let outcome = input
+        .get("outcome")
+        .and_then(|value| serde_json::from_value(value.clone()).ok());
+    if outcome == Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan) {
+        return input;
+    }
+
     let (Some(session_id), Some(plans_dir)) = (ctx.session_id, ctx.plans_dir) else {
         return input;
     };

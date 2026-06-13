@@ -16,6 +16,7 @@
 //! coordination across three crates.
 
 use crate::AgentColorName;
+use crate::ExitPlanModeOutcome;
 use crate::PermissionMode;
 use crate::PermissionRulesBySource;
 use crate::RateLimitEntry;
@@ -111,6 +112,11 @@ pub struct ToolAppState {
     /// detects an unannounced mode transition. Cleared by the reminder
     /// after the exit-attachment is appended to history.
     pub needs_plan_mode_exit_attachment: bool,
+
+    /// Outcome paired with `needs_plan_mode_exit_attachment` when the exit was
+    /// produced by `ExitPlanModeTool`. `None` means the engine inferred an
+    /// unannounced transition and cannot know whether there was a plan.
+    pub pending_plan_mode_exit_outcome: Option<ExitPlanModeOutcome>,
 
     /// One-shot: set when leaving Auto mode (ExitPlanMode from a
     /// plan entered via Auto, or an unannounced Auto→non-Auto cycle

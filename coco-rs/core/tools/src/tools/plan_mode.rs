@@ -17,6 +17,7 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ExitPlanChoice;
+use coco_types::ExitPlanModeOutcome;
 use coco_types::ExitPlanModeResult;
 use coco_types::PendingPlanVerificationState;
 use coco_types::PermissionMode;
@@ -37,6 +38,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct ExitPlanModeOutput {
+    /// Whether this exit carries an implementation plan.
+    outcome: ExitPlanModeOutcome,
     /// The plan text — either the CCR-edited version from `input.plan`
     /// or the on-disk plan file contents.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,6 +85,7 @@ pub fn build_enter_plan_mode_patch(current_mode: PermissionMode) -> coco_types::
             PermissionMode::Plan,
             &coco_types::PermissionRulesBySource::new(),
         );
+        state.pending_plan_mode_exit_outcome = None;
     })
 }
 
@@ -347,7 +351,8 @@ fn exit_plan_mode_prompt() -> String {
          ## How This Tool Works\n\
          - You should have already written your plan to the plan file specified in the plan mode system message\n\
          - This tool does NOT take the plan content as a parameter - it will read the plan from the file you wrote\n\
-         - This tool simply signals that you're done planning and ready for the user to review and approve\n\
+         - Set outcome to `implementation_plan` when you have a plan for code changes; set outcome to `no_implementation_plan` when plan mode should end without implementation work\n\
+         - This tool simply signals that you're done planning and ready for the user to review and approve, or that no implementation plan is needed\n\
          - The user will see the contents of your plan file when they review it\n\
          \n\
          ## When to Use This Tool\n\
@@ -393,6 +398,8 @@ pub struct ExitPlanAllowedPrompt {
 /// emit only `allowedPrompts`.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ExitPlanModeInput {
+    /// Whether this exit presents an implementation plan or exits without one.
+    pub outcome: ExitPlanModeOutcome,
     /// Prompt-based permissions needed to implement the plan.
     #[serde(default, rename = "allowedPrompts")]
     pub allowed_prompts: Option<Vec<ExitPlanAllowedPrompt>>,
@@ -558,6 +565,7 @@ impl Tool for ExitPlanModeTool {
         // `config_home`-only resolution for older call sites that haven't
         // migrated to populating `ctx.plans_dir`.
         let input_plan = input.plan.clone();
+        let outcome = input.outcome;
         let session_id = ctx.session_id_for_history.as_deref();
         let plans_dir = ctx.plans_dir.clone().or_else(|| {
             ctx.config_home
@@ -573,16 +581,36 @@ impl Tool for ExitPlanModeTool {
             ),
             _ => None,
         };
-        let disk_plan = match (session_id, plans_dir.as_ref()) {
-            (Some(sid), Some(pd)) => coco_context::get_plan(sid, pd, agent_id_str.as_deref()),
-            _ => None,
+        let disk_plan = if outcome.has_implementation_plan() {
+            match (session_id, plans_dir.as_ref()) {
+                (Some(sid), Some(pd)) => coco_context::get_plan(sid, pd, agent_id_str.as_deref()),
+                _ => None,
+            }
+        } else {
+            None
         };
         let input_plan_is_edit = match (&input_plan, &disk_plan) {
             (Some(input), Some(disk)) => input != disk,
             (Some(_), None) => true,
             _ => false,
         };
-        let plan = input_plan.clone().or(disk_plan);
+        let plan = if outcome.has_implementation_plan() {
+            input_plan.clone().or(disk_plan)
+        } else {
+            None
+        };
+        if outcome.has_implementation_plan()
+            && plan.as_deref().is_none_or(|plan| plan.trim().is_empty())
+        {
+            return Err(ToolError::InvalidInput {
+                message:
+                    "No implementation plan found. Write your plan before calling ExitPlanMode."
+                        .into(),
+                error_code: Some("1".into()),
+            });
+        }
+        let has_implementation_plan = outcome.has_implementation_plan();
+        let result_file_path = has_implementation_plan.then(|| file_path.clone()).flatten();
 
         // If plan was provided in input (CCR edit), persist to disk so the
         // next reader (VerifyPlanExecution, Read tool) sees the edit.
@@ -592,6 +620,7 @@ impl Tool for ExitPlanModeTool {
         // byte-identical snapshot as a user edit or rewrite the file
         // unnecessarily.
         if input_plan_is_edit
+            && has_implementation_plan
             && let (Some(plan_content), Some(path)) = (&input_plan, &file_path)
             && let Err(e) = tokio::fs::write(path, plan_content.as_bytes()).await
         {
@@ -624,14 +653,6 @@ impl Tool for ExitPlanModeTool {
                     error_code: Some("1".into()),
                 });
             };
-            if plan_text.trim().is_empty() {
-                return Err(ToolError::InvalidInput {
-                    message: "Plan file is empty. Write your plan before calling ExitPlanMode."
-                        .into(),
-                    error_code: Some("1".into()),
-                });
-            }
-
             // Swarm identity is pre-resolved by the engine into
             // `ctx.agent_name` + `ctx.team_name` (3-tier fallback done
             // once at ctx build time). Tools read from the typed field,
@@ -693,6 +714,7 @@ impl Tool for ExitPlanModeTool {
             });
 
             let out = ExitPlanModeOutput {
+                outcome,
                 plan: Some(plan_text.to_string()),
                 is_agent: true,
                 file_path,
@@ -734,25 +756,31 @@ impl Tool for ExitPlanModeTool {
             ),
         };
         let choice = parse_exit_plan_choice(input.user_choice.as_deref())?;
-        let restore_mode = match choice {
-            Some(ExitPlanChoice::ClearBypassPermissions)
-                if ctx.permission_context.bypass_available =>
-            {
-                PermissionMode::BypassPermissions
+        let restore_mode = if has_implementation_plan {
+            match choice {
+                Some(ExitPlanChoice::ClearBypassPermissions)
+                    if ctx.permission_context.bypass_available =>
+                {
+                    PermissionMode::BypassPermissions
+                }
+                Some(ExitPlanChoice::ClearBypassPermissions | ExitPlanChoice::ClearAcceptEdits) => {
+                    PermissionMode::AcceptEdits
+                }
+                Some(ExitPlanChoice::KeepAcceptEdits)
+                    if ctx.permission_context.bypass_available =>
+                {
+                    PermissionMode::BypassPermissions
+                }
+                Some(ExitPlanChoice::KeepAcceptEdits) => PermissionMode::AcceptEdits,
+                Some(ExitPlanChoice::KeepDefault) => PermissionMode::Default,
+                // `No` is a denial routed by the TUI before `execute`; if it ever
+                // arrives here, treat it like an absent choice — restore pre-plan.
+                Some(ExitPlanChoice::No) | None => {
+                    pre_plan_from_state.unwrap_or(PermissionMode::Default)
+                }
             }
-            Some(ExitPlanChoice::ClearBypassPermissions | ExitPlanChoice::ClearAcceptEdits) => {
-                PermissionMode::AcceptEdits
-            }
-            Some(ExitPlanChoice::KeepAcceptEdits) if ctx.permission_context.bypass_available => {
-                PermissionMode::BypassPermissions
-            }
-            Some(ExitPlanChoice::KeepAcceptEdits) => PermissionMode::AcceptEdits,
-            Some(ExitPlanChoice::KeepDefault) => PermissionMode::Default,
-            // `No` is a denial routed by the TUI before `execute`; if it ever
-            // arrives here, treat it like an absent choice — restore pre-plan.
-            Some(ExitPlanChoice::No) | None => {
-                pre_plan_from_state.unwrap_or(PermissionMode::Default)
-            }
+        } else {
+            pre_plan_from_state.unwrap_or(PermissionMode::Default)
         };
         let auto_was_active_during_plan =
             stripped_from_state || pre_plan_from_state == Some(PermissionMode::Auto);
@@ -778,8 +806,9 @@ impl Tool for ExitPlanModeTool {
 
         // Clear-context options schedule a history clear plus a fresh
         // implementation user message for the next turn.
-        let clear_history_requested = choice.is_some_and(ExitPlanChoice::clears_context);
-        let post_clear_message = clear_history_requested.then(|| {
+        let clear_history_requested =
+            has_implementation_plan && choice.is_some_and(ExitPlanChoice::clears_context);
+        let post_clear_message = (clear_history_requested && has_implementation_plan).then(|| {
             format!(
                 "Implement the following plan:\n\n{}",
                 plan.as_deref().unwrap_or_default()
@@ -797,6 +826,7 @@ impl Tool for ExitPlanModeTool {
             state.pre_plan_mode = None;
             state.has_exited_plan_mode = true;
             state.needs_plan_mode_exit_attachment = true;
+            state.pending_plan_mode_exit_outcome = Some(outcome);
             state.pending_plan_verification = pending_verification_plan
                 .clone()
                 .map(PendingPlanVerificationState::new);
@@ -818,11 +848,16 @@ impl Tool for ExitPlanModeTool {
         });
 
         let out = ExitPlanModeOutput {
+            outcome,
             plan,
             is_agent,
-            file_path,
+            file_path: result_file_path,
             has_task_tool: if has_agent_tool { Some(true) } else { None },
-            plan_was_edited: if input_plan_is_edit { Some(true) } else { None },
+            plan_was_edited: if has_implementation_plan && input_plan_is_edit {
+                Some(true)
+            } else {
+                None
+            },
             ..Default::default()
         };
         let display_data = exit_plan_mode_display_data(&out);
@@ -846,6 +881,7 @@ impl Tool for ExitPlanModeTool {
 
 fn exit_plan_mode_display_data(out: &ExitPlanModeOutput) -> ToolDisplayData {
     ToolDisplayData::ExitPlanModeResult(ExitPlanModeResult {
+        outcome: out.outcome,
         plan: out.plan.clone().unwrap_or_default(),
         file_path: out.file_path.clone(),
         awaiting_leader_approval: out.awaiting_leader_approval,
@@ -884,10 +920,11 @@ impl ExitPlanModeTool {
                 .to_string();
         }
 
-        let plan_text = out.plan.as_deref().unwrap_or("");
-        if plan_text.trim().is_empty() {
-            return "User has approved exiting plan mode. You can now proceed.".to_string();
+        if out.outcome == ExitPlanModeOutcome::NoImplementationPlan {
+            return "User has approved exiting plan mode. There is no implementation plan to execute."
+                .to_string();
         }
+        let plan_text = out.plan.as_deref().unwrap_or("");
 
         let team_hint = if out.has_task_tool.unwrap_or(false) {
             "\n\nIf this plan can be broken down into multiple independent tasks, \

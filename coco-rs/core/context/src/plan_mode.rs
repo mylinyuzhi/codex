@@ -1262,6 +1262,13 @@ fn render_full_interview(
 /// Emitted exactly once on the turn immediately after `ExitPlanMode` is
 /// approved.
 pub fn render_plan_mode_exit_reminder(attachment: &PlanModeExitAttachment) -> String {
+    if attachment.outcome == Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan) {
+        return "## Exited Plan Mode\n\n\
+                You have exited plan mode without an implementation plan. \
+                Continue answering the user without starting implementation."
+            .to_string();
+    }
+
     let plan_reference = if attachment.plan_exists {
         format!(
             " The plan file is located at {path} if you need to reference it.",

@@ -27,14 +27,23 @@ use coco_tui_ui::widgets::QuestionNav;
 use coco_tui_ui::widgets::QuestionRow;
 use coco_tui_ui::widgets::QuestionView;
 use coco_tui_ui::widgets::RowMark;
+use coco_tui_ui::widgets::SelectItem;
+use coco_tui_ui::widgets::SelectListStyle;
 use coco_tui_ui::widgets::SubmitNavTab;
+use coco_tui_ui::widgets::render_select_list;
 
 pub(crate) fn permission_content(
     p: &PermissionPromptState,
     current_mode: coco_types::PermissionMode,
     styles: UiStyles<'_>,
 ) -> (String, String, Color) {
-    let detail = permission_detail_for_prompt(p);
+    let is_exit_plan = matches!(p.detail, PermissionDetail::ExitPlanMode { .. });
+    let exit_plan_has_plan = is_exit_plan && exit_plan_has_implementation_plan(p);
+    let detail = if is_exit_plan {
+        String::new()
+    } else {
+        permission_detail_for_prompt(p)
+    };
     let risk_badge = match p.risk_level {
         Some(RiskLevel::Low) => t!("dialog.risk_low").to_string(),
         Some(RiskLevel::Medium) => t!("dialog.risk_medium").to_string(),
@@ -50,8 +59,15 @@ pub(crate) fn permission_content(
         .as_ref()
         .map(|b| format!(" · @{}", b.name))
         .unwrap_or_default();
-    let title = if matches!(p.detail, PermissionDetail::ExitPlanMode { .. }) {
-        format!(" Ready to code?{worker_suffix} ")
+    let title = if is_exit_plan {
+        format!(
+            " {}{worker_suffix} ",
+            if exit_plan_has_plan {
+                t!("dialog.ready_to_code")
+            } else {
+                t!("dialog.exit_plan_mode")
+            }
+        )
     } else if risk_badge.is_empty() {
         format!(" {}{worker_suffix} ", p.tool_name)
     } else {
@@ -115,8 +131,8 @@ pub(crate) fn permission_content(
         },
     };
 
-    let body = if matches!(p.detail, PermissionDetail::ExitPlanMode { .. }) {
-        format!("{classifier_line}\n\n{detail}\n\n{actions}{explainer_panel}")
+    let body = if is_exit_plan {
+        format!("{classifier_line}\n\n{actions}{explainer_panel}")
             .trim_start()
             .to_string()
     } else {
@@ -161,121 +177,168 @@ pub(crate) fn permission_styled_content(
     (title, lines, border)
 }
 
-/// Rich, styled rendering of the `ExitPlanMode` approval prompt — the
-/// interactive "Ready to code?" panel. The plan is rendered as **markdown**
-/// (via `coco_tui_markdown`) inside a dashed frame, then the structured choice
-/// list.
+/// Compact bottom-prompt projection for `ExitPlanMode`.
 ///
-/// Returns `(title, styled lines, border_color)` for the bordered prompt box.
-/// The trailing block (prompt + choices + hints) is laid out *after* the last
-/// blank line so the viewport's `compact_sequence` keeps the actionable rows
-/// visible when the plan is long; the full plan persists in the transcript
-/// (`render_exit_plan_mode`) once approved.
-///
-/// Only valid for an `ExitPlanMode` detail; the viewport guards the call.
-pub(crate) fn exit_plan_approval_styled_content(
+/// The plan body itself is rendered into the live transcript area by
+/// [`exit_plan_pending_history_lines`]. Keeping this prompt to just the
+/// decision rows mirrors codex-rs' "plan in history, actions in bottom pane"
+/// layout and keeps the choices visible for long plans.
+pub(crate) fn exit_plan_prompt_lines(
     p: &PermissionPromptState,
-    width: u16,
-    syntax: coco_tui_ui::display::SyntaxHighlighting,
     styles: UiStyles<'_>,
-) -> (String, Vec<Line<'static>>, Color) {
-    let PermissionDetail::ExitPlanMode {
-        plan,
-        plan_file_path,
-        allowed_prompts,
-    } = &p.detail
-    else {
-        return (String::new(), Vec::new(), styles.warning());
-    };
-
+    list_budget: usize,
+) -> Vec<Line<'static>> {
+    let has_plan = exit_plan_has_implementation_plan(p);
     let worker_suffix = p
         .worker_badge
         .as_ref()
         .map(|b| format!(" · @{}", b.name))
         .unwrap_or_default();
-    let title = format!(" {}{worker_suffix} ", t!("dialog.ready_to_code"));
-
-    let text = Style::default().fg(styles.text());
-    let dim = Style::default().fg(styles.dim());
-    let accent = Style::default().fg(styles.accent());
-    let dash_width = width.saturating_sub(2).max(1) as usize;
-    let dashed = || Line::from(Span::styled("┄".repeat(dash_width), dim));
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(Span::styled(
-        t!("dialog.plan_heading").to_string(),
-        text,
-    )));
-    lines.push(dashed());
-
-    // Plan body as markdown, indented two columns under the heading.
-    let plan_body = plan.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    match plan_body {
-        Some(body) => {
-            let md_width = width.saturating_sub(4).max(1);
-            let opts = coco_tui_markdown::MarkdownOptions::new(styles, md_width, syntax);
-            for mut line in coco_tui_markdown::render_markdown(body, opts, None) {
-                line.spans.insert(0, Span::raw("  "));
-                lines.push(line);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "{}{}",
+                if has_plan {
+                    t!("dialog.ready_to_code")
+                } else {
+                    t!("dialog.exit_plan_mode")
+                },
+                worker_suffix
+            ),
+            Style::default()
+                .fg(styles.plan())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            if has_plan {
+                t!("dialog.plan_ready_prompt")
+            } else {
+                t!("dialog.no_plan_ready_prompt")
             }
-        }
-        None => lines.push(Line::from(Span::styled(
-            format!("  {}", t!("dialog.plan_missing")),
-            dim,
-        ))),
-    }
-    lines.push(dashed());
+            .to_string(),
+            Style::default().fg(styles.text()),
+        )),
+        Line::from(""),
+    ];
+
+    if let Some(choices) = &p.choices {
+        let items: Vec<SelectItem> = choices
+            .iter()
+            .map(|choice| {
+                let mut item = SelectItem::new(choice.label.clone());
+                if let Some(description) = &choice.description {
+                    item = item.with_secondary(description.clone());
+                }
+                item
+            })
+            .collect();
+        lines.extend(render_select_list(
+            &items,
+            p.selected_choice,
+            &SelectListStyle {
+                numbered: false,
+                visible_count: list_budget.max(1),
+            },
+            styles,
+        ));
+    };
+
+    lines.push(Line::from(Span::styled(
+        t!("dialog.hints_nav_select").to_string(),
+        Style::default().fg(styles.dim()),
+    )));
+    lines
+}
+
+/// Temporary source-backed display of the pending plan while the exit-plan
+/// prompt is waiting for a choice. This deliberately looks like normal
+/// transcript output rather than a centered modal.
+pub(crate) fn exit_plan_pending_history_lines(
+    p: &PermissionPromptState,
+    width: u16,
+    syntax: coco_tui_ui::display::SyntaxHighlighting,
+    styles: UiStyles<'_>,
+) -> Vec<Line<'static>> {
+    let PermissionDetail::ExitPlanMode {
+        outcome,
+        plan,
+        plan_file_path,
+        allowed_prompts,
+    } = &p.detail
+    else {
+        return Vec::new();
+    };
+
+    if *outcome == coco_types::ExitPlanModeOutcome::NoImplementationPlan {
+        return vec![Line::from(vec![
+            Span::styled("• ", Style::default().fg(styles.dim())),
+            Span::styled(
+                t!("dialog.no_plan_heading").to_string(),
+                Style::default()
+                    .fg(styles.plan())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])];
+    };
+
+    let plan_body = plan.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let Some(body) = plan_body else {
+        return vec![Line::from(vec![
+            Span::styled("• ", Style::default().fg(styles.dim())),
+            Span::styled(
+                t!("dialog.no_plan_heading").to_string(),
+                Style::default()
+                    .fg(styles.plan())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])];
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("• ", Style::default().fg(styles.dim())),
+            Span::styled(
+                t!("dialog.plan_heading").to_string(),
+                Style::default()
+                    .fg(styles.plan())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+    ];
+    lines.extend(crate::presentation::plan::render_plan_markdown(
+        body, styles, width, syntax,
+    ));
 
     if let Some(path) = plan_file_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             t!("dialog.plan_file", path = path).to_string(),
-            dim,
+            Style::default().fg(styles.dim()),
         )));
     }
     if !allowed_prompts.is_empty() {
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             t!("dialog.plan_requested_permissions").to_string(),
-            dim,
+            Style::default().fg(styles.dim()),
         )));
         for prompt in allowed_prompts {
-            lines.push(Line::from(Span::styled(format!("  - {prompt}"), dim)));
+            lines.push(Line::from(Span::styled(
+                format!("  - {prompt}"),
+                Style::default().fg(styles.dim()),
+            )));
         }
     }
 
-    // Blank separator: everything below is the actionable tail the viewport's
-    // compaction must preserve, so it carries NO further blank lines.
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        t!("dialog.plan_ready_prompt").to_string(),
-        text,
-    )));
+    lines
+}
 
-    if let Some(choices) = &p.choices {
-        let selected = p.selected_choice.min(choices.len().saturating_sub(1));
-        for (idx, choice) in choices.iter().enumerate() {
-            if idx == selected {
-                lines.push(Line::from(vec![
-                    Span::styled("❯ ", accent),
-                    Span::styled("✓ ", Style::default().fg(styles.success())),
-                    Span::styled(choice.label.clone(), accent.add_modifier(Modifier::BOLD)),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("    "),
-                    Span::styled(choice.label.clone(), text),
-                ]));
-            }
-            if let Some(desc) = &choice.description {
-                lines.push(Line::from(Span::styled(format!("    {desc}"), dim)));
-            }
-        }
-    }
-    lines.push(Line::from(Span::styled(
-        t!("dialog.hints_nav_select").to_string(),
-        dim,
-    )));
-
-    (title, lines, styles.plan())
+fn exit_plan_has_implementation_plan(p: &PermissionPromptState) -> bool {
+    let PermissionDetail::ExitPlanMode { outcome, .. } = &p.detail else {
+        return false;
+    };
+    outcome.has_implementation_plan()
 }
 
 fn classic_permission_actions(
@@ -651,37 +714,9 @@ fn permission_detail(detail: &PermissionDetail) -> String {
             "{}\n\n{description}",
             t!("dialog.perm_computer_use", action = action.as_str())
         ),
-        PermissionDetail::ExitPlanMode {
-            plan,
-            plan_file_path,
-            allowed_prompts,
-        } => exit_plan_mode_detail(plan.as_deref(), plan_file_path.as_deref(), allowed_prompts),
+        PermissionDetail::ExitPlanMode { .. } => String::new(),
         PermissionDetail::Generic { input_preview } => input_preview.clone(),
     }
-}
-
-fn exit_plan_mode_detail(
-    plan: Option<&str>,
-    plan_file_path: Option<&str>,
-    allowed_prompts: &[String],
-) -> String {
-    let plan = plan
-        .filter(|p| !p.trim().is_empty())
-        .unwrap_or("No plan found. Please write your plan to the plan file first.");
-    let mut out = format!("Here is Claude's plan:\n\n{plan}");
-    if let Some(path) = plan_file_path.filter(|p| !p.trim().is_empty()) {
-        out.push_str(&format!("\n\nPlan file: {path}"));
-    }
-    if !allowed_prompts.is_empty() {
-        out.push_str("\n\nRequested permissions:");
-        for prompt in allowed_prompts {
-            out.push_str(&format!("\n  - {prompt}"));
-        }
-    }
-    out.push_str(
-        "\n\nClaude has written up a plan and is ready to execute. Would you like to proceed?",
-    );
-    out
 }
 
 fn shell_detail(

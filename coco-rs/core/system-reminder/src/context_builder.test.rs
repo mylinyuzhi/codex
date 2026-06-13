@@ -113,6 +113,7 @@ fn forwards_plan_exit_and_reentry_flags() {
     let app = ToolAppState {
         has_exited_plan_mode: true,
         needs_plan_mode_exit_attachment: true,
+        pending_plan_mode_exit_outcome: Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan),
         needs_auto_mode_exit_attachment: true,
         ..Default::default()
     };
@@ -125,6 +126,10 @@ fn forwards_plan_exit_and_reentry_flags() {
     .build();
     assert!(ctx.is_plan_reentry);
     assert!(ctx.needs_plan_mode_exit_attachment);
+    assert_eq!(
+        ctx.pending_plan_mode_exit_outcome,
+        Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan)
+    );
     assert!(ctx.needs_auto_mode_exit_attachment);
 }
 

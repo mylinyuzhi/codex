@@ -195,7 +195,7 @@ impl LanguageModel for PricedToolCallMock {
                 AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id: "budget_unsafe_1".into(),
                     tool_name: "budget_unsafe".into(),
-                    input: serde_json::json!({}),
+                    input: serde_json::json!({"outcome": "implementation_plan"}),
                     provider_executed: None,
                     provider_metadata: None,
                     invalid: false,
@@ -546,7 +546,7 @@ impl LanguageModel for ExitPlanModeThenTextMock {
                 content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id: "exit_plan_1".into(),
                     tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
-                    input: serde_json::json!({}),
+                    input: serde_json::json!({"outcome": "implementation_plan"}),
                     provider_executed: None,
                     provider_metadata: None,
                     invalid: false,
@@ -2148,8 +2148,12 @@ async fn exit_plan_mode_observable_input_includes_disk_plan() {
         transcript.get("plan"),
         Some(&serde_json::json!("## Plan\n- implement"))
     );
-    let output = tool_result_text(&result.final_messages, "exit_plan_1")
-        .expect("ExitPlanMode should complete");
+    let output = tool_result_text(&result.final_messages, "exit_plan_1").unwrap_or_else(|| {
+        panic!(
+            "ExitPlanMode should complete; error={:?}",
+            tool_result_error_text(&result.final_messages, "exit_plan_1")
+        )
+    });
     assert!(output.contains("## Approved Plan:"), "output: {output}");
     assert!(
         !output.contains("edited by user"),

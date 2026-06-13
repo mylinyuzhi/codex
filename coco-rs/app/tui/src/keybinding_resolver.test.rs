@@ -96,6 +96,15 @@ fn display_for_returns_default_chord() {
 }
 
 #[test]
+fn display_for_returns_plan_editor_chord() {
+    let handle = KeybindingHandle::from_defaults();
+    let display = handle
+        .display_for(&KeybindingAction::AppPlanEditor, TuiContext::Chat)
+        .unwrap();
+    assert_eq!(display, "ctrl+g");
+}
+
+#[test]
 fn warnings_default_to_empty() {
     let handle = KeybindingHandle::from_defaults();
     assert!(handle.warnings().is_empty());

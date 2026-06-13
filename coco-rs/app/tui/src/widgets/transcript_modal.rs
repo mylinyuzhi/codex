@@ -251,6 +251,7 @@ struct TranscriptCellRenderer<'a> {
     reasoning_metadata: &'a HashMap<uuid::Uuid, crate::state::session::ReasoningMetadata>,
     compact_boundary_shortcut: String,
     thinking_toggle_hint: String,
+    plan_editor_hint: String,
     width: u16,
     styles: UiStyles<'a>,
     syntax_highlighting: SyntaxHighlighting,
@@ -270,6 +271,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             reasoning_metadata: &state.session.reasoning_metadata,
             compact_boundary_shortcut: compact_boundary_shortcut(state),
             thinking_toggle_hint: thinking_toggle_hint(state),
+            plan_editor_hint: plan_editor_hint(state),
             width,
             styles,
             syntax_highlighting: state.ui.display_settings.syntax_highlighting,
@@ -285,6 +287,7 @@ impl<'a> TranscriptCellRenderer<'a> {
             styles: self.styles,
             width: self.width,
             syntax_highlighting: self.syntax_highlighting,
+            plan_editor_hint: self.plan_editor_hint.clone(),
             expand_hint: String::new(),
             expanded,
         }
@@ -1206,6 +1209,15 @@ fn thinking_toggle_hint(state: &AppState) -> String {
         "status.thinking_toggle_expand"
     };
     t!(key, shortcut = shortcut.as_str()).to_string()
+}
+
+fn plan_editor_hint(state: &AppState) -> String {
+    let shortcut = state
+        .ui
+        .kb_handle
+        .display_for(&KeybindingAction::AppPlanEditor, TuiContext::Chat)
+        .unwrap_or_else(|| "ctrl+g".to_string());
+    format!("{shortcut} to edit")
 }
 
 fn mix_str(mut hash: u64, value: &str) -> u64 {

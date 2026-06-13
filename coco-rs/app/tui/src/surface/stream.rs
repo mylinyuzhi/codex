@@ -1,5 +1,10 @@
 //! Native-surface live stream preparation.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hash;
+use std::hash::Hasher;
+
+use coco_tui_ui::display::SyntaxHighlighting;
 use coco_tui_ui::style::UiStyles;
 use ratatui::text::Line;
 
@@ -8,7 +13,10 @@ use crate::presentation::thinking::ThinkingRenderInput;
 use crate::presentation::thinking::estimate_reasoning_tokens;
 use crate::presentation::thinking::render_thinking_block;
 use crate::state::AppState;
+use crate::state::PermissionDetail;
+use crate::state::PermissionPromptState;
 use crate::surface::modal::SurfaceFramePlan;
+use crate::surface::viewport::active_exit_plan_prompt;
 use crate::surface::viewport::build_live_tail_lines;
 use crate::terminal::STREAMING_LIVE_TAIL_CAP;
 use crate::transcript::stream::ScrollbackStreamCommit;
@@ -23,6 +31,7 @@ use coco_tui_ui::engine::history_insert::render_history_rows;
 #[derive(Debug, Default)]
 pub(crate) struct SurfaceStreamDriver {
     controller: StreamRenderController,
+    pending_plan: Option<PendingPlanProjectionCache>,
     /// The single record of stream rows already inserted into native scrollback
     /// (`None` until the first mid-stream stable commit). This is the SOLE owner
     /// of that fact — the finalize reads it through [`Self::commit`]. The
@@ -30,6 +39,21 @@ pub(crate) struct SurfaceStreamDriver {
     /// fingerprint is retained — soundness rests on the markdown
     /// prefix-stability property pinned in `transcript::stream` tests.
     committed: Option<ScrollbackStreamCommit>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingPlanProjectionCache {
+    key: PendingPlanProjectionKey,
+    lines: Vec<Line<'static>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingPlanProjectionKey {
+    request_id: String,
+    detail_hash: u64,
+    width: u16,
+    theme_hash: u64,
+    syntax_highlighting: SyntaxHighlighting,
 }
 
 #[derive(Debug, Default)]
@@ -65,6 +89,9 @@ impl SurfaceStreamDriver {
         plan: SurfaceFramePlan,
     ) -> PreparedLiveTail {
         let styles = UiStyles::new(&state.ui.theme);
+        if active_exit_plan_prompt(state).is_none() {
+            self.pending_plan = None;
+        }
         if width == 0 || plan.finalized_history_in_viewport() {
             // View-mode / zero-width frame: no rows enter native scrollback, so
             // the commit is untouched (clearing it here is what let a later
@@ -88,7 +115,12 @@ impl SurfaceStreamDriver {
             // re-committed already-present rows (duplication).
             self.controller.clear();
             crate::transcript::render::assistant::clear_in_flight_markdown_memo();
-            return PreparedLiveTail::default();
+            return PreparedLiveTail {
+                lines: self.pending_plan_lines(state, width, styles),
+                stream_append: None,
+                commit_invalidated: false,
+                stream_cache_hit: None,
+            };
         };
 
         let visible = streaming.visible_content();
@@ -198,6 +230,7 @@ impl SurfaceStreamDriver {
         if !state.ui.user_scrolled && lines.len() > cap {
             lines.drain(0..lines.len() - cap);
         }
+        self.append_pending_plan_lines(&mut lines, state, width, styles);
 
         // The stale commit describes rows in scrollback that no longer match
         // this frame; drop it so the surface replays and the live tail rebuilds
@@ -240,8 +273,87 @@ impl SurfaceStreamDriver {
     pub(crate) fn reset(&mut self) {
         self.controller.clear();
         self.committed = None;
+        self.pending_plan = None;
         crate::transcript::render::assistant::clear_in_flight_markdown_memo();
     }
+
+    fn append_pending_plan_lines(
+        &mut self,
+        lines: &mut Vec<Line<'static>>,
+        state: &AppState,
+        width: u16,
+        styles: UiStyles<'_>,
+    ) {
+        let pending = self.pending_plan_lines(state, width, styles);
+        if pending.is_empty() {
+            return;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(pending);
+    }
+
+    fn pending_plan_lines(
+        &mut self,
+        state: &AppState,
+        width: u16,
+        styles: UiStyles<'_>,
+    ) -> Vec<Line<'static>> {
+        let Some(prompt) = active_exit_plan_prompt(state) else {
+            self.pending_plan = None;
+            return Vec::new();
+        };
+        let key = pending_plan_projection_key(prompt, width, styles, state);
+        if let Some(cache) = self.pending_plan.as_ref()
+            && cache.key == key
+        {
+            return cache.lines.clone();
+        }
+        let lines = crate::presentation::request::exit_plan_pending_history_lines(
+            prompt,
+            width,
+            state.ui.display_settings.syntax_highlighting,
+            styles,
+        );
+        self.pending_plan = Some(PendingPlanProjectionCache {
+            key,
+            lines: lines.clone(),
+        });
+        lines
+    }
+}
+
+fn pending_plan_projection_key(
+    prompt: &PermissionPromptState,
+    width: u16,
+    styles: UiStyles<'_>,
+    state: &AppState,
+) -> PendingPlanProjectionKey {
+    PendingPlanProjectionKey {
+        request_id: prompt.request_id.clone(),
+        detail_hash: pending_plan_detail_hash(prompt),
+        width,
+        theme_hash: styles.theme_hash(),
+        syntax_highlighting: state.ui.display_settings.syntax_highlighting,
+    }
+}
+
+fn pending_plan_detail_hash(prompt: &PermissionPromptState) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    if let PermissionDetail::ExitPlanMode {
+        outcome,
+        plan,
+        plan_file_path,
+        allowed_prompts,
+    } = &prompt.detail
+    {
+        outcome.hash(&mut hasher);
+        plan.hash(&mut hasher);
+        plan_file_path.hash(&mut hasher);
+        allowed_prompts.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[cfg(test)]

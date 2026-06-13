@@ -127,6 +127,7 @@ impl AttachmentGenerator for PlanModeExitGenerator {
         let attachment = PlanModeExitAttachment {
             plan_file_path: plan_file_path_string(ctx),
             plan_exists: ctx.plan_exists,
+            outcome: ctx.pending_plan_mode_exit_outcome,
         };
         let text = coco_context::render_plan_mode_exit_reminder(&attachment);
         Ok(Some(SystemReminder::new(

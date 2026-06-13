@@ -49,6 +49,7 @@ fn exit_plan_mode_request(id: &str) -> ToolPermissionRequest {
         tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
         description: "Exit plan mode?".into(),
         input: serde_json::json!({
+            "outcome": "implementation_plan",
             "plan": "# Plan\n\n- Change the thing",
             "planFilePath": "/tmp/plan.md",
             "allowedPrompts": [{"tool": "Bash", "prompt": "cargo test"}]
@@ -240,6 +241,23 @@ fn exit_plan_mode_choices_include_clear_context_and_bypass_when_available() {
     );
     assert!(choices[0].label.contains("clear context"));
     assert!(choices[0].label.contains("bypass permissions"));
+}
+
+#[test]
+fn exit_plan_mode_no_plan_choices_are_yes_no_only() {
+    let choices = build_exit_plan_mode_no_plan_choices();
+    let values: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
+    assert_eq!(values, vec!["yes-default-keep-context", "no"]);
+    assert_eq!(choices[0].label, "Yes, exit plan mode");
+    assert_eq!(choices[1].label, "No, keep planning");
+    assert!(choices.iter().all(|choice| {
+        !choice.label.contains("edit")
+            && !choice
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .contains("implementation")
+    }));
 }
 
 #[tokio::test]

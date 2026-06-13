@@ -80,6 +80,7 @@ fn tool_display_data_serializes_apply_patch_preview() {
 #[test]
 fn tool_display_data_serializes_exit_plan_mode_result() {
     let data = ToolDisplayData::ExitPlanModeResult(ExitPlanModeResult {
+        outcome: ExitPlanModeOutcome::ImplementationPlan,
         plan: "# Plan\n- step".to_string(),
         file_path: Some("/tmp/session-plan.md".to_string()),
         awaiting_leader_approval: false,
@@ -93,7 +94,8 @@ fn tool_display_data_serializes_exit_plan_mode_result() {
         value,
         serde_json::json!({
             "kind": "exit_plan_mode_result",
-            "data": {
+                "data": {
+                "outcome": "implementation_plan",
                 "plan": "# Plan\n- step",
                 "filePath": "/tmp/session-plan.md",
                 "awaitingLeaderApproval": false,
@@ -106,6 +108,29 @@ fn tool_display_data_serializes_exit_plan_mode_result() {
         serde_json::from_value::<ToolDisplayData>(value).unwrap(),
         data
     );
+}
+
+#[test]
+fn exit_plan_mode_result_distinguishes_no_plan_notice() {
+    let no_plan = ExitPlanModeResult {
+        outcome: ExitPlanModeOutcome::NoImplementationPlan,
+        plan: "User asked for a read-only explanation.".to_string(),
+        file_path: Some("/tmp/session-plan.md".to_string()),
+        awaiting_leader_approval: false,
+        is_agent: false,
+        plan_was_edited: false,
+    };
+    let plan = ExitPlanModeResult {
+        outcome: ExitPlanModeOutcome::ImplementationPlan,
+        plan: "# Plan\n- Update code".to_string(),
+        file_path: Some("/tmp/session-plan.md".to_string()),
+        awaiting_leader_approval: false,
+        is_agent: false,
+        plan_was_edited: false,
+    };
+
+    assert!(!no_plan.has_implementation_plan());
+    assert!(plan.has_implementation_plan());
 }
 
 #[test]

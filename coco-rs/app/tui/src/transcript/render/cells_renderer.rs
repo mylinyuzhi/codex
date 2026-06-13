@@ -409,6 +409,7 @@ impl<'a> CellsRenderer<'a> {
             styles: self.styles,
             width: self.width,
             syntax_highlighting: self.syntax_highlighting,
+            plan_editor_hint: self.plan_editor_hint(),
             expand_hint: self.expand_hint(),
             expanded: false,
         }
@@ -425,6 +426,19 @@ impl<'a> CellsRenderer<'a> {
             })
             .unwrap_or_else(|| "ctrl+o".to_string());
         format!("({chord} to expand)")
+    }
+
+    fn plan_editor_hint(&self) -> String {
+        let chord = self
+            .kb_handle
+            .and_then(|handle| {
+                handle.display_for(
+                    &coco_keybindings::KeybindingAction::AppPlanEditor,
+                    crate::keybinding_bridge::KeybindingContext::Chat,
+                )
+            })
+            .unwrap_or_else(|| "ctrl+g".to_string());
+        format!("{chord} to edit")
     }
 
     pub(crate) fn thinking_toggle_hint(&self) -> String {
