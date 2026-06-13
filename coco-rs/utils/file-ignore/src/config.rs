@@ -22,6 +22,18 @@ pub struct IgnoreConfig {
     /// Default: `true`
     pub respect_ignore: bool,
 
+    /// Whether to respect `.agentignore` files (agent-level exclusions).
+    ///
+    /// `.agentignore` uses gitignore syntax but is honored **independently**
+    /// of [`Self::respect_gitignore`] / [`Self::respect_ignore`] — it stays
+    /// in force even in the Glob tool's `--no-ignore` discovery mode. This is
+    /// the "hide from the AI agent" mechanism for checked-in files (secrets,
+    /// fixtures, generated artefacts) that the user wants kept out of the
+    /// model's view without affecting git tooling.
+    ///
+    /// Default: `true`
+    pub respect_agentignore: bool,
+
     /// Whether to include hidden files (dotfiles).
     ///
     /// When `false`, files and directories starting with `.` are excluded
@@ -50,6 +62,7 @@ impl Default for IgnoreConfig {
         Self {
             respect_gitignore: true,
             respect_ignore: true,
+            respect_agentignore: true,
             include_hidden: false,
             follow_links: false,
             custom_excludes: Vec::new(),
@@ -63,11 +76,28 @@ impl IgnoreConfig {
         Self::default()
     }
 
-    /// Create a config that ignores all ignore files (show everything).
+    /// Create a config that ignores all ignore files (show everything),
+    /// including `.agentignore`.
     pub fn ignoring_none() -> Self {
         Self {
             respect_gitignore: false,
             respect_ignore: false,
+            respect_agentignore: false,
+            include_hidden: true,
+            follow_links: false,
+            custom_excludes: Vec::new(),
+        }
+    }
+
+    /// Glob-tool discovery config: matches the TS reference's
+    /// `--no-ignore --hidden` (ignore `.gitignore` / `.ignore`, show hidden)
+    /// while keeping `.agentignore` in force so agent-hidden files stay hidden
+    /// even during broad file discovery.
+    pub fn for_glob_discovery() -> Self {
+        Self {
+            respect_gitignore: false,
+            respect_ignore: false,
+            respect_agentignore: true,
             include_hidden: true,
             follow_links: false,
             custom_excludes: Vec::new(),
@@ -83,6 +113,12 @@ impl IgnoreConfig {
     /// Builder method: set whether to respect `.ignore` files.
     pub fn with_ignore(mut self, respect: bool) -> Self {
         self.respect_ignore = respect;
+        self
+    }
+
+    /// Builder method: set whether to respect `.agentignore` files.
+    pub fn with_agentignore(mut self, respect: bool) -> Self {
+        self.respect_agentignore = respect;
         self
     }
 

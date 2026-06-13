@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
+use coco_config::RoleSlots;
 use coco_config::RuntimeConfig;
 use coco_config::RuntimeOverrides;
 use coco_config::RuntimePublisher;
@@ -15,6 +16,7 @@ use coco_config::settings::SettingsWithSource;
 use coco_sandbox::EnforcementLevel;
 use coco_sandbox::SandboxState;
 use coco_types::Feature;
+use coco_types::ProviderModelSelection;
 use coco_types::SandboxMode;
 use tempfile::TempDir;
 
@@ -31,8 +33,11 @@ fn settings_with(merged: Settings) -> SettingsWithSource {
 fn build_test_runtime(mut merged: Settings) -> (TempDir, RuntimeConfig) {
     // Multi-LLM SDK has no implicit Main fallback — sandbox tests
     // don't care about the model, but the build now requires one.
-    if merged.model.is_none() && merged.models.main.is_none() {
-        merged.model = Some("anthropic/claude-opus-4-7".into());
+    if merged.models.main.is_none() {
+        merged.models.main = Some(RoleSlots::new(ProviderModelSelection {
+            provider: "anthropic".into(),
+            model_id: "claude-opus-4-7".into(),
+        }));
     }
     let tmp = TempDir::new().expect("tempdir");
     let catalogs = CatalogPaths::empty_in(tmp.path());

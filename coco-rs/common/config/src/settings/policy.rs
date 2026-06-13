@@ -18,7 +18,7 @@ pub fn load_policy_settings() -> Option<Settings> {
     let managed_path = global_config::managed_settings_path();
     if managed_path.exists()
         && let Ok(content) = std::fs::read_to_string(&managed_path)
-        && let Ok(settings) = crate::jsonc::from_str::<Settings>(&content)
+        && let Ok(settings) = crate::settings::parse_settings(&content)
     {
         return Some(settings);
     }
@@ -43,6 +43,9 @@ pub fn load_policy_settings() -> Option<Settings> {
             }
         }
 
+        if crate::settings::reject_unsupported_settings_keys(&merged).is_err() {
+            return None;
+        }
         if let Ok(settings) = serde_json::from_value::<Settings>(merged) {
             return Some(settings);
         }

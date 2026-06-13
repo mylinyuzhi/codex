@@ -7,6 +7,7 @@
 //! sibling `dispatcher.test.rs`.
 
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -2919,6 +2920,41 @@ impl Drop for TempProjectDir {
     }
 }
 
+static CONFIG_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+const COCO_CONFIG_DIR_ENV: &str = "COCO_CONFIG_DIR";
+
+struct ConfigDirGuard {
+    path: std::path::PathBuf,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl Drop for ConfigDirGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => {
+                // SAFETY: SDK config tests hold CONFIG_ENV_LOCK while this
+                // guard is alive; nextest also isolates tests per process.
+                unsafe { std::env::set_var(COCO_CONFIG_DIR_ENV, value) };
+            }
+            None => {
+                // SAFETY: see set_temp_config_dir.
+                unsafe { std::env::remove_var(COCO_CONFIG_DIR_ENV) };
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn set_temp_config_dir() -> ConfigDirGuard {
+    let path = std::env::temp_dir().join(format!("coco-sdk-test-config-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&path).unwrap();
+    let previous = std::env::var_os(COCO_CONFIG_DIR_ENV);
+    // SAFETY: callers hold CONFIG_ENV_LOCK while the returned guard is alive.
+    unsafe { std::env::set_var(COCO_CONFIG_DIR_ENV, &path) };
+    ConfigDirGuard { path, previous }
+}
+
 /// Start a session pointing at the given cwd. Used by config tests so
 /// config/read + config/write resolve paths relative to the tempdir
 /// instead of the real process cwd.
@@ -2936,10 +2972,12 @@ async fn start_session_with_cwd(client: &InMemoryTransport, cwd: &std::path::Pat
 
 #[tokio::test]
 async fn config_read_returns_merged_settings_from_project_scope() {
+    let _env_lock = CONFIG_ENV_LOCK.lock().await;
+    let _config_dir = set_temp_config_dir();
     let tmp = TempProjectDir::new();
     // Pre-populate a project settings file.
     let project_settings = tmp.path.join(".coco/settings.json");
-    std::fs::write(&project_settings, r#"{"auto_updater_status":"enabled"}"#).unwrap();
+    std::fs::write(&project_settings, r#"{"language":"en"}"#).unwrap();
 
     let (server_task, client) = spawn_server().await;
     start_session_with_cwd(&client, &tmp.path).await;
@@ -2960,7 +2998,7 @@ async fn config_read_returns_merged_settings_from_project_scope() {
                 "per-source map should include 'project' since we wrote a project settings file"
             );
             assert_eq!(
-                sources["project"]["auto_updater_status"], "enabled",
+                sources["project"]["language"], "en",
                 "project source should round-trip our written value"
             );
         }
@@ -2973,6 +3011,8 @@ async fn config_read_returns_merged_settings_from_project_scope() {
 
 #[tokio::test]
 async fn config_write_project_scope_persists_to_disk() {
+    let _env_lock = CONFIG_ENV_LOCK.lock().await;
+    let _config_dir = set_temp_config_dir();
     let tmp = TempProjectDir::new();
     let (server_task, client) = spawn_server().await;
     start_session_with_cwd(&client, &tmp.path).await;
@@ -2983,8 +3023,8 @@ async fn config_write_project_scope_persists_to_disk() {
             2,
             "config/value/write",
             serde_json::json!({
-                "key": "auto_updater_status",
-                "value": "disabled",
+                "key": "language",
+                "value": "en",
                 "scope": "project",
             }),
         ))
@@ -3000,7 +3040,7 @@ async fn config_write_project_scope_persists_to_disk() {
     let settings_path = tmp.path.join(".coco/settings.json");
     let contents = std::fs::read_to_string(&settings_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-    assert_eq!(parsed["auto_updater_status"], "disabled");
+    assert_eq!(parsed["language"], "en");
 
     drop(client);
     server_task.await.unwrap();
@@ -3008,6 +3048,8 @@ async fn config_write_project_scope_persists_to_disk() {
 
 #[tokio::test]
 async fn config_write_local_scope_persists_to_separate_file() {
+    let _env_lock = CONFIG_ENV_LOCK.lock().await;
+    let _config_dir = set_temp_config_dir();
     let tmp = TempProjectDir::new();
     let (server_task, client) = spawn_server().await;
     start_session_with_cwd(&client, &tmp.path).await;
@@ -3017,8 +3059,8 @@ async fn config_write_local_scope_persists_to_separate_file() {
             2,
             "config/value/write",
             serde_json::json!({
-                "key": "theme",
-                "value": "dark",
+                "key": "language",
+                "value": "en",
                 "scope": "local",
             }),
         ))
@@ -3039,7 +3081,7 @@ async fn config_write_local_scope_persists_to_separate_file() {
     );
     let contents = std::fs::read_to_string(&local_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
-    assert_eq!(parsed["theme"], "dark");
+    assert_eq!(parsed["language"], "en");
 
     drop(client);
     server_task.await.unwrap();
@@ -3077,7 +3119,52 @@ async fn config_write_invalid_scope_errors() {
 }
 
 #[tokio::test]
+async fn config_write_unknown_setting_key_errors_without_writing() {
+    let _env_lock = CONFIG_ENV_LOCK.lock().await;
+    let _config_dir = set_temp_config_dir();
+    let tmp = TempProjectDir::new();
+    let (server_task, client) = spawn_server().await;
+    start_session_with_cwd(&client, &tmp.path).await;
+
+    client
+        .send(req(
+            2,
+            "config/value/write",
+            serde_json::json!({
+                "key": "theme",
+                "value": "dark",
+                "scope": "project",
+            }),
+        ))
+        .await
+        .unwrap();
+    let reply = client.recv().await.unwrap().unwrap();
+    match reply {
+        JsonRpcMessage::Error(e) => {
+            assert_eq!(e.code, error_codes::INVALID_PARAMS);
+            assert!(e.message.contains("theme"), "got: {}", e.message);
+            assert!(
+                e.message.contains("not a supported settings key"),
+                "got: {}",
+                e.message
+            );
+        }
+        other => panic!("expected Error, got {other:?}"),
+    }
+
+    assert!(
+        !tmp.path.join(".coco/settings.json").exists(),
+        "invalid settings key must not be persisted"
+    );
+
+    drop(client);
+    server_task.await.unwrap();
+}
+
+#[tokio::test]
 async fn config_write_nested_key_creates_intermediate_objects() {
+    let _env_lock = CONFIG_ENV_LOCK.lock().await;
+    let _config_dir = set_temp_config_dir();
     let tmp = TempProjectDir::new();
     let (server_task, client) = spawn_server().await;
     start_session_with_cwd(&client, &tmp.path).await;
@@ -3113,6 +3200,8 @@ async fn config_write_nested_key_creates_intermediate_objects() {
 
 #[tokio::test]
 async fn config_write_then_read_roundtrip() {
+    let _env_lock = CONFIG_ENV_LOCK.lock().await;
+    let _config_dir = set_temp_config_dir();
     // Write a value at project scope, then read it back via
     // config/read and verify it appears in the per-source map.
     let tmp = TempProjectDir::new();
@@ -3124,8 +3213,8 @@ async fn config_write_then_read_roundtrip() {
             2,
             "config/value/write",
             serde_json::json!({
-                "key": "auto_updater_status",
-                "value": "disabled",
+                "key": "language",
+                "value": "en",
                 "scope": "project",
             }),
         ))
@@ -3140,10 +3229,7 @@ async fn config_write_then_read_roundtrip() {
     let reply = client.recv().await.unwrap().unwrap();
     match reply {
         JsonRpcMessage::Response(r) => {
-            assert_eq!(
-                r.result["sources"]["project"]["auto_updater_status"],
-                "disabled"
-            );
+            assert_eq!(r.result["sources"]["project"]["language"], "en");
         }
         other => panic!("expected Response, got {other:?}"),
     }

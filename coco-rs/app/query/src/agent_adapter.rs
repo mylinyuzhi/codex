@@ -73,14 +73,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
         config: AgentQueryConfig,
     ) -> Result<AgentQueryResult, coco_error::BoxedError> {
         // Resolve the subagent's permission mode. Parent is expected to
-        // have applied the inheritance rule before calling; we just
-        // parse/fall back.
+        // have applied the inheritance rule before calling; default when
+        // unset.
         let permission_mode = config
             .permission_mode
-            .as_deref()
-            .and_then(|s| {
-                serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
-            })
             .unwrap_or(coco_types::PermissionMode::Default);
         let model_selection = effective_model_selection(&config);
         let engine_model_id = model_selection.display_model_id().unwrap_or(config.model);
@@ -140,11 +136,30 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // we just thread the categorical level (no budget, default
             // options) and let the downstream apply model-relative
             // overrides where they exist.
-            thinking_level: config.effort.map(|effort| ThinkingLevel {
-                effort,
-                budget_tokens: None,
-                options: std::collections::HashMap::new(),
-            }),
+            // TS parity (`runAgent.ts:682-684`): a non-fork subagent runs
+            // with thinking DISABLED — only forks (which inherit the
+            // parent's exact prompt + tool pool) keep the parent's
+            // reasoning. An explicit per-spawn `effort` override still
+            // wins. coco detects "fork" via `fork_label` (memory/dream/
+            // summary forks) or a non-empty inherited history (the
+            // user-facing `COCO_FORK_SUBAGENT` path).
+            thinking_level: {
+                let is_fork =
+                    config.fork_label.is_some() || !config.fork_context_messages.is_empty();
+                match config.effort {
+                    Some(effort) => Some(ThinkingLevel {
+                        effort,
+                        budget_tokens: None,
+                        options: std::collections::HashMap::new(),
+                    }),
+                    None if !is_fork => Some(ThinkingLevel {
+                        effort: coco_types::ReasoningEffort::Off,
+                        budget_tokens: None,
+                        options: std::collections::HashMap::new(),
+                    }),
+                    None => None,
+                }
+            },
             fast_mode: false,
             session_id: config.session_id.unwrap_or_default(),
             project_dir: None,

@@ -82,18 +82,12 @@ pub struct ForkedAgentOverrides {
     /// `None`, dispatcher allocates a fresh token. Speculation /
     /// compact thread their own so user `Esc` aborts the fork.
     pub abort: Option<CancellationToken>,
-    /// Pre-cloned `FileReadState` to install on the fork's
-    /// `ToolUseContext`. When `None`, dispatcher clones from the
-    /// parent at fork time. Pre-supplied is faster when the caller
-    /// already has a clone in scope (sessionMemory does).
-    pub file_read_state: Option<Arc<tokio::sync::RwLock<coco_context::FileReadState>>>,
 }
 
 impl std::fmt::Debug for ForkedAgentOverrides {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ForkedAgentOverrides")
             .field("abort", &self.abort.is_some())
-            .field("file_read_state", &self.file_read_state.is_some())
             .finish()
     }
 }
@@ -243,10 +237,6 @@ pub struct ForkedAgentResult {
     pub messages: Vec<Arc<Message>>,
     /// Accumulated token usage across the fork's turns.
     pub total_usage: TokenUsage,
-    /// Stop reason from the model on the last turn (e.g. `end_turn`,
-    /// `tool_use`, `max_tokens`). `None` when the fork errored or
-    /// was cancelled.
-    pub stop_reason: Option<String>,
 }
 
 /// Async trait for dispatching a one-shot forked query.

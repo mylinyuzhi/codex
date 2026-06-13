@@ -29,7 +29,7 @@ async def test_text_arrives_incrementally(live_deepseek, isolated_cwd) -> None:
                 # Ask for ~25-50 short tokens so we reliably see more than
                 # one delta even on a fast provider.
                 "List the numbers 1 through 20 separated by commas; nothing else.",
-                model=live_deepseek.model,
+                    models_main=live_deepseek.models_main,
                 cwd=str(isolated_cwd),
                 max_turns=1,
             ):

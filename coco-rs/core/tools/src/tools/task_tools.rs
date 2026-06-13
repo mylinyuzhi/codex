@@ -485,6 +485,15 @@ impl Tool for TaskCreateTool {
     fn is_concurrency_safe(&self, _input: &TaskCreateInput) -> bool {
         true
     }
+    // Defer policy for the Task*/Todo family is set explicitly here (not via
+    // the trait default) so it stays greppable. Deliberate divergence from the
+    // TS reference, which defers all of these: coco-rs keeps the high-frequency
+    // plan/todo tools (Create/Get/List/Update/Stop, TodoWrite) always-loaded so
+    // weak non-Anthropic models don't need a ToolSearch round-trip before their
+    // first call. Only the deprecated TaskOutput defers.
+    fn should_defer(&self) -> bool {
+        false
+    }
     fn search_hint(&self) -> Option<&str> {
         Some(TASK_CREATE_SEARCH_HINT)
     }
@@ -607,6 +616,9 @@ impl Tool for TaskGetTool {
     fn is_concurrency_safe(&self, _input: &TaskGetInput) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        false
+    }
     fn search_hint(&self) -> Option<&str> {
         Some(TASK_GET_SEARCH_HINT)
     }
@@ -726,6 +738,9 @@ impl Tool for TaskListTool {
     }
     fn is_concurrency_safe(&self, _input: &TaskListInput) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        false
     }
     fn search_hint(&self) -> Option<&str> {
         Some(TASK_LIST_SEARCH_HINT)
@@ -901,6 +916,9 @@ impl Tool for TaskUpdateTool {
 
     fn is_concurrency_safe(&self, _input: &TaskUpdateInput) -> bool {
         true
+    }
+    fn should_defer(&self) -> bool {
+        false
     }
     fn search_hint(&self) -> Option<&str> {
         Some(TASK_UPDATE_SEARCH_HINT)
@@ -1290,6 +1308,9 @@ impl Tool for TaskStopTool {
     fn is_concurrency_safe(&self, _input: &TaskStopInput) -> bool {
         true
     }
+    fn should_defer(&self) -> bool {
+        false
+    }
     fn search_hint(&self) -> Option<&str> {
         Some("stop a running background task or shell")
     }
@@ -1477,6 +1498,9 @@ impl Tool for TaskOutputTool {
     fn is_concurrency_safe(&self, _input: &TaskOutputInput) -> bool {
         true
     }
+    // The lone deferred Task tool: deprecated + low-frequency, so it stays
+    // behind ToolSearch (matches TS `shouldDefer: true`). See the family defer
+    // policy on `TaskCreateTool::should_defer`.
     fn should_defer(&self) -> bool {
         true
     }
@@ -1862,6 +1886,9 @@ impl Tool for TodoWriteTool {
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         !ctx.features.enabled(Feature::TaskV2)
+    }
+    fn should_defer(&self) -> bool {
+        false
     }
     fn search_hint(&self) -> Option<&str> {
         Some("write the per-agent todo checklist for tracking work")

@@ -124,8 +124,8 @@ fn builtin_gpt_and_gemini_models_have_base_instructions() {
             .base_instructions
             .as_deref()
             .unwrap()
-            .starts_with("You are Codex"),
-        "gpt prompt should preserve Codex identity"
+            .starts_with("You are Coco"),
+        "gpt prompt should carry the unified Coco identity"
     );
     assert!(
         builtin["gemini-3.1-pro-preview"]
@@ -133,9 +133,9 @@ fn builtin_gpt_and_gemini_models_have_base_instructions() {
             .as_deref()
             .unwrap()
             .starts_with(
-                "You are an interactive CLI agent specializing in software engineering tasks."
+                "You are Coco, an interactive CLI agent specializing in software engineering tasks."
             ),
-        "gemini prompt should match the official Gemini CLI preamble"
+        "gemini prompt should carry the unified Coco identity"
     );
 }
 

@@ -94,11 +94,11 @@ class LiveTarget:
     """A resolved provider + model + binary, ready to drive a coco subprocess."""
 
     binary_path: str
-    model: ModelSpec
+    models_main: ModelSpec
 
     @property
     def cli_args(self) -> list[str]:
-        return ["--model", self.model.cli_arg]
+        return ["--models.main", self.models_main.cli_arg]
 
 
 def deepseek_target(model: ModelSpec) -> LiveTarget:
@@ -127,7 +127,7 @@ def deepseek_target(model: ModelSpec) -> LiveTarget:
     binary = _resolve_coco_binary()
     if not binary:
         _skip("`coco` binary not found on PATH or COCO_PATH; build coco-rs first")
-    return LiveTarget(binary_path=binary, model=model)
+    return LiveTarget(binary_path=binary, models_main=model)
 
 
 @pytest.fixture
@@ -146,3 +146,15 @@ def isolated_cwd() -> Iterator[Path]:
     """Per-test tempdir; tools that touch the filesystem stay sandboxed there."""
     with tempfile.TemporaryDirectory(prefix="coco-sdk-e2e-") as tmp:
         yield Path(tmp)
+
+
+@pytest.fixture(autouse=True)
+def isolated_coco_config_dir(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Per-test user config dir so e2e does not read the developer's ~/.coco."""
+    with tempfile.TemporaryDirectory(
+        prefix="coco-sdk-config-",
+        ignore_cleanup_errors=True,
+    ) as tmp:
+        config_dir = Path(tmp)
+        monkeypatch.setenv("COCO_CONFIG_DIR", str(config_dir))
+        yield config_dir

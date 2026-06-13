@@ -31,7 +31,7 @@ async def test_pre_tool_use_hook_fires(live_deepseek, isolated_cwd) -> None:
             "Use the Read tool on the file 'marker.txt' in the current"
             " directory, then reply with the lucky number it contains."
         ),
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         hooks=[record_pre_tool_use],
         permission_mode="auto",  # auto-approve so the test doesn't hang

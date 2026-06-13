@@ -98,7 +98,6 @@ fn app_toggle_team_roster_opens_when_a_teammate_is_present() {
             status: crate::state::SubagentStatus::Running,
             color: None,
             team_name: Some("my-team".into()),
-            tool_use_id: None,
             started_at_ms: None,
             last_tool_name: None,
             tool_count: 0,

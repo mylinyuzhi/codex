@@ -55,8 +55,6 @@ pub struct Settings {
 
     // === Model ===
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub available_models: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_level: Option<ThinkingLevel>,
@@ -650,8 +648,29 @@ fn default_true() -> bool {
 
 /// Load settings from a JSON string.
 pub fn parse_settings(json: &str) -> crate::Result<Settings> {
-    let settings: Settings = crate::jsonc::from_str(json)?;
+    let value = crate::jsonc::parse_value(json)?;
+    reject_unsupported_settings_keys(&value)?;
+    let settings: Settings = serde_json::from_value(value)?;
     Ok(settings)
+}
+
+pub(super) fn reject_unsupported_settings_keys(value: &serde_json::Value) -> crate::Result<()> {
+    let Some(root) = value.as_object() else {
+        return Ok(());
+    };
+    for key in root.keys() {
+        if key == "model" {
+            return Err(crate::ConfigError::generic(
+                "`model` is not a supported settings key; use `models.main`",
+            ));
+        }
+        if !validation::is_setting_supported(key) {
+            return Err(crate::ConfigError::generic(format!(
+                "`{key}` is not a supported settings key"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Load and merge settings using the default user / managed paths
@@ -805,6 +824,8 @@ fn load_and_merge(
         .with_ctx_lazy(|| format!("failed to read settings file: {}", path.display()))?;
     let mut value = crate::jsonc::parse_value(&contents)
         .with_ctx_lazy(|| format!("failed to parse JSONC in settings file: {}", path.display()))?;
+    reject_unsupported_settings_keys(&value)
+        .with_ctx_lazy(|| format!("invalid settings file: {}", path.display()))?;
     // Strip malformed permission rules per-source (TS validation.ts) so one bad
     // rule can't poison the merged set, and warn so the user sees why a rule had
     // no effect instead of it silently passing through verbatim.

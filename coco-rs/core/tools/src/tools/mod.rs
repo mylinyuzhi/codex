@@ -1,11 +1,13 @@
 pub mod agent;
 pub mod apply_patch;
 pub mod ask_user_question;
+pub(crate) mod background_task;
 pub mod bash;
 pub mod bash_advanced;
 pub mod config;
 pub mod edit;
 pub mod edit_utils;
+pub(crate) mod file_filter;
 pub mod glob;
 pub mod grep;
 pub mod lsp;

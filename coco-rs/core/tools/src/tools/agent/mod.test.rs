@@ -1790,8 +1790,8 @@ async fn test_agent_tool_isolation_falls_back_to_definition() {
     let captured = capturing.last_request.lock().await;
     let req = captured.as_ref().expect("spawn request must be captured");
     assert_eq!(
-        req.isolation.as_deref(),
-        Some("worktree"),
+        req.isolation,
+        Some(coco_types::AgentIsolation::Worktree),
         "definition isolation must flow into the spawn request when the param is omitted"
     );
 }

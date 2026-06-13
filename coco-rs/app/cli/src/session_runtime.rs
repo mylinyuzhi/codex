@@ -2218,6 +2218,17 @@ impl SessionRuntime {
         app_state_override: Option<Arc<RwLock<ToolAppState>>>,
         persistence: EnginePersistenceMode,
     ) -> QueryEngine {
+        // Fork isolation for the file-read dedup cache: when a fork sets
+        // `clone_file_read_state` (default true for every framework fork),
+        // give the child a *deep clone* of the parent's `FileReadState`
+        // instead of the shared Arc `wire_engine` installs. The fork then
+        // sees the parent's already-seen ids (cache parity preserved) but
+        // its own reads/edits can't pollute the parent's cache. Mirrors TS
+        // `createSubagentContext`, which clones `readFileState` per fork.
+        let isolate_file_read_state = config
+            .fork_isolation
+            .as_ref()
+            .is_some_and(|iso| iso.clone_file_read_state);
         let engine = QueryEngine::new(
             config,
             self.model_runtimes.clone(),
@@ -2225,8 +2236,14 @@ impl SessionRuntime {
             cancel,
             Some(self.hook_registry.clone()),
         );
-        self.wire_engine(engine, app_state_override, persistence)
-            .await
+        let mut engine = self
+            .wire_engine(engine, app_state_override, persistence)
+            .await;
+        if isolate_file_read_state {
+            let snapshot = self.file_read_state.read().await.clone();
+            engine = engine.with_file_read_state(Arc::new(RwLock::new(snapshot)));
+        }
+        engine
     }
 
     /// Install every per-session subsystem on a pre-built engine. The

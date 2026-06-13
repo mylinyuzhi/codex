@@ -92,8 +92,8 @@ fn test_write_user_setting_parse_error_preserves_existing_file() {
 
     let err = write_user_setting_at_path(
         &path,
-        "theme",
-        serde_json::Value::String("dark".to_string()),
+        "language",
+        serde_json::Value::String("en".to_string()),
     )
     .expect_err("invalid JSONC must not be overwritten");
 
@@ -110,7 +110,7 @@ fn test_write_user_setting_to_path_rejects_invalid_json_without_overwriting_file
     std::fs::write(&path, original).expect("write settings");
 
     let err =
-        write_user_setting_to_path(&path, "theme", json!("dark")).expect_err("invalid settings");
+        write_user_setting_to_path(&path, "language", json!("en")).expect_err("invalid settings");
 
     assert!(
         err.to_string().contains("jsonc error"),
@@ -127,10 +127,12 @@ fn test_write_user_setting_to_path_preserves_siblings_for_dotted_keys() {
     std::fs::write(
         &path,
         serde_json::to_string_pretty(&json!({
-            "theme": "dark",
+            "language": "en",
             "sandbox": {
                 "mode": "workspace-write",
-                "network": "enabled"
+                "network": {
+                    "mode": "full"
+                }
             }
         }))
         .expect("serialize settings"),
@@ -138,7 +140,7 @@ fn test_write_user_setting_to_path_preserves_siblings_for_dotted_keys() {
     .expect("write settings");
 
     let written =
-        write_user_setting_to_path(&path, "sandbox.mode", json!("read-only")).expect("write");
+        write_user_setting_to_path(&path, "sandbox.mode", json!("read_only")).expect("write");
 
     assert_eq!(written, path);
     let updated = std::fs::read_to_string(&path).expect("read settings");
@@ -146,10 +148,12 @@ fn test_write_user_setting_to_path_preserves_siblings_for_dotted_keys() {
     assert_eq!(
         value,
         json!({
-            "theme": "dark",
+            "language": "en",
             "sandbox": {
-                "mode": "read-only",
-                "network": "enabled"
+                "mode": "read_only",
+                "network": {
+                    "mode": "full"
+                }
             }
         })
     );

@@ -41,6 +41,7 @@ fn single_running_pill_uses_at_prefix() {
         pills: vec![PillEntry {
             label: "alex",
             is_idle: false,
+            color: None,
         }],
     };
     let out = render(view, 80, 1);
@@ -54,14 +55,17 @@ fn multiple_pills_join_with_single_space() {
             PillEntry {
                 label: "alex",
                 is_idle: false,
+                color: None,
             },
             PillEntry {
                 label: "blake",
                 is_idle: false,
+                color: None,
             },
             PillEntry {
                 label: "casey",
                 is_idle: true,
+                color: None,
             },
         ],
     };
@@ -76,6 +80,7 @@ fn overflow_emits_plus_n_more_tail() {
             .map(|_| PillEntry {
                 label: "agentname",
                 is_idle: false,
+                color: None,
             })
             .collect(),
     };
@@ -91,6 +96,7 @@ fn narrow_width_keeps_first_pill_visible() {
         pills: vec![PillEntry {
             label: "tiny",
             is_idle: false,
+            color: None,
         }],
     };
     // `@tiny` is 5 cols; 20 cols is plenty even with overflow reserve

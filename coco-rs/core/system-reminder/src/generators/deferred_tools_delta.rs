@@ -11,7 +11,10 @@
 //!    `deferred_tools_delta` attachments in history.
 //!
 //! Text format: two optional sections joined by `"\n\n"`, each a header
-//! line followed by newline-joined entries.
+//! line followed by newline-joined entries. The "added" header spells out
+//! the ToolSearch round-trip explicitly — schemas are unloaded and a
+//! direct call fails — so weaker (non-Anthropic) models don't read the
+//! bare name list as "callable now" and invoke a deferred tool blind.
 
 use async_trait::async_trait;
 
@@ -58,7 +61,7 @@ fn render(info: &DeferredToolsDeltaInfo) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(2);
     if !info.added_lines.is_empty() {
         parts.push(format!(
-            "The following deferred tools are now available by name via ToolSearch. These tools are not callable until you load them with ToolSearch:\n{}",
+            "The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query \"select:<name>[,<name>...]\" to load tool schemas before calling them:\n{}",
             info.added_lines.join("\n")
         ));
     }

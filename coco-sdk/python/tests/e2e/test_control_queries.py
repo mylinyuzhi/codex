@@ -22,7 +22,7 @@ async def test_mcp_status_returns_empty_roster(live_deepseek, isolated_cwd) -> N
     """
     async with CocoClient(
         prompt="reply with: ok",
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         max_turns=1,
     ) as client:
@@ -46,7 +46,7 @@ async def test_context_usage_returns_token_breakdown(live_deepseek, isolated_cwd
     """
     async with CocoClient(
         prompt="Reply with the single word: ok",
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         max_turns=1,
     ) as client:

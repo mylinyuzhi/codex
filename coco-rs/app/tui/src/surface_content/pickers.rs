@@ -39,8 +39,9 @@ pub(super) fn agents_dialog_content(
     a: &AgentsDialogState,
     subagents: &[SubagentInstance],
     styles: UiStyles<'_>,
+    now_ms: i64,
 ) -> (String, String, Color) {
-    picker::agents_dialog_content(a, subagents, styles)
+    picker::agents_dialog_content(a, subagents, styles, now_ms)
 }
 
 pub(super) fn permissions_editor_content(

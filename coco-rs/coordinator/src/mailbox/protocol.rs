@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
+use coco_types::BackendType;
 use coco_types::PermissionBehavior;
 use coco_types::PermissionMode;
 use coco_types::PermissionRule;
@@ -548,7 +549,7 @@ pub enum ProtocolMessage {
             default,
             skip_serializing_if = "Option::is_none"
         )]
-        backend_type: Option<String>,
+        backend_type: Option<BackendType>,
     },
     ShutdownRejected {
         #[serde(rename = "requestId")]
@@ -970,14 +971,14 @@ pub fn create_shutdown_approved_message(
     request_id: &str,
     from: &str,
     pane_id: Option<&str>,
-    backend_type: Option<&str>,
+    backend_type: Option<BackendType>,
 ) -> String {
     let msg = ProtocolMessage::ShutdownApproved {
         request_id: request_id.to_string(),
         from: from.to_string(),
         timestamp: chrono::Utc::now().to_rfc3339(),
         pane_id: pane_id.filter(|s| !s.is_empty()).map(String::from),
-        backend_type: backend_type.filter(|s| !s.is_empty()).map(String::from),
+        backend_type,
     };
     serde_json::to_string(&msg).unwrap_or_default()
 }

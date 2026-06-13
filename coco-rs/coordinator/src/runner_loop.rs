@@ -91,7 +91,7 @@ pub struct AgentQueryConfig {
     pub mcp_servers: Vec<String>,
     pub model_role: Option<coco_types::ModelRole>,
     pub model_selection: coco_types::LlmModelSelection,
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<coco_types::PermissionMode>,
     pub extra_permission_rules: Vec<coco_types::PermissionRule>,
     pub live_permission_rules: Option<Arc<RwLock<Vec<coco_types::PermissionRule>>>>,
     pub live_permission_mode: Option<Arc<RwLock<coco_types::PermissionMode>>>,
@@ -394,7 +394,7 @@ pub async fn run_in_process_teammate(
             mcp_servers: config.mcp_servers.clone(),
             model_role: config.model_role,
             model_selection: config.model_selection.clone(),
-            permission_mode: Some(permission_mode_wire(permission_mode)),
+            permission_mode: Some(permission_mode),
             extra_permission_rules: Vec::new(),
             live_permission_rules: Some(live_permission_rules),
             live_permission_mode: Some(live_permission_mode),
@@ -1236,13 +1236,6 @@ async fn claim_first_available_task(
     }
 
     None
-}
-
-fn permission_mode_wire(mode: coco_types::PermissionMode) -> String {
-    serde_json::to_value(mode)
-        .ok()
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_else(|| "default".to_string())
 }
 
 /// Read a team's `team_allowed_paths` and convert them into `Allow`

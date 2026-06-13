@@ -244,6 +244,14 @@ pub struct GeneratorContext<'a> {
     /// can emit a baseline `Today's date is <date>.` reminder. `None` (the
     /// default, e.g. in unit tests) suppresses the reminder.
     pub current_date: Option<String>,
+    /// `Some(body)` = the coordinator-mode `workerToolsContext` block
+    /// (worker tool pool + connected MCP servers), injected per-turn by
+    /// the engine when coordinator mode is active so the leader knows
+    /// which tools the workers it spawns will have. Rendered as a sibling
+    /// `# workerToolsContext` key inside the same user-context reminder
+    /// (TS `prependUserContext` one-message-multi-key shape). `None`
+    /// outside coordinator mode.
+    pub coordinator_worker_context: Option<String>,
 
     // ── Phase E (verify-plan reminder) ──
     /// True when `ExitPlanModeTool` has recorded pending plan
@@ -452,6 +460,7 @@ pub struct GeneratorContextBuilder<'a> {
     used_tokens: i64,
     new_date: Option<String>,
     current_date: Option<String>,
+    coordinator_worker_context: Option<String>,
     has_pending_plan_verification: bool,
     turns_since_plan_exit: i32,
     total_cost_usd: f64,
@@ -528,6 +537,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             used_tokens: 0,
             new_date: None,
             current_date: None,
+            coordinator_worker_context: None,
             has_pending_plan_verification: false,
             turns_since_plan_exit: 0,
             total_cost_usd: 0.0,
@@ -742,6 +752,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn current_date(mut self, d: Option<String>) -> Self {
         self.current_date = d;
+        self
+    }
+
+    pub fn coordinator_worker_context(mut self, c: Option<String>) -> Self {
+        self.coordinator_worker_context = c;
         self
     }
 
@@ -976,6 +991,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             used_tokens: self.used_tokens,
             new_date: self.new_date,
             current_date: self.current_date,
+            coordinator_worker_context: self.coordinator_worker_context,
             has_pending_plan_verification: self.has_pending_plan_verification,
             turns_since_plan_exit: self.turns_since_plan_exit,
             total_cost_usd: self.total_cost_usd,
