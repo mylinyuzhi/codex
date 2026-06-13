@@ -60,7 +60,7 @@ pub async fn apply_to_runtime(
 
 pub async fn live_allow_rules_from_sdk_state(state: &SdkServerState) -> PermissionRulesBySource {
     match state.session_runtime.read().await.as_ref() {
-        Some(rt) => rt.current_engine_config().await.allow_rules.clone(),
+        Some(rt) => rt.current_engine_config().await.allow_rules,
         None => PermissionRulesBySource::new(),
     }
 }

@@ -293,9 +293,10 @@ impl QueryEngine {
             &reminder_loaded_tools,
             &app_state_snapshot.last_announced_tools,
         );
-        // Clone the deferred list for post-emit bookkeeping — replaces
-        // `announced` with the current deferred set after emission.
-        let reminder_deferred_tools_clone = reminder_deferred_tools.clone();
+        // Hand the deferred list to post-emit bookkeeping — replaces
+        // `announced` with the current deferred set after emission. Moved
+        // (last use): the delta above already read it by reference.
+        let reminder_deferred_tools_clone = reminder_deferred_tools;
         // Diff the current agent-type set (from `SessionBootstrap`)
         // against the last-announced set on app_state.
         let reminder_current_agents: Vec<String> = self
@@ -479,7 +480,7 @@ impl QueryEngine {
             config: reminder_orchestrator.config(),
             turn_number: reminder_human_turn_number,
             agent_id: self.config.agent_id.clone(),
-            user_input: reminder_user_input.clone(),
+            user_input: reminder_user_input,
             last_human_turn_uuid: history.iter().rev().find_map(|m| match m.as_ref() {
                 Message::User(u) => Some(u.uuid),
                 _ => None,
@@ -519,8 +520,8 @@ impl QueryEngine {
             companion_name: None,
             companion_species: None,
             has_prior_companion_intro: false,
-            deferred_tools_delta: reminder_deferred_tools_delta.clone(),
-            agent_listing_delta: reminder_agent_listing_delta.clone(),
+            deferred_tools_delta: reminder_deferred_tools_delta,
+            agent_listing_delta: reminder_agent_listing_delta,
             // McpSource.instructions() returns the current per-server map;
             // engine diffs against `last_announced_mcp_instructions` to
             // produce the delta (same pattern as deferred_tools_delta).

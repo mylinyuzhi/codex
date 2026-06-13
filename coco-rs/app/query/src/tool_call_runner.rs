@@ -274,8 +274,8 @@ impl<'a> ToolCallRunner<'a> {
                     }
                 },
                 |outcome| {
-                    let ctx_entry = contexts.get(outcome.tool_use_id()).cloned();
-                    let (tool_name, is_error) = match (ctx_entry.as_ref(), outcome.error_kind()) {
+                    let ctx_entry = contexts.get(outcome.tool_use_id());
+                    let (tool_name, is_error) = match (ctx_entry, outcome.error_kind()) {
                         (Some(c), _) => (c.tool_name.clone(), outcome.error_kind().is_some()),
                         (None, _) => (
                             outcome.tool_id().to_string(),
