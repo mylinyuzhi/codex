@@ -1441,7 +1441,7 @@ impl QueryEngine {
         let compact_run_options = coco_compact::CompactRunOptions {
             context_window: self.config.context_window,
             trigger,
-            custom_prompt: effective_instructions.clone(),
+            custom_prompt: effective_instructions,
             recompaction_info,
             ..Default::default()
         };

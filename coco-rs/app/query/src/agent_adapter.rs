@@ -83,9 +83,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             })
             .unwrap_or(coco_types::PermissionMode::Default);
         let model_selection = effective_model_selection(&config);
-        let engine_model_id = model_selection
-            .display_model_id()
-            .unwrap_or_else(|| config.model.clone());
+        let engine_model_id = model_selection.display_model_id().unwrap_or(config.model);
         let initial_rule_maps = build_initial_rule_maps(&config.extra_permission_rules);
 
         let engine_config = QueryEngineConfig {
@@ -238,10 +236,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // the child side, but `narrow_with(parent)` keeps every
             // parent-side restriction.
             tool_filter: {
-                let child = ToolFilter::new(
-                    config.allowed_tools.clone(),
-                    config.disallowed_tools.clone(),
-                );
+                let child = ToolFilter::new(config.allowed_tools, config.disallowed_tools);
                 match &config.parent_tool_filter {
                     Some(parent) => child.narrow_with(parent),
                     None => child,
@@ -316,11 +311,11 @@ impl AgentQueryEngine for QueryEngineAdapter {
         });
 
         let result = if !config.fork_context_messages.is_empty() {
-            // Parent history is already shared via `Arc<Message>`; just
-            // clone the Arc-slice (cheap pointer bumps) and append the
-            // new user prompt after the inherited history.
+            // Parent history is already shared via `Arc<Message>`; move
+            // the owned Arc-slice out of `config` (last use) and append
+            // the new user prompt after the inherited history.
             let mut messages: Vec<std::sync::Arc<coco_messages::Message>> =
-                config.fork_context_messages.clone();
+                config.fork_context_messages;
             messages.push(std::sync::Arc::new(coco_messages::create_user_message(
                 prompt,
             )));
