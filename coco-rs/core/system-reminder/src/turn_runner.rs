@@ -73,6 +73,8 @@ pub struct TurnReminderInput<'a> {
     /// Explore / plan sub-agent counts referenced in the 5-phase Full prompt.
     pub explore_agent_count: i32,
     pub plan_agent_count: i32,
+    /// Whether the current turn can actually launch built-in Explore/Plan agents.
+    pub explore_plan_agents_available: bool,
     /// True during the interview-style plan workflow.
     pub is_plan_interview_phase: bool,
 
@@ -123,7 +125,8 @@ pub struct TurnReminderInput<'a> {
     pub current_date: Option<String>,
 
     // ── Verify-plan reminder ──
-    /// True when `ToolAppState::pending_plan_verification` is set.
+    /// True when TS-shaped pending plan verification exists and has not
+    /// started or completed.
     pub has_pending_plan_verification: bool,
 
     // ── Phase 1 engine-local inputs ──
@@ -225,6 +228,7 @@ pub async fn run_turn_reminders(
         phase4_variant,
         explore_agent_count,
         plan_agent_count,
+        explore_plan_agents_available,
         is_plan_interview_phase,
         app_state,
         fallback_permission_mode,
@@ -306,6 +310,7 @@ pub async fn run_turn_reminders(
         .plan_workflow(plan_workflow)
         .phase4_variant(phase4_variant)
         .agent_counts(explore_agent_count, plan_agent_count)
+        .explore_plan_agents_available(explore_plan_agents_available)
         .last_human_turn_uuid(last_human_turn_uuid)
         .user_input(user_input)
         .tools(tools)

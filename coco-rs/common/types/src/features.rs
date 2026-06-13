@@ -110,7 +110,7 @@ pub enum Feature {
     AutoMemory,
     /// Retrieval subsystem (BM25 + vector + AST + RepoMap + reranker).
     Retrieval,
-    /// Subagent / swarm spawning (`Task` tool, multi-agent orchestration).
+    /// Persistent agent teams and teammate orchestration.
     AgentTeams,
     /// Worktree tools (`EnterWorktree` / `ExitWorktree`).
     Worktree,
@@ -363,8 +363,8 @@ const FEATURES: &[FeatureSpec] = &[
         key: "agent_teams",
         stage: Stage::Experimental {
             name: "Agent Teams",
-            menu_description: "Spawn subagents and persistent teammates (Agent / TeamCreate / TeamDelete tools, /agents command)",
-            announcement: "Agent teams enabled — use /agents to inspect the catalog and Agent(...) to spawn workers.",
+            menu_description: "Create persistent teams and spawn addressable teammates (TeamCreate / TeamDelete / SendMessage plus Agent team parameters)",
+            announcement: "Agent teams enabled — use TeamCreate and Agent(...) team parameters to spawn teammates.",
         },
         default_enabled: false,
     },

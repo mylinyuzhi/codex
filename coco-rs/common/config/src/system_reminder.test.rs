@@ -46,8 +46,8 @@ fn default_is_fully_enabled_except_feature_gated() {
     assert!(c.attachments.ide_opened_file);
     assert!(c.attachments.nested_memory);
     assert!(c.attachments.relevant_memories);
-    // Verify-plan defaults on in coco-rs because the matching tool is
-    // built in. TS gates it behind CLAUDE_CODE_VERIFY_PLAN.
+    // Verify-plan config defaults on; the generator still requires the
+    // matching tool to be visible before it emits.
     assert!(c.attachments.verify_plan_reminder);
     // TS feature-gated reminders — opt-in (default false) to match TS
     // external-build behavior.

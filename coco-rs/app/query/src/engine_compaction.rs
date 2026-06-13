@@ -1054,6 +1054,19 @@ impl QueryEngine {
         coco_compact::create_plan_attachment_if_needed(&plan_path, plan_content.as_deref())
     }
 
+    fn explore_plan_agents_available_from_bootstrap(&self) -> bool {
+        self.session_bootstrap.as_ref().is_some_and(|bootstrap| {
+            bootstrap
+                .agents
+                .iter()
+                .any(|name| name == coco_types::SubagentType::Explore.as_str())
+                && bootstrap
+                    .agents
+                    .iter()
+                    .any(|name| name == coco_types::SubagentType::Plan.as_str())
+        })
+    }
+
     async fn snapshot_plan_mode_attachment(&self) -> Option<coco_compact::PlanModeAttachment> {
         let in_plan_mode = if let Some(state) = &self.app_state {
             let g = state.read().await;
@@ -1101,6 +1114,7 @@ impl QueryEngine {
             phase4_variant: phase4,
             explore_agent_count: self.config.plan_mode_settings.explore_agent_count,
             plan_agent_count: self.config.plan_mode_settings.plan_agent_count,
+            explore_plan_agents_available: self.explore_plan_agents_available_from_bootstrap(),
             is_sub_agent: self.config.agent_id.is_some(),
             plan_file_path,
             plan_exists,
@@ -1308,6 +1322,8 @@ impl QueryEngine {
                     phase4_variant: phase4,
                     explore_agent_count: pm.explore_agent_count,
                     plan_agent_count: pm.plan_agent_count,
+                    explore_plan_agents_available: self
+                        .explore_plan_agents_available_from_bootstrap(),
                     is_sub_agent: agent_id_for_attachments.is_some(),
                     plan_file_path: plan_path,
                     plan_exists: plan_exists_flag,

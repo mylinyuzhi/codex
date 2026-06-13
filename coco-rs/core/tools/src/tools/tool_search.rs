@@ -75,7 +75,7 @@ const MCP_PREFIX: &str = "mcp__";
 const PROMPT_HEAD: &str =
     "Fetches full schema definitions for deferred tools so they can be called.\n\n";
 
-const PROMPT_TAIL: &str = " Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query, matches it against the deferred tool list, and returns the matched tools' complete JSONSchema definitions inside a <functions> block. Once a tool's schema appears in that result, it is callable exactly like any tool defined at the top of the prompt.\n\nResult format: each matched tool appears as one <function>{\"description\": \"...\", \"name\": \"...\", \"parameters\": {...}}</function> line inside the <functions> block — the same encoding as the tool list at the top of this prompt.\n\nQuery forms:\n- \"select:Read,Edit,Grep\" — fetch these exact tools by name\n- \"notebook jupyter\" — keyword search, up to max_results best matches\n- \"+slack send\" — require \"slack\" in the name, rank by remaining terms";
+const PROMPT_TAIL: &str = " Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query and matches it against the deferred tool list.\n\nProvider behavior:\n- Providers with server-side tool references receive the matched tool schemas inline, and those tools become callable after the result.\n- Client-side ToolSearch providers receive the matched tool names now; the runtime exposes their full schemas on the next turn, after the ToolSearch result is processed.\n\nQuery forms:\n- \"select:Read,Edit,Grep\" — fetch these exact tools by name\n- \"notebook jupyter\" — keyword search, up to max_results best matches\n- \"+slack send\" — require \"slack\" in the name, rank by remaining terms";
 
 /// Deferred tools appear by name in `<system-reminder>` messages.
 const PROMPT_LOCATION_HINT: &str = "Deferred tools appear by name in <system-reminder> messages.";
@@ -499,9 +499,9 @@ impl Tool for ToolSearchTool {
     ///    NOT modified — cache prefix stays warm across discoveries.
     ///
     /// 2. **Text list** (every other provider + non-capable Anthropic
-    ///    models) — single `Text` part rendering matches as
-    ///    `"Matched tools:\nA\nB"`. The executor pairs this branch
-    ///    with an `AppStatePatch` that adds matches to
+    ///    models) — single `Text` part rendering matched names and
+    ///    explaining schemas arrive next turn. The executor pairs this
+    ///    branch with an `AppStatePatch` that adds matches to
     ///    `discovered_tool_names`, so the next turn's `tools` array
     ///    surfaces the schemas client-side. One cache break per
     ///    discovery, unavoidable without server-side expansion.
@@ -537,7 +537,10 @@ impl Tool for ToolSearchTool {
             }
             text
         } else {
-            format!("Matched tools:\n{}", out.matches.join("\n"))
+            format!(
+                "Matched tools (schemas will be available next turn):\n{}",
+                out.matches.join("\n")
+            )
         };
         vec![ToolResultContentPart::Text {
             text,

@@ -28,17 +28,14 @@ pub fn sessions_dir() -> PathBuf {
 /// Build [`ProjectPaths`] for `cwd`.
 ///
 /// Returns an `Arc<ProjectPaths>` so callers can cheaply share one
-/// instance across subsystems (transcript store, memory store,
-/// KAIROS daily log, etc.).
+/// instance across session/transcript subsystems.
 ///
-/// `cwd` should already be canonicalised by the caller; this helper
-/// then applies the same `coco_git::find_canonical_git_root` rule
-/// the memory layer uses so a linked worktree and the main repo
-/// share one project slug.
+/// `cwd` should already be canonicalised by the caller. Unlike the memory
+/// layer, session paths intentionally keep the worktree/project cwd so linked
+/// worktrees get distinct transcript project dirs, mirroring the TS runtime.
 pub fn project_paths(cwd: &Path) -> Arc<ProjectPaths> {
     let memory_base = global_config::config_home();
-    let canonical = coco_git::find_canonical_git_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
-    Arc::new(ProjectPaths::new(memory_base, &canonical))
+    Arc::new(ProjectPaths::new(memory_base, cwd))
 }
 
 /// `~/.coco/output-styles` — user-scope output style markdown dir.

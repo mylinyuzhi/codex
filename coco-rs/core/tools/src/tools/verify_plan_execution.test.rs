@@ -1,6 +1,7 @@
 use super::VerifyPlanExecutionTool;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::PendingPlanVerificationState;
 use coco_types::PermissionMode;
 use coco_types::ToolAppState;
 use coco_types::ToolName;
@@ -22,9 +23,9 @@ fn text(result: &coco_messages::ToolResult<serde_json::Value>) -> String {
 }
 
 #[tokio::test]
-async fn execute_clears_pending_plan_verification() {
+async fn execute_marks_pending_plan_verification_completed() {
     let app_state = Arc::new(RwLock::new(ToolAppState {
-        pending_plan_verification: true,
+        pending_plan_verification: Some(PendingPlanVerificationState::new("# plan".into())),
         ..ToolAppState::default()
     }));
     let mut ctx = ToolUseContext::test_default();
@@ -42,13 +43,20 @@ async fn execute_clears_pending_plan_verification() {
     let patch = result
         .app_state_patch
         .take()
-        .expect("tool clears pending verification");
+        .expect("tool records pending verification");
     {
         let mut guard = app_state.write().await;
         patch(&mut guard);
     }
 
-    assert!(!app_state.read().await.pending_plan_verification);
+    let pending = app_state
+        .read()
+        .await
+        .pending_plan_verification
+        .clone()
+        .expect("pending verification state is retained");
+    assert!(pending.verification_started);
+    assert!(pending.verification_completed);
     assert_eq!(result.data["status"], "verified");
     assert_eq!(result.data["summary"], "checked files and tests");
     assert!(text(&result).contains("Plan execution verification recorded."));

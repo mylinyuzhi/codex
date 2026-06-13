@@ -98,7 +98,10 @@ mod render_tests {
         let ToolResultContentPart::Text { text, .. } = &parts[0] else {
             panic!("expected Text part");
         };
-        assert!(text.starts_with("Matched tools:"), "got: {text}");
+        assert!(
+            text.starts_with("Matched tools (schemas will be available next turn):"),
+            "got: {text}"
+        );
         assert!(text.contains("Read"), "got: {text}");
         assert!(text.contains("Grep"), "got: {text}");
     }

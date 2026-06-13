@@ -108,9 +108,9 @@ pub enum AttachmentType {
     UserContext,
 
     // ── Verify-plan reminder (MainAgentOnly tier) ──
-    /// Fires every 10 human turns after ExitPlanMode while
-    /// `pending_plan_verification` hasn't been resolved. Main-thread only —
-    /// sub-agents don't own the plan. Gated on the
+    /// Fires every 10 human turns after ExitPlanMode while TS-shaped
+    /// `pending_plan_verification` exists and has not started or completed.
+    /// Main-thread only — sub-agents don't own the plan. Gated on the
     /// `settings.system_reminder.attachments.verify_plan_reminder` flag.
     VerifyPlanReminder,
 

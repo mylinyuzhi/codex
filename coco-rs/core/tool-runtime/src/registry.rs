@@ -92,6 +92,16 @@ pub struct ToolRegistry {
     inner: RwLock<RegistryInner>,
 }
 
+/// Context-aware tool lookup for committed model tool calls.
+pub enum ToolLookup {
+    /// Tool is visible in the current turn's loaded tool set.
+    Loaded(Arc<dyn DynTool>),
+    /// Tool exists and is enabled, but is deferred until ToolSearch discovers it.
+    Deferred { name: String },
+    /// Tool is unknown or filtered out by feature/override/agent policy.
+    Unavailable,
+}
+
 impl Default for ToolRegistry {
     fn default() -> Self {
         Self {
@@ -125,6 +135,32 @@ impl ToolRegistry {
     /// Look up a tool by ToolId.
     pub fn get(&self, id: &ToolId) -> Option<Arc<dyn DynTool>> {
         self.get_by_name(&id.to_string())
+    }
+
+    /// Look up a tool exactly as the model is allowed to call it this turn.
+    ///
+    /// Raw registry lookup intentionally sees every registered tool, including
+    /// disabled and deferred entries. Execution preparation needs the stricter
+    /// model-facing view: feature/override/filter gates applied, and deferred
+    /// tools rejected until ToolSearch has promoted them into the loaded set.
+    pub fn lookup_loaded(&self, id: &ToolId, ctx: &ToolUseContext) -> ToolLookup {
+        let Some(tool) = self.get(id) else {
+            return ToolLookup::Unavailable;
+        };
+        if !passes_filter_pipeline(tool.as_ref(), ctx) {
+            return ToolLookup::Unavailable;
+        }
+        let tool_search_active = ctx.tool_search_active();
+        if tool_search_active
+            && tool.should_defer()
+            && !tool.always_load()
+            && !ctx.discovered_tool_names.contains(tool.name())
+        {
+            return ToolLookup::Deferred {
+                name: tool.name().to_string(),
+            };
+        }
+        ToolLookup::Loaded(tool)
     }
 
     /// Look up a tool by name or alias.

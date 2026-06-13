@@ -25,6 +25,7 @@ fn minimal_input<'a>(
         phase4_variant: Phase4Variant::Standard,
         explore_agent_count: 3,
         plan_agent_count: 1,
+        explore_plan_agents_available: false,
         is_plan_interview_phase: false,
         app_state,
         fallback_permission_mode: PermissionMode::Default,

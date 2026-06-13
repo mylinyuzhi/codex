@@ -1,8 +1,8 @@
 //! `verify_plan_reminder` generator.
 //!
-//! Fires every 10 turns after `ExitPlanMode` while
-//! [`ToolAppState::pending_plan_verification`] remains set, nudging the
-//! agent to call the `VerifyPlanExecution` tool.
+//! Fires every 10 turns after `ExitPlanMode` while TS-shaped
+//! `pending_plan_verification` exists and is neither started nor completed,
+//! nudging the agent to call the `VerifyPlanExecution` tool.
 //!
 //! **Tier**: [`ReminderTier::MainAgentOnly`] — sub-agents don't own the
 //! plan; the reminder would be wasted tokens.
@@ -11,8 +11,10 @@
 //!
 //! 1. Config flag enabled (`config.attachments.verify_plan_reminder`).
 //! 2. Main-agent only (enforced by tier filter in the orchestrator).
-//! 3. `ctx.has_pending_plan_verification` (set by `ExitPlanModeTool`).
-//! 4. `ctx.turns_since_plan_exit > 0` and divisible by 10 — skips turn 0
+//! 3. `ctx.has_pending_plan_verification` (derived from
+//!    `ToolAppState::pending_plan_verification`).
+//! 4. `VerifyPlanExecution` is present in the model-visible tool list.
+//! 5. `ctx.turns_since_plan_exit > 0` and divisible by 10 — skips turn 0
 //!    and fires at 10, 20, …
 
 use async_trait::async_trait;
@@ -60,6 +62,13 @@ impl AttachmentGenerator for VerifyPlanReminderGenerator {
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
         if !ctx.has_pending_plan_verification {
+            return Ok(None);
+        }
+        if !ctx
+            .tools
+            .iter()
+            .any(|name| name == ToolName::VerifyPlanExecution.as_str())
+        {
             return Ok(None);
         }
         let n = ctx.turns_since_plan_exit;

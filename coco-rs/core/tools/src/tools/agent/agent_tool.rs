@@ -277,8 +277,8 @@ impl Tool for AgentTool {
     fn name(&self) -> &str {
         ToolName::Agent.as_str()
     }
-    fn is_enabled(&self, ctx: &coco_tool_runtime::ToolUseContext) -> bool {
-        ctx.features.enabled(coco_types::Feature::AgentTeams)
+    fn is_enabled(&self, _ctx: &coco_tool_runtime::ToolUseContext) -> bool {
+        true
     }
     fn description(&self, _input: &AgentInput, _options: &DescriptionOptions) -> String {
         // Static fallback when prompt() isn't called (e.g. tools that
@@ -477,6 +477,14 @@ impl Tool for AgentTool {
             .or_else(|| ctx.team_name.clone());
         let requested_name = input.name.clone().filter(|s| !s.is_empty());
         let is_team_spawn = resolved_team_name.is_some() && requested_name.is_some();
+
+        if is_team_spawn && !ctx.features.enabled(coco_types::Feature::AgentTeams) {
+            return Err(ToolError::ExecutionFailed {
+                message: "Agent Teams is not available in this session.".into(),
+                display_data: None,
+                source: None,
+            });
+        }
 
         if ctx.is_teammate && is_team_spawn {
             return Err(ToolError::ExecutionFailed {

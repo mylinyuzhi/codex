@@ -10,6 +10,10 @@ fn cfg() -> SystemReminderConfig {
     c
 }
 
+fn tools_with_verify_plan_execution() -> Vec<String> {
+    vec![ToolName::VerifyPlanExecution.as_str().to_string()]
+}
+
 #[tokio::test]
 async fn skips_when_config_disabled() {
     let mut c = SystemReminderConfig::default();
@@ -40,6 +44,7 @@ async fn skips_on_turn_count_zero() {
     let ctx = GeneratorContext::builder(&c)
         .has_pending_plan_verification(true)
         .turns_since_plan_exit(0)
+        .tools(tools_with_verify_plan_execution())
         .build();
     assert!(
         VerifyPlanReminderGenerator
@@ -57,6 +62,7 @@ async fn skips_when_not_on_10_turn_boundary() {
         let ctx = GeneratorContext::builder(&c)
             .has_pending_plan_verification(true)
             .turns_since_plan_exit(n)
+            .tools(tools_with_verify_plan_execution())
             .build();
         assert!(
             VerifyPlanReminderGenerator
@@ -70,12 +76,29 @@ async fn skips_when_not_on_10_turn_boundary() {
 }
 
 #[tokio::test]
-async fn fires_on_10_turn_boundaries() {
+async fn skips_when_verify_plan_execution_tool_is_not_visible() {
+    let c = cfg();
+    let ctx = GeneratorContext::builder(&c)
+        .has_pending_plan_verification(true)
+        .turns_since_plan_exit(10)
+        .build();
+    assert!(
+        VerifyPlanReminderGenerator
+            .generate(&ctx)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn fires_on_10_turn_boundaries_when_tool_is_visible() {
     let c = cfg();
     for n in [10, 20, 30, 100] {
         let ctx = GeneratorContext::builder(&c)
             .has_pending_plan_verification(true)
             .turns_since_plan_exit(n)
+            .tools(tools_with_verify_plan_execution())
             .build();
         let r = VerifyPlanReminderGenerator
             .generate(&ctx)

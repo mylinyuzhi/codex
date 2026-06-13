@@ -131,6 +131,7 @@ pub use permission_rule_handle::PermissionRuleHandleRef;
 pub use plan_approval::PlanApprovalMessage;
 pub use plan_approval::PlanApprovalRequest;
 pub use plan_approval::PlanApprovalResponse;
+pub use registry::ToolLookup;
 pub use registry::ToolRegistry;
 pub use schedule_store::CronTask;
 pub use schedule_store::InMemoryScheduleStore;

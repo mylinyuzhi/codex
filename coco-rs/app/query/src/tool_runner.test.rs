@@ -1,9 +1,16 @@
 use std::sync::Arc;
 
+use coco_llm_types::LlmMessage;
 use coco_llm_types::ToolCallPart;
+use coco_llm_types::ToolContentPart;
+use coco_llm_types::ToolResultContent;
+use coco_messages::Message;
 use coco_messages::MessageHistory;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
+use coco_types::ToolId;
+use coco_types::ToolName;
+use coco_types::ToolOverrides;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -16,6 +23,59 @@ fn registry_with(tool: Arc<dyn coco_tool_runtime::DynTool>) -> ToolRegistry {
     registry
 }
 
+fn tool_result_text(message: &Message) -> &str {
+    let Message::ToolResult(result) = message else {
+        panic!("expected tool result");
+    };
+    let LlmMessage::Tool { content, .. } = &result.message else {
+        panic!("expected tool-role message");
+    };
+    let Some(ToolContentPart::ToolResult(result)) = content.first() else {
+        panic!("expected tool result content");
+    };
+    match &result.output {
+        ToolResultContent::Text { value, .. } | ToolResultContent::ErrorText { value, .. } => {
+            value.as_str()
+        }
+        other => panic!("expected text output, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
+    let tools = registry_with(Arc::new(coco_tools::tools::ExitPlanModeTool));
+    let ctx = ToolUseContext::test_default().with_model_capabilities(
+        /*supports_tool_reference*/ false, /*supports_client_side_tool_search*/ true,
+    );
+    let mut history = MessageHistory::new();
+    let tc = ToolCallPart::new(
+        "call-deferred",
+        "ExitPlanMode",
+        json!({"summary": "wrong shape"}),
+    );
+
+    let prepared = prepare_committed_tool_call(
+        &None,
+        &mut history,
+        &tools,
+        &ctx,
+        &tc,
+        ToolCompletionEventMode::Emit,
+        None,
+    )
+    .await;
+
+    assert!(prepared.is_none());
+    assert_eq!(history.len(), 1);
+    let text = tool_result_text(history.iter().next().unwrap());
+    assert!(
+        text.contains("deferred tool that has not been loaded yet"),
+        "{text}"
+    );
+    assert!(text.contains("select:ExitPlanMode"));
+    assert!(!text.contains("InputValidationError"));
+}
+
 /// calm-bouncing-biscuit regression: a freeform apply_patch call arrives as
 /// a BARE STRING. The prepared call must carry the coerced `{patch: …}`
 /// object — never the raw string — so permission carve-outs and
@@ -25,7 +85,9 @@ fn registry_with(tool: Arc<dyn coco_tool_runtime::DynTool>) -> ToolRegistry {
 #[tokio::test]
 async fn test_prepare_committed_freeform_raw_string_threads_coerced_input() {
     let tools = registry_with(Arc::new(coco_tools::tools::ApplyPatchTool));
-    let ctx = ToolUseContext::test_default();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.tool_overrides =
+        Arc::new(ToolOverrides::default().with_extra(ToolId::Builtin(ToolName::ApplyPatch)));
     let mut history = MessageHistory::new();
     let raw = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch\n";
     let tc = ToolCallPart::new("call-1", "apply_patch", json!(raw));

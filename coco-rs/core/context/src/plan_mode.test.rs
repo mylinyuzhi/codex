@@ -305,6 +305,7 @@ fn att(rt: ReminderType, is_sub: bool, path: &str, exists: bool) -> PlanModeAtta
         phase4_variant: Phase4Variant::default(),
         explore_agent_count: 3,
         plan_agent_count: 1,
+        explore_plan_agents_available: true,
         is_sub_agent: is_sub,
         plan_file_path: path.into(),
         plan_exists: exists,
@@ -321,6 +322,7 @@ fn reminder_full_main_agent_includes_workflow_and_plan_file() {
         phase4_variant: Phase4Variant::default(),
         explore_agent_count: 3,
         plan_agent_count: 1,
+        explore_plan_agents_available: true,
         is_sub_agent: false,
         plan_file_path: "/tmp/plans/foo.md".into(),
         plan_exists: true,
@@ -348,6 +350,7 @@ fn reminder_names_model_specific_file_tool() {
         phase4_variant: Phase4Variant::default(),
         explore_agent_count: 3,
         plan_agent_count: 1,
+        explore_plan_agents_available: true,
         is_sub_agent: false,
         plan_file_path: "/tmp/plans/foo.md".into(),
         plan_exists: exists,
@@ -476,8 +479,11 @@ fn five_phase_substitutes_configured_agent_counts() {
     a.explore_agent_count = 7;
     a.plan_agent_count = 5;
     let out = render_plan_mode_reminder(&a);
-    assert!(out.contains("up to 7 explore agents"));
+    assert!(out.contains("up to 7 Explore agents"));
     assert!(out.contains("up to 5 agent(s) in parallel"));
+    assert!(out.contains("only use the Explore subagent type"));
+    assert!(out.contains("Launch Plan agent(s)"));
+    assert!(!out.contains("only use the explore subagent type"));
     // The "multiple agents" block should appear when plan_agent_count > 1.
     assert!(out.contains("Multiple agents"));
 }
@@ -488,6 +494,28 @@ fn five_phase_single_plan_agent_omits_multiple_block() {
     // default plan_agent_count = 1
     let out = render_plan_mode_reminder(&a);
     assert!(!out.contains("Multiple agents"));
+}
+
+#[test]
+fn five_phase_without_agents_falls_back_to_interview_workflow() {
+    let mut a = att(ReminderType::Full, false, "/p.md", false);
+    a.explore_plan_agents_available = false;
+    let out = render_plan_mode_reminder(&a);
+    assert!(out.contains("Iterative Planning Workflow"));
+    assert!(out.contains("Use Read, Glob, Grep, LSP"));
+    assert!(!out.contains("Plan Workflow"));
+    assert!(!out.contains("Launch Plan agent"));
+    assert!(!out.contains("agent type to parallelize"));
+}
+
+#[test]
+fn interview_omits_explore_agent_sentence_when_unavailable() {
+    let mut a = att(ReminderType::Full, false, "/p.md", false);
+    a.workflow = PlanWorkflow::Interview;
+    a.explore_plan_agents_available = false;
+    let out = render_plan_mode_reminder(&a);
+    assert!(out.contains("Iterative Planning Workflow"));
+    assert!(!out.contains("agent type to parallelize"));
 }
 
 // ── verify_plan_was_edited ──
@@ -582,6 +610,7 @@ fn snapshot_attachment(phase4: Phase4Variant, workflow: PlanWorkflow) -> PlanMod
         phase4_variant: phase4,
         explore_agent_count: 3,
         plan_agent_count: 1,
+        explore_plan_agents_available: true,
         is_sub_agent: false,
         plan_file_path: "/tmp/plans/SNAP.md".into(),
         plan_exists: false,

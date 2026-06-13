@@ -7,6 +7,7 @@
 //! This module also hosts the per-turn system-reminder renderers that
 //! keep the model aware it is in plan mode and must stay read-only.
 
+use coco_types::SubagentType;
 use coco_types::ToolName;
 use std::collections::HashMap;
 use std::path::Path;
@@ -779,8 +780,9 @@ pub fn copy_plan_for_fork(
 }
 
 /// Outcome of verifying that the plan file was actually edited during
-/// plan mode. Used by the optional `ExitPlanMode` stale-plan advisory —
-/// feature-gated on `settings.plan_mode.verify_execution`.
+/// plan mode. Retained as a standalone helper for callers that want a
+/// local plan-file edit check; the TS-style `VerifyPlanExecution` flow
+/// does not use this mtime advisory.
 ///
 /// "Skipped" is a caller-side concept (no entry timestamp, verification
 /// disabled) and is modeled as `Option<PlanVerificationOutcome>::None`
@@ -896,7 +898,7 @@ pub fn render_plan_mode_reminder(attachment: &PlanModeAttachment) -> String {
     match attachment.reminder_type {
         ReminderType::Sparse => render_sparse(attachment, ask_user_question, exit_plan_mode),
         ReminderType::Reentry => render_reentry(attachment, exit_plan_mode),
-        ReminderType::Full => match attachment.workflow {
+        ReminderType::Full => match effective_workflow(attachment) {
             PlanWorkflow::FivePhase => {
                 render_full_five_phase(attachment, ask_user_question, exit_plan_mode)
             }
@@ -904,6 +906,18 @@ pub fn render_plan_mode_reminder(attachment: &PlanModeAttachment) -> String {
                 render_full_interview(attachment, ask_user_question, exit_plan_mode)
             }
         },
+    }
+}
+
+fn effective_workflow(attachment: &PlanModeAttachment) -> PlanWorkflow {
+    // TS has no separate five-phase-without-agents prompt: the five-phase
+    // reminder assumes built-in Explore/Plan agents are available. When a Rust
+    // host disables those built-ins, use the TS interview workflow instead of
+    // inventing a second five-phase variant that points at unavailable tools.
+    if attachment.workflow == PlanWorkflow::FivePhase && !attachment.explore_plan_agents_available {
+        PlanWorkflow::Interview
+    } else {
+        attachment.workflow
     }
 }
 
@@ -1009,8 +1023,8 @@ fn render_full_five_phase(
     ask_user_question: &str,
     exit_plan_mode: &str,
 ) -> String {
-    let explore_agent = "explore";
-    let plan_agent = "plan";
+    let explore_agent = SubagentType::Explore.as_str();
+    let plan_agent = SubagentType::Plan.as_str();
     let n_explore = attachment.explore_agent_count;
     let n_plan = attachment.plan_agent_count;
 
@@ -1171,6 +1185,16 @@ fn render_full_interview(
     ask_user_question: &str,
     exit_plan_mode: &str,
 ) -> String {
+    let explore_agent_sentence = if attachment.explore_plan_agents_available {
+        format!(
+            " You can use the `{}` agent type to parallelize complex \
+             searches without filling your context, though for straightforward \
+             queries direct tools are simpler.",
+            SubagentType::Explore.as_str()
+        )
+    } else {
+        String::new()
+    };
     format!(
         "Plan mode is active. The user indicated that they do not want you to \
          execute yet -- you MUST NOT make any edits (with the exception of the \
@@ -1188,9 +1212,7 @@ fn render_full_interview(
          Repeat this cycle until the plan is complete:\n\n\
          1. **Explore** — Use Read, Glob, Grep, LSP, and other read-only tools \
          to read code. Look for existing functions, utilities, and patterns to \
-         reuse. You can use the `Explore` agent type to parallelize complex \
-         searches without filling your context, though for straightforward \
-         queries direct tools are simpler.\n\
+         reuse.{explore_agent_sentence}\n\
          2. **Update the plan file** — After each discovery, immediately capture \
          what you learned. Don't wait until the end.\n\
          3. **Ask the user** — When you hit an ambiguity or decision you can't \

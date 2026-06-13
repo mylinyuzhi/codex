@@ -115,8 +115,8 @@ pub fn apply_auto_transition_to_app_state(
 /// Apply a full permission-mode transition to shared app state.
 ///
 /// This is the app-state-shaped equivalent of the permission mode transition
-/// function, plus the plan-mode entry timestamp used by the optional
-/// `ExitPlanMode` stale-plan advisory.
+/// function, plus the plan-mode entry timestamp used by plan-mode
+/// lifecycle consumers.
 ///
 /// Call this from external mode switchers (TUI Shift+Tab, SDK control,
 /// bridge control, `/plan`) and model-driven plan entry. It centralizes

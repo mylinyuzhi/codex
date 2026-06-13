@@ -53,10 +53,9 @@ pub fn register_all_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(TaskOutputTool));
     registry.register(Arc::new(TodoWriteTool));
 
-    // Plan & Worktree (5)
+    // Plan & Worktree (4)
     registry.register(Arc::new(EnterPlanModeTool));
     registry.register(Arc::new(ExitPlanModeTool));
-    registry.register(Arc::new(VerifyPlanExecutionTool));
     registry.register(Arc::new(EnterWorktreeTool));
     registry.register(Arc::new(ExitWorktreeTool));
 
