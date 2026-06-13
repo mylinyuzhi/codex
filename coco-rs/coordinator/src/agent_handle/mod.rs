@@ -441,17 +441,14 @@ impl SwarmAgentHandle {
                 model: Some(resolved_model.model.clone()),
                 prompt: request.prompt.clone(),
                 color: None,
-                plan_mode_required: request.mode.as_deref().is_some_and(|m| m == "plan"),
+                plan_mode_required: request.mode == Some(coco_types::PermissionMode::Plan),
                 cwd: request
                     .cwd
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| self.cwd.clone()),
                 worktree_path: None,
-                mode: request
-                    .mode
-                    .as_deref()
-                    .and_then(|m| serde_json::from_value(serde_json::json!(m)).ok()),
+                mode: request.mode,
             })
             .await?;
         let name = reservation.name.as_str();
@@ -467,7 +464,7 @@ impl SwarmAgentHandle {
             team_name: team_name.to_string(),
             prompt: request.prompt.clone(),
             color: Some(color.as_str().to_string()),
-            plan_mode_required: request.mode.as_deref().is_some_and(|m| m == "plan"),
+            plan_mode_required: request.mode == Some(coco_types::PermissionMode::Plan),
             model: Some(resolved_model.model.clone()),
             working_dir: request.cwd.as_ref().map(|p| p.display().to_string()),
             system_prompt: teammate_system_prompt,

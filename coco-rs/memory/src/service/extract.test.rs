@@ -103,8 +103,8 @@ async fn fires_with_constraints_and_fork_messages() {
         constraints.allowed_write_roots,
         vec![temp.path().to_path_buf()]
     );
-    // Fork mode + parent context propagation.
-    assert_eq!(calls[0].isolation.as_deref(), Some("fork"));
+    // Fork behaviour is driven by fork_context_messages, not isolation.
+    assert_eq!(calls[0].isolation, None);
     assert_eq!(calls[0].fork_context_messages.len(), 1);
 }
 

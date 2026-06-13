@@ -1033,7 +1033,7 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
     let request = AgentSpawnRequest {
         prompt: "do work".into(),
         subagent_type: Some("general-purpose".into()),
-        mode: Some("default".into()),
+        mode: Some(coco_types::PermissionMode::Default),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1130,7 +1130,7 @@ async fn test_spawn_subagent_worktree_without_manager_fails_cleanly() {
     let handle = create_test_handle();
     let request = AgentSpawnRequest {
         prompt: "isolated work".into(),
-        isolation: Some("worktree".into()),
+        isolation: Some(coco_types::AgentIsolation::Worktree),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1762,7 +1762,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def),
-            mode: Some("plan".into()),
+            mode: Some(coco_types::PermissionMode::Plan),
             ..Default::default()
         })
         .await
@@ -2212,7 +2212,7 @@ async fn test_spawn_subagent_validation_failure_does_not_leak_state() {
     let request = AgentSpawnRequest {
         prompt: "isolated work".into(),
         // Worktree without a manager — first gate fails.
-        isolation: Some("worktree".into()),
+        isolation: Some(coco_types::AgentIsolation::Worktree),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();

@@ -18,7 +18,6 @@ pub mod trigger;
 pub mod unified;
 
 pub use agent_search::AgentInfo;
-pub use agent_search::AgentSearchManager;
 pub use file_search::FileSearchEvent;
 pub use file_search::FileSearchManager;
 pub use skill_search::SkillInfo;

@@ -79,6 +79,62 @@ async fn submit_on_create_new_opens_wizard_no_command() {
     );
 }
 
+#[tokio::test]
+async fn delete_arms_confirm_then_dispatches_on_yes() {
+    let mut state = AppState::new();
+    state.ui.show_modal(ModalState::AgentsDialog(
+        dialog_state(library_with_create()),
+    ));
+    if let Some(ModalState::AgentsDialog(d)) = state.ui.modal.as_mut() {
+        d.library_cursor = 2;
+    }
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    // 'd' arms the confirmation but must NOT dispatch the destructive command.
+    intercept(&mut state, &TuiCommand::InsertChar('d'), &tx).await;
+    assert!(
+        rx.try_recv().is_err(),
+        "delete must not dispatch before confirmation"
+    );
+    assert!(
+        matches!(state.ui.modal.as_ref(), Some(ModalState::AgentsDialog(d)) if d.pending_delete.is_some()),
+        "pending_delete must be armed after 'd'"
+    );
+    // 'y' confirms → dispatch + clear.
+    intercept(&mut state, &TuiCommand::InsertChar('y'), &tx).await;
+    let received = rx.try_recv().unwrap();
+    assert!(matches!(
+        received,
+        UserCommand::DeleteAgentFile { path }
+            if path == std::path::Path::new("/tmp/my-agent.md")
+    ));
+    assert!(
+        matches!(state.ui.modal.as_ref(), Some(ModalState::AgentsDialog(d)) if d.pending_delete.is_none()),
+        "pending_delete cleared after confirm"
+    );
+}
+
+#[tokio::test]
+async fn delete_confirm_cancel_does_not_dispatch() {
+    let mut state = AppState::new();
+    state.ui.show_modal(ModalState::AgentsDialog(
+        dialog_state(library_with_create()),
+    ));
+    if let Some(ModalState::AgentsDialog(d)) = state.ui.modal.as_mut() {
+        d.library_cursor = 2;
+    }
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    intercept(&mut state, &TuiCommand::InsertChar('d'), &tx).await;
+    intercept(&mut state, &TuiCommand::InsertChar('n'), &tx).await;
+    assert!(
+        rx.try_recv().is_err(),
+        "cancel ('n') must not dispatch the delete"
+    );
+    assert!(
+        matches!(state.ui.modal.as_ref(), Some(ModalState::AgentsDialog(d)) if d.pending_delete.is_none()),
+        "pending_delete cleared after cancel"
+    );
+}
+
 #[test]
 fn cycle_tab_left_and_right() {
     let mut state = AppState::new();

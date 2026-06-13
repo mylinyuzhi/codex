@@ -204,18 +204,24 @@ pub struct AgentSpawnRequest {
     /// is then a no-op.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session_id: String,
-    /// Isolation mode ("worktree" or "remote").
+    /// Isolation mode. Typed [`coco_types::AgentIsolation`]
+    /// (`Worktree` / `Remote`); the `AgentTool` boundary parses the
+    /// model's wire string and the definition's frontmatter into the enum.
+    /// `None` means no isolation (shares the parent cwd).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub isolation: Option<String>,
+    pub isolation: Option<coco_types::AgentIsolation>,
     /// Agent name (for multi-agent teams).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Team name (triggers teammate spawn).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team_name: Option<String>,
-    /// Permission mode override (e.g., "plan").
+    /// Permission mode override (e.g., `PermissionMode::Plan`). Typed —
+    /// the `AgentTool` boundary resolves the effective mode via
+    /// `resolve_subagent_mode` and threads the enum through verbatim;
+    /// serialises to its camelCase wire string for cross-process spawns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
+    pub mode: Option<coco_types::PermissionMode>,
     /// Working directory override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,

@@ -658,7 +658,10 @@ pub struct SubagentInstance {
     pub agent_type: String,
     pub description: String,
     pub status: SubagentStatus,
-    pub color: Option<String>,
+    /// Agent badge color, parsed from the protocol wire string at the
+    /// `TaskStarted` boundary. Drives the per-agent color in the activity
+    /// panel + footer pills.
+    pub color: Option<coco_types::AgentColorName>,
     /// Team name for `kind == Teammate`. `None` for subagents (they
     /// have no team affiliation) and for legacy / dormant entries.
     pub team_name: Option<String>,

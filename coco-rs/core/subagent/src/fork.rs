@@ -56,6 +56,17 @@ pub struct ForkContext {
 /// (prompt-cache sharing). Non-tool-result messages share the parent's
 /// `Arc<Message>` allocation directly; only the rewritten entries
 /// allocate.
+///
+/// **Divergence from TS (deliberate, documented).** TS `buildForkedMessages`
+/// keeps the *real* tool results for all prior turns and blanks only the
+/// in-flight turn's `tool_use` blocks; coco-rs blanks **every** historical
+/// `tool_result`. coco optimises for child↔child cache sharing (all
+/// children get an identical prefix regardless of what the parent's tools
+/// returned) at the cost of the child not seeing earlier tool output. This
+/// is acceptable for the current fork use (short, scoped worker directives)
+/// and avoids threading the in-flight assistant message through
+/// `SpawnMode::Fork`; revisit if forks need the parent's gathered context.
+/// Gated behind the default-off `COCO_FORK_SUBAGENT`.
 pub fn build_fork_context(parent_messages: &[Arc<Message>]) -> ForkContext {
     let mut forked: Vec<Arc<Message>> = Vec::with_capacity(parent_messages.len());
 
@@ -127,6 +138,19 @@ pub fn build_fork_child_rules() -> String {
 /// Scans user-role messages for the [`FORK_BOILERPLATE_TAG`] inside
 /// any text content part — the tag is only present in fork child
 /// contexts (injected by [`build_fork_child_message`]).
+///
+/// **Known limitation (compaction).** This is a *message-scan* guard:
+/// it only detects a fork child while the `<fork-boilerplate>` user turn
+/// is still in the live history. The TS reference pairs it with a
+/// PRIMARY, history-independent signal (`querySource === 'agent:builtin:fork'`)
+/// that survives autocompaction. coco-rs has no fork-source field on
+/// `ToolUseContext`, so a long-running fork that compacts its history
+/// (summarising away the boilerplate turn) can re-enter the fork path —
+/// a fork-of-fork. The whole fork feature is gated behind the default-off
+/// `COCO_FORK_SUBAGENT`, so this is latent; closing it requires threading
+/// a typed fork marker onto `ToolUseContext` (engine seam), tracked as a
+/// follow-up rather than risking the engine's per-call context for an
+/// off-by-default path.
 pub fn is_in_fork_child(messages: &[Arc<Message>]) -> bool {
     let tag_marker = format!("<{FORK_BOILERPLATE_TAG}>");
     messages.iter().any(|arc| {

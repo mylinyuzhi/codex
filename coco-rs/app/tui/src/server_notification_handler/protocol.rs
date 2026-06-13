@@ -1084,7 +1084,9 @@ fn ensure_subagent_row(state: &mut AppState, kind: SubagentKind, p: &TaskStarted
             // populate it.
             (
                 p.agent_name.clone().unwrap_or_else(|| p.task_id.clone()),
-                p.color.clone(),
+                // Parse the wire color string into the typed enum at the
+                // protocol boundary (unknown values collapse to `None`).
+                p.color.as_deref().and_then(|c| c.parse().ok()),
                 p.team_name.clone().filter(|s| !s.is_empty()),
                 // Teammates have no originating Agent-tool call.
                 None,

@@ -465,9 +465,6 @@ impl Tool for AgentTool {
         // fallback is needed.
         let effective_mode =
             coco_permissions::resolve_subagent_mode(ctx.permission_context.mode, input.mode);
-        let effective_mode_str = serde_json::to_value(effective_mode)
-            .ok()
-            .and_then(|v| v.as_str().map(String::from));
 
         let explicit_subagent_type = input.subagent_type.clone();
         let resolved_team_name = input
@@ -675,20 +672,25 @@ impl Tool for AgentTool {
         // Effective isolation: the explicit tool param overrides, else the
         // agent definition's frontmatter isolation. A definition declaring
         // `isolation: worktree` isolates even when the model omits the param.
-        // `AgentIsolation::None` maps to `None` so the spawn-side
-        // `Some("worktree")` gate stays correct.
-        let effective_isolation: Option<String> = input.isolation.clone().or_else(|| {
-            resolved_definition
-                .as_ref()
-                .and_then(|d| match d.isolation {
-                    coco_types::AgentIsolation::None => None,
-                    other => Some(other.to_string()),
-                })
-        });
+        // Parse the model's wire string into the typed enum (invalid /
+        // `none` collapse to `None` = no isolation).
+        let effective_isolation: Option<coco_types::AgentIsolation> = input
+            .isolation
+            .as_deref()
+            .and_then(|s| s.parse::<coco_types::AgentIsolation>().ok())
+            .filter(|i| *i != coco_types::AgentIsolation::None)
+            .or_else(|| {
+                resolved_definition
+                    .as_ref()
+                    .and_then(|d| match d.isolation {
+                        coco_types::AgentIsolation::None => None,
+                        other => Some(other),
+                    })
+            });
 
         // Remote isolation is unsupported in this build. Gate on the EFFECTIVE
         // value so a definition-declared `isolation: remote` is rejected too.
-        if effective_isolation.as_deref() == Some("remote") {
+        if effective_isolation == Some(coco_types::AgentIsolation::Remote) {
             return Err(ToolError::ExecutionFailed {
                 message: "Isolation mode 'remote' is not supported in this build. \
                           Use 'worktree' for local isolation or omit the field for \
@@ -707,8 +709,9 @@ impl Tool for AgentTool {
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from);
-        let requested_isolation = effective_isolation.as_deref();
-        if requested_cwd.is_some() && requested_isolation == Some("worktree") {
+        if requested_cwd.is_some()
+            && effective_isolation == Some(coco_types::AgentIsolation::Worktree)
+        {
             return Err(ToolError::InvalidInput {
                 message: "`cwd` and `isolation: \"worktree\"` are mutually exclusive — \
                           a worktree-isolated agent runs in the worktree's path; \
@@ -814,7 +817,7 @@ impl Tool for AgentTool {
             isolation: effective_isolation,
             name: requested_name,
             team_name: resolved_team_name.clone(),
-            mode: effective_mode_str,
+            mode: Some(effective_mode),
             // `cwd` is read from the tool input.
             // Mutually-exclusive-with-worktree validation runs above.
             //

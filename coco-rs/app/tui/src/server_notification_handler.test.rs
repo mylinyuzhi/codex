@@ -127,7 +127,7 @@ fn test_in_process_teammate_task_started_creates_teammate_kind_row() {
     assert_eq!(agent.agent_type, "researcher");
     assert_eq!(agent.team_name.as_deref(), Some("my-team"));
     assert_eq!(agent.tool_use_id, None);
-    assert_eq!(agent.color.as_deref(), Some("blue"));
+    assert_eq!(agent.color, Some(coco_types::AgentColorName::Blue));
     // active_tasks projection works in parallel.
     assert_eq!(state.session.active_tasks.len(), 1);
 }

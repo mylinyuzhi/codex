@@ -652,13 +652,12 @@ impl ExtractService {
             definition: Some(memory_def),
             run_in_background: false,
             auto_background_ms: None,
-            // Fork mode so the child sees the parent's message slice
-            // prepended to its first turn.
-            isolation: if fork_context.is_empty() {
-                None
-            } else {
-                Some("fork".into())
-            },
+            // No worktree/remote isolation. The "fork" behaviour (child
+            // sees the parent's message slice prepended) is driven solely
+            // by `fork_context_messages` below — the old `isolation:
+            // "fork"` string was never a real `AgentIsolation` variant and
+            // matched no spawn-path branch.
+            isolation: None,
             fork_context_messages: fork_context,
             constraints: Some(AgentSpawnConstraints {
                 max_turns: Some(self.config.extraction_max_turns),

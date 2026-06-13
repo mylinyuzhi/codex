@@ -180,6 +180,7 @@ dialog.agents_builtin_readonly: "Built-in agents cannot be edited. Override by c
 dialog.agents_no_file: "This agent has no markdown file on disk."
 dialog.agents_create_hint: "Place a markdown file in ~/.coco/agents/<name>.md (user) or .claude/agents/<name>.md (project), then /agents reload."
 dialog.agents_deleted_toast: "Deleted %{path} — reloading catalog."
+dialog.agents_delete_confirm: "Delete agent “%{name}”? y to confirm · n/Esc to cancel"
 dialog.agents_wizard_hint: "Enter advance · Esc back · ←/→/Home/End move caret · ↑/↓ on source"
 dialog.agents_create_step_header: "Step %{step} of %{total} — %{label}"
 dialog.agents_create_step_name: "Name"

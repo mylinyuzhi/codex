@@ -60,7 +60,13 @@ pub(crate) fn agents_dialog_content(
     body.push_str(&tab_body);
 
     body.push_str("\n\n");
-    let hint = if s.is_in_wizard() {
+    let hint = if let Some(path) = s.pending_delete.as_ref() {
+        let name = path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("this agent");
+        t!("dialog.agents_delete_confirm", name = name).to_string()
+    } else if s.is_in_wizard() {
         t!("dialog.agents_wizard_hint").to_string()
     } else {
         t!("dialog.agents_hint").to_string()

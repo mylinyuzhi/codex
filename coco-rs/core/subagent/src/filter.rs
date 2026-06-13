@@ -7,6 +7,7 @@
 //! crate never touches the registry.
 
 use coco_types::ToolName;
+use strum::IntoEnumIterator;
 
 /// Tools blocked for every spawned agent.
 ///
@@ -61,6 +62,29 @@ pub fn subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
     ALL_AGENT_DISALLOWED_TOOLS
         .iter()
         .copied()
+        .filter(|name| !(plan_mode && *name == exit_plan_mode))
+        .collect()
+}
+
+/// Deny-list that clamps a background (async) subagent to the async-safe
+/// tool set — every built-in tool NOT in [`ASYNC_AGENT_ALLOWED_TOOLS`].
+///
+/// TS parity: `filterToolsForAgent` (`agentToolUtils.ts`) strips every
+/// tool outside the async-safe set when `isAsync`
+/// (`run_in_background || agent.background`). REPL and other long-lived
+/// stateful tools the runtime can't safely background are excluded.
+///
+/// MCP tools (`mcp__*`) are NOT [`ToolName`] variants, so they never
+/// appear here and pass through — mirroring TS, where MCP bypasses the
+/// async clamp. `ExitPlanMode` is re-admitted in plan mode so a
+/// plan-mode background spawn can still exit the plan. The caller merges
+/// these into the child `ToolFilter`'s disallowed set (deny wins over the
+/// definition's own allow-list, exactly like the universal block).
+pub fn async_subagent_disallowed_tools(plan_mode: bool) -> Vec<&'static str> {
+    let exit_plan_mode = ToolName::ExitPlanMode.as_str();
+    ToolName::iter()
+        .map(|t| t.as_str())
+        .filter(|name| !ASYNC_AGENT_ALLOWED_TOOLS.contains(name))
         .filter(|name| !(plan_mode && *name == exit_plan_mode))
         .collect()
 }

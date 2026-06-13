@@ -73,14 +73,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
         config: AgentQueryConfig,
     ) -> Result<AgentQueryResult, coco_error::BoxedError> {
         // Resolve the subagent's permission mode. Parent is expected to
-        // have applied the inheritance rule before calling; we just
-        // parse/fall back.
+        // have applied the inheritance rule before calling; default when
+        // unset.
         let permission_mode = config
             .permission_mode
-            .as_deref()
-            .and_then(|s| {
-                serde_json::from_value::<coco_types::PermissionMode>(serde_json::json!(s)).ok()
-            })
             .unwrap_or(coco_types::PermissionMode::Default);
         let model_selection = effective_model_selection(&config);
         let engine_model_id = model_selection.display_model_id().unwrap_or(config.model);

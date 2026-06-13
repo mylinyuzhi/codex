@@ -11,9 +11,6 @@
 use coco_types::AgentColorName;
 use coco_types::AgentDefinition;
 
-use crate::widgets::suggestion_popup::SuggestionItem;
-use crate::widgets::suggestion_popup::SuggestionMeta;
-
 /// A loaded agent definition projection used for `@` autocomplete.
 ///
 /// Carries the minimum the popup needs to render and the insertion path needs
@@ -44,51 +41,5 @@ impl AgentInfo {
             description: def.description.clone(),
             color: def.color,
         }
-    }
-}
-
-/// Synchronous filter over a static `AgentInfo` slice.
-///
-/// Retained for callsites that want the raw single-source search (no
-/// merging). The unified popup goes through
-/// [`super::unified::seed_agent_items`] instead.
-pub struct AgentSearchManager {
-    agents: Vec<AgentInfo>,
-}
-
-impl AgentSearchManager {
-    pub fn new(agents: Vec<AgentInfo>) -> Self {
-        Self { agents }
-    }
-
-    pub fn empty() -> Self {
-        Self { agents: Vec::new() }
-    }
-
-    pub fn set_agents(&mut self, agents: Vec<AgentInfo>) {
-        self.agents = agents;
-    }
-
-    /// Substring filter, case-insensitive. Returns items already
-    /// formatted with the `(agent)` suffix on the label so direct
-    /// callsites get the same look as the unified popup.
-    pub fn search(&self, query: &str) -> Vec<SuggestionItem> {
-        let query_lower = query.to_lowercase();
-        self.agents
-            .iter()
-            .filter(|a| a.name.to_lowercase().contains(&query_lower))
-            .take(10)
-            .map(|a| SuggestionItem {
-                label: format!("{} (agent)", a.name),
-                description: a.description.clone(),
-                metadata: Some(SuggestionMeta::Agent { color: a.color }),
-            })
-            .collect()
-    }
-}
-
-impl Default for AgentSearchManager {
-    fn default() -> Self {
-        Self::empty()
     }
 }

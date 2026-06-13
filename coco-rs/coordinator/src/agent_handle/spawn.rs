@@ -755,7 +755,7 @@ impl SwarmAgentHandle {
 
         // Worktree isolation: any creation error returns a model-visible
         // failure — never silently fall back to sync-without-isolation.
-        let worktree_session = if matches!(request.isolation.as_deref(), Some("worktree")) {
+        let worktree_session = if request.isolation == Some(coco_types::AgentIsolation::Worktree) {
             match self.worktree_manager() {
                 Some(m) => {
                     let slug = format!(
@@ -915,12 +915,33 @@ impl SwarmAgentHandle {
         //
         // - **Fresh**: caller's `request.model` > `def.model` >
         //   coordinator's current Main role.
-        let model_pinned_to_snapshot = match &request.spawn_mode {
+        // Fork pins the model to the parent's captured identity for
+        // prompt-cache parity. We carry BOTH the `api_model_name` (for the
+        // `<env>` block + `AgentQueryConfig.model`) AND the provider, so
+        // the selection below can be an `Explicit { provider, model_id }`
+        // that resolves the SAME provider config the parent used. A bare
+        // model name would parse as neither `Explicit` nor a role and fall
+        // back to live `Role { Main }` resolution — which a mid-session
+        // role remap or hot-reload could repoint to a different provider,
+        // the exact cache bust this snapshot exists to prevent. (base_url /
+        // wire_api still resolve from that provider's config by name;
+        // pinning the provider closes the role-remap gap.)
+        let fork_pin = match &request.spawn_mode {
             coco_tool_runtime::SpawnMode::Fork {
                 parent_snapshot, ..
-            } => Some(parent_snapshot.api_model_name.clone()),
+            } => Some((
+                parent_snapshot.provider.clone(),
+                parent_snapshot.api_model_name.clone(),
+            )),
             _ => None,
         };
+        let model_pinned_to_snapshot = fork_pin.as_ref().map(|(_, model_id)| model_id.clone());
+        let fork_model_selection =
+            fork_pin.map(
+                |(provider, model_id)| coco_types::LlmModelSelection::Explicit {
+                    primary: coco_types::ProviderModelSelection { provider, model_id },
+                },
+            );
         let model_for_env = model_pinned_to_snapshot.clone().unwrap_or_else(|| {
             selection.model.clone().unwrap_or_else(|| {
                 self.current_main_model_id()
@@ -1113,12 +1134,11 @@ impl SwarmAgentHandle {
                         .unwrap_or_else(|_| String::new())
                 })
             }),
-            model_selection: if let Some(model) = model_pinned_to_snapshot.as_deref() {
-                coco_types::LlmModelSelection::from_model_and_role(
-                    Some(model),
-                    Some(coco_types::ModelRole::Main),
-                )
-            } else if request.mode.as_deref() == Some("plan")
+            model_selection: if let Some(sel) = fork_model_selection.clone() {
+                // Fork: pin the parent's exact (provider, model) — see
+                // `fork_pin` above for the cache-parity rationale.
+                sel
+            } else if request.mode == Some(coco_types::PermissionMode::Plan)
                 && !matches!(
                     request.spawn_mode,
                     coco_tool_runtime::SpawnMode::Fork { .. }
@@ -1193,14 +1213,38 @@ impl SwarmAgentHandle {
                     .as_ref()
                     .map(|d| d.disallowed_tools.clone())
                     .unwrap_or_default();
-                let plan_mode = request
-                    .mode
-                    .as_deref()
-                    .and_then(|m| m.parse::<coco_types::PermissionMode>().ok())
-                    == Some(coco_types::PermissionMode::Plan);
+                let plan_mode = request.mode == Some(coco_types::PermissionMode::Plan);
                 for name in coco_subagent::subagent_disallowed_tools(plan_mode) {
                     if !denied.iter().any(|d| d == name) {
                         denied.push(name.to_string());
+                    }
+                }
+                // Async clamp (TS `filterToolsForAgent` parity): a
+                // background subagent is restricted to the async-safe tool
+                // set — every non-async-safe built-in is denied (MCP tools
+                // pass through). Coordinator-mode spawns already narrow via
+                // `worker_tool_pool` on the allow-list side; forks inherit
+                // the parent's exact tool pool. So this only applies to a
+                // plain background AgentTool spawn.
+                let is_coordinator = request
+                    .features
+                    .as_deref()
+                    .is_some_and(coco_subagent::is_coordinator_mode);
+                let is_async = request.run_in_background
+                    || request
+                        .definition
+                        .as_ref()
+                        .map(|d| d.background)
+                        .unwrap_or(false);
+                let is_fork = matches!(
+                    request.spawn_mode,
+                    coco_tool_runtime::SpawnMode::Fork { .. }
+                );
+                if is_async && !is_coordinator && !is_fork {
+                    for name in coco_subagent::async_subagent_disallowed_tools(plan_mode) {
+                        if !denied.iter().any(|d| d == name) {
+                            denied.push(name.to_string());
+                        }
                     }
                 }
                 denied
@@ -1216,7 +1260,7 @@ impl SwarmAgentHandle {
             skill_overrides: request.skill_overrides.clone(),
             parent_tool_filter: request.parent_tool_filter.clone(),
             preserve_tool_use_results,
-            permission_mode: request.mode.clone(),
+            permission_mode: request.mode,
             agent_id: Some(agent_id.clone()),
             is_teammate: false,
             is_in_process_teammate: false,
@@ -1241,7 +1285,7 @@ impl SwarmAgentHandle {
             // the cheaper Subagent model — silently worse for plan-mode
             // reasoning quality.
             model_role: Some(
-                if request.mode.as_deref() == Some("plan")
+                if request.mode == Some(coco_types::PermissionMode::Plan)
                     && !matches!(
                         request.spawn_mode,
                         coco_tool_runtime::SpawnMode::Fork { .. }
@@ -1463,7 +1507,7 @@ impl SwarmAgentHandle {
         // Permission mode gates the post-spawn handoff classifier (auto
         // only). Pre-cloned so the detached engine task can read it
         // without borrowing `request` across the `await`.
-        let mode_for_engine = request.mode.clone();
+        let mode_for_engine = request.mode;
         let task_id_for_engine = sync_task.as_ref().map(|(id, _)| id.clone());
         let task_cancel_for_engine = sync_task.as_ref().map(|(_, c)| c.clone());
         let worktree_session_for_engine = worktree_session.clone();
@@ -1597,9 +1641,7 @@ impl SwarmAgentHandle {
                         &agent_type_for_engine,
                         &qr,
                         side_query_for_engine.as_ref(),
-                        mode_for_engine
-                            .as_deref()
-                            .and_then(|m| m.parse::<coco_types::PermissionMode>().ok()),
+                        mode_for_engine,
                     )
                     .await;
                     AgentSpawnResponse {
@@ -1888,10 +1930,7 @@ impl SwarmAgentHandle {
         // mode only). Clone the side-query handle + permission mode so the
         // detached task can gate and run it after completion.
         let side_query_for_task = self.side_query().cloned();
-        let mode_for_task = request
-            .mode
-            .as_deref()
-            .and_then(|m| m.parse::<coco_types::PermissionMode>().ok());
+        let mode_for_task = request.mode;
         // Preload frontmatter skills synchronously here — bg task can't
         // borrow `&self`, so resolve bodies upfront and prepend
         // before handing the prompt to the detached task.

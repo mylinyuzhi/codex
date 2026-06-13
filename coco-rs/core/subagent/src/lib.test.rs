@@ -283,6 +283,33 @@ fn allowed_agent_types_empty_names_means_match_all() {
     assert!(unrestricted.matches("anything"));
 }
 
+// ── async subagent tool clamp ──
+
+#[test]
+fn async_clamp_denies_non_async_safe_builtins_keeps_async_safe() {
+    let denied = crate::async_subagent_disallowed_tools(/*plan_mode*/ false);
+    // Long-lived / interactive tools are denied for background spawns.
+    assert!(denied.contains(&ToolName::Repl.as_str()));
+    assert!(denied.contains(&ToolName::Agent.as_str()));
+    assert!(denied.contains(&ToolName::AskUserQuestion.as_str()));
+    // Async-safe tools are NOT denied.
+    assert!(!denied.contains(&ToolName::Read.as_str()));
+    assert!(!denied.contains(&ToolName::Bash.as_str()));
+    assert!(!denied.contains(&ToolName::Grep.as_str()));
+    // ExitPlanMode is denied outside plan mode...
+    assert!(denied.contains(&ToolName::ExitPlanMode.as_str()));
+}
+
+#[test]
+fn async_clamp_readmits_exit_plan_mode_in_plan_mode() {
+    let denied = crate::async_subagent_disallowed_tools(/*plan_mode*/ true);
+    // ...but re-admitted in plan mode so a plan-mode background spawn can
+    // still exit the plan.
+    assert!(!denied.contains(&ToolName::ExitPlanMode.as_str()));
+    // Other non-async-safe builtins stay denied.
+    assert!(denied.contains(&ToolName::Repl.as_str()));
+}
+
 #[test]
 fn frontmatter_wildcard_tools_collapses_to_default_allow_list() {
     // `parseAgentToolsFromFrontmatter` (`utils/markdownConfigLoader.ts:122-124`)
