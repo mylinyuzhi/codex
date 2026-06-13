@@ -22,7 +22,15 @@ fn build_test_runtime() -> coco_config::RuntimeConfig {
             // Multi-LLM SDK: Main has no implicit default. The
             // SwarmAgentHandle tests don't care which model — pick a
             // builtin so config build succeeds.
-            model: Some("anthropic/claude-opus-4-7".into()),
+            models: coco_config::ModelSelectionSettings {
+                main: Some(coco_config::RoleSlots::new(
+                    coco_types::ProviderModelSelection {
+                        provider: "anthropic".into(),
+                        model_id: "claude-opus-4-7".into(),
+                    },
+                )),
+                ..Default::default()
+            },
             ..Default::default()
         },
         per_source: std::collections::HashMap::new(),

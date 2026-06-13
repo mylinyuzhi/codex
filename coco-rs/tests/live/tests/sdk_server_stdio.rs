@@ -116,7 +116,7 @@ fn run() -> Result<()> {
 async fn serve(args: Args) -> Result<()> {
     use clap::Parser;
     let model_arg = format!("{}/{}", args.provider, args.model);
-    let cli = Cli::parse_from(["coco", "--model", &model_arg, "sdk"]);
+    let cli = Cli::parse_from(["coco", "--models.main", &model_arg, "sdk"]);
 
     let cwd = std::env::current_dir().context("read cwd")?;
     let sessions_dir = tempfile::tempdir().context("create sessions tmpdir")?;

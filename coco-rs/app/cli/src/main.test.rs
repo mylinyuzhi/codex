@@ -4,16 +4,23 @@ use coco_cli::headless::DEFAULT_SYSTEM_PROMPT_IDENTITY;
 use coco_cli::headless::build_system_prompt_for_model;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
+use coco_config::RoleSlots;
 use coco_config::RuntimeConfig;
 use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
+use coco_types::ProviderModelSelection;
 use tempfile::TempDir;
 
 fn runtime_for_model(selection: &str, home: &TempDir) -> RuntimeConfig {
     let settings = SettingsWithSource {
         merged: Settings {
-            model: Some(selection.to_string()),
+            models: coco_config::ModelSelectionSettings {
+                main: Some(RoleSlots::new(
+                    ProviderModelSelection::from_slash_str(selection).expect("model selection"),
+                )),
+                ..Default::default()
+            },
             ..Default::default()
         },
         per_source: HashMap::new(),

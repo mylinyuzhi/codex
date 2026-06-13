@@ -1,6 +1,20 @@
 use coco_types::PermissionMode;
+use coco_types::ProviderModelSelection;
 
 use super::*;
+
+fn settings_with_main(model_id: &str) -> Settings {
+    Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(crate::RoleSlots::new(ProviderModelSelection {
+                provider: "anthropic".into(),
+                model_id: model_id.into(),
+            })),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
 
 // ── validate_permission_rule_string ──
 
@@ -126,9 +140,8 @@ fn test_validate_settings_bypass_conflict() {
 #[test]
 fn test_validate_settings_model_not_in_allowlist() {
     let settings = Settings {
-        model: Some("claude-opus-4-6".into()),
         available_models: Some(vec!["haiku".into()]),
-        ..Default::default()
+        ..settings_with_main("claude-opus-4-6")
     };
     let errors = validate_settings(&settings);
     assert!(
@@ -142,13 +155,12 @@ fn test_validate_settings_model_not_in_allowlist() {
 #[test]
 fn test_validate_settings_model_matches_family_alias() {
     let settings = Settings {
-        model: Some("claude-opus-4-6".into()),
         available_models: Some(vec!["opus".into()]),
-        ..Default::default()
+        ..settings_with_main("claude-opus-4-6")
     };
     let errors = validate_settings(&settings);
     // "opus" should match "claude-opus-4-6" as a family alias
-    let model_errors: Vec<_> = errors.iter().filter(|e| e.path == "model").collect();
+    let model_errors: Vec<_> = errors.iter().filter(|e| e.path == "models.main").collect();
     assert!(
         model_errors.is_empty(),
         "should not flag opus match: {model_errors:?}"
@@ -158,13 +170,12 @@ fn test_validate_settings_model_matches_family_alias() {
 #[test]
 fn test_validate_settings_empty_available_models_denies_selected_model() {
     let settings = Settings {
-        model: Some("claude-opus-4-6".into()),
         available_models: Some(Vec::new()),
-        ..Default::default()
+        ..settings_with_main("claude-opus-4-6")
     };
     let errors = validate_settings(&settings);
     assert!(
-        errors.iter().any(|e| e.path == "model"),
+        errors.iter().any(|e| e.path == "models.main"),
         "expected model allowlist error: {errors:?}"
     );
 }
@@ -189,7 +200,6 @@ fn test_validate_settings_auto_mode_empty_string() {
 
 #[test]
 fn test_known_fields() {
-    assert!(is_setting_supported("model"));
     assert!(is_setting_supported("permissions"));
     assert!(is_setting_supported("hooks"));
     assert!(is_setting_supported("env"));
@@ -242,7 +252,7 @@ fn test_filter_invalid_rules_removes_bad_syntax() {
 
 #[test]
 fn test_filter_no_permissions_section() {
-    let mut data = serde_json::json!({"model": "claude"});
+    let mut data = serde_json::json!({"language": "en"});
     let warnings = filter_invalid_permission_rules(&mut data, "test.json");
     assert!(warnings.is_empty());
 }

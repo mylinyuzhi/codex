@@ -101,7 +101,7 @@ impl LanguageModel for MockModel {
 
         let response = format!(
             "[mock model, call #{call}] Received: \"{user_text}\"\n\n\
-             No model configured. Set a model via settings.json or --model to use a real provider."
+             No model configured. Set models.main via settings.json or --models.main to use a real provider."
         );
 
         Ok(LanguageModelGenerateResult {
@@ -146,10 +146,10 @@ pub fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides>
     use coco_types::ProviderModelSelection;
 
     let mut overrides = coco_config::RuntimeOverrides::default();
-    if let Some(raw) = cli.model.as_deref() {
+    if let Some(raw) = cli.models_main.as_deref() {
         overrides.model_override = Some(
             ProviderModelSelection::from_slash_str(raw)
-                .map_err(|e| anyhow::anyhow!("--model: {e}"))?,
+                .map_err(|e| anyhow::anyhow!("--models.main: {e}"))?,
         );
     }
     if let Some(mode) = cli.permission_mode.as_deref()
@@ -666,7 +666,7 @@ pub async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome>
 ///   `--resume` in-process.
 ///
 /// Honors these `Cli` flags end-to-end:
-/// `--model`, `--fallback-model`, `--permission-mode`,
+/// `--models.main`, `--fallback-model`, `--permission-mode`,
 /// `--dangerously-skip-permissions` / `--allow-…`, `--max-turns`,
 /// `--max-tokens`, `--settings`, `--system-prompt`,
 /// `--append-system-prompt`, `--append-system-prompt-file`,

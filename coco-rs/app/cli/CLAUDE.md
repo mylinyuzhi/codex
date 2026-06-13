@@ -35,7 +35,7 @@ Resume: `--continue`, `--resume`, `--fork-session`, `--session-id`, `--name`
 Auth/Perms: `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--permission-mode`, `--permission-prompt-tool`
 Tools: `--allowed-tools`, `--disallowed-tools`, `--add-dir`
 Config: `--settings`, `--setting-sources`, `--system-prompt`, `--append-system-prompt(-file)`, `--mcp-config`, `--strict-mcp-config`
-Model: `--model`, `--fallback-model`, `--betas`, `--agent`, `--thinking`, `--thinking-budget`, `--max-thinking-tokens`, `--effort`
+Model: `--models.main`, `--fallback-model`, `--betas`, `--agent`, `--thinking`, `--thinking-budget`, `--max-thinking-tokens`, `--effort`
 Worktree/bg: `--worktree`, `--bg`
 SDK: `--replay-user-messages`, `--include-hook-events`, `--include-partial-messages`
 

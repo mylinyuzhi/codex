@@ -96,7 +96,15 @@ impl coco_inference::LanguageModel for ForkMockModel {
 async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
     let settings = SettingsWithSource {
         merged: Settings {
-            model: Some("anthropic/claude-opus-4-7".into()),
+            models: coco_config::ModelSelectionSettings {
+                main: Some(coco_config::RoleSlots::new(
+                    coco_types::ProviderModelSelection {
+                        provider: "anthropic".into(),
+                        model_id: "claude-opus-4-7".into(),
+                    },
+                )),
+                ..Default::default()
+            },
             ..Default::default()
         },
         per_source: std::collections::HashMap::new(),

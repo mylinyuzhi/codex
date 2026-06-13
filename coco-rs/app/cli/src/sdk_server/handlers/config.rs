@@ -143,6 +143,7 @@ pub(super) async fn handle_config_write(
         };
 
         set_nested_json_key(&mut doc, &key, value).map_err(ConfigWriteError::InvalidKey)?;
+        validate_settings_document(&doc).map_err(ConfigWriteError::InvalidKey)?;
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -238,4 +239,11 @@ fn set_nested_json_key(
         cursor = entry;
     }
     unreachable!("segments vec is non-empty, loop returns on last iteration")
+}
+
+fn validate_settings_document(doc: &serde_json::Value) -> Result<(), String> {
+    let body = serde_json::to_string(doc).map_err(|e| format!("failed to serialize: {e}"))?;
+    coco_config::settings::parse_settings(&body)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }

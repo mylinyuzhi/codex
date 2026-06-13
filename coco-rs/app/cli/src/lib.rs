@@ -68,9 +68,9 @@ pub struct Cli {
     #[arg(short, long)]
     pub prompt: Option<String>,
 
-    /// Model to use.
-    #[arg(short, long)]
-    pub model: Option<String>,
+    /// Main model to use.
+    #[arg(long = "models.main")]
+    pub models_main: Option<String>,
 
     /// Run without TUI (REPL mode).
     #[arg(long)]

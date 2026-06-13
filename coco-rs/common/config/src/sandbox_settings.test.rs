@@ -700,7 +700,7 @@ fn test_sourced_helpers_handle_missing_keys_gracefully() {
     use crate::settings::source::SettingSource;
 
     // No `permissions` block, no `sandbox.filesystem.allow_read` key.
-    let raw = serde_json::json!({ "model": "claude-haiku-4-5-20251001" });
+    let raw = serde_json::json!({ "language": "en" });
     let mut per_source = std::collections::HashMap::new();
     per_source.insert(SettingSource::User, raw);
     let swith = SettingsWithSource {
