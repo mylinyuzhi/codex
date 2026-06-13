@@ -15,29 +15,6 @@ use std::sync::Arc;
 use coco_llm_types::AssistantContentPart;
 use coco_llm_types::LlmMessage;
 use coco_types::messages::Message;
-use serde::Deserialize;
-use serde::Serialize;
-
-/// State required to resume an agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentResumeState {
-    /// The agent's ID to resume.
-    pub agent_id: String,
-    /// Restored conversation messages (filtered for consistency).
-    pub messages: Vec<serde_json::Value>,
-    /// Agent type that was running.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_type: Option<String>,
-    /// Model that was in use.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    /// Worktree path if the agent had isolation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree_path: Option<String>,
-    /// New prompt to append (optional).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume_prompt: Option<String>,
-}
 
 /// Filter out incomplete or corrupted messages from a transcript.
 ///

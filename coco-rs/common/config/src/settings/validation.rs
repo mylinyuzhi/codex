@@ -66,20 +66,21 @@ pub fn validate_settings(settings: &Settings) -> Vec<ValidationError> {
         });
     }
 
-    // Validate model allowlist vs selected model
-    if let (Some(selected), Some(available)) = (&settings.model, &settings.available_models)
-        && !is_model_allowed(selected, Some(available.as_slice()))
+    // Validate model allowlist vs selected Main model
+    if let (Some(main), Some(available)) = (&settings.models.main, &settings.available_models)
+        && !is_model_allowed(&main.primary.model_id, Some(available.as_slice()))
     {
+        let selected = &main.primary.model_id;
         errors.push(ValidationError {
             file: None,
-            path: "model".into(),
+            path: "models.main".into(),
             message: format!(
-                "Selected model '{selected}' is not in the available_models allowlist"
+                "Selected Main model '{selected}' is not in the available_models allowlist"
             ),
             expected: Some(format!("One of: {}", available.join(", "))),
             invalid_value: Some(selected.clone()),
             suggestion: Some(
-                "Either add the model to available_models or choose an available model".into(),
+                "Either add the Main model to available_models or choose an available model".into(),
             ),
         });
     }
@@ -562,7 +563,6 @@ pub fn validate_hooks(settings: &Settings) -> Vec<ValidationError> {
 const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "api_key_helper",
     "permissions",
-    "model",
     "models",
     "available_models",
     "thinking_level",
@@ -579,7 +579,14 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "mcp",
     "web_fetch",
     "web_search",
+    "diagnostics",
+    "lsp",
     "paths",
+    "agent_teams",
+    "compact",
+    "prompt_cache",
+    "account",
+    "features",
     "hooks",
     "disable_all_hooks",
     "allowed_mcp_servers",
@@ -588,7 +595,13 @@ const KNOWN_SETTINGS_FIELDS: &[&str] = &[
     "output_style",
     "language",
     crate::settings::SYNTAX_HIGHLIGHTING_DISABLED_KEY,
+    crate::settings::SHOW_THINKING_KEY,
+    crate::settings::COPY_FULL_RESPONSE_KEY,
+    "statusLine",
+    "status_line",
+    "tui",
     "enabled_plugins",
+    "skill_overrides",
     "worktree",
     "plans_directory",
     "plan_mode",

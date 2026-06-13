@@ -16,7 +16,7 @@ into the model::
 
     async with TypedClient(prompt="Review main.rs",
                            output_type=CodeReview,
-                           model=DEEPSEEK.flash_openai) as client:
+                           models_main=DEEPSEEK.flash_openai) as client:
         result = await client.get_typed_result()
         print(result.summary, result.score)
 """

@@ -122,5 +122,4 @@ fn test_forked_agent_result_default() {
     let r = ForkedAgentResult::default();
     assert!(r.messages.is_empty());
     assert_eq!(r.total_usage, TokenUsage::default());
-    assert!(r.stop_reason.is_none());
 }

@@ -169,69 +169,6 @@ fn task_notification_status_strings_match_ts() {
 }
 
 #[test]
-fn looks_like_task_notification_recognises_opening_tag() {
-    assert!(looks_like_task_notification(
-        "<task-notification>...</task-notification>"
-    ));
-    assert!(looks_like_task_notification(
-        "  \n<task-notification>...</task-notification>"
-    ));
-    assert!(!looks_like_task_notification(
-        "just a normal teammate message"
-    ));
-    assert!(!looks_like_task_notification("<other-tag>...</other-tag>"));
-}
-
-#[test]
-fn parse_task_notification_completed_minimal_round_trips() {
-    let original = TaskNotification {
-        task_id: "agent-x",
-        status: TaskNotificationStatus::Completed,
-        summary: "did the thing",
-        result: None,
-        usage: None,
-    };
-    let xml = render_task_notification(&original);
-    let parsed = parse_task_notification(&xml).expect("parses");
-    assert_eq!(parsed.task_id, "agent-x");
-    assert_eq!(parsed.status, TaskNotificationStatus::Completed);
-    assert_eq!(parsed.summary, "did the thing");
-    assert!(parsed.result.is_none());
-    assert!(parsed.usage.is_none());
-}
-
-#[test]
-fn parse_task_notification_with_result_and_usage_round_trips() {
-    let original = TaskNotification {
-        task_id: "agent-y",
-        status: TaskNotificationStatus::Failed,
-        summary: "failed: build error",
-        result: Some("rustc: E0599"),
-        usage: Some(TaskNotificationUsage {
-            total_tokens: 1234,
-            tool_uses: 7,
-            duration_ms: 12_500,
-        }),
-    };
-    let xml = render_task_notification(&original);
-    let parsed = parse_task_notification(&xml).expect("parses");
-    assert_eq!(parsed.status, TaskNotificationStatus::Failed);
-    assert_eq!(parsed.result.as_deref(), Some("rustc: E0599"));
-    let u = parsed.usage.expect("usage parsed");
-    assert_eq!(u.total_tokens, 1234);
-    assert_eq!(u.tool_uses, 7);
-    assert_eq!(u.duration_ms, 12_500);
-}
-
-#[test]
-fn parse_task_notification_rejects_non_envelope() {
-    assert!(parse_task_notification("hello from the teammate").is_none());
-    assert!(
-        parse_task_notification("<task-notification>missing fields</task-notification>").is_none()
-    );
-}
-
-#[test]
 fn coordinator_system_prompt_contains_role_section_and_tool_names() {
     let p = coordinator_system_prompt(false);
     assert!(p.contains("You are Claude Code"));

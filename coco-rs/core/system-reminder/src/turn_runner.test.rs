@@ -39,6 +39,7 @@ fn minimal_input<'a>(
         used_tokens: 10_000,
         new_date: None,
         current_date: None,
+        coordinator_worker_context: None,
         has_pending_plan_verification: false,
         total_cost_usd: 0.0,
         max_budget_usd: None,

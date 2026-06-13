@@ -120,7 +120,7 @@ pub struct AgentQueryConfig {
     /// {bypass, acceptEdits, auto} else parent.permission_mode`. When
     /// `None`, the adapter defaults to `PermissionMode::Default`.
     #[serde(default)]
-    pub permission_mode: Option<String>,
+    pub permission_mode: Option<coco_types::PermissionMode>,
     /// Branded agent ID. Subagents get per-agent
     /// plan files `{slug}-agent-{id}.md`; setting this flows through to
     /// `ToolUseContext::agent_id` and `session_plan_file` so the Plan-mode

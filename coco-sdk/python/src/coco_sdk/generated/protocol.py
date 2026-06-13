@@ -1275,11 +1275,6 @@ class ServerNotificationIdeDiagnosticsUpdated(BaseModel):
     method: Literal['ide/diagnosticsUpdated'] = Field(default='ide/diagnosticsUpdated', alias='method')
     params: IdeDiagnosticsUpdatedParams
 
-class ServerNotificationPlanModeChanged(BaseModel):
-    model_config = {"populate_by_name": True}
-    method: Literal['plan/modeChanged'] = Field(default='plan/modeChanged', alias='method')
-    params: PlanModeChangedParams
-
 class ServerNotificationQueueStateChanged(BaseModel):
     model_config = {"populate_by_name": True}
     method: Literal['queue/stateChanged'] = Field(default='queue/stateChanged', alias='method')
@@ -1411,7 +1406,7 @@ class ServerNotificationPluginsChanged(BaseModel):
     params: dict[str, Any]
 
 ServerNotification = Annotated[
-    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationSessionUsageUpdated, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnEnded, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationPlanModeChanged, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
+    Union[ServerNotificationSessionStarted, ServerNotificationSessionResult, ServerNotificationSessionEnded, ServerNotificationSessionUsageUpdated, ServerNotificationHistoryMessageAppended, ServerNotificationHistoryMessageTruncated, ServerNotificationHistoryResetForResume, ServerNotificationHistoryReplaced, ServerNotificationHistoryReasoningMetadataAttached, ServerNotificationTurnStarted, ServerNotificationTurnEnded, ServerNotificationItemStarted, ServerNotificationItemUpdated, ServerNotificationItemCompleted, ServerNotificationAgentMessageDelta, ServerNotificationReasoningDelta, ServerNotificationMcpStartupStatus, ServerNotificationMcpStartupComplete, ServerNotificationLspPrewarmComplete, ServerNotificationContextCompacted, ServerNotificationContextUsageWarning, ServerNotificationContextCompactionStarted, ServerNotificationContextCompactionPhase, ServerNotificationContextCompactionFailed, ServerNotificationContextCleared, ServerNotificationTaskStarted, ServerNotificationTaskCompleted, ServerNotificationTaskProgress, ServerNotificationTaskPanelChanged, ServerNotificationPlanApprovalRequested, ServerNotificationAgentsKilled, ServerNotificationModelFallbackStarted, ServerNotificationModelFallbackCompleted, ServerNotificationModelFastModeChanged, ServerNotificationModelRoleChanged, ServerNotificationPermissionModeChanged, ServerNotificationPromptSuggestion, ServerNotificationError, ServerNotificationRateLimit, ServerNotificationKeepAlive, ServerNotificationIdeSelectionChanged, ServerNotificationIdeDiagnosticsUpdated, ServerNotificationQueueStateChanged, ServerNotificationQueueCommandQueued, ServerNotificationQueueCommandDequeued, ServerNotificationRewindCompleted, ServerNotificationRewindFailed, ServerNotificationCostWarning, ServerNotificationSandboxStateChanged, ServerNotificationSandboxViolationsDetected, ServerNotificationAgentsRegistered, ServerNotificationHookStarted, ServerNotificationHookProgress, ServerNotificationHookResponse, ServerNotificationWorktreeEntered, ServerNotificationWorktreeExited, ServerNotificationSummarizeCompleted, ServerNotificationSummarizeFailed, ServerNotificationStreamStallDetected, ServerNotificationStreamWatchdogWarning, ServerNotificationStreamRequestEnd, ServerNotificationSessionStateChanged, ServerNotificationLocalCommandOutput, ServerNotificationFilesPersisted, ServerNotificationElicitationComplete, ServerNotificationToolUseSummary, ServerNotificationToolProgress, ServerNotificationPluginsChanged],
     Field(discriminator='method'),
 ]
 
@@ -2163,11 +2158,6 @@ class PlanApprovalRequestedParams(BaseModel):
     request_id: str
     plan_file_path: str | None = None
 
-class PlanModeChangedParams(BaseModel):
-    entered: bool
-    approved: bool | None = None
-    plan_file: str | None = None
-
 class RateLimitParams(BaseModel):
     limit: int | None = None
     provider: str | None = None
@@ -2441,7 +2431,6 @@ class NotificationMethod(str, Enum):
     KEEP_ALIVE = 'keepAlive'
     IDE_SELECTION_CHANGED = 'ide/selectionChanged'
     IDE_DIAGNOSTICS_UPDATED = 'ide/diagnosticsUpdated'
-    PLAN_MODE_CHANGED = 'plan/modeChanged'
     QUEUE_STATE_CHANGED = 'queue/stateChanged'
     QUEUE_COMMAND_QUEUED = 'queue/commandQueued'
     QUEUE_COMMAND_DEQUEUED = 'queue/commandDequeued'

@@ -37,7 +37,7 @@ from coco_sdk.generated.protocol import (
 async def test_list_then_resume(live_deepseek, isolated_cwd) -> None:
     async with CocoClient(
         prompt="Reply with the single word: alpha",
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         max_turns=1,
     ) as client:

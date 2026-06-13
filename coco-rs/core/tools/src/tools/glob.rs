@@ -230,10 +230,7 @@ impl Tool for GlobTool {
         // Move owned values into the blocking closure — no redundant clones.
         let cancel = ctx.cancel_token();
         let pattern_owned = input.pattern.clone();
-        let read_ignore_matcher =
-            crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
-                &ctx.tool_config.file_read_ignore_patterns,
-            );
+        let read_ignore_patterns = ctx.tool_config.file_read_ignore_patterns.clone();
         let search_future = tokio::task::spawn_blocking(move || {
             run_glob_search(
                 &pattern_owned,
@@ -241,7 +238,7 @@ impl Tool for GlobTool {
                 &cwd,
                 max_results,
                 &cancel,
-                &read_ignore_matcher,
+                &read_ignore_patterns,
             )
         });
 
@@ -294,20 +291,28 @@ fn run_glob_search(
     base_dir: &Path,
     max_results: usize,
     cancel: &CancellationToken,
-    read_ignore_matcher: &globset::GlobSet,
+    read_ignore_patterns: &[String],
 ) -> Result<(Vec<String>, bool), String> {
-    // Build the glob matcher
-    let glob = globset::GlobBuilder::new(pattern)
-        .literal_separator(false)
-        .build()
-        .map_err(|e| format!("invalid glob pattern: {e}"))?
-        .compile_matcher();
+    // The user pattern is compiled into an `ignore::overrides::Override` — the
+    // exact matcher ripgrep's `--glob` uses — and applied as a per-file filter
+    // (not as the walker's whitelist override). A slash-less pattern therefore
+    // matches its basename at any depth (`Cargo.toml` finds every Cargo.toml,
+    // matching `rg --files --glob Cargo.toml`), while `.agentignore` (pruned by
+    // the walk below) still wins: a whitelist override would otherwise outrank
+    // ignore files and let the model read agent-hidden files via `Glob "**/*"`.
+    let pattern_matcher = crate::tools::file_filter::compile_glob_matcher(search_path, &[pattern])
+        .map_err(|e| format!("invalid glob pattern: {e}"))?;
 
-    let ignore_config = IgnoreConfig::default()
-        .with_hidden(true)
-        .with_gitignore(false);
-    let ignore_service = IgnoreService::new(ignore_config);
-    let walker_builder = ignore_service.create_walk_builder(search_path);
+    // Glob discovery mirrors the TS reference's `--no-ignore --hidden` while
+    // keeping `.agentignore` in force (see `IgnoreConfig::for_glob_discovery`).
+    // File-read ignore patterns prune the walk as `!` negatives (no whitelist,
+    // so `.agentignore` is preserved) — one traversal, no second filter pass.
+    let ignore_service = IgnoreService::new(IgnoreConfig::for_glob_discovery());
+    let mut walker_builder = ignore_service.create_walk_builder(search_path);
+    let exclusions =
+        crate::tools::file_filter::build_exclusion_override(search_path, &[], read_ignore_patterns)
+            .map_err(|e| format!("invalid file-read ignore pattern: {e}"))?;
+    walker_builder.overrides(exclusions);
 
     let mut matches: Vec<(PathBuf, SystemTime)> = Vec::new();
 
@@ -321,22 +326,18 @@ fn run_glob_search(
             continue;
         }
 
-        // R6-T20: hide files that match the file-read ignore patterns
-        // from the result list (pipes through `checkReadPermissionForTool`
-        // before emitting).
-        if crate::tools::read_permissions::is_read_ignored_with_matcher(path, read_ignore_matcher) {
+        // Per-file glob filter (rg `--glob` semantics). The walk already
+        // pruned `.agentignore` / read-ignored paths.
+        let rel = path.strip_prefix(search_path).unwrap_or(path);
+        if !pattern_matcher.matched(rel, false).is_whitelist() {
             continue;
         }
 
-        // Match against the path relative to the search directory, not cwd.
-        let rel_path = path.strip_prefix(search_path).unwrap_or(path);
-        if glob.is_match(rel_path) {
-            let mtime = path
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            matches.push((path.to_path_buf(), mtime));
-        }
+        let mtime = path
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        matches.push((path.to_path_buf(), mtime));
     }
 
     // Sort ascending by modification time (oldest first), matching

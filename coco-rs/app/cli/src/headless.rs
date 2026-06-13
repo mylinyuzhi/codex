@@ -101,7 +101,7 @@ impl LanguageModel for MockModel {
 
         let response = format!(
             "[mock model, call #{call}] Received: \"{user_text}\"\n\n\
-             No model configured. Set a model via settings.json or --model to use a real provider."
+             No model configured. Set models.main via settings.json or --models.main to use a real provider."
         );
 
         Ok(LanguageModelGenerateResult {
@@ -146,10 +146,10 @@ pub fn cli_runtime_overrides(cli: &Cli) -> Result<coco_config::RuntimeOverrides>
     use coco_types::ProviderModelSelection;
 
     let mut overrides = coco_config::RuntimeOverrides::default();
-    if let Some(raw) = cli.model.as_deref() {
+    if let Some(raw) = cli.models_main.as_deref() {
         overrides.model_override = Some(
             ProviderModelSelection::from_slash_str(raw)
-                .map_err(|e| anyhow::anyhow!("--model: {e}"))?,
+                .map_err(|e| anyhow::anyhow!("--models.main: {e}"))?,
         );
     }
     if let Some(mode) = cli.permission_mode.as_deref()
@@ -353,6 +353,25 @@ pub fn build_system_prompt_for_model(
     let base_instructions = resolved
         .as_ref()
         .and_then(|model| model.info.base_instructions.as_deref());
+    // Point the "Break down and manage your work with the <X> tool" nudge at
+    // whichever task tool is actually live. The two are mutually exclusive:
+    // TaskV2 on → TaskCreate, off → TodoWrite (see `task_tools.rs::is_enabled`).
+    // The default prompt names TaskCreate, so only V1 needs a rewrite. Mirrors
+    // TS `getUsingYourToolsSection`'s `taskToolName = [TaskCreate, TodoWrite]
+    // .find(enabled)`; `replace` is a no-op for prompts without the bullet.
+    let base_instructions: Option<String> = base_instructions.map(|base| {
+        if runtime_config.features.enabled(coco_types::Feature::TaskV2) {
+            base.to_string()
+        } else {
+            base.replace(
+                &format!(
+                    "with the {} tool",
+                    coco_types::ToolName::TaskCreate.as_str()
+                ),
+                &format!("with the {} tool", coco_types::ToolName::TodoWrite.as_str()),
+            )
+        }
+    });
     // Suppress the git-status block under COCO_REMOTE or a disabled
     // `include_git_instructions` setting (COCO_DISABLE_GIT_INSTRUCTIONS
     // overrides the setting either way).
@@ -365,7 +384,7 @@ pub fn build_system_prompt_for_model(
     build_system_prompt(
         cwd,
         model_id,
-        base_instructions,
+        base_instructions.as_deref(),
         output_style,
         additional_working_directories,
         include_git_status,
@@ -647,7 +666,7 @@ pub async fn run_chat(cli: &Cli, prompt: Option<&str>) -> Result<RunChatOutcome>
 ///   `--resume` in-process.
 ///
 /// Honors these `Cli` flags end-to-end:
-/// `--model`, `--fallback-model`, `--permission-mode`,
+/// `--models.main`, `--fallback-model`, `--permission-mode`,
 /// `--dangerously-skip-permissions` / `--allow-…`, `--max-turns`,
 /// `--max-tokens`, `--settings`, `--system-prompt`,
 /// `--append-system-prompt`, `--append-system-prompt-file`,

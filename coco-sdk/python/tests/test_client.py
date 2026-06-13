@@ -282,11 +282,11 @@ async def test_client_interrupt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_set_model_string() -> None:
+async def test_client_set_models_main_string() -> None:
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
-    await client.set_model("anthropic/claude-opus-4-7")
+    await client.set_models_main("anthropic/claude-opus-4-7")
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["method"] == ClientRequestMethod.CONTROL_SET_MODEL
@@ -294,13 +294,13 @@ async def test_client_set_model_string() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_set_model_spec() -> None:
+async def test_client_set_models_main_spec() -> None:
     from coco_sdk.types import DEEPSEEK
 
     transport = MockTransport()
     client = CocoClient(prompt="test", transport=transport)
     client._started = True
-    await client.set_model(DEEPSEEK.flash_openai)
+    await client.set_models_main(DEEPSEEK.flash_openai)
 
     sent = json.loads(transport.sent_lines[0])
     assert sent["params"]["model"] == "deepseek-openai/deepseek-v4-flash"

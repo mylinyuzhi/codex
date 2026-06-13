@@ -30,7 +30,7 @@ async def _drain_until_turn_completed(client: CocoClient) -> str:
 async def test_client_two_turns(live_deepseek, isolated_cwd) -> None:
     async with CocoClient(
         prompt="Remember the number 47. Then reply with: noted.",
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         max_turns=2,
     ) as client:

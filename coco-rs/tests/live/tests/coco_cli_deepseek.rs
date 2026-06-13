@@ -53,7 +53,15 @@ fn model_id() -> &'static str {
 
 fn parse_cli(argv: &[&str]) -> Cli {
     use clap::Parser;
-    Cli::parse_from(argv)
+    let mut hermetic = argv.to_vec();
+    if !argv
+        .iter()
+        .any(|arg| *arg == "--setting-sources" || arg.starts_with("--setting-sources="))
+    {
+        hermetic.push("--setting-sources");
+        hermetic.push("project,local,flag");
+    }
+    Cli::parse_from(hermetic)
 }
 
 /// Build a `Cli` configured to drive a single one-shot prompt against
@@ -67,7 +75,7 @@ fn cli_for(
     extra: &[&str],
 ) -> Cli {
     let model_arg = format!("{provider}/{model}");
-    let mut argv: Vec<&str> = vec!["coco", "-p", prompt, "--model", &model_arg];
+    let mut argv: Vec<&str> = vec!["coco", "-p", prompt, "--models.main", &model_arg];
     if let Some(s) = settings_path {
         argv.push("--settings");
         argv.push(s);
@@ -185,9 +193,9 @@ async fn test_coco_cli_max_turns_one_deepseek_openai() -> Result<()> {
 
 // ─── --settings file plumbing ────────────────────────────────────────
 
-/// Write a tempdir `settings.json` that pins `model: deepseek-openai/<model_id()>`,
+/// Write a tempdir `settings.json` that pins `models.main: deepseek-openai/<model_id()>`,
 /// then run `coco -p "..." --settings <tempdir>/settings.json` *without*
-/// `--model` and verify the settings-driven model takes effect.
+/// `--models.main` and verify the settings-driven model takes effect.
 #[tokio::test]
 async fn test_coco_cli_settings_file_drives_model_deepseek_openai() -> Result<()> {
     let _t = require_live!("deepseek-openai", model_id(), "text");
@@ -195,14 +203,16 @@ async fn test_coco_cli_settings_file_drives_model_deepseek_openai() -> Result<()
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
-        "model": format!("deepseek-openai/{}", model_id()),
+        "models": {
+            "main": format!("deepseek-openai/{}", model_id()),
+        },
     });
     std::fs::write(
         &settings_path,
         serde_json::to_vec_pretty(&body).expect("settings.json"),
     )?;
 
-    // No --model flag — let settings.json drive it.
+    // No --models.main flag — let settings.json drive it.
     let argv: Vec<String> = vec![
         "coco".into(),
         "-p".into(),
@@ -548,14 +558,14 @@ async fn test_coco_cli_append_system_prompt_file_deepseek_openai() -> Result<()>
 
 #[tokio::test]
 async fn test_coco_cli_invalid_model_format_errors() -> Result<()> {
-    // Build a Cli with an invalid --model directly (don't go through
-    // `cli_for` because it pre-sets a valid --model that would
+    // Build a Cli with an invalid --models.main directly (don't go through
+    // `cli_for` because it pre-sets a valid --models.main that would
     // collide).
-    let cli = parse_cli(&["coco", "-p", "noop", "--model", "garbage_no_slash"]);
+    let cli = parse_cli(&["coco", "-p", "noop", "--models.main", "garbage_no_slash"]);
     let result = run_chat(&cli, cli.prompt.as_deref()).await;
     assert!(
         result.is_err(),
-        "invalid --model format should error, got Ok"
+        "invalid --models.main format should error, got Ok"
     );
     Ok(())
 }
@@ -671,7 +681,7 @@ async fn test_coco_cli_fallback_chain_installs_count() -> Result<()> {
 // These exercise the config layer (parse, merge, error paths) on top
 // of the user-facing CLI.
 
-/// CLI flag wins over `settings.json`: settings says anthropic, --model
+/// CLI flag wins over `settings.json`: settings says anthropic, --models.main
 /// says openai → openai wins.
 #[tokio::test]
 async fn test_coco_cli_cli_model_flag_overrides_settings_file() -> Result<()> {
@@ -679,7 +689,9 @@ async fn test_coco_cli_cli_model_flag_overrides_settings_file() -> Result<()> {
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
-        "model": "deepseek-anthropic/deepseek-v4-flash",
+        "models": {
+            "main": "deepseek-anthropic/deepseek-v4-flash",
+        },
     });
     std::fs::write(&settings_path, serde_json::to_vec_pretty(&body)?)?;
     let cli = cli_for(
@@ -694,7 +706,7 @@ async fn test_coco_cli_cli_model_flag_overrides_settings_file() -> Result<()> {
     assert_eq!(
         outcome.provider_api,
         Some(ProviderApi::OpenaiCompat),
-        "--model openai should win over settings.json anthropic"
+        "--models.main openai should win over settings.json anthropic"
     );
     drop(tmp);
     Ok(())
@@ -710,7 +722,7 @@ async fn test_coco_cli_cwd_flag_wins_over_options() -> Result<()> {
         "coco".into(),
         "-p".into(),
         "Reply with the single word: ok".into(),
-        "--model".into(),
+        "--models.main".into(),
         format!("deepseek-openai/{}", model_id()),
         "--cwd".into(),
         flag_dir.path().to_string_lossy().into_owned(),
@@ -1003,25 +1015,28 @@ async fn test_coco_cli_max_tokens_zero_errors() -> Result<()> {
     Ok(())
 }
 
-/// `--model ""` (empty string) — clap accepts empty Option<String>,
+/// `--models.main ""` (empty string) — clap accepts empty Option<String>,
 /// then `from_slash_str("")` should reject it. Pure config-layer test
 /// (no live API).
 #[tokio::test]
 async fn test_coco_cli_empty_model_string_errors() -> Result<()> {
-    let cli = parse_cli(&["coco", "-p", "noop", "--model", ""]);
-    let result = run_chat(&cli, cli.prompt.as_deref()).await;
-    assert!(result.is_err(), "empty --model string should error, got Ok");
-    Ok(())
-}
-
-/// `--model deepseek-openai/` (empty model_id half) — should error.
-#[tokio::test]
-async fn test_coco_cli_model_with_empty_id_errors() -> Result<()> {
-    let cli = parse_cli(&["coco", "-p", "noop", "--model", "deepseek-openai/"]);
+    let cli = parse_cli(&["coco", "-p", "noop", "--models.main", ""]);
     let result = run_chat(&cli, cli.prompt.as_deref()).await;
     assert!(
         result.is_err(),
-        "--model with empty model_id should error, got Ok"
+        "empty --models.main string should error, got Ok"
+    );
+    Ok(())
+}
+
+/// `--models.main deepseek-openai/` (empty model_id half) — should error.
+#[tokio::test]
+async fn test_coco_cli_model_with_empty_id_errors() -> Result<()> {
+    let cli = parse_cli(&["coco", "-p", "noop", "--models.main", "deepseek-openai/"]);
+    let result = run_chat(&cli, cli.prompt.as_deref()).await;
+    assert!(
+        result.is_err(),
+        "--models.main with empty model_id should error, got Ok"
     );
     Ok(())
 }
@@ -1035,7 +1050,7 @@ async fn test_coco_cli_cwd_nonexistent_path_behavior() -> Result<()> {
         "coco",
         "-p",
         "noop",
-        "--model",
+        "--models.main",
         &format!("deepseek-openai/{}", model_id()),
         "--cwd",
         "/this/path/should/not/exist/anywhere/in/2026",
@@ -1063,7 +1078,7 @@ async fn test_coco_cli_add_dir_relative_resolves_against_cwd() -> Result<()> {
         "coco".into(),
         "-p".into(),
         "Reply with the single word: ok".into(),
-        "--model".into(),
+        "--models.main".into(),
         format!("deepseek-openai/{}", model_id()),
         "--cwd".into(),
         workdir.path().to_string_lossy().into_owned(),
@@ -1155,16 +1170,13 @@ async fn test_coco_cli_perm_mode_flag_wins_over_settings_default() -> Result<()>
     Ok(())
 }
 
-/// settings.json with unknown keys — should the lib reject (strict) or
-/// ignore (permissive)? `coco_config::Settings` uses `#[serde(default)]`
-/// and presumably permissive deserialize. Document.
+/// settings.json with unknown top-level keys should be rejected before
+/// startup so typos do not silently produce ambiguous config.
 #[tokio::test]
-async fn test_coco_cli_settings_unknown_keys_ignored() -> Result<()> {
-    let _t = require_live!("deepseek-openai", model_id(), "text");
+async fn test_coco_cli_settings_unknown_keys_rejected() -> Result<()> {
     let tmp = common::tmpdir::make("coco-tests-cli-unknown-keys-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
-        "model": format!("deepseek-openai/{}", model_id()),
         "fooBar": "wat",            // unknown
         "nested": { "weird": 42 },  // unknown
     });
@@ -1176,13 +1188,13 @@ async fn test_coco_cli_settings_unknown_keys_ignored() -> Result<()> {
         Some(&settings_path.to_string_lossy()),
         &[],
     );
-    // Permissive parse → run succeeds. Strict parse → would error.
-    let outcome = run_chat(&cli, cli.prompt.as_deref()).await?;
-    record_outcome("coco_cli.unknown_settings_keys", &outcome);
-    eprintln!(
-        "[adversarial] settings.json with unknown keys → Ok (permissive deserialize); \
-         model_id={} provider={:?}",
-        outcome.model_id, outcome.provider_api,
+    let err = run_chat(&cli, cli.prompt.as_deref())
+        .await
+        .expect_err("unknown settings keys should be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("fooBar") && msg.contains("not a supported settings key"),
+        "unexpected error: {msg}"
     );
     drop(tmp);
     Ok(())

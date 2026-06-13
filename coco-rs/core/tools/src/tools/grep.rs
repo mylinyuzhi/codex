@@ -516,12 +516,9 @@ impl Tool for GrepTool {
         let timeout_secs = ctx.tool_config.glob_timeout_seconds.max(1) as u64;
 
         let cancel = ctx.cancel_token();
-        let read_ignore_matcher =
-            crate::tools::read_permissions::file_read_ignore_matcher_from_patterns(
-                &ctx.tool_config.file_read_ignore_patterns,
-            );
+        let read_ignore_patterns = ctx.tool_config.file_read_ignore_patterns.clone();
         let search_future = tokio::task::spawn_blocking(move || {
-            run_grep_search(&params, &cancel, &read_ignore_matcher)
+            run_grep_search(&params, &cancel, &read_ignore_patterns)
         });
 
         let result = tokio::time::timeout(Duration::from_secs(timeout_secs), search_future)
@@ -568,7 +565,7 @@ struct GrepSearchResult {
 fn run_grep_search(
     params: &GrepSearchParams,
     cancel: &CancellationToken,
-    read_ignore_matcher: &globset::GlobSet,
+    read_ignore_patterns: &[String],
 ) -> Result<GrepSearchResult, String> {
     // Build regex matcher via grep-regex (ripgrep's core library)
     let mut matcher_builder = RegexMatcherBuilder::new();
@@ -609,7 +606,10 @@ fn run_grep_search(
             &mut file_mtimes,
         );
     } else {
-        let walker_builder = build_directory_walker(params);
+        let walker_builder = build_directory_walker(params, read_ignore_patterns)?;
+        // The `glob` filter is matched per file (rg `--glob` semantics) so it
+        // composes with — but never outranks — `.agentignore`/`.gitignore`.
+        let glob_matcher = compile_glob_filter(&params.search_path, params.glob_filter.as_deref())?;
         for entry in walker_builder.build().flatten() {
             if cancel.is_cancelled() || matches.len() >= params.max_results {
                 break;
@@ -618,15 +618,16 @@ fn run_grep_search(
                 continue;
             }
 
-            // R6-T20: skip files matching file-read ignore patterns.
-            // Filtered per-entry rather than via ripgrep `--glob '!...'`
-            // so we don't have to round-trip through the globset/walker
-            // override system.
-            if crate::tools::read_permissions::is_read_ignored_with_matcher(
-                entry.path(),
-                read_ignore_matcher,
-            ) {
-                continue;
+            // VCS excludes and file-read ignore patterns pruned the walk; apply
+            // the user `glob` filter (if any) to the survivors.
+            if let Some(glob) = &glob_matcher {
+                let rel = entry
+                    .path()
+                    .strip_prefix(&params.search_path)
+                    .unwrap_or(entry.path());
+                if !glob.matched(rel, false).is_whitelist() {
+                    continue;
+                }
             }
 
             search_one_file(
@@ -691,23 +692,31 @@ fn search_one_file(
     }
 }
 
-/// Build the directory walker with VCS exclusion and type/glob filter applied.
-fn build_directory_walker(params: &GrepSearchParams) -> ignore::WalkBuilder {
-    let ignore_config = IgnoreConfig::default().with_hidden(true);
-    let ignore_service = IgnoreService::new(ignore_config);
+/// VCS metadata directories excluded from every grep, matching the TS
+/// reference (`rg --glob '!.git'` …). Kept as gitignore-style overrides.
+const VCS_EXCLUDES: &[&str] = &["!.git", "!.svn", "!.hg", "!.bzr", "!.jj", "!.sl"];
+
+/// Build the directory walker. The walker honors `.gitignore` / `.ignore` /
+/// `.agentignore` (via [`IgnoreService`]), prunes VCS dirs and the file-read
+/// ignore patterns via a negatives-only `Override`, and applies the `type`
+/// filter. The user `glob` filter is matched per file (see
+/// [`compile_glob_filter`]) — composing with `type`, as the TS GrepTool
+/// passes both `--type` and `--glob`.
+fn build_directory_walker(
+    params: &GrepSearchParams,
+    read_ignore_patterns: &[String],
+) -> Result<ignore::WalkBuilder, String> {
+    let ignore_service = IgnoreService::new(IgnoreConfig::default().with_hidden(true));
     let mut walker_builder = ignore_service.create_walk_builder(&params.search_path);
 
-    // Exclude VCS directories
-    const VCS_EXCLUDES: &[&str] = &["!.git", "!.svn", "!.hg", "!.bzr", "!.jj", "!.sl"];
-    let mut override_builder = ignore::overrides::OverrideBuilder::new(&params.search_path);
-    let all_added = VCS_EXCLUDES
-        .iter()
-        .all(|pat| override_builder.add(pat).is_ok());
-    if all_added && let Ok(built) = override_builder.build() {
-        walker_builder.overrides(built);
-    }
+    let exclusions = crate::tools::file_filter::build_exclusion_override(
+        &params.search_path,
+        VCS_EXCLUDES,
+        read_ignore_patterns,
+    )
+    .map_err(|e| format!("failed to build grep file filter: {e}"))?;
+    walker_builder.overrides(exclusions);
 
-    // Apply type filter or glob filter
     if let Some(ref type_name) = params.type_filter {
         let mut types_builder = ignore::types::TypesBuilder::new();
         types_builder.add_defaults();
@@ -715,18 +724,45 @@ fn build_directory_walker(params: &GrepSearchParams) -> ignore::WalkBuilder {
         if let Ok(types) = types_builder.build() {
             walker_builder.types(types);
         }
-    } else if let Some(ref glob_pat) = params.glob_filter {
-        let mut types_builder = ignore::types::TypesBuilder::new();
-        for pat in split_glob_pattern(glob_pat) {
-            let _ = types_builder.add("custom", &pat);
-        }
-        types_builder.select("custom");
-        if let Ok(types) = types_builder.build() {
-            walker_builder.types(types);
-        }
     }
 
-    walker_builder
+    Ok(walker_builder)
+}
+
+/// Compile the user `glob` filter into a per-file matcher (rg `--glob`
+/// semantics). Returns `None` when no `glob` was passed (no filtering). The
+/// combined-filter string is split on whitespace/commas first
+/// (see [`split_glob_pattern`]).
+///
+/// DECISION (Option A — `.agentignore` over rg parity): the `glob` is a
+/// per-file *filter* applied AFTER the walk's ignore matchers, NOT the walker's
+/// whitelist override. ripgrep's precedence is a single tier — an override
+/// whitelist outranks every ignore file — so routing `glob` through the
+/// override would let `Grep glob="**/*"` re-surface `.agentignore`'d
+/// secrets/fixtures, defeating their purpose. Filtering per file keeps
+/// `.gitignore` / `.ignore` / `.agentignore` authoritative.
+///
+/// Trade-off vs ripgrep/TS: a `glob` whitelist does NOT re-include a file that
+/// `.gitignore` already excluded (in real `rg`, `-g '*.rs'` would re-surface a
+/// gitignored `*.rs`). This only affects the gitignored ∩ glob-matched
+/// intersection — an obscure case — and is accepted to keep `.agentignore`
+/// robust and Grep/Glob consistent. The `ignore` crate cannot express the
+/// 3-tier precedence (`.agentignore` > glob > `.gitignore`) that would satisfy
+/// both. See [`crate::tools::file_filter`].
+fn compile_glob_filter(
+    search_path: &Path,
+    glob_filter: Option<&str>,
+) -> Result<Option<ignore::overrides::Override>, String> {
+    let Some(glob) = glob_filter else {
+        return Ok(None);
+    };
+    let patterns = split_glob_pattern(glob);
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    let matcher = crate::tools::file_filter::compile_glob_matcher(search_path, &patterns)
+        .map_err(|e| format!("invalid glob filter: {e}"))?;
+    Ok(Some(matcher))
 }
 
 /// Split a glob filter string into individual patterns: first split on

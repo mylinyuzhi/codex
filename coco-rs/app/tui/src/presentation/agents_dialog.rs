@@ -37,6 +37,7 @@ pub(crate) fn agents_dialog_content(
     s: &AgentsDialogState,
     subagents: &[SubagentInstance],
     styles: UiStyles<'_>,
+    now_ms: i64,
 ) -> (String, String, Color) {
     let title = t!("dialog.title_agents").to_string();
     let running_count = subagents
@@ -54,13 +55,19 @@ pub(crate) fn agents_dialog_content(
     // blocked by the dispatch layer.
     let tab_body = match (s.selected_tab, s.wizard.as_ref()) {
         (AgentsDialogTab::Library, Some(wizard)) => render_create_wizard(wizard),
-        (AgentsDialogTab::Running, _) => render_running_tab(s, subagents),
+        (AgentsDialogTab::Running, _) => render_running_tab(s, subagents, now_ms),
         (AgentsDialogTab::Library, None) => render_library_tab(s),
     };
     body.push_str(&tab_body);
 
     body.push_str("\n\n");
-    let hint = if s.is_in_wizard() {
+    let hint = if let Some(path) = s.pending_delete.as_ref() {
+        let name = path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("this agent");
+        t!("dialog.agents_delete_confirm", name = name).to_string()
+    } else if s.is_in_wizard() {
         t!("dialog.agents_wizard_hint").to_string()
     } else {
         t!("dialog.agents_hint").to_string()
@@ -100,7 +107,11 @@ fn format_tab_label(label: &str, count: usize, focused: bool) -> String {
     }
 }
 
-fn render_running_tab(s: &AgentsDialogState, subagents: &[SubagentInstance]) -> String {
+fn render_running_tab(
+    s: &AgentsDialogState,
+    subagents: &[SubagentInstance],
+    now_ms: i64,
+) -> String {
     let active: Vec<&SubagentInstance> = subagents
         .iter()
         .filter(|s| s.status == SubagentStatus::Running)
@@ -115,7 +126,7 @@ fn render_running_tab(s: &AgentsDialogState, subagents: &[SubagentInstance]) -> 
         let marker = if i == cursor { "▸" } else { " " };
         let elapsed = sub
             .started_at_ms
-            .map(format_elapsed)
+            .map(|started| format_elapsed(now_ms, started))
             .unwrap_or_else(|| "--".to_string());
         let last = sub.last_tool_name.as_deref().unwrap_or("…");
         out.push_str(&format!(
@@ -319,12 +330,8 @@ fn render_wizard_error(err: &WizardError) -> String {
     }
 }
 
-fn format_elapsed(started_at_ms: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(started_at_ms);
-    let elapsed_secs = ((now - started_at_ms) / 1000).max(0);
+fn format_elapsed(now_ms: i64, started_at_ms: i64) -> String {
+    let elapsed_secs = ((now_ms - started_at_ms) / 1000).max(0);
     if elapsed_secs < 60 {
         format!("{elapsed_secs}s")
     } else if elapsed_secs < 3600 {

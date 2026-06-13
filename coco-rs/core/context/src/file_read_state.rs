@@ -43,7 +43,12 @@ pub struct FileReadEntry {
 /// serves as the "came from the Read tool" marker — Edit/Write/@mention
 /// entries are never in it, so `Read(path, limit=2000)` followed by an
 /// identical call can dedup-match exactly.
-#[derive(Debug, Default)]
+// `Clone` is load-bearing: a fork engine deep-clones the parent's
+// `FileReadState` into a fresh `Arc<RwLock<>>` so the fork's reads/edits
+// can't pollute the parent's dedup cache (mirrors TS
+// `createSubagentContext`, which clones `readFileState` per fork). Plain
+// owned data — a cheap structural clone.
+#[derive(Debug, Default, Clone)]
 pub struct FileReadState {
     entries: HashMap<PathBuf, FileReadEntry>,
     /// LRU ordering (most-recently-accessed at end).

@@ -1432,7 +1432,7 @@ pub fn register_ts_parity_handlers(
     }
 
     // /model — no-args opens the picker overlay; with-args validates against
-    // the builtin registry and persists `model_roles.main`.
+    // the builtin registry and persists `models.main`.
     {
         let mut base = crate::builtin_base_ext(
             names::MODEL,

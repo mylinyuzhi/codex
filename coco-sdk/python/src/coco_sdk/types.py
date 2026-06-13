@@ -60,13 +60,13 @@ class ModelSpec(_GeneratedModelSpec):
     """Generated ``ModelSpec`` + ergonomic CLI rendering.
 
     Adds :attr:`cli_arg` and ``__str__`` so callers can write
-    ``CocoClient(model=spec)`` and the transport layer can ``str()`` it
-    into the ``--model`` flag without a separate helper.
+    ``CocoClient(models_main=spec)`` and the transport layer can ``str()`` it
+    into the ``--models.main`` flag without a separate helper.
     """
 
     @property
     def cli_arg(self) -> str:
-        """Render as ``"<provider>/<model_id>"`` for the CLI ``--model`` arg."""
+        """Render as ``"<provider>/<model_id>"`` for the CLI model arg."""
         return f"{self.provider}/{self.model_id}"
 
     def __str__(self) -> str:

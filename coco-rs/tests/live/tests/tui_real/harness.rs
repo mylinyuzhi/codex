@@ -63,7 +63,7 @@ use crate::common;
 /// Knobs for [`RealTuiHarness::builder`]. Most defaults match the
 /// `coco -p` headless convention so a one-shot test reads naturally.
 pub struct HarnessConfig {
-    /// Provider name as used by `--model <provider>/<model>`.
+    /// Provider name as used by `--models.main <provider>/<model>`.
     pub provider: String,
     /// Wire-side model id (e.g. `deepseek-v4-flash`).
     pub model: String,
@@ -258,7 +258,7 @@ impl RealTuiHarness {
         // session's view; the build helper threads it through
         // RuntimeConfig.paths and into engine config_dir.
         let mut argv: Vec<String> = vec!["coco".into()];
-        argv.push("--model".into());
+        argv.push("--models.main".into());
         argv.push(format!("{}/{}", cfg.provider, cfg.model));
         argv.push("--max-turns".into());
         argv.push(cfg.max_turns.to_string());

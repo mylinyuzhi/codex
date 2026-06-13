@@ -88,13 +88,13 @@ fn test_env_snapshot_from_pairs() {
 
     assert_eq!(env.get_i32(EnvKey::CocoMaxToolUseConcurrency), Some(7));
     assert!(env.is_truthy(EnvKey::CocoSimple));
-    assert_eq!(env.get(EnvKey::CocoModel), None);
+    assert_eq!(env.get(EnvKey::CocoModelMain), None);
 }
 
 #[test]
 fn test_env_only_config_from_snapshot() {
     let env = EnvSnapshot::from_pairs([
-        (EnvKey::CocoModel, "openai/gpt-5"),
+        (EnvKey::CocoModelMain, "openai/gpt-5"),
         (EnvKey::CocoSimple, "true"),
     ]);
 

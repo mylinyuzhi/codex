@@ -15,7 +15,6 @@ fn running_subagent() -> SubagentInstance {
         status: SubagentStatus::Running,
         color: None,
         team_name: None,
-        tool_use_id: None,
         started_at_ms: None,
         last_tool_name: None,
         tool_count: 0,

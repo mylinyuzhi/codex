@@ -117,6 +117,21 @@ fn parses_single_fallback_model_flag_as_one_tier_chain() {
 }
 
 #[test]
+fn parses_models_main_flag() {
+    let cli = Cli::try_parse_from(["coco", "--models.main", "openai/gpt-5-5"])
+        .expect("parse models.main flag");
+    assert_eq!(cli.models_main.as_deref(), Some("openai/gpt-5-5"));
+}
+
+#[test]
+fn does_not_accept_legacy_model_flag() {
+    let Err(err) = Cli::try_parse_from(["coco", "--model", "openai/gpt-5-5"]) else {
+        panic!("legacy --model flag must not parse");
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
+#[test]
 fn parses_resume_short_flag() {
     let cli = Cli::try_parse_from(["coco", "-r", "auth-refactor"]).expect("parse -r resume");
     assert_eq!(cli.resume.as_deref(), Some("auth-refactor"));

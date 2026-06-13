@@ -25,13 +25,11 @@
 //! ```rust
 //! use coco_file_ignore::{IgnoreService, IgnoreConfig};
 //!
-//! let config = IgnoreConfig {
-//!     respect_gitignore: true,
-//!     respect_ignore: true,
-//!     include_hidden: false,
-//!     follow_links: false,
-//!     custom_excludes: vec!["*.log".to_string()],
-//! };
+//! let config = IgnoreConfig::default()
+//!     .with_gitignore(true)
+//!     .with_ignore(true)
+//!     .with_hidden(false)
+//!     .with_excludes(vec!["*.log".to_string()]);
 //! let service = IgnoreService::new(config);
 //! ```
 

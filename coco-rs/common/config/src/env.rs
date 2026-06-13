@@ -130,7 +130,7 @@ pub enum EnvKey {
     /// prompt copy.
     CocoCoworkMemoryExtraGuidelines,
     CocoMcpToolTimeoutMs,
-    CocoModel,
+    CocoModelMain,
     CocoParentSessionId,
     CocoPlanModeRequired,
     CocoRemote,
@@ -335,7 +335,7 @@ impl EnvKey {
             Self::CocoTeamMemorySyncUrl => "COCO_TEAM_MEMORY_SYNC_URL",
             Self::CocoCoworkMemoryExtraGuidelines => "COCO_COWORK_MEMORY_EXTRA_GUIDELINES",
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
-            Self::CocoModel => "COCO_MODEL",
+            Self::CocoModelMain => "COCO_MODEL_MAIN",
             Self::CocoParentSessionId => "COCO_PARENT_SESSION_ID",
             Self::CocoPlanModeRequired => "COCO_PLAN_MODE_REQUIRED",
             Self::CocoRemote => "COCO_REMOTE",
@@ -590,7 +590,7 @@ impl EnvSnapshot {
 /// provider crate when they land.
 #[derive(Debug, Clone, Default)]
 pub struct EnvOnlyConfig {
-    /// Single-knob `COCO_MODEL` Main override (kept env-only — it is
+    /// Single-knob `COCO_MODEL_MAIN` Main override (kept env-only — it is
     /// the user's "swap the whole thing" escape hatch and must work
     /// before settings.json is parsed). Per-role models go through
     /// `settings.models.*` exclusively.
@@ -611,7 +611,7 @@ impl EnvOnlyConfig {
 
     pub fn from_snapshot(env: &EnvSnapshot) -> Self {
         Self {
-            model_override: env.get_string(EnvKey::CocoModel),
+            model_override: env.get_string(EnvKey::CocoModelMain),
             force_env_auth: env.is_truthy(EnvKey::CocoSimple),
         }
     }

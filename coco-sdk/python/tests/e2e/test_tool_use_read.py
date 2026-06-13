@@ -34,7 +34,7 @@ async def test_model_invokes_read_tool_on_fixture(live_deepseek, isolated_cwd) -
             " working directory, then reply with just the lucky number"
             " digits — no other text."
         ),
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         permission_mode="auto",
         # Tool-using turns typically need 2+ turns: one for the tool

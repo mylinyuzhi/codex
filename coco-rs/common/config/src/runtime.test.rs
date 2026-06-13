@@ -62,6 +62,16 @@ fn role_slots_of(provider: &str, model_id: &str) -> crate::RoleSlots<ProviderMod
     crate::RoleSlots::new(model_selection(provider, model_id))
 }
 
+fn settings_with_main(provider: &str, model_id: &str) -> SettingsWithSource {
+    settings_with(Settings {
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of(provider, model_id)),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
 fn model_selection(provider: &str, model_id: &str) -> ProviderModelSelection {
     ProviderModelSelection {
         provider: provider.to_string(),
@@ -99,7 +109,10 @@ fn test_runtime_config_resolves_provider_overrides() {
         },
     );
     let settings = settings_with(Settings {
-        model: Some("local/local-model".to_string()),
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("local", "local-model")),
+            ..Default::default()
+        },
         providers,
         ..Default::default()
     });
@@ -127,10 +140,7 @@ fn test_runtime_providers_satisfy_identity_invariant() {
     // explicit Main model — there is no implicit default after the
     // multi-LLM fallback removal.
     let runtime = build_isolated(
-        settings_with(Settings {
-            model: Some("anthropic/claude-opus-4-7".into()),
-            ..Default::default()
-        }),
+        settings_with_main("anthropic", "claude-opus-4-7"),
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
     )
@@ -159,7 +169,10 @@ fn test_partial_provider_overlay_does_not_coerce_api() {
     let settings = settings_with(Settings {
         // Main is mandatory now — the test asserts provider overlay
         // behavior, so any valid model selection works.
-        model: Some("openai/gpt-5-5".into()),
+        models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("openai", "gpt-5-5")),
+            ..Default::default()
+        },
         providers,
         ..Default::default()
     });
@@ -207,11 +220,8 @@ fn test_incomplete_new_provider_overlay_returns_typed_error() {
 
 #[test]
 fn test_runtime_config_env_model_override_beats_json() {
-    let settings = settings_with(Settings {
-        model: Some("anthropic/json-model".to_string()),
-        ..Default::default()
-    });
-    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "openai/gpt-5-5")]);
+    let settings = settings_with_main("anthropic", "claude-opus-4-7");
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModelMain, "openai/gpt-5-5")]);
 
     let runtime =
         build_isolated(settings, env, RuntimeOverrides::default()).expect("runtime config");
@@ -261,7 +271,7 @@ fn test_runtime_config_resolves_structured_model_roles() {
 #[test]
 fn test_runtime_config_rejects_bare_env_model_override() {
     let settings = settings_with(Settings::default());
-    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModel, "gpt-5-5")]);
+    let env = EnvSnapshot::from_pairs([(EnvKey::CocoModelMain, "gpt-5-5")]);
 
     let err = build_isolated(settings, env, RuntimeOverrides::default())
         .expect_err("bare model override should fail");
@@ -279,10 +289,7 @@ fn test_cli_fallback_model_overrides_populate_main_chain_in_order() {
     // must be set explicitly (no implicit default in the multi-LLM
     // SDK); pick an id distinct from the fallbacks so the chain has
     // no duplicates with the primary.
-    let settings = settings_with(Settings {
-        model: Some("anthropic/claude-haiku-4-5".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("anthropic", "claude-haiku-4-5");
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
@@ -311,10 +318,7 @@ fn test_cli_fallback_model_rejects_duplicate_of_primary() {
     // Configuring primary + fallback to the same slug makes the
     // fallback useless; hard-fail at startup rather than silently
     // accept a degenerate config.
-    let settings = settings_with(Settings {
-        model: Some("anthropic/claude-opus-4-7".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("anthropic", "claude-opus-4-7");
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![ProviderModelSelection {
@@ -335,10 +339,7 @@ fn test_cli_fallback_model_rejects_duplicate_of_primary() {
 fn test_cli_fallback_model_rejects_duplicate_within_chain() {
     // Use an explicit primary so the auto-default doesn't collide
     // with one of the duplicated fallbacks.
-    let settings = settings_with(Settings {
-        model: Some("openai/gpt-5-5".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("openai", "gpt-5-5");
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![
@@ -366,10 +367,7 @@ fn test_cli_fallback_model_with_unknown_provider_fails_startup() {
     // Main is configured with a valid spec so resolution reaches the
     // fallback-chain validation step (which is what this test is
     // actually exercising).
-    let settings = settings_with(Settings {
-        model: Some("anthropic/claude-opus-4-7".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("anthropic", "claude-opus-4-7");
     let env = EnvSnapshot::default();
     let overrides = RuntimeOverrides {
         fallback_model_overrides: vec![ProviderModelSelection {
@@ -411,12 +409,13 @@ fn settings_inline_provider_block_equals_providers_json_split() {
     // intentionally has no implicit default. Pick a builtin
     // (anthropic) so neither shape needs the user-defined provider
     // to resolve Main.
-    let main_model = "anthropic/claude-opus-4-7";
-
     // Path A: providers declared inline in settings.json.
     let inline_runtime = build_isolated(
         settings_with(Settings {
-            model: Some(main_model.into()),
+            models: crate::ModelSelectionSettings {
+                main: Some(role_slots_of("anthropic", "claude-opus-4-7")),
+                ..Default::default()
+            },
             providers: providers_inline.clone(),
             ..Default::default()
         }),
@@ -434,10 +433,7 @@ fn settings_inline_provider_block_equals_providers_json_split() {
     )
     .unwrap();
     let split_runtime = build_runtime_config_with(
-        settings_with(Settings {
-            model: Some(main_model.into()),
-            ..Default::default()
-        }),
+        settings_with_main("anthropic", "claude-opus-4-7"),
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::rooted(tmp.path()),
@@ -464,10 +460,7 @@ fn test_role_validation_rejects_unknown_model_id() {
     // Plan §11: typo'd model_id in `settings.models.main` must
     // surface at config build, not silently degrade runtime construction
     // to the legacy mock path.
-    let settings = settings_with(Settings {
-        model: Some("openai/gpt-typo".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("openai", "gpt-typo");
     let err = build_isolated(
         settings,
         EnvSnapshot::default(),
@@ -499,10 +492,7 @@ fn test_runtime_loads_jsonc_provider_catalog() {
     .unwrap();
 
     let runtime = build_runtime_config_with(
-        settings_with(Settings {
-            model: Some("anthropic/claude-opus-4-7".into()),
-            ..Default::default()
-        }),
+        settings_with_main("anthropic", "claude-opus-4-7"),
         EnvSnapshot::default(),
         RuntimeOverrides::default(),
         CatalogPaths::rooted(tmp.path()),
@@ -542,10 +532,7 @@ fn test_role_validation_rejects_incomplete_user_catalog_entry() {
     )
     .unwrap();
 
-    let settings = settings_with(Settings {
-        model: Some("openai/custom-llm".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("openai", "custom-llm");
     let err = build_runtime_config_with(
         settings,
         EnvSnapshot::default(),
@@ -604,10 +591,7 @@ fn test_unconfigured_roles_default_to_main() {
     // No settings.models.{fast,memory,compact,plan,explore,review,hook_agent}
     // → resolver should fall back to Main so consumer-side
     // `.get(role)` is total.
-    let settings = settings_with(Settings {
-        model: Some("anthropic/claude-opus-4-7".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("anthropic", "claude-opus-4-7");
     let runtime = build_isolated(
         settings,
         EnvSnapshot::default(),
@@ -648,8 +632,8 @@ fn test_explicit_role_overrides_main_default() {
     use crate::model::RoleSlots;
     use coco_types::ProviderModelSelection;
     let settings = settings_with(Settings {
-        model: Some("anthropic/claude-opus-4-7".into()),
         models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("anthropic", "claude-opus-4-7")),
             memory: Some(RoleSlots::new(ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
@@ -679,8 +663,8 @@ fn test_subagent_role_resolves_from_settings() {
     use crate::model::RoleSlots;
     use coco_types::ProviderModelSelection;
     let settings = settings_with(Settings {
-        model: Some("anthropic/claude-opus-4-7".into()),
         models: crate::ModelSelectionSettings {
+            main: Some(role_slots_of("anthropic", "claude-opus-4-7")),
             subagent: Some(RoleSlots::new(ProviderModelSelection {
                 provider: "anthropic".into(),
                 model_id: "claude-haiku-4-5".into(),
@@ -704,10 +688,7 @@ fn test_subagent_role_resolves_from_settings() {
 
 #[test]
 fn test_subagent_role_defaults_to_main_when_unset() {
-    let settings = settings_with(Settings {
-        model: Some("anthropic/claude-opus-4-7".into()),
-        ..Default::default()
-    });
+    let settings = settings_with_main("anthropic", "claude-opus-4-7");
     let runtime = build_isolated(
         settings,
         EnvSnapshot::default(),

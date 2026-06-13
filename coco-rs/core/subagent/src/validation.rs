@@ -32,7 +32,7 @@ pub enum ValidationError {
     #[error("invalid permission_mode `{value}`")]
     InvalidPermissionMode { value: String },
     #[error(
-        "invalid model_role `{value}` (expected one of main/fast/compact/plan/explore/review/hook_agent/memory/subagent)"
+        "invalid model_role `{value}` (expected one of main/fast/plan/explore/review/hook_agent/memory/subagent)"
     )]
     InvalidModelRole { value: String },
     #[error("invalid `max_turns` value `{value}` (expected positive integer)")]

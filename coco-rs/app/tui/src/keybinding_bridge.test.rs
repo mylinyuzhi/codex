@@ -464,7 +464,6 @@ fn test_ctrl_shift_t_opens_team_roster_when_teammate_present() {
             status: crate::state::SubagentStatus::Running,
             color: None,
             team_name: Some("my-team".into()),
-            tool_use_id: None,
             started_at_ms: None,
             last_tool_name: None,
             tool_count: 0,

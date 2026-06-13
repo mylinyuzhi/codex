@@ -116,7 +116,7 @@ pub async fn run_login(provider: Option<String>, no_browser: bool) -> Result<()>
         status.provider_name, status.display_name
     );
     println!(
-        "  Use it by binding a model role to `{}` (e.g. `--model {}/gpt-5.5`, \
+        "  Use it by binding a model role to `{}` (e.g. `--models.main {}/gpt-5.5`, \
          or set it as a role in settings.json).",
         status.provider_name, status.provider_name
     );

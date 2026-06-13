@@ -82,9 +82,8 @@ impl SwarmAgentHandle {
             session_id,
             // `Resume` (not `Fork`) — the child engine sees the persisted
             // history as its starting point but builds a fresh system
-            // prompt from the agent definition. Fork would rewrite
-            // `tool_result` blocks to `FORK_PLACEHOLDER`, which strips the
-            // outputs the resumed child needs to continue.
+            // prompt from the agent definition (Fork instead inherits the
+            // parent's pre-rendered prompt verbatim for cache parity).
             spawn_mode: coco_tool_runtime::SpawnMode::Resume {
                 parent_messages: filtered,
             },

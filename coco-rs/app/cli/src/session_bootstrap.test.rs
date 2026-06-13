@@ -9,9 +9,11 @@ use std::sync::Arc;
 
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
+use coco_config::RoleSlots;
 use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
+use coco_types::ProviderModelSelection;
 use tempfile::TempDir;
 
 use crate::Cli;
@@ -28,7 +30,13 @@ async fn build_runtime(home: &TempDir) -> Arc<SessionRuntime> {
         merged: Settings {
             // Multi-LLM SDK: Main is mandatory, no implicit default.
             // Tests pin a builtin model so SessionRuntime can build.
-            model: Some("anthropic/claude-opus-4-7".into()),
+            models: coco_config::ModelSelectionSettings {
+                main: Some(RoleSlots::new(ProviderModelSelection {
+                    provider: "anthropic".into(),
+                    model_id: "claude-opus-4-7".into(),
+                })),
+                ..Default::default()
+            },
             ..Default::default()
         },
         per_source: std::collections::HashMap::new(),

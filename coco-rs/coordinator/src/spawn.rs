@@ -33,7 +33,7 @@ pub fn build_teammate_command(config: &TeammateSpawnConfig) -> String {
     // belong here.
     let mut args: Vec<String> = Vec::new();
     if let Some(model) = &config.model {
-        args.push(format!("--model={}", shell_quote(model)));
+        args.push(format!("--models.main={}", shell_quote(model)));
     }
 
     let env_vars = build_inherited_env_vars(config);
