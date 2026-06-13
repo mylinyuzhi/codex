@@ -144,7 +144,7 @@ fn test_shutdown_request_round_trip() {
 
 #[test]
 fn test_shutdown_approved_round_trip() {
-    let json = r#"{"type":"shutdown_approved","requestId":"s1","from":"worker","timestamp":"t","paneId":"p","backendType":"in_process"}"#;
+    let json = r#"{"type":"shutdown_approved","requestId":"s1","from":"worker","timestamp":"t","paneId":"p","backendType":"in-process"}"#;
     assert_round_trips(json, "shutdown_approved");
 }
 
@@ -158,7 +158,8 @@ fn test_shutdown_rejected_round_trip() {
 fn test_create_shutdown_approved_carries_pane_coords() {
     // Pane-based teammate: pane id + backend round-trip so the leader can
     // kill the right pane.
-    let text = create_shutdown_approved_message("req-9", "worker-1", Some("%3"), Some("tmux"));
+    let text =
+        create_shutdown_approved_message("req-9", "worker-1", Some("%3"), Some(BackendType::Tmux));
     let ProtocolMessage::ShutdownApproved {
         request_id,
         from,
@@ -172,14 +173,19 @@ fn test_create_shutdown_approved_carries_pane_coords() {
     assert_eq!(request_id, "req-9");
     assert_eq!(from, "worker-1");
     assert_eq!(pane_id.as_deref(), Some("%3"));
-    assert_eq!(backend_type.as_deref(), Some("tmux"));
+    assert_eq!(backend_type, Some(BackendType::Tmux));
 }
 
 #[test]
 fn test_create_shutdown_approved_empty_pane_is_none() {
     // In-process teammate: empty pane id collapses to None so the leader
     // skips kill_pane and only removes membership.
-    let text = create_shutdown_approved_message("req-1", "ip-worker", Some(""), Some("in-process"));
+    let text = create_shutdown_approved_message(
+        "req-1",
+        "ip-worker",
+        Some(""),
+        Some(BackendType::InProcess),
+    );
     let ProtocolMessage::ShutdownApproved {
         pane_id,
         backend_type,
@@ -189,7 +195,7 @@ fn test_create_shutdown_approved_empty_pane_is_none() {
         panic!("wrong variant");
     };
     assert_eq!(pane_id, None);
-    assert_eq!(backend_type.as_deref(), Some("in-process"));
+    assert_eq!(backend_type, Some(BackendType::InProcess));
 }
 
 #[test]
