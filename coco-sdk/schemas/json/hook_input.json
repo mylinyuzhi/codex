@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "HookInput",
-  "description": "Generic hook input \u2014 unified envelope for every TS hook event.\n\nInternally tagged on `hook_event_name` (PascalCase wire literal,\nmatching `HookEventType`). The tag field is supplied by serde from\nthe variant identity, so inner structs do NOT carry a redundant\n`hook_event_name` field. Wire shape is identical to the prior\n`untagged` representation:\n\n```json\n{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s\",\"tool_name\":\"Read\",...}\n```\n\nCompared with `untagged`, this representation:\n - lets schemars emit a discriminated `oneOf` with `const` on the\n   tag field, which downstream codegen (Pydantic discriminated\n   unions, TS native discriminated-union narrowing) consumes natively;\n - replaces serde's try-each-variant deserialize loop with O(1)\n   dispatch on the tag value.",
+  "description": "Generic hook input \u2014 unified envelope for every hook event.\n\nInternally tagged on `hook_event_name` (PascalCase wire literal,\nmatching `HookEventType`). The tag field is supplied by serde from\nthe variant identity, so inner structs do NOT carry a redundant\n`hook_event_name` field. Wire shape:\n\n```json\n{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s\",\"tool_name\":\"Read\",...}\n```\n\nCompared with `untagged`, this representation:\n - lets schemars emit a discriminated `oneOf` with `const` on the\n   tag field, which downstream codegen (Pydantic discriminated\n   unions) consumes natively;\n - replaces serde's try-each-variant deserialize loop with O(1)\n   dispatch on the tag value.",
   "oneOf": [
     {
       "$ref": "#/$defs/PreToolUseInput"
@@ -87,7 +87,7 @@
   ],
   "$defs": {
     "CompactTrigger": {
-      "description": "Pre/PostCompact `trigger`. TS: `enum(['manual','auto'])`.",
+      "description": "Pre/PostCompact `trigger`: `manual` or `auto`.",
       "type": "string",
       "enum": [
         "manual",
@@ -95,7 +95,7 @@
       ]
     },
     "ConfigChangeInput": {
-      "description": "Input for ConfigChange hooks. TS: `ConfigChangeHookInputSchema`.",
+      "description": "Input for ConfigChange hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -106,7 +106,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -134,7 +134,7 @@
           "$ref": "#/$defs/ConfigChangeSource"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -151,7 +151,7 @@
       ]
     },
     "ConfigChangeSource": {
-      "description": "ConfigChange `source`. TS:\n`enum(['user_settings','project_settings','local_settings','policy_settings','skills'])`.",
+      "description": "ConfigChange `source`: `user_settings`, `project_settings`, `local_settings`, `policy_settings`, or `skills`.",
       "type": "string",
       "enum": [
         "user_settings",
@@ -162,7 +162,7 @@
       ]
     },
     "CwdChangedInput": {
-      "description": "Input for CwdChanged hooks. TS: `CwdChangedHookInputSchema`.",
+      "description": "Input for CwdChanged hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -173,7 +173,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -198,7 +198,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -225,7 +225,7 @@
       ]
     },
     "ElicitationInput": {
-      "description": "Input for Elicitation hooks.\n\nTS: `ElicitationHookInputSchema` (`coreSchemas.ts:627-643`):\n`{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.",
+      "description": "Input for Elicitation hooks.\n\nFields: `{mcp_server_name, message, mode?, url?, elicitation_id?, requested_schema?}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -236,7 +236,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -278,7 +278,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -302,7 +302,7 @@
       ]
     },
     "ElicitationMode": {
-      "description": "Elicitation `mode`. TS: `enum(['form','url'])`.",
+      "description": "Elicitation `mode`: `form` or `url`.",
       "type": "string",
       "enum": [
         "form",
@@ -310,7 +310,7 @@
       ]
     },
     "ElicitationResultInput": {
-      "description": "Input for ElicitationResult hooks.\n\nTS: `ElicitationResultHookInputSchema` (`coreSchemas.ts:645-660`):\n`{mcp_server_name, elicitation_id?, mode?, action, content?}`.",
+      "description": "Input for ElicitationResult hooks.\n\nFields: `{mcp_server_name, elicitation_id?, mode?, action, content?}`.",
       "type": "object",
       "properties": {
         "action": {
@@ -324,7 +324,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -363,7 +363,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -381,7 +381,7 @@
       ]
     },
     "ExitReason": {
-      "description": "SessionEnd `reason`. TS:\n`enum(['clear','resume','logout','prompt_input_exit','other','bypass_permissions_disabled'])`.",
+      "description": "SessionEnd `reason`: `clear`, `resume`, `logout`, `prompt_input_exit`, `other`, or `bypass_permissions_disabled`.",
       "type": "string",
       "enum": [
         "clear",
@@ -393,7 +393,7 @@
       ]
     },
     "FileChangeEvent": {
-      "description": "FileChanged `event`. TS: `enum(['change','add','unlink'])`.",
+      "description": "FileChanged `event`: `change`, `add`, or `unlink`.",
       "type": "string",
       "enum": [
         "change",
@@ -402,7 +402,7 @@
       ]
     },
     "FileChangedInput": {
-      "description": "Input for FileChanged hooks. TS: `FileChangedHookInputSchema`.",
+      "description": "Input for FileChanged hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -413,7 +413,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -438,7 +438,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -456,7 +456,7 @@
       ]
     },
     "InstructionsLoadReason": {
-      "description": "InstructionsLoaded `load_reason`. TS:\n`enum(['session_start','nested_traversal','path_glob_match','include','compact'])`.",
+      "description": "InstructionsLoaded `load_reason`: `session_start`, `nested_traversal`, `path_glob_match`, `include`, or `compact`.",
       "type": "string",
       "enum": [
         "session_start",
@@ -467,7 +467,7 @@
       ]
     },
     "InstructionsLoadedInput": {
-      "description": "Input for InstructionsLoaded hooks.\n\nTS: `InstructionsLoadedHookInputSchema` (`coreSchemas.ts:695-706`):\n`{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.",
+      "description": "Input for InstructionsLoaded hooks.\n\nFields: `{file_path, memory_type, load_reason, globs?, trigger_file_path?, parent_file_path?}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -478,7 +478,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -521,7 +521,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -546,7 +546,7 @@
       ]
     },
     "MemoryType": {
-      "description": "InstructionsLoaded `memory_type`. TS:\n`enum(['User','Project','Local','Managed'])`.",
+      "description": "InstructionsLoaded `memory_type`: `User`, `Project`, `Local`, or `Managed`.",
       "type": "string",
       "enum": [
         "User",
@@ -556,7 +556,7 @@
       ]
     },
     "NotificationInput": {
-      "description": "Input for Notification hooks.\n\nTS: `NotificationHookInputSchema` (`coreSchemas.ts:473-482`):\n`{message, title?, notification_type}`.",
+      "description": "Input for Notification hooks.\n\nFields: `{message, title?, notification_type}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -567,7 +567,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -598,7 +598,7 @@
           ]
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -616,7 +616,7 @@
       ]
     },
     "PermissionDeniedInput": {
-      "description": "Input for PermissionDenied hooks.\n\nTS: `PermissionDeniedHookInputSchema` (`coreSchemas.ts:461-471`):\n`{tool_name, tool_input, tool_use_id, reason}`.",
+      "description": "Input for PermissionDenied hooks.\n\nFields: `{tool_name, tool_input, tool_use_id, reason}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -627,7 +627,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -656,7 +656,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -676,7 +676,7 @@
       ]
     },
     "PermissionRequestInput": {
-      "description": "Input for PermissionRequest hooks.\n\nTS: `PermissionRequestHookInputSchema` (`coreSchemas.ts:425-434`):\n`{tool_name, tool_input, permission_suggestions?}` \u2014 note that TS\ndoes NOT include `tool_use_id` on this event.",
+      "description": "Input for PermissionRequest hooks.\n\nFields: `{tool_name, tool_input, permission_suggestions?}` \u2014 note that\n`tool_use_id` is NOT included on this event.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -687,7 +687,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -703,7 +703,7 @@
           ]
         },
         "permission_suggestions": {
-          "description": "Suggested permission updates from upstream classifiers. JSON\npass-through to match TS `PermissionUpdate[]`."
+          "description": "Suggested permission updates from upstream classifiers."
         },
         "session_id": {
           "type": "string"
@@ -713,7 +713,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -731,7 +731,7 @@
       ]
     },
     "PostCompactInput": {
-      "description": "Input for PostCompact hooks.\n\nTS: `PostCompactHookInputSchema` (`coreSchemas.ts:579-589`):\n`{trigger: enum('manual','auto'), compact_summary: string}`. Both\nfields are required.",
+      "description": "Input for PostCompact hooks.\n\nFields: `{trigger: enum('manual','auto'), compact_summary: string}`. Both\nfields are required.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -742,7 +742,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -764,7 +764,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -785,7 +785,7 @@
       ]
     },
     "PostToolUseFailureInput": {
-      "description": "Input for PostToolUseFailure hooks.\n\nTS: `PostToolUseFailureHookInputSchema` (`coreSchemas.ts:448-459`):\n`{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.",
+      "description": "Input for PostToolUseFailure hooks.\n\nFields: `{tool_name, tool_input, tool_use_id, error, is_interrupt?}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -796,7 +796,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -809,7 +809,7 @@
           "type": "string"
         },
         "is_interrupt": {
-          "description": "`true` when the tool call was aborted because the user\ninterrupted the turn (TS `processInterrupt` path).",
+          "description": "`true` when the tool call was aborted because the user\ninterrupted the turn.",
           "type": [
             "boolean",
             "null"
@@ -832,7 +832,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -852,7 +852,7 @@
       ]
     },
     "PostToolUseInput": {
-      "description": "Input for PostToolUse hooks. TS: `PostToolUseHookInputSchema`.",
+      "description": "Input for PostToolUse hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -863,7 +863,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -890,7 +890,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -910,7 +910,7 @@
       ]
     },
     "PreCompactInput": {
-      "description": "Input for PreCompact hooks.\n\nTS: `PreCompactHookInputSchema` (`coreSchemas.ts:569-577`):\n`{trigger: enum('manual','auto'), custom_instructions: string | null}`.\n`custom_instructions` is **nullable, not optional** \u2014 the field is\nalways present on the wire, with `null` indicating no instructions.",
+      "description": "Input for PreCompact hooks.\n\nFields: `{trigger: enum('manual','auto'), custom_instructions: string | null}`.\n`custom_instructions` is **nullable, not optional** \u2014 the field is\nalways present on the wire, with `null` indicating no instructions.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -921,14 +921,14 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
           ]
         },
         "custom_instructions": {
-          "description": "`None` serializes to JSON `null` (TS-nullable parity); the\nfield is intentionally NOT skip_serializing_if so it always\nappears on the wire.",
+          "description": "`None` serializes to JSON `null`; the field is intentionally\nNOT skip_serializing_if so it always appears on the wire.",
           "type": [
             "string",
             "null"
@@ -947,7 +947,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -967,7 +967,7 @@
       ]
     },
     "PreToolUseInput": {
-      "description": "Input for PreToolUse hooks. TS: `PreToolUseHookInputSchema`.",
+      "description": "Input for PreToolUse hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -978,7 +978,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1004,7 +1004,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1023,7 +1023,7 @@
       ]
     },
     "SessionEndInput": {
-      "description": "Input for SessionEnd hooks. TS: `SessionEndHookInputSchema`.",
+      "description": "Input for SessionEnd hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1034,7 +1034,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1056,7 +1056,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1073,7 +1073,7 @@
       ]
     },
     "SessionStartInput": {
-      "description": "Input for SessionStart hooks. TS: `SessionStartHookInputSchema`.",
+      "description": "Input for SessionStart hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1111,7 +1111,7 @@
           "$ref": "#/$defs/SessionStartSource"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1128,7 +1128,7 @@
       ]
     },
     "SessionStartSource": {
-      "description": "SessionStart `source`. TS: `enum(['startup','resume','clear','compact'])`.",
+      "description": "SessionStart `source`: `startup | resume | clear | compact`.",
       "type": "string",
       "enum": [
         "startup",
@@ -1138,7 +1138,7 @@
       ]
     },
     "SetupInput": {
-      "description": "Input for Setup hooks. TS: `SetupHookInputSchema`.",
+      "description": "Input for Setup hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1149,7 +1149,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1168,7 +1168,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1188,7 +1188,7 @@
       ]
     },
     "SetupTrigger": {
-      "description": "Setup `trigger`. TS: `enum(['init','maintenance'])`.",
+      "description": "Setup `trigger`: `init` or `maintenance`.",
       "type": "string",
       "enum": [
         "init",
@@ -1196,7 +1196,7 @@
       ]
     },
     "StopFailureInput": {
-      "description": "Input for StopFailure hooks. TS: `StopFailureHookInputSchema`.",
+      "description": "Input for StopFailure hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1207,7 +1207,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1241,7 +1241,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1258,7 +1258,7 @@
       ]
     },
     "StopInput": {
-      "description": "Input for Stop hooks.\n\nTS: `StopHookInputSchema` (`coreSchemas.ts:513-527`):\n`{stop_hook_active, last_assistant_message?}`.",
+      "description": "Input for Stop hooks.\n\nFields: `{stop_hook_active, last_assistant_message?}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1269,7 +1269,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1298,7 +1298,7 @@
           "type": "boolean"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1315,7 +1315,7 @@
       ]
     },
     "SubagentStartInput": {
-      "description": "Input for SubagentStart hooks. TS: `SubagentStartHookInputSchema`.",
+      "description": "Input for SubagentStart hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1337,7 +1337,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1355,14 +1355,14 @@
       ]
     },
     "SubagentStopInput": {
-      "description": "Input for SubagentStop hooks.\n\nTS: `SubagentStopHookInputSchema` (`coreSchemas.ts:550-567`):\n`{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.",
+      "description": "Input for SubagentStop hooks.\n\nFields: `{stop_hook_active, agent_id, agent_transcript_path, agent_type, last_assistant_message?}`.",
       "type": "object",
       "properties": {
         "agent_id": {
           "type": "string"
         },
         "agent_transcript_path": {
-          "description": "Path to the subagent's transcript file. Empty string when the\nsubagent is not persisting one (TS marks this required).",
+          "description": "Path to the subagent's transcript file. Empty string when the\nsubagent is not persisting one.",
           "type": "string"
         },
         "agent_type": {
@@ -1390,7 +1390,7 @@
           "type": "boolean"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1410,7 +1410,7 @@
       ]
     },
     "TaskCompletedInput": {
-      "description": "Input for TaskCompleted hooks.\n\nTS: `TaskCompletedHookInputSchema` (`coreSchemas.ts:614-625`):\n`{task_id, task_subject, task_description?, teammate_name?, team_name?}`.",
+      "description": "Input for TaskCompleted hooks.\n\nFields: `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1421,7 +1421,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1464,7 +1464,7 @@
           ]
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1482,7 +1482,7 @@
       ]
     },
     "TaskCreatedInput": {
-      "description": "Input for TaskCreated hooks.\n\nTS: `TaskCreatedHookInputSchema` (`coreSchemas.ts:601-612`):\n`{task_id, task_subject, task_description?, teammate_name?, team_name?}`.",
+      "description": "Input for TaskCreated hooks.\n\nFields: `{task_id, task_subject, task_description?, teammate_name?, team_name?}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1493,7 +1493,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1536,7 +1536,7 @@
           ]
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1554,7 +1554,7 @@
       ]
     },
     "TeammateIdleInput": {
-      "description": "Input for TeammateIdle hooks.\n\nTS: `TeammateIdleHookInputSchema` (`coreSchemas.ts:591-599`):\n`{teammate_name, team_name}`.",
+      "description": "Input for TeammateIdle hooks.\n\nFields: `{teammate_name, team_name}`.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1565,7 +1565,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1590,7 +1590,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1608,7 +1608,7 @@
       ]
     },
     "UserPromptSubmitInput": {
-      "description": "Input for UserPromptSubmit hooks. TS: `UserPromptSubmitHookInputSchema`.",
+      "description": "Input for UserPromptSubmit hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1619,7 +1619,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1641,7 +1641,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1658,7 +1658,7 @@
       ]
     },
     "WorktreeCreateInput": {
-      "description": "Input for WorktreeCreate hooks. TS: `WorktreeCreateHookInputSchema`.",
+      "description": "Input for WorktreeCreate hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1669,7 +1669,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1691,7 +1691,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
@@ -1708,7 +1708,7 @@
       ]
     },
     "WorktreeRemoveInput": {
-      "description": "Input for WorktreeRemove hooks. TS: `WorktreeRemoveHookInputSchema`.",
+      "description": "Input for WorktreeRemove hooks.",
       "type": "object",
       "properties": {
         "agent_id": {
@@ -1719,7 +1719,7 @@
           ]
         },
         "agent_type": {
-          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent` (TS parity).",
+          "description": "Subagent type (e.g. `\"Explore\"`, `\"Review\"`) \u2014 set on subagent\nhooks AND on main-thread hooks when the session was launched\nvia `--agent`.",
           "type": [
             "string",
             "null"
@@ -1738,7 +1738,7 @@
           "type": "string"
         },
         "transcript_path": {
-          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript (matches TS practice of\nalways emitting a string value). Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
+          "description": "Path to the on-disk transcript file. Empty string when the\nsession is not persisting a transcript. Defaults to `\"\"` on\ndeserialize so older fixtures missing the field still parse.",
           "type": "string",
           "default": ""
         },
