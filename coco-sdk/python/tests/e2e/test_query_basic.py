@@ -1,6 +1,6 @@
 """End-to-end: one-shot ``query()`` against deepseek-v4-flash.
 
-Spawns ``coco sdk --model deepseek-openai/deepseek-v4-flash``, sends a
+Spawns ``coco --models.main deepseek-openai/deepseek-v4-flash sdk``, sends a
 trivial prompt, and asserts that:
 
 * the session starts,
@@ -30,7 +30,7 @@ async def test_query_basic_completes(live_deepseek, isolated_cwd) -> None:
         async with asyncio.timeout(120):
             async for event in query(
                 "Reply with the single word: ok",
-                model=live_deepseek.model,
+                models_main=live_deepseek.models_main,
                 cwd=str(isolated_cwd),
                 max_turns=1,
             ):

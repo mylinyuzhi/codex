@@ -106,7 +106,7 @@ pub(crate) fn team_roster(state: &mut AppState) {
             TeamRosterMember {
                 name,
                 agent_type: s.agent_type.clone(),
-                color: s.color.as_deref().and_then(|c| c.parse().ok()),
+                color: s.color,
                 mode,
             }
         })

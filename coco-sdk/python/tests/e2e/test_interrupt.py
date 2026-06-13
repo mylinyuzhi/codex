@@ -34,7 +34,7 @@ async def test_interrupt_terminates_in_flight_turn(live_deepseek, isolated_cwd) 
             "Write a long detailed essay (at least 500 words) about the "
             "history of the printing press. Take your time."
         ),
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         max_turns=1,
     ) as client:

@@ -29,7 +29,7 @@ _SERVER_NOTIFICATION_ADAPTER: TypeAdapter[ServerNotification] = TypeAdapter(
 async def query(
     prompt: str,
     *,
-    model: str | ModelSpec | None = None,
+    models_main: str | ModelSpec | None = None,
     max_turns: int | None = None,
     cwd: str | None = None,
     append_system_prompt: str | None = None,
@@ -44,7 +44,7 @@ async def query(
     The simplest way to use the SDK — fire-and-forget. For multi-turn
     sessions, hooks, or in-process tools, use :class:`CocoClient`.
 
-    ``model`` accepts either a string in ``"<provider>/<model_id>"`` form
+    ``models_main`` accepts either a string in ``"<provider>/<model_id>"`` form
     or a :class:`~coco_sdk.types.ModelSpec`. ``env`` is forwarded to
     the subprocess environment (not the wire protocol — coco-rs reads
     env vars natively).
@@ -57,19 +57,19 @@ async def query(
         from coco_sdk.types import DEEPSEEK
 
         async def main():
-            async for event in query("List Python files", model=DEEPSEEK.flash_openai):
+            async for event in query("List Python files", models_main=DEEPSEEK.flash_openai):
                 if event.method == NotificationMethod.AGENT_MESSAGE_DELTA:
                     print(event.params.get("delta", ""), end="")
 
         asyncio.run(main())
     """
-    model_str = str(model) if model is not None else None
+    models_main_str = str(models_main) if models_main is not None else None
     # `coco sdk` rejects the legacy default model at startup, so
-    # `--model provider/model_id` must be set BEFORE the subcommand
+    # `--models.main provider/model_id` must be set BEFORE the subcommand
     # rather than only sent on the wire via `session/start.model`.
     cli_args: list[str] = []
-    if model_str:
-        cli_args += ["--model", model_str]
+    if models_main_str:
+        cli_args += ["--models.main", models_main_str]
     transport = SubprocessCLITransport(
         binary_path=binary_path,
         cwd=cwd,
@@ -92,7 +92,7 @@ async def query(
         #    for the first user message); turns are launched separately
         #    via `turn/start`.
         await router.request(SessionStartRequest(params=SessionStartRequest.SessionStartRequestParams(
-            model=model_str,
+            model=models_main_str,
             max_turns=max_turns,
             cwd=cwd,
             append_system_prompt=append_system_prompt,

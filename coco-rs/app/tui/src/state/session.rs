@@ -138,20 +138,6 @@ impl CompactionPhaseLabel {
     }
 }
 
-/// Current Unix epoch in milliseconds (best-effort — clamps to 0
-/// if the system clock is before the epoch, which only happens in
-/// pathological setups).
-///
-/// `pub(crate)` so call sites outside this module (the protocol
-/// handler that times subagent starts) reuse the same clamp instead
-/// of open-coding `SystemTime::now()`.
-pub(crate) fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 /// Agent-synchronized session state.
 #[derive(Debug)]
 pub struct SessionState {
@@ -658,17 +644,13 @@ pub struct SubagentInstance {
     pub agent_type: String,
     pub description: String,
     pub status: SubagentStatus,
-    pub color: Option<String>,
+    /// Agent badge color, parsed from the protocol wire string at the
+    /// `TaskStarted` boundary. Drives the per-agent color in the activity
+    /// panel + footer pills.
+    pub color: Option<coco_types::AgentColorName>,
     /// Team name for `kind == Teammate`. `None` for subagents (they
     /// have no team affiliation) and for legacy / dormant entries.
     pub team_name: Option<String>,
-    /// `tool_use_id` of the parent `Agent` tool invocation that
-    /// spawned this row (when the entry came from a TaskStarted bridge
-    /// for a `BgAgent` task). Used by the inline `AgentProgressLine`
-    /// renderer to attach this row visually beneath the matching
-    /// `ToolExecution` in the transcript. `None` for teammates (they
-    /// have no originating tool call).
-    pub tool_use_id: Option<String>,
     /// Unix-epoch ms when the subagent started. `None` while the
     /// protocol handler hasn't populated it yet. The renderer shows
     /// `elapsed = now - started_at` only when this is set.

@@ -242,13 +242,11 @@ fn test_refresh_seeds_at_trigger_with_agents() {
     state.session.available_agents = vec![
         crate::autocomplete::AgentInfo {
             name: "plan".into(),
-            agent_type: "planner".into(),
             description: Some("Planning agent".into()),
             color: None,
         },
         crate::autocomplete::AgentInfo {
             name: "review".into(),
-            agent_type: "reviewer".into(),
             description: None,
             color: None,
         },
@@ -269,7 +267,6 @@ fn test_apply_async_result_merges_files_after_agents() {
     let mut state = AppState::new();
     state.session.available_agents = vec![crate::autocomplete::AgentInfo {
         name: "src".into(),
-        agent_type: "src".into(),
         description: Some("Source explorer".into()),
         color: None,
     }];
@@ -316,7 +313,6 @@ fn test_apply_async_result_merges_directory_rows_after_agents() {
     let mut state = AppState::new();
     state.session.available_agents = vec![crate::autocomplete::AgentInfo {
         name: "src".into(),
-        agent_type: "src".into(),
         description: Some("Source explorer".into()),
         color: None,
     }];

@@ -7,10 +7,12 @@
 use super::*;
 use coco_config::EnvSnapshot;
 use coco_config::PartialProviderConfig;
+use coco_config::RoleSlots;
 use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::settings::SettingsWithSource;
 use coco_types::ProviderApi;
+use coco_types::ProviderModelSelection;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -33,7 +35,13 @@ fn build_runtime_with(extra_provider: Option<(String, PartialProviderConfig)>) -
         // exercise model_factory for arbitrary (provider, model) pairs
         // — Main itself is irrelevant, just needs to satisfy the
         // mandatory-field check.
-        model: Some("anthropic/claude-opus-4-7".into()),
+        models: coco_config::ModelSelectionSettings {
+            main: Some(RoleSlots::new(ProviderModelSelection {
+                provider: "anthropic".into(),
+                model_id: "claude-opus-4-7".into(),
+            })),
+            ..Default::default()
+        },
         providers,
         ..Default::default()
     };

@@ -30,7 +30,15 @@ fn wizard_with(step: CreateWizardStep) -> CreateWizardState {
     w
 }
 
+/// Fixed wall-clock for renders so any elapsed-time output is
+/// deterministic (the renderer reads this, never the real clock).
+const TEST_NOW_MS: i64 = 1_000_000_000;
+
 fn body_only(state: &AgentsDialogState, subagents: &[SubagentInstance]) -> String {
+    body_only_at(state, subagents, TEST_NOW_MS)
+}
+
+fn body_only_at(state: &AgentsDialogState, subagents: &[SubagentInstance], now_ms: i64) -> String {
     // Pin the locale to `en` for the render. `cargo test` shares one process,
     // so a concurrent locale-sensitive test can otherwise leave the global
     // rust-i18n locale set to `zh-CN` and this dialog's translated strings
@@ -39,8 +47,39 @@ fn body_only(state: &AgentsDialogState, subagents: &[SubagentInstance]) -> Strin
     let _locale = crate::i18n::locale_test_guard("en");
     let theme = Theme::default();
     let styles = UiStyles::new(&theme);
-    let (_title, body, _color) = agents_dialog_content(state, subagents, styles);
+    let (_title, body, _color) = agents_dialog_content(state, subagents, styles, now_ms);
     body
+}
+
+#[test]
+fn running_tab_elapsed_uses_injected_now_not_wall_clock() {
+    // The elapsed column is computed from the injected `now_ms`, so a
+    // fixed clock yields a deterministic value (regression guard for the
+    // old `SystemTime::now()` open-coding that made this untestable).
+    let mut state = AgentsDialogState::new(vec![LibraryRow::CreateNew]);
+    state.selected_tab = crate::state::AgentsDialogTab::Running;
+    let started = TEST_NOW_MS - 65_000; // 65s before "now"
+    let sub = SubagentInstance {
+        kind: SubagentKind::Subagent,
+        agent_id: "a1".into(),
+        agent_type: "Explore".into(),
+        description: "scan".into(),
+        status: SubagentStatus::Running,
+        color: None,
+        team_name: None,
+        started_at_ms: Some(started),
+        last_tool_name: Some("Grep".into()),
+        tool_count: 2,
+        total_tokens: 0,
+        is_backgrounded: false,
+        recent_activities: Vec::new(),
+        final_message: None,
+    };
+    let body = body_only_at(&state, std::slice::from_ref(&sub), TEST_NOW_MS);
+    assert!(
+        body.contains("1m05s"),
+        "elapsed must derive from injected now_ms (65s → 1m05s); got: {body}"
+    );
 }
 
 #[test]
@@ -178,7 +217,6 @@ fn render_running_tab_with_active_and_completed() {
         status: SubagentStatus::Running,
         color: None,
         team_name: None,
-        tool_use_id: None,
         started_at_ms: None,
         last_tool_name: Some("read".into()),
         tool_count: 3,

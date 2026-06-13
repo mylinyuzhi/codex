@@ -465,9 +465,6 @@ impl Tool for AgentTool {
         // fallback is needed.
         let effective_mode =
             coco_permissions::resolve_subagent_mode(ctx.permission_context.mode, input.mode);
-        let effective_mode_str = serde_json::to_value(effective_mode)
-            .ok()
-            .and_then(|v| v.as_str().map(String::from));
 
         let explicit_subagent_type = input.subagent_type.clone();
         let resolved_team_name = input
@@ -500,15 +497,21 @@ impl Tool for AgentTool {
 
         // Fork-mode dispatch: when the env gate is on, agent-teams is
         // enabled, the session is interactive, and the caller omitted
-        // `subagent_type`, the child inherits
-        // the parent's pre-rendered system prompt + full message
-        // history (with `tool_result` blocks replaced by
-        // `coco_subagent::FORK_PLACEHOLDER` for cache-identical
-        // request prefixes). The coordinator wraps the user-facing
-        // directive in `<fork-boilerplate>` so the worker receives
-        // its rules and a downstream recursion guard
+        // `subagent_type`, the child inherits the parent's pre-rendered
+        // system prompt + full message history (with real `tool_result`
+        // bodies intact) so its request prefix is byte-identical to the
+        // parent's (prompt-cache hit). The coordinator wraps the
+        // user-facing directive in `<fork-boilerplate>` so the worker
+        // receives its rules and a downstream recursion guard
         // (`is_in_fork_child`) can detect fork-of-fork.
+        //
+        // Team spawns (`name` + `team_name`) are NOT fork-eligible even
+        // when `subagent_type` is omitted: a teammate is a distinct,
+        // addressable agent, not a cache-shared fork. TS routes the team
+        // branch before fork (`AgentTool.tsx:284-316`); mirror that here
+        // so a `Fork{..} + team_name` shape can never be constructed.
         let spawn_mode = if explicit_subagent_type.is_none()
+            && !is_team_spawn
             && coco_subagent::is_fork_subagent_active(&ctx.features, ctx.is_non_interactive)
         {
             let Some(rendered_system_prompt) = ctx.rendered_system_prompt.clone() else {
@@ -541,12 +544,12 @@ impl Tool for AgentTool {
             };
             // Snapshot the parent's history into shared `Arc<Message>`
             // entries. `ctx.messages` is the immutable post-budget
-            // snapshot the engine threaded onto this turn's ctx —
-            // each entry is already `Arc<Message>`, so `.iter().cloned()`
+            // snapshot the engine threaded onto this turn's ctx (the
+            // pre-response view — every tool_use already has its
+            // tool_result, and the in-flight assistant turn is excluded).
+            // Each entry is already `Arc<Message>`, so `.iter().cloned()`
             // gives a `Vec<Arc<Message>>` via cheap atomic ref-count
-            // bumps. Downstream `build_fork_context` then only allocates
-            // fresh messages for the tool-result FORK_PLACEHOLDER
-            // rewrite; everything else stays shared.
+            // bumps — the coordinator threads it through verbatim.
             let parent_messages: Vec<std::sync::Arc<coco_messages::Message>> =
                 ctx.messages.iter().cloned().collect();
             // Recursive-fork guard: rejects the fork path when the
@@ -631,8 +634,14 @@ impl Tool for AgentTool {
         // defers `Agent(<type>)` content denies to the tool (see
         // core/permissions `central_rule_applies`), so the agentType scoping
         // MUST happen here or denied agents leak through. Skipped for pure
-        // forks (no model-chosen agentType).
+        // forks (no model-chosen agentType) AND for team spawns: an untyped
+        // team spawn defaults `effective_subagent_type` to `general-purpose`,
+        // so without the `!is_team_spawn` guard an `Agent(general-purpose)`
+        // deny rule (meant to curb ad-hoc subagents) would wrongly reject
+        // every untyped teammate. TS scopes the scan to the non-team branch
+        // (`AgentTool.tsx:342-353`, after the team early-return).
         if !is_fork
+            && !is_team_spawn
             && let Some(denied) =
                 find_agent_deny_rule(&ctx.permission_context, &effective_subagent_type)
         {
@@ -670,20 +679,25 @@ impl Tool for AgentTool {
         // Effective isolation: the explicit tool param overrides, else the
         // agent definition's frontmatter isolation. A definition declaring
         // `isolation: worktree` isolates even when the model omits the param.
-        // `AgentIsolation::None` maps to `None` so the spawn-side
-        // `Some("worktree")` gate stays correct.
-        let effective_isolation: Option<String> = input.isolation.clone().or_else(|| {
-            resolved_definition
-                .as_ref()
-                .and_then(|d| match d.isolation {
-                    coco_types::AgentIsolation::None => None,
-                    other => Some(other.to_string()),
-                })
-        });
+        // Parse the model's wire string into the typed enum (invalid /
+        // `none` collapse to `None` = no isolation).
+        let effective_isolation: Option<coco_types::AgentIsolation> = input
+            .isolation
+            .as_deref()
+            .and_then(|s| s.parse::<coco_types::AgentIsolation>().ok())
+            .filter(|i| *i != coco_types::AgentIsolation::None)
+            .or_else(|| {
+                resolved_definition
+                    .as_ref()
+                    .and_then(|d| match d.isolation {
+                        coco_types::AgentIsolation::None => None,
+                        other => Some(other),
+                    })
+            });
 
         // Remote isolation is unsupported in this build. Gate on the EFFECTIVE
         // value so a definition-declared `isolation: remote` is rejected too.
-        if effective_isolation.as_deref() == Some("remote") {
+        if effective_isolation == Some(coco_types::AgentIsolation::Remote) {
             return Err(ToolError::ExecutionFailed {
                 message: "Isolation mode 'remote' is not supported in this build. \
                           Use 'worktree' for local isolation or omit the field for \
@@ -702,8 +716,9 @@ impl Tool for AgentTool {
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from);
-        let requested_isolation = effective_isolation.as_deref();
-        if requested_cwd.is_some() && requested_isolation == Some("worktree") {
+        if requested_cwd.is_some()
+            && effective_isolation == Some(coco_types::AgentIsolation::Worktree)
+        {
             return Err(ToolError::InvalidInput {
                 message: "`cwd` and `isolation: \"worktree\"` are mutually exclusive — \
                           a worktree-isolated agent runs in the worktree's path; \
@@ -809,7 +824,7 @@ impl Tool for AgentTool {
             isolation: effective_isolation,
             name: requested_name,
             team_name: resolved_team_name.clone(),
-            mode: effective_mode_str,
+            mode: Some(effective_mode),
             // `cwd` is read from the tool input.
             // Mutually-exclusive-with-worktree validation runs above.
             //

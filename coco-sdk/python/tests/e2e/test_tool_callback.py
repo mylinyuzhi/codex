@@ -28,7 +28,7 @@ async def test_sdk_hosted_tool_invocation(live_deepseek, isolated_cwd) -> None:
             "Call the `lucky_number` tool exactly once, then reply with"
             " the number it returned (just the digits)."
         ),
-        model=live_deepseek.model,
+        models_main=live_deepseek.models_main,
         cwd=str(isolated_cwd),
         tools=[lucky_number],
         # SDK-hosted tools are user-authored; the test bypasses Default-mode

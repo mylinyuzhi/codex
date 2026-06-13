@@ -452,6 +452,39 @@ impl QueryEngine {
             })
             .await;
 
+        // Coordinator (leader) worker-tools context for the `user_context`
+        // reminder's `# workerToolsContext` block. Only the main leader gets
+        // it: workers (`agent_id.is_some()`) are excluded because the
+        // coordinator env var is process-global and would otherwise leak the
+        // leader's worker pool into every worker; cache-shared forks
+        // (`fork_label.is_some()`) are excluded for the same prompt-cache
+        // parity reason as `current_date`. `coordinator_user_context`
+        // self-gates on `is_coordinator_mode`, so this stays `None` outside
+        // coordinator mode. `simple_mode` mirrors the system-prompt /
+        // worker-pool gate (`EnvKey::CocoSimple`) so the advertised pool
+        // matches what workers actually receive. MCP names degrade to the
+        // servers currently advertising instructions — the only source on the
+        // reminder path that doesn't reach back into the MCP registry.
+        let reminder_coordinator_context =
+            if self.config.agent_id.is_none() && self.config.fork_label.is_none() {
+                let mcp_names: Vec<&str> = materialized
+                    .mcp_instructions_current
+                    .keys()
+                    .map(String::as_str)
+                    .collect();
+                let simple_mode = coco_config::env::is_env_truthy(coco_config::EnvKey::CocoSimple);
+                coco_subagent::coordinator_user_context(
+                    &self.config.features,
+                    &mcp_names,
+                    /*scratchpad_dir*/ None,
+                    /*scratchpad_gate_enabled*/ false,
+                    simple_mode,
+                )
+                .remove("workerToolsContext")
+            } else {
+                None
+            };
+
         // Part 1 silent reminder: intersect every path this turn
         // might try to load (@-mentions + nested memory + relevant
         // memory prefetch) with the session file-read cache. Paths
@@ -525,6 +558,7 @@ impl QueryEngine {
             used_tokens: total_usage.input_tokens.total,
             new_date: reminder_new_date,
             current_date: reminder_current_date,
+            coordinator_worker_context: reminder_coordinator_context,
             has_pending_plan_verification: app_state_snapshot
                 .pending_plan_verification
                 .as_ref()

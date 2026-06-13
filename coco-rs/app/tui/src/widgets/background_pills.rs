@@ -54,6 +54,8 @@ const PILL_PREFIX: &str = "@";
 pub(crate) struct PillEntry<'a> {
     pub(crate) label: &'a str,
     pub(crate) is_idle: bool,
+    /// Agent badge color; a running pill renders in its color when set.
+    pub(crate) color: Option<coco_types::AgentColorName>,
 }
 
 /// Borrowed view-model. Pills follow insertion order from
@@ -82,6 +84,7 @@ pub(crate) fn build_view(state: &AppState) -> BackgroundPillsView<'_> {
         .map(|a| PillEntry {
             label: a.description.as_str(),
             is_idle: !matches!(a.status, SubagentStatus::Running),
+            color: a.color,
         })
         .collect();
     BackgroundPillsView { pills }
@@ -130,13 +133,14 @@ impl Widget for BackgroundPills<'_> {
             if i > 0 {
                 spans.push(Span::raw(PILL_GAP));
             }
-            // Idle pills are dim; running pills use the agent's accent
-            // color. Agent-specific colors are not yet threaded through,
-            // so we fall back to `text` for running and `dim` for idle.
+            // Idle pills are dim; running pills render in the agent's
+            // assigned color when set, else the default text color.
             let color = if pill.is_idle {
                 self.styles.dim()
             } else {
-                self.styles.text()
+                pill.color
+                    .map(crate::widgets::suggestion_popup::agent_color_to_ratatui)
+                    .unwrap_or_else(|| self.styles.text())
             };
             spans.push(Span::raw(PILL_PREFIX).fg(color));
             spans.push(Span::raw(pill.label).fg(color));

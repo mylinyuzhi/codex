@@ -507,7 +507,7 @@ fn resolve_model_roles(
     let mut roles = ModelRoles::default();
 
     // Main resolution precedence: CLI override > env override >
-    // settings.models.main > settings.model. No silent fallback —
+    // settings.models.main. No silent fallback —
     // this is a multi-provider SDK; the user MUST pick a model.
     // Surfacing this as a startup error (instead of defaulting to a
     // built-in like `anthropic/claude-sonnet-4-6`) keeps the choice
@@ -519,12 +519,11 @@ fn resolve_model_roles(
         RoleSlots::new(model_spec_from_selection(selection, providers)?)
     } else if let Some(slots) = settings.merged.models.main.clone() {
         resolve_role_slots(ModelRole::Main, slots, providers)?
-    } else if let Some(selection) = settings.merged.model.as_deref() {
-        RoleSlots::new(model_spec_from_selection(selection, providers)?)
     } else {
         return Err(crate::ConfigError::generic(
-            "no Main model configured: set `models.main` (or `model`) in settings.json, \
-             pass `--model <provider>/<model_id>`, or set `COCO_MODEL=<provider>/<model_id>`",
+            "no Main model configured: set `models.main` in settings.json, \
+             pass `--models.main <provider>/<model_id>`, or set \
+             `COCO_MODEL_MAIN=<provider>/<model_id>`",
         ));
     };
 
@@ -599,7 +598,7 @@ fn resolve_model_roles(
     // Single source of truth: every role goes through settings.json
     // (`models.<role>`). The legacy `COCO_SMALL_FAST_MODEL` /
     // `COCO_SUBAGENT_MODEL` env-only overrides have been removed —
-    // configure via settings instead. Only `COCO_MODEL` survives as
+    // configure via settings instead. Only `COCO_MODEL_MAIN` survives as
     // the single-knob Main escape hatch (handled above).
     if let Some(main_slots) = roles.roles.get(&ModelRole::Main).cloned() {
         let mut defaulted_roles = Vec::new();

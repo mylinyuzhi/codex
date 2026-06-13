@@ -17,7 +17,7 @@ pub const AGENT_WORKTREE_BRANCH_PREFIX: &str = "agent/task-";
 
 /// All built-in tool names.
 /// Copy + const fn as_str() — zero-cost identity for builtins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, strum::EnumIter)]
 #[serde(rename_all = "PascalCase")]
 pub enum ToolName {
     // File I/O (8)

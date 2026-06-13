@@ -318,7 +318,7 @@ fn permission_content_renders_exit_plan_mode_without_raw_input_keys() {
 
     assert!(title.contains("Ready to code?"));
     assert!(
-        !body.contains("Here is plan:"),
+        !body.contains("Here is proposed plan:"),
         "generic permission body must not render ExitPlanMode plan text: {body}"
     );
     assert!(!body.contains("- Update code"), "{body}");
@@ -460,7 +460,7 @@ fn exit_plan_pending_history_lines_render_plan_without_choices() {
     );
     let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-    assert!(joined.contains("Here is plan:"), "{joined}");
+    assert!(joined.contains("Here is proposed plan:"), "{joined}");
     assert!(joined.contains("Goal"), "{joined}");
     assert!(joined.contains("Step one"), "{joined}");
     assert!(joined.contains("Plan file: /tmp/plan.md"), "{joined}");
@@ -490,7 +490,7 @@ fn exit_plan_pending_history_lines_render_no_plan_notice_without_file() {
         joined.contains("No implementation plan needed."),
         "{joined}"
     );
-    assert!(!joined.contains("Here is plan:"), "{joined}");
+    assert!(!joined.contains("Here is proposed plan:"), "{joined}");
     assert!(!joined.contains("Plan file:"), "{joined}");
     assert!(!joined.contains("read-only explanation"), "{joined}");
 }

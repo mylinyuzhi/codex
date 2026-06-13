@@ -139,7 +139,7 @@ impl LiveSdkServer {
 pub fn cli_for(provider: &str, model: &str, extra: &[&str]) -> Cli {
     use clap::Parser;
     let model_arg = format!("{provider}/{model}");
-    let mut argv: Vec<&str> = vec!["coco", "--model", &model_arg];
+    let mut argv: Vec<&str> = vec!["coco", "--models.main", &model_arg];
     for e in extra {
         argv.push(e);
     }

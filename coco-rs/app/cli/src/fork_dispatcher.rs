@@ -234,7 +234,6 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         Ok(ForkedAgentResult {
             messages: fork_messages,
             total_usage: result.total_usage,
-            stop_reason: result.stop_reason,
         })
     }
 }

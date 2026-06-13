@@ -18,10 +18,15 @@
 //!    (memory store recall). The pending slot is the engine-side
 //!    delivery channel.
 //!
-//! Session-level dedup uses
-//! [`QueryEngine::loaded_nested_memory_paths`] — once a memory file is
-//! injected this session, subsequent reads of files in the same subtree
-//! won't re-inject it.
+//! Dedup is two-gated, mirroring the TS `memoryFilesToAttachments`:
+//! 1. [`QueryEngine::loaded_nested_memory_paths`] — a non-evicting set
+//!    that dedups within a user-prompt cycle. The engine (and this set)
+//!    are rebuilt per cycle, so it does not survive across prompts.
+//! 2. The session-persistent [`coco_context::FileReadState`] — survives
+//!    the per-cycle rebuild, so a CLAUDE.md already injected (or already
+//!    Read by a tool) on an earlier prompt is not re-injected when a
+//!    later prompt re-reads the same subtree. This is the gate the TS
+//!    side spells `readFileState.has(path)`.
 
 use std::path::PathBuf;
 
@@ -79,6 +84,23 @@ impl QueryEngine {
             .cloned()
             .collect();
 
+        // Gate 2 (cross-cycle): snapshot the session-persistent
+        // FileReadState keys. `loaded_nested_memory_paths` is rebuilt per
+        // prompt cycle and can't suppress a CLAUDE.md shown on an earlier
+        // prompt; FileReadState survives the rebuild, so a memory file it
+        // already tracks (prior injection or a direct tool Read) is skipped.
+        // Snapshot once (LRU-capped, ≤100 paths) to avoid holding the FRS
+        // lock across traversal. Mirrors TS `readFileState.has(path)`.
+        let frs_seen: std::collections::HashSet<PathBuf> = match self.file_read_state.as_ref() {
+            Some(frs_arc) => frs_arc
+                .read()
+                .await
+                .iter_entries()
+                .map(|(p, _)| p.to_path_buf())
+                .collect(),
+            None => std::collections::HashSet::new(),
+        };
+
         let mut loaded = self.loaded_nested_memory_paths.lock().await;
         let mut new_entries: Vec<NestedMemoryInfo> = Vec::new();
         let mut newly_loaded: Vec<(String, String, coco_context::MemoryFileSource)> = Vec::new();
@@ -94,6 +116,11 @@ impl QueryEngine {
             let trigger_path = path.display().to_string();
             let entries = coco_context::traverse_for_file(&path, &cwd, &mut loaded);
             for entry in entries {
+                // Gate 2: a prior tool Read or an earlier-cycle injection
+                // already surfaced this memory file — don't re-inject it.
+                if frs_seen.contains(&entry.path) {
+                    continue;
+                }
                 newly_loaded.push((
                     entry.path.display().to_string(),
                     trigger_path.clone(),

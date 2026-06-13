@@ -115,7 +115,7 @@ async fn teammate_pty_consumes_mailbox_and_runs_turn() {
     .unwrap();
     std::fs::write(
         config_dir.path().join("settings.json"),
-        r#"{"model":"anthropic/claude-haiku-4-5"}"#,
+        r#"{"models":{"main":"anthropic/claude-haiku-4-5"}}"#,
     )
     .unwrap();
 

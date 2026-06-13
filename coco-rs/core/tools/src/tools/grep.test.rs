@@ -500,6 +500,114 @@ async fn test_grep_glob_filter() {
     assert!(!t.contains("b.txt"), "should not match .txt file: {t}");
 }
 
+/// A path-segment glob (`subdir/*.rs`) must filter by path relative to the
+/// search root — rg `--glob` semantics. The old implementation routed the
+/// `glob` param through `TypesBuilder`, which only understands basename type
+/// globs and silently mishandled path-containing patterns.
+#[tokio::test]
+async fn test_grep_glob_path_segment_pattern() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("subdir");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("a.rs"), "fn target() {}").unwrap();
+    std::fs::write(dir.path().join("root.rs"), "fn target() {}").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "glob": "subdir/*.rs"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("subdir/a.rs"), "should match nested file: {t}");
+    assert!(!t.contains("root.rs"), "should not match root file: {t}");
+}
+
+/// A slash-less glob matches the basename at any depth, like `rg --glob`.
+#[tokio::test]
+async fn test_grep_glob_bare_basename() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("nested");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("Cargo.toml"), "name = \"target\"").unwrap();
+    std::fs::write(dir.path().join("other.txt"), "target").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({
+            "pattern": "target",
+            "path": dir.path().to_str().unwrap(),
+            "glob": "Cargo.toml"
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("nested/Cargo.toml"), "should match nested: {t}");
+    assert!(!t.contains("other.txt"), "should not match other: {t}");
+}
+
+/// `.agentignore` excludes files from grep too (shared IgnoreService wiring).
+#[tokio::test]
+async fn test_grep_agentignore_excludes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("keep.rs"), "fn target() {}").unwrap();
+    std::fs::write(dir.path().join("fixture.rs"), "fn target() {}").unwrap();
+    std::fs::write(dir.path().join(".agentignore"), "fixture.rs\n").unwrap();
+
+    let ctx = ToolUseContext::test_default();
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({"pattern": "target", "path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("keep.rs"), "non-ignored file present: {t}");
+    assert!(
+        !t.contains("fixture.rs"),
+        ".agentignore should hide it from grep: {t}"
+    );
+}
+
+/// file_read_ignore_patterns are folded into the grep walk as `!` negatives.
+#[tokio::test]
+async fn test_grep_read_ignore_patterns_exclude() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("app.rs"), "let token = 1;").unwrap();
+    std::fs::write(dir.path().join("secret.env"), "token = abc").unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.tool_config.file_read_ignore_patterns = vec!["*.env".to_string()];
+
+    let result = <GrepTool as DynTool>::execute(
+        &GrepTool,
+        json!({"pattern": "token", "path": dir.path().to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let t = text(&result);
+    assert!(t.contains("app.rs"), "normal file present: {t}");
+    assert!(
+        !t.contains("secret.env"),
+        "read-ignore pattern should exclude: {t}"
+    );
+}
+
 // -----------------------------------------------------------------------
 // Offset
 // -----------------------------------------------------------------------

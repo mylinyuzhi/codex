@@ -4,16 +4,23 @@ use coco_cli::headless::DEFAULT_SYSTEM_PROMPT_IDENTITY;
 use coco_cli::headless::build_system_prompt_for_model;
 use coco_config::CatalogPaths;
 use coco_config::EnvSnapshot;
+use coco_config::RoleSlots;
 use coco_config::RuntimeConfig;
 use coco_config::RuntimeOverrides;
 use coco_config::Settings;
 use coco_config::SettingsWithSource;
+use coco_types::ProviderModelSelection;
 use tempfile::TempDir;
 
 fn runtime_for_model(selection: &str, home: &TempDir) -> RuntimeConfig {
     let settings = SettingsWithSource {
         merged: Settings {
-            model: Some(selection.to_string()),
+            models: coco_config::ModelSelectionSettings {
+                main: Some(RoleSlots::new(
+                    ProviderModelSelection::from_slash_str(selection).expect("model selection"),
+                )),
+                ..Default::default()
+            },
             ..Default::default()
         },
         per_source: HashMap::new(),
@@ -39,7 +46,7 @@ fn build_system_prompt_uses_model_instructions_when_present() {
         build_system_prompt_for_model(cwd.path(), &runtime, "openai", "gpt-5-4", None, &[]);
 
     assert!(
-        prompt.starts_with("You are Codex, a coding agent based on GPT-5."),
+        prompt.starts_with("You are Coco, a coding agent based on GPT-5."),
         "shared headless/SDK/TUI prompt builder should use model instructions"
     );
     assert!(prompt.contains("# Personality"));

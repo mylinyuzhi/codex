@@ -104,7 +104,7 @@ class SubprocessCLITransport(Transport):
         ) from last_error
 
     async def _start_process(self) -> None:
-        # `--model`, `--log-stderr`, etc. are top-level flags — clap
+        # `--models.main`, `--log-stderr`, etc. are top-level flags — clap
         # parses them BEFORE the subcommand. Putting `cli_args` after
         # `sdk` gives "unexpected argument" errors.
         cmd = [self._binary_path, *self._cli_args, "sdk"]

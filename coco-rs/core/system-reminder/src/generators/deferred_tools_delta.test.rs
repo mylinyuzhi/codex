@@ -59,7 +59,7 @@ async fn emits_added_only() {
     let text = r.content().unwrap();
     assert_eq!(
         text,
-        "The following deferred tools are now available by name via ToolSearch. These tools are not callable until you load them with ToolSearch:\n- Foo: Does foo\n- Bar: Does bar"
+        "The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded — calling them directly will fail with InputValidationError. Use ToolSearch with query \"select:<name>[,<name>...]\" to load tool schemas before calling them:\n- Foo: Does foo\n- Bar: Does bar"
     );
 }
 

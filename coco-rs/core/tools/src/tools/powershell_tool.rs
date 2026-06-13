@@ -26,6 +26,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
 
+use super::background_task::BackgroundKind;
+use super::background_task::background_output_path;
+use super::background_task::format_background_notice;
 use super::powershell::analyze_ps_security;
 use super::powershell::classify_ps_command;
 use super::powershell::decode_ps_output;
@@ -186,12 +189,11 @@ impl Tool for PowerShellTool {
     type Input = PowerShellInput;
     coco_tool_runtime::impl_runtime_schema!(PowerShellInput);
     /// Output is `Value` because the wire shape is a tagged union of
-    /// fg / bg / auto-bg-promotion envelopes (`{stdout, stderr,
-    /// exitCode, interrupted}` vs `{task_id, status: "background",
-    /// message}` vs the latter + `backgroundTaskId` /
-    /// `assistantAutoBackgrounded` / `backgroundedByUser`). Modeling
-    /// as a tagged enum would require a `Bash`-style refactor of the
-    /// renderer; deferred to a follow-up pass.
+    /// fg / bg envelopes (`{stdout, stderr, exitCode, interrupted}` vs
+    /// `{backgroundTaskId, outputPath}` plus optional
+    /// `assistantAutoBackgrounded` / `backgroundedByUser` discriminants).
+    /// Modeling as a tagged enum would require a `Bash`-style refactor of
+    /// the renderer; deferred to a follow-up pass.
     type Output = Value;
 
     fn to_auto_classifier_input(&self, input: &PowerShellInput) -> Option<String> {
@@ -277,17 +279,13 @@ impl Tool for PowerShellTool {
         ValidationResult::Valid
     }
 
-    /// Render the PowerShell envelope. Branches mirror Bash's render so
-    /// future fg→bg promotion requires only execute-side changes:
-    /// 1. **Status==background** (user-initiated `run_in_background:true`):
-    ///    emit prebuilt `message` field.
-    /// 2. **Foreground**: build `[processedStdout, errorMessage,
-    ///    backgroundInfo]` joined with `\n`, skipping empties.
-    ///    `processedStdout` strips leading blank lines + trims trailing
-    ///    whitespace. Oversized text output is persisted by the query-level
-    ///    generic Level 1 tool-result pipeline. `backgroundTaskId` triggers
-    ///    one of three messages (`assistantAutoBackgrounded` /
-    ///    `backgroundedByUser` / default).
+    /// Render the PowerShell envelope. Mirrors Bash's text-path render:
+    /// build `[processedStdout, errorMessage, backgroundInfo]` joined with
+    /// `\n`, skipping empties. `processedStdout` strips leading blank lines +
+    /// trims trailing whitespace. Oversized text output is persisted by the
+    /// query-level generic Level 1 tool-result pipeline. A backgrounded
+    /// command carries `backgroundTaskId` + `outputPath`, so the
+    /// `backgroundInfo` line names both — the model `Read`s that path.
     ///
     /// The `isImage` branch is intentionally unimplemented because
     /// `execute_foreground` decodes UTF-16 stdout into UTF-8 before the
@@ -295,21 +293,6 @@ impl Tool for PowerShellTool {
     /// Wire image detection into the execute path (emit `structuredContent`)
     /// before adding the render branch.
     fn render_for_model(&self, data: &Value) -> Vec<ToolResultContentPart> {
-        if data
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|s| s == "background")
-        {
-            let msg = data
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("PowerShell command running in background.");
-            return vec![ToolResultContentPart::Text {
-                text: msg.to_string(),
-                provider_options: None,
-            }];
-        }
-
         let stdout = data.get("stdout").and_then(Value::as_str).unwrap_or("");
         let stderr = data.get("stderr").and_then(Value::as_str).unwrap_or("");
         let interrupted = data
@@ -332,29 +315,8 @@ impl Tool for PowerShellTool {
             .get("backgroundTaskId")
             .and_then(Value::as_str)
             .map(|task_id| {
-                let auto = data
-                    .get("assistantAutoBackgrounded")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let by_user = data
-                    .get("backgroundedByUser")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if auto {
-                    let budget_seconds =
-                        super::bash_advanced::ASSISTANT_BLOCKING_BUDGET_MS / 1000;
-                    format!(
-                        "Command exceeded the assistant-mode blocking budget ({budget_seconds}s) and was moved to the background with ID: {task_id}. It is still running — you will be notified when it completes. Output is being written to the task output. In assistant mode, delegate long-running work to a subagent or use run_in_background to keep this conversation responsive."
-                    )
-                } else if by_user {
-                    format!(
-                        "Command was manually backgrounded by user with ID: {task_id}. Output is being written to the task output."
-                    )
-                } else {
-                    format!(
-                        "Command running in background with ID: {task_id}. Output is being written to the task output."
-                    )
-                }
+                let output_path = data.get("outputPath").and_then(Value::as_str).unwrap_or("");
+                format_background_notice(BackgroundKind::from_result(data), task_id, output_path)
             })
             .unwrap_or_default();
 
@@ -496,14 +458,11 @@ async fn execute_background(
             source: None,
         })?;
 
+    let output_path = background_output_path(task_handle, &task_id).await;
     Ok(ToolResult {
         data: serde_json::json!({
-            "task_id": task_id,
-            "status": "background",
-            "message": format!(
-                "PowerShell command running in background. Task ID: {task_id}. \
-                 You will be notified when it completes."
-            ),
+            "backgroundTaskId": task_id,
+            "outputPath": output_path,
         }),
         new_messages: vec![],
         app_state_patch: None,
