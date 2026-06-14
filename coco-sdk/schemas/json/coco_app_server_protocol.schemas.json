@@ -2603,6 +2603,21 @@
       ],
       "type": "object"
     },
+    "ExitPlanModeAllowedPrompt": {
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "prompt"
+      ],
+      "type": "object"
+    },
     "ExitPlanModeOutcome": {
       "description": "First-class outcome of an `ExitPlanMode` tool call.",
       "oneOf": [
@@ -5286,6 +5301,45 @@
         }
       ],
       "title": "PermissionRequestDecision"
+    },
+    "PermissionRequestDetail": {
+      "description": "Tool-specific payload for permission UIs.",
+      "oneOf": [
+        {
+          "properties": {
+            "allowed_prompts": {
+              "items": {
+                "$ref": "#/$defs/ExitPlanModeAllowedPrompt"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "exit_plan_mode",
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/$defs/ExitPlanModeOutcome"
+            },
+            "plan": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "plan_file_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "PermissionRule": {
       "description": "A single permission rule.",
@@ -11985,7 +12039,7 @@
       "description": "TUI-exclusive events.\n\nThese events are dropped by SDK and App-Server consumers. They drive\noverlays, toasts, and UI-only state transitions that are not part of the\nprotocol contract.\n\nPer `event-system-design.md` Section 1.7, the design listed this type as\nowned by `coco-tui`. Since `CoreEvent::Tui(TuiOnlyEvent)` is part of the\nenvelope enum defined in `coco-types`, the type itself must live in\n`coco-types` to avoid a cyclic dependency. The semantic contract\n(TUI-only, never sent to SDK) is preserved via consumer dispatch rules\nin `StreamAccumulator` and `handle_core_event()`.\n\n23 variants (20 from design \u00a74.1 + 3 coco-rs extensions).",
       "oneOf": [
         {
-          "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.updated_input` as a\n`{ ..original_input, user_choice: \"<value>\" }` JSON object so\nthe tool's `execute()` can branch on the choice. TS parity:\n`ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can splice\nthe picked `user_choice` into it verbatim and derive path-scoped\nread permission updates for classic \"always allow\" approvals.",
+          "description": "Permission approval overlay needed.\n\nWhen `choices` is `Some`, the TUI should render a multi-choice\nlist (e.g. ExitPlanMode's keep/clear/cancel) instead of the\ndefault yes/no buttons. Picked `value` is echoed back via\n`UserCommand::ApprovalResponse.resolution_detail` so the tool's\n`execute()` can branch on the choice. TS parity:\n`ExitPlanModePermissionRequest.tsx:691-704` option grid.\n\n`original_input` carries the raw tool input so the TUI can derive\npath-scoped read permission updates for classic \"always allow\"\napprovals.",
           "properties": {
             "choices": {
               "items": {
@@ -12005,6 +12059,16 @@
             },
             "description": {
               "type": "string"
+            },
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PermissionRequestDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "display_input": {
               "$ref": "#/$defs/PermissionDisplayInput"
