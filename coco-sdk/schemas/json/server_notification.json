@@ -1900,7 +1900,7 @@
       ]
     },
     "AttachmentKind": {
-      "description": "Every TS `Attachment.type` discriminator, plus coco-rs-synthetic\nreminder kinds. 61 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
+      "description": "Every TS `Attachment.type` discriminator, plus coco-rs-synthetic\nreminder kinds. 62 variants.\n\nWire format is snake_case via `#[serde(rename_all = \"snake_case\")]`\nto match TS `Attachment.type` exactly, so transcripts round-trip.",
       "oneOf": [
         {
           "type": "string",
@@ -1970,6 +1970,11 @@
           "description": "User-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the standard case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
           "type": "string",
           "const": "critical_system_reminder"
+        },
+        {
+          "description": "TS-style slash-command metadata (`<command-name>`, optional args)\ninjected before expanded prompt content.",
+          "type": "string",
+          "const": "slash_command_metadata"
         },
         {
           "description": "coco-rs per-turn baseline user context (TS `prependUserContext`\n`utils/api.ts:449`, `currentDate` from `context.ts:186`). Injected\nevery turn as an `is_meta` `<system-reminder>` carrying\n`Today's date is <local ISO>.` — distinct from the one-shot\n[`DateChange`](Self::DateChange) rollover notice.",
