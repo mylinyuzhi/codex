@@ -876,8 +876,9 @@ impl QueryEngine {
             None => coco_types::ToolAppState::default(),
         };
 
-        let (current_loaded_tools, current_deferred_tools) =
-            self.current_tool_search_partitions(&app_state_snapshot);
+        let (current_loaded_tools, current_deferred_tools) = self
+            .current_tool_search_partitions(&app_state_snapshot)
+            .await;
         let current_agents = self
             .session_bootstrap
             .as_ref()
@@ -988,7 +989,7 @@ impl QueryEngine {
         (attachments, state)
     }
 
-    fn current_tool_search_partitions(
+    async fn current_tool_search_partitions(
         &self,
         app_state: &coco_types::ToolAppState,
     ) -> (Vec<String>, Vec<String>) {
@@ -1012,6 +1013,7 @@ impl QueryEngine {
         )
         .with_discovered_tool_names(discovered)
         .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
+        let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
         let mut loaded: Vec<String> = self
             .tools
             .loaded_tools(&stub_ctx)
@@ -1083,7 +1085,9 @@ impl QueryEngine {
         if !in_plan_mode {
             return None;
         }
-        let (_, deferred_tools) = self.current_tool_search_partitions(&app_state_snapshot);
+        let (_, deferred_tools) = self
+            .current_tool_search_partitions(&app_state_snapshot)
+            .await;
 
         let workflow = match self.config.plan_mode_settings.workflow {
             coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
@@ -1289,7 +1293,9 @@ impl QueryEngine {
             if !in_plan_mode {
                 None
             } else {
-                let (_, deferred_tools) = self.current_tool_search_partitions(&app_state_snapshot);
+                let (_, deferred_tools) = self
+                    .current_tool_search_partitions(&app_state_snapshot)
+                    .await;
                 let pm = &self.config.plan_mode_settings;
                 let workflow = match pm.workflow {
                     coco_config::PlanModeWorkflow::FivePhase => {

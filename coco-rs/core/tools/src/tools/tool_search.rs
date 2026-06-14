@@ -551,11 +551,11 @@ impl Tool for ToolSearchTool {
     fn name(&self) -> &str {
         ToolName::ToolSearch.as_str()
     }
-    /// Hidden from the model when `ToolSearch` is inactive — either
-    /// [`coco_types::Feature::ToolSearch`] is off, OR the current
-    /// model declared neither
+    /// Hidden from the model when `ToolSearch` is inactive: the feature is off,
+    /// the current model declared neither
     /// [`coco_types::Capability::ServerSideToolReference`] nor
-    /// [`coco_types::Capability::ClientSideToolSearch`].
+    /// [`coco_types::Capability::ClientSideToolSearch`], or there are no
+    /// deferred tools / pending MCP servers to search.
     ///
     /// Symmetric with [`coco_tool_runtime::ToolRegistry::loaded_tools`]
     /// which short-circuits the `should_defer()` filter on the same

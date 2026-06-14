@@ -57,6 +57,9 @@ impl Tool for McpAuthTool {
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
+    fn should_defer(&self) -> bool {
+        true
+    }
     fn description(&self, _input: &McpAuthInput, _options: &DescriptionOptions) -> String {
         "Authenticate with an MCP server by name (fallback when a server isn't surfacing its own authenticate tool).".into()
     }
@@ -131,10 +134,12 @@ pub struct McpAuthServerInput {}
 /// reconnect: it reports `mcp_info().server_name == server`, so the
 /// `ToolRegistry::replace_server_tools` wipe that installs the real tools
 /// removes the pseudo-tool in the same atomic swap as the
-/// `mcp__<server>__*` prefix replacement). `should_defer() == false` so it is
-/// visible in the model's tool list on turn 1, unlike its real-tool siblings.
+/// `mcp__<server>__*` prefix replacement). It defers like other MCP tools;
+/// pending-server state keeps `ToolSearch` visible while auth/bootstrap is
+/// incomplete.
 pub struct McpAuthServerTool {
     info: McpToolInfo,
+    qualified_name: String,
     description: String,
 }
 
@@ -153,11 +158,14 @@ impl McpAuthServerTool {
              authorization URL to share with the user. Once the user completes authorization \
              in their browser, the server's real tools become available automatically."
         );
+        let info = McpToolInfo {
+            server_name,
+            tool_name: "authenticate".to_string(),
+        };
+        let qualified_name = info.qualified_name();
         Self {
-            info: McpToolInfo {
-                server_name,
-                tool_name: "authenticate".to_string(),
-            },
+            info,
+            qualified_name,
             description,
         }
     }
@@ -176,7 +184,7 @@ impl Tool for McpAuthServerTool {
         }
     }
     fn name(&self) -> &str {
-        &self.info.tool_name
+        &self.qualified_name
     }
     fn mcp_info(&self) -> Option<&McpToolInfo> {
         Some(&self.info)
@@ -188,11 +196,8 @@ impl Tool for McpAuthServerTool {
         ctx.features.enabled(coco_types::Feature::Mcp)
     }
 
-    /// CRITICAL: the auth pseudo-tool must NOT defer (unlike [`McpTool`], which
-    /// hides behind `ToolSearch`). If it deferred, the model would never see it
-    /// on turn 1 and the whole per-server surfacing would be a silent no-op.
     fn should_defer(&self) -> bool {
-        false
+        true
     }
 
     fn description(&self, _input: &McpAuthServerInput, _options: &DescriptionOptions) -> String {

@@ -339,7 +339,7 @@ impl ToolContextFactory {
             &live_permission_rules,
             PermissionBehavior::Ask,
         );
-        ToolUseContext {
+        let mut ctx = ToolUseContext {
             tools: self.tools.clone(),
             main_loop_model,
             // Honor the config-driven values that the previous inline
@@ -372,6 +372,7 @@ impl ToolContextFactory {
             model_supports_tool_reference: overrides.current_model_supports_tool_reference,
             model_supports_client_side_tool_search: overrides
                 .current_model_supports_client_side_tool_search,
+            tool_search_has_candidates: false,
             is_teammate: self.config.is_teammate,
             is_in_process_teammate: self.config.is_in_process_teammate,
             plan_mode_required: self.config.plan_mode_required,
@@ -577,7 +578,15 @@ impl ToolContextFactory {
                 .as_ref()
                 .map(|iso| iso.child_query_depth())
                 .unwrap_or(0),
+        };
+
+        if ctx.tool_search_supported() {
+            ctx.tool_search_has_candidates = true;
+            let has_deferred = !ctx.tools.deferred_tools(&ctx).is_empty();
+            let has_pending_mcp = !ctx.mcp.pending_server_names().await.is_empty();
+            ctx.tool_search_has_candidates = has_deferred || has_pending_mcp;
         }
+        ctx
     }
 }
 

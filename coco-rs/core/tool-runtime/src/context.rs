@@ -189,6 +189,11 @@ pub struct ToolUseContext {
     /// capability via `~/.coco/models.json`.
     pub model_supports_client_side_tool_search: bool,
 
+    /// Whether this turn has anything ToolSearch can usefully surface:
+    /// at least one filtered, undiscovered deferred tool or one MCP server
+    /// still pending bootstrap. Computed by app/query for real turns.
+    pub tool_search_has_candidates: bool,
+
     // ── Core State ──
     /// Structured abort signal for tool execution.
     pub abort: ToolAbortSignal,
@@ -620,6 +625,7 @@ impl ToolUseContext {
             discovered_tool_names: self.discovered_tool_names.clone(),
             model_supports_tool_reference: self.model_supports_tool_reference,
             model_supports_client_side_tool_search: self.model_supports_client_side_tool_search,
+            tool_search_has_candidates: self.tool_search_has_candidates,
             abort: self.abort.clone(),
             messages: self.messages.clone(),
             permission_context: self.permission_context.clone(),
@@ -770,6 +776,19 @@ impl ToolUseContext {
         self
     }
 
+    /// Builder: install the current turn's ToolSearch candidate gate.
+    pub fn with_tool_search_candidates(mut self, has_candidates: bool) -> Self {
+        self.tool_search_has_candidates = has_candidates;
+        self
+    }
+
+    /// Capability/feature predicate before checking whether any candidates
+    /// are currently searchable.
+    pub fn tool_search_supported(&self) -> bool {
+        self.features.enabled(coco_types::Feature::ToolSearch)
+            && (self.model_supports_tool_reference || self.model_supports_client_side_tool_search)
+    }
+
     /// Effective `ToolSearch` activation for the current turn.
     ///
     /// Three-way predicate combining:
@@ -778,6 +797,8 @@ impl ToolUseContext {
     ///    [`Self::model_supports_tool_reference`] (server-side, cache-friendly)
     ///    or [`Self::model_supports_client_side_tool_search`]
     ///    (universal, costs cache breaks on Anthropic) must be declared.
+    /// 3. A current candidate source — at least one undiscovered deferred
+    ///    tool or one pending MCP server.
     ///
     /// When `false`:
     ///   - [`crate::ToolRegistry::loaded_tools`] short-circuits the
@@ -790,8 +811,7 @@ impl ToolUseContext {
     /// This is the canonical site for the predicate so registry /
     /// tool / engine_prompt agree byte-for-byte.
     pub fn tool_search_active(&self) -> bool {
-        self.features.enabled(coco_types::Feature::ToolSearch)
-            && (self.model_supports_tool_reference || self.model_supports_client_side_tool_search)
+        self.tool_search_supported() && self.tool_search_has_candidates
     }
 
     /// Create a minimal context for testing.
@@ -831,6 +851,7 @@ impl ToolUseContext {
             discovered_tool_names: Arc::new(HashSet::new()),
             model_supports_tool_reference: false,
             model_supports_client_side_tool_search: false,
+            tool_search_has_candidates: false,
             abort: ToolAbortSignal::from_turn(TurnAbortController::new().signal()),
             messages: Arc::new(Vec::new()),
             permission_context: ToolPermissionContext {

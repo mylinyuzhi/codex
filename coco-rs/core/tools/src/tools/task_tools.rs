@@ -485,9 +485,6 @@ impl Tool for TaskCreateTool {
     fn is_concurrency_safe(&self, _input: &TaskCreateInput) -> bool {
         true
     }
-    fn should_defer(&self) -> bool {
-        true
-    }
     fn search_hint(&self) -> Option<&str> {
         Some(TASK_CREATE_SEARCH_HINT)
     }
@@ -610,9 +607,6 @@ impl Tool for TaskGetTool {
     fn is_concurrency_safe(&self, _input: &TaskGetInput) -> bool {
         true
     }
-    fn should_defer(&self) -> bool {
-        true
-    }
     fn search_hint(&self) -> Option<&str> {
         Some(TASK_GET_SEARCH_HINT)
     }
@@ -731,9 +725,6 @@ impl Tool for TaskListTool {
         true
     }
     fn is_concurrency_safe(&self, _input: &TaskListInput) -> bool {
-        true
-    }
-    fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
@@ -909,9 +900,6 @@ impl Tool for TaskUpdateTool {
     }
 
     fn is_concurrency_safe(&self, _input: &TaskUpdateInput) -> bool {
-        true
-    }
-    fn should_defer(&self) -> bool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
@@ -1302,9 +1290,6 @@ impl Tool for TaskStopTool {
     fn is_concurrency_safe(&self, _input: &TaskStopInput) -> bool {
         true
     }
-    fn should_defer(&self) -> bool {
-        true
-    }
     fn search_hint(&self) -> Option<&str> {
         Some("stop a running background task or shell")
     }
@@ -1490,6 +1475,9 @@ impl Tool for TaskOutputTool {
         true
     }
     fn is_concurrency_safe(&self, _input: &TaskOutputInput) -> bool {
+        true
+    }
+    fn should_defer(&self) -> bool {
         true
     }
 
@@ -1874,9 +1862,6 @@ impl Tool for TodoWriteTool {
     }
     fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
         !ctx.features.enabled(Feature::TaskV2)
-    }
-    fn should_defer(&self) -> bool {
-        true
     }
     fn search_hint(&self) -> Option<&str> {
         Some("write the per-agent todo checklist for tracking work")
