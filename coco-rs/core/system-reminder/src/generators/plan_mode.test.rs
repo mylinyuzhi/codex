@@ -28,6 +28,7 @@ async fn enter_emits_full_when_full_flag_set() {
         .is_plan_mode(true)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
+        .explore_plan_agents_available(true)
         .set_full_content(AttachmentType::PlanMode, true)
         .build();
     let g = PlanModeEnterGenerator;
@@ -109,6 +110,7 @@ async fn enter_interview_workflow_full_content_differs_from_five_phase() {
         .plan_workflow(PlanWorkflow::FivePhase)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
+        .explore_plan_agents_available(true)
         .set_full_content(AttachmentType::PlanMode, true)
         .build();
     let interview = GeneratorContext::builder(&c)
@@ -116,6 +118,7 @@ async fn enter_interview_workflow_full_content_differs_from_five_phase() {
         .plan_workflow(PlanWorkflow::Interview)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
+        .explore_plan_agents_available(true)
         .set_full_content(AttachmentType::PlanMode, true)
         .build();
 
@@ -147,6 +150,7 @@ async fn enter_phase4_variant_affects_full_five_phase_only() {
         .phase4_variant(Phase4Variant::Standard)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
+        .explore_plan_agents_available(true)
         .set_full_content(AttachmentType::PlanMode, true)
         .build();
     let cut = GeneratorContext::builder(&c)
@@ -154,6 +158,7 @@ async fn enter_phase4_variant_affects_full_five_phase_only() {
         .phase4_variant(Phase4Variant::Cut)
         .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
         .plan_exists(false)
+        .explore_plan_agents_available(true)
         .set_full_content(AttachmentType::PlanMode, true)
         .build();
 

@@ -837,7 +837,7 @@ async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
     assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
     assert!(!guard.pending_clear_message_history);
     assert_eq!(guard.pending_plan_implementation_message, None);
-    assert!(!guard.pending_plan_verification);
+    assert!(guard.pending_plan_verification.is_none());
     assert_eq!(
         guard.pending_plan_mode_exit_outcome,
         Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan)

@@ -834,23 +834,6 @@
       ]
     },
     {
-      "description": "Plan mode changed.",
-      "type": "object",
-      "properties": {
-        "method": {
-          "type": "string",
-          "const": "plan/modeChanged"
-        },
-        "params": {
-          "$ref": "#/$defs/PlanModeChangedParams"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ]
-    },
-    {
       "description": "Command queue state changed.",
       "type": "object",
       "properties": {
@@ -1984,7 +1967,7 @@
           ]
         },
         {
-          "description": "TS: user-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the TS-aligned case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
+          "description": "User-supplied per-turn critical instruction\n(`toolUseContext.criticalSystemReminder_EXPERIMENTAL`).\n\n**coco-rs dual role**: also serves as the generic carrier kind for\n`coco_messages::create_meta_message` / `create_system_reminder_message`\n(post-Phase-2 drop-in for the old `User{is_meta:true}` shape). The\nreminder-generator path reads `ctx.config.critical_instruction`\nfor the standard case; engine-internal meta injection reuses the\nsame kind because API-visible + UI-hidden wrapped text is exactly\nits visibility profile. Both paths land in `Message::Attachment`\nwith `AttachmentBody::Api(LlmMessage)`.",
           "type": "string",
           "const": "critical_system_reminder"
         },
@@ -1996,7 +1979,7 @@
       ]
     },
     "AttachmentMessage": {
-      "description": "Attachment message: `kind` carries the TS-parity discriminant (60 variants),\n`body` carries the typed payload.\n\n**Invariant**: `kind` and `body` must agree — e.g. `kind = HookCancelled`\nmust come with `body = Silent(SilentPayload::HookCancelled(..))`. Do **not**\nconstruct via struct literal; use the typed constructor helpers below.",
+      "description": "Attachment message: `kind` carries the discriminant (60 variants),\n`body` carries the typed payload.\n\n**Invariant**: `kind` and `body` must agree — e.g. `kind = HookCancelled`\nmust come with `body = Silent(SilentPayload::HookCancelled(..))`. Do **not**\nconstruct via struct literal; use the typed constructor helpers below.",
       "type": "object",
       "properties": {
         "body": {
@@ -2354,7 +2337,7 @@
       ]
     },
     "ContextSuggestion": {
-      "description": "An actionable suggestion shown under the `/context` view. Mirrors TS\n`ContextSuggestion` (`utils/contextSuggestions.ts`).",
+      "description": "An actionable suggestion shown under the `/context` view.",
       "type": "object",
       "properties": {
         "detail": {
@@ -2694,6 +2677,21 @@
         "code"
       ]
     },
+    "ExitPlanModeOutcome": {
+      "description": "First-class outcome of an `ExitPlanMode` tool call.",
+      "oneOf": [
+        {
+          "description": "A concrete implementation plan was produced and approved for execution.",
+          "type": "string",
+          "const": "implementation_plan"
+        },
+        {
+          "description": "Plan mode ended for a request that does not have implementation work.",
+          "type": "string",
+          "const": "no_implementation_plan"
+        }
+      ]
+    },
     "ExitPlanModeResult": {
       "description": "UI-only data needed to render an ExitPlanMode result without reading private\ntool input/output wire fields.",
       "type": "object",
@@ -2710,6 +2708,9 @@
         "isAgent": {
           "type": "boolean"
         },
+        "outcome": {
+          "$ref": "#/$defs/ExitPlanModeOutcome"
+        },
         "plan": {
           "type": "string"
         },
@@ -2718,6 +2719,7 @@
         }
       },
       "required": [
+        "outcome",
         "plan",
         "awaitingLeaderApproval",
         "isAgent",
@@ -2725,7 +2727,7 @@
       ]
     },
     "ExpandedView": {
-      "description": "Which panel the TUI should have expanded in the task area.\n\nTS parity: `AppState.expandedView` in `AppStateStore.ts` (3 variants:\n`'none' | 'tasks' | 'teammates'`).\n\n**`Teammates` ≠ general subagents.** In TS, `expandedView ===\n'teammates'` mounts `TeammateSpinnerTree`, which strictly filters\n`task.type === 'in_process_teammate'` — i.e. agents created by\n`spawnTeammate()` with persistent identity (`agentId@teamName`,\nsurvives `/clear`, mailbox-based). Async subagents from the\n`Agent` tool (TS `LocalAgentTask`, type `'local_agent'`) render\ninline in the transcript via `AgentProgressLine` and in the\n`BackgroundTaskStatus` pill row — **not** here.\n\nA subagent only appears in this view when the Agent tool was\ninvoked with `isAgentSwarmsEnabled() && teamName` set, which\nroutes through `spawnTeammate()` and transforms the worker into\na first-class teammate.",
+      "description": "Which panel the TUI should have expanded in the task area.\n\n**`Teammates` ≠ general subagents.** `Teammates` strictly shows agents\nwith persistent teammate identity (`agentId@teamName`, survives `/clear`,\nmailbox-based). Async subagents spawned by the `Agent` tool render inline\nin the transcript and in the `BackgroundTaskStatus` pill row — **not** here.\n\nA subagent only appears in this view when the Agent tool was invoked with\n`teamName` set, which routes through `spawnTeammate()` and transforms the\nworker into a first-class teammate.",
       "type": "string",
       "enum": [
         "none",
@@ -3206,7 +3208,7 @@
       ]
     },
     "LanguageModelV4FileData": {
-      "description": "Generated file data — either raw bytes/base64 or a URL.\n\nMatches the 2-arm `SharedV4FileDataData | SharedV4FileDataUrl` tagged union\nfrom the TypeScript v4 spec.",
+      "description": "Generated file data — either raw bytes/base64 or a URL.\n\nMatches the 2-arm `SharedV4FileDataData | SharedV4FileDataUrl` tagged union\nfrom the v4 spec.",
       "oneOf": [
         {
           "description": "Raw bytes (Uint8Array) or base64-encoded string.",
@@ -3942,29 +3944,6 @@
         "request_id",
         "from",
         "plan_content"
-      ]
-    },
-    "PlanModeChangedParams": {
-      "type": "object",
-      "properties": {
-        "approved": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "entered": {
-          "type": "boolean"
-        },
-        "plan_file": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "entered"
       ]
     },
     "PluginInit": {
@@ -5803,7 +5782,7 @@
       ]
     },
     "TaskListStatus": {
-      "description": "Task status wire format — matches TS `TaskStatusSchema`\n(`utils/tasks.ts:69-74`). **Distinct** from [`crate::TaskStatus`],\nwhich is the 6-variant running-task lifecycle enum.",
+      "description": "Task status wire format. **Distinct** from [`crate::TaskStatus`],\nwhich is the 6-variant running-task lifecycle enum.",
       "type": "string",
       "enum": [
         "pending",
@@ -5894,7 +5873,7 @@
       ]
     },
     "TaskRecord": {
-      "description": "A durable plan-item, matching TS `TaskSchema` (`utils/tasks.ts:76-89`).",
+      "description": "A durable plan-item.",
       "type": "object",
       "properties": {
         "activeForm": {
@@ -6329,21 +6308,21 @@
       ]
     },
     "TodoRecord": {
-      "description": "A TodoWrite item — byte-matches TS `TodoItemSchema` (no `id` field,\npositional identity).",
+      "description": "A TodoWrite item (no `id` field, positional identity).",
       "type": "object",
       "properties": {
         "activeForm": {
-          "description": "TS `TodoItemSchema.activeForm: z.string().min(1)`.",
+          "description": "Non-empty active form identifier.",
           "type": "string",
           "minLength": 1
         },
         "content": {
-          "description": "TS `TodoItemSchema.content: z.string().min(1)`.",
+          "description": "Non-empty content string.",
           "type": "string",
           "minLength": 1
         },
         "status": {
-          "description": "`status` is a plain `String` (TUI/store paths pre-date typing); the\nallowed values are declared on the schema. TS `z.enum([...])`.",
+          "description": "`status` is a plain `String` (TUI/store paths pre-date typing); the\nallowed values are declared on the schema.",
           "type": "string",
           "enum": [
             "pending",
@@ -6486,7 +6465,7 @@
           "description": "The tool arguments as JSON. **Always populated** — see struct doc."
         },
         "invalid": {
-          "description": "`true` when the tool call cannot be executed as emitted: the\nraw `arguments` could not be recovered into a parseable shape,\nthe schema validator rejected the input, or the model named a\ntool that does not exist. Pair with [`Self::invalid_reason`]\nfor the precise cause.\n\nCaller layers (`app/query` preparer, side queries) read this\nflag and emit a synthetic `tool_result(is_error: true)` so the\nagent loop's next turn carries a structured error back to the\nmain LLM for self-correction.\n\n**TS parity**: mirrors `invalid: boolean` on the SDK-level\n`TypedToolCall` in `@ai-sdk/ai`\n(`packages/ai/src/generate-text/parse-tool-call.ts`).",
+          "description": "`true` when the tool call cannot be executed as emitted: the\nraw `arguments` could not be recovered into a parseable shape,\nthe schema validator rejected the input, or the model named a\ntool that does not exist. Pair with [`Self::invalid_reason`]\nfor the precise cause.\n\nCaller layers (`app/query` preparer, side queries) read this\nflag and emit a synthetic `tool_result(is_error: true)` so the\nagent loop's next turn carries a structured error back to the\nmain LLM for self-correction.\n\nWhen `true`, signals that the tool call is structurally invalid.",
           "type": "boolean"
         },
         "invalidReason": {
@@ -6622,7 +6601,7 @@
       ]
     },
     "ToolInputInvalidReason": {
-      "description": "Structured cause for an invalid tool call. Drives the wrap prefix\nchosen by `app/query`'s tool result synthesizer:\n- [`Self::JsonParseFailed`] → `<tool_use_error>JSON parse failed: …</tool_use_error>`\n- [`Self::SchemaViolation`] → `<tool_use_error>InputValidationError: …</tool_use_error>`\n- [`Self::NoSuchTool`] → `<tool_use_error>No such tool available: …</tool_use_error>`\n\nMirrors the three failure modes that TS Claude Code distinguishes\nin `services/tools/toolExecution.ts:337-411,614-680`.",
+      "description": "Structured cause for an invalid tool call. Drives the wrap prefix\nchosen by `app/query`'s tool result synthesizer:\n- [`Self::JsonParseFailed`] → `<tool_use_error>JSON parse failed: …</tool_use_error>`\n- [`Self::SchemaViolation`] → `<tool_use_error>InputValidationError: …</tool_use_error>`\n- [`Self::NoSuchTool`] → `<tool_use_error>No such tool available: …</tool_use_error>`\n\nStructured cause for an invalid tool call — three failure modes.",
       "oneOf": [
         {
           "description": "Raw `arguments` bytes could not be parsed into JSON, even after\nrepair. Reserved for the unrecoverable case (e.g. a streaming\nbuffer that finished with truly malformed content). The common\nrecoverable failure mode lands in [`Self::SchemaViolation`]\ninstead because adapters fall back to `{}` on parse failure\nand let the schema validator report specific missing fields.",
