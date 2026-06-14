@@ -219,7 +219,7 @@ Behavioral details:
 |------|-------|
 | `EnterPlanModeTool` | `{}` |
 | `ExitPlanModeTool` | `{ allowed_prompts: Option<Vec<AllowedPrompt>> }` |
-| `VerifyPlanExecutionTool` | `{ summary?: String, issues?: String }` |
+| `VerifyPlanExecutionTool` (legacy, not default-registered) | `{ summary?: String, issues?: String }` |
 | `EnterWorktreeTool` | `{}` |
 | `ExitWorktreeTool` | `{}` |
 
@@ -233,7 +233,7 @@ three built-in tools:
 |------|-------|--------|
 | `EnterPlanModeTool` | `{}` | `{ message, isInterviewPhase }` |
 | `ExitPlanModeTool` | `{ allowed_prompts?, user_choice?, plan? }` | `{ plan, isAgent, filePath?, hasTaskTool?, planWasEdited?, awaitingLeaderApproval?, requestId?, planVerification? }` |
-| `VerifyPlanExecutionTool` | `{ summary?, issues? }` | `{ status, planFilePath?, summary, issues }` |
+| `VerifyPlanExecutionTool` (legacy, not default-registered) | `{ summary?, issues? }` | `{ status, planFilePath?, summary, issues }` |
 
 Tool-specific invariants:
 

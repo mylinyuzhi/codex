@@ -98,7 +98,7 @@ const FEATURES: &[FeatureSpec] = &[
 
 | 项 | 不归 Feature 的原因 |
 |----|--------------------|
-| `PlanMode` | 永远开；`PlanModeConfig.workflow / phase4_variant / verify_execution` 调细节 |
+| `PlanMode` | 永远开；`PlanModeConfig.workflow / phase4_variant` 调细节；legacy `verify_execution` 默认关闭 |
 | `Hooks` | 配了 `hooks` 字段即启用 |
 | `Plugins` | `plugins/` 目录有 `PLUGIN.toml` 即加载 |
 | `Skills` | `skills/` 目录有 `.md` 即注册 |
@@ -224,7 +224,7 @@ pub fn is_known_feature_key(key: &str) -> bool;
   "plan_mode": {
     "workflow": "five_phase",
     "phase4_variant": "trim",
-    "verify_execution": true
+    "verify_execution": false
   },
 
   "telemetry":       { "sinks": ["otel"] },
