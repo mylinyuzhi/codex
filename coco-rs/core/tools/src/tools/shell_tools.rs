@@ -224,6 +224,9 @@ impl Tool for ReplTool {
     fn description(&self, _input: &ReplInput, _options: &DescriptionOptions) -> String {
         "Start an interactive REPL session for a supported language.".into()
     }
+    fn is_enabled(&self, _ctx: &ToolUseContext) -> bool {
+        false
+    }
     /// Model-facing tool description. No upstream prompt text available;
     /// returning the short label keeps the description non-empty.
     async fn prompt(&self, _options: &PromptOptions) -> String {

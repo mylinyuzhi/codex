@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortController;
+use coco_tool_runtime::mcp_handle::McpResourceContent;
+use coco_tool_runtime::mcp_handle::McpResourceInfo;
+use coco_tool_runtime::mcp_handle::McpToolCallResult;
 use coco_types::PermissionMode;
 use coco_types::ThinkingLevel;
 use coco_types::ToolAbortReasonPayload;
@@ -58,6 +61,51 @@ fn factory_with_live_rules(
         agent_catalog: None,
         parent_runtime_snapshot: None,
         live_command_rules,
+    }
+}
+
+#[derive(Debug)]
+struct PendingMcpHandle;
+
+#[async_trait::async_trait]
+impl coco_tool_runtime::McpHandle for PendingMcpHandle {
+    async fn list_resources(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<McpResourceInfo>, coco_error::BoxedError> {
+        Ok(Vec::new())
+    }
+
+    async fn read_resource(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> Result<Vec<McpResourceContent>, coco_error::BoxedError> {
+        Ok(Vec::new())
+    }
+
+    async fn call_tool(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<serde_json::Value>,
+    ) -> Result<McpToolCallResult, coco_error::BoxedError> {
+        Ok(McpToolCallResult {
+            content: Vec::new(),
+            is_error: false,
+        })
+    }
+
+    async fn authenticate(&self, _: &str) -> Result<String, coco_error::BoxedError> {
+        Ok(String::new())
+    }
+
+    async fn connected_servers(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    async fn pending_server_names(&self) -> Vec<String> {
+        vec!["github".to_string()]
     }
 }
 
@@ -134,14 +182,14 @@ async fn test_factory_threads_tool_reference_capability() {
 async fn test_factory_threads_client_side_tool_search_capability() {
     // Same plumbing as `tool_reference` — the client-side capability
     // is the universal cousin (no Anthropic beta dependency). When
-    // both capabilities are absent, `ctx.tool_search_active()` is
+    // both capabilities are absent, `ctx.tool_search_supported()` is
     // false and `ToolSearch` hides from the model.
     let config = test_config();
 
     let ctx_neither = factory(config.clone()).build(Default::default()).await;
     assert!(!ctx_neither.model_supports_client_side_tool_search);
     assert!(
-        !ctx_neither.tool_search_active(),
+        !ctx_neither.tool_search_supported(),
         "no capability → tool_search inactive even if feature on"
     );
 
@@ -154,8 +202,12 @@ async fn test_factory_threads_client_side_tool_search_capability() {
     assert!(ctx_client_only.model_supports_client_side_tool_search);
     assert!(!ctx_client_only.model_supports_tool_reference);
     assert!(
-        ctx_client_only.tool_search_active(),
-        "client-side cap alone is sufficient when feature on"
+        ctx_client_only.tool_search_supported(),
+        "client-side cap alone is supported when feature on"
+    );
+    assert!(
+        !ctx_client_only.tool_search_active(),
+        "no deferred tools and no pending MCP means ToolSearch remains hidden"
     );
 
     let ctx_server_only = factory(config)
@@ -165,9 +217,45 @@ async fn test_factory_threads_client_side_tool_search_capability() {
         })
         .await;
     assert!(
-        ctx_server_only.tool_search_active(),
-        "server-side cap alone is sufficient when feature on"
+        ctx_server_only.tool_search_supported(),
+        "server-side cap alone is supported when feature on"
     );
+    assert!(
+        !ctx_server_only.tool_search_active(),
+        "no deferred tools and no pending MCP means ToolSearch remains hidden"
+    );
+}
+
+#[tokio::test]
+async fn test_factory_activates_tool_search_for_deferred_tools() {
+    let tools = ToolRegistry::new();
+    tools.register(Arc::new(coco_tools::TaskOutputTool));
+    let ctx = ToolContextFactory {
+        tools: Arc::new(tools),
+        ..factory(test_config())
+    }
+    .build(ToolContextOverrides {
+        current_model_supports_client_side_tool_search: true,
+        ..Default::default()
+    })
+    .await;
+
+    assert!(ctx.tool_search_active());
+}
+
+#[tokio::test]
+async fn test_factory_activates_tool_search_for_pending_mcp() {
+    let ctx = ToolContextFactory {
+        mcp_handle: Some(Arc::new(PendingMcpHandle)),
+        ..factory(test_config())
+    }
+    .build(ToolContextOverrides {
+        current_model_supports_client_side_tool_search: true,
+        ..Default::default()
+    })
+    .await;
+
+    assert!(ctx.tool_search_active());
 }
 
 #[tokio::test]

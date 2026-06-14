@@ -44,9 +44,11 @@ fn tool_result_text(message: &Message) -> &str {
 #[tokio::test]
 async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
     let tools = registry_with(Arc::new(coco_tools::tools::ExitPlanModeTool));
-    let ctx = ToolUseContext::test_default().with_model_capabilities(
-        /*supports_tool_reference*/ false, /*supports_client_side_tool_search*/ true,
-    );
+    let ctx = ToolUseContext::test_default()
+        .with_model_capabilities(
+            /*supports_tool_reference*/ false, /*supports_client_side_tool_search*/ true,
+        )
+        .with_tool_search_candidates(true);
     let mut history = MessageHistory::new();
     let tc = ToolCallPart::new(
         "call-deferred",

@@ -370,6 +370,7 @@ impl QueryEngine {
         )
         .with_discovered_tool_names(discovered.clone())
         .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
+        let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
 
         // The tool list sent to the model. When the server-side path
         // is live (capability declared AND `Feature::ToolSearch` on),
@@ -639,6 +640,23 @@ impl QueryEngine {
     pub(crate) async fn mcp_servers_ready_snapshot(&self) -> Option<Vec<String>> {
         let handle = self.mcp_handle.as_ref()?;
         Some(handle.connected_servers().await)
+    }
+
+    pub(crate) async fn with_current_tool_search_candidates(
+        &self,
+        mut ctx: coco_tool_runtime::ToolUseContext,
+    ) -> coco_tool_runtime::ToolUseContext {
+        if !ctx.tool_search_supported() {
+            return ctx;
+        }
+        ctx.tool_search_has_candidates = true;
+        let has_deferred = !self.tools.deferred_tools(&ctx).is_empty();
+        let has_pending_mcp = match self.mcp_handle.as_ref() {
+            Some(handle) => !handle.pending_server_names().await.is_empty(),
+            None => false,
+        };
+        ctx.tool_search_has_candidates = has_deferred || has_pending_mcp;
+        ctx
     }
 
     pub(crate) fn tool_context_factory(

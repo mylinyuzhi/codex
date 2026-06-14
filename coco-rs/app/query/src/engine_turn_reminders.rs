@@ -164,6 +164,7 @@ impl QueryEngine {
             )
             .with_discovered_tool_names(pre_snapshot_discovered)
             .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
+            let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
             let mut loaded: Vec<String> = self
                 .tools
                 .loaded_tools(&stub_ctx)

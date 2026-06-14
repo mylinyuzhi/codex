@@ -680,6 +680,7 @@ mod execute_tests {
         let mut ctx = ctx_with_tools(tools);
         ctx.model_supports_tool_reference = true;
         ctx.model_supports_client_side_tool_search = true;
+        ctx.tool_search_has_candidates = true;
         ctx
     }
 
@@ -689,6 +690,7 @@ mod execute_tests {
     fn ctx_with_tools_client_capable(tools: Vec<Arc<dyn DynTool>>) -> ToolUseContext {
         let mut ctx = ctx_with_tools(tools);
         ctx.model_supports_client_side_tool_search = true;
+        ctx.tool_search_has_candidates = true;
         ctx
     }
 
@@ -745,7 +747,8 @@ mod execute_tests {
     /// covered by `tool_search_tool_hidden_when_no_capability` below.
     #[tokio::test]
     async fn tool_search_tool_hidden_when_feature_off() {
-        let mut ctx = ctx_with_tools_client_capable(vec![]);
+        let mut ctx =
+            ctx_with_tools_client_capable(vec![deferred("WebFetch", "Fetch a URL", None)]);
         assert!(
             <ToolSearchTool as DynTool>::is_enabled(&ToolSearchTool, &ctx),
             "feature on + client-side cap → ToolSearch exposed"

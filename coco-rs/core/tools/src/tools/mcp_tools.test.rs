@@ -294,15 +294,43 @@ async fn mcp_auth_server_tool_bakes_server_name_into_authenticate() {
 }
 
 #[test]
-fn mcp_auth_server_tool_is_not_deferred() {
-    // CRITICAL regression guard: if this defers (like McpTool), the model never
-    // sees it on turn 1 and the surfacing is a silent no-op.
+fn mcp_auth_server_tool_is_deferred() {
     let tool = McpAuthServerTool::new("github".into(), "http", None);
     let tool: &dyn DynTool = &tool;
     assert!(
-        !tool.should_defer(),
-        "the auth pseudo-tool must be visible on turn 1"
+        tool.should_defer(),
+        "auth pseudo-tool loads through ToolSearch"
     );
+}
+
+#[test]
+fn mcp_auth_tool_is_deferred() {
+    let tool: &dyn DynTool = &McpAuthTool;
+    assert!(
+        tool.should_defer(),
+        "generic MCP auth loads through ToolSearch"
+    );
+}
+
+#[test]
+fn mcp_auth_server_tool_is_searchable_by_qualified_name() {
+    let registry = coco_tool_runtime::ToolRegistry::new();
+    registry.register(std::sync::Arc::new(McpAuthServerTool::new(
+        "github".into(),
+        "http",
+        None,
+    )));
+    let ctx = coco_tool_runtime::ToolUseContext::test_default()
+        .with_model_capabilities(false, true)
+        .with_tool_search_candidates(true);
+
+    let names: Vec<String> = registry
+        .searchable_deferred(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    assert_eq!(names, vec!["mcp__github__authenticate"]);
 }
 
 #[test]
@@ -311,7 +339,7 @@ fn mcp_auth_server_tool_id_is_qualified_and_server_owned() {
     let tool: &dyn DynTool = &tool;
     // ToolId::Mcp Display = mcp__<server>__<tool> — must match the wipe prefix.
     assert_eq!(tool.id().to_string(), "mcp__github__authenticate");
-    assert_eq!(tool.name(), "authenticate");
+    assert_eq!(tool.name(), "mcp__github__authenticate");
     assert_eq!(
         tool.mcp_info().map(|i| i.server_name.as_str()),
         Some("github"),

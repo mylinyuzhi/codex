@@ -130,6 +130,86 @@ fn kairos_brief_and_proactive_features_expose_their_tools() {
     );
 }
 
+#[test]
+fn task_tools_loaded_except_task_output() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let ctx = ToolUseContext::test_default()
+        .with_model_capabilities(false, true)
+        .with_tool_search_candidates(true);
+
+    let loaded: HashSet<String> = registry
+        .loaded_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+    let deferred: HashSet<String> = registry
+        .deferred_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    for name in [
+        ToolName::TaskCreate,
+        ToolName::TaskGet,
+        ToolName::TaskList,
+        ToolName::TaskUpdate,
+        ToolName::TaskStop,
+    ] {
+        assert!(
+            loaded.contains(name.as_str()),
+            "{name:?} should load eagerly"
+        );
+        assert!(
+            !deferred.contains(name.as_str()),
+            "{name:?} should not be deferred"
+        );
+    }
+    assert!(!loaded.contains(ToolName::TaskOutput.as_str()));
+    assert!(deferred.contains(ToolName::TaskOutput.as_str()));
+}
+
+#[test]
+fn todo_write_loaded_in_v1_mode() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+    let mut features = Features::with_defaults();
+    features.disable(Feature::TaskV2);
+    let ctx = ToolUseContext::test_default()
+        .with_model_capabilities(false, true)
+        .with_tool_search_candidates(true);
+    let mut ctx = ctx;
+    ctx.features = Arc::new(features);
+
+    let loaded: HashSet<String> = registry
+        .loaded_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+    let deferred: HashSet<String> = registry
+        .deferred_tools(&ctx)
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    assert!(loaded.contains(ToolName::TodoWrite.as_str()));
+    assert!(!deferred.contains(ToolName::TodoWrite.as_str()));
+}
+
+#[test]
+fn repl_stub_is_hidden() {
+    let registry = ToolRegistry::new();
+    crate::register_all_tools(&registry);
+
+    let visible: HashSet<String> = registry
+        .loaded_tools(&ToolUseContext::test_default())
+        .into_iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+
+    assert!(!visible.contains(ToolName::Repl.as_str()));
+}
+
 /// Force-initialize every registered tool's runtime validation schema. The
 /// schemas are `OnceLock`-lazy, so registering a tool does NOT compile them —
 /// only calling `runtime_validation_schema()` does. This is the gate the schema
