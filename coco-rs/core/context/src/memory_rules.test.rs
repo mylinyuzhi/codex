@@ -163,6 +163,7 @@ fn filter_rules_matching_simple_glob() {
 
     let rule = super::RuleFile {
         path: proj.join(".coco").join("rules").join("r.md"),
+        raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["src/**/*.rs".into()]),
     };
@@ -181,6 +182,7 @@ fn filter_rules_matching_non_matching_glob() {
 
     let rule = super::RuleFile {
         path: proj.join(".coco").join("rules").join("r.md"),
+        raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["docs/**/*.md".into()]),
     };
@@ -200,6 +202,7 @@ fn filter_rules_matching_brace_pattern() {
     // Pre-expanded into separate patterns (simulates parse_paths_field output).
     let rule = super::RuleFile {
         path: proj.join(".coco").join("rules").join("r.md"),
+        raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["src/*.ts".into(), "src/*.tsx".into()]),
     };
@@ -219,6 +222,7 @@ fn filter_rules_target_outside_base_returns_empty() {
 
     let rule = super::RuleFile {
         path: proj.join(".coco").join("rules").join("r.md"),
+        raw_content: "body".into(),
         content: "body".into(),
         paths: Some(vec!["**".into()]),
     };

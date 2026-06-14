@@ -1,7 +1,7 @@
 //! Session-level file-read state cache.
 //!
 //! LRU cache (100 entries, 25MB) tracking all files read by tools or @mentions
-//! with `{content, mtime, offset, limit}`.
+//! with `{content, mtime, range, evidence}`.
 //!
 //! Enables:
 //! - @mention deduplication (already-read check via mtime comparison)
@@ -25,10 +25,60 @@ pub struct FileReadEntry {
     pub content: String,
     /// File modification time (epoch ms) when last read.
     pub mtime_ms: i64,
-    /// Line offset if this was a partial read.
-    pub offset: Option<i32>,
-    /// Line limit if this was a partial read.
-    pub limit: Option<i32>,
+    /// Whether the cached content represents the full file or a line range.
+    pub range: FileReadRange,
+    /// Whether this entry is real file content the model saw, or injected
+    /// context that is not safe edit/write evidence.
+    pub evidence: ReadEvidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileReadRange {
+    Full,
+    Lines { offset: Option<i32>, limit: i32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadEvidence {
+    RealFileView,
+    InjectedPartialView,
+}
+
+impl FileReadEntry {
+    pub fn full_real(content: String, mtime_ms: i64) -> Self {
+        Self {
+            content,
+            mtime_ms,
+            range: FileReadRange::Full,
+            evidence: ReadEvidence::RealFileView,
+        }
+    }
+
+    pub fn line_real(content: String, mtime_ms: i64, offset: Option<i32>, limit: i32) -> Self {
+        Self {
+            content,
+            mtime_ms,
+            range: FileReadRange::Lines { offset, limit },
+            evidence: ReadEvidence::RealFileView,
+        }
+    }
+
+    pub fn injected_partial(content: String, mtime_ms: i64, range: FileReadRange) -> Self {
+        Self {
+            content,
+            mtime_ms,
+            range,
+            evidence: ReadEvidence::InjectedPartialView,
+        }
+    }
+
+    pub fn is_full_real(&self) -> bool {
+        self.range == FileReadRange::Full && self.evidence == ReadEvidence::RealFileView
+    }
+
+    pub fn can_satisfy_edit_or_write(&self) -> bool {
+        self.evidence == ReadEvidence::RealFileView
+    }
 }
 
 /// Session-level cache of file read states.
@@ -38,10 +88,11 @@ pub struct FileReadEntry {
 /// detection.
 ///
 /// `read_input_ranges` stores the literal `(offset, limit)` the model
-/// passed on a Read call, separately from `FileReadEntry::{offset,limit}`
-/// which store the effective truncated range. Presence in this map also
-/// serves as the "came from the Read tool" marker — Edit/Write/@mention
-/// entries are never in it, so `Read(path, limit=2000)` followed by an
+/// passed on a Read call, separately from `FileReadEntry::range`, which
+/// stores whether the cached content is a full file or a line range.
+/// Presence in this map also serves as the "came from the Read tool" marker —
+/// Edit/Write/@mention
+/// entries are never in it, so `Read(path, limit=50)` followed by an
 /// identical call can dedup-match exactly.
 // `Clone` is load-bearing: a fork engine deep-clones the parent's
 // `FileReadState` into a fresh `Arc<RwLock<>>` so the fork's reads/edits
@@ -118,7 +169,7 @@ impl FileReadState {
         self.read_input_ranges.get(&path.to_path_buf()).copied()
     }
 
-    /// Update after an edit/write: new content, new mtime, clear partial-read
+    /// Update after an edit/write: new content, new mtime, clear line-range
     /// markers so a subsequent Read doesn't dedup-stub against a post-edit
     /// entry that was never returned to the model as a Read tool result.
     pub fn update_after_edit(&mut self, path: &Path, new_content: String, new_mtime_ms: i64) {
@@ -127,12 +178,7 @@ impl FileReadState {
         self.read_input_ranges.remove(&canonical);
         self.entries.insert(
             canonical,
-            FileReadEntry {
-                content: new_content,
-                mtime_ms: new_mtime_ms,
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real(new_content, new_mtime_ms),
         );
     }
 

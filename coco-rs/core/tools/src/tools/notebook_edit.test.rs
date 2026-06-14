@@ -529,12 +529,7 @@ async fn test_notebook_allows_edit_after_read() {
         let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
         frs.set(
             abs,
-            FileReadEntry {
-                content: std::fs::read_to_string(file.path()).unwrap(),
-                mtime_ms: mtime,
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real(std::fs::read_to_string(file.path()).unwrap(), mtime),
         );
     }
 
@@ -682,13 +677,11 @@ async fn test_notebook_rejects_edit_on_mtime_drift() {
         let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
         frs.set(
             abs,
-            FileReadEntry {
-                content: "stale view".into(),
+            FileReadEntry::full_real(
+                "stale view".into(),
                 // Deliberately wrong mtime to simulate external modification.
-                mtime_ms: real_mtime.saturating_sub(10_000),
-                offset: None,
-                limit: None,
-            },
+                real_mtime.saturating_sub(10_000),
+            ),
         );
     }
 

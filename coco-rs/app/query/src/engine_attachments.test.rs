@@ -136,6 +136,77 @@ async fn drain_traverses_intermediate_claude_md() {
 }
 
 #[tokio::test]
+async fn drain_records_transformed_memory_as_injected_raw_content() {
+    let root = tempdir().unwrap();
+    let proj = root.path().join("proj");
+    let sub = proj.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    let memory = sub.join("CLAUDE.md");
+    fs::write(&memory, "visible\n<!-- hidden -->\n").unwrap();
+    let trigger = sub.join("handler.rs");
+    fs::write(&trigger, "").unwrap();
+
+    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let engine = make_test_engine().with_file_read_state(frs.clone());
+    let ctx = make_test_ctx_with_cwd(proj.clone());
+    ctx.nested_memory_attachment_triggers
+        .write()
+        .await
+        .insert(trigger.canonicalize().unwrap().display().to_string());
+
+    engine.drain_nested_memory_triggers(&ctx).await;
+
+    let pending = engine.take_pending_nested_memory().await;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].content, "visible\n\n");
+
+    let frs_read = frs.read().await;
+    let entry = frs_read
+        .peek(&memory.canonicalize().unwrap())
+        .expect("memory file should be recorded");
+    assert_eq!(entry.content, "visible\n<!-- hidden -->\n");
+    assert_eq!(entry.range, coco_context::FileReadRange::Full);
+    assert_eq!(
+        entry.evidence,
+        coco_context::ReadEvidence::InjectedPartialView
+    );
+}
+
+#[tokio::test]
+async fn drain_records_untransformed_memory_as_real_full_read() {
+    let root = tempdir().unwrap();
+    let proj = root.path().join("proj");
+    let sub = proj.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    let memory = sub.join("CLAUDE.md");
+    fs::write(&memory, "visible\n").unwrap();
+    let trigger = sub.join("handler.rs");
+    fs::write(&trigger, "").unwrap();
+
+    let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
+    let engine = make_test_engine().with_file_read_state(frs.clone());
+    let ctx = make_test_ctx_with_cwd(proj.clone());
+    ctx.nested_memory_attachment_triggers
+        .write()
+        .await
+        .insert(trigger.canonicalize().unwrap().display().to_string());
+
+    engine.drain_nested_memory_triggers(&ctx).await;
+
+    let pending = engine.take_pending_nested_memory().await;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].content, "visible\n");
+
+    let frs_read = frs.read().await;
+    let entry = frs_read
+        .peek(&memory.canonicalize().unwrap())
+        .expect("memory file should be recorded");
+    assert_eq!(entry.content, "visible\n");
+    assert_eq!(entry.range, coco_context::FileReadRange::Full);
+    assert_eq!(entry.evidence, coco_context::ReadEvidence::RealFileView);
+}
+
+#[tokio::test]
 async fn drain_dedupes_via_session_loaded_set() {
     // Two file reads under the same subtree should each surface
     // sub/CLAUDE.md — but only the first injection survives the
@@ -234,12 +305,7 @@ async fn drain_dedupes_via_file_read_state() {
     let frs = Arc::new(RwLock::new(coco_context::FileReadState::new()));
     frs.write().await.set(
         std::path::PathBuf::from(&injected_path),
-        coco_context::FileReadEntry {
-            content: "# sub".into(),
-            mtime_ms: 0,
-            offset: None,
-            limit: None,
-        },
+        coco_context::FileReadEntry::full_real("# sub".into(), 0),
     );
     let engine = make_test_engine().with_file_read_state(frs);
     let ctx = make_test_ctx_with_cwd(proj.clone());

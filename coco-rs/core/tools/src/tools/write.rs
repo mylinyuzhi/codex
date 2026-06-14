@@ -182,9 +182,20 @@ impl Tool for WriteTool {
                 });
             };
 
+            if !entry.can_satisfy_edit_or_write() {
+                return Err(ToolError::ExecutionFailed {
+                    message: format!(
+                        "{file_path} was only provided as partial injected context. \
+                         Read it with the Read tool before overwriting."
+                    ),
+                    display_data: None,
+                    source: None,
+                });
+            }
+
             // Layer 2: mtime comparison.
             if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
-                && entry.mtime_ms != disk_mtime
+                && disk_mtime > entry.mtime_ms
             {
                 return Err(ToolError::ExecutionFailed {
                     message: format!(
@@ -199,11 +210,10 @@ impl Tool for WriteTool {
             // Layer 3: content hash fallback. mtime can be stable even when
             // content changed on filesystems with <1s precision or under
             // rapid edit loops, so we compare the stored content against
-            // the current disk content when the stored entry is a full-view
-            // read (offset/limit are None). For partial reads we can't
+            // the current disk content when the stored entry is a full real
+            // snapshot. For line-range reads we can't
             // compare meaningfully, so we skip this layer.
-            if entry.offset.is_none()
-                && entry.limit.is_none()
+            if entry.is_full_real()
                 && let Ok(raw) = std::fs::read(&abs_path)
             {
                 let detected_enc = coco_file_encoding::detect_encoding(&raw);

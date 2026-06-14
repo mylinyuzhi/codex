@@ -30,6 +30,7 @@ use crate::nested_memory::LoadedMemoryEntry;
 #[derive(Debug, Clone)]
 pub struct RuleFile {
     pub path: PathBuf,
+    pub raw_content: String,
     pub content: String,
     /// Glob patterns from frontmatter `paths`. `None` ⇒ unconditional
     /// (loaded eagerly). `Some(...)` ⇒ conditional (loaded only when a
@@ -207,11 +208,12 @@ fn walk_rules_dir(
 }
 
 fn read_rule_file(path: &Path) -> Option<RuleFile> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let fm = coco_frontmatter::parse(&content);
+    let raw_content = std::fs::read_to_string(path).ok()?;
+    let fm = coco_frontmatter::parse(&raw_content);
     let paths = fm.data.get("paths").and_then(parse_paths_field);
     Some(RuleFile {
         path: path.to_path_buf(),
+        raw_content,
         content: fm.content,
         paths,
     })
@@ -276,6 +278,7 @@ pub(crate) fn rule_to_entry(rule: RuleFile, source: MemoryFileSource) -> LoadedM
     LoadedMemoryEntry {
         path: rule.path,
         content: rule.content,
+        raw_content: rule.raw_content,
         source,
     }
 }

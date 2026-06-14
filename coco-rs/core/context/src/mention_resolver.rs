@@ -12,6 +12,7 @@ use crate::attachment::DirectoryAttachment;
 use crate::attachment::FileReadOptions;
 use crate::attachment::generate_file_attachment;
 use crate::file_read_state::FileReadEntry;
+use crate::file_read_state::FileReadRange;
 use crate::file_read_state::FileReadState;
 use crate::file_read_state::file_mtime_ms;
 use crate::user_input::Mention;
@@ -152,22 +153,27 @@ async fn update_file_read_state(
     attachment: &Attachment,
     options: &FileReadOptions,
 ) {
-    let content = match attachment {
-        Attachment::File(f) => f.content.clone(),
+    let (content, truncated) = match attachment {
+        Attachment::File(f) => (f.content.clone(), f.truncated),
         // Images and PDFs don't populate text content in FileReadState.
         _ => return,
     };
 
     if let Ok(mtime) = file_mtime_ms(abs_path).await {
-        state.set(
-            abs_path.to_path_buf(),
-            FileReadEntry {
-                content,
-                mtime_ms: mtime,
-                offset: options.offset,
-                limit: options.limit,
+        let range = match (options.offset, options.limit) {
+            (None, None) => FileReadRange::Full,
+            (offset, Some(limit)) => FileReadRange::Lines { offset, limit },
+            (offset, None) => FileReadRange::Lines {
+                offset,
+                limit: i32::MAX,
             },
-        );
+        };
+        let entry = if truncated || range != FileReadRange::Full {
+            FileReadEntry::injected_partial(content, mtime, range)
+        } else {
+            FileReadEntry::full_real(content, mtime)
+        };
+        state.set(abs_path.to_path_buf(), entry);
     }
 }
 

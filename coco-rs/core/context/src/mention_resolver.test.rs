@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use super::*;
+use crate::ReadEvidence;
 
 fn make_mention(text: &str, mention_type: MentionType) -> Mention {
     Mention {
@@ -41,6 +42,10 @@ async fn test_resolve_file_mention() {
 
     // FileReadState should now have the entry
     assert_eq!(state.len(), 1);
+    let abs = std::fs::canonicalize(&file_path).unwrap();
+    let entry = state.peek(&abs).expect("mention should populate state");
+    assert_eq!(entry.range, FileReadRange::Full);
+    assert_eq!(entry.evidence, ReadEvidence::RealFileView);
 }
 
 #[tokio::test]
@@ -160,4 +165,14 @@ async fn test_resolve_with_line_range() {
         }
         other => panic!("Expected File attachment, got {other:?}"),
     }
+    let abs = std::fs::canonicalize(&file_path).unwrap();
+    let entry = state.peek(&abs).expect("mention should populate state");
+    assert_eq!(
+        entry.range,
+        FileReadRange::Lines {
+            offset: Some(5),
+            limit: 6,
+        }
+    );
+    assert_eq!(entry.evidence, ReadEvidence::InjectedPartialView);
 }

@@ -104,7 +104,7 @@ impl QueryEngine {
         let mut loaded = self.loaded_nested_memory_paths.lock().await;
         let mut new_entries: Vec<NestedMemoryInfo> = Vec::new();
         let mut newly_loaded: Vec<(String, String, coco_context::MemoryFileSource)> = Vec::new();
-        let mut frs_records: Vec<(PathBuf, String)> = Vec::new();
+        let mut frs_records: Vec<(PathBuf, String, bool)> = Vec::new();
         for path in triggered_paths {
             if !coco_permissions::is_path_within_allowed_dirs(
                 &path.to_string_lossy(),
@@ -126,7 +126,12 @@ impl QueryEngine {
                     trigger_path.clone(),
                     entry.source,
                 ));
-                frs_records.push((entry.path.clone(), entry.content.clone()));
+                let content_differs_from_disk = entry.content != entry.raw_content;
+                frs_records.push((
+                    entry.path.clone(),
+                    entry.raw_content.clone(),
+                    content_differs_from_disk,
+                ));
                 new_entries.push(NestedMemoryInfo {
                     path: entry.path.display().to_string(),
                     content: entry.content,
@@ -141,25 +146,27 @@ impl QueryEngine {
         // a partial-view entry. mtimes are computed outside the lock so we
         // never await while holding the write guard.
         if let Some(frs_arc) = self.file_read_state.as_ref() {
-            let mut to_set: Vec<(PathBuf, String, i64)> = Vec::with_capacity(frs_records.len());
-            for (path, content) in frs_records {
+            let mut to_set: Vec<(PathBuf, String, bool, i64)> =
+                Vec::with_capacity(frs_records.len());
+            for (path, raw_content, content_differs_from_disk) in frs_records {
                 let mtime_ms = coco_context::file_mtime_ms(&path).await.unwrap_or(0);
-                to_set.push((path, content, mtime_ms));
+                to_set.push((path, raw_content, content_differs_from_disk, mtime_ms));
             }
             let mut frs = frs_arc.write().await;
-            for (path, content, mtime_ms) in to_set {
+            for (path, raw_content, content_differs_from_disk, mtime_ms) in to_set {
                 if frs.peek(&path).is_some() {
                     continue;
                 }
-                frs.set(
-                    path,
-                    coco_context::FileReadEntry {
-                        content,
+                let entry = if content_differs_from_disk {
+                    coco_context::FileReadEntry::injected_partial(
+                        raw_content,
                         mtime_ms,
-                        offset: None,
-                        limit: None,
-                    },
-                );
+                        coco_context::FileReadRange::Full,
+                    )
+                } else {
+                    coco_context::FileReadEntry::full_real(raw_content, mtime_ms)
+                };
+                frs.set(path, entry);
             }
         }
 

@@ -8,12 +8,7 @@ fn test_set_and_get() {
     let path = PathBuf::from("/tmp/test.rs");
     state.set(
         path.clone(),
-        FileReadEntry {
-            content: "fn main() {}".to_string(),
-            mtime_ms: 1000,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("fn main() {}".to_string(), 1000),
     );
     let entry = state.get(&path).expect("should find entry");
     assert_eq!(entry.content, "fn main() {}");
@@ -27,12 +22,7 @@ fn test_peek_does_not_update_lru() {
     let path = PathBuf::from("/tmp/test.rs");
     state.set(
         path.clone(),
-        FileReadEntry {
-            content: "hello".to_string(),
-            mtime_ms: 1000,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("hello".to_string(), 1000),
     );
     // peek should return the entry
     assert!(state.peek(&path).is_some());
@@ -46,20 +36,14 @@ fn test_update_after_edit() {
     let path = PathBuf::from("/tmp/test.rs");
     state.set(
         path.clone(),
-        FileReadEntry {
-            content: "old".to_string(),
-            mtime_ms: 1000,
-            offset: Some(5),
-            limit: Some(10),
-        },
+        FileReadEntry::line_real("old".to_string(), 1000, Some(5), 10),
     );
     state.update_after_edit(&path, "new content".to_string(), 2000);
     let entry = state.get(&path).expect("should find entry");
     assert_eq!(entry.content, "new content");
     assert_eq!(entry.mtime_ms, 2000);
-    // offset/limit should be cleared after edit
-    assert_eq!(entry.offset, None);
-    assert_eq!(entry.limit, None);
+    assert_eq!(entry.range, FileReadRange::Full);
+    assert_eq!(entry.evidence, ReadEvidence::RealFileView);
 }
 
 #[test]
@@ -68,12 +52,7 @@ fn test_invalidate() {
     let path = PathBuf::from("/tmp/test.rs");
     state.set(
         path.clone(),
-        FileReadEntry {
-            content: "x".to_string(),
-            mtime_ms: 1000,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("x".to_string(), 1000),
     );
     state.invalidate(&path);
     assert!(state.get(&path).is_none());
@@ -87,12 +66,7 @@ fn test_lru_eviction() {
     for i in 0..100 {
         state.set(
             PathBuf::from(format!("/tmp/file{i}.rs")),
-            FileReadEntry {
-                content: format!("content {i}"),
-                mtime_ms: i as i64,
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real(format!("content {i}"), i as i64),
         );
     }
     assert_eq!(state.len(), 100);
@@ -100,12 +74,7 @@ fn test_lru_eviction() {
     // Adding one more should evict the oldest (file0)
     state.set(
         PathBuf::from("/tmp/overflow.rs"),
-        FileReadEntry {
-            content: "overflow".to_string(),
-            mtime_ms: 999,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("overflow".to_string(), 999),
     );
     assert_eq!(state.len(), 100);
     assert!(state.peek(&PathBuf::from("/tmp/file0.rs")).is_none());
@@ -117,21 +86,11 @@ fn test_iter_entries() {
     let mut state = FileReadState::new();
     state.set(
         PathBuf::from("/a.rs"),
-        FileReadEntry {
-            content: "a".to_string(),
-            mtime_ms: 1,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("a".to_string(), 1),
     );
     state.set(
         PathBuf::from("/b.rs"),
-        FileReadEntry {
-            content: "b".to_string(),
-            mtime_ms: 2,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("b".to_string(), 2),
     );
     assert_eq!(state.iter_entries().count(), 2);
 }
@@ -160,12 +119,7 @@ async fn test_is_unchanged_with_tempfile() {
     let mtime = file_mtime_ms(&file_path).await.unwrap();
     state.set(
         file_path.clone(),
-        FileReadEntry {
-            content: "hello".to_string(),
-            mtime_ms: mtime,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("hello".to_string(), mtime),
     );
     // Should be unchanged (mtime matches)
     assert!(state.is_unchanged(&file_path).await);
@@ -186,12 +140,7 @@ fn test_snapshot_by_recency_ordering() {
     let make = |name: &str, mtime: i64| {
         (
             PathBuf::from(name),
-            FileReadEntry {
-                content: name.to_string(),
-                mtime_ms: mtime,
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real(name.to_string(), mtime),
         )
     };
     let (pa, ea) = make("/a.rs", 1);

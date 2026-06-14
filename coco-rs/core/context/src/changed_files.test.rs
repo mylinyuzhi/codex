@@ -15,12 +15,7 @@ async fn test_no_changes() {
     let mut state = FileReadState::new();
     state.set(
         file.clone(),
-        FileReadEntry {
-            content: "stable content".to_string(),
-            mtime_ms: mtime,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("stable content".to_string(), mtime),
     );
 
     let changed = detect_changed_files(&mut state).await;
@@ -40,12 +35,7 @@ async fn test_detects_changed_file() {
     let mut state = FileReadState::new();
     state.set(
         file.clone(),
-        FileReadEntry {
-            content: "original".to_string(),
-            mtime_ms: mtime,
-            offset: None,
-            limit: None,
-        },
+        FileReadEntry::full_real("original".to_string(), mtime),
     );
 
     // Modify file after a small delay to ensure mtime changes
@@ -79,12 +69,7 @@ async fn test_skips_partial_reads() {
     let mut state = FileReadState::new();
     state.set(
         file.clone(),
-        FileReadEntry {
-            content: "partial".to_string(),
-            mtime_ms: 0, // stale mtime → would normally trigger change
-            offset: Some(5),
-            limit: Some(10),
-        },
+        FileReadEntry::line_real("partial".to_string(), 0, Some(5), 10),
     );
 
     // Even though mtime is stale, partial reads should be skipped
