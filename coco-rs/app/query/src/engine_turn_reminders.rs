@@ -523,7 +523,7 @@ impl QueryEngine {
             has_pending_plan_verification: app_state_snapshot
                 .pending_plan_verification
                 .as_ref()
-                .is_some_and(|pending| pending.needs_reminder()),
+                .is_some_and(coco_types::PendingPlanVerificationState::needs_reminder),
             // Phase 1 engine-local inputs.
             total_cost_usd: cost_tracker.total_cost_usd(),
             max_budget_usd: self.config.max_budget_usd,

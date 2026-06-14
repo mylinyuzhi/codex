@@ -46,7 +46,6 @@
     "keepAlive",
     "ide/selectionChanged",
     "ide/diagnosticsUpdated",
-    "plan/modeChanged",
     "queue/stateChanged",
     "queue/commandQueued",
     "queue/commandDequeued",

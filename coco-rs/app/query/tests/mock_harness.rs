@@ -35,12 +35,14 @@ use coco_llm_types::Usage;
 use coco_query::QueryEngine;
 use coco_query::QueryEngineConfig;
 use coco_query::QueryResult;
+use coco_query::SessionBootstrap;
 use coco_tool_runtime::ToolPermissionBridge;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolPermissionDecision;
 use coco_tool_runtime::ToolPermissionRequest;
 use coco_tool_runtime::ToolPermissionResolution;
 use coco_tool_runtime::ToolRegistry;
+use coco_tools::AgentTool;
 use coco_tools::BashTool;
 use coco_tools::EditTool;
 use coco_tools::EnterPlanModeTool;
@@ -465,6 +467,7 @@ pub fn tools_with_plan_mode() -> Arc<ToolRegistry> {
     registry.register(Arc::new(EditTool));
     registry.register(Arc::new(GlobTool));
     registry.register(Arc::new(GrepTool));
+    registry.register(Arc::new(AgentTool));
     registry.register(Arc::new(EnterPlanModeTool));
     registry.register(Arc::new(ExitPlanModeTool));
     Arc::new(registry)
@@ -591,6 +594,10 @@ pub async fn run_plan_mode_turn_with_events(
     let engine = QueryEngine::new(config, model_runtimes, params.tools, cancel, None)
         .with_app_state(params.app_state)
         .with_config_home(params.config_home)
+        .with_session_bootstrap(SessionBootstrap {
+            agents: vec!["Explore".into(), "Plan".into()],
+            ..Default::default()
+        })
         // Auto-approve any `Ask` decision (ExitPlanMode, etc.) — tests
         // script the model flow, not user interaction.
         .with_permission_bridge(allow_all_bridge());

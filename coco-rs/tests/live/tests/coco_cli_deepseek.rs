@@ -185,7 +185,8 @@ async fn test_coco_cli_max_turns_one_deepseek_openai() -> Result<()> {
 
 // ─── --settings file plumbing ────────────────────────────────────────
 
-/// Write a tempdir `settings.json` that pins `model: deepseek-openai/<model_id()>`,
+/// Write a tempdir `settings.json` that pins
+/// `models.main: deepseek-openai/<model_id()>`,
 /// then run `coco -p "..." --settings <tempdir>/settings.json` *without*
 /// `--model` and verify the settings-driven model takes effect.
 #[tokio::test]
@@ -195,7 +196,9 @@ async fn test_coco_cli_settings_file_drives_model_deepseek_openai() -> Result<()
     let tmp = common::tmpdir::make("coco-tests-cli-")?;
     let settings_path = tmp.path().join("settings.json");
     let body = serde_json::json!({
-        "model": format!("deepseek-openai/{}", model_id()),
+        "models": {
+            "main": format!("deepseek-openai/{}", model_id()),
+        },
     });
     std::fs::write(
         &settings_path,
