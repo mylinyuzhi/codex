@@ -135,7 +135,6 @@ impl QueryEngine {
             session_id = %self.config.session_id,
             agent_id = ?self.config.agent_id,
             model_id = %self.config.model_id,
-            permission_mode = ?self.config.permission_mode,
         ),
     )]
     pub(crate) async fn run_internal_with_messages(
@@ -150,6 +149,7 @@ impl QueryEngine {
             max_turns = ?self.config.max_turns,
             query_source = %self.query_source_label(),
             fork_label = ?self.config.fork_label,
+            configured_permission_mode = ?self.config.permission_mode,
             "session entering agent loop"
         );
 
