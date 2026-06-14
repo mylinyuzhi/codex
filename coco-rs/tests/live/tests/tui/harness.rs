@@ -684,6 +684,7 @@ impl TuiHarness {
             Vec::new(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -696,6 +697,7 @@ impl TuiHarness {
             false,
             feedback,
             Vec::new(),
+            None,
             None,
             None,
         )

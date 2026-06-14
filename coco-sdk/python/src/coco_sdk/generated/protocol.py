@@ -545,6 +545,9 @@ JsonRpcMessage = Union["JsonRpcRequest", "JsonRpcResponse", "JsonRpcNotification
 # Top-level message enum.
 Message = Union["UserMessage", "AssistantMessage", "SystemMessage", "AttachmentMessage", "ToolResultMessage", "ProgressMessage", "TombstoneMessage"]
 
+# Tool-specific payload for permission UIs.
+PermissionRequestDetail = dict[str, Any]
+
 # Request identifier. Can be a string or integer per JSON-RPC 2.0.
 RequestId = int | str
 
@@ -1668,6 +1671,7 @@ class TuiOnlyEventApprovalRequired(BaseModel):
     tool_name: str
     choices: list[PermissionAskChoice] | None = None
     cwd: str | None = None
+    detail: PermissionRequestDetail | None = None
     original_input: dict[str, Any] | None = None
     permission_suggestions: list[PermissionUpdate] | None = None
     show_always_allow: bool = False
@@ -3193,6 +3197,10 @@ class ElicitationResultInput(BaseModel):
 class ErrorPayload(BaseModel):
     code: ErrorCode
     message: str
+
+class ExitPlanModeAllowedPrompt(BaseModel):
+    prompt: str
+    tool: str
 
 class ExitPlanModeResult(BaseModel):
     awaiting_leader_approval: bool = Field(alias='awaitingLeaderApproval')

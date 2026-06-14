@@ -452,6 +452,7 @@ impl RealTuiHarness {
                     Vec::new(),
                     Some(updated_input),
                     None,
+                    None,
                 )
                 .await;
                 true
@@ -593,6 +594,7 @@ impl RealTuiHarness {
             Vec::new(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -606,6 +608,7 @@ impl RealTuiHarness {
             false,
             feedback,
             Vec::new(),
+            None,
             None,
             None,
         )
@@ -926,6 +929,7 @@ async fn run_real_agent_driver(
                     feedback,
                     Vec::new(),
                     updated_input,
+                    None,
                     None,
                 )
                 .await;
