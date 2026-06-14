@@ -107,6 +107,9 @@ impl QueryEngine {
             turns_since_last_compact = ?turns_since_last_compact,
             history_len = history.len(),
             active_model = active_snapshot.model_id,
+            live_permission_mode = ?live_permission_mode,
+            configured_permission_mode = ?self.config.permission_mode,
+            use_plan_runtime,
             "turn start (per-round; cycle TurnStarted was emitted by run_internal_with_messages)"
         );
 
