@@ -17,6 +17,7 @@ use std::sync::Arc;
 use coco_tool_runtime::AgentQueryConfig;
 use coco_tool_runtime::AgentQueryEngine;
 use coco_tool_runtime::AgentQueryResult;
+use coco_tool_runtime::PermissionPromptPolicy;
 use coco_types::Features;
 use coco_types::LlmModelSelection;
 use coco_types::ThinkingLevel;
@@ -72,14 +73,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
         prompt: &str,
         config: AgentQueryConfig,
     ) -> Result<AgentQueryResult, coco_error::BoxedError> {
-        // Resolve the subagent's permission mode. Parent is expected to
-        // have applied the inheritance rule before calling; default when
-        // unset.
-        let permission_mode = config
-            .permission_mode
-            .unwrap_or(coco_types::PermissionMode::Default);
-        let model_selection = effective_model_selection(&config);
-        let engine_model_id = model_selection.display_model_id().unwrap_or(config.model);
+        let identity = config.identity.clone();
+        let permission_mode = config.permission_mode;
+        let model_selection = config.model_selection.clone();
+        let engine_model_id = model_selection.display_model_id().unwrap_or_default();
         let initial_rule_maps = build_initial_rule_maps(&config.extra_permission_rules);
 
         let engine_config = QueryEngineConfig {
@@ -114,7 +111,10 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // Make this conditional on `permission_mode != Bubble` only
             // once that routing lands — doing so earlier would turn a clean
             // deny into a dangling Ask.
-            avoid_permission_prompts: true,
+            avoid_permission_prompts: matches!(
+                config.permission_prompt_policy,
+                PermissionPromptPolicy::FailClosed
+            ),
             // Subagents inherit the parent's debug/verbose surface only
             // when the parent piped that into `AgentQueryConfig`; today
             // we don't propagate, so default to `false`.
@@ -161,7 +161,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
                 }
             },
             fast_mode: false,
-            session_id: config.session_id.unwrap_or_default(),
+            session_id: identity.session_id.clone(),
             project_dir: None,
             // Subagent rule maps start empty, then we fold in any
             // `extra_permission_rules` the caller (today: fork-mode
@@ -181,7 +181,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             // Grep / Bash operate inside the override.
             cwd_override: config.cwd_override.clone(),
             plans_directory: None,
-            agent_id: config.agent_id,
+            agent_id: Some(identity.agent_id.clone()),
             is_teammate: config.is_teammate,
             is_in_process_teammate: config.is_in_process_teammate,
             plan_mode_required: config.plan_mode_required,
@@ -190,8 +190,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             allow_managed_hooks_only: false,
             enable_token_budget_continuation: false,
             compact: coco_config::CompactConfig::default(),
-            // Subagent LLM traffic is not wire-captured (scope: main session).
-            wire_dump: None,
+            wire_dump: config.wire_dump.clone(),
             system_reminder: coco_config::SystemReminderConfig::default(),
             tool_config: coco_config::ToolConfig::default(),
             sandbox_config: coco_config::SandboxSettings::default(),
@@ -294,6 +293,13 @@ impl AgentQueryEngine for QueryEngineAdapter {
         // selection through to the factory so concrete provider/model
         // selections use explicit runtimes and role selections install
         // the role-specific runtime.
+        tracing::debug!(
+            session_id = %identity.session_id,
+            agent_id = %identity.agent_id,
+            kind = ?identity.kind,
+            "agent_adapter: executing child query"
+        );
+
         let mut engine =
             (self.engine_factory)(engine_config, model_selection, config.cancel.clone()).await;
         // D3: install the per-spawn permission bridge if one was
@@ -381,17 +387,6 @@ impl AgentQueryEngine for QueryEngineAdapter {
             cancelled: result.cancelled,
         })
     }
-}
-
-fn effective_model_selection(config: &AgentQueryConfig) -> LlmModelSelection {
-    if config.model_selection != LlmModelSelection::InheritMain {
-        return config.model_selection.clone();
-    }
-
-    LlmModelSelection::from_model_and_role(
-        (!config.model.trim().is_empty()).then_some(config.model.as_str()),
-        config.model_role,
-    )
 }
 
 #[derive(Default)]

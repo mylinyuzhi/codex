@@ -216,6 +216,17 @@ pub fn knowledge_cutoff(model_id: &str) -> Option<String> {
         .map(|c| c.display.clone())
 }
 
+/// Bare model name for display in the `<env>` block ("You are powered by
+/// the model …"). Strips any `provider/` prefix (mirroring the catalog's
+/// stripped-index lookup) so a `provider/model_id` selection renders the
+/// same bare id the rest of the system shows, while **preserving the
+/// configured id spelling** — the agent is told the model it is actually
+/// running, not a re-canonicalized slug. Empty input stays empty so the
+/// env line is omitted.
+pub fn display_model_name(raw: &str) -> String {
+    strip_provider(raw).to_string()
+}
+
 /// Convenience for cost-tracking and display call sites.
 pub fn pricing(provider: Option<&str>, model_id: &str) -> Option<Pricing> {
     match current_catalog().lookup_with_provider(provider, model_id) {

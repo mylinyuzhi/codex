@@ -213,8 +213,11 @@ async fn test_select_teammate_executor_auto_falls_back_to_in_process() {
 
 #[tokio::test]
 async fn test_select_teammate_executor_explicit_tmux_uses_registered_pane() {
+    // Spawns a teammate that writes a real mailbox under `teams_base_dir()`;
+    // isolate `COCO_TEAMS_DIR` so a sibling test flipping it mid-body can't
+    // break the `read_mailbox(...).unwrap()` below (shared `ENV_LOCK`).
+    let _teams = crate::test_support::isolate_teams_dir().await;
     let team_name = format!("pane-test-{}", uuid::Uuid::new_v4().simple());
-    let _ = crate::team_file::cleanup_team_directories(&team_name);
 
     let registry = BackendRegistry::new();
     let pane = std::sync::Arc::new(FakePaneBackend::new(BackendType::Tmux, true));

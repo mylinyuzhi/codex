@@ -2281,6 +2281,7 @@ dependencies = [
  "coco-types",
  "coco-utils-json-repair",
  "coco-utils-string",
+ "coco-wire-dump",
  "futures",
  "jsonschema",
  "pretty_assertions",

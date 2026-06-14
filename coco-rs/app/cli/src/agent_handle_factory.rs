@@ -230,6 +230,13 @@ pub async fn build_agent_team_wiring(
                 engine_config.web_search_config = runtime.runtime_config.web_search.clone();
                 engine_config.plan_mode_settings =
                     runtime.runtime_config.settings.merged.plan_mode.clone();
+                if engine_config.wire_dump.is_none()
+                    && let Some(parent_wire_dump) =
+                        runtime.current_engine_config().await.wire_dump.as_ref()
+                    && let Some(agent_id) = engine_config.agent_id.as_deref()
+                {
+                    engine_config.wire_dump = parent_wire_dump.for_subagent(agent_id);
+                }
 
                 let runtime_source = resolve_agent_runtime_source(&role);
                 // Build a fresh engine via the runtime's standard

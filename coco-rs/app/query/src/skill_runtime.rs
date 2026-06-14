@@ -263,11 +263,19 @@ impl SkillHandle for QuerySkillRuntime {
                 );
                 let config = AgentQueryConfig {
                     system_prompt: String::new(),
-                    model: skill.model.clone().unwrap_or_default(),
+                    identity: coco_tool_runtime::AgentRunIdentity::new(
+                        inherit.session_id.clone(),
+                        agent_id.clone(),
+                        coco_tool_runtime::AgentRunKind::Skill,
+                    )
+                    .map_err(|reason| SkillInvocationError::Forked { reason })?,
                     model_selection: coco_types::LlmModelSelection::from_model_and_role(
                         skill.model.as_deref(),
                         skill.model_role,
                     ),
+                    permission_mode: inherit.permission_mode,
+                    permission_prompt_policy:
+                        coco_tool_runtime::PermissionPromptPolicy::PromptAllowed,
                     max_turns: None,
                     context_window: None,
                     prompt_cache: None,
@@ -290,17 +298,13 @@ impl SkillHandle for QuerySkillRuntime {
                     parent_tool_filter: inherit.parent_tool_filter.clone(),
                     active_shell_tool: inherit.active_shell_tool,
                     preserve_tool_use_results: false,
-                    permission_mode: None,
-                    agent_id: Some(agent_id.clone()),
                     is_teammate: false,
                     is_in_process_teammate: false,
                     plan_mode_required: false,
-                    session_id: None,
                     bypass_permissions_available: false,
                     cwd_override: None,
                     // Skill fork: absent model/model_role inherits the
                     // parent session's Main client via `InheritMain`.
-                    model_role: skill.model_role,
                     fork_context_messages: Vec::new(),
                     allowed_write_roots: Vec::new(),
                     // Skill subagents inherit the parent's call options
@@ -320,6 +324,7 @@ impl SkillHandle for QuerySkillRuntime {
                     permission_bridge: None,
                     // Skills don't stream into a task buffer.
                     event_tx: None,
+                    wire_dump: None,
                     // Skills don't install a per-fork canUseTool
                     // callback — they inherit the parent's permission
                     // pipeline (allow/deny rules + tool's own

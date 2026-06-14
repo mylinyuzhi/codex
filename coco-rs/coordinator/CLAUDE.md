@@ -22,8 +22,8 @@ import the other for the types alone.
 | `runner` / `runner_loop` | Outer lifecycle + per-iteration scheduling. `InProcessAgentRunner`, `PermissionBridge`, `InProcessRunnerConfig`, `AgentExecutionEngine` trait. |
 | `agent_handle/` | `SwarmAgentHandle: AgentHandle` — the bridge that AgentTool dispatches to. Split: `mod.rs` (struct + setters + trait impl + teammate dispatch), `spawn.rs` (sync + background subagent dispatch), `handoff.rs` (post-spawn classifier + AgentSummary), `resume.rs` (background-spawn resume). |
 | `inprocess_backend` | `InProcessBackend: TeammateExecutor` — wraps `InProcessAgentRunner` for the registry. Lives outside `pane/` because it composes the runner. |
-| `mailbox/{mod,io,lock,protocol}.rs` | File-based teammate inboxes (`~/.claude/teams/{team}/inboxes/{agent}.json`) with `fs2` advisory locking + retry/jitter. Split into `io.rs` (path / JSON r/w), `lock.rs` (fs2 + 30-retry exponential backoff), `protocol.rs` (envelope codec). |
-| `team_file` | `~/.claude/teams/{team}/team.json` r/w + lock helpers. |
+| `mailbox/{mod,io,lock,protocol}.rs` | File-based teammate inboxes (`~/.coco/teams/{team}/inboxes/{agent}.json`) with `fs2` advisory locking + retry/jitter. Split into `io.rs` (path / JSON r/w), `lock.rs` (fs2 + 30-retry exponential backoff), `protocol.rs` (envelope codec). |
+| `team_file` | `~/.coco/teams/{team}/config.json` r/w + lock helpers. |
 | `task` | `InProcessTeammateTaskState` — UI mirror state for in-process teammates (capped at 50 messages). |
 | `identity` | 3-tier teammate identity resolution: thread-local context → dynamic context → env vars. |
 | `discovery` | Team / teammate enumeration via `team.json`. |

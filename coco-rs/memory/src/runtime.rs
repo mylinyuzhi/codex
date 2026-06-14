@@ -264,6 +264,7 @@ impl MemoryRuntimeBuilder {
         // drains via `MemoryRuntime::drain_user_notices()`. SM also
         // shares the inbox for API uniformity if a future surface lands.
         let notices = crate::notice::NoticeInbox::default();
+        let session_id = self.session_id.clone();
         let extract = Arc::new(ExtractService::with_shared_agent_and_notices(
             directories.personal.clone(),
             self.config.clone(),
@@ -271,6 +272,7 @@ impl MemoryRuntimeBuilder {
             self.telemetry.clone(),
             notices.clone(),
             self.active_shell_tool,
+            session_id.clone(),
         ));
         let dream = Arc::new(DreamService::with_shared_agent_and_notices(
             directories.personal.clone(),
@@ -279,6 +281,7 @@ impl MemoryRuntimeBuilder {
             self.telemetry.clone(),
             notices.clone(),
             self.active_shell_tool,
+            session_id,
         ));
         let session_memory = Arc::new(SessionMemoryService::with_shared_agent(
             project_paths,
@@ -522,6 +525,13 @@ impl MemoryRuntime {
         self.recall_state.reset();
         self.extract.reset().await;
         self.session_memory.reset().await;
+    }
+
+    /// Repoint session-scoped memory services at a new parent session id.
+    pub async fn set_session_id(&self, new_id: String) {
+        self.extract.set_session_id(new_id.clone());
+        self.dream.set_session_id(new_id.clone());
+        self.session_memory.set_session_id(new_id).await;
     }
 
     /// Convenience — current personal memory directory.

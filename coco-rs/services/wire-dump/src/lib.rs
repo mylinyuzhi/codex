@@ -53,6 +53,7 @@ pub struct WireDumpConfig {
     redact: bool,
     seq: Arc<AtomicU64>,
     sink: Arc<dyn WireSink>,
+    session_dir: Option<PathBuf>,
 }
 
 impl WireDumpConfig {
@@ -70,6 +71,7 @@ impl WireDumpConfig {
             max_body_bytes,
             redact,
         )
+        .with_session_dir(session_dir)
     }
 
     /// Config with a caller-supplied sink (tests, remote/stdout sinks).
@@ -85,7 +87,35 @@ impl WireDumpConfig {
             redact,
             seq: Arc::new(AtomicU64::new(0)),
             sink,
+            session_dir: None,
         }
+    }
+
+    fn with_session_dir(mut self, session_dir: PathBuf) -> Self {
+        self.session_dir = Some(session_dir);
+        self
+    }
+
+    /// Build a child config that writes under
+    /// `<session_dir>/wire/subagents/agent-<agent_id>/`.
+    ///
+    /// Returns `None` for custom sinks, where the filesystem layout is
+    /// caller-defined.
+    pub fn for_subagent(&self, agent_id: &str) -> Option<Self> {
+        let session_dir = self.session_dir.as_ref()?;
+        Some(Self {
+            level: self.level,
+            max_body_bytes: self.max_body_bytes,
+            redact: self.redact,
+            seq: Arc::new(AtomicU64::new(0)),
+            sink: Arc::new(FileSink::new(
+                session_dir
+                    .join("wire")
+                    .join("subagents")
+                    .join(format!("agent-{agent_id}")),
+            )),
+            session_dir: Some(session_dir.clone()),
+        })
     }
 
     /// Begin capturing one LLM call. The consumer feeds the returned

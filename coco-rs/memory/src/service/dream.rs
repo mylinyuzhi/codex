@@ -16,6 +16,7 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
+use arc_swap::ArcSwap;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
@@ -76,6 +77,7 @@ impl Drop for ConsolidatingGuard {
 
 /// Auto-dream service.
 pub struct DreamService {
+    session_id: ArcSwap<String>,
     memory_dir: PathBuf,
     config: MemoryConfig,
     agent: crate::service::extract::AgentSlot,
@@ -133,6 +135,7 @@ impl DreamService {
             telemetry,
             crate::notice::NoticeInbox::default(),
             ActiveShellTool::Disabled,
+            "test-session".to_string(),
         )
     }
 
@@ -145,8 +148,10 @@ impl DreamService {
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
         active_shell_tool: ActiveShellTool,
+        session_id: String,
     ) -> Self {
         Self {
+            session_id: ArcSwap::from_pointee(session_id),
             memory_dir,
             config,
             agent,
@@ -156,6 +161,10 @@ impl DreamService {
             last_scan_at: std::sync::Mutex::new(None),
             consolidating: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn set_session_id(&self, new_id: String) {
+        self.session_id.store(Arc::new(new_id));
     }
 
     /// Try to atomically claim the within-process consolidation slot.
@@ -340,6 +349,7 @@ impl DreamService {
         let request = AgentSpawnRequest {
             prompt,
             description: Some("auto-dream consolidation".into()),
+            session_id: (**self.session_id.load()).clone(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(memory_def),
             constraints: Some(AgentSpawnConstraints {

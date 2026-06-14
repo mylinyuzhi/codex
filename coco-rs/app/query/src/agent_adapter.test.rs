@@ -14,7 +14,6 @@ fn test_agent_query_config_fork_context_messages_field_round_trips() {
     let parent_msg = Arc::new(coco_messages::create_user_message("parent turn 1"));
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
-        model: "m".into(),
         max_turns: Some(1),
         preserve_tool_use_results: true,
         fork_context_messages: vec![parent_msg],
@@ -35,7 +34,6 @@ async fn test_no_op_engine_returns_error() {
     let engine = coco_tool_runtime::NoOpAgentQueryEngine;
     let config = AgentQueryConfig {
         system_prompt: "test".into(),
-        model: "test-model".into(),
         max_turns: Some(1),
         ..Default::default()
     };
@@ -64,10 +62,9 @@ fn role_observer() -> (
 }
 
 #[tokio::test]
-async fn test_adapter_threads_model_role_to_factory() {
-    // Contract: `AgentQueryConfig.model_role` flows through the
-    // factory unchanged so downstream code can resolve the right
-    // primary + fallback chain for the subagent.
+async fn test_adapter_threads_role_selection_to_factory() {
+    // Contract: typed `AgentQueryConfig.model_selection` flows through the
+    // factory unchanged so downstream code can resolve the right runtime.
     use super::QueryEngineAdapter;
     use super::QueryEngineFactory;
 
@@ -92,7 +89,9 @@ async fn test_adapter_threads_model_role_to_factory() {
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
         max_turns: Some(1),
-        model_role: Some(coco_types::ModelRole::Explore),
+        model_selection: coco_types::LlmModelSelection::Role {
+            role: coco_types::ModelRole::Explore,
+        },
         ..Default::default()
     };
 
@@ -113,7 +112,7 @@ async fn test_adapter_threads_model_role_to_factory() {
         coco_types::LlmModelSelection::Role {
             role: coco_types::ModelRole::Explore,
         },
-        "adapter must convert model_role into typed selection",
+        "adapter must forward typed role selection",
     );
 }
 
@@ -139,9 +138,14 @@ async fn test_adapter_threads_provider_model_selection_to_factory() {
 
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
-        model: "openai/gpt-5.4".into(),
         max_turns: Some(1),
-        model_role: Some(coco_types::ModelRole::Review),
+        model_selection: coco_types::LlmModelSelection::ExplicitWithFallbackRole {
+            primary: coco_types::ProviderModelSelection {
+                provider: "openai".into(),
+                model_id: "gpt-5.4".into(),
+            },
+            fallback_role: coco_types::ModelRole::Review,
+        },
         ..Default::default()
     };
 
@@ -185,7 +189,6 @@ async fn test_adapter_parses_effort_string_into_thinking_level() {
 
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
-        model: "m".into(),
         max_turns: Some(1),
         effort: Some(coco_types::ReasoningEffort::High),
         ..Default::default()
@@ -234,7 +237,6 @@ async fn test_adapter_xhigh_effort_propagates() {
 
     let cfg = AgentQueryConfig {
         system_prompt: "s".into(),
-        model: "m".into(),
         max_turns: Some(1),
         effort: Some(coco_types::ReasoningEffort::XHigh),
         ..Default::default()

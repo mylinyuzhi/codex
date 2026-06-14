@@ -40,7 +40,17 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
     ) -> crate::Result<RunnerAgentQueryResult> {
         let tool_runtime_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt: config.system_prompt,
-            model: config.model.unwrap_or_default(),
+            identity: coco_tool_runtime::AgentRunIdentity::new(
+                config.session_id,
+                config.agent_id,
+                coco_tool_runtime::AgentRunKind::Teammate,
+            )
+            .map_err(crate::CoordinatorError::generic)?,
+            model_selection: config.model_selection,
+            permission_mode: config
+                .permission_mode
+                .unwrap_or(coco_types::PermissionMode::Default),
+            permission_prompt_policy: coco_tool_runtime::PermissionPromptPolicy::PromptAllowed,
             max_turns: config.max_turns,
             allowed_tools: config.allowed_tools,
             disallowed_tools: config.disallowed_tools,
@@ -52,7 +62,6 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             parent_tool_filter: config.parent_tool_filter,
             active_shell_tool: config.active_shell_tool,
             preserve_tool_use_results: config.preserve_tool_use_results,
-            permission_mode: config.permission_mode,
             cancel: config.cancel,
             bypass_permissions_available: config.bypass_permissions_available,
             fork_context_messages: config.fork_context_messages,
@@ -61,8 +70,6 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             effort: config.effort,
             use_exact_tools: config.use_exact_tools,
             mcp_servers: config.mcp_servers,
-            model_role: config.model_role,
-            model_selection: config.model_selection,
             ..Default::default()
         };
 
@@ -104,6 +111,8 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         &self,
         messages: Vec<std::sync::Arc<coco_messages::Message>>,
         _total_tokens: i64,
+        session_id: &str,
+        agent_id: &str,
     ) -> crate::Result<Vec<std::sync::Arc<coco_messages::Message>>> {
         const KEEP_RECENT_FOR_MICRO: usize = 5;
         const KEEP_RECENT_ROUNDS_FOR_FULL: usize = 2;
@@ -125,12 +134,29 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
         // closure here per call keeps the borrow simple — the
         // engine ref is `Arc<dyn>` so cloning is cheap.
         let engine = self.inner.clone();
+        let session_id = session_id.to_string();
+        let agent_id = agent_id.to_string();
         let summarize = move |attempt: coco_compact::CompactSummaryAttempt| {
             let engine = engine.clone();
+            let session_id = session_id.clone();
+            let agent_id = agent_id.clone();
             async move {
+                // Summarization sub-run scoped to the teammate's parent
+                // session with a derived child agent id. On a bad identity
+                // (e.g. empty session) the closure errors and the caller
+                // falls back to the micro-compacted history.
+                let identity = coco_tool_runtime::AgentRunIdentity::new(
+                    session_id,
+                    format!("{agent_id}-compact"),
+                    coco_tool_runtime::AgentRunKind::Summary,
+                )
+                .map_err(|e| format!("compact summary identity: {e}"))?;
                 let cfg = coco_tool_runtime::AgentQueryConfig {
                     system_prompt: String::new(),
-                    model: String::new(),
+                    identity,
+                    model_selection: coco_types::LlmModelSelection::InheritMain,
+                    permission_mode: coco_types::PermissionMode::Default,
+                    permission_prompt_policy: coco_tool_runtime::PermissionPromptPolicy::FailClosed,
                     max_turns: Some(1),
                     max_output_tokens: Some(attempt.max_summary_tokens),
                     // `CompactSummaryAttempt.context_messages` is already

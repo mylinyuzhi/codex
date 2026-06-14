@@ -22,18 +22,78 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+/// Kind of side-agent run represented by [`AgentRunIdentity`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunKind {
+    Subagent,
+    Fork,
+    Teammate,
+    Summary,
+    Skill,
+    Test,
+}
+
+/// Stable identity for a child agent run. Both ids are required
+/// non-empty: a child run is always scoped to a concrete parent session
+/// and carries its own minted agent id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunIdentity {
+    /// Parent/main session id. Subagent transcripts and artifacts live
+    /// under this session. Required — callers must thread the real
+    /// parent session id (tests / embeddings supply a placeholder).
+    pub session_id: String,
+    /// Child run id, distinct from the session id. Always set by the
+    /// spawn path (`createAgentId` analog) — required non-empty.
+    pub agent_id: String,
+    /// Runtime category used for logging/storage decisions.
+    pub kind: AgentRunKind,
+}
+
+impl AgentRunIdentity {
+    pub fn new(
+        session_id: impl Into<String>,
+        agent_id: impl Into<String>,
+        kind: AgentRunKind,
+    ) -> Result<Self, String> {
+        let session_id = session_id.into();
+        if session_id.trim().is_empty() {
+            return Err("AgentRunIdentity.session_id must be non-empty".to_string());
+        }
+        let agent_id = agent_id.into();
+        if agent_id.trim().is_empty() {
+            return Err("AgentRunIdentity.agent_id must be non-empty".to_string());
+        }
+        Ok(Self {
+            session_id,
+            agent_id,
+            kind,
+        })
+    }
+}
+
+/// Whether a child engine may surface permission prompts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionPromptPolicy {
+    PromptAllowed,
+    FailClosed,
+}
+
 /// Configuration for a single agent query turn.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AgentQueryConfig {
     /// System prompt for the agent.
     pub system_prompt: String,
-    /// Model to use for inference.
-    pub model: String,
-    /// Typed runtime model selection. New callers should set this
-    /// instead of relying on `model`/`model_role`; those legacy fields
-    /// are still accepted at the adapter boundary for older IPC/tests.
-    #[serde(default)]
+    /// Parent session + child agent identity.
+    pub identity: AgentRunIdentity,
+    /// Typed runtime model selection. Use [`coco_types::LlmModelSelection::InheritMain`]
+    /// explicitly when inheritance is intended.
     pub model_selection: coco_types::LlmModelSelection,
+    /// Permission mode resolved before constructing the child config.
+    pub permission_mode: coco_types::PermissionMode,
+    /// Explicit prompt-routing policy for residual permission asks.
+    pub permission_prompt_policy: PermissionPromptPolicy,
     /// Optional cancellation token for this agent query turn. In-process
     /// teammates use a fresh token per prompt so interrupting current
     /// work does not kill the teammate lifecycle.
@@ -120,18 +180,6 @@ pub struct AgentQueryConfig {
     /// Whether to preserve tool use results across compaction.
     #[serde(default)]
     pub preserve_tool_use_results: bool,
-    /// Permission mode resolved by the parent (main agent) via the
-    /// inheritance rule: `agent.permission_mode if set and parent ∉
-    /// {bypass, acceptEdits, auto} else parent.permission_mode`. When
-    /// `None`, the adapter defaults to `PermissionMode::Default`.
-    #[serde(default)]
-    pub permission_mode: Option<coco_types::PermissionMode>,
-    /// Branded agent ID. Subagents get per-agent
-    /// plan files `{slug}-agent-{id}.md`; setting this flows through to
-    /// `ToolUseContext::agent_id` and `session_plan_file` so the Plan-mode
-    /// auto-allow + SubAgent reminder variant trigger correctly.
-    #[serde(default)]
-    pub agent_id: Option<String>,
     /// Whether this agent runs as a swarm teammate (spawned via
     /// `TeamCreate`). Controls ExitPlanMode teammate
     /// branch + bypass-permission behavior.
@@ -144,11 +192,6 @@ pub struct AgentQueryConfig {
     /// request to the leader (required) or exits locally (voluntary).
     #[serde(default)]
     pub plan_mode_required: bool,
-    /// Session ID for plan file + history scoping. Subagents share the
-    /// parent's session_id so `{slug}-agent-{id}.md` resolves against the
-    /// same slug cache.
-    #[serde(default)]
-    pub session_id: Option<String>,
     /// Parent session's bypass-permissions capability. In-process subagents
     /// inherit the parent's capability through this field instead of argv
     /// forwarding — the engine threads it into
@@ -172,18 +215,6 @@ pub struct AgentQueryConfig {
     /// once at the wire boundary instead.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fork_context_messages: Vec<Arc<Message>>,
-    /// Which `ModelRole` this subagent runs under. The adapter
-    /// resolves the role's primary + fallback chain from
-    /// `ModelRoles` and installs them on the child engine so the
-    /// subagent inherits the same capacity-resilience policy its
-    /// role is configured with. `None` defers to the factory's
-    /// default (typically `ModelRole::Main` or the parent's role).
-    ///
-    /// Non-Main roles (Explore / Review / Plan) only get a
-    /// fallback chain when the role is explicitly configured in
-    /// `settings.models.{role}.fallbacks`. No Main-walk.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_role: Option<coco_types::ModelRole>,
     /// FileWrite / FileEdit / NotebookEdit are restricted to paths under one
     /// of these roots. Empty = no restriction. Threaded into the child's
     /// `ToolUseContext::allowed_write_roots` so file-mutation tools can
@@ -242,6 +273,11 @@ pub struct AgentQueryConfig {
     #[serde(skip)]
     pub event_tx: Option<tokio::sync::mpsc::Sender<coco_types::CoreEvent>>,
 
+    /// Per-child wire dump config. When set, subagent model calls write
+    /// to this config's sink instead of disabling capture.
+    #[serde(skip)]
+    pub wire_dump: Option<coco_wire_dump::WireDumpConfig>,
+
     /// Per-fork tool-execution gate. Threaded onto the child engine's
     /// `ToolUseContext.can_use_tool` so app/query enforces the policy
     /// before the static permission evaluator. `None` preserves
@@ -269,6 +305,61 @@ pub struct AgentQueryConfig {
     /// is skipped at the JSON boundary like [`Self::event_tx`].
     #[serde(skip)]
     pub live_transcript: Option<crate::LiveTranscript>,
+}
+
+impl Default for AgentQueryConfig {
+    fn default() -> Self {
+        Self {
+            system_prompt: String::new(),
+            // Test/placeholder identity. Every production construction
+            // path overrides `identity` with a real one (built via
+            // `AgentRunIdentity::new`); this default is only materialized
+            // by tests using a bare `..Default::default()`.
+            identity: AgentRunIdentity {
+                session_id: "test-session".to_string(),
+                agent_id: "test-agent".to_string(),
+                kind: AgentRunKind::Test,
+            },
+            model_selection: coco_types::LlmModelSelection::InheritMain,
+            permission_mode: coco_types::PermissionMode::Default,
+            permission_prompt_policy: PermissionPromptPolicy::FailClosed,
+            cancel: None,
+            max_turns: None,
+            context_window: None,
+            prompt_cache: None,
+            max_output_tokens: None,
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            extra_permission_rules: Vec::new(),
+            live_permission_rules: None,
+            live_permission_mode: None,
+            tool_overrides: None,
+            features: None,
+            skill_overrides: None,
+            parent_tool_filter: None,
+            active_shell_tool: default_active_shell_tool(),
+            preserve_tool_use_results: false,
+            is_teammate: false,
+            is_in_process_teammate: false,
+            plan_mode_required: false,
+            bypass_permissions_available: false,
+            cwd_override: None,
+            fork_context_messages: Vec::new(),
+            allowed_write_roots: Vec::new(),
+            effort: None,
+            use_exact_tools: false,
+            mcp_servers: Vec::new(),
+            initial_prompt: None,
+            definition: None,
+            permission_bridge: None,
+            event_tx: None,
+            wire_dump: None,
+            can_use_tool: None,
+            require_can_use_tool: false,
+            fork_label: None,
+            live_transcript: None,
+        }
+    }
 }
 
 fn default_active_shell_tool() -> coco_types::ActiveShellTool {
@@ -336,3 +427,7 @@ impl AgentQueryEngine for NoOpAgentQueryEngine {
         )))
     }
 }
+
+#[cfg(test)]
+#[path = "agent_query.test.rs"]
+mod tests;

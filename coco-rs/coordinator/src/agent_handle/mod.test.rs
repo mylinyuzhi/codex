@@ -9,10 +9,14 @@ use coco_tool_runtime::CreateTeamResult;
 use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::TaskListHandleRef;
 use coco_tool_runtime::TeamTaskListRouter;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
-static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+// `COCO_TEAMS_DIR` / identity-env isolation lives in `crate::test_support` so
+// every coordinator test module (here, `runner_loop`, `identity`) serializes on
+// the *same* crate-wide `ENV_LOCK` — separate per-module locks would still race
+// each other under threaded `cargo test`.
+use crate::test_support::isolate_teams_dir;
 
 fn build_test_runtime() -> coco_config::RuntimeConfig {
     let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -140,20 +144,7 @@ fn teammate_context(agent_name: &str, team_name: &str) -> crate::identity::Teamm
 
 #[tokio::test]
 async fn respond_to_plan_approval_writes_typed_mailbox_wire() {
-    let _g = ENV_LOCK.lock().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let teams = tmp.path().join("teams");
-    std::fs::create_dir_all(&teams).unwrap();
-    // SAFETY: serialized via `ENV_LOCK`; nextest isolates per process.
-    unsafe { std::env::set_var("COCO_TEAMS_DIR", &teams) };
-    struct Restore;
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: same as the set above.
-            unsafe { std::env::remove_var("COCO_TEAMS_DIR") };
-        }
-    }
-    let _restore = Restore;
+    let _teams = isolate_teams_dir().await;
 
     let handle = create_test_handle();
     install_test_team(&handle, "t").await;
@@ -207,20 +198,7 @@ async fn respond_to_plan_approval_rejects_non_leader() {
 
 #[tokio::test]
 async fn respond_to_plan_approval_preserves_non_plan_mode() {
-    let _g = ENV_LOCK.lock().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let teams = tmp.path().join("teams");
-    std::fs::create_dir_all(&teams).unwrap();
-    // SAFETY: serialized via `ENV_LOCK`; nextest isolates per process.
-    unsafe { std::env::set_var("COCO_TEAMS_DIR", &teams) };
-    struct Restore;
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: same as the set above.
-            unsafe { std::env::remove_var("COCO_TEAMS_DIR") };
-        }
-    }
-    let _restore = Restore;
+    let _teams = isolate_teams_dir().await;
 
     let handle = create_test_handle();
     install_test_team(&handle, "t").await;
@@ -987,6 +965,7 @@ async fn test_spawn_subagent_sync_with_engine_routes_to_query() {
     let request = AgentSpawnRequest {
         prompt: "do work".into(),
         subagent_type: Some("Explore".into()),
+        session_id: "test-session".into(),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1042,6 +1021,7 @@ async fn test_spawn_subagent_sync_classifier_respects_permission_mode() {
         prompt: "do work".into(),
         subagent_type: Some("general-purpose".into()),
         mode: Some(coco_types::PermissionMode::Default),
+        session_id: "test-session".into(),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1108,6 +1088,7 @@ async fn test_spawn_subagent_sync_drains_stream_events_to_task_registry() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "do work".into(),
             subagent_type: Some("Explore".into()),
+            session_id: "test-session".into(),
             ..Default::default()
         })
         .await
@@ -1289,6 +1270,7 @@ async fn test_spawn_subagent_sync_detach_keeps_engine_running() {
     let request = AgentSpawnRequest {
         prompt: "long work".into(),
         subagent_type: Some("general-purpose".into()),
+        session_id: "test-session".into(),
         ..Default::default()
     };
 
@@ -1375,6 +1357,7 @@ async fn test_spawn_subagent_async() {
     let request = AgentSpawnRequest {
         prompt: "Background work".to_string(),
         run_in_background: true,
+        session_id: "test-session".into(),
         ..Default::default()
     };
 
@@ -1391,6 +1374,7 @@ async fn test_spawn_subagent_async_without_engine_fails_cleanly() {
     let request = AgentSpawnRequest {
         prompt: "Background work".to_string(),
         run_in_background: true,
+        session_id: "test-session".into(),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1399,6 +1383,7 @@ async fn test_spawn_subagent_async_without_engine_fails_cleanly() {
 
 #[tokio::test]
 async fn test_spawn_teammate() {
+    let _teams = isolate_teams_dir().await;
     let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let _ = crate::team_file::cleanup_team_directories(&team_name);
     let handle = create_test_handle();
@@ -1424,6 +1409,7 @@ async fn test_spawn_teammate() {
 
 #[tokio::test]
 async fn test_spawn_teammate_drives_engine_when_installed() {
+    let _teams = isolate_teams_dir().await;
     // Gap C regression: pre-fix, `spawn_teammate` called only
     // `runner.register_agent(...)` and never started the runner-loop.
     // Teammates registered as Running but no LLM turn ever fired.
@@ -1513,6 +1499,7 @@ async fn test_spawn_teammate_drives_engine_when_installed() {
 
 #[tokio::test]
 async fn test_query_team_agent_without_local_task_reports_not_controllable() {
+    let _teams = isolate_teams_dir().await;
     let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let _ = crate::team_file::cleanup_team_directories(&team_name);
     let handle = create_test_handle();
@@ -1611,6 +1598,7 @@ async fn test_spawn_subagent_fresh_threads_definition_system_prompt() {
         prompt: "do work".into(),
         subagent_type: Some("Explore".into()),
         definition: Some(definition),
+        session_id: "test-session".into(),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1681,6 +1669,7 @@ async fn test_spawn_subagent_threads_definition_allowed_tools() {
         prompt: "do work".into(),
         subagent_type: Some("restricted".into()),
         definition: Some(definition),
+        session_id: "test-session".into(),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -1745,6 +1734,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             prompt: "do work".into(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def.clone()),
+            session_id: "test-session".into(),
             ..Default::default()
         })
         .await
@@ -1771,6 +1761,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
             subagent_type: Some("general-purpose".into()),
             definition: Some(wildcard_def),
             mode: Some(coco_types::PermissionMode::Plan),
+            session_id: "test-session".into(),
             ..Default::default()
         })
         .await
@@ -1788,6 +1779,7 @@ async fn test_spawn_subagent_applies_universal_tool_block() {
 
 #[tokio::test]
 async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
+    let _teams = isolate_teams_dir().await;
     // Pre-fix: spawn_teammate ignored the leader's resolved system
     // prompt and passed only `request.initial_prompt` (usually `None`)
     // to the runner-loop, which built only the addendum. This test
@@ -1861,6 +1853,7 @@ async fn test_spawn_teammate_uses_base_system_prompt_when_no_initial_prompt() {
 
 #[tokio::test]
 async fn test_spawn_teammate_forwards_runner_query_options() {
+    let _teams = isolate_teams_dir().await;
     use crate::runner_loop::{
         AgentExecutionEngine, AgentQueryConfig as RunnerCfg, AgentQueryResult as RunnerResult,
     };
@@ -1938,6 +1931,11 @@ async fn test_spawn_teammate_forwards_runner_query_options() {
 
 #[tokio::test]
 async fn test_send_message_no_team() {
+    // `send_message` falls back to `identity::get_team_name()`, which reads the
+    // `COCO_TEAM_NAME` env / dynamic-context globals. Hold the shared env lock
+    // so a concurrent identity test can't transiently set them under threaded
+    // `cargo test`.
+    let _env = crate::test_support::lock_env().await;
     let handle = create_test_handle();
     let result = handle.send_message("target", "hello").await;
     assert!(result.is_err());
@@ -1946,6 +1944,7 @@ async fn test_send_message_no_team() {
 
 #[tokio::test]
 async fn test_create_and_delete_team() {
+    let _teams = isolate_teams_dir().await;
     let handle = create_test_handle();
     let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let _ = crate::team_file::cleanup_team_directories(&team_name);
@@ -1962,6 +1961,7 @@ async fn test_create_and_delete_team() {
 
 #[tokio::test]
 async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
+    let _teams = isolate_teams_dir().await;
     let team_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let _ = crate::team_file::cleanup_team_directories(&team_name);
 
@@ -2062,12 +2062,17 @@ async fn test_team_lifecycle_writes_roster_and_blocks_delete_while_active() {
 }
 
 #[tokio::test]
-async fn test_create_team_rejects_existing_team_for_same_leader_session() {
+async fn test_create_team_per_session_dedup_is_in_memory_not_disk() {
+    // TS parity: leader-session dedup is the in-memory `active_team` check on a
+    // single handle (see `test_team_lifecycle_*`) — there is NO scan of
+    // `~/.coco/teams/` by `lead_session_id`. Two independent handles (each its
+    // own `active_team`) therefore BOTH succeed with the same leader session
+    // id; a disk scan would have failed the second and, worse, coupled
+    // unrelated `coco` processes through the shared teams dir.
+    let _teams = isolate_teams_dir().await;
     let session_id = format!("session-{}", uuid::Uuid::new_v4().simple());
     let first_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let second_name = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
-    let _ = crate::team_file::cleanup_team_directories(&first_name);
-    let _ = crate::team_file::cleanup_team_directories(&second_name);
 
     let first_handle = create_test_handle();
     first_handle
@@ -2076,22 +2081,18 @@ async fn test_create_team_rejects_existing_team_for_same_leader_session() {
         .expect("first team create succeeds");
 
     let second_handle = create_test_handle();
-    let duplicate = second_handle
+    second_handle
         .create_team(create_team_request_with_session(&second_name, &session_id))
-        .await;
-    assert!(
-        duplicate
-            .expect_err("same leader session must not create another team")
-            .contains("leader session already has active team"),
-    );
+        .await
+        .expect("a separate handle is not blocked by another handle's team (no disk dedup)");
 
     let _ = first_handle.delete_team().await;
-    let _ = crate::team_file::cleanup_team_directories(&first_name);
-    let _ = crate::team_file::cleanup_team_directories(&second_name);
+    let _ = second_handle.delete_team().await;
 }
 
 #[tokio::test]
 async fn test_create_team_uses_unique_name_when_requested_dir_exists() {
+    let _teams = isolate_teams_dir().await;
     let base = format!("agentteam-test-{}", uuid::Uuid::new_v4().simple());
     let expected = format!("{base}-2");
     let _ = crate::team_file::cleanup_team_directories(&base);
@@ -2296,6 +2297,7 @@ async fn test_subagent_start_hook_injects_additional_context() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "ORIGINAL PROMPT".into(),
             subagent_type: Some("Explore".into()),
+            session_id: "test-session".into(),
             ..Default::default()
         })
         .await
@@ -2364,6 +2366,7 @@ async fn test_subagent_start_hook_no_context_leaves_prompt_unchanged() {
         .spawn_agent(AgentSpawnRequest {
             prompt: "ORIGINAL PROMPT".into(),
             subagent_type: Some("Explore".into()),
+            session_id: "test-session".into(),
             ..Default::default()
         })
         .await
@@ -2428,6 +2431,7 @@ async fn test_spawn_subagent_resume_mode_preserves_tool_results() {
         spawn_mode: coco_tool_runtime::SpawnMode::Resume {
             parent_messages: parent_messages.clone(),
         },
+        session_id: "test-session".into(),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -2520,6 +2524,7 @@ async fn test_spawn_subagent_fork_mode_wraps_directive_with_boilerplate() {
             parent_messages: parent_messages.clone(),
             parent_snapshot,
         },
+        session_id: "test-session".into(),
         ..Default::default()
     };
     let response = handle.spawn_agent(request).await.unwrap();
@@ -2589,6 +2594,7 @@ fn team_tasks_dir(team_name: &str) -> std::path::PathBuf {
 
 #[tokio::test]
 async fn test_delete_team_notifies_task_list_subscriber_on_success() {
+    let _teams = isolate_teams_dir().await;
     // After deleting the team (and its task-list dir), a subscriber on
     // the wired task-list store must observe the change notification.
     let mut handle = create_test_handle();
@@ -2645,6 +2651,7 @@ fn unix_dir_perms_enforced() -> bool {
 #[cfg(unix)]
 #[tokio::test]
 async fn test_delete_team_does_not_notify_when_tasks_dir_removal_fails() {
+    let _teams = isolate_teams_dir().await;
     // Force the removal to fail (non-empty dir with no write permission →
     // its child can't be unlinked) and assert no notification fires.
     use std::os::unix::fs::PermissionsExt;

@@ -28,6 +28,7 @@ pub use bytes_per_token::bytes_per_token_for_model;
 pub use catalog::LookupResult;
 pub use catalog::ModelCardCatalog;
 pub use catalog::bundled_catalog;
+pub use catalog::display_model_name;
 pub use catalog::install_openrouter_snapshot;
 pub use catalog::knowledge_cutoff;
 pub use catalog::lookup;

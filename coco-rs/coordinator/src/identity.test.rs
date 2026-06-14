@@ -11,8 +11,12 @@ fn test_create_teammate_context() {
     assert_eq!(ctx.parent_session_id, "sess-1");
 }
 
-#[test]
-fn test_dynamic_context_set_clear() {
+#[tokio::test]
+async fn test_dynamic_context_set_clear() {
+    // `DYNAMIC_CONTEXT` is a process-global; serialize against other identity
+    // tests (and readers like `test_send_message_no_team`) under threaded
+    // `cargo test`.
+    let _env = crate::test_support::lock_env().await;
     clear_dynamic_team_context();
     assert!(get_dynamic_team_context().is_none());
 
@@ -32,8 +36,9 @@ fn test_dynamic_context_set_clear() {
     assert!(get_dynamic_team_context().is_none());
 }
 
-#[test]
-fn test_resolve_teammate_identity_from_dynamic_context() {
+#[tokio::test]
+async fn test_resolve_teammate_identity_from_dynamic_context() {
+    let _env = crate::test_support::lock_env().await;
     set_dynamic_team_context(DynamicTeamContext {
         agent_id: "researcher@my-team".into(),
         agent_name: "researcher".into(),
@@ -58,19 +63,40 @@ fn test_resolve_teammate_identity_from_dynamic_context() {
 /// pane/parent — and therefore the reason deleting the transcript-scan
 /// `reconnect.rs` was a behavioral no-op (R3 was a false-positive). Locks the
 /// supported resume topology against regression.
-#[test]
-fn test_resolve_teammate_identity_from_env_vars() {
+#[tokio::test]
+async fn test_resolve_teammate_identity_from_env_vars() {
     use crate::constants::AGENT_ID_ENV_VAR;
     use crate::constants::AGENT_NAME_ENV_VAR;
     use crate::constants::PLAN_MODE_REQUIRED_ENV_VAR;
     use crate::constants::TEAM_NAME_ENV_VAR;
     use crate::constants::TEAMMATE_COLOR_ENV_VAR;
 
+    // Serialize against other env-touching tests (readers like
+    // `test_send_message_no_team` resolve identity from these same globals).
+    let _env = crate::test_support::lock_env().await;
+
+    // Remove the identity env on drop even if an assert panics, so the next
+    // test that acquires `ENV_LOCK` starts from a clean environment.
+    struct ClearIdentityEnv;
+    impl Drop for ClearIdentityEnv {
+        fn drop(&mut self) {
+            // SAFETY: serialized via the held `ENV_LOCK` guard.
+            unsafe {
+                std::env::remove_var(AGENT_ID_ENV_VAR.as_str());
+                std::env::remove_var(AGENT_NAME_ENV_VAR.as_str());
+                std::env::remove_var(TEAM_NAME_ENV_VAR.as_str());
+                std::env::remove_var(TEAMMATE_COLOR_ENV_VAR.as_str());
+                std::env::remove_var(PLAN_MODE_REQUIRED_ENV_VAR.as_str());
+            }
+        }
+    }
+    let _clear = ClearIdentityEnv;
+
     // Tier-1 (task-local) is absent outside a `run_with_teammate_context`
     // scope; clear tier-2 so resolution falls through to the env tier.
     clear_dynamic_team_context();
-    // SAFETY: nextest isolates each test in its own process, so these
-    // process-global env mutations cannot race sibling tests.
+    // SAFETY: serialized via the held `ENV_LOCK` guard; nextest isolates per
+    // process.
     unsafe {
         std::env::set_var(AGENT_ID_ENV_VAR.as_str(), "researcher@my-team");
         std::env::set_var(AGENT_NAME_ENV_VAR.as_str(), "researcher");
@@ -85,15 +111,6 @@ fn test_resolve_teammate_identity_from_env_vars() {
     assert_eq!(id.team_name, "my-team");
     assert_eq!(id.color, Some(coco_types::AgentColorName::Blue));
     assert!(id.plan_mode_required);
-
-    // SAFETY: same as above.
-    unsafe {
-        std::env::remove_var(AGENT_ID_ENV_VAR.as_str());
-        std::env::remove_var(AGENT_NAME_ENV_VAR.as_str());
-        std::env::remove_var(TEAM_NAME_ENV_VAR.as_str());
-        std::env::remove_var(TEAMMATE_COLOR_ENV_VAR.as_str());
-        std::env::remove_var(PLAN_MODE_REQUIRED_ENV_VAR.as_str());
-    }
 }
 
 #[tokio::test]

@@ -139,15 +139,21 @@ pub fn get_environment_info(cwd: &Path, model: &str, include_git_status: bool) -
         None
     };
 
+    // Single normalization point for the model name shown to the agent:
+    // strip any provider prefix and resolve to the catalog-canonical bare
+    // id. Every `<env>` block (main loop, headless, subagents) routes
+    // through here, so main and child agents render the model identically.
+    // Unknown / self-hosted models pass through unchanged.
+    let model = coco_model_card::display_model_name(model);
     let os_version = get_os_version();
-    let knowledge_cutoff = knowledge_cutoff_for_model(model).unwrap_or_default();
+    let knowledge_cutoff = knowledge_cutoff_for_model(&model).unwrap_or_default();
 
     EnvironmentInfo {
         cwd: cwd.to_string_lossy().to_string(),
         platform: Platform::current(),
         shell: ShellKind::detect(),
         os_version,
-        model: model.to_string(),
+        model,
         knowledge_cutoff,
         is_git_repo,
         git_status,

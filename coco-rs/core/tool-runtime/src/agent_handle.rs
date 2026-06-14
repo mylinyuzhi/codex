@@ -118,7 +118,7 @@ pub enum SpawnMode {
         /// `RuntimeConfig::resolve_model_roles()` would return now.
         ///
         /// The spawn path uses this to populate the env block AND
-        /// the `AgentQueryConfig.model` for the actual API call;
+        /// `AgentQueryConfig.model_selection` for the actual API call;
         /// reading live runtime config would break cache parity.
         parent_snapshot: Arc<SubagentRuntimeSnapshot>,
     },
@@ -198,9 +198,9 @@ pub struct AgentSpawnRequest {
     /// scope per-agent transcript / metadata persistence
     /// (`<sessions_dir>/<session_id>/subagents/agent-<id>.*`).
     /// Filled at the AgentTool boundary from
-    /// `ctx.session_id_for_history`. Empty when the session id
-    /// isn't available (tests / minimal embedding) — persistence
-    /// is then a no-op.
+    /// `ctx.session_id_for_history`. **Required**: the spawn path builds
+    /// an [`AgentRunIdentity`] from it, which rejects an empty value —
+    /// callers (incl. tests / embeddings) must supply a concrete id.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub session_id: String,
     /// Isolation mode. Typed [`coco_types::AgentIsolation`]

@@ -158,26 +158,13 @@ fn select_mailbox_prompt_plain_text_alongside_structured_picks_text() {
 // to the `teams_base_dir` path-assertion tests even under bare `cargo test`;
 // nextest isolates per process regardless).
 
-use std::sync::LazyLock;
-
-static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+// Shared crate-wide `COCO_TEAMS_DIR` isolation (one `ENV_LOCK` across all test
+// modules — see `crate::test_support`).
+use crate::test_support::isolate_teams_dir;
 
 #[tokio::test]
 async fn in_process_drain_applies_mode_set_against_real_mailbox() {
-    let _g = ENV_LOCK.lock().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let teams = tmp.path().join("teams");
-    std::fs::create_dir_all(&teams).unwrap();
-    // SAFETY: serialized via `ENV_LOCK`; nextest isolates per process.
-    unsafe { std::env::set_var("COCO_TEAMS_DIR", &teams) };
-    struct Restore;
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: same as the set above.
-            unsafe { std::env::remove_var("COCO_TEAMS_DIR") };
-        }
-    }
-    let _restore = Restore;
+    let _teams = isolate_teams_dir().await;
 
     let identity = TeammateIdentity {
         agent_id: "worker@t".to_string(),
@@ -282,6 +269,7 @@ fn in_process_config(prompt: &str) -> InProcessRunnerConfig {
             plan_mode_required: false,
         },
         task_id: "task-1".to_string(),
+        session_id: "session-1".to_string(),
         prompt: prompt.to_string(),
         model: None,
         system_prompt: None,
@@ -313,20 +301,7 @@ fn in_process_config(prompt: &str) -> InProcessRunnerConfig {
 
 #[tokio::test]
 async fn in_process_teammate_runs_initial_prompt_then_exits_on_shutdown() {
-    let _g = ENV_LOCK.lock().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let teams = tmp.path().join("teams");
-    std::fs::create_dir_all(&teams).unwrap();
-    // SAFETY: serialized via `ENV_LOCK`; nextest isolates per process.
-    unsafe { std::env::set_var("COCO_TEAMS_DIR", &teams) };
-    struct Restore;
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: same as the set above.
-            unsafe { std::env::remove_var("COCO_TEAMS_DIR") };
-        }
-    }
-    let _restore = Restore;
+    let _teams = isolate_teams_dir().await;
 
     const MARKER: &str = "RUN_INPROC_MARKER_7";
 
@@ -367,20 +342,7 @@ async fn in_process_teammate_runs_initial_prompt_then_exits_on_shutdown() {
 /// `inProcessRunner.ts` only exits when the model approves).
 #[tokio::test]
 async fn in_process_teammate_rejecting_shutdown_keeps_working() {
-    let _g = ENV_LOCK.lock().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let teams = tmp.path().join("teams");
-    std::fs::create_dir_all(&teams).unwrap();
-    // SAFETY: serialized via `ENV_LOCK`; nextest isolates per process.
-    unsafe { std::env::set_var("COCO_TEAMS_DIR", &teams) };
-    struct Restore;
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            // SAFETY: same as the set above.
-            unsafe { std::env::remove_var("COCO_TEAMS_DIR") };
-        }
-    }
-    let _restore = Restore;
+    let _teams = isolate_teams_dir().await;
 
     const FOLLOWUP: &str = "KEEP_WORKING_MARKER_9";
 

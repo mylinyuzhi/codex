@@ -622,7 +622,8 @@ struct AgentSummaryTimer {
     agent_type: String,
     engine: coco_tool_runtime::AgentQueryEngineRef,
     definition: Option<std::sync::Arc<coco_types::AgentDefinition>>,
-    model_role: Option<coco_types::ModelRole>,
+    model_selection: coco_types::LlmModelSelection,
+    session_id: String,
     /// Reader half of the child engine's per-turn message snapshot.
     live_transcript: coco_tool_runtime::LiveTranscript,
 }
@@ -635,7 +636,8 @@ fn spawn_agent_summary_timer(timer: AgentSummaryTimer) {
         agent_type,
         engine,
         definition,
-        model_role,
+        model_selection,
+        session_id,
         live_transcript,
     } = timer;
     const AGENT_SUMMARY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
@@ -669,14 +671,27 @@ fn spawn_agent_summary_timer(timer: AgentSummaryTimer) {
             let (sys, user) =
                 coco_subagent::build_summary_prompts(&agent_type, previous.as_deref());
             let user_with_buf = format!("{user}\n\n--- recent transcript ---\n{transcript}");
+            let identity = match coco_tool_runtime::AgentRunIdentity::new(
+                session_id.clone(),
+                format!("{task_id}-summary"),
+                coco_tool_runtime::AgentRunKind::Summary,
+            ) {
+                Ok(identity) => identity,
+                Err(e) => {
+                    tracing::debug!(error = %e, "agent_summary: invalid identity; skipping tick");
+                    continue;
+                }
+            };
             let summary_cfg = coco_tool_runtime::AgentQueryConfig {
                 system_prompt: sys,
-                model: String::new(),
+                identity,
+                model_selection: model_selection.clone(),
+                permission_mode: coco_types::PermissionMode::Default,
+                permission_prompt_policy: coco_tool_runtime::PermissionPromptPolicy::FailClosed,
                 max_turns: Some(1),
                 allowed_tools: vec![String::new()],
                 is_teammate: false,
                 definition: definition.clone(),
-                model_role,
                 can_use_tool: Some(coco_tool_runtime::deny_all_handle(
                     "agent_summary: tools disabled",
                 )),
@@ -853,23 +868,9 @@ impl SwarmAgentHandle {
             .as_deref()
             .map(|t| t.parse().expect("AgentTypeId::from_str is Infallible"));
         let selection = coco_subagent::resolve_subagent_selection(
-            // No per-request `model` / `model_role` — both flow
-            // through `request.definition` only. See the field-level
-            // comment on `AgentSpawnRequest` for the rationale.
-            None,
-            None,
             request.definition.as_deref(),
             agent_type_id.as_ref(),
         );
-
-        // Pin the agent type's color in the per-`AgentTypeId` cache so all
-        // `Explore` spawns render in the same color regardless of how many
-        // copies are running. Consumed by `presentation::activity` and
-        // `CoordinatorPanel`. Teammates use a separate per-`name@team`
-        // cache.
-        if let Some(id) = agent_type_id.as_ref() {
-            let _ = crate::pane::layout::assign_agent_type_color(id);
-        }
 
         // Resolve the prior-history + system-prompt pair from the
         // requested spawn mode:
@@ -904,7 +905,7 @@ impl SwarmAgentHandle {
         //   `RuntimeConfig` here would silently bust the cache after
         //   a hot-reload between the parent's last turn and this
         //   spawn. Used for BOTH env-block rendering AND the actual
-        //   `AgentQueryConfig.model` below — they must agree.
+        //   `AgentQueryConfig.model_selection` below — they must agree.
         //
         // - **Resume**: rebuild fresh from current runtime. Resume
         //   restarts a previously-backgrounded agent in a (possibly
@@ -912,11 +913,10 @@ impl SwarmAgentHandle {
         //   at engine bootstrap would conflate "current parent" with
         //   "original spawn" and is meaningless.
         //
-        // - **Fresh**: caller's `request.model` > `def.model` >
-        //   coordinator's current Main role.
+        // - **Fresh**: `def.model` > role-resolved primary.
         // Fork pins the model to the parent's captured identity for
         // prompt-cache parity. We carry BOTH the `api_model_name` (for the
-        // `<env>` block + `AgentQueryConfig.model`) AND the provider, so
+        // `<env>` block + `AgentQueryConfig.model_selection`) AND the provider, so
         // the selection below can be an `Explicit { provider, model_id }`
         // that resolves the SAME provider config the parent used. A bare
         // model name would parse as neither `Explicit` nor a role and fall
@@ -934,19 +934,44 @@ impl SwarmAgentHandle {
             )),
             _ => None,
         };
-        let model_pinned_to_snapshot = fork_pin.as_ref().map(|(_, model_id)| model_id.clone());
         let fork_model_selection =
             fork_pin.map(
                 |(provider, model_id)| coco_types::LlmModelSelection::Explicit {
                     primary: coco_types::ProviderModelSelection { provider, model_id },
                 },
             );
-        let model_for_env = model_pinned_to_snapshot.clone().unwrap_or_else(|| {
-            selection.model.clone().unwrap_or_else(|| {
-                self.current_main_model_id()
-                    .unwrap_or_else(|_| String::new())
-            })
-        });
+        // Single source of truth for the child's model: the same typed
+        // selection feeds BOTH the `<env>` block display AND the engine
+        // factory's routing, so the displayed model can never disagree
+        // with the one actually resolved.
+        //
+        // - **Fork**: pin the parent's exact (provider, model) for
+        //   prompt-cache parity (see `fork_pin` above).
+        // - **Plan mode (non-fork)**: promote to `ModelRole::Plan` so a
+        //   custom agent called with `mode: plan` reasons on the Plan
+        //   model regardless of its declared role (keeping any explicit
+        //   definition model as the primary).
+        // - **Fresh/Resume**: the spawn-resolved selection
+        //   (`definition.model` > role-resolved).
+        let effective_model_selection = if let Some(sel) = fork_model_selection {
+            sel
+        } else if request.mode == Some(coco_types::PermissionMode::Plan)
+            && !matches!(
+                request.spawn_mode,
+                coco_tool_runtime::SpawnMode::Fork { .. }
+            )
+        {
+            coco_types::LlmModelSelection::from_model_and_role(
+                selection.model.as_deref(),
+                Some(coco_types::ModelRole::Plan),
+            )
+        } else {
+            selection.model_selection.clone()
+        };
+        // Bare, catalog-canonical model id for the env block, resolved
+        // from that same selection (Role/InheritMain → role-resolved id
+        // with Main fallback; Explicit → its bare `model_id`).
+        let model_for_env = self.model_id_for_env(&effective_model_selection);
         // `dirs::home_dir()` can return `None` on minimal containers
         // (no `$HOME`, no passwd entry). The legacy code fell back to
         // `/tmp`, which silently routed memory lookups to the wrong
@@ -1126,38 +1151,28 @@ impl SwarmAgentHandle {
             .then(coco_tool_runtime::LiveTranscript::new);
         let mut query_config = coco_tool_runtime::AgentQueryConfig {
             system_prompt,
-            // **Fork**: pin to `parent_snapshot.api_model_name`
-            // (carried by `SpawnMode::Fork`). Cache parity requires
-            // the API call to use the exact model the parent's
-            // snapshot captured — falling back to `current_main_model_id()`
-            // after a hot-reload would silently break the cache.
-            //
-            // **Fresh/Resume**: `selection.model` (request > definition)
-            // wins; otherwise fall through to the role-resolved primary
-            // from live `RuntimeConfig` via `current_main_model_id()`
-            // (T6 hot-reload pickup).
-            model: model_pinned_to_snapshot.clone().unwrap_or_else(|| {
-                selection.model.clone().unwrap_or_else(|| {
-                    self.current_main_model_id()
-                        .unwrap_or_else(|_| String::new())
-                })
-            }),
-            model_selection: if let Some(sel) = fork_model_selection.clone() {
-                // Fork: pin the parent's exact (provider, model) — see
-                // `fork_pin` above for the cache-parity rationale.
-                sel
-            } else if request.mode == Some(coco_types::PermissionMode::Plan)
-                && !matches!(
-                    request.spawn_mode,
-                    coco_tool_runtime::SpawnMode::Fork { .. }
-                )
-            {
-                coco_types::LlmModelSelection::from_model_and_role(
-                    selection.model.as_deref(),
-                    Some(coco_types::ModelRole::Plan),
-                )
+            identity: match coco_tool_runtime::AgentRunIdentity::new(
+                request.session_id.clone(),
+                agent_id.clone(),
+                coco_tool_runtime::AgentRunKind::Subagent,
+            ) {
+                Ok(identity) => identity,
+                Err(e) => {
+                    return Ok(spawn_failed(
+                        agent_id,
+                        e,
+                        start.elapsed().as_millis() as i64,
+                    ));
+                }
+            },
+            // Routing uses the SAME selection that drove `model_for_env`
+            // above (fork pin > plan-mode promotion > spawn-resolved).
+            model_selection: effective_model_selection,
+            permission_mode: request.mode.unwrap_or(coco_types::PermissionMode::Default),
+            permission_prompt_policy: if request.run_in_background || request.fork_label.is_some() {
+                coco_tool_runtime::PermissionPromptPolicy::FailClosed
             } else {
-                selection.model_selection.clone()
+                coco_tool_runtime::PermissionPromptPolicy::PromptAllowed
             },
             // `max_turns` precedence: constraints (memory forks tighten
             // via `AgentSpawnConstraints.max_turns`) > definition. Top-
@@ -1269,12 +1284,9 @@ impl SwarmAgentHandle {
             parent_tool_filter: request.parent_tool_filter.clone(),
             active_shell_tool: request.active_shell_tool,
             preserve_tool_use_results,
-            permission_mode: request.mode,
-            agent_id: Some(agent_id.clone()),
             is_teammate: false,
             is_in_process_teammate: false,
             plan_mode_required: false,
-            session_id: None,
             // Subagents/teammates never inherit the leader's bypass capability
             // (A7b) — always gated. See the teammate site in `mod.rs`.
             bypass_permissions_available: false,
@@ -1285,26 +1297,6 @@ impl SwarmAgentHandle {
                 .as_ref()
                 .map(|c| c.allowed_write_roots.clone())
                 .unwrap_or_default(),
-            // P1-6 fix — plan-mode children route through ModelRole::Plan
-            // regardless of the agent's declared role. Custom agents
-            // spawned with `mode: "plan"` get this promotion at the role
-            // level so the inference layer's role-resolver routes to the
-            // plan client. Without this, a custom agent declaring
-            // `model_role: subagent` and called with `mode: plan` ran on
-            // the cheaper Subagent model — silently worse for plan-mode
-            // reasoning quality.
-            model_role: Some(
-                if request.mode == Some(coco_types::PermissionMode::Plan)
-                    && !matches!(
-                        request.spawn_mode,
-                        coco_tool_runtime::SpawnMode::Fork { .. }
-                    )
-                {
-                    coco_types::ModelRole::Plan
-                } else {
-                    selection.model_role
-                },
-            ),
             // `AgentDefinition.effort` is the single source of truth
             // for static effort overrides. Read it here (was: blank
             // pass-through of the never-set `request.effort`). The
@@ -1346,6 +1338,7 @@ impl SwarmAgentHandle {
             // The bg path below populates a per-task event channel so live
             // text deltas reach the task's output buffer.
             event_tx: None,
+            wire_dump: None,
             // Per-fork canUseTool callback inherits from the request. The
             // AgentTool spawn path doesn't set one by default; memory /
             // dream / session services thread their per-policy handle
@@ -1545,7 +1538,8 @@ impl SwarmAgentHandle {
                     agent_type: agent_type.to_string(),
                     engine: engine.clone(),
                     definition: request.definition.clone(),
-                    model_role: query_config.model_role,
+                    model_selection: query_config.model_selection.clone(),
+                    session_id: query_config.identity.session_id.clone(),
                     live_transcript: live,
                 });
             }
@@ -1918,7 +1912,8 @@ impl SwarmAgentHandle {
                 agent_type: agent_type.to_string(),
                 engine: engine.clone(),
                 definition: request.definition.clone(),
-                model_role: query_config.model_role,
+                model_selection: query_config.model_selection.clone(),
+                session_id: query_config.identity.session_id.clone(),
                 live_transcript: live,
             }),
             None => tracing::debug!(

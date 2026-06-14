@@ -10,8 +10,7 @@
           "tool": "Agent",
           "input": {
             "prompt": "Analyze the project structure and identify key modules",
-            "description": "Architecture analysis",
-            "model": "sonnet"
+            "description": "Architecture analysis"
           }
         }
       ]
