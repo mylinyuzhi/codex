@@ -263,7 +263,7 @@ async fn test_powershell_background_preserves_command_for_provider() {
     )
     .await
     .expect("background PowerShell request should be accepted");
-    assert_eq!(result.data["task_id"], "task-ps");
+    assert_eq!(result.data["backgroundTaskId"], "task-ps");
 
     let request = task_handle
         .request
