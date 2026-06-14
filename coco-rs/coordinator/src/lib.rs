@@ -80,6 +80,9 @@ pub mod roster_store;
 pub mod spawn;
 pub mod teammate;
 
+#[cfg(test)]
+mod test_support;
+
 // ── Crate-root re-exports for the stable surface. ──
 
 pub use agent_handle::SwarmAgentHandle;

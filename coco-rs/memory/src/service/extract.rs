@@ -30,6 +30,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use arc_swap::ArcSwap;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
@@ -128,6 +129,7 @@ impl Drop for InProgressGuard {
 
 /// Turn-end extraction service.
 pub struct ExtractService {
+    session_id: ArcSwap<String>,
     memory_dir: PathBuf,
     config: MemoryConfig,
     agent: AgentSlot,
@@ -253,6 +255,7 @@ impl ExtractService {
             telemetry,
             crate::notice::NoticeInbox::default(),
             ActiveShellTool::Disabled,
+            "test-session".to_string(),
         )
     }
 
@@ -265,9 +268,11 @@ impl ExtractService {
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
         active_shell_tool: ActiveShellTool,
+        session_id: String,
     ) -> Self {
         let (tx, rx) = watch::channel(false);
         Self {
+            session_id: ArcSwap::from_pointee(session_id),
             memory_dir,
             config,
             agent,
@@ -279,6 +284,10 @@ impl ExtractService {
             in_progress_tx: Arc::new(tx),
             in_progress_rx: rx,
         }
+    }
+
+    pub fn set_session_id(&self, new_id: String) {
+        self.session_id.store(Arc::new(new_id));
     }
 
     /// Try to atomically claim the `in_progress` slot. Returns a Drop
@@ -653,6 +662,7 @@ impl ExtractService {
         let request = AgentSpawnRequest {
             prompt,
             description: Some("memory extraction".into()),
+            session_id: (**self.session_id.load()).clone(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(memory_def),
             run_in_background: false,

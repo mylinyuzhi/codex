@@ -662,6 +662,7 @@ impl SessionMemoryService {
         let request = AgentSpawnRequest {
             prompt,
             description: Some("session memory update".into()),
+            session_id: self.read_session_id(),
             subagent_type: Some("general-purpose".into()),
             definition: Some(memory_def),
             constraints: Some(AgentSpawnConstraints {

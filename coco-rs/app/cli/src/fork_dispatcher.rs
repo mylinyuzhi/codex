@@ -63,7 +63,9 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // Derive the AgentQueryConfig shape from the cache slot. This
         // keeps the byte-faithful contract documented on `forked_agent`
         // (skip_cache_write, transcript_mode, max_turns: Some(1) by default).
-        let mut agent_config = coco_query::forked_agent::build_query_config(cache, options);
+        let session_id = self.runtime.current_session_id().await;
+        let mut agent_config =
+            coco_query::forked_agent::build_query_config(cache, options, &session_id);
         if let Some(system) = system_prompt_override {
             agent_config.system_prompt = system;
         }
@@ -88,7 +90,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             .then(|| coco_query::fork_context::auto_agent_id(options.fork_label));
 
         let engine_config = QueryEngineConfig {
-            model_id: agent_config.model.clone(),
+            model_id: cache.model_id.clone(),
             permission_mode: coco_types::PermissionMode::Default,
             allow_rules,
             deny_rules,
@@ -102,7 +104,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             prompt_cache: agent_config.prompt_cache.clone(),
             system_prompt: Some(agent_config.system_prompt.clone()),
             streaming_tool_execution: false,
-            session_id: agent_config.session_id.clone().unwrap_or_default(),
+            session_id: session_id.clone(),
             tool_config: runtime_config.tool.clone(),
             sandbox_config: runtime_config.sandbox.clone(),
             sandbox_state: self.runtime.sandbox_state(),

@@ -79,7 +79,7 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
     };
     let options = ForkedAgentOptions::for_label(ForkLabel::PromptSuggestion);
 
-    let config = build_query_config(&cache, &options);
+    let config = build_query_config(&cache, &options, "test-session");
 
     let prompt_cache = config
         .prompt_cache

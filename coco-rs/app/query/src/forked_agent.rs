@@ -190,6 +190,7 @@ impl ForkedAgentOptions {
 pub fn build_query_config(
     cache: &CacheSafeParams,
     options: &ForkedAgentOptions,
+    session_id: &str,
 ) -> AgentQueryConfig {
     let mut prompt_cache = cache.prompt_cache.clone();
     if let Some(cfg) = prompt_cache.as_mut() {
@@ -197,7 +198,27 @@ pub fn build_query_config(
     }
     AgentQueryConfig {
         system_prompt: cache.rendered_system_prompt.clone(),
-        model: cache.model_id.clone(),
+        // Real fork identity (parent session + per-fork agent id). The
+        // current `ForkDispatcher` builds its own `QueryEngineConfig` and
+        // does not read this back, but populating it keeps the config
+        // honest and avoids a fabricated test identity in a real run.
+        identity: coco_tool_runtime::AgentRunIdentity {
+            session_id: session_id.to_string(),
+            agent_id: crate::fork_context::auto_agent_id(options.fork_label),
+            kind: coco_tool_runtime::AgentRunKind::Fork,
+        },
+        model_selection: if cache.provider.trim().is_empty() || cache.model_id.trim().is_empty() {
+            coco_types::LlmModelSelection::InheritMain
+        } else {
+            coco_types::LlmModelSelection::Explicit {
+                primary: coco_types::ProviderModelSelection {
+                    provider: cache.provider.clone(),
+                    model_id: cache.model_id.clone(),
+                },
+            }
+        },
+        permission_mode: coco_types::PermissionMode::Default,
+        permission_prompt_policy: coco_tool_runtime::PermissionPromptPolicy::FailClosed,
         max_turns: options.max_turns,
         prompt_cache,
         // Inherit the parent's history verbatim so the API request's

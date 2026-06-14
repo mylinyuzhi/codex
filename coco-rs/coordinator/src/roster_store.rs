@@ -105,12 +105,12 @@ impl TeamRosterStore {
         if request.leader_session_id.trim().is_empty() {
             return Err("TeamCreate requires a non-empty leader session id".to_string());
         }
-        if let Some(existing) = team_for_leader_session(&request.leader_session_id) {
-            return Err(format!(
-                "Cannot create team '{}': leader session already has active team '{}'",
-                request.requested_name, existing
-            ));
-        }
+        // Leader-session dedup is the in-memory `active_team` check above
+        // (one team per leader, mirroring TS `appState.teamContext`). We do NOT
+        // scan `~/.coco/teams/` by `lead_session_id`: a disk scan reads every
+        // *other* live `coco` process's team files (and races their create /
+        // delete), coupling independent sessions for no benefit — a session
+        // owns exactly one process, whose `active_team` is the authority.
 
         let team_name = unique_team_name(&request.requested_name);
         let lead_agent_id = request
@@ -157,18 +157,15 @@ impl TeamRosterStore {
 
         team_file::write_team_file(&team_name, &team_file)
             .map_err(|e| format!("Failed to create team '{team_name}': {e}"))?;
-        team_file::register_team_for_session_cleanup(&team_name);
         if let Some(router) = request.task_list_router {
             if let Err(e) = router.route_team_task_list(&task_list_id).await {
                 let _ = team_file::cleanup_team_directories(&team_name);
-                team_file::unregister_team_for_session_cleanup(&team_name);
                 return Err(format!(
                     "Failed to route task tools to team task list '{task_list_id}': {e}"
                 ));
             }
         } else {
             let _ = team_file::cleanup_team_directories(&team_name);
-            team_file::unregister_team_for_session_cleanup(&team_name);
             return Err("TeamCreate requires a team task-list router".to_string());
         }
 
@@ -452,8 +449,6 @@ impl TeamRosterStore {
         {
             notifier.notify_change().await;
         }
-        team_file::unregister_team_for_session_cleanup(&team_name);
-        crate::pane::layout::clear_teammate_colors();
         *self.active_team.write().await = None;
         Ok(DeleteTeamResult {
             team_name: Some(team_name),
@@ -474,15 +469,4 @@ fn unique_team_name(requested_name: &str) -> String {
         }
     }
     format!("{base}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8])
-}
-
-fn team_for_leader_session(leader_session_id: &str) -> Option<String> {
-    team_file::list_team_names().into_iter().find(|team_name| {
-        team_file::read_team_file(team_name)
-            .ok()
-            .flatten()
-            .and_then(|team| team.lead_session_id)
-            .as_deref()
-            == Some(leader_session_id)
-    })
 }

@@ -3042,7 +3042,9 @@ impl SessionRuntime {
         let new_id_for_cfg = new_session_id.to_string();
         self.update_engine_config(|cfg| cfg.session_id = new_id_for_cfg)
             .await;
-        if let Some(svc) = &self.session_memory_service {
+        if let Some(runtime) = &self.memory_runtime {
+            runtime.set_session_id(new_session_id.to_string()).await;
+        } else if let Some(svc) = &self.session_memory_service {
             svc.set_session_id(new_session_id.to_string()).await;
         }
         if let Some(sink_id) = &self.file_history_sink_session_id

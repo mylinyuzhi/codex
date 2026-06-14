@@ -1,14 +1,20 @@
-//! Teammate color assignment and layout management.
+//! Teammate / agent display-color assignment.
 //!
-//! Assigns colors in round-robin from a fixed palette. Tracks assignments
-//! per-session in a global map.
-
-use std::collections::HashMap;
-use std::sync::RwLock;
+//! Each teammate (`name@team`) and each agent type maps to one color from a
+//! fixed palette via a **deterministic hash** — stateless, so the same id
+//! always yields the same color, in any process, with no shared mutable state
+//! to lock, reset, or race.
+//!
+//! TS uses a stateful round-robin allocator (a `Map` + `colorIndex++`); the
+//! hash trades guaranteed first-N distinctness for a pure function. The upside
+//! beyond simplicity: a leader and a teammate's own pane compute the *same*
+//! color for an id without sharing state (the cross-process lookup in
+//! `app/cli::leader_permission`). Color collisions among unrelated agents are
+//! possible but purely cosmetic.
 
 use crate::constants::AgentColorName;
 
-/// Color palette for teammate assignment (round-robin order).
+/// Color palette — the hash's codomain.
 const AGENT_COLORS: &[AgentColorName] = &[
     AgentColorName::Blue,
     AgentColorName::Green,
@@ -20,107 +26,35 @@ const AGENT_COLORS: &[AgentColorName] = &[
     AgentColorName::Red,
 ];
 
-/// Global state for color assignment.
-static COLOR_STATE: RwLock<Option<ColorAssignmentState>> = RwLock::new(None);
-
-struct ColorAssignmentState {
-    assignments: HashMap<String, AgentColorName>,
-    next_index: usize,
-}
-
-fn with_state<F, T>(f: F) -> T
-where
-    F: FnOnce(&mut ColorAssignmentState) -> T,
-{
-    let mut guard = COLOR_STATE
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let state = guard.get_or_insert_with(|| ColorAssignmentState {
-        assignments: HashMap::new(),
-        next_index: 0,
-    });
-    f(state)
-}
-
-/// Assign a color to a teammate (round-robin from palette).
-///
-/// Returns the assigned color. If already assigned, returns the existing one.
-pub fn assign_teammate_color(teammate_id: &str) -> AgentColorName {
-    with_state(|state| {
-        if let Some(&color) = state.assignments.get(teammate_id) {
-            return color;
-        }
-        let color = AGENT_COLORS[state.next_index % AGENT_COLORS.len()];
-        state.next_index += 1;
-        state.assignments.insert(teammate_id.to_string(), color);
-        color
-    })
-}
-
-/// Get the color assigned to a teammate (if any).
-pub fn get_teammate_color(teammate_id: &str) -> Option<AgentColorName> {
-    let guard = COLOR_STATE
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard
-        .as_ref()
-        .and_then(|s| s.assignments.get(teammate_id).copied())
-}
-
-/// Clear all color assignments (for testing or session reset).
-pub fn clear_teammate_colors() {
-    let mut guard = COLOR_STATE
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = None;
-    let mut agent_guard = AGENT_TYPE_COLORS
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *agent_guard = None;
-}
-
-/// Per-`AgentTypeId` color cache — kept stable across spawns so the
-/// `Explore` agent always renders in the same color regardless of how
-/// many copies are running.
-///
-/// Distinct from the per-teammate cache above (`COLOR_STATE`), which keys
-/// on `name@team` for long-lived teammates spawned via `TeamCreate`.
-static AGENT_TYPE_COLORS: RwLock<Option<HashMap<coco_types::AgentTypeId, AgentColorName>>> =
-    RwLock::new(None);
-
-/// Assign a color to an agent type, reusing the prior assignment when one
-/// exists. The first spawn of `AgentTypeId::Builtin(SubagentType::Explore)`
-/// rotates a fresh color off the palette; subsequent spawns hit the cache.
-pub fn assign_agent_type_color(agent_type: &coco_types::AgentTypeId) -> AgentColorName {
-    let mut guard = AGENT_TYPE_COLORS
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let cache = guard.get_or_insert_with(HashMap::new);
-    if let Some(&color) = cache.get(agent_type) {
-        return color;
+/// FNV-1a over the key bytes → palette index. Deterministic and stable across
+/// processes and runs (fixed offset basis + prime). The `u64` wrapping
+/// arithmetic is the hash's defining bit pattern, not a counter.
+fn palette_color(key: &str) -> AgentColorName {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in key.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    // Use the same round-robin counter as teammates so coordinators that
-    // mix teammates + standalone subagents avoid awkward color collisions
-    // on the first few assignments.
-    let color = with_state(|state| {
-        let color = AGENT_COLORS[state.next_index % AGENT_COLORS.len()];
-        state.next_index += 1;
-        color
-    });
-    cache.insert(agent_type.clone(), color);
-    color
+    AGENT_COLORS[(hash % AGENT_COLORS.len() as u64) as usize]
 }
 
-/// Look up the cached color for an agent type without assigning. Useful
-/// for renderers that want to avoid mutating the cache when the type
-/// hasn't been spawned yet.
+/// Stable display color for a teammate (`name@team`).
+pub fn assign_teammate_color(teammate_id: &str) -> AgentColorName {
+    palette_color(teammate_id)
+}
+
+/// Display color for a teammate. The mapping is total (every id has a color),
+/// so this is always `Some`; the `Option` is kept for call-site ergonomics —
+/// callers `.map` it into an `Option<String>` color field.
+pub fn get_teammate_color(teammate_id: &str) -> Option<AgentColorName> {
+    Some(palette_color(teammate_id))
+}
+
+/// Display color for an agent type, so every `Explore` copy renders in the same
+/// color regardless of how many run. Pure — the consumer (`presentation`
+/// renderers) computes it on demand; nothing needs pre-populating at spawn.
 pub fn get_agent_type_color(agent_type: &coco_types::AgentTypeId) -> Option<AgentColorName> {
-    let guard = AGENT_TYPE_COLORS
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard
-        .as_ref()
-        .and_then(|cache| cache.get(agent_type).copied())
+    Some(palette_color(&agent_type.to_string()))
 }
 
 #[cfg(test)]

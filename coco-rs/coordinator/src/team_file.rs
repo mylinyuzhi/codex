@@ -251,39 +251,6 @@ pub fn destroy_worktree(worktree_path: &str) -> crate::Result<()> {
     Ok(())
 }
 
-/// Registry of teams owned by the current session (for cleanup on exit).
-static SESSION_TEAMS: std::sync::RwLock<Option<Vec<String>>> = std::sync::RwLock::new(None);
-
-/// Register a team for cleanup when the session ends.
-pub fn register_team_for_session_cleanup(team_name: &str) {
-    let mut guard = SESSION_TEAMS
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let teams = guard.get_or_insert_with(Vec::new);
-    if !teams.contains(&team_name.to_string()) {
-        teams.push(team_name.to_string());
-    }
-}
-
-/// Unregister a team from session cleanup.
-pub fn unregister_team_for_session_cleanup(team_name: &str) {
-    let mut guard = SESSION_TEAMS
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(teams) = guard.as_mut() {
-        teams.retain(|t| t != team_name);
-    }
-}
-
-/// Get all teams registered for session cleanup.
-pub fn get_session_cleanup_teams() -> Vec<String> {
-    SESSION_TEAMS
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-        .unwrap_or_default()
-}
-
 /// Kill all tmux-pane teammates for a team (orphan cleanup on leader
 /// exit). Best-effort: a failed kill is ignored so cleanup proceeds.
 ///

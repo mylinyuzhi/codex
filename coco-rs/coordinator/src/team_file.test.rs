@@ -107,10 +107,14 @@ fn test_sanitize_name_for_dir() {
     assert_eq!(crate::types::sanitize_name("test-1"), "test-1");
 }
 
-#[test]
-fn cleanup_destroys_member_worktrees_and_tasks_dir() {
-    // Unique name so we can safely touch the real teams base + tasks root,
-    // mirroring the agent_handle integration tests.
+#[tokio::test]
+async fn cleanup_destroys_member_worktrees_and_tasks_dir() {
+    // Isolate the teams root: this test captures `get_team_dir(team)` and later
+    // asserts `cleanup_team_directories(team)` removed it, so a concurrent test
+    // flipping `COCO_TEAMS_DIR` mid-body (threaded `cargo test`) would point the
+    // cleanup at a different base than the captured path. Shares the crate-wide
+    // `ENV_LOCK` (see `crate::test_support`).
+    let _teams = crate::test_support::isolate_teams_dir().await;
     let team_name = format!("agentteam-cleanup-{}", uuid::Uuid::new_v4().simple());
 
     // Stand-in worktree: a plain dir. `destroy_worktree`'s

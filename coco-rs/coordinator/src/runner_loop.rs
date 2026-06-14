@@ -96,6 +96,8 @@ pub struct AgentQueryConfig {
     pub live_permission_rules: Option<Arc<RwLock<Vec<coco_types::PermissionRule>>>>,
     pub live_permission_mode: Option<Arc<RwLock<coco_types::PermissionMode>>>,
     pub cancel: Option<CancellationToken>,
+    pub session_id: String,
+    pub agent_id: String,
 }
 
 /// Result from running a single query/turn.
@@ -149,6 +151,11 @@ pub trait AgentExecutionEngine: Send + Sync {
         &self,
         messages: Vec<Arc<Message>>,
         _total_tokens: i64,
+        // Parent session + teammate agent id — used by real engines to
+        // scope the summarization sub-run's identity. Ignored by the
+        // no-op default.
+        _session_id: &str,
+        _agent_id: &str,
     ) -> crate::Result<Vec<Arc<Message>>> {
         // No-op default: keep the input. Real engines should override.
         Ok(messages)
@@ -164,6 +171,8 @@ pub struct InProcessRunnerConfig {
     pub identity: TeammateIdentity,
     /// Task ID in AppState.
     pub task_id: String,
+    /// Parent session id shared by this teammate run.
+    pub session_id: String,
     /// Initial prompt/task.
     pub prompt: String,
     /// Model override.
@@ -399,6 +408,8 @@ pub async fn run_in_process_teammate(
             live_permission_rules: Some(live_permission_rules),
             live_permission_mode: Some(live_permission_mode),
             cancel: Some(current_turn_cancel.clone()),
+            session_id: config.session_id.clone(),
+            agent_id: config.identity.agent_id.clone(),
         };
 
         // Run query — wrapped in the teammate's task-local identity context
@@ -566,7 +577,12 @@ pub async fn run_in_process_teammate(
         let total_tokens = total_input_tokens + total_output_tokens;
         if total_tokens > config.auto_compact_threshold && !all_messages.is_empty() {
             match engine
-                .compact_messages(all_messages.clone(), total_tokens)
+                .compact_messages(
+                    all_messages.clone(),
+                    total_tokens,
+                    &config.session_id,
+                    &config.identity.agent_id,
+                )
                 .await
             {
                 Ok(compacted) if compacted.len() < all_messages.len() => {

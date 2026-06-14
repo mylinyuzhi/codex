@@ -162,6 +162,8 @@ impl Tool for SkillTool {
         // concept. Forward parent's Layer 1 + 2 so a fork-mode skill
         // subagent inherits the same gate set; inline expansion ignores it.
         let inherit = coco_tool_runtime::SubagentInheritance {
+            session_id: ctx.session_id_for_history.clone().unwrap_or_default(),
+            permission_mode: ctx.permission_context.mode,
             features: Some(ctx.features.clone()),
             tool_overrides: Some(ctx.tool_overrides.clone()),
             active_shell_tool: ctx.active_shell_tool,

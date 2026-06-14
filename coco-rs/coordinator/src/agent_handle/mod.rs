@@ -317,16 +317,52 @@ impl SwarmAgentHandle {
         self.runtime_config.load_full()
     }
 
+    /// Resolve a role's primary `model_id`, mirroring `ModelRoles::get`'s
+    /// Main-fallback so the value matches whatever the engine factory's
+    /// `resolve_agent_runtime_source` ultimately runs for that role.
+    /// Returns `Err` when neither the role nor Main is configured.
+    pub(crate) fn current_model_id_for_role(
+        &self,
+        role: coco_types::ModelRole,
+    ) -> Result<String, &'static str> {
+        self.runtime_config()
+            .model_roles
+            .get(role)
+            .map(|spec| spec.model_id.clone())
+            .ok_or("requested role (and Main fallback) not configured in RuntimeConfig.model_roles")
+    }
+
     /// Resolve the Main role's `model_id`. Returns `Err` when no
     /// Main role is configured — the previous silent-empty-string
     /// fallback hid the misconfiguration from the caller and surfaced
     /// it later as a confusing provider error.
     pub(crate) fn current_main_model_id(&self) -> Result<String, &'static str> {
-        self.runtime_config()
-            .model_roles
-            .get(coco_types::ModelRole::Main)
-            .map(|spec| spec.model_id.clone())
-            .ok_or("Main role not configured in RuntimeConfig.model_roles")
+        self.current_model_id_for_role(coco_types::ModelRole::Main)
+    }
+
+    /// Resolve the concrete bare `model_id` to render in a child's
+    /// `<env>` block, derived from the SAME
+    /// [`coco_types::LlmModelSelection`] that drives routing so the
+    /// displayed model matches the one the engine factory resolves.
+    /// `Role`/`InheritMain` resolve through [`Self::current_model_id_for_role`]
+    /// (Main-fallback), `Explicit*` read the structured (already-bare)
+    /// `primary.model_id`. Catalog-canonicalization for display happens
+    /// once downstream in `coco_context::get_environment_info`. Empty
+    /// when nothing resolves — the env block then omits the "powered by"
+    /// line.
+    pub(crate) fn model_id_for_env(&self, selection: &coco_types::LlmModelSelection) -> String {
+        match selection {
+            coco_types::LlmModelSelection::Explicit { primary }
+            | coco_types::LlmModelSelection::ExplicitWithFallbackRole { primary, .. } => {
+                primary.model_id.clone()
+            }
+            coco_types::LlmModelSelection::Role { role } => {
+                self.current_model_id_for_role(*role).unwrap_or_default()
+            }
+            coco_types::LlmModelSelection::InheritMain => {
+                self.current_main_model_id().unwrap_or_default()
+            }
+        }
     }
 
     pub(crate) fn execution_engine(&self) -> Option<coco_tool_runtime::AgentQueryEngineRef> {
@@ -726,6 +762,7 @@ impl SwarmAgentHandle {
             let runner_config = crate::runner_loop::InProcessRunnerConfig {
                 identity,
                 task_id: teammate_task_id.clone(),
+                session_id: request.session_id.clone(),
                 prompt: request.prompt.clone(),
                 model: config.model.clone(),
                 system_prompt: config.system_prompt.clone(),

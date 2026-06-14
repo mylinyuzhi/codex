@@ -1,56 +1,45 @@
 use super::*;
+use std::collections::HashSet;
 
 #[test]
-fn test_assign_teammate_color_round_robin() {
-    clear_teammate_colors();
-
-    let c1 = assign_teammate_color("agent-1");
-    let c2 = assign_teammate_color("agent-2");
-    let c3 = assign_teammate_color("agent-3");
-
-    assert_eq!(c1, AgentColorName::Blue);
-    assert_eq!(c2, AgentColorName::Green);
-    assert_eq!(c3, AgentColorName::Yellow);
-
-    // Same agent gets same color
-    assert_eq!(assign_teammate_color("agent-1"), AgentColorName::Blue);
-
-    clear_teammate_colors();
+fn teammate_color_is_deterministic() {
+    // Same id → same color on every call, with no shared state and no spawn
+    // ordering dependency.
+    let first = assign_teammate_color("researcher@my-team");
+    assert_eq!(first, assign_teammate_color("researcher@my-team"));
+    // `get` mirrors `assign` (the mapping is total).
+    assert_eq!(get_teammate_color("researcher@my-team"), Some(first));
 }
 
 #[test]
-fn test_get_teammate_color() {
-    clear_teammate_colors();
-
-    assert!(get_teammate_color("unknown").is_none());
-
-    assign_teammate_color("test-agent");
-    assert_eq!(get_teammate_color("test-agent"), Some(AgentColorName::Blue));
-
-    clear_teammate_colors();
-}
-
-#[test]
-fn test_clear_teammate_colors() {
-    clear_teammate_colors();
-    let agent = format!("x-{}", uuid::Uuid::new_v4().simple());
-    let _ = assign_teammate_color(&agent);
-
-    clear_teammate_colors();
-    assert!(get_teammate_color(&agent).is_none());
-}
-
-#[test]
-fn test_color_palette_wraps() {
-    clear_teammate_colors();
-
-    // Assign 8 colors (full palette)
-    for i in 0..8 {
-        assign_teammate_color(&format!("a-{i}"));
+fn teammate_color_is_always_in_palette() {
+    for i in 0..64 {
+        let color = assign_teammate_color(&format!("agent-{i}"));
+        assert!(
+            AGENT_COLORS.contains(&color),
+            "color {color:?} not in palette"
+        );
     }
-    // 9th should wrap to first color
-    let c9 = assign_teammate_color("a-8");
-    assert_eq!(c9, AgentColorName::Blue);
+}
 
-    clear_teammate_colors();
+#[test]
+fn distinct_ids_spread_across_palette() {
+    // Not a uniqueness guarantee (a hash can collide), but the mapping must not
+    // collapse every id onto one color.
+    let colors: HashSet<_> = (0..32)
+        .map(|i| assign_teammate_color(&format!("agent-{i}")))
+        .collect();
+    assert!(
+        colors.len() > 1,
+        "hash should spread ids across the palette, got {colors:?}"
+    );
+}
+
+#[test]
+fn agent_type_color_is_deterministic() {
+    let explore: coco_types::AgentTypeId = "explore".parse().expect("infallible");
+    let color = get_agent_type_color(&explore);
+    assert!(color.is_some());
+    assert_eq!(color, get_agent_type_color(&explore));
+    assert!(AGENT_COLORS.contains(&color.unwrap()));
 }

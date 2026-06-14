@@ -1,6 +1,6 @@
 {
   "name": "agent_spawn_with_model",
-  "description": "Spawn agent with explicit model override (haiku for fast exploration)",
+  "description": "Spawn Explore agent using static role-based routing",
   "workspace": {},
   "config": { "tools": "extended" },
   "turns": [
@@ -11,14 +11,13 @@
           "input": {
             "prompt": "Quick scan of project structure",
             "description": "Quick scan",
-            "subagent_type": "Explore",
-            "model": "haiku"
+            "subagent_type": "Explore"
           }
         }
       ]
     },
     {
-      "text": "Quick scan completed using haiku model."
+      "text": "Quick scan completed using the Explore agent."
     }
   ],
   "expect": {

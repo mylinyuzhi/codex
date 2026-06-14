@@ -175,3 +175,22 @@ fn dynamic_snapshot_parser_builds_catalog() {
         Some("December 2025")
     );
 }
+
+#[test]
+fn display_model_name_strips_provider_preserving_spelling() {
+    // Provider-prefixed → bare, spelling preserved (no canonical rewrite).
+    assert_eq!(
+        display_model_name("anthropic/claude-sonnet-4.5"),
+        "claude-sonnet-4.5"
+    );
+    assert_eq!(display_model_name("acme/self-hosted-x"), "self-hosted-x");
+    // Bare id (the common case) passes through verbatim — the agent is
+    // told the exact model it runs, not a re-canonicalized slug.
+    assert_eq!(display_model_name("claude-opus-4-7"), "claude-opus-4-7");
+    assert_eq!(
+        display_model_name("totally-custom-model"),
+        "totally-custom-model"
+    );
+    // Empty input stays empty so the env line is omitted.
+    assert_eq!(display_model_name(""), "");
+}

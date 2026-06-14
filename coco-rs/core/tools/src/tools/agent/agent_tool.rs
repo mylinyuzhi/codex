@@ -794,8 +794,8 @@ impl Tool for AgentTool {
         // the spawned subagent runs on is resolved entirely from the
         // catalog: `AgentDefinition.model` (.md frontmatter, set by
         // the author who knows the target provider) +
-        // `AgentDefinition.model_role` + LLM-supplied `model_role`
-        // override. `resolve_subagent_selection` does the precedence.
+        // `AgentDefinition.model_role`, with built-in agent type fallback.
+        // `resolve_subagent_selection` does the precedence.
         let request_subagent_type = if is_team_spawn {
             explicit_subagent_type.clone()
         } else if is_fork && explicit_subagent_type.is_none() {
