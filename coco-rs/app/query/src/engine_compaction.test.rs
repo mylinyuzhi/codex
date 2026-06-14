@@ -9,7 +9,9 @@ use coco_types::CacheSafeParams;
 use coco_types::ForkLabel;
 use coco_types::HookEventType;
 use coco_types::HookScope;
+use coco_types::ToolAppState;
 use pretty_assertions::assert_eq;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::QueryEngineConfig;
@@ -205,6 +207,40 @@ fn new_engine_for_model(model: Arc<dyn coco_inference::LanguageModel>) -> QueryE
     )
 }
 
+fn new_engine_with_tools(
+    model: Arc<dyn coco_inference::LanguageModel>,
+    tools: Arc<coco_tool_runtime::ToolRegistry>,
+) -> QueryEngine {
+    let model_info = coco_config::ModelInfo::from_partial(
+        "mock",
+        "mock-model",
+        coco_config::PartialModelInfo {
+            context_window: Some(coco_config::PositiveTokens::new(200_000)),
+            max_output_tokens: Some(coco_config::PositiveTokens::new(8_192)),
+            capabilities: Some(vec![coco_types::Capability::ClientSideToolSearch]),
+            ..Default::default()
+        },
+    )
+    .expect("valid test model info");
+    let model_runtimes = Arc::new(
+        coco_inference::ModelRuntimeRegistry::from_prebuilt_language_model(
+            coco_types::ModelRole::Main,
+            coco_inference::PrebuiltLanguageModelSlot::new(
+                model,
+                coco_inference::RetryConfig::default(),
+            )
+            .with_model_info(model_info),
+        ),
+    );
+    QueryEngine::new(
+        QueryEngineConfig::default(),
+        model_runtimes,
+        tools,
+        CancellationToken::new(),
+        None,
+    )
+}
+
 fn new_engine_with_hooks(
     model: Arc<CapturingModel>,
     hooks: Arc<coco_hooks::HookRegistry>,
@@ -244,6 +280,28 @@ fn hook(event: HookEventType, command: &str) -> coco_hooks::HookDefinition {
         async_rewake: false,
         status_message: None,
     }
+}
+
+#[tokio::test]
+async fn plan_mode_snapshot_carries_deferred_exit_plan_mode() {
+    let registry = coco_tool_runtime::ToolRegistry::new();
+    registry.register(Arc::new(coco_tools::ExitPlanModeTool));
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        permission_mode: Some(coco_types::PermissionMode::Plan),
+        ..ToolAppState::default()
+    }));
+    let engine = new_engine_with_tools(Arc::new(CapturingModel::default()), Arc::new(registry))
+        .with_app_state(app_state);
+
+    let attachment = engine
+        .snapshot_plan_mode_attachment()
+        .await
+        .expect("plan mode should snapshot");
+
+    assert_eq!(
+        attachment.deferred_tools,
+        vec![coco_types::ToolName::ExitPlanMode.as_str().to_string()]
+    );
 }
 
 fn compact_attempt(summary_request: &str) -> coco_compact::CompactSummaryAttempt {

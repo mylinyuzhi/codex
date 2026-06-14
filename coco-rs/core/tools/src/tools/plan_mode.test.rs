@@ -20,7 +20,14 @@ fn ctx_with_mode(mode: PermissionMode) -> ToolUseContext {
 }
 
 fn implementation_plan_input() -> Value {
-    json!({"outcome": "implementation_plan"})
+    json!({})
+}
+
+fn set_exit_plan_choice(ctx: &mut ToolUseContext, choice: coco_types::ExitPlanChoice) {
+    ctx.permission_resolution_detail = Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+        choice,
+        edited_plan: None,
+    });
 }
 
 /// Drive a tool's `execute` + apply its `app_state_patch` — the
@@ -185,17 +192,21 @@ async fn exit_plan_mode_non_teammate_asks_for_confirmation() {
     .await;
     match decision {
         coco_types::ToolCheckResult::Ask {
-            message, choices, ..
+            message,
+            choices,
+            detail,
+            ..
         } => {
             assert!(message.contains("Exit plan mode"));
-            assert!(choices.is_none(), "TUI owns ExitPlanMode choices");
+            assert!(choices.is_some(), "ExitPlanMode should provide choices");
+            assert!(detail.is_some(), "ExitPlanMode should provide typed detail");
         }
         other => panic!("expected Ask, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn exit_plan_mode_tool_does_not_embed_tui_choices() {
+async fn exit_plan_mode_tool_embeds_typed_tui_choices() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.plan_mode_settings.show_clear_context_on_exit = true;
 
@@ -206,8 +217,11 @@ async fn exit_plan_mode_tool_does_not_embed_tui_choices() {
     )
     .await;
     match decision {
-        coco_types::ToolCheckResult::Ask { choices, .. } => {
-            assert!(choices.is_none(), "TUI owns ExitPlanMode choices");
+        coco_types::ToolCheckResult::Ask {
+            choices, detail, ..
+        } => {
+            assert!(choices.is_some(), "ExitPlanMode should provide choices");
+            assert!(detail.is_some(), "ExitPlanMode should provide typed detail");
         }
         other => panic!("expected Ask, got {other:?}"),
     }
@@ -226,20 +240,68 @@ async fn exit_plan_mode_clear_context_choice_sets_pending_flag() {
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::ClearAcceptEdits);
 
-    // Simulate the TUI rewriting input with the picked choice value.
-    let input = json!({"outcome": "implementation_plan", "user_choice": "yes-accept-edits"});
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert!(
         guard.pending_clear_message_history,
         "clear-context approval must schedule MessageHistory::clear()"
     );
-    assert_eq!(
-        guard.pending_plan_implementation_message.as_deref(),
-        Some("Implement the following plan:\n\n# plan")
+    assert!(
+        guard
+            .pending_plan_implementation_message
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Implement the following plan:\n\n# plan\n\nPlan file path: ")
+    );
+}
+
+#[tokio::test]
+async fn exit_plan_mode_clear_context_bounds_approval_feedback() {
+    use tempfile::tempdir;
+    let tmp = tempdir().unwrap();
+    let session_id = "exit-clear-feedback";
+    let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
+    coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
+
+    let app_state = plan_mode_app_state(Some(PermissionMode::Default), None);
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(tmp.path().to_path_buf());
+    ctx.session_id_for_history = Some(session_id.into());
+    ctx.app_state = Some(app_state.clone().into());
+    ctx.approval_feedback = Some("x".repeat(super::APPROVAL_FEEDBACK_CONTEXT_CHAR_LIMIT + 10));
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::ClearAcceptEdits);
+
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+
+    let guard = app_state.read().await;
+    let message = guard
+        .pending_plan_implementation_message
+        .as_deref()
+        .expect("clear-context message");
+    assert!(message.contains("Plan file path: "), "{message}");
+    assert!(
+        message.contains(super::APPROVAL_FEEDBACK_TRUNCATION_MARKER),
+        "{message}"
+    );
+    assert!(
+        !message.contains(&"x".repeat(super::APPROVAL_FEEDBACK_CONTEXT_CHAR_LIMIT + 1)),
+        "feedback should be bounded"
     );
 }
 
@@ -256,12 +318,16 @@ async fn exit_plan_mode_keep_context_choice_does_not_set_pending_flag() {
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::KeepDefault);
 
-    let input =
-        json!({"outcome": "implementation_plan", "user_choice": "yes-default-keep-context"});
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert!(
         !guard.pending_clear_message_history,
@@ -271,7 +337,7 @@ async fn exit_plan_mode_keep_context_choice_does_not_set_pending_flag() {
 }
 
 #[tokio::test]
-async fn exit_plan_mode_rejects_legacy_choice_values() {
+async fn exit_plan_mode_ignores_stale_choice_json() {
     use tempfile::tempdir;
     let tmp = tempdir().unwrap();
     let session_id = "exit-legacy-choice";
@@ -284,18 +350,17 @@ async fn exit_plan_mode_rejects_legacy_choice_values() {
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
 
-    let err = execute_and_apply_patch(
+    let _ = execute_and_apply_patch(
         &ExitPlanModeTool,
-        json!({"outcome": "implementation_plan", "user_choice": "yes-clear-context"}),
+        json!({"user_choice": "yes-clear-context"}),
         &ctx,
         &app_state,
     )
     .await
-    .expect_err("legacy choice must fail");
-    assert!(
-        err.to_string()
-            .contains("Unsupported ExitPlanMode approval choice")
-    );
+    .unwrap();
+    let guard = app_state.read().await;
+    assert!(!guard.pending_clear_message_history);
+    assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
 }
 
 #[tokio::test]
@@ -311,12 +376,16 @@ async fn exit_plan_mode_ts_manual_choice_sets_default_mode() {
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::KeepDefault);
 
-    let input =
-        json!({"outcome": "implementation_plan", "user_choice": "yes-default-keep-context"});
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert_eq!(guard.permission_mode, Some(PermissionMode::Default));
     assert!(!guard.pending_clear_message_history);
@@ -336,14 +405,16 @@ async fn exit_plan_mode_ts_elevated_choice_accepts_edits_without_bypass_gate() {
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::KeepAcceptEdits);
 
-    let input = json!({
-        "outcome": "implementation_plan",
-        "user_choice": "yes-accept-edits-keep-context"
-    });
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
     assert!(!guard.pending_clear_message_history);
@@ -363,14 +434,16 @@ async fn exit_plan_mode_ts_elevated_choice_uses_bypass_when_available() {
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::KeepAcceptEdits);
 
-    let input = json!({
-        "outcome": "implementation_plan",
-        "user_choice": "yes-accept-edits-keep-context"
-    });
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert_eq!(
         guard.permission_mode,
@@ -392,11 +465,16 @@ async fn exit_plan_mode_ts_clear_context_choice_sets_mode_and_pending_flag() {
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some(session_id.into());
     ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::ClearAcceptEdits);
 
-    let input = json!({"outcome": "implementation_plan", "user_choice": "yes-accept-edits"});
-    let _ = execute_and_apply_patch(&ExitPlanModeTool, input, &ctx, &app_state)
-        .await
-        .unwrap();
+    let _ = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
     let guard = app_state.read().await;
     assert_eq!(guard.permission_mode, Some(PermissionMode::AcceptEdits));
     assert!(guard.pending_clear_message_history);
@@ -413,6 +491,7 @@ fn plan_mode_app_state(
         permission_mode: Some(PermissionMode::Plan),
         pre_plan_mode: pre_plan,
         stripped_dangerous_rules: stripped,
+        plan_mode_entry_ms: Some(1),
         ..Default::default()
     }))
 }
@@ -580,7 +659,10 @@ async fn exit_plan_mode_execute_sets_exit_flags_on_app_state() {
     let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
     coco_context::write_plan(session_id, &plans_dir, "# plan", None).unwrap();
 
-    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
@@ -620,6 +702,7 @@ async fn exit_plan_mode_from_auto_with_no_restore_target_fires_auto_exit_flag() 
     let app_state = Arc::new(RwLock::new(ToolAppState {
         permission_mode: Some(PermissionMode::Plan),
         stripped_dangerous_rules: Some(coco_types::PermissionRulesBySource::default()),
+        plan_mode_entry_ms: Some(1),
         ..Default::default()
     }));
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
@@ -690,7 +773,13 @@ async fn exit_plan_mode_reads_plan_from_disk() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+    ctx.app_state = Some(
+        Arc::new(RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
 
     let result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
@@ -738,7 +827,7 @@ async fn exit_plan_mode_reads_plan_from_disk() {
 }
 
 #[tokio::test]
-async fn exit_plan_mode_input_plan_wins_over_disk() {
+async fn exit_plan_mode_approved_edit_wins_over_disk() {
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
@@ -752,11 +841,21 @@ async fn exit_plan_mode_input_plan_wins_over_disk() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+    ctx.app_state = Some(
+        Arc::new(RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
+    ctx.permission_resolution_detail = Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+        choice: coco_types::ExitPlanChoice::KeepDefault,
+        edited_plan: Some("edited plan from CCR".into()),
+    });
 
     let result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
-        json!({"outcome": "implementation_plan", "plan": "edited plan from CCR"}),
+        implementation_plan_input(),
         &ctx,
     )
     .await
@@ -779,6 +878,68 @@ async fn exit_plan_mode_input_plan_wins_over_disk() {
 }
 
 #[tokio::test]
+async fn exit_plan_mode_stale_json_plan_without_disk_is_no_plan() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    let tmp = tempdir().unwrap();
+    let config_home = tmp.path().to_path_buf();
+    let session_id = "test-session-stale-json-no-disk";
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
+
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.config_home = Some(config_home);
+    ctx.session_id_for_history = Some(session_id.to_string());
+    ctx.app_state = Some(app_state.clone().into());
+
+    let result = execute_and_apply_patch(
+        &ExitPlanModeTool,
+        json!({"plan": "stale injected plan"}),
+        &ctx,
+        &app_state,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result.data.get("outcome").and_then(Value::as_str),
+        Some("no_implementation_plan")
+    );
+    assert!(result.data.get("plan").is_none());
+}
+
+#[tokio::test]
+async fn exit_plan_mode_approved_edit_without_path_returns_typed_error() {
+    let mut ctx = ctx_with_mode(PermissionMode::Plan);
+    ctx.permission_resolution_detail = Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+        choice: coco_types::ExitPlanChoice::KeepDefault,
+        edited_plan: Some("edited plan".into()),
+    });
+
+    let err = <ExitPlanModeTool as DynTool>::execute(
+        &ExitPlanModeTool,
+        implementation_plan_input(),
+        &ctx,
+    )
+    .await
+    .expect_err("approved edit without a plan path must fail");
+
+    match err {
+        coco_tool_runtime::ToolError::InvalidInput { error_code, .. } => {
+            assert_eq!(
+                error_code.as_deref(),
+                Some("approved_edit_without_plan_path")
+            );
+        }
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -789,20 +950,20 @@ async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
     let session_id = "test-session-no-plan";
     let plans_dir = coco_context::resolve_plans_directory(&config_home, None, None);
     let plan_path = coco_context::get_plan_file_path(session_id, &plans_dir, None);
-    let app_state = Arc::new(RwLock::new(ToolAppState::default()));
+    let app_state = Arc::new(RwLock::new(ToolAppState {
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
 
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(app_state.clone().into());
+    set_exit_plan_choice(&mut ctx, coco_types::ExitPlanChoice::ClearAcceptEdits);
 
     let result = execute_and_apply_patch(
         &ExitPlanModeTool,
-        json!({
-            "outcome": "no_implementation_plan",
-            "plan": "User asked for a read-only explanation.",
-            "user_choice": coco_types::ExitPlanChoice::ClearAcceptEdits.as_str(),
-        }),
+        implementation_plan_input(),
         &ctx,
         &app_state,
     )
@@ -845,7 +1006,7 @@ async fn exit_plan_mode_no_plan_notice_is_not_saved_as_plan() {
 }
 
 #[tokio::test]
-async fn exit_plan_mode_implementation_plan_requires_plan_content() {
+async fn exit_plan_mode_without_current_plan_exits_without_implementation_plan() {
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
@@ -854,24 +1015,31 @@ async fn exit_plan_mode_implementation_plan_requires_plan_content() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(tmp.path().to_path_buf());
     ctx.session_id_for_history = Some("test-session-missing-plan".to_string());
-    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+    ctx.app_state = Some(
+        Arc::new(RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
 
     let result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
         implementation_plan_input(),
         &ctx,
     )
-    .await;
+    .await
+    .unwrap();
 
-    let err = result.expect_err("implementation-plan exit must require plan content");
-    assert!(
-        err.to_string().contains("No implementation plan found"),
-        "{err}"
+    assert_eq!(
+        result.data.get("outcome").and_then(Value::as_str),
+        Some("no_implementation_plan")
     );
+    assert!(result.data.get("plan").is_none());
 }
 
 #[tokio::test]
-async fn exit_plan_mode_injected_disk_plan_not_marked_as_user_edit() {
+async fn exit_plan_mode_stale_json_plan_not_marked_as_user_edit() {
     use std::sync::Arc;
     use tempfile::tempdir;
     use tokio::sync::RwLock;
@@ -885,11 +1053,17 @@ async fn exit_plan_mode_injected_disk_plan_not_marked_as_user_edit() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(Arc::new(RwLock::new(ToolAppState::default())).into());
+    ctx.app_state = Some(
+        Arc::new(RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
 
     let result = <ExitPlanModeTool as DynTool>::execute(
         &ExitPlanModeTool,
-        json!({"outcome": "implementation_plan", "plan": "on-disk plan"}),
+        json!({"plan": "on-disk plan"}),
         &ctx,
     )
     .await
@@ -903,14 +1077,38 @@ fn exit_plan_mode_schema_exposes_allowed_prompts() {
     let schema =
         <ExitPlanModeTool as DynTool>::runtime_validation_schema(&ExitPlanModeTool).as_value();
     assert!(schema["properties"].get("allowedPrompts").is_some());
-    assert!(schema["properties"].get("outcome").is_some());
-    let required = schema["required"].as_array().expect("required fields");
+    assert!(schema["properties"].get("outcome").is_none());
+    assert_ne!(schema["additionalProperties"], json!(false));
+    let required = schema["required"].as_array().cloned().unwrap_or_default();
     assert!(
-        required
+        !required
             .iter()
             .any(|field| field.as_str() == Some("outcome")),
-        "outcome must be required: {required:?}"
+        "outcome must not be required: {required:?}"
     );
+}
+
+#[test]
+fn exit_plan_mode_accepts_passthrough_fields_and_parses_allowed_prompts() {
+    let input = json!({
+        "allowedPrompts": [{"tool": "Bash", "prompt": "cargo test"}],
+        "plan_file": "/tmp/plan.md",
+        "teardown": true
+    });
+    let schema =
+        <ExitPlanModeTool as DynTool>::runtime_validation_schema(&ExitPlanModeTool).as_value();
+    let validation = <ExitPlanModeTool as DynTool>::runtime_validation_schema(&ExitPlanModeTool)
+        .validate(&input);
+    assert!(
+        validation.is_ok(),
+        "schema rejected passthrough fields: {schema}"
+    );
+
+    let parsed: super::ExitPlanModeInput =
+        serde_json::from_value(input).expect("ExitPlanModeInput parses");
+    let prompts = parsed.allowed_prompts.expect("allowedPrompts parsed");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].prompt, "cargo test");
 }
 
 #[test]
@@ -988,7 +1186,13 @@ async fn teammate_exit_plan_writes_approval_request_to_team_lead() {
     ctx.plan_mode_required = true;
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(Arc::new(tokio::sync::RwLock::new(ToolAppState::default())).into());
+    ctx.app_state = Some(
+        Arc::new(tokio::sync::RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
     ctx.mailbox = capture.clone();
     // The tool falls back to `ctx.agent_id` when env vars aren't set,
     // so we can control identity without mutating the global env
@@ -1090,7 +1294,7 @@ async fn teammate_exit_plan_with_empty_plan_errors() {
         result
             .unwrap_err()
             .to_string()
-            .contains("No implementation plan found")
+            .contains("No plan file found")
     );
 }
 
@@ -1109,7 +1313,13 @@ async fn voluntary_teammate_exits_locally_without_mailbox_write() {
     ctx.plan_mode_required = false; // voluntary
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(Arc::new(tokio::sync::RwLock::new(ToolAppState::default())).into());
+    ctx.app_state = Some(
+        Arc::new(tokio::sync::RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
     ctx.mailbox = capture.clone();
 
     let result = <ExitPlanModeTool as DynTool>::execute(
@@ -1149,6 +1359,7 @@ async fn verify_execution_disabled_skips_pending_verification() {
     ctx.session_id_for_history = Some(session_id.to_string());
     ctx.app_state = Some(
         Arc::new(tokio::sync::RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
             ..Default::default()
         }))
         .into(),
@@ -1190,7 +1401,13 @@ async fn verify_execution_enabled_records_pending_verification() {
     let mut ctx = ctx_with_mode(PermissionMode::Plan);
     ctx.config_home = Some(config_home);
     ctx.session_id_for_history = Some(session_id.to_string());
-    ctx.app_state = Some(Arc::new(tokio::sync::RwLock::new(ToolAppState::default())).into());
+    ctx.app_state = Some(
+        Arc::new(tokio::sync::RwLock::new(ToolAppState {
+            plan_mode_entry_ms: Some(1),
+            ..Default::default()
+        }))
+        .into(),
+    );
     ctx.plan_verify_execution = true;
 
     let mut result = <ExitPlanModeTool as DynTool>::execute(
@@ -1293,18 +1510,18 @@ async fn exit_plan_mode_tool_spec_hides_internal_fields_and_tightens_allowed_pro
     let props = schema["properties"].as_object().expect("object schema");
     let required: Vec<&str> = schema["required"]
         .as_array()
-        .expect("ExitPlanMode schema must declare required fields")
-        .iter()
+        .into_iter()
+        .flatten()
         .filter_map(Value::as_str)
         .collect();
     assert!(
-        required.contains(&"outcome"),
-        "model schema must require outcome; got {required:?}"
+        !required.contains(&"outcome"),
+        "model schema must not require outcome; got {required:?}"
     );
     // Internal splice fields must be hidden from the model.
     assert!(
-        props.contains_key("outcome"),
-        "outcome missing from model schema"
+        !props.contains_key("outcome"),
+        "outcome leaked into model schema"
     );
     assert!(!props.contains_key("plan"), "plan leaked into model schema");
     assert!(
@@ -1476,7 +1693,6 @@ const TS_EXIT_PLAN_MODE_PROMPT: &str =
 ## How This Tool Works
 - You should have already written your plan to the plan file specified in the plan mode system message
 - This tool does NOT take the plan content as a parameter - it will read the plan from the file you wrote
-- Set outcome to `implementation_plan` when you have a plan for code changes; set outcome to `no_implementation_plan` when plan mode should end without implementation work
 - This tool simply signals that you're done planning and ready for the user to review and approve, or that no implementation plan is needed
 - The user will see the contents of your plan file when they review it
 

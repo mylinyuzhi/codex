@@ -333,6 +333,10 @@ pub struct PlanModeAttachment {
     /// [`Self::write_tool`]). Defaults to `Edit`.
     #[serde(default = "default_edit_tool")]
     pub edit_tool: ToolName,
+    /// Tool names that are currently searchable but not callable until
+    /// loaded with ToolSearch. Sorted by canonical tool name.
+    #[serde(default)]
+    pub deferred_tools: Vec<String>,
 }
 
 fn default_explore_count() -> i32 {

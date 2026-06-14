@@ -1747,6 +1747,7 @@ async fn run_agent_driver(
                 always_allow,
                 feedback,
                 updated_input,
+                resolution_detail,
                 mut permission_updates,
                 content_blocks,
             } => {
@@ -1904,6 +1905,7 @@ async fn run_agent_driver(
                         feedback,
                         permission_updates,
                         updated_input,
+                        resolution_detail,
                         content_blocks,
                     );
                     if !resolved {

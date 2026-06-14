@@ -31,6 +31,7 @@ fn minimal_input<'a>(
         fallback_permission_mode: PermissionMode::Default,
         is_auto_classifier_active: false,
         tools: vec![ToolName::Read.as_str().to_string()],
+        deferred_tools: Vec::new(),
         is_task_v2_enabled: false,
         history,
         todo_key: "session-1".to_string(),

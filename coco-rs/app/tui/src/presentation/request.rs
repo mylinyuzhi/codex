@@ -325,7 +325,7 @@ pub(crate) fn exit_plan_pending_history_lines(
         )));
         for prompt in allowed_prompts {
             lines.push(Line::from(Span::styled(
-                format!("  - {prompt}"),
+                format!("  - {}: {}", prompt.tool, prompt.prompt),
                 Style::default().fg(styles.dim()),
             )));
         }

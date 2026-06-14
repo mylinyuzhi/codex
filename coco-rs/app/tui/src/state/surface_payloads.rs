@@ -28,7 +28,7 @@ pub struct PermissionPromptState {
     /// yes/no/always dialog. `Some` switches the renderer into a
     /// choice-list mode: Up/Down moves `selected_choice`, Enter (approve)
     /// echoes the picked value back to the tool via
-    /// `UserCommand::ApprovalResponse.updated_input`.
+    /// `UserCommand::ApprovalResponse.resolution_detail`.
     pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
     /// Cursor position within `choices`, or within the classic
     /// approve / always-allow / deny action list when `choices.is_none()`.
@@ -37,9 +37,8 @@ pub struct PermissionPromptState {
     /// Raw input must stay in `original_input` and must not be read by
     /// presentation code.
     pub display_input: coco_types::PermissionDisplayInput,
-    /// Raw tool input captured at dialog-open time. Choice dialogs splice
-    /// `user_choice` into it; classic read dialogs use it to build
-    /// path-scoped "always allow" updates.
+    /// Raw tool input captured at dialog-open time. Classic read dialogs use
+    /// it to build path-scoped "always allow" updates.
     pub original_input: Option<serde_json::Value>,
     /// Tool execution working directory. Relative paths in `original_input`
     /// are resolved against this cwd when deriving scoped allow updates.
@@ -223,7 +222,7 @@ pub enum PermissionDetail {
         outcome: coco_types::ExitPlanModeOutcome,
         plan: Option<String>,
         plan_file_path: Option<String>,
-        allowed_prompts: Vec<String>,
+        allowed_prompts: Vec<coco_types::ExitPlanModeAllowedPrompt>,
     },
     /// Generic fallback — plain text description.
     Generic { input_preview: String },

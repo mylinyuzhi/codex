@@ -87,6 +87,7 @@ async fn emit_tui_routes_to_tui_layer() {
         display_input: coco_types::PermissionDisplayInput::Command("rm -rf".into()),
         show_always_allow: true,
         choices: None,
+        detail: None,
         permission_suggestions: vec![],
         original_input: None,
         cwd: None,

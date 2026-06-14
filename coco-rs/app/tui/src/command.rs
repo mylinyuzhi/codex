@@ -7,6 +7,7 @@ use std::fmt;
 
 use coco_messages::SystemMessageLevel;
 use coco_types::PermissionMode;
+use coco_types::PermissionResolutionDetail;
 use coco_types::PermissionUpdate;
 
 /// Why the TUI requested process shutdown.
@@ -263,6 +264,8 @@ pub enum UserCommand {
         feedback: Option<String>,
         /// Modified tool input (user edited the command/path before approving).
         updated_input: Option<serde_json::Value>,
+        /// Trusted tool-specific approval metadata.
+        resolution_detail: Option<PermissionResolutionDetail>,
         /// Permission rules to persist from this decision (suggestions the user accepted).
         permission_updates: Vec<PermissionUpdate>,
         /// Optional content blocks (image attachments etc.) the user

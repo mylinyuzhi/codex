@@ -143,6 +143,7 @@ async fn send_question_rejection(
             always_allow: false,
             feedback: (!feedback.is_empty()).then_some(feedback),
             updated_input: None,
+            resolution_detail: None,
             permission_updates: vec![],
             content_blocks: None,
         })
@@ -367,6 +368,7 @@ async fn submit_question_answers(
             always_allow: false,
             feedback: None,
             updated_input: Some(updated_input),
+            resolution_detail: None,
             permission_updates: vec![],
             content_blocks: None,
         })

@@ -230,6 +230,10 @@ impl<'a> ToolCallRunner<'a> {
                             shared_ctx.clone_for_tool_call(prepared.tool_use_id.clone());
                         call_ctx.abort = runtime.abort.clone();
                         call_ctx.progress_tx = runtime.progress_tx.clone();
+                        call_ctx.approval_feedback =
+                            ctx_entry.and_then(|c| c.approval_feedback.clone());
+                        call_ctx.permission_resolution_detail =
+                            ctx_entry.and_then(|c| c.permission_resolution_detail.clone());
 
                         // Pre-execute abort guard: when the turn is already
                         // aborted before the tool runs,

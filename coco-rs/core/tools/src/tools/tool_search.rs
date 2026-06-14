@@ -50,9 +50,11 @@ use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;
 use coco_tool_runtime::DynTool;
 use coco_tool_runtime::PromptOptions;
+use coco_tool_runtime::SchemaContext;
 use coco_tool_runtime::Tool;
 use coco_tool_runtime::ToolError;
 use coco_tool_runtime::ToolResultContentPart;
+use coco_tool_runtime::ToolSpec;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::ToolId;
 use coco_types::ToolName;
@@ -75,7 +77,7 @@ const MCP_PREFIX: &str = "mcp__";
 const PROMPT_HEAD: &str =
     "Fetches full schema definitions for deferred tools so they can be called.\n\n";
 
-const PROMPT_TAIL: &str = " Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query and matches it against the deferred tool list.\n\nProvider behavior:\n- Providers with server-side tool references receive the matched tool schemas inline, and those tools become callable after the result.\n- Client-side ToolSearch providers receive the matched tool names now; the runtime exposes their full schemas on the next turn, after the ToolSearch result is processed.\n\nQuery forms:\n- \"select:Read,Edit,Grep\" — fetch these exact tools by name\n- \"notebook jupyter\" — keyword search, up to max_results best matches\n- \"+slack send\" — require \"slack\" in the name, rank by remaining terms";
+const PROMPT_TAIL: &str = " Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked. This tool takes a query, matches it against the deferred tool list, and returns the matched tools' complete JSONSchema definitions inside a <functions> block. Once a tool's schema appears in that result, it is callable exactly like any tool defined at the top of the prompt.\n\nResult format: each matched tool appears as one <function>{\"description\":\"...\",\"name\":\"...\",\"parameters\":{...}}</function> line inside the <functions> block — the same encoding as the tool list at the top of this prompt.\n\nQuery forms:\n- \"select:Read,Edit,Grep\" — fetch these exact tools by name\n- \"notebook jupyter\" — keyword search, up to max_results best matches\n- \"+slack send\" — require \"slack\" in the name, rank by remaining terms";
 
 /// Deferred tools appear by name in `<system-reminder>` messages.
 const PROMPT_LOCATION_HINT: &str = "Deferred tools appear by name in <system-reminder> messages.";
@@ -377,12 +379,103 @@ fn search_with_keywords(
         })
         .filter(|s| s.score > 0)
         .collect();
-    scored.sort_by(|a, b| b.score.cmp(&a.score));
+    scored.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
     scored
         .into_iter()
         .take(max_results)
         .map(|s| s.name)
         .collect()
+}
+
+fn sort_tools_by_name(tools: &mut [Arc<dyn DynTool>]) {
+    tools.sort_by(|a, b| a.name().cmp(b.name()));
+}
+
+fn canonical_json(value: Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.into_iter().map(canonical_json).collect()),
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut out = serde_json::Map::new();
+            for (key, value) in entries {
+                out.insert(key, canonical_json(value));
+            }
+            Value::Object(out)
+        }
+        other => other,
+    }
+}
+
+fn stable_json_string(value: Value) -> String {
+    serde_json::to_string(&canonical_json(value)).unwrap_or_default()
+}
+
+fn matched_tools_for_schema(
+    matches: &[String],
+    deferred: &[Arc<dyn DynTool>],
+    enabled_tools: &[Arc<dyn DynTool>],
+    all_tools: &[Arc<dyn DynTool>],
+) -> Vec<Arc<dyn DynTool>> {
+    let mut tools: Vec<Arc<dyn DynTool>> = matches
+        .iter()
+        .filter_map(|name| {
+            deferred
+                .iter()
+                .chain(enabled_tools.iter())
+                .chain(all_tools.iter())
+                .find(|tool| tool.name() == name)
+                .cloned()
+        })
+        .collect();
+    sort_tools_by_name(&mut tools);
+    tools.dedup_by(|a, b| a.name() == b.name());
+    tools
+}
+
+async fn render_functions_for_client_side(
+    matches: &[String],
+    deferred: &[Arc<dyn DynTool>],
+    enabled_tools: &[Arc<dyn DynTool>],
+    all_tools: &[Arc<dyn DynTool>],
+    ctx: &ToolUseContext,
+) -> Option<String> {
+    let tools = matched_tools_for_schema(matches, deferred, enabled_tools, all_tools);
+    if tools.is_empty() {
+        return None;
+    }
+
+    let mut tool_names: Vec<String> = all_tools
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
+    tool_names.sort();
+    let prompt_options = PromptOptions {
+        is_non_interactive: ctx.is_non_interactive,
+        tool_names,
+        permission_context: Some(ctx.permission_context.clone()),
+        ..PromptOptions::default()
+    };
+    let schema_ctx = SchemaContext {
+        features: Some(ctx.features.clone()),
+        ..SchemaContext::default()
+    };
+
+    let mut lines = Vec::with_capacity(tools.len() + 2);
+    lines.push("<functions>".to_string());
+    for tool in tools {
+        let ToolSpec::Function(spec) = tool.tool_spec(&schema_ctx, &prompt_options).await else {
+            continue;
+        };
+        let schema = stable_json_string(serde_json::json!({
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters,
+        }));
+        lines.push(format!("<function>{schema}</function>"));
+    }
+    lines.push("</functions>".to_string());
+    Some(lines.join("\n"))
 }
 
 /// Build the `AppStatePatch` that inserts the matched tool names into
@@ -439,6 +532,9 @@ pub struct ToolSearchOutput {
     /// least one MCP server is still mid-handshake.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_mcp_servers: Option<Vec<String>>,
+    /// Client-side fallback schema block rendered for the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendered_functions: Option<String>,
 }
 
 pub struct ToolSearchTool;
@@ -536,6 +632,8 @@ impl Tool for ToolSearchTool {
                 }
             }
             text
+        } else if let Some(rendered) = out.rendered_functions.as_ref() {
+            rendered.clone()
         } else {
             format!(
                 "Matched tools (schemas will be available next turn):\n{}",
@@ -570,7 +668,8 @@ impl Tool for ToolSearchTool {
 
         // Snapshot the registry once so the searchable pools see a
         // consistent state. `ctx.tools.*` clone Arc handles — cheap.
-        let all_tools = ctx.tools.all();
+        let mut all_tools = ctx.tools.all();
+        sort_tools_by_name(&mut all_tools);
         // Pipeline-filtered candidate pools. ToolSearch must never match a
         // tool the registry would refuse to surface: a match that fails
         // `passes_filter_pipeline` is inert (it can't enter `loaded_tools`)
@@ -579,8 +678,10 @@ impl Tool for ToolSearchTool {
         // kept so re-select is an idempotent no-op); `enabled` is the
         // exact-name fallback corpus of pipeline-passing tools that aren't
         // deferred (already loaded → harmless no-op match).
-        let deferred: Vec<Arc<dyn DynTool>> = ctx.tools.searchable_deferred(ctx);
-        let enabled_tools = ctx.tools.enabled(ctx);
+        let mut deferred: Vec<Arc<dyn DynTool>> = ctx.tools.searchable_deferred(ctx);
+        sort_tools_by_name(&mut deferred);
+        let mut enabled_tools = ctx.tools.enabled(ctx);
+        sort_tools_by_name(&mut enabled_tools);
         let total_deferred_tools = deferred.len() as i64;
         let deferred_tool_names: Vec<&str> = deferred.iter().map(|t| t.name()).collect();
         let enabled_tool_names: Vec<&str> = enabled_tools.iter().map(|t| t.name()).collect();
@@ -597,7 +698,8 @@ impl Tool for ToolSearchTool {
         // Includes the full tool-name list so tools whose description
         // varies by sibling tools (Agent / Skill) render their final
         // text rather than a placeholder.
-        let tool_names: Vec<String> = all_tools.iter().map(|t| t.name().to_string()).collect();
+        let mut tool_names: Vec<String> = all_tools.iter().map(|t| t.name().to_string()).collect();
+        tool_names.sort();
         let desc_opts = DescriptionOptions {
             is_non_interactive: false,
             tool_names,
@@ -653,11 +755,24 @@ impl Tool for ToolSearchTool {
                 matches = ?matches,
                 "ToolSearch resolved matches"
             );
+            let rendered_functions = if use_tool_reference {
+                None
+            } else {
+                render_functions_for_client_side(
+                    &matches,
+                    &deferred,
+                    &enabled_tools,
+                    &all_tools,
+                    ctx,
+                )
+                .await
+            };
             let envelope = build_envelope(
                 &matches,
                 &raw_query,
                 total_deferred_tools,
                 use_tool_reference,
+                rendered_functions,
                 &ctx.mcp,
             )
             .await;
@@ -689,11 +804,18 @@ impl Tool for ToolSearchTool {
             "ToolSearch resolved matches"
         );
 
+        let rendered_functions = if use_tool_reference {
+            None
+        } else {
+            render_functions_for_client_side(&matches, &deferred, &enabled_tools, &all_tools, ctx)
+                .await
+        };
         let envelope = build_envelope(
             &matches,
             &raw_query,
             total_deferred_tools,
             use_tool_reference,
+            rendered_functions,
             &ctx.mcp,
         )
         .await;
@@ -724,6 +846,7 @@ async fn build_envelope(
     raw_query: &str,
     total_deferred_tools: i64,
     use_tool_reference: bool,
+    rendered_functions: Option<String>,
     mcp: &coco_tool_runtime::McpHandleRef,
 ) -> ToolSearchOutput {
     // Empty-result retry hint: only attach when there's genuine MCP-
@@ -745,6 +868,7 @@ async fn build_envelope(
         total_deferred_tools,
         render_as_tool_reference: use_tool_reference.then_some(true),
         pending_mcp_servers,
+        rendered_functions,
     }
 }
 

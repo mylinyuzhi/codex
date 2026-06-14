@@ -51,6 +51,8 @@ use crate::tool_runner::prepare_committed_tool_call;
 pub(crate) struct ToolResultContext {
     pub tool_name: String,
     pub effective_input: ValidatedInput,
+    pub approval_feedback: Option<String>,
+    pub permission_resolution_detail: Option<coco_types::PermissionResolutionDetail>,
 }
 
 pub(crate) struct PendingToolPreparation<'a> {
@@ -271,19 +273,20 @@ pub(crate) async fn prepare_one_pending_tool_call(
         return None;
     }
 
-    let effective_input = resolve_effective_input_from_permission(
-        args.event_tx,
-        args.history,
-        args.ctx,
-        tc,
-        &tool_id,
-        &tool,
-        permission_outcome,
-        effective_input,
-        args.completion_event_mode,
-        args.deferred_tool_completions.as_deref_mut(),
-    )
-    .await?;
+    let (effective_input, approval_feedback, permission_resolution_detail) =
+        resolve_effective_input_from_permission(
+            args.event_tx,
+            args.history,
+            args.ctx,
+            tc,
+            &tool_id,
+            &tool,
+            permission_outcome,
+            effective_input,
+            args.completion_event_mode,
+            args.deferred_tool_completions.as_deref_mut(),
+        )
+        .await?;
 
     Some((
         PendingToolCall {
@@ -294,6 +297,8 @@ pub(crate) async fn prepare_one_pending_tool_call(
         ToolResultContext {
             tool_name: tc.tool_name.clone(),
             effective_input,
+            approval_feedback,
+            permission_resolution_detail,
         },
     ))
 }
@@ -405,6 +410,7 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
                 .unwrap_or_else(|| "PreToolUse hook requested approval".into()),
             suggestions: Vec::new(),
             choices: None,
+            detail: None,
         },
         Some(coco_types::PermissionBehavior::Deny) => PermissionDecision::Deny {
             message: hook_permission_reason
@@ -810,11 +816,19 @@ async fn resolve_effective_input_from_permission(
     effective_input: ValidatedInput,
     completion_event_mode: ToolCompletionEventMode,
     deferred_tool_completions: Option<&mut crate::helpers::DeferredToolCompletionBuffer>,
-) -> Option<ValidatedInput> {
+) -> Option<(
+    ValidatedInput,
+    Option<String>,
+    Option<coco_types::PermissionResolutionDetail>,
+)> {
     match permission_outcome {
         PermissionOutcome::Denied => None,
         PermissionOutcome::Aborted => None,
-        PermissionOutcome::Allow { updated_input } => {
+        PermissionOutcome::Allow {
+            updated_input,
+            approval_feedback,
+            resolution_detail,
+        } => {
             if let Some(updated_input) = updated_input {
                 return validate_effective_input_or_complete_error(
                     event_tx,
@@ -827,9 +841,10 @@ async fn resolve_effective_input_from_permission(
                     completion_event_mode,
                     deferred_tool_completions,
                 )
-                .await;
+                .await
+                .map(|input| (input, approval_feedback, resolution_detail));
             }
-            Some(effective_input)
+            Some((effective_input, approval_feedback, resolution_detail))
         }
     }
 }

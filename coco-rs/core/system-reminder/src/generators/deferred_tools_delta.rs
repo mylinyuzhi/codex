@@ -58,7 +58,7 @@ fn render(info: &DeferredToolsDeltaInfo) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(2);
     if !info.added_lines.is_empty() {
         parts.push(format!(
-            "The following deferred tools are now available via ToolSearch:\n{}",
+            "The following deferred tools are now available by name via ToolSearch. These tools are not callable until you load them with ToolSearch:\n{}",
             info.added_lines.join("\n")
         ));
     }

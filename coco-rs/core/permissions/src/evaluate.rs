@@ -203,6 +203,7 @@ impl PermissionEvaluator {
                     message,
                     suggestions,
                     choices,
+                    detail,
                 } => {
                     tracing::debug!(
                         tool_name = %tool_str,
@@ -214,6 +215,7 @@ impl PermissionEvaluator {
                         message,
                         suggestions,
                         choices,
+                        detail,
                     };
                 }
                 ToolCheckResult::Passthrough => {
@@ -301,6 +303,7 @@ impl PermissionEvaluator {
                                 message: format!("ask rule matched: {tool_str}({content})"),
                                 suggestions: vec![],
                                 choices: None,
+                                detail: None,
                             };
                         }
                     }
@@ -327,6 +330,7 @@ impl PermissionEvaluator {
                     message: format!("tool-wide ask rule for {tool_str}"),
                     suggestions: vec![],
                     choices: None,
+                    detail: None,
                 };
             }
         }
@@ -351,6 +355,7 @@ impl PermissionEvaluator {
                         ),
                         suggestions: vec![],
                         choices: None,
+                        detail: None,
                     };
                 }
             }
@@ -376,6 +381,7 @@ impl PermissionEvaluator {
                     message,
                     suggestions: vec![],
                     choices: None,
+                    detail: None,
                 };
             }
         }
@@ -431,6 +437,7 @@ impl PermissionEvaluator {
                             message: format!("MCP server {server} requires approval"),
                             suggestions: vec![],
                             choices: None,
+                            detail: None,
                         };
                     }
                 }
@@ -599,6 +606,7 @@ fn mode_fallthrough(
                     message: format!("plan mode: approve {tool_str}?"),
                     suggestions: shell_ask_suggestions(tool_str, input),
                     choices: None,
+                    detail: None,
                 }
             }
         }
@@ -619,6 +627,7 @@ fn mode_fallthrough(
                     message: format!("approve {tool_str}?"),
                     suggestions: shell_ask_suggestions(tool_str, input),
                     choices: None,
+                    detail: None,
                 }
             }
         }
@@ -638,6 +647,7 @@ fn mode_fallthrough(
                 message: format!("approve {tool_str}?"),
                 suggestions: shell_ask_suggestions(tool_str, input),
                 choices: None,
+                detail: None,
             }
         }
     }

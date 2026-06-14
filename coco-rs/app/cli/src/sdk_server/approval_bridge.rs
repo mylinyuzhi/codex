@@ -150,6 +150,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                     // Image attachments pasted alongside the answer ride
                     // this slot.
                     content_blocks: parsed.content_blocks,
+                    detail: None,
                 })
             }
             JsonRpcMessage::Error(e) => {
@@ -167,6 +168,7 @@ impl ToolPermissionBridge for SdkPermissionBridge {
                     applied_updates: Vec::new(),
                     updated_input: None,
                     content_blocks: None,
+                    detail: None,
                 })
             }
             other => Err(format!(

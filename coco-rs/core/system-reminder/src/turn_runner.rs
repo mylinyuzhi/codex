@@ -93,6 +93,8 @@ pub struct TurnReminderInput<'a> {
     // ── Tools ──
     /// Wire names of every tool available this turn (builtins + MCP + custom).
     pub tools: Vec<String>,
+    /// Wire names of ToolSearch-searchable tools that are not callable yet.
+    pub deferred_tools: Vec<String>,
     /// `true` when V2 task tools are active (drives todo vs task reminder
     /// mutual exclusion).
     pub is_task_v2_enabled: bool,
@@ -234,6 +236,7 @@ pub async fn run_turn_reminders(
         fallback_permission_mode,
         is_auto_classifier_active,
         tools,
+        deferred_tools,
         is_task_v2_enabled,
         history,
         todo_key,
@@ -314,6 +317,7 @@ pub async fn run_turn_reminders(
         .last_human_turn_uuid(last_human_turn_uuid)
         .user_input(user_input)
         .tools(tools)
+        .deferred_tools(deferred_tools)
         .is_task_v2_enabled(is_task_v2_enabled)
         .turns_since_last_todo_write(turns_since_last_todo_write)
         .turns_since_last_todo_reminder(turns_since_last_todo_reminder)

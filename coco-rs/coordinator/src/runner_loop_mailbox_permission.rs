@@ -158,6 +158,7 @@ impl coco_tool_runtime::ToolPermissionBridge for MailboxPermissionBridge {
                 applied_updates: outcome.permission_updates,
                 updated_input: outcome.updated_input,
                 content_blocks: None,
+                detail: None,
             }),
             Some(outcome) => Ok(coco_tool_runtime::ToolPermissionResolution {
                 decision: coco_tool_runtime::ToolPermissionDecision::Rejected,
@@ -165,6 +166,7 @@ impl coco_tool_runtime::ToolPermissionBridge for MailboxPermissionBridge {
                 applied_updates: outcome.permission_updates,
                 updated_input: outcome.updated_input,
                 content_blocks: None,
+                detail: None,
             }),
             None => Err("Permission request cancelled or leader mailbox unreachable".into()),
         }

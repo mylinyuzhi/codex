@@ -248,6 +248,7 @@ fn test_permission_request_shows_prompt() {
             display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
             show_always_allow: true,
             choices: None,
+            detail: None,
             permission_suggestions: vec![],
             original_input: None,
             cwd: None,
@@ -284,6 +285,7 @@ fn test_permission_request_hides_always_allow_when_disabled() {
             display_input: coco_types::PermissionDisplayInput::Command("rm -rf /tmp/test".into()),
             show_always_allow: false,
             choices: None,
+            detail: None,
             permission_suggestions: vec![],
             original_input: None,
             cwd: None,
@@ -318,6 +320,15 @@ fn test_exit_plan_mode_permission_uses_dedicated_detail() {
                 label: "Yes, manually approve edits".into(),
                 description: None,
             }]),
+            detail: Some(coco_types::PermissionRequestDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+                plan: Some("# Plan".into()),
+                plan_file_path: Some("/tmp/plan.md".into()),
+                allowed_prompts: vec![coco_types::ExitPlanModeAllowedPrompt {
+                    tool: "Bash".into(),
+                    prompt: "cargo test".into(),
+                }],
+            }),
             permission_suggestions: vec![],
             original_input: Some(serde_json::json!({
                 "outcome": "implementation_plan",
@@ -340,7 +351,13 @@ fn test_exit_plan_mode_permission_uses_dedicated_detail() {
             else {
                 panic!("expected ExitPlanMode detail")
             };
-            assert!(allowed_prompts.is_empty());
+            assert_eq!(
+                allowed_prompts,
+                &vec![coco_types::ExitPlanModeAllowedPrompt {
+                    tool: "Bash".to_string(),
+                    prompt: "cargo test".to_string(),
+                }]
+            );
         }
         other => panic!("expected permission state, got {other:?}"),
     }
@@ -361,9 +378,9 @@ fn test_exit_plan_mode_no_plan_permission_uses_yes_no_choices() {
             show_always_allow: true,
             choices: Some(vec![
                 coco_types::PermissionAskChoice {
-                    value: "yes-accept-edits".into(),
-                    label: "Yes, auto-accept edits".into(),
-                    description: Some("Allow file edits during implementation.".into()),
+                    value: "yes-default-keep-context".into(),
+                    label: "Yes, exit plan mode".into(),
+                    description: None,
                 },
                 coco_types::PermissionAskChoice {
                     value: "no".into(),
@@ -371,6 +388,12 @@ fn test_exit_plan_mode_no_plan_permission_uses_yes_no_choices() {
                     description: None,
                 },
             ]),
+            detail: Some(coco_types::PermissionRequestDetail::ExitPlanMode {
+                outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+                plan: None,
+                plan_file_path: None,
+                allowed_prompts: Vec::new(),
+            }),
             permission_suggestions: vec![],
             original_input: Some(serde_json::json!({
                 "outcome": "no_implementation_plan",

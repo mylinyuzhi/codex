@@ -311,6 +311,7 @@ fn att(rt: ReminderType, is_sub: bool, path: &str, exists: bool) -> PlanModeAtta
         plan_exists: exists,
         write_tool: coco_types::ToolName::Write,
         edit_tool: coco_types::ToolName::Edit,
+        deferred_tools: Vec::new(),
     }
 }
 
@@ -328,6 +329,7 @@ fn reminder_full_main_agent_includes_workflow_and_plan_file() {
         plan_exists: true,
         write_tool: coco_types::ToolName::Write,
         edit_tool: coco_types::ToolName::Edit,
+        deferred_tools: Vec::new(),
     };
     let out = render_plan_mode_reminder(&att);
     assert!(out.contains("Plan mode is active"));
@@ -356,6 +358,7 @@ fn reminder_names_model_specific_file_tool() {
         plan_exists: exists,
         write_tool: coco_types::ToolName::ApplyPatch,
         edit_tool: coco_types::ToolName::ApplyPatch,
+        deferred_tools: Vec::new(),
     };
 
     let new_plan = render_plan_mode_reminder(&mk(false));
@@ -365,6 +368,25 @@ fn reminder_names_model_specific_file_tool() {
     let existing_plan = render_plan_mode_reminder(&mk(true));
     assert!(existing_plan.contains("using the apply_patch tool"));
     assert!(!existing_plan.contains("using the Edit tool"));
+}
+
+#[test]
+fn reminder_mentions_tool_search_only_when_exit_plan_mode_is_deferred() {
+    let mut loaded = att(ReminderType::Sparse, false, "/tmp/plans/foo.md", false);
+    loaded.deferred_tools = vec!["OtherTool".to_string()];
+    let loaded_text = render_plan_mode_reminder(&loaded);
+    assert!(
+        !loaded_text.contains("select:ExitPlanMode"),
+        "loaded ExitPlanMode should not get ToolSearch guidance: {loaded_text}"
+    );
+
+    let mut deferred = att(ReminderType::Sparse, false, "/tmp/plans/foo.md", false);
+    deferred.deferred_tools = vec![coco_types::ToolName::ExitPlanMode.as_str().to_string()];
+    let deferred_text = render_plan_mode_reminder(&deferred);
+    assert!(
+        deferred_text.contains("select:ExitPlanMode"),
+        "deferred ExitPlanMode should get ToolSearch guidance: {deferred_text}"
+    );
 }
 
 #[test]
@@ -631,6 +653,7 @@ fn snapshot_attachment(phase4: Phase4Variant, workflow: PlanWorkflow) -> PlanMod
         plan_exists: false,
         write_tool: coco_types::ToolName::Write,
         edit_tool: coco_types::ToolName::Edit,
+        deferred_tools: Vec::new(),
     }
 }
 

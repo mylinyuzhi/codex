@@ -1701,14 +1701,13 @@ pub enum TuiOnlyEvent {
     /// When `choices` is `Some`, the TUI should render a multi-choice
     /// list (e.g. ExitPlanMode's keep/clear/cancel) instead of the
     /// default yes/no buttons. Picked `value` is echoed back via
-    /// `UserCommand::ApprovalResponse.updated_input` as a
-    /// `{ ..original_input, user_choice: "<value>" }` JSON object so
-    /// the tool's `execute()` can branch on the choice. TS parity:
+    /// `UserCommand::ApprovalResponse.resolution_detail` so the tool's
+    /// `execute()` can branch on the choice. TS parity:
     /// `ExitPlanModePermissionRequest.tsx:691-704` option grid.
     ///
-    /// `original_input` carries the raw tool input so the TUI can splice
-    /// the picked `user_choice` into it verbatim and derive path-scoped
-    /// read permission updates for classic "always allow" approvals.
+    /// `original_input` carries the raw tool input so the TUI can derive
+    /// path-scoped read permission updates for classic "always allow"
+    /// approvals.
     ApprovalRequired {
         request_id: String,
         tool_name: String,
@@ -1720,6 +1719,8 @@ pub enum TuiOnlyEvent {
         show_always_allow: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         choices: Option<Vec<crate::PermissionAskChoice>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<crate::PermissionRequestDetail>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         permission_suggestions: Vec<crate::PermissionUpdate>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

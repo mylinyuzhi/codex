@@ -186,6 +186,10 @@ pub struct GeneratorContext<'a> {
     /// todo reminders check for `TodoWrite` / `Brief`).
     pub tools: Vec<String>,
 
+    /// Names that are searchable through ToolSearch but not callable until
+    /// loaded. Sorted by canonical tool name.
+    pub deferred_tools: Vec<String>,
+
     /// Assistant turns since the agent last called `TodoWrite`, counting
     /// from the end of history. Engine pre-computes by scanning message
     /// history.
@@ -433,6 +437,7 @@ pub struct GeneratorContextBuilder<'a> {
     last_human_turn_uuid: Option<Uuid>,
     user_input: Option<String>,
     tools: Vec<String>,
+    deferred_tools: Vec<String>,
     turns_since_last_todo_write: i32,
     turns_since_last_todo_reminder: i32,
     turns_since_last_task_tool: i32,
@@ -508,6 +513,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             last_human_turn_uuid: None,
             user_input: None,
             tools: Vec::new(),
+            deferred_tools: Vec::new(),
             turns_since_last_todo_write: 0,
             turns_since_last_todo_reminder: 0,
             turns_since_last_task_tool: 0,
@@ -661,6 +667,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn tools(mut self, tools: Vec<String>) -> Self {
         self.tools = tools;
+        self
+    }
+
+    pub fn deferred_tools(mut self, tools: Vec<String>) -> Self {
+        self.deferred_tools = tools;
         self
     }
 
@@ -950,6 +961,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             last_human_turn_uuid: self.last_human_turn_uuid,
             user_input: self.user_input,
             tools: self.tools,
+            deferred_tools: self.deferred_tools,
             turns_since_last_todo_write: self.turns_since_last_todo_write,
             turns_since_last_todo_reminder: self.turns_since_last_todo_reminder,
             turns_since_last_task_tool: self.turns_since_last_task_tool,

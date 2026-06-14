@@ -434,6 +434,7 @@ impl ToolPermissionBridge for AllowAllPermissionBridge {
             applied_updates: Vec::new(),
             updated_input: None,
             content_blocks: None,
+            detail: None,
         })
     }
 }

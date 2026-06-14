@@ -15,6 +15,7 @@ fn fresh_attachment() -> PlanModeAttachment {
         plan_exists: false,
         write_tool: coco_types::ToolName::Write,
         edit_tool: coco_types::ToolName::Edit,
+        deferred_tools: Vec::new(),
     }
 }
 
@@ -68,5 +69,24 @@ fn forces_reminder_type_full_regardless_of_input() {
         text.contains("Phase") || text.len() > 200,
         "post-compact plan_mode must render the FULL reminder text \
          (caller-provided Sparse must be coerced to Full)"
+    );
+}
+
+#[test]
+fn deferred_exit_plan_mode_adds_tool_search_guidance() {
+    let mut attachment = fresh_attachment();
+    attachment.deferred_tools = vec![coco_types::ToolName::ExitPlanMode.as_str().to_string()];
+    let result = create_plan_mode_attachment_if_needed(true, attachment)
+        .expect("plan-mode session must emit attachment");
+    let LlmMessage::User { content, .. } = result.as_api_message().unwrap() else {
+        panic!("expected User LlmMessage");
+    };
+    let text = match &content[0] {
+        coco_llm_types::UserContentPart::Text(t) => &t.text,
+        _ => panic!("expected text part"),
+    };
+    assert!(
+        text.contains("ToolSearch with query \"select:ExitPlanMode\""),
+        "post-compact plan_mode reminder must tell the model how to load deferred ExitPlanMode: {text}"
     );
 }

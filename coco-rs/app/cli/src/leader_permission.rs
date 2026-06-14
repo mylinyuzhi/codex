@@ -89,6 +89,7 @@ async fn handle_request(bridge: ToolPermissionBridgeRef, value: serde_json::Valu
         cwd,
         suggestions: Vec::new(),
         choices: None,
+        detail: None,
         // Badge the worker so the leader sees who is asking. Color is the
         // worker's assigned per-teammate palette entry; fall back to Cyan
         // when unassigned.

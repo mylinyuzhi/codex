@@ -17,10 +17,12 @@ use coco_tool_runtime::ToolResultContentPart;
 use coco_tool_runtime::ToolUseContext;
 use coco_tool_runtime::ValidationResult;
 use coco_types::ExitPlanChoice;
+use coco_types::ExitPlanModeAllowedPrompt as PermissionExitPlanAllowedPrompt;
 use coco_types::ExitPlanModeOutcome;
 use coco_types::ExitPlanModeResult;
 use coco_types::PendingPlanVerificationState;
 use coco_types::PermissionMode;
+use coco_types::PermissionRequestDetail;
 use coco_types::ToolDisplayData;
 use coco_types::ToolId;
 use coco_types::ToolName;
@@ -67,6 +69,10 @@ struct ExitPlanModeOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     request_id: Option<String>,
 }
+
+const APPROVAL_FEEDBACK_CONTEXT_CHAR_LIMIT: usize = 4_000;
+const APPROVAL_FEEDBACK_TRUNCATION_MARKER: &str =
+    "\n\n[Approval feedback truncated. The approved plan is saved at the plan file path above.]";
 
 /// Build the cross-turn `AppStatePatch` that flips state into plan
 /// mode. Captures the current mode (so `ExitPlanMode` knows where to
@@ -351,7 +357,6 @@ fn exit_plan_mode_prompt() -> String {
          ## How This Tool Works\n\
          - You should have already written your plan to the plan file specified in the plan mode system message\n\
          - This tool does NOT take the plan content as a parameter - it will read the plan from the file you wrote\n\
-         - Set outcome to `implementation_plan` when you have a plan for code changes; set outcome to `no_implementation_plan` when plan mode should end without implementation work\n\
          - This tool simply signals that you're done planning and ready for the user to review and approve, or that no implementation plan is needed\n\
          - The user will see the contents of your plan file when they review it\n\
          \n\
@@ -375,6 +380,14 @@ pub enum AllowedPromptTool {
     Bash,
 }
 
+impl AllowedPromptTool {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bash => "Bash",
+        }
+    }
+}
+
 /// Single entry in the `allowedPrompts` array — pre-approved tool / prompt
 /// pair that the model is signaling it intends to use when plan is approved.
 /// Both fields are required, so the derived schema carries
@@ -389,61 +402,130 @@ pub struct ExitPlanAllowedPrompt {
 
 /// Typed input for [`ExitPlanModeTool`].
 ///
-/// The schema-visible field is `allowedPrompts`. Three additional fields
-/// ride along internally: `plan` and `planFilePath` are spliced by the
-/// query layer (inject the on-disk plan content + its path into the tool's
-/// input for hooks/SDK/transcript), and `user_choice` is spliced by the TUI
-/// permission-multichoice dialog. All three are declared so the closed
-/// runtime schema accepts them on re-validation; the model is taught to
-/// emit only `allowedPrompts`.
+/// The only accepted field is `allowedPrompts`. Plan content for display is
+/// carried in [`PermissionRequestDetail`], and approval choices/edits are
+/// carried in `ToolUseContext.permission_resolution_detail`.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct ExitPlanModeInput {
-    /// Whether this exit presents an implementation plan or exits without one.
-    pub outcome: ExitPlanModeOutcome,
     /// Prompt-based permissions needed to implement the plan.
     #[serde(default, rename = "allowedPrompts")]
     pub allowed_prompts: Option<Vec<ExitPlanAllowedPrompt>>,
-    /// (Internal) Plan content spliced by the query layer before
-    /// invocation so hooks see the full plan body. Model never populates this.
-    #[serde(default)]
-    pub plan: Option<String>,
-    /// (Internal) Absolute path to the on-disk plan file, spliced by the
-    /// query layer alongside `plan` (same `normalizeToolInput` parity) so
-    /// hooks/SDK observe it. Model never populates this.
-    #[serde(default, rename = "planFilePath")]
-    pub plan_file_path: Option<String>,
-    /// (Internal) User's choice from the multi-option permission
-    /// dialog. The TUI splices it via
-    /// `PermissionOutcome::Allow.updated_input`.
-    #[serde(default)]
-    pub user_choice: Option<String>,
 }
 
-/// Parse the spliced `user_choice` into the shared [`ExitPlanChoice`].
-/// `None` input → no explicit choice (restore pre-plan); an unrecognized
-/// value is a hard input error. The wire-string mapping itself lives on
-/// `ExitPlanChoice` in `coco-types`, shared with the TUI bridge that produced it.
-fn parse_exit_plan_choice(raw: Option<&str>) -> Result<Option<ExitPlanChoice>, ToolError> {
-    match raw {
-        None => Ok(None),
-        Some(value) => {
-            ExitPlanChoice::from_wire(value)
-                .map(Some)
-                .ok_or_else(|| ToolError::InvalidInput {
-                    message: format!("Unsupported ExitPlanMode approval choice: {value}"),
-                    error_code: Some("1".into()),
-                })
+fn build_exit_plan_mode_no_plan_choices() -> Vec<coco_types::PermissionAskChoice> {
+    vec![
+        coco_types::PermissionAskChoice {
+            value: ExitPlanChoice::KeepDefault.as_str().into(),
+            label: "Yes, exit plan mode".into(),
+            description: None,
+        },
+        coco_types::PermissionAskChoice {
+            value: ExitPlanChoice::No.as_str().into(),
+            label: "No, keep planning".into(),
+            description: None,
+        },
+    ]
+}
+
+fn build_exit_plan_mode_choices_for_state(
+    state: &coco_context::ExitPlanModeDerivedState,
+    ctx: &ToolUseContext,
+) -> Vec<coco_types::PermissionAskChoice> {
+    if state.outcome == ExitPlanModeOutcome::NoImplementationPlan {
+        return build_exit_plan_mode_no_plan_choices();
+    }
+    let mut choices = Vec::new();
+    if ctx.plan_mode_settings.show_clear_context_on_exit {
+        if ctx.permission_context.bypass_available {
+            choices.push(coco_types::PermissionAskChoice {
+                value: ExitPlanChoice::ClearBypassPermissions.as_str().into(),
+                label: "Yes, clear context and bypass permissions".into(),
+                description: Some(
+                    "Start fresh and run implementation without approval prompts.".into(),
+                ),
+            });
+        } else {
+            choices.push(coco_types::PermissionAskChoice {
+                value: ExitPlanChoice::ClearAcceptEdits.as_str().into(),
+                label: "Yes, clear context and auto-accept edits".into(),
+                description: Some("Start fresh and allow file edits during implementation.".into()),
+            });
         }
     }
+    choices.push(coco_types::PermissionAskChoice {
+        value: ExitPlanChoice::KeepAcceptEdits.as_str().into(),
+        label: if ctx.permission_context.bypass_available {
+            "Yes, and bypass permissions".into()
+        } else {
+            "Yes, auto-accept edits".into()
+        },
+        description: Some("Keep this conversation and proceed with elevated edit approval.".into()),
+    });
+    choices.push(coco_types::PermissionAskChoice {
+        value: ExitPlanChoice::KeepDefault.as_str().into(),
+        label: "Yes, manually approve edits".into(),
+        description: Some("Keep this conversation and ask before file edits.".into()),
+    });
+    choices.push(coco_types::PermissionAskChoice {
+        value: ExitPlanChoice::No.as_str().into(),
+        label: "No, keep planning".into(),
+        description: None,
+    });
+    choices
+}
+
+fn allowed_prompts_for_detail(input: &ExitPlanModeInput) -> Vec<PermissionExitPlanAllowedPrompt> {
+    input
+        .allowed_prompts
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|prompt| PermissionExitPlanAllowedPrompt {
+            tool: prompt.tool.as_str().to_string(),
+            prompt: prompt.prompt.clone(),
+        })
+        .collect()
+}
+
+fn bounded_approval_feedback_suffix(feedback: Option<&str>) -> String {
+    let Some(feedback) = feedback
+        .map(str::trim)
+        .filter(|feedback| !feedback.is_empty())
+    else {
+        return String::new();
+    };
+    let mut chars = feedback.chars();
+    let bounded: String = chars
+        .by_ref()
+        .take(APPROVAL_FEEDBACK_CONTEXT_CHAR_LIMIT)
+        .collect();
+    let truncated = chars.next().is_some();
+    let marker = if truncated {
+        APPROVAL_FEEDBACK_TRUNCATION_MARKER
+    } else {
+        ""
+    };
+    format!("\n\nUser feedback on the approved plan:\n{bounded}{marker}")
 }
 
 #[async_trait::async_trait]
 impl Tool for ExitPlanModeTool {
     type Input = ExitPlanModeInput;
-    coco_tool_runtime::impl_runtime_schema!(ExitPlanModeInput);
     /// Output is `Value` — `ExitPlanModeOutput` is rich and serializes
     /// cleanly for the model render path.
     type Output = Value;
+
+    fn runtime_validation_schema(&self) -> &coco_tool_runtime::ToolInputSchema {
+        static SCHEMA: std::sync::OnceLock<coco_tool_runtime::ToolInputSchema> =
+            std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| {
+            let mut schema = coco_tool_runtime::derive_input_schema_value::<ExitPlanModeInput>();
+            if let Some(obj) = schema.as_object_mut() {
+                obj.remove("additionalProperties");
+            }
+            coco_tool_runtime::ToolInputSchema::from_static_value(schema)
+        })
+    }
 
     fn id(&self) -> ToolId {
         ToolId::Builtin(ToolName::ExitPlanMode)
@@ -452,12 +534,11 @@ impl Tool for ExitPlanModeTool {
         ToolName::ExitPlanMode.as_str()
     }
 
-    /// Model-facing spec exposes ONLY `allowedPrompts`. `plan` /
-    /// `planFilePath` / `user_choice` stay in the runtime schema (CCR UI /
-    /// hooks / SDK / TUI splice them) but are hidden from the model. The
+    /// Model-facing spec exposes only `allowedPrompts`. The
     /// `allowedPrompts` item shape (`{ tool: enum["Bash"], prompt }`, both
-    /// required) is derived from [`ExitPlanAllowedPrompt`] — model-facing
-    /// and runtime schemas agree, nothing to hand-patch.
+    /// required) is derived from [`ExitPlanAllowedPrompt`]. The runtime schema
+    /// intentionally permits additional passthrough fields, mirroring TS while
+    /// typed execution consumes only `allowedPrompts`.
     async fn tool_spec(
         &self,
         _ctx: &coco_tool_runtime::SchemaContext,
@@ -466,10 +547,7 @@ impl Tool for ExitPlanModeTool {
         coco_tool_runtime::ToolSpec::Function(coco_tool_runtime::FunctionToolSpec {
             name: self.name().to_string(),
             description: self.prompt(prompt_opts).await,
-            parameters: coco_tool_runtime::schema_omit_properties(
-                self.runtime_validation_schema().as_value(),
-                &["plan", "planFilePath", "user_choice"],
-            ),
+            parameters: self.runtime_validation_schema().as_value().clone(),
             strict: self.strict(),
         })
     }
@@ -526,7 +604,7 @@ impl Tool for ExitPlanModeTool {
     /// leader, otherwise exits locally.
     async fn check_permissions(
         &self,
-        _input: &ExitPlanModeInput,
+        input: &ExitPlanModeInput,
         ctx: &ToolUseContext,
     ) -> coco_types::ToolCheckResult {
         // Teammates bypass the permission UI entirely.
@@ -539,13 +617,22 @@ impl Tool for ExitPlanModeTool {
                 feedback: None,
             };
         }
+        let state = self.derive_state(input, ctx, None).await;
+        let choices = build_exit_plan_mode_choices_for_state(&state, ctx);
+        let detail = Some(PermissionRequestDetail::ExitPlanMode {
+            outcome: state.outcome,
+            plan: state.plan,
+            plan_file_path: state.plan_file_path,
+            allowed_prompts: allowed_prompts_for_detail(input),
+        });
         // Non-teammates: require user confirmation. The interactive TUI
         // renders ExitPlanMode with a dedicated approval prompt and option
         // set; SDK/headless clients keep the plain Ask shape.
         coco_types::ToolCheckResult::Ask {
             message: "Exit plan mode?".into(),
             suggestions: vec![],
-            choices: None,
+            choices: Some(choices),
+            detail,
         }
     }
 
@@ -557,79 +644,30 @@ impl Tool for ExitPlanModeTool {
         let is_agent = ctx.agent_id.is_some();
         let agent_id_str = ctx.agent_id.as_ref().map(|a| a.as_str().to_string());
 
-        // Read the plan. Input (CCR/hook override) wins; otherwise read from
-        // the on-disk plan file.
-        //
-        // The plans directory is pre-resolved by the engine (respecting the
-        // `plansDirectory` setting + project root); fall back to the legacy
-        // `config_home`-only resolution for older call sites that haven't
-        // migrated to populating `ctx.plans_dir`.
-        let input_plan = input.plan.clone();
-        let outcome = input.outcome;
-        let session_id = ctx.session_id_for_history.as_deref();
-        let plans_dir = ctx.plans_dir.clone().or_else(|| {
-            ctx.config_home
-                .as_ref()
-                .map(|ch| coco_context::resolve_plans_directory(ch, None, None))
-        });
-
-        let file_path: Option<String> = match (session_id, plans_dir.as_ref()) {
-            (Some(sid), Some(pd)) => Some(
-                coco_context::get_plan_file_path(sid, pd, agent_id_str.as_deref())
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            _ => None,
-        };
-        let disk_plan = if outcome.has_implementation_plan() {
-            match (session_id, plans_dir.as_ref()) {
-                (Some(sid), Some(pd)) => coco_context::get_plan(sid, pd, agent_id_str.as_deref()),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let input_plan_is_edit = match (&input_plan, &disk_plan) {
-            (Some(input), Some(disk)) => input != disk,
-            (Some(_), None) => true,
-            _ => false,
-        };
-        let plan = if outcome.has_implementation_plan() {
-            input_plan.clone().or(disk_plan)
-        } else {
-            None
-        };
-        if outcome.has_implementation_plan()
-            && plan.as_deref().is_none_or(|plan| plan.trim().is_empty())
-        {
-            return Err(ToolError::InvalidInput {
-                message:
-                    "No implementation plan found. Write your plan before calling ExitPlanMode."
-                        .into(),
-                error_code: Some("1".into()),
-            });
-        }
+        let approval_detail = ctx.permission_resolution_detail.clone();
+        let choice = approval_detail
+            .as_ref()
+            .map(|coco_types::PermissionResolutionDetail::ExitPlanMode { choice, .. }| *choice);
+        let approved_plan_edit = self.approved_plan_edit_from_detail(ctx, approval_detail)?;
+        let state = self.derive_state(&input, ctx, approved_plan_edit).await;
+        let outcome = state.outcome;
+        let plan = state.plan;
+        let file_path = state.plan_file_path;
+        let input_plan_is_edit = state.plan_was_edited;
         let has_implementation_plan = outcome.has_implementation_plan();
         let result_file_path = has_implementation_plan.then(|| file_path.clone()).flatten();
 
-        // If plan was provided in input (CCR edit), persist to disk so the
-        // next reader (VerifyPlanExecution, Read tool) sees the edit.
-        //
-        // The query layer also injects the current on-disk plan into
-        // ExitPlanMode input for hooks/SDK/transcript. Do not treat that
-        // byte-identical snapshot as a user edit or rewrite the file
-        // unnecessarily.
         if input_plan_is_edit
             && has_implementation_plan
-            && let (Some(plan_content), Some(path)) = (&input_plan, &file_path)
+            && let (Some(plan_content), Some(path)) = (&plan, &file_path)
             && let Err(e) = tokio::fs::write(path, plan_content.as_bytes()).await
         {
             tracing::warn!("Failed to persist edited plan to {path}: {e}");
         }
 
-        let has_agent_tool = ctx
+        let has_task_tool = ctx
             .tools
-            .get_by_name(ToolName::Agent.as_str())
+            .get_by_name(ToolName::TeamCreate.as_str())
             .is_some_and(|t| t.is_enabled(ctx));
 
         // ── Teammate branch — write plan_approval_request to leader inbox ──
@@ -755,7 +793,6 @@ impl Tool for ExitPlanModeTool {
                 ctx.permission_context.stripped_dangerous_rules.is_some(),
             ),
         };
-        let choice = parse_exit_plan_choice(input.user_choice.as_deref())?;
         let restore_mode = if has_implementation_plan {
             match choice {
                 Some(ExitPlanChoice::ClearBypassPermissions)
@@ -809,9 +846,29 @@ impl Tool for ExitPlanModeTool {
         let clear_history_requested =
             has_implementation_plan && choice.is_some_and(ExitPlanChoice::clears_context);
         let post_clear_message = (clear_history_requested && has_implementation_plan).then(|| {
+            let transcript_hint = ctx
+                .transcript_path
+                .as_ref()
+                .map(|path| {
+                    format!(
+                        "\n\nTranscript for pre-clear planning context: {}",
+                        path.display()
+                    )
+                })
+                .unwrap_or_default();
+            let plan_file_hint = file_path
+                .as_deref()
+                .map(|path| format!("\n\nPlan file path: {path}"))
+                .unwrap_or_default();
+            let team_hint = if has_task_tool {
+                "\n\nIf this plan can be broken down into multiple independent tasks, consider using TeamCreate to parallelize the work."
+            } else {
+                ""
+            };
+            let feedback_suffix = bounded_approval_feedback_suffix(ctx.approval_feedback.as_deref());
             format!(
-                "Implement the following plan:\n\n{}",
-                plan.as_deref().unwrap_or_default()
+                "Implement the following plan:\n\n{}{plan_file_hint}{transcript_hint}{team_hint}{feedback_suffix}",
+                plan.as_deref().unwrap_or_default(),
             )
         });
         let pending_verification_plan = if ctx.plan_verify_execution {
@@ -852,7 +909,7 @@ impl Tool for ExitPlanModeTool {
             plan,
             is_agent,
             file_path: result_file_path,
-            has_task_tool: if has_agent_tool { Some(true) } else { None },
+            has_task_tool: if has_task_tool { Some(true) } else { None },
             plan_was_edited: if has_implementation_plan && input_plan_is_edit {
                 Some(true)
             } else {
@@ -891,6 +948,59 @@ fn exit_plan_mode_display_data(out: &ExitPlanModeOutput) -> ToolDisplayData {
 }
 
 impl ExitPlanModeTool {
+    fn approved_plan_edit_from_detail(
+        &self,
+        ctx: &ToolUseContext,
+        detail: Option<coco_types::PermissionResolutionDetail>,
+    ) -> Result<Option<String>, ToolError> {
+        let Some(coco_types::PermissionResolutionDetail::ExitPlanMode { edited_plan, .. }) = detail
+        else {
+            return Ok(None);
+        };
+        let Some(edited_plan) = edited_plan.filter(|plan| !plan.trim().is_empty()) else {
+            return Ok(None);
+        };
+
+        let plans_dir = ctx.plans_dir.clone().or_else(|| {
+            ctx.config_home
+                .as_ref()
+                .map(|ch| coco_context::resolve_plans_directory(ch, None, None))
+        });
+        if ctx.session_id_for_history.is_some() && plans_dir.is_some() {
+            return Ok(Some(edited_plan));
+        }
+
+        Err(ToolError::InvalidInput {
+            message: "ExitPlanMode approved edit requires a resolved plan file path".into(),
+            error_code: Some("approved_edit_without_plan_path".into()),
+        })
+    }
+
+    async fn derive_state(
+        &self,
+        _input: &ExitPlanModeInput,
+        ctx: &ToolUseContext,
+        edited_plan: Option<String>,
+    ) -> coco_context::ExitPlanModeDerivedState {
+        let agent_id = ctx.agent_id.as_ref().map(coco_types::AgentId::as_str);
+        let plans_dir = ctx.plans_dir.clone().or_else(|| {
+            ctx.config_home
+                .as_ref()
+                .map(|ch| coco_context::resolve_plans_directory(ch, None, None))
+        });
+        let entry_ms = match ctx.app_state.as_ref() {
+            Some(state) => state.read().await.plan_mode_entry_ms,
+            None => None,
+        };
+        coco_context::derive_exit_plan_mode_state(
+            ctx.session_id_for_history.as_deref(),
+            plans_dir.as_deref(),
+            agent_id,
+            entry_ms,
+            edited_plan,
+        )
+    }
+
     /// Build the instructions text returned to the model as tool_result content.
     pub fn build_instructions(result_data: &Value) -> String {
         let out: ExitPlanModeOutput =

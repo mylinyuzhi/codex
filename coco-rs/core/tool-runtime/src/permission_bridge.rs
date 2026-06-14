@@ -45,12 +45,15 @@ pub struct ToolPermissionRequest {
     /// Optional multi-choice payload propagated from
     /// `PermissionDecision::Ask.choices`. When `Some`, the TUI / SDK
     /// client should render a choice list rather than yes/no; the picked
-    /// `value` is echoed back via `ToolPermissionResolution.updated_input`
-    /// as `{ ..originalInput, user_choice: "<value>" }` so the tool's
-    /// `execute()` can branch on the selection.
+    /// `value` is echoed back via `ToolPermissionResolution.detail` so the
+    /// tool's `execute()` can branch on the selection without trusting
+    /// rewritten JSON input.
     ///
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<coco_types::PermissionAskChoice>>,
+    /// Tool-specific structured detail for rich approval UIs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<coco_types::PermissionRequestDetail>,
     /// Identity badge for a cross-process teammate whose tool needs the
     /// leader's approval — surfaced in the prompt so the human sees who
     /// is asking. `None` for the leader's own (in-process) requests.
@@ -104,6 +107,10 @@ pub struct ToolPermissionResolution {
     /// the consumer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_blocks: Option<Vec<serde_json::Value>>,
+    /// Trusted tool-specific approval metadata. Unlike `updated_input`, this
+    /// is not substituted into the model-emitted tool input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<coco_types::PermissionResolutionDetail>,
 }
 
 /// Trait for forwarding permission requests from agents to the leader.
@@ -141,6 +148,7 @@ impl ToolPermissionBridge for NoOpPermissionBridge {
             applied_updates: Vec::new(),
             updated_input: None,
             content_blocks: None,
+            detail: None,
         })
     }
 }

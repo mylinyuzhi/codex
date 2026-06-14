@@ -185,6 +185,7 @@ fn test_exit_plan_mode_tool_check_ask_is_not_bypassed_by_modes_or_allow_rules() 
                     message: "Exit plan mode?".to_string(),
                     suggestions: vec![],
                     choices: None,
+                    detail: None,
                 }
             } else {
                 ToolCheckResult::Passthrough
@@ -227,6 +228,7 @@ fn test_exit_plan_mode_tool_check_ask_is_denied_in_dont_ask() {
                 message: "Exit plan mode?".to_string(),
                 suggestions: vec![],
                 choices: None,
+                detail: None,
             }
         };
     let ctx = empty_context(PermissionMode::DontAsk);

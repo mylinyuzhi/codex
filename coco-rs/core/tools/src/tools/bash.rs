@@ -417,6 +417,7 @@ impl Tool for BashTool {
                 message: reason,
                 suggestions: Vec::new(),
                 choices: None,
+                detail: None,
             };
         }
         let allow_file_writes =
@@ -428,6 +429,7 @@ impl Tool for BashTool {
                     .into(),
                 suggestions: Vec::new(),
                 choices: None,
+                detail: None,
             };
         }
         if let Some(reason) = coco_shell::check_git_escape(command, &cwd) {
@@ -435,6 +437,7 @@ impl Tool for BashTool {
                 message: reason,
                 suggestions: Vec::new(),
                 choices: None,
+                detail: None,
             };
         }
         // Path-constraint gate: an output redirection or process substitution that
@@ -448,6 +451,7 @@ impl Tool for BashTool {
                     .into(),
                 suggestions: Vec::new(),
                 choices: None,
+                detail: None,
             };
         }
         let additional_dirs: Vec<String> = ctx
@@ -468,6 +472,7 @@ impl Tool for BashTool {
                         .into(),
                     suggestions: Vec::new(),
                     choices: None,
+                    detail: None,
                 };
             }
             if !is_path_within_allowed_dirs(&target, &cwd, &additional_dirs) {
@@ -478,6 +483,7 @@ impl Tool for BashTool {
                     ),
                     suggestions: Vec::new(),
                     choices: None,
+                    detail: None,
                 };
             }
         }
@@ -497,6 +503,7 @@ impl Tool for BashTool {
                         .into(),
                     suggestions: Vec::new(),
                     choices: None,
+                    detail: None,
                 };
             }
             let allowed = is_path_within_allowed_dirs(&target, &cwd, &additional_dirs)
@@ -509,6 +516,7 @@ impl Tool for BashTool {
                     ),
                     suggestions: Vec::new(),
                     choices: None,
+                    detail: None,
                 };
             }
         }
@@ -561,6 +569,7 @@ impl Tool for BashTool {
                 ),
                 suggestions: Vec::new(),
                 choices: None,
+                detail: None,
             };
         }
         coco_types::ToolCheckResult::Passthrough
