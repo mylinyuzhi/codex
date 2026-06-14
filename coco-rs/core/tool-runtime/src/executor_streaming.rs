@@ -132,12 +132,7 @@ where
         match plan {
             ToolCallPlan::EarlyOutcome(o) => self.pending_early.push(o),
             ToolCallPlan::Runnable(prepared) => {
-                let is_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    prepared
-                        .tool
-                        .is_concurrency_safe(prepared.parsed_input.as_value())
-                }))
-                .unwrap_or(false);
+                let is_safe = prepared.is_concurrency_safe;
                 if is_safe && !self.any_unsafe_fed {
                     self.start_safe_now(prepared);
                 } else {

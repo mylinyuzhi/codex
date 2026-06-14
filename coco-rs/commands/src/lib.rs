@@ -749,13 +749,7 @@ impl CommandHandler for SkillPromptHandler {
     async fn execute_command(&self, args: &str) -> crate::Result<CommandResult> {
         // Argument substitution via the canonical implementation
         // in `coco_skills::prompt_render`.
-        let args_opt = (!args.is_empty()).then_some(args);
-        let mut text = coco_skills::prompt_render::substitute_arguments(
-            &self.body,
-            args_opt,
-            &[],
-            /* append_if_no_placeholder */ true,
-        );
+        let mut text = render_skill_prompt_args(&self.name, &self.body, args);
         // Replace `${CLAUDE_SKILL_DIR}` / `${CLAUDE_SESSION_ID}` on every
         // invocation. Snapshot the session-id cell, dropping the read guard
         // before any later `.await`.
@@ -968,9 +962,19 @@ mod seam_tests {
         allowed_tools: Vec<String>,
         handle: Option<Arc<dyn BashToolHandle>>,
     ) -> SkillPromptHandler {
+        skill_handler_named("s", body, is_mcp, allowed_tools, handle)
+    }
+
+    fn skill_handler_named(
+        name: &str,
+        body: &str,
+        is_mcp: bool,
+        allowed_tools: Vec<String>,
+        handle: Option<Arc<dyn BashToolHandle>>,
+    ) -> SkillPromptHandler {
         let cell: SharedBashToolHandle = Arc::new(std::sync::RwLock::new(handle));
         SkillPromptHandler {
-            name: "s".to_string(),
+            name: name.to_string(),
             body: body.to_string(),
             progress_message: "running".to_string(),
             is_mcp,
@@ -1005,6 +1009,16 @@ mod seam_tests {
         );
         let r = h.execute_command("").await.unwrap();
         assert_eq!(prompt_text(r), "see <git status>");
+    }
+
+    #[tokio::test]
+    async fn simplify_args_render_as_additional_focus() {
+        let h = skill_handler_named("simplify", "base prompt", false, vec![], None);
+        let r = h.execute_command("focus on tests").await.unwrap();
+        assert_eq!(
+            prompt_text(r),
+            "base prompt\n\n## Additional Focus\n\nfocus on tests"
+        );
     }
 
     #[tokio::test]
@@ -1095,6 +1109,29 @@ mod seam_tests {
         // The cell is now populated; a fresh snapshot sees the handle.
         assert!(snapshot_bash_handle(&reg.bash_tool_handle_cell()).is_some());
     }
+}
+
+fn render_skill_prompt_args(name: &str, body: &str, args: &str) -> String {
+    let args_opt = (!args.is_empty()).then_some(args);
+    if name == "simplify" {
+        let mut text = coco_skills::prompt_render::substitute_arguments(
+            body,
+            args_opt,
+            &[],
+            /* append_if_no_placeholder */ false,
+        );
+        if !args.is_empty() {
+            text.push_str("\n\n## Additional Focus\n\n");
+            text.push_str(args);
+        }
+        return text;
+    }
+    coco_skills::prompt_render::substitute_arguments(
+        body,
+        args_opt,
+        &[],
+        /* append_if_no_placeholder */ true,
+    )
 }
 
 /// Built-in command handler for simple commands that return static or

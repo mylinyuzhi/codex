@@ -426,6 +426,7 @@ impl QueryEngine {
                                     tool_id: pending.tool.id(),
                                     tool: pending.tool,
                                     parsed_input: pending.input,
+                                    is_concurrency_safe: pending.is_concurrency_safe,
                                     model_index,
                                 }));
                             }

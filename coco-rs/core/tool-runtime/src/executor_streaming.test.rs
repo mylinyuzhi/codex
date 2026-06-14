@@ -94,6 +94,7 @@ fn prepared(
         tool_id: ToolId::Custom(name.into()),
         parsed_input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
             .expect("test input must validate"),
+        is_concurrency_safe: safe,
         tool,
         model_index,
     }
@@ -459,6 +460,7 @@ async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
         tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
         parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
             .expect("test input must validate"),
+        is_concurrency_safe: true,
         tool: bash_tool,
         model_index: 0,
     };

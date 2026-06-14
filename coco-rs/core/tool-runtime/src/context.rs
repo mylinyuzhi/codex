@@ -736,6 +736,22 @@ impl ToolUseContext {
         self
     }
 
+    /// Effective shell cwd for analysis and spawn.
+    ///
+    /// Keep this in sync with shell execution semantics: worktree override
+    /// first, then the live shared session cwd, then the process cwd.
+    pub async fn effective_shell_cwd(&self) -> std::path::PathBuf {
+        if let Some(over) = self.cwd_override.clone() {
+            over
+        } else if let Some(session_cwd) = &self.session_cwd {
+            session_cwd.read().await.clone()
+        } else {
+            std::env::current_dir()
+                .ok()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        }
+    }
+
     /// All `/<word>` tokens the user typed in the current turn —
     /// indexed for O(1) gate lookup against canonical skill names
     /// AND aliases. Lines like `/fix-issue 42` contribute
@@ -754,7 +770,7 @@ impl ToolUseContext {
         let Ok(uid_uuid) = uuid::Uuid::parse_str(uid) else {
             return out;
         };
-        for arc in self.messages.iter().rev() {
+        for (idx, arc) in self.messages.iter().enumerate().rev() {
             let Message::User(user) = arc.as_ref() else {
                 continue;
             };
@@ -762,6 +778,14 @@ impl ToolUseContext {
                 continue;
             }
             extract_slash_tokens(&user.message, &mut out);
+            if let Some(prev) = idx.checked_sub(1).and_then(|i| self.messages.get(i))
+                && let Message::Attachment(attachment) = prev.as_ref()
+                && attachment.kind == coco_types::AttachmentKind::SlashCommandMetadata
+                && let Some(message) = attachment.as_api_message()
+            {
+                extract_command_name_tokens(message, &mut out);
+            }
+            break;
         }
         out
     }
@@ -973,6 +997,40 @@ fn extract_slash_tokens(
     }
 }
 
+fn extract_command_name_tokens(
+    msg: &coco_messages::LlmMessage,
+    out: &mut std::collections::HashSet<String>,
+) {
+    let coco_messages::LlmMessage::User { content, .. } = msg else {
+        return;
+    };
+    for part in content {
+        let coco_messages::UserContent::Text(text) = part else {
+            continue;
+        };
+        extract_command_name_tags(&text.text, out);
+    }
+}
+
+fn extract_command_name_tags(text: &str, out: &mut std::collections::HashSet<String>) {
+    let mut rest = text;
+    let open = "<command-name>";
+    let close = "</command-name>";
+    while let Some(start) = rest.find(open) {
+        let value_start = start + open.len();
+        let Some(end_offset) = rest[value_start..].find(close) else {
+            break;
+        };
+        let value = rest[value_start..value_start + end_offset].trim();
+        let value = value.strip_prefix('/').unwrap_or(value);
+        let token: String = value.chars().take_while(|c| !c.is_whitespace()).collect();
+        if !token.is_empty() {
+            out.insert(token);
+        }
+        rest = &rest[value_start + end_offset + close.len()..];
+    }
+}
+
 #[cfg(test)]
 mod user_typed_slash_tests {
     use super::*;
@@ -993,6 +1051,22 @@ mod user_typed_slash_tests {
             origin: None,
             parent_tool_use_id: None,
         }))
+    }
+
+    fn make_attachment(text: &str, uuid: Uuid) -> Arc<Message> {
+        let mut attachment = coco_messages::AttachmentMessage::api(
+            coco_types::AttachmentKind::CriticalSystemReminder,
+            LlmMessage::user_text(text),
+        );
+        attachment.uuid = uuid;
+        Arc::new(Message::Attachment(attachment))
+    }
+
+    fn make_slash_metadata(text: &str) -> Arc<Message> {
+        Arc::new(Message::Attachment(coco_messages::AttachmentMessage::api(
+            coco_types::AttachmentKind::SlashCommandMetadata,
+            LlmMessage::user_text(text),
+        )))
     }
 
     fn ctx_with(messages: Vec<Arc<Message>>, user_msg_id: Option<String>) -> ToolUseContext {
@@ -1093,5 +1167,65 @@ mod user_typed_slash_tests {
         // the model invokes the canonical name.
         assert!(set.contains("alpha"));
         assert!(set.contains("beta"));
+    }
+
+    #[test]
+    fn captures_slash_command_metadata_tag_for_current_turn() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![
+                make_slash_metadata(
+                    "<command-message>simplify</command-message>\n\
+                     <command-name>/simplify</command-name>\n\
+                     <command-args>cleanup</command-args>",
+                ),
+                make_user("expanded prompt", uid),
+            ],
+            Some(uid.to_string()),
+        );
+        let set = ctx.typed_slashes_in_turn();
+        assert!(set.contains("simplify"));
+        assert!(!set.contains("cleanup"));
+    }
+
+    #[test]
+    fn ignores_command_name_tag_in_plain_user_text() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![make_user(
+                "please inspect <command-name>/debug</command-name>",
+                uid,
+            )],
+            Some(uid.to_string()),
+        );
+        assert!(!ctx.typed_slashes_in_turn().contains("debug"));
+    }
+
+    #[test]
+    fn ignores_command_name_tag_in_generic_attachment() {
+        let uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![
+                make_attachment("<command-name>/debug</command-name>", Uuid::new_v4()),
+                make_user("expanded prompt", uid),
+            ],
+            Some(uid.to_string()),
+        );
+        assert!(!ctx.typed_slashes_in_turn().contains("debug"));
+    }
+
+    #[test]
+    fn ignores_stale_slash_metadata_from_prior_turn() {
+        let old_uid = Uuid::new_v4();
+        let current_uid = Uuid::new_v4();
+        let ctx = ctx_with(
+            vec![
+                make_slash_metadata("<command-name>/simplify</command-name>"),
+                make_user("old expanded prompt", old_uid),
+                make_user("plain current prompt", current_uid),
+            ],
+            Some(current_uid.to_string()),
+        );
+        assert!(!ctx.typed_slashes_in_turn().contains("simplify"));
     }
 }

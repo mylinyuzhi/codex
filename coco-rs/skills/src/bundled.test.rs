@@ -51,6 +51,26 @@ fn batch_disables_model_invocation() {
 }
 
 #[test]
+fn simplify_prompt_matches_review_agent_flow() {
+    let skills = get_bundled_skills();
+    let simplify = skills.iter().find(|s| s.name == "simplify").unwrap();
+    assert!(simplify.user_invocable);
+    assert!(
+        simplify
+            .prompt
+            .contains("# Simplify: Code Review and Cleanup")
+    );
+    assert!(
+        simplify
+            .prompt
+            .contains("Use the Agent tool to launch all three agents concurrently")
+    );
+    assert!(simplify.prompt.contains("### Agent 1: Code Reuse Review"));
+    assert!(simplify.prompt.contains("### Agent 2: Code Quality Review"));
+    assert!(simplify.prompt.contains("### Agent 3: Efficiency Review"));
+}
+
+#[test]
 fn keybindings_not_user_invocable() {
     let skills = get_bundled_skills();
     let kb = skills

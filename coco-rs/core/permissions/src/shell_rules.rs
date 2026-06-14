@@ -478,10 +478,40 @@ pub fn bash_permission_suggestions(
     tool_name: &str,
     command: &str,
 ) -> Vec<coco_types::PermissionUpdate> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "/".to_string());
+    bash_permission_suggestions_in_cwd(tool_name, command, &cwd)
+}
+
+pub fn bash_permission_suggestions_in_cwd(
+    tool_name: &str,
+    command: &str,
+    cwd: &str,
+) -> Vec<coco_types::PermissionUpdate> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return Vec::new();
     }
+
+    let significant = significant_bash_subcommands_in_cwd(trimmed, cwd);
+    if significant.len() > 1 {
+        return suggestions_for_significant_subcommands(tool_name, &significant);
+    }
+    if let Some(only) = significant.first()
+        && only != trimmed
+    {
+        return bash_permission_suggestions_for_single(tool_name, only);
+    }
+
+    bash_permission_suggestions_for_single(tool_name, trimmed)
+}
+
+fn bash_permission_suggestions_for_single(
+    tool_name: &str,
+    command: &str,
+) -> Vec<coco_types::PermissionUpdate> {
+    let trimmed = command.trim();
 
     // Heredoc: suggest a prefix taken from the words before `<<`.
     if let Some(prefix) = coco_shell::heredoc_command_prefix(trimmed) {
@@ -504,6 +534,50 @@ pub fn bash_permission_suggestions(
     vec![suggestion_for_exact_command(tool_name, trimmed)]
 }
 
+fn significant_bash_subcommands(command: &str) -> Vec<String> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "/".to_string());
+    significant_bash_subcommands_in_cwd(command, &cwd)
+}
+
+fn significant_bash_subcommands_in_cwd(command: &str, cwd: &str) -> Vec<String> {
+    let analysis = coco_shell::analyze_compound_command(command, cwd);
+    analysis.significant_subcommands
+}
+
+fn suggestions_for_significant_subcommands(
+    tool_name: &str,
+    subcommands: &[String],
+) -> Vec<coco_types::PermissionUpdate> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for subcommand in subcommands {
+        for suggestion in bash_permission_suggestions_for_single(tool_name, subcommand) {
+            if let Some(content) = single_rule_content(&suggestion)
+                && seen.insert(content.to_string())
+            {
+                out.push(suggestion);
+            }
+        }
+    }
+    out
+}
+
+fn single_rule_content(update: &coco_types::PermissionUpdate) -> Option<&str> {
+    match update {
+        coco_types::PermissionUpdate::AddRules { rules, .. } if rules.len() == 1 => {
+            rules[0].value.rule_content.as_deref()
+        }
+        coco_types::PermissionUpdate::ReplaceRules { .. }
+        | coco_types::PermissionUpdate::AddRules { .. }
+        | coco_types::PermissionUpdate::RemoveRules { .. }
+        | coco_types::PermissionUpdate::SetMode { .. }
+        | coco_types::PermissionUpdate::AddDirectories { .. }
+        | coco_types::PermissionUpdate::RemoveDirectories { .. } => None,
+    }
+}
+
 /// Default text for the permission dialog's editable "always allow" prefix
 /// field, given the raw bash command.
 ///
@@ -515,6 +589,18 @@ pub fn bash_permission_suggestions(
 /// [`coco_shell::get_first_word_prefix`] as a starting point the user can refine.
 pub fn editable_prefix_default(command: &str) -> String {
     let trimmed = command.trim();
+    let significant = significant_bash_subcommands(trimmed);
+    if significant.len() == 1
+        && let Some(only) = significant.first()
+        && only != trimmed
+    {
+        return editable_prefix_default_for_single(only);
+    }
+    editable_prefix_default_for_single(trimmed)
+}
+
+fn editable_prefix_default_for_single(command: &str) -> String {
+    let trimmed = command.trim();
     if let Some(prefix) = coco_shell::get_command_prefix(trimmed) {
         return format!("{prefix}:*");
     }
@@ -522,6 +608,49 @@ pub fn editable_prefix_default(command: &str) -> String {
         return format!("{word}:*");
     }
     trimmed.to_string()
+}
+
+/// TUI seed value for the editable prefix field. When backend suggestions
+/// contain exactly one rule, seed from that rule. When they contain multiple
+/// rules, suppress the editable field so the UI saves them atomically.
+pub fn editable_prefix_from_suggestions_or_command(
+    command: &str,
+    suggestions: &[coco_types::PermissionUpdate],
+) -> Option<String> {
+    let mut contents = suggestions
+        .iter()
+        .flat_map(permission_update_rule_contents)
+        .collect::<Vec<_>>();
+    contents.sort_unstable();
+    contents.dedup();
+    match contents.as_slice() {
+        [only] => Some((*only).to_string()),
+        [] => {
+            if significant_bash_subcommands(command).len() > 1 {
+                None
+            } else {
+                Some(editable_prefix_default(command))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn permission_update_rule_contents(
+    update: &coco_types::PermissionUpdate,
+) -> impl Iterator<Item = &str> {
+    match update {
+        coco_types::PermissionUpdate::AddRules { rules, .. } => rules
+            .iter()
+            .filter_map(|rule| rule.value.rule_content.as_deref())
+            .collect::<Vec<_>>()
+            .into_iter(),
+        coco_types::PermissionUpdate::ReplaceRules { .. }
+        | coco_types::PermissionUpdate::RemoveRules { .. }
+        | coco_types::PermissionUpdate::SetMode { .. }
+        | coco_types::PermissionUpdate::AddDirectories { .. }
+        | coco_types::PermissionUpdate::RemoveDirectories { .. } => Vec::new().into_iter(),
+    }
 }
 
 #[cfg(test)]

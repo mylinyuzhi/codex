@@ -319,6 +319,84 @@ fn test_bash_suggestion_targets_tool_name() {
 }
 
 #[test]
+fn test_bash_suggestion_filters_noop_cd_before_git() {
+    let cwd = std::env::current_dir().expect("test cwd");
+    let command = format!("cd {} && git diff", cwd.display());
+    let s = bash_permission_suggestions("Bash", &command);
+    assert_eq!(one_rule(&s), ("Bash", "git diff:*"));
+}
+
+#[test]
+fn test_bash_suggestion_filters_noop_cd_against_supplied_cwd() {
+    let original = tempfile::tempdir().expect("original cwd");
+    let live = tempfile::tempdir().expect("live cwd");
+    let command = format!("cd {} && git diff", original.path().display());
+    let live_cwd = live.path().display().to_string();
+    let s = bash_permission_suggestions_in_cwd("Bash", &command, &live_cwd);
+    let rules: Vec<String> = s
+        .iter()
+        .filter_map(|update| match update {
+            coco_types::PermissionUpdate::AddRules { rules, .. } => {
+                rules.first()?.value.rule_content.clone()
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        vec![
+            format!("cd {}", original.path().display()),
+            "git diff:*".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn test_bash_suggestion_filters_noop_cd_before_git_log() {
+    let cwd = std::env::current_dir().expect("test cwd");
+    let command = format!("cd {} && git log --oneline", cwd.display());
+    let s = bash_permission_suggestions("Bash", &command);
+    assert_eq!(one_rule(&s), ("Bash", "git log:*"));
+}
+
+#[test]
+fn test_bash_suggestion_compound_is_per_subcommand() {
+    let s = bash_permission_suggestions("Bash", "cd other && git diff");
+    let rules: Vec<&str> = s
+        .iter()
+        .filter_map(|update| match update {
+            coco_types::PermissionUpdate::AddRules { rules, .. } => {
+                rules.first()?.value.rule_content.as_deref()
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rules, vec!["cd other:*", "git diff:*"]);
+    assert!(!rules.contains(&"cd:*"));
+}
+
+#[test]
+fn test_editable_prefix_uses_single_backend_suggestion() {
+    let cwd = std::env::current_dir().expect("test cwd");
+    let command = format!("cd {} && git diff", cwd.display());
+    let suggestions = bash_permission_suggestions("Bash", &command);
+    assert_eq!(
+        editable_prefix_from_suggestions_or_command(&command, &suggestions),
+        Some("git diff:*".to_string())
+    );
+}
+
+#[test]
+fn test_editable_prefix_suppressed_for_multiple_backend_suggestions() {
+    let command = "cd other && git diff";
+    let suggestions = bash_permission_suggestions("Bash", command);
+    assert_eq!(
+        editable_prefix_from_suggestions_or_command(command, &suggestions),
+        None
+    );
+}
+
+#[test]
 fn test_editable_prefix_default() {
     // Two-word prefix.
     assert_eq!(editable_prefix_default("git status -s"), "git status:*");

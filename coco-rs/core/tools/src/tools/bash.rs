@@ -210,19 +210,15 @@ fn active_sandbox_state(ctx: &ToolUseContext) -> Option<std::sync::Arc<SandboxSt
     ctx.sandbox_state.clone()
 }
 
-/// Working directory for the bash force-ask path gates (dangerous-removal /
-/// git-escape relativize relative targets against it). Worktree-aware: prefers
-/// the session `cwd_override`, then `original_cwd`, then the process cwd.
-fn bash_gate_cwd(ctx: &ToolUseContext) -> String {
-    ctx.cwd_override
-        .as_deref()
-        .or(ctx.original_cwd.as_deref())
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| "/".to_string())
-        })
+/// Working directory for Bash force-ask path gates.
+///
+/// Mirrors the executor spawn cwd so permission analysis and execution observe
+/// the same current directory.
+async fn bash_gate_cwd(ctx: &ToolUseContext) -> String {
+    ctx.effective_shell_cwd()
+        .await
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Effective max Bash output byte budget.
@@ -367,16 +363,23 @@ impl Tool for BashTool {
         if input.command.is_empty() {
             return false;
         }
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "/".to_string());
+        if coco_shell::check_multiple_cwd_changes(&input.command, &cwd).is_some() {
+            return false;
+        }
         // Git sandbox-escape commands (cd+git, git-internal writes) are NOT
         // read-only — they reach the permission prompt instead of auto-allowing.
-        if coco_shell::has_git_escape_pattern(&input.command) {
+        if coco_shell::has_git_escape_pattern_in_cwd(&input.command, &cwd) {
             return false;
         }
         is_read_only_command(&input.command)
     }
 
-    /// Concurrency-safe iff read-only. Read-only commands have no shared mutable
-    /// state with sibling tools, so the executor can batch them with Read/Grep/Glob.
+    /// Concurrency-safe iff read-only, matching TS Bash. Foreground Bash still
+    /// writes a cwd checkpoint after completion; concurrent read-only cwd
+    /// changes use final-completer-wins session cwd updates, as in TS.
     fn is_concurrency_safe(&self, input: &BashInput) -> bool {
         Tool::is_read_only(self, input)
     }
@@ -417,8 +420,17 @@ impl Tool for BashTool {
         // `sed`, or a git sandbox-escape cannot be auto-allowed. A returned `Ask`
         // short-circuits at the evaluator's step-1b — no allow rule or mode
         // overrides it (only `DontAsk` converts it to deny).
-        let cwd = bash_gate_cwd(ctx);
+        let cwd = bash_gate_cwd(ctx).await;
+        let command_analysis = coco_shell::analyze_compound_command(command, &cwd);
         if let Some(reason) = coco_shell::check_dangerous_removal(command, &cwd) {
+            return coco_types::ToolCheckResult::Ask {
+                message: reason,
+                suggestions: Vec::new(),
+                choices: None,
+                detail: None,
+            };
+        }
+        if let Some(reason) = coco_shell::check_multiple_cwd_changes(command, &cwd) {
             return coco_types::ToolCheckResult::Ask {
                 message: reason,
                 suggestions: Vec::new(),
@@ -466,7 +478,16 @@ impl Tool for BashTool {
             .keys()
             .cloned()
             .collect();
-        for target in coco_shell::extract_output_redirect_targets(command) {
+        let redirect_targets = coco_shell::extract_output_redirect_targets(command);
+        if command_analysis.has_non_noop_cwd_change() && !redirect_targets.is_empty() {
+            return coco_types::ToolCheckResult::Ask {
+                message: "Output redirection after changing directories requires approval.".into(),
+                suggestions: Vec::new(),
+                choices: None,
+                detail: None,
+            };
+        }
+        for target in redirect_targets {
             // /dev/null is always safe — it discards output.
             if target == "/dev/null" {
                 continue;
@@ -502,7 +523,16 @@ impl Tool for BashTool {
             cwd: &cwd,
             session_plan_file: ctx.permission_context.session_plan_file.as_deref(),
         };
-        for target in coco_shell::extract_write_path_targets(command) {
+        let write_targets = coco_shell::extract_write_path_targets(command);
+        if command_analysis.has_non_noop_cwd_change() && !write_targets.is_empty() {
+            return coco_types::ToolCheckResult::Ask {
+                message: "Filesystem writes after changing directories require approval.".into(),
+                suggestions: Vec::new(),
+                choices: None,
+                detail: None,
+            };
+        }
+        for target in write_targets {
             if has_shell_expansion(&target) {
                 return coco_types::ToolCheckResult::Ask {
                     message: "Shell expansion syntax in a write path requires manual approval."

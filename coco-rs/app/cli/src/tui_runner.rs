@@ -950,6 +950,7 @@ async fn run_agent_driver(
                 // resolve through `runtime.command_registry` BEFORE handing
                 // raw text to the model.
                 let mut effective_content = content;
+                let mut slash_metadata = None;
                 if let Some((name, args)) = parse_slash_command(&effective_content) {
                     let outcome = dispatch_slash_command(name, args, &runtime, &event_tx).await;
                     match handle_slash_outcome(
@@ -965,8 +966,9 @@ async fn run_agent_driver(
                         // Unknown command falls through to the model
                         // as raw text — falls through to the model.
                         SlashFollowup::NotFound => {}
-                        SlashFollowup::RunEngine(rendered) => {
-                            effective_content = rendered;
+                        SlashFollowup::RunEngine { content, metadata } => {
+                            effective_content = content;
+                            slash_metadata = metadata;
                         }
                     }
                 }
@@ -1003,6 +1005,7 @@ async fn run_agent_driver(
                     process_submit_turn(
                         user_message_id,
                         effective_content,
+                        slash_metadata,
                         images,
                         runtime_t,
                         event_tx_t,
@@ -1169,10 +1172,10 @@ async fn run_agent_driver(
                     SlashFollowup::NotFound => {
                         warn!(%name, "ExecuteSkill: command not registered");
                     }
-                    SlashFollowup::RunEngine(content) => {
+                    SlashFollowup::RunEngine { content, metadata } => {
                         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
-                            content,
+                            SlashEnginePrompt { content, metadata },
                             &runtime,
                             &event_tx,
                             &active_turn,
@@ -1207,10 +1210,10 @@ async fn run_agent_driver(
                         )
                         .await;
                     }
-                    SlashFollowup::RunEngine(content) => {
+                    SlashFollowup::RunEngine { content, metadata } => {
                         drain_active_turn(&active_turn, ActiveTurnDrain::Wait).await;
                         spawn_slash_run_engine_turn(
-                            content,
+                            SlashEnginePrompt { content, metadata },
                             &runtime,
                             &event_tx,
                             &active_turn,
@@ -2155,7 +2158,10 @@ enum SlashOutcome {
     /// (Prompt / InjectPrompt). For typed commands the original `/foo`
     /// is replaced with the rendered prompt body so the model sees the
     /// expansion, not the slash.
-    RunEngine { content: String },
+    RunEngine {
+        content: String,
+        metadata: Option<String>,
+    },
     /// No command with this name is registered. Caller should fall
     /// through to the existing path (model receives raw text).
     NotFound,
@@ -2241,6 +2247,24 @@ fn parse_slash_command(text: &str) -> Option<(&str, &str)> {
         Some((name, rest)) => (name, rest.trim_start()),
         None => (stripped, ""),
     })
+}
+
+fn format_slash_command_metadata(name: &str, args: &str) -> String {
+    let mut body =
+        format!("<command-message>{name}</command-message>\n<command-name>/{name}</command-name>");
+    let trimmed_args = args.trim();
+    if !trimmed_args.is_empty() {
+        body.push_str(&format!("\n<command-args>{trimmed_args}</command-args>"));
+    }
+    body
+}
+
+fn create_slash_metadata_message(metadata: &str) -> coco_messages::Message {
+    let attachment = coco_messages::AttachmentMessage::api(
+        coco_types::AttachmentKind::SlashCommandMetadata,
+        coco_messages::LlmMessage::user_text(metadata),
+    );
+    coco_messages::Message::Attachment(attachment)
 }
 
 async fn hydrate_resume_plan(
@@ -2685,7 +2709,15 @@ enum SlashFollowup {
     NotFound,
     /// Command expanded to a model prompt. Caller spawns a turn
     /// (palette / SDK) or substitutes `effective_content` (typed input).
-    RunEngine(String),
+    RunEngine {
+        content: String,
+        metadata: Option<String>,
+    },
+}
+
+struct SlashEnginePrompt {
+    content: String,
+    metadata: Option<String>,
 }
 
 /// Process a [`SlashOutcome`] into a [`SlashFollowup`] for the
@@ -2701,7 +2733,9 @@ async fn handle_slash_outcome(
     match outcome {
         SlashOutcome::Handled => SlashFollowup::Done,
         SlashOutcome::NotFound => SlashFollowup::NotFound,
-        SlashOutcome::RunEngine { content } => SlashFollowup::RunEngine(content),
+        SlashOutcome::RunEngine { content, metadata } => {
+            SlashFollowup::RunEngine { content, metadata }
+        }
         SlashOutcome::TriggerCompact {
             custom_instructions,
         } => {
@@ -2798,10 +2832,10 @@ async fn drain_queued_slash_commands(
             SlashOutcome::NotFound => {
                 emit_slash_status(event_tx, name, SlashCommandStatusKind::NoHandler).await;
             }
-            SlashOutcome::RunEngine { content } => {
+            SlashOutcome::RunEngine { content, metadata } => {
                 let session_id = runtime.current_session_id().await;
                 spawn_slash_run_engine_turn(
-                    content,
+                    SlashEnginePrompt { content, metadata },
                     runtime,
                     event_tx,
                     active_turn,
@@ -2997,7 +3031,7 @@ async fn process_queued_history_turn(
 /// before this returns — callers can immediately start observing
 /// `ActiveTurn` from a peer task without a TOCTOU window.
 async fn spawn_slash_run_engine_turn(
-    content: String,
+    prompt: SlashEnginePrompt,
     runtime: &Arc<crate::session_runtime::SessionRuntime>,
     event_tx: &mpsc::Sender<CoreEvent>,
     active_turn: &Arc<Mutex<Option<ActiveTurn>>>,
@@ -3014,6 +3048,7 @@ async fn spawn_slash_run_engine_turn(
     let turn_done_tx_t = turn_done_tx.clone();
     let session_id_t = session_id.to_string();
     let synth_id = uuid::Uuid::new_v4().to_string();
+    let SlashEnginePrompt { content, metadata } = prompt;
     let task = tokio::spawn(async move {
         let _done = TurnDoneGuard {
             turn_id,
@@ -3022,6 +3057,7 @@ async fn spawn_slash_run_engine_turn(
         process_submit_turn(
             synth_id,
             content,
+            metadata,
             Vec::new(),
             runtime_t,
             event_tx_t,
@@ -3205,7 +3241,10 @@ async fn dispatch_slash_command(
             emit_slash_text(event_tx, name, args, &text).await;
             SlashOutcome::Handled
         }
-        CommandResult::InjectPrompt(text) => SlashOutcome::RunEngine { content: text },
+        CommandResult::InjectPrompt(text) => SlashOutcome::RunEngine {
+            content: text,
+            metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+        },
         CommandResult::Prompt { parts, .. } => {
             // Concatenate text parts. `File` parts are not yet wired —
             // none of the in-tree Prompt handlers emit them today.
@@ -3227,7 +3266,10 @@ async fn dispatch_slash_command(
                 emit_slash_status(event_tx, name, SlashCommandStatusKind::EmptyPrompt).await;
                 SlashOutcome::Handled
             } else {
-                SlashOutcome::RunEngine { content: buf }
+                SlashOutcome::RunEngine {
+                    content: buf,
+                    metadata: Some(format_slash_command_metadata(&cmd.base.name, args)),
+                }
             }
         }
         CommandResult::Compact {
@@ -3555,6 +3597,7 @@ async fn dispatch_plan(
     match plan_command_query_after_flip(args) {
         Some(desc) => SlashOutcome::RunEngine {
             content: desc.to_string(),
+            metadata: Some(format_slash_command_metadata("plan", args)),
         },
         None => {
             // Unreachable in practice — bare `/plan` and `/plan open`
@@ -4276,6 +4319,7 @@ async fn emit_slash_status(
 async fn process_submit_turn(
     user_message_id: String,
     content: String,
+    slash_metadata: Option<String>,
     images: Vec<coco_tui::ImageData>,
     runtime: Arc<crate::session_runtime::SessionRuntime>,
     event_tx: mpsc::Sender<CoreEvent>,
@@ -4385,6 +4429,14 @@ async fn process_submit_turn(
     let messages: Vec<std::sync::Arc<coco_messages::Message>> = {
         let mut h = runtime.history.lock().await;
         let event_tx_opt = Some(event_tx.clone());
+        if let Some(metadata) = slash_metadata.as_deref() {
+            coco_query::history_sync::history_push_and_emit(
+                &mut h,
+                create_slash_metadata_message(metadata),
+                &event_tx_opt,
+            )
+            .await;
+        }
         for m in new_turn_messages.iter().cloned() {
             coco_query::history_sync::history_push_and_emit(&mut h, m, &event_tx_opt).await;
         }

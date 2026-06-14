@@ -77,7 +77,9 @@ use super::ActiveTurnDrain;
 use super::PermissionsMutation;
 use super::SentinelTrigger;
 use super::classify_sentinel_trigger;
+use super::create_slash_metadata_message;
 use super::drain_active_turn;
+use super::format_slash_command_metadata;
 use super::parse_editor_command;
 use super::parse_permissions_mutation;
 use super::parse_slash_command;
@@ -205,6 +207,39 @@ fn parse_slash_rejects_non_slash() {
 fn parse_slash_rejects_bare_slash() {
     assert_eq!(parse_slash_command("/"), None);
     assert_eq!(parse_slash_command("   /   "), None);
+}
+
+#[test]
+fn slash_prompt_metadata_matches_ts_shape() {
+    assert_eq!(
+        format_slash_command_metadata("simplify", "focus on tests"),
+        "<command-message>simplify</command-message>\n\
+         <command-name>/simplify</command-name>\n\
+         <command-args>focus on tests</command-args>"
+    );
+}
+
+#[test]
+fn slash_prompt_metadata_omits_empty_args() {
+    assert_eq!(
+        format_slash_command_metadata("simplify", ""),
+        "<command-message>simplify</command-message>\n\
+         <command-name>/simplify</command-name>"
+    );
+}
+
+#[test]
+fn slash_prompt_metadata_message_has_distinct_identity_and_kind() {
+    let metadata = format_slash_command_metadata("simplify", "focus");
+    let message = create_slash_metadata_message(&metadata);
+    let coco_messages::Message::Attachment(attachment) = message else {
+        panic!("slash metadata should be an attachment");
+    };
+    assert_eq!(
+        attachment.kind,
+        coco_types::AttachmentKind::SlashCommandMetadata
+    );
+    assert_ne!(attachment.uuid, uuid::Uuid::nil());
 }
 
 #[test]

@@ -79,6 +79,9 @@ pub struct PreparedToolCall {
     /// construction). Hook rewrites during `run_one` may replace this with a
     /// re-validated `updated_input` before permission / execution.
     pub parsed_input: crate::ValidatedInput,
+    /// Context-aware concurrency decision computed by the caller that holds
+    /// the current `ToolUseContext`.
+    pub is_concurrency_safe: bool,
     /// Tool-use position within the assistant message. Used to
     /// address per-call hook/permission state and to order
     /// `app_state_patch` application within a concurrent-safe batch.

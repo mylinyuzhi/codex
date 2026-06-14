@@ -182,6 +182,45 @@ fn test_split_preserves_quotes() {
 }
 
 #[test]
+fn test_analyze_compound_filters_noop_cd_current_cwd() {
+    let cwd = "/Users/example/project";
+    let analysis = analyze_compound_command("cd /Users/example/project && git diff", cwd);
+    assert_eq!(analysis.significant_subcommands, vec!["git diff"]);
+    assert_eq!(analysis.cwd_change_count, 1);
+    assert_eq!(analysis.non_noop_cwd_change_count, 0);
+    assert!(analysis.has_git);
+}
+
+#[test]
+fn test_analyze_compound_filters_equivalent_relative_noop_cd() {
+    let cwd = "/Users/example/project";
+    let analysis = analyze_compound_command("cd . && git log --oneline", cwd);
+    assert_eq!(analysis.significant_subcommands, vec!["git log --oneline"]);
+    assert_eq!(analysis.non_noop_cwd_change_count, 0);
+    assert!(analysis.has_git);
+}
+
+#[test]
+fn test_analyze_compound_keeps_non_noop_cd_before_git() {
+    let cwd = "/Users/example/project";
+    let analysis = analyze_compound_command("cd ../other && git diff", cwd);
+    assert_eq!(
+        analysis.significant_subcommands,
+        vec!["cd ../other", "git diff"]
+    );
+    assert_eq!(analysis.non_noop_cwd_change_count, 1);
+    assert!(analysis.has_non_noop_cwd_change());
+    assert!(analysis.has_git);
+}
+
+#[test]
+fn test_analyze_compound_detects_multiple_cwd_changes() {
+    let analysis = analyze_compound_command("cd a && cd b && ls", "/tmp/project");
+    assert_eq!(analysis.non_noop_cwd_change_count, 2);
+    assert!(analysis.has_multiple_cwd_changes());
+}
+
+#[test]
 fn test_strip_all_env_vars() {
     assert_eq!(
         strip_all_env_vars("FOO=bar BAZ=qux command", /*check_hijack*/ false),

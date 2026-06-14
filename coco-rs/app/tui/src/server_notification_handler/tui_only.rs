@@ -57,6 +57,7 @@ fn enqueue_informational(
 fn seed_prefix_input(
     tool_name: &str,
     original_input: Option<&serde_json::Value>,
+    permission_suggestions: &[coco_types::PermissionUpdate],
 ) -> Option<crate::state::PrefixInputState> {
     if tool_name != coco_types::ToolName::Bash.as_str()
         && tool_name != coco_types::ToolName::PowerShell.as_str()
@@ -64,7 +65,10 @@ fn seed_prefix_input(
         return None;
     }
     let command = original_input?.get("command")?.as_str()?;
-    let value = coco_permissions::shell_rules::editable_prefix_default(command);
+    let value = coco_permissions::shell_rules::editable_prefix_from_suggestions_or_command(
+        command,
+        permission_suggestions,
+    )?;
     Some(crate::state::PrefixInputState::new(value))
 }
 
@@ -93,7 +97,9 @@ pub(super) fn handle(
         } => {
             let detail = permission_detail_for_approval(&display_input, detail);
             let prefix_input = (choices.is_none() && show_always_allow)
-                .then(|| seed_prefix_input(&tool_name, original_input.as_ref()))
+                .then(|| {
+                    seed_prefix_input(&tool_name, original_input.as_ref(), &permission_suggestions)
+                })
                 .flatten();
             state.ui.push_delayed_permission(
                 crate::state::PermissionPromptState {

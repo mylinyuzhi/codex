@@ -106,6 +106,7 @@ pub async fn run_tools(
             pending.push(PendingToolCall {
                 tool_use_id: tool_use_id.clone(),
                 tool: tool.clone(),
+                is_concurrency_safe: tool.is_concurrency_safe(validated.as_value()),
                 input: validated,
             });
         } else {

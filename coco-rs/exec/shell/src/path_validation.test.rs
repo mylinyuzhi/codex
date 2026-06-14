@@ -62,11 +62,25 @@ fn test_check_dangerous_removal() {
 fn test_has_git_escape_pattern() {
     // cd + git compound → escape pattern.
     assert!(has_git_escape_pattern("cd /tmp/x && git status"));
+    assert!(has_git_escape_pattern_in_cwd(
+        "cd /tmp/other && git status",
+        "/tmp/project"
+    ));
+    assert!(!has_git_escape_pattern_in_cwd(
+        "cd /tmp/project && git status",
+        "/tmp/project"
+    ));
     // mkdir of a git-internal dir then git → escape.
     assert!(has_git_escape_pattern("mkdir refs && git init"));
     // Plain git / plain cd → not an escape.
     assert!(!has_git_escape_pattern("git status"));
     assert!(!has_git_escape_pattern("cd /tmp/x && ls"));
+}
+
+#[test]
+fn test_check_multiple_cwd_changes() {
+    assert!(check_multiple_cwd_changes("cd a && cd b && ls", "/tmp/project").is_some());
+    assert!(check_multiple_cwd_changes("cd /tmp/project && cd . && ls", "/tmp/project").is_none());
 }
 
 #[test]

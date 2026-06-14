@@ -7,11 +7,11 @@ use std::collections::HashSet;
 /// continuing. Update both the constant and the TS `Attachment` union
 /// size in the README.
 #[test]
-fn attachment_kind_all_has_61_variants() {
+fn attachment_kind_all_has_62_variants() {
     assert_eq!(
         AttachmentKind::all().len(),
-        61,
-        "60 TS Attachment union members + coco-rs-synthetic user_context"
+        62,
+        "60 TS Attachment union members + coco-rs-synthetic user_context and slash_command_metadata"
     );
 }
 
@@ -74,14 +74,14 @@ fn coverage_distribution_matches_readme_snapshot() {
         "in-crate reminders (incl. synthetic user_context)"
     );
     assert_eq!(silent_reminder, 2, "in-crate silent reminders");
-    assert_eq!(outside, 6, "owned by sister crates");
+    assert_eq!(outside, 7, "owned by sister crates");
     assert_eq!(silent_event, 9, "typed API-hidden events");
     assert_eq!(feature_gated, 1, "HISTORY_SNIP intentionally unported");
     assert_eq!(runtime, 3, "inactive runtime bookkeeping");
     assert_eq!(
         reminder + silent_reminder + outside + silent_event + feature_gated + runtime,
-        61,
-        "total must match union size + synthetic user_context"
+        62,
+        "total must match union size + synthetic user_context + slash_command_metadata"
     );
 }
 
@@ -123,6 +123,7 @@ fn renders_in_transcript_matches_ts_null_rendering_list_exact() {
         AttachmentKind::AgentMention,
         AttachmentKind::BudgetUsd,
         AttachmentKind::CriticalSystemReminder,
+        AttachmentKind::SlashCommandMetadata,
         AttachmentKind::EditedImageFile,
         AttachmentKind::EditedTextFile,
         AttachmentKind::OpenedFileInIde,

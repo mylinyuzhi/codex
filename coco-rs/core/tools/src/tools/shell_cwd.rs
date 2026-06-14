@@ -45,15 +45,7 @@ use unicode_normalization::UnicodeNormalization;
 /// 3. `std::env::current_dir()` — fallback for tests / SDK paths without session state.
 /// 4. `/tmp` — last-resort floor when even `current_dir()` fails.
 pub async fn resolve_spawn_cwd(ctx: &ToolUseContext) -> PathBuf {
-    if let Some(over) = ctx.cwd_override.clone() {
-        over
-    } else if let Some(session_cwd) = &ctx.session_cwd {
-        session_cwd.read().await.clone()
-    } else {
-        std::env::current_dir()
-            .ok()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-    }
+    ctx.effective_shell_cwd().await
 }
 
 /// Run the post-exec cwd sequence: update `session_cwd` then snap back if
