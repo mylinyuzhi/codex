@@ -148,36 +148,44 @@ pub fn check_dangerous_removal(command: &str, cwd: &str) -> Option<String> {
 /// then runs git. Used by `BashTool::is_read_only` so such commands are NOT
 /// auto-classified read-only.
 pub fn has_git_escape_pattern(command: &str) -> bool {
-    let subs = crate::bash_permissions::split_compound_command(command);
-    let mut has_cd = false;
-    let mut has_git = false;
-    for sub in &subs {
-        match crate::mode_validation::extract_base_executable(sub.trim()) {
-            "cd" => has_cd = true,
-            "git" => has_git = true,
-            _ => {}
-        }
-    }
-    has_git && (has_cd || command_writes_git_internal(&subs))
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "/".to_string());
+    has_git_escape_pattern_in_cwd(command, &cwd)
+}
+
+/// Cwd-aware variant used by the permission gate.
+pub fn has_git_escape_pattern_in_cwd(command: &str, cwd: &str) -> bool {
+    let analysis = crate::bash_permissions::analyze_compound_command(command, cwd);
+    analysis.has_git
+        && (analysis.has_non_noop_cwd_change()
+            || command_writes_git_internal(&analysis.significant_subcommands))
+}
+
+/// Force-ask if a compound command changes cwd more than once after no-op cwd
+/// changes have been filtered. This mirrors TS's conservative path validation.
+pub fn check_multiple_cwd_changes(command: &str, cwd: &str) -> Option<String> {
+    let analysis = crate::bash_permissions::analyze_compound_command(command, cwd);
+    analysis
+        .has_multiple_cwd_changes()
+        .then(|| "Compound commands with multiple directory changes require approval.".to_string())
 }
 
 /// Force-ask gate for git sandbox-escape: `cd`+`git` compound, git-internal
 /// writes before git, or git run inside a bare-repo cwd.
 pub fn check_git_escape(command: &str, cwd: &str) -> Option<String> {
-    let subs = crate::bash_permissions::split_compound_command(command);
-    let base_of = |s: &str| crate::mode_validation::extract_base_executable(s.trim()).to_string();
-    let has_git = subs.iter().any(|s| base_of(s) == "git");
-    if !has_git {
+    let analysis = crate::bash_permissions::analyze_compound_command(command, cwd);
+    if !analysis.has_git {
         return None;
     }
-    if subs.iter().any(|s| base_of(s) == "cd") {
+    if analysis.has_non_noop_cwd_change() {
         return Some(
             "Compound commands with `cd` and `git` require approval to prevent \
              bare-repository attacks."
                 .into(),
         );
     }
-    if command_writes_git_internal(&subs) {
+    if command_writes_git_internal(&analysis.significant_subcommands) {
         return Some(
             "Commands that create git-internal files (HEAD/objects/refs/hooks) and run \
              git require approval."

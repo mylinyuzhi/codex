@@ -85,6 +85,7 @@ pub struct PendingToolCall {
     pub tool_use_id: String,
     pub tool: Arc<dyn DynTool>,
     pub input: ValidatedInput,
+    pub is_concurrency_safe: bool,
 }
 
 impl std::fmt::Debug for PendingToolCall {
@@ -1056,12 +1057,7 @@ fn partition_plans(plans: Vec<ToolCallPlan>) -> Vec<PlanBlock> {
     for plan in plans {
         match plan {
             ToolCallPlan::Runnable(prepared) => {
-                let is_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    prepared
-                        .tool
-                        .is_concurrency_safe(prepared.parsed_input.as_value())
-                }))
-                .unwrap_or(false);
+                let is_safe = prepared.is_concurrency_safe;
                 if is_safe {
                     safe_batch.push(prepared);
                 } else {

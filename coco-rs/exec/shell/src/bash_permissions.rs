@@ -4,6 +4,9 @@
 //! and compound command splitting for the permission rule matching system.
 
 use std::collections::HashSet;
+use std::path::Component;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 /// Safe environment variables — no code execution or library loading risk.
@@ -327,6 +330,144 @@ pub fn split_compound_command(command: &str) -> Vec<String> {
     }
 
     subcommands
+}
+
+/// Static summary of a shell compound command for permission decisions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompoundCommandAnalysis {
+    /// Raw split subcommands, preserving user text.
+    pub subcommands: Vec<String>,
+    /// Subcommands after filtering exact no-op cwd changes like `cd <cwd>`.
+    pub significant_subcommands: Vec<String>,
+    /// Count of all cwd-changing subcommands (`cd`, `pushd`, `popd`).
+    pub cwd_change_count: usize,
+    /// Count of cwd-changing subcommands that are not exact no-ops.
+    pub non_noop_cwd_change_count: usize,
+    /// Whether any significant subcommand invokes `git`.
+    pub has_git: bool,
+}
+
+impl CompoundCommandAnalysis {
+    pub fn has_non_noop_cwd_change(&self) -> bool {
+        self.non_noop_cwd_change_count > 0
+    }
+
+    pub fn has_multiple_cwd_changes(&self) -> bool {
+        self.non_noop_cwd_change_count > 1
+    }
+}
+
+/// Analyze compound command structure after env/wrapper normalization.
+///
+/// This mirrors the TS permission posture: exact no-op `cd <current cwd>`
+/// segments are ignored before deciding whether a later `git` command is
+/// really a cwd+git escape pattern or just a scoped prefix.
+pub fn analyze_compound_command(command: &str, cwd: &str) -> CompoundCommandAnalysis {
+    let subcommands = split_compound_command(command);
+    let mut significant_subcommands = Vec::new();
+    let mut cwd_change_count = 0;
+    let mut non_noop_cwd_change_count = 0;
+    let mut has_git = false;
+
+    for sub in &subcommands {
+        let normalized = normalize_subcommand_for_analysis(sub);
+        let base = crate::mode_validation::extract_base_executable(&normalized);
+        if base == "git" {
+            has_git = true;
+        }
+
+        let is_cwd_change = matches!(base, "cd" | "pushd" | "popd");
+        if is_cwd_change {
+            cwd_change_count += 1;
+            if is_noop_cwd_change(base, &normalized, cwd) {
+                continue;
+            }
+            non_noop_cwd_change_count += 1;
+        }
+        significant_subcommands.push(sub.trim().to_string());
+    }
+
+    CompoundCommandAnalysis {
+        subcommands,
+        significant_subcommands,
+        cwd_change_count,
+        non_noop_cwd_change_count,
+        has_git,
+    }
+}
+
+fn normalize_subcommand_for_analysis(subcommand: &str) -> String {
+    strip_safe_wrappers(&strip_all_env_vars(
+        subcommand.trim(),
+        /*check_hijack*/ false,
+    ))
+}
+
+fn is_noop_cwd_change(base: &str, command: &str, cwd: &str) -> bool {
+    if base != "cd" {
+        return false;
+    }
+    let argv = command_argv(command);
+    let Some(target) = argv.get(1) else {
+        return false;
+    };
+    if target == "-" || target.starts_with('-') {
+        return false;
+    }
+    cd_target_is_current_cwd(target, cwd)
+}
+
+fn command_argv(command: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .map(|t| t.trim_matches(['\'', '"']).to_string())
+        .collect()
+}
+
+fn cd_target_is_current_cwd(target: &str, cwd: &str) -> bool {
+    let current = normalize_path_lexically(Path::new(cwd));
+    let target_path = if target == "~" || target.starts_with("~/") {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let Some(home) = home else {
+            return false;
+        };
+        if target == "~" {
+            home
+        } else {
+            home.join(target.trim_start_matches("~/"))
+        }
+    } else {
+        let path = Path::new(target);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            Path::new(cwd).join(path)
+        }
+    };
+    normalize_path_lexically(&target_path) == current
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let popped = out.pop();
+                if !popped {
+                    out.push(component.as_os_str());
+                }
+            }
+            Component::RootDir | Component::Prefix(_) | Component::Normal(_) => {
+                out.push(component.as_os_str());
+            }
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        out
+    }
 }
 
 /// Remove unquoted output-redirection clauses (`> file`, `>> file`, `2> file`,

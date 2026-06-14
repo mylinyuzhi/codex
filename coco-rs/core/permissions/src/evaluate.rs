@@ -39,7 +39,7 @@ pub type ToolCheckFn = dyn Fn(&ToolId, &Value, &ToolPermissionContext) -> ToolCh
 /// These are facts about the already-validated tool input, not policy.
 /// Keeping them explicit avoids making `coco-permissions` depend on
 /// shell/file parsers owned by tool crates.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PermissionEvaluationOptions {
     /// The concrete tool/input pair is read-only even though the tool name
     /// itself may not be statically read-only, e.g. `Bash(ls | head)`.
@@ -50,6 +50,8 @@ pub struct PermissionEvaluationOptions {
     /// command auto-allows. Computed in `app/query` (which holds
     /// `ctx.sandbox_state`) so `coco-permissions` keeps no `exec/sandbox` dependency.
     pub sandbox_auto_allow_bash: bool,
+    /// Effective Bash cwd for cwd-sensitive permission suggestions.
+    pub shell_cwd: Option<String>,
 }
 
 /// Permission evaluator. Implements the multi-step evaluation pipeline.
@@ -461,7 +463,7 @@ impl PermissionEvaluator {
         }
 
         // Step 8: Mode-based fallthrough
-        let decision = mode_fallthrough(context, &tool_str, input, options);
+        let decision = mode_fallthrough(context, &tool_str, input, &options);
         tracing::debug!(
             tool_name = %tool_str,
             permission_decision = decision_label(&decision),
@@ -572,7 +574,7 @@ fn mode_fallthrough(
     context: &ToolPermissionContext,
     tool_str: &str,
     input: &Value,
-    options: PermissionEvaluationOptions,
+    options: &PermissionEvaluationOptions,
 ) -> PermissionDecision {
     match context.mode {
         PermissionMode::BypassPermissions => PermissionDecision::Allow {
@@ -604,7 +606,11 @@ fn mode_fallthrough(
             } else {
                 PermissionDecision::Ask {
                     message: format!("plan mode: approve {tool_str}?"),
-                    suggestions: shell_ask_suggestions(tool_str, input),
+                    suggestions: shell_ask_suggestions(
+                        tool_str,
+                        input,
+                        options.shell_cwd.as_deref(),
+                    ),
                     choices: None,
                     detail: None,
                 }
@@ -625,7 +631,11 @@ fn mode_fallthrough(
             } else {
                 PermissionDecision::Ask {
                     message: format!("approve {tool_str}?"),
-                    suggestions: shell_ask_suggestions(tool_str, input),
+                    suggestions: shell_ask_suggestions(
+                        tool_str,
+                        input,
+                        options.shell_cwd.as_deref(),
+                    ),
                     choices: None,
                     detail: None,
                 }
@@ -645,7 +655,7 @@ fn mode_fallthrough(
         PermissionMode::Default | PermissionMode::Auto | PermissionMode::Bubble => {
             PermissionDecision::Ask {
                 message: format!("approve {tool_str}?"),
-                suggestions: shell_ask_suggestions(tool_str, input),
+                suggestions: shell_ask_suggestions(tool_str, input, options.shell_cwd.as_deref()),
                 choices: None,
                 detail: None,
             }
@@ -661,12 +671,19 @@ fn mode_fallthrough(
 /// The dangerous-gate asks raised by Bash's own `check_permissions` (rm,
 /// git-escape, process substitution, out-of-tree writes, …) keep their empty
 /// suggestions — declining to suggest saving a potentially dangerous command.
-fn shell_ask_suggestions(tool_str: &str, input: &Value) -> Vec<coco_types::PermissionUpdate> {
+fn shell_ask_suggestions(
+    tool_str: &str,
+    input: &Value,
+    shell_cwd: Option<&str>,
+) -> Vec<coco_types::PermissionUpdate> {
     if !is_shell_tool(tool_str) {
         return Vec::new();
     }
     match extract_shell_command(input) {
-        Some(command) => shell_rules::bash_permission_suggestions(tool_str, &command),
+        Some(command) => match shell_cwd {
+            Some(cwd) => shell_rules::bash_permission_suggestions_in_cwd(tool_str, &command, cwd),
+            None => shell_rules::bash_permission_suggestions(tool_str, &command),
+        },
         None => Vec::new(),
     }
 }

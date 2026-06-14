@@ -102,10 +102,12 @@ fn pending(
     tool_use_id: &str,
     input: Value,
 ) -> PendingToolCall {
+    let is_concurrency_safe = tool.is_concurrency_safe(&input);
     PendingToolCall {
         tool_use_id: tool_use_id.into(),
         input: crate::ValidatedInput::validate(tool.as_ref(), input)
             .expect("test input must validate"),
+        is_concurrency_safe,
         tool,
     }
 }
@@ -116,7 +118,13 @@ fn make_call(name: &str, safe: bool) -> PendingToolCall {
     } else {
         Arc::new(UnsafeTool { name: name.into() })
     };
-    pending(tool, name, json!({}))
+    PendingToolCall {
+        tool_use_id: name.into(),
+        input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
+            .expect("test input must validate"),
+        is_concurrency_safe: safe,
+        tool,
+    }
 }
 
 #[test]
@@ -624,6 +632,7 @@ fn prepared_from(
         tool_id: tool.id(),
         parsed_input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
             .expect("test input must validate"),
+        is_concurrency_safe: tool.is_concurrency_safe(&json!({})),
         tool,
         model_index,
     }
@@ -753,6 +762,7 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
             tool_id: ToolId::Builtin(coco_types::ToolName::Bash),
             parsed_input: crate::ValidatedInput::validate(bash_tool.as_ref(), json!({}))
                 .expect("test input must validate"),
+            is_concurrency_safe: true,
             tool: bash_tool,
             model_index: 0,
         }),

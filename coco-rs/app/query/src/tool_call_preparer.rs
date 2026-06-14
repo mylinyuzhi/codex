@@ -26,6 +26,7 @@ use coco_types::ModelRole;
 use coco_types::PermissionDecision;
 use coco_types::PermissionDenialInfo;
 use coco_types::ToolId;
+use coco_types::ToolName;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -293,6 +294,13 @@ pub(crate) async fn prepare_one_pending_tool_call(
             tool_use_id: tc.tool_call_id.clone(),
             tool: tool.clone(),
             input: effective_input.clone(),
+            is_concurrency_safe: dynamic_concurrency_safe(
+                tool.as_ref(),
+                &tool_id,
+                effective_input.as_value(),
+                args.ctx,
+            )
+            .await,
         },
         ToolResultContext {
             tool_name: tc.tool_name.clone(),
@@ -428,7 +436,14 @@ async fn resolve_permission_decision<M: std::borrow::Borrow<Message>>(
         && let (Some(state), Some(tracker)) = (auto_mode_state, chosen_tracker.as_ref())
         && state.is_active()
     {
-        let is_read_only = tool.is_read_only(effective_input);
+        let tool_id = tool.id();
+        let shell_cwd = shell_analysis_cwd(&tool_id, ctx).await;
+        let is_read_only = dynamic_read_only(
+            tool.as_ref(),
+            &tool_id,
+            effective_input,
+            shell_cwd.as_deref(),
+        );
         // Context for path-safety immunity + safe-in-cwd fast path + headless
         // fail-closed. cwd: worktree override first, else the bootstrap cwd.
         let cwd = ctx
@@ -608,6 +623,13 @@ async fn evaluate_with_rules(
           -> ToolCheckResult { tool_opinion.clone() };
 
     let tool_id = tool.id();
+    let shell_cwd = shell_analysis_cwd(&tool_id, ctx).await;
+    let dynamic_read_only = dynamic_read_only(
+        tool.as_ref(),
+        &tool_id,
+        effective_input,
+        shell_cwd.as_deref(),
+    );
     let sandbox_auto_allow_bash = sandbox_auto_allow_bash(&tool_id, effective_input, ctx);
     // `evaluate_with_tool_check` step 1c short-circuits with the
     // tool's own `Allow { updated_input, feedback }` before any rule
@@ -620,10 +642,64 @@ async fn evaluate_with_rules(
         &ctx.permission_context,
         Some(&tool_check),
         coco_permissions::PermissionEvaluationOptions {
-            dynamic_read_only: tool.is_read_only(effective_input),
+            dynamic_read_only,
             sandbox_auto_allow_bash,
+            shell_cwd,
         },
     )
+}
+
+async fn shell_analysis_cwd(tool_id: &ToolId, ctx: &ToolUseContext) -> Option<String> {
+    if matches!(tool_id, ToolId::Builtin(ToolName::Bash)) {
+        Some(
+            ctx.effective_shell_cwd()
+                .await
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        None
+    }
+}
+
+fn dynamic_read_only(
+    tool: &dyn DynTool,
+    tool_id: &ToolId,
+    input: &Value,
+    shell_cwd: Option<&str>,
+) -> bool {
+    if matches!(tool_id, ToolId::Builtin(ToolName::Bash)) {
+        let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+        return bash_dynamic_read_only(command, shell_cwd.unwrap_or("/"));
+    }
+    tool.is_read_only(input)
+}
+
+fn bash_dynamic_read_only(command: &str, cwd: &str) -> bool {
+    if command.is_empty() {
+        return false;
+    }
+    if coco_shell::check_multiple_cwd_changes(command, cwd).is_some() {
+        return false;
+    }
+    if coco_shell::has_git_escape_pattern_in_cwd(command, cwd) {
+        return false;
+    }
+    coco_shell::read_only::is_read_only_command(command)
+}
+
+async fn dynamic_concurrency_safe(
+    tool: &dyn DynTool,
+    tool_id: &ToolId,
+    input: &Value,
+    ctx: &ToolUseContext,
+) -> bool {
+    if matches!(tool_id, ToolId::Builtin(ToolName::Bash)) {
+        let cwd = ctx.effective_shell_cwd().await;
+        let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+        return bash_dynamic_read_only(command, &cwd.to_string_lossy());
+    }
+    tool.is_concurrency_safe(input)
 }
 
 /// Returns true iff this is a Bash command that WILL be sandboxed AND

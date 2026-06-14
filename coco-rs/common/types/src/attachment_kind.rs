@@ -23,7 +23,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Every TS `Attachment.type` discriminator, plus coco-rs-synthetic
-/// reminder kinds. 61 variants.
+/// reminder kinds. 62 variants.
 ///
 /// Wire format is snake_case via `#[serde(rename_all = "snake_case")]`
 /// to match TS `Attachment.type` exactly, so transcripts round-trip.
@@ -51,6 +51,9 @@ pub enum AttachmentKind {
     /// its visibility profile. Both paths land in `Message::Attachment`
     /// with `AttachmentBody::Api(LlmMessage)`.
     CriticalSystemReminder,
+    /// TS-style slash-command metadata (`<command-name>`, optional args)
+    /// injected before expanded prompt content.
+    SlashCommandMetadata,
     CompactionReminder,
     DateChange,
     /// coco-rs per-turn baseline user context (TS `prependUserContext`
@@ -135,6 +138,7 @@ impl AttachmentKind {
             Self::TodoReminder => "todo_reminder",
             Self::TaskReminder => "task_reminder",
             Self::CriticalSystemReminder => "critical_system_reminder",
+            Self::SlashCommandMetadata => "slash_command_metadata",
             Self::CompactionReminder => "compaction_reminder",
             Self::DateChange => "date_change",
             Self::UserContext => "user_context",
@@ -213,6 +217,7 @@ impl AttachmentKind {
             | TodoReminder
             | TaskReminder
             | CriticalSystemReminder
+            | SlashCommandMetadata
             | CompactionReminder
             | DateChange
             | UserContext
@@ -308,6 +313,7 @@ impl AttachmentKind {
             | AgentMention
             | BudgetUsd
             | CriticalSystemReminder
+            | SlashCommandMetadata
             | EditedImageFile
             | EditedTextFile
             | OpenedFileInIde
@@ -393,9 +399,9 @@ impl AttachmentKind {
         }
     }
 
-    /// Every variant in declaration order. Length must equal 61 (60 TS
-    /// `Attachment` union members + the coco-rs-synthetic `UserContext`
-    /// reminder) — enforced by the parity test.
+    /// Every variant in declaration order. Length must equal 62 (60 TS
+    /// `Attachment` union members + coco-rs-synthetic `UserContext` and
+    /// `SlashCommandMetadata` reminders) — enforced by the parity test.
     pub const fn all() -> &'static [AttachmentKind] {
         &[
             Self::PlanMode,
@@ -406,6 +412,7 @@ impl AttachmentKind {
             Self::TodoReminder,
             Self::TaskReminder,
             Self::CriticalSystemReminder,
+            Self::SlashCommandMetadata,
             Self::CompactionReminder,
             Self::DateChange,
             Self::UserContext,
@@ -578,6 +585,10 @@ pub const fn coverage_of(kind: AttachmentKind) -> Coverage {
         },
         CriticalSystemReminder => Coverage::Reminder {
             generator: "CriticalSystemReminderGenerator",
+        },
+        SlashCommandMetadata => Coverage::OutsideReminder {
+            owner_crate: "app/cli",
+            note: "slash-command prompt expansion metadata injected before expanded prompt content",
         },
         CompactionReminder => Coverage::Reminder {
             generator: "CompactionReminderGenerator",

@@ -109,6 +109,39 @@ fn test_bash_read_only_fast_path() {
     }
 }
 
+#[test]
+fn test_bash_cd_safety_parity() {
+    let cwd = std::env::current_dir().expect("test cwd");
+    let noop_cd_git = json!({"command": format!("cd {} && git diff", cwd.display())});
+    assert!(<BashTool as DynTool>::is_read_only(&BashTool, &noop_cd_git));
+    assert!(<BashTool as DynTool>::is_concurrency_safe(
+        &BashTool,
+        &noop_cd_git
+    ));
+
+    let readonly = json!({"command": "cd src && ls"});
+    assert!(<BashTool as DynTool>::is_read_only(&BashTool, &readonly));
+    assert!(<BashTool as DynTool>::is_concurrency_safe(
+        &BashTool, &readonly
+    ));
+
+    let cd_git = json!({"command": "cd src && git status"});
+    assert!(!<BashTool as DynTool>::is_read_only(&BashTool, &cd_git));
+    assert!(!<BashTool as DynTool>::is_concurrency_safe(
+        &BashTool, &cd_git
+    ));
+
+    let multiple_cd = json!({"command": "cd a && cd b && ls"});
+    assert!(!<BashTool as DynTool>::is_read_only(
+        &BashTool,
+        &multiple_cd
+    ));
+    assert!(!<BashTool as DynTool>::is_concurrency_safe(
+        &BashTool,
+        &multiple_cd
+    ));
+}
+
 /// Non-read-only commands (mutations, installs, shell execution) must be
 /// reported as destructive so the permission evaluator asks the user.
 ///
@@ -1361,9 +1394,10 @@ async fn test_bash_check_permissions_common_substitution_not_prompted() {
 }
 
 #[tokio::test]
-async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
-    // acceptEdits auto-allows a pure-create subcommand anywhere in a compound
-    // command (#164), but `rm`/`mv`/`cp`/`sed` are NO LONGER blanket-allowed —
+async fn test_bash_check_permissions_accept_edits_asks_cd_then_write() {
+    // TS parity: a non-noop cwd change before a filesystem write requires
+    // approval even in acceptEdits mode. `rm`/`mv`/`cp`/`sed` are likewise
+    // not blanket-allowed —
     // they route through the dangerous-removal/sed gates and defer to the rule
     // pipeline (acceptEdits auto-accepts file-edit tools, not bash `rm`).
     let mut ctx = ToolUseContext::test_default();
@@ -1376,13 +1410,11 @@ async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
     )
     .await;
     assert!(
-        matches!(mkdir, coco_types::ToolCheckResult::Allow { .. }),
-        "acceptEdits pure-create subcommand should Allow, got {mkdir:?}"
+        matches!(mkdir, coco_types::ToolCheckResult::Ask { .. }),
+        "cd + mkdir should Ask in acceptEdits, got {mkdir:?}"
     );
 
-    // A safe `rm` no longer auto-allows via acceptEdits — it passes the
-    // dangerous-removal gate (target is in-tree) and defers to the rule
-    // pipeline / mode fallthrough rather than short-circuiting to Allow.
+    // A safe `rm` after `cd` still asks under the same cwd+write rule.
     let rm = <BashTool as DynTool>::check_permissions(
         &BashTool,
         &json!({"command": "cd src && rm old.txt"}),
@@ -1390,8 +1422,41 @@ async fn test_bash_check_permissions_accept_edits_allows_compound_filesystem() {
     )
     .await;
     assert!(
-        matches!(rm, coco_types::ToolCheckResult::Passthrough),
-        "acceptEdits should no longer blanket-allow `rm`; got {rm:?}"
+        matches!(rm, coco_types::ToolCheckResult::Ask { .. }),
+        "cd + rm should Ask in acceptEdits, got {rm:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_check_permissions_uses_live_session_cwd_for_noop_cd() {
+    let original = tempfile::tempdir().expect("original cwd");
+    let live = tempfile::tempdir().expect("live cwd");
+    let mut ctx = ToolUseContext::test_default();
+    ctx.original_cwd = Some(original.path().to_path_buf());
+    ctx.session_cwd = Some(std::sync::Arc::new(tokio::sync::RwLock::new(
+        live.path().to_path_buf(),
+    )));
+
+    let original_cd_git = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": format!("cd {} && git diff", original.path().display())}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(original_cd_git, coco_types::ToolCheckResult::Ask { .. }),
+        "cd to original cwd is non-noop when live cwd differs, got {original_cd_git:?}"
+    );
+
+    let live_cd_git = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": format!("cd {} && git diff", live.path().display())}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(live_cd_git, coco_types::ToolCheckResult::Passthrough),
+        "cd to live cwd should be filtered as no-op, got {live_cd_git:?}"
     );
 }
 
@@ -1445,6 +1510,21 @@ async fn test_bash_redirect_within_tree_passes() {
     assert!(
         matches!(result, coco_types::ToolCheckResult::Passthrough),
         "in-tree redirect must not Ask from the path gate, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_bash_redirect_after_cd_asks() {
+    let ctx = ToolUseContext::test_default();
+    let result = <BashTool as DynTool>::check_permissions(
+        &BashTool,
+        &json!({"command": "cd src && echo hi > out.txt"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        matches!(result, coco_types::ToolCheckResult::Ask { .. }),
+        "cd + output redirection must Ask, got {result:?}"
     );
 }
 

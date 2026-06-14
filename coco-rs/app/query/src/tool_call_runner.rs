@@ -159,6 +159,7 @@ impl<'a> ToolCallRunner<'a> {
                 tool_id,
                 tool: pending_call.tool,
                 parsed_input: pending_call.input,
+                is_concurrency_safe: pending_call.is_concurrency_safe,
                 model_index: idx,
             }));
         }
