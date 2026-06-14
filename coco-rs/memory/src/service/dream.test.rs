@@ -88,6 +88,10 @@ async fn fires_with_dream_constraints() {
         constraints.allowed_write_roots,
         vec![temp.path().to_path_buf()]
     );
+    assert_eq!(
+        calls[0].active_shell_tool,
+        coco_types::ActiveShellTool::Disabled
+    );
 }
 
 #[tokio::test]

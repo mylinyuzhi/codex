@@ -67,6 +67,7 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
         rendered_system_prompt: "system".into(),
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
+        active_shell_tool: coco_types::ActiveShellTool::Disabled,
         prompt_cache: Some(PromptCacheConfig {
             mode: PromptCacheMode::Auto,
             ttl: CacheTtl::OneHour,
@@ -90,6 +91,10 @@ fn test_build_query_config_inherits_prompt_cache_and_sets_skip_cache_write() {
         "fire-and-forget fork must flip skip_cache_write without losing cache-key fields"
     );
     assert_eq!(config.fork_context_messages.len(), 1);
+    assert_eq!(
+        config.active_shell_tool,
+        coco_types::ActiveShellTool::Disabled
+    );
     assert!(Arc::ptr_eq(
         &config.fork_context_messages[0],
         &cache.fork_context_messages[0],

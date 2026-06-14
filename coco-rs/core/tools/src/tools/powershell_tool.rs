@@ -152,6 +152,35 @@ pub struct PowerShellInput {
 
 pub struct PowerShellTool;
 
+fn resolve_powershell_provider(
+    ctx: &ToolUseContext,
+) -> Result<Arc<dyn coco_shell::ShellProvider>, ToolError> {
+    if let Some(provider) = ctx.shell_provider.clone() {
+        if matches!(provider.shell_type(), coco_shell::ShellType::PowerShell) {
+            return Ok(provider);
+        }
+        return Err(ToolError::ExecutionFailed {
+            message: format!(
+                "PowerShell tool selected, but the session shell provider is {}.",
+                provider.shell_type().name()
+            ),
+            display_data: None,
+            source: None,
+        });
+    }
+
+    let shell = coco_shell::get_shell(coco_shell::ShellType::PowerShell, None).ok_or(
+        ToolError::ExecutionFailed {
+            message:
+                "PowerShell not found on PATH. Install `pwsh` or `powershell` to use this tool."
+                    .into(),
+            display_data: None,
+            source: None,
+        },
+    )?;
+    Ok(Arc::new(coco_shell::PowerShellProvider::from_shell(shell)))
+}
+
 #[async_trait::async_trait]
 impl Tool for PowerShellTool {
     type Input = PowerShellInput;
@@ -175,6 +204,10 @@ impl Tool for PowerShellTool {
 
     fn name(&self) -> &str {
         ToolName::PowerShell.as_str()
+    }
+
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.active_shell_tool == coco_types::ActiveShellTool::PowerShell
     }
 
     /// Short UI label: the caller-supplied `description` field, falling back
@@ -427,13 +460,7 @@ async fn execute_background(
             source: None,
         })?;
 
-    // Wrap the command in the same pwsh invocation we use for
-    // foreground. The task handle runs the shell for us; we just feed
-    // the wrapped command string through.
-    let wrapped = format!(
-        "pwsh -NoProfile -NonInteractive -Command {command:?}",
-        command = input.command
-    );
+    let provider = resolve_powershell_provider(ctx)?;
     let description = input
         .description
         .as_deref()
@@ -442,7 +469,8 @@ async fn execute_background(
         .unwrap_or_else(|| "PowerShell background task".into());
     let task_id = task_handle
         .spawn_shell_task(coco_tool_runtime::BackgroundShellRequest {
-            command: wrapped,
+            command: input.command.clone(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::Provider(provider),
             timeout_ms: input.timeout.map(|t| t as i64),
             description,
             tool_use_id: ctx.tool_use_id.clone(),
@@ -510,20 +538,7 @@ async fn execute_foreground(
     // runs AFTER exec — annotation lands on the offending command's stderr.
     let cwd = crate::tools::shell_cwd::resolve_spawn_cwd(ctx).await;
 
-    // Build a per-call pwsh provider. PowerShell isn't currently
-    // session-scoped (no snapshot/session-env story for pwsh) — a fresh
-    // provider per call is cheap and isolates `/env` state correctly.
-    // Note this is independent of cwd persistence, which uses the same
-    // session-cwd plumbing as bash above.
-    let pwsh_shell = coco_shell::get_shell(coco_shell::ShellType::PowerShell, None).ok_or(
-        ToolError::ExecutionFailed {
-            message: "pwsh not found on PATH. Install PowerShell to use this tool.".into(),
-            display_data: None,
-            source: None,
-        },
-    )?;
-    let provider: Arc<dyn coco_shell::ShellProvider> =
-        Arc::new(coco_shell::PowerShellProvider::from_shell(pwsh_shell));
+    let provider = resolve_powershell_provider(ctx)?;
     let mut executor = coco_shell::ShellExecutor::with_provider(&cwd, provider);
 
     let violations_baseline = if let Some(state) = &sandbox_state {

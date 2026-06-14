@@ -209,6 +209,7 @@ pub fn build_query_config(
         // Inherit the parent's history verbatim so the API request's
         // prefix bytes match — this is what enables cache sharing.
         fork_context_messages: cache.fork_context_messages.clone(),
+        active_shell_tool: cache.active_shell_tool,
         allowed_tools: Vec::new(),
         disallowed_tools: Vec::new(),
         extra_permission_rules: Vec::new(),

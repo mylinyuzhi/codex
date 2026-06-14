@@ -187,6 +187,7 @@ impl AgentQueryEngine for QueryEngineAdapter {
             sandbox_state: None,
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
+            active_shell_tool: config.active_shell_tool,
             // Subagent flows don't carry the parent's shell provider
             // (snapshot/session-env/`/env`/shell-prefix). Worktree-isolated
             // subagents set `cwd_override` so the bash tool's spawn already

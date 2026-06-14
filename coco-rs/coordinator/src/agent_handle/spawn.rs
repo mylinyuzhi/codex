@@ -1215,6 +1215,7 @@ impl SwarmAgentHandle {
             features: request.features.clone(),
             skill_overrides: request.skill_overrides.clone(),
             parent_tool_filter: request.parent_tool_filter.clone(),
+            active_shell_tool: request.active_shell_tool,
             preserve_tool_use_results,
             permission_mode: request.mode.clone(),
             agent_id: Some(agent_id.clone()),

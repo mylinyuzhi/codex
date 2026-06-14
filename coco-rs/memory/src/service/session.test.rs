@@ -107,6 +107,10 @@ async fn fires_at_init_with_template_seeded() {
     // truncated SM updates for models that prefer one-section-per-turn
     // pacing. Now matches `extraction_max_turns` (default 5).
     assert_eq!(constraints.max_turns, Some(5));
+    assert_eq!(
+        calls[0].active_shell_tool,
+        coco_types::ActiveShellTool::Disabled
+    );
     // Seed file exists on disk with the 9-section template.
     let path = svc.file_path();
     let content = std::fs::read_to_string(&path).unwrap();

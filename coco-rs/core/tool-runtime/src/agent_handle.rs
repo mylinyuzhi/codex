@@ -25,6 +25,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use coco_messages::Message;
+use coco_types::ActiveShellTool;
 use coco_types::AgentDefinition;
 use coco_types::Features;
 use coco_types::SubagentRuntimeSnapshot;
@@ -261,6 +262,10 @@ pub struct AgentSpawnRequest {
     /// fields.
     #[serde(skip)]
     pub parent_tool_filter: Option<ToolFilter>,
+    /// Parent session's resolved shell tool visibility. Subagents inherit
+    /// this so model/config-level shell disabling stays session-wide.
+    #[serde(skip, default = "default_active_shell_tool")]
+    pub active_shell_tool: ActiveShellTool,
     /// Per-spawn safety constraints (turn cap, write-path whitelist).
     /// Used by the memory crate's forked extraction / auto-dream
     /// agents to install a 5-turn cap and memdir-only write fence.
@@ -341,6 +346,10 @@ pub struct AgentSpawnRequest {
     /// boundary from `ctx.agent_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invoking_agent_id: Option<String>,
+}
+
+fn default_active_shell_tool() -> ActiveShellTool {
+    ActiveShellTool::Disabled
 }
 
 /// Response from spawning a subagent.

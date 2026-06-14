@@ -377,7 +377,8 @@ impl QueryEngine {
                 self.config.tool_overrides.clone(),
                 self.config.tool_filter.clone(),
                 self.config.permission_mode,
-            );
+            )
+            .with_active_shell_tool(self.config.active_shell_tool);
             self.tools
                 .loaded_tools(&stub_ctx)
                 .iter()

@@ -288,6 +288,7 @@ impl SkillHandle for QuerySkillRuntime {
                     // from the dispatch's `SkillGateContext`.
                     skill_overrides: Some(gate.overrides.clone()),
                     parent_tool_filter: inherit.parent_tool_filter.clone(),
+                    active_shell_tool: inherit.active_shell_tool,
                     preserve_tool_use_results: false,
                     permission_mode: None,
                     agent_id: Some(agent_id.clone()),

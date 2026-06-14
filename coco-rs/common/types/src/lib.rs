@@ -348,6 +348,10 @@ pub use log::Entrypoint;
 pub use log::LogOption;
 pub use log::UserType;
 
+// Tool selection / identity types
+pub use tool::ActiveShellTool;
+pub use tool::ModelShellToolType;
+
 /// How compaction was triggered.
 ///
 /// Stays in `coco-types` (rather than `coco-messages`) because

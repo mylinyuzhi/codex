@@ -164,6 +164,7 @@ impl Tool for SkillTool {
         let inherit = coco_tool_runtime::SubagentInheritance {
             features: Some(ctx.features.clone()),
             tool_overrides: Some(ctx.tool_overrides.clone()),
+            active_shell_tool: ctx.active_shell_tool,
             parent_tool_filter: Some(ctx.tool_filter.clone()),
         };
         // `gate` carries the inputs `QuerySkillRuntime` needs to enforce

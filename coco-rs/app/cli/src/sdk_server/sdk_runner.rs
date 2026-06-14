@@ -125,6 +125,7 @@ impl TurnRunner for QueryEngineRunner {
                     &runtime_config.settings,
                     &runtime.original_cwd,
                 );
+            let current_engine_config = runtime.current_engine_config().await;
             let config = QueryEngineConfig {
                 model_id: handoff.model.clone(),
                 permission_mode,
@@ -158,6 +159,8 @@ impl TurnRunner for QueryEngineRunner {
                 sandbox_state: runtime.sandbox_state(),
                 memory_config: runtime_config.memory.clone(),
                 shell_config: runtime_config.shell.clone(),
+                active_shell_tool: current_engine_config.active_shell_tool,
+                shell_provider: current_engine_config.shell_provider.clone(),
                 web_fetch_config: runtime_config.web_fetch.clone(),
                 web_search_config: runtime_config.web_search.clone(),
                 compact: runtime_config.compact.clone(),
@@ -167,14 +170,11 @@ impl TurnRunner for QueryEngineRunner {
                 // Inherit `--include-hook-events` from the runtime's
                 // stored engine config so SDK turns honour the flag the
                 // session was started with.
-                include_hook_events: runtime.current_engine_config().await.include_hook_events,
+                include_hook_events: current_engine_config.include_hook_events,
                 // Inherit the session working-dir allowlist (seeded at build
                 // from --add-dir + settings additionalDirectories, plus any
                 // runtime /add-dir) so per-turn SDK rebuilds don't drop it (P17).
-                session_additional_dirs: runtime
-                    .current_engine_config()
-                    .await
-                    .session_additional_dirs,
+                session_additional_dirs: current_engine_config.session_additional_dirs,
                 ..Default::default()
             };
 

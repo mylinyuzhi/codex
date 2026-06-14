@@ -369,6 +369,11 @@ pub struct CacheSafeParams {
     /// provider" (selective check fails closed → no suppression).
     #[serde(default)]
     pub provider: String,
+    /// Runtime-resolved shell tool visibility for cache-sharing forks.
+    /// Defaults preserve backward compatibility for older serialized
+    /// cache slots.
+    #[serde(default)]
+    pub active_shell_tool: crate::ActiveShellTool,
     /// Parent request's prompt-cache directive. Forks must reuse the
     /// same mode/ttl/scope and only flip `skip_cache_write` when the
     /// fork is fire-and-forget; otherwise the fork changes the cache key

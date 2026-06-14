@@ -357,6 +357,7 @@ impl ToolContextFactory {
             sandbox_state: self.config.sandbox_state.clone(),
             memory_config: self.config.memory_config.clone(),
             shell_config: self.config.shell_config.clone(),
+            active_shell_tool: self.config.active_shell_tool,
             shell_provider: self.config.shell_provider.clone(),
             original_cwd: self.config.original_cwd.clone(),
             session_cwd: self.config.session_cwd.clone(),

@@ -115,6 +115,7 @@ pub use sections::McpRuntimeConfig;
 pub use sections::MemoryConfig;
 pub use sections::PathConfig;
 pub use sections::ShellConfig;
+pub use sections::ShellToolSelection;
 pub use sections::TeammateMode;
 pub use sections::ToolConfig;
 pub use sections::WebFetchConfig;

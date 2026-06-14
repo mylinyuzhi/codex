@@ -18,6 +18,7 @@ use crate::positive::PositiveTokens;
 use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
 use coco_types::ModelRole;
+use coco_types::ModelShellToolType;
 use coco_types::ModelSpec;
 use coco_types::ProviderModelSelection;
 use coco_types::ReasoningEffort;
@@ -77,7 +78,7 @@ pub struct ModelInfo {
     /// Per-model tool-availability adjustments. Layered on top of the
     /// built-in registry. See `docs/coco-rs/feature-gates-and-tool-filtering.md`.
     pub tool_overrides: Option<ToolOverrides>,
-    pub shell_type: Option<String>,
+    pub shell_tool_type: ModelShellToolType,
     pub max_tool_output_chars: Option<i32>,
 
     // === Instructions ===
@@ -120,7 +121,7 @@ impl Default for ModelInfo {
             auto_compact_pct: None,
             apply_patch_tool_type: None,
             tool_overrides: None,
-            shell_type: None,
+            shell_tool_type: ModelShellToolType::ShellCommand,
             max_tool_output_chars: None,
             base_instructions: None,
             base_instructions_file: None,
@@ -204,7 +205,7 @@ impl ModelInfo {
             auto_compact_pct: partial.auto_compact_pct,
             apply_patch_tool_type: partial.apply_patch_tool_type,
             tool_overrides: partial.tool_overrides,
-            shell_type: partial.shell_type,
+            shell_tool_type: partial.shell_tool_type.unwrap_or_default(),
             max_tool_output_chars: partial.max_tool_output_chars,
             base_instructions: partial.base_instructions,
             base_instructions_file: partial.base_instructions_file,

@@ -556,3 +556,87 @@ pub fn register_core_tools(registry: &coco_tool_runtime::ToolRegistry) {
     registry.register(Arc::new(GlobTool));
     registry.register(Arc::new(GrepTool));
 }
+
+#[cfg(test)]
+mod shell_visibility_tests {
+    use super::*;
+    use coco_types::ActiveShellTool;
+    use coco_types::ToolId;
+    use coco_types::ToolName;
+    use std::sync::Arc;
+
+    fn registered_registry() -> coco_tool_runtime::ToolRegistry {
+        let registry = coco_tool_runtime::ToolRegistry::new();
+        register_all_tools(&registry);
+        registry
+    }
+
+    fn loaded_names(ctx: &coco_tool_runtime::ToolUseContext) -> Vec<String> {
+        let mut names = ctx
+            .tools
+            .loaded_tools(ctx)
+            .into_iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn registry_registers_both_shell_tools_but_loads_only_active_one() {
+        let registry = Arc::new(registered_registry());
+        assert!(registry.get_by_name(ToolName::Bash.as_str()).is_some());
+        assert!(
+            registry
+                .get_by_name(ToolName::PowerShell.as_str())
+                .is_some()
+        );
+
+        let mut bash_ctx = coco_tool_runtime::ToolUseContext::test_default();
+        bash_ctx.tools = registry.clone();
+        bash_ctx.active_shell_tool = ActiveShellTool::Bash;
+        let bash_loaded = loaded_names(&bash_ctx);
+        assert!(bash_loaded.contains(&ToolName::Bash.as_str().to_string()));
+        assert!(!bash_loaded.contains(&ToolName::PowerShell.as_str().to_string()));
+
+        let mut powershell_ctx = coco_tool_runtime::ToolUseContext::test_default();
+        powershell_ctx.tools = registry;
+        powershell_ctx.active_shell_tool = ActiveShellTool::PowerShell;
+        let powershell_loaded = loaded_names(&powershell_ctx);
+        assert!(!powershell_loaded.contains(&ToolName::Bash.as_str().to_string()));
+        assert!(powershell_loaded.contains(&ToolName::PowerShell.as_str().to_string()));
+    }
+
+    #[test]
+    fn disabled_shell_tool_hides_both_shell_tools() {
+        let registry = Arc::new(registered_registry());
+        let mut ctx = coco_tool_runtime::ToolUseContext::test_default();
+        ctx.tools = registry;
+        ctx.active_shell_tool = ActiveShellTool::Disabled;
+
+        let loaded = loaded_names(&ctx);
+        assert!(!loaded.contains(&ToolName::Bash.as_str().to_string()));
+        assert!(!loaded.contains(&ToolName::PowerShell.as_str().to_string()));
+    }
+
+    #[test]
+    fn tool_overrides_and_agent_filter_still_hide_active_shell_tool() {
+        let registry = Arc::new(registered_registry());
+        let mut override_ctx = coco_tool_runtime::ToolUseContext::test_default();
+        override_ctx.tools = registry.clone();
+        override_ctx.active_shell_tool = ActiveShellTool::Bash;
+        override_ctx.tool_overrides = Arc::new(
+            coco_types::ToolOverrides::none().with_excluded(ToolId::Builtin(ToolName::Bash)),
+        );
+        assert!(!loaded_names(&override_ctx).contains(&ToolName::Bash.as_str().to_string()));
+
+        let mut filter_ctx = coco_tool_runtime::ToolUseContext::test_default();
+        filter_ctx.tools = registry;
+        filter_ctx.active_shell_tool = ActiveShellTool::PowerShell;
+        filter_ctx.tool_filter = coco_types::ToolFilter::new(
+            Vec::new(),
+            vec![ToolName::PowerShell.as_str().to_string()],
+        );
+        assert!(!loaded_names(&filter_ctx).contains(&ToolName::PowerShell.as_str().to_string()));
+    }
+}

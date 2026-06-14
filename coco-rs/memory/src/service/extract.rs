@@ -33,6 +33,7 @@ use std::time::Instant;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
 use coco_types::messages::Message;
 use tokio::sync::Mutex;
@@ -131,6 +132,7 @@ pub struct ExtractService {
     config: MemoryConfig,
     agent: AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
+    active_shell_tool: ActiveShellTool,
     /// User-visible save notices land here on a successful
     /// extraction; the engine drains it once per turn and injects a
     /// `SystemMemorySavedMessage` into history.
@@ -250,6 +252,7 @@ impl ExtractService {
             agent,
             telemetry,
             crate::notice::NoticeInbox::default(),
+            ActiveShellTool::Disabled,
         )
     }
 
@@ -261,6 +264,7 @@ impl ExtractService {
         agent: AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
+        active_shell_tool: ActiveShellTool,
     ) -> Self {
         let (tx, rx) = watch::channel(false);
         Self {
@@ -268,6 +272,7 @@ impl ExtractService {
             config,
             agent,
             telemetry,
+            active_shell_tool,
             notices,
             state: Mutex::new(ExtractState::default()),
             in_progress: Arc::new(AtomicBool::new(false)),
@@ -679,6 +684,7 @@ impl ExtractService {
             )),
             require_can_use_tool: false,
             fork_label: Some(coco_types::ForkLabel::ExtractMemories),
+            active_shell_tool: self.active_shell_tool,
             ..Default::default()
         };
 

@@ -112,6 +112,11 @@ pub struct AgentQueryConfig {
     /// for the same reason as the other inheritance fields.
     #[serde(skip)]
     pub parent_tool_filter: Option<coco_types::ToolFilter>,
+    /// Parent session's resolved shell tool visibility. Skipped at the
+    /// JSON boundary because it is a runtime decision, not portable
+    /// cross-process configuration.
+    #[serde(skip, default = "default_active_shell_tool")]
+    pub active_shell_tool: coco_types::ActiveShellTool,
     /// Whether to preserve tool use results across compaction.
     #[serde(default)]
     pub preserve_tool_use_results: bool,
@@ -264,6 +269,10 @@ pub struct AgentQueryConfig {
     /// is skipped at the JSON boundary like [`Self::event_tx`].
     #[serde(skip)]
     pub live_transcript: Option<crate::LiveTranscript>,
+}
+
+fn default_active_shell_tool() -> coco_types::ActiveShellTool {
+    coco_types::ActiveShellTool::Disabled
 }
 
 /// Result of a multi-turn agent query.

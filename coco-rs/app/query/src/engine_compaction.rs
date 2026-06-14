@@ -653,6 +653,7 @@ impl QueryEngine {
                         .runtime_snapshot()
                         .map(|snapshot| snapshot.provider)
                         .unwrap_or_default(),
+                    active_shell_tool: self.config.active_shell_tool,
                     prompt_cache: self.config.prompt_cache.clone(),
                     fork_context_messages: Vec::new(),
                 }
@@ -1012,7 +1013,8 @@ impl QueryEngine {
             self.config.permission_mode,
         )
         .with_discovered_tool_names(discovered)
-        .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
+        .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search)
+        .with_active_shell_tool(self.config.active_shell_tool);
         let stub_ctx = self.with_current_tool_search_candidates(stub_ctx).await;
         let mut loaded: Vec<String> = self
             .tools

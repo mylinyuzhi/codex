@@ -46,6 +46,7 @@ fn test_cache_safe_params_serde_roundtrip() {
         rendered_system_prompt: "You are a helpful agent.".into(),
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
+        active_shell_tool: crate::ActiveShellTool::PowerShell,
         prompt_cache: None,
         fork_context_messages: vec![user_msg("hi"), assistant_msg("hello")],
     };
@@ -54,6 +55,7 @@ fn test_cache_safe_params_serde_roundtrip() {
     assert_eq!(back.rendered_system_prompt, params.rendered_system_prompt);
     assert_eq!(back.model_id, params.model_id);
     assert_eq!(back.provider, params.provider);
+    assert_eq!(back.active_shell_tool, params.active_shell_tool);
     assert_eq!(back.fork_context_messages.len(), 2);
     assert!(matches!(
         back.fork_context_messages[0].as_ref(),
@@ -77,6 +79,7 @@ fn test_cache_safe_params_default_skips_empty_fork_messages() {
     assert!(parsed.fork_context_messages.is_empty());
     assert_eq!(parsed.model_id, "m");
     assert_eq!(parsed.provider, "");
+    assert_eq!(parsed.active_shell_tool, crate::ActiveShellTool::Disabled);
 }
 
 #[test]
@@ -89,6 +92,7 @@ fn test_cache_safe_params_eq_distinguishes_model() {
         rendered_system_prompt: "sys".into(),
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
+        active_shell_tool: crate::ActiveShellTool::Bash,
         prompt_cache: None,
         fork_context_messages: Vec::new(),
     };
@@ -106,6 +110,7 @@ fn test_cache_safe_params_eq_distinguishes_provider() {
         rendered_system_prompt: "sys".into(),
         model_id: "claude-opus-4-7".into(),
         provider: "anthropic".into(),
+        active_shell_tool: crate::ActiveShellTool::Bash,
         prompt_cache: None,
         fork_context_messages: Vec::new(),
     };

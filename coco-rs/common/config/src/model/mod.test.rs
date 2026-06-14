@@ -51,6 +51,39 @@ fn test_model_info_resolve_thinking_nearest() {
 }
 
 #[test]
+fn model_info_defaults_shell_tool_type_to_shell_command() {
+    use crate::positive::PositiveTokens;
+
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test-model", partial).expect("should resolve");
+    assert_eq!(
+        info.shell_tool_type,
+        coco_types::ModelShellToolType::ShellCommand
+    );
+}
+
+#[test]
+fn model_info_accepts_shell_tool_type() {
+    use crate::positive::PositiveTokens;
+
+    let partial = PartialModelInfo {
+        context_window: Some(PositiveTokens::new(100_000)),
+        max_output_tokens: Some(PositiveTokens::new(16_384)),
+        shell_tool_type: Some(coco_types::ModelShellToolType::Disabled),
+        ..Default::default()
+    };
+    let info = ModelInfo::from_partial("test", "test-model", partial).expect("should resolve");
+    assert_eq!(
+        info.shell_tool_type,
+        coco_types::ModelShellToolType::Disabled
+    );
+}
+
+#[test]
 fn test_partial_model_info_merge_from() {
     use crate::positive::PositiveTokens;
 

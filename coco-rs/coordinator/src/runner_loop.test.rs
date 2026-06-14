@@ -295,6 +295,7 @@ fn in_process_config(prompt: &str) -> InProcessRunnerConfig {
         features: None,
         tool_overrides: None,
         parent_tool_filter: None,
+        active_shell_tool: coco_types::ActiveShellTool::Disabled,
         effort: None,
         use_exact_tools: false,
         mcp_servers: Vec::new(),

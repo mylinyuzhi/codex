@@ -65,6 +65,36 @@ fn models_json_round_trip_is_byte_stable() {
 }
 
 #[test]
+fn shell_tool_type_parses_valid_values() {
+    let parsed: PartialModelInfo = serde_json::from_value(serde_json::json!({
+        "shell_tool_type": "unified_exec"
+    }))
+    .expect("valid shell_tool_type should parse");
+    assert_eq!(
+        parsed.shell_tool_type,
+        Some(coco_types::ModelShellToolType::UnifiedExec)
+    );
+}
+
+#[test]
+fn shell_tool_type_rejects_invalid_values() {
+    let err = serde_json::from_value::<PartialModelInfo>(serde_json::json!({
+        "shell_tool_type": "fish"
+    }))
+    .expect_err("invalid shell_tool_type must fail");
+    assert!(err.to_string().contains("unknown variant"));
+}
+
+#[test]
+fn legacy_shell_type_field_is_rejected() {
+    let err = serde_json::from_value::<PartialModelInfo>(serde_json::json!({
+        "shell_type": "shell_command"
+    }))
+    .expect_err("legacy shell_type must fail");
+    assert!(err.to_string().contains("unknown field"));
+}
+
+#[test]
 fn merge_from_preserves_existing_extra_body_on_empty_overlay() {
     let mut acc = PartialModelInfo {
         extra_body: Some(std::collections::BTreeMap::from([(

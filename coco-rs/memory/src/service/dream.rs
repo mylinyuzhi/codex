@@ -19,6 +19,7 @@ use std::time::SystemTime;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
 
 use crate::config::MemoryConfig;
@@ -79,6 +80,7 @@ pub struct DreamService {
     config: MemoryConfig,
     agent: crate::service::extract::AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
+    active_shell_tool: ActiveShellTool,
     /// User-visible notice channel — engine drains the inbox once per
     /// turn and injects a `SystemMemorySavedMessage` with `verb:
     /// "Improved"`.
@@ -130,6 +132,7 @@ impl DreamService {
             agent,
             telemetry,
             crate::notice::NoticeInbox::default(),
+            ActiveShellTool::Disabled,
         )
     }
 
@@ -141,12 +144,14 @@ impl DreamService {
         agent: crate::service::extract::AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
         notices: crate::notice::NoticeInbox,
+        active_shell_tool: ActiveShellTool,
     ) -> Self {
         Self {
             memory_dir,
             config,
             agent,
             telemetry,
+            active_shell_tool,
             notices,
             last_scan_at: std::sync::Mutex::new(None),
             consolidating: Arc::new(AtomicBool::new(false)),
@@ -354,6 +359,7 @@ impl DreamService {
             )),
             require_can_use_tool: false,
             fork_label: Some(coco_types::ForkLabel::AutoDream),
+            active_shell_tool: self.active_shell_tool,
             ..Default::default()
         };
 

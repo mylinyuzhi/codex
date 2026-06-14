@@ -39,6 +39,7 @@ use coco_paths::ProjectPaths;
 use coco_tool_runtime::AgentHandleRef;
 use coco_tool_runtime::AgentSpawnConstraints;
 use coco_tool_runtime::AgentSpawnRequest;
+use coco_types::ActiveShellTool;
 use coco_types::ModelRole;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -130,6 +131,7 @@ pub struct SessionMemoryService {
     config: MemoryConfig,
     agent: crate::service::extract::AgentSlot,
     telemetry: Arc<dyn MemoryTelemetryEmitter>,
+    active_shell_tool: ActiveShellTool,
     state: Arc<Mutex<SessionState>>,
     /// In-memory text cache. Empty string ⇒ no extract yet / file missing.
     /// Populated by [`Self::load_from_disk`] at session start and
@@ -190,6 +192,7 @@ impl SessionMemoryService {
             config,
             Arc::new(std::sync::RwLock::new(agent)),
             Arc::new(NoopEmitter),
+            ActiveShellTool::Disabled,
         )
     }
 
@@ -201,6 +204,7 @@ impl SessionMemoryService {
         config: MemoryConfig,
         agent: crate::service::extract::AgentSlot,
         telemetry: Arc<dyn MemoryTelemetryEmitter>,
+        active_shell_tool: ActiveShellTool,
     ) -> Self {
         let (tx, rx) = watch::channel(false);
         Self {
@@ -209,6 +213,7 @@ impl SessionMemoryService {
             config,
             agent,
             telemetry,
+            active_shell_tool,
             state: Arc::new(Mutex::new(SessionState::default())),
             text_cache: tokio::sync::RwLock::new(String::new()),
             in_progress: Arc::new(AtomicBool::new(false)),
@@ -677,6 +682,7 @@ impl SessionMemoryService {
             )),
             require_can_use_tool: false,
             fork_label: Some(fork_label),
+            active_shell_tool: self.active_shell_tool,
             ..Default::default()
         };
 

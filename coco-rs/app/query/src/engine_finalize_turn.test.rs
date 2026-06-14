@@ -42,6 +42,7 @@ fn empty_cache(provider: &str) -> CacheSafeParams {
         rendered_system_prompt: String::new(),
         model_id: "claude-opus-4-7".into(),
         provider: provider.into(),
+        active_shell_tool: coco_types::ActiveShellTool::Bash,
         prompt_cache: None,
         fork_context_messages: Vec::new(),
     }

@@ -13,6 +13,7 @@ use coco_config::WebSearchConfig;
 use coco_messages::CostTracker;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
+use coco_types::ActiveShellTool;
 use coco_types::Features;
 use coco_types::PermissionMode;
 use coco_types::PermissionRule;
@@ -268,6 +269,8 @@ pub struct QueryEngineConfig {
     pub memory_config: MemoryConfig,
     /// Resolved shell runtime configuration (bash-tool path).
     pub shell_config: ShellConfig,
+    /// Model-facing shell tool selected for this session.
+    pub active_shell_tool: ActiveShellTool,
     /// Session-scoped shell command assembler. Constructed once at
     /// session bootstrap (with the live snapshot watch + session-env
     /// reader + `/env` store) and threaded onto every
@@ -407,6 +410,12 @@ impl Default for QueryEngineConfig {
             sandbox_state: None,
             memory_config: MemoryConfig::default(),
             shell_config: ShellConfig::default(),
+            // Engine tests and SDK-style harnesses build QueryEngineConfig
+            // directly, bypassing CLI session bootstrap where shell.tool=auto
+            // resolves to the platform default. Preserve the historical Bash
+            // visibility for those callers; fork/spawn request DTOs still
+            // default to Disabled until a parent explicitly threads a value.
+            active_shell_tool: ActiveShellTool::Bash,
             shell_provider: None,
             original_cwd: None,
             session_cwd: None,

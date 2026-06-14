@@ -72,6 +72,7 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
         // parent's tool/sandbox/web_*/feature/role configuration so
         // the child engine sees the same world the parent does.
         let runtime_config = self.runtime.runtime_config.as_ref();
+        let parent_engine_config = self.runtime.current_engine_config().await;
 
         // Forks inherit the parent's settings-driven permission rules;
         // re-resolve from the same layered settings the parent uses.
@@ -107,6 +108,11 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             sandbox_state: self.runtime.sandbox_state(),
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
+            active_shell_tool: agent_config.active_shell_tool,
+            shell_provider: (agent_config.active_shell_tool
+                != coco_types::ActiveShellTool::Disabled)
+                .then(|| parent_engine_config.shell_provider.clone())
+                .flatten(),
             web_fetch_config: runtime_config.web_fetch.clone(),
             web_search_config: runtime_config.web_search.clone(),
             lsp_config: runtime_config.lsp.clone(),

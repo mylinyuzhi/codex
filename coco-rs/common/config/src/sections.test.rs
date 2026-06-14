@@ -134,6 +134,25 @@ fn test_tool_config_json_first_env_override() {
 }
 
 #[test]
+fn shell_config_defaults_tool_to_auto() {
+    let config = ShellConfig::resolve(&Settings::default(), &EnvSnapshot::default());
+    assert_eq!(config.tool, ShellToolSelection::Auto);
+}
+
+#[test]
+fn shell_config_parses_tool_selection() {
+    let settings = Settings {
+        shell: PartialShellSettings {
+            tool: Some(ShellToolSelection::PowerShell),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let config = ShellConfig::resolve(&settings, &EnvSnapshot::default());
+    assert_eq!(config.tool, ShellToolSelection::PowerShell);
+}
+
+#[test]
 fn test_api_retry_env_max_retries_overrides_settings() {
     let settings = Settings {
         api: PartialApiSettings {

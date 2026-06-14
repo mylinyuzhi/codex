@@ -4,9 +4,17 @@
 //! helpers from `powershell.rs` — previously they were dead code.
 
 use super::PowerShellTool;
+use coco_tool_runtime::BackgroundShellKind;
+use coco_tool_runtime::BackgroundShellRequest;
 use coco_tool_runtime::DynTool;
+use coco_tool_runtime::TaskHandle;
 use coco_tool_runtime::ToolUseContext;
 use serde_json::json;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Unsafe CLM type reference must be blocked before pwsh is spawned.
 /// Rejects types outside the allowlist.
@@ -168,6 +176,108 @@ async fn test_powershell_readonly_bypasses_clm_gate() {
             "read-only command must bypass CLM gate, got: {msg}"
         );
     }
+}
+
+#[derive(Debug)]
+struct FakePowerShellProvider {
+    shell_type: coco_shell::ShellType,
+    shell_path: PathBuf,
+}
+
+#[async_trait::async_trait]
+impl coco_shell::ShellProvider for FakePowerShellProvider {
+    fn shell_type(&self) -> &coco_shell::ShellType {
+        &self.shell_type
+    }
+
+    fn shell_path(&self) -> &Path {
+        &self.shell_path
+    }
+
+    async fn build_exec_command(
+        &self,
+        command: &str,
+        _opts: &coco_shell::BuildExecOpts,
+    ) -> coco_shell::BuiltCommand {
+        coco_shell::BuiltCommand {
+            command_string: command.to_string(),
+            cwd_file_path: std::env::temp_dir().join("fake-powershell-cwd"),
+        }
+    }
+
+    fn spawn_args(&self, command_string: &str) -> Vec<String> {
+        vec![
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            command_string.into(),
+        ]
+    }
+
+    async fn env_overrides(
+        &self,
+        _command: &str,
+        _opts: &coco_shell::BuildExecOpts,
+    ) -> HashMap<String, String> {
+        HashMap::new()
+    }
+}
+
+#[derive(Default)]
+struct RecordingTaskHandle {
+    request: Mutex<Option<BackgroundShellRequest>>,
+}
+
+#[async_trait::async_trait]
+impl TaskHandle for RecordingTaskHandle {
+    async fn spawn_shell_task(
+        &self,
+        request: BackgroundShellRequest,
+    ) -> Result<String, coco_error::BoxedError> {
+        *self.request.lock().unwrap() = Some(request);
+        Ok("task-ps".into())
+    }
+}
+
+#[tokio::test]
+async fn test_powershell_background_preserves_command_for_provider() {
+    let command = r#"$env:FOO = "$(Get-Date)"; Write-Output "quotes ' and `backtick`""#;
+    let task_handle = Arc::new(RecordingTaskHandle::default());
+    let provider = Arc::new(FakePowerShellProvider {
+        shell_type: coco_shell::ShellType::PowerShell,
+        shell_path: PathBuf::from("/fake/pwsh"),
+    });
+    let mut ctx = ToolUseContext::test_default();
+    ctx.active_shell_tool = coco_types::ActiveShellTool::PowerShell;
+    ctx.shell_provider = Some(provider);
+    ctx.task_handle = Some(task_handle.clone());
+
+    let result = <PowerShellTool as DynTool>::execute(
+        &PowerShellTool,
+        json!({
+            "command": command,
+            "run_in_background": true,
+            "description": "pwsh bg"
+        }),
+        &ctx,
+    )
+    .await
+    .expect("background PowerShell request should be accepted");
+    assert_eq!(result.data["task_id"], "task-ps");
+
+    let request = task_handle
+        .request
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("task request captured");
+    assert_eq!(request.command, command);
+    assert!(!request.command.contains("-NoProfile"));
+    assert!(matches!(
+        request.shell_kind,
+        BackgroundShellKind::Provider(ref provider)
+            if matches!(provider.shell_type(), coco_shell::ShellType::PowerShell)
+    ));
 }
 
 // ── render_for_model — output envelopes ────────────────

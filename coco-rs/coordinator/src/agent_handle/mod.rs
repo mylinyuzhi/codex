@@ -747,6 +747,7 @@ impl SwarmAgentHandle {
                 features: request.features.clone(),
                 tool_overrides: request.tool_overrides.clone(),
                 parent_tool_filter: request.parent_tool_filter.clone(),
+                active_shell_tool: request.active_shell_tool,
                 // All static knobs read from `request.definition` —
                 // see `agent_handle.rs` `AgentSpawnRequest` field
                 // comment for why the top-level slots are gone.

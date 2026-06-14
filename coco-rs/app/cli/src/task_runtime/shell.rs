@@ -1,14 +1,15 @@
 //! Shell-task spawning, driver, and terminal-state composition.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use coco_tasks::{
     NotificationKind, NotificationSink, TaskCreateRequest, TaskManager, TaskNotification,
     TerminalStatus,
 };
+use coco_tool_runtime::BackgroundShellKind;
 use coco_tool_runtime::BackgroundShellRequest;
 use coco_types::{TaskStatus, TaskType};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, warn};
 
@@ -16,6 +17,8 @@ use super::TaskRuntime;
 use super::stall;
 use super::timers::{spawn_auto_detach_timer, spawn_progress_timer};
 use crate::disk_task_output::DiskTaskOutput;
+
+static BACKGROUND_SHELL_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
 
 impl TaskRuntime {
     #[instrument(
@@ -77,7 +80,6 @@ impl TaskRuntime {
         let driver_tool_use_id = request.tool_use_id.clone();
         let driver_agent_id = request.issuing_agent.clone();
         let driver_output_path = output_path.clone();
-        let command_str = request.command.clone();
         let timeout_ms = request.timeout_ms.unwrap_or(120_000);
 
         let dto_for_driver = dto.clone();
@@ -128,21 +130,13 @@ impl TaskRuntime {
         }
 
         let drain_done_for_driver = drain_done;
-        // W6: thread sandbox state into the driver. `None` = no
-        // wrapping (current bg-default behavior). `Some` = apply
-        // `SandboxState::try_wrap_command_with_binds` before spawn.
-        let sandbox_for_driver = request.sandbox_state.clone();
-        let sandbox_bypass_for_driver = request.sandbox_bypass;
-        let kill_on_timeout = request.kill_on_timeout;
+        let request_for_driver = request.clone();
         tokio::spawn(async move {
             let outcome = run_shell_task(
-                &command_str,
+                request_for_driver,
                 timeout_ms,
-                kill_on_timeout,
                 cancel_for_driver,
                 dto_for_driver,
-                sandbox_for_driver,
-                sandbox_bypass_for_driver,
             )
             .await;
             drain_done_for_driver.cancel();
@@ -193,36 +187,87 @@ struct ShellOutcome {
 /// the legacy `ShellExecutor` foreground path provided.
 #[instrument(
     level = "debug",
-    skip(cancel, dto, sandbox_state),
-    fields(command_preview = %command_preview(command), timeout_ms, kill_on_timeout, sandboxed = sandbox_state.is_some())
+    skip(cancel, dto, request),
+    fields(command_preview = %command_preview(&request.command), timeout_ms, kill_on_timeout = request.kill_on_timeout, sandboxed = request.sandbox_state.is_some())
 )]
 async fn run_shell_task(
-    command: &str,
+    request: BackgroundShellRequest,
     timeout_ms: i64,
-    kill_on_timeout: bool,
     cancel: CancellationToken,
     dto: DiskTaskOutput,
-    sandbox_state: Option<Arc<coco_sandbox::SandboxState>>,
-    sandbox_bypass: coco_sandbox::SandboxBypass,
 ) -> ShellOutcome {
     use tokio::io::AsyncReadExt;
     use tokio::process::Command;
 
-    #[cfg(windows)]
-    let (program, args) = ("cmd.exe", vec!["/C", command]);
-    #[cfg(not(windows))]
-    let (program, args) = ("/bin/bash", vec!["-c", command]);
+    let command = request.command.as_str();
+    let sandbox_tmp_dir = match &request.sandbox_state {
+        Some(state)
+            if state
+                .command_snapshot(command, request.sandbox_bypass)
+                .should_wrap =>
+        {
+            coco_sandbox::SandboxState::allocate_command_tmp_dir()
+        }
+        _ => None,
+    };
+    let sandbox_tmp_path = sandbox_tmp_dir.as_ref().map(|dir| dir.path().to_path_buf());
+
+    let (program, args, env_overrides): (std::path::PathBuf, Vec<String>, Vec<(String, String)>) =
+        match request.shell_kind.clone() {
+            BackgroundShellKind::DefaultPlatformShell => {
+                #[cfg(windows)]
+                {
+                    (
+                        std::path::PathBuf::from("cmd.exe"),
+                        vec!["/C".to_string(), command.to_string()],
+                        Vec::new(),
+                    )
+                }
+                #[cfg(not(windows))]
+                {
+                    (
+                        std::path::PathBuf::from("/bin/bash"),
+                        vec!["-c".to_string(), command.to_string()],
+                        Vec::new(),
+                    )
+                }
+            }
+            BackgroundShellKind::Provider(provider) => {
+                let use_sandbox = sandbox_tmp_path.is_some();
+                let opts = coco_shell::BuildExecOpts {
+                    id: BACKGROUND_SHELL_COMMAND_ID.fetch_add(1, Ordering::Relaxed),
+                    sandbox_tmp_dir: sandbox_tmp_path.clone(),
+                    use_sandbox,
+                };
+                let built = provider.build_exec_command(command, &opts).await;
+                let args = provider.spawn_args(&built.command_string);
+                let env_overrides = provider
+                    .env_overrides(command, &opts)
+                    .await
+                    .into_iter()
+                    .collect();
+                (provider.shell_path().to_path_buf(), args, env_overrides)
+            }
+        };
 
     let mut cmd = Command::new(program);
     cmd.args(&args);
+    for (key, value) in env_overrides {
+        cmd.env(key, value);
+    }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     // W6: sandbox wrap. `try_wrap_command_with_binds` mutates `cmd`
     // in place to swap the program/args with the platform-specific
     // wrapper (bwrap on Linux, Seatbelt sandbox-exec on macOS).
     // No-op when sandbox is None / inactive / command excluded.
-    if let Some(state) = &sandbox_state
-        && let Err(e) = state.try_wrap_command_with_binds(command, sandbox_bypass, &[], &mut cmd)
+    if let Some(state) = &request.sandbox_state
+        && let Err(e) = state.try_wrap_command_with_binds(
+            command,
+            request.sandbox_bypass,
+            &sandbox_tmp_path.iter().cloned().collect::<Vec<_>>(),
+            &mut cmd,
+        )
     {
         warn!(
             target: "coco::task_runtime::shell",
@@ -310,7 +355,7 @@ async fn run_shell_task(
         // awaiter is released separately by the auto-detach timer (which fires
         // at the same `timeout_ms`), and the child runs to natural exit in the
         // background — TS `shouldAutoBackground` parity.
-        () = tokio::time::sleep(timeout_duration), if kill_on_timeout => {
+        () = tokio::time::sleep(timeout_duration), if request.kill_on_timeout => {
             let _ = child.kill().await;
             WaitOutcome::TimedOut { budget_ms: timeout_ms }
         }

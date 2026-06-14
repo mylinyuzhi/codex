@@ -166,6 +166,7 @@ pub use task_handle::AgentTranscriptStore;
 pub use task_handle::AgentTranscriptStoreRef;
 pub use task_handle::AgentUsage;
 pub use task_handle::AgentWorktree;
+pub use task_handle::BackgroundShellKind;
 pub use task_handle::BackgroundShellRequest;
 pub use task_handle::BackgroundTaskHandleRef;
 pub use task_handle::DetachOutcome;
