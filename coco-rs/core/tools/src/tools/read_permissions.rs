@@ -165,6 +165,7 @@ pub fn check_read_permission_for_path(
             ),
             suggestions: vec![],
             choices: None,
+            detail: None,
         };
     }
 
@@ -183,6 +184,7 @@ pub fn check_read_permission_for_path(
             ),
             suggestions: vec![],
             choices: None,
+            detail: None,
         };
     }
 
@@ -226,6 +228,7 @@ pub fn check_read_permission_for_path(
             ),
             suggestions: vec![],
             choices: None,
+            detail: None,
         };
     }
 
@@ -305,6 +308,7 @@ pub fn check_read_permission_for_path(
         ),
         suggestions: read_permission_suggestions(path, &cwd_str),
         choices: None,
+        detail: None,
     }
 }
 

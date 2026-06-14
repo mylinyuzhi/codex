@@ -43,7 +43,15 @@ async fn run_with_response(approved: bool) -> SandboxApprovalDecision {
     let entry = take_pending(&pending, &request_id)
         .await
         .expect("pending entry registered");
-    assert!(send_resolution(entry, approved, None, vec![], None, None));
+    assert!(send_resolution(
+        entry,
+        approved,
+        None,
+        vec![],
+        None,
+        None,
+        None
+    ));
 
     handle.await.expect("request_approval task")
 }

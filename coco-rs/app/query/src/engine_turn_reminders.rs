@@ -164,18 +164,20 @@ impl QueryEngine {
             )
             .with_discovered_tool_names(pre_snapshot_discovered)
             .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
-            let loaded: Vec<String> = self
+            let mut loaded: Vec<String> = self
                 .tools
                 .loaded_tools(&stub_ctx)
                 .iter()
                 .map(|t| t.name().to_string())
                 .collect();
-            let deferred: Vec<String> = self
+            loaded.sort();
+            let mut deferred: Vec<String> = self
                 .tools
                 .deferred_tools(&stub_ctx)
                 .iter()
                 .map(|t| t.name().to_string())
                 .collect();
+            deferred.sort();
             (loaded, deferred)
         };
         // `reminder_tools` is the model-visible (loaded) tool list —
@@ -511,6 +513,7 @@ impl QueryEngine {
             fallback_permission_mode: self.config.permission_mode,
             is_auto_classifier_active: reminder_auto_classifier_active,
             tools: reminder_tools,
+            deferred_tools: reminder_deferred_tools_clone.clone(),
             is_task_v2_enabled: reminder_task_v2_enabled,
             history,
             todo_key: reminder_todo_key.to_string(),

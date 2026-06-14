@@ -48,6 +48,7 @@ fn factory_with_live_rules(
         file_history: None,
         config_home: None,
         tool_result_session_dir: None,
+        transcript_path: None,
         hook_handle: None,
         agent_handle: None,
         skill_handle: None,

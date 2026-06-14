@@ -12,6 +12,7 @@ fn dummy_request(id: &str) -> ToolPermissionRequest {
         cwd: None,
         suggestions: vec![],
         choices: None,
+        detail: None,
         worker_badge: None,
     }
 }
@@ -37,6 +38,7 @@ fn ask_user_question_request(id: &str) -> ToolPermissionRequest {
         cwd: None,
         suggestions: vec![],
         choices: None,
+        detail: None,
         worker_badge: None,
     }
 }
@@ -56,7 +58,32 @@ fn exit_plan_mode_request(id: &str) -> ToolPermissionRequest {
         }),
         cwd: None,
         suggestions: vec![],
-        choices: None,
+        choices: Some(vec![
+            coco_types::PermissionAskChoice {
+                value: "yes-accept-edits-keep-context".into(),
+                label: "Yes, auto-accept edits".into(),
+                description: None,
+            },
+            coco_types::PermissionAskChoice {
+                value: "yes-default-keep-context".into(),
+                label: "Yes, manually approve edits".into(),
+                description: None,
+            },
+            coco_types::PermissionAskChoice {
+                value: "no".into(),
+                label: "No, keep planning".into(),
+                description: None,
+            },
+        ]),
+        detail: Some(coco_types::PermissionRequestDetail::ExitPlanMode {
+            outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+            plan: Some("# Plan\n\n- Change the thing".into()),
+            plan_file_path: Some("/tmp/plan.md".into()),
+            allowed_prompts: vec![coco_types::ExitPlanModeAllowedPrompt {
+                tool: "Bash".into(),
+                prompt: "cargo test".into(),
+            }],
+        }),
         worker_badge: None,
     }
 }
@@ -92,7 +119,7 @@ async fn approve_flow_sends_approved_decision() {
     }
 
     // Simulate user approval.
-    let resolved = resolve_pending(&pending, "r1", true, None, Vec::new(), None, None).await;
+    let resolved = resolve_pending(&pending, "r1", true, None, Vec::new(), None, None, None).await;
     assert!(resolved);
 
     let resolution = request_handle.await.unwrap().unwrap();
@@ -114,6 +141,7 @@ async fn reject_flow_propagates_feedback() {
         false,
         Some("not safe".into()),
         Vec::new(),
+        None,
         None,
         None,
     )
@@ -158,6 +186,7 @@ async fn ask_user_question_emits_question_asked_event() {
         None,
         Vec::new(),
         Some(updated_input.clone()),
+        None,
         None,
     )
     .await;
@@ -220,50 +249,18 @@ async fn exit_plan_mode_emits_dedicated_choices_without_always_allow() {
         other => panic!("expected Tui(ApprovalRequired); got {other:?}"),
     }
 
-    let resolved = resolve_pending(&pending, "plan1", false, None, Vec::new(), None, None).await;
+    let resolved =
+        resolve_pending(&pending, "plan1", false, None, Vec::new(), None, None, None).await;
     assert!(resolved);
     let resolution = handle.await.unwrap().unwrap();
     assert_eq!(resolution.decision, ToolPermissionDecision::Rejected);
 }
 
-#[test]
-fn exit_plan_mode_choices_include_clear_context_and_bypass_when_available() {
-    let choices = build_exit_plan_mode_choices(true, true);
-    let values: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
-    assert_eq!(
-        values,
-        vec![
-            "yes-bypass-permissions",
-            "yes-accept-edits-keep-context",
-            "yes-default-keep-context",
-            "no"
-        ]
-    );
-    assert!(choices[0].label.contains("clear context"));
-    assert!(choices[0].label.contains("bypass permissions"));
-}
-
-#[test]
-fn exit_plan_mode_no_plan_choices_are_yes_no_only() {
-    let choices = build_exit_plan_mode_no_plan_choices();
-    let values: Vec<&str> = choices.iter().map(|c| c.value.as_str()).collect();
-    assert_eq!(values, vec!["yes-default-keep-context", "no"]);
-    assert_eq!(choices[0].label, "Yes, exit plan mode");
-    assert_eq!(choices[1].label, "No, keep planning");
-    assert!(choices.iter().all(|choice| {
-        !choice.label.contains("edit")
-            && !choice
-                .description
-                .as_deref()
-                .unwrap_or_default()
-                .contains("implementation")
-    }));
-}
-
 #[tokio::test]
 async fn unknown_request_id_returns_false() {
     let pending = new_pending_map();
-    let resolved = resolve_pending(&pending, "ghost", true, None, Vec::new(), None, None).await;
+    let resolved =
+        resolve_pending(&pending, "ghost", true, None, Vec::new(), None, None, None).await;
     assert!(!resolved);
 }
 
@@ -283,7 +280,15 @@ async fn take_pending_removes_entry_before_resolution() {
         .await
         .expect("pending entry exists");
     assert!(take_pending(&pending, "r4").await.is_none());
-    assert!(send_resolution(entry, true, None, Vec::new(), None, None));
+    assert!(send_resolution(
+        entry,
+        true,
+        None,
+        Vec::new(),
+        None,
+        None,
+        None
+    ));
 
     let resolution = rx.await.expect("resolution sent");
     assert_eq!(resolution.decision, ToolPermissionDecision::Approved);

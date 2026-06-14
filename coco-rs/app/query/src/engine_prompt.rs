@@ -678,6 +678,10 @@ impl QueryEngine {
             file_history: self.file_history.clone(),
             config_home: self.config_home.clone(),
             tool_result_session_dir: self.tool_result_session_dir_for_prompt(),
+            transcript_path: self
+                .transcript_store
+                .as_ref()
+                .map(|store| store.transcript_path(&self.config.session_id)),
             hook_handle,
             // Real `AgentHandle` when the CLI / SDK / TUI installed
             // one via `with_agent_handle`; otherwise fall back to

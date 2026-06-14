@@ -137,9 +137,7 @@ async fn end_to_end_single_run() {
     std::fs::write(&path, "# test plan\n").unwrap();
 
     let model = MockModelBuilder::new()
-        .on_call(0, |_| {
-            MockResponse::tool_call("ExitPlanMode", json!({"outcome": "implementation_plan"}))
-        })
+        .on_call(0, |_| MockResponse::tool_call("ExitPlanMode", json!({})))
         .on_call(1, |_| MockResponse::text("done"))
         .build();
 
@@ -203,9 +201,7 @@ async fn no_plan_exit_does_not_reference_stale_plan_file() {
     std::fs::write(&path, "# stale implementation plan\n").unwrap();
 
     let model = MockModelBuilder::new()
-        .on_call(0, |_| {
-            MockResponse::tool_call("ExitPlanMode", json!({"outcome": "no_implementation_plan"}))
-        })
+        .on_call(0, |_| MockResponse::tool_call("ExitPlanMode", json!({})))
         .on_call(1, |_| MockResponse::text("answered"))
         .build();
 
@@ -624,9 +620,7 @@ async fn model_driven_exit_plan_mode_stops_reminder_on_next_turn() {
     // loop, turn_start runs multiple times so we can observe the
     // plan-reminder-stops behavior).
     let model = MockModelBuilder::new()
-        .on_call(0, |_| {
-            MockResponse::tool_call("ExitPlanMode", json!({"outcome": "implementation_plan"}))
-        })
+        .on_call(0, |_| MockResponse::tool_call("ExitPlanMode", json!({})))
         .on_call(1, |_| {
             MockResponse::tool_call("Read", json!({"file_path": "/dev/null"}))
         })

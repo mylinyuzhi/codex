@@ -330,6 +330,7 @@ impl Tool for AskUserQuestionTool {
             message: "Answer questions?".to_string(),
             suggestions: Vec::new(),
             choices: None,
+            detail: None,
         }
     }
 

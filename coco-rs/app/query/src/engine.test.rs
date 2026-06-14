@@ -546,7 +546,7 @@ impl LanguageModel for ExitPlanModeThenTextMock {
                 content: vec![AssistantContentPart::ToolCall(ToolCallPart {
                     tool_call_id: "exit_plan_1".into(),
                     tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
-                    input: serde_json::json!({"outcome": "implementation_plan"}),
+                    input: serde_json::json!({}),
                     provider_executed: None,
                     provider_metadata: None,
                     invalid: false,
@@ -2089,7 +2089,7 @@ async fn rejected_ask_user_question_streaming_completion_is_non_error() {
 }
 
 #[tokio::test]
-async fn exit_plan_mode_observable_input_includes_disk_plan() {
+async fn exit_plan_mode_observable_input_excludes_disk_plan() {
     let tmp = tempfile::tempdir().unwrap();
     let session_id = "exit-plan-normalize-session";
     let plans_dir = coco_context::resolve_plans_directory(tmp.path(), None, None);
@@ -2109,8 +2109,13 @@ async fn exit_plan_mode_observable_input_includes_disk_plan() {
 
     let client = crate::test_support::model_runtime_registry(model);
     let cancel = CancellationToken::new();
+    let app_state = Arc::new(tokio::sync::RwLock::new(ToolAppState {
+        plan_mode_entry_ms: Some(1),
+        ..Default::default()
+    }));
     let engine = QueryEngine::new(config, client, tools, cancel, None)
-        .with_config_home(tmp.path().to_path_buf());
+        .with_config_home(tmp.path().to_path_buf())
+        .with_app_state(app_state);
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<CoreEvent>(256);
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
@@ -2130,23 +2135,24 @@ async fn exit_plan_mode_observable_input_includes_disk_plan() {
     let events = collector.await.unwrap();
 
     let queued = queued_tool_input(&events, "exit_plan_1").expect("queued input");
-    assert_eq!(
-        queued.get("plan"),
-        Some(&serde_json::json!("## Plan\n- implement"))
+    assert!(
+        queued.get("plan").is_none(),
+        "queued input must not carry plan snapshot: {queued}"
     );
     assert!(
-        queued
-            .get("planFilePath")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|path| path.ends_with(".md")),
-        "queued input: {queued}"
+        queued.get("planFilePath").is_none(),
+        "queued input must not carry plan path: {queued}"
     );
 
     let transcript = assistant_tool_input(&result.final_messages, "exit_plan_1")
         .expect("assistant transcript input");
-    assert_eq!(
-        transcript.get("plan"),
-        Some(&serde_json::json!("## Plan\n- implement"))
+    assert!(
+        transcript.get("plan").is_none(),
+        "transcript input must not carry plan snapshot: {transcript}"
+    );
+    assert!(
+        transcript.get("planFilePath").is_none(),
+        "transcript input must not carry plan path: {transcript}"
     );
     let output = tool_result_text(&result.final_messages, "exit_plan_1").unwrap_or_else(|| {
         panic!(
@@ -3481,6 +3487,7 @@ impl coco_tool_runtime::Tool for AskingTool {
             message: "please approve".into(),
             suggestions: vec![],
             choices: None,
+            detail: None,
         }
     }
     async fn execute(
@@ -3746,6 +3753,7 @@ impl Tool for AskingMockTool {
             message: "Mock needs permission".into(),
             suggestions: vec![],
             choices: None,
+            detail: None,
         }
     }
     async fn execute(
@@ -3790,6 +3798,7 @@ impl ToolPermissionBridge for RecordingBridge {
             applied_updates: Vec::new(),
             updated_input: None,
             content_blocks: None,
+            detail: None,
         })
     }
 }
@@ -4337,6 +4346,7 @@ impl ToolPermissionBridge for BlockingBridge {
             applied_updates: Vec::new(),
             updated_input: None,
             content_blocks: None,
+            detail: None,
         })
     }
 }

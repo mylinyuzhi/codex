@@ -254,11 +254,7 @@ impl ToolPermissionBridge for TuiPermissionBridge {
         } else {
             let is_exit_plan_mode =
                 request.tool_name == coco_types::ToolName::ExitPlanMode.as_str();
-            let choices = if is_exit_plan_mode {
-                Some(self.exit_plan_mode_choices(&request.input).await)
-            } else {
-                request.choices.clone()
-            };
+            let choices = request.choices.clone();
             let show_always_allow = !is_exit_plan_mode && self.show_always_allow_options().await;
             CoreEvent::Tui(TuiOnlyEvent::ApprovalRequired {
                 request_id: request.id.clone(),
@@ -274,10 +270,10 @@ impl ToolPermissionBridge for TuiPermissionBridge {
                 },
                 show_always_allow,
                 choices,
+                detail: request.detail.clone(),
                 permission_suggestions: request.suggestions.clone(),
-                // Carry the raw input for both choice and classic dialogs:
-                // choices splice `user_choice`; classic read permissions
-                // derive path-scoped "always allow" updates.
+                // Carry the raw input so classic read permissions can derive
+                // path-scoped "always allow" updates.
                 original_input: Some(request.input.clone()),
                 cwd: request.cwd.clone(),
                 worker_badge: request.worker_badge.clone(),
@@ -305,99 +301,6 @@ impl ToolPermissionBridge for TuiPermissionBridge {
     }
 }
 
-impl TuiPermissionBridge {
-    async fn exit_plan_mode_choices(
-        &self,
-        input: &serde_json::Value,
-    ) -> Vec<coco_types::PermissionAskChoice> {
-        let outcome = input
-            .get("outcome")
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
-            .unwrap_or(coco_types::ExitPlanModeOutcome::ImplementationPlan);
-        if outcome == coco_types::ExitPlanModeOutcome::NoImplementationPlan {
-            return build_exit_plan_mode_no_plan_choices();
-        }
-
-        let runtime = self
-            .notification_runtime
-            .read()
-            .await
-            .as_ref()
-            .and_then(Weak::upgrade);
-        let (show_clear_context, bypass_available) = if let Some(runtime) = runtime {
-            let cfg = runtime.current_engine_config().await;
-            (
-                cfg.plan_mode_settings.show_clear_context_on_exit,
-                cfg.bypass_permissions_available,
-            )
-        } else {
-            (false, false)
-        };
-        build_exit_plan_mode_choices(show_clear_context, bypass_available)
-    }
-}
-
-fn build_exit_plan_mode_no_plan_choices() -> Vec<coco_types::PermissionAskChoice> {
-    use coco_types::ExitPlanChoice;
-    vec![
-        coco_types::PermissionAskChoice {
-            value: ExitPlanChoice::KeepDefault.as_str().into(),
-            label: "Yes, exit plan mode".into(),
-            description: None,
-        },
-        coco_types::PermissionAskChoice {
-            value: ExitPlanChoice::No.as_str().into(),
-            label: "No, keep planning".into(),
-            description: None,
-        },
-    ]
-}
-
-fn build_exit_plan_mode_choices(
-    show_clear_context: bool,
-    bypass_available: bool,
-) -> Vec<coco_types::PermissionAskChoice> {
-    use coco_types::ExitPlanChoice;
-    let mut choices = Vec::new();
-    if show_clear_context {
-        if bypass_available {
-            choices.push(coco_types::PermissionAskChoice {
-                value: ExitPlanChoice::ClearBypassPermissions.as_str().into(),
-                label: "Yes, clear context and bypass permissions".into(),
-                description: Some(
-                    "Start fresh and run implementation without approval prompts.".into(),
-                ),
-            });
-        } else {
-            choices.push(coco_types::PermissionAskChoice {
-                value: ExitPlanChoice::ClearAcceptEdits.as_str().into(),
-                label: "Yes, clear context and auto-accept edits".into(),
-                description: Some("Start fresh and allow file edits during implementation.".into()),
-            });
-        }
-    }
-    choices.push(coco_types::PermissionAskChoice {
-        value: ExitPlanChoice::KeepAcceptEdits.as_str().into(),
-        label: if bypass_available {
-            "Yes, and bypass permissions".into()
-        } else {
-            "Yes, auto-accept edits".into()
-        },
-        description: Some("Keep this conversation and proceed with elevated edit approval.".into()),
-    });
-    choices.push(coco_types::PermissionAskChoice {
-        value: ExitPlanChoice::KeepDefault.as_str().into(),
-        label: "Yes, manually approve edits".into(),
-        description: Some("Keep this conversation and ask before file edits.".into()),
-    });
-    choices.push(coco_types::PermissionAskChoice {
-        value: ExitPlanChoice::No.as_str().into(),
-        label: "No, keep planning".into(),
-        description: None,
-    });
-    choices
-}
-
 /// Called by tui_runner when `UserCommand::ApprovalResponse` arrives.
 /// Pops the matching oneshot and sends the resolution. Returns `true`
 /// when the request_id matched a pending entry, `false` otherwise
@@ -416,11 +319,15 @@ fn build_exit_plan_mode_choices(
 /// (`PermissionController::resolve` → `tool_call_preparer`) substitutes
 /// it for the original input before invoking the tool.
 ///
+/// `resolution_detail` carries trusted tool-specific approval metadata
+/// without rewriting the tool input.
+///
 /// `content_blocks` carries optional image attachments (etc.) the user
 /// pasted alongside the answer. Today the TUI doesn't have a paste-into-
 /// question gesture so callers pass `None`; the bridge plumbing is in
 /// place so SDK clients (which already ship the field via
 /// `ApprovalResolveParams.content_blocks`) flow through unchanged.
+#[allow(clippy::too_many_arguments)]
 pub async fn resolve_pending(
     pending: &PendingApprovals,
     request_id: &str,
@@ -428,6 +335,7 @@ pub async fn resolve_pending(
     feedback: Option<String>,
     permission_updates: Vec<coco_types::PermissionUpdate>,
     updated_input: Option<serde_json::Value>,
+    resolution_detail: Option<coco_types::PermissionResolutionDetail>,
     content_blocks: Option<Vec<serde_json::Value>>,
 ) -> bool {
     let entry = take_pending(pending, request_id).await;
@@ -441,6 +349,7 @@ pub async fn resolve_pending(
         feedback,
         permission_updates,
         updated_input,
+        resolution_detail,
         content_blocks,
     )
 }
@@ -466,6 +375,7 @@ pub fn send_resolution(
     feedback: Option<String>,
     permission_updates: Vec<coco_types::PermissionUpdate>,
     updated_input: Option<serde_json::Value>,
+    resolution_detail: Option<coco_types::PermissionResolutionDetail>,
     content_blocks: Option<Vec<serde_json::Value>>,
 ) -> bool {
     let resolution = ToolPermissionResolution {
@@ -478,6 +388,7 @@ pub fn send_resolution(
         applied_updates: permission_updates,
         updated_input,
         content_blocks,
+        detail: resolution_detail,
     };
     entry.sender.send(resolution).is_ok()
 }

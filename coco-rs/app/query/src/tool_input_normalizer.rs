@@ -1,13 +1,8 @@
-use std::path::Path;
-
 use coco_types::ToolName;
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ToolInputNormalizationContext<'a> {
-    pub session_id: Option<&'a str>,
-    pub plans_dir: Option<&'a Path>,
-    pub agent_id: Option<&'a str>,
     /// Current working directory string, used by the Bash branch to
     /// strip a model-emitted `cd $cwd && ` prefix. `None` skips that
     /// rewrite (e.g. test paths or environments where cwd isn't
@@ -20,10 +15,9 @@ pub(crate) struct ToolInputNormalizationContext<'a> {
 ///
 /// Per-tool branches:
 ///
-/// - `ExitPlanMode` — inject `plan` + `planFilePath` so hooks/SDK
-///   observe the plan content the tool will load from disk. The
-///   matching strip step lives in `coco_messages::normalize` so the
-///   wire schema (empty input) stays clean.
+/// - `ExitPlanMode` — strip stale internal fields from old transcripts or
+///   clients. The plan snapshot is carried in typed permission detail instead
+///   of observable tool input.
 /// - `Bash` — strip a leading `cd $cwd && ` prefix and rewrite `\\;`
 ///   into `\;` (find-exec quoting fix).
 /// - `TaskOutput` — alias-map `agentId` / `bash_id` → `task_id` and
@@ -52,36 +46,15 @@ pub(crate) fn normalize_observable_tool_input(
     input
 }
 
-fn normalize_exit_plan_mode(input: Value, ctx: ToolInputNormalizationContext<'_>) -> Value {
-    let outcome = input
-        .get("outcome")
-        .and_then(|value| serde_json::from_value(value.clone()).ok());
-    if outcome == Some(coco_types::ExitPlanModeOutcome::NoImplementationPlan) {
-        return input;
-    }
-
-    let (Some(session_id), Some(plans_dir)) = (ctx.session_id, ctx.plans_dir) else {
-        return input;
-    };
-    let Some(plan) = coco_context::get_plan(session_id, plans_dir, ctx.agent_id) else {
-        return input;
-    };
-
-    let plan_file_path = coco_context::get_plan_file_path(session_id, plans_dir, ctx.agent_id)
-        .to_string_lossy()
-        .into_owned();
+fn normalize_exit_plan_mode(input: Value, _ctx: ToolInputNormalizationContext<'_>) -> Value {
     let mut object = match input {
         Value::Object(map) => map,
         other => return other,
     };
-    object.insert(
-        coco_messages::EXIT_PLAN_MODE_INJECTED_PLAN_FIELD.into(),
-        Value::String(plan),
-    );
-    object.insert(
-        coco_messages::EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD.into(),
-        Value::String(plan_file_path),
-    );
+    object.remove(coco_messages::EXIT_PLAN_MODE_INJECTED_PLAN_FIELD);
+    object.remove(coco_messages::EXIT_PLAN_MODE_INJECTED_PLAN_FILE_PATH_FIELD);
+    object.remove("user_choice");
+    object.remove("outcome");
     Value::Object(object)
 }
 

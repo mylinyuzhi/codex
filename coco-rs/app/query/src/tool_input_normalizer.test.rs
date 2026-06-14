@@ -16,7 +16,7 @@ fn test_normalize_observable_tool_input_non_exit_tool_unchanged() {
 }
 
 #[test]
-fn test_normalize_observable_tool_input_exit_injects_plan_and_path() {
+fn test_normalize_observable_tool_input_exit_does_not_inject_plan_and_path() {
     let tmp = tempdir().unwrap();
     let plans_dir = tmp.path().join("plans");
     let session_id = "session-with-plan";
@@ -25,25 +25,14 @@ fn test_normalize_observable_tool_input_exit_injects_plan_and_path() {
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::ExitPlanMode.as_str(),
         json!({"outcome": "implementation_plan", "allowedPrompts": []}),
-        ToolInputNormalizationContext {
-            session_id: Some(session_id),
-            plans_dir: Some(&plans_dir),
-            agent_id: None,
-            cwd: None,
-        },
+        ToolInputNormalizationContext::default(),
     );
 
-    assert_eq!(normalized.get("plan"), Some(&json!("## Plan\n- ship it")));
-    let path = normalized
-        .get("planFilePath")
-        .and_then(serde_json::Value::as_str)
-        .expect("planFilePath injected");
-    assert!(path.ends_with(".md"), "path: {path}");
-    assert_eq!(normalized.get("allowedPrompts"), Some(&json!([])));
+    assert_eq!(normalized, json!({"allowedPrompts": []}));
 }
 
 #[test]
-fn test_normalize_observable_tool_input_exit_overrides_stale_plan() {
+fn test_normalize_observable_tool_input_exit_strips_stale_internal_fields() {
     let tmp = tempdir().unwrap();
     let plans_dir = tmp.path().join("plans");
     let session_id = "session-stale-plan";
@@ -54,42 +43,26 @@ fn test_normalize_observable_tool_input_exit_overrides_stale_plan() {
         json!({
             "outcome": "implementation_plan",
             "plan": "stale",
-            "planFilePath": "/tmp/stale.md"
+            "planFilePath": "/tmp/stale.md",
+            "user_choice": "yes-accept-edits"
         }),
-        ToolInputNormalizationContext {
-            session_id: Some(session_id),
-            plans_dir: Some(&plans_dir),
-            agent_id: Some("agent-1"),
-            cwd: None,
-        },
+        ToolInputNormalizationContext::default(),
     );
 
-    assert_eq!(normalized.get("plan"), Some(&json!("fresh plan")));
-    let path = normalized
-        .get("planFilePath")
-        .and_then(serde_json::Value::as_str)
-        .expect("planFilePath injected");
-    assert!(path.contains("agent-agent-1"), "path: {path}");
+    assert_eq!(normalized, json!({}));
 }
 
 #[test]
 fn test_normalize_observable_tool_input_exit_without_plan_unchanged() {
-    let tmp = tempdir().unwrap();
-    let plans_dir = tmp.path().join("plans");
     let input = json!({"outcome": "implementation_plan", "allowedPrompts": []});
 
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::ExitPlanMode.as_str(),
-        input.clone(),
-        ToolInputNormalizationContext {
-            session_id: Some("missing-plan"),
-            plans_dir: Some(&plans_dir),
-            agent_id: None,
-            cwd: None,
-        },
+        input,
+        ToolInputNormalizationContext::default(),
     );
 
-    assert_eq!(normalized, input);
+    assert_eq!(normalized, json!({"allowedPrompts": []}));
 }
 
 #[test]
@@ -102,16 +75,11 @@ fn test_normalize_observable_tool_input_exit_no_plan_skips_stale_disk_plan() {
 
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::ExitPlanMode.as_str(),
-        input.clone(),
-        ToolInputNormalizationContext {
-            session_id: Some(session_id),
-            plans_dir: Some(&plans_dir),
-            agent_id: None,
-            cwd: None,
-        },
+        input,
+        ToolInputNormalizationContext::default(),
     );
 
-    assert_eq!(normalized, input);
+    assert_eq!(normalized, json!({}));
 }
 
 #[test]
@@ -119,10 +87,7 @@ fn test_bash_strips_cd_cwd_prefix() {
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::Bash.as_str(),
         json!({"command": "cd /repo && ls -la"}),
-        ToolInputNormalizationContext {
-            cwd: Some("/repo"),
-            ..ToolInputNormalizationContext::default()
-        },
+        ToolInputNormalizationContext { cwd: Some("/repo") },
     );
     assert_eq!(normalized, json!({"command": "ls -la"}));
 }
@@ -143,10 +108,7 @@ fn test_bash_skips_strip_when_prefix_does_not_match() {
     let normalized = normalize_observable_tool_input(
         coco_types::ToolName::Bash.as_str(),
         json!({"command": "cd /other && ls"}),
-        ToolInputNormalizationContext {
-            cwd: Some("/repo"),
-            ..ToolInputNormalizationContext::default()
-        },
+        ToolInputNormalizationContext { cwd: Some("/repo") },
     );
     assert_eq!(normalized, json!({"command": "cd /other && ls"}));
 }

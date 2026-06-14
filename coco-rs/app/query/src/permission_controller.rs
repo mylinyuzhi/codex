@@ -24,9 +24,18 @@ use coco_types::ToolName;
 pub(crate) enum PermissionOutcome {
     Allow {
         updated_input: Option<serde_json::Value>,
+        approval_feedback: Option<String>,
+        resolution_detail: Option<coco_types::PermissionResolutionDetail>,
     },
     Denied,
     Aborted,
+}
+
+struct PermissionAskPayload {
+    message: String,
+    suggestions: Vec<coco_types::PermissionUpdate>,
+    choices: Option<Vec<coco_types::PermissionAskChoice>>,
+    detail: Option<coco_types::PermissionRequestDetail>,
 }
 
 pub(crate) struct PermissionController<'a> {
@@ -93,9 +102,11 @@ impl<'a> PermissionController<'a> {
         tool_id: &ToolId,
     ) -> PermissionOutcome {
         match decision {
-            PermissionDecision::Allow { updated_input, .. } => {
-                PermissionOutcome::Allow { updated_input }
-            }
+            PermissionDecision::Allow { updated_input, .. } => PermissionOutcome::Allow {
+                updated_input,
+                approval_feedback: None,
+                resolution_detail: None,
+            },
             PermissionDecision::Deny { message, .. } => {
                 warn!(tool = tool_call.tool_name, %message, "tool permission denied");
                 self.record_denial(tool_call, tool_input);
@@ -135,15 +146,19 @@ impl<'a> PermissionController<'a> {
                 message,
                 suggestions,
                 choices,
+                detail,
                 ..
             } => {
                 self.resolve_ask(
                     tool_call,
                     tool_input,
                     tool_id,
-                    message,
-                    suggestions,
-                    choices,
+                    PermissionAskPayload {
+                        message,
+                        suggestions,
+                        choices,
+                        detail,
+                    },
                 )
                 .await
             }
@@ -155,9 +170,7 @@ impl<'a> PermissionController<'a> {
         tool_call: &ToolCallPart,
         tool_input: &serde_json::Value,
         tool_id: &ToolId,
-        message: String,
-        suggestions: Vec<coco_types::PermissionUpdate>,
-        choices: Option<Vec<coco_types::PermissionAskChoice>>,
+        ask: PermissionAskPayload,
     ) -> PermissionOutcome {
         // Transition to RequiresAction while waiting for the approval path,
         // then back to Running when it resolves. No bridge preserves legacy
@@ -172,7 +185,7 @@ impl<'a> PermissionController<'a> {
         if let (Some(registry), Some(ctx)) = (self.hooks, self.orchestration_ctx)
             && !ctx.disable_all_hooks
         {
-            let permission_suggestions = serde_json::to_value(&suggestions).ok();
+            let permission_suggestions = serde_json::to_value(&ask.suggestions).ok();
             match coco_hooks::orchestration::execute_permission_request(
                 registry,
                 ctx,
@@ -189,7 +202,11 @@ impl<'a> PermissionController<'a> {
                                 self.state_tracker
                                     .transition_to(SessionState::Running, self.event_tx)
                                     .await;
-                                return PermissionOutcome::Allow { updated_input };
+                                return PermissionOutcome::Allow {
+                                    updated_input,
+                                    approval_feedback: None,
+                                    resolution_detail: None,
+                                };
                             }
                             PermissionRequestDecision::Deny { message, .. } => {
                                 let feedback = message
@@ -271,6 +288,8 @@ impl<'a> PermissionController<'a> {
                 .await;
             return PermissionOutcome::Allow {
                 updated_input: None,
+                approval_feedback: None,
+                resolution_detail: None,
             };
         };
 
@@ -279,11 +298,12 @@ impl<'a> PermissionController<'a> {
             tool_use_id: tool_call.tool_call_id.clone(),
             agent_id: self.session_id.to_string(),
             tool_name: tool_call.tool_name.clone(),
-            description: message,
+            description: ask.message,
             input: tool_input.clone(),
             cwd: self.cwd.clone(),
-            suggestions,
-            choices,
+            suggestions: ask.suggestions,
+            choices: ask.choices,
+            detail: ask.detail,
             // The generic controller can't resolve the coordinator's
             // task-local teammate identity, so it leaves the badge empty.
             // For in-process teammates the leader's permission bridge
@@ -314,6 +334,8 @@ impl<'a> PermissionController<'a> {
                     // `answers` into the tool's data envelope.
                     PermissionOutcome::Allow {
                         updated_input: resolution.updated_input,
+                        approval_feedback: resolution.feedback,
+                        resolution_detail: resolution.detail,
                     }
                 }
                 coco_tool_runtime::ToolPermissionDecision::Rejected => {

@@ -492,6 +492,15 @@ pub struct ToolUseContext {
     /// Session artifact root used by tool-result persistence helpers.
     /// Storage helpers append `tool-results/` below this directory.
     pub tool_result_session_dir: Option<PathBuf>,
+    /// Path to the session transcript, used for post-clear implementation
+    /// hints after plan approval.
+    pub transcript_path: Option<PathBuf>,
+    /// Optional user feedback attached to the approval for this specific tool
+    /// call.
+    pub approval_feedback: Option<String>,
+    /// Trusted tool-specific metadata attached to the approval for this
+    /// specific tool call.
+    pub permission_resolution_detail: Option<coco_types::PermissionResolutionDetail>,
 
     // ── Plan mode ──
     /// Resolved plans directory for plan-mode file I/O. Pre-computed by
@@ -667,6 +676,9 @@ impl ToolUseContext {
             config_home: self.config_home.clone(),
             session_id_for_history: self.session_id_for_history.clone(),
             tool_result_session_dir: self.tool_result_session_dir.clone(),
+            transcript_path: self.transcript_path.clone(),
+            approval_feedback: self.approval_feedback.clone(),
+            permission_resolution_detail: self.permission_resolution_detail.clone(),
             plans_dir: self.plans_dir.clone(),
             app_state: self.app_state.clone(),
             local_denial_tracking: self.local_denial_tracking.clone(),
@@ -883,6 +895,9 @@ impl ToolUseContext {
             config_home: None,
             session_id_for_history: None,
             tool_result_session_dir: None,
+            transcript_path: None,
+            approval_feedback: None,
+            permission_resolution_detail: None,
             plans_dir: None,
             app_state: None,
             local_denial_tracking: None,

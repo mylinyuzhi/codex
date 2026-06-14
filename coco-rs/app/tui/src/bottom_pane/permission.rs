@@ -99,6 +99,7 @@ pub(crate) async fn resolve_classic_permission(
             always_allow,
             feedback: None,
             updated_input: None,
+            resolution_detail: None,
             permission_updates,
             content_blocks: None,
         })
@@ -115,8 +116,8 @@ pub(crate) async fn resolve_classic_permission(
 /// Approve ('y' / approve choice) on a tool-permission prompt.
 ///
 /// Multi-choice mode: commits the currently-focused choice (Enter takes the
-/// same path via `confirm`). The chosen `value` is spliced into
-/// `updated_input` so the tool's `execute()` can branch on it; a choice whose
+/// same path via `confirm`). The chosen `value` is carried as typed
+/// resolution detail so the tool's `execute()` can branch on it; a choice whose
 /// value is "no" denies. Classic mode commits a one-shot approve regardless
 /// of the focused row — `y` is the ApproveOnce hotkey, not "confirm
 /// selection" (that's Enter); the rendered rows carry their hotkeys so the
@@ -151,8 +152,9 @@ pub(crate) async fn approve_permission(
             approved,
             always_allow: false,
             feedback: rejection_feedback(p, chosen_is_no),
-            updated_input: build_choice_payload(p),
-            permission_updates: vec![],
+            updated_input: None,
+            resolution_detail: build_choice_detail(p),
+            permission_updates: exit_plan_allowed_prompt_updates(p, approved),
             content_blocks: None,
         })
         .await
@@ -205,6 +207,7 @@ pub(crate) async fn respond_sandbox(
             always_allow: false,
             feedback: None,
             updated_input: None,
+            resolution_detail: None,
             permission_updates: vec![],
             content_blocks: None,
         })
@@ -231,6 +234,7 @@ pub(crate) async fn respond_mcp_server(
             always_allow: false,
             feedback: None,
             updated_input: None,
+            resolution_detail: None,
             permission_updates: vec![],
             content_blocks: None,
         })
@@ -345,6 +349,7 @@ pub(crate) async fn classifier_auto_approve(
                 always_allow: false,
                 feedback: None,
                 updated_input: None,
+                resolution_detail: None,
                 permission_updates: vec![],
                 content_blocks: None,
             })
@@ -423,26 +428,50 @@ pub(crate) fn nav_permission(
     }
 }
 
-/// Build the `{...original_input, user_choice}` payload shipped via
-/// `UserCommand::ApprovalResponse.updated_input` when the user commits
-/// a multi-choice permission selection. Carries every field the tool
-/// originally supplied so its `execute()` can read both the new
-/// `user_choice` field and the original args. Returns `None` when the
-/// state has no choices or the cursor is out of range — caller falls
-/// back to `updated_input: None`.
-/// The option's `value` is merged into the original tool input on commit.
-pub(crate) fn build_choice_payload(
+/// Build trusted typed metadata for a multi-choice permission selection.
+pub(crate) fn build_choice_detail(
     p: &crate::state::PermissionPromptState,
-) -> Option<serde_json::Value> {
+) -> Option<coco_types::PermissionResolutionDetail> {
     let choice = p.choices.as_ref()?.get(p.selected_choice)?;
-    let mut payload = p
-        .original_input
-        .as_ref()
-        .and_then(|v| v.as_object().cloned())
-        .unwrap_or_default();
-    payload.insert(
-        "user_choice".into(),
-        serde_json::Value::String(choice.value.clone()),
-    );
-    Some(serde_json::Value::Object(payload))
+    if p.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+        return None;
+    }
+    let choice = coco_types::ExitPlanChoice::from_wire(&choice.value)?;
+    Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+        choice,
+        edited_plan: None,
+    })
+}
+
+fn exit_plan_allowed_prompt_updates(
+    p: &crate::state::PermissionPromptState,
+    approved: bool,
+) -> Vec<coco_types::PermissionUpdate> {
+    if !approved || p.tool_name != coco_types::ToolName::ExitPlanMode.as_str() {
+        return Vec::new();
+    }
+    let crate::state::PermissionDetail::ExitPlanMode {
+        allowed_prompts, ..
+    } = &p.detail
+    else {
+        return Vec::new();
+    };
+    if allowed_prompts.is_empty() {
+        return Vec::new();
+    }
+    let rules = allowed_prompts
+        .iter()
+        .map(|prompt| coco_types::PermissionRule {
+            source: coco_types::PermissionRuleSource::Session,
+            behavior: coco_types::PermissionBehavior::Allow,
+            value: coco_types::PermissionRuleValue {
+                tool_pattern: prompt.tool.clone(),
+                rule_content: Some(prompt.prompt.clone()),
+            },
+        })
+        .collect();
+    vec![coco_types::PermissionUpdate::AddRules {
+        rules,
+        destination: coco_types::PermissionUpdateDestination::Session,
+    }]
 }

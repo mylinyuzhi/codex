@@ -75,8 +75,8 @@ async fn confirm_memory_dialog_keeps_non_file_rows_open() {
 
 // ── Permission state: multi-choice commit path ──
 //
-// The user picks via arrows and Enter; the chosen `value` is spliced
-// into `updated_input` and sent back as `ApprovalResponse`.
+// The user picks via arrows and Enter; the chosen `value` is sent back
+// as typed `resolution_detail` on `ApprovalResponse`.
 
 fn permission_with_choices(values: &[&str], selected: usize) -> AppState {
     permission_with_choices_for_tool("ExitPlanMode", values, selected)
@@ -121,11 +121,56 @@ fn permission_with_choices_for_tool(tool_name: &str, values: &[&str], selected: 
     s
 }
 
+fn permission_with_allowed_prompts(values: &[&str], selected: usize) -> AppState {
+    use crate::state::PermissionDetail;
+    use crate::state::PermissionPromptState;
+    use coco_types::PermissionAskChoice;
+
+    let mut s = AppState::new();
+    let choices: Vec<PermissionAskChoice> = values
+        .iter()
+        .map(|v| PermissionAskChoice {
+            value: (*v).to_string(),
+            label: (*v).to_string(),
+            description: None,
+        })
+        .collect();
+    s.ui.push_prompt(PanePromptState::Permission(PermissionPromptState {
+        request_id: "req-1".into(),
+        tool_name: coco_types::ToolName::ExitPlanMode.as_str().into(),
+        description: "Exit plan mode?".into(),
+        detail: PermissionDetail::ExitPlanMode {
+            outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+            plan: Some("# Plan".into()),
+            plan_file_path: Some("/tmp/plan.md".into()),
+            allowed_prompts: vec![coco_types::ExitPlanModeAllowedPrompt {
+                tool: "Bash".into(),
+                prompt: "cargo test".into(),
+            }],
+        },
+        risk_level: None,
+        show_always_allow: false,
+        classifier_checking: false,
+        classifier_auto_approved: None,
+        choices: Some(choices),
+        selected_choice: selected,
+        display_input: coco_types::PermissionDisplayInput::Empty,
+        original_input: Some(serde_json::json!({"plan": "do the thing"})),
+        cwd: None,
+        permission_suggestions: vec![],
+        worker_badge: None,
+        explanation_visible: false,
+        explanation: crate::state::ExplainerFetch::NotFetched,
+        prefix_input: None,
+    }));
+    s
+}
+
 #[tokio::test]
-async fn confirm_with_choice_splices_user_choice_into_updated_input() {
+async fn confirm_with_choice_sends_exit_plan_resolution_detail() {
     // Selecting "yes-accept-edits" should send approved=true with
-    // user_choice spliced into the original input — the engine reads
-    // this off ExitPlanModeTool's input to flag history clear.
+    // a typed resolution detail — the engine reads this off
+    // ToolUseContext to flag history clear.
     let mut s = permission_with_choices(
         &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
         1, // "yes-accept-edits"
@@ -137,22 +182,62 @@ async fn confirm_with_choice_splices_user_choice_into_updated_input() {
     let UserCommand::ApprovalResponse {
         approved,
         updated_input,
+        resolution_detail,
         ..
     } = cmd
     else {
         panic!("expected ApprovalResponse")
     };
     assert!(approved, "non-'no' choice should approve");
-    let payload = updated_input.expect("updated_input populated");
-    assert_eq!(payload["plan"], "do the thing");
-    assert_eq!(payload["user_choice"], "yes-accept-edits");
+    assert!(updated_input.is_none());
+    assert!(matches!(
+        resolution_detail,
+        Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+            choice: coco_types::ExitPlanChoice::ClearAcceptEdits,
+            edited_plan: None,
+        })
+    ));
     assert!(!s.ui.has_active_surface(), "state dismissed after commit");
+}
+
+#[tokio::test]
+async fn confirm_with_allowed_prompts_sends_session_rules() {
+    let mut s =
+        permission_with_allowed_prompts(&["yes-default-keep-context", "yes-accept-edits", "no"], 0);
+    let (tx, mut rx) = mpsc::channel::<UserCommand>(8);
+    confirm(&mut s, &tx).await;
+
+    let UserCommand::ApprovalResponse {
+        approved,
+        permission_updates,
+        ..
+    } = rx.try_recv().expect("approval sent")
+    else {
+        panic!("expected ApprovalResponse")
+    };
+    assert!(approved);
+    let [coco_types::PermissionUpdate::AddRules { rules, destination }] =
+        permission_updates.as_slice()
+    else {
+        panic!("expected one AddRules update, got {permission_updates:?}")
+    };
+    assert_eq!(
+        *destination,
+        coco_types::PermissionUpdateDestination::Session
+    );
+    let [rule] = rules.as_slice() else {
+        panic!("expected one rule, got {rules:?}")
+    };
+    assert_eq!(rule.source, coco_types::PermissionRuleSource::Session);
+    assert_eq!(rule.behavior, coco_types::PermissionBehavior::Allow);
+    assert_eq!(rule.value.tool_pattern, "Bash");
+    assert_eq!(rule.value.rule_content.as_deref(), Some("cargo test"));
 }
 
 #[tokio::test]
 async fn confirm_with_no_choice_sends_approved_false() {
     // "no" is the sentinel for deny; engine treats it as a regular
-    // denial (tool doesn't execute). updated_input still carries the
+    // denial (tool doesn't execute). Typed detail still carries the
     // value so logs/audits see what the user picked.
     let mut s = permission_with_choices(
         &["yes-accept-edits-keep-context", "yes-accept-edits", "no"],
@@ -165,19 +250,28 @@ async fn confirm_with_no_choice_sends_approved_false() {
     let UserCommand::ApprovalResponse {
         approved,
         updated_input,
+        resolution_detail,
         feedback,
+        permission_updates,
         ..
     } = cmd
     else {
         panic!("expected ApprovalResponse")
     };
     assert!(!approved, "'no' choice should deny");
+    assert!(permission_updates.is_empty());
     assert_eq!(
         feedback.as_deref(),
         Some("User rejected the plan. Stay in plan mode and continue planning.")
     );
-    let payload = updated_input.expect("updated_input populated");
-    assert_eq!(payload["user_choice"], "no");
+    assert!(updated_input.is_none());
+    assert!(matches!(
+        resolution_detail,
+        Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+            choice: coco_types::ExitPlanChoice::No,
+            edited_plan: None,
+        })
+    ));
 }
 
 #[tokio::test]
@@ -208,14 +302,21 @@ async fn approve_with_choice_takes_same_path_as_confirm() {
     let UserCommand::ApprovalResponse {
         approved,
         updated_input,
+        resolution_detail,
         ..
     } = rx.try_recv().expect("approval sent")
     else {
         panic!()
     };
     assert!(approved);
-    let payload = updated_input.expect("updated_input populated");
-    assert_eq!(payload["user_choice"], "yes-accept-edits");
+    assert!(updated_input.is_none());
+    assert!(matches!(
+        resolution_detail,
+        Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+            choice: coco_types::ExitPlanChoice::ClearAcceptEdits,
+            edited_plan: None,
+        })
+    ));
 }
 
 #[tokio::test]
@@ -451,14 +552,14 @@ async fn down_then_enter_commits_always_allow() {
 }
 
 #[test]
-fn build_choice_payload_merges_with_original_input() {
+fn build_choice_detail_for_exit_plan_choice() {
     use crate::state::PermissionDetail;
     use crate::state::PermissionPromptState;
     use coco_types::PermissionAskChoice;
 
     let p = PermissionPromptState {
         request_id: "req-1".into(),
-        tool_name: "Foo".into(),
+        tool_name: "ExitPlanMode".into(),
         description: String::new(),
         detail: PermissionDetail::Generic {
             input_preview: String::new(),
@@ -468,8 +569,8 @@ fn build_choice_payload_merges_with_original_input() {
         classifier_checking: false,
         classifier_auto_approved: None,
         choices: Some(vec![PermissionAskChoice {
-            value: "pick-1".into(),
-            label: "Pick 1".into(),
+            value: coco_types::ExitPlanChoice::KeepDefault.as_str().into(),
+            label: "Keep context".into(),
             description: None,
         }]),
         selected_choice: 0,
@@ -482,14 +583,17 @@ fn build_choice_payload_merges_with_original_input() {
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
     };
-    let out = crate::bottom_pane::permission::build_choice_payload(&p).expect("payload built");
-    assert_eq!(out["existing"], 42);
-    assert_eq!(out["other"], "v");
-    assert_eq!(out["user_choice"], "pick-1");
+    assert!(matches!(
+        crate::bottom_pane::permission::build_choice_detail(&p),
+        Some(coco_types::PermissionResolutionDetail::ExitPlanMode {
+            choice: coco_types::ExitPlanChoice::KeepDefault,
+            edited_plan: None,
+        })
+    ));
 }
 
 #[test]
-fn build_choice_payload_none_when_cursor_out_of_range() {
+fn build_choice_detail_none_when_cursor_out_of_range() {
     use crate::state::PermissionDetail;
     use crate::state::PermissionPromptState;
 
@@ -515,7 +619,7 @@ fn build_choice_payload_none_when_cursor_out_of_range() {
         explanation: crate::state::ExplainerFetch::NotFetched,
         prefix_input: None,
     };
-    assert!(crate::bottom_pane::permission::build_choice_payload(&p).is_none());
+    assert!(crate::bottom_pane::permission::build_choice_detail(&p).is_none());
 }
 
 // === AskUserQuestion key + answer mechanics ===

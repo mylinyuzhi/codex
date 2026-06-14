@@ -744,6 +744,7 @@ impl Tool for WebFetchTool {
                 message: format!("Allow WebFetch to access {host}?"),
                 suggestions: web_fetch_domain_suggestions(&host),
                 choices: None,
+                detail: None,
             };
         }
         if matching_web_fetch_rule(&pc.allow_rules, &host).is_some() {
@@ -756,6 +757,7 @@ impl Tool for WebFetchTool {
             message: format!("Allow WebFetch to access {host}?"),
             suggestions: web_fetch_domain_suggestions(&host),
             choices: None,
+            detail: None,
         }
     }
 

@@ -615,6 +615,25 @@ mod execute_tests {
     }
 
     #[tokio::test]
+    async fn keyword_ties_sort_by_canonical_tool_name() {
+        let ctx = ctx_with_tools(vec![
+            deferred("ZetaAlpha", "alpha helper", None),
+            deferred("AlphaTool", "alpha helper", None),
+        ]);
+        let result =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "alpha"}), &ctx)
+                .await
+                .expect("keyword executes");
+        let matches: Vec<&str> = result.data["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(matches, vec!["AlphaTool", "ZetaAlpha"]);
+    }
+
+    #[tokio::test]
     async fn empty_query_is_rejected() {
         let ctx = ctx_with_tools(vec![]);
         let err = <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": ""}), &ctx)
@@ -779,6 +798,59 @@ mod execute_tests {
         let mut state = coco_types::ToolAppState::default();
         patch(&mut state);
         assert!(state.discovered_tool_names.contains("WebFetch"));
+    }
+
+    #[tokio::test]
+    async fn client_side_model_returns_stable_functions_schema_text() {
+        let ctx = ctx_with_tools_client_capable(vec![
+            deferred("BetaTool", "alpha helper", None),
+            deferred("AlphaTool", "alpha helper", None),
+        ]);
+        let first =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "alpha"}), &ctx)
+                .await
+                .expect("first search executes");
+        let second =
+            <ToolSearchTool as DynTool>::execute(&ToolSearchTool, json!({"query": "alpha"}), &ctx)
+                .await
+                .expect("second search executes");
+
+        let first_schema = first.data["rendered_functions"]
+            .as_str()
+            .expect("client-side rendered functions");
+        let second_schema = second.data["rendered_functions"]
+            .as_str()
+            .expect("client-side rendered functions");
+        assert_eq!(first_schema, second_schema);
+        assert!(first_schema.starts_with("<functions>\n"));
+        assert!(first_schema.ends_with("\n</functions>"));
+        assert!(
+            first_schema
+                .contains("<function>{\"description\":\"alpha helper\",\"name\":\"AlphaTool\""),
+            "AlphaTool schema must be wrapped in <function>: {first_schema}"
+        );
+        assert!(
+            first_schema.contains(
+                "</function>\n<function>{\"description\":\"alpha helper\",\"name\":\"BetaTool\""
+            ),
+            "each schema should render as a separate <function> line: {first_schema}"
+        );
+        let alpha_index = first_schema
+            .find("<function>{\"description\":\"alpha helper\",\"name\":\"AlphaTool\"")
+            .expect("AlphaTool rendered");
+        let beta_index = first_schema
+            .find("<function>{\"description\":\"alpha helper\",\"name\":\"BetaTool\"")
+            .expect("BetaTool rendered");
+        assert!(
+            alpha_index < beta_index,
+            "schemas should render in canonical name order: {first_schema}"
+        );
+
+        let parts = <ToolSearchTool as DynTool>::render_for_model(&ToolSearchTool, &first.data);
+        let coco_tool_runtime::ToolResultContentPart::Text { text, .. } = &parts[0] else {
+            panic!("expected rendered functions text");
+        };
+        assert_eq!(text, first_schema);
     }
 }
 

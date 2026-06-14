@@ -800,6 +800,86 @@ pub enum PlanVerificationOutcome {
     Missing,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExitPlanModeDerivedState {
+    pub outcome: coco_types::ExitPlanModeOutcome,
+    pub plan: Option<String>,
+    pub plan_file_path: Option<String>,
+    pub plan_was_edited: bool,
+}
+
+/// Derive the semantic ExitPlanMode state from the current plan file and
+/// optional user-edited approval text. This is the single source of truth for
+/// whether an exit carries an implementation plan.
+pub fn derive_exit_plan_mode_state(
+    session_id: Option<&str>,
+    plans_dir: Option<&Path>,
+    agent_id: Option<&str>,
+    plan_mode_entry_ms: Option<i64>,
+    edited_plan: Option<String>,
+) -> ExitPlanModeDerivedState {
+    let plan_file_path = match (session_id, plans_dir) {
+        (Some(session_id), Some(plans_dir)) => {
+            Some(get_plan_file_path(session_id, plans_dir, agent_id))
+        }
+        _ => None,
+    };
+    let plan_file_path_string = plan_file_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned());
+
+    let Some(path) = plan_file_path.as_deref() else {
+        return ExitPlanModeDerivedState {
+            outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+            plan: None,
+            plan_file_path: None,
+            plan_was_edited: false,
+        };
+    };
+    if let Some(plan) = edited_plan
+        && !plan.trim().is_empty()
+    {
+        return ExitPlanModeDerivedState {
+            outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+            plan: Some(plan),
+            plan_file_path: plan_file_path_string,
+            plan_was_edited: true,
+        };
+    }
+
+    let verification = plan_mode_entry_ms
+        .and_then(|entry_ms| verify_plan_was_edited(path, entry_ms))
+        .unwrap_or(PlanVerificationOutcome::Missing);
+    if verification != PlanVerificationOutcome::Edited {
+        return ExitPlanModeDerivedState {
+            outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+            plan: None,
+            plan_file_path: None,
+            plan_was_edited: false,
+        };
+    }
+
+    let plan = match (session_id, plans_dir) {
+        (Some(session_id), Some(plans_dir)) => get_plan(session_id, plans_dir, agent_id),
+        _ => None,
+    };
+    if plan.as_deref().is_some_and(|plan| !plan.trim().is_empty()) {
+        ExitPlanModeDerivedState {
+            outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+            plan,
+            plan_file_path: plan_file_path_string,
+            plan_was_edited: false,
+        }
+    } else {
+        ExitPlanModeDerivedState {
+            outcome: coco_types::ExitPlanModeOutcome::NoImplementationPlan,
+            plan: None,
+            plan_file_path: None,
+            plan_was_edited: false,
+        }
+    }
+}
+
 /// Check whether the plan file was edited between EnterPlanMode and
 /// the current call. Soft-failure: ExitPlanMode surfaces a warning; it
 /// does NOT block approval.
@@ -952,6 +1032,20 @@ fn plan_file_info_impl(attachment: &PlanModeAttachment, sub_agent: bool) -> Stri
     }
 }
 
+fn exit_plan_mode_deferred_note(attachment: &PlanModeAttachment, exit_plan_mode: &str) -> String {
+    if attachment
+        .deferred_tools
+        .iter()
+        .any(|name| name == exit_plan_mode)
+    {
+        format!(
+            " If {exit_plan_mode} is listed as deferred, first use ToolSearch with query \"select:{exit_plan_mode}\" to load it."
+        )
+    } else {
+        String::new()
+    }
+}
+
 fn render_sparse(
     attachment: &PlanModeAttachment,
     ask_user_question: &str,
@@ -968,8 +1062,9 @@ fn render_sparse(
         "Plan mode still active (see full instructions earlier in conversation). \
          Read-only except plan file ({path}). {workflow_hint} End turns with \
          {ask_user_question} (for clarifications) or {exit_plan_mode} (for plan \
-         approval). Never ask about plan approval via text or AskUserQuestion.",
+         approval).{deferred_note} Never ask about plan approval via text or AskUserQuestion.",
         path = attachment.plan_file_path,
+        deferred_note = exit_plan_mode_deferred_note(attachment, exit_plan_mode),
     )
 }
 
@@ -992,9 +1087,10 @@ fn render_reentry(attachment: &PlanModeAttachment, exit_plan_mode: &str) -> Stri
          refinement of the exact same task, modify the existing plan while cleaning \
          up outdated or irrelevant sections\n\
          4. Continue on with the plan process and most importantly you should always \
-         edit the plan file one way or the other before calling {exit_plan_mode}\n\n\
+         edit the plan file one way or the other before calling {exit_plan_mode}.{deferred_note}\n\n\
          Treat this as a fresh planning session. Do not assume the existing plan is \
-         relevant without evaluating it first."
+         relevant without evaluating it first.",
+        deferred_note = exit_plan_mode_deferred_note(attachment, exit_plan_mode),
     )
 }
 
@@ -1114,13 +1210,14 @@ fn render_full_five_phase(
          Do NOT ask about plan approval in any other way - no text questions, no \
          AskUserQuestion. Phrases like \"Is this plan okay?\", \"Should I proceed?\", \
          \"How does this plan look?\", \"Any changes before we start?\", or similar \
-         MUST use {exit_plan_mode}.\n\n\
+         MUST use {exit_plan_mode}.{deferred_note}\n\n\
          NOTE: At any point in time through this workflow you should feel free to \
          ask the user questions or clarifications using the {ask_user_question} \
          tool. Don't make large assumptions about user intent. The goal is to present \
          a well researched plan to the user, and tie any loose ends before \
          implementation begins.",
         file_info = plan_file_info(attachment),
+        deferred_note = exit_plan_mode_deferred_note(attachment, exit_plan_mode),
     )
 }
 
@@ -1252,8 +1349,9 @@ fn render_full_interview(
          - Using {ask_user_question} to gather more information\n\
          - Calling {exit_plan_mode} when the plan is ready for approval\n\n\
          **Important:** Use {exit_plan_mode} to request plan approval. Do NOT ask \
-         about plan approval via text or AskUserQuestion.",
+         about plan approval via text or AskUserQuestion.{deferred_note}",
         file_info = plan_file_info(attachment),
+        deferred_note = exit_plan_mode_deferred_note(attachment, exit_plan_mode),
     )
 }
 

@@ -53,6 +53,7 @@ async fn request_permission_approved_round_trip() {
                 cwd: None,
                 suggestions: vec![],
                 choices: None,
+                detail: None,
                 worker_badge: None,
             })
             .await
@@ -109,6 +110,7 @@ async fn request_permission_denied_round_trip() {
                 cwd: None,
                 suggestions: vec![],
                 choices: None,
+                detail: None,
                 worker_badge: None,
             })
             .await
@@ -156,6 +158,7 @@ async fn request_permission_client_error_is_treated_as_denial() {
                 cwd: None,
                 suggestions: vec![],
                 choices: None,
+                detail: None,
                 worker_badge: None,
             })
             .await
@@ -203,6 +206,7 @@ async fn request_permission_errors_if_transport_not_initialized() {
             cwd: None,
             suggestions: vec![],
             choices: None,
+            detail: None,
             worker_badge: None,
         })
         .await;

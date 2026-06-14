@@ -869,12 +869,7 @@ impl QueryEngine {
 
             let (content_parts, tool_calls) = assistant_content_from_snapshot(
                 &snapshot,
-                crate::tool_input_normalizer::ToolInputNormalizationContext {
-                    session_id: Some(&self.config.session_id),
-                    plans_dir: consts.plans_dir.as_deref(),
-                    agent_id: self.config.agent_id.as_deref(),
-                    cwd: None,
-                },
+                crate::tool_input_normalizer::ToolInputNormalizationContext { cwd: None },
             );
             let assistant_msg = Message::Assistant(coco_messages::AssistantMessage {
                 message: LlmMessage::Assistant {

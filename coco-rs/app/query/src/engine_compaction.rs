@@ -1012,18 +1012,20 @@ impl QueryEngine {
         )
         .with_discovered_tool_names(discovered)
         .with_model_capabilities(supports_tool_reference, supports_client_side_tool_search);
-        let loaded = self
+        let mut loaded: Vec<String> = self
             .tools
             .loaded_tools(&stub_ctx)
             .iter()
             .map(|t| t.name().to_string())
             .collect();
-        let deferred = self
+        loaded.sort();
+        let mut deferred: Vec<String> = self
             .tools
             .deferred_tools(&stub_ctx)
             .iter()
             .map(|t| t.name().to_string())
             .collect();
+        deferred.sort();
         (loaded, deferred)
     }
 
@@ -1068,15 +1070,20 @@ impl QueryEngine {
     }
 
     async fn snapshot_plan_mode_attachment(&self) -> Option<coco_compact::PlanModeAttachment> {
-        let in_plan_mode = if let Some(state) = &self.app_state {
+        let app_state_snapshot = if let Some(state) = &self.app_state {
             let g = state.read().await;
-            g.permission_mode == Some(coco_types::PermissionMode::Plan)
+            g.clone()
         } else {
-            self.config.permission_mode == coco_types::PermissionMode::Plan
+            coco_types::ToolAppState::default()
         };
+        let in_plan_mode = app_state_snapshot.permission_mode
+            == Some(coco_types::PermissionMode::Plan)
+            || (self.app_state.is_none()
+                && self.config.permission_mode == coco_types::PermissionMode::Plan);
         if !in_plan_mode {
             return None;
         }
+        let (_, deferred_tools) = self.current_tool_search_partitions(&app_state_snapshot);
 
         let workflow = match self.config.plan_mode_settings.workflow {
             coco_config::PlanModeWorkflow::FivePhase => coco_context::PlanWorkflow::FivePhase,
@@ -1121,6 +1128,7 @@ impl QueryEngine {
             // Model-aware plan-file tool (gpt-5 → apply_patch, Claude → Write/Edit).
             write_tool: self.config.tool_overrides.write_tool(),
             edit_tool: self.config.tool_overrides.edit_tool(),
+            deferred_tools,
         })
     }
 
@@ -1268,15 +1276,20 @@ impl QueryEngine {
         // workflow / phase4_variant / agent counts come from QueryEngineConfig.
         let agent_id_for_attachments = self.config.agent_id.clone();
         let captured_plan_mode_snapshot: Option<coco_compact::PlanModeAttachment> = {
-            let in_plan_mode = if let Some(state) = &self.app_state {
+            let app_state_snapshot = if let Some(state) = &self.app_state {
                 let g = state.read().await;
-                g.permission_mode == Some(coco_types::PermissionMode::Plan)
+                g.clone()
             } else {
-                self.config.permission_mode == coco_types::PermissionMode::Plan
+                coco_types::ToolAppState::default()
             };
+            let in_plan_mode = app_state_snapshot.permission_mode
+                == Some(coco_types::PermissionMode::Plan)
+                || (self.app_state.is_none()
+                    && self.config.permission_mode == coco_types::PermissionMode::Plan);
             if !in_plan_mode {
                 None
             } else {
+                let (_, deferred_tools) = self.current_tool_search_partitions(&app_state_snapshot);
                 let pm = &self.config.plan_mode_settings;
                 let workflow = match pm.workflow {
                     coco_config::PlanModeWorkflow::FivePhase => {
@@ -1330,6 +1343,7 @@ impl QueryEngine {
                     // Model-aware plan-file tool (gpt-5 → apply_patch, Claude → Write/Edit).
                     write_tool: self.config.tool_overrides.write_tool(),
                     edit_tool: self.config.tool_overrides.edit_tool(),
+                    deferred_tools,
                 })
             }
         };

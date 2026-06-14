@@ -198,7 +198,7 @@ impl QueryEngine {
         streaming_model_index: &mut usize,
         state_tracker: &SessionStateTracker,
         turn_id: &str,
-        consts: &LoopConstants,
+        _consts: &LoopConstants,
         services: &LoopServices,
         acc: &mut LoopAccumulator,
         turn_state: &LoopTurnState,
@@ -352,12 +352,6 @@ impl QueryEngine {
                             &buf.tool_name,
                             parsed_input,
                             crate::tool_input_normalizer::ToolInputNormalizationContext {
-                                session_id: Some(&self.config.session_id),
-                                plans_dir: consts.plans_dir.as_deref(),
-                                agent_id: ctx_arc
-                                    .agent_id
-                                    .as_ref()
-                                    .map(coco_types::AgentId::as_str),
                                 cwd: None,
                             },
                         );
@@ -596,7 +590,7 @@ impl QueryEngine {
         history: &mut MessageHistory,
         event_tx: &Option<tokio::sync::mpsc::Sender<crate::CoreEvent>>,
         services: &LoopServices,
-        consts: &LoopConstants,
+        _consts: &LoopConstants,
     ) where
         F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = UnstampedToolCallOutcome> + Send + 'static,
@@ -634,12 +628,7 @@ impl QueryEngine {
                 let synth_snapshot = AssistantTurnSnapshot { parts: synth_parts };
                 let (content_parts, _) = crate::engine::assistant_content_from_snapshot(
                     &synth_snapshot,
-                    crate::tool_input_normalizer::ToolInputNormalizationContext {
-                        session_id: Some(&self.config.session_id),
-                        plans_dir: consts.plans_dir.as_deref(),
-                        agent_id: self.config.agent_id.as_deref(),
-                        cwd: None,
-                    },
+                    crate::tool_input_normalizer::ToolInputNormalizationContext { cwd: None },
                 );
                 if !content_parts.is_empty() {
                     let assistant_msg = Message::Assistant(AssistantMessage {

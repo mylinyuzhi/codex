@@ -1044,6 +1044,7 @@ impl<T: Tool> DynTool for T {
                     ),
                     suggestions: vec![],
                     choices: None,
+                    detail: None,
                 }
             }
         }

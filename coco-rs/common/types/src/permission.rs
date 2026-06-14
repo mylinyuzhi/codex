@@ -252,7 +252,7 @@ pub enum ToolCheckResult {
     /// `choices` is `None` for the traditional yes/no dialog. When
     /// `Some`, the TUI renders a multi-choice list instead and the
     /// selected `value` is echoed back to the tool via
-    /// `ToolUseContext::user_choice` so `execute()` can branch on it.
+    /// `PermissionResolutionDetail` so `execute()` can branch on it.
     /// TS parity: `ExitPlanModePermissionRequest.tsx:691-704` option grid.
     Ask {
         message: String,
@@ -260,6 +260,7 @@ pub enum ToolCheckResult {
         /// "always allow".
         suggestions: Vec<PermissionUpdate>,
         choices: Option<Vec<PermissionAskChoice>>,
+        detail: Option<PermissionRequestDetail>,
     },
     /// Tool denies this input.
     Deny { message: String },
@@ -297,29 +298,58 @@ pub struct PermissionAskChoice {
     pub description: Option<String>,
 }
 
+/// Tool-specific payload for permission UIs.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PermissionRequestDetail {
+    ExitPlanMode {
+        outcome: ExitPlanModeOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan_file_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        allowed_prompts: Vec<ExitPlanModeAllowedPrompt>,
+    },
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExitPlanModeAllowedPrompt {
+    pub tool: String,
+    pub prompt: String,
+}
+
 /// The user's response to an `ExitPlanMode` approval prompt.
 ///
 /// The wire `value` strings are the single source of truth for the choice
 /// echoed back through `PermissionDecision::Ask.choices` →
-/// `ApprovalResponse.updated_input.user_choice`. Owning the mapping here keeps
+/// `PermissionResolutionDetail::ExitPlanMode.choice`. Owning the mapping here keeps
 /// the producer (the TUI permission bridge, which builds the choice list) and
 /// the consumer (`ExitPlanModeTool::execute`, which branches on the picked
 /// value) from drifting apart.
 ///
 /// TS parity: `ExitPlanModePermissionRequest.tsx` `ResponseValue` union.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExitPlanChoice {
     /// Clear context, then implement with permissions bypassed.
+    #[serde(rename = "yes-bypass-permissions")]
     ClearBypassPermissions,
     /// Clear context, then implement auto-accepting edits.
+    #[serde(rename = "yes-accept-edits")]
     ClearAcceptEdits,
     /// Keep context; auto-accept edits (or bypass when the gate allows).
+    #[serde(rename = "yes-accept-edits-keep-context")]
     KeepAcceptEdits,
     /// Keep context; restore the pre-plan mode (default → manual approval).
+    #[serde(rename = "yes-default-keep-context")]
     KeepDefault,
     /// Reject the plan and stay in plan mode. Never reaches `execute` (the
     /// TUI maps it to a denial) — carried so the bridge and the "is this a
     /// rejection?" check share one wire constant.
+    #[serde(rename = "no")]
     No,
 }
 
@@ -351,6 +381,18 @@ impl ExitPlanChoice {
     pub const fn clears_context(self) -> bool {
         matches!(self, Self::ClearBypassPermissions | Self::ClearAcceptEdits)
     }
+}
+
+/// Tool-specific trusted metadata attached to a permission approval.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PermissionResolutionDetail {
+    ExitPlanMode {
+        choice: ExitPlanChoice,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edited_plan: Option<String>,
+    },
 }
 
 /// First-class outcome of an `ExitPlanMode` tool call.
@@ -399,6 +441,8 @@ pub enum PermissionDecision {
         /// `ExitPlanModePermissionRequest.tsx:691-704` option grid.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         choices: Option<Vec<PermissionAskChoice>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<PermissionRequestDetail>,
     },
     Deny {
         message: String,

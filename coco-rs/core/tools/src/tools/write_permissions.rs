@@ -69,6 +69,7 @@ pub(crate) fn check_write_permission_for_paths(
                 message,
                 suggestions: write_permission_suggestions(paths_to_check, &cwd_str, ctx),
                 choices: None,
+                detail: None,
             };
         }
     }
@@ -87,6 +88,7 @@ pub(crate) fn check_write_permission_for_paths(
             ),
             suggestions: vec![],
             choices: None,
+            detail: None,
         };
     }
 
@@ -125,6 +127,7 @@ pub(crate) fn check_write_permission_for_paths(
             ),
             suggestions: write_permission_suggestions(paths_to_check, &cwd_str, ctx),
             choices: None,
+            detail: None,
         },
         PermissionMode::Plan if !ctx.permission_context.bypass_available => ToolCheckResult::Ask {
             message: format!(
@@ -132,6 +135,7 @@ pub(crate) fn check_write_permission_for_paths(
             ),
             suggestions: write_permission_suggestions(paths_to_check, &cwd_str, ctx),
             choices: None,
+            detail: None,
         },
         PermissionMode::Plan | PermissionMode::BypassPermissions | PermissionMode::DontAsk => {
             ToolCheckResult::Passthrough

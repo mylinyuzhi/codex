@@ -152,6 +152,7 @@ where
             message,
             suggestions: Vec::new(),
             choices: None,
+            detail: None,
         });
     }
     //    Transient outage. Default posture is fail closed (deny even in
@@ -240,6 +241,7 @@ fn require_interactive_or_deny(
             message,
             suggestions: Vec::new(),
             choices: None,
+            detail: None,
         }
     }
 }

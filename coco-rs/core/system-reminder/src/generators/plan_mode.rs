@@ -210,6 +210,7 @@ fn build_plan_mode_attachment(
         // for Claude — never a tool the model lacks.
         write_tool: coco_types::ToolName::write_tool_for(&ctx.tools),
         edit_tool: coco_types::ToolName::edit_tool_for(&ctx.tools),
+        deferred_tools: ctx.deferred_tools.clone(),
     }
 }
 
