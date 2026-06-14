@@ -47,7 +47,11 @@ use crate::memory_rules::rule_to_entry;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedMemoryEntry {
     pub path: PathBuf,
+    /// Content surfaced to the model after memory transforms.
     pub content: String,
+    /// Raw file content from disk before transforms such as HTML comment
+    /// stripping, frontmatter stripping, or import expansion.
+    pub raw_content: String,
     pub source: MemoryFileSource,
 }
 
@@ -238,11 +242,7 @@ fn push_rule_entry(
         out.push(rule_to_entry(rule, source));
     }
     for (p, c) in iter {
-        out.push(LoadedMemoryEntry {
-            path: p,
-            content: c,
-            source,
-        });
+        out.push(loaded_entry(p, c, source));
     }
 }
 
@@ -271,11 +271,17 @@ fn push_loaded(
         crate::memory_discovery::allows_external_imports(source),
     );
     for (p, c) in entries {
-        out.push(LoadedMemoryEntry {
-            path: p,
-            content: c,
-            source,
-        });
+        out.push(loaded_entry(p, c, source));
+    }
+}
+
+fn loaded_entry(path: PathBuf, content: String, source: MemoryFileSource) -> LoadedMemoryEntry {
+    let raw_content = std::fs::read_to_string(&path).unwrap_or_else(|_| content.clone());
+    LoadedMemoryEntry {
+        path,
+        content,
+        raw_content,
+        source,
     }
 }
 

@@ -264,15 +264,11 @@ impl Tool for EditTool {
                 });
             };
 
-            // Also reject partial-view reads: a Read with offset/limit only
-            // cached a slice, so the full file can't be validated against the
-            // edit. Force a full Read first — same data-loss guard as the
-            // never-read case above.
-            if entry.offset.is_some() || entry.limit.is_some() {
+            if !entry.can_satisfy_edit_or_write() {
                 return Err(ToolError::ExecutionFailed {
                     message: format!(
-                        "{file_path} was only read partially (a line range). \
-                         Read the whole file before editing it."
+                        "{file_path} was only provided as partial injected context. \
+                         Read it with the Read tool before editing it."
                     ),
                     display_data: None,
                     source: None,
@@ -280,20 +276,68 @@ impl Tool for EditTool {
             }
 
             if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
-                && entry.mtime_ms != disk_mtime
+                && disk_mtime > entry.mtime_ms
             {
-                return Err(ToolError::ExecutionFailed {
-                    message: format!(
-                        "{file_path} has been modified since it was last read \
-                         (mtime changed). Read it again before editing."
-                    ),
-                    display_data: None,
-                    source: None,
-                });
+                match (entry.range, entry.evidence) {
+                    (
+                        coco_context::FileReadRange::Full,
+                        coco_context::ReadEvidence::RealFileView,
+                    ) => {
+                        let raw = tokio::fs::read(&abs_path).await.map_err(|e| {
+                            ToolError::ExecutionFailed {
+                                message: format!(
+                                    "failed to read {file_path} for stale edit check: {e}"
+                                ),
+                                display_data: None,
+                                source: None,
+                            }
+                        })?;
+                        let enc = coco_file_encoding::detect_encoding(&raw);
+                        let current = enc.decode(&raw).map_err(|e| ToolError::ExecutionFailed {
+                            message: format!(
+                                "failed to decode {file_path} for stale edit check as {enc:?}: {e}"
+                            ),
+                            display_data: None,
+                            source: None,
+                        })?;
+                        if current != entry.content {
+                            return Err(ToolError::ExecutionFailed {
+                                message: format!(
+                                    "{file_path} has been modified since it was last read \
+                                     (content changed). Read it again before editing."
+                                ),
+                                display_data: None,
+                                source: None,
+                            });
+                        }
+                    }
+                    (coco_context::FileReadRange::Lines { .. }, _) => {
+                        return Err(ToolError::ExecutionFailed {
+                            message: format!(
+                                "{file_path} has been modified since it was last read \
+                                 (mtime changed). Read it again before editing."
+                            ),
+                            display_data: None,
+                            source: None,
+                        });
+                    }
+                    (
+                        coco_context::FileReadRange::Full,
+                        coco_context::ReadEvidence::InjectedPartialView,
+                    ) => {
+                        return Err(ToolError::ExecutionFailed {
+                            message: format!(
+                                "{file_path} was only provided as partial injected context. \
+                                 Read it with the Read tool before editing it."
+                            ),
+                            display_data: None,
+                            source: None,
+                        });
+                    }
+                }
             }
 
-            if entry.offset.is_none()
-                && entry.limit.is_none()
+            if entry.is_full_real()
                 && let Ok(meta) = tokio::fs::metadata(&abs_path).await
                 && meta.len() <= LAYER2_MAX_BYTES
                 && let Ok(raw) = tokio::fs::read(&abs_path).await

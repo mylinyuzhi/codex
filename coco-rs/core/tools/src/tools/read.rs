@@ -12,10 +12,11 @@ use coco_types::ToolName;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
 use std::path::Path;
-
-/// Default number of lines to read if no limit specified.
-const DEFAULT_LINE_LIMIT: usize = 2000;
 
 /// Short per-call UI label, returned by `async description()`.
 const READ_TOOL_SHORT_DESCRIPTION: &str = "Read a file from the local filesystem.";
@@ -32,7 +33,7 @@ Assume this tool is able to read all files on the machine. If the User provides 
 
 Usage:
 - The file_path parameter must be an absolute path, not a relative path
-- By default, it reads up to 2000 lines starting from the beginning of the file
+- By default, it reads the full file starting from the beginning, subject to the file size and token limits below
 - When you already know which part of the file you need, only read that part. This can be important for larger files.
 - Results are returned using cat -n format, with line numbers starting at 1
 - This tool allows Claude Code to read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as Claude Code is a multimodal LLM.
@@ -398,8 +399,8 @@ impl Tool for ReadTool {
             // The dedup compares the LITERAL input range stored on the
             // FileReadState (via `read_input_range`) against the current
             // call's input. This avoids the effective-range normalization
-            // gotcha where Read(file, limit=2000) followed by Read(file,
-            // limit=2000) wouldn't match if the first call's effective
+            // gotcha where Read(file, limit=50) followed by Read(file,
+            // limit=50) wouldn't match if the first call's effective
             // limit got rewritten to None.
             if frs_read.is_from_read_tool(&abs_path)
                 && let Some(entry) = frs_read.peek(&abs_path)
@@ -439,7 +440,15 @@ impl Tool for ReadTool {
                 .iter()
                 .find_map(|(e, mt)| (*e == ext_lower).then_some(*mt))
             {
-                crate::record_file_read(ctx, path, String::new(), None, None, None, None).await;
+                crate::record_file_read(
+                    ctx,
+                    path,
+                    String::new(),
+                    coco_context::FileReadRange::Full,
+                    None,
+                    None,
+                )
+                .await;
                 crate::track_nested_memory_attachment(ctx, path).await;
                 return read_image_as_base64(file_path, media_type).await;
             }
@@ -447,7 +456,15 @@ impl Tool for ReadTool {
             // Image formats we recognize but Anthropic multimodal API doesn't
             // accept — return a placeholder so the model knows the file type.
             if PLACEHOLDER_IMAGE_EXTENSIONS.contains(&ext_lower.as_str()) {
-                crate::record_file_read(ctx, path, String::new(), None, None, None, None).await;
+                crate::record_file_read(
+                    ctx,
+                    path,
+                    String::new(),
+                    coco_context::FileReadRange::Full,
+                    None,
+                    None,
+                )
+                .await;
                 crate::track_nested_memory_attachment(ctx, path).await;
                 return Ok(ToolResult {
                     // `text` envelope for the placeholder message —
@@ -478,7 +495,15 @@ impl Tool for ReadTool {
             }
 
             if ext_lower == "pdf" {
-                crate::record_file_read(ctx, path, String::new(), None, None, None, None).await;
+                crate::record_file_read(
+                    ctx,
+                    path,
+                    String::new(),
+                    coco_context::FileReadRange::Full,
+                    None,
+                    None,
+                )
+                .await;
                 crate::track_nested_memory_attachment(ctx, path).await;
                 let pages = input.pages.as_deref();
                 return read_pdf(file_path, pages);
@@ -496,161 +521,29 @@ impl Tool for ReadTool {
             }
         }
 
-        // Read file bytes, then detect encoding and decode. Delegates to
-        // `coco-file-encoding` which supports UTF-8, UTF-8-with-BOM,
-        // UTF-16LE, and UTF-16BE.
-        //
-        // Reading as bytes first means UTF-16 files no longer fail with
-        // "invalid UTF-8".
-        let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
-            message: format!("failed to read {file_path}: {e}"),
-            display_data: None,
-            source: None,
-        })?;
+        let selection = read_text_selection(file_path, &input)?;
 
-        // #25: a FULL read (no `limit`) of a file larger than
-        // MAX_READ_OUTPUT_BYTES throws instead of truncating — the model must
-        // narrow with offset/limit. Partial reads pass through to the line +
-        // token caps.
-        if input.limit.is_none() && raw_bytes.len() > MAX_READ_OUTPUT_BYTES {
-            return Err(ToolError::InvalidInput {
-                message: format!(
-                    "File content ({} bytes) exceeds maximum allowed size ({} bytes). \
-                     Use the offset and limit parameters to read specific portions of the file.",
-                    raw_bytes.len(),
-                    MAX_READ_OUTPUT_BYTES
-                ),
-                error_code: None,
-            });
-        }
-
-        let encoding = coco_file_encoding::detect_encoding(&raw_bytes);
-        let content = encoding
-            .decode(&raw_bytes)
-            .map_err(|e| ToolError::ExecutionFailed {
-                message: format!("failed to decode {file_path} as {encoding:?}: {e}"),
-                display_data: None,
-                source: None,
-            })?;
-
-        // `validate_input` already rejected negative `offset` / non-positive
-        // `limit`, so casting to `usize` here is safe. Both `0` and `1`
-        // are treated as "start from the first line"
-        // (`lineOffset = offset === 0 ? 0 : offset - 1`).
-        let offset = input
-            .offset
-            .filter(|n| *n >= 0)
-            .map(|n| n as usize)
-            .unwrap_or(1);
-        let limit = input
-            .limit
-            .filter(|n| *n > 0)
-            .map(|n| n as usize)
-            .unwrap_or(DEFAULT_LINE_LIMIT);
-
-        // Empty file. Yields one empty selected line → `totalLines = 1`, so
-        // this routes to the offset warning in `render_for_model`
-        // (`content` empty, `startLine` = the effective offset). The warning
-        // string itself is emitted at render time.
-        if content.is_empty() {
+        if !selection.should_record {
             return Ok(ToolResult {
-                data: text_output(file_path, "", 0, offset, 1),
+                data: text_output(
+                    file_path,
+                    &selection.output,
+                    selection.num_lines,
+                    selection.start_line,
+                    selection.total_lines,
+                ),
                 new_messages: vec![],
                 app_state_patch: None,
                 permission_updates: Vec::new(),
                 display_data: None,
             });
         }
-
-        let lines: Vec<&str> = content.lines().collect();
-        let total_lines = lines.len();
-
-        // Convert user-facing 1-based offset → internal 0-based start index.
-        // `offset === 0 ? 0 : offset - 1`.
-        let start = if offset == 0 { 0 } else { offset - 1 };
-
-        // Offset-beyond-file: emits a `<system-reminder>` when the requested
-        // 1-based offset exceeds the total line count. The content is left
-        // empty here; the warning string (with the effective offset + total
-        // line count) is produced in `render_for_model` at the map layer.
-        if start >= total_lines && total_lines > 0 {
-            return Ok(ToolResult {
-                data: text_output(file_path, "", 0, offset, total_lines),
-                new_messages: vec![],
-                app_state_patch: None,
-                permission_updates: Vec::new(),
-                display_data: None,
-            });
-        }
-
-        let line_end = (start + limit).min(total_lines);
-
-        // #17: reject a slice whose rough token estimate exceeds the budget
-        // (default 25000) so a single Read can't blow the context. Estimate
-        // on the slice content (not the line-number prefixes), using the
-        // file-type bytes/token ratio.
-        let slice_bytes: usize = lines[start..line_end].iter().map(|l| l.len() + 1).sum();
-        let token_estimate = slice_bytes / bytes_per_token_for_ext(file_path);
-        if token_estimate > DEFAULT_MAX_OUTPUT_TOKENS {
-            return Err(ToolError::InvalidInput {
-                message: format!(
-                    "File content ({token_estimate} tokens) exceeds maximum allowed tokens \
-                     ({DEFAULT_MAX_OUTPUT_TOKENS}). Use offset and limit parameters to read \
-                     specific portions of the file, or search for specific content instead of \
-                     reading the whole file."
-                ),
-                error_code: None,
-            });
-        }
-
-        // Format as cat -n (1-indexed line numbers). The displayed line
-        // number is `start + i + 1`, which evaluates to `offset + i` when
-        // offset ≥ 1 and to `i + 1` when offset == 0.
-        let mut output = String::new();
-        for (i, line) in lines[start..line_end].iter().enumerate() {
-            let line_num = start + i + 1;
-            output.push_str(&format!("{line_num}\t{line}\n"));
-        }
-        let end = line_end;
-
-        // Line-cap footer: more lines exist beyond the emitted slice.
-        if end < total_lines {
-            output.push_str(&format!(
-                "\n... ({} more lines not shown. Use offset/limit to read more.)",
-                total_lines - end
-            ));
-        }
-
-        // `record_file_read` captures both the EFFECTIVE range (post-truncation)
-        // and the LITERAL input range (what the model passed). The effective
-        // range drives Edit/Write conflict detection (`offset.is_none() &&
-        // limit.is_none()` means "we have the full file"). The literal input
-        // range drives the Read tool's `file_unchanged` dedup so a repeat call
-        // with the same args matches byte-for-byte.
-        let offset_i32 = if offset > 1 {
-            Some(offset as i32)
-        } else {
-            None
-        };
-        let limit_i32 = if end < total_lines {
-            Some((end - start) as i32)
-        } else {
-            None
-        };
-        // Capture the projected metadata BEFORE handing `content` to
-        // `record_file_read` (which moves the String). `numLines` is the
-        // count of source lines actually emitted into `output`; `startLine`
-        // is the 1-based line number of the first emitted line; `totalLines`
-        // is the file's total line count.
-        let num_lines = end - start;
-        let start_line = if start == 0 { 1 } else { start + 1 };
 
         crate::record_file_read(
             ctx,
             path,
-            content,
-            offset_i32,
-            limit_i32,
+            selection.cached_content,
+            selection.range,
             dedup_offset,
             dedup_limit,
         )
@@ -667,7 +560,13 @@ impl Tool for ReadTool {
         Ok(ToolResult {
             // Discriminated-union `text` variant with
             // `file: { filePath, content, numLines, startLine, totalLines }`.
-            data: text_output(file_path, &output, num_lines, start_line, total_lines),
+            data: text_output(
+                file_path,
+                &selection.output,
+                selection.num_lines,
+                selection.start_line,
+                selection.total_lines,
+            ),
             new_messages: vec![],
             app_state_patch: None,
             permission_updates: Vec::new(),
@@ -770,6 +669,326 @@ impl Tool for ReadTool {
             }],
         }
     }
+}
+
+struct TextReadSelection {
+    output: String,
+    cached_content: String,
+    range: coco_context::FileReadRange,
+    num_lines: usize,
+    start_line: usize,
+    total_lines: usize,
+    should_record: bool,
+}
+
+fn read_text_selection(file_path: &str, input: &ReadInput) -> Result<TextReadSelection, ToolError> {
+    let metadata = std::fs::metadata(file_path).map_err(|e| ToolError::ExecutionFailed {
+        message: format!("failed to stat {file_path}: {e}"),
+        display_data: None,
+        source: None,
+    })?;
+
+    if input.limit.is_some() && metadata.len() > MAX_READ_OUTPUT_BYTES as u64 {
+        return read_text_selection_streaming(file_path, input);
+    }
+
+    let raw_bytes = std::fs::read(file_path).map_err(|e| ToolError::ExecutionFailed {
+        message: format!("failed to read {file_path}: {e}"),
+        display_data: None,
+        source: None,
+    })?;
+
+    // #25: a FULL read (no `limit`) of a file larger than
+    // MAX_READ_OUTPUT_BYTES throws instead of truncating — the model must
+    // narrow with offset/limit. Partial reads pass through to the line +
+    // token caps.
+    if input.limit.is_none() && raw_bytes.len() > MAX_READ_OUTPUT_BYTES {
+        return Err(ToolError::InvalidInput {
+            message: format!(
+                "File content ({} bytes) exceeds maximum allowed size ({} bytes). \
+                 Use the offset and limit parameters to read specific portions of the file.",
+                raw_bytes.len(),
+                MAX_READ_OUTPUT_BYTES
+            ),
+            error_code: None,
+        });
+    }
+
+    let encoding = coco_file_encoding::detect_encoding(&raw_bytes);
+    let content = encoding
+        .decode(&raw_bytes)
+        .map_err(|e| ToolError::ExecutionFailed {
+            message: format!("failed to decode {file_path} as {encoding:?}: {e}"),
+            display_data: None,
+            source: None,
+        })?;
+
+    read_text_selection_from_content(file_path, input, content)
+}
+
+fn read_text_selection_from_content(
+    file_path: &str,
+    input: &ReadInput,
+    content: String,
+) -> Result<TextReadSelection, ToolError> {
+    let offset = normalized_offset(input);
+    let explicit_limit = explicit_limit(input);
+
+    // Empty file. Yields one empty selected line → `totalLines = 1`, so
+    // this routes to the offset warning in `render_for_model`.
+    if content.is_empty() {
+        return Ok(TextReadSelection {
+            output: String::new(),
+            cached_content: String::new(),
+            range: coco_context::FileReadRange::Full,
+            num_lines: 0,
+            start_line: offset,
+            total_lines: 1,
+            should_record: false,
+        });
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+    let start = start_index(offset);
+
+    // Offset-beyond-file: emits a `<system-reminder>` at render time.
+    if start >= total_lines && total_lines > 0 {
+        return Ok(TextReadSelection {
+            output: String::new(),
+            cached_content: String::new(),
+            range: coco_context::FileReadRange::Lines {
+                offset: if offset > 1 {
+                    Some(offset as i32)
+                } else {
+                    None
+                },
+                limit: 0,
+            },
+            num_lines: 0,
+            start_line: offset,
+            total_lines,
+            should_record: false,
+        });
+    }
+
+    let line_end = explicit_limit
+        .map(|limit| start.saturating_add(limit).min(total_lines))
+        .unwrap_or(total_lines);
+    let slice_bytes: usize = lines[start..line_end].iter().map(|l| l.len() + 1).sum();
+    enforce_token_cap(file_path, slice_bytes)?;
+
+    let mut output = String::new();
+    for (i, line) in lines[start..line_end].iter().enumerate() {
+        let line_num = start + i + 1;
+        output.push_str(&format!("{line_num}\t{line}\n"));
+    }
+
+    if line_end < total_lines {
+        output.push_str(&format!(
+            "\n... ({} more lines not shown. Use offset/limit to read more.)",
+            total_lines - line_end
+        ));
+    }
+
+    let requested_line_range = input.limit.is_some() || input.offset.is_some_and(|n| n > 1);
+    let range = if requested_line_range {
+        coco_context::FileReadRange::Lines {
+            offset: if offset > 1 {
+                Some(offset as i32)
+            } else {
+                None
+            },
+            limit: (line_end - start) as i32,
+        }
+    } else {
+        coco_context::FileReadRange::Full
+    };
+    let cached_content = if range == coco_context::FileReadRange::Full {
+        content
+    } else {
+        lines[start..line_end].join("\n")
+    };
+
+    Ok(TextReadSelection {
+        output,
+        cached_content,
+        range,
+        num_lines: line_end - start,
+        start_line: if start == 0 { 1 } else { start + 1 },
+        total_lines,
+        should_record: true,
+    })
+}
+
+fn read_text_selection_streaming(
+    file_path: &str,
+    input: &ReadInput,
+) -> Result<TextReadSelection, ToolError> {
+    reject_unsupported_streaming_encoding(file_path)?;
+
+    let file = File::open(file_path).map_err(|e| ToolError::ExecutionFailed {
+        message: format!("failed to read {file_path}: {e}"),
+        display_data: None,
+        source: None,
+    })?;
+    let mut reader = BufReader::new(file);
+    let offset = normalized_offset(input);
+    let Some(limit) = explicit_limit(input) else {
+        return Err(ToolError::InvalidInput {
+            message: "streaming range reads require a positive limit".into(),
+            error_code: None,
+        });
+    };
+    let start = start_index(offset);
+    let requested_end = start.saturating_add(limit);
+    let mut line = String::new();
+    let mut total_lines = 0usize;
+    let mut selected_lines: Vec<String> = Vec::new();
+    let mut slice_bytes = 0usize;
+
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_line(&mut line)
+            .map_err(|e| ToolError::ExecutionFailed {
+                message: format!("failed to decode {file_path} as UTF-8 while streaming: {e}"),
+                display_data: None,
+                source: None,
+            })?;
+        if bytes == 0 {
+            break;
+        }
+        trim_line_ending(&mut line);
+        if total_lines == 0 && line.starts_with('\u{feff}') {
+            line.remove(0);
+        }
+        if total_lines >= start && total_lines < requested_end {
+            slice_bytes += line.len() + 1;
+            selected_lines.push(line.clone());
+        }
+        total_lines += 1;
+    }
+
+    if start >= total_lines && total_lines > 0 {
+        return Ok(TextReadSelection {
+            output: String::new(),
+            cached_content: String::new(),
+            range: coco_context::FileReadRange::Lines {
+                offset: if offset > 1 {
+                    Some(offset as i32)
+                } else {
+                    None
+                },
+                limit: 0,
+            },
+            num_lines: 0,
+            start_line: offset,
+            total_lines,
+            should_record: false,
+        });
+    }
+
+    enforce_token_cap(file_path, slice_bytes)?;
+
+    let mut output = String::new();
+    for (i, line) in selected_lines.iter().enumerate() {
+        let line_num = start + i + 1;
+        output.push_str(&format!("{line_num}\t{line}\n"));
+    }
+
+    let end = start + selected_lines.len();
+    if end < total_lines {
+        output.push_str(&format!(
+            "\n... ({} more lines not shown. Use offset/limit to read more.)",
+            total_lines - end
+        ));
+    }
+
+    Ok(TextReadSelection {
+        output,
+        cached_content: selected_lines.join("\n"),
+        range: coco_context::FileReadRange::Lines {
+            offset: if offset > 1 {
+                Some(offset as i32)
+            } else {
+                None
+            },
+            limit: selected_lines.len() as i32,
+        },
+        num_lines: selected_lines.len(),
+        start_line: if start == 0 { 1 } else { start + 1 },
+        total_lines,
+        should_record: true,
+    })
+}
+
+fn reject_unsupported_streaming_encoding(file_path: &str) -> Result<(), ToolError> {
+    let mut file = File::open(file_path).map_err(|e| ToolError::ExecutionFailed {
+        message: format!("failed to read {file_path}: {e}"),
+        display_data: None,
+        source: None,
+    })?;
+    let mut prefix = [0u8; 3];
+    let bytes = file
+        .read(&mut prefix)
+        .map_err(|e| ToolError::ExecutionFailed {
+            message: format!("failed to read {file_path}: {e}"),
+            display_data: None,
+            source: None,
+        })?;
+    if bytes >= 2 && (prefix[..2] == [0xff, 0xfe] || prefix[..2] == [0xfe, 0xff]) {
+        return Err(ToolError::ExecutionFailed {
+            message: format!(
+                "Cannot range-stream {file_path}: UTF-16 is not supported for large explicit-range reads. \
+                 Use a smaller UTF-8 file or convert the file to UTF-8 before reading a range."
+            ),
+            display_data: None,
+            source: None,
+        });
+    }
+    Ok(())
+}
+
+fn normalized_offset(input: &ReadInput) -> usize {
+    input
+        .offset
+        .filter(|n| *n >= 0)
+        .map(|n| n as usize)
+        .unwrap_or(1)
+}
+
+fn explicit_limit(input: &ReadInput) -> Option<usize> {
+    input.limit.filter(|n| *n > 0).map(|n| n as usize)
+}
+
+fn start_index(offset: usize) -> usize {
+    if offset == 0 { 0 } else { offset - 1 }
+}
+
+fn trim_line_ending(line: &mut String) {
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+}
+
+fn enforce_token_cap(file_path: &str, slice_bytes: usize) -> Result<(), ToolError> {
+    let token_estimate = slice_bytes / bytes_per_token_for_ext(file_path);
+    if token_estimate > DEFAULT_MAX_OUTPUT_TOKENS {
+        return Err(ToolError::InvalidInput {
+            message: format!(
+                "File content ({token_estimate} tokens) exceeds maximum allowed tokens \
+                 ({DEFAULT_MAX_OUTPUT_TOKENS}). Use offset and limit parameters to read \
+                 specific portions of the file, or search for specific content instead of \
+                 reading the whole file."
+            ),
+            error_code: None,
+        });
+    }
+    Ok(())
 }
 
 /// Render notebook cells as multi-block content.

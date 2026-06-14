@@ -427,12 +427,10 @@ async fn test_edit_detects_content_drift_in_race() {
         let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
         frs.set(
             abs,
-            FileReadEntry {
-                content: "stale cached content".into(), // != current
-                mtime_ms: mtime,                        // but same mtime
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real(
+                "stale cached content".into(), // != current
+                mtime,                         // but same mtime
+            ),
         );
     }
 
@@ -455,6 +453,71 @@ async fn test_edit_detects_content_drift_in_race() {
     );
     // Content on disk must be unchanged.
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "current on disk");
+}
+
+#[tokio::test]
+async fn test_edit_allows_newer_mtime_when_full_content_is_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("same-content.txt");
+    std::fs::write(&file, "hello world\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(abs, FileReadEntry::full_real("hello world\n".into(), 0));
+    }
+
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "hello",
+            "new_string": "goodbye"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "newer mtime with identical full content should be allowed: {result:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "goodbye world\n");
+}
+
+#[tokio::test]
+async fn test_edit_rejects_newer_mtime_when_full_content_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("changed-content.txt");
+    std::fs::write(&file, "current on disk\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(abs, FileReadEntry::full_real("cached version\n".into(), 0));
+    }
+
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "current",
+            "new_string": "updated"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(result.is_err(), "changed content must be rejected");
+    assert!(
+        result.unwrap_err().to_string().contains("content changed"),
+        "error should mention content drift",
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "current on disk\n");
 }
 
 /// Read-before-edit guard (errorCode 6): when the file exists on disk but
@@ -492,11 +555,10 @@ async fn test_edit_rejects_unread_existing_file() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello world");
 }
 
-/// Partial-view reads are also rejected: a Read with offset/limit only
-/// cached a slice, so the full file can't be validated against the edit.
-/// An entry with `offset`/`limit` set must be rejected.
+/// Line-range reads from the Read tool are valid edit evidence as long as the
+/// file has not advanced on disk.
 #[tokio::test]
-async fn test_edit_rejects_partial_view_read() {
+async fn test_edit_allows_line_range_read() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("partial.txt");
     std::fs::write(&file, "line one\nline two\n").unwrap();
@@ -509,12 +571,7 @@ async fn test_edit_rejects_partial_view_read() {
         let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
         frs.set(
             abs,
-            FileReadEntry {
-                content: "line one\n".into(),
-                mtime_ms: mtime,
-                offset: Some(1), // partial view (line range) → must reject
-                limit: Some(1),
-            },
+            FileReadEntry::line_real("line one\n".into(), mtime, None, 1),
         );
     }
 
@@ -530,12 +587,94 @@ async fn test_edit_rejects_partial_view_read() {
     .await;
 
     assert!(
-        result.is_err(),
-        "editing after a partial read must be rejected"
+        result.is_ok(),
+        "editing after a line-range read should be allowed: {result:?}"
     );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "LINE ONE\nline two\n"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_rejects_injected_partial_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("partial.txt");
+    std::fs::write(&file, "line one\nline two\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(
+            abs,
+            FileReadEntry::injected_partial(
+                "line one\n".into(),
+                mtime,
+                coco_context::FileReadRange::Lines {
+                    offset: None,
+                    limit: 1,
+                },
+            ),
+        );
+    }
+
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "line one",
+            "new_string": "LINE ONE"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(result.is_err(), "injected partial views must be rejected");
     assert!(
-        result.unwrap_err().to_string().contains("partially"),
-        "error should mention the partial read",
+        result.unwrap_err().to_string().contains("partial injected"),
+        "error should mention injected partial context",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "line one\nline two\n"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_rejects_stale_line_range_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("partial.txt");
+    std::fs::write(&file, "line one\nline two\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(
+            abs,
+            FileReadEntry::line_real("line one\n".into(), 0, None, 1),
+        );
+    }
+
+    let result = <EditTool as DynTool>::execute(
+        &EditTool,
+        json!({
+            "file_path": file.to_str().unwrap(),
+            "old_string": "line one",
+            "new_string": "LINE ONE"
+        }),
+        &ctx,
+    )
+    .await;
+
+    assert!(result.is_err(), "stale line-range reads must be rejected");
+    assert!(
+        result.unwrap_err().to_string().contains("mtime changed"),
+        "error should mention mtime drift",
     );
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),

@@ -230,16 +230,15 @@ pub fn register_mcp_auth_tool(
 /// entries don't get this flag, so dedup-aware readers skip stub-ing
 /// against post-edit entries.
 ///
-/// `effective_*` is the truncated range stored on `FileReadEntry` (None
-/// = "no truncation in that dimension"). `input_*` is the literal value
+/// `range` is the model-visible file range stored on `FileReadEntry`.
+/// `input_*` is the literal value
 /// the model passed; the dedup check matches against the model-visible
 /// inputs, not the effective ones, so the two are kept separately.
 pub(crate) async fn record_file_read(
     ctx: &coco_tool_runtime::ToolUseContext,
     path: &Path,
     content: String,
-    effective_offset: Option<i32>,
-    effective_limit: Option<i32>,
+    range: coco_context::FileReadRange,
     input_offset: Option<i32>,
     input_limit: Option<i32>,
 ) {
@@ -253,8 +252,8 @@ pub(crate) async fn record_file_read(
             coco_context::FileReadEntry {
                 content,
                 mtime_ms: mtime,
-                offset: effective_offset,
-                limit: effective_limit,
+                range,
+                evidence: coco_context::ReadEvidence::RealFileView,
             },
             input_offset,
             input_limit,

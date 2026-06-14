@@ -425,15 +425,7 @@ async fn test_write_allows_overwrite_after_read() {
     let ctx = ctx_with_file_state();
     {
         let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
-        frs.set(
-            abs,
-            FileReadEntry {
-                content: "first version".into(),
-                mtime_ms: mtime,
-                offset: None,
-                limit: None,
-            },
-        );
+        frs.set(abs, FileReadEntry::full_real("first version".into(), mtime));
     }
 
     let result = <WriteTool as DynTool>::execute(
@@ -447,6 +439,110 @@ async fn test_write_allows_overwrite_after_read() {
         "prior read should allow overwrite: {result:?}"
     );
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "second version");
+}
+
+#[tokio::test]
+async fn test_write_allows_overwrite_after_line_range_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("file.txt");
+    std::fs::write(&file, "first version\nsecond line\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+
+    let ctx = ctx_with_file_state();
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(
+            abs,
+            FileReadEntry::line_real("first version\n".into(), mtime, None, 1),
+        );
+    }
+
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "replacement"}),
+        &ctx,
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "line-range read should allow overwrite: {result:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "replacement");
+}
+
+#[tokio::test]
+async fn test_write_rejects_injected_partial_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("file.txt");
+    std::fs::write(&file, "first version\nsecond line\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+    let mtime = coco_context::file_mtime_ms(&abs).await.unwrap();
+
+    let ctx = ctx_with_file_state();
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(
+            abs,
+            FileReadEntry::injected_partial(
+                "first version\n".into(),
+                mtime,
+                coco_context::FileReadRange::Lines {
+                    offset: None,
+                    limit: 1,
+                },
+            ),
+        );
+    }
+
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "replacement"}),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_err(), "injected partial views must be rejected");
+    assert!(
+        result.unwrap_err().to_string().contains("partial injected"),
+        "error should mention injected partial context",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "first version\nsecond line\n"
+    );
+}
+
+#[tokio::test]
+async fn test_write_rejects_stale_line_range_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("file.txt");
+    std::fs::write(&file, "first version\nsecond line\n").unwrap();
+    let abs = std::fs::canonicalize(&file).unwrap();
+
+    let ctx = ctx_with_file_state();
+    {
+        let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
+        frs.set(
+            abs,
+            FileReadEntry::line_real("first version\n".into(), 0, None, 1),
+        );
+    }
+
+    let result = <WriteTool as DynTool>::execute(
+        &WriteTool,
+        json!({"file_path": file.to_str().unwrap(), "content": "replacement"}),
+        &ctx,
+    )
+    .await;
+    assert!(result.is_err(), "stale line-range reads must be rejected");
+    assert!(
+        result.unwrap_err().to_string().contains("mtime changed"),
+        "error should mention mtime drift",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "first version\nsecond line\n"
+    );
 }
 
 /// Stale content in file_read_state (file was edited on disk since we
@@ -467,12 +563,7 @@ async fn test_write_detects_content_drift() {
         let mut frs = ctx.file_read_state.as_ref().unwrap().write().await;
         frs.set(
             abs,
-            FileReadEntry {
-                content: "stale cached content".into(),
-                mtime_ms: mtime,
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real("stale cached content".into(), mtime),
         );
     }
 

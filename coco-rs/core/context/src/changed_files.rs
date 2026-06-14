@@ -6,19 +6,20 @@
 use crate::attachment::Attachment;
 use crate::attachment::FileAttachment;
 use crate::file_read_state::FileReadEntry;
+use crate::file_read_state::FileReadRange;
 use crate::file_read_state::FileReadState;
 use crate::file_read_state::file_mtime_ms;
 
 /// Detect files that changed on disk since they were last read.
 ///
-/// Skips partial reads (offset/limit set) since they can't be reliably diffed.
+/// Skips line-range reads since they can't be reliably diffed.
 /// Updates the cache with new content after detecting changes.
 pub async fn detect_changed_files(file_read_state: &mut FileReadState) -> Vec<Attachment> {
     let mut changed = Vec::new();
 
     let paths_to_check: Vec<(std::path::PathBuf, i64)> = file_read_state
         .iter_entries()
-        .filter(|(_, entry)| entry.offset.is_none() && entry.limit.is_none())
+        .filter(|(_, entry)| entry.range == FileReadRange::Full)
         .map(|(path, entry)| (path.to_path_buf(), entry.mtime_ms))
         .collect();
 
@@ -42,12 +43,7 @@ pub async fn detect_changed_files(file_read_state: &mut FileReadState) -> Vec<At
         // Update cache first so we can move new_content into the attachment.
         file_read_state.set(
             path,
-            FileReadEntry {
-                content: new_content.clone(),
-                mtime_ms: disk_mtime,
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real(new_content.clone(), disk_mtime),
         );
 
         changed.push(Attachment::File(FileAttachment {

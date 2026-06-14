@@ -287,18 +287,30 @@ impl Tool for NotebookEditTool {
             // mtime drift check — reject edits staged against a view that is
             // older than the current
             // disk mtime so we don't quietly overwrite external changes.
-            if let Some(entry) = frs_read.peek(&abs_path)
-                && let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
-                && entry.mtime_ms != disk_mtime
-            {
-                return Err(ToolError::ExecutionFailed {
-                    message: format!(
-                        "{notebook_path} has been modified since it was last read. \
-                         Read it again before editing."
-                    ),
-                    display_data: None,
-                    source: None,
-                });
+            if let Some(entry) = frs_read.peek(&abs_path) {
+                if !entry.can_satisfy_edit_or_write() {
+                    return Err(ToolError::ExecutionFailed {
+                        message: format!(
+                            "{notebook_path} was only provided as partial injected context. \
+                             Read it with the Read tool before editing it."
+                        ),
+                        display_data: None,
+                        source: None,
+                    });
+                }
+
+                if let Ok(disk_mtime) = coco_context::file_mtime_ms(&abs_path).await
+                    && disk_mtime > entry.mtime_ms
+                {
+                    return Err(ToolError::ExecutionFailed {
+                        message: format!(
+                            "{notebook_path} has been modified since it was last read. \
+                             Read it again before editing."
+                        ),
+                        display_data: None,
+                        source: None,
+                    });
+                }
             }
         }
 

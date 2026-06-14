@@ -9,7 +9,7 @@ use serde_json::json;
 // ── R7-T25: read prompt content check ──
 //
 // Regression guard: the model-facing prompt() must include the
-// multimodal capabilities (images/PDF/notebooks), the 2000-line
+// multimodal capabilities (images/PDF/notebooks), the full-file
 // default, and the cat -n format hint. Without these the model won't
 // discover the tool's full surface. The short description() is only
 // the per-call UI label.
@@ -22,7 +22,7 @@ async fn test_read_prompt_mentions_multimodal_capabilities() {
         desc.contains("Jupyter notebook") || desc.contains(".ipynb"),
         "missing notebook hint"
     );
-    assert!(desc.contains("2000 lines"), "missing 2000-line default");
+    assert!(desc.contains("full file"), "missing full-file default");
     assert!(desc.contains("cat -n"), "missing cat -n format hint");
 }
 
@@ -53,6 +53,38 @@ async fn test_read_basic_file() {
     assert!(text.contains("1\tline one"));
     assert!(text.contains("2\tline two"));
     assert!(text.contains("3\tline three"));
+}
+
+#[tokio::test]
+async fn test_read_without_limit_reads_past_2000_lines_and_records_full() {
+    use coco_context::FileReadRange;
+    use coco_context::FileReadState;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("many_lines.txt");
+    let content: String = (1..=2500).map(|i| format!("line {i}\n")).collect();
+    std::fs::write(&file, &content).unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap()}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let text = result.data["file"]["content"].as_str().unwrap();
+    assert!(text.contains("2500\tline 2500"), "got: {text}");
+    assert!(!text.contains("more lines not shown"), "got: {text}");
+
+    let abs = std::fs::canonicalize(&file).unwrap();
+    let frs = ctx.file_read_state.as_ref().unwrap().read().await;
+    let entry = frs.peek(&abs).expect("read should populate file state");
+    assert_eq!(entry.range, FileReadRange::Full);
 }
 
 /// `offset` is 1-based — it corresponds directly to the line number visible
@@ -747,13 +779,19 @@ async fn test_read_full_read_too_large_errors() {
 /// full-file size cap — only the line and token caps apply.
 #[tokio::test]
 async fn test_read_partial_read_skips_size_cap() {
+    use coco_context::FileReadRange;
+    use coco_context::FileReadState;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("big_lines.txt");
     // 50K short lines → file well over 256K total, but the slice is tiny.
     let content: String = (0..50_000).map(|i| format!("line {i}\n")).collect();
     std::fs::write(&file, &content).unwrap();
 
-    let ctx = ToolUseContext::test_default();
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
     let result = <ReadTool as DynTool>::execute(
         &ReadTool,
         json!({"file_path": file.to_str().unwrap(), "offset": 1, "limit": 3}),
@@ -764,6 +802,62 @@ async fn test_read_partial_read_skips_size_cap() {
     let text = result.data["file"]["content"].as_str().unwrap();
     assert!(text.contains("1\tline 0"), "got: {text}");
     assert!(text.contains("more lines not shown"));
+
+    let abs = std::fs::canonicalize(&file).unwrap();
+    let frs = ctx.file_read_state.as_ref().unwrap().read().await;
+    let entry = frs.peek(&abs).expect("read should populate file state");
+    assert_eq!(
+        entry.range,
+        FileReadRange::Lines {
+            offset: None,
+            limit: 3,
+        }
+    );
+}
+
+#[tokio::test]
+async fn test_read_large_explicit_limit_streams_range() {
+    use coco_context::FileReadRange;
+    use coco_context::FileReadState;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("large_stream.txt");
+    // >10MB UTF-8 file. The requested range is tiny and near EOF, so this
+    // must not go through the full-file size cap.
+    let content: String = (1..=1_200_000).map(|i| format!("line {i:07}\n")).collect();
+    assert!(content.len() > 10 * 1024 * 1024);
+    std::fs::write(&file, content).unwrap();
+
+    let mut ctx = ToolUseContext::test_default();
+    ctx.file_read_state = Some(Arc::new(RwLock::new(FileReadState::new())));
+
+    let result = <ReadTool as DynTool>::execute(
+        &ReadTool,
+        json!({"file_path": file.to_str().unwrap(), "offset": 1_199_999, "limit": 2}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+
+    let text = result.data["file"]["content"].as_str().unwrap();
+    assert!(text.contains("1199999\tline 1199999"), "got: {text}");
+    assert!(text.contains("1200000\tline 1200000"), "got: {text}");
+    assert!(!text.contains("more lines not shown"), "got: {text}");
+    assert_eq!(result.data["file"]["totalLines"], 1_200_000);
+
+    let abs = std::fs::canonicalize(&file).unwrap();
+    let frs = ctx.file_read_state.as_ref().unwrap().read().await;
+    let entry = frs.peek(&abs).expect("read should populate file state");
+    assert_eq!(
+        entry.range,
+        FileReadRange::Lines {
+            offset: Some(1_199_999),
+            limit: 2,
+        }
+    );
+    assert_eq!(entry.content, "line 1199999\nline 1200000");
 }
 
 /// #17: a slice whose token estimate exceeds the budget throws
@@ -1257,10 +1351,8 @@ async fn test_read_dedup_invalidated_by_mtime_change() {
         // Pull the existing entry, decrement mtime, reinsert via
         // `set_from_read` to preserve the from-read marker + input range.
         if let Some(stale) = frs_w.peek(&abs).cloned() {
-            let stale = coco_context::FileReadEntry {
-                mtime_ms: stale.mtime_ms - 1,
-                ..stale
-            };
+            let mut stale = stale;
+            stale.mtime_ms -= 1;
             frs_w.set_from_read(abs, stale, None, None);
         }
     }
@@ -1307,12 +1399,7 @@ async fn test_read_dedup_skipped_after_edit() {
         let mut frs_w = frs.write().await;
         frs_w.set(
             abs,
-            FileReadEntry {
-                content: "post-edit content\n".into(),
-                mtime_ms: mtime,
-                offset: None,
-                limit: None,
-            },
+            FileReadEntry::full_real("post-edit content\n".into(), mtime),
         );
     }
 

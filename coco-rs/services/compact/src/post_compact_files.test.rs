@@ -9,12 +9,7 @@ use coco_llm_types::ToolCallPart;
 use super::*;
 
 fn make_entry(content: &str, mtime: i64) -> FileReadEntry {
-    FileReadEntry {
-        content: content.to_string(),
-        mtime_ms: mtime,
-        offset: None,
-        limit: None,
-    }
+    FileReadEntry::full_real(content.to_string(), mtime)
 }
 
 fn make_assistant_with_read_tool_call(tool_call_id: &str, file_path: &str) -> Message {

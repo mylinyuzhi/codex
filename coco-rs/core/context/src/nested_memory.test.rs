@@ -333,6 +333,27 @@ fn loaded_entries_contain_file_contents() {
         .find(|e| e.path.parent() == Some(sub_canonical.as_path()))
         .expect("missing entry");
     assert_eq!(entry.content, "hello world");
+    assert_eq!(entry.raw_content, "hello world");
+}
+
+#[test]
+fn loaded_entries_keep_raw_content_when_visible_content_is_stripped() {
+    let root = tempdir().unwrap();
+    let proj = root.path().join("proj");
+    let sub = proj.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("CLAUDE.md"), "hello\n<!-- hidden -->\n").unwrap();
+    let trigger = sub.join("f.rs");
+    fs::write(&trigger, "").unwrap();
+
+    let mut loaded = HashSet::new();
+    let entries = traverse_for_file(&trigger, &proj, &mut loaded);
+    let entry = entries
+        .iter()
+        .find(|e| e.path.file_name().unwrap() == std::ffi::OsStr::new("CLAUDE.md"))
+        .expect("missing entry");
+    assert_eq!(entry.content, "hello\n\n");
+    assert_eq!(entry.raw_content, "hello\n<!-- hidden -->\n");
 }
 
 #[test]
