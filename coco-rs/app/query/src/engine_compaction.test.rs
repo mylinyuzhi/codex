@@ -411,6 +411,7 @@ fn empty_cache() -> CacheSafeParams {
         rendered_system_prompt: "system".into(),
         model_id: "mock-model".into(),
         provider: "mock".into(),
+        active_shell_tool: coco_types::ActiveShellTool::Bash,
         prompt_cache: None,
         fork_context_messages: vec![Arc::new(coco_messages::create_user_message(
             "old parent cache",

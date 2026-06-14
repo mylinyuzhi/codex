@@ -106,6 +106,10 @@ async fn fires_with_constraints_and_fork_messages() {
     // Fork mode + parent context propagation.
     assert_eq!(calls[0].isolation.as_deref(), Some("fork"));
     assert_eq!(calls[0].fork_context_messages.len(), 1);
+    assert_eq!(
+        calls[0].active_shell_tool,
+        coco_types::ActiveShellTool::Disabled
+    );
 }
 
 #[tokio::test]

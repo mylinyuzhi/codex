@@ -335,6 +335,10 @@ impl Tool for BashTool {
         ToolName::Bash.as_str()
     }
 
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.active_shell_tool == coco_types::ActiveShellTool::Bash
+    }
+
     /// Short per-call UI label: `description || 'Run shell command'`.
     fn description(&self, input: &BashInput, _options: &DescriptionOptions) -> String {
         input
@@ -996,6 +1000,7 @@ async fn execute_via_task_runtime(
 
     let req = BackgroundShellRequest {
         command: command.to_string(),
+        shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
         description: description.to_string(),
         timeout_ms: Some(timeout_ms as i64),
         tool_use_id,

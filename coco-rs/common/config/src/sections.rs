@@ -428,13 +428,25 @@ impl LoopConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PartialShellSettings {
+    pub tool: Option<ShellToolSelection>,
     pub default_shell: Option<String>,
     pub disable_snapshot: Option<bool>,
     pub maintain_project_working_dir: Option<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellToolSelection {
+    #[default]
+    Auto,
+    Bash,
+    PowerShell,
+    Disabled,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellConfig {
+    pub tool: ShellToolSelection,
     pub default_shell: Option<String>,
     pub disable_snapshot: bool,
     /// When true, snap the bash cwd back to the session's original cwd
@@ -446,6 +458,7 @@ pub struct ShellConfig {
 impl ShellConfig {
     pub fn resolve(settings: &Settings, env: &EnvSnapshot) -> Self {
         let mut config = Self {
+            tool: settings.shell.tool.unwrap_or_default(),
             default_shell: settings.shell.default_shell.clone(),
             disable_snapshot: settings.shell.disable_snapshot.unwrap_or(false),
             maintain_project_working_dir: settings

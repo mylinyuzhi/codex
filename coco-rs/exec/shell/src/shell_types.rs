@@ -27,6 +27,18 @@ pub enum ShellType {
     Cmd,
 }
 
+impl ShellType {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Zsh => "zsh",
+            Self::Bash => "bash",
+            Self::PowerShell => "powershell",
+            Self::Sh => "sh",
+            Self::Cmd => "cmd",
+        }
+    }
+}
+
 /// Shell configuration with path and optional environment snapshot.
 #[derive(Debug, Clone)]
 pub struct Shell {
@@ -48,13 +60,7 @@ impl Shell {
 
     /// Returns the short name of the shell.
     pub fn name(&self) -> &'static str {
-        match self.shell_type {
-            ShellType::Zsh => "zsh",
-            ShellType::Bash => "bash",
-            ShellType::PowerShell => "powershell",
-            ShellType::Sh => "sh",
-            ShellType::Cmd => "cmd",
-        }
+        self.shell_type.name()
     }
 
     /// Derives the command arguments for executing a shell script.
@@ -113,9 +119,10 @@ pub fn detect_shell_type(shell_path: &Path) -> Option<ShellType> {
     let name = shell_path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
-    match name {
+    match name.as_str() {
         "zsh" => Some(ShellType::Zsh),
         "bash" => Some(ShellType::Bash),
         "sh" => Some(ShellType::Sh),
@@ -188,23 +195,38 @@ fn default_user_shell_from_path(user_shell_path: Option<PathBuf>) -> Shell {
 
 /// Gets a shell of the specified type, optionally at a specific path.
 pub fn get_shell(shell_type: ShellType, path: Option<&Path>) -> Option<Shell> {
-    let binary_name = match shell_type {
-        ShellType::Zsh => "zsh",
-        ShellType::Bash => "bash",
-        ShellType::Sh => "sh",
-        ShellType::PowerShell => "pwsh",
-        ShellType::Cmd => "cmd",
+    let binary_names: &[&str] = match shell_type {
+        ShellType::Zsh => &["zsh"],
+        ShellType::Bash => &["bash"],
+        ShellType::Sh => &["sh"],
+        ShellType::PowerShell => &["pwsh", "powershell"],
+        ShellType::Cmd => &["cmd"],
     };
 
     let fallbacks: &[&str] = match shell_type {
         ShellType::Zsh => &["/bin/zsh"],
         ShellType::Bash => &["/bin/bash"],
         ShellType::Sh => &["/bin/sh"],
-        ShellType::PowerShell => &["/usr/local/bin/pwsh"],
-        ShellType::Cmd => &[],
+        ShellType::PowerShell => {
+            if cfg!(windows) {
+                &[
+                    r"C:\Program Files\PowerShell\7\pwsh.exe",
+                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                ]
+            } else {
+                &["/usr/local/bin/pwsh", "/opt/homebrew/bin/pwsh"]
+            }
+        }
+        ShellType::Cmd => {
+            if cfg!(windows) {
+                &[r"C:\Windows\System32\cmd.exe"]
+            } else {
+                &[]
+            }
+        }
     };
 
-    let resolved = resolve_shell_path(path, binary_name, fallbacks)?;
+    let resolved = resolve_shell_path(path, binary_names, fallbacks)?;
 
     Some(Shell {
         shell_type,
@@ -222,19 +244,24 @@ pub fn get_shell_by_path(shell_path: &Path) -> Shell {
 
 fn resolve_shell_path(
     provided: Option<&Path>,
-    binary_name: &str,
+    binary_names: &[&str],
     fallbacks: &[&str],
 ) -> Option<PathBuf> {
     // Exact provided path
-    if let Some(path) = provided
-        && path.is_file()
-    {
-        return Some(path.to_path_buf());
+    if let Some(path) = provided {
+        if path.is_file() {
+            return Some(path.to_path_buf());
+        }
+        if let Ok(path) = which::which(path) {
+            return Some(path);
+        }
     }
 
     // Try `which`
-    if let Ok(path) = which::which(binary_name) {
-        return Some(path);
+    for binary_name in binary_names {
+        if let Ok(path) = which::which(binary_name) {
+            return Some(path);
+        }
     }
 
     // Try fallback paths

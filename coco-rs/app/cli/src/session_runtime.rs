@@ -818,6 +818,8 @@ impl SessionRuntime {
         // runner calls `MemoryRuntime::install_agent` once the real
         // `SwarmAgentHandle` is built. Recall + system-prompt
         // rendering work without an agent handle.
+        let active_shell_tool =
+            crate::shell_tool_selection::active_shell_tool_from_runtime(&runtime_config)?;
         let memory_runtime = if runtime_config
             .features
             .enabled(coco_types::Feature::AutoMemory)
@@ -851,6 +853,7 @@ impl SessionRuntime {
             .with_project_paths(project_paths.clone())
             .with_transcript_dir(transcript_root)
             .with_telemetry(memory_telemetry)
+            .with_active_shell_tool(active_shell_tool)
             .with_auto_compact_enabled(auto_compact_enabled)
             .build();
             info!(
@@ -1087,52 +1090,69 @@ impl SessionRuntime {
 
         // ── Session-scoped shell provider ──
         //
-        // Build once at session start so `BashProvider` keeps the same
-        // snapshot watch + session-env reader + `/env` store across all
-        // BashTool invocations. The snapshot promise resolves once for
-        // the lifetime of the shell provider singleton.
-        let shell_provider: Option<Arc<dyn coco_shell::ShellProvider>> = {
-            let mut shell = coco_shell::shell_from_config(&runtime_config.shell);
-            let snap_cfg = coco_shell::SnapshotConfig::new(&config_home);
-            if !runtime_config.shell.disable_snapshot {
-                coco_shell::ShellSnapshot::start_snapshotting(
-                    snap_cfg.clone(),
-                    &session_id,
-                    &mut shell,
-                );
-                // Sweep prior-run residue in the background — mtime-only,
-                // no await needed on the hot path. Skipped in bare mode.
-                if !bare_mode {
-                    let dir = snap_cfg.snapshot_dir.clone();
-                    let sid = session_id.clone();
-                    let retention = snap_cfg.retention;
-                    tokio::spawn(async move {
-                        match coco_shell::cleanup_stale_snapshots(&dir, &sid, retention).await {
-                            Ok(n) if n > 0 => {
-                                info!("reaped {n} stale shell snapshots from {}", dir.display());
+        // Build once at session start so the provider keeps the same
+        // resolved shell binary and session-scoped `/env` store across all
+        // shell-tool invocations. Bash additionally keeps snapshot watch +
+        // session-env reader state.
+        let shell_provider: Option<Arc<dyn coco_shell::ShellProvider>> = match active_shell_tool {
+            coco_types::ActiveShellTool::Bash => {
+                let mut shell = coco_shell::shell_from_config(&runtime_config.shell);
+                let snap_cfg = coco_shell::SnapshotConfig::new(&config_home);
+                if !runtime_config.shell.disable_snapshot {
+                    coco_shell::ShellSnapshot::start_snapshotting(
+                        snap_cfg.clone(),
+                        &session_id,
+                        &mut shell,
+                    );
+                    // Sweep prior-run residue in the background — mtime-only,
+                    // no await needed on the hot path. Skipped in bare mode.
+                    if !bare_mode {
+                        let dir = snap_cfg.snapshot_dir.clone();
+                        let sid = session_id.clone();
+                        let retention = snap_cfg.retention;
+                        tokio::spawn(async move {
+                            match coco_shell::cleanup_stale_snapshots(&dir, &sid, retention).await {
+                                Ok(n) if n > 0 => {
+                                    info!(
+                                        "reaped {n} stale shell snapshots from {}",
+                                        dir.display()
+                                    );
+                                }
+                                Ok(_) => {}
+                                Err(e) => warn!("shell snapshot cleanup failed: {e}"),
                             }
-                            Ok(_) => {}
-                            Err(e) => warn!("shell snapshot cleanup failed: {e}"),
-                        }
-                    });
+                        });
+                    }
                 }
+                let session_env_reader = Some(Arc::new(coco_shell::SessionEnvReader::new(
+                    &config_home,
+                    &session_id,
+                )));
+                // `COCO_SHELL_PREFIX` is consumed here (BashProvider wraps the
+                // assembled command). The same env var is also consumed by
+                // `coco-hooks` for hook-command execution — they share the
+                // value but apply it independently.
+                let shell_prefix = std::env::var("COCO_SHELL_PREFIX").ok();
+                let session_env_vars = coco_shell::SessionEnvVars::new();
+                Some(Arc::new(coco_shell::BashProvider::new(
+                    shell,
+                    session_env_reader,
+                    session_env_vars,
+                    shell_prefix,
+                )) as Arc<dyn coco_shell::ShellProvider>)
             }
-            let session_env_reader = Some(Arc::new(coco_shell::SessionEnvReader::new(
-                &config_home,
-                &session_id,
-            )));
-            // `COCO_SHELL_PREFIX` is consumed here (BashProvider wraps the
-            // assembled command). The same env var is also consumed by
-            // `coco-hooks` for hook-command execution — they share the
-            // value but apply it independently.
-            let shell_prefix = std::env::var("COCO_SHELL_PREFIX").ok();
-            let session_env_vars = coco_shell::SessionEnvVars::new();
-            Some(Arc::new(coco_shell::BashProvider::new(
-                shell,
-                session_env_reader,
-                session_env_vars,
-                shell_prefix,
-            )) as Arc<dyn coco_shell::ShellProvider>)
+            coco_types::ActiveShellTool::PowerShell => {
+                let shell = crate::shell_tool_selection::require_shell(
+                    coco_shell::ShellType::PowerShell,
+                    "PowerShell tool selected, but neither `pwsh` nor `powershell` was found",
+                )?;
+                let session_env_vars = coco_shell::SessionEnvVars::new();
+                Some(
+                    Arc::new(coco_shell::PowerShellProvider::new(shell, session_env_vars))
+                        as Arc<dyn coco_shell::ShellProvider>,
+                )
+            }
+            coco_types::ActiveShellTool::Disabled => None,
         };
 
         // Build the engine config — owns most settings drawn from
@@ -1179,6 +1199,7 @@ impl SessionRuntime {
             sandbox_state: sandbox_state.clone(),
             memory_config: runtime_config.memory.clone(),
             shell_config: runtime_config.shell.clone(),
+            active_shell_tool,
             shell_provider,
             original_cwd: Some(session_original_cwd.clone()),
             session_cwd: Some(session_current_cwd.clone()),

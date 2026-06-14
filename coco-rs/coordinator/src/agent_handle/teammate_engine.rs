@@ -50,6 +50,7 @@ impl AgentExecutionEngine for TeammateExecutionAdapter {
             tool_overrides: config.tool_overrides,
             features: config.features,
             parent_tool_filter: config.parent_tool_filter,
+            active_shell_tool: config.active_shell_tool,
             preserve_tool_use_results: config.preserve_tool_use_results,
             permission_mode: config.permission_mode,
             cancel: config.cancel,

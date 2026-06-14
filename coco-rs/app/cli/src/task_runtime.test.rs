@@ -579,6 +579,7 @@ async fn shell_spawn_runs_command_and_marks_completed() {
     let task_id = rt
         .spawn_shell_task(BackgroundShellRequest {
             command: "echo hello-bg".into(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
             timeout_ms: Some(5_000),
             description: "echo test".into(),
             tool_use_id: Some("toolu_sh1".into()),
@@ -617,6 +618,7 @@ async fn shell_spawn_propagates_nonzero_exit_as_failed() {
     let task_id = rt
         .spawn_shell_task(BackgroundShellRequest {
             command: "exit 7".into(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
             timeout_ms: Some(5_000),
             description: "fail".into(),
             tool_use_id: None,
@@ -655,6 +657,7 @@ async fn shell_spawn_threads_tool_use_id_and_agent_id_into_notification() {
     let _task_id = rt
         .spawn_shell_task(BackgroundShellRequest {
             command: "true".into(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
             timeout_ms: Some(5_000),
             description: "noop".into(),
             tool_use_id: Some("toolu_bash99".into()),
@@ -702,6 +705,7 @@ async fn shell_stop_suppresses_model_notification() {
     let task_id = rt
         .spawn_shell_task(BackgroundShellRequest {
             command: "sleep 5".into(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
             timeout_ms: Some(10_000),
             description: "sleep".into(),
             tool_use_id: Some("toolu_stop".into()),
@@ -914,6 +918,7 @@ async fn shell_spawn_persists_exit_code_for_terminal_outputs() {
     let task_id = rt
         .spawn_shell_task(BackgroundShellRequest {
             command: "exit 42".into(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
             timeout_ms: Some(5_000),
             description: "exit-42".into(),
             tool_use_id: None,
@@ -962,6 +967,7 @@ async fn shell_spawn_emits_progress_events_through_progress_tx() {
             // Sleep long enough to ensure at least one progress tick
             // at 100 ms throttle, then exit.
             command: "sleep 0.3 && echo done".into(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
             timeout_ms: Some(5_000),
             description: "progress-test".into(),
             tool_use_id: Some("toolu_progress".into()),
@@ -1000,6 +1006,7 @@ async fn shell_spawn_auto_detach_timer_fires() {
         .spawn_shell_task(BackgroundShellRequest {
             // Long-running command so auto-detach beats natural exit.
             command: "sleep 5".into(),
+            shell_kind: coco_tool_runtime::BackgroundShellKind::DefaultPlatformShell,
             timeout_ms: Some(10_000),
             description: "auto-detach".into(),
             tool_use_id: None,

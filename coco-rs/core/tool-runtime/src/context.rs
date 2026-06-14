@@ -1,6 +1,7 @@
 use coco_context::FileHistoryState;
 use coco_context::FileReadState;
 use coco_messages::Message;
+use coco_types::ActiveShellTool;
 use coco_types::AgentId;
 use coco_types::AgentTypeId;
 use coco_types::Features;
@@ -85,6 +86,8 @@ pub struct ToolUseContext {
     /// (`ShellExecutor::new_with_config`) for shell-override + snapshot
     /// gating.
     pub shell_config: coco_config::ShellConfig,
+    /// Model-facing shell tool selected for this session.
+    pub active_shell_tool: ActiveShellTool,
     /// Session-scoped shell command assembler. Constructed once at
     /// session bootstrap and threaded through every tool invocation so
     /// that snapshot capture, session-env hook output, `/env` vars,
@@ -611,6 +614,7 @@ impl ToolUseContext {
             sandbox_state: self.sandbox_state.clone(),
             memory_config: self.memory_config.clone(),
             shell_config: self.shell_config.clone(),
+            active_shell_tool: self.active_shell_tool,
             shell_provider: self.shell_provider.clone(),
             original_cwd: self.original_cwd.clone(),
             session_cwd: self.session_cwd.clone(),
@@ -776,6 +780,13 @@ impl ToolUseContext {
         self
     }
 
+    /// Builder: install the selected model-facing shell tool on a filtering
+    /// stub. Real execution contexts get this from `QueryEngineConfig`.
+    pub fn with_active_shell_tool(mut self, active_shell_tool: ActiveShellTool) -> Self {
+        self.active_shell_tool = active_shell_tool;
+        self
+    }
+
     /// Builder: install the current turn's ToolSearch candidate gate.
     pub fn with_tool_search_candidates(mut self, has_candidates: bool) -> Self {
         self.tool_search_has_candidates = has_candidates;
@@ -837,6 +848,7 @@ impl ToolUseContext {
             sandbox_state: None,
             memory_config: coco_config::MemoryConfig::default(),
             shell_config: coco_config::ShellConfig::default(),
+            active_shell_tool: ActiveShellTool::default(),
             shell_provider: None,
             original_cwd: None,
             session_cwd: None,

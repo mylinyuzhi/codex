@@ -292,6 +292,33 @@ pub fn legacy_tool_name_aliases_of(canonical: &str) -> &'static [&'static str] {
     }
 }
 
+/// Model-facing shell tool protocol declared by a model entry.
+///
+/// This is intentionally distinct from the runtime shell used to spawn
+/// processes. It answers "which shell tool schema/protocol can this model
+/// consume?", not "which binary should execute commands?".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelShellToolType {
+    #[default]
+    ShellCommand,
+    UnifiedExec,
+    Disabled,
+}
+
+/// Shell tool exposed to the model for this session.
+///
+/// `Disabled` means no model-facing shell tool is visible, regardless of
+/// whether shell binaries exist locally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveShellTool {
+    Bash,
+    PowerShell,
+    #[default]
+    Disabled,
+}
+
 /// Tool identity — type-safe for all tool kinds.
 ///
 /// Three distinct concepts:

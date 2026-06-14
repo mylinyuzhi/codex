@@ -13,6 +13,7 @@ use crate::positive::PositiveCount;
 use crate::positive::PositiveTokens;
 use coco_types::ApplyPatchToolType;
 use coco_types::Capability;
+use coco_types::ModelShellToolType;
 use coco_types::ReasoningEffort;
 use coco_types::ThinkingLevel;
 use coco_types::ToolOverrides;
@@ -69,7 +70,7 @@ pub struct PartialModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_overrides: Option<ToolOverrides>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub shell_type: Option<String>,
+    pub shell_tool_type: Option<ModelShellToolType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tool_output_chars: Option<i32>,
 
@@ -119,7 +120,7 @@ impl PartialModelInfo {
                 auto_compact_pct: None,
                 apply_patch_tool_type: None,
                 tool_overrides: None,
-                shell_type: None,
+                shell_tool_type: None,
                 max_tool_output_chars: None,
                 base_instructions: None,
                 base_instructions_file: None,
@@ -153,7 +154,7 @@ impl PartialModelInfo {
         merge_opt!(auto_compact_pct);
         merge_opt!(apply_patch_tool_type);
         merge_opt!(tool_overrides);
-        merge_opt!(shell_type);
+        merge_opt!(shell_tool_type);
         merge_opt!(max_tool_output_chars);
         merge_opt!(base_instructions);
         merge_opt!(base_instructions_file);

@@ -4,6 +4,9 @@ use coco_types::ToolName;
 use serde_json::Value;
 use serde_json::json;
 
+use crate::AgentQueryConfig;
+use crate::AgentSpawnRequest;
+
 use super::*;
 
 /// Minimal test tool for unit tests.
@@ -89,6 +92,18 @@ fn test_tool_default_flags() {
     // T3: `is_mcp` derives from `mcp_info().is_some()`. Built-in tools
     // (no mcp_info) are not MCP tools.
     assert!(!tool.is_mcp());
+}
+
+#[test]
+fn agent_shell_runtime_carriers_default_disabled() {
+    assert_eq!(
+        AgentQueryConfig::default().active_shell_tool,
+        coco_types::ActiveShellTool::Disabled
+    );
+    assert_eq!(
+        AgentSpawnRequest::default().active_shell_tool,
+        coco_types::ActiveShellTool::Disabled
+    );
 }
 
 /// T3: `is_mcp` must return true for tools that advertise McpToolInfo

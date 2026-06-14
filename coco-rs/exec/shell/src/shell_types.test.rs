@@ -22,6 +22,18 @@ fn test_detect_shell_type_from_name() {
         detect_shell_type(Path::new("pwsh")),
         Some(ShellType::PowerShell)
     );
+    assert_eq!(
+        detect_shell_type(Path::new("pwsh.exe")),
+        Some(ShellType::PowerShell)
+    );
+    assert_eq!(
+        detect_shell_type(Path::new("powershell.exe")),
+        Some(ShellType::PowerShell)
+    );
+    assert_eq!(
+        detect_shell_type(Path::new("cmd.exe")),
+        Some(ShellType::Cmd)
+    );
 }
 
 #[test]
@@ -118,4 +130,23 @@ fn test_default_user_shell_returns_valid() {
 fn test_empty_snapshot_receiver_returns_none() {
     let rx = empty_shell_snapshot_receiver();
     assert!(rx.borrow().is_none());
+}
+
+#[test]
+fn powershell_resolution_prefers_pwsh_before_powershell() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pwsh = temp.path().join("pwsh");
+    let powershell = temp.path().join("powershell");
+    std::fs::write(&pwsh, "").expect("write pwsh");
+    std::fs::write(&powershell, "").expect("write powershell");
+
+    let pwsh_s = pwsh.to_string_lossy().to_string();
+    let powershell_s = powershell.to_string_lossy().to_string();
+    let resolved = resolve_shell_path(
+        None,
+        &["definitely-missing-pwsh", "definitely-missing-powershell"],
+        &[pwsh_s.as_str(), powershell_s.as_str()],
+    )
+    .expect("fallback should resolve");
+    assert_eq!(resolved, pwsh);
 }

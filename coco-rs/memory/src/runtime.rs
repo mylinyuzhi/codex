@@ -142,6 +142,7 @@ pub struct MemoryRuntimeBuilder {
     pub agent: AgentHandleRef,
     pub telemetry: Arc<dyn MemoryTelemetryEmitter>,
     pub side_query: Option<SideQueryHandle>,
+    pub active_shell_tool: coco_types::ActiveShellTool,
     /// Optional pre-resolved project transcript directory. Surfaces into
     /// the dream prompt's grep example and the searching-past-context block.
     pub transcript_dir: Option<PathBuf>,
@@ -168,6 +169,7 @@ impl MemoryRuntimeBuilder {
             agent,
             telemetry: Arc::new(NoopEmitter),
             side_query: None,
+            active_shell_tool: coco_types::ActiveShellTool::Disabled,
             transcript_dir: None,
             auto_compact_enabled: true,
         }
@@ -200,6 +202,14 @@ impl MemoryRuntimeBuilder {
     /// relevant memories instead of falling back to recency.
     pub fn with_side_query(mut self, side_query: SideQueryHandle) -> Self {
         self.side_query = Some(side_query);
+        self
+    }
+
+    pub fn with_active_shell_tool(
+        mut self,
+        active_shell_tool: coco_types::ActiveShellTool,
+    ) -> Self {
+        self.active_shell_tool = active_shell_tool;
         self
     }
 
@@ -260,6 +270,7 @@ impl MemoryRuntimeBuilder {
             agent_slot.clone(),
             self.telemetry.clone(),
             notices.clone(),
+            self.active_shell_tool,
         ));
         let dream = Arc::new(DreamService::with_shared_agent_and_notices(
             directories.personal.clone(),
@@ -267,6 +278,7 @@ impl MemoryRuntimeBuilder {
             agent_slot.clone(),
             self.telemetry.clone(),
             notices.clone(),
+            self.active_shell_tool,
         ));
         let session_memory = Arc::new(SessionMemoryService::with_shared_agent(
             project_paths,
@@ -274,6 +286,7 @@ impl MemoryRuntimeBuilder {
             self.config.clone(),
             agent_slot.clone(),
             self.telemetry.clone(),
+            self.active_shell_tool,
         ));
         let side_query_slot = OnceLock::new();
         if let Some(handle) = self.side_query {

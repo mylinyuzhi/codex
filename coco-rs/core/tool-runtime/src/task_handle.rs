@@ -56,6 +56,7 @@ impl DetachOutcome {
 #[derive(Clone)]
 pub struct BackgroundShellRequest {
     pub command: String,
+    pub shell_kind: BackgroundShellKind,
     pub description: String,
     pub timeout_ms: Option<i64>,
     pub tool_use_id: Option<String>,
@@ -83,10 +84,29 @@ pub struct BackgroundShellRequest {
     pub sandbox_bypass: coco_sandbox::SandboxBypass,
 }
 
+#[derive(Clone)]
+pub enum BackgroundShellKind {
+    DefaultPlatformShell,
+    Provider(Arc<dyn coco_shell::ShellProvider>),
+}
+
+impl std::fmt::Debug for BackgroundShellKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DefaultPlatformShell => f.write_str("DefaultPlatformShell"),
+            Self::Provider(provider) => f
+                .debug_tuple("Provider")
+                .field(&provider.shell_type().name())
+                .finish(),
+        }
+    }
+}
+
 impl std::fmt::Debug for BackgroundShellRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BackgroundShellRequest")
             .field("command", &self.command)
+            .field("shell_kind", &self.shell_kind)
             .field("description", &self.description)
             .field("timeout_ms", &self.timeout_ms)
             .field("tool_use_id", &self.tool_use_id)

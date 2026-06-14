@@ -426,6 +426,7 @@ impl QueryEngine {
             rendered_system_prompt,
             model_id: self.config.model_id.clone(),
             provider,
+            active_shell_tool: self.config.active_shell_tool,
             prompt_cache: self.config.prompt_cache.clone(),
             fork_context_messages: fork_messages,
         })

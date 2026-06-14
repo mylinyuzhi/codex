@@ -165,6 +165,7 @@ async fn dispatch_with_parent_history_uses_no_event_message_path() {
         rendered_system_prompt: "test".into(),
         model_id: "mock-model".into(),
         provider: "mock".into(),
+        active_shell_tool: coco_types::ActiveShellTool::Bash,
         prompt_cache: None,
         fork_context_messages: vec![Arc::new(coco_messages::create_user_message("parent turn"))],
     };
@@ -202,6 +203,7 @@ async fn compact_sidechain_transcript_writes_agent_store_only() {
         rendered_system_prompt: "test".into(),
         model_id: "mock-model".into(),
         provider: "mock".into(),
+        active_shell_tool: coco_types::ActiveShellTool::Bash,
         prompt_cache: None,
         fork_context_messages: vec![Arc::new(coco_messages::create_user_message("parent turn"))],
     };

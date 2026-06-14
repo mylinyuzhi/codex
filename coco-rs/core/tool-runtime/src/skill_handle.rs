@@ -29,6 +29,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use coco_config::SkillOverrideTiers;
+use coco_types::ActiveShellTool;
 use coco_types::Features;
 use coco_types::PermissionUpdate;
 use coco_types::ToolFilter;
@@ -40,14 +41,26 @@ use coco_types::ToolOverrides;
 /// (and [`crate::AgentSpawnRequest`]) so a forked subagent runs with
 /// the same Layer 1 + Layer 2 + Layer 4 set as the parent. Subagents
 /// only ever **narrow** these sets — never widen.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SubagentInheritance {
     pub features: Option<Arc<Features>>,
     pub tool_overrides: Option<Arc<ToolOverrides>>,
+    pub active_shell_tool: ActiveShellTool,
     /// Parent's Layer 4 filter; the child's own `allowed_tools` /
     /// `disallowed_tools` is intersected with this via
     /// [`ToolFilter::narrow_with`].
     pub parent_tool_filter: Option<ToolFilter>,
+}
+
+impl Default for SubagentInheritance {
+    fn default() -> Self {
+        Self {
+            features: None,
+            tool_overrides: None,
+            active_shell_tool: ActiveShellTool::Disabled,
+            parent_tool_filter: None,
+        }
+    }
 }
 
 /// Per-invocation gate inputs for [`SkillHandle::invoke_skill`].
