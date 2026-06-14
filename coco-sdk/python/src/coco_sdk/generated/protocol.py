@@ -133,6 +133,7 @@ class AttachmentKind(str, Enum):
     teammate_shutdown_batch = 'teammate_shutdown_batch'
     bagel_console = 'bagel_console'
     critical_system_reminder = 'critical_system_reminder'
+    slash_command_metadata = 'slash_command_metadata'
     user_context = 'user_context'
 
 class Capability(str, Enum):
