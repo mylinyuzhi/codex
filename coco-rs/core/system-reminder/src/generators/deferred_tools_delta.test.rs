@@ -103,8 +103,9 @@ async fn emits_both_sections_joined_by_blank_line() {
         .unwrap()
         .to_string();
     // Two sections joined by \n\n
-    assert!(text.contains("available by name via ToolSearch"));
-    assert!(text.contains("not callable until you load them with ToolSearch"));
+    assert!(text.contains("available via ToolSearch"));
+    assert!(text.contains("schemas are NOT loaded"));
+    assert!(text.contains("select:<name>"));
     assert!(text.contains("no longer available"));
     assert!(text.contains("- NewTool: Does new\n\n"));
 }

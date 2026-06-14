@@ -147,8 +147,7 @@ Tools that override `should_defer() -> true` (and a matching
 |----------|-------|
 | Web | `WebFetch`, `WebSearch` |
 | Notebook | `NotebookEdit` |
-| Tasks (V2) | `TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate`, `TaskStop` |
-| Todo (V1) | `TodoWrite` |
+| Tasks | `TaskOutput` |
 | Swarm | `SendMessage`, `TeamCreate`, `TeamDelete` |
 | Scheduling | `CronCreate`, `CronDelete`, `CronList`, `RemoteTrigger` |
 | Worktree | `EnterWorktree`, `ExitWorktree` |
@@ -161,6 +160,13 @@ Plus every MCP tool: `McpTool::should_defer() = true` mirrors TS
 `Tool.isMcp = true`. The `anthropic/alwaysLoad` `_meta` opt-out is
 **not yet plumbed**; when an MCP server advertises that flag, the
 hook point is `McpToolAnnotations`.
+
+**Eager-loaded divergence:** `TaskCreate`, `TaskGet`, `TaskList`,
+`TaskUpdate`, `TaskStop`, and `TodoWrite` intentionally stay loaded in
+coco-rs even though `claude-code-kim` defers them. These high-frequency
+plan/todo tools need to work on the first call across weaker non-Anthropic
+providers without a ToolSearch round-trip. `TaskOutput` remains deferred
+because it is deprecated and low-frequency.
 
 ## What this port intentionally skips
 

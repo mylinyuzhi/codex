@@ -28,6 +28,15 @@
 - All file-mutation tools (Edit/Write/NotebookEdit/Bash) invoke the team-mem secret guard + file-history tracking helpers before touching disk.
 - One file per tool. Utility tools live in their own modules: `ask_user_question.rs`, `tool_search.rs`, `config.rs`, `brief.rs`, `lsp_tool.rs`, `notebook_edit.rs`. (`lsp_tool.rs` is suffixed because `lsp.rs` holds the shared DTOs + formatters that the tool consumes.)
 
+### Task/Todo defer policy
+
+`TaskCreate`, `TaskGet`, `TaskList`, `TaskUpdate`, `TaskStop`, and
+`TodoWrite` intentionally return `should_defer() = false`, diverging from
+`claude-code-kim`. They are high-frequency plan/todo tools, and keeping them
+loaded avoids a ToolSearch round-trip before the first call on weaker
+non-Anthropic providers. `TaskOutput` is the only deferred Task-family tool
+because it is deprecated and low-frequency.
+
 ### LSP tool dispatch
 
 `LspAction` (9 variants: `goToDefinition` / `findReferences` / `hover` /

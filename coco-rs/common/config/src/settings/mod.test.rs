@@ -57,9 +57,9 @@ fn test_plan_mode_clear_context_default_is_enabled() {
 }
 
 #[test]
-fn test_plan_mode_verify_execution_default_is_enabled() {
+fn test_plan_mode_verify_execution_default_is_disabled() {
     let settings = parse_settings("{}").expect("parse empty settings");
-    assert!(settings.plan_mode.verify_execution);
+    assert!(!settings.plan_mode.verify_execution);
 }
 
 #[test]

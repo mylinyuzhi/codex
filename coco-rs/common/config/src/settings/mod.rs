@@ -534,12 +534,11 @@ pub struct PlanModeSettings {
     /// ship tier detection — user picks). Valid range [1, 10].
     #[serde(default = "default_plan_agent_count")]
     pub plan_agent_count: i32,
-    /// Enable the TS-style post-plan verification flow. When enabled,
-    /// `ExitPlanMode` records a pending plan verification and the
-    /// `verify_plan_reminder` can nudge the model after implementation
-    /// if `VerifyPlanExecution` is visible in the active tool list.
-    /// Default on.
-    #[serde(default = "default_true")]
+    /// Enable the legacy TS-style post-plan verification flow. This is
+    /// deprecated and inert by default; it only has an effect when explicitly
+    /// enabled in settings and a build explicitly registers
+    /// `VerifyPlanExecution` in the active tool list.
+    #[serde(default)]
     pub verify_execution: bool,
     /// In plan mode, if the latest assistant message's context exceeds
     /// this token count, the engine falls back from the configured
@@ -583,7 +582,7 @@ impl Default for PlanModeSettings {
             phase4_variant: PlanPhase4Variant::default(),
             explore_agent_count: default_explore_agent_count(),
             plan_agent_count: default_plan_agent_count(),
-            verify_execution: true,
+            verify_execution: false,
             plan_model_fallback_threshold_tokens: default_plan_model_fallback_threshold(),
             show_clear_context_on_exit: true,
         }

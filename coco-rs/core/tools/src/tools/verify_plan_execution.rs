@@ -1,13 +1,15 @@
-//! VerifyPlanExecutionTool — record a post-plan verification checkpoint.
+//! VerifyPlanExecutionTool — legacy post-plan verification checkpoint.
 //!
-//! **Scope.** This tool does **not** verify anything itself — the model is
-//! expected to inspect files and run checks first. Calling the tool marks the
-//! TS-shaped `pending_plan_verification` state as started and completed so the
-//! `verify_plan_reminder` nudge stops firing.
+//! Deprecated compatibility path. This tool does **not** verify anything
+//! itself — the model is expected to inspect files and run checks first.
+//! Calling the tool marks the TS-shaped `pending_plan_verification` state as
+//! started and completed so the `verify_plan_reminder` nudge stops firing.
 //!
 //! The tool is intentionally not registered in the default tool registry while
 //! the mirrored TS project conditionally imports it behind
-//! `CLAUDE_CODE_VERIFY_PLAN`.
+//! `CLAUDE_CODE_VERIFY_PLAN`. The flow is inert unless
+//! `settings.plan_mode.verify_execution` is explicitly enabled and this tool
+//! is explicitly registered.
 
 use coco_messages::ToolResult;
 use coco_tool_runtime::DescriptionOptions;

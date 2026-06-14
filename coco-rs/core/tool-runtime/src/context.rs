@@ -341,7 +341,8 @@ pub struct ToolUseContext {
     /// When `true`, ExitPlanMode records TS-shaped pending verification
     /// state so the main-agent reminder can request a later
     /// `VerifyPlanExecution` call.
-    /// Enabled via `settings.plan_mode.verify_execution`.
+    /// Deprecated legacy verify-plan flow. Enabled only via explicit
+    /// `settings.plan_mode.verify_execution`.
     pub plan_verify_execution: bool,
     /// Plan-mode interview-phase flag — drives the `EnterPlanMode`
     /// post-execute instruction text variant. Source is

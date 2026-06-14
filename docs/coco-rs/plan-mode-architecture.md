@@ -34,7 +34,7 @@ fields:
 | `has_exited_plan_mode` | One-shot reentry latch. Preserved across Plan reentry until the reentry reminder emits. |
 | `needs_plan_mode_exit_attachment` | One-shot exit banner latch. Cleared after emit or when Plan is re-entered. |
 | `pending_clear_message_history` | Set when the user approves `ExitPlanMode` with clear-context. |
-| `pending_plan_verification` | Set by `ExitPlanMode`; drives follow-up verify reminders until `VerifyPlanExecution` clears it. |
+| `pending_plan_verification` | Legacy/default-off path set by `ExitPlanMode` only when `settings.plan_mode.verify_execution` is explicitly enabled; drives follow-up verify reminders until `VerifyPlanExecution` clears it. |
 
 All external mode switchers must call
 `coco_permissions::apply_permission_mode_transition_to_app_state`. This mirrors
@@ -235,15 +235,19 @@ The optional verify path is Rust-owned but follows TS intent:
 
 1. Plan entry records `plan_mode_entry_ms`.
 2. `ExitPlanMode` can compare plan file mtime against that entry timestamp when
-   `settings.plan_mode.verify_execution` is enabled.
+   the legacy `settings.plan_mode.verify_execution` setting is explicitly
+   enabled.
 3. Outcomes are soft signals: edited, not edited, missing, or skipped when no
    timestamp exists.
 
 The check does not block plan approval. It only gives the model and future
-reminder chain a durable signal.
+reminder chain a durable signal. This legacy path is deprecated and inactive by
+default.
 
 `VerifyPlanExecutionTool` is the lightweight mirror of TS's conditional
-`VerifyPlanExecution` tool reference. **It performs no verification itself** —
+`VerifyPlanExecution` tool reference. It is not default-registered, and the
+flow only runs when legacy verification is explicitly enabled and the tool is
+explicitly registered. **It performs no verification itself** —
 TS's (unavailable) tool spins up a background verification agent
 (`state/AppStateStore.ts` carries `verificationStarted` /
 `verificationCompleted` sub-flags for that flow); coco-rs deliberately ships

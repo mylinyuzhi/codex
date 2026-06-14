@@ -254,8 +254,8 @@ pub struct GeneratorContext<'a> {
     pub coordinator_worker_context: Option<String>,
 
     // ── Phase E (verify-plan reminder) ──
-    /// True when `ExitPlanModeTool` has recorded pending plan
-    /// verification and a follow-up `VerifyPlanExecution` call is still
+    /// True when the deprecated legacy verify-plan flow has recorded pending
+    /// plan verification and a follow-up `VerifyPlanExecution` call is still
     /// outstanding. Set from TS-shaped
     /// `appState.pendingPlanVerification` by requiring pending exists and
     /// neither `verificationStarted` nor `verificationCompleted` is set.
