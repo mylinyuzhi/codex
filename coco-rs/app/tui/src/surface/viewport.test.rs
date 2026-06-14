@@ -103,7 +103,7 @@ fn exit_plan_pending_plan_renders_in_live_tail() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(text.contains("Here is plan:"), "{text}");
+    assert!(text.contains("Here is proposed plan:"), "{text}");
     assert!(text.contains("step 40"), "{text}");
     assert!(text.contains("Plan file: /tmp/plan.md"), "{text}");
     assert!(!text.contains("clear context"), "{text}");

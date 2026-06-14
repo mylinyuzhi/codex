@@ -211,7 +211,7 @@ fn no_stream_frame_projects_pending_exit_plan_without_stream_append() {
 
     assert!(prepared.stream_append.is_none());
     assert!(!prepared.commit_invalidated);
-    assert!(text.contains("Here is plan:"), "{text}");
+    assert!(text.contains("Here is proposed plan:"), "{text}");
     assert!(text.contains("step 12"), "{text}");
     assert!(text.contains("Plan file: /tmp/session-plan.md"), "{text}");
     assert!(!text.contains("manually approve edits"), "{text}");
@@ -226,7 +226,7 @@ fn pending_exit_plan_disappears_after_prompt_closes() {
     assert!(
         plain_lines(&pending.lines)
             .join("\n")
-            .contains("Here is plan:")
+            .contains("Here is proposed plan:")
     );
     assert!(
         driver.pending_plan.is_some(),
