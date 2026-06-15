@@ -103,6 +103,9 @@ impl Tool for SendUserMessageTool {
     fn name(&self) -> &str {
         ToolName::SendUserMessage.as_str()
     }
+    fn search_hint(&self) -> Option<&str> {
+        Some("send a message to the user — your primary visible output channel")
+    }
     fn description(&self, _input: &SendUserMessageInput, _options: &DescriptionOptions) -> String {
         SEND_USER_MESSAGE_DESCRIPTION.into()
     }

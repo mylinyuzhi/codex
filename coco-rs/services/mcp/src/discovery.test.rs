@@ -107,6 +107,25 @@ fn test_convert_server_tools_search_hint() {
 }
 
 #[test]
+fn test_convert_server_tools_generic_search_hint_key() {
+    // Provider-neutral `searchHint` (no `anthropic/` namespace) is accepted
+    // so non-Anthropic MCP servers can supply a hint too.
+    let tool = McpToolDefinition {
+        name: "generic".to_string(),
+        description: Some("A tool".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "_meta": { "searchHint": "look up records by id" }
+        }),
+    };
+    let discovered = convert_server_tools("server", &[tool]);
+    assert_eq!(
+        discovered[0].search_hint.as_deref(),
+        Some("look up records by id")
+    );
+}
+
+#[test]
 fn test_extract_annotations_missing() {
     let schema = serde_json::json!({"type": "object"});
     let annotations = extract_annotations(&schema);

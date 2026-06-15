@@ -112,6 +112,12 @@ pub struct GeneratorContext<'a> {
     /// True when the engine is in plan mode this turn.
     pub is_plan_mode: bool,
 
+    /// Whether the `plan_mode` feature is enabled this session (default on).
+    /// When `false` the three plan-mode generators short-circuit so an
+    /// opted-out user never receives a plan-mode `<system-reminder>`, even
+    /// if a resumed transcript still carries `permission_mode == Plan`.
+    pub plan_mode_feature_enabled: bool,
+
     /// True on the first plan-mode turn after a prior exit in this session.
     /// Drives the `plan_mode_reentry` variant.
     ///
@@ -428,6 +434,7 @@ pub struct GeneratorContextBuilder<'a> {
     is_main_agent: bool,
     has_user_input: bool,
     is_plan_mode: bool,
+    plan_mode_feature_enabled: bool,
     is_plan_reentry: bool,
     is_plan_interview_phase: bool,
     needs_plan_mode_exit_attachment: bool,
@@ -505,6 +512,8 @@ impl<'a> GeneratorContextBuilder<'a> {
             is_main_agent: true,
             has_user_input: false,
             is_plan_mode: false,
+            // Default on: tests + callers that don't set it keep plan reminders.
+            plan_mode_feature_enabled: true,
             is_plan_reentry: false,
             is_plan_interview_phase: false,
             needs_plan_mode_exit_attachment: false,
@@ -592,6 +601,11 @@ impl<'a> GeneratorContextBuilder<'a> {
 
     pub fn is_plan_mode(mut self, b: bool) -> Self {
         self.is_plan_mode = b;
+        self
+    }
+
+    pub fn plan_mode_feature_enabled(mut self, b: bool) -> Self {
+        self.plan_mode_feature_enabled = b;
         self
     }
 
@@ -959,6 +973,7 @@ impl<'a> GeneratorContextBuilder<'a> {
             is_main_agent: self.is_main_agent,
             has_user_input: self.has_user_input,
             is_plan_mode: self.is_plan_mode,
+            plan_mode_feature_enabled: self.plan_mode_feature_enabled,
             is_plan_reentry: self.is_plan_reentry,
             is_plan_interview_phase: self.is_plan_interview_phase,
             needs_plan_mode_exit_attachment: self.needs_plan_mode_exit_attachment,

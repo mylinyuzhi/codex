@@ -80,6 +80,29 @@ fn test_toggle_plan_mode_flips_between_plan_and_default() {
 }
 
 #[test]
+fn test_cycle_skips_plan_when_plan_mode_unavailable() {
+    // `features.plan_mode = false` → AcceptEdits skips Plan straight to
+    // Default (bypass/auto also off), and Tab can't enter plan mode.
+    let mut state = AppState::new();
+    state.session.plan_mode_available = false;
+
+    state.cycle_permission_mode();
+    assert_eq!(state.session.permission_mode, PermissionMode::AcceptEdits);
+
+    state.cycle_permission_mode();
+    assert_eq!(
+        state.session.permission_mode,
+        PermissionMode::Default,
+        "Plan must be skipped when the feature is off"
+    );
+
+    // Tab is a no-op when plan mode is unavailable.
+    state.toggle_plan_mode();
+    assert_eq!(state.session.permission_mode, PermissionMode::Default);
+    assert!(!state.is_plan_mode());
+}
+
+#[test]
 fn test_toggle_plan_mode_from_accept_edits_goes_to_plan() {
     // Quick toggle is "enable plan mode" regardless of source; it
     // doesn't try to preserve the prior mode.

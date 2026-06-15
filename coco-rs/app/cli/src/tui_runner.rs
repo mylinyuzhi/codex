@@ -131,6 +131,9 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     let permission_mode = resources.startup.mode;
     let bypass_permissions_available = resources.startup.bypass_available;
     let auto_mode_available = resources.startup.auto_available;
+    let plan_mode_available = runtime_config
+        .features
+        .enabled(coco_types::Feature::PlanMode);
     let startup_notification = resources.startup.notification.clone();
     let tools = resources.tools;
     let system_prompt = resources.system_prompt;
@@ -567,6 +570,7 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
     // engine and TUI share one truth. Static for session lifetime.
     app.state_mut().session.bypass_permissions_available = bypass_permissions_available;
     app.state_mut().session.auto_mode_available = auto_mode_available;
+    app.state_mut().session.plan_mode_available = plan_mode_available;
     app.state_mut().session.permission_mode = permission_mode;
     // Seed the model + provider for the status bar. Production TUI
     // doesn't currently install a `SessionBootstrap`, so the engine's
@@ -3556,6 +3560,26 @@ async fn dispatch_plan(
     event_tx: &mpsc::Sender<CoreEvent>,
 ) -> SlashOutcome {
     let args = args.trim();
+
+    // Plan mode opted out via `features.plan_mode = false`: don't flip into
+    // Plan, just tell the user. Mirrors the hidden plan-mode tools, the
+    // suppressed reminders, and the Plan rung removed from the Shift+Tab cycle.
+    if !runtime
+        .runtime_config
+        .features
+        .enabled(coco_types::Feature::PlanMode)
+    {
+        emit_slash_text(
+            event_tx,
+            "plan",
+            args,
+            "Plan mode is disabled (`features.plan_mode = false`). \
+             Re-enable it in settings.json to use `/plan`.",
+        )
+        .await;
+        return SlashOutcome::Handled;
+    }
+
     let session_id = runtime.current_session_id().await;
     let project_dir = runtime.runtime_config.paths.project_dir.as_deref();
     let plans_directory_setting = runtime

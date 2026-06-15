@@ -283,7 +283,7 @@ fn hook(event: HookEventType, command: &str) -> coco_hooks::HookDefinition {
 }
 
 #[tokio::test]
-async fn plan_mode_snapshot_carries_deferred_exit_plan_mode() {
+async fn plan_mode_snapshot_omits_always_loaded_exit_plan_mode() {
     let registry = coco_tool_runtime::ToolRegistry::new();
     registry.register(Arc::new(coco_tools::ExitPlanModeTool));
     let app_state = Arc::new(RwLock::new(ToolAppState {
@@ -298,9 +298,13 @@ async fn plan_mode_snapshot_carries_deferred_exit_plan_mode() {
         .await
         .expect("plan mode should snapshot");
 
-    assert_eq!(
-        attachment.deferred_tools,
-        vec![coco_types::ToolName::ExitPlanMode.as_str().to_string()]
+    // ExitPlanMode is non-deferred (always loaded), so it never lands in the
+    // snapshot's deferred-tools list — the post-compact "reload via ToolSearch"
+    // path no longer applies to it (it survives compaction already loaded).
+    assert!(
+        attachment.deferred_tools.is_empty(),
+        "always-loaded ExitPlanMode must not be listed as deferred: {:?}",
+        attachment.deferred_tools
     );
 }
 

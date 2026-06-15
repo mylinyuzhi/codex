@@ -26,7 +26,7 @@ fn make_context(mode: PermissionMode, bypass: bool) -> ToolPermissionContext {
 fn test_default_to_accept_edits() {
     let ctx = make_context(PermissionMode::Default, false);
     assert_eq!(
-        get_next_permission_mode(&ctx, false),
+        get_next_permission_mode(&ctx, /*plan*/ true, false),
         PermissionMode::AcceptEdits
     );
 }
@@ -34,14 +34,28 @@ fn test_default_to_accept_edits() {
 #[test]
 fn test_accept_edits_to_plan() {
     let ctx = make_context(PermissionMode::AcceptEdits, false);
-    assert_eq!(get_next_permission_mode(&ctx, false), PermissionMode::Plan);
+    assert_eq!(
+        get_next_permission_mode(&ctx, /*plan*/ true, false),
+        PermissionMode::Plan
+    );
+}
+
+#[test]
+fn test_accept_edits_skips_plan_when_unavailable() {
+    // plan_mode feature off → AcceptEdits jumps over Plan to the next
+    // available rung (Default here, since bypass/auto are both off).
+    let ctx = make_context(PermissionMode::AcceptEdits, false);
+    assert_eq!(
+        get_next_permission_mode(&ctx, /*plan*/ false, false),
+        PermissionMode::Default
+    );
 }
 
 #[test]
 fn test_plan_to_bypass_when_available() {
     let ctx = make_context(PermissionMode::Plan, true);
     assert_eq!(
-        get_next_permission_mode(&ctx, false),
+        get_next_permission_mode(&ctx, /*plan*/ true, false),
         PermissionMode::BypassPermissions
     );
 }
@@ -49,14 +63,17 @@ fn test_plan_to_bypass_when_available() {
 #[test]
 fn test_plan_to_auto_when_bypass_unavailable() {
     let ctx = make_context(PermissionMode::Plan, false);
-    assert_eq!(get_next_permission_mode(&ctx, true), PermissionMode::Auto);
+    assert_eq!(
+        get_next_permission_mode(&ctx, /*plan*/ true, true),
+        PermissionMode::Auto
+    );
 }
 
 #[test]
 fn test_plan_to_default_when_nothing_available() {
     let ctx = make_context(PermissionMode::Plan, false);
     assert_eq!(
-        get_next_permission_mode(&ctx, false),
+        get_next_permission_mode(&ctx, /*plan*/ true, false),
         PermissionMode::Default
     );
 }
@@ -64,14 +81,17 @@ fn test_plan_to_default_when_nothing_available() {
 #[test]
 fn test_bypass_to_auto_when_available() {
     let ctx = make_context(PermissionMode::BypassPermissions, false);
-    assert_eq!(get_next_permission_mode(&ctx, true), PermissionMode::Auto);
+    assert_eq!(
+        get_next_permission_mode(&ctx, /*plan*/ true, true),
+        PermissionMode::Auto
+    );
 }
 
 #[test]
 fn test_bypass_to_default() {
     let ctx = make_context(PermissionMode::BypassPermissions, false);
     assert_eq!(
-        get_next_permission_mode(&ctx, false),
+        get_next_permission_mode(&ctx, /*plan*/ true, false),
         PermissionMode::Default
     );
 }
@@ -80,7 +100,7 @@ fn test_bypass_to_default() {
 fn test_auto_to_default() {
     let ctx = make_context(PermissionMode::Auto, false);
     assert_eq!(
-        get_next_permission_mode(&ctx, false),
+        get_next_permission_mode(&ctx, /*plan*/ true, false),
         PermissionMode::Default
     );
 }
@@ -89,7 +109,7 @@ fn test_auto_to_default() {
 fn test_dont_ask_to_default() {
     let ctx = make_context(PermissionMode::DontAsk, false);
     assert_eq!(
-        get_next_permission_mode(&ctx, false),
+        get_next_permission_mode(&ctx, /*plan*/ true, false),
         PermissionMode::Default
     );
 }

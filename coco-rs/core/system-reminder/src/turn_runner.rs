@@ -77,6 +77,9 @@ pub struct TurnReminderInput<'a> {
     pub explore_plan_agents_available: bool,
     /// True during the interview-style plan workflow.
     pub is_plan_interview_phase: bool,
+    /// Whether the `plan_mode` feature is enabled this session (default on).
+    /// `false` suppresses every plan-mode reminder regardless of mode.
+    pub plan_mode_feature_enabled: bool,
 
     // ── Shared mutable state ──
     /// Typed app-state snapshot — source of truth for permission mode,
@@ -238,6 +241,7 @@ pub async fn run_turn_reminders(
         plan_agent_count,
         explore_plan_agents_available,
         is_plan_interview_phase,
+        plan_mode_feature_enabled,
         app_state,
         fallback_permission_mode,
         is_auto_classifier_active,
@@ -312,6 +316,7 @@ pub async fn run_turn_reminders(
         .turn_number(turn_number)
         .is_main_agent(!is_sub_agent)
         .has_user_input(has_user_input)
+        .plan_mode_feature_enabled(plan_mode_feature_enabled)
         .is_plan_interview_phase(is_plan_interview_phase)
         .plan_file_path(plan_file_path)
         .plan_exists(plan_exists)

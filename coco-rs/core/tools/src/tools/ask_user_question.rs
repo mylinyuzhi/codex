@@ -208,6 +208,9 @@ impl Tool for AskUserQuestionTool {
     fn name(&self) -> &str {
         ToolName::AskUserQuestion.as_str()
     }
+    fn search_hint(&self) -> Option<&str> {
+        Some("prompt the user with a multiple-choice question")
+    }
     fn description(&self, _input: &AskUserQuestionInput, _options: &DescriptionOptions) -> String {
         ASK_USER_QUESTION_DESCRIPTION.into()
     }

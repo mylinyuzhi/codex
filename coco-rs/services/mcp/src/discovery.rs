@@ -348,18 +348,28 @@ fn convert_server_tools(server_name: &str, tools: &[McpToolDefinition]) -> Vec<D
             // Extract annotations from input schema metadata
             let annotations = extract_annotations(&tool.input_schema);
 
-            // Extract search hint from metadata
+            // Extract search hint from metadata. Anthropic-namespaced key
+            // first (claude-code MCP compat), then a provider-neutral
+            // `searchHint` fallback so non-Anthropic servers can supply one.
             let search_hint = tool
                 .input_schema
                 .get("_meta")
-                .and_then(|m| m.get("anthropic/searchHint"))
+                .and_then(|m| {
+                    m.get("anthropic/searchHint")
+                        .or_else(|| m.get("searchHint"))
+                })
                 .and_then(|h| h.as_str())
                 .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "));
 
+            // Anthropic-namespaced key first (claude-code MCP compat), then a
+            // provider-neutral `alwaysLoad` fallback.
             let always_load = tool
                 .input_schema
                 .get("_meta")
-                .and_then(|m| m.get("anthropic/alwaysLoad"))
+                .and_then(|m| {
+                    m.get("anthropic/alwaysLoad")
+                        .or_else(|| m.get("alwaysLoad"))
+                })
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
 

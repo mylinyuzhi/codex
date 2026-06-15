@@ -307,6 +307,7 @@ impl AppState {
     /// flags are forwarded from the session.
     pub fn cycle_permission_mode(&mut self) {
         self.session.permission_mode = self.session.permission_mode.next_in_cycle(
+            self.session.plan_mode_available,
             self.session.bypass_permissions_available,
             self.session.auto_mode_available,
         );
@@ -317,11 +318,17 @@ impl AppState {
     /// Quick shortcut distinct from the full cycle: flips between
     /// `Plan` and `Default`, preserving nothing. Callers that need to
     /// return to an earlier elevated mode should use the full cycle.
+    ///
+    /// When the `plan_mode` feature is disabled, entering plan mode is a
+    /// no-op (Tab does nothing); exiting an already-active Plan mode is
+    /// still allowed so a resumed session can escape.
     pub fn toggle_plan_mode(&mut self) {
         self.session.permission_mode = if self.session.permission_mode == PermissionMode::Plan {
             PermissionMode::Default
-        } else {
+        } else if self.session.plan_mode_available {
             PermissionMode::Plan
+        } else {
+            self.session.permission_mode
         };
     }
 

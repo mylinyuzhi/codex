@@ -280,6 +280,9 @@ impl Tool for AgentTool {
     fn is_enabled(&self, _ctx: &coco_tool_runtime::ToolUseContext) -> bool {
         true
     }
+    fn search_hint(&self) -> Option<&str> {
+        Some("delegate work to a subagent")
+    }
     fn description(&self, _input: &AgentInput, _options: &DescriptionOptions) -> String {
         // Static fallback when prompt() isn't called (e.g. tools that
         // route through `description` directly). The dynamic agent

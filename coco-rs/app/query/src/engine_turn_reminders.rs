@@ -295,6 +295,10 @@ impl QueryEngine {
         // `turn_runner` for counting turns since the last task mutation,
         // but no longer for V2-mode detection.
         let reminder_task_v2_enabled = self.config.features.enabled(Feature::TaskV2);
+        // `plan_mode` feature gate (default on). When off, every plan-mode
+        // reminder is suppressed — mirrors the hidden EnterPlanMode/ExitPlanMode
+        // tools and the Plan rung removed from the TUI mode cycle.
+        let reminder_plan_mode_enabled = self.config.features.enabled(Feature::PlanMode);
         // Resolves through `QueryEngineConfig.compact.auto.is_active()`
         // (user toggle AND env kill switches) so the SDK / CLI / TUI
         // can control it per session without re-reading settings from
@@ -544,6 +548,7 @@ impl QueryEngine {
             plan_agent_count: pm_settings.plan_agent_count,
             explore_plan_agents_available: reminder_explore_plan_agents_available,
             is_plan_interview_phase: false,
+            plan_mode_feature_enabled: reminder_plan_mode_enabled,
             app_state: &app_state_snapshot,
             fallback_permission_mode: self.config.permission_mode,
             is_auto_classifier_active: reminder_auto_classifier_active,

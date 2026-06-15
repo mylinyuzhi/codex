@@ -105,6 +105,19 @@ pub enum Feature {
     /// Run shell commands inside a sandbox.
     Sandbox,
 
+    // Core-subsystem gate (Stable, default=true — opt-out only).
+    /// Plan-mode subsystem: the `EnterPlanMode` / `ExitPlanMode` tools and
+    /// the plan-mode `<system-reminder>` attachment.
+    ///
+    /// **Default on.** Plan mode is a first-class capability; this gate
+    /// exists purely so a user who never plans can opt out and reclaim the
+    /// reminder tokens + tool schema. When **off**, the two plan-mode tools
+    /// are hidden from the model and the plan-mode reminder never fires —
+    /// call-time permission evaluation still honors `PermissionMode::Plan`
+    /// if a transcript somehow re-enters it, but nothing in a fresh session
+    /// will surface plan mode to the model.
+    PlanMode,
+
     // /experimental menu (UnderDevelopment, default=false).
     /// Auto-memory subsystem (extraction, team sync, relevant injection).
     AutoMemory,
@@ -344,6 +357,13 @@ const FEATURES: &[FeatureSpec] = &[
         key: "sandbox",
         stage: Stage::Stable,
         default_enabled: false,
+    },
+    // Core-subsystem gate (opt-out only).
+    FeatureSpec {
+        id: Feature::PlanMode,
+        key: "plan_mode",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     // /experimental menu candidates.
     FeatureSpec {

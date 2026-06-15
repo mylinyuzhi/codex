@@ -147,7 +147,7 @@ impl Tool for LspTool {
     }
 
     fn search_hint(&self) -> Option<&str> {
-        Some("LSP code intelligence definitions references hover symbols call hierarchy")
+        Some("code intelligence (definitions, references, symbols, hover)")
     }
 
     async fn execute(

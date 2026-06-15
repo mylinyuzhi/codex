@@ -46,6 +46,23 @@ fn defaults_for_safety_gate() {
 }
 
 #[test]
+fn plan_mode_defaults_on_and_is_opt_out() {
+    let f = Features::with_defaults();
+    assert!(
+        f.enabled(Feature::PlanMode),
+        "PlanMode must default on — it is an opt-out gate"
+    );
+    let mut m = BTreeMap::new();
+    m.insert("plan_mode".to_string(), false);
+    let mut f = Features::with_defaults();
+    f.apply_map(&m);
+    assert!(
+        !f.enabled(Feature::PlanMode),
+        "explicit `plan_mode: false` must turn the subsystem off"
+    );
+}
+
+#[test]
 fn defaults_for_experimental_gates() {
     let f = Features::with_defaults();
     for feat in [

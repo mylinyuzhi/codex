@@ -63,6 +63,9 @@ impl AttachmentGenerator for PlanModeEnterGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
+        if !ctx.plan_mode_feature_enabled {
+            return Ok(None);
+        }
         if !ctx.is_plan_mode {
             return Ok(None);
         }
@@ -117,6 +120,9 @@ impl AttachmentGenerator for PlanModeExitGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
+        if !ctx.plan_mode_feature_enabled {
+            return Ok(None);
+        }
         if !ctx.needs_plan_mode_exit_attachment {
             return Ok(None);
         }
@@ -174,6 +180,9 @@ impl AttachmentGenerator for PlanModeReentryGenerator {
     }
 
     async fn generate(&self, ctx: &GeneratorContext<'_>) -> Result<Option<SystemReminder>> {
+        if !ctx.plan_mode_feature_enabled {
+            return Ok(None);
+        }
         if !(ctx.is_plan_mode && ctx.is_plan_reentry && ctx.plan_exists && !ctx.is_sub_agent) {
             return Ok(None);
         }

@@ -600,21 +600,33 @@ impl std::str::FromStr for PermissionMode {
 impl PermissionMode {
     /// Next mode when the user presses Shift+Tab.
     ///
-    /// Cycle: `Default → AcceptEdits → Plan → [BypassPermissions] → [Auto] → Default`.
-    /// Optional modes are skipped when their gate flag is false.
-    pub fn next_in_cycle(self, bypass_available: bool, auto_available: bool) -> Self {
+    /// Cycle: `Default → AcceptEdits → [Plan] → [BypassPermissions] → [Auto] → Default`.
+    /// Optional modes are skipped when their gate flag is false — `Plan` is
+    /// skipped when the `plan_mode` feature is off (`plan_available == false`).
+    pub fn next_in_cycle(
+        self,
+        plan_available: bool,
+        bypass_available: bool,
+        auto_available: bool,
+    ) -> Self {
+        // Shared tail after the (optional) Plan step.
+        let after_plan = if bypass_available {
+            Self::BypassPermissions
+        } else if auto_available {
+            Self::Auto
+        } else {
+            Self::Default
+        };
         match self {
             Self::Default => Self::AcceptEdits,
-            Self::AcceptEdits => Self::Plan,
-            Self::Plan => {
-                if bypass_available {
-                    Self::BypassPermissions
-                } else if auto_available {
-                    Self::Auto
+            Self::AcceptEdits => {
+                if plan_available {
+                    Self::Plan
                 } else {
-                    Self::Default
+                    after_plan
                 }
             }
+            Self::Plan => after_plan,
             Self::BypassPermissions => {
                 if auto_available {
                     Self::Auto
