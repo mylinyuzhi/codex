@@ -250,7 +250,10 @@ impl QueryEngine {
                     let effective_input = prepared.parsed_input.clone();
                     let mut call_ctx = ctx.clone_for_tool_call(prepared.tool_use_id.clone());
                     call_ctx.abort = runtime.abort.clone();
-                    call_ctx.progress_tx = runtime.progress_tx.clone();
+                    // `progress_tx` is inherited from the base streaming ctx via
+                    // `clone_for_tool_call`. Do NOT overwrite it with
+                    // `runtime.progress_tx` (always `None`), or foreground Bash
+                    // loses real-time `ToolProgress` streaming to the TUI.
                     // Thread per-call approval metadata into the execute ctx so
                     // the streaming path matches the batch runner. Without this,
                     // tools that branch on the user's choice (ExitPlanMode's
