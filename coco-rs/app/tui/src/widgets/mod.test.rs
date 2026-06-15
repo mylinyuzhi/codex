@@ -818,3 +818,43 @@ fn test_snapshot_command_palette_inline_popup() {
     let output = render_to_string(&state, 80, 24);
     insta::assert_snapshot!("command_palette_inline", output);
 }
+
+#[test]
+fn test_snapshot_reverse_search_footer_match() {
+    // Ctrl+R reverse-i-search previewing a match: the composer shows the
+    // matched history entry and the bottom border carries the
+    // `reverse-i-search: <query>` footer plus the accept/cancel hint.
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("git status".to_string());
+    state.ui.input.add_to_history("cargo build".to_string());
+    state.ui.input.textarea.set_text("git status");
+    state.ui.history_search = Some(crate::state::HistorySearch {
+        query: "git".into(),
+        matched: Some(1),
+        original_text: String::new(),
+        original_pastes: Vec::new(),
+        original_history_index: None,
+    });
+
+    let output = render_to_string(&state, 80, 24);
+    insta::assert_snapshot!("reverse_search_footer_match", output);
+}
+
+#[test]
+fn test_snapshot_reverse_search_footer_no_match() {
+    // No history entry matches the query: the composer keeps the draft and
+    // the footer shows the `no match` warning instead of the accept hint.
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("git status".to_string());
+    state.ui.input.textarea.set_text("draft text");
+    state.ui.history_search = Some(crate::state::HistorySearch {
+        query: "zzz".into(),
+        matched: None,
+        original_text: "draft text".into(),
+        original_pastes: Vec::new(),
+        original_history_index: None,
+    });
+
+    let output = render_to_string(&state, 80, 24);
+    insta::assert_snapshot!("reverse_search_footer_no_match", output);
+}

@@ -54,6 +54,11 @@ impl ExitKey {
 pub struct UiState {
     /// Multi-line input state.
     pub input: InputState,
+    /// Active Ctrl+R reverse-i-search session, or `None` when not searching.
+    pub history_search: Option<HistorySearch>,
+    /// One-shot flag: the "ctrl+r to search history" hint has been shown
+    /// this session (after the user up-arrowed past the newest entry).
+    pub search_hint_shown: bool,
     /// Paste pill manager for tracking pasted content (text and images).
     pub paste_manager: coco_tui_ui::paste::PasteManager,
     /// Chat scroll offset (lines from bottom).
@@ -195,6 +200,8 @@ impl UiState {
         let theme_state = ThemeRuntimeState::default();
         Self {
             input: InputState::new(),
+            history_search: None,
+            search_hint_shown: false,
             paste_manager: coco_tui_ui::paste::PasteManager::new(),
             scroll_offset: 0,
             focus: FocusTarget::Input,
@@ -521,47 +528,40 @@ pub enum FocusTarget {
     Chat,
 }
 
-/// A single history entry with frecency metadata.
+/// A single composer history entry.
 ///
-/// Each entry tracks how often it was used and when it was last entered.
-/// Navigation sorts by a frecency score (`ln(frequency) * recency_factor`)
-/// rather than raw insertion order, so a command typed ten times last week
-/// floats above a one-off from yesterday.
+/// History is ordered most-recent-first (index 0 = newest), matching
+/// shell / codex / claude-code up-arrow recall. Re-submitting an existing
+/// text moves it back to the front rather than creating a duplicate.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub text: String,
-    /// How many times this exact text has been submitted.
-    pub frequency: i32,
-    /// Unix-epoch seconds of the most recent submission.
-    pub last_used_secs: i64,
     /// Paste-pill payloads referenced by `text`, snapshotted at submit so
     /// recalling the entry rehydrates the paste manager — without this a
     /// recalled `[Pasted text #N]` is a dangling token (the manager was
     /// cleared at submit) and resolves to literal text. Mirrors codex
-    /// `HistoryEntry.pending_pastes`.
+    /// `HistoryEntry.pending_pastes`. Empty for entries hydrated from
+    /// persistent cross-session history (text-only, like codex).
     pub pastes: Vec<coco_tui_ui::paste::PasteEntry>,
 }
 
-impl HistoryEntry {
-    /// Frecency score — higher is more relevant. Returns `f64` so the caller
-    /// can sort_by on the raw value without losing ordering granularity.
-    ///
-    /// Formula: `ln(frequency + 1) * recency_factor`, where
-    /// `recency_factor = 1.0` for entries less than 24h old and decays
-    /// exponentially with 7-day half-life for older entries. Guards
-    /// `ln(0)` by adding 1 to frequency.
-    pub fn frecency(&self, now_secs: i64) -> f64 {
-        let freq = ((self.frequency.max(0) + 1) as f64).ln();
-        let age = (now_secs - self.last_used_secs).max(0) as f64;
-        let day = 86_400.0_f64;
-        let recency = if age < day {
-            1.0
-        } else {
-            let weeks = (age - day) / (7.0 * day);
-            0.5_f64.powf(weeks)
-        };
-        freq * recency
-    }
+/// Active Ctrl+R reverse-i-search session over the in-memory composer
+/// history. Mirrors codex's inline `reverse-i-search:` UX: typing edits
+/// `query`, Ctrl+R/↑ steps to older matches, ↓ to newer, Enter accepts
+/// the previewed entry into the composer, Esc restores the saved draft.
+#[derive(Debug, Clone)]
+pub struct HistorySearch {
+    /// Search query shown in the composer's bottom-border footer.
+    pub query: String,
+    /// Index into [`InputState::history`] of the currently previewed
+    /// match, or `None` when the query has no match yet.
+    pub matched: Option<usize>,
+    /// Draft text to restore on cancel / no-match.
+    pub original_text: String,
+    /// Paste-manager snapshot to restore alongside `original_text`.
+    pub original_pastes: Vec<coco_tui_ui::paste::PasteEntry>,
+    /// `history_index` to restore on cancel.
+    pub original_history_index: Option<usize>,
 }
 
 /// Input prefix mode — derived from the leading character of [`InputState::text`].
@@ -626,7 +626,7 @@ impl PromptMode {
 ///
 /// Backed by a [`TextArea`] (byte-offset cursor, multi-line wrapped,
 /// grapheme + display-width aware) so the cursor renders correctly over
-/// CJK / wide characters and multi-line input wraps. Frecency-ranked
+/// CJK / wide characters and multi-line input wraps. Most-recent-first
 /// history + vim runtime live alongside it.
 #[derive(Debug)]
 pub struct InputState {
@@ -640,7 +640,7 @@ pub struct InputState {
     /// editable buffer; accepting it applies [`InlineGhost::replacement`]
     /// over [`InlineGhost::replace_start`]..[`InlineGhost::replace_end`].
     pub inline_ghost: Option<InlineGhost>,
-    /// Command history ordered by frecency (most-relevant first).
+    /// Composer history ordered most-recent-first (index 0 = newest).
     pub history: Vec<HistoryEntry>,
     /// Current history navigation index into `history` (None = live draft).
     pub history_index: Option<usize>,
@@ -742,13 +742,31 @@ impl InputState {
         PromptMode::from_text(self.textarea.text())
     }
 
-    /// Record a submitted text into history using frecency scoring.
+    /// Seed history from persistent cross-session storage at startup.
     ///
-    /// If the text already exists, bump its frequency and update `last_used`.
-    /// Otherwise append a new entry. After insertion the vector is sorted
-    /// descending by [`HistoryEntry::frecency`] so that up-arrow navigation
-    /// walks the most relevant entries first. Capped at
-    /// `constants::MAX_HISTORY_ENTRIES` by dropping the lowest-scoring tail.
+    /// `texts` arrives newest-first (as `PromptHistory::get_history`
+    /// returns it). Deduped keeping the first (newest) occurrence and
+    /// capped at [`constants::MAX_HISTORY_ENTRIES`]. Hydrated entries are
+    /// text-only (no paste pills), matching codex's cross-session recall.
+    pub fn hydrate_history(&mut self, texts: Vec<String>) {
+        let max = constants::MAX_HISTORY_ENTRIES as usize;
+        let mut seen = std::collections::HashSet::new();
+        self.history = texts
+            .into_iter()
+            .filter(|t| !t.is_empty() && seen.insert(t.clone()))
+            .take(max)
+            .map(|text| HistoryEntry {
+                text,
+                pastes: Vec::new(),
+            })
+            .collect();
+    }
+
+    /// Record a submitted text into history, most-recent-first.
+    ///
+    /// If the text already exists it is moved back to the front (no
+    /// duplicate); otherwise it is prepended. Capped at
+    /// [`constants::MAX_HISTORY_ENTRIES`] by dropping the oldest tail.
     pub fn add_to_history(&mut self, text: String) {
         self.add_to_history_with_pastes(text, Vec::new());
     }
@@ -765,38 +783,15 @@ impl InputState {
         if text.is_empty() {
             return;
         }
-        let now = now_unix_secs();
-        if let Some(entry) = self.history.iter_mut().find(|h| h.text == text) {
-            entry.frequency = entry.frequency.saturating_add(1);
-            entry.last_used_secs = now;
-            entry.pastes = pastes;
-        } else {
-            self.history.push(HistoryEntry {
-                text,
-                frequency: 1,
-                last_used_secs: now,
-                pastes,
-            });
-        }
-        // Sort by frecency desc; ties keep recent-first (stable sort on
-        // original order where the most-recent append naturally sits last).
-        self.history
-            .sort_by(|a, b| b.frecency(now).total_cmp(&a.frecency(now)));
+        // Drop any prior occurrence, then prepend so the most recent
+        // submission sits at index 0 for up-arrow recall.
+        self.history.retain(|h| h.text != text);
+        self.history.insert(0, HistoryEntry { text, pastes });
         let max = constants::MAX_HISTORY_ENTRIES as usize;
         if self.history.len() > max {
             self.history.truncate(max);
         }
     }
-}
-
-/// Unix-epoch seconds for the frecency timestamp. Clock skew or a pre-epoch
-/// system date falls back to 0, which dampens the recency factor but keeps
-/// the history useful rather than panicking.
-fn now_unix_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 impl Default for InputState {

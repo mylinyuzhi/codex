@@ -37,6 +37,21 @@ fn drained_channel() -> (mpsc::Sender<UserCommand>, mpsc::Receiver<UserCommand>)
     mpsc::channel(8)
 }
 
+/// Next real `UserCommand` on the wire, transparently skipping the
+/// `PersistPromptHistory` bookkeeping message that `submit` now emits beside
+/// every `add_to_history`. Returns the same `Result` shape as `try_recv` so
+/// callers keep their `Ok(..)` and error arms unchanged.
+fn next_user_command(
+    rx: &mut mpsc::Receiver<UserCommand>,
+) -> Result<UserCommand, mpsc::error::TryRecvError> {
+    loop {
+        match rx.try_recv()? {
+            UserCommand::PersistPromptHistory { .. } => continue,
+            other => return Ok(other),
+        }
+    }
+}
+
 #[tokio::test]
 async fn clear_screen_nulls_last_agent_markdown() {
     // Regression: without this, Ctrl+L (ClearScreen) would wipe the visible
@@ -126,7 +141,7 @@ async fn submit_slash_dispatches_typed_command_without_chat_echo() {
         state.session.transcript.is_empty(),
         "slash invocations are commands, not chat transcript entries"
     );
-    match rx.try_recv() {
+    match next_user_command(&mut rx) {
         Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
             assert_eq!(name, "rewind");
             assert_eq!(args, "last");
@@ -194,7 +209,7 @@ async fn autocomplete_enter_completes_and_submits_no_arg_slash_command() {
         state.ui.input.is_empty(),
         "submitted command consumes input"
     );
-    match rx.try_recv() {
+    match next_user_command(&mut rx) {
         Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
             assert_eq!(name, "clear");
             assert!(args.is_empty());
@@ -273,7 +288,7 @@ async fn autocomplete_enter_submits_overlay_command_despite_optional_arg_hint() 
         state.ui.input.is_empty(),
         "submitted overlay command consumes input"
     );
-    match rx.try_recv() {
+    match next_user_command(&mut rx) {
         Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
             assert_eq!(name, "model");
             assert!(args.is_empty(), "no-arg overlay open carries empty args");
@@ -370,7 +385,7 @@ async fn prompt_suggestion_enter_submits_visible_suggestion() {
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitPromptSuggestion, &tx).await;
 
-    match rx.try_recv() {
+    match next_user_command(&mut rx) {
         Ok(UserCommand::SubmitInput { content, .. }) => {
             assert_eq!(content, "Run the failing tests");
         }
@@ -709,7 +724,7 @@ async fn directory_command_enter_submits_current_input() {
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
 
-    match rx.try_recv() {
+    match next_user_command(&mut rx) {
         Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
             assert_eq!(name, "add-dir");
             assert_eq!(args, "./src");
@@ -742,7 +757,7 @@ async fn resume_completion_inserts_session_id_and_submits() {
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::AutocompleteSubmit, &tx).await;
 
-    match rx.try_recv() {
+    match next_user_command(&mut rx) {
         Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
             assert_eq!(name, "resume");
             assert_eq!(args, "session-123");
@@ -821,7 +836,7 @@ async fn submit_rewind_undo_alias_dispatches_typed_command() {
     let (tx, mut rx) = drained_channel();
     handle_command(&mut state, TuiCommand::SubmitInput, &tx).await;
 
-    match rx.try_recv() {
+    match next_user_command(&mut rx) {
         Ok(UserCommand::ExecuteSlashCommand { name, args }) => {
             assert_eq!(name, "undo");
             assert!(args.is_empty());
@@ -1103,6 +1118,61 @@ async fn up_ignores_non_editable_queue_and_uses_history() {
         rx.try_recv().is_err(),
         "non-editable queue should not dispatch edit"
     );
+}
+
+#[tokio::test]
+async fn up_on_lower_line_moves_cursor_instead_of_recalling_history() {
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("prior".to_string());
+    // Multi-line draft with the cursor parked on the second line.
+    state.ui.input.textarea.set_text("line1\nline2");
+    state.ui.input.textarea.set_cursor(8); // inside "line2"
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::CursorUp, &tx).await;
+
+    // Cursor moved within the draft; history was NOT recalled.
+    assert_eq!(state.ui.input.text(), "line1\nline2");
+    assert!(state.ui.input.history_index.is_none());
+}
+
+#[tokio::test]
+async fn ctrl_r_reverse_search_previews_match_and_accepts() {
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("git status".to_string());
+    state.ui.input.add_to_history("cargo build".to_string());
+    // history (newest-first): [cargo build, git status]
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::HistorySearchStart, &tx).await;
+    assert!(state.ui.history_search.is_some());
+
+    for c in "git".chars() {
+        handle_command(&mut state, TuiCommand::HistorySearchInput(c), &tx).await;
+    }
+    // "git" matches the older entry; it previews in the composer.
+    assert_eq!(state.ui.input.text(), "git status");
+    assert_eq!(state.ui.history_search.as_ref().unwrap().matched, Some(1));
+
+    handle_command(&mut state, TuiCommand::HistorySearchAccept, &tx).await;
+    assert!(state.ui.history_search.is_none());
+    assert_eq!(state.ui.input.text(), "git status");
+}
+
+#[tokio::test]
+async fn ctrl_r_reverse_search_cancel_restores_draft() {
+    let mut state = AppState::new();
+    state.ui.input.add_to_history("git status".to_string());
+    state.ui.input.textarea.set_text("draft text");
+    let (tx, _rx) = drained_channel();
+
+    handle_command(&mut state, TuiCommand::HistorySearchStart, &tx).await;
+    handle_command(&mut state, TuiCommand::HistorySearchInput('g'), &tx).await;
+    assert_eq!(state.ui.input.text(), "git status"); // previewing the match
+
+    handle_command(&mut state, TuiCommand::HistorySearchCancel, &tx).await;
+    assert!(state.ui.history_search.is_none());
+    assert_eq!(state.ui.input.text(), "draft text"); // draft restored
 }
 
 #[tokio::test]

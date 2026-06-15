@@ -117,6 +117,15 @@ impl InputRenderModel {
     }
 }
 
+/// Active reverse-i-search projection for the composer footer.
+#[derive(Debug, Clone, Copy)]
+pub struct HistorySearchView<'a> {
+    /// The query typed so far.
+    pub query: &'a str,
+    /// Whether the query currently previews a match in the composer.
+    pub matched: bool,
+}
+
 /// Input widget with prompt-mode indicator and placeholder handling.
 pub struct InputWidget<'a> {
     input: &'a InputState,
@@ -126,6 +135,7 @@ pub struct InputWidget<'a> {
     prompt_suggestion: Option<&'a str>,
     has_editable_queue: bool,
     command_palette_filter: Option<&'a str>,
+    history_search: Option<HistorySearchView<'a>>,
 }
 
 impl<'a> InputWidget<'a> {
@@ -138,7 +148,13 @@ impl<'a> InputWidget<'a> {
             prompt_suggestion: None,
             has_editable_queue: false,
             command_palette_filter: None,
+            history_search: None,
         }
+    }
+
+    pub fn history_search(mut self, view: Option<HistorySearchView<'a>>) -> Self {
+        self.history_search = view;
+        self
     }
 
     pub fn focused(mut self, focused: bool) -> Self {
@@ -221,14 +237,45 @@ impl Widget for InputWidget<'_> {
             ));
         }
         let input_line = Line::from(spans);
-        let input = Paragraph::new(input_line).block(
-            Block::default()
-                .borders(Borders::TOP | Borders::BOTTOM)
-                .title(model.title)
-                .border_style(Style::default().fg(border_color)),
-        );
+        let mut block = Block::default()
+            .borders(Borders::TOP | Borders::BOTTOM)
+            .title(model.title)
+            .border_style(Style::default().fg(border_color));
+        if let Some(view) = self.history_search {
+            block = block.title_bottom(self.history_search_footer_line(view));
+        }
+        let input = Paragraph::new(input_line).block(block);
 
         input.render(area, buf);
+    }
+}
+
+impl InputWidget<'_> {
+    /// Shell-style `reverse-i-search: <query>` footer rendered on the
+    /// composer's bottom border while a Ctrl+R search is active.
+    fn history_search_footer_line(&self, view: HistorySearchView<'_>) -> Line<'static> {
+        let mut spans = vec![
+            Span::styled(
+                t!("input.reverse_search_label").to_string(),
+                Style::default().fg(self.styles.dim()),
+            ),
+            Span::styled(
+                view.query.to_string(),
+                Style::default().fg(self.styles.accent()),
+            ),
+        ];
+        if view.matched {
+            spans.push(Span::styled(
+                format!("  {}", t!("input.reverse_search_hint")),
+                Style::default().fg(self.styles.dim()),
+            ));
+        } else if !view.query.is_empty() {
+            spans.push(Span::styled(
+                format!("  {}", t!("input.reverse_search_no_match")),
+                Style::default().fg(self.styles.warning()),
+            ));
+        }
+        Line::from(spans)
     }
 }
 

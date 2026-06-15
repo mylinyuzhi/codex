@@ -236,6 +236,14 @@ fn resolve_key(
         }
     }
 
+    // Reverse-i-search owns every key (except the reserved exits above)
+    // while active: typing edits the query, Ctrl+R/↑ and ↓ cycle matches,
+    // Enter accepts, Esc cancels. Unmapped keys are swallowed so they
+    // can't leak into composer editing mid-search.
+    if state.ui.history_search.is_some() {
+        return (map_history_search_key(key), "history_search");
+    }
+
     if matches!(ctx, KeybindingContext::Transcript) {
         if matches!(key.code, KeyCode::BackTab) {
             return (None, "transcript_backtab");
@@ -342,6 +350,26 @@ fn permission_prefix_edit_map_key(key: KeyEvent) -> Option<TuiCommand> {
         KeyCode::Char('e') if ctrl => Some(TuiCommand::CursorEnd),
         KeyCode::Char('w') if ctrl => Some(TuiCommand::DeleteWordBackward),
         KeyCode::Char(c) if !ctrl && !alt => Some(TuiCommand::InsertChar(c)),
+        _ => None,
+    }
+}
+
+/// Keys for the active Ctrl+R reverse-i-search session. Mirrors codex:
+/// Ctrl+R / ↑ = older match, Ctrl+S / ↓ = newer, Enter/Tab = accept,
+/// Esc = cancel, Backspace edits the query, any other printable char
+/// appends to the query.
+fn map_history_search_key(key: KeyEvent) -> Option<TuiCommand> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => Some(TuiCommand::HistorySearchCancel),
+        KeyCode::Enter | KeyCode::Tab => Some(TuiCommand::HistorySearchAccept),
+        KeyCode::Up => Some(TuiCommand::HistorySearchOlder),
+        KeyCode::Char('r' | 'R') if ctrl => Some(TuiCommand::HistorySearchOlder),
+        KeyCode::Down => Some(TuiCommand::HistorySearchNewer),
+        KeyCode::Char('s' | 'S') if ctrl => Some(TuiCommand::HistorySearchNewer),
+        KeyCode::Backspace => Some(TuiCommand::HistorySearchBackspace),
+        KeyCode::Char(c) if !ctrl && !alt => Some(TuiCommand::HistorySearchInput(c)),
         _ => None,
     }
 }
