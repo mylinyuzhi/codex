@@ -814,6 +814,11 @@ pub enum MessageOrigin {
     /// `createUserMessage` (model-visible) vs `createCommandInputMessage`
     /// (transcript-only) split. Drives tag-aware command-pill rendering.
     SlashCommand,
+    /// Engine-injected "implement the approved plan" seed after a
+    /// clear-context plan exit. Carries the full plan text for the model,
+    /// but the TUI renders it as a compact chip instead of echoing the
+    /// whole plan as a `❯` input wall.
+    PlanImplementation,
 }
 
 /// Direction hint for partial compaction.

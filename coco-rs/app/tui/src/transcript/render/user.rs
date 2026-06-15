@@ -23,6 +23,24 @@ pub(super) fn try_render(
 ) -> Option<()> {
     match &cell.kind {
         CellKind::UserText { text } => {
+            // Clear-context plan exit injects the full approved plan as the
+            // next user message so the post-clear model still has it. Render a
+            // compact chip instead of echoing ~50 lines back as a `❯` wall.
+            if matches!(
+                cell.source.as_ref(),
+                Message::User(u)
+                    if u.origin == Some(coco_messages::MessageOrigin::PlanImplementation)
+            ) {
+                let mut spans = vec![
+                    Span::raw("◇ ").fg(w.styles.accent()).dim(),
+                    Span::raw(t!("chat.implementing_approved_plan").to_string()).fg(w.styles.dim()),
+                ];
+                if let Some(file) = plan_implementation_chip_file(text) {
+                    spans.push(Span::raw(format!(" · {file}")).fg(w.styles.dim()).bold());
+                }
+                lines.push(Line::from(spans));
+                return Some(());
+            }
             if let Some(rendered) =
                 crate::presentation::slash_command::render_slash_command_user_text(
                     cell.source.as_ref(),
@@ -135,6 +153,17 @@ pub(super) fn try_render(
         }
         _ => None,
     }
+}
+
+/// Extract the plan-file basename from the clear-context implement message
+/// body (`…\n\nPlan file path: <path>`), for the compact chip's `· <file>`
+/// suffix. `None` when the marker line is absent.
+fn plan_implementation_chip_file(text: &str) -> Option<String> {
+    let path = text
+        .lines()
+        .find_map(|line| line.strip_prefix("Plan file path: "))?;
+    let name = path.trim().rsplit('/').next()?;
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 #[cfg(test)]

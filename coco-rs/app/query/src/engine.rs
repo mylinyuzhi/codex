@@ -15,7 +15,7 @@ use coco_messages::CostTracker;
 use coco_messages::LlmMessage;
 use coco_messages::Message;
 use coco_messages::MessageHistory;
-use coco_messages::create_user_message;
+use coco_messages::create_plan_implementation_message;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::TurnAbortSignal;
 use coco_types::TokenUsage;
@@ -1204,7 +1204,7 @@ async fn consume_pending_plan_mode_clear_context(
     if let Some(message) = implementation_message {
         crate::history_sync::history_push_and_emit(
             history,
-            create_user_message(&message),
+            create_plan_implementation_message(&message),
             event_tx,
         )
         .await;

@@ -43,6 +43,27 @@ pub fn create_user_message_with_uuid(uuid: Uuid, text: &str) -> Message {
     })
 }
 
+/// Create the clear-context plan-implementation seed message.
+///
+/// Same shape as [`create_user_message`] (model-visible user text) but tagged
+/// `MessageOrigin::PlanImplementation` so the TUI renders it as a compact
+/// chip instead of echoing the entire plan as a `❯` input wall. The body
+/// still carries the full plan text — the model needs it after the history
+/// clear.
+pub fn create_plan_implementation_message(text: &str) -> Message {
+    Message::User(UserMessage {
+        message: LlmMessage::user_text(text),
+        uuid: Uuid::new_v4(),
+        timestamp: String::new(),
+        is_visible_in_transcript_only: false,
+        is_virtual: false,
+        is_compact_summary: false,
+        permission_mode: None,
+        origin: Some(MessageOrigin::PlanImplementation),
+        parent_tool_use_id: None,
+    })
+}
+
 /// Create a user message with mixed content parts (text + images).
 ///
 /// Used when the user input includes @-mentioned images or pasted images
