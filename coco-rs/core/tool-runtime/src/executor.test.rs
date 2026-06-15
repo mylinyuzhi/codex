@@ -95,103 +95,6 @@ impl crate::traits::Tool for UnsafeTool {
     }
 }
 
-/// Test helper: validate `input` against `tool`'s (open) test schema and
-/// build the `PendingToolCall`.
-fn pending(
-    tool: Arc<dyn crate::traits::DynTool>,
-    tool_use_id: &str,
-    input: Value,
-) -> PendingToolCall {
-    let is_concurrency_safe = tool.is_concurrency_safe(&input);
-    PendingToolCall {
-        tool_use_id: tool_use_id.into(),
-        input: crate::ValidatedInput::validate(tool.as_ref(), input)
-            .expect("test input must validate"),
-        is_concurrency_safe,
-        tool,
-    }
-}
-
-fn make_call(name: &str, safe: bool) -> PendingToolCall {
-    let tool: Arc<dyn crate::traits::DynTool> = if safe {
-        Arc::new(SafeTool { name: name.into() })
-    } else {
-        Arc::new(UnsafeTool { name: name.into() })
-    };
-    PendingToolCall {
-        tool_use_id: name.into(),
-        input: crate::ValidatedInput::validate(tool.as_ref(), json!({}))
-            .expect("test input must validate"),
-        is_concurrency_safe: safe,
-        tool,
-    }
-}
-
-#[test]
-fn test_partition_all_safe() {
-    let executor = StreamingToolExecutor::new();
-    let calls = vec![
-        make_call("read1", /*safe*/ true),
-        make_call("read2", true),
-        make_call("read3", true),
-    ];
-    let batches = executor.partition(calls);
-    assert_eq!(batches.len(), 1);
-    assert!(matches!(&batches[0], ToolBatch::ConcurrentSafe(v) if v.len() == 3));
-}
-
-#[test]
-fn test_partition_all_unsafe() {
-    let executor = StreamingToolExecutor::new();
-    let calls = vec![
-        make_call("bash1", /*safe*/ false),
-        make_call("bash2", false),
-    ];
-    let batches = executor.partition(calls);
-    assert_eq!(batches.len(), 2);
-    assert!(matches!(&batches[0], ToolBatch::SingleUnsafe(_)));
-    assert!(matches!(&batches[1], ToolBatch::SingleUnsafe(_)));
-}
-
-#[test]
-fn test_partition_mixed() {
-    // [safe, safe, unsafe, safe]
-    // -> batch1: ConcurrentSafe([safe, safe])
-    // -> batch2: SingleUnsafe(unsafe)
-    // -> batch3: ConcurrentSafe([safe])
-    let executor = StreamingToolExecutor::new();
-    let calls = vec![
-        make_call("read1", true),
-        make_call("read2", true),
-        make_call("bash", false),
-        make_call("read3", true),
-    ];
-    let batches = executor.partition(calls);
-    assert_eq!(batches.len(), 3);
-    assert!(matches!(&batches[0], ToolBatch::ConcurrentSafe(v) if v.len() == 2));
-    assert!(matches!(&batches[1], ToolBatch::SingleUnsafe(_)));
-    assert!(matches!(&batches[2], ToolBatch::ConcurrentSafe(v) if v.len() == 1));
-}
-
-#[test]
-fn test_partition_empty() {
-    let executor = StreamingToolExecutor::new();
-    let batches = executor.partition(vec![]);
-    assert!(batches.is_empty());
-}
-
-#[tokio::test]
-async fn test_execute_single_tool() {
-    let executor = StreamingToolExecutor::new();
-    let ctx = crate::context::ToolUseContext::test_default();
-    let call = make_call("test_tool", false);
-
-    let result = executor.execute_single(call, &ctx).await;
-    assert_eq!(result.tool_use_id, "test_tool");
-    assert!(result.result.is_ok());
-    assert!(result.duration_ms >= 0);
-}
-
 /// A slow tool that tracks concurrent execution via an atomic counter.
 struct SlowSafeTool {
     name: String,
@@ -244,363 +147,6 @@ impl crate::traits::Tool for SlowSafeTool {
             display_data: None,
         })
     }
-}
-
-struct PatchSafeTool {
-    name: String,
-    sleep_ms: u64,
-    digit: i64,
-}
-
-#[async_trait::async_trait]
-impl crate::traits::Tool for PatchSafeTool {
-    fn runtime_validation_schema(&self) -> &crate::schema::ToolInputSchema {
-        crate::schema::test_runtime_schema()
-    } // Migration scaffold: assoc types pinned to `Value`.
-    type Input = serde_json::Value;
-    type Output = serde_json::Value;
-
-    fn id(&self) -> ToolId {
-        ToolId::Custom(self.name.clone())
-    }
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn description(&self, _: &Value, _options: &DescriptionOptions) -> String {
-        "patch safe".into()
-    }
-    async fn prompt(&self, _options: &crate::traits::PromptOptions) -> String {
-        "test tool".into()
-    }
-    fn is_concurrency_safe(&self, _: &Value) -> bool {
-        true
-    }
-    async fn execute(
-        &self,
-        _input: Value,
-        _ctx: &crate::context::ToolUseContext,
-    ) -> Result<ToolResult<Value>, crate::error::ToolError> {
-        tokio::time::sleep(tokio::time::Duration::from_millis(self.sleep_ms)).await;
-        let digit = self.digit;
-        Ok(ToolResult {
-            data: json!({"tool": self.name}),
-            new_messages: vec![],
-            app_state_patch: Some(Box::new(move |state| {
-                state.plan_mode_attachment_count = state.plan_mode_attachment_count * 10 + digit;
-            })),
-            permission_updates: Vec::new(),
-            display_data: None,
-        })
-    }
-}
-
-#[tokio::test]
-async fn test_execute_concurrent_tools() {
-    let executor = StreamingToolExecutor::with_max_concurrency(10);
-    let ctx = crate::context::ToolUseContext::test_default();
-
-    let calls = vec![
-        make_call("read1", /*safe*/ true),
-        make_call("read2", true),
-        make_call("read3", true),
-    ];
-
-    let results = executor.execute_concurrent(calls, &ctx).await;
-    assert_eq!(results.len(), 3);
-    for r in &results {
-        assert!(r.result.is_ok(), "concurrent tool should succeed");
-    }
-}
-
-#[tokio::test]
-async fn test_execute_concurrent_tools_returns_completion_order() {
-    let concurrent_count = Arc::new(AtomicI32::new(0));
-    let max_concurrent = Arc::new(AtomicI32::new(0));
-
-    let make_slow = |name: &str, sleep_ms| -> PendingToolCall {
-        pending(
-            Arc::new(SlowSafeTool {
-                name: name.into(),
-                concurrent_count: concurrent_count.clone(),
-                max_concurrent: max_concurrent.clone(),
-                sleep_ms,
-            }),
-            name,
-            json!({}),
-        )
-    };
-
-    let executor = StreamingToolExecutor::with_max_concurrency(2);
-    let ctx = crate::context::ToolUseContext::test_default();
-
-    let results = executor
-        .execute_concurrent(
-            vec![make_slow("slow_first", 80), make_slow("fast_second", 10)],
-            &ctx,
-        )
-        .await;
-
-    assert_eq!(results.len(), 2);
-    assert_eq!(results[0].tool_use_id, "fast_second");
-    assert_eq!(results[1].tool_use_id, "slow_first");
-}
-
-#[tokio::test]
-async fn test_execute_concurrent_patches_apply_in_model_order() {
-    let app_state = Arc::new(tokio::sync::RwLock::new(coco_types::ToolAppState::default()));
-    let executor = StreamingToolExecutor::with_max_concurrency(2).with_app_state(app_state.clone());
-    let ctx = crate::context::ToolUseContext::test_default();
-
-    let make_patch = |name: &str, sleep_ms, digit| {
-        pending(
-            Arc::new(PatchSafeTool {
-                name: name.into(),
-                sleep_ms,
-                digit,
-            }),
-            name,
-            json!({}),
-        )
-    };
-
-    let results = executor
-        .execute_concurrent(
-            vec![
-                make_patch("slow_first", 80, 1),
-                make_patch("fast_second", 10, 2),
-            ],
-            &ctx,
-        )
-        .await;
-
-    assert_eq!(results[0].tool_use_id, "fast_second");
-    assert_eq!(results[1].tool_use_id, "slow_first");
-    assert_eq!(app_state.read().await.plan_mode_attachment_count, 12);
-}
-
-#[tokio::test]
-async fn test_concurrent_tools_run_in_parallel() {
-    let concurrent_count = Arc::new(AtomicI32::new(0));
-    let max_concurrent = Arc::new(AtomicI32::new(0));
-
-    let make_slow = |name: &str| -> PendingToolCall {
-        pending(
-            Arc::new(SlowSafeTool {
-                name: name.into(),
-                concurrent_count: concurrent_count.clone(),
-                max_concurrent: max_concurrent.clone(),
-                sleep_ms: 50,
-            }),
-            name,
-            json!({}),
-        )
-    };
-
-    let executor = StreamingToolExecutor::with_max_concurrency(5);
-    let ctx = crate::context::ToolUseContext::test_default();
-
-    let calls = vec![make_slow("slow1"), make_slow("slow2"), make_slow("slow3")];
-
-    let results = executor.execute_concurrent(calls, &ctx).await;
-    assert_eq!(results.len(), 3);
-    for r in &results {
-        assert!(r.result.is_ok());
-    }
-    // All 3 tools should have been running concurrently
-    assert!(
-        max_concurrent.load(Ordering::SeqCst) >= 2,
-        "expected at least 2 concurrent, got {}",
-        max_concurrent.load(Ordering::SeqCst),
-    );
-}
-
-#[tokio::test]
-async fn test_execute_all_mixed_batches() {
-    let executor = StreamingToolExecutor::with_max_concurrency(10);
-    let ctx = crate::context::ToolUseContext::test_default();
-
-    // [safe, safe, unsafe, safe] -> 3 batches
-    let calls = vec![
-        make_call("read1", true),
-        make_call("read2", true),
-        make_call("bash1", false),
-        make_call("read3", true),
-    ];
-
-    let results = executor.execute_all(calls, &ctx).await;
-    assert_eq!(results.len(), 4);
-    assert_eq!(results[0].tool_use_id, "read1");
-    assert_eq!(results[1].tool_use_id, "read2");
-    assert_eq!(results[2].tool_use_id, "bash1");
-    assert_eq!(results[3].tool_use_id, "read3");
-    for r in &results {
-        assert!(r.result.is_ok());
-    }
-}
-
-#[tokio::test]
-async fn test_semaphore_limits_concurrency() {
-    let concurrent_count = Arc::new(AtomicI32::new(0));
-    let max_concurrent = Arc::new(AtomicI32::new(0));
-
-    let make_slow = |name: &str| -> PendingToolCall {
-        pending(
-            Arc::new(SlowSafeTool {
-                name: name.into(),
-                concurrent_count: concurrent_count.clone(),
-                max_concurrent: max_concurrent.clone(),
-                sleep_ms: 50,
-            }),
-            name,
-            json!({}),
-        )
-    };
-
-    // Only allow 2 concurrent
-    let executor = StreamingToolExecutor::with_max_concurrency(2);
-    let ctx = crate::context::ToolUseContext::test_default();
-
-    let calls = vec![
-        make_slow("t1"),
-        make_slow("t2"),
-        make_slow("t3"),
-        make_slow("t4"),
-    ];
-
-    let results = executor.execute_concurrent(calls, &ctx).await;
-    assert_eq!(results.len(), 4);
-    // Max concurrency should be capped at 2
-    assert!(
-        max_concurrent.load(Ordering::SeqCst) <= 2,
-        "expected max 2 concurrent, got {}",
-        max_concurrent.load(Ordering::SeqCst),
-    );
-}
-
-#[test]
-fn test_streaming_add_tool() {
-    let mut executor = StreamingToolExecutor::new();
-    let tool: Arc<dyn crate::traits::DynTool> = Arc::new(SafeTool {
-        name: "test".into(),
-    });
-    executor.add_tool("t1".into(), tool.clone(), json!({}));
-    executor.add_tool("t2".into(), tool, json!({}));
-    assert!(executor.has_pending());
-    assert!(!executor.is_complete());
-}
-
-#[test]
-fn test_streaming_discard() {
-    let mut executor = StreamingToolExecutor::new();
-    let tool: Arc<dyn crate::traits::DynTool> = Arc::new(SafeTool {
-        name: "test".into(),
-    });
-    executor.add_tool("t1".into(), tool, json!({}));
-
-    executor.discard();
-
-    let updates = executor.drain_completed();
-    assert_eq!(updates.len(), 1);
-    match &updates[0] {
-        StreamingToolUpdate::Result(r) => {
-            assert_eq!(r.tool_use_id, "t1");
-            assert!(r.result.is_err());
-        }
-        _ => panic!("expected Result, got Progress"),
-    }
-}
-
-use crate::hook_handle::HookHandle;
-use crate::hook_handle::PostToolUseOutcome;
-use crate::hook_handle::PreToolUseOutcome;
-
-struct CountingHookHandle {
-    calls: Arc<AtomicI32>,
-}
-
-#[async_trait::async_trait]
-impl HookHandle for CountingHookHandle {
-    async fn run_pre_tool_use(
-        &self,
-        _tool_name: &str,
-        _tool_use_id: &str,
-        _tool_input: &Value,
-    ) -> PreToolUseOutcome {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        PreToolUseOutcome {
-            updated_input: Some(json!({"rewritten": true})),
-            blocking_reason: Some("executor should not run hooks".into()),
-            ..Default::default()
-        }
-    }
-
-    async fn run_post_tool_use(
-        &self,
-        _tool_name: &str,
-        _tool_use_id: &str,
-        _tool_input: &Value,
-        _tool_response: &Value,
-    ) -> PostToolUseOutcome {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        PostToolUseOutcome {
-            updated_output: Some(json!("rewritten by hook")),
-            blocking_reason: Some("executor should not run hooks".into()),
-            ..Default::default()
-        }
-    }
-
-    async fn run_post_tool_use_failure(
-        &self,
-        _tool_name: &str,
-        _tool_use_id: &str,
-        _tool_input: &Value,
-        _error_message: &str,
-    ) -> PostToolUseOutcome {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        PostToolUseOutcome::default()
-    }
-}
-
-#[tokio::test]
-async fn test_executor_does_not_run_hooks() {
-    let hook_calls = Arc::new(AtomicI32::new(0));
-    let mut ctx = crate::context::ToolUseContext::test_default();
-    ctx.hook_handle = Some(Arc::new(CountingHookHandle {
-        calls: hook_calls.clone(),
-    }));
-
-    let exec = StreamingToolExecutor::new();
-    let single = pending(
-        Arc::new(UnsafeTool { name: "u".into() }),
-        "single",
-        json!({"x": 42}),
-    );
-    let single_result = exec.execute_single(single, &ctx).await;
-
-    assert_eq!(single_result.result.unwrap().data, json!({"x": 42}));
-
-    let calls = vec![
-        pending(
-            Arc::new(SafeTool { name: "s".into() }),
-            "a",
-            json!({"i": 1}),
-        ),
-        pending(
-            Arc::new(SafeTool { name: "s".into() }),
-            "b",
-            json!({"i": 2}),
-        ),
-        pending(
-            Arc::new(SafeTool { name: "s".into() }),
-            "c",
-            json!({"i": 3}),
-        ),
-    ];
-    let results = exec.execute_concurrent(calls, &ctx).await;
-
-    assert_eq!(results.len(), 3);
-    assert!(results.iter().all(|r| r.result.is_ok()));
-    assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -675,7 +221,7 @@ where
 /// Drive `execute_with` and capture the completion-order sequence of
 /// outcomes surfaced to `on_outcome`.
 async fn drive_capture<F, Fut>(
-    exec: &StreamingToolExecutor,
+    exec: &ToolExecutor,
     plans: Vec<ToolCallPlan>,
     run_one: F,
 ) -> Vec<ToolCallOutcome>
@@ -718,7 +264,7 @@ async fn test_execute_with_concurrent_batch_surfaces_in_completion_order() {
         ToolCallPlan::Runnable(prepared_from(c, "C", 2)),
     ];
 
-    let exec = StreamingToolExecutor::new();
+    let exec = ToolExecutor::new();
     let outcomes = drive_capture(&exec, plans, |prepared, _runtime| async move {
         let tool_use_id = prepared.tool_use_id.clone();
         let model_index = prepared.model_index;
@@ -775,7 +321,7 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
     let observed_reason = Arc::new(Mutex::new(None));
     let observed_reason_for_run = observed_reason.clone();
 
-    let exec = StreamingToolExecutor::new();
+    let exec = ToolExecutor::new();
     let outcomes = drive_capture(&exec, plans, move |prepared, runtime| {
         let observed_reason = observed_reason_for_run.clone();
         async move {
@@ -813,7 +359,7 @@ async fn test_execute_with_concurrent_batch_applies_patches_in_model_order() {
     // state must reflect the LAST write in model order (= B, index 1),
     // regardless of which future resolved first.
     let app_state = Arc::new(RwLock::new(coco_types::ToolAppState::default()));
-    let exec = StreamingToolExecutor::new().with_app_state(app_state.clone());
+    let exec = ToolExecutor::new().with_app_state(app_state.clone());
 
     let a = Arc::new(SafeTool { name: "a".into() });
     let b = Arc::new(SafeTool { name: "b".into() });
@@ -858,7 +404,7 @@ async fn test_execute_with_serial_tool_applies_patch_before_next_context() {
     // by the time the second run_one is called — serial mode applies
     // between tools.
     let app_state = Arc::new(RwLock::new(coco_types::ToolAppState::default()));
-    let exec = StreamingToolExecutor::new().with_app_state(app_state.clone());
+    let exec = ToolExecutor::new().with_app_state(app_state.clone());
 
     let u1 = Arc::new(UnsafeTool { name: "u1".into() });
     let u2 = Arc::new(UnsafeTool { name: "u2".into() });
@@ -937,7 +483,7 @@ async fn test_execute_with_early_outcome_is_barrier_between_safe_batches() {
         ToolCallPlan::Runnable(prepared_from(c, "C", 2)),
     ];
 
-    let exec = StreamingToolExecutor::new();
+    let exec = ToolExecutor::new();
     let outcomes = drive_capture(&exec, plans, |prepared, _| async move {
         let tool_use_id = prepared.tool_use_id.clone();
         empty_unstamped(&tool_use_id, prepared.model_index)
@@ -981,7 +527,7 @@ async fn test_execute_with_every_plan_gets_one_outcome() {
         ToolCallPlan::Runnable(prepared_from(b, "C", 2)),
     ];
 
-    let exec = StreamingToolExecutor::new();
+    let exec = ToolExecutor::new();
     let outcomes = drive_capture(&exec, plans, |prepared, _| async move {
         empty_unstamped(&prepared.tool_use_id, prepared.model_index)
     })

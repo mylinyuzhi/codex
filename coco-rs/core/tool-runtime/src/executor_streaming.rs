@@ -1,4 +1,4 @@
-//! Streaming entry-point for [`StreamingToolExecutor`] — Phase 9.
+//! Streaming entry-point for [`ToolExecutor`] — Phase 9.
 //!
 //! Streaming is driven at the **executor** level via `addTool(block)` being
 //! called from the stream consumer as tool_use blocks finish parsing;
@@ -66,14 +66,14 @@ use crate::call_plan::ToolCallPlan;
 use crate::call_plan::ToolMessagePath;
 use crate::call_plan::ToolSideEffects;
 use crate::call_plan::UnstampedToolCallOutcome;
-use crate::executor::StreamingToolExecutor;
+use crate::executor::ToolExecutor;
 
 /// Streaming scheduler driven by [`StreamingHandle::feed_plan`].
 ///
 /// See module documentation for design rationale. Typical lifecycle:
 ///
 /// ```ignore
-/// let executor = Arc::new(StreamingToolExecutor::new());
+/// let executor = Arc::new(ToolExecutor::new());
 /// let mut h = StreamingHandle::new(executor.clone(), runner_closure);
 /// // as each tool-use arrives during stream:
 /// h.feed_plan(plan);
@@ -87,7 +87,7 @@ where
     F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = UnstampedToolCallOutcome> + Send + 'static,
 {
-    executor: Arc<StreamingToolExecutor>,
+    executor: Arc<ToolExecutor>,
     run_one: Arc<F>,
     /// Spawned tasks for safe plans. `JoinSet` drives them
     /// autonomously via the tokio runtime — no external poll needed.
@@ -110,7 +110,7 @@ where
     F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = UnstampedToolCallOutcome> + Send + 'static,
 {
-    pub fn new(executor: Arc<StreamingToolExecutor>, run_one: F) -> Self {
+    pub fn new(executor: Arc<ToolExecutor>, run_one: F) -> Self {
         Self {
             executor,
             run_one: Arc::new(run_one),
@@ -238,7 +238,7 @@ where
     ///
     /// Post-batch safe patches apply in model-index order under one
     /// write lock. Serial unsafe patches apply between each tool's
-    /// execution. Matches [`StreamingToolExecutor::execute_with`]
+    /// execution. Matches [`ToolExecutor::execute_with`]
     /// semantics exactly.
     pub async fn commit_flush<H>(mut self, seq_start: usize, mut on_outcome: H)
     where
@@ -366,10 +366,10 @@ fn join_error_outcome(
 }
 
 /// Convenience: build a [`StreamingHandle`] from an
-/// `Arc<StreamingToolExecutor>`. The `Arc` requirement is inherent in
+/// `Arc<ToolExecutor>`. The `Arc` requirement is inherent in
 /// the `'static` spawn model — spawned tasks must not borrow the
 /// executor's stack slot.
-impl StreamingToolExecutor {
+impl ToolExecutor {
     pub fn streaming_handle<F, Fut>(self: &Arc<Self>, run_one: F) -> StreamingHandle<F, Fut>
     where
         F: Fn(PreparedToolCall, RunOneRuntime) -> Fut + Send + Sync + 'static,

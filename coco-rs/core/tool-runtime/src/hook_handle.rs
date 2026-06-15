@@ -17,7 +17,7 @@
 //! 2. The higher-layer orchestrator (`app/query`) implements this trait by
 //!    bridging to `coco_hooks::execute_pre_tool_use()` / `execute_post_tool_use()`
 //!    and converting `AggregatedHookResult` → the DTO types below.
-//! 3. `StreamingToolExecutor` calls into the handle at the right lifecycle
+//! 3. `ToolExecutor` calls into the handle at the right lifecycle
 //!    points, without ever touching `coco-hooks` types.
 //!
 //! # Lifecycle order

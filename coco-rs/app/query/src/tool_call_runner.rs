@@ -2,7 +2,7 @@
 //! assistant batch.
 //!
 //! Phase 4d-β rewires this to drive
-//! [`coco_tool_runtime::StreamingToolExecutor::execute_with`] so outcomes
+//! [`coco_tool_runtime::ToolExecutor::execute_with`] so outcomes
 //! surface through `on_outcome` in I12 order:
 //!
 //! - Concurrent-safe batches surface in completion order.
@@ -33,10 +33,10 @@ use coco_llm_types::ToolCallPart;
 use coco_messages::MessageHistory;
 use coco_permissions::AutoModeRules;
 use coco_tool_runtime::PreparedToolCall;
-use coco_tool_runtime::StreamingToolExecutor;
 use coco_tool_runtime::ToolAbortSignal;
 use coco_tool_runtime::ToolCallPlan;
 use coco_tool_runtime::ToolError;
+use coco_tool_runtime::ToolExecutor;
 use coco_tool_runtime::ToolPermissionBridgeRef;
 use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
@@ -466,10 +466,10 @@ fn create_executor(
     app_state: Option<&Arc<RwLock<ToolAppState>>>,
     permission_rule_handle: &coco_tool_runtime::PermissionRuleHandleRef,
     event_tx: &Option<mpsc::Sender<CoreEvent>>,
-) -> StreamingToolExecutor {
+) -> ToolExecutor {
     let base = match app_state {
-        Some(arc) => StreamingToolExecutor::new().with_app_state(arc.clone()),
-        None => StreamingToolExecutor::new(),
+        Some(arc) => ToolExecutor::new().with_app_state(arc.clone()),
+        None => ToolExecutor::new(),
     };
     let base = base.with_permission_rule_handle(permission_rule_handle.clone());
     match event_tx {

@@ -228,7 +228,7 @@ impl QueryEngine {
             None
         };
         let streaming_handle = streaming_ctx.as_ref().map(|ctx_arc| {
-            let executor_base = coco_tool_runtime::StreamingToolExecutor::new()
+            let executor_base = coco_tool_runtime::ToolExecutor::new()
                 .with_turn_abort(ctx_arc.abort.turn_signal());
             let executor_with_state = match self.app_state.as_ref() {
                 Some(state) => executor_base.with_app_state(state.clone()),

@@ -1,4 +1,4 @@
-//! Scheduler DTOs for the `ToolCallRunner` / `StreamingToolExecutor`
+//! Scheduler DTOs for the `ToolCallRunner` / `ToolExecutor`
 //! boundary.
 //!
 //! I12 of `docs/coco-rs/agent-loop-refactor-plan.md`. The
@@ -14,15 +14,6 @@
 //! types. `coco-query` owns the `ToolCallRunner` implementation and
 //! the message-bucket helpers; the executor schedules and stamps.
 //!
-//! This module is currently scaffolding — no production code path in
-//! coco-rs consumes it yet. Phase 4d (the `run_one` rewire) is the
-//! first consumer. Dead-code warnings are suppressed on the whole
-//! module because the helper is already exercised by the companion
-//! `call_plan.test.rs` and will be wired into the runner in the next
-//! step.
-
-#![allow(dead_code)]
-
 use coco_messages::Message;
 use coco_types::AppStatePatch;
 use coco_types::PermissionDenialInfo;
@@ -33,7 +24,6 @@ use std::sync::Arc;
 
 use crate::cancellation::ToolAbortSignal;
 use crate::traits::DynTool;
-use crate::traits::ProgressSender;
 
 /// What [`prepare_batch`](crate::call_plan) returns for each committed
 /// assistant tool-use entry.
@@ -105,15 +95,14 @@ pub struct PreparedToolCall {
 ///
 /// Built by the executor and handed to the runner via the `run_one`
 /// callback. Keeps scheduler state (cancellation tokens, sibling-abort
-/// broadcasts, progress channels, `model_index`) out of the runner's
-/// semantic surface while letting `run_one` forward them into the
-/// `ToolUseContext` it builds per call.
+/// broadcasts, `model_index`) out of the runner's semantic surface while
+/// letting `run_one` forward them into the `ToolUseContext` it builds per
+/// call. The execute-time `ToolUseContext.progress_tx` is inherited from
+/// the base ctx via `clone_for_tool_call` — it is not threaded here.
 pub struct RunOneRuntime {
     /// Structured per-tool abort signal combining turn, self, and sibling
     /// abort sources.
     pub abort: ToolAbortSignal,
-    /// Progress-event sender, forwarded into `ToolUseContext.progress_tx`.
-    pub progress_tx: Option<ProgressSender>,
     /// Echoes `PreparedToolCall.model_index` so the runner can tag
     /// patches and telemetry without a separate lookup.
     pub model_index: usize,

@@ -1,5 +1,5 @@
 //! Parallel safe-tool dispatch: model issues multiple Read calls in a
-//! single turn → `StreamingToolExecutor` runs them concurrently via the
+//! single turn → `ToolExecutor` runs them concurrently via the
 //! safe-tool batch path.
 //!
 //! Engine wiring: each tool implements `is_concurrency_safe(input)`.

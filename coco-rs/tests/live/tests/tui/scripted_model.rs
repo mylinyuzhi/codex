@@ -82,7 +82,7 @@ impl Reply {
     /// Multi-tool turn — emit several `ToolCall` blocks at once. Mirrors the
     /// shape a frontier model uses when it batches independent tool calls
     /// into a single assistant message; the agent loop's
-    /// `StreamingToolExecutor` then dispatches them concurrently or in a
+    /// `ToolExecutor` then dispatches them concurrently or in a
     /// queue depending on each tool's `is_safe_concurrent`.
     pub fn tools<I, S1, S2>(calls: I) -> Self
     where

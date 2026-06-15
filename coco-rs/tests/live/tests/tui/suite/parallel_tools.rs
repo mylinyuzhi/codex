@@ -1,7 +1,7 @@
 //! Multi-tool turn: a single scripted assistant message emits two
 //! `Write` tool calls. Exercises the agent loop's handling of
 //! batched tool calls — the production engine dispatches them through
-//! `StreamingToolExecutor` (concurrent for safe-concurrent tools,
+//! `ToolExecutor` (concurrent for safe-concurrent tools,
 //! queued otherwise). Order of completion isn't load-bearing here;
 //! both must finish before the engine re-enters the loop with both
 //! tool results and the next scripted reply lands. Verifies:
