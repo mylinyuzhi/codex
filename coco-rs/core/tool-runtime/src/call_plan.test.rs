@@ -229,6 +229,8 @@ fn test_runnable_plan_carries_prepared_call() {
             .expect("test input must validate"),
         is_concurrency_safe: false,
         model_index: 5,
+        permission_resolution_detail: None,
+        approval_feedback: None,
     };
     let plan = ToolCallPlan::Runnable(prepared);
     match plan {

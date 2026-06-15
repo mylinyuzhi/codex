@@ -97,6 +97,8 @@ fn prepared(
         is_concurrency_safe: safe,
         tool,
         model_index,
+        permission_resolution_detail: None,
+        approval_feedback: None,
     }
 }
 
@@ -463,6 +465,8 @@ async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
         is_concurrency_safe: true,
         tool: bash_tool,
         model_index: 0,
+        permission_resolution_detail: None,
+        approval_feedback: None,
     };
     handle.feed_plan(ToolCallPlan::Runnable(bash));
     handle.feed_plan(ToolCallPlan::Runnable(prepared(

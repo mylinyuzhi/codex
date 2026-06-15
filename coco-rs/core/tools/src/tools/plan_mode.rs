@@ -845,6 +845,13 @@ impl Tool for ExitPlanModeTool {
         // implementation user message for the next turn.
         let clear_history_requested =
             has_implementation_plan && choice.is_some_and(ExitPlanChoice::clears_context);
+        tracing::info!(
+            ?choice,
+            has_implementation_plan,
+            clear_history_requested,
+            ?restore_mode,
+            "ExitPlanMode resolved approval choice",
+        );
         let post_clear_message = (clear_history_requested && has_implementation_plan).then(|| {
             let transcript_hint = ctx
                 .transcript_path

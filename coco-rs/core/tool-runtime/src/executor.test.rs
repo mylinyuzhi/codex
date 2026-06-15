@@ -635,6 +635,8 @@ fn prepared_from(
         is_concurrency_safe: tool.is_concurrency_safe(&json!({})),
         tool,
         model_index,
+        permission_resolution_detail: None,
+        approval_feedback: None,
     }
 }
 
@@ -765,6 +767,8 @@ async fn test_execute_with_bash_failure_aborts_concurrent_sibling_runtime() {
             is_concurrency_safe: true,
             tool: bash_tool,
             model_index: 0,
+            permission_resolution_detail: None,
+            approval_feedback: None,
         }),
         ToolCallPlan::Runnable(prepared_from(read_tool, "read-call", 1)),
     ];

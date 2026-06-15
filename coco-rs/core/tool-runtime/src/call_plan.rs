@@ -26,6 +26,7 @@
 use coco_messages::Message;
 use coco_types::AppStatePatch;
 use coco_types::PermissionDenialInfo;
+use coco_types::PermissionResolutionDetail;
 use coco_types::PermissionUpdate;
 use coco_types::ToolId;
 use std::sync::Arc;
@@ -88,6 +89,16 @@ pub struct PreparedToolCall {
     /// **Not** a history-append slot — that is `completion_seq`,
     /// stamped by the executor.
     pub model_index: usize,
+    /// Trusted per-call approval metadata captured during permission
+    /// resolution (e.g. the `ExitPlanMode` choice). The streaming feed
+    /// populates this from the resolved `ToolResultContext` so the
+    /// streaming run-closure can thread it into the execute-time
+    /// `ToolUseContext`, matching the batch runner. `None` when the call
+    /// carries no approval detail (the common case).
+    pub permission_resolution_detail: Option<PermissionResolutionDetail>,
+    /// User feedback captured alongside an approval (e.g. plan-approval
+    /// notes). Threaded into `ToolUseContext.approval_feedback`.
+    pub approval_feedback: Option<String>,
 }
 
 /// Scheduler-owned per-tool runtime.

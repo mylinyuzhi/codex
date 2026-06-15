@@ -405,7 +405,7 @@ impl QueryEngine {
                         let deferred_outcomes = deferred_tool_completions.into_outcomes();
 
                         match prep_result {
-                            Some((pending, _ctx)) => {
+                            Some((pending, ctx)) => {
                                 debug_assert!(
                                     deferred_outcomes.is_empty(),
                                     "preparation succeeded but staged deferred completions"
@@ -428,6 +428,8 @@ impl QueryEngine {
                                     parsed_input: pending.input,
                                     is_concurrency_safe: pending.is_concurrency_safe,
                                     model_index,
+                                    permission_resolution_detail: ctx.permission_resolution_detail,
+                                    approval_feedback: ctx.approval_feedback,
                                 }));
                             }
                             None if !deferred_outcomes.is_empty() => {
