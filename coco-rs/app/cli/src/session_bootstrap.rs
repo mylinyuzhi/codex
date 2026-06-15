@@ -488,10 +488,12 @@ pub async fn install_session_late_binds(
     // In-prompt skill / slash-command shell routing is wired at the
     // engine-build site (`SessionRuntime::build_engine`): it calls
     // `QueryEngine::build_base_tool_context()` and
-    // `crate::bash_tool_handle::inject_into_registry(&registry, base_ctx)`
-    // so skill / `ShellExpandingPromptHandler` markers route through the real
-    // Bash tool with a per-command permission check. Refreshing it there
-    // (rather than once here) also survives a `/reload-plugins` registry swap.
+    // `crate::bash_tool_handle::build_session_bash_handle(base_ctx)`, then
+    // installs the one handle into both the command registry and the skill
+    // runtime's shared cell so skill / `ShellExpandingPromptHandler` markers
+    // route through the real Bash tool with a per-command permission check.
+    // Refreshing it there (rather than once here) also survives a
+    // `/reload-plugins` registry swap.
 
     Ok(())
 }

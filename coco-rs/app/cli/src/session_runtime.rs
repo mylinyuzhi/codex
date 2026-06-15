@@ -564,6 +564,21 @@ pub struct SessionRuntime {
     /// `SwarmAgentHandle` requires the canonical TaskManager-backed
     /// registry at construction.
     agent_handle: Arc<RwLock<Option<AgentHandleRef>>>,
+    /// Skill-execution handle (`QuerySkillRuntime`). Late-bound for the
+    /// same Arc-cycle reason as `agent_handle`: the real impl wraps the
+    /// subagent `AgentQueryEngineRef` (built in `agent_handle_factory`).
+    /// Installed on every per-turn engine via `wire_engine` so the model's
+    /// `SkillTool` resolves; `None` ⇒ engine falls back to
+    /// `NoOpSkillHandle` (every skill call returns `Unavailable`).
+    skill_handle: Arc<RwLock<Option<coco_tool_runtime::SkillHandleRef>>>,
+    /// Shared, per-turn-refreshed Bash handle for in-prompt skill shell
+    /// expansion (`` !`cmd` ``). Set on every main-session engine build
+    /// (`build_engine`) with the same `SessionBashToolHandle` injected into
+    /// the command registry, and read by `QuerySkillRuntime` so the
+    /// model-invoked + fork-mode skill paths run identical permission-checked
+    /// shell. `std::sync::RwLock` (snapshot read, no guard across await).
+    skill_bash_cell:
+        Arc<std::sync::RwLock<Option<Arc<dyn coco_skills::shell_exec::BashToolHandle>>>>,
     /// Post-turn fork dispatcher (D1/D2). Same late-bind pattern as
     /// `agent_handle`: built after `build()` returns the `Arc<Self>`
     /// (the dispatcher impl captures the runtime), and installed on
@@ -1380,6 +1395,8 @@ impl SessionRuntime {
             // Arc<SessionRuntime> is constructed so the
             // QueryEngineAdapter factory can close over Arc<Self>.
             agent_handle: Arc::new(RwLock::new(None)),
+            skill_handle: Arc::new(RwLock::new(None)),
+            skill_bash_cell: Arc::new(std::sync::RwLock::new(None)),
             fork_dispatcher: Arc::new(RwLock::new(None)),
             current_suggestion_abort: Arc::new(tokio::sync::Mutex::new(None)),
             task_runtime: Arc::new(RwLock::new(None)),
@@ -2049,7 +2066,16 @@ impl SessionRuntime {
         // registry swap (the new registry starts with an empty handle cell).
         let base_ctx = engine.build_base_tool_context().await;
         let registry = self.command_registry.read().await.clone();
-        crate::bash_tool_handle::inject_into_registry(&registry, base_ctx);
+        // One handle, two consumers: the command registry (slash /
+        // shell-expanding prompt commands) and the skill runtime's shared
+        // cell (model-invoked + fork-mode skills). Refreshed every build so
+        // it survives a `/reload-plugins` registry swap and tracks the
+        // latest tool config / cwd.
+        let bash_handle = crate::bash_tool_handle::build_session_bash_handle(base_ctx);
+        registry.set_bash_tool_handle(bash_handle.clone());
+        if let Ok(mut cell) = self.skill_bash_cell.write() {
+            *cell = Some(bash_handle);
+        }
         // Late-bind the session id so user-typed skill slash commands can
         // substitute `${CLAUDE_SESSION_ID}`.
         registry.set_session_id(self.session_id.read().await.clone());
@@ -2458,6 +2484,14 @@ impl SessionRuntime {
         if let Some(handle) = self.agent_handle.read().await.clone() {
             engine = engine.with_agent_handle(handle);
         }
+        // Skill handle: installed by bootstrap (`agent_handle_factory`)
+        // once the subagent engine adapter exists. Until then the engine
+        // carries `NoOpSkillHandle` and every `SkillTool` call returns
+        // `Unavailable`. Installed on subagent engines too (this runs via
+        // `build_engine_from_config`) so children can invoke skills.
+        if let Some(handle) = self.skill_handle.read().await.clone() {
+            engine = engine.with_skill_handle(handle);
+        }
         // Fork dispatcher (D1/D2). Same late-bind contract as
         // `agent_handle` — installed only when `attach_fork_dispatcher`
         // ran at bootstrap. Without it, post-turn forks fall back to
@@ -2493,6 +2527,71 @@ impl SessionRuntime {
         *self.agent_handle.write().await = Some(handle.clone());
         if let Some(runtime) = &self.memory_runtime {
             runtime.install_agent(handle);
+        }
+    }
+
+    /// Install the skill-execution handle (`QuerySkillRuntime`). Late-bound
+    /// alongside `attach_agent_handle` because the real impl wraps the same
+    /// subagent `AgentQueryEngineRef` the swarm handle uses. Once set,
+    /// `wire_engine` installs it on every per-turn engine so the model's
+    /// `SkillTool` and user-typed fork-mode `/slash` skills resolve.
+    pub async fn attach_skill_handle(&self, handle: coco_tool_runtime::SkillHandleRef) {
+        *self.skill_handle.write().await = Some(handle);
+    }
+
+    /// Snapshot the installed skill handle, if any. Used by the TUI
+    /// slash-command dispatch to run user-typed fork-mode skills through
+    /// the same `SkillHandle` the model's `SkillTool` uses.
+    pub async fn skill_handle(&self) -> Option<coco_tool_runtime::SkillHandleRef> {
+        self.skill_handle.read().await.clone()
+    }
+
+    /// The shared Bash-handle cell threaded into `QuerySkillRuntime` so the
+    /// skill paths run the same permission-checked in-prompt shell as
+    /// slash-command handlers. Clone shares the same `Arc` cell.
+    pub(crate) fn skill_bash_cell(
+        &self,
+    ) -> Arc<std::sync::RwLock<Option<Arc<dyn coco_skills::shell_exec::BashToolHandle>>>> {
+        self.skill_bash_cell.clone()
+    }
+
+    /// Run a user-typed fork-mode skill (`/<name>`) through the installed
+    /// `SkillHandle`, mirroring TS `executeForkedSlashCommand`: the skill
+    /// body runs as a subagent and its final text is returned for the
+    /// caller to inject as a `<local-command-stdout>` block — no follow-up
+    /// main-model query.
+    ///
+    /// The gate marks the skill as user-invoked (`typed_slashes_in_turn`),
+    /// so it bypasses the `disable_model_invocation` author lock and the
+    /// `user-invocable-only` override. Inheritance is taken from the live
+    /// engine config so the subagent runs with the session's features /
+    /// permission mode / tool overrides. Returns `Err` when no skill
+    /// runtime is installed or the fork fails.
+    pub async fn invoke_skill_fork(&self, name: &str, args: &str) -> Result<String, String> {
+        let handle = self
+            .skill_handle()
+            .await
+            .ok_or_else(|| "no skill runtime installed".to_string())?;
+        let cfg = self.current_engine_config().await;
+        let inherit = coco_tool_runtime::SubagentInheritance {
+            session_id: self.current_session_id().await,
+            permission_mode: cfg.permission_mode,
+            features: Some(cfg.features.clone()),
+            tool_overrides: Some(cfg.tool_overrides.clone()),
+            active_shell_tool: cfg.active_shell_tool,
+            parent_tool_filter: None,
+        };
+        let gate = coco_tool_runtime::SkillGateContext {
+            overrides: cfg.skill_overrides.clone(),
+            typed_slashes_in_turn: std::iter::once(name.to_string()).collect(),
+        };
+        match handle.invoke_skill(name, args, inherit, gate).await {
+            Ok(coco_tool_runtime::SkillInvocationResult::Forked { output, .. }) => Ok(output),
+            // A fork-context skill always resolves to `Forked`; the inline
+            // arm is defensive (e.g. a skill whose context flipped between
+            // registry snapshot and dispatch) — surface its summary.
+            Ok(coco_tool_runtime::SkillInvocationResult::Inline { summary, .. }) => Ok(summary),
+            Err(e) => Err(e.to_string()),
         }
     }
 
