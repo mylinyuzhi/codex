@@ -1,4 +1,12 @@
-# Simplify: Code Review and Cleanup
+//! `/simplify` — review changed code for reuse, quality, and efficiency, then fix issues found. Mirrors claude-code's simplify.ts.
+
+use coco_types::ToolName;
+
+pub fn prompt() -> String {
+    TEMPLATE.replace("__AGENT__", ToolName::Agent.as_str())
+}
+
+const TEMPLATE: &str = r#"# Simplify: Code Review and Cleanup
 
 Review all changed files for reuse, quality, and efficiency. Fix any issues found.
 
@@ -8,7 +16,7 @@ Run `git diff` (or `git diff HEAD` if there are staged changes) to see what chan
 
 ## Phase 2: Launch Three Review Agents in Parallel
 
-Use the Agent tool to launch all three agents concurrently in a single message. Pass each agent the full diff so it has the complete context.
+Use the __AGENT__ tool to launch all three agents concurrently in a single message. Pass each agent the full diff so it has the complete context.
 
 ### Agent 1: Code Reuse Review
 
@@ -47,3 +55,4 @@ Review the same changes for efficiency:
 Wait for all three agents to complete. Aggregate their findings and fix each issue directly. If a finding is a false positive or not worth addressing, note it and move on — do not argue with the finding, just skip it.
 
 When done, briefly summarize what was fixed (or confirm the code was already clean).
+"#;

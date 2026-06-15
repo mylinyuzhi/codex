@@ -1,5 +1,0 @@
-Generate filler text for long-context testing. Specify token count as argument (e.g., /lorem-ipsum 50000). Outputs approximately the requested number of tokens. Caps at 500,000 for safety.
-
-If no argument: default to 10,000 tokens.
-
-If argument is not a positive integer: respond with "Invalid token count. Please provide a positive number (e.g., /lorem-ipsum 10000)." and stop.

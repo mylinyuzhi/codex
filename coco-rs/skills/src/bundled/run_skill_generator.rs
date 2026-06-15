@@ -1,4 +1,7 @@
-Run the skill-generator workflow to create or refine a SKILL.md.
+//! `/run-skill-generator` — run the skill-generator workflow to create or refine a SKILL.md. Mirrors claude-code's runSkillGenerator.ts.
+//! No upstream runSkillGenerator.ts; coco-authored content migrated as-is.
+
+pub const PROMPT: &str = r#"Run the skill-generator workflow to create or refine a SKILL.md.
 
 Steps:
 1. Ask the user what skill they want (name, purpose, when-to-use, side effects).
@@ -8,3 +11,4 @@ Steps:
 5. Once approved, write the file and tell the user how to invoke it (`/<skill-name>`).
 
 If the user already has a skill they want to refine, read it first and propose specific edits with rationale.
+"#;
