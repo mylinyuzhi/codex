@@ -9,7 +9,6 @@ use ratatui::prelude::Color;
 
 use crate::i18n::t;
 use crate::presentation::pager;
-use crate::state::AutoModeOptInState;
 use crate::state::BridgeState;
 use crate::state::BypassPermissionsState;
 use crate::state::CostWarningPromptState;
@@ -198,17 +197,6 @@ pub(crate) fn trust_content(tr: &TrustState, styles: UiStyles<'_>) -> (String, S
             t!("dialog.yn_trust_deny"),
         ),
         styles.warning(),
-    )
-}
-
-pub(crate) fn auto_mode_opt_in_content(
-    a: &AutoModeOptInState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    (
-        t!("dialog.title_auto_mode").to_string(),
-        format!("{}\n\n{}", a.description, t!("dialog.enable_auto_approve")),
-        styles.primary(),
     )
 }
 

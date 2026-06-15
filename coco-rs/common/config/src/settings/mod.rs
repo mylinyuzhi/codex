@@ -462,6 +462,12 @@ pub struct PartialLogSettings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutoModeConfig {
+    /// Opt-out switch for the classifier-backed `Auto` permission mode.
+    /// `false` (default) keeps `Auto` reachable in the Shift+Tab cycle and
+    /// settable via control; `true` hides it. Mirrors TS `disableAutoMode`
+    /// (coco-rs has no GrowthBook circuit breaker / model allow-list, so a
+    /// settings opt-out is the sole availability gate — auto is on by default).
+    pub disabled: bool,
     pub allow: Vec<String>,
     pub soft_deny: Vec<String>,
     pub environment: Vec<String>,

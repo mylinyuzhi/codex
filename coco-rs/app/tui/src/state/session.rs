@@ -179,8 +179,10 @@ pub struct SessionState {
     /// runtime based on auth + settings.
     pub bypass_permissions_available: bool,
     /// Whether the classifier-backed `Auto` mode is available.
-    /// Gate flag for [`PermissionMode::next_in_cycle`]; set by the
-    /// runtime based on feature flags.
+    /// Gate flag for [`PermissionMode::next_in_cycle`]; seeded once at
+    /// startup from `compute_auto_mode_capability` (default-on, gated only
+    /// by the `auto_mode.disabled` settings opt-out — coco-rs has no
+    /// GrowthBook circuit breaker / model allow-list). Static per session.
     pub auto_mode_available: bool,
     /// Active tool executions.
     pub tool_executions: Vec<ToolExecution>,

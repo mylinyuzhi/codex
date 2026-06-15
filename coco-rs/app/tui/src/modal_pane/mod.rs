@@ -95,15 +95,6 @@ pub(crate) async fn approve(state: &mut AppState, command_tx: &mpsc::Sender<User
                 .await;
             state.ui.dismiss_modal();
         }
-        Some(ModalState::AutoModeOptIn(_)) => {
-            state.session.permission_mode = PermissionMode::Auto;
-            let _ = command_tx
-                .send(UserCommand::SetPermissionMode {
-                    mode: PermissionMode::Auto,
-                })
-                .await;
-            state.ui.dismiss_modal();
-        }
         Some(ModalState::PluginHint(ph)) => {
             let response = ph.selected_response();
             let plugin_id = ph.plugin_id.clone();
@@ -157,7 +148,7 @@ async fn apply_plugin_hint_response(
 
 pub(crate) async fn deny(state: &mut AppState, command_tx: &mpsc::Sender<UserCommand>) {
     match state.ui.modal.as_ref() {
-        Some(ModalState::BypassPermissions(_)) | Some(ModalState::AutoModeOptIn(_)) => {
+        Some(ModalState::BypassPermissions(_)) => {
             state.ui.dismiss_modal();
         }
         _ => close_modal_with_feedback(state, command_tx).await,
@@ -260,7 +251,6 @@ fn picker_dismiss(modal: &ModalState) -> Option<PickerDismiss> {
         | M::InvalidConfig(_)
         | M::IdleReturn(_)
         | M::Trust(_)
-        | M::AutoModeOptIn(_)
         | M::BypassPermissions(_)
         | M::TaskDetail(_)
         | M::TeamRoster(_)

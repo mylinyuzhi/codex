@@ -15,6 +15,7 @@ Permission evaluation pipeline: auto-mode / yolo classifier (2-stage XML via LLM
 - **Explainer**: `ExplainerParams`, `build_explainer_query`, `explainer_tool_def`, `generate_permission_explanation`
 - **Shadowed rules**: `DetectUnreachableRulesOptions`, `ShadowType`, `UnreachableRule`, `detect_unreachable_rules`
 - **Bypass / killswitch**: `InitialPermissionMode`, `KillswitchCheck`, `check_bypass_killswitch_transition`, `compute_bypass_capability`, `resolve_initial_permission_mode`
+- **Auto-mode availability**: `compute_auto_mode_capability` — the cycle/control gate for `Auto`. Default-on; gated only by the `auto_mode.disabled` settings opt-out (no GrowthBook `TRANSCRIPT_CLASSIFIER` / circuit breaker / `modelSupportsAutoMode` allow-list, unlike TS). Threaded `StartupPermissionState.auto_available` → TUI `SessionState.auto_mode_available`.
 - **Denial tracking**: `DenialTracker`
 - **Dangerous rules**: `restore_dangerous_rules`, `strip_dangerous_rules`
 - **Shell rules**: `ShellPermissionRule`

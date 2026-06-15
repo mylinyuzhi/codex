@@ -3,7 +3,7 @@
 //! An emergency override that forcibly disables `BypassPermissions` mode
 //! regardless of settings. Two activation vectors:
 //!
-//! 1. **Env var** `DISABLE_BYPASS_PERMISSIONS=1` — local operator override
+//! 1. **Env var** `COCO_PERMISSIONS_DISABLE_BYPASS=1` — local operator override
 //!    for CI, shared workstations, or security-sensitive runs.
 //! 2. **Enterprise policy** — `settings.json` field
 //!    `bypassPermissionsKillswitch: true` at the policy scope
@@ -17,7 +17,8 @@ use coco_config::env;
 use coco_types::PermissionMode;
 
 /// Env var name that activates the killswitch when set to a truthy value.
-pub const KILLSWITCH_ENV: &str = "DISABLE_BYPASS_PERMISSIONS";
+/// Single source of truth is the typed [`coco_config::EnvKey`] registry.
+pub const KILLSWITCH_ENV: &str = coco_config::EnvKey::CocoPermissionsDisableBypass.as_str();
 
 /// Settings key (policy scope) for the killswitch flag.
 pub const KILLSWITCH_SETTING_KEY: &str = "bypassPermissionsKillswitch";
@@ -47,7 +48,7 @@ impl KillswitchCheck {
             KillswitchCheck::Allowed => None,
             KillswitchCheck::BlockedByEnv => Some(
                 "BypassPermissions disabled by operator override \
-                 (DISABLE_BYPASS_PERMISSIONS environment variable).",
+                 (COCO_PERMISSIONS_DISABLE_BYPASS environment variable).",
             ),
             KillswitchCheck::BlockedByPolicy => Some(
                 "BypassPermissions disabled by enterprise policy \
@@ -166,7 +167,7 @@ pub struct InitialPermissionMode {
 ///
 /// The function walks these in order. The first *non-blocked* candidate
 /// wins. `BypassPermissions` is blocked by the killswitch (env var
-/// `DISABLE_BYPASS_PERMISSIONS` or `policy_flag == Some(true)`); every
+/// `COCO_PERMISSIONS_DISABLE_BYPASS` or `policy_flag == Some(true)`); every
 /// other mode is always allowed. If every candidate is blocked or the
 /// list is empty, the resolved mode is `Default`.
 ///

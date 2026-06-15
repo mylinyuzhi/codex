@@ -93,6 +93,7 @@ pub use rule_compiler::rule_value_to_string;
 pub use settings_store::SettingsPermissionStore;
 pub use setup::PermissionConfigError;
 pub use setup::PermissionModeChoice;
+pub use setup::compute_auto_mode_capability;
 pub use setup::get_default_rules_for_mode;
 pub use setup::is_dangerous_powershell_permission;
 pub use setup::validate_permission_configuration;

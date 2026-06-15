@@ -1360,10 +1360,12 @@ async fn deny_bypass_modal_keeps_mode() {
 }
 
 #[tokio::test]
-async fn cycle_into_auto_shows_opt_in() {
+async fn cycle_into_auto_applies_immediately() {
     use coco_types::PermissionMode;
 
     // Only auto available — cycle Plan → Auto since bypass is gated off.
+    // Auto is classifier-gated (not dangerous), so it switches directly
+    // with no confirmation modal — only Bypass surfaces a dialog.
     let mut state = AppState::new();
     state.session.auto_mode_available = true;
     state.session.bypass_permissions_available = false;
@@ -1372,12 +1374,19 @@ async fn cycle_into_auto_shows_opt_in() {
 
     handle_command(&mut state, TuiCommand::CyclePermissionMode, &tx).await;
 
-    assert_eq!(state.session.permission_mode, PermissionMode::Plan);
+    assert_eq!(state.session.permission_mode, PermissionMode::Auto);
     assert!(
-        matches!(state.ui.modal.as_ref(), Some(ModalState::AutoModeOptIn(_))),
-        "AutoModeOptIn state should be shown"
+        !state.ui.has_active_surface(),
+        "no confirmation modal for Auto"
     );
-    assert!(rx.try_recv().is_err());
+    assert!(state.ui.toasts.is_empty());
+    let cmd = rx.try_recv().expect("SetPermissionMode must be sent");
+    assert!(matches!(
+        cmd,
+        UserCommand::SetPermissionMode {
+            mode: PermissionMode::Auto
+        }
+    ));
 }
 
 #[tokio::test]

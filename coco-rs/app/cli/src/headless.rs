@@ -397,6 +397,9 @@ pub fn build_system_prompt_for_model(
 pub struct StartupPermissionState {
     pub mode: coco_types::PermissionMode,
     pub bypass_available: bool,
+    /// Whether the classifier-backed `Auto` mode can be cycled into / set.
+    /// Default-on, gated only by the `auto_mode.disabled` settings opt-out.
+    pub auto_available: bool,
     pub notification: Option<String>,
 }
 
@@ -433,6 +436,10 @@ pub fn resolve_startup_permission_state(
         policy_flag,
     );
 
+    let auto_available = coco_permissions::compute_auto_mode_capability(
+        settings.auto_mode.as_ref().is_some_and(|c| c.disabled),
+    );
+
     let requesting_bypass =
         mode == PermissionMode::BypassPermissions || cli.allow_dangerously_skip_permissions;
     enforce_dangerous_skip_safety(requesting_bypass)?;
@@ -440,6 +447,7 @@ pub fn resolve_startup_permission_state(
     Ok(StartupPermissionState {
         mode,
         bypass_available,
+        auto_available,
         notification: resolved.notification,
     })
 }

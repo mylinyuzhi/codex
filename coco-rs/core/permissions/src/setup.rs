@@ -10,6 +10,20 @@ use coco_types::ToolName;
 
 use crate::rule_compiler;
 
+/// Compute whether the classifier-backed `Auto` permission mode is available
+/// for this session (the Shift+Tab cycle gate + control-plane entry gate).
+///
+/// Parallel to [`crate::compute_bypass_capability`]. coco-rs intentionally
+/// drops TS's three-part gate (`feature('TRANSCRIPT_CLASSIFIER')` +
+/// `tengu_auto_mode_config` GrowthBook circuit breaker + `modelSupportsAutoMode`
+/// allow-list): there is no GrowthBook here and the classifier subsystem ships
+/// for every provider/model. Auto is therefore **available by default**, gated
+/// only by the `auto_mode.disabled` settings opt-out (mirrors TS
+/// `disableAutoMode`). A future model-support check would slot in here.
+pub fn compute_auto_mode_capability(settings_disabled: bool) -> bool {
+    !settings_disabled
+}
+
 // ��─ PermissionModeChoice ──
 
 /// User-facing permission mode selection during onboarding or mode-switch.

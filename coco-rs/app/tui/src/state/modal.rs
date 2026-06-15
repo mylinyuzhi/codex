@@ -45,7 +45,6 @@ pub enum ModalState {
     InvalidConfig(surface_payloads::InvalidConfigState),
     IdleReturn(surface_payloads::IdleReturnState),
     Trust(surface_payloads::TrustState),
-    AutoModeOptIn(surface_payloads::AutoModeOptInState),
     BypassPermissions(surface_payloads::BypassPermissionsState),
     TaskDetail(TaskDetailState),
     Feedback(surface_payloads::FeedbackState),
@@ -61,10 +60,7 @@ impl ModalState {
             Self::WorktreeExit(_) | Self::BypassPermissions(_) => 3,
             Self::Error(_) | Self::InvalidConfig(_) => 4,
             Self::Rewind(_) | Self::DiffView(_) => 5,
-            Self::AutoModeOptIn(_)
-            | Self::Trust(_)
-            | Self::Bridge(_)
-            | Self::McpServerSelect(_) => 6,
+            Self::Trust(_) | Self::Bridge(_) | Self::McpServerSelect(_) => 6,
             Self::ModelPicker(_)
             | Self::ThemePicker(_)
             | Self::SessionBrowser(_)

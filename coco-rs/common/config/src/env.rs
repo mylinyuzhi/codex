@@ -132,6 +132,11 @@ pub enum EnvKey {
     CocoMcpToolTimeoutMs,
     CocoModelMain,
     CocoParentSessionId,
+    /// Truthy ⇒ emergency killswitch that forcibly disables
+    /// `BypassPermissions` mode regardless of CLI flags / settings
+    /// (local operator override). Pairs with the policy-scope
+    /// `bypassPermissionsKillswitch` managed setting.
+    CocoPermissionsDisableBypass,
     CocoPlanModeRequired,
     CocoRemote,
     /// Override for the memory base directory (the parent of `projects/`).
@@ -337,6 +342,7 @@ impl EnvKey {
             Self::CocoMcpToolTimeoutMs => "COCO_MCP_TOOL_TIMEOUT_MS",
             Self::CocoModelMain => "COCO_MODEL_MAIN",
             Self::CocoParentSessionId => "COCO_PARENT_SESSION_ID",
+            Self::CocoPermissionsDisableBypass => "COCO_PERMISSIONS_DISABLE_BYPASS",
             Self::CocoPlanModeRequired => "COCO_PLAN_MODE_REQUIRED",
             Self::CocoRemote => "COCO_REMOTE",
             Self::CocoRemoteMemoryDir => "COCO_REMOTE_MEMORY_DIR",

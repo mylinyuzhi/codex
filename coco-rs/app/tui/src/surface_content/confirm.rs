@@ -3,7 +3,6 @@
 use ratatui::prelude::Color;
 
 use crate::presentation::confirm;
-use crate::state::AutoModeOptInState;
 use crate::state::BridgeState;
 use crate::state::BypassPermissionsState;
 use crate::state::CostWarningPromptState;
@@ -80,13 +79,6 @@ pub(super) fn idle_return_content(
 
 pub(super) fn trust_content(tr: &TrustState, styles: UiStyles<'_>) -> (String, String, Color) {
     confirm::trust_content(tr, styles)
-}
-
-pub(super) fn auto_mode_opt_in_content(
-    a: &AutoModeOptInState,
-    styles: UiStyles<'_>,
-) -> (String, String, Color) {
-    confirm::auto_mode_opt_in_content(a, styles)
 }
 
 pub(super) fn bypass_permissions_content(
