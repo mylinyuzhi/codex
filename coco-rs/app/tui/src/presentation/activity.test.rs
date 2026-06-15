@@ -98,6 +98,59 @@ fn turn_activity_view_renders_stream_status_without_agents() {
 }
 
 #[test]
+fn exit_plan_mode_tool_is_hidden_from_activity() {
+    let _locale = crate::i18n::locale_test_guard("en");
+    let mut state = AppState::default();
+    // ExitPlanMode's UI is the "Ready to code?" dialog, so `start_tool` keeps
+    // it out of the tool ledger entirely — no activity strip, no busy spinner,
+    // no foreground-task count.
+    state
+        .session
+        .start_tool("call-1".into(), "ExitPlanMode".into());
+
+    assert!(state.session.tool_executions.is_empty());
+    assert!(matches!(
+        turn_activity_view(&state, 160),
+        TurnActivityView::None
+    ));
+}
+
+#[test]
+fn ask_user_question_tool_is_hidden_from_activity() {
+    let _locale = crate::i18n::locale_test_guard("en");
+    let mut state = AppState::default();
+    // AskUserQuestion's UI is the question dialog; like ExitPlanMode it stays
+    // out of the tool ledger (TS + codex-rs both suppress it).
+    state
+        .session
+        .start_tool("call-1".into(), "AskUserQuestion".into());
+
+    assert!(state.session.tool_executions.is_empty());
+    assert!(matches!(
+        turn_activity_view(&state, 160),
+        TurnActivityView::None
+    ));
+}
+
+#[test]
+fn ordinary_running_tool_still_shows_in_activity() {
+    let _locale = crate::i18n::locale_test_guard("en");
+    let mut state = AppState::default();
+    state.session.start_tool("call-1".into(), "Bash".into());
+
+    assert_eq!(state.session.tool_executions.len(), 1);
+    let view = surface(turn_activity_view(&state, 160));
+
+    assert_eq!(view.title, ActivityTitle::Activity);
+    assert!(
+        view.lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .any(|span| span.text.contains("Bash"))
+    );
+}
+
+#[test]
 fn turn_activity_view_keeps_stale_teammates_view_empty_without_agents() {
     let mut state = AppState::default();
     state.session.expanded_view = ExpandedView::Teammates;

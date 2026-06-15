@@ -194,28 +194,22 @@ pub(crate) fn exit_plan_prompt_lines(
         .as_ref()
         .map(|b| format!(" · @{}", b.name))
         .unwrap_or_default();
+    // The "Ready to code?" title now leads the plan block in the transcript
+    // (`exit_plan_pending_history_lines`); the bottom prompt keeps just the
+    // proceed cue + decision rows so long plans don't push the choices off
+    // screen. The worker badge rides the proceed line so cross-process
+    // teammate requests still show who is asking.
     let mut lines = vec![
         Line::from(Span::styled(
             format!(
                 "{}{}",
                 if has_plan {
-                    t!("dialog.ready_to_code")
+                    t!("dialog.plan_ready_prompt")
                 } else {
-                    t!("dialog.exit_plan_mode")
+                    t!("dialog.no_plan_ready_prompt")
                 },
                 worker_suffix
             ),
-            Style::default()
-                .fg(styles.plan())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            if has_plan {
-                t!("dialog.plan_ready_prompt")
-            } else {
-                t!("dialog.no_plan_ready_prompt")
-            }
-            .to_string(),
             Style::default().fg(styles.text()),
         )),
         Line::from(""),
@@ -294,16 +288,25 @@ pub(crate) fn exit_plan_pending_history_lines(
         ])];
     };
 
+    // TS-style "title in front": lead with the bold "Ready to code?" header,
+    // then the plan heading, then the plan body. The decision rows live in
+    // the bottom prompt (`exit_plan_prompt_lines`), which no longer repeats
+    // the title.
     let mut lines = vec![
         Line::from(vec![
             Span::styled("• ", Style::default().fg(styles.dim())),
             Span::styled(
-                t!("dialog.plan_heading").to_string(),
+                t!("dialog.ready_to_code").to_string(),
                 Style::default()
                     .fg(styles.plan())
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            t!("dialog.plan_heading").to_string(),
+            Style::default().fg(styles.plan()),
+        )),
         Line::from(""),
     ];
     lines.extend(crate::presentation::plan::render_plan_markdown(

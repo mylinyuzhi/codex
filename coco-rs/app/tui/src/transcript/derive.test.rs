@@ -132,3 +132,43 @@ fn skill_listing_attachment_derives_no_cells() {
 
     assert!(message_to_cells(Arc::new(msg)).is_empty());
 }
+
+#[test]
+fn overlay_driven_tool_calls_emit_no_tool_use_cell() {
+    // ExitPlanMode / AskUserQuestion render their own surface; their
+    // `● ToolName(…)` invocation header must not be derived — only the result
+    // renders. Bash is the control: a normal tool still yields a ToolUse cell.
+    let overlay = coco_messages::create_assistant_message(
+        vec![AssistantContent::ToolCall(ToolCallContent::new(
+            "c1",
+            "ExitPlanMode",
+            json!({"plan": "# Goal"}),
+        ))],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    let cells = message_to_cells(Arc::new(overlay));
+    assert!(
+        !cells
+            .iter()
+            .any(|c| matches!(c.kind, CellKind::ToolUse { .. })),
+        "overlay-driven tool must not derive a ToolUse cell: {cells:?}"
+    );
+
+    let normal = coco_messages::create_assistant_message(
+        vec![AssistantContent::ToolCall(ToolCallContent::new(
+            "c2",
+            "Bash",
+            json!({"command": "ls"}),
+        ))],
+        "test-model",
+        coco_types::TokenUsage::default(),
+    );
+    let cells = message_to_cells(Arc::new(normal));
+    assert!(
+        cells
+            .iter()
+            .any(|c| matches!(c.kind, CellKind::ToolUse { .. })),
+        "normal tool must derive a ToolUse cell: {cells:?}"
+    );
+}
