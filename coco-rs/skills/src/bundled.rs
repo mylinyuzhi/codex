@@ -24,6 +24,24 @@ use crate::SkillContext;
 use crate::SkillDefinition;
 use crate::SkillSource;
 
+mod batch;
+mod claude_api;
+mod claude_in_chrome;
+mod debug;
+mod dream;
+mod hunter;
+mod keybindings;
+mod loop_skill;
+mod lorem_ipsum;
+mod remember;
+mod run_skill_generator;
+mod schedule;
+mod simplify;
+mod skillify;
+mod stuck;
+mod update_config;
+mod verify;
+
 /// Create a bundled skill with common defaults.
 fn bundled(
     name: &str,
@@ -84,7 +102,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "update-config",
             "Configure settings via settings.json",
-            include_str!("bundled_prompts/update_config.txt"),
+            update_config::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Edit.as_str(),
@@ -102,7 +120,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "keybindings-help",
             "Customize keyboard shortcuts and keybindings",
-            include_str!("bundled_prompts/keybindings_help.txt"),
+            keybindings::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Edit.as_str(),
@@ -122,7 +140,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "batch",
             "Run a prompt or command on multiple files",
-            include_str!("bundled_prompts/batch.txt"),
+            &batch::prompt(),
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -145,7 +163,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(bundled(
             "verify",
             "Verify a code change does what it should by running the app",
-            include_str!("bundled_prompts/verify.txt"),
+            verify::PROMPT,
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -158,7 +176,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut debug_skill = bundled(
             "debug",
             "Debug your current Claude Code session by reading the session debug log. Includes all event logging",
-            include_str!("bundled_prompts/debug.txt"),
+            debug::PROMPT,
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -173,7 +191,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut sk = bundled(
             "skillify",
             "Convert a workflow into a reusable skill file",
-            include_str!("bundled_prompts/skillify.txt"),
+            &skillify::prompt(),
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Write.as_str(),
@@ -184,25 +202,31 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         sk.when_to_use = Some("When user wants to automate a repeatable workflow".to_string());
         skills.push(sk);
 
-        // /remember(ant-only)
+        // /remember — ant gate dropped, but the auto-memory capability gate is
+        // kept (mirrors TS `isEnabled: isAutoMemoryEnabled()`): the skill audits
+        // auto-memory, so it stays hidden until `Feature::AutoMemory` is enabled.
+        // Registered here for catalog parity; `visible()` applies the gate.
         let mut rem = bundled(
             "remember",
-            "Save information to memory for future conversations",
-            include_str!("bundled_prompts/remember.txt"),
+            "Review auto-memory entries and propose promotions to CLAUDE.md, CLAUDE.local.md, or shared memory. Also detects outdated, conflicting, and duplicate entries across memory layers.",
+            remember::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Write.as_str(),
                 ToolName::Glob.as_str(),
             ],
         );
-        rem.when_to_use = Some("Use when reviewing or organizing memory entries".to_string());
+        rem.when_to_use = Some(
+            "Use when the user wants to review, organize, or promote their auto-memory entries. Also useful for cleaning up outdated or conflicting entries across CLAUDE.md, CLAUDE.local.md, and auto-memory.".to_string(),
+        );
+        rem.gated_by = Some(Feature::AutoMemory);
         skills.push(rem);
 
-        // /simplify(ant-only)
+        // /simplify(general-purpose) — upstream simplify.ts has no ant gate
         skills.push(bundled(
             "simplify",
             "Review changed code for reuse, quality, and efficiency, then fix any issues found",
-            include_str!("bundled_prompts/simplify.txt"),
+            &simplify::prompt(),
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -217,7 +241,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         skills.push(bundled(
             "stuck",
             "Help when stuck in loops or debugging dead ends",
-            include_str!("bundled_prompts/stuck.txt"),
+            stuck::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Glob.as_str(),
@@ -230,7 +254,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut li = bundled(
             "lorem-ipsum",
             "Generate filler text for long context testing. Specify token count as argument (e.g., /lorem-ipsum 50000). Outputs approximately the requested number of tokens.",
-            include_str!("bundled_prompts/lorem_ipsum.txt"),
+            lorem_ipsum::PROMPT,
             vec![],
         );
         li.argument_hint = Some("[token_count]".to_string());
@@ -244,7 +268,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "loop",
             "Run a prompt or slash command on a recurring interval",
-            include_str!("bundled_prompts/loop.txt"),
+            &loop_skill::prompt(),
             vec![
                 ToolName::Bash.as_str(),
                 ToolName::Read.as_str(),
@@ -261,7 +285,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "schedule",
             "Create, update, list, or run scheduled remote agents (triggers) that execute on a cron schedule",
-            include_str!("bundled_prompts/schedule.txt"),
+            &schedule::prompt(),
             vec![
                 ToolName::RemoteTrigger.as_str(),
                 ToolName::AskUserQuestion.as_str(),
@@ -280,7 +304,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "claude-api",
             "Build apps with the Claude API or Anthropic SDK",
-            include_str!("bundled_prompts/claude_api.txt"),
+            claude_api::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Grep.as_str(),
@@ -300,7 +324,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "dream",
             "Run KAIROS auto-dream memory consolidation: review and consolidate session memory",
-            include_str!("bundled_prompts/dream.txt"),
+            dream::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Edit.as_str(),
@@ -318,7 +342,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "hunter",
             "Deep bug-finding review: scour code for bugs, security issues, and edge cases",
-            include_str!("bundled_prompts/hunter.txt"),
+            hunter::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Bash.as_str(),
@@ -336,7 +360,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "claude-in-chrome",
             "Automates your Chrome browser to interact with web pages — clicking elements, filling forms, capturing screenshots, reading console logs, and navigating sites. Opens pages in new tabs within your existing Chrome session. Requires site-level permissions before executing (configured in the extension).",
-            include_str!("bundled_prompts/claude_in_chrome.txt"),
+            claude_in_chrome::PROMPT,
             // Browser MCP tools are dynamic; allowed_tools entries must be `mcp__claude-in-chrome__*`
             // populated at startup by the Chrome MCP integration. Empty here is a placeholder.
             vec![],
@@ -353,7 +377,7 @@ pub fn get_bundled_skills() -> Vec<SkillDefinition> {
         let mut s = bundled(
             "run-skill-generator",
             "Create or refine a SKILL.md file for a custom workflow",
-            include_str!("bundled_prompts/run_skill_generator.txt"),
+            run_skill_generator::PROMPT,
             vec![
                 ToolName::Read.as_str(),
                 ToolName::Write.as_str(),

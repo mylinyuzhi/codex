@@ -1,4 +1,7 @@
-You are helping the user build applications with the Claude API or Anthropic SDK.
+//! `/claude-api` — reference for building applications with the Claude API or Anthropic SDK. Mirrors claude-code's claudeApi.ts.
+//! Deferred: the full claude-api doc tree (~247KB of bundled .md, vendored via the files/extraction seam) is not yet ported.
+
+pub const PROMPT: &str = r#"You are helping the user build applications with the Claude API or Anthropic SDK.
 
 TRIGGER when: code imports `anthropic`/`@anthropic-ai/sdk`/`claude_agent_sdk`, or user asks to use Claude API, Anthropic SDKs, or Agent SDK.
 DO NOT TRIGGER when: code imports `openai`/other AI SDK, general coding questions unrelated to Claude/Anthropic.
@@ -52,3 +55,4 @@ Enable with `thinking: { type: "enabled", budget_tokens: N }` for complex reason
 - Always check stop_reason to know if the response was truncated
 
 When helping the user, read their existing code first to understand the language and framework they're using, then provide targeted guidance.
+"#;
