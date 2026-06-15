@@ -387,7 +387,10 @@ fn exit_plan_prompt_lines_render_only_decision_rows() {
     let lines = exit_plan_prompt_lines(&state, UiStyles::new(&theme), 8);
     let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-    assert!(joined.contains("Ready to code?"), "{joined}");
+    // The "Ready to code?" title now leads the plan block in the transcript,
+    // not the bottom prompt — the prompt keeps only the proceed cue + choices.
+    assert!(!joined.contains("Ready to code?"), "{joined}");
+    assert!(joined.contains("Would you like to proceed?"), "{joined}");
     assert!(joined.contains("Yes, manually approve edits"), "{joined}");
     assert!(joined.contains("Ask before each edit."), "{joined}");
     assert!(!joined.contains("Step one"), "{joined}");
@@ -420,7 +423,9 @@ fn exit_plan_prompt_lines_use_no_plan_copy_without_plan() {
     let lines = exit_plan_prompt_lines(&state, UiStyles::new(&theme), 8);
     let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
 
-    assert!(joined.contains("Exit plan mode?"), "{joined}");
+    // No-plan exit: the bottom prompt drops the bold title too, leaving the
+    // descriptive proceed line + choices.
+    assert!(joined.contains("Would you like to proceed?"), "{joined}");
     assert!(
         joined.contains("without an implementation plan"),
         "{joined}"
@@ -465,6 +470,40 @@ fn exit_plan_pending_history_lines_render_plan_without_choices() {
     assert!(joined.contains("Step one"), "{joined}");
     assert!(joined.contains("Plan file: /tmp/plan.md"), "{joined}");
     assert!(!joined.contains("manually approve"), "{joined}");
+}
+
+#[test]
+fn exit_plan_pending_history_lines_lead_with_ready_to_code_title() {
+    let _locale = locale_test_guard("en");
+    let theme = Theme::default();
+    let state = permission_prompt(PermissionDetail::ExitPlanMode {
+        outcome: coco_types::ExitPlanModeOutcome::ImplementationPlan,
+        plan: Some("# Goal\n\n- Step one".to_string()),
+        plan_file_path: None,
+        allowed_prompts: vec![],
+    });
+
+    let lines = exit_plan_pending_history_lines(
+        &state,
+        /*width*/ 80,
+        coco_tui_ui::display::SyntaxHighlighting::Disabled,
+        UiStyles::new(&theme),
+    );
+    let texts: Vec<String> = lines.iter().map(line_text).collect();
+    let joined = texts.join("\n");
+
+    // TS-style "title in front": the bold "Ready to code?" header leads, the
+    // plan heading and body follow.
+    let ready_at = texts
+        .iter()
+        .position(|t| t.contains("Ready to code?"))
+        .unwrap_or_else(|| panic!("missing title: {joined}"));
+    let heading_at = texts
+        .iter()
+        .position(|t| t.contains("Here is proposed plan:"))
+        .unwrap_or_else(|| panic!("missing heading: {joined}"));
+    assert!(ready_at < heading_at, "title must precede plan: {joined}");
+    assert!(joined.contains("Step one"), "{joined}");
 }
 
 #[test]

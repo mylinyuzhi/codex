@@ -396,6 +396,14 @@ impl SessionState {
 
     /// Queue a tool execution (called from ToolUseQueued).
     pub fn start_tool(&mut self, call_id: String, name: String) {
+        // Overlay-driven tools (plan approval, plan-mode entry, question
+        // dialog) own a dedicated surface; keeping them out of the UI tool
+        // ledger is the single chokepoint that stops them leaking into the
+        // activity strip, the `⠋ Processing…` busy spinner, and the Ctrl+B
+        // foreground-task check. Their result still renders from MessageHistory.
+        if crate::tool_display::tool_is_overlay_driven(&name) {
+            return;
+        }
         self.tool_executions.push(ToolExecution {
             call_id,
             name,

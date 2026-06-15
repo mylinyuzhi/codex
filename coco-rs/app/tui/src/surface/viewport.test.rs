@@ -432,3 +432,28 @@ fn plain_buffer_lines(buffer: &Buffer) -> Vec<String> {
         .map(|cells| cells.iter().map(ratatui::buffer::Cell::symbol).collect())
         .collect()
 }
+
+#[test]
+fn exit_plan_pending_live_tail_has_no_busy_spinner() {
+    let mut state = exit_plan_prompt_state(3);
+    // ToolUseQueued fires start_tool("ExitPlanMode"); the overlay-driven skip
+    // keeps it out of the ledger, so no `⠋ Processing…` busy spinner appears
+    // above the plan (the prior leak: active_transcript_cell saw it Queued).
+    state
+        .session
+        .start_tool("call-1".into(), "ExitPlanMode".into());
+    let styles = UiStyles::new(&state.ui.theme);
+    let lines = build_live_tail_lines(&state, styles, 96, native_plan());
+    let text = lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.to_lowercase().contains("processing"), "{text}");
+    assert!(text.contains("Ready to code?"), "{text}");
+}

@@ -216,6 +216,32 @@ fn normalized_builtin_tool(tool_name: &str) -> Option<ToolName> {
     ToolName::from_str(normalized).ok()
 }
 
+/// Tools whose entire user interaction *is* a dedicated overlay or prompt
+/// (the plan-approval dialog, the plan-mode banner, the question dialog).
+/// Their real UI is that surface, so they must never surface as a generic
+/// tool element anywhere — not an `◦ ExitPlanMode (1s)` activity row, a
+/// `⠋ Processing…` busy spinner, nor a `● ExitPlanMode(plan: …)` tool-call
+/// header. Their result (the plan / the answers) still renders from
+/// `MessageHistory` via the result path.
+///
+/// This is the single predicate behind that suppression, enforced at two
+/// data boundaries so every downstream render path is leak-proof by
+/// construction:
+/// - UI tool-ledger ingestion — [`crate::state::session::SessionState::start_tool`]
+///   (kills the activity strip, the busy spinner, and foreground-task checks);
+/// - message→cell derivation — [`crate::transcript::derive::message_to_cells`]
+///   (kills the `● ToolName(…)` invocation header; the result orphan-renders).
+///
+/// Mirrors claude-code's `userFacingName() == ""` (tool-use renders `null`;
+/// only the result shows) and codex-rs routing these flows as request-based
+/// interrupts rather than tool-call cells.
+pub(crate) fn tool_is_overlay_driven(tool_name: &str) -> bool {
+    matches!(
+        normalized_builtin_tool(tool_name),
+        Some(ToolName::ExitPlanMode | ToolName::EnterPlanMode | ToolName::AskUserQuestion)
+    )
+}
+
 pub(crate) fn single_line_tool_input(tool_name: &str, input: &Value) -> String {
     let Some(tool) = normalized_builtin_tool(tool_name) else {
         return object_summary(input);

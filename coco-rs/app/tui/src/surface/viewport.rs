@@ -106,12 +106,7 @@ pub(crate) fn interactive_viewport_desired_height(
         };
     // Mirror render_live_viewport's reservations so the sizing pass and the
     // paint pass agree on viewport height (these were previously omitted here).
-    let status_indicator_rows: u16 =
-        if state.ui.ephemeral.turn_active() || state.session.is_compacting {
-            1
-        } else {
-            0
-        };
+    let status_indicator_rows: u16 = if show_status_indicator(state) { 1 } else { 0 };
     let background_pills_rows: u16 =
         if crate::widgets::build_background_pills_view(state).is_empty() {
             0
@@ -209,6 +204,17 @@ fn interaction_pane_bottom_reservation(
     }
 }
 
+/// The turn-status spinner ("Enchanting… · esc to interrupt") shows while
+/// the turn is actively working, or while a compaction runs — but NOT while
+/// the turn is paused on a blocking approval prompt. During an approval the
+/// prompt itself is the UI; a spinner row wedged between the content and the
+/// decision options is pure noise (TS/codex pause the turn → no spinner).
+/// `turn_paused()` is the existing paused-on-permission-prompt signal.
+fn show_status_indicator(state: &AppState) -> bool {
+    (state.ui.ephemeral.turn_active() && !state.ui.ephemeral.turn_paused())
+        || state.session.is_compacting
+}
+
 fn render_live_viewport(
     frame: &mut SurfaceFrame<'_>,
     area: Rect,
@@ -248,12 +254,7 @@ fn render_live_viewport(
     // Single-row main-turn status indicator (spinner + verb + elapsed
     // + tokens) above the activity panel — visible only while a turn
     // is running.
-    let status_indicator_rows: u16 =
-        if state.ui.ephemeral.turn_active() || state.session.is_compacting {
-            1
-        } else {
-            0
-        };
+    let status_indicator_rows: u16 = if show_status_indicator(state) { 1 } else { 0 };
     // Background pills bar — shown when any subagent is backgrounded.
     // The row stays populated for the lifetime of the backgrounded task
     // (completed teammates render with `is_idle = true`); no completion-flash window.
@@ -309,9 +310,7 @@ fn render_live_viewport(
         avail_for_live_tail,
         state,
     );
-    if status_indicator_area.height > 0
-        && (state.ui.ephemeral.turn_active() || state.session.is_compacting)
-    {
+    if status_indicator_area.height > 0 && show_status_indicator(state) {
         // Elapsed reads from the UI ephemeral helper so the displayed
         // clock subtracts paused time (permission-prompt blocks). The
         // turn-start anchor is on the running-turn record itself —

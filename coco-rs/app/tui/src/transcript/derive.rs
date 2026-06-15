@@ -159,6 +159,14 @@ fn assistant_cells(
                     &mut reasoning_run,
                     &mut first_visible_reasoning_run,
                 );
+                // Overlay-driven tools (plan approval, plan-mode entry, question
+                // dialog) render their own surface; suppress the `● ToolName(…)`
+                // invocation header so only the result/plan shows. The result
+                // cell orphan-renders (see `presentation::transcript` projection),
+                // matching TS `userFacingName() == ""`.
+                if crate::tool_display::tool_is_overlay_driven(&tc.tool_name) {
+                    continue;
+                }
                 CellKind::ToolUse {
                     call_id: tc.tool_call_id.clone(),
                     tool_name: tc.tool_name.clone(),
