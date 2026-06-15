@@ -3723,6 +3723,11 @@
           "description": "Synthesized echo/result of a slash command (`❯ /cmd` + `⎿ output`).\nCarried on the `Message::User` envelope; combined with\n`is_visible_in_transcript_only` it mirrors TS's\n`createUserMessage` (model-visible) vs `createCommandInputMessage`\n(transcript-only) split. Drives tag-aware command-pill rendering.",
           "type": "string",
           "const": "slash_command"
+        },
+        {
+          "description": "Engine-injected \"implement the approved plan\" seed after a\nclear-context plan exit. Carries the full plan text for the model,\nbut the TUI renders it as a compact chip instead of echoing the\nwhole plan as a `❯` input wall.",
+          "type": "string",
+          "const": "plan_implementation"
         }
       ]
     },

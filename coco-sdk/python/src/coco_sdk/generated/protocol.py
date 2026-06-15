@@ -363,6 +363,7 @@ class MessageOrigin(str, Enum):
     compact_summary = 'compact_summary'
     subagent_reply = 'subagent_reply'
     slash_command = 'slash_command'
+    plan_implementation = 'plan_implementation'
 
 class ModelRole(str, Enum):
     main = 'main'
