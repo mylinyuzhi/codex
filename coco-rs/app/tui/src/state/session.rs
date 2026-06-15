@@ -184,6 +184,12 @@ pub struct SessionState {
     /// by the `auto_mode.disabled` settings opt-out — coco-rs has no
     /// GrowthBook circuit breaker / model allow-list). Static per session.
     pub auto_mode_available: bool,
+    /// Whether the `plan_mode` feature is enabled (default on). Gate flag
+    /// for [`PermissionMode::next_in_cycle`] and [`AppState::toggle_plan_mode`]:
+    /// when `false` the Shift+Tab cycle skips `Plan` and `Tab` is a no-op, so
+    /// an opted-out user can never reach plan mode. Seeded once at startup
+    /// from `RuntimeConfig.features`.
+    pub plan_mode_available: bool,
     /// Active tool executions.
     pub tool_executions: Vec<ToolExecution>,
     /// True when all currently running tools are cancel-interruptible.
@@ -532,6 +538,9 @@ impl Default for SessionState {
             permission_mode: PermissionMode::Default,
             bypass_permissions_available: false,
             auto_mode_available: false,
+            // Plan mode is default-on; the CLI overrides this from the
+            // resolved `plan_mode` feature gate at startup.
+            plan_mode_available: true,
             tool_executions: Vec::new(),
             has_submit_interruptible_tool_in_progress: false,
             tool_group_summaries: HashMap::new(),

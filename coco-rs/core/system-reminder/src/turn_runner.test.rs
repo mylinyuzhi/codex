@@ -27,6 +27,7 @@ fn minimal_input<'a>(
         plan_agent_count: 1,
         explore_plan_agents_available: false,
         is_plan_interview_phase: false,
+        plan_mode_feature_enabled: true,
         app_state,
         fallback_permission_mode: PermissionMode::Default,
         is_auto_classifier_active: false,

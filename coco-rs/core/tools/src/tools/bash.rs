@@ -338,6 +338,9 @@ impl Tool for BashTool {
     }
 
     /// Short per-call UI label: `description || 'Run shell command'`.
+    fn search_hint(&self) -> Option<&str> {
+        Some("execute shell commands")
+    }
     fn description(&self, input: &BashInput, _options: &DescriptionOptions) -> String {
         input
             .description

@@ -190,7 +190,7 @@ impl Tool for NotebookEditTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("edit a Jupyter notebook ipynb cell")
+        Some("edit Jupyter notebook cells (.ipynb)")
     }
 
     /// Reject non-`.ipynb` paths (errorCode 2 → redirect to FileEdit)

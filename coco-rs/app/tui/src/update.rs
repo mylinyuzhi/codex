@@ -141,6 +141,7 @@ pub async fn handle_command(
             // classifier-gated, not dangerous, so a per-switch confirmation
             // would just be noise.
             let next = state.session.permission_mode.next_in_cycle(
+                state.session.plan_mode_available,
                 state.session.bypass_permissions_available,
                 state.session.auto_mode_available,
             );

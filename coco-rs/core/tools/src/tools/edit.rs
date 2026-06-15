@@ -82,6 +82,9 @@ impl Tool for EditTool {
     }
 
     /// Short per-call UI label.
+    fn search_hint(&self) -> Option<&str> {
+        Some("modify file contents in place")
+    }
     fn description(&self, _input: &EditInput, _options: &DescriptionOptions) -> String {
         "A tool for editing files".into()
     }

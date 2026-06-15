@@ -245,7 +245,7 @@ impl Tool for PowerShellTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("run pwsh PowerShell commands on Windows")
+        Some("execute Windows PowerShell commands")
     }
 
     fn get_activity_description(&self, input: &PowerShellInput) -> Option<String> {

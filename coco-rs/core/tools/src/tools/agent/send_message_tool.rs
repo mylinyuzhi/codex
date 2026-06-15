@@ -178,7 +178,7 @@ impl Tool for SendMessageTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("send a message to a teammate agent or broadcast")
+        Some("send messages to agent teammates (swarm protocol)")
     }
 
     /// Render either the prebuilt `message` field (auto-resumed path)

@@ -87,6 +87,9 @@ impl Tool for SkillTool {
         ToolName::Skill.as_str()
     }
     /// Short UI label.
+    fn search_hint(&self) -> Option<&str> {
+        Some("invoke a slash-command skill")
+    }
     fn description(&self, input: &SkillInput, _options: &DescriptionOptions) -> String {
         format!("Execute skill: {}", input.skill)
     }

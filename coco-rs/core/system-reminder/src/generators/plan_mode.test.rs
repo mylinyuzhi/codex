@@ -185,6 +185,58 @@ async fn enter_phase4_variant_affects_full_five_phase_only() {
     );
 }
 
+#[tokio::test]
+async fn all_plan_generators_suppressed_when_feature_off() {
+    // `features.plan_mode = false` (→ plan_mode_feature_enabled=false) wins
+    // over every other firing condition for all three generators.
+    let c = cfg();
+
+    let enter = GeneratorContext::builder(&c)
+        .plan_mode_feature_enabled(false)
+        .is_plan_mode(true)
+        .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
+        .set_full_content(AttachmentType::PlanMode, true)
+        .build();
+    assert!(
+        PlanModeEnterGenerator
+            .generate(&enter)
+            .await
+            .unwrap()
+            .is_none(),
+        "enter must be suppressed when plan_mode feature is off"
+    );
+
+    let exit = GeneratorContext::builder(&c)
+        .plan_mode_feature_enabled(false)
+        .needs_plan_mode_exit_attachment(true)
+        .plan_exists(true)
+        .build();
+    assert!(
+        PlanModeExitGenerator
+            .generate(&exit)
+            .await
+            .unwrap()
+            .is_none(),
+        "exit must be suppressed when plan_mode feature is off"
+    );
+
+    let reentry = GeneratorContext::builder(&c)
+        .plan_mode_feature_enabled(false)
+        .is_plan_mode(true)
+        .is_plan_reentry(true)
+        .plan_exists(true)
+        .plan_file_path(Some(PathBuf::from("/tmp/plan.md")))
+        .build();
+    assert!(
+        PlanModeReentryGenerator
+            .generate(&reentry)
+            .await
+            .unwrap()
+            .is_none(),
+        "reentry must be suppressed when plan_mode feature is off"
+    );
+}
+
 // ── PlanModeExitGenerator ──
 
 #[tokio::test]

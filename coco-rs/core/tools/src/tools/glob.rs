@@ -105,6 +105,9 @@ impl Tool for GlobTool {
         ToolName::Glob.as_str()
     }
 
+    fn search_hint(&self) -> Option<&str> {
+        Some("find files by name pattern or wildcard")
+    }
     fn description(&self, _input: &GlobInput, _options: &DescriptionOptions) -> String {
         GLOB_DESCRIPTION.into()
     }

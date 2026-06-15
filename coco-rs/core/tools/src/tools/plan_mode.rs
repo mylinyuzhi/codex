@@ -247,11 +247,18 @@ impl Tool for EnterPlanModeTool {
     fn is_concurrency_safe(&self, _input: &EnterPlanModeInput) -> bool {
         true
     }
-    fn should_defer(&self) -> bool {
-        true
-    }
+    // Not deferred: `should_defer` stays the trait default `false` so the
+    // model can call `EnterPlanMode` directly, with no `ToolSearch` round-trip
+    // (same rationale as the Task/Todo tools). `search_hint` is kept anyway —
+    // it's inert while non-deferred, but ready if `should_defer` is flipped on.
     fn search_hint(&self) -> Option<&str> {
         Some("switch to plan mode to design an approach before coding")
+    }
+    /// Gated by the `plan_mode` feature (default on). When a user opts out
+    /// (`features.plan_mode = false`), the whole plan-mode subsystem is
+    /// hidden — the model never sees this tool.
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::PlanMode)
     }
 
     async fn execute(
@@ -567,11 +574,17 @@ impl Tool for ExitPlanModeTool {
     fn is_concurrency_safe(&self, _input: &ExitPlanModeInput) -> bool {
         true
     }
-    fn should_defer(&self) -> bool {
-        true
-    }
+    // Not deferred (trait default `false`) — kept loaded alongside
+    // `EnterPlanModeTool` so neither plan-mode tool needs a `ToolSearch` hop.
+    // `search_hint` kept but inert while non-deferred (ready if re-deferred).
     fn search_hint(&self) -> Option<&str> {
         Some("present plan for approval and start coding (plan mode only)")
+    }
+    /// Gated by the `plan_mode` feature (default on); hidden when the user
+    /// opts out via `features.plan_mode = false`. Paired with
+    /// `EnterPlanModeTool` so neither half of the subsystem leaks through.
+    fn is_enabled(&self, ctx: &ToolUseContext) -> bool {
+        ctx.features.enabled(coco_types::Feature::PlanMode)
     }
 
     /// Reject if not currently in plan mode.

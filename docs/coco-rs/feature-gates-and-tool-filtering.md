@@ -54,6 +54,9 @@ pub enum Feature {
     // 行为/安全 gate（Stable，default=false 安全保守）
     Sandbox,
 
+    // 核心子系统 opt-out gate（Stable，default=true，仅用于显式关闭）
+    PlanMode,
+
     // /experimental 菜单（UnderDevelopment，default=false）
     AutoMemory,
     Retrieval,
@@ -71,6 +74,7 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec { id: WebFetch,   key: "web_fetch",   stage: Stable,            default_enabled: true  },
     FeatureSpec { id: TaskV2,     key: "task_v2",     stage: Stable,            default_enabled: true  },
     FeatureSpec { id: Sandbox,    key: "sandbox",     stage: Stable,            default_enabled: false },
+    FeatureSpec { id: PlanMode,   key: "plan_mode",   stage: Stable,            default_enabled: true  },
     FeatureSpec { id: AutoMemory, key: "auto_memory", stage: UnderDevelopment,  default_enabled: false },
     FeatureSpec { id: Retrieval,  key: "retrieval",   stage: UnderDevelopment,  default_enabled: false },
     FeatureSpec { id: AgentTeams, key: "agent_teams", stage: UnderDevelopment,  default_enabled: false },
@@ -80,6 +84,14 @@ const FEATURES: &[FeatureSpec] = &[
 ```
 
 **`Feature::TaskV2` 特殊语义**：这是**互斥开关**，不是单纯 token-economy。开 → `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` 暴露给模型、`TodoWrite` 隐藏；关 → 反之。`TaskOutput` 与 `TaskStop` 操作的是后台任务命名空间（Bash `run_in_background`、agent spawn），与 V1/V2 plan-item 正交，永不被这个 gate 影响。对应 TS `isTodoV2Enabled()` (`utils/tasks.ts:133-139`)。
+
+**`Feature::PlanMode` 特殊语义**：**默认开**的 opt-out gate，专为"明确不需要 plan mode"的用户省 token（reminder + 工具 schema）。关 → 整个 plan-mode 子系统对该会话失效，四处协同执行：
+1. **工具**（Layer 1 `is_enabled`）：`EnterPlanMode` / `ExitPlanMode` 从模型工具集中隐藏。
+2. **Reminder**：三个 plan-mode 生成器（`plan_mode` / `plan_mode_exit` / `plan_mode_reentry`）短路返回 `None`（`GeneratorContext.plan_mode_feature_enabled` 由引擎从 `features` 写入）。即使 resume 的 transcript 仍带 `permission_mode == Plan` 也不再注入。
+3. **TUI 进入路径**：`PermissionMode::next_in_cycle` 新增 `plan_available` 形参——Shift+Tab 循环跳过 `Plan` 这一档，`Tab`（`toggle_plan_mode`）成为 no-op（已在 Plan 的会话仍可退出）。
+4. **`/plan` 命令**：`dispatch_plan` 直接提示"plan mode disabled"，不翻转模式。
+
+调用时 `coco_permissions` 的 `PermissionMode::Plan` 分支保留不动——它只在模式真的是 Plan 时生效，而上面四处保证默认会话进不去 Plan。`PlanModeConfig.workflow / phase4_variant / verify_execution` 仍是子系统内部细节，与本 gate 正交。
 
 ### 3.3 与原分散字段的对应
 
@@ -98,7 +110,6 @@ const FEATURES: &[FeatureSpec] = &[
 
 | 项 | 不归 Feature 的原因 |
 |----|--------------------|
-| `PlanMode` | 永远开；`PlanModeConfig.workflow / phase4_variant` 调细节；legacy `verify_execution` 默认关闭 |
 | `Hooks` | 配了 `hooks` 字段即启用 |
 | `Plugins` | `plugins/` 目录有 `PLUGIN.toml` 即加载 |
 | `Skills` | `skills/` 目录有 `.md` 即注册 |

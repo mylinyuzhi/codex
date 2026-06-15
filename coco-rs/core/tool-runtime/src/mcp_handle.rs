@@ -64,31 +64,53 @@ pub struct McpToolAnnotations {
     pub destructive_hint: bool,
     /// Tool accesses external resources (network, APIs). Default: false.
     pub open_world_hint: bool,
-    /// Server-side opt-out from `ToolSearch` deferral. When the MCP
-    /// server advertises `_meta["anthropic/alwaysLoad"] == true` on a
-    /// tool, this flag short-circuits the deferred-pool filter in
+    /// Server-side opt-out from `ToolSearch` deferral. When the MCP server
+    /// advertises `_meta["anthropic/alwaysLoad"] == true` (or the
+    /// provider-neutral `_meta["alwaysLoad"]`) on a tool, this flag
+    /// short-circuits the deferred-pool filter in
     /// [`crate::ToolRegistry::loaded_tools`], so the tool's full
     /// schema appears in turn-1 tool definitions.
     ///
     /// Default: false (every MCP tool is deferred unless the server opts out).
     pub always_load: bool,
+    /// Server-declared `ToolSearch` hint, lifted from the tool's `_meta`.
+    /// Curated capability phrase that boosts this (deferred) MCP tool in
+    /// `ToolSearch` ranking. `None` when the server advertises no hint.
+    pub search_hint: Option<String>,
 }
 
 impl McpToolAnnotations {
     /// Read the MCP server-declared `_meta` block off the tool's input
-    /// schema and lift the `anthropic/alwaysLoad` flag onto the typed
-    /// annotation struct. Other annotation fields stay at
+    /// schema and lift the `alwaysLoad` flag + the search hint onto the
+    /// typed annotation struct. Other annotation fields stay at
     /// [`Default::default()`] — they are wired by the discovery layer
     /// from the rmcp `annotations` object, not from `_meta`.
     ///
     pub fn from_input_schema_meta(input_schema: &Value) -> Self {
-        let always_load = input_schema
-            .get("_meta")
-            .and_then(|m| m.get("anthropic/alwaysLoad"))
+        let meta = input_schema.get("_meta");
+        // Both `_meta` flags accept the Anthropic-namespaced key first (compat
+        // with claude-code MCP servers), then a provider-neutral fallback so
+        // non-Anthropic servers can supply them too.
+        let always_load = meta
+            .and_then(|m| {
+                m.get("anthropic/alwaysLoad")
+                    .or_else(|| m.get("alwaysLoad"))
+            })
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        // `searchHint` is whitespace-normalized to a single-spaced phrase;
+        // empty strings collapse to `None`.
+        let search_hint = meta
+            .and_then(|m| {
+                m.get("anthropic/searchHint")
+                    .or_else(|| m.get("searchHint"))
+            })
+            .and_then(Value::as_str)
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|s| !s.is_empty());
         Self {
             always_load,
+            search_hint,
             ..Self::default()
         }
     }
@@ -228,3 +250,7 @@ impl McpHandle for NoOpMcpHandle {
         vec![]
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_handle.test.rs"]
+mod tests;

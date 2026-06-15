@@ -43,7 +43,9 @@ fn tool_result_text(message: &Message) -> &str {
 
 #[tokio::test]
 async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
-    let tools = registry_with(Arc::new(coco_tools::tools::ExitPlanModeTool));
+    // WebFetch is a genuinely deferred, default-enabled tool. (Plan-mode tools
+    // are no longer deferred, so they can't exercise the not-yet-loaded path.)
+    let tools = registry_with(Arc::new(coco_tools::tools::WebFetchTool));
     let ctx = ToolUseContext::test_default()
         .with_model_capabilities(
             /*supports_tool_reference*/ false, /*supports_client_side_tool_search*/ true,
@@ -52,7 +54,7 @@ async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
     let mut history = MessageHistory::new();
     let tc = ToolCallPart::new(
         "call-deferred",
-        "ExitPlanMode",
+        "WebFetch",
         json!({"summary": "wrong shape"}),
     );
 
@@ -74,7 +76,7 @@ async fn deferred_tool_call_before_tool_search_does_not_schema_validate() {
         text.contains("deferred tool that has not been loaded yet"),
         "{text}"
     );
-    assert!(text.contains("select:ExitPlanMode"));
+    assert!(text.contains("select:WebFetch"));
     assert!(!text.contains("InputValidationError"));
 }
 

@@ -697,7 +697,7 @@ impl Tool for WebFetchTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("fetch a URL and summarize the page contents")
+        Some("fetch and extract content from a URL")
     }
 
     /// Per-domain matcher so persisted `domain:<host>` rules apply to the
@@ -1628,7 +1628,7 @@ impl Tool for WebSearchTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("search the web for current information and sources")
+        Some("search the web for current information")
     }
 
     fn validate_input(

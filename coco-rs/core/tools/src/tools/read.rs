@@ -182,6 +182,9 @@ impl Tool for ReadTool {
         coco_tool_runtime::ResultSizeBound::Unbounded
     }
 
+    fn search_hint(&self) -> Option<&str> {
+        Some("read files, images, PDFs, notebooks")
+    }
     fn description(&self, _input: &ReadInput, _options: &DescriptionOptions) -> String {
         READ_TOOL_SHORT_DESCRIPTION.into()
     }

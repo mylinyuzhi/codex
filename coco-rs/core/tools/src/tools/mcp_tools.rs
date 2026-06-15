@@ -298,7 +298,7 @@ impl Tool for ListMcpResourcesTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("list resources available on connected MCP servers")
+        Some("list resources from connected MCP servers")
     }
 
     /// Unwraps the bare string for empty/error branches and JSON-stringifies
@@ -410,7 +410,7 @@ impl Tool for ReadMcpResourceTool {
         true
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("read a specific resource from an MCP server by URI")
+        Some("read a specific MCP resource by URI")
     }
 
     /// Unwraps the error-path bare string (which would otherwise be
@@ -590,11 +590,19 @@ impl Tool for McpTool {
     }
 
     /// Read from `McpToolAnnotations.always_load`, sourced from the server's
-    /// `_meta["anthropic/alwaysLoad"]` flag on the tool. When true,
-    /// `ToolRegistry::loaded_tools` ignores the `should_defer()` signal and
-    /// surfaces the tool's full schema on turn 1.
+    /// `_meta["anthropic/alwaysLoad"]` (or provider-neutral `_meta["alwaysLoad"]`)
+    /// flag on the tool. When true, `ToolRegistry::loaded_tools` ignores the
+    /// `should_defer()` signal and surfaces the tool's full schema on turn 1.
     fn always_load(&self) -> bool {
         self.annotations.always_load
+    }
+
+    /// Server-declared search hint, lifted from the tool's
+    /// `_meta["anthropic/searchHint"]` (or the provider-neutral
+    /// `_meta["searchHint"]`) by [`McpToolAnnotations::from_input_schema_meta`].
+    /// Feeds `ToolSearch` ranking for this deferred MCP tool.
+    fn search_hint(&self) -> Option<&str> {
+        self.annotations.search_hint.as_deref()
     }
 
     fn is_concurrency_safe(&self, _: &Value) -> bool {

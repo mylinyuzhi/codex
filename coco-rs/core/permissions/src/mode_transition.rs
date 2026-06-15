@@ -13,15 +13,20 @@ use crate::dangerous_rules::strip_dangerous_rules;
 /// Determine the next permission mode when cycling (Shift+Tab).
 ///
 /// Thin wrapper around [`PermissionMode::next_in_cycle`] that reads the
-/// gate flags off the [`ToolPermissionContext`]. Kept for call sites
-/// that already hold a full context.
+/// bypass gate flag off the [`ToolPermissionContext`]. Kept for call sites
+/// that already hold a full context. Plan/auto availability are passed in
+/// because they are session-level capabilities (`plan_mode` feature gate /
+/// classifier availability), not permission-context fields.
 pub fn get_next_permission_mode(
     context: &ToolPermissionContext,
+    is_plan_available: bool,
     is_auto_available: bool,
 ) -> PermissionMode {
-    context
-        .mode
-        .next_in_cycle(context.bypass_available, is_auto_available)
+    context.mode.next_in_cycle(
+        is_plan_available,
+        context.bypass_available,
+        is_auto_available,
+    )
 }
 
 /// Resolve the initial permission mode from CLI flags and settings.

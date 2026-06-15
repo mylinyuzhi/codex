@@ -1312,7 +1312,7 @@ impl Tool for TaskStopTool {
         false
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("stop a running background task or shell")
+        Some("kill a running background task")
     }
 
     // The entire `{message, task_id, task_type}` envelope is emitted as
@@ -1482,6 +1482,9 @@ impl Tool for TaskOutputTool {
     }
     fn name(&self) -> &str {
         ToolName::TaskOutput.as_str()
+    }
+    fn search_hint(&self) -> Option<&str> {
+        Some("read output/logs from a background task")
     }
     fn description(&self, _input: &TaskOutputInput, _options: &DescriptionOptions) -> String {
         "[Deprecated] — prefer Read on the task output file path".into()
@@ -1891,7 +1894,7 @@ impl Tool for TodoWriteTool {
         false
     }
     fn search_hint(&self) -> Option<&str> {
-        Some("write the per-agent todo checklist for tracking work")
+        Some("manage the session task checklist")
     }
 
     /// The model only needs the success message + optional verification

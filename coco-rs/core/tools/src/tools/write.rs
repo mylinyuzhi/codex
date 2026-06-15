@@ -81,6 +81,9 @@ impl Tool for WriteTool {
     }
 
     /// Short per-call UI label: `'Write a file to the local filesystem.'`.
+    fn search_hint(&self) -> Option<&str> {
+        Some("create or overwrite files")
+    }
     fn description(&self, _input: &WriteInput, _options: &DescriptionOptions) -> String {
         "Write a file to the local filesystem.".into()
     }

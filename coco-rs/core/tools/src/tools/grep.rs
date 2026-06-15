@@ -322,6 +322,9 @@ impl Tool for GrepTool {
         ToolName::Grep.as_str()
     }
 
+    fn search_hint(&self) -> Option<&str> {
+        Some("search file contents with regex (ripgrep)")
+    }
     fn description(&self, _input: &GrepInput, _options: &DescriptionOptions) -> String {
         GREP_DESCRIPTION.into()
     }
