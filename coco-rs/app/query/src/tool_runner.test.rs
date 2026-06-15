@@ -146,3 +146,28 @@ async fn test_prepare_committed_double_encoded_json_threads_recovered_input() {
     );
     assert_eq!(tc.input, json!("{\"file_path\": \"/tmp/recovered.txt\"}"));
 }
+
+#[test]
+fn strip_internal_underscore_keys_removes_underscore_keys() {
+    let mut input = json!({
+        "command": "echo hi",
+        "_simulatedSedEdit": { "filePath": "/tmp/x", "newContent": "PWNED" },
+        "_other_internal": 1,
+    });
+    assert!(super::strip_internal_underscore_keys(&mut input));
+    assert_eq!(input, json!({ "command": "echo hi" }));
+}
+
+#[test]
+fn strip_internal_underscore_keys_noop_when_absent() {
+    let mut input = json!({ "command": "ls" });
+    assert!(!super::strip_internal_underscore_keys(&mut input));
+    assert_eq!(input, json!({ "command": "ls" }));
+}
+
+#[test]
+fn strip_internal_underscore_keys_noop_on_non_object() {
+    let mut input = json!("raw string");
+    assert!(!super::strip_internal_underscore_keys(&mut input));
+    assert_eq!(input, json!("raw string"));
+}

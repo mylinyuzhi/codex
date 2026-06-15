@@ -9,6 +9,8 @@ use coco_tool_runtime::ToolRegistry;
 use coco_tool_runtime::ToolUseContext;
 use coco_types::CoreEvent;
 use coco_types::ToolId;
+use coco_types::ToolName;
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -141,7 +143,7 @@ pub(crate) async fn prepare_committed_tool_call(
     let mut validated = tool_call.clone();
     let validated_input =
         crate::tool_input_validate::validate_tool_call(&mut validated, Some(&tool));
-    let Some(validated_input) = validated_input else {
+    let Some(mut validated_input) = validated_input else {
         let message = match validated.invalid_reason {
             Some(coco_llm_types::ToolInputInvalidReason::SchemaViolation { message }) => {
                 format!("<tool_use_error>InputValidationError: {message}</tool_use_error>")
@@ -171,6 +173,25 @@ pub(crate) async fn prepare_committed_tool_call(
         .await;
         return None;
     };
+
+    // Defense-in-depth: drop model-injected internal `_`-prefixed fields
+    // (e.g. Bash `_simulatedSedEdit`) from the COERCED input. They are
+    // reserved for trusted UI dialogs and hidden from the model-facing
+    // spec, but the runtime schema accepts them — so without this a model
+    // could smuggle one (including via raw-string `arguments` that decode
+    // into an object here) to BashTool's internal short-circuit: an
+    // arbitrary Edit-style write. Stripping post-coercion covers both
+    // object and string-encoded arguments. Re-validation cannot fail —
+    // removing an optional field keeps the input schema-valid.
+    if tool_call.tool_name == ToolName::Bash.as_str() {
+        let mut value = validated_input.as_value().clone();
+        if strip_internal_underscore_keys(&mut value)
+            && let Ok(revalidated) =
+                coco_tool_runtime::ValidatedInput::validate(tool.as_ref(), value)
+        {
+            validated_input = revalidated;
+        }
+    }
 
     // Validate the coerced input, not the raw `tool_call.input` — feeding
     // a freeform tool's raw string to the serde-backed `validate_input`
@@ -209,6 +230,22 @@ pub(crate) async fn prepare_committed_tool_call(
         tool,
         input: validated_input,
     })
+}
+
+/// Remove every `_`-prefixed key from a tool-input object, returning whether
+/// any key was removed. A defense-in-depth strip for internal fields (e.g.
+/// Bash `_simulatedSedEdit`) that trusted UI dialogs populate but the model
+/// must never supply. No-op (returns `false`) on non-object inputs.
+fn strip_internal_underscore_keys(input: &mut Value) -> bool {
+    let Some(obj) = input.as_object_mut() else {
+        return false;
+    };
+    let internal_keys: Vec<String> = obj.keys().filter(|k| k.starts_with('_')).cloned().collect();
+    let removed = !internal_keys.is_empty();
+    for key in internal_keys {
+        obj.remove(&key);
+    }
+    removed
 }
 
 #[cfg(test)]
