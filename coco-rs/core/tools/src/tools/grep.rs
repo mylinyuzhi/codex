@@ -15,7 +15,7 @@
 //!
 //! # Execution pipeline
 //!
-//! The `StreamingToolExecutor` batches safe, read-only tools into a
+//! The `ToolExecutor` batches safe, read-only tools into a
 //! `ConcurrentSafe` batch and dispatches each via `tokio::spawn`. Inside this
 //! tool, the CPU-bound walk + regex search runs inside
 //! [`tokio::task::spawn_blocking`] so the async executor thread is not blocked.
@@ -341,7 +341,7 @@ impl Tool for GrepTool {
     }
 
     /// Safe to run in parallel with other concurrency-safe tools. The
-    /// `StreamingToolExecutor` batches consecutive safe tools and dispatches
+    /// `ToolExecutor` batches consecutive safe tools and dispatches
     /// them via `tokio::spawn` up to `COCO_MAX_TOOL_USE_CONCURRENCY`
     /// (default 10).
     fn is_concurrency_safe(&self, _input: &GrepInput) -> bool {

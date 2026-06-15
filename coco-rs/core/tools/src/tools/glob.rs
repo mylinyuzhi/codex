@@ -5,7 +5,7 @@
 //!
 //! - `is_read_only(_) = true` — no filesystem modifications.
 //! - `is_concurrency_safe(_) = true` — no shared mutable state; two calls
-//!   may execute in parallel via the `StreamingToolExecutor`.
+//!   may execute in parallel via the `ToolExecutor`.
 //! - `is_destructive` / `interrupt_behavior` / `requires_user_interaction`
 //!   all use the trait defaults, which also does not
 //!   override these.
@@ -124,7 +124,7 @@ impl Tool for GlobTool {
     }
 
     /// Safe to run in parallel with other concurrency-safe tools. Batches
-    /// with Grep/Read/etc. via the `StreamingToolExecutor`.
+    /// with Grep/Read/etc. via the `ToolExecutor`.
     fn is_concurrency_safe(&self, _input: &GlobInput) -> bool {
         true
     }

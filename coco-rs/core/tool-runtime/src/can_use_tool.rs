@@ -9,10 +9,9 @@
 //! `file_path` to overlay_path" semantics or auto-mem's "Edit only
 //! when path is under `memory_dir`".
 //!
-//! The handle is invoked by the app/query tool-call preparer before
-//! the static permission evaluator consults `tool.check_permissions`.
-//! The legacy [`crate::execution::execute_tool_call`] helper also
-//! honors the same step for direct callers. Decision variants:
+//! The handle is invoked by the app/query tool-call preparer
+//! (`resolve_can_use_tool_decision`) before the static permission
+//! evaluator consults `tool.check_permissions`. Decision variants:
 //!
 //! - [`CanUseToolDecision::Deny`] short-circuits with the message
 //!   surfaced as the `tool_result` content.

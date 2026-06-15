@@ -1,11 +1,11 @@
 # coco-tool-runtime
 
-Tool trait, streaming executor, tool registry, callback handles. Defines the interface; `coco-tools` provides implementations.
+Tool trait, concurrent executor, tool registry, callback handles. Defines the interface; `coco-tools` provides implementations.
 
 ## Key Types
 
 - **Trait + context**: `Tool`, `ToolUseContext`, `DescriptionOptions`, `InterruptBehavior`, `ProgressSender`/`ProgressReceiver`/`ToolProgress`, `PromptOptions`, `SearchReadInfo`, `McpToolInfo`
-- **Executor**: `StreamingToolExecutor`, `ToolBatch`, `BatchResult`, `PendingToolCall`, `ToolCallResult`, `ToolStatus`, `StreamingToolUpdate`
+- **Executor**: `ToolExecutor` (batch via `execute_with`) + `StreamingHandle` (streaming via `feed_plan`/`commit_flush`), `PendingToolCall`. Plan/outcome DTOs (`call_plan`): `ToolCallPlan`, `PreparedToolCall`, `RunOneRuntime`, `UnstampedToolCallOutcome`/`ToolCallOutcome`, `ToolSideEffects`, `ToolMessagePath`, `ToolCallErrorKind`.
 - **Registry**: `ToolRegistry`
 - **Errors**: `ToolError`, `SyntheticToolError`, `ToolUseEvent`, `classify_tool_error`, `format_tool_error`
 - **Validation**: `ValidationResult`, `ValidatedInput` — proof-carrying input newtype; the only constructor (`ValidatedInput::validate`) fuses freeform coercion (`coerce_raw_string_input`) + runtime schema validation. `PendingToolCall.input` and `call_plan::PreparedToolCall.parsed_input` require it, so a freeform tool's raw-string wire input (apply_patch) can never reach permission checks or `serde_json::from_value::<T::Input>` uncoerced. History/wire carriers (`ToolCallPart.input`) intentionally keep the raw shape for provider round-trips.
@@ -28,7 +28,7 @@ Tool trait, streaming executor, tool registry, callback handles. Defines the int
 
 ## Architecture
 
-- **Safe tools** (read-only, idempotent) execute concurrently; **unsafe tools** queue and execute after streaming stop. `StreamingToolExecutor` orchestrates this.
+- **Safe tools** (read-only, idempotent) execute concurrently; **unsafe tools** queue and execute after streaming stop. `ToolExecutor` orchestrates this.
 - All cross-subsystem interaction (tasks, agents, hooks, MCP, mailbox) goes through callback handle traits — `coco-tool-runtime` does NOT depend on `coco-tools`, `coco-tasks`, `coco-commands`, etc. Implementations are injected via `ToolUseContext` at runtime.
 - `ToolUseContext` is the typed payload carried across tool invocations (see main CLAUDE.md "Typed Structs over JSON Values" for the `ToolAppState` migration story).
 

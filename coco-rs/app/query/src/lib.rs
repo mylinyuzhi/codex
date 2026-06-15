@@ -5,7 +5,7 @@
 //! 2. Normalize messages for API
 //! 3. Call LLM via inference
 //! 4. Parse response, extract tool calls
-//! 5. Execute tools (via StreamingToolExecutor batch partitioning)
+//! 5. Execute tools (via ToolExecutor batch partitioning)
 //! 6. Check stop conditions (no tool calls, max turns, budget)
 //! 7. Auto-compact if needed
 //! 8. Drain command queue + inject attachments

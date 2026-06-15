@@ -6,7 +6,7 @@
 //!
 //! Engine wiring: `BashTool::execute` returns `Ok(ToolResult)` with the
 //! stderr/exit-code embedded — `is_error=false` because the *tool*
-//! didn't fail (the process did). `StreamingToolExecutor` feeds the
+//! didn't fail (the process did). `ToolExecutor` feeds the
 //! result back into the conversation; the next iteration runs normally.
 //!
 //! TS parity: tool errors don't terminate the loop in TS either —

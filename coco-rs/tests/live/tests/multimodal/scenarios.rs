@@ -10,7 +10,7 @@
 //!     ↓
 //!  Turn 1: model emits Read tool_call
 //!     ↓
-//!  StreamingToolExecutor → coco_tools::ReadTool::execute (real disk read)
+//!  ToolExecutor → coco_tools::ReadTool::execute (real disk read)
 //!     ↓
 //!  Tool::render_for_model — projects data into Vec<ToolResultContentPart>
 //!     ↓

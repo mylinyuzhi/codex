@@ -21,7 +21,7 @@ use crate::call_plan::PreparedToolCall;
 use crate::call_plan::ToolCallPlan;
 use crate::call_plan::ToolSideEffects;
 use crate::call_plan::UnstampedToolCallOutcome;
-use crate::executor::StreamingToolExecutor;
+use crate::executor::ToolExecutor;
 use crate::traits::DescriptionOptions;
 
 /// A tool whose `is_concurrency_safe` flag is configurable, and whose
@@ -131,7 +131,7 @@ async fn stub_run_one(
 
 #[tokio::test]
 async fn test_safe_plan_starts_mid_stream() {
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -165,7 +165,7 @@ async fn test_safe_plan_starts_mid_stream() {
 
 #[tokio::test]
 async fn test_unsafe_plan_holds_until_commit_flush() {
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -199,7 +199,7 @@ async fn test_unsafe_feed_poisons_subsequent_safe_starts() {
     // Rule: once any unsafe plan is fed, every subsequent safe feed
     // also waits. This preserves "no safe/unsafe interleave
     // mid-stream" without requiring tool-level interlock.
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -250,7 +250,7 @@ async fn test_unsafe_feed_poisons_subsequent_safe_starts() {
 
 #[tokio::test]
 async fn test_early_outcome_surfaces_first_on_flush() {
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -288,7 +288,7 @@ async fn test_early_outcome_surfaces_first_on_flush() {
 
 #[tokio::test]
 async fn test_discard_converts_pending_to_streaming_discarded() {
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -315,7 +315,7 @@ async fn test_discard_converts_pending_to_streaming_discarded() {
 
 #[tokio::test]
 async fn test_terminal_drain_commits_ready_safe_and_skips_pending_serial() {
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -350,7 +350,7 @@ async fn test_terminal_drain_commits_ready_safe_and_skips_pending_serial() {
 
 #[tokio::test]
 async fn test_terminal_drain_aborts_unfinished_safe_tool() {
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -376,7 +376,7 @@ async fn test_terminal_drain_aborts_unfinished_safe_tool() {
 
 #[tokio::test]
 async fn test_commit_flush_stamps_monotonic_completion_seq() {
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let started = Arc::new(AtomicI32::new(0));
     let mut handle = executor.streaming_handle(stub_run_one);
 
@@ -414,7 +414,7 @@ async fn test_commit_flush_stamps_monotonic_completion_seq() {
 async fn test_streaming_shell_failure_aborts_concurrent_sibling() {
     use std::sync::Mutex;
 
-    let executor = Arc::new(StreamingToolExecutor::new());
+    let executor = Arc::new(ToolExecutor::new());
     let observed = Arc::new(Mutex::new(None));
     let observed_for_run = observed.clone();
 

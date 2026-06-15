@@ -1,21 +1,19 @@
-//! Streaming tool executor — real-time concurrent tool execution.
+//! Concurrent tool executor.
 //!
-//!
-//! Tools execute DURING API streaming, not after. As the API streams
-//! tool_use blocks, `add_tool()` queues them immediately. Safe tools
-//! start executing while the API is still streaming. Results and
-//! progress messages are yielded in real-time.
+//! Drives a validated plan list via [`ToolExecutor::execute_with`]
+//! (batch) or [`StreamingHandle`](crate::executor_streaming) (streaming):
+//! concurrency-safe tools run in parallel under a semaphore, unsafe tools
+//! run serially, outcomes surface in completion order (I12), and
+//! `app_state` patches apply in model-index order under one write lock.
 
 use coco_config::EnvKey;
 use coco_config::env;
-use coco_messages::ToolResult;
 use coco_types::ToolAbortReasonPayload;
 use coco_types::ToolId;
 use coco_types::ToolName;
 use coco_types::TuiOnlyEvent;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
@@ -32,48 +30,12 @@ use crate::cancellation::ToolAbortController;
 use crate::cancellation::ToolAbortSignal;
 use crate::cancellation::TurnAbortController;
 use crate::cancellation::TurnAbortSignal;
-use crate::context::ToolUseContext;
-use crate::error::SyntheticToolError;
-use crate::error::ToolError;
 use crate::traits::DynTool;
 use crate::traits::InterruptBehavior;
-use crate::traits::ToolProgress;
 use crate::validated_input::ValidatedInput;
 
 /// Default maximum concurrent tool executions.
 const DEFAULT_MAX_CONCURRENCY: usize = 10;
-
-/// Status of a tracked tool in the streaming executor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolStatus {
-    /// Waiting to be executed.
-    Queued,
-    /// Currently executing.
-    Executing,
-    /// Execution completed (result ready).
-    Completed,
-    /// Result has been yielded to the caller.
-    Yielded,
-}
-
-/// An update from the streaming executor.
-#[derive(Debug)]
-pub enum StreamingToolUpdate {
-    /// A tool progress message (yielded immediately).
-    Progress(ToolProgress),
-    /// A completed tool result.
-    Result(ToolCallResult),
-}
-
-/// A batch of tool calls to execute.
-/// Either a single unsafe (non-concurrent) tool, or multiple concurrent-safe tools.
-#[derive(Debug)]
-pub enum ToolBatch {
-    /// Single non-concurrent tool -- runs exclusively.
-    SingleUnsafe(PendingToolCall),
-    /// Multiple concurrent-safe tools -- run in parallel.
-    ConcurrentSafe(Vec<PendingToolCall>),
-}
 
 /// A pending tool call waiting for execution.
 ///
@@ -97,67 +59,18 @@ impl std::fmt::Debug for PendingToolCall {
     }
 }
 
-/// Result of executing a batch of tool calls.
-#[derive(Debug)]
-pub struct BatchResult {
-    pub results: Vec<ToolCallResult>,
-}
-
-/// Result of a single tool call.
-pub struct ToolCallResult {
-    pub tool_use_id: String,
-    pub tool_id: ToolId,
-    pub result: Result<ToolResult<Value>, ToolError>,
-    pub duration_ms: i64,
-}
-
-impl std::fmt::Debug for ToolCallResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ToolCallResult")
-            .field("tool_use_id", &self.tool_use_id)
-            .field("tool_id", &self.tool_id)
-            .field("is_ok", &self.result.is_ok())
-            .field("duration_ms", &self.duration_ms)
-            .finish()
-    }
-}
-
-/// Internal tracking for a tool in the streaming executor.
-#[allow(dead_code)]
-struct TrackedTool {
-    tool_use_id: String,
-    tool: Arc<dyn DynTool>,
-    input: Value,
-    status: ToolStatus,
-    is_concurrency_safe: bool,
-}
-
-/// Streaming tool executor.
+/// Concurrent tool executor — schedules already-prepared plans.
 ///
-/// Tools are added via `add_tool()` as the API streams tool_use blocks.
-/// Safe tools start executing immediately while the API is still streaming.
-/// Results are yielded in tool-received order for determinism.
-///
-/// Progress messages are forwarded immediately from the tool's progress_tx
-/// channel to the update_tx output channel.
-///
-/// Sibling abort: When a tool fails in a concurrent batch, its siblings
-/// are cancelled via a shared abort controller.
-///
-/// Streaming fallback: `discard()` generates SyntheticToolError::StreamingFallback
-/// for all unfinished tools when the stream fails and retries non-streaming.
-pub struct StreamingToolExecutor {
+/// `execute_with` (batch) and `StreamingHandle` (streaming) both drive
+/// this struct: concurrency-safe tools run in parallel under
+/// `max_concurrency`, unsafe tools run serially, and a failing shell
+/// tool aborts its concurrent siblings via `sibling_abort`.
+pub struct ToolExecutor {
     max_concurrency: usize,
-    tracked: Vec<TrackedTool>,
-    discarded: bool,
     /// Current turn abort signal for scheduler-based execution.
     turn_abort: TurnAbortSignal,
     /// Structured sibling-abort controller.
     sibling_abort: ToolAbortController,
-    /// Output channel for streaming updates (results + progress).
-    update_tx: mpsc::UnboundedSender<StreamingToolUpdate>,
-    /// Receive end of the update channel.
-    update_rx: mpsc::UnboundedReceiver<StreamingToolUpdate>,
     /// Shared app_state write handle — the executor owns the **only
     /// write-capable reference** visible from the tool pipeline.
     /// Tools see `ctx.app_state` as an `AppStateReadHandle` (no
@@ -187,19 +100,14 @@ fn resolve_max_concurrency(raw: Option<String>) -> usize {
         .unwrap_or(DEFAULT_MAX_CONCURRENCY)
 }
 
-impl StreamingToolExecutor {
+impl ToolExecutor {
     pub fn new() -> Self {
         let max_concurrency =
             resolve_max_concurrency(env::env_opt(EnvKey::CocoMaxToolUseConcurrency));
-        let (update_tx, update_rx) = mpsc::unbounded_channel();
         Self {
             max_concurrency,
-            tracked: Vec::new(),
-            discarded: false,
             turn_abort: TurnAbortController::new().signal(),
             sibling_abort: ToolAbortController::new(),
-            update_tx,
-            update_rx,
             app_state: None,
             permission_rule_handle: None,
             event_tx: None,
@@ -239,535 +147,17 @@ impl StreamingToolExecutor {
         self
     }
 
-    pub fn with_max_concurrency(max_concurrency: usize) -> Self {
-        let (update_tx, update_rx) = mpsc::unbounded_channel();
-        Self {
-            max_concurrency,
-            tracked: Vec::new(),
-            discarded: false,
-            turn_abort: TurnAbortController::new().signal(),
-            sibling_abort: ToolAbortController::new(),
-            update_tx,
-            update_rx,
-            app_state: None,
-            permission_rule_handle: None,
-            event_tx: None,
-        }
-    }
-
-    /// Queue a tool for execution. Called as API streams tool_use blocks.
-    /// Safe tools start immediately if only safe tools are currently running.
-    pub fn add_tool(&mut self, tool_use_id: String, tool: Arc<dyn DynTool>, input: Value) {
-        let is_concurrency_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tool.is_concurrency_safe(&input)
-        }))
-        .unwrap_or(false);
-
-        self.tracked.push(TrackedTool {
-            tool_use_id,
-            tool,
-            input,
-            status: ToolStatus::Queued,
-            is_concurrency_safe,
-        });
-    }
-
-    /// Whether a tool with the given safety level can start now.
-    ///
-    /// - Concurrent-safe: can run if no non-safe tools are executing
-    /// - Non-safe: can run only if nothing is executing
-    #[allow(dead_code)]
-    fn can_execute(&self, is_concurrency_safe: bool) -> bool {
-        let has_executing = self
-            .tracked
-            .iter()
-            .any(|t| t.status == ToolStatus::Executing);
-        let has_unsafe_executing = self
-            .tracked
-            .iter()
-            .any(|t| t.status == ToolStatus::Executing && !t.is_concurrency_safe);
-
-        if is_concurrency_safe {
-            !has_unsafe_executing
-        } else {
-            !has_executing
-        }
-    }
-
-    /// Whether there are still tools executing or queued.
-    pub fn has_pending(&self) -> bool {
-        self.tracked
-            .iter()
-            .any(|t| t.status == ToolStatus::Queued || t.status == ToolStatus::Executing)
-    }
-
-    /// Whether all tools have been yielded.
-    pub fn is_complete(&self) -> bool {
-        self.tracked.iter().all(|t| t.status == ToolStatus::Yielded)
-    }
-
-    /// Drain completed results (non-blocking).
-    ///
-    /// Returns all updates (progress + results) that are ready now.
-    pub fn drain_completed(&mut self) -> Vec<StreamingToolUpdate> {
-        let mut updates = Vec::new();
-        while let Ok(update) = self.update_rx.try_recv() {
-            updates.push(update);
-        }
-        updates
-    }
-
-    /// Wait for the next update (progress or result).
-    pub async fn next_update(&mut self) -> Option<StreamingToolUpdate> {
-        self.update_rx.recv().await
-    }
-
-    /// Abandon all pending tools, generating synthetic errors.
-    /// Called on streaming fallback when stream fails and the engine
-    /// retries without streaming.
-    pub fn discard(&mut self) {
-        self.discarded = true;
-        self.sibling_abort.abort(ToolAbortReasonPayload::SelfAbort {
-            message: SyntheticToolError::StreamingFallback.to_string(),
-        });
-
-        for tracked in &mut self.tracked {
-            if tracked.status == ToolStatus::Queued || tracked.status == ToolStatus::Executing {
-                let _ = self
-                    .update_tx
-                    .send(StreamingToolUpdate::Result(ToolCallResult {
-                        tool_use_id: tracked.tool_use_id.clone(),
-                        tool_id: tracked.tool.id(),
-                        result: Err(ToolError::ExecutionFailed {
-                            message: SyntheticToolError::StreamingFallback.to_string(),
-                            display_data: None,
-                            source: None,
-                        }),
-                        duration_ms: 0,
-                    }));
-                tracked.status = ToolStatus::Completed;
-            }
-        }
-    }
-
-    // -- Batch API (backward-compatible) --
-
-    /// Partition tool calls into execution batches.
-    ///
-    /// Rules:
-    /// - Consecutive concurrent-safe tools -> one ConcurrentSafe batch
-    /// - Each non-concurrent tool -> its own SingleUnsafe batch
-    /// - If is_concurrency_safe() panics, treat as unsafe (conservative)
-    pub fn partition(&self, tool_calls: Vec<PendingToolCall>) -> Vec<ToolBatch> {
-        let mut batches: Vec<ToolBatch> = Vec::new();
-        let mut safe_accumulator: Vec<PendingToolCall> = Vec::new();
-
-        for call in tool_calls {
-            let is_safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                call.tool.is_concurrency_safe(call.input.as_value())
-            }))
-            .unwrap_or(false);
-
-            if is_safe {
-                safe_accumulator.push(call);
-            } else {
-                // Flush any accumulated safe tools first
-                if !safe_accumulator.is_empty() {
-                    batches.push(ToolBatch::ConcurrentSafe(std::mem::take(
-                        &mut safe_accumulator,
-                    )));
-                }
-                batches.push(ToolBatch::SingleUnsafe(call));
-            }
-        }
-
-        // Flush remaining safe tools
-        if !safe_accumulator.is_empty() {
-            batches.push(ToolBatch::ConcurrentSafe(safe_accumulator));
-        }
-
-        batches
-    }
-
-    /// Execute a batch of tool calls.
-    pub async fn execute_batch(&self, batch: ToolBatch, ctx: &ToolUseContext) -> BatchResult {
-        match batch {
-            ToolBatch::SingleUnsafe(call) => {
-                let result = self.execute_single(call, ctx).await;
-                BatchResult {
-                    results: vec![result],
-                }
-            }
-            ToolBatch::ConcurrentSafe(calls) => {
-                let results = self.execute_concurrent(calls, ctx).await;
-                BatchResult { results }
-            }
-        }
-    }
-
-    /// Execute all batches in sequence, yielding results.
-    pub async fn execute_all(
-        &self,
-        tool_calls: Vec<PendingToolCall>,
-        ctx: &ToolUseContext,
-    ) -> Vec<ToolCallResult> {
-        let batches = self.partition(tool_calls);
-        let mut all_results = Vec::new();
-
-        for batch in batches {
-            if ctx.abort.is_aborted() {
-                break;
-            }
-            let batch_result = self.execute_batch(batch, ctx).await;
-            all_results.extend(batch_result.results);
-        }
-
-        all_results
-    }
-
-    /// Execute a single tool call and apply any resulting app-state patch.
-    ///
-    /// Hook and permission lifecycle decisions are owned by the query layer.
-    /// The executor only schedules and runs already-approved calls.
-    async fn execute_single(&self, call: PendingToolCall, ctx: &ToolUseContext) -> ToolCallResult {
-        let tool_id = call.tool.id();
-        let tool_use_id = call.tool_use_id.clone();
-        let tool_name = call.tool.name().to_string();
-        let start = std::time::Instant::now();
-        let input = call.input.into_value();
-
-        tracing::info!(
-            tool_use_id = %tool_use_id,
-            tool_name = %tool_name,
-            batch_type = "single_unsafe",
-            "tool batch execute (serial)"
-        );
-
-        // Track in-progress
-        {
-            let mut ids = ctx.in_progress_tool_use_ids.write().await;
-            ids.insert(tool_use_id.clone());
-        }
-
-        let call_ctx = ctx.clone_for_tool_call(tool_use_id.clone());
-        let result = tokio::select! {
-            r = call.tool.execute(input, &call_ctx) => r,
-            () = call_ctx.abort.cancelled() => Err(ToolError::Cancelled),
-        };
-
-        // Remove from in-progress
-        {
-            let mut ids = ctx.in_progress_tool_use_ids.write().await;
-            ids.remove(&tool_use_id);
-        }
-
-        // Apply queued app_state patch (if any) under a write lock
-        // before returning. This is the serial-tool equivalent of the
-        // "`currentContext = update.newContext(currentContext)`"
-        // reassign-between-tools pattern — because serial unsafe
-        // tools run one-per-batch, we can apply immediately and the
-        // next batch's `create_tool_context` sees the update.
-        // Patches also get stripped from the ToolCallResult so the
-        // engine's downstream code (which flows the result across
-        // `.await` points) doesn't need `Sync` on `AppStatePatch`.
-        let result = match result {
-            Ok(mut tr) => {
-                if let Some(patch) = tr.app_state_patch.take()
-                    && let Some(state) = self.app_state.as_ref()
-                {
-                    let snapshot = {
-                        let mut guard = state.write().await;
-                        patch(&mut guard);
-                        coco_types::TaskPanelChangedParams {
-                            plan_tasks: guard.plan_tasks.clone(),
-                            todos_by_agent: guard.todos_by_agent.clone(),
-                            expanded_view: guard.expanded_view,
-                            verification_nudge_pending: guard.verification_nudge_pending,
-                        }
-                    };
-                    if let Some(tx) = self.event_tx.as_ref() {
-                        let _ = tx
-                            .send(coco_types::CoreEvent::Protocol(
-                                coco_types::ServerNotification::TaskPanelChanged(snapshot),
-                            ))
-                            .await;
-                    }
-                }
-                // Apply permission-rule deltas through the installed
-                // handle (typically the CLI's `SessionRuntime` adapter
-                // that folds rules into `QueryEngineConfig`). Skipped
-                // silently when no handle is wired — `tracing::debug!`
-                // logs a non-empty drop so a regression leaves a trail.
-                if !tr.permission_updates.is_empty()
-                    && let Some(handle) = self.permission_rule_handle.as_ref()
-                {
-                    let updates = std::mem::take(&mut tr.permission_updates);
-                    handle.apply_updates(updates).await;
-                }
-                Ok(tr)
-            }
-            Err(e) => Err(e),
-        };
-
-        let duration_ms = start.elapsed().as_millis() as i64;
-
-        match &result {
-            Ok(_) => tracing::info!(
-                tool_use_id = %tool_use_id,
-                tool_name = %tool_name,
-                duration_ms,
-                "tool batch ok (serial)"
-            ),
-            Err(e) => tracing::warn!(
-                tool_use_id = %tool_use_id,
-                tool_name = %tool_name,
-                duration_ms,
-                error = %e,
-                "tool batch failed (serial)"
-            ),
-        }
-
-        ToolCallResult {
-            tool_use_id,
-            tool_id,
-            result,
-            duration_ms,
-        }
-    }
-
-    /// Execute multiple concurrent-safe tool calls in parallel.
-    ///
-    /// Uses sibling abort: if any tool fails, siblings are cancelled.
-    /// Results are collected in submission order (not completion order).
-    ///
-    /// **app_state invariant**: tools that return
-    /// `is_concurrency_safe == true` MUST NOT write `ctx.app_state`
-    /// during `execute` — see the `Tool::is_concurrency_safe`
-    /// contract. `shared_ctx` is an `Arc<ToolUseContext>` holding the
-    /// SAME `Arc<RwLock<ToolAppState>>` as every sibling, so any write
-    /// would be visible mid-batch to the others. Rust relies on convention: concurrent
-    /// tools are read-only (Read/Glob/Grep/LSP). Serial unsafe tools
-    /// — the only writers — never hit this path.
-    async fn execute_concurrent(
-        &self,
-        calls: Vec<PendingToolCall>,
-        ctx: &ToolUseContext,
-    ) -> Vec<ToolCallResult> {
-        let semaphore = Arc::new(Semaphore::new(self.max_concurrency));
-        let shared_ctx = Arc::new(ctx.clone_for_concurrent());
-        let sibling_abort = ToolAbortController::new();
-        let call_count = calls.len();
-        tracing::info!(
-            batch_type = "concurrent_safe",
-            call_count,
-            max_concurrency = self.max_concurrency,
-            "tool batch execute (concurrent)"
-        );
-        let model_order_tool_use_ids: Vec<String> =
-            calls.iter().map(|call| call.tool_use_id.clone()).collect();
-        let mut handles = FuturesUnordered::new();
-
-        for call in calls {
-            let sem = semaphore.clone();
-            let ctx_clone = shared_ctx.clone();
-            let tool = call.tool;
-            let input = call.input.into_value();
-            let tool_use_id = call.tool_use_id;
-            let tool_id = tool.id();
-            let tool_name = tool.name().to_string();
-            let sibling_abort_for_call = sibling_abort.clone();
-            tracing::debug!(
-                tool_use_id = %tool_use_id,
-                tool_name = %tool_name,
-                "concurrent tool spawn"
-            );
-
-            // Capture IDs before spawn for join-error fallback
-            let saved_tool_use_id = tool_use_id.clone();
-            let saved_tool_id = tool_id.clone();
-
-            let handle = tokio::spawn(async move {
-                let Ok(_permit) = sem.acquire().await else {
-                    return ToolCallResult {
-                        tool_use_id,
-                        tool_id,
-                        result: Err(ToolError::Cancelled),
-                        duration_ms: 0,
-                    };
-                };
-                let start = std::time::Instant::now();
-
-                // Track in-progress
-                {
-                    let mut ids = ctx_clone.in_progress_tool_use_ids.write().await;
-                    ids.insert(tool_use_id.clone());
-                }
-
-                let mut call_ctx = ctx_clone.clone_for_tool_call(tool_use_id.clone());
-                let self_abort = ToolAbortController::new();
-                call_ctx.abort = ToolAbortSignal::new(
-                    call_ctx.abort.turn_signal(),
-                    self_abort.signal(),
-                    Some(sibling_abort_for_call.signal()),
-                );
-                let result = tokio::select! {
-                    r = tool.execute(input, &call_ctx) => r,
-                    () = call_ctx.abort.cancelled() => match call_ctx.abort.reason() {
-                        Some(ToolAbortReasonPayload::SiblingError { failed_tool }) => {
-                            Err(ToolError::ExecutionFailed {
-                                message: SyntheticToolError::SiblingError {
-                                    failed_tool,
-                                }.to_string(),
-                                display_data: None,
-                                source: None,
-                            })
-                        }
-                        _ => Err(ToolError::Cancelled),
-                    },
-                };
-
-                // Remove from in-progress
-                {
-                    let mut ids = ctx_clone.in_progress_tool_use_ids.write().await;
-                    ids.remove(&tool_use_id);
-                }
-
-                // If a shell tool failed, cancel siblings.
-                // Only Bash/PowerShell errors trigger sibling abort — these tools
-                // can leave the system in an inconsistent state. Non-shell tool
-                // failures (Read, WebFetch) are isolated and don't affect siblings.
-                if result.is_err()
-                    && (tool_name.as_str() == ToolName::Bash.as_str()
-                        || tool_name.as_str() == ToolName::PowerShell.as_str())
-                {
-                    tracing::warn!(
-                        tool_use_id = %tool_use_id,
-                        tool_name = %tool_name,
-                        "shell tool failed; aborting concurrent siblings"
-                    );
-                    sibling_abort_for_call.abort(ToolAbortReasonPayload::SiblingError {
-                        failed_tool: tool_name.clone(),
-                    });
-                }
-
-                let duration_ms = start.elapsed().as_millis() as i64;
-
-                match &result {
-                    Ok(_) => tracing::debug!(
-                        tool_use_id = %tool_use_id,
-                        tool_name = %tool_name,
-                        duration_ms,
-                        "concurrent tool ok"
-                    ),
-                    Err(e) => tracing::warn!(
-                        tool_use_id = %tool_use_id,
-                        tool_name = %tool_name,
-                        duration_ms,
-                        error = %e,
-                        "concurrent tool failed"
-                    ),
-                }
-
-                ToolCallResult {
-                    tool_use_id,
-                    tool_id,
-                    result,
-                    duration_ms,
-                }
-            });
-
-            handles.push(async move { (saved_tool_use_id, saved_tool_id, handle.await) });
-        }
-
-        // Collect in completion order. Shared app-state patches are still
-        // applied after the batch; see the patch block below.
-        let mut results = Vec::with_capacity(call_count);
-        while let Some((saved_tool_use_id, saved_tool_id, joined)) = handles.next().await {
-            match joined {
-                Ok(result) => results.push(result),
-                Err(e) => {
-                    results.push(ToolCallResult {
-                        tool_use_id: saved_tool_use_id,
-                        tool_id: saved_tool_id,
-                        result: Err(ToolError::ExecutionFailed {
-                            message: format!("task join error: {e}"),
-                            display_data: None,
-                            source: None,
-                        }),
-                        duration_ms: 0,
-                    });
-                }
-            }
-        }
-
-        // Apply any queued app_state patches in model/submission order
-        // under a single write lock. Concurrent tools by convention
-        // don't return patches (they're read-only), but the plumbing
-        // exists uniformly so Tool authors don't have to special-case
-        // which path their tool is on. Applied after the concurrent batch
-        // finishes — same timing + ordering as `orchestration.ts`.
-        //
-        // Patches also get stripped here so the returned
-        // `ToolCallResult` values don't carry a `FnOnce` across
-        // `.await` points in the engine (which would require `Sync`).
-        if let Some(state) = self.app_state.as_ref() {
-            let any_patch = results
-                .iter()
-                .any(|r| matches!(&r.result, Ok(tr) if tr.app_state_patch.is_some()));
-            if any_patch {
-                let snapshot = {
-                    let mut guard = state.write().await;
-                    for tool_use_id in &model_order_tool_use_ids {
-                        if let Some(r) = results
-                            .iter_mut()
-                            .find(|r| r.tool_use_id.as_str() == tool_use_id)
-                            && let Ok(tr) = r.result.as_mut()
-                            && let Some(patch) = tr.app_state_patch.take()
-                        {
-                            patch(&mut guard);
-                        }
-                    }
-                    coco_types::TaskPanelChangedParams {
-                        plan_tasks: guard.plan_tasks.clone(),
-                        todos_by_agent: guard.todos_by_agent.clone(),
-                        expanded_view: guard.expanded_view,
-                        verification_nudge_pending: guard.verification_nudge_pending,
-                    }
-                };
-                if let Some(tx) = self.event_tx.as_ref() {
-                    let _ = tx
-                        .send(coco_types::CoreEvent::Protocol(
-                            coco_types::ServerNotification::TaskPanelChanged(snapshot),
-                        ))
-                        .await;
-                }
-            }
-        } else {
-            // No shared state → drop any patches silently to strip
-            // `FnOnce` from the result for Sync-safety downstream.
-            for r in results.iter_mut() {
-                if let Ok(tr) = r.result.as_mut() {
-                    tr.app_state_patch = None;
-                }
-            }
-        }
-
-        results
-    }
-
-    // -- Phase 4d Scheduler API (plans + callback-driven surfacing) --
+    // -- Scheduler API (plans + callback-driven surfacing) --
     //
-    // `execute_with` is the scheduler the refactor plan calls for:
-    // the runner hands in pre-validated `ToolCallPlan`
-    // values and a `run_one` callback, and the executor surfaces each
-    // outcome through `on_outcome` the moment it is ready. No
-    // pre-allocated result-slot vector — history grows in completion
-    // order for concurrent-safe batches, execution order for serial
-    // unsafe tools, and partition order for `EarlyOutcome` barriers.
-    //
-    // This coexists with the legacy `execute_all` / `execute_batch`
-    // API. The engine migrates call-site by call-site; the legacy
-    // path stays until every caller has been ported.
+    // `execute_with` is the batch scheduler: the runner hands in
+    // pre-validated `ToolCallPlan` values and a `run_one` callback, and
+    // the executor surfaces each outcome through `on_outcome` the moment
+    // it is ready. No pre-allocated result-slot vector — history grows in
+    // completion order for concurrent-safe batches, execution order for
+    // serial unsafe tools, and partition order for `EarlyOutcome`
+    // barriers. The streaming counterpart is `StreamingHandle`
+    // (`executor_streaming.rs`); both share `run_concurrent_batch` /
+    // `apply_side_effects` / `make_runtime`.
 
     /// Drive a plan list and surface each outcome through `on_outcome`
     /// as soon as it is available.
@@ -793,10 +183,8 @@ impl StreamingToolExecutor {
     ///   resulting completion sequence interleaves correctly with
     ///   surrounding batches.
     ///
-    /// This does **not** emit `ToolUseStarted` / `ToolUseCompleted`
-    /// yet — Phase 4d wires event emission to the runner boundary once
-    /// `ToolCallRunner::run_one` is the sole semantic lifecycle owner.
-    /// Today the engine still owns those events for the legacy path.
+    /// This does **not** emit `ToolUseStarted` / `ToolUseCompleted` —
+    /// the engine owns those events at the runner boundary.
     pub async fn execute_with<F, Fut, H>(
         &self,
         plans: Vec<ToolCallPlan>,
@@ -864,7 +252,6 @@ impl StreamingToolExecutor {
                 self_abort.signal(),
                 Some(self.sibling_abort.signal()),
             ),
-            progress_tx: None,
             model_index,
         }
     }
@@ -934,8 +321,8 @@ impl StreamingToolExecutor {
         }
 
         // Apply queued patches in model_index order under one write
-        // lock. This mirrors the legacy `execute_concurrent` post-batch
-        // apply but keys on `model_index` rather than tool_use_id.
+        // lock — concurrent-safe tools surface in completion order but
+        // their state mutations must apply deterministically (I12).
         queued_effects.sort_by_key(|(idx, _)| *idx);
         let (patches, update_lists): (Vec<_>, Vec<_>) = queued_effects
             .into_iter()
@@ -1093,7 +480,7 @@ pub(crate) fn coalesce_patches(
     }))
 }
 
-impl Default for StreamingToolExecutor {
+impl Default for ToolExecutor {
     fn default() -> Self {
         Self::new()
     }

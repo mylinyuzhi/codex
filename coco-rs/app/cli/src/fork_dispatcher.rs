@@ -138,9 +138,9 @@ impl ForkDispatcher for SessionRuntimeForkDispatcher {
             }),
             // Per-fork plumbing — thread the canUseTool callback,
             // fork_label, and query_source override onto the child
-            // engine config so step 3.5 in execute_tool_call enforces
-            // uniformly and log lines self-identify which fork they
-            // belong to.
+            // engine config so the tool-call preparer's canUseTool gate
+            // (`resolve_can_use_tool_decision`) enforces uniformly and
+            // log lines self-identify which fork they belong to.
             can_use_tool: options.can_use_tool.clone(),
             query_source_override: Some(options.query_source.clone()),
             fork_label: Some(options.fork_label),

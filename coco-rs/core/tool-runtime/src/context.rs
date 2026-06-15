@@ -456,7 +456,7 @@ pub struct ToolUseContext {
 
     // ── Progress Reporting ──
     /// Channel for tool progress updates. Tools send ToolProgress here;
-    /// StreamingToolExecutor yields them immediately to the TUI.
+    /// ToolExecutor yields them immediately to the TUI.
     pub progress_tx: Option<ProgressSender>,
 
     // ── Background Task Management ──

@@ -1,6 +1,6 @@
 //! End-to-end plan-mode lifecycle integration tests.
 //!
-//! Exercises the full agent loop (QueryEngine + StreamingToolExecutor +
+//! Exercises the full agent loop (QueryEngine + ToolExecutor +
 //! PlanModeReminder + Enter/ExitPlanMode tools) against a scripted mock
 //! LLM, with plan-mode cadence observed through a shared
 //! `Arc<RwLock<ToolAppState>>` across multiple `engine.run*` calls.

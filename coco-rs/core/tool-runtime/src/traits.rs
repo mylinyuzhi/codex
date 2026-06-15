@@ -571,7 +571,7 @@ pub trait Tool: Send + Sync + 'static {
     }
 
     /// Whether multiple instances can safely run concurrently.
-    /// Critical for batch partitioning in StreamingToolExecutor.
+    /// Critical for batch partitioning in ToolExecutor.
     ///
     /// **Invariant**: tools returning `true` MUST NOT mutate
     /// `ctx.app_state` during `execute`. Concurrent tools share a
