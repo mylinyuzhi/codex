@@ -77,7 +77,7 @@ pub fn dispatch_action(action: &KeybindingAction, state: &AppState) -> Option<Tu
         AppToggleBrief | AppToggleTerminal => return None,
 
         // ── History navigation ──────────────────────────────────────
-        HistorySearch => TuiCommand::ShowCommandPalette,
+        HistorySearch => TuiCommand::HistorySearchStart,
         HistoryPrevious => TuiCommand::CursorUp,
         HistoryNext => TuiCommand::CursorDown,
 

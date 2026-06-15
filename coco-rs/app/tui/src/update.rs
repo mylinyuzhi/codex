@@ -507,12 +507,40 @@ pub async fn handle_command(
                     .await;
                 return true;
             }
-            edit::history_prev(state);
+            edit::history_up(state);
             true
         }
         TuiCommand::CursorDown => {
             state.ui.input.clear_inline_hint();
-            edit::history_next(state);
+            edit::history_down(state);
+            true
+        }
+        TuiCommand::HistorySearchStart => {
+            edit::history_search_start(state);
+            true
+        }
+        TuiCommand::HistorySearchInput(c) => {
+            edit::history_search_input(state, c);
+            true
+        }
+        TuiCommand::HistorySearchBackspace => {
+            edit::history_search_backspace(state);
+            true
+        }
+        TuiCommand::HistorySearchOlder => {
+            edit::history_search_older(state);
+            true
+        }
+        TuiCommand::HistorySearchNewer => {
+            edit::history_search_newer(state);
+            true
+        }
+        TuiCommand::HistorySearchAccept => {
+            edit::history_search_accept(state);
+            true
+        }
+        TuiCommand::HistorySearchCancel => {
+            edit::history_search_cancel(state);
             true
         }
         TuiCommand::CursorHome => {

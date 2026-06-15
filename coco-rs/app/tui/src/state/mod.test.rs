@@ -318,22 +318,40 @@ fn test_input_editing() {
 }
 
 #[test]
-fn test_input_history_frecency() {
+fn test_input_history_most_recent_first() {
     let mut state = AppState::new();
 
     state.ui.input.add_to_history("first".to_string());
     state.ui.input.add_to_history("second".to_string());
     assert_eq!(state.ui.input.history.len(), 2);
+    // Newest submission sits at the front for up-arrow recall.
+    assert_eq!(state.ui.input.history[0].text, "second");
+    assert_eq!(state.ui.input.history[1].text, "first");
 
-    // Re-adding an entry bumps its frequency instead of creating a duplicate.
+    // Re-submitting an existing entry moves it to the front without
+    // creating a duplicate.
     state.ui.input.add_to_history("first".to_string());
     assert_eq!(state.ui.input.history.len(), 2);
-
-    // "first" now has frequency 2; sort puts it at the top of the list.
     assert_eq!(state.ui.input.history[0].text, "first");
-    assert_eq!(state.ui.input.history[0].frequency, 2);
     assert_eq!(state.ui.input.history[1].text, "second");
-    assert_eq!(state.ui.input.history[1].frequency, 1);
+}
+
+#[test]
+fn test_hydrate_history_dedups_newest_first() {
+    let mut state = AppState::new();
+
+    // `get_history` yields newest-first, possibly with duplicate display
+    // text across sessions; hydration keeps the first (newest) occurrence.
+    state.ui.input.hydrate_history(vec![
+        "newest".to_string(),
+        "older".to_string(),
+        "newest".to_string(),
+        String::new(),
+    ]);
+
+    assert_eq!(state.ui.input.history.len(), 2);
+    assert_eq!(state.ui.input.history[0].text, "newest");
+    assert_eq!(state.ui.input.history[1].text, "older");
 }
 
 #[test]

@@ -153,6 +153,13 @@ pub enum UserCommand {
         /// Image data from pasted images (clipboard or drag-drop).
         images: Vec<coco_tui_ui::paste::ImageData>,
     },
+    /// Persist a submitted prompt to the cross-session composer history
+    /// (`<config_home>/history.jsonl`). Emitted by the composer alongside
+    /// the in-memory `add_to_history` so up-arrow recall survives restarts;
+    /// the driver writes it off-thread via `coco_session::PromptHistory`.
+    /// `display` carries any mode prefix (`!` / `/`) so recall returns to
+    /// the same mode.
+    PersistPromptHistory { display: String },
     /// Interrupt current operation (Ctrl+C).
     Interrupt(coco_types::TurnAbortReason),
     /// Interrupt a teammate's active turn without killing the teammate.

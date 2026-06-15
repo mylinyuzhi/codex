@@ -502,12 +502,22 @@ fn render_live_tail_lines(
 
 fn render_input(frame: &mut SurfaceFrame<'_>, state: &AppState, area: Rect, styles: UiStyles<'_>) {
     let is_focused = state.ui.focus == FocusTarget::Input;
+    let history_search =
+        state
+            .ui
+            .history_search
+            .as_ref()
+            .map(|s| crate::widgets::HistorySearchView {
+                query: s.query.as_str(),
+                matched: s.matched.is_some(),
+            });
     let input = crate::widgets::InputWidget::new(&state.ui.input, styles)
         .focused(is_focused)
         .streaming(state.is_streaming())
         .prompt_suggestion(state.session.prompt_suggestions.last().map(String::as_str))
         .has_editable_queue(!state.session.queued_commands.is_empty())
-        .command_palette_filter(None);
+        .command_palette_filter(None)
+        .history_search(history_search);
 
     frame.render_widget(input, area);
 }

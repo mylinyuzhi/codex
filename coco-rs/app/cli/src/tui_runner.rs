@@ -535,6 +535,21 @@ pub async fn run_tui(cli: &Cli, resume_plan: Option<ResumePlan>) -> Result<()> {
         ));
     app.state_mut().ui.coordinator_mode_active =
         coco_subagent::is_coordinator_mode(&runtime.runtime_config.features);
+
+    // Hydrate the composer's up-arrow history from the persistent
+    // cross-session store (`<config_home>/history.jsonl`), project-scoped
+    // to this cwd and newest-first. Text-only recall — paste pills are
+    // re-snapshotted per session, matching codex cross-session behaviour.
+    {
+        let project = cwd.to_string_lossy();
+        let session_id = runtime.current_session_id().await;
+        let texts = coco_session::PromptHistory::new(&runtime.config_home, &project, &session_id)
+            .get_history()
+            .into_iter()
+            .map(|e| e.display)
+            .collect();
+        app.state_mut().ui.input.hydrate_history(texts);
+    }
     if let Some(rx) = display_settings_rx {
         app = app.with_display_settings_reload(rx);
     }
@@ -1045,6 +1060,24 @@ async fn run_agent_driver(
                 tokio::spawn(async move {
                     run_prompt_mode_bash(&cwd, user_message_id, command, runtime_t, event_tx_t)
                         .await;
+                });
+            }
+
+            UserCommand::PersistPromptHistory { display } => {
+                // Append to the cross-session composer history off the
+                // dispatch thread — the JSONL append takes an advisory file
+                // lock. Session id is re-read each time so entries written
+                // after `/resume` or `/clear` carry the new session tag.
+                let config_home = runtime.config_home.clone();
+                let project = cwd.to_string_lossy().to_string();
+                let session_id = runtime.current_session_id().await;
+                tokio::task::spawn_blocking(move || {
+                    let history =
+                        coco_session::PromptHistory::new(&config_home, &project, &session_id);
+                    if let Err(e) = history.add(&display) {
+                        warn!(target: "coco_cli::history", error = %e,
+                            "failed to persist prompt history");
+                    }
                 });
             }
 

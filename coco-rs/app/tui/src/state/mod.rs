@@ -148,6 +148,7 @@ pub use transcript_view::TranscriptView;
 pub use ui::ExitKey;
 pub use ui::FocusTarget;
 pub use ui::HistoryEntry;
+pub use ui::HistorySearch;
 pub use ui::InlineGhost;
 pub use ui::InputState;
 pub use ui::PromptMode;

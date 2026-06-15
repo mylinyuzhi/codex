@@ -138,6 +138,22 @@ pub enum TuiCommand {
     /// Move cursor one word right.
     WordRight,
 
+    // ── Ctrl+R reverse history search ──
+    /// Enter reverse-i-search mode (Ctrl+R on an idle composer).
+    HistorySearchStart,
+    /// Append a character to the active search query.
+    HistorySearchInput(char),
+    /// Delete the last character from the active search query.
+    HistorySearchBackspace,
+    /// Step to an older match (Ctrl+R / Up while searching).
+    HistorySearchOlder,
+    /// Step to a newer match (Down while searching).
+    HistorySearchNewer,
+    /// Accept the previewed match into the composer and exit search.
+    HistorySearchAccept,
+    /// Cancel search and restore the saved draft (Esc).
+    HistorySearchCancel,
+
     // ── Scrolling ──
     /// Scroll up by line step.
     ScrollUp,
