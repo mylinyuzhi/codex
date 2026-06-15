@@ -1834,7 +1834,7 @@
           "type": "string"
         },
         "value": {
-          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`, `\"yes-accept-edits\"`,\n`\"no\"`).",
+          "description": "Stable identifier echoed back in the approval response. Use\nkebab-case (`\"yes-default-keep-context\"`,\n`\"yes-accept-edits-clear-context\"`, `\"no\"`).",
           "type": "string"
         }
       },

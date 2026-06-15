@@ -288,8 +288,8 @@ pub enum PermissionAbortReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionAskChoice {
     /// Stable identifier echoed back in the approval response. Use
-    /// kebab-case (`"yes-default-keep-context"`, `"yes-accept-edits"`,
-    /// `"no"`).
+    /// kebab-case (`"yes-default-keep-context"`,
+    /// `"yes-accept-edits-clear-context"`, `"no"`).
     pub value: String,
     /// Short row label shown to the user.
     pub label: String,
@@ -330,15 +330,21 @@ pub struct ExitPlanModeAllowedPrompt {
 /// the consumer (`ExitPlanModeTool::execute`, which branches on the picked
 /// value) from drifting apart.
 ///
-/// TS parity: `ExitPlanModePermissionRequest.tsx` `ResponseValue` union.
+/// Adapted from TS `ExitPlanModePermissionRequest.tsx` `ResponseValue` union.
+/// The two clear-context variants intentionally diverge from the TS strings
+/// (`yes-accept-edits` / `yes-bypass-permissions`): coco appends an explicit
+/// `-clear-context` suffix so every clear variant reads symmetrically against
+/// the `-keep-context` keep variants — self-documenting in logs and on the wire.
+/// The value is ephemeral (resolved to the enum within a turn, never persisted),
+/// so the rename is a clean break with no legacy alias.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ExitPlanChoice {
     /// Clear context, then implement with permissions bypassed.
-    #[serde(rename = "yes-bypass-permissions")]
+    #[serde(rename = "yes-bypass-permissions-clear-context")]
     ClearBypassPermissions,
     /// Clear context, then implement auto-accepting edits.
-    #[serde(rename = "yes-accept-edits")]
+    #[serde(rename = "yes-accept-edits-clear-context")]
     ClearAcceptEdits,
     /// Keep context; auto-accept edits (or bypass when the gate allows).
     #[serde(rename = "yes-accept-edits-keep-context")]
@@ -357,8 +363,8 @@ impl ExitPlanChoice {
     /// Stable wire value echoed back in the approval response.
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ClearBypassPermissions => "yes-bypass-permissions",
-            Self::ClearAcceptEdits => "yes-accept-edits",
+            Self::ClearBypassPermissions => "yes-bypass-permissions-clear-context",
+            Self::ClearAcceptEdits => "yes-accept-edits-clear-context",
             Self::KeepAcceptEdits => "yes-accept-edits-keep-context",
             Self::KeepDefault => "yes-default-keep-context",
             Self::No => "no",
@@ -368,8 +374,8 @@ impl ExitPlanChoice {
     /// Parse a wire value back into a choice; `None` for an unrecognized value.
     pub fn from_wire(value: &str) -> Option<Self> {
         match value {
-            "yes-bypass-permissions" => Some(Self::ClearBypassPermissions),
-            "yes-accept-edits" => Some(Self::ClearAcceptEdits),
+            "yes-bypass-permissions-clear-context" => Some(Self::ClearBypassPermissions),
+            "yes-accept-edits-clear-context" => Some(Self::ClearAcceptEdits),
             "yes-accept-edits-keep-context" => Some(Self::KeepAcceptEdits),
             "yes-default-keep-context" => Some(Self::KeepDefault),
             "no" => Some(Self::No),
